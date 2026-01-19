@@ -10,7 +10,6 @@ from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServ
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.distributed import DistContext
 from lmdeploy.pytorch.engine.model_agent import build_model_agent
-from lmdeploy.pytorch.utils import wait_for_async_tasks
 from lmdeploy.utils import get_logger
 
 from .dist_utils import init_process_group, setup_master_addr
@@ -50,7 +49,6 @@ class WorkerWrapperBase:
         self.specdecode_config = specdecode_config
         logger.setLevel(log_level)
         self.out_que: asyncio.Queue = None
-        self._output_loop: asyncio.Task = None
 
         # frequently gc would cause latency spike
         # default threshold (700, 10, 10)
@@ -72,25 +70,9 @@ class WorkerWrapperBase:
         """Pack output."""
         return output
 
-    async def _get_outputs_loop(self):
-        """Get outputs loop."""
-        assert self.out_que is not None
-        while True:
-            ret = await self.get_output_async()
-            ret = self.pack_output(ret)
-            self.out_que.put_nowait(ret)
-
     async def get_outputs(self):
         """Get outputs."""
-        assert self.out_que is not None
-        qsize = self.out_que.qsize()
-        if qsize > 0:
-            outs = []
-            for _ in range(qsize):
-                outs.append(self.out_que.get_nowait())
-            return outs
-        else:
-            return [await self.out_que.get()]
+        return await self.get_output_async()
 
     def build_model(self):
         """Build model."""
@@ -152,39 +134,27 @@ class WorkerWrapperBase:
     def start(self):
         """Start engine loop."""
         self.model_agent.start()
-        event_loop = asyncio.get_event_loop()
         self.out_que = asyncio.Queue()
-        self._output_loop = event_loop.create_task(self._get_outputs_loop(), name='GetOutputsLoop')
 
     async def wait_tasks(self):
         """Wait tasks."""
-        event_loop = asyncio.get_event_loop()
-        tasks = [event_loop.create_task(self.model_agent.wait_tasks())]
-        if self._output_loop is not None:
-            tasks.append(self._output_loop)
         try:
-            await wait_for_async_tasks(tasks)
+            await self.model_agent.wait_tasks()
         except asyncio.CancelledError:
             logger.debug('WorkerWrapper wait_tasks cancelled.')
             raise
         except BaseException:
-            logger.error('WorkerWrapper wait_tasks failed.')
+            # we want to keep logs in both ray logs and engine logs
+            msg = f'WorkerWrapper rank[{self.rank}] wait_tasks failed.'
+            logger.exception(msg)
             raise
 
     def stop(self):
         """Stop engine loop."""
         self.model_agent.stop()
-        if self._output_loop is not None:
-            self._output_loop.cancel()
 
     async def stop_async(self):
         await self.model_agent.stop_async()
-        if self._output_loop is not None:
-            self._output_loop.cancel()
-            try:
-                await self._output_loop
-            except asyncio.CancelledError:
-                logger.debug('worker output loop cancelled.')
 
     async def forward_async(self, inputs):
         """Start forward."""
@@ -193,6 +163,7 @@ class WorkerWrapperBase:
     async def get_output_async(self):
         """Get output async."""
         ret = await self.model_agent.get_output_async()
+        ret = self.pack_output(ret)
         return ret
 
     def release(self):

@@ -11,28 +11,29 @@ import numpy as np
 import pybase64
 import torch
 import torch.distributed as dist
-from torch.profiler import ProfilerActivity, profile, record_function
+from torch.profiler import record_function
 
+from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
+from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.config import EngineRole
-from lmdeploy.pytorch.utils import wait_for_async_tasks
+from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
+from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
+from lmdeploy.pytorch.engine.guided_process import GuidedDecodingManager
+from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs, SamplingInputsDelta
+from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, step_ctx_manager
+from lmdeploy.pytorch.models.patch import BuildModelContext, add_adapters, build_patched_model, update_custom_module_map
+from lmdeploy.pytorch.spec_decode import build_spec_agent
+from lmdeploy.pytorch.strategies import build_strategy_factory
+from lmdeploy.pytorch.strategies.base.model_agent import ExtraInputs, ExtraOutputs, StoppingCriteria
+from lmdeploy.pytorch.utils import get_gpu_memory, monkey_patch_hf_modules_cache, wait_for_async_tasks
+from lmdeploy.pytorch.weight_loader.model_weight_loader import ModelWeightLoader, load_model_weights
 from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import FlattenedTensorBucket, FlattenedTensorMetadata, get_logger
 
-from ..backends import get_backend
-from ..config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
-from ..devices import DeviceContext, get_device_manager
-from ..distributed import DistContext, get_dist_manager
-from ..model_inputs import ModelInputs, step_ctx_manager
-from ..models.patch import BuildModelContext, add_adapters, build_patched_model, update_custom_module_map
-from ..spec_decode import build_spec_agent
-from ..strategies import build_strategy_factory
-from ..strategies.base.model_agent import ExtraInputs, ExtraOutputs, StoppingCriteria
-from ..utils import get_gpu_memory, monkey_patch_hf_modules_cache
-from ..weight_loader.model_weight_loader import ModelWeightLoader, load_model_weights
-from .cache_engine import CacheEngine, StateCacheEngine
-from .guided_process import GuidedDecodingManager
-from .logits_process import FusedLogitsProcessor, SamplingInputs
+from .inputs_maker import build_inputs_maker
+from .profiler import AgentProfiler
 
 logger = get_logger('lmdeploy')
 
@@ -113,86 +114,6 @@ class BatchedOutputs:
                 v = v.to_tensor()
             out[k] = v
         return BatchedOutputs(**out)
-
-
-class AgentProfiler:
-
-    def __init__(self, dist_ctx: DistContext, stream: torch.Stream):
-        from lmdeploy.pytorch import envs
-        self.rank = dist_ctx.rank
-        self.dp_rank = dist_ctx.dp_rank
-        self.dp = dist_ctx.dist_config.dp
-        self.stream = stream
-        self.profiler = None
-        self.name = f'rank[{self.rank}]'
-
-        self.delay = envs.torch_profile_delay
-        self.duration = envs.torch_profile_duration
-
-        self.profiler = self._build_profiler()
-        self.prefix = envs.torch_profile_output_prefix
-        self._task = None
-        self._started = False
-        if self.dp > 1 and self.duration < 0 and self.profiler is not None:
-            logger.warning('Do not support duration<=0 for dp > 1.')
-            self.profiler = None
-
-    def _build_profiler(self):
-        from lmdeploy.pytorch import envs
-        activities = []
-        if envs.torch_profile_cpu:
-            activities.append(ProfilerActivity.CPU)
-        if envs.torch_profile_cuda:
-            activities.append(ProfilerActivity.CUDA)
-        if len(activities) > 0:
-            logger.warning(f'Profiler start on {self.name}. '
-                           'Please Note that profiling might harm performance.')
-            profiler = profile(activities=activities)
-            return profiler
-        else:
-            return None
-
-    def dump(self):
-        """Dump profile result."""
-        if self.profiler is None:
-            return
-
-        if not self._started:
-            logger.warning(f'Profiler {self.name} not started, skip dump.')
-            return
-
-        try:
-            self.profiler.stop()
-            rank = self.rank
-            dump_path = f'{self.prefix}{rank}.json'
-            self.profiler.export_chrome_trace(dump_path)
-            logger.warning(f'Profiler {self.name} dump to {dump_path}.')
-        except Exception as e:
-            logger.error(f'Failed to dump profile {self.name} result: {e}')
-        finally:
-            self.profiler = None
-
-    async def profile_task(self):
-        """Profile task."""
-        if self.profiler is None:
-            return
-
-        # start profiler with delay
-        await asyncio.sleep(self.delay)
-        self.profiler.start()
-        self._started = True
-
-        if self.duration <= 0:
-            return
-
-        # dump profiler
-        await asyncio.sleep(self.duration)
-        self.dump()
-
-    def create_task(self):
-        """Create task."""
-        event_loop = asyncio.get_event_loop()
-        self._task = event_loop.create_task(self.profile_task())
 
 
 def msg_with_rank(rank: int, msg: str):
@@ -295,6 +216,92 @@ class DistGatherScalar:
 SwapMap = Dict[int, int]
 
 
+@dataclass
+class StepInputs:
+    """Step inputs."""
+    model_inputs: ModelInputs = None
+    extra_inputs: ExtraInputs = None
+    stopping_criteria: StoppingCriteria = None
+    sampling_delta: SamplingInputsDelta = None
+
+    @record_function('StepInputs.merge')
+    def merge(
+        self,
+        inputs: ModelInputs,
+        extra_inputs: ExtraInputs,
+        stopping_criteria: StoppingCriteria,
+        sampling_delta: SamplingInputsDelta,
+        next_token_ids: torch.Tensor,
+        model_metas,
+        extra_outputs: ExtraOutputs,
+        model_agent: 'BaseModelAgent',
+    ):
+        """Merge prefill inputs."""
+        inputs, extra_inputs = model_agent.agent_strategy.update_prefill_for_next_step(
+            inputs,
+            extra_inputs,
+            next_token_ids,
+            model_metas,
+            extra_outputs,
+        )
+        stopping_criteria = stopping_criteria.clone()
+        sampling_delta = model_agent.sampling_strategy.step_sampling_delta(sampling_delta,
+                                                                           next_token_ids,
+                                                                           extra_inputs=extra_inputs)
+        if self.model_inputs is None:
+            self.model_inputs = inputs
+            self.extra_inputs = extra_inputs
+            self.stopping_criteria = stopping_criteria
+            self.sampling_delta = sampling_delta
+        else:
+            self.model_inputs = model_agent.inputs_strategy.merge(self.model_inputs, inputs)
+            self.extra_inputs = self.extra_inputs.merge(extra_inputs)
+            self.stopping_criteria = self.stopping_criteria.merge(stopping_criteria)
+            self.sampling_delta = model_agent.sampling_strategy.merge_sampling_delta(
+                self.sampling_delta, sampling_delta)
+
+    def update_delta(
+        self,
+        delta: ModelInputsDelta,
+        model_agent: 'BaseModelAgent',
+    ):
+        """Get inputs from delta."""
+        self.model_inputs = model_agent.inputs_strategy.update_inputs(self.model_inputs, delta)
+        self.extra_inputs = model_agent.agent_strategy.update_extra_inputs(self.extra_inputs, delta)
+        self.stopping_criteria = self.stopping_criteria.update(delta)
+        self.sampling_delta = model_agent.sampling_strategy.update_sampling_delta(self.sampling_delta, delta)
+
+    @record_function('StepInputs.step')
+    def step(
+        self,
+        model_inputs: ModelInputs,
+        extra_inputs: ExtraInputs,
+        stopping_criteria: StoppingCriteria,
+        sampling_delta: SamplingInputsDelta,
+        next_token_ids: torch.Tensor,
+        model_metas,
+        extra_outputs: ExtraOutputs,
+        model_agent: 'BaseModelAgent',
+    ):
+        """Update inputs."""
+        # dp might change is_decoding of decoding inputs
+        model_inputs.is_decoding = True
+        (
+            self.model_inputs,
+            self.extra_inputs,
+        ) = model_agent.agent_strategy.update_decoding_for_next_step(
+            model_inputs,
+            next_token_ids=next_token_ids,
+            model_metas=model_metas,
+            extra_inputs=extra_inputs,
+            extra_outputs=extra_outputs,
+        )
+        self.stopping_criteria = stopping_criteria.clone()
+        self.sampling_delta = model_agent.sampling_strategy.step_sampling_delta(sampling_delta,
+                                                                                next_token_ids,
+                                                                                extra_inputs=extra_inputs)
+
+
 class BaseModelAgent:
     """Base model agent.
 
@@ -382,6 +389,7 @@ class BaseModelAgent:
         self.strategy_factory = build_strategy_factory(model_config, misc_config, specdecode_config=specdecode_config)
         self.inputs_strategy = self.strategy_factory.build_model_inputs_strategy()
         self.agent_strategy = self.strategy_factory.build_model_agent_strategy()
+        self.sampling_strategy = self.strategy_factory.build_sampling_strategy()
 
         # spec decoding
         self.spec_agent = build_spec_agent(specdecode_config,
@@ -391,11 +399,17 @@ class BaseModelAgent:
                                            self.agent_strategy,
                                            device=device)
 
+        # decoding inputs
+        self.step_inputs = StepInputs()
+
+        # long context
+        self._prev_chunk_output: Dict = None
+
     @contextmanager
     def all_context(self):
         device_mgr = get_device_manager()
         dist_mgr = get_dist_manager()
-        with device_mgr.context(self.device_ctx), dist_mgr.context(self.dist_ctx):
+        with device_mgr.context(self.device_ctx), dist_mgr.context(self.dist_ctx), torch.inference_mode():
             yield
 
     def set_cache_config(self, cache_config: CacheConfig, spec_cache_config: CacheConfig = None):
@@ -423,9 +437,15 @@ class BaseModelAgent:
 
         with self.all_context(), torch.cuda.stream(self.stream):
             max_batches = self.cache_config.max_batches
+            world_size = self.dist_config.world_size
 
             num_tokens = max_batches
             dp = self.dist_config.dp
+
+            if dp > 1:
+                # make sure warmup started together
+                group = self.dist_ctx.cpu_group
+                dist.barrier(group=group)
 
             # warmup prefill
             inputs = self.inputs_strategy.make_dummy(max_batches,
@@ -433,7 +453,8 @@ class BaseModelAgent:
                                                      device='cuda',
                                                      vocab_size=self.model_config.vocab_size)
             if dp > 1:
-                inputs.build_dp_meta()
+                num_tokens = inputs.input_ids.numel()
+                inputs.build_dp_meta([num_tokens] * world_size)
             logger.debug('Warmup prefill start.')
             self._forward_impl(inputs)
             torch.cuda.synchronize()
@@ -451,7 +472,8 @@ class BaseModelAgent:
                                                          device='cuda',
                                                          vocab_size=self.model_config.vocab_size)
                 if dp > 1:
-                    inputs.build_dp_meta()
+                    num_tokens = inputs.input_ids.numel()
+                    inputs.build_dp_meta([num_tokens] * world_size)
                 logger.debug(f'Warmup decoding num_tokens={num_tokens} start.')
                 self._forward_impl(inputs)
                 torch.cuda.synchronize()
@@ -476,147 +498,13 @@ class BaseModelAgent:
         self,
         inputs: ModelInputs,
         return_logits: bool,
-        sync_long_context: bool,
-        return_routed_experts: bool,
     ):
         """Model forward."""
-        dist_config = get_dist_manager().current_config()
-        dp = dist_config.dp
-        max_prefill_token_num = self.cache_config.max_prefill_token_num
-        strategy = self.agent_strategy
-
-        class _OutputGather:
-            """Output gather."""
-
-            def __init__(self, max_seq_len):
-                self._max_seq_len = max_seq_len
-                self._start = 0
-                self._output: torch.Tensor = None
-                self._device: torch.device = None
-                self._routed_experts: torch.Tensor = None
-                # aux hidden states for eagle3
-                self._aux_output: torch.Tensor = None
-
-            def gather(self, output):
-                """gather."""
-                tmp_output = output['hidden_states']
-                seq_len = tmp_output.size(-2)
-
-                if return_routed_experts and 'all_routed_experts' in output:
-                    tmp_exp_ids = output['all_routed_experts']
-                    out_exp_ids = self._routed_experts
-                    if out_exp_ids is None:
-                        out_exp_ids = tmp_exp_ids.new_empty(self._max_seq_len, *tmp_exp_ids.shape[1:], device='cpu')
-                        self._device = tmp_output.device
-                    out_exp_ids[self._start:self._start + seq_len, ...].copy_(tmp_exp_ids, non_blocking=True)
-                    self._routed_experts = out_exp_ids
-                    if not return_logits:
-                        self._start += seq_len
-
-                if not return_logits:
-                    self._output = tmp_output
-                    return
-
-                out_logits = self._output
-                start = self._start
-
-                if out_logits is None:
-                    out_logits = tmp_output.new_empty(1, self._max_seq_len, tmp_output.size(-1), device='cpu')
-                    self._device = tmp_output.device
-                out_logits[:, start:start + seq_len].copy_(tmp_output, non_blocking=True)
-
-                # egale3
-                if 'aux_hidden_states' in output:
-                    tmp_aux = output['aux_hidden_states']
-                    aux_out = self._aux_output
-                    if aux_out is None:
-                        aux_out = tmp_aux.new_empty(1, self._max_seq_len, tmp_aux.size(-1), device='cpu')
-                    aux_out[:, start:start + seq_len].copy_(tmp_aux, non_blocking=True)
-                    self._aux_output = aux_out
-
-                self._start = start + seq_len
-                self._output = out_logits
-
-            def get_output(self):
-                """Get tmp_output."""
-                aux_hidden_states = None
-                if return_logits:
-                    torch.cuda.synchronize()
-                    output_hidden_states = self._output.to(self._device)
-                    if self._aux_output is not None:
-                        aux_hidden_states = self._aux_output.to(self._device)
-                else:
-                    seqlen = torch.full((1, ),
-                                        self._output.numel() // self._output.size(-1),
-                                        device=self._output.device,
-                                        dtype=self._output.dtype)
-                    output_hidden_states = strategy.slice_outputs(self._output, seqlen)
-                return output_hidden_states, self._routed_experts, aux_hidden_states
-
-        async def __forward(inputs):
-            """Warp forward."""
-            if sync_long_context and dp > 1:
-                inputs.build_dp_meta()
-            return await self.async_forward(inputs)
-
-        async def __long_context_single_forward(new_inputs, max_seqlen: int):
-            """One large sequence."""
-            model_metas = new_inputs[0].model_metas
-            output_gather = _OutputGather(max_seqlen)
-            for inp in new_inputs:
-                inp.model_metas = model_metas
-                tmp_out = await __forward(inp)
-                model_metas = tmp_out.get('model_metas')
-                output_gather.gather(tmp_out)
-                tmp_out.pop('hidden_states', None)
-                tmp_out.pop('all_routed_experts', None)
-                tmp_out.pop('aux_hidden_states', None)
-                tmp_out.pop('position_ids', None)
-
-            tmp_out['hidden_states'], routed_experts, aux_hidden_states = output_gather.get_output()
-
-            if return_routed_experts:
-                tmp_out['all_routed_experts'] = routed_experts
-
-            if aux_hidden_states is not None:
-                tmp_out['aux_hidden_states'] = aux_hidden_states
-            return tmp_out
-
         origin_inputs = inputs
-
-        # make long context inputs
-        is_long_context = inputs.input_ids.numel() > max_prefill_token_num and not inputs.is_decoding
-        max_seqlen = 0
-        if is_long_context:
-            seq_len = inputs.seq_length
-            batch_size = seq_len.size(0)
-            assert batch_size == 1, 'Do not support batched long context.'
-            max_seqlen = inputs.seq_length[0]
-            inputs = inputs.split(max_prefill_token_num)
-
-        # get num dummy loop
-        dummy_loop = 0
-        if sync_long_context:
-            forward_loop = 1
-            if is_long_context:
-                forward_loop = len(inputs)
-            max_loop = torch.tensor(forward_loop, device='cuda')
-            dist.all_reduce(max_loop, op=dist.ReduceOp.MAX)
-            dummy_loop = max_loop - forward_loop
-
-        if not is_long_context:
-            ret = await __forward(inputs)
-        else:
-            ret = await __long_context_single_forward(inputs, max_seqlen)
+        ret = await self.async_forward(inputs)
 
         if not return_logits:
             ret = self._postprocess_forward_output(ret, origin_inputs)
-
-        # compute dummy loop
-        if dummy_loop > 0:
-            dummy_inputs = self.inputs_strategy.make_dummy(1, False, 'cuda', vocab_size=self.model_config.vocab_size)
-        for _ in range(dummy_loop):
-            await __forward(dummy_inputs)
 
         hidden_states, ret = self.spec_agent.update_main_model_outputs(ret, origin_inputs)
 
@@ -624,7 +512,7 @@ class BaseModelAgent:
         ret['logits'] = logits
         return ret
 
-    async def async_sampling_logits(self, logits: torch.Tensor, sampling_inputs: SamplingInputs, inputs: ModelInputs):
+    async def async_sampling_logits(self, logits: torch.Tensor, sampling_inputs: SamplingInputs):
         """Sampling logits."""
 
         # record function does not support async function
@@ -664,14 +552,20 @@ class BaseModelAgent:
             yield handle
 
     @record_function('prepare_dp')
-    async def _prepare_dp(self, inputs: ModelInputs, sync_long_context: bool, is_dummy: bool):
-        """Prepare dp."""
+    async def _prepare_dp_v1(self, inputs: ModelInputs):
+        """Prepare dp.
+
+        If all inputs are dummy inputs, skip forward. If any of the inputs is prefill, then do prefill. Set padding
+        batch size for decoding.
+        """
         world_size = self.dist_config.world_size
         is_decoding = inputs.is_decoding
+        num_tokens = inputs.input_ids.numel()
+        is_dummy = inputs.is_dummy
 
         # gather dp forward metadata
         batch_size = inputs.seq_length.numel()
-        dp_forward_meta = [int(is_decoding), int(is_dummy), batch_size, int(sync_long_context)]
+        dp_forward_meta = [int(is_decoding), int(is_dummy), num_tokens]
         # check enable_microbatch
         if self.enable_microbatch:
             tokens_num = inputs.input_ids.numel()
@@ -683,187 +577,332 @@ class BaseModelAgent:
                     self.enable_microbatch_prefill_batchsize_threshold and \
                     tokens_num >= self.enable_microbatch_prefill_token_threshold
             dp_forward_meta.append(int(enable_microbatch))
-        gathered_meta = DistGatherScalar(dp_forward_meta, world_size, device='cuda')
+        group = self.dist_ctx.cpu_group
+        device = 'cpu'
+        gathered_meta = DistGatherScalar(dp_forward_meta, world_size, device=device, group=group)
         gathered_meta = (await gathered_meta.async_wait()).cpu()
 
         # check is_decoding
-        all_is_decoding = gathered_meta[:, 0]
-        assert all_is_decoding.sum().item() in [0, world_size]
+        # if any one of the rank is prefill, then all ranks are prefill
+        is_decoding = gathered_meta[:, 0].all().item()
+        inputs.is_decoding = is_decoding
 
         # check if all inputs are dummy inputs
-        is_all_dummy = gathered_meta[:, 1].all()
+        is_all_dummy = gathered_meta[:, 1].all().item()
         if is_all_dummy:
-            return inputs, sync_long_context, is_all_dummy
+            return None
 
+        # pad batch size for decoding
+        all_num_tokens = gathered_meta[:, 2].tolist()
         if is_decoding:
-            all_batch_sizes = gathered_meta[:, 2]
-            padding_batch_size = all_batch_sizes.max().item()
+            max_num_tokens = max(all_num_tokens)
             meta = self.patched_model.get_meta()
-            meta.padding_batch_size = padding_batch_size
-            logger.debug(f'padding_batch_size={padding_batch_size}')
-        else:
-            all_sync_flags = gathered_meta[:, 3].bool()
-            sync_long_context = all_sync_flags.any().item()
-            logger.debug(f'sync_long_context={sync_long_context}')
+            meta.padding_batch_size = max_num_tokens
+            logger.debug(f'max_num_tokens={max_num_tokens}')
 
         # update if enable_microbatch
-        if self.enable_microbatch and gathered_meta[:, 4].all():
-            inputs.enable_microbatch = True
+        if self.enable_microbatch:
+            inputs.enable_microbatch = gathered_meta[:, 3].all().item()
 
         # update dp meta
-        inputs.build_dp_meta()
+        inputs.build_dp_meta(all_num_tokens)
         inputs = self.patched_model.update_inputs(inputs)
-        return inputs, sync_long_context, is_all_dummy
+        return inputs
 
-    async def _async_step_background(
+    def _get_inputs_from_delta(
+        self,
+        delta: ModelInputsDelta,
+        sampling_inputs: SamplingInputs,
+    ):
+        """Get inputs from delta."""
+        self.step_inputs.update_delta(delta, self)
+        inputs = self.step_inputs.model_inputs
+        extra_inputs = self.step_inputs.extra_inputs
+        stopping_criteria = self.step_inputs.stopping_criteria
+        sampling_inputs.update_delta(self.step_inputs.sampling_delta)
+        return inputs, extra_inputs, stopping_criteria, sampling_inputs
+
+    def _prepare_inputs_prefill(
         self,
         inputs: ModelInputs,
-        loop_count: int,
+        delta: ModelInputsDelta,
+    ):
+        """Prepare prefill inputs."""
+
+        if delta is not None:
+            # update decoding inputs with delta
+            # for second round chat
+            self.step_inputs.update_delta(delta, self)
+
+        # check long context
+        if self._prev_chunk_output is not None:
+            # update model metas
+            model_metas = self._prev_chunk_output.get('model_metas')
+            inputs.model_metas = model_metas
+
+            if not inputs.is_chunk:
+                # remove _prev_chunk_output
+                self._prev_chunk_output = None
+
+        return inputs
+
+    async def _step_postprocess_with_output(self,
+                                            last_logits: torch.Tensor,
+                                            logits: torch.Tensor,
+                                            inputs: ModelInputs,
+                                            sampling_inputs: SamplingInputs,
+                                            stopping_criteria: StoppingCriteria,
+                                            model_metas: Any,
+                                            need_broadcast_next: bool,
+                                            return_logits: bool = False,
+                                            all_routed_experts: Any = None,
+                                            extra_inputs: ExtraInputs = None):
+        """Step postprocess with output."""
+        rank = self.rank
+        logger.debug(f'<ForwardTask> rank[{rank}]: Sampling.')
+        # sampling
+        next_token_ids, logprobs = await self.async_sampling_logits(last_logits, sampling_inputs)
+
+        # post sampling
+        next_token_ids, extra_inputs = self.agent_strategy.post_sampling(inputs, last_logits, next_token_ids,
+                                                                         extra_inputs)
+
+        # spec decoding
+        output_token_ids = next_token_ids
+        if self.spec_agent.is_enabled():
+            extra_inputs = await self.spec_agent.async_model_forward(next_token_ids, inputs, extra_inputs,
+                                                                     sampling_inputs)
+            next_token_ids = extra_inputs.next_token_ids
+            output_token_ids = extra_inputs.output_token_ids
+            logits = None
+
+        with self._broadcast_next_token(next_token_ids, extra_inputs, enable=need_broadcast_next):
+            logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids')
+
+            # stopping criteria
+            stopped, stop_pos, stopping_criteria = stopping_criteria.step(
+                next_token_ids,
+                sampling_inputs.stop_words,
+                inputs=inputs,
+                extra_inputs=extra_inputs,
+            )
+
+            # send output
+            logger.debug(f'<ForwardTask> rank[{rank}]: Output')
+            extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs)
+
+        self._push_output(
+            BatchedOutputs(next_token_ids=output_token_ids,
+                           logits=logits if return_logits else None,
+                           stopped=stopped,
+                           stop_pos=stop_pos,
+                           model_metas=model_metas,
+                           logprobs=logprobs,
+                           all_routed_experts=all_routed_experts,
+                           extra_outputs=extra_outputs))
+
+        return inputs, extra_inputs, stopping_criteria, extra_outputs, next_token_ids
+
+    async def _step_postprocess_without_output(
+        self,
+        inputs: ModelInputs,
+        last_logits: torch.Tensor,
+        extra_inputs: ExtraInputs,
+        need_broadcast_next: bool,
+    ):
+        rank = self.rank
+        # Avoid adding the ADInplaceOrView dispatch key to `next_token_ids`,
+        # as it can trigger recompilation on different ranks when using torch.compile.
+        next_token_ids, extra_inputs = self.agent_strategy.make_dummy_next_token(inputs, last_logits, extra_inputs)
+
+        # broadcast next token for TP > 1
+        with self._broadcast_next_token(next_token_ids, extra_inputs, enable=need_broadcast_next):
+            logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids')
+
+        extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs)
+
+        return inputs, next_token_ids, extra_inputs, extra_outputs
+
+    async def _async_step(
+        self,
+        inputs: ModelInputs,
+        delta: ModelInputsDelta = None,
         swap_in_map: Dict = None,
         swap_out_map: Dict = None,
         sampling_inputs: SamplingInputs = None,
         stopping_criteria: StoppingCriteria = None,
         return_logits: bool = False,
         return_routed_experts: bool = False,
-        is_dummy: bool = False,
-        sync_long_context: bool = False,
         extra_inputs: ExtraInputs = None,
     ):
         """Asyc forward task."""
 
-        @record_function('update_inputs_for_next_step')
-        def __update_inputs(next_token_ids, model_metas, extra_inputs):
+        @record_function('update_decoding_for_next_step')
+        def __update_inputs(
+            inputs,
+            next_token_ids,
+            model_metas,
+            extra_inputs,
+            extra_outputs,
+            stopping_criteria,
+            sampling_delta: SamplingInputsDelta = None,
+        ):
             """Update inputs."""
-            return self.agent_strategy.update_inputs_for_next_step(
+            # dp might change is_decoding of decoding inputs
+            self.step_inputs.step(
                 inputs,
-                sampling_inputs,
-                next_token_ids=next_token_ids,
-                model_metas=model_metas,
-                extra_inputs=extra_inputs,
+                extra_inputs,
+                stopping_criteria,
+                sampling_delta,
+                next_token_ids,
+                model_metas,
+                extra_outputs,
+                model_agent=self,
             )
 
-        # dist tools
         dist_ctx = get_dist_manager().current_context()
         dist_config = dist_ctx.dist_config
         rank = self.rank
         tp = dist_config.attn_tp
+        need_broadcast_next = (tp > 1)
         dp = dist_config.dp
-        sync_long_context = False if dp == 1 else sync_long_context
+        need_update_inputs = False
+
+        if inputs is None:
+            # decoding step, update prev_inputs with delta
+            need_update_inputs = True
+            assert delta is not None
+            (
+                inputs,
+                extra_inputs,
+                stopping_criteria,
+                sampling_inputs,
+            ) = self._get_inputs_from_delta(
+                delta,
+                sampling_inputs,
+            )
+        elif not inputs.is_dummy:
+            # prefill step
+            inputs = self._prepare_inputs_prefill(
+                inputs,
+                delta,
+            )
+
+        # dp might change is_decoding in inputs
         is_decoding = inputs.is_decoding
-
-        # is_all_dummy would be updated in __prepare_dp
         if dp > 1:
-            inputs, sync_long_context, is_all_dummy = await self._prepare_dp(inputs, sync_long_context, is_dummy)
-
+            # update inputs for dp
+            inputs = await self._prepare_dp_v1(inputs)
             # skip dummy forward.
-            if is_all_dummy:
+            if inputs is None:
                 logger.debug(f'<ForwardTask> rank[{rank}]: all inputs are dummy, skip forward.')
+                await asyncio.sleep(0.01)
                 return
-
-        logger.debug(f'<ForwardTask> rank[{rank}]: '
-                     f'batch_size={inputs.seq_length.size(0)} '
-                     f'num_tokens={inputs.input_ids.size(-1)} '
-                     f'is_decoding={inputs.is_decoding}')
 
         if not is_decoding:
             # init state cache for first time prefill
             # I don't know if this is necessary...
             self.state_cache_engine.init_caches(inputs.state_offsets, inputs.history_lengths == 0)
+
+        # swap caches
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
-        for idx in range(loop_count):
-            # inference
-            logger.debug(f'<ForwardTask> rank[{rank}]: model forward [{idx}].')
-            output = await self._async_model_forward(
-                inputs,
-                return_logits=return_logits,
-                sync_long_context=sync_long_context,
-                return_routed_experts=return_routed_experts and self.need_output,
-            )
-            logits = output['logits'][0]  # [bs, seq, prob] -> [seq, prob]
-            seq_length = output.get('seq_length', inputs.seq_length)
-            last_logits = self._slice_outs(logits, seq_length)  # [bs, 1, prob] -> [bs, prob]
-            last_loop_step = (idx == loop_count - 1)
-            extra_inputs = self.agent_strategy.slice_extra_inputs(extra_inputs, inputs, output)
-            model_metas = output.get('model_metas')
 
-            # output empty for dummy inputs
-            if is_dummy:
-                continue
+        # inference
+        logger.debug(f'<ForwardTask> rank[{rank}]: model forward. '
+                     f'batch_size={inputs.seq_length.size(0)} '
+                     f'num_tokens={inputs.input_ids.size(-1)} '
+                     f'is_decoding={inputs.is_decoding}')
+        output = await self._async_model_forward(
+            inputs,
+            return_logits=return_logits,
+        )
+        # recovery is_decoding
+        inputs.is_decoding = is_decoding
 
-            need_broadcast_next = (tp > 1 and idx < loop_count - 1)
+        if inputs.is_dummy:
+            # skip dummy forward output
+            return
 
-            # sampling and stopping
-            if self.need_output:
-                logger.debug(f'<ForwardTask> rank[{rank}]: Sampling [{idx}].')
-                # sampling
-                next_token_ids, logprobs = await self.async_sampling_logits(last_logits, sampling_inputs, inputs)
+        logits = output['logits'][0]  # [bs, seq, prob] -> [seq, prob]
+        seq_length = output.get('seq_length', inputs.seq_length)
+        last_logits = self._slice_outs(logits, seq_length)  # [bs, 1, prob] -> [bs, prob]
+        extra_inputs = self.agent_strategy.slice_extra_inputs(extra_inputs, inputs, output)
+        model_metas = output.get('model_metas')
 
-                # post sampling
-                next_token_ids, extra_inputs = self.agent_strategy.post_sampling(inputs, last_logits, next_token_ids,
-                                                                                 extra_inputs)
-                # for router replay
+        if self.need_output:
+            logger.debug(f'<ForwardTask> rank[{rank}]: Sampling.')
+            # for router replay
+            if return_routed_experts:
                 all_routed_experts = output.get('all_routed_experts', None)
-
-                # spec decoding
-                output_token_ids = next_token_ids
-                extra_inputs = await self.spec_agent.async_model_forward(next_token_ids, inputs, extra_inputs,
-                                                                         sampling_inputs)
-                if self.spec_agent.is_enabled():
-                    next_token_ids = extra_inputs.next_token_ids
-                    output_token_ids = extra_inputs.output_token_ids
-                    logits = None
-
-                with self._broadcast_next_token(next_token_ids, extra_inputs, enable=need_broadcast_next):
-                    logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids [{idx}]')
-
-                    # stopping criteria
-                    stopped, stop_pos, stopping_criteria = stopping_criteria.step(next_token_ids,
-                                                                                  sampling_inputs.stop_words,
-                                                                                  inputs=inputs,
-                                                                                  extra_inputs=extra_inputs)
-
-                    # send output
-                    logger.debug(f'<ForwardTask> rank[{rank}]: Output [{idx}]')
-                    extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs, last_loop_step=last_loop_step)
-                    self._push_output(
-                        BatchedOutputs(next_token_ids=output_token_ids,
-                                       logits=logits if return_logits else None,
-                                       stopped=stopped,
-                                       stop_pos=stop_pos,
-                                       model_metas=model_metas,
-                                       logprobs=logprobs,
-                                       all_routed_experts=all_routed_experts,
-                                       extra_outputs=extra_outputs))
             else:
-                # Avoid adding the ADInplaceOrView dispatch key to `next_token_ids`,
-                # as it can trigger recompilation on different ranks when using torch.compile.
-                next_token_ids, extra_inputs = self.agent_strategy.make_dummy_next_token(
-                    inputs, last_logits, extra_inputs)
+                all_routed_experts = None
 
-                # broadcast next token for TP > 1
-                with self._broadcast_next_token(next_token_ids, extra_inputs, enable=need_broadcast_next):
-                    logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids [{idx}]')
+            (
+                inputs,
+                extra_inputs,
+                stopping_criteria,
+                extra_outputs,
+                next_token_ids,
+            ) = await self._step_postprocess_with_output(
+                last_logits,
+                logits,
+                inputs,
+                sampling_inputs,
+                stopping_criteria,
+                model_metas,
+                need_broadcast_next,
+                return_logits=return_logits,
+                all_routed_experts=all_routed_experts,
+                extra_inputs=extra_inputs,
+            )
+        else:
+            (
+                inputs,
+                next_token_ids,
+                extra_inputs,
+                extra_outputs,
+            ) = await self._step_postprocess_without_output(
+                inputs,
+                last_logits,
+                extra_inputs,
+                need_broadcast_next,
+            )
 
-            # update for next loop
-            if is_decoding and idx < loop_count - 1:
-                inputs, extra_inputs = __update_inputs(next_token_ids, model_metas, extra_inputs)
+        sampling_delta = sampling_inputs.get_delta()
+        if need_update_inputs:
+            __update_inputs(inputs,
+                            next_token_ids,
+                            model_metas,
+                            extra_inputs,
+                            extra_outputs,
+                            stopping_criteria,
+                            sampling_delta=sampling_delta)
+        elif inputs.is_chunk:
+            # _prev_chunk_output is used to update model metas
+            self._prev_chunk_output = output
+        elif self.cache_config.role != EngineRole.Prefill:
+            self.step_inputs.merge(
+                inputs,
+                extra_inputs,
+                stopping_criteria,
+                sampling_delta,
+                next_token_ids,
+                model_metas,
+                extra_outputs,
+                model_agent=self,
+            )
 
     async def _async_loop_background(self, forward_event: asyncio.Event = None):
         """Async loop background."""
         with self.all_context(), torch.cuda.stream(self.stream), torch.inference_mode():
-            dist_config = get_dist_manager().current_config()
-            dp = dist_config.dp
 
             # for dp
-            if dp > 1:
-                input_maker = DPForwardInputsMaker(self)
-            else:
-                input_maker = DefaultForwardInputsMaker(self)
+            input_maker = build_inputs_maker(self)
 
             while True:
                 forward_inputs = await input_maker.get()
 
-                await self._async_step_background(**forward_inputs, )
+                await self._async_step(**forward_inputs, )
                 if forward_event is not None:
                     forward_event.set()
 
@@ -872,7 +911,7 @@ class BaseModelAgent:
     async def _async_loop_inputs_preprocess(self, forward_event: asyncio.Event = None):
         """Async loop inputs preprocess."""
         non_blocking = True
-        keys = ['inputs', 'sampling_inputs', 'stopping_criteria', 'extra_inputs']
+        keys = ['inputs', 'delta', 'sampling_inputs', 'stopping_criteria', 'extra_inputs']
         while True:
             forward_inputs = await self._pre_in_que.get()
             forward_inputs_cuda = {}
@@ -924,9 +963,6 @@ class BaseModelAgent:
             logger.debug(f'ModelAgent rank[{self.rank}] wait_tasks cancelled.')
             raise
         except BaseException as e:
-            # we want to keep logs in both ray logs and engine logs
-            msg = f'ModelAgent rank[{self.rank}] wait_tasks failed'
-            logger.exception(msg)
             raise e from None
         finally:
             logger.debug(f'ModelAgent rank[{self.rank}] wait_tasks cleanup.')
@@ -961,10 +997,11 @@ class BaseModelAgent:
         for task in self.tasks:
             if not task.done():
                 task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    logger.debug(f'ModelAgent {task.get_name()} task cancelled.')
+
+        try:
+            await asyncio.gather(*self.tasks, return_exceptions=True)
+        except asyncio.CancelledError:
+            logger.debug(f'ModelAgent {task.get_name()} task cancelled.')
 
         if self.guided_decoding_manager:
             self.guided_decoding_manager.clear()
@@ -985,6 +1022,7 @@ class BaseModelAgent:
         while not event.query():
             await asyncio.sleep(0.001)
         with torch.cuda.stream(self.out_stream), torch.inference_mode(), record_function('outputs_D2H'):
+            event.wait()
             out = out.to_cpu()
             out.new_token_timestamp = time.time()
         return out
@@ -1086,7 +1124,7 @@ class BaseModelAgent:
         return self.patched_model.get_logits(hidden_states)
 
     def get_input_processor(self):
-        """Get input processor.."""
+        """Get input processor."""
         return self.patched_model.get_input_processor()
 
     def reset_graph_runner(self):
@@ -1173,205 +1211,3 @@ class BaseModelAgent:
         self.patched_model = None
         self.cache_engine = None
         torch.cuda.empty_cache()
-
-
-class DefaultForwardInputsMaker:
-    """Default forward inputs maker."""
-
-    def __init__(self, model_agent: BaseModelAgent):
-        self._in_que = model_agent._in_que
-
-    async def get(self):
-        """get."""
-        return await self._in_que.get()
-
-    def step(self):
-        """step."""
-        # No-op for default maker
-        pass
-
-
-class DPForwardInputsMaker:
-    """Dp forward inputs maker."""
-
-    def __init__(self, model_agent: BaseModelAgent):
-        self.model_agent = model_agent
-        self.dist_ctx = model_agent.dist_ctx
-        self.model_config = model_agent.model_config
-        self.cache_config = model_agent.cache_config
-        self.misc_config = model_agent.misc_config
-        self.inputs_strategy = model_agent.inputs_strategy
-        self.device = model_agent.device
-        self._in_que = model_agent._in_que
-
-        # maker metas
-        self._next_inputs = None
-        self._is_decoding = False
-        self._ready_event = torch.cuda.Event()
-        self._attn_tp_cpu_group = self.dist_ctx.attn_tp_group.cpu_group
-
-        # timeout to wait for inputs
-        # if any rank has no inputs, all ranks would wait for this timeout
-        # so it is very important to balance the inputs between ranks
-        from lmdeploy.pytorch import envs
-        self.base_timeout = envs.dp_input_timeout
-        self.timeout = self.base_timeout
-
-    def _make_dummy_forward_inputs(self):
-        """Make dummy forward inputs."""
-        is_decoding = self._is_decoding
-        loop_count = self.misc_config.prefill_interval if is_decoding else 1
-        dist_config = self.dist_ctx.dist_config
-        batch_size = 2 if dist_config.enable_microbatch else 1
-        batch_size = min(self.cache_config.max_batches, batch_size)
-        model_inputs = self.inputs_strategy.make_dummy(batch_size,
-                                                       is_decoding,
-                                                       device=self.device,
-                                                       vocab_size=self.model_config.vocab_size)
-        forward_inputs = dict(
-            inputs=model_inputs,
-            loop_count=loop_count,
-            is_dummy=True,
-            sync_long_context=False,
-        )
-        return forward_inputs
-
-    def _update_is_decoding(self, forward_inputs):
-        """Update is decoding."""
-        model_inputs = forward_inputs['inputs']
-        assert model_inputs.is_decoding == self._is_decoding
-        if self.cache_config.role != EngineRole.Prefill:
-            self._is_decoding = not self._is_decoding
-
-        if self.cache_config.role == EngineRole.Decode:
-            # set timeout for next inputs
-            # next inputs is ~self._is_decoding
-            # and prefill is rarely happened in decoding engine
-            if self._is_decoding:
-                self.timeout = max(0.02, self.base_timeout / 2)
-            else:
-                self.timeout = self.base_timeout
-
-    async def _gather_has_inputs(self, has_inputs: bool = False):
-        """Broadcast has inputs."""
-        attn_tp_group = self.dist_ctx.attn_tp_group
-        attn_tp = self.dist_ctx.dist_config.attn_tp
-        if attn_tp == 1:
-            return has_inputs
-
-        group = attn_tp_group.cpu_group
-        has_inputs = torch.tensor((int(has_inputs), ))
-        handle = dist.all_reduce(has_inputs, op=dist.ReduceOp.SUM, group=group, async_op=True)
-        future = handle.get_future()
-        while not future.done():
-            await asyncio.sleep(0)
-        future.wait()
-        return (has_inputs > 0).item()
-
-    async def _get_inputs(self):
-        if self.model_agent._pre_in_que.qsize() > 0:
-            forward_inputs = await self._in_que.get()
-        else:
-            try:
-                forward_inputs = await asyncio.wait_for(self._in_que.get(), timeout=self.timeout)
-            except asyncio.TimeoutError:
-                forward_inputs = None
-
-        has_inputs = await self._gather_has_inputs(forward_inputs is not None)
-
-        # try get inputs
-        if has_inputs and forward_inputs is None:
-            forward_inputs = await self._in_que.get()
-
-        return forward_inputs
-
-    async def _try_get_inputs(self):
-        """Try get inputs."""
-
-        # initialize output
-        forward_inputs = None
-        need_dummy = True
-
-        # get inputs from in_que. Rank 1 will not gather if rank 0 does not read inputs.
-        forward_inputs = await self._get_inputs()
-
-        if forward_inputs is not None:
-            model_inputs = forward_inputs['inputs']
-            if model_inputs.is_decoding != self._is_decoding:
-                self._next_inputs = forward_inputs
-            else:
-                need_dummy = False
-
-        return forward_inputs, need_dummy
-
-    async def get(self):
-        """get."""
-        if self._next_inputs is not None:
-            forward_inputs = self._next_inputs
-            self._next_inputs = None
-            self._update_is_decoding(forward_inputs)
-            return forward_inputs
-
-        # wait until has inputs or prev forward finish
-        while self._in_que.qsize() == 0 and not self._ready_event.query():
-            await asyncio.sleep(0.001)
-
-        # try get inputs
-        forward_inputs, need_dummy = await self._try_get_inputs()
-
-        # make dummy inputs
-        if need_dummy:
-            forward_inputs = self._make_dummy_forward_inputs()
-
-        self._update_is_decoding(forward_inputs)
-
-        return forward_inputs
-
-    def step(self):
-        """step."""
-        self._ready_event = torch.cuda.Event()
-        self._ready_event.record()
-
-
-def build_model_agent(
-    model_path: str,
-    model_config: ModelConfig,
-    cache_config: CacheConfig,
-    backend_config: BackendConfig,
-    misc_config: MiscConfig,
-    dist_ctx: DistContext = None,
-    device_ctx: DeviceContext = None,
-    adapters: Dict[str, str] = None,
-    specdecode_config: SpecDecodeConfig = None,
-):
-    """Create model agent.
-
-    Args:
-        model_path (str): the path of the input model
-        cache_config (CacheConfig): config of kv cache
-        backend_config (BackendConfig): config of backend devices
-        trust_remote_code (bool): To use the remote modeling code or not
-        adapters (Dict): lora adapters
-        tp (int): the number of devices to be used in tensor parallelism
-        dtype (str): the data type of model weights and activations
-        custom_module_map (str): customized nn module map
-    """
-    if device_ctx is None:
-        device_mgr = get_device_manager()
-        device_ctx = device_mgr.current_context()
-    if dist_ctx is None:
-        dist_mgr = get_dist_manager()
-        dist_ctx = dist_mgr.current_context()
-
-    model_agent = BaseModelAgent(
-        model_path,
-        model_config=model_config,
-        cache_config=cache_config,
-        backend_config=backend_config,
-        misc_config=misc_config,
-        adapters=adapters,
-        dist_ctx=dist_ctx,
-        device_ctx=device_ctx,
-        specdecode_config=specdecode_config,
-    )
-    return model_agent

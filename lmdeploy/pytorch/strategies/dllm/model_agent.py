@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -13,12 +13,34 @@ from lmdeploy.pytorch.config import DLLMConfig
 from lmdeploy.pytorch.distributed import DistContext
 from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.messages import SchedulerSequence
-from lmdeploy.pytorch.model_inputs import ModelInputs
+from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 
 from ..base.model_agent import ExtraInputs, ExtraOutputs, ModelAgentStrategy, StoppingCriteria
 from .unmasking import UnmaskingProcessor
 
 SeqList = List[SchedulerSequence]
+
+
+def get_model_inputs_next_decoding(inputs: ModelInputs, input_ids: torch.Tensor, max_q_seqlen,
+                                   step_seqlens: torch.Tensor, model_metas) -> ModelInputs:
+    """Next decoding step."""
+    if input_ids.dim() == 1:
+        input_ids = input_ids[None, :]
+    step_seqlens = torch.where(step_seqlens > 0, step_seqlens, inputs.seq_length - max_q_seqlen)
+    return ModelInputs(
+        input_ids=input_ids,
+        seq_length=torch.full_like(inputs.seq_length, max_q_seqlen),
+        history_lengths=inputs.history_lengths + step_seqlens,
+        block_offsets=inputs.block_offsets,
+        is_decoding=True,
+        num_ignored_history=inputs.num_ignored_history,
+        max_q_seqlen=max_q_seqlen,
+        max_kv_seqlen=inputs.max_kv_seqlen + max_q_seqlen,
+        sum_kv_seqlen=inputs.sum_kv_seqlen + inputs.seq_length.numel() * inputs.max_q_seqlen,
+        local_adapter_ids=inputs.local_adapter_ids,
+        model_metas=model_metas,
+        state_offsets=inputs.state_offsets,
+    )
 
 
 @dataclass
@@ -28,6 +50,11 @@ class DLLMExtraInputs(ExtraInputs):
 
     def broadcast(self, src: int, group, async_op=False):
         return dist.broadcast(self.dllm_mask, src=src, group=group, async_op=async_op)
+
+    def merge(self, other: 'DLLMExtraInputs'):
+        """Merge extra inputs."""
+        dllm_mask = torch.cat([self.dllm_mask, other.dllm_mask], dim=0)
+        return DLLMExtraInputs(dllm_mask=dllm_mask)
 
 
 @dataclass
@@ -73,6 +100,22 @@ def _check_stopwords_dllm(token_ids: torch.Tensor, stop_words: torch.Tensor, is_
 class DLLMStoppingCriteria(StoppingCriteria):
     num_appendable_ids: torch.Tensor
     output_start_pos: torch.Tensor
+
+    def clone(self) -> 'DLLMStoppingCriteria':
+        """clone."""
+        return DLLMStoppingCriteria(num_appendable_ids=self.num_appendable_ids, output_start_pos=self.output_start_pos)
+
+    def merge(self, other: 'DLLMStoppingCriteria') -> 'DLLMStoppingCriteria':
+        """Merge two stopping criteria."""
+        return DLLMStoppingCriteria(num_appendable_ids=torch.cat([self.num_appendable_ids, other.num_appendable_ids],
+                                                                 dim=0),
+                                    output_start_pos=torch.cat([self.output_start_pos, other.output_start_pos], dim=0))
+
+    def update(self, delta: 'ModelInputsDelta') -> 'DLLMStoppingCriteria':
+        """Update stopping criteria."""
+        indices = delta.indices
+        return DLLMStoppingCriteria(num_appendable_ids=self.num_appendable_ids[indices],
+                                    output_start_pos=self.output_start_pos[indices])
 
     @record_function('stopping_criteria')
     def step(self,
@@ -160,10 +203,11 @@ class DLLMModelAgentStrategy(ModelAgentStrategy):
         dllm_mask = self.slice_outputs(extra_inputs.dllm_mask, model_inputs.seq_length)
         return DLLMExtraInputs(dllm_mask=dllm_mask)
 
-    def _step_sampling_inputs(self, sampling_inputs: SamplingInputs, next_token_ids: torch.Tensor,
-                              dllm_mask: torch.Tensor, **kwargs):
-        """step."""
+    def step_sampling_inputs(self, sampling_inputs: SamplingInputs, next_token_ids: torch.Tensor,
+                             extra_inputs: DLLMExtraInputs, **kwargs):
+        """Step sampling inputs."""
         from lmdeploy.pytorch import consts
+        dllm_mask = extra_inputs.dllm_mask
         dllm_block_size = self.block_size
         DLLM_UNMASKED = consts.DLLM_UNMASKED
         is_unmasked = (dllm_mask == DLLM_UNMASKED).view(-1, dllm_block_size).all(dim=1, keepdim=True)
@@ -191,27 +235,61 @@ class DLLMModelAgentStrategy(ModelAgentStrategy):
 
         return DLLMStoppingCriteria(num_appendable_ids=num_appendable, output_start_pos=output_start_pos)
 
-    def make_extra_inputs(self, seqs: 'SeqList') -> ExtraInputs:
+    def make_extra_inputs(self, seqs: 'SeqList', model_inputs: 'ModelInputs') -> ExtraInputs:
         """Create extra inputs."""
         dllm_masks = [seq.dllm_mask for seq in seqs]
+
+        # chunked prefill only require part of the dllm masks
+        if model_inputs.is_chunk:
+            seqlens = model_inputs.seq_length.tolist()
+            dllm_masks = [mask[:length] for mask, length in zip(dllm_masks, seqlens)]
+
         dllm_masks = torch.as_tensor(np.concatenate(dllm_masks))
         return DLLMExtraInputs(dllm_mask=dllm_masks)
 
-    def make_extra_outputs(self, extra_inputs: DLLMExtraInputs, **kwargs) -> DLLMExtraOutputs:
+    def update_extra_inputs(self, extra_inputs: DLLMExtraInputs, delta: 'ModelInputsDelta') -> DLLMExtraInputs:
+        """Update extra inputs with model inputs delta."""
+        dllm_mask = extra_inputs.dllm_mask
+        dllm_mask = dllm_mask.reshape(-1, self.block_size)
+
+        indices = delta.indices
+        dllm_mask = dllm_mask[indices].flatten()
+
+        return DLLMExtraInputs(dllm_mask=dllm_mask)
+
+    def make_extra_outputs(self, extra_inputs: DLLMExtraInputs) -> DLLMExtraOutputs:
         """Create extra outputs."""
         dllm_mask = extra_inputs.dllm_mask
         return DLLMExtraOutputs(dllm_mask=dllm_mask)
 
-    def update_inputs_for_next_step(self, model_inputs: 'ModelInputs', sampling_inputs: 'SamplingInputs',
-                                    next_token_ids: torch.Tensor, model_metas: Any, extra_inputs: DLLMExtraInputs,
-                                    **kwargs):
+    def update_prefill_for_next_step(
+        self,
+        model_inputs: 'ModelInputs',
+        extra_inputs: DLLMExtraInputs,
+        next_token_ids: torch.Tensor,
+        model_metas: Any,
+        extra_outputs: DLLMExtraOutputs,
+    ) -> Tuple['ModelInputs', DLLMExtraInputs]:
+        """Step next decoding."""
+        dllm_mask = extra_outputs.dllm_mask
+        next_token_ids, dllm_mask, step_seqlens = self._update_dllm(next_token_ids, dllm_mask, model_inputs.seq_length)
+
+        inputs = get_model_inputs_next_decoding(model_inputs,
+                                                next_token_ids,
+                                                model_metas=model_metas,
+                                                max_q_seqlen=self.block_size,
+                                                step_seqlens=step_seqlens)
+        extra_inputs = DLLMExtraInputs(dllm_mask=dllm_mask)
+        return inputs, extra_inputs
+
+    def update_decoding_for_next_step(self, model_inputs: 'ModelInputs', next_token_ids: torch.Tensor, model_metas: Any,
+                                      extra_inputs: DLLMExtraInputs, **kwargs):
         """Step next inputs."""
         model_inputs.model_metas = model_metas
         dllm_mask = extra_inputs.dllm_mask
 
         next_token_ids, dllm_mask, step_seqlens = self._update_dllm(next_token_ids, dllm_mask, model_inputs.seq_length)
         model_inputs.step(next_token_ids, step_seqlens)
-        self._step_sampling_inputs(sampling_inputs, next_token_ids, dllm_mask=dllm_mask)
 
         extra_inputs = DLLMExtraInputs(dllm_mask=dllm_mask)
         return model_inputs, extra_inputs

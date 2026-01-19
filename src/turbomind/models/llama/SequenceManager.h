@@ -115,12 +115,12 @@ public:
     //   seq_len += output
     //     cache += input + output - 1  or  cache = seq_len - 1
 
-    [[nodiscard]] Outcome Materialize(Sequences             sequences,
-                                      std::vector<int>      context_length,
-                                      std::vector<int>      alpha,
-                                      std::vector<uint64_t> priorities,
-                                      int                   max_fwd_tokens,
-                                      int                   max_tmp_tokens);
+    [[maybe_unused]] Outcome Materialize(Sequences             sequences,
+                                         std::vector<int>      context_length,
+                                         std::vector<int>      alpha,
+                                         std::vector<uint64_t> priorities,
+                                         int                   max_fwd_tokens,
+                                         int                   max_tmp_tokens);
 
     /** @brief cache the input prompt tokens of each seq in sequences[0:active_size-1]
      *

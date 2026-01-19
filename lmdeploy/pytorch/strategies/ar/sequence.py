@@ -10,7 +10,7 @@ from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.pytorch.engine.model_agent import BatchedOutputs
 from lmdeploy.pytorch.messages import (InputEmbeddings, MessageStatus, MultiModalInputs, SamplingParam,
                                        SchedulerSequence, SchedulerSession, UpdateTokenMode, _to_ndarray)
-from lmdeploy.pytorch.model_inputs import ModelInputs
+from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 
 from ..base.sequence import SequenceStrategy
 
@@ -39,9 +39,7 @@ class SchedulerSequenceDefault(SchedulerSequence):
 
         num_valid = len(token_ids)
         # record cached expert ids
-        if self.return_routed_experts:
-            if routed_experts is not None:
-                self.all_routed_experts.append(routed_experts)
+        self.append_routed_experts(routed_experts)
 
         if mode == UpdateTokenMode.INPUTS:
             self.arrive_time = time.perf_counter()
@@ -74,13 +72,10 @@ class SchedulerSequenceDefault(SchedulerSequence):
 
         self.model_meta = None
 
-        # cross
-        if self.history_multimodals is not None:
-            self._num_history_cross = self.history_multimodals.get_encoder_len(0, self.num_history_ids)
-            self._num_cross = self.history_multimodals.get_encoder_len(self._num_history_ids, num_all_ids)
-
         if self.return_routed_experts:
-            self.all_routed_experts.resize(step)
+            # chunk long context might not have all routed experts
+            if len(self.all_routed_experts) > step:
+                self.all_routed_experts.resize(step)
 
 
 class ARSequenceStrategy(SequenceStrategy):
@@ -104,7 +99,8 @@ class ARSequenceStrategy(SequenceStrategy):
             preserve_cache=preserve_cache,
         )
 
-    def update_running(self, running: SeqList, batched_outputs: BatchedOutputs, model_inputs: 'ModelInputs') -> None:
+    def update_running(self, running: SeqList, batched_outputs: BatchedOutputs, model_inputs: 'ModelInputs',
+                       delta: 'ModelInputsDelta') -> None:
         """Update running sequences."""
         next_token_ids = batched_outputs.next_token_ids
         stopped = batched_outputs.stopped
@@ -114,12 +110,17 @@ class ARSequenceStrategy(SequenceStrategy):
             model_metas = [None] * len(running)
 
         next_token_ids = next_token_ids.numpy()
-        num_tokens = model_inputs.seq_length.tolist()
+        if model_inputs is None:
+            num_tokens = delta.seq_length.tolist()
+            is_decoding = delta.is_decoding
+        else:
+            num_tokens = model_inputs.seq_length.tolist()
+            is_decoding = model_inputs.is_decoding
         all_routed_experts = [None] * len(num_tokens)
         if batched_outputs.all_routed_experts is not None:
             all_routed_experts = batched_outputs.all_routed_experts.split(num_tokens, dim=0)
             all_routed_experts = [experts.numpy() for experts in all_routed_experts]
-        update_mode = UpdateTokenMode.DECODE if model_inputs.is_decoding else UpdateTokenMode.PREFILL
+        update_mode = UpdateTokenMode.DECODE if is_decoding else UpdateTokenMode.PREFILL
         for token, msg, stop, model_meta, routed_experts in zip(next_token_ids, running, stopped, model_metas,
                                                                 all_routed_experts):
             if msg.status != MessageStatus.RUNNING:
