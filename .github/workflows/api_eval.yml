@@ -154,15 +154,6 @@ jobs:
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
         gpu_num: ['gpu_num_1', 'gpu_num_2', 'gpu_num_4', 'gpu_num_8']
-        include:
-          - n: 8
-            gpu_num: gpu_num_1
-          - n: 4
-            gpu_num: gpu_num_2
-          - n: 2
-            gpu_num: gpu_num_4
-          - n: 1
-            gpu_num: gpu_num_8
     container:
       image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -209,7 +200,7 @@ jobs:
           ln -s /nvme/qa_test_models/resource/nltk_data /usr/share/nltk_data
           execution_mode="${{ github.event.inputs.execution_mode || 'both' }}"
           if [ "$execution_mode" = "both" ] || [ "$execution_mode" = "infer" ]; then
-            pytest autotest/evaluate/test_api_evaluate.py -m "${{matrix.gpu_num}} and ${{matrix.backend}} and infer" -n ${{matrix.n}} --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
+            pytest autotest/evaluate/test_api_evaluate.py -m "${{matrix.gpu_num}} and ${{matrix.backend}} and infer" --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
           fi
           if [ "$execution_mode" = "both" ] || [ "$execution_mode" = "eval" ]; then
             pytest autotest/evaluate/test_api_evaluate.py -m "${{matrix.gpu_num}} and ${{matrix.backend}} and eval" -n 4 --alluredir=${{env.REPORT_DIR}} || overall_exit=$?

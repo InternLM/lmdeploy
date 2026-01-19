@@ -33,6 +33,7 @@ jobs:
     timeout-minutes: 120
     env:
       REPORT_DIR: /nvme/qa_test_models/test-reports/${{ github.head_ref }}_${{ github.run_id }}
+      SERVER_LOG: /nvme/qa_test_models/server_log/${{ github.head_ref }}_${{ github.run_id }}
     container:
       image: openmmlab/lmdeploy:dev-cu12.8
       options: --gpus all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never
@@ -67,7 +68,7 @@ jobs:
           pip install transformers==4.57.3
       - name: Test restful server - turbomind Qwen3-32B
         run: |
-          CUDA_VISIBLE_DEVICES=5,6 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-32B --tp 2 --backend turbomind --logprobs-mode raw_logprobs --allow-terminate-by-client > ${{env.REPORT_DIR}}/server_log/turbomind_Qwen3-32B_start_restful.log 2>&1 &
+          CUDA_VISIBLE_DEVICES=5,6 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-32B --tp 2 --backend turbomind --logprobs-mode raw_logprobs --allow-terminate-by-client > ${{env.SERVER_LOG}}/turbomind_Qwen3-32B_start_restful.log 2>&1 &
           echo "restful_pid=$!"
           for i in $(seq 1 180)
           do
@@ -83,11 +84,11 @@ jobs:
 
           echo "health check fail"
           curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
-          cat turbomind_Qwen3-32B_start_restful.log
+          cat ${{env.SERVER_LOG}}/turbomind_Qwen3-32B_start_restful.log
           exit 1
       - name: Test restful server - turbomind InternVL3-38B
         run: |
-          CUDA_VISIBLE_DEVICES=5,6 lmdeploy serve api_server /nvme/qa_test_models/OpenGVLab/InternVL3-38B --tp 2 --backend turbomind --logprobs-mode raw_logprobs --allow-terminate-by-client > ${{env.REPORT_DIR}}/server_log/turbomind_InternVL3-38B_start_restful.log 2>&1 &
+          CUDA_VISIBLE_DEVICES=5,6 lmdeploy serve api_server /nvme/qa_test_models/OpenGVLab/InternVL3-38B --tp 2 --backend turbomind --logprobs-mode raw_logprobs --allow-terminate-by-client > ${{env.SERVER_LOG}}/turbomind_InternVL3-38B_start_restful.log 2>&1 &
           echo "restful_pid=$!"
           for i in $(seq 1 180)
           do
@@ -103,11 +104,11 @@ jobs:
 
           echo "health check fail"
           curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
-          cat turbomind_InternVL3-38B_start_restful.log
+          cat ${{env.SERVER_LOG}}/turbomind_InternVL3-38B_start_restful.log
           exit 1
       - name: Test restful server - turbomind Qwen3-30B-A3B
         run: |
-          CUDA_VISIBLE_DEVICES=5,6 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-30B-A3B --tp 2 --backend turbomind --logprobs-mode raw_logprobs  --allow-terminate-by-client> ${{env.REPORT_DIR}}/server_log/turbomind_Qwen3-30B-A3B_start_restful.log 2>&1 &
+          CUDA_VISIBLE_DEVICES=5,6 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-30B-A3B --tp 2 --backend turbomind --logprobs-mode raw_logprobs  --allow-terminate-by-client> ${{env.SERVER_LOG}}/turbomind_Qwen3-30B-A3B_start_restful.log 2>&1 &
           echo "restful_pid=$!"
           for i in $(seq 1 180)
           do
@@ -123,11 +124,11 @@ jobs:
 
           echo "health check fail"
           curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
-          cat turbomind_Qwen3-30B-A3B_start_restful.log
+          cat ${{env.SERVER_LOG}}/turbomind_Qwen3-30B-A3B_start_restful.log
           exit 1
       - name: Test restful server - pytorch Qwen3-30B-A3B
         run: |
-          CUDA_VISIBLE_DEVICES=5,6 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-30B-A3B --tp 2 --backend pytorch --logprobs-mode raw_logprobs --enable-return-routed-experts --allow-terminate-by-client > ${{env.REPORT_DIR}}/server_log/pytorch_Qwen3-30B-A3B_start_restful.log 2>&1 &
+          CUDA_VISIBLE_DEVICES=5,6 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-30B-A3B --tp 2 --backend pytorch --logprobs-mode raw_logprobs --enable-return-routed-experts --allow-terminate-by-client > ${{env.SERVER_LOG}}/pytorch_Qwen3-30B-A3B_start_restful.log 2>&1 &
           echo "restful_pid=$!"
           for i in $(seq 1 180)
           do
@@ -143,11 +144,11 @@ jobs:
 
           echo "health check fail"
           curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
-          cat pytorch_Qwen3-30B-A3B_start_restful.log
+          cat ${{env.SERVER_LOG}}/pytorch_Qwen3-30B-A3B_start_restful.log
           exit 1
       - name: Test restful server - pytorch Qwen3-VL-30B-A3B-Instruct
         run: |
-          CUDA_VISIBLE_DEVICES=5,6 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-VL-30B-A3B-Instruct --tp 2 --backend pytorch --logprobs-mode raw_logprobs --allow-terminate-by-client > ${{env.REPORT_DIR}}/server_log/pytorch_Qwen3-VL-30B-A3B-Instruct_start_restful.log 2>&1 &
+          CUDA_VISIBLE_DEVICES=5,6 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-VL-30B-A3B-Instruct --tp 2 --backend pytorch --logprobs-mode raw_logprobs --allow-terminate-by-client > ${{env.SERVER_LOG}}/pytorch_Qwen3-VL-30B-A3B-Instruct_start_restful.log 2>&1 &
           echo "restful_pid=$!"
           for i in $(seq 1 180)
           do
@@ -163,11 +164,11 @@ jobs:
 
           echo "health check fail"
           curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
-          cat pytorch_Qwen3-VL-30B-A3B-Instruct_start_restful.log
+          cat ${{env.SERVER_LOG}}/pytorch_Qwen3-VL-30B-A3B-Instruct_start_restful.log
           exit 1
       - name: Test restful server - pytorch InternVL3_5-30B-A3B
         run: |
-          CUDA_VISIBLE_DEVICES=5,6 lmdeploy serve api_server /nvme/qa_test_models/OpenGVLab/InternVL3_5-30B-A3B --tp 2 --backend pytorch --logprobs-mode raw_logprobs  --allow-terminate-by-client > ${{env.REPORT_DIR}}/server_log/pytorch_InternVL3_5-30B-A3B_start_restful.log 2>&1 &
+          CUDA_VISIBLE_DEVICES=5,6 lmdeploy serve api_server /nvme/qa_test_models/OpenGVLab/InternVL3_5-30B-A3B --tp 2 --backend pytorch --logprobs-mode raw_logprobs  --allow-terminate-by-client > ${{env.SERVER_LOG}}/pytorch_InternVL3_5-30B-A3B_start_restful.log 2>&1 &
           echo "restful_pid=$!"
           for i in $(seq 1 180)
           do
@@ -183,7 +184,7 @@ jobs:
 
           echo "health check fail"
           curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
-          cat pytorch_InternVL3_5-30B-A3B_start_restful.log
+          cat ${{env.SERVER_LOG}}/pytorch_InternVL3_5-30B-A3B_start_restful.log
           exit 1
       - name: Generate reports
         if: always()
