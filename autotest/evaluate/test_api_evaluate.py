@@ -28,7 +28,6 @@ def _run_ray_distributed_test(
         model_path = os.path.join(config['model_path'], model_name)
         preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
         eval_path = config.get('eval_path')
-        case_name = get_case_str_by_config(run_config)
 
         # Start API Server for current model (master node starts/stops, worker nodes verify)
         manager.start_lmdeploy_api_server(model_path=model_path, run_config=run_config)

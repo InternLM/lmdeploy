@@ -41,7 +41,7 @@ def run_pipeline_llm_test(config, run_config, common_case_config, worker_id: str
     with open(pipeline_log, 'r', encoding='utf-8') as file:
         output_text = file.read()
 
-    with open(pipeline_log, 'r', encoding='utf-8') as file:
+    with open(pipeline_log, 'a') as file:
         for case in common_case_config.keys():
             if is_smoke and case != 'memory_test':
                 continue
@@ -96,7 +96,7 @@ def run_pipeline_mllm_test(config, run_config, worker_id: str = '', is_smoke: bo
     with open(pipeline_log, 'r', encoding='utf-8') as file:
         output_text = file.read()
 
-    with open(pipeline_log, 'a', encoding='utf-8') as file:
+    with open(pipeline_log, 'a') as file:
         with allure.step('single1 pic'):
             response = get_response_from_output(output_text, 'single1')
             case_result = any(word in response.lower() for word in ['tiger', '虎'])

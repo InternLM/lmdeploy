@@ -73,7 +73,7 @@ def command_test(config, cmd, run_config, case_info, need_extract_output):
                    text=True,
                    encoding='utf-8',
                    env=env,
-                   start_new_session=True) as proc, open(chat_log, 'a', encoding='utf-8') as file:
+                   start_new_session=True) as proc, open(chat_log, 'a') as file:
             print(f'reproduce command chat: {cmd} \n')
             file.writelines(f'reproduce command chat: {cmd} \n')
 

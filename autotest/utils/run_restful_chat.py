@@ -574,7 +574,7 @@ def _run_tools_case(log_path, port: int = DEFAULT_PORT):
     client = OpenAI(api_key='YOUR_API_KEY', base_url=http_url + '/v1')
     model_name = client.models.list().data[0].id
 
-    with open(restful_log, 'a', encoding='utf-8') as file:
+    with open(restful_log, 'a') as file:
         with allure.step('step1 - one_round_prompt'):
             tools = [{
                 'type': 'function',
