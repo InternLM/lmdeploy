@@ -147,7 +147,7 @@ jobs:
   test_evaluation:
     needs: download_pkgs
     if: ${{ !cancelled() }}
-    runs-on: [self-hosted, test-a100]
+    runs-on: [self-hosted, linux-a100]
     timeout-minutes: 2400
     strategy:
       fail-fast: false
