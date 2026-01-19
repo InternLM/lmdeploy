@@ -50,7 +50,7 @@ def test_restful_chat_prefix_cache_tp2(config, run_config, common_case_config, w
 @pytest.mark.parametrize('run_config', TURBOMIND_FALLBACK_TEST_LLM_GPU1)
 def test_restful_chat_fallback_backend_tp1(config, run_config, common_case_config, worker_id):
     case_config = {k: v for k, v in common_case_config.items() if k == 'memory_test'}
-    run_llm_test(config, run_config, run_config, case_config, worker_id)
+    run_llm_test(config, run_config, case_config, worker_id)
 
 
 @pytest.mark.usefixtures('common_case_config')
@@ -58,7 +58,7 @@ def test_restful_chat_fallback_backend_tp1(config, run_config, common_case_confi
 @pytest.mark.parametrize('run_config', TURBOMIND_FALLBACK_TEST_LLM_GPU2)
 def test_restful_chat_fallback_backend_tp2(config, run_config, common_case_config, worker_id):
     case_config = {k: v for k, v in common_case_config.items() if k == 'memory_test'}
-    run_llm_test(config, run_config, run_config, case_config, worker_id)
+    run_llm_test(config, run_config, case_config, worker_id)
 
 
 @pytest.mark.usefixtures('common_case_config')

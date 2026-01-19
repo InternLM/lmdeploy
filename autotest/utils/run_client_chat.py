@@ -50,13 +50,8 @@ def command_test(config, cmd, run_config, case_info, need_extract_output):
         timestamp = time.strftime('%Y%m%d_%H%M%S', time.localtime())
         chat_log = os.path.join(log_path, f'chat_{case_name}_{timestamp}.log')
 
-        file = open(chat_log, 'w')
-
         returncode = -1
         result = True
-
-        print(f'reproduce command chat: {cmd} \n')
-        file.writelines(f'reproduce command chat: {cmd} \n')
 
         spliter = '\n\n'
         # join prompt together
@@ -78,7 +73,10 @@ def command_test(config, cmd, run_config, case_info, need_extract_output):
                    text=True,
                    encoding='utf-8',
                    env=env,
-                   start_new_session=True) as proc:
+                   start_new_session=True) as proc, open(chat_log, 'a', encoding='utf-8') as file:
+            print(f'reproduce command chat: {cmd} \n')
+            file.writelines(f'reproduce command chat: {cmd} \n')
+
             file.writelines('prompt:' + prompt + '\n')
 
             outputs, errors = proc.communicate(input=prompt)
@@ -110,7 +108,6 @@ def command_test(config, cmd, run_config, case_info, need_extract_output):
                 result = result and case_result
             file.writelines('\n\n\n' + 'full log:' + outputs + '\n')
 
-        file.close()
         return result, chat_log, msg
     except Exception as e:
         return False, None, f'Unknown error: {e}'

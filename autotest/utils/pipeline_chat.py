@@ -41,26 +41,25 @@ def run_pipeline_llm_test(config, run_config, common_case_config, worker_id: str
     with open(pipeline_log, 'r', encoding='utf-8') as file:
         output_text = file.read()
 
-    file = open(pipeline_log, 'a')
-    for case in common_case_config.keys():
-        if is_smoke and case != 'memory_test':
-            continue
+    with open(pipeline_log, 'r', encoding='utf-8') as file:
+        for case in common_case_config.keys():
+            if is_smoke and case != 'memory_test':
+                continue
 
-        with allure.step(case):
-            case_info = common_case_config.get(case)
-            case_result = True
-            reason = ''
+            with allure.step(case):
+                case_info = common_case_config.get(case)
+                case_result = True
+                reason = ''
 
-            for prompt_detail in case_info:
-                prompt = list(prompt_detail.keys())[0]
-                case_result, reason = assert_result(get_response_from_output_by_prompt(output_text, case, prompt),
-                                                    prompt_detail.values(), model_path)
-                if not case_result:
-                    print(f'{case} result: {case_result}, reason: {reason} \n')
-                file.writelines(f'{case} result: {case_result}, reason: {reason} \n')
-            with assume:
-                assert case_result, reason
-    file.close()
+                for prompt_detail in case_info:
+                    prompt = list(prompt_detail.keys())[0]
+                    case_result, reason = assert_result(get_response_from_output_by_prompt(output_text, case, prompt),
+                                                        prompt_detail.values(), model_path)
+                    if not case_result:
+                        print(f'{case} result: {case_result}, reason: {reason} \n')
+                    file.writelines(f'{case} result: {case_result}, reason: {reason} \n')
+                with assume:
+                    assert case_result, reason
     allure.attach.file(pipeline_log, attachment_type=allure.attachment_type.TEXT)
 
 
@@ -97,59 +96,57 @@ def run_pipeline_mllm_test(config, run_config, worker_id: str = '', is_smoke: bo
     with open(pipeline_log, 'r', encoding='utf-8') as file:
         output_text = file.read()
 
-    file = open(pipeline_log, 'a')
-    with allure.step('single1 pic'):
-        response = get_response_from_output(output_text, 'single1')
-        case_result = any(word in response.lower() for word in ['tiger', '虎'])
-        file.writelines(f'single1 pic result: {case_result} reason: simple example tiger should in {response} \n')
-        with assume:
-            assert case_result, f'reason: simple example tiger should in {response}'
-    with allure.step('single2 pic'):
-        response = get_response_from_output(output_text, 'single2')
-        case_result = any(word in response.lower() for word in ['tiger', '虎'])
-        file.writelines(f'single2 pic result: {case_result} reason: simple example tiger should in {response} \n')
-        with assume:
-            assert case_result, f'reason: simple example tiger should in {response}'
-    with allure.step('multi-imagese'):
-        response = get_response_from_output(output_text, 'multi-imagese')
-        case_result = any(word in response.lower() for word in ['tiger', '虎', '滑雪', 'ski'])
-        file.writelines(f'multi-imagese pic result: {case_result} reason: tiger or ski should in {response} \n')
-        with assume:
-            assert case_result, f'reason: Multi-images example: tiger or ski should in {response}'
-    with allure.step('batch-example1'):
-        response = get_response_from_output(output_text, 'batch-example1')
-        case_result = any(word in response.lower() for word in ['滑雪', 'ski'])
-        file.writelines(f'batch-example1 pic result: {case_result} reason: ski should in {response} \n')
-        with assume:
-            assert case_result, f'reason: batch-example1: ski should in {response}'
-    with allure.step('batch-example2'):
-        response = get_response_from_output(output_text, 'batch-example2')
-        case_result = any(word in response.lower() for word in ['tiger', '虎'])
-        file.writelines(f'batch-example2 pic result: {case_result} reason: tiger should in {response} \n')
-        with assume:
-            assert case_result, f'reason: batch-example1: tiger should in {response}'
-    with allure.step('multi-turn1'):
-        response = get_response_from_output(output_text, 'multi-turn1')
-        case_result = any(word in response.lower() for word in ['滑雪', 'ski'])
-        file.writelines(f'multi-turn1 pic result: {case_result} reason:  ski should in {response} \n')
-        with assume:
-            assert case_result, f'reason: batch-example1: ski should in {response}'
-    with allure.step('multi-turn2'):
-        response = get_response_from_output(output_text, 'multi-turn2')
-        case_result = any(word in response.lower() for word in ['滑雪', 'ski'])
-        file.writelines(f'multi-turn2 pic result: {case_result} reason: ski should in {response} \n')
-        with assume:
-            assert case_result, f'reason: batch-example1: ski should in {response}'
-    if not is_smoke:
-        if 'internvl' in model.lower() and 'internvl2-4b' not in model.lower():
-            internvl_vl_testcase(output_text, file)
-            internvl_vl_testcase(output_text, file, 'cn')
-        if 'minicpm' in model.lower():
-            MiniCPM_vl_testcase(output_text, file)
-        if 'qwen' in model.lower():
-            Qwen_vl_testcase(output_text, file)
-
-    file.close()
+    with open(pipeline_log, 'a', encoding='utf-8') as file:
+        with allure.step('single1 pic'):
+            response = get_response_from_output(output_text, 'single1')
+            case_result = any(word in response.lower() for word in ['tiger', '虎'])
+            file.writelines(f'single1 pic result: {case_result} reason: simple example tiger should in {response} \n')
+            with assume:
+                assert case_result, f'reason: simple example tiger should in {response}'
+        with allure.step('single2 pic'):
+            response = get_response_from_output(output_text, 'single2')
+            case_result = any(word in response.lower() for word in ['tiger', '虎'])
+            file.writelines(f'single2 pic result: {case_result} reason: simple example tiger should in {response} \n')
+            with assume:
+                assert case_result, f'reason: simple example tiger should in {response}'
+        with allure.step('multi-imagese'):
+            response = get_response_from_output(output_text, 'multi-imagese')
+            case_result = any(word in response.lower() for word in ['tiger', '虎', '滑雪', 'ski'])
+            file.writelines(f'multi-imagese pic result: {case_result} reason: tiger or ski should in {response} \n')
+            with assume:
+                assert case_result, f'reason: Multi-images example: tiger or ski should in {response}'
+        with allure.step('batch-example1'):
+            response = get_response_from_output(output_text, 'batch-example1')
+            case_result = any(word in response.lower() for word in ['滑雪', 'ski'])
+            file.writelines(f'batch-example1 pic result: {case_result} reason: ski should in {response} \n')
+            with assume:
+                assert case_result, f'reason: batch-example1: ski should in {response}'
+        with allure.step('batch-example2'):
+            response = get_response_from_output(output_text, 'batch-example2')
+            case_result = any(word in response.lower() for word in ['tiger', '虎'])
+            file.writelines(f'batch-example2 pic result: {case_result} reason: tiger should in {response} \n')
+            with assume:
+                assert case_result, f'reason: batch-example1: tiger should in {response}'
+        with allure.step('multi-turn1'):
+            response = get_response_from_output(output_text, 'multi-turn1')
+            case_result = any(word in response.lower() for word in ['滑雪', 'ski'])
+            file.writelines(f'multi-turn1 pic result: {case_result} reason:  ski should in {response} \n')
+            with assume:
+                assert case_result, f'reason: batch-example1: ski should in {response}'
+        with allure.step('multi-turn2'):
+            response = get_response_from_output(output_text, 'multi-turn2')
+            case_result = any(word in response.lower() for word in ['滑雪', 'ski'])
+            file.writelines(f'multi-turn2 pic result: {case_result} reason: ski should in {response} \n')
+            with assume:
+                assert case_result, f'reason: batch-example1: ski should in {response}'
+        if not is_smoke:
+            if 'internvl' in model.lower() and 'internvl2-4b' not in model.lower():
+                internvl_vl_testcase(output_text, file)
+                internvl_vl_testcase(output_text, file, 'cn')
+            if 'minicpm' in model.lower():
+                MiniCPM_vl_testcase(output_text, file)
+            if 'qwen' in model.lower():
+                Qwen_vl_testcase(output_text, file)
 
     with open(pipeline_log, 'r', encoding='utf-8') as file:
         output_text = file.read()

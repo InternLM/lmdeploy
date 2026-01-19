@@ -574,91 +574,91 @@ def _run_tools_case(log_path, port: int = DEFAULT_PORT):
     client = OpenAI(api_key='YOUR_API_KEY', base_url=http_url + '/v1')
     model_name = client.models.list().data[0].id
 
-    with allure.step('step1 - one_round_prompt'):
-        tools = [{
-            'type': 'function',
-            'function': {
-                'name': 'get_current_weather',
-                'description': 'Get the current weather in a given location',
-                'parameters': {
-                    'type': 'object',
-                    'properties': {
-                        'location': {
-                            'type': 'string',
-                            'description': 'The city and state, e.g. San Francisco, CA',
+    with open(restful_log, 'a', encoding='utf-8') as file:
+        with allure.step('step1 - one_round_prompt'):
+            tools = [{
+                'type': 'function',
+                'function': {
+                    'name': 'get_current_weather',
+                    'description': 'Get the current weather in a given location',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'location': {
+                                'type': 'string',
+                                'description': 'The city and state, e.g. San Francisco, CA',
+                            },
+                            'unit': {
+                                'type': 'string',
+                                'enum': ['celsius', 'fahrenheit']
+                            },
                         },
-                        'unit': {
-                            'type': 'string',
-                            'enum': ['celsius', 'fahrenheit']
-                        },
+                        'required': ['location'],
                     },
-                    'required': ['location'],
-                },
-            }
-        }]
-        messages = [{'role': 'user', 'content': 'What\'s the weather like in Boston today?'}]
-        response = client.chat.completions.create(model=model_name,
-                                                  messages=messages,
-                                                  temperature=0.01,
-                                                  stream=False,
-                                                  tools=tools)
-        print(response)
-        with assume:
-            assert response.choices[0].finish_reason == 'tool_calls'
-        with assume:
-            assert response.choices[0].message.tool_calls[0].function.name == 'get_current_weather'
-        with assume:
-            assert 'Boston' in response.choices[0].message.tool_calls[0].function.arguments
-        with assume:
-            assert response.choices[0].message.tool_calls[0].type == 'function'
-        file.writelines(str(response) + '\n')
-
-    with allure.step('step2 - search prompt'):
-        tools = [{
-            'type': 'function',
-            'function': {
-                'name': 'search',
-                'description': 'BING search API',
-                'parameters': {
-                    'type': 'object',
-                    'properties': {
-                        'query': {
-                            'type': 'string',
-                            'description': 'list of search query strings'
-                        }
-                    },
-                    'required': ['location']
                 }
-            }
-        }]
-        messages = [{'role': 'user', 'content': '搜索最近的人工智能发展趋势'}]
-        response = client.chat.completions.create(model=model_name,
-                                                  messages=messages,
-                                                  temperature=0.01,
-                                                  stream=False,
-                                                  tools=tools)
-        print(response)
-        with assume:
-            assert response.choices[0].finish_reason == 'tool_calls'
-        with assume:
-            assert response.choices[0].message.tool_calls[0].function.name == 'search'
-        with assume:
-            assert '人工智能' in response.choices[0].message.tool_calls[0].function.arguments
-        with assume:
-            assert response.choices[0].message.tool_calls[0].type == 'function'
-        file.writelines(str(response) + '\n')
+            }]
+            messages = [{'role': 'user', 'content': 'What\'s the weather like in Boston today?'}]
+            response = client.chat.completions.create(model=model_name,
+                                                      messages=messages,
+                                                      temperature=0.01,
+                                                      stream=False,
+                                                      tools=tools)
+            print(response)
+            with assume:
+                assert response.choices[0].finish_reason == 'tool_calls'
+            with assume:
+                assert response.choices[0].message.tool_calls[0].function.name == 'get_current_weather'
+            with assume:
+                assert 'Boston' in response.choices[0].message.tool_calls[0].function.arguments
+            with assume:
+                assert response.choices[0].message.tool_calls[0].type == 'function'
+            file.writelines(str(response) + '\n')
 
-    with allure.step('step3 - multiple_round_prompt'):
-        response_list = None
-        if 'intern' in model.lower():
-            response_list = test_internlm_multiple_round_prompt(client, model_name)
-        elif 'qwen' in model.lower():
-            response_list = test_qwen_multiple_round_prompt(client, model_name)
+        with allure.step('step2 - search prompt'):
+            tools = [{
+                'type': 'function',
+                'function': {
+                    'name': 'search',
+                    'description': 'BING search API',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'query': {
+                                'type': 'string',
+                                'description': 'list of search query strings'
+                            }
+                        },
+                        'required': ['location']
+                    }
+                }
+            }]
+            messages = [{'role': 'user', 'content': '搜索最近的人工智能发展趋势'}]
+            response = client.chat.completions.create(model=model_name,
+                                                      messages=messages,
+                                                      temperature=0.01,
+                                                      stream=False,
+                                                      tools=tools)
+            print(response)
+            with assume:
+                assert response.choices[0].finish_reason == 'tool_calls'
+            with assume:
+                assert response.choices[0].message.tool_calls[0].function.name == 'search'
+            with assume:
+                assert '人工智能' in response.choices[0].message.tool_calls[0].function.arguments
+            with assume:
+                assert response.choices[0].message.tool_calls[0].type == 'function'
+            file.writelines(str(response) + '\n')
 
-        if response_list is not None:
-            file.writelines(str(response_list) + '\n')
+        with allure.step('step3 - multiple_round_prompt'):
+            response_list = None
+            if 'intern' in model.lower():
+                response_list = test_internlm_multiple_round_prompt(client, model_name)
+            elif 'qwen' in model.lower():
+                response_list = test_qwen_multiple_round_prompt(client, model_name)
 
-    file.close()
+            if response_list is not None:
+                file.writelines(str(response_list) + '\n')
+
     allure.attach.file(restful_log, attachment_type=allure.attachment_type.TEXT)
 
 
