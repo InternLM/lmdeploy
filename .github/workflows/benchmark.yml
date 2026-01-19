@@ -17,7 +17,7 @@ on:
         required: true
         description: 'Set benchmark type. Default is "["longtext", "throughput", "api_server", "prefixcache"]"'
         type: string
-        default: "['apiserver', 'throughput', 'longtext', 'prefixcache']"
+        default: "['apiserver', 'mllm_apiserver', 'throughput', 'longtext', 'prefixcache']"
       backend:
         required: true
         description: 'Set backend filter. Default is "["turbomind", "pytorch"]"'

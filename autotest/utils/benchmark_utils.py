@@ -217,7 +217,7 @@ def prefixcache_throughput_test(config, run_config, worker_id: str = ''):
     env = os.environ.copy()
     env.update(run_config.get('env', {}))
 
-    test_configs = [(8096, 256, 10, '8k', None)]
+    test_configs = [(8096, 256, 500, '8k', None)]
     for enable_prefix_caching in [False, True]:
         suffix = 'cache' if enable_prefix_caching else 'no_cache'
 

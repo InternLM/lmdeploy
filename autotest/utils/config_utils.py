@@ -47,6 +47,10 @@ def get_func_config_list(backend: str,
                         'tp', 1) > 1 and ('InternVL3' in model or 'InternVL2_5' in model or 'MiniCPM-V-2_6' in model
                                           or 'InternVL2-Llama3' in model):  # noqa
                     continue
+                if 'turbomind' == backend and parallel_config.get(
+                        'tp', 1
+                ) > 1 and model_type == 'vl_model' and func_type == 'mllm_evaluate':  # mllm eval with bug when tp > 2
+                    continue
                 # [TM][FATAL] models/llama/LlamaBatch.cc(362): Check failed: r->session.start_flag Mrope doesn't support interactive chat # noqa
                 if ('Qwen2.5-VL' in model or 'Qwen2-VL' in model) and 'turbomind' == backend:
                     continue

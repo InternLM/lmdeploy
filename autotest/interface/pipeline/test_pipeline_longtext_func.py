@@ -1,8 +1,9 @@
+import multiprocessing as mp
 import os
 
 import numpy as np
 import pytest
-from utils.config_utils import set_device_env_variable
+from utils.config_utils import set_device_env_variable, unset_device_env_variable
 
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
 
@@ -20,8 +21,15 @@ SESSION_LEN_CONFIG = {
     'meta-llama/Meta-Llama-3-1-8B-Instruct': SESSION_LEN_128K,
     'internlm/Intern-S1-mini': SESSION_LEN_128K,
     'internlm/Intern-S1': SESSION_LEN_128K,
-    'meta-llama/Meta-Llama-3-1-70B-Instruct': SESSION_LEN_128K
+    'meta-llama/Meta-Llama-3-1-70B-Instruct': SESSION_LEN_128K,
 }
+
+
+def run_case_in_spawn(target, args):
+    ctx = mp.get_context('spawn')
+    process = ctx.Process(target=target, args=args)
+    process.start()
+    process.join()
 
 
 @pytest.mark.gpu_num_1
@@ -30,7 +38,9 @@ SESSION_LEN_CONFIG = {
 def test_history_issue_tp1(config, model, worker_id):
     if 'gw' in worker_id:
         set_device_env_variable(worker_id)
-    stream_infer_basic(config, model, 1)
+    run_case_in_spawn(stream_infer_worker, (config, model, 1))
+    if 'gw' in worker_id:
+        unset_device_env_variable()
 
 
 @pytest.mark.gpu_num_2
@@ -39,10 +49,12 @@ def test_history_issue_tp2(config, model, worker_id):
     if 'gw' in worker_id:
         set_device_env_variable(worker_id, parallel_config=2)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    stream_infer_basic(config, model, 2)
+    run_case_in_spawn(stream_infer_worker, (config, model, 2))
+    if 'gw' in worker_id:
+        unset_device_env_variable()
 
 
-def stream_infer_basic(config, model, tp_num):
+def stream_infer_worker(config, model, tp_num):
     model_path = os.path.join(config.get('model_path'), model)
 
     backend_config = TurbomindEngineConfig(session_len=SESSION_LEN, tp=tp_num)
@@ -74,7 +86,10 @@ def test_long_test_passkey_tp1(config, model, backend, worker_id):
     log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
     if 'gw' in worker_id:
         set_device_env_variable(worker_id)
-    passkey_retrival(config, model, backend, log_name, 1, SESSION_LEN_CONFIG.get(model, SESSION_LEN_128K))
+    run_case_in_spawn(passkey_retrival_worker,
+                      (config, model, backend, log_name, 1, SESSION_LEN_CONFIG.get(model, SESSION_LEN_128K)))
+    if 'gw' in worker_id:
+        unset_device_env_variable()
 
 
 @pytest.mark.gpu_num_2
@@ -85,7 +100,10 @@ def test_long_test_passkey_tp2(config, model, backend, worker_id):
     if 'gw' in worker_id:
         set_device_env_variable(worker_id, parallel_config=2)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    passkey_retrival(config, model, backend, log_name, 2, SESSION_LEN_CONFIG.get(model, SESSION_LEN_128K))
+    run_case_in_spawn(passkey_retrival_worker,
+                      (config, model, backend, log_name, 2, SESSION_LEN_CONFIG.get(model, SESSION_LEN_128K)))
+    if 'gw' in worker_id:
+        unset_device_env_variable()
 
 
 @pytest.mark.gpu_num_4
@@ -96,7 +114,10 @@ def test_long_test_passkey_tp4(config, model, backend, worker_id):
     if 'gw' in worker_id:
         set_device_env_variable(worker_id, parallel_config=4)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    passkey_retrival(config, model, backend, log_name, 4, SESSION_LEN_CONFIG.get(model, SESSION_LEN_128K))
+    run_case_in_spawn(passkey_retrival_worker,
+                      (config, model, backend, log_name, 4, SESSION_LEN_CONFIG.get(model, SESSION_LEN_128K)))
+    if 'gw' in worker_id:
+        unset_device_env_variable()
 
 
 @pytest.mark.gpu_num_8
@@ -108,7 +129,10 @@ def test_long_test_passkey_tp8(config, model, backend, worker_id):
     if 'gw' in worker_id:
         set_device_env_variable(worker_id, parallel_config=8)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    passkey_retrival(config, model, backend, log_name, 8, SESSION_LEN_CONFIG.get(model, SESSION_LEN_128K))
+    run_case_in_spawn(passkey_retrival_worker,
+                      (config, model, backend, log_name, 8, SESSION_LEN_CONFIG.get(model, SESSION_LEN_128K)))
+    if 'gw' in worker_id:
+        unset_device_env_variable()
 
 
 YARN_CONFIG = {'rope_scaling': {'rope_type': 'yarn', 'factor': 4.0, 'original_max_position_embeddings': 32768}}
@@ -121,7 +145,7 @@ NTK_CONFIG = {
 }
 
 
-def passkey_retrival(config, model, backend, log_name, tp_num, session_len: int = SESSION_LEN_128K):
+def passkey_retrival_worker(config, model, backend, log_name, tp_num, session_len: int = SESSION_LEN_128K):
     model_path = '/'.join([config.get('model_path'), model])
     if backend == 'turbomind':
         if 'qwen' in model.lower():

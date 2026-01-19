@@ -57,7 +57,8 @@ jobs:
         run: |
           python3 -m pip list
           lmdeploy check_env
-          mkdir ${{env.REPORT_DIR}}/server_log -p
+          mkdir ${{env.REPORT_DIR}} -p
+          mkdir ${{env.SERVER_LOG}} -p
           echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Test lmdeploy - func
         run: |
