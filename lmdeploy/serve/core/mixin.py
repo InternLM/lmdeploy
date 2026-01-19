@@ -61,14 +61,14 @@ class LogitsMixin:
         logits = [None] * len(input_ids)
 
         async def _proc(session, i):
-            async with session.acquire_inst(self.inst_mgr) as inst:
+            async with session.acquire_request_handle(self.req_hnd_mgr) as handle:
                 input_len = len(input_ids[i])
                 # TODO(lvhan): Fix the ugly code later on
                 max_new_tokens = 1 if self.backend == 'turbomind' else 0
                 # The reason to set `top_k=1` is that pt engine crashes at top_k sampling stage
                 # when perform inference on a reward model.
                 gen_config = GenerationConfig(max_new_tokens=max_new_tokens, output_logits='all', top_k=1)
-                async with self.safe_run(inst,
+                async with self.safe_run(handle,
                                          session_id=i,
                                          input_ids=input_ids[i],
                                          gen_config=gen_config,

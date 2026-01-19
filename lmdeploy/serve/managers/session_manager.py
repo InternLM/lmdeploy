@@ -2,14 +2,15 @@
 import asyncio
 import itertools
 from contextlib import asynccontextmanager
-from typing import Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
 from lmdeploy.messages import GenerationConfig, Response
 from lmdeploy.serve.core.exceptions import SafeRunException
 from lmdeploy.serve.utils import singleton
 from lmdeploy.utils import get_logger
 
-from .instance_manager import InferInstManager
+if TYPE_CHECKING:
+    from .request_handle_manager import RequestHandleManager
 
 logger = get_logger('lmdeploy')
 
@@ -26,8 +27,8 @@ class Session:
         self.step: int = 0
         # event to wait for the session to be active
         self._active: Optional[asyncio.Event] = None
-        self._inst = None  # inference instance
-        self._inst_mgr: Optional[InferInstManager] = None
+        self._hnd = None  # inference instance
+        self._hnd_mgr: Optional['RequestHandleManager'] = None
         self.update(**kwargs)
 
     def update(self, **kwargs):
@@ -65,22 +66,22 @@ class Session:
         self.gen_config = None
         self.step = 0
         self._active = None
-        self._inst = None
-        self._inst_mgr = None
+        self._hnd = None
+        self._hnd_mgr = None
         logger.debug(f'Session {self.session_id} has been reset.')
 
     @asynccontextmanager
-    async def acquire_inst(self, inst_mgr: InferInstManager):
-        if self._inst is not None:
+    async def acquire_request_handle(self, req_hnd_mgr: 'RequestHandleManager'):
+        if self._hnd is not None:
             raise RuntimeError(f'Session {self.session_id} already has an inference instance.')
-        logger.debug(f'[acquire_inst] session {self.session_id} acquiring an instance')
-        self._inst_mgr = inst_mgr
-        free_insts = self._inst_mgr.get()
-        self._inst = await free_insts.get()
+        logger.debug(f'[acquire_request_handle] session {self.session_id} acquiring an instance')
+        self._hnd_mgr = req_hnd_mgr
+        free_handles = self._hnd_mgr.get()
+        self._hnd = await free_handles.get()
         self._active = asyncio.Event()
-        logger.debug(f'[acquire_inst] session {self.session_id} acquired an instance')
+        logger.debug(f'[acquire_request_handle] session {self.session_id} acquired an instance')
         try:
-            yield self._inst
+            yield self._hnd
         except SafeRunException:
             # SafeRunException is raised by AsyncEngine.safe_run. We don't need to handle it here.
             pass
@@ -88,11 +89,11 @@ class Session:
             logger.error(f'Session {self.session_id} failed to acquire an inference instance: {e}')
             raise e
         finally:
-            logger.debug(f'[model_inst] session {self.session_id} releasing the instance')
+            logger.debug(f'[acquire_request_handle] session {self.session_id} releasing the instance')
             # Return inference instance if it was acquired
-            if self._inst is not None:
-                inst_mgr.ret(self._inst)
-                self._inst = None
+            if self._hnd is not None:
+                req_hnd_mgr.ret(self._hnd)
+                self._hnd = None
             # MUST set the signal after releasing the instance to avoid race condition
             # refer to async_end method
             self._active.set()
@@ -100,29 +101,29 @@ class Session:
     async def async_abort(self):
         """Abort the session."""
         logger.info(f'Aborting session {self.session_id}')
-        if self._inst is not None:
-            await self._inst.async_cancel(self.session_id)
+        if self._hnd is not None:
+            await self._hnd.async_cancel(self.session_id)
         # DO NOT reset the session here because it might be used by other components.
         # Leave the cleanup to the caller.
 
     async def async_end(self):
         """End the session."""
         logger.debug(f'Ending session {self.session_id}')
-        if self._inst_mgr is None:
+        if self._hnd_mgr is None:
             logger.warning(f'Session {self.session_id} has no inference instance manager.')
             return
 
-        if self._inst is not None:
+        if self._hnd is not None:
             await self._active.wait()
-            if self._inst is not None:
+            if self._hnd is not None:
                 raise RuntimeError(f'Session {self.session_id} is not finished yet.')
-        inst = await self._inst_mgr.get().get()
+        handle = await self._hnd_mgr.get().get()
         try:
-            await inst.async_end(self.session_id)
+            await handle.async_end(self.session_id)
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
             logger.error(f'[async_end] exception caught: {e}')
         finally:
-            self._inst_mgr.ret(inst)
+            self._hnd_mgr.ret(handle)
             self.reset()
 
 

@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from .instance_manager import InferInstManager
+from .request_handle_manager import RequestHandleManager
 from .session_manager import Session, SessionManager
 
-__all__ = ['InferInstManager', 'Session', 'SessionManager']
+__all__ = ['RequestHandleManager', 'Session', 'SessionManager']

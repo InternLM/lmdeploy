@@ -21,7 +21,7 @@ from lmdeploy.metrics.stats import IterationStats, RequestStats, SpeculativeDeco
 from lmdeploy.model import ChatTemplateConfig, get_chat_template
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
                                                    DistServeInitRequest)
-from lmdeploy.serve.managers import InferInstManager, SessionManager
+from lmdeploy.serve.managers import RequestHandleManager, SessionManager
 from lmdeploy.serve.processors import MultimodalProcessor
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger
@@ -205,7 +205,7 @@ class AsyncEngine(LogitsMixin):
             else speculative_config.num_speculative_tokens
 
         # Initialize inference instance manager to handle instance lifecycle
-        self.inst_mgr = InferInstManager(self, self.backend_config.max_batch_size)
+        self.req_hnd_mgr = RequestHandleManager(self, self.backend_config.max_batch_size)
         self.session_mgr = SessionManager()
 
         # build stat loggers
@@ -214,7 +214,7 @@ class AsyncEngine(LogitsMixin):
 
     def close(self):
         self.internal_thread.close()
-        self.inst_mgr.clear()
+        self.req_hnd_mgr.clear()
         self.session_mgr.clear()
         self.engine.close()
 
@@ -310,7 +310,7 @@ class AsyncEngine(LogitsMixin):
         self.engine.wakeup(tags)
         # for TM backend, sleep/wakeup will reset gateway, therefore we need to rebuild instances
         if self.backend == 'turbomind' and 'kv_cache' in tags:
-            self.inst_mgr.rebuild(self.engine)
+            self.req_hnd_mgr.rebuild(self.engine)
         self.sleeping_tags = self.sleeping_tags - set(tags)
         self.is_sleeping = bool(self.sleeping_tags)
 
@@ -383,14 +383,14 @@ class AsyncEngine(LogitsMixin):
         return gen_config
 
     @asynccontextmanager
-    async def safe_run(self, inst, session_id, **kwargs):
-        generator = inst.async_stream_infer(session_id, **kwargs)
+    async def safe_run(self, handle, session_id, **kwargs):
+        generator = handle.async_stream_infer(session_id, **kwargs)
         try:
             yield generator
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
             logger.error(f'[safe_run] session {session_id} exception caught: {type(e).__name__} {e}')
             # TODO: remove session_id from async cancel
-            await inst.async_cancel(session_id)
+            await handle.async_cancel(session_id)
             raise SafeRunException(f'Safe run exception for session {session_id}') from e
         finally:
             await generator.aclose()
@@ -505,7 +505,7 @@ class AsyncEngine(LogitsMixin):
 
         metrics_processor.increment_total_requests()
 
-        async with session.acquire_inst(self.inst_mgr) as inst:
+        async with session.acquire_request_handle(self.req_hnd_mgr) as handle:
             if epoch != self.epoch:
                 logger.debug(f'[generate] session {session_id} got aborted before starting inference')
                 # TODO(lvhan): metrics_processor.increment_failed_requests('abort')
@@ -524,7 +524,7 @@ class AsyncEngine(LogitsMixin):
             state = DetokenizeState(input_len)
             response = ''
             finish_reason = None
-            async with self.safe_run(inst,
+            async with self.safe_run(handle,
                                      session_id=session_id,
                                      **prompt_input,
                                      gen_config=gen_config,
@@ -640,7 +640,7 @@ class AsyncEngine(LogitsMixin):
                     # note: Using session_mgr.async_end(session) here results in deadlock
                     # because it waits for session's _active event to be set, but the event is set
                     # after the session is finished, i.e., session.acuqire_inst() context exits.
-                    await inst.async_end(session_id)
+                    await handle.async_end(session_id)
                 self.session_mgr.sessions.pop(session_id)
 
     def _run(self, fn=None, coro=None, loop=None):
