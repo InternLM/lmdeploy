@@ -638,8 +638,8 @@ class AsyncEngine(LogitsMixin):
                 if self.backend == 'pytorch':
                     # manually end pytorch session
                     # note: Using session_mgr.async_end(session) here results in deadlock
-                    # because it waits for session's _active event to be set, but the event is set
-                    # after the session is finished, i.e., session.acuqire_inst() context exits.
+                    # because it waits for session's _active event to be set, but the event won't be set
+                    # until the session is finished, i.e., session.acuqire_request_handle() context exits.
                     await handle.async_end(session_id)
                 self.session_mgr.sessions.pop(session_id)
 
