@@ -4,6 +4,7 @@ from contextlib import closing
 from typing import TYPE_CHECKING, Dict, Iterator, List, Optional, Tuple, Union
 
 import tqdm
+from typing_extensions import deprecated
 
 from .archs import autoget_backend_config, get_task
 from .messages import GenerationConfig, PytorchEngineConfig, SpeculativeConfig, TurbomindEngineConfig
@@ -112,6 +113,10 @@ class Pipeline:
         if is_single:
             return outputs[0]
         return outputs
+
+    @deprecated('This method is deprecated. Please use "Pipeline.infer" instead.')
+    def batch_infer(self, *args, **kwargs):
+        return self.infer(*args, **kwargs)
 
     def stream_infer(self,
                      prompts: Union[List[str], str, List[Dict], List[List[Dict]], Tuple, List[Tuple]],
@@ -249,6 +254,15 @@ class Pipeline:
 
     def __exit__(self, exc_type, exc_value, traceback):
         self.close()
+
+    @deprecated('This method is deprecated. Please use "AsyncEngine.generate" instead.')
+    async def generate(self, *args, **kwargs):
+        """Generate responses as an async generator.
+
+        This method delegates to async_engine.generate and forwards all yielded values.
+        """
+        async for item in self.async_engine.generate(*args, **kwargs):
+            yield item
 
     @staticmethod
     def _is_single(prompts):
