@@ -162,8 +162,6 @@ class CudaGraphMixin:
         input_buffers['kv_seqlens'] = input_buffers['qkv_lens'][2]
         input_buffers['qkv_seqlens'] = input_buffers['qkv_lens'][1:]
         input_buffers['local_adapter_ids'] = torch.zeros(max_batches, dtype=torch.int64, device=device)
-        # create buffer for cross_attn_metadata here
-        input_buffers['fill_seqlens'] = torch.zeros(max_batches, dtype=torch.int64, device=device)
 
         input_buffers['cu_seqlens'] = torch.zeros(2, max_batches + 1, dtype=torch.int32, device=device)
         input_buffers['cu_seqlens_q'] = input_buffers['cu_seqlens'][0]
@@ -271,11 +269,6 @@ class CudaGraphMixin:
             past_key_values=past_key_values,
             attn_metadata=attn_metadata,
         )
-
-        cross_attn_metadata = kwargs.get('cross_attn_metadata', None)
-        if cross_attn_metadata is not None:
-            # TODO: update cross_attn_metadata here
-            new_inputs['cross_attn_metadata'] = cross_attn_metadata
 
         new_inputs['input_ids'] = input_buffers['input_ids']
         new_inputs['position_ids'] = input_buffers['position_ids']

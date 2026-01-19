@@ -65,7 +65,7 @@ def process_fp8(x: torch.Tensor, kind: str):
     elif kind != 'weight_scale_inv' and x.dtype == torch.float:
         return x.to(dtype=torch.bfloat16)
     else:
-        return x
+        return x.to(dtype=torch.bfloat16)
 
 
 def get_input_policy(model_format):

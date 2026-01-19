@@ -358,14 +358,6 @@ class RayExecutor(ExecutorBase):
         """Build cache engine."""
         return ray.get(self.workers[0].get_input_processor.remote())
 
-    async def _prefetch_outputs(self):
-        while True:
-            outs = await self.workers[0].get_outputs.remote()
-            logger.debug(f'Receive {len(outs)} outputs from worker[0].')
-            for out in outs:
-                out = out.to_tensor()
-                self.remote_outs.put_nowait(out)
-
     def _prefetch_task_callback(self, task: asyncio.Task):
         try:
             task.result()
@@ -382,9 +374,7 @@ class RayExecutor(ExecutorBase):
         self.collective_rpc('start')
 
         self.remote_outs = asyncio.Queue()
-        event_loop = asyncio.get_event_loop()
         logger.info('Starting async task RayPrefetchOutput loop.')
-        self._prefetch_task = event_loop.create_task(self._prefetch_outputs(), name='RayExecutorPrefetchOutput')
 
     async def wait_tasks(self):
         """Wait tasks."""
@@ -475,28 +465,34 @@ class RayExecutor(ExecutorBase):
 
     async def forward_async(self, inputs):
         """Start forward."""
-        # we don't need return of forward async
+
         if self.dag is None:
             self.dag = self._compile_dag()
+            self._prev_inputs = None
+            self._prev_out = None
 
-        try:
-            inputs = ray.put(inputs)
-            # make sure in order
-            outs = self.dag.execute(inputs)
-            ray.get(outs)
-        except SystemExit:
-            logger.error('Ray worker exited.')
-            raise
-        finally:
-            # free ray.put inputs
+        if self._prev_out is not None:
             try:
-                ray._private.internal_api.free(inputs)
-            except Exception as e:
-                logger.warning(f'Free input ref failed: {e}')
+                ray.get(self._prev_out)
+            except SystemExit:
+                logger.error('Ray worker exited.')
+                raise
+            finally:
+                # free ray.put inputs
+                try:
+                    ray._private.internal_api.free(self._prev_inputs)
+                except Exception as e:
+                    logger.warning(f'Free input ref failed: {e}')
+
+        self._prev_inputs = ray.put(inputs)
+        # make sure in order
+        self._prev_out = self.dag.execute(self._prev_inputs)
 
     async def get_output_async(self):
         """Get output async."""
-        return await self.remote_outs.get()
+        ret = await self.workers[0].get_outputs.remote()
+        ret = ret.to_tensor()
+        return ret
 
     @contextlib.contextmanager
     def remote_log(self, msg: str):

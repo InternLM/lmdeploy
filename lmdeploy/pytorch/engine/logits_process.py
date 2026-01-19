@@ -81,6 +81,13 @@ SeqList = List[SchedulerSequence]
 
 
 @dataclass
+class SamplingInputsDelta:
+    num_ignore_eos: torch.Tensor = None
+    random_offsets: torch.Tensor = None
+    all_ids: Optional[torch.Tensor] = None
+
+
+@dataclass
 class SamplingInputs:
     temperature: torch.Tensor = None
     bad_words: torch.LongTensor = None
@@ -115,6 +122,24 @@ class SamplingInputs:
             out_dict[k] = v
 
         return SamplingInputs(**out_dict)
+
+    def get_delta(self) -> SamplingInputsDelta:
+        """Get delta."""
+        delta = SamplingInputsDelta()
+        for f in fields(self):
+            k = f.name
+            v = getattr(self, k)
+            if isinstance(v, torch.Tensor):
+                setattr(delta, k, v)
+        return delta
+
+    def update_delta(self, delta: SamplingInputsDelta):
+        """Update from delta."""
+        for f in fields(delta):
+            k = f.name
+            v = getattr(delta, k)
+            if v is not None:
+                setattr(self, k, v)
 
 
 def _apply_custom_logits_processors(batched_logits_processors, all_ids, logits):

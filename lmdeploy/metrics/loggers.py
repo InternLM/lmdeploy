@@ -93,10 +93,11 @@ class LoggingStatLogger(StatLoggerBase):
                    f'Accepted: {self.num_accepted_tokens} tokens, '
                    f'Drafted: {self.num_draft_tokens} tokens, '
                    f'Per-position acceptance rate: {rates_str}')
-        print(log_msg, flush=True)
+        return log_msg
 
     def log(self):
         now = time.perf_counter()
+        spec_msg = self.log_spec_msg()
 
         # skip logging if no tokens were processed
         if self.total_prompt_tokens == 0 and self.total_generation_tokens == 0:
@@ -121,8 +122,9 @@ class LoggingStatLogger(StatLoggerBase):
                    f'GPU KV cache usage: {scheduler_stats.gpu_cache_usage * 100 :.1f}%, '
                    f'Prefix cache hit rate: {scheduler_stats.prefix_cache_hit_rate * 100 :.1f}%')
 
+        if spec_msg is not None:
+            log_msg += ', ' + spec_msg
         print(log_msg, flush=True)
-        self.log_spec_msg()
 
 
 class PrometheusStatLogger(StatLoggerBase):

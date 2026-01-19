@@ -4,8 +4,9 @@ from typing import List
 import torch
 from torch.profiler import record_function
 
-from lmdeploy.pytorch.engine.logits_process import SamplingInputs
+from lmdeploy.pytorch.engine.logits_process import SamplingInputs, SamplingInputsDelta
 from lmdeploy.pytorch.messages import SchedulerSequence
+from lmdeploy.pytorch.model_inputs import ModelInputsDelta
 
 from ..base.sampling import SamplingStrategy
 
@@ -146,7 +147,6 @@ class ARSamplingStrategy(SamplingStrategy):
             top_p, min_top_p = None, 1.0
             min_p = None
             random_seeds = None
-            random_offsets = None
         else:
             top_k = torch.tensor(top_k)
             if (top_k == max_top_k).all():
@@ -156,7 +156,7 @@ class ARSamplingStrategy(SamplingStrategy):
             top_p, min_top_p = __get_topp(top_p)
             min_p = __get_minp(min_p)
             random_seeds = torch.tensor(random_seeds)
-            random_offsets = torch.tensor(random_offsets)
+        random_offsets = torch.tensor(random_offsets)
 
         max_num_logprobs = max(num_logprobs)
 
@@ -194,3 +194,78 @@ class ARSamplingStrategy(SamplingStrategy):
 
     def on_session_end(self, session_id: int):
         self.session_to_cleanup.append(session_id)
+
+    def merge_sampling_delta(
+        self,
+        sampling_delta: 'SamplingInputsDelta',
+        other: 'SamplingInputsDelta',
+    ) -> 'SamplingInputsDelta':
+        """Merge two sampling deltas."""
+        num_ignore_eos = torch.cat([sampling_delta.num_ignore_eos, other.num_ignore_eos], 0)
+        random_offsets = torch.cat([sampling_delta.random_offsets, other.random_offsets], 0)
+
+        batch_size = num_ignore_eos.size(0)
+        all_ids0 = sampling_delta.all_ids
+        all_ids1 = other.all_ids
+        if all_ids0 is None and all_ids1 is None:
+            all_ids = None
+        else:
+            max_len0 = 0 if all_ids0 is None else all_ids0.size(1)
+            max_len1 = 0 if all_ids1 is None else all_ids1.size(1)
+            max_len = max(max_len0, max_len1)
+            all_ids = torch.full((batch_size, max_len),
+                                 self.pad_token_id,
+                                 dtype=torch.int64,
+                                 device=num_ignore_eos.device)
+            if all_ids0 is not None:
+                bs0 = all_ids0.size(0)
+                all_ids[:bs0, :max_len0] = all_ids0
+            if all_ids1 is not None:
+                bs1 = all_ids1.size(0)
+                all_ids[-bs1:, :max_len1] = all_ids1
+
+        return SamplingInputsDelta(
+            num_ignore_eos=num_ignore_eos,
+            random_offsets=random_offsets,
+            all_ids=all_ids,
+        )
+
+    def step_sampling_delta(
+        self,
+        sampling_delta: 'SamplingInputsDelta',
+        next_token_ids: torch.Tensor,
+        **kwargs,
+    ) -> 'SamplingInputsDelta':
+        """Step next delta."""
+        sampling_delta.num_ignore_eos = sampling_delta.num_ignore_eos - 1
+        if sampling_delta.random_offsets is not None:
+            # random offset is used to generate random numbers for multinomial sampling
+            # so we need to increase it by 1 at each step
+            sampling_delta.random_offsets += 1
+
+        all_ids = sampling_delta.all_ids
+        if all_ids is not None:
+            sampling_delta.all_ids = torch.cat([all_ids, next_token_ids[:, None]], 1)
+
+        return sampling_delta
+
+    def update_sampling_delta(
+        self,
+        sampling_delta: 'SamplingInputsDelta',
+        delta: 'ModelInputsDelta',
+    ) -> 'SamplingInputsDelta':
+        """Update sampling delta with model inputs delta."""
+        indices = delta.indices
+        num_ignore_eos = sampling_delta.num_ignore_eos[indices]
+        if sampling_delta.random_offsets is not None:
+            random_offsets = sampling_delta.random_offsets[indices]
+        else:
+            random_offsets = None
+        all_ids = sampling_delta.all_ids
+        if all_ids is not None:
+            all_ids = all_ids[indices]
+        return SamplingInputsDelta(
+            num_ignore_eos=num_ignore_eos,
+            random_offsets=random_offsets,
+            all_ids=all_ids,
+        )
