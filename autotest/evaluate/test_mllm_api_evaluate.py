@@ -34,7 +34,7 @@ def run_eval_test_new(config, run_config, worker_id, test_type='infer', eval_con
 
         try:
             model_path = os.path.join(config.get('model_path'), run_config.get('model'))
-            extra_command['api-nproc'] = work_num * 16
+            extra_command += f' --api-nproc {work_num * 16}'
             mllm_eval_test(model_path,
                            eval_path,
                            case_name,
