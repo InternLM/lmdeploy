@@ -81,6 +81,11 @@ def get_func_config_list(backend: str,
         if config.get('env_tag', '') in ['3090', '5080']:
             run_config['extra_params']['cache-max-entry-count'] = 0.5
 
+        if 'sdar' in run_config['model'].lower():
+            run_config['extra_params']['dllm-block-length'] = 4
+            run_config['extra_params']['dllm-denoising-steps'] = 4
+            run_config['extra_params']['dllm-confidence-threshold'] = 0.9
+
     return run_configs
 
 
@@ -118,6 +123,16 @@ def get_cli_common_param(run_config: Dict[str, Any]) -> str:
         cli_params.append(f'--{key} {value}' if value else f'--{key}')
 
     return ' '.join(cli_params).replace('_', '-')
+
+
+def get_cli_str(config: Dict[str, Any]) -> str:
+    cli_str = []
+    # Extra params
+    for key, value in config.items():
+        key = key.replace('_', '-')
+        cli_str.append(f'--{key} {value}' if value else f'--{key}')
+
+    return ' '.join(cli_str)
 
 
 def get_parallel_config(config: Dict, model_name: str) -> Dict[str, int]:

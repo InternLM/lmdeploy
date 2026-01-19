@@ -38,7 +38,14 @@ EVAL_CONFIGS = {
     }
 }
 
-MLLM_EVAL_CONFIGS = {'default': '--temperature 0.7 --top-k 20 --top-p 0.8 --repetition-penalty 1.0'}
+MLLM_EVAL_CONFIGS = {
+    'default': {
+        'repetition-penalty': 1.0,
+        'top-p': 0.8,
+        'top-k': 20,
+        'temperature': 0.7,
+    }
+}
 
 BACKEND_LIST = ['turbomind', 'pytorch']
 

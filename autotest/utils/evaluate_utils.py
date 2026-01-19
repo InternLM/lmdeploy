@@ -8,7 +8,7 @@ import allure
 import pandas as pd
 from mmengine.config import Config
 from utils.common_utils import execute_command_with_logging
-from utils.config_utils import parse_config_by_case
+from utils.config_utils import get_cli_str, parse_config_by_case
 
 DEFAULT_PORT = 23333
 
@@ -255,7 +255,7 @@ def eval_test(model_path, eval_path, case_name, port=DEFAULT_PORT, test_type='in
         return False, error_msg
 
 
-def mllm_eval_test(model_path, eval_path, case_name, port=DEFAULT_PORT, test_type='infer', extra_command=''):
+def mllm_eval_test(model_path, eval_path, case_name, port=DEFAULT_PORT, test_type='infer', extra_config={}):
     work_dir = os.path.join(eval_path, f'wk_{case_name}')
     eval_log = os.path.join(eval_path, f'log_{case_name}.log')
 
@@ -266,8 +266,10 @@ def mllm_eval_test(model_path, eval_path, case_name, port=DEFAULT_PORT, test_typ
 
     os.makedirs(work_dir, exist_ok=True)
 
+    extra_config_str = get_cli_str(extra_config)
+
     if test_type == 'infer':
-        cmd = f'python run.py --data MMBench_V11_MINI MMStar_MINI AI2D_MINI OCRBench_MINI --model {case_name} --base-url http://127.0.0.1:{port}/v1 --reuse --work-dir {work_dir} --mode infer {extra_command}'  # noqa
+        cmd = f'python run.py --data MMBench_V11_MINI MMStar_MINI AI2D_MINI OCRBench_MINI --model {case_name} --base-url http://127.0.0.1:{port}/v1 --reuse --work-dir {work_dir} --mode infer {extra_config_str}'  # noqa
     elif test_type == 'eval':
         cmd = f'python run.py --data MMBench_V11_MINI MMStar_MINI AI2D_MINI OCRBench_MINI --model {case_name} --base-url http://127.0.0.1:empty/v1 --reuse --work-dir {work_dir} --api-nproc 32 --mode eval --judge Qwen2.5-32B-Instruct --judge-base-url http://127.0.0.1:{port}/v1'  # noqa
 

@@ -8,7 +8,7 @@ from utils.run_restful_chat import start_openai_service, start_proxy_server, sto
 
 
 def run_eval_test_new(config, run_config, worker_id, test_type='infer', eval_config_name='default'):
-    extra_command = constant.MLLM_EVAL_CONFIGS.get(eval_config_name, {})
+    extra_config = constant.MLLM_EVAL_CONFIGS.get(eval_config_name, {})
     eval_path = config.get('mllm_eval_path')
     case_name = get_case_str_by_config(run_config)
 
@@ -34,13 +34,13 @@ def run_eval_test_new(config, run_config, worker_id, test_type='infer', eval_con
 
         try:
             model_path = os.path.join(config.get('model_path'), run_config.get('model'))
-            extra_command += f' --api-nproc {work_num * 16}'
+            extra_config['api-nproc'] = work_num * 16
             mllm_eval_test(model_path,
                            eval_path,
                            case_name,
                            port=constant.PROXY_PORT,
                            test_type=test_type,
-                           extra_command=extra_command)
+                           extra_config=extra_config)
         finally:
             for i in range(work_num):
                 terminate_restful_api(f'gw{i}')
