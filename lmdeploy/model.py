@@ -6,6 +6,7 @@ from typing import List, Literal, Optional, Union
 
 from mmengine import Registry
 
+from lmdeploy.archs import get_model_arch
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -682,25 +683,36 @@ class HFChatTemplate(BaseChatTemplate):
     """
 
     def __init__(self, model_path: str = '', **kwargs):
+
         try:
-            from transformers import AutoConfig, AutoTokenizer, PretrainedConfig
+            from transformers import AutoTokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-            # verify if the model can perform apply_chat_template with user role
+            # Verify if the model can perform apply_chat_template with user roles.
             self._role_instruction('user')
             self.stop_words = []
             if hasattr(self.tokenizer, 'eos_token') and self.tokenizer.eos_token is not None:
                 self.stop_words.append(self.tokenizer.eos_token)
             if hasattr(self.tokenizer, 'eot_token') and self.tokenizer.eot_token is not None:
                 self.stop_words.append(self.tokenizer.eot_token)
-            try:
-                cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-            except Exception as e:  # noqa
-                cfg = PretrainedConfig.from_pretrained(model_path, trust_remote_code=True)
-            self.is_gpt_oss = getattr(cfg, 'architectures', [''])[0] == 'GptOssForCausalLM'
+            arch, _ = get_model_arch(model_path)
+            self.is_gpt_oss = arch == 'GptOssForCausalLM'
             if self.is_gpt_oss:
                 self.stop_words.append('<|call|>')
         except Exception as e:
             raise ValueError(f'Try apply_chat_template failed: {e}')
+        try:
+            _, _, self.sentinel_system_messages, self.sentinel_system_prompt = self._role_instruction('system')
+            self.assistant_start, self.assistant_end, _, _ = self._role_instruction('assistant')
+        except Exception:
+            # Some models like google/gemma-2-2b-it forbid system role in messages,
+            # and require conversation roles must alternate user/assistant/user/assistant/...
+            # So we cannot get the system role and assistant role's special token trivivally
+            arch, _ = get_model_arch(model_path)
+            if arch in ['Gemma2ForCausalLM', 'Gemma3ForConditionalGeneration']:
+                self.sentinel_system_messages = []
+                self.sentinel_system_prompt = '<bos>'
+                self.assistant_start = '<start_of_turn>model\n'
+                self.assistant_end = '<end_of_turn>\n'
 
     def get_prompt(self, prompt, sequence_start=True, **kwargs):
         messages = [{'role': 'user', 'content': prompt}]
@@ -725,23 +737,15 @@ class HFChatTemplate(BaseChatTemplate):
                                                         add_generation_prompt=add_generation_prompt,
                                                         **kwargs)
         else:
-            try:
-                # Use a sentinel position to avoid the influence of default system role in the tokenizer's chat template
-                _, _, sentinel_messages, sentinel_prompt = self._role_instruction('system')
-                prompt = self.tokenizer.apply_chat_template(sentinel_messages + messages,
-                                                            tokenize=False,
-                                                            add_generation_prompt=add_generation_prompt,
-                                                            **kwargs)
-                # remove the sentinel part
-                prompt = prompt[len(sentinel_prompt):]
-            except Exception:
-                # Some models like google/gemma-2-2b-it forbid system role in messages,
-                # so we can use the messages directly
-                prompt = self.tokenizer.apply_chat_template(messages,
-                                                            tokenize=False,
-                                                            add_generation_prompt=add_generation_prompt,
-                                                            **kwargs)
-
+            # Use a sentinel position to avoid the influence of default system role in the tokenizer's chat template
+            # in interactive chat mode
+            messages = self.sentinel_system_messages + messages if self.sentinel_system_messages else messages
+            prompt = self.tokenizer.apply_chat_template(messages,
+                                                        tokenize=False,
+                                                        add_generation_prompt=add_generation_prompt,
+                                                        **kwargs)
+            # Remove the sentinel part.
+            prompt = prompt[len(self.sentinel_system_prompt):] if len(self.sentinel_system_prompt) > 0 else prompt
         if messages[-1]['role'] == 'assistant' and len(self.assistant_end) > 0:
             prompt = prompt[:-len(self.assistant_end)]  # prefix of response to let the model complete the response
         if self.is_gpt_oss and not kwargs.get('tools'):
@@ -750,17 +754,12 @@ class HFChatTemplate(BaseChatTemplate):
         return prompt
 
     def _role_instruction(self, role):
-        try:
-            # Some models like google/gemma-2-2b-it have chat_template, but not accept system role in messages
-            # so we use try-except to handle this case
-            messages = [{'role': role, 'content': 'sentinel'}]
-            prompt = self.tokenizer.apply_chat_template(messages, tokenize=False)
-            role_pos = prompt.find('sentinel')
-            role_start = prompt[:role_pos]
-            role_end = prompt[role_pos + len('sentinel'):]
-            return role_start, role_end, messages, prompt
-        except Exception as e:
-            raise e
+        messages = [{'role': role, 'content': 'sentinel'}]
+        prompt = self.tokenizer.apply_chat_template(messages, tokenize=False)
+        role_pos = prompt.find('sentinel')
+        role_start = prompt[:role_pos]
+        role_end = prompt[role_pos + len('sentinel'):]
+        return role_start, role_end, messages, prompt
 
     @classmethod
     def match(cls, model_path: str) -> Optional[str]:
