@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import warnings
 from typing import TYPE_CHECKING, List, Literal, Optional, Union
+
+from typing_extensions import deprecated
 
 from .pipeline import Pipeline
 
@@ -71,6 +72,7 @@ def pipeline(model_path: str,
                     **kwargs)
 
 
+@deprecated('This function is no longer available. Please use CLI command "lmdeploy serve api_server" instead.')
 def serve(model_path: str,
           model_name: Optional[str] = None,
           backend: Literal['turbomind', 'pytorch'] = 'turbomind',
@@ -89,14 +91,11 @@ def serve(model_path: str,
 
     This will run the api_server in a subprocess.
     """ # noqa E501
-    warnings.warn("The 'serve' function is deprecated and no longer available. "
-                  'Please use alternative methods.',
-                  DeprecationWarning,
-                  stacklevel=2)
     raise NotImplementedError("The 'serve' function is no longer available. "
                               'This function has been deprecated and removed.')
 
 
+@deprecated('This function is no longer available. Please use "from lmdeploy.serve import APIClient" instead.')
 def client(api_server_url: str = 'http://0.0.0.0:23333', api_key: Optional[str] = None, **kwargs):
     """This function is deprecated and no longer available.
 
@@ -111,11 +110,5 @@ def client(api_server_url: str = 'http://0.0.0.0:23333', api_key: Optional[str] 
     Return:
         Chatbot for LLaMA series models with turbomind as inference engine.
     """
-    warnings.warn(
-        "The 'client' function is deprecated and no longer available. "
-        "Please use 'from lmdeploy.serve import APIClient' instead.",
-        DeprecationWarning,
-        stacklevel=2)
-    raise NotImplementedError("The 'client' function is no longer available. "
-                              'This function has been deprecated and removed. '
-                              "Please use 'from lmdeploy.serve import APIClient' instead.")
+    raise NotImplementedError("The 'client' function is no longer available. This function has been deprecated. "
+                              ' Please use "from lmdeploy.serve import APIClient" instead.')
