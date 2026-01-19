@@ -1,11 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-from typing import TYPE_CHECKING
 
 from lmdeploy.utils import get_logger
-
-if TYPE_CHECKING:
-    from lmdeploy.serve.core import AsyncEngine
 
 logger = get_logger('lmdeploy')
 
@@ -34,22 +30,21 @@ class RequestHandleManager:
         as `asyncio.Queue` must be created within an async context.
     """
 
-    def __init__(self, engine: 'AsyncEngine', size: int):
-        self.engine = engine.engine
+    def __init__(self, engine, size: int):
         self.size = size
-        self.handles = [self.engine.create_instance() for _ in range(size)]
+        self.handles = [engine.create_instance() for _ in range(size)]
         # `asyncio.Queue` must be created in an async context, refer to `get` method
         self.pool: asyncio.Queue = None
 
-    def get(self):
-        """Get the handles pool."""
+    async def get(self):
+        """Get a handle from pool."""
         # Lazy initialization: create pool on first use
         if self.pool is None:
             self.pool = asyncio.Queue()
             for inst in self.handles:
                 self.pool.put_nowait(inst)
 
-        return self.pool
+        return await self.pool.get()
 
     def ret(self, handle):
         """Return a handle to the pool."""

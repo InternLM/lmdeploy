@@ -205,7 +205,7 @@ class AsyncEngine(LogitsMixin):
             else speculative_config.num_speculative_tokens
 
         # Initialize inference instance manager to handle instance lifecycle
-        self.req_hnd_mgr = RequestHandleManager(self, self.backend_config.max_batch_size)
+        self.req_hnd_mgr = RequestHandleManager(self.engine, self.backend_config.max_batch_size)
         self.session_mgr = SessionManager()
 
         # build stat loggers

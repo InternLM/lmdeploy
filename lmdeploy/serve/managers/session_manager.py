@@ -76,8 +76,7 @@ class Session:
             raise RuntimeError(f'Session {self.session_id} already has an inference instance.')
         logger.debug(f'[acquire_request_handle] session {self.session_id} acquiring an instance')
         self._hnd_mgr = req_hnd_mgr
-        free_handles = self._hnd_mgr.get()
-        self._hnd = await free_handles.get()
+        self._hnd = await self._hnd_mgr.get()
         self._active = asyncio.Event()
         logger.debug(f'[acquire_request_handle] session {self.session_id} acquired an instance')
         try:
@@ -110,14 +109,14 @@ class Session:
         """End the session."""
         logger.debug(f'Ending session {self.session_id}')
         if self._hnd_mgr is None:
-            logger.warning(f'Session {self.session_id} has no inference instance manager.')
+            logger.warning(f'Session {self.session_id} has no handle.')
             return
 
         if self._hnd is not None:
             await self._active.wait()
             if self._hnd is not None:
                 raise RuntimeError(f'Session {self.session_id} is not finished yet.')
-        handle = await self._hnd_mgr.get().get()
+        handle = await self._hnd_mgr.get()
         try:
             await handle.async_end(self.session_id)
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
