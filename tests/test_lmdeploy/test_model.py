@@ -427,16 +427,7 @@ def test_HFChatTemplate_Qwen3_VL_with_vision_id(model_path):
 
 @pytest.mark.parametrize('model_path', ['google/gemma-2-9b-it', 'google/gemma-3-12b-it'])
 def test_gemma_chat_template(model_path):
-    messages = [{
-        'role': 'user',
-        'content': 'who are you'
-    }, {
-        'role': 'assistant',
-        'content': 'I am an AI'
-    }, {
-        'role': 'user',
-        'content': 'AGI is?'
-    }]
+    messages = [{'role': 'user', 'content': 'who are you'}]
 
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(model_path)
@@ -445,3 +436,14 @@ def test_gemma_chat_template(model_path):
     model = MODELS.get('hf')(model_path=model_path)
     lm_res = model.messages2prompt(messages)
     assert expected == lm_res
+
+    messages += [{'role': 'assistant', 'content': 'I am an AI'}, {'role': 'user', 'content': 'AGI is?'}]
+    lm_res = model.messages2prompt(messages, sequence_start=False)
+    assert lm_res == """<start_of_turn>user
+who are you<end_of_turn>
+<start_of_turn>model
+I am an AI<end_of_turn>
+<start_of_turn>user
+AGI is?<end_of_turn>
+<start_of_turn>model
+"""
