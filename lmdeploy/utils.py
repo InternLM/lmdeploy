@@ -465,9 +465,9 @@ def serialize_state_dict(state_dict: dict) -> str:
     from torch.multiprocessing.reductions import reduce_tensor
 
     # flattened_tensor
-    if 'metadata' in state_dict and 'flattened_tensor' in state_dict:
+    if 'metadata' in state_dict:
         data = state_dict
-        if isinstance(data['flattened_tensor'], torch.Tensor):
+        if 'flattened_tensor' in data and isinstance(data['flattened_tensor'], torch.Tensor):
             data['flattened_tensor'] = reduce_tensor(state_dict['flattened_tensor'])
     else:
         data = [(k, reduce_tensor(v)) for k, v in state_dict.items()]
@@ -522,6 +522,7 @@ class FlattenedTensorBucket:
             num_tensors = len(named_tensors)
             self.metadata = [None] * num_tensors
             self.flattened_tensor = [None] * num_tensors
+            flattened_tensor_list = [None] * num_tensors
             if num_tensors > 0:
                 if num_tensors > 1:
                     dtypes = [t.dtype for _, t in named_tensors]
@@ -530,7 +531,7 @@ class FlattenedTensorBucket:
 
                 current_idx = 0
                 for idx, (name, tensor) in enumerate(named_tensors):
-                    self.flattened_tensor[idx] = tensor.flatten()
+                    flattened_tensor_list[idx] = tensor.flatten()
                     numel = tensor.numel()
                     self.metadata[idx] = FlattenedTensorMetadata(name=name,
                                                                  shape=tensor.shape,
@@ -539,8 +540,16 @@ class FlattenedTensorBucket:
                                                                  end_idx=current_idx + numel,
                                                                  numel=numel)
                     current_idx += numel
-
-                self.flattened_tensor = torch.cat(self.flattened_tensor, dim=0)
+                if flattened_tensor is None:
+                    self.flattened_tensor = torch.cat(flattened_tensor_list, dim=0)
+                else:
+                    assert len(flattened_tensor.shape) == 1, 'flattened_tensor must be 1-D tensor'
+                    assert flattened_tensor.numel() >= current_idx, \
+                        'Provided flattened tensor numel is smaller than ' + \
+                        f'required numel: {flattened_tensor.numel()} < {current_idx}'
+                    assert sum([t.numel() for t in flattened_tensor_list]) == current_idx
+                    torch.cat(flattened_tensor_list, dim=0, out=flattened_tensor[:current_idx])
+                    self.flattened_tensor = flattened_tensor
         else:
             if flattened_tensor is None or metadata is None:
                 raise ValueError('Must provide either named_tensors or both flattened_tensor and metadata')
