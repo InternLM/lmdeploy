@@ -1243,7 +1243,7 @@ def run_benchmark(args_: argparse.Namespace):
     backend = args.backend
     model_id = args.model
     model_path = args.model_path if args.model_path is not None else args.model
-    tokenizer_id = args.tokenizer if args.tokenizer is not None else args.model_path
+    tokenizer_id = args.tokenizer if args.tokenizer is not None else model_path
 
     if args.model is None:
         print('No model specified or found. Please provide a model '
