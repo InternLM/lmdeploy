@@ -29,7 +29,7 @@ RUN bash /tmp/install_conda.sh && rm /tmp/install_conda.sh
 RUN /opt/conda/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main && \
     /opt/conda/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
 
-RUN PY_VERSIONS=(3.9 3.10 3.11 3.12 3.13) && \
+RUN PY_VERSIONS=(3.10 3.11 3.12 3.13) && \
     for pyver in "${PY_VERSIONS[@]}"; do \
         /opt/conda/bin/conda create -n py${pyver//./} python=${pyver} -yq && \
         /opt/conda/envs/py${pyver//./}/bin/pip install -i 'https://mirrors.aliyun.com/pypi/simple/' --no-cache-dir pybind11; \

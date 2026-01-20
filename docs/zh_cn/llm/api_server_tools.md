@@ -157,13 +157,11 @@ ChatCompletion(id='2', choices=[Choice(finish_reason='tool_calls', index=0, logp
 
 Meta 在 [Llama3 的官方用户指南](https://llama.meta.com/docs/model-cards-and-prompt-formats/llama3_1)中宣布（注：下文为原文的中文翻译）：
 
-```{text}
-有三个内置工具（brave_search、wolfram_alpha 和 code interpreter）可以使用系统提示词打开：
-
-1. Brave Search：执行网络搜索的工具调用。
-2. Wolfram Alpha：执行复杂数学计算的工具调用。
-3. Code Interpreter：使模型能够输出 Python 代码的功能。
-```
+> 有三个内置工具（brave_search、wolfram_alpha 和 code interpreter）可以使用系统提示词打开：
+>
+> 1. Brave Search：执行网络搜索的工具调用。
+> 2. Wolfram Alpha：执行复杂数学计算的工具调用。
+> 3. Code Interpreter：使模型能够输出 Python 代码的功能。
 
 此外，它还警告说：“注意： 我们建议使用 Llama 70B-instruct 或 Llama 405B-instruct 用于结合对话和工具调用的应用。Llama 8B-Instruct 无法可靠地在工具调用定义的同时维持对话。它可以用于零样本工具调用，但在模型和用户之间的常规对话中，应移除工具指令。”（注：引号中内容为原文的中文翻译）
 

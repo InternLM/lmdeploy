@@ -114,6 +114,7 @@ Documentation
 
    api/pipeline.rst
    api/openapi.rst
+   api/cli.rst
 
 Indices and tables
 ==================
