@@ -71,7 +71,7 @@ class Session:
         logger.debug(f'Session {self.session_id} has been reset.')
 
     @asynccontextmanager
-    async def acquire_request_handle(self, req_hnd_mgr: 'RequestHandleManager'):
+    async def request_handle(self, req_hnd_mgr: 'RequestHandleManager'):
         if self._hnd is not None:
             raise RuntimeError(f'Session {self.session_id} already has an inference instance.')
         logger.debug(f'[acquire_request_handle] session {self.session_id} acquiring an instance')
@@ -91,7 +91,7 @@ class Session:
             logger.debug(f'[acquire_request_handle] session {self.session_id} releasing the instance')
             # Return inference instance if it was acquired
             if self._hnd is not None:
-                req_hnd_mgr.ret(self._hnd)
+                req_hnd_mgr.put(self._hnd)
                 self._hnd = None
             # MUST set the signal after releasing the instance to avoid race condition
             # refer to async_end method
@@ -122,7 +122,7 @@ class Session:
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
             logger.error(f'[async_end] exception caught: {e}')
         finally:
-            self._hnd_mgr.ret(handle)
+            self._hnd_mgr.put(handle)
             self.reset()
 
 

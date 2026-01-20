@@ -61,7 +61,7 @@ class LogitsMixin:
         logits = [None] * len(input_ids)
 
         async def _proc(session, i):
-            async with session.acquire_request_handle(self.req_hnd_mgr) as handle:
+            async with session.request_handle(self.req_hnd_mgr) as handle:
                 input_len = len(input_ids[i])
                 # TODO(lvhan): Fix the ugly code later on
                 max_new_tokens = 1 if self.backend == 'turbomind' else 0

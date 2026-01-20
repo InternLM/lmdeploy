@@ -46,8 +46,8 @@ class RequestHandleManager:
 
         return await self.pool.get()
 
-    def ret(self, handle):
-        """Return a handle to the pool."""
+    def put(self, handle):
+        """Put a handle back to the pool."""
         if handle is not None and self.pool is not None:
             self.pool.put_nowait(handle)
 

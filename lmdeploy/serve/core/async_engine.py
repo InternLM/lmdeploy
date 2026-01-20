@@ -505,7 +505,7 @@ class AsyncEngine(LogitsMixin):
 
         metrics_processor.increment_total_requests()
 
-        async with session.acquire_request_handle(self.req_hnd_mgr) as handle:
+        async with session.request_handle(self.req_hnd_mgr) as handle:
             if epoch != self.epoch:
                 logger.debug(f'[generate] session {session_id} got aborted before starting inference')
                 # TODO(lvhan): metrics_processor.increment_failed_requests('abort')
