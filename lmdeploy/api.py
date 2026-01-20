@@ -1,5 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import TYPE_CHECKING, List, Literal, Optional, Union
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, List, Literal
 
 from typing_extensions import deprecated
 
@@ -11,11 +13,11 @@ if TYPE_CHECKING:
 
 
 def pipeline(model_path: str,
-             backend_config: Optional[Union['TurbomindEngineConfig', 'PytorchEngineConfig']] = None,
-             chat_template_config: Optional['ChatTemplateConfig'] = None,
+             backend_config: 'TurbomindEngineConfig' | 'PytorchEngineConfig' | None = None,
+             chat_template_config: 'ChatTemplateConfig' | None = None,
              log_level: str = 'WARNING',
-             max_log_len: int = None,
-             speculative_config: 'SpeculativeConfig' = None,
+             max_log_len: int | None = None,
+             speculative_config: 'SpeculativeConfig' | None = None,
              **kwargs):
     """
     Args:
@@ -74,14 +76,14 @@ def pipeline(model_path: str,
 
 @deprecated('This function is no longer available. Please use CLI command "lmdeploy serve api_server" instead.')
 def serve(model_path: str,
-          model_name: Optional[str] = None,
+          model_name: str | None = None,
           backend: Literal['turbomind', 'pytorch'] = 'turbomind',
-          backend_config: Optional[Union['TurbomindEngineConfig', 'PytorchEngineConfig']] = None,
-          chat_template_config: Optional['ChatTemplateConfig'] = None,
+          backend_config: 'TurbomindEngineConfig' | 'PytorchEngineConfig' | None = None,
+          chat_template_config: 'ChatTemplateConfig' | None = None,
           server_name: str = '0.0.0.0',
           server_port: int = 23333,
           log_level: str = 'ERROR',
-          api_keys: Optional[Union[List[str], str]] = None,
+          api_keys: List[str] | str | None = None,
           ssl: bool = False,
           **kwargs):
     """This function is deprecated and no longer available.
@@ -96,7 +98,7 @@ def serve(model_path: str,
 
 
 @deprecated('This function is no longer available. Please use "from lmdeploy.serve import APIClient" instead.')
-def client(api_server_url: str = 'http://0.0.0.0:23333', api_key: Optional[str] = None, **kwargs):
+def client(api_server_url: str = 'http://0.0.0.0:23333', api_key: str | None = None, **kwargs):
     """This function is deprecated and no longer available.
 
     .. deprecated::

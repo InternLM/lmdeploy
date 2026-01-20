@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-from typing import List, Union
+from typing import List
 
 import torch
 
@@ -52,7 +52,7 @@ class LogitsMixin:
 
     async def _async_get_logits(self,
                                 input_ids,
-                                steps: List[int] = None,
+                                steps: List[int] | None = None,
                                 sequence_start: bool = True,
                                 sequence_end: bool = True) -> List[torch.Tensor]:
         assert input_ids and all(isinstance(_, List) for _ in input_ids)
@@ -88,12 +88,12 @@ class LogitsMixin:
                 await self.session_mgr.async_end(session)
         return logits
 
-    def get_ppl(self, input_ids: Union[List[int], List[List[int]]]) -> List[float]:
+    def get_ppl(self, input_ids: List[int] | List[List[int]]) -> List[float]:
         """Get perplexity scores given a list of input tokens that have to be
         of the same length.
 
         Args:
-            input_ids (Union[List[int], List[List[int]]]): the batch of
+            input_ids (List[int] | List[List[int]]): the batch of
                 input token ids
 
         Returns:

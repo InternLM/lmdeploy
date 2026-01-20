@@ -2,7 +2,7 @@
 import asyncio
 import itertools
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, List, Tuple
 
 from lmdeploy.messages import GenerationConfig, Response
 from lmdeploy.serve.core.exceptions import SafeRunException
@@ -21,14 +21,14 @@ class Session:
     def __init__(self, session_id: int, **kwargs):
         self.session_id = session_id
         self.prompt: Any = None
-        self.response: Optional[Response] = None
+        self.response: Response | None = None
         self.history: List[Tuple[Any, str]] = []
-        self.gen_config: Optional[GenerationConfig] = None
+        self.gen_config: GenerationConfig | None = None
         self.step: int = 0
         # event to wait for the session to be active
-        self._active: Optional[asyncio.Event] = None
+        self._active: asyncio.Event | None = None
         self._hnd = None  # inference instance
-        self._hnd_mgr: Optional['RequestHandleManager'] = None
+        self._hnd_mgr: 'RequestHandleManager' | None = None
         self.update(**kwargs)
 
     def update(self, **kwargs):
@@ -144,7 +144,7 @@ class SessionManager:
         """Reserve a new session id."""
         return next(self.session_id_generator)
 
-    def get(self, session_id: Optional[int] = None, **kwargs) -> Session:
+    def get(self, session_id: int | None = None, **kwargs) -> Session:
         """Create a new session."""
         if session_id is None:
             session_id = self.reserve()

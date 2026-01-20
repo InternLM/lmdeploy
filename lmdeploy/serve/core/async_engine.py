@@ -10,7 +10,7 @@ from copy import deepcopy
 from functools import partial
 from queue import Queue
 from threading import Thread
-from typing import Any, Dict, Iterator, List, Literal, Optional, Union
+from typing import Any, Dict, Iterator, List, Literal
 
 from lmdeploy.archs import get_model_arch
 from lmdeploy.logger import RequestLogger
@@ -39,12 +39,12 @@ class GenOut:
     history_token_len: int
     input_token_len: int
     generate_token_len: int
-    finish_reason: Optional[Literal['stop', 'length', 'error']] = None
-    token_ids: List[int] = None
-    logprobs: List[Dict[int, float]] = None
+    finish_reason: Literal['stop', 'length', 'error'] | None = None
+    token_ids: List[int] | None = None
+    logprobs: List[Dict[int, float]] | None = None
     logits: Any = None
     last_hidden_state: Any = None
-    cache_block_ids: List[int] = None  # for disaggregation
+    cache_block_ids: List[int] | None = None  # for disaggregation
     routed_experts: Any = None  # for RL router replay
 
     def to_response(self, index: int = 0) -> Response:
@@ -156,12 +156,12 @@ class AsyncEngine(LogitsMixin):
 
     def __init__(self,
                  model_path: str,
-                 model_name: Optional[str] = None,
+                 model_name: str | None = None,
                  backend: Literal['turbomind', 'pytorch'] = 'turbomind',
-                 backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None,
-                 chat_template_config: Optional[ChatTemplateConfig] = None,
-                 max_log_len: int = None,
-                 speculative_config: SpeculativeConfig = None,
+                 backend_config: TurbomindEngineConfig | PytorchEngineConfig | None = None,
+                 chat_template_config: ChatTemplateConfig | None = None,
+                 max_log_len: int | None = None,
+                 speculative_config: SpeculativeConfig | None = None,
                  **kwargs) -> None:
         logger.info(f'input backend={backend}, backend_config={backend_config}')
         logger.info(f'speculative_config={speculative_config}')
@@ -224,15 +224,15 @@ class AsyncEngine(LogitsMixin):
     def __exit__(self, exc_type, exc_value, traceback):
         self.close()
 
-    def _build_turbomind(self, model_path: str, backend_config: TurbomindEngineConfig = None, **kwargs):
+    def _build_turbomind(self, model_path: str, backend_config: TurbomindEngineConfig | None = None, **kwargs):
         """Inner build method for turbomind backend."""
         from lmdeploy import turbomind as tm
         return tm.TurboMind.from_pretrained(model_path, engine_config=backend_config, **kwargs)
 
     def _build_pytorch(self,
                        model_path: str,
-                       backend_config: PytorchEngineConfig = None,
-                       speculative_config: SpeculativeConfig = None,
+                       backend_config: PytorchEngineConfig | None = None,
+                       speculative_config: SpeculativeConfig | None = None,
                        **kwargs):
         """Inner build method for pytorch backend."""
         from lmdeploy.pytorch.engine import Engine
@@ -293,7 +293,7 @@ class AsyncEngine(LogitsMixin):
         self.sleeping_tags = {'weights', 'kv_cache'}
         self.is_sleeping = True
 
-    def wakeup(self, tags: Optional[List[str]] = None):
+    def wakeup(self, tags: List[str] | None = None):
         """Wake up the model.
 
         Args:
@@ -357,10 +357,7 @@ class AsyncEngine(LogitsMixin):
 
         return iter(que.get, None)
 
-    def _determine_gen_config(self,
-                              session,
-                              input_ids,
-                              gen_config: Optional[GenerationConfig] = None) -> GenerationConfig:
+    def _determine_gen_config(self, session, input_ids, gen_config: GenerationConfig | None = None) -> GenerationConfig:
         """Determine the generation configuration."""
         gen_config = deepcopy(gen_config) or GenerationConfig()
         gen_config.convert_stop_bad_words_to_ids(self.tokenizer)
@@ -399,20 +396,20 @@ class AsyncEngine(LogitsMixin):
             self,
             messages,
             session_id: int,
-            gen_config: Optional[GenerationConfig] = None,
-            tools: Optional[List[object]] = None,
-            reasoning_effort: Optional[Literal['low', 'medium', 'high']] = None,
+            gen_config: GenerationConfig | None = None,
+            tools: List[object] | None = None,
+            reasoning_effort: Literal['low', 'medium', 'high'] | None = None,
             stream_response: bool = True,
             sequence_start: bool = True,
             sequence_end: bool = True,  # no interactive mode by default
             step: int = 0,
             do_preprocess: bool = True,
-            adapter_name: Optional[str] = None,
+            adapter_name: str | None = None,
             rewind_stop_tokens: bool = False,
-            input_ids: Optional[List] = None,
-            enable_thinking: Optional[bool] = None,
-            chat_template_kwargs: Optional[Dict] = None,
-            mm_processor_kwargs: Optional[Dict[str, Any]] = None,
+            input_ids: List | None = None,
+            enable_thinking: bool | None = None,
+            chat_template_kwargs: Dict | None = None,
+            mm_processor_kwargs: Dict[str, Any] | None = None,
             **kwargs):
         """Generate responses.
 

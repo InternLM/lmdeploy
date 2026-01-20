@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
 from contextlib import closing
-from typing import TYPE_CHECKING, Dict, Iterator, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Dict, Iterator, List, Tuple
 
 import tqdm
 from typing_extensions import deprecated
@@ -25,11 +25,11 @@ class Pipeline:
 
     def __init__(self,
                  model_path: str,
-                 backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None,
-                 chat_template_config: Optional[ChatTemplateConfig] = None,
+                 backend_config: TurbomindEngineConfig | PytorchEngineConfig | None = None,
+                 chat_template_config: ChatTemplateConfig | None = None,
                  log_level: str = 'WARNING',
-                 max_log_len: int = None,
-                 speculative_config: Optional[SpeculativeConfig] = None,
+                 max_log_len: int | None = None,
+                 speculative_config: SpeculativeConfig | None = None,
                  **kwargs):
         """Initialize Pipeline.
 
@@ -71,11 +71,11 @@ class Pipeline:
         self.backend_config = self.async_engine.backend_config
 
     def infer(self,
-              prompts: Union[List[str], str, List[Dict], List[List[Dict]], Tuple, List[Tuple]],
-              session_id: Optional[Union[List[int], int]] = None,
-              gen_config: Optional[Union[GenerationConfig, List[GenerationConfig]]] = None,
+              prompts: List[str] | str | List[Dict] | List[List[Dict]] | Tuple | List[Tuple],
+              session_id: List[int] | int | None = None,
+              gen_config: GenerationConfig | List[GenerationConfig] | None = None,
               do_preprocess: bool = True,
-              adapter_name: Optional[str] = None,
+              adapter_name: str | None = None,
               use_tqdm: bool = False,
               **kwargs):
         """Inference prompts.
@@ -83,10 +83,10 @@ class Pipeline:
         Args:
             prompts: Prompts to inference. It can be a single prompt, a list of prompts, a list of tuples, or a tuple.
                 Tuple can be (prompt, image or [images]) or (image or [images], prompt).
-            session_id(Optional[Union[List[int], int]]): Session ID(s).
-            gen_config(Optional[Union[GenerationConfig, List[GenerationConfig]]]): Generation configuration(s).
+            session_id(List[int] | int | None): Session ID(s).
+            gen_config(GenerationConfig | List[GenerationConfig] | None): Generation configuration(s).
             do_preprocess(bool): Whether to pre-process messages.
-            adapter_name(Optional[str]): Adapter name.
+            adapter_name(str | None): Adapter name.
             use_tqdm(bool): Whether to use progress bar.
             **kwargs(dict): Additional keyword arguments.
         """
@@ -119,23 +119,23 @@ class Pipeline:
         return self.infer(*args, **kwargs)
 
     def stream_infer(self,
-                     prompts: Union[List[str], str, List[Dict], List[List[Dict]], Tuple, List[Tuple]],
-                     session_id: Optional[Union[int, List[int]]] = None,
-                     gen_config: Optional[Union[GenerationConfig, List[GenerationConfig]]] = None,
+                     prompts: List[str] | str | List[Dict] | List[List[Dict]] | Tuple | List[Tuple],
+                     session_id: int | List[int] | None = None,
+                     gen_config: GenerationConfig | List[GenerationConfig] | None = None,
                      do_preprocess: bool = True,
-                     adapter_name: Optional[str] = None,
+                     adapter_name: str | None = None,
                      stream_response: bool = True,
                      **kwargs):
         """Stream inference.
 
         Args:
-            prompts(Union[List[str], str, List[Dict], List[List[Dict]], Tuple, List[Tuple]]): Prompts to inference.
+            prompts(List[str] | str | List[Dict] | List[List[Dict]] | Tuple | List[Tuple]): Prompts to inference.
                 It can be a single prompt, a list of prompts, a list of tuples, or a tuple.
                 Tuple can be (prompt, image or [images]) or (image or [images], prompt).
-            session_id(Optional[Union[int, List[int]]]): Session ID.
-            gen_config(Optional[Union[GenerationConfig, List[GenerationConfig]]]): Generation configuration(s).
+            session_id(int | List[int] | None): Session ID.
+            gen_config(GenerationConfig | List[GenerationConfig] | None): Generation configuration(s).
             do_preprocess(bool): Whether to pre-process messages.
-            adapter_name(Optional[str]): Adapter name.
+            adapter_name(str | None): Adapter name.
             stream_response(bool): Whether to stream the response. If True, the generator will stream the response.
                 Otherwise, the generator will run until finish and return the final response. This argument
                 is introduced to support the streaming and non-streaming modes of Pipeline.chat.
@@ -159,12 +159,12 @@ class Pipeline:
         self.async_engine.close()
 
     def chat(self,
-             prompt: Union[str, Tuple[str, Union['Image', List['Image']]]],
+             prompt: str | Tuple[str, 'Image' | List['Image']],
              session=None,
-             gen_config: Optional[GenerationConfig] = None,
+             gen_config: GenerationConfig | None = None,
              stream_response=False,
              adapter_name=None,
-             **kwargs) -> Union['Session', Iterator]:
+             **kwargs) -> 'Session' | Iterator:
         """Chat.
 
         Args:
@@ -230,12 +230,12 @@ class Pipeline:
         """End a session."""
         self.async_engine._run(coro=self.session_mgr.async_end(session)).result()
 
-    def get_ppl(self, input_ids: Union[List[int], List[List[int]]]) -> List[float]:
+    def get_ppl(self, input_ids: List[int] | List[List[int]]) -> List[float]:
         """Get perplexity scores given a list of input tokens that have to be
         of the same length.
 
         Args:
-            input_ids (Union[List[int], List[List[int]]]): the batch of
+            input_ids (List[int] | List[List[int]]): the batch of
                 input token ids
 
         Returns:
@@ -244,8 +244,8 @@ class Pipeline:
         return self.async_engine.get_ppl(input_ids)
 
     def __call__(self,
-                 prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
-                 gen_config: Optional[Union[GenerationConfig, List[GenerationConfig]]] = None,
+                 prompts: List[str] | str | List[Dict] | List[List[Dict]],
+                 gen_config: GenerationConfig | List[GenerationConfig] | None = None,
                  **kwargs):
         return self.infer(prompts, gen_config=gen_config, **kwargs)
 
@@ -271,9 +271,9 @@ class Pipeline:
                 or (isinstance(prompts, list) and len(prompts) > 0 and isinstance(prompts[0], Dict)))
 
     def _request_generator(self,
-                           prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
-                           session_id: Optional[Union[List[int], int]] = None,
-                           gen_config: Optional[Union[GenerationConfig, List[GenerationConfig]]] = None,
+                           prompts: List[str] | str | List[Dict] | List[List[Dict]],
+                           session_id: List[int] | int | None = None,
+                           gen_config: GenerationConfig | List[GenerationConfig] | None = None,
                            **kwargs):
         """Generate requests."""
         is_single = self._is_single(prompts)

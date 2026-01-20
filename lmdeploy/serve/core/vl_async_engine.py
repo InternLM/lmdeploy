@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Literal, Optional, Union
+from typing import Literal
 
 from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig, VisionConfig
 from lmdeploy.serve.processors import MultimodalProcessor
@@ -17,8 +17,8 @@ class VLAsyncEngine(AsyncEngine):
     def __init__(self,
                  model_path: str,
                  backend: Literal['turbomind', 'pytorch'] = 'turbomind',
-                 backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None,
-                 vision_config: Optional[VisionConfig] = None,
+                 backend_config: TurbomindEngineConfig | PytorchEngineConfig | None = None,
+                 vision_config: VisionConfig | None = None,
                  **kwargs) -> None:
         if backend == 'pytorch':
             try_import_deeplink(backend_config.device_type)

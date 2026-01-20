@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Tuple
 
 import PIL
 
@@ -19,7 +19,7 @@ class MultimodalProcessor:
                  tokenizer: Tokenizer,
                  chat_template: BaseChatTemplate,
                  vl_encoder=None,
-                 backend: Optional[str] = None):
+                 backend: str | None = None):
         """Initialize MultimodalProcessor.
 
         Args:
@@ -182,14 +182,14 @@ class MultimodalProcessor:
         return out_messages
 
     async def get_prompt_input(self,
-                               prompt: Union[str, List[Dict]],
+                               prompt: str | List[Dict],
                                do_preprocess: bool,
                                sequence_start: bool,
                                adapter_name: str,
-                               tools: Optional[List[object]] = None,
-                               reasoning_effort: Optional[Literal['low', 'medium', 'high']] = None,
-                               chat_template_kwargs: Optional[Dict] = None,
-                               mm_processor_kwargs: Optional[Dict[str, Any]] = None,
+                               tools: List[object] | None = None,
+                               reasoning_effort: Literal['low', 'medium', 'high'] | None = None,
+                               chat_template_kwargs: Dict | None = None,
+                               mm_processor_kwargs: Dict[str, Any] | None = None,
                                **kwargs):
         """Process prompt and return prompt string and input_ids.
 
@@ -334,13 +334,13 @@ class MultimodalProcessor:
                 item.get('type') in ['image_url', 'image_data'] for item in message['content']) for message in messages)
 
     async def _get_text_prompt_input(self,
-                                     prompt: Union[str, List[Dict]],
+                                     prompt: str | List[Dict],
                                      do_preprocess: bool,
                                      sequence_start: bool,
                                      adapter_name: str,
-                                     tools: Optional[List[object]] = None,
-                                     reasoning_effort: Optional[Literal['low', 'medium', 'high']] = None,
-                                     chat_template_kwargs: Optional[Dict] = None,
+                                     tools: List[object] | None = None,
+                                     reasoning_effort: Literal['low', 'medium', 'high'] | None = None,
+                                     chat_template_kwargs: Dict | None = None,
                                      **kwargs):
         """Process text-only prompt and return prompt string and input_ids."""
         # Change multimodal data to openai text messages
@@ -371,9 +371,9 @@ class MultimodalProcessor:
                                            do_preprocess: bool,
                                            sequence_start: bool,
                                            adapter_name: str,
-                                           tools: Optional[List[object]] = None,
-                                           chat_template_kwargs: Optional[Dict] = None,
-                                           mm_processor_kwargs: Optional[Dict[str, Any]] = None,
+                                           tools: List[object] | None = None,
+                                           chat_template_kwargs: Dict | None = None,
+                                           mm_processor_kwargs: Dict[str, Any] | None = None,
                                            **kwargs):
         """Process multimodal prompt and return processed data for inference
         engines."""
