@@ -246,7 +246,7 @@ def run_pipeline_testcase_repetition_penalty(config, model, backend, file_name):
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
-    gen_config = GenerationConfig(repetition_penalty=0.01, random_seed=1, do_sample=True)
+    gen_config = GenerationConfig(repetition_penalty=0.01, random_seed=1, min_new_tokens=50, do_sample=True)
     response = pipe('Shanghai is', gen_config=gen_config)
     result, msg = has_repeated_fragment(response.text)
     save_pipeline_common_log(config, file_name, result, response, msg=msg)
