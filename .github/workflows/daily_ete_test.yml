@@ -382,7 +382,8 @@ jobs:
             model_path: Qwen/Qwen3-VL-30B-A3B-Instruct
             case_info: ['chat_completions_v1', 'generate']
             generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs'
+            extra: '--logprobs-mode raw_logprobs--enable-return-routed-experts'
+            backend: pytorch
           - tp: 2
             model: Qwen3-32B
             model_path: Qwen/Qwen3-32B
@@ -394,7 +395,8 @@ jobs:
             model_path: Qwen/Qwen3-VL-8B-Instruct
             case_info: ['chat_completions_v1', 'generate']
             generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs'
+            extra: '--logprobs-mode raw_logprobs --enable-return-routed-experts'
+            backend: pytorch
           - tp: 2
             model: InternVL3-38B
             model_path: OpenGVLab/InternVL3-38B
