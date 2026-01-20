@@ -1239,6 +1239,12 @@ def run_benchmark(args_: argparse.Namespace):
                   '`--host` and `--port`.')
             sys.exit(1)
 
+    # Read dataset
+    backend = args.backend
+    model_id = args.model
+    model_path = args.model_path if args.model_path is not None else args.model
+    tokenizer_id = args.tokenizer if args.tokenizer is not None else args.model_path
+
     if args.model is None:
         print('No model specified or found. Please provide a model '
               'using `--model`.')
@@ -1251,12 +1257,6 @@ def run_benchmark(args_: argparse.Namespace):
               'there is gibberish, it might count incorrectly.\n')
 
     print(f'{args}\n')
-
-    # Read dataset
-    backend = args.backend
-    model_id = args.model
-    model_path = args.model_path if args.model_path is not None else args.model
-    tokenizer_id = args.tokenizer if args.tokenizer is not None else args.model_path
 
     tokenizer = get_tokenizer(tokenizer_id)
 
