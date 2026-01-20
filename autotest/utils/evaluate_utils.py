@@ -179,9 +179,10 @@ def eval_test(model_path, eval_path, case_name, port=DEFAULT_PORT, test_type='in
 
                 if cfg.models and len(cfg.models) > 0:
                     model_cfg = cfg.models[0]
-                    model_cfg['abbr'] = f'{case_name}-lmdeploy-api'
+                    model_cfg['abbr'] = f'{case_name}'
                     model_cfg['openai_api_base'] = test_url  # noqa: E231
-                    model_cfg['path'] = model_path
+                    model_cfg['path'] = case_name
+                    model_cfg['tokenizer_path'] = model_path
 
                     for key, value in kwargs.items():
                         model_cfg[key] = value
