@@ -174,7 +174,7 @@ def mllm_restful_profile(config, run_config, port, is_smoke: bool = False):
 
     csv_path = f'{work_dir}/mllm_restful.csv'
 
-    command = f'python benchmark/profile_restful_api.py --backend lmdeploy-chat --dataset-name image --tokenizer {model_path} --random-input-len 100 --random-output-len 100 --random-range-ratio 1 --image-format jpeg --image-count 1 --image-content random --image-resolution 1024x1024 --base-url {http_url} --output-file {csv_path}'  # noqa
+    command = f'python benchmark/profile_restful_api.py --backend lmdeploy-chat --dataset-name image --tokenizer {model_path} --model {case_name} --model-path {model_path} --random-input-len 100 --random-output-len 100 --random-range-ratio 1 --image-format jpeg --image-count 1 --image-content random --image-resolution 1024x1024 --base-url {http_url} --output-file {csv_path}'  # noqa
     if is_smoke:
         command += ' --num-prompts 100'
     else:
@@ -253,5 +253,7 @@ def get_max_cache_entry(model, backend):
         return 0.95
     elif 'internlm2' in model:
         return 0.9
+    elif 'Qwen/Qwen3-235B-A22B' == model or 'internlm/Intern-S1' == model:
+        return 0.7
     else:
         return None
