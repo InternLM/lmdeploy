@@ -187,13 +187,10 @@ jobs:
           curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
           cat ${{env.SERVER_LOG}}/pytorch_InternVL3_5-30B-A3B_start_restful.log
           exit 1
-      - name: Generate reports
-        if: always()
-        run: |
-          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
       - name: Clear workfile
         if: always()
         run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir

@@ -137,9 +137,7 @@ def test_restful_chat_distributed_dpep16(shared_proxy_manager, config, run_confi
 
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize('run_config',
-                         get_func_config_list(BACKEND, {'tp': 2}, extra={'enable_prefix_caching': True}),
-                         indirect=True)
+@pytest.mark.parametrize('run_config', get_func_config_list(BACKEND, {'tp': 2}, extra={'enable_prefix_caching': True}))
 def test_restful_chat_turbomind_prefix_cache_tp2(config, run_config, common_case_config, worker_id):
     run_llm_test(config, run_config, common_case_config, worker_id)
 
@@ -164,8 +162,7 @@ def test_hf_turbomind_chat_pr_tp1(config, run_config, common_case_config, worker
 
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.gpu_num_1
-@pytest.mark.parametrize('run_config', [item for item in MODELSCOPE_CONFIG if item['backend'] == BACKEND],
-                         indirect=True)
+@pytest.mark.parametrize('run_config', [item for item in MODELSCOPE_CONFIG if item['backend'] == BACKEND])
 def test_modelscope_restful_chat_tp1(config, run_config, common_case_config, worker_id):
     case_config = {k: v for k, v in common_case_config.items() if k == 'memory_test'}
     run_llm_test(config, run_config, case_config, worker_id)
@@ -190,8 +187,7 @@ def test_pytorch_chat_with_lora_tp2(config, run_config, common_case_config, work
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize(
     'run_config',
-    [item for item in REASONING_TEST_LLM if item['backend'] == BACKEND and item['parallel_config']['tp'] == 1],
-    indirect=True)
+    [item for item in REASONING_TEST_LLM if item['backend'] == BACKEND and item['parallel_config']['tp'] == 1])
 def test_restful_chat_reasoning_tp1(config, run_config, worker_id):
     run_reasoning_case(config, run_config, worker_id)
 
@@ -201,8 +197,7 @@ def test_restful_chat_reasoning_tp1(config, run_config, worker_id):
 @pytest.mark.gpu_num_2
 @pytest.mark.parametrize(
     'run_config',
-    [item for item in REASONING_TEST_LLM if item['backend'] == BACKEND and item['parallel_config']['tp'] == 2],
-    indirect=True)
+    [item for item in REASONING_TEST_LLM if item['backend'] == BACKEND and item['parallel_config']['tp'] == 2])
 def test_restful_chat_reasoning_tp2(config, run_config, worker_id):
     run_reasoning_case(config, run_config, worker_id)
 
@@ -212,8 +207,7 @@ def test_restful_chat_reasoning_tp2(config, run_config, worker_id):
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize(
     'run_config',
-    [item for item in TOOLCALL_TEST_LLM if item['backend'] == BACKEND and item['parallel_config']['tp'] == 1],
-    indirect=True)
+    [item for item in TOOLCALL_TEST_LLM if item['backend'] == BACKEND and item['parallel_config']['tp'] == 1])
 def test_restful_chat_tools_tp1(config, run_config, worker_id):
     run_tools_case(config, run_config, worker_id)
 
@@ -223,8 +217,7 @@ def test_restful_chat_tools_tp1(config, run_config, worker_id):
 @pytest.mark.gpu_num_2
 @pytest.mark.parametrize(
     'run_config',
-    [item for item in TOOLCALL_TEST_LLM if item['backend'] == BACKEND and item['parallel_config']['tp'] == 2],
-    indirect=True)
+    [item for item in TOOLCALL_TEST_LLM if item['backend'] == BACKEND and item['parallel_config']['tp'] == 2])
 def test_restful_chat_tools_tp2(config, run_config, worker_id):
     run_tools_case(config, run_config, worker_id)
 
@@ -234,7 +227,6 @@ def test_restful_chat_tools_tp2(config, run_config, worker_id):
 @pytest.mark.gpu_num_4
 @pytest.mark.parametrize(
     'run_config',
-    [item for item in TOOLCALL_TEST_LLM if item['backend'] == BACKEND and item['parallel_config']['tp'] == 4],
-    indirect=True)
+    [item for item in TOOLCALL_TEST_LLM if item['backend'] == BACKEND and item['parallel_config']['tp'] == 4])
 def test_restful_chat_tools_tp4(config, run_config, worker_id):
     run_tools_case(config, run_config, worker_id)
