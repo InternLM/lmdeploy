@@ -70,7 +70,7 @@ class VariableInterface:
     enable_abort_handling: bool = False
 
     @staticmethod
-    def apply_session_id(session_id: int) -> int:
+    def get_session_id(session_id: int) -> int:
         if session_id == -1:
             return VariableInterface.session_mgr.reserve()
         return session_id
@@ -393,7 +393,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
-    request.session_id = VariableInterface.apply_session_id(request.session_id)
+    request.session_id = VariableInterface.get_session_id(request.session_id)
 
     json_request = await raw_request.json()
     migration_request = json_request.pop('migration_request', None)
@@ -750,7 +750,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
-    request.session_id = VariableInterface.apply_session_id(request.session_id)
+    request.session_id = VariableInterface.get_session_id(request.session_id)
 
     json_request = await raw_request.json()
     migration_request = json_request.pop('migration_request', None)
@@ -940,7 +940,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
     error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
-    request.session_id = VariableInterface.apply_session_id(request.session_id)
+    request.session_id = VariableInterface.get_session_id(request.session_id)
 
     prompt = request.prompt
     input_ids = request.input_ids
