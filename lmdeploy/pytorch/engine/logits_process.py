@@ -23,9 +23,11 @@ def _process_bad_words_(scores: torch.Tensor,
                         mask: torch.BoolTensor,
                         filter_value: float = -float('inf')):
     """Process bad words."""
-    filtered_scores = scores.gather(1, bad_words)
+    # invalid badwords might be negative
+    valid_bad_words = bad_words.where(mask, 0)
+    filtered_scores = scores.gather(1, valid_bad_words)
     filtered_scores[mask] = filter_value
-    scores.scatter_(1, bad_words, filtered_scores)
+    scores.scatter_(1, valid_bad_words, filtered_scores)
     return scores
 
 
