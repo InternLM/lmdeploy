@@ -43,13 +43,13 @@ def start_openai_service(config, run_config, worker_id):
         get_cli_common_param(run_config), f'--model-name {case_name}'
     ]).strip()
 
-    print('reproduce command restful: ' + cmd)
-
     env = os.environ.copy()
     env['MASTER_PORT'] = str(get_workerid(worker_id) + 29500)
     env.update(run_config.get('env', {}))
 
     file = open(server_log, 'w')
+    print('reproduce command restful: ' + cmd)
+    file.write('reproduce command restful: ' + cmd + '\n')
     startRes = subprocess.Popen(cmd,
                                 stdout=file,
                                 stderr=file,
