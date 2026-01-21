@@ -8,8 +8,6 @@ from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor
 from lmdeploy.pytorch.model_inputs import StepContext
 from lmdeploy.pytorch.nn.linear import build_rowwise_linear
 
-from ..patch import get_build_model_context
-
 
 class DeployModelMixin:
 

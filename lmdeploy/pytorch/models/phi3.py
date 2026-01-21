@@ -7,7 +7,7 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, Embedding, RMSNorm, SiluAndMul
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul
 from lmdeploy.pytorch.nn.linear import build_down_linear, build_gateup_linear, build_o_proj, build_qkv_proj
 from lmdeploy.pytorch.nn.rotary_embedding import build_rotary_embedding_from_config
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
@@ -211,11 +211,11 @@ class Phi3Model(nn.Module):
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
 
-        self.embed_tokens = Embedding(config.vocab_size,
-                                      config.hidden_size,
-                                      self.padding_idx,
-                                      dtype=dtype,
-                                      device=device)
+        self.embed_tokens = nn.Embedding(config.vocab_size,
+                                         config.hidden_size,
+                                         self.padding_idx,
+                                         dtype=dtype,
+                                         device=device)
 
         # build all decode layers
         self.layers = nn.ModuleList([
