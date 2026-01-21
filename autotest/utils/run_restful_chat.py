@@ -8,7 +8,7 @@ import requests
 from openai import OpenAI
 from pytest_assume.plugin import assume
 from utils.config_utils import get_case_str_by_config, get_cli_common_param, get_cuda_prefix_by_workerid, get_workerid
-from utils.constant import DEFAULT_PORT
+from utils.constant import DEFAULT_PORT, DEFAULT_SERVER
 from utils.restful_return_check import assert_chat_completions_batch_return
 from utils.rule_condition_assert import assert_result
 
@@ -685,7 +685,7 @@ def start_proxy_server(log_path, port, case_name: str = 'default'):
     timestamp = time.strftime('%Y%m%d_%H%M%S')
     proxy_log = os.path.join(log_path, f'proxy_server_{case_name}_{str(port)}_{timestamp}.log')
 
-    proxy_url = f'http://127.0.0.1:{port}'  # noqa: E231, E261
+    proxy_url = f'http://{DEFAULT_SERVER}:{port}'  # noqa: E231, E261
     try:
         response = requests.get(f'{proxy_url}/nodes/status', timeout=5)
         if response.status_code == 200:
@@ -695,7 +695,7 @@ def start_proxy_server(log_path, port, case_name: str = 'default'):
     except requests.exceptions.RequestException:
         pass
 
-    cmd = (f'lmdeploy serve proxy --server-name 127.0.0.1 --server-port {port} '
+    cmd = (f'lmdeploy serve proxy --server-name {DEFAULT_SERVER} --server-port {port} '
            f'--routing-strategy min_expected_latency --serving-strategy Hybrid')
 
     print(f'Starting proxy server with command: {cmd}')

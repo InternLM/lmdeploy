@@ -1,4 +1,5 @@
 DEFAULT_PORT = 23333
+DEFAULT_SERVER = '127.0.0.1'
 PROXY_PORT = 8000
 
 EVAL_CONFIGS = {
@@ -72,7 +73,7 @@ EVAL_RUN_CONFIG = {
         'tp': 2
     },
     'extra_params': {
-        'server-name': '127.0.0.1',
+        'server-name': DEFAULT_SERVER,
         'session-len': 76000,
         'cache-max-entry-count': 0.7
     }
