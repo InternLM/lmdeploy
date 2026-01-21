@@ -179,7 +179,7 @@ def eval_test(model_path, eval_path, case_name, port=DEFAULT_PORT, test_type='in
 
                 if cfg.models and len(cfg.models) > 0:
                     model_cfg = cfg.models[0]
-                    model_cfg['abbr'] = f'{case_name}'
+                    model_cfg['abbr'] = case_name
                     model_cfg['openai_api_base'] = test_url  # noqa: E231
                     model_cfg['path'] = case_name
                     model_cfg['tokenizer_path'] = model_path
@@ -200,11 +200,13 @@ def eval_test(model_path, eval_path, case_name, port=DEFAULT_PORT, test_type='in
 
                 cfg.JUDGE_API_BASE = test_url
                 cfg.JUDGE_MODEL_PATH = model_path
+                cfg.JUDGE_MODEL_NAME = case_name
 
                 if hasattr(cfg, 'judge_cfg'):
-                    cfg.judge_cfg['path'] = cfg.JUDGE_MODEL_PATH
-                    cfg.judge_cfg['openai_api_base'] = cfg.JUDGE_API_BASE
-                    cfg.judge_cfg['tokenizer_path'] = cfg.JUDGE_MODEL_PATH
+                    cfg.judge_cfg['path'] = case_name
+                    cfg.judge_cfg['abbr'] = case_name
+                    cfg.judge_cfg['openai_api_base'] = test_url
+                    cfg.judge_cfg['tokenizer_path'] = model_path
 
                 if hasattr(cfg, 'datasets') and cfg.datasets:
                     for dataset in cfg.datasets:
