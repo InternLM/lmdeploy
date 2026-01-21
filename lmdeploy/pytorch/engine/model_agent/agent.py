@@ -1193,27 +1193,13 @@ class BaseModelAgent:
     @torch.inference_mode()
     async def sleep(self, level: int = 1):
         """Sleep."""
-        from torch import distributed as dist
-
-        from lmdeploy.pytorch.backends.deepep_moe_checker import get_moe_backend
-
         self.state.is_sleeping = True
         await self.state.to_sleep.wait()
-
         self.cache_engine = None
         self.reset_graph_runner()
         device = 'cpu' if level == 1 else 'meta'
         self.patched_model.get_model().to(device=device, non_blocking=True)
         torch.cuda.synchronize()
-
-        # # destroy deepep buffer
-        if get_moe_backend().use_deepep_moe_backend():
-            from dlblas.layers.moe.token_dispatcher import DeepEPBuffer
-
-            if hasattr(DeepEPBuffer, 'destroy'):
-                DeepEPBuffer.destroy()
-                dist.barrier()
-
         torch.cuda.empty_cache()
         self.state.to_sleep.clear()
 
