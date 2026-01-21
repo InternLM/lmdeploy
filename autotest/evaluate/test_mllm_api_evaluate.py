@@ -13,7 +13,8 @@ def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_
     case_name = get_case_str_by_config(run_config)
 
     if test_type == 'infer':
-        proxy_pid, proxy_process = start_proxy_server(config.get('server_log_path'), constant.PROXY_PORT)
+        proxy_pid, proxy_process = start_proxy_server(config.get('server_log_path'), constant.PROXY_PORT,
+                                                      f'{case_name}_infer')
         work_num = int(8 / run_config.get('parallel_config', {}).get('tp', 1))
         run_config_new = run_config.copy()
         if 'extra_params' not in run_config_new:
@@ -47,7 +48,7 @@ def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_
             stop_restful_api(proxy_pid, proxy_process)
     else:  # eval
         port = constant.PROXY_PORT + get_workerid(worker_id)
-        proxy_pid, proxy_process = start_proxy_server(config.get('server_log_path'), port)
+        proxy_pid, proxy_process = start_proxy_server(config.get('server_log_path'), port, f'{case_name}_eval')
         eval_run_config = constant.EVAL_RUN_CONFIG.copy()
         if 'extra_params' not in eval_run_config:
             eval_run_config['extra_params'] = {}

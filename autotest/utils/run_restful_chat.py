@@ -676,7 +676,7 @@ def proxy_health_check(url):
         return False
 
 
-def start_proxy_server(log_path, port):
+def start_proxy_server(log_path, port, case_name: str = ''):
     """Start the proxy server for testing with enhanced error handling and
     logging."""
     if log_path is None:
