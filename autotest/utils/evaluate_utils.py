@@ -272,7 +272,7 @@ def mllm_eval_test(model_path, eval_path, case_name, port=DEFAULT_PORT, test_typ
     if test_type == 'infer':
         cmd = f'python run.py --data MMBench_V11_MINI MMStar_MINI AI2D_MINI OCRBench_MINI --model {case_name} --base-url http://127.0.0.1:{port}/v1 --reuse --work-dir {work_dir} --mode infer {extra_config_str}'  # noqa
     elif test_type == 'eval':
-        cmd = f'python run.py --data MMBench_V11_MINI MMStar_MINI AI2D_MINI OCRBench_MINI --model {case_name} --base-url http://127.0.0.1:empty/v1 --reuse --work-dir {work_dir} --api-nproc 32 --mode eval --judge Qwen2.5-32B-Instruct --judge-base-url http://127.0.0.1:{port}/v1'  # noqa
+        cmd = f'python run.py --data MMBench_V11_MINI MMStar_MINI AI2D_MINI OCRBench_MINI --model {case_name} --base-url http://127.0.0.1:empty/v1 --reuse --work-dir {work_dir} --api-nproc 32 --mode eval --judge turbomind_Qwen2.5-32B-Instruct_nccl_tp2_0 --judge-base-url http://127.0.0.1:{port}/v1'  # noqa
 
     result, msg = execute_command_with_logging(cmd, eval_log)
 
