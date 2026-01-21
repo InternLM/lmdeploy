@@ -61,7 +61,7 @@ class LogitsMixin:
         logits = [None] * len(input_ids)
 
         async def _proc(session, i):
-            async with session.request_handle(self.req_hnd_mgr) as handle:
+            async with session.request_handle() as handle:
                 input_len = len(input_ids[i])
                 # TODO(lvhan): Fix the ugly code later on
                 max_new_tokens = 1 if self.backend == 'turbomind' else 0
@@ -69,7 +69,7 @@ class LogitsMixin:
                 # when perform inference on a reward model.
                 gen_config = GenerationConfig(max_new_tokens=max_new_tokens, output_logits='all', top_k=1)
                 async with self.safe_run(handle,
-                                         session_id=i,
+                                         session=session,
                                          input_ids=input_ids[i],
                                          gen_config=gen_config,
                                          stream_output=False,
@@ -85,7 +85,7 @@ class LogitsMixin:
         await asyncio.gather(*tasks)
         if sequence_end and self.backend == 'pytorch':
             for session in sessions:
-                await self.session_mgr.async_end(session)
+                await session.async_close()
         return logits
 
     def get_ppl(self, input_ids: List[int] | List[List[int]]) -> List[float]:

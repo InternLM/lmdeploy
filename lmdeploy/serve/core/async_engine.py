@@ -21,7 +21,7 @@ from lmdeploy.metrics.stats import IterationStats, RequestStats, SpeculativeDeco
 from lmdeploy.model import ChatTemplateConfig, get_chat_template
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
                                                    DistServeInitRequest)
-from lmdeploy.serve.managers import RequestHandleManager, SessionManager
+from lmdeploy.serve.managers import Session, SessionManager
 from lmdeploy.serve.processors import MultimodalProcessor
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger
@@ -204,9 +204,9 @@ class AsyncEngine(LogitsMixin):
         self.num_spec_token = 0 if backend == 'turbomind' or speculative_config is None \
             else speculative_config.num_speculative_tokens
 
-        # Initialize inference instance manager to handle instance lifecycle
-        self.req_hnd_mgr = RequestHandleManager(self.engine, self.backend_config.max_batch_size)
         self.session_mgr = SessionManager()
+        self.session_mgr.attach_event_loop(self.internal_thread.loop)
+        self.session_mgr.build_request_handle_pool(self.engine, self.backend_config.max_batch_size)
 
         # build stat loggers
         self._build_stat_loggers()
@@ -214,7 +214,6 @@ class AsyncEngine(LogitsMixin):
 
     def close(self):
         self.internal_thread.close()
-        self.req_hnd_mgr.clear()
         self.session_mgr.clear()
         self.engine.close()
 
@@ -271,16 +270,6 @@ class AsyncEngine(LogitsMixin):
         self.epoch += 1
         await self.session_mgr.async_abort_all()
 
-    async def stop_session(self, session_id: int):
-        """Stop a session by a session_id."""
-        logger.info(f'stop session {session_id}')
-        await self.session_mgr.async_abort(session_id)
-
-    async def end_session(self, session_id: int):
-        """For ending a session that is not running."""
-        logger.info(f'end session {session_id}')
-        await self.session_mgr.async_end(session_id)
-
     def sleep(self, level: int = 1):
         """Sleep the model.
 
@@ -310,7 +299,7 @@ class AsyncEngine(LogitsMixin):
         self.engine.wakeup(tags)
         # for TM backend, sleep/wakeup will reset gateway, therefore we need to rebuild instances
         if self.backend == 'turbomind' and 'kv_cache' in tags:
-            self.req_hnd_mgr.rebuild(self.engine)
+            self.session_mgr.build_request_handle_pool(self.engine, self.backend_config.max_batch_size)
         self.sleeping_tags = self.sleeping_tags - set(tags)
         self.is_sleeping = bool(self.sleeping_tags)
 
@@ -380,22 +369,21 @@ class AsyncEngine(LogitsMixin):
         return gen_config
 
     @asynccontextmanager
-    async def safe_run(self, handle, session_id, **kwargs):
-        generator = handle.async_stream_infer(session_id, **kwargs)
+    async def safe_run(self, handle, session, **kwargs):
+        generator = handle.async_stream_infer(session.session_id, **kwargs)
         try:
             yield generator
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
-            logger.error(f'[safe_run] session {session_id} exception caught: {type(e).__name__} {e}')
-            # TODO: remove session_id from async cancel
-            await handle.async_cancel(session_id)
-            raise SafeRunException(f'Safe run exception for session {session_id}') from e
+            logger.error(f'[safe_run] session {session.session_id} exception caught: {type(e).__name__} {e}')
+            await session.async_abort()
+            raise SafeRunException(f'Safe run exception for session {session.session_id}') from e
         finally:
             await generator.aclose()
 
     async def generate(
             self,
             messages,
-            session_id: int,
+            session_id: int | Session,
             gen_config: GenerationConfig | None = None,
             tools: List[object] | None = None,
             reasoning_effort: Literal['low', 'medium', 'high'] | None = None,
@@ -415,7 +403,7 @@ class AsyncEngine(LogitsMixin):
 
         Args:
             messages (str | List): chat history or prompt
-            session_id (int): the session id
+            session_id (int | Session): the session id or instance of Session
             gen_config (GenerationConfig | None): a instance of
                 GenerationConfig. Default to None.
             stream_response (bool): whether return responses streamingly
@@ -428,7 +416,13 @@ class AsyncEngine(LogitsMixin):
         epoch = self.epoch
         if (messages is not None) ^ (input_ids is None):
             raise ValueError('You must specify exactly one of messages or input_ids')
-        session = self.session_mgr.get(session_id, step=step)
+        if isinstance(session_id, Session):
+            session = session_id
+        elif isinstance(session_id, int):
+            session = self.session_mgr.get(session_id, step=step)
+        else:
+            raise ValueError(f'Invalid session_id: {session_id}. It should be an instance of Session or an integer.')
+        session_id = session.session_id
         chat_template_kwargs = chat_template_kwargs or {}
         if enable_thinking is not None:
             logger.warning('enable_thinking is deprecated, use chat_template_kwargs["enable_thinking"] instead')
@@ -439,7 +433,7 @@ class AsyncEngine(LogitsMixin):
                                'the value will not be overwritten by enable_thinking')
         if messages:
             prompt = messages
-            self.request_logger.log_prompt(session_id=session_id, prompt=prompt)
+            self.request_logger.log_prompt(session, prompt=prompt)
             prompt_input = await self.prompt_processor.get_prompt_input(prompt=prompt,
                                                                         do_preprocess=do_preprocess,
                                                                         sequence_start=sequence_start,
@@ -451,7 +445,7 @@ class AsyncEngine(LogitsMixin):
                                                                         **kwargs)
             prompt = prompt_input['prompt']
             input_ids = prompt_input['input_ids']
-            self.request_logger.log_inputs(session_id=session_id,
+            self.request_logger.log_inputs(session,
                                            prompt=prompt,
                                            prompt_token_ids=input_ids,
                                            gen_config=gen_config,
@@ -471,7 +465,7 @@ class AsyncEngine(LogitsMixin):
                              finish_reason='length',
                              token_ids=[])
                 if sequence_end is True and sequence_start is False:
-                    await self.end_session(session_id)
+                    await session.async_close()
                 return
         if self.backend_config.enable_prefix_caching and (gen_config.output_last_hidden_state == 'all'
                                                           or gen_config.output_logits == 'all'):
@@ -502,7 +496,7 @@ class AsyncEngine(LogitsMixin):
 
         metrics_processor.increment_total_requests()
 
-        async with session.request_handle(self.req_hnd_mgr) as handle:
+        async with session.request_handle() as handle:
             if epoch != self.epoch:
                 logger.debug(f'[generate] session {session_id} got aborted before starting inference')
                 # TODO(lvhan): metrics_processor.increment_failed_requests('abort')
@@ -522,7 +516,7 @@ class AsyncEngine(LogitsMixin):
             response = ''
             finish_reason = None
             async with self.safe_run(handle,
-                                     session_id=session_id,
+                                     session=session,
                                      **prompt_input,
                                      gen_config=gen_config,
                                      adapter_name=adapter_name,
@@ -630,15 +624,12 @@ class AsyncEngine(LogitsMixin):
                                  generate_token_len=0,
                                  finish_reason='error',
                                  token_ids=[])
-            # update step
-            if sequence_end:
-                if self.backend == 'pytorch':
-                    # manually end pytorch session
-                    # note: Using session_mgr.async_end(session) here results in deadlock
-                    # because it waits for session's _active event to be set, but the event won't be set
-                    # until the session is finished, i.e., session.acuqire_request_handle() context exits.
-                    await handle.async_end(session_id)
-                self.session_mgr.sessions.pop(session_id)
+        if sequence_end:
+            if self.backend == 'pytorch':
+                # manually end pytorch session. session cannot be ended until session.request_handle()
+                # context exits
+                await session.async_close()
+            self.session_mgr.remove(session)
 
     def _run(self, fn=None, coro=None, loop=None):
         assert (fn or coro) and not (fn and coro)

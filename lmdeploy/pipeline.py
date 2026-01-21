@@ -72,7 +72,6 @@ class Pipeline:
 
     def infer(self,
               prompts: List[str] | str | List[Dict] | List[List[Dict]] | Tuple | List[Tuple],
-              session_id: List[int] | int | None = None,
               gen_config: GenerationConfig | List[GenerationConfig] | None = None,
               do_preprocess: bool = True,
               adapter_name: str | None = None,
@@ -83,7 +82,6 @@ class Pipeline:
         Args:
             prompts: Prompts to inference. It can be a single prompt, a list of prompts, a list of tuples, or a tuple.
                 Tuple can be (prompt, image or [images]) or (image or [images], prompt).
-            session_id(List[int] | int | None): Session ID(s).
             gen_config(GenerationConfig | List[GenerationConfig] | None): Generation configuration(s).
             do_preprocess(bool): Whether to pre-process messages.
             adapter_name(str | None): Adapter name.
@@ -97,7 +95,6 @@ class Pipeline:
         outputs = []
         try:
             requests = self._request_generator(prompts,
-                                               session_id=session_id,
                                                gen_config=gen_config,
                                                do_preprocess=do_preprocess,
                                                adapter_name=adapter_name,
@@ -120,7 +117,7 @@ class Pipeline:
 
     def stream_infer(self,
                      prompts: List[str] | str | List[Dict] | List[List[Dict]] | Tuple | List[Tuple],
-                     session_id: int | List[int] | None = None,
+                     sessions: 'Session' | List['Session'] | None = None,
                      gen_config: GenerationConfig | List[GenerationConfig] | None = None,
                      do_preprocess: bool = True,
                      adapter_name: str | None = None,
@@ -132,7 +129,7 @@ class Pipeline:
             prompts(List[str] | str | List[Dict] | List[List[Dict]] | Tuple | List[Tuple]): Prompts to inference.
                 It can be a single prompt, a list of prompts, a list of tuples, or a tuple.
                 Tuple can be (prompt, image or [images]) or (image or [images], prompt).
-            session_id(int | List[int] | None): Session ID.
+            sessions(Session | List[Session] | None): Sessions. Each of which corresponds to a prompt.
             gen_config(GenerationConfig | List[GenerationConfig] | None): Generation configuration(s).
             do_preprocess(bool): Whether to pre-process messages.
             adapter_name(str | None): Adapter name.
@@ -146,7 +143,7 @@ class Pipeline:
         """
         prompts = MultimodalProcessor.format_prompts(prompts)
         requests = self._request_generator(prompts,
-                                           session_id=session_id,
+                                           sessions=sessions,
                                            gen_config=gen_config,
                                            do_preprocess=do_preprocess,
                                            adapter_name=adapter_name,
@@ -183,8 +180,8 @@ class Pipeline:
         prompt = MultimodalProcessor.format_prompts(prompt)
 
         sequence_start = session.step == 0
-        generator = self.stream_infer(prompt,
-                                      session_id=session.session_id,
+        generator = self.stream_infer(prompts=prompt,
+                                      sessions=session,
                                       gen_config=gen_config,
                                       stream_response=stream_response,
                                       adapter_name=adapter_name,
@@ -200,7 +197,7 @@ class Pipeline:
                     resp = resp.extend(out) if resp else out
                     yield out
             except:  # noqa
-                self.async_engine._run(coro=self.session_mgr.async_abort(session)).result()
+                self.async_engine._run(coro=session.async_abort())
                 raise
             else:
                 session.response = resp
@@ -218,17 +215,9 @@ class Pipeline:
 
         return session
 
-    def open_session(self) -> 'Session':
-        """Open a new session."""
+    def session(self) -> 'Session':
+        """Create a new session."""
         return self.session_mgr.get()
-
-    def stop_session(self, session: 'Session'):
-        """Stop a session."""
-        self.async_engine._run(coro=self.session_mgr.async_abort(session)).result()
-
-    def end_session(self, session: 'Session'):
-        """End a session."""
-        self.async_engine._run(coro=self.session_mgr.async_end(session)).result()
 
     def get_ppl(self, input_ids: List[int] | List[List[int]]) -> List[float]:
         """Get perplexity scores given a list of input tokens that have to be
@@ -272,23 +261,23 @@ class Pipeline:
 
     def _request_generator(self,
                            prompts: List[str] | str | List[Dict] | List[List[Dict]],
-                           session_id: List[int] | int | None = None,
+                           sessions: List['Session'] | 'Session' | None = None,
                            gen_config: GenerationConfig | List[GenerationConfig] | None = None,
                            **kwargs):
         """Generate requests."""
         is_single = self._is_single(prompts)
         prompts = [prompts] if is_single else prompts
 
-        if session_id is None:
-            session_ids = [self.session_mgr.reserve() for _ in prompts]
-        elif isinstance(session_id, list):
-            session_ids = session_id
+        if sessions is None:
+            sessions = [self.session_mgr.get() for _ in prompts]
+        elif isinstance(sessions, list):
+            sessions = sessions
         else:
-            session_ids = [session_id]
+            sessions = [sessions]
 
-        if len(prompts) != len(session_ids):
-            raise ValueError(f'prompts and session_ids should have the same length. '
-                             f'Got {len(prompts)} prompts and {len(session_ids)} session_ids')
+        if len(prompts) != len(sessions):
+            raise ValueError(f'prompts and sessions should have the same length. '
+                             f'Got {len(prompts)} prompts and {len(sessions)} sessions')
 
         if gen_config is None:
             gen_configs = [GenerationConfig()] * len(prompts)
@@ -301,5 +290,8 @@ class Pipeline:
             raise ValueError(f'input gen_config length differs from the length of prompts. '
                              f'Got {len(prompts)} prompts and {len(gen_configs)} gen_configs')
 
-        for prompt, gen_cfg, sid in zip(prompts, gen_configs, session_ids):
-            yield dict(session_id=sid, messages=prompt, gen_config=gen_cfg, **kwargs)
+        for prompt, gen_cfg, session in zip(prompts, gen_configs, sessions):
+            # Use session_id is for backward compatibility. We will remove it in the future.
+            # Since AsyncEngine.generate defines session_id in the argument lists, here we
+            # use session_id to pass the session to the AsyncEngine.generate. It's
+            yield dict(session_id=session, messages=prompt, gen_config=gen_cfg, **kwargs)
