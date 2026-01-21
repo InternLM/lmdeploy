@@ -716,7 +716,7 @@ def start_proxy_server(log_path, port, case_name: str = 'default'):
     time.sleep(5)
     for i in range(timeout):
         time.sleep(1)
-        if proxy_health_check(f'http://127.0.0.1:{port}'):  # noqa: E231, E261
+        if proxy_health_check(f'http://{DEFAULT_SERVER}:{port}'):  # noqa: E231, E261
             break
 
         try:
