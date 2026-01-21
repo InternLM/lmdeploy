@@ -211,13 +211,14 @@ class InternLM3Model(nn.Module):
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
 
-        self.embed_tokens = ParallelEmbedding(config.vocab_size,
-                                      config.hidden_size,
-                                      self.padding_idx,
-                                      dtype=dtype,
-                                      device=device,
-                                      force_dtype=torch.float32 if getattr(config, 'enforce_fp32_head') else None,
-                                      )
+        self.embed_tokens = ParallelEmbedding(
+            config.vocab_size,
+            config.hidden_size,
+            self.padding_idx,
+            dtype=dtype,
+            device=device,
+            force_dtype=torch.float32 if getattr(config, 'enforce_fp32_head') else None,
+        )
 
         # build all decode layers
         self.layers = nn.ModuleList([

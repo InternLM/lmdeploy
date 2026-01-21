@@ -7,8 +7,9 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config, ParallelEmbedding)
-from lmdeploy.pytorch.nn.linear import (build_down_linear, build_gateup_linear, build_o_proj, build_qkv_proj)
+from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, ParallelEmbedding, RMSNorm, SiluAndMul,
+                                 build_rotary_embedding_from_config)
+from lmdeploy.pytorch.nn.linear import build_down_linear, build_gateup_linear, build_o_proj, build_qkv_proj
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -208,12 +209,13 @@ class InternLM2Model(nn.Module):
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
 
-        self.tok_embeddings = nn.ParallelEmbedding(config.vocab_size,
-                                           config.hidden_size,
-                                           self.padding_idx,
-                                           dtype=dtype,
-                                           device=device,
-                                           force_dtype=torch.float32 if getattr(config, 'enforce_fp32_head') else None)
+        self.tok_embeddings = ParallelEmbedding(
+            config.vocab_size,
+            config.hidden_size,
+            self.padding_idx,
+            dtype=dtype,
+            device=device,
+            force_dtype=torch.float32 if getattr(config, 'enforce_fp32_head') else None)
         # build all decode layers
         self.layers = nn.ModuleList([
             InternLM2DecoderLayer(config, layer_idx, dtype=dtype, device=device)
@@ -290,11 +292,7 @@ class InternLM2ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         # build Model
         self.model = InternLM2Model(config, dtype=dtype, device=device)
         # build lm_head
-        self.output = self.build_lm_head(config.hidden_size,
-                                           config.vocab_size,
-                                           bias=False,
-                                           dtype=dtype,
-                                           device=device)
+        self.output = self.build_lm_head(config.hidden_size, config.vocab_size, bias=False, dtype=dtype, device=device)
 
     def forward(
         self,

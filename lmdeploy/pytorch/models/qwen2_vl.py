@@ -9,8 +9,8 @@ from transformers.configuration_utils import PretrainedConfig
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, ParallelEmbedding, FlashAttention, LayerNorm, RMSNorm, SiluAndMul,
-                                 build_rotary_embedding_from_config)
+from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, FlashAttention, LayerNorm, ParallelEmbedding, RMSNorm,
+                                 SiluAndMul, build_rotary_embedding_from_config)
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_merged_colwise_linear, build_qkv_proj,
                                         build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
@@ -235,13 +235,14 @@ class Qwen2Model(nn.Module):
         self.vocab_size = config.vocab_size
         self.mrope_section = config.rope_scaling['mrope_section']
 
-        self.embed_tokens = ParallelEmbedding(config.vocab_size,
-                                      config.hidden_size,
-                                      self.padding_idx,
-                                      dtype=dtype,
-                                      device=device,
-                                      force_dtype=torch.float32 if getattr(config, 'enforce_fp32_head') else None,
-                                      )
+        self.embed_tokens = ParallelEmbedding(
+            config.vocab_size,
+            config.hidden_size,
+            self.padding_idx,
+            dtype=dtype,
+            device=device,
+            force_dtype=torch.float32 if getattr(config, 'enforce_fp32_head') else None,
+        )
 
         # build all decode layers
         self.layers = nn.ModuleList([

@@ -358,7 +358,8 @@ class ModelConfig:
         setattr(model_config.hf_config, 'enforce_fp32_head', enforce_fp32_head)
         if hasattr(model_config.hf_config, 'text_config'):
             setattr(model_config.hf_config.text_config, 'enforce_fp32_head', enforce_fp32_head)
-                
+        if hasattr(model_config.hf_config, 'llm_config'):
+            setattr(model_config.hf_config.llm_config, 'enforce_fp32_head', enforce_fp32_head)
         # for serialization of transformers modules
         maybe_register_config_serialize_by_value(trust_remote_code)
 

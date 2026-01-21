@@ -16,17 +16,18 @@ def pad_vocab_size(vocab_size: int, pad_to: int = DEFAULT_VOCAB_PADDING_SIZE) ->
 
 class ParallelEmbedding(nn.Module):
 
-    def __init__(self,
-                 vocab_size: int,
-                 hidden_size: int,
-                 padding_idx: int,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None,
-                 is_tp: bool = False,
-                 padding_size: int = DEFAULT_VOCAB_PADDING_SIZE,
-                 layer_type: str = 'attn',
-                 force_dtype: torch.dtype=None,
-                 ):
+    def __init__(
+        self,
+        vocab_size: int,
+        hidden_size: int,
+        padding_idx: int,
+        dtype: torch.dtype = None,
+        device: torch.device = None,
+        is_tp: bool = False,
+        padding_size: int = DEFAULT_VOCAB_PADDING_SIZE,
+        layer_type: str = 'attn',
+        force_dtype: torch.dtype = None,
+    ):
         self.dist_ctx = get_dist_manager().current_context()
         super().__init__()
 

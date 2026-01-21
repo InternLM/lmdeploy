@@ -9,13 +9,15 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, build_rotary_embedding_from_config, ParallelEmbedding
+from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, ParallelEmbedding, RMSNorm,
+                                 build_rotary_embedding_from_config)
 from lmdeploy.pytorch.nn.linear import build_o_proj, build_qkv_proj
 from lmdeploy.pytorch.nn.moe import build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
 from .utils.model import DeployModelMixinV1
+
 
 class GptOssAttention(nn.Module):
     """attention."""
@@ -333,14 +335,14 @@ class GptOssModel(nn.Module):
 
     def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
-        self.embed_tokens = ParallelEmbedding(config.vocab_size,
-                                         config.hidden_size,
-                                         config.pad_token_id,
-                                         dtype=dtype,
-                                         device=device,
-                                         force_dtype=torch.float32 if getattr(config, 'enforce_fp32_head') else None,
-                                         is_tp=getattr(config, 'tie_word_embeddings', False) is False,
-                                      )
+        self.embed_tokens = ParallelEmbedding(
+            config.vocab_size,
+            config.hidden_size,
+            config.pad_token_id,
+            dtype=dtype,
+            device=device,
+            force_dtype=torch.float32 if getattr(config, 'enforce_fp32_head') else None,
+        )
 
         # build all decode layers
         self.layers = nn.ModuleList([
@@ -419,11 +421,7 @@ class GptOssForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         # build model
         self.model = GptOssModel(config, dtype=dtype, device=device)
         # build lm_head
-        self.lm_head = self.build_lm_head(config.hidden_size,
-                                            config.vocab_size,
-                                            bias=False,
-                                            dtype=dtype,
-                                            device=device)
+        self.lm_head = self.build_lm_head(config.hidden_size, config.vocab_size, bias=False, dtype=dtype, device=device)
 
     def forward(
         self,
