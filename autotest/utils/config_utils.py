@@ -311,12 +311,11 @@ def get_config() -> Dict[str, Any]:
     # Deep copy config to avoid modify raw data, update log path with github run id
     config_copy = copy.deepcopy(config)
     run_id = os.environ.get('RUN_ID', 'local_run')
-    config_copy['log_path'] = os.path.join(config_copy['log_path'], str(run_id))
-    config_copy['eval_path'] = os.path.join(config_copy['eval_path'], str(run_id))
-    config_copy['mllm_eval_path'] = os.path.join(config_copy['mllm_eval_path'], str(run_id))
-    config_copy['benchmark_path'] = os.path.join(config_copy['benchmark_path'], str(run_id))
-    config_copy['server_log_path'] = os.path.join(config_copy['server_log_path'], str(run_id))
-
+    config_copy['log_path'] = os.path.join(config_copy['log_path'], str(run_id).replace('/', '_'))
+    config_copy['eval_path'] = os.path.join(config_copy['eval_path'], str(run_id).replace('/', '_'))
+    config_copy['mllm_eval_path'] = os.path.join(config_copy['mllm_eval_path'], str(run_id).replace('/', '_'))
+    config_copy['benchmark_path'] = os.path.join(config_copy['benchmark_path'], str(run_id).replace('/', '_'))
+    config_copy['server_log_path'] = os.path.join(config_copy['server_log_path'], str(run_id).replace('/', '_'))
     os.makedirs(config_copy['log_path'], exist_ok=True)
     os.makedirs(config_copy['eval_path'], exist_ok=True)
     os.makedirs(config_copy['mllm_eval_path'], exist_ok=True)

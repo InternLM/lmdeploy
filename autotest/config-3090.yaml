@@ -1,6 +1,6 @@
 model_path: /nvme/qa_test_models
 resource_path: /nvme/qa_test_models/resource
-log_path: /nvme/qa_test_models/autotest_model/log
+log_path: /nvme/qa_test_models/autotest_log
 benchmark_path: /nvme/qa_test_models/benchmark_report
 dataset_path: /nvme/qa_test_models/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
 env_tag: 3090
