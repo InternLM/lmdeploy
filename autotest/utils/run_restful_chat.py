@@ -19,11 +19,11 @@ BASE_HTTP_URL = f'http://{MASTER_ADDR}'
 
 
 def start_openai_service(config, run_config, worker_id):
+    port = DEFAULT_PORT + get_workerid(worker_id)
     case_name = get_case_str_by_config(run_config)
     timestamp = time.strftime('%Y%m%d_%H%M%S')
-    server_log = os.path.join(config.get('server_log_path'), f'log_{case_name}_{timestamp}.log')
+    server_log = os.path.join(config.get('server_log_path'), f'log_{case_name}_{port}_{timestamp}.log')
 
-    port = DEFAULT_PORT + get_workerid(worker_id)
     model = run_config.get('model')
     if run_config.get('env', {}).get('LMDEPLOY_USE_MODELSCOPE', 'False') == 'True':
         model_path = model
@@ -676,14 +676,14 @@ def proxy_health_check(url):
         return False
 
 
-def start_proxy_server(log_path, port, case_name: str = ''):
+def start_proxy_server(log_path, port, case_name: str = 'default'):
     """Start the proxy server for testing with enhanced error handling and
     logging."""
     if log_path is None:
         log_path = '/nvme/qa_test_models/evaluation_report'
 
     timestamp = time.strftime('%Y%m%d_%H%M%S')
-    proxy_log = os.path.join(log_path, f'proxy_server_{str(port)}_{timestamp}.log')
+    proxy_log = os.path.join(log_path, f'proxy_server_{case_name}_{str(port)}_{timestamp}.log')
 
     proxy_url = f'http://127.0.0.1:{port}'  # noqa: E231, E261
     try:
