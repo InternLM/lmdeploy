@@ -4,6 +4,7 @@ import subprocess
 import time
 
 import allure
+import psutil
 import requests
 from openai import OpenAI
 from pytest_assume.plugin import assume
@@ -91,7 +92,10 @@ def start_openai_service(config, run_config, worker_id):
 
 def stop_restful_api(pid, startRes):
     if pid > 0:
-        startRes.terminate()
+        parent = psutil.Process(pid)
+        for child in parent.children(recursive=True):
+            child.terminate()
+        parent.terminate()
 
 
 def terminate_restful_api(worker_id):
