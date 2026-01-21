@@ -78,11 +78,14 @@ def _run_proxy_distributed_test(config,
             eval_path = config.get('eval_path')
             case_name = get_case_str_by_config(run_config)
 
+            extra_config = {'max-num-workers': 16}
+
             result, msg = eval_test(model_path,
                                     eval_path,
                                     case_name,
                                     port=constant.PROXY_PORT,
                                     test_type=test_type,
+                                    extra_config=extra_config,
                                     **preset_config)
             assert result, f'❌ {test_type} test failed: {msg}'
             print(f'✅ {test_type} test passed')
@@ -107,11 +110,12 @@ def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_
     eval_path = config.get('eval_path')
     case_name = get_case_str_by_config(run_config)
 
+    work_num = int(8 / run_config.get('parallel_config', {}).get('tp', 1))
+    extra_config = {'max-num-workers': min(work_num * 16, 64)}
+
     if test_type == 'infer':
         proxy_pid, proxy_process = start_proxy_server(config.get('server_log_path'), constant.PROXY_PORT,
                                                       f'{case_name}_infer')
-        work_num = int(8 / run_config.get('parallel_config', {}).get('tp', 1))
-
         run_config_new = run_config.copy()
         if 'extra_params' not in run_config_new:
             run_config_new['extra_params'] = {}
@@ -132,7 +136,13 @@ def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_
 
         try:
             model_path = os.path.join(config.get('model_path'), run_config.get('model'))
-            eval_test(model_path, eval_path, case_name, port=constant.PROXY_PORT, test_type=test_type, **preset_config)
+            eval_test(model_path,
+                      eval_path,
+                      case_name,
+                      port=constant.PROXY_PORT,
+                      test_type=test_type,
+                      extra_config=extra_config,
+                      **preset_config)
         finally:
             for i in range(work_num):
                 terminate_restful_api(f'gw{i}')
@@ -149,7 +159,13 @@ def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_
         try:
             if pid > 0:
                 model_path = os.path.join(config.get('model_path'), eval_run_config.get('model'))
-                eval_test(model_path, eval_path, case_name, port=port, test_type=test_type, **preset_config)
+                eval_test(model_path,
+                          eval_path,
+                          case_name,
+                          port=port,
+                          test_type=test_type,
+                          extra_config=extra_config,
+                          **preset_config)
             else:
                 assert False, f'Failed to start RESTful API server: {content}'
         finally:

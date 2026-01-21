@@ -142,7 +142,7 @@ def mllm_summary(case_name,
     write_to_summary(case_name, result, msg, metrics, result_dir)
 
 
-def eval_test(model_path, eval_path, case_name, port=DEFAULT_PORT, test_type='infer', **kwargs):
+def eval_test(model_path, eval_path, case_name, port=DEFAULT_PORT, test_type='infer', extra_config={}, **kwargs):
     work_dir = None
     try:
 
@@ -224,7 +224,8 @@ def eval_test(model_path, eval_path, case_name, port=DEFAULT_PORT, test_type='in
                 cfg.dump(temp_config_path)
                 print(f'Modified config for eval stage saved to: {temp_config_path}')
 
-            cmd = f'opencompass {temp_config_path} --reuse --max-num-workers 16 -w {work_dir} -m {test_type} --dump-res-length'  # noqa
+            extra_config_str = get_cli_str(extra_config)
+            cmd = f'opencompass {temp_config_path} --reuse -w {work_dir} -m {test_type} --dump-res-length {extra_config_str}'  # noqa
             print(f'Running command: {cmd}')
             print(f'Work directory: {work_dir}')
 
