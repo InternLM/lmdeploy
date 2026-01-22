@@ -390,6 +390,7 @@ class BuildModelContext:
     strategy_factory: 'StrategyFactoryBase' = None
     enable_return_routed_experts: bool = False
     enforce_fp32_head: bool = False
+    tie_word_embeddings: bool = False
 
 
 class StepContextManager(CtxMgrBase[StepContext]):

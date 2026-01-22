@@ -126,7 +126,11 @@ def build_embedding(vocab_size: int,
     """Build embedding."""
     bm_ctx = get_build_model_context()
 
-    force_dtype = torch.float32 if bm_ctx.enforce_fp32_head else None
+    # run with fp32 only when share weights with lm_head
+    force_dtype = None
+    if bm_ctx.enforce_fp32_head and bm_ctx.tie_word_embeddings:
+        force_dtype = torch.float32
+
     return ParallelEmbedding(
         vocab_size,
         hidden_size,
