@@ -9,15 +9,13 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, ParallelEmbedding, RMSNorm,
-                                 build_rotary_embedding_from_config)
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, build_rotary_embedding_from_config
 from lmdeploy.pytorch.nn.linear import build_o_proj, build_qkv_proj
 from lmdeploy.pytorch.nn.moe import build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
-from .patch import get_build_model_context
 from .utils.cudagraph import CudaGraphMixin
-from .utils.model import DeployModelMixinV1
+from .utils.model import DeployModelMixinV1, build_embedding
 
 
 class GptOssAttention(nn.Module):
@@ -336,15 +334,13 @@ class GptOssModel(nn.Module):
 
     def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
-        bm_ctx = get_build_model_context()
 
-        self.embed_tokens = ParallelEmbedding(
+        self.embed_tokens = build_embedding(
             config.vocab_size,
             config.hidden_size,
             config.pad_token_id,
             dtype=dtype,
             device=device,
-            force_dtype=torch.float32 if bm_ctx.enforce_fp32_head else None,
         )
 
         # build all decode layers

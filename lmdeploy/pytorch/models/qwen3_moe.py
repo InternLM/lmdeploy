@@ -8,8 +8,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, ParallelEmbedding, RMSNorm, SiluAndMul,
-                                 build_rotary_embedding_from_config)
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
 from lmdeploy.pytorch.nn.eplb import EPLBManager
 from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
@@ -17,7 +16,7 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .patch import get_build_model_context
 from .utils.cudagraph import CudaGraphMixin
-from .utils.model import DeployModelMixinV1
+from .utils.model import DeployModelMixinV1, build_embedding
 
 
 class Qwen3MoeAttention(nn.Module):
@@ -318,14 +317,12 @@ class Qwen3MoeModel(nn.Module):
         super().__init__()
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
-        bm_ctx = get_build_model_context()
-        self.embed_tokens = ParallelEmbedding(
+        self.embed_tokens = build_embedding(
             config.vocab_size,
             config.hidden_size,
             self.padding_idx,
             dtype=dtype,
             device=device,
-            force_dtype=torch.float32 if bm_ctx.enforce_fp32_head else None,
         )
 
         if get_dist_manager().current_context().dist_config.enable_eplb:

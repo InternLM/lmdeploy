@@ -7,6 +7,7 @@ import torch
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor
 from lmdeploy.pytorch.model_inputs import StepContext
 from lmdeploy.pytorch.models.patch import get_build_model_context
+from lmdeploy.pytorch.nn.embedding import ParallelEmbedding
 from lmdeploy.pytorch.nn.linear import build_rowwise_linear
 
 
@@ -113,3 +114,26 @@ def vlm_model(vlm_cls):
             return vlm_cls(*args, **kwargs)
 
     return wrapper
+
+
+def build_embedding(vocab_size: int,
+                    hidden_size: int,
+                    padding_idx: int,
+                    dtype: torch.dtype = None,
+                    device: torch.device = None,
+                    is_tp: bool = False,
+                    **kwargs):
+    """Build embedding."""
+    bm_ctx = get_build_model_context()
+
+    force_dtype = torch.float32 if bm_ctx.enforce_fp32_head else None
+    return ParallelEmbedding(
+        vocab_size,
+        hidden_size,
+        padding_idx,
+        dtype=dtype,
+        device=device,
+        is_tp=is_tp,
+        force_dtype=force_dtype,
+        **kwargs,
+    )

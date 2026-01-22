@@ -9,15 +9,14 @@ from transformers.configuration_utils import PretrainedConfig
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, FlashAttention, LayerNorm, ParallelEmbedding, RMSNorm,
-                                 SiluAndMul, build_rotary_embedding_from_config)
+from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, FlashAttention, LayerNorm, RMSNorm, SiluAndMul,
+                                 build_rotary_embedding_from_config)
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_merged_colwise_linear, build_qkv_proj,
                                         build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
-from .patch import get_build_model_context
 from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
-from .utils.model import DeployModelMixinV1, vlm_model
+from .utils.model import DeployModelMixinV1, build_embedding, vlm_model
 
 
 def _apply_mrope_selection(hidden_states: torch.Tensor, mrope_position_ids: torch.Tensor, mrope_section: List[int],
@@ -235,14 +234,13 @@ class Qwen2Model(nn.Module):
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
         self.mrope_section = config.rope_scaling['mrope_section']
-        bm_ctx = get_build_model_context()
-        self.embed_tokens = ParallelEmbedding(
+
+        self.embed_tokens = build_embedding(
             config.vocab_size,
             config.hidden_size,
             self.padding_idx,
             dtype=dtype,
             device=device,
-            force_dtype=torch.float32 if bm_ctx.enforce_fp32_head else None,
         )
 
         # build all decode layers
