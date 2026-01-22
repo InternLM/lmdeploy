@@ -127,24 +127,3 @@ summarizer = dict(
 for item in datasets:
     if 'max_out_len' in item['infer_cfg']['inferencer']:
         del item['infer_cfg']['inferencer']['max_out_len']
-
-#######################################################################
-#                 PART 4  Inference/Evaluation Configuration          #
-#######################################################################
-
-# infer with local runner
-infer = dict(
-    partitioner=dict(type=NumWorkerPartitioner, num_worker=8),
-    runner=dict(
-        type=LocalRunner,
-        max_num_workers=16,
-        retry=0,
-        task=dict(type=OpenICLInferTask),
-    ),
-)
-
-# eval with local runner
-eval = dict(
-    partitioner=dict(type=NaivePartitioner, n=10),
-    runner=dict(type=LocalRunner, max_num_workers=16, task=dict(type=OpenICLEvalTask)),
-)
