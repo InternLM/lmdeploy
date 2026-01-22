@@ -3,6 +3,7 @@ import os
 import pytest
 import yaml
 from utils.config_utils import get_config
+from utils.constant import DEFAULT_SERVER
 from utils.proxy_distributed_utils import ProxyDistributedManager
 from utils.ray_distributed_utils import RayLMDeployManager
 
@@ -37,7 +38,7 @@ def common_case_config():
 
 @pytest.fixture(scope='session')
 def shared_ray_manager():
-    master_addr = os.getenv('MASTER_ADDR', 'localhost')
+    master_addr = DEFAULT_SERVER
     device = os.environ.get('DEVICE', '')
     if device:
         device_config_path = f'autotest/config-{device}.yaml'
@@ -67,7 +68,7 @@ def shared_ray_manager():
 
 @pytest.fixture(scope='session')
 def shared_proxy_manager():
-    master_addr = os.getenv('MASTER_ADDR', 'localhost')
+    master_addr = DEFAULT_SERVER
 
     manager = ProxyDistributedManager()
 

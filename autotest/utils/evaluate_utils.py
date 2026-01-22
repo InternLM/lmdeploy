@@ -178,8 +178,8 @@ def eval_test(model_path, eval_path, case_name, port=DEFAULT_PORT, test_type='in
                 if cfg.models and len(cfg.models) > 0:
                     model_cfg = cfg.models[0]
                     model_cfg['abbr'] = case_name
-                    model_cfg['openai_api_base'] = test_url  # noqa: E231
                     model_cfg['path'] = case_name
+                    model_cfg['openai_api_base'] = test_url
                     model_cfg['tokenizer_path'] = model_path
 
                     for key, value in kwargs.items():
@@ -212,12 +212,14 @@ def eval_test(model_path, eval_path, case_name, port=DEFAULT_PORT, test_type='in
                             evaluator = dataset['eval_cfg']['evaluator']
 
                             if 'judge_cfg' in evaluator:
-                                evaluator['judge_cfg']['path'] = cfg.JUDGE_MODEL_PATH
+                                evaluator['judge_cfg']['abbr'] = cfg.JUDGE_MODEL_NAME
+                                evaluator['judge_cfg']['path'] = cfg.JUDGE_MODEL_NAME
                                 evaluator['judge_cfg']['openai_api_base'] = cfg.JUDGE_API_BASE
                                 evaluator['judge_cfg']['tokenizer_path'] = cfg.JUDGE_MODEL_PATH
 
                             if 'llm_evaluator' in evaluator and 'judge_cfg' in evaluator['llm_evaluator']:
-                                evaluator['llm_evaluator']['judge_cfg']['path'] = cfg.JUDGE_MODEL_PATH
+                                evaluator['llm_evaluator']['judge_cfg']['abbr'] = cfg.JUDGE_MODEL_NAME
+                                evaluator['llm_evaluator']['judge_cfg']['path'] = cfg.JUDGE_MODEL_NAME
                                 evaluator['llm_evaluator']['judge_cfg']['openai_api_base'] = cfg.JUDGE_API_BASE
                                 evaluator['llm_evaluator']['judge_cfg']['tokenizer_path'] = cfg.JUDGE_MODEL_PATH
 

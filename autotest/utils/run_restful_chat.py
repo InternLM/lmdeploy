@@ -15,8 +15,7 @@ from utils.rule_condition_assert import assert_result
 
 from lmdeploy.serve.openai.api_client import APIClient
 
-MASTER_ADDR = os.getenv('MASTER_ADDR', 'localhost')
-BASE_HTTP_URL = f'http://{MASTER_ADDR}'
+BASE_HTTP_URL = f'http://{DEFAULT_SERVER}'
 
 
 def start_openai_service(config, run_config, worker_id):

@@ -125,8 +125,7 @@ def restful_test(config, run_config, worker_id: str = '', is_smoke: bool = False
             terminate_restful_api(worker_id)
 
 
-MASTER_ADDR = os.getenv('MASTER_ADDR', 'localhost')
-BASE_HTTP_URL = f'http://{MASTER_ADDR}'
+BASE_HTTP_URL = f'http://{constant.DEFAULT_SERVER}'
 
 
 def restful_profile(config, run_config, port, is_smoke: bool = False):
