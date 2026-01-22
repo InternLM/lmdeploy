@@ -318,14 +318,14 @@ class Qwen3MoeModel(nn.Module):
         super().__init__()
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
-
+        bm_ctx = get_build_model_context()
         self.embed_tokens = ParallelEmbedding(
             config.vocab_size,
             config.hidden_size,
             self.padding_idx,
             dtype=dtype,
             device=device,
-            force_dtype=torch.float32 if getattr(config, 'enforce_fp32_head') else None,
+            force_dtype=torch.float32 if bm_ctx.enforce_fp32_head else None,
         )
 
         if get_dist_manager().current_context().dist_config.enable_eplb:

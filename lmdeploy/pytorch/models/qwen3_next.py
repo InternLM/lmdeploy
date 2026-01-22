@@ -17,6 +17,7 @@ from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_merged_colwi
 from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader, load_weight
 
+from .patch import get_build_model_context
 from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
 from .utils.model import DeployModelMixinV1
 
@@ -813,14 +814,14 @@ class Qwen3NextModel(nn.Module):
         self.config = config
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
-
+        bm_ctx = get_build_model_context()
         self.embed_tokens = ParallelEmbedding(
             config.vocab_size,
             config.hidden_size,
             self.padding_idx,
             dtype=dtype,
             device=device,
-            force_dtype=torch.float32 if getattr(config, 'enforce_fp32_head') else None,
+            force_dtype=torch.float32 if bm_ctx.enforce_fp32_head else None,
         )
 
         # build all decode layers

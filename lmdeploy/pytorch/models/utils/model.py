@@ -6,6 +6,7 @@ import torch
 
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor
 from lmdeploy.pytorch.model_inputs import StepContext
+from lmdeploy.pytorch.models.patch import get_build_model_context
 from lmdeploy.pytorch.nn.linear import build_rowwise_linear
 
 
@@ -83,7 +84,8 @@ class DeployModelMixinV1(DeployModelMixin):
                       device: Optional[torch.device] = None,
                       **kwargs):
         """Build LM Head."""
-        head_dtype = torch.float32 if getattr(self.config, 'enforce_fp32_head') else dtype
+        bm_ctx = get_build_model_context()
+        head_dtype = torch.float32 if bm_ctx.enforce_fp32_head else dtype
         lm_head = build_rowwise_linear(
             hidden_size,
             vocab_size,
@@ -101,7 +103,6 @@ def vlm_model(vlm_cls):
 
     @functools.wraps(vlm_cls)
     def wrapper(*args, **kwargs):
-        from lmdeploy.pytorch.models.patch import get_build_model_context
         bm_ctx = get_build_model_context()
         disable_vision_encoder = bm_ctx.disable_vision_encoder
         if disable_vision_encoder:

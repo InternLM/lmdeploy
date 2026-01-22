@@ -304,6 +304,9 @@ class ModelConfig:
     # check env for model-device combination
     check_env_func: Callable = _default_check_env
 
+    # fp32 lm head
+    enforce_fp32_head: bool = False
+
     def get_head_size(self):
         """Get head size."""
         return self.head_dim
@@ -351,15 +354,10 @@ class ModelConfig:
         if hf_overrides is not None:
             logger = get_logger('lmdeploy')
             logger.warning(f'Overriding HF config with {hf_overrides}')
+            enforce_fp32_head = hf_overrides.pop('enforce_fp32_head', False)
             override_hf_config(model_config.hf_config, hf_overrides)
-            enforce_fp32_head = hf_overrides.get('enforce_fp32_head', False)
 
-        # deal with fp32_head
-        setattr(model_config.hf_config, 'enforce_fp32_head', enforce_fp32_head)
-        if hasattr(model_config.hf_config, 'text_config'):
-            setattr(model_config.hf_config.text_config, 'enforce_fp32_head', enforce_fp32_head)
-        if hasattr(model_config.hf_config, 'llm_config'):
-            setattr(model_config.hf_config.llm_config, 'enforce_fp32_head', enforce_fp32_head)
+        model_config.enforce_fp32_head = enforce_fp32_head
         # for serialization of transformers modules
         maybe_register_config_serialize_by_value(trust_remote_code)
 

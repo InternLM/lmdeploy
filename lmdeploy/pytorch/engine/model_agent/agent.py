@@ -1040,12 +1040,11 @@ class BaseModelAgent:
         # for router replay
         enable_return_routed_experts = self.misc_config.enable_return_routed_experts and self.need_output
 
-        build_model_ctx = BuildModelContext(
-            disable_vision_encoder=self.misc_config.disable_vision_encoder,
-            dllm_config=self.misc_config.dllm_config,
-            strategy_factory=self.strategy_factory,
-            enable_return_routed_experts=enable_return_routed_experts,
-        )
+        build_model_ctx = BuildModelContext(disable_vision_encoder=self.misc_config.disable_vision_encoder,
+                                            dllm_config=self.misc_config.dllm_config,
+                                            strategy_factory=self.strategy_factory,
+                                            enable_return_routed_experts=enable_return_routed_experts,
+                                            enforce_fp32_head=self.model_config.enforce_fp32_head)
         patched_model = build_patched_model(self.model_config,
                                             device=device,
                                             model_format=self.misc_config.model_format,
