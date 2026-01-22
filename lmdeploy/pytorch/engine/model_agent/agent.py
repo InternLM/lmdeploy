@@ -810,6 +810,8 @@ class BaseModelAgent:
                     self.state.to_sleep.set()
                     await self.state.to_wakeup.wait()
                     self.state.to_wakeup.clear()
+                    # sync after wakeup
+                    dist.barrier()
                 logger.debug(f'<ForwardTask> rank[{rank}]: all inputs are dummy, skip forward.')
                 await asyncio.sleep(0.01)
                 return
@@ -1225,7 +1227,6 @@ class BaseModelAgent:
             self.build_cache_engine()
             # wake up signal
             self.state.is_sleeping = False
-            dist.barrier()
             self.state.to_wakeup.set()
 
     def release(self):
