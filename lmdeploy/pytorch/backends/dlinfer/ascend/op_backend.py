@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import itertools
+import math
 import os
 import re
 from dataclasses import dataclass
@@ -304,12 +305,24 @@ class AscendOpsBackend(DlinferOpsBackend):
                 max_tokens_across_dp = torch.max(num_tokens_buffer).item()
             else:
                 max_tokens_across_dp = num_tokens
-            # get pad_size
-            paded_size = (max_tokens_across_dp + tp_size - 1) // tp_size * tp_size
-            pad_size = paded_size - num_tokens
+            # # get pad_size
+            # paded_size = (max_tokens_across_dp + tp_size - 1) // tp_size * tp_size
+            # pad_size = paded_size - num_tokens
             # get x_active_mask
             x_active_mask = torch.ones(tokens_current_rank, dtype=torch.bool, device=torch.npu.current_device())
-            return max_tokens_across_dp, pad_size, x_active_mask
+            return num_tokens, max_tokens_across_dp, x_active_mask
+
+        def get_pad_size(num_tokens, max_tokens_across_dp, tp_size, moe_type):
+            if moe_type == MoeType.MC2:
+                paded_size = math.ceil(max_tokens_across_dp / tp_size) * tp_size
+                pad_size = paded_size - num_tokens
+            elif moe_type == MoeType.ALLTOALL:
+                pad_size = tp_size - num_tokens
+            elif moe_type == MoeType.ALLGATHER:
+                pad_size = max_tokens_across_dp - num_tokens
+            else:
+                pad_size = 0
+            return pad_size
 
         @lru_cache
         def init_mc2_token_capacity(tp_size):
@@ -383,10 +396,11 @@ class AscendOpsBackend(DlinferOpsBackend):
         step_context.attn_metadata = attn_metadata
 
         cls.dist_meta = get_dist_meta()
-        max_tokens_across_dp, pad_size, x_active_mask = get_tokens_info(cls.dist_meta.dp_size, cls.dist_meta.tp_size,
-                                                                        cls.dist_meta.ep_size, cls.dist_meta.ep_group)
+        num_tokens, max_tokens_across_dp, x_active_mask = get_tokens_info(cls.dist_meta.dp_size, cls.dist_meta.tp_size,
+                                                                          cls.dist_meta.ep_size, cls.dist_meta.ep_group)
         moe_type = select_moe_type(max_tokens_across_dp, cls.dist_meta.dp_size, cls.dist_meta.tp_size,
                                    cls.dist_meta.ep_size)
+        pad_size = get_pad_size(num_tokens, max_tokens_across_dp, cls.dist_meta.tp_size, moe_type)
         mlp_meta_cls = cls.get_mlp_metadata_cls()
         mlp_metadata = mlp_meta_cls(
             max_tokens_across_dp=max_tokens_across_dp,
