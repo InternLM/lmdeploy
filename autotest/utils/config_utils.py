@@ -119,10 +119,9 @@ def get_cli_common_param(run_config: Dict[str, Any]) -> str:
         cli_params.append(f'--tp {tp_num}')  # noqa
 
     # Extra params
-    for key, value in extra_params.items():
-        cli_params.append(f'--{key} {value}' if value else f'--{key}')
+    cli_params.append(get_cli_str(extra_params))
 
-    return ' '.join(cli_params).replace('_', '-')
+    return ' '.join(cli_params)
 
 
 def get_cli_str(config: Dict[str, Any]) -> str:
