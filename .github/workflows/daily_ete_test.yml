@@ -46,14 +46,14 @@ env:
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
   OUTPUT_FOLDER: cuda12.8_dist_${{ github.run_id }}
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
-  REPORT_DIR: /nvme/qa_test_models/test-reports/${{ inputs.repo_ref }}_${{ github.run_id }}
+  REPORT_DIR: /nvme/qa_test_models/test-reports/${{ inputs.repo_ref || 'main' }}_${{ github.run_id }}
   COV_PARAM: --cov /opt/py3/lib/python3.10/site-packages/lmdeploy
   FAIL_CONFIG: ${{ github.event_name == 'schedule' && github.run_attempt != 1 && '--lf --lfnf none' || '--lf'}}
-  TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy/${{ github.run_id }}
+  TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy/${{ inputs.repo_ref || 'main' }}_${{ github.run_id }}
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
   OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
   DEEPSEEK_VL: /nvme/qa_test_models/offline_pkg/DeepSeek-VL
-  RUN_ID: ${{ github.run_id }}
+  RUN_ID: ${{ inputs.repo_ref || 'main' }}_${{ github.run_id }}
 
 jobs:
   linux-build:
@@ -382,7 +382,8 @@ jobs:
             model_path: Qwen/Qwen3-VL-30B-A3B-Instruct
             case_info: ['chat_completions_v1', 'generate']
             generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs'
+            extra: '--logprobs-mode raw_logprobs--enable-return-routed-experts'
+            backend: pytorch
           - tp: 2
             model: Qwen3-32B
             model_path: Qwen/Qwen3-32B
@@ -394,7 +395,8 @@ jobs:
             model_path: Qwen/Qwen3-VL-8B-Instruct
             case_info: ['chat_completions_v1', 'generate']
             generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs'
+            extra: '--logprobs-mode raw_logprobs --enable-return-routed-experts'
+            backend: pytorch
           - tp: 2
             model: InternVL3-38B
             model_path: OpenGVLab/InternVL3-38B
@@ -628,7 +630,6 @@ jobs:
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           chmod -R 777 $REPORT_DIR
-          chmod -R 777 /nvme/qa_test_models/benchmark_report/${{ github.run_id }}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
