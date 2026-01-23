@@ -151,6 +151,9 @@ class EngineLoop:
 
     def _send_resp(self, out: InferOutput):
         """Send response."""
+        # skip cancelled response
+        if out.resp.type == ResponseType.CANCEL:
+            return
         resp_type = (ResponseType.FINISH if out.finish else ResponseType.SUCCESS)
         logprobs = None if out.resp.data is None else out.resp.data.get('logprobs', None)
         response_reqs(self.req_manager,
