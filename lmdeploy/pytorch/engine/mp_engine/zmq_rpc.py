@@ -152,7 +152,6 @@ class AsyncRPCServer:
             self.tasks.add(task)
             task.add_done_callback(self.tasks.discard)
             response = dict(success=True, request_id=request_id, result=stream_id)
-            await init_event.wait()
             session_id = kwargs.get('session_id', None)
             if session_id is None:
                 session_id = args[0]
@@ -190,12 +189,13 @@ class AsyncRPCServer:
 
         self.register_method('_asyncrpcserver_get_stream_output', self.get_stream_output)
         try:
+            events = await poller.poll(timeout=10)
             while self.running:
-                events = await poller.poll(timeout=10)
-                if self.socket in dict(events):
+                while self.socket in dict(events):
                     await self.call_and_response()
-                else:
-                    await asyncio.sleep(0)
+                    events = await poller.poll(timeout=0)
+                events = await poller.poll(timeout=10)
+
         except zmq.ZMQError:
             logger.exception('ZMQRPCServer error')
         except Exception:
