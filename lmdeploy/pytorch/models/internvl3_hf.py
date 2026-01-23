@@ -666,7 +666,8 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMix
 
             return load_lora_weights(weights, adapter_id)
 
-    def rename_weight(self, name: str) -> str:
+    @classmethod
+    def rename_weight(cls, name: str) -> str:
         """Rename weight."""
         if name == 'lm_head.weight':
             return 'language_model.lm_head.weight'

@@ -65,11 +65,7 @@ class BaseSpecProposer:
         self.num_speculative_tokens = specdecode_config.num_speculative_tokens
         self.target_model = None
 
-    def build_model(self,
-                    empty_init: bool,
-                    target_model: torch.nn.Module = None,
-                    model_format=None,
-                    build_model_ctx=None):
+    def build_model(self, empty_init: bool, target_model: torch.nn.Module = None, build_model_ctx=None):
         if self.specdecode_config is None:
             return
         model_path = self.specdecode_config.model
@@ -81,7 +77,6 @@ class BaseSpecProposer:
         patched_model = build_patched_model(
             model_config,
             device=self.device,
-            model_format=model_format,
             build_model_ctx=build_model_ctx,
         )
         logger.debug('loading weights for draft model.')
