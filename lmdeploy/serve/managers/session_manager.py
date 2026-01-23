@@ -219,15 +219,16 @@ class SessionManager:
             session.reset()
         self.sessions.clear()
 
+    def has(self, session_id):
+        return session_id in self.sessions
+
     def remove(self, session: Session):
-        """Remove a session."""
         self.sessions.pop(session.session_id)
 
     def clear(self):
-        """Clear all sessions."""
         self.sessions.clear()
         # reset the session id generator
-        self.session_id_generator = itertools.count()
+        self.session_id_generator = itertools.count(1)
 
     def attach_event_loop(self, loop):
         self.loop = loop

@@ -624,12 +624,21 @@ class AsyncEngine(LogitsMixin):
                                  generate_token_len=0,
                                  finish_reason='error',
                                  token_ids=[])
-        if sequence_end:
-            if self.backend == 'pytorch':
-                # manually end pytorch session. session cannot be ended until session.request_handle()
-                # context exits
-                await session.async_close()
-            self.session_mgr.remove(session)
+            # update step
+            if sequence_end:
+                if self.backend == 'pytorch':
+                    # manually end pytorch session
+                    # note: Using session.async_abort() here results in deadlock
+                    # because it waits for session's _active event to be set, but the event won't be set
+                    # until the session is finished, i.e., session.request_handle() context exits.
+                    await handle.async_end(session.session_id)
+                self.session_mgr.remove(session)
+        # if sequence_end:
+        #     if self.backend == 'pytorch':
+        #         # manually end pytorch session. session cannot be ended until session.request_handle()
+        #         # context exits
+        #         await session.async_close()
+        #     self.session_mgr.remove(session)
 
     def _run(self, fn=None, coro=None, loop=None):
         assert (fn or coro) and not (fn and coro)

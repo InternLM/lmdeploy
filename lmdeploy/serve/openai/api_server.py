@@ -31,7 +31,6 @@ from lmdeploy.pytorch.disagg.conn.protocol import (DistServeCacheFreeRequest, Di
                                                    DistServeDropConnectionRequest, DistServeInitRequest,
                                                    MigrationRequest)
 from lmdeploy.serve.core import AsyncEngine
-from lmdeploy.serve.managers import SessionManager
 from lmdeploy.serve.openai.harmony_utils import GptOssChatParser
 from lmdeploy.serve.openai.protocol import ChatCompletionResponse  # noqa: E501
 from lmdeploy.serve.openai.protocol import (AbortRequest, ChatCompletionRequest, ChatCompletionResponseChoice,
@@ -56,7 +55,6 @@ logger = get_logger('lmdeploy')
 class VariableInterface:
     """A IO interface maintaining variables."""
     async_engine: AsyncEngine = None
-    session_mgr: SessionManager = SessionManager()
     api_keys: Optional[List[str]] = None
     request_hosts = []
     # following are for registering to proxy server
@@ -70,14 +68,25 @@ class VariableInterface:
     enable_abort_handling: bool = False
 
     @staticmethod
-    def get_session_id(session_id: int) -> int:
+    def get_session(session_id: int) -> int:
+        session_mgr = VariableInterface.get_session_manager()
         if session_id == -1:
-            return VariableInterface.session_mgr.reserve()
-        return session_id
+            return session_mgr.get()
+        else:
+            return session_mgr.get(session_id)
+
+    @staticmethod
+    def get_session_manager():
+        return VariableInterface.async_engine.session_mgr
+
+    @staticmethod
+    def get_engine_config():
+        return VariableInterface.async_engine.backend_config
 
 
 router = APIRouter()
 get_bearer_token = HTTPBearer(auto_error=False)
+server_context = VariableInterface()
 
 
 async def check_api_key(auth: Optional[HTTPAuthorizationCredentials] = Depends(get_bearer_token), ) -> str:
@@ -153,12 +162,12 @@ def check_request(request) -> Optional[JSONResponse]:
         check_func = check_request
     else:
         # Define an async function that always returns success
-        def always_success(req, backend_config):
+        def always_success(req, server_context):
             return ''
 
         check_func = always_success
 
-    error_msg = check_func(request, VariableInterface.async_engine.backend_config)
+    error_msg = check_func(request, server_context)
     if error_msg:
         return create_error_response(HTTPStatus.BAD_REQUEST, error_msg)
     return None
@@ -393,7 +402,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
-    request.session_id = VariableInterface.get_session_id(request.session_id)
+    session = VariableInterface.get_session(request.session_id)
 
     json_request = await raw_request.json()
     migration_request = json_request.pop('migration_request', None)
@@ -406,7 +415,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     adapter_name = None
     if model_name != VariableInterface.async_engine.model_name:
         adapter_name = model_name  # got a adapter name
-    request_id = str(request.session_id)
+    request_id = str(session.session_id)
     created_time = int(time.time())
     gpt_oss_parser = None
     if VariableInterface.async_engine.arch == 'GptOssForCausalLM':
@@ -489,7 +498,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     enable_thinking = chat_template_kwargs.get('enable_thinking', None)
     result_generator = VariableInterface.async_engine.generate(
         request.messages,
-        request.session_id,
+        session,
         gen_config=gen_config,
         tools=tools,
         reasoning_effort=request.reasoning_effort,
@@ -613,7 +622,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     async for res in result_generator:
         if await raw_request.is_disconnected():
             # Abort the request if the client disconnects.
-            await VariableInterface.async_engine.stop_session(request.session_id)
+            await session.stop_session()
             return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
         final_res = res
         text += res.response
@@ -750,7 +759,6 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
-    request.session_id = VariableInterface.get_session_id(request.session_id)
 
     json_request = await raw_request.json()
     migration_request = json_request.pop('migration_request', None)
@@ -765,8 +773,13 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         adapter_name = model_name  # got a adapter name
     request_id = str(request.session_id)
     created_time = int(time.time())
+    sessions = []
     if isinstance(request.prompt, str):
         request.prompt = [request.prompt]
+        sessions.append(VariableInterface.get_session(request.session_id))
+    elif isinstance(request.prompt, list):
+        for i in range(len(request.prompt)):
+            sessions.append(VariableInterface.get_session())
     if isinstance(request.stop, str):
         request.stop = [request.stop]
     random_seed = request.seed if request.seed else None
@@ -791,10 +804,10 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         preserve_cache=preserve_cache,
     )
     generators = []
-    for i in range(len(request.prompt)):
+    for prompt, session in zip(request.prompt, sessions):
         result_generator = VariableInterface.async_engine.generate(
-            request.prompt[i],
-            request.session_id + i,
+            prompt,
+            session,
             gen_config=gen_config,
             stream_response=True,  # always use stream to enable batching
             sequence_start=True,
@@ -940,7 +953,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
     error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
-    request.session_id = VariableInterface.get_session_id(request.session_id)
+    session = VariableInterface.get_session(request.session_id)
 
     prompt = request.prompt
     input_ids = request.input_ids
@@ -979,7 +992,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
 
     result_generator = VariableInterface.async_engine.generate(
         messages=prompt,
-        session_id=request.session_id,
+        session_id=session,
         input_ids=input_ids,
         gen_config=gen_config,
         stream_response=True,  # always use stream to enable batching
@@ -1030,7 +1043,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         async for res in result_generator:
             if await raw_request.is_disconnected():
                 # Abort the request if the client disconnects.
-                await VariableInterface.async_engine.stop_session(request.session_id)
+                await session.async_abort()
                 return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
             text += res.response or ''
             output_ids.extend(res.token_ids or [])
@@ -1222,7 +1235,8 @@ async def abort_request(request: AbortRequest, raw_request: Request = None):
     if request.abort_all:
         await VariableInterface.async_engine.stop_all_session()
     else:
-        await VariableInterface.async_engine.stop_session(request.session_id)
+        session = VariableInterface.get_session(request.session_id)
+        await session.async_abort()
     return Response(status_code=200)
 
 

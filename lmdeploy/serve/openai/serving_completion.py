@@ -4,16 +4,14 @@ from typing import TYPE_CHECKING
 from .protocol import CompletionRequest
 
 if TYPE_CHECKING:
-    from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
-
-from lmdeploy.serve.managers import SessionManager
-
-session_manager: SessionManager = SessionManager()
+    from .api_server import VariableInterface
 
 
-def check_request(request: CompletionRequest, engine_config: 'TurbomindEngineConfig | PytorchEngineConfig') -> str:
-    # Check logprobs settings
+def check_request(request: CompletionRequest, server_context: 'VariableInterface') -> str:
+    engine_config = server_context.get_engine_config()
+    session_manager = server_context.get_session_manager()
     try:
+        # Check logprobs settings
         logprobs_mode = engine_config.logprobs_mode
         logprobs = request.logprobs or 0
         if logprobs > 0 and logprobs_mode is None:
