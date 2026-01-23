@@ -94,18 +94,26 @@ class AsyncRPCServer:
             response = dict(success=False, request_id=request_id, error=str(e))
         self.send_multipart(client_id, response)
 
-    async def _method_async_streaming_task(self, stream_id: int, init_event: asyncio.Event, method: Callable,
+    async def _method_async_streaming_task(self, stream_id: int, request_id: int, client_id: int, method: Callable,
                                            args: tuple, kwargs: Dict):
         """Call method in a task for streaming."""
+
+        def __send_resp():
+            response = dict(success=True, request_id=request_id, result=stream_id)
+            session_id = kwargs.get('session_id', None)
+            if session_id is None:
+                session_id = args[0]
+            self.send_multipart(client_id, response)
+
         stream_out = dict(
             event=asyncio.Event(),
             result=None,
             stopped=False,
         )
         self.stream_output[stream_id] = stream_out
+        __send_resp()
         try:
             generator = method(*args, **kwargs)
-            init_event.set()
             async for result in generator:
                 self._engine_output_gather.add(stream_id, result)
                 stream_out['result'] = result
@@ -115,7 +123,6 @@ class AsyncRPCServer:
             stream_out['event'].set()
         finally:
             stream_out['stopped'] = True
-            init_event.set()
 
     async def get_stream_output(self, stream_id: int):
         """Get streaming output."""
@@ -145,17 +152,11 @@ class AsyncRPCServer:
         if request.get('streaming', False):
             # if method is a streaming method, use a different task
             stream_id = self._get_next_stream_id()
-            init_event = asyncio.Event()
-            task = event_loop.create_task(self._method_async_streaming_task(stream_id, init_event, method, args,
-                                                                            kwargs),
+            task = event_loop.create_task(self._method_async_streaming_task(stream_id, request_id, client_id, method,
+                                                                            args, kwargs),
                                           name=name)
             self.tasks.add(task)
             task.add_done_callback(self.tasks.discard)
-            response = dict(success=True, request_id=request_id, result=stream_id)
-            session_id = kwargs.get('session_id', None)
-            if session_id is None:
-                session_id = args[0]
-            self.send_multipart(client_id, response)
         else:
             task = event_loop.create_task(self._method_async_task(client_id, request_id, method, args, kwargs),
                                           name=name)
