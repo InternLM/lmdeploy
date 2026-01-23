@@ -1,8 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 from dataclasses import dataclass, fields
-from typing import Any, Dict, List, Optional, Tuple
+from functools import lru_cache
+from typing import Any, Dict, List, Tuple
 
+import numpy as np
 import torch
 
 from lmdeploy.messages import LogitsProcessor
@@ -29,7 +31,7 @@ def _process_bad_words_(scores: torch.Tensor,
     return scores
 
 
-def _process_repetition_penalty_(scores: torch.Tensor, input_ids: torch.LongTensor, penalty: torch.Tensor):
+def _process_repetition_penalty_(scores: torch.Tensor, input_ids: torch.Tensor, penalty: torch.Tensor):
     """Process repetition penalty."""
     score = torch.gather(scores, 1, input_ids)
     penalty = penalty.to(score.dtype)
@@ -68,6 +70,116 @@ def _filter_minp_sorted_(scores: torch.Tensor, minp: torch.Tensor, filter_value:
     return scores
 
 
+@lru_cache(maxsize=1)
+def _ngram_one(dtype: torch.dtype, device: torch.device):
+    return torch.ones(1, dtype=dtype, device=device)
+
+
+def ngram(token_ids: torch.Tensor, n: torch.Tensor, threshold: torch.Tensor, max_n: int, same_n: bool = False):
+    """Compute n-gram matches between sliding windows and a target sequence.
+
+    For each batch, performs cosine similarity checking between:
+      - All sliding windows of length `max_n` from the full sequence
+      - The last `max_n` tokens of the sequence (target window)
+
+    A match is counted when both:
+      1. Cosine similarity ≈ 1 (normalized vectors match)
+      2. Vector lengths match (preventing zero/normalization artifacts)
+
+    Parameters
+    ----------
+    token_ids : torch.Tensor
+        Input token IDs of shape (batch_size, seq_len).
+        Values are typically ≥0 (0 may represent padding/special tokens).
+    n : torch.Tensor
+        Effective n-gram length for each batch element, shape (batch_size,).
+        When `same_n=False`, positions beyond `n` in the last `max_n` tokens are masked.
+    threshold : torch.Tensor
+        Minimum number of matching windows required for validity, shape (batch_size,).
+    max_n : int
+        Maximum n-gram length (window size for matching).
+    same_n : bool, default False
+        If True, use full `max_n`-length windows regardless of `n`.
+        If False, mask positions where index < (max_n - n) in the target window.
+
+    Returns
+    -------
+    matched_mask : torch.Tensor
+        Boolean mask of shape (batch_size, seq_len - max_n + 1) indicating
+        which sliding windows match the target n-gram.
+    found : torch.Tensor
+        Boolean tensor of shape (batch_size,) indicating whether each batch
+        element has at least `threshold` matches.
+    """
+
+    batch_size, seq_len = token_ids.size()
+    if seq_len < max_n:
+        # Not enough tokens to form a single n-gram
+        matched_mask = torch.zeros((batch_size, 0), dtype=torch.bool, device=token_ids.device)
+        found = torch.zeros((batch_size, ), dtype=torch.bool, device=token_ids.device)
+        return matched_mask, found
+    # token_ids could be 0, so we add 1 to avoid div 0
+    token_ids = token_ids.to(torch.float32) + 1
+
+    # normalize ids
+    norm = token_ids[:, -max_n:]
+    if not same_n:
+        # fill 0 for n < max_n
+        mask = torch.arange(max_n, device=token_ids.device).unsqueeze(0) >= (max_n - n.unsqueeze(1))
+        norm = norm * mask.to(torch.float32)
+    norm = norm.norm(2, dim=-1, keepdim=True)
+    normed_ids = token_ids / norm
+
+    # concate p1 and p2 so we can check distance and vector in one conv1d
+    normed_n_ids = normed_ids[:, -max_n:]
+    normed_ids_p2 = normed_ids * normed_ids
+    ones_ids = torch.ones_like(normed_n_ids)
+    if not same_n:
+        # fill 0 for n < max_n
+        normed_n_ids = normed_n_ids * mask.to(torch.float32)
+        ones_ids = ones_ids * mask.to(torch.float32)
+    normed_ids = torch.cat([normed_ids, normed_ids_p2], dim=0)
+    normed_n_ids = torch.cat([normed_n_ids, ones_ids], dim=0)
+
+    # check cos distance & check vector length
+    match_norm = torch.conv1d(normed_ids.unsqueeze(0), normed_n_ids.unsqueeze(1), groups=batch_size * 2)[0]
+    match_norm, match_ones = match_norm.chunk(2, dim=0)
+
+    # both match result should be close to 1
+    one_tensor = _ngram_one(dtype=match_norm.dtype, device=match_norm.device)
+    matched_mask = match_norm.isclose(one_tensor) & match_ones.isclose(one_tensor)
+
+    # threshold
+    count = matched_mask.sum(-1)
+    found = (count >= threshold) & (threshold > 0)
+
+    return matched_mask, found
+
+
+def _filter_ngram_(
+    scores: torch.Tensor,
+    stop_words: torch.Tensor,
+    generated_ids: torch.Tensor,
+    n: torch.Tensor,
+    threshold: torch.Tensor,
+    max_n: int,
+    same_n: bool = False,
+):
+    """Filter ngram."""
+    if stop_words is None or stop_words.numel() == 0:
+        return scores
+    # use first stop words
+    _, found = ngram(generated_ids, n, threshold, max_n, same_n)
+    stop_words = stop_words[:, 0]
+    # fill all scores -inf
+    scores.masked_fill_(found[:, None], -float('inf'))
+    # set stop words to 0
+    stop_scores = scores.gather(1, stop_words[:, None])
+    stop_scores.masked_fill_(found[:, None], 0)
+    scores.scatter_(1, stop_words[:, None], stop_scores)
+    return scores
+
+
 def _multinomial_sampling(scores: torch.Tensor,
                           seeds: torch.LongTensor,
                           offsets: torch.LongTensor,
@@ -84,7 +196,7 @@ SeqList = List[SchedulerSequence]
 class SamplingInputsDelta:
     num_ignore_eos: torch.Tensor = None
     random_offsets: torch.Tensor = None
-    all_ids: Optional[torch.Tensor] = None
+    all_ids: None | torch.Tensor = None
 
 
 @dataclass
@@ -104,16 +216,27 @@ class SamplingInputs:
     min_top_p: float = 1.0
     response_formats: Tuple[str] = ()
     logits_processors: List[List[LogitsProcessor]] = None
-    max_num_logprobs: Optional[int] = None
-    all_ids: Optional[torch.Tensor] = None
+    max_num_logprobs: None | int = None
+    all_ids: None | torch.Tensor = None
     num_ignore_eos: torch.Tensor = None
     batch_size: int = 0
-    session_ctx: Optional[List[Dict[str, Any]]] = None
-    session_to_cleanup: Optional[List[int]] = None
+    session_ctx: None | List[Dict[str, Any]] = None
+    session_to_cleanup: None | List[int] = None
+    # for repetition_penalty and ngram
+    generated_ids: torch.Tensor | None = None
+    generated_ids_cpu: np.ndarray | None = None
+
+    # n gram
+    ngram_size: torch.Tensor = None
+    ngram_threshold: torch.Tensor = None
+    max_ngram_size: int = 0
+    ngram_same_n: bool = False
 
     def to_device(self, device: str, non_blocking: bool = False):
         """To device."""
         out_dict = dict()
+        if self.generated_ids_cpu is not None:
+            self.generated_ids = torch.from_numpy(self.generated_ids_cpu.copy())
         for f in fields(self):
             k = f.name
             v = getattr(self, k)
@@ -168,8 +291,8 @@ class FusedLogitsProcessor:
     def __init__(
         self,
         sampling_inputs: SamplingInputs,
-        logprobs_mode: Optional[str] = None,
-        guided_decoding_manager: Optional[GuidedDecodingManager] = None,
+        logprobs_mode: None | str = None,
+        guided_decoding_manager: None | GuidedDecodingManager = None,
     ):
         self.sampling_inputs: SamplingInputs = sampling_inputs
         self.logprobs_mode = logprobs_mode
@@ -238,7 +361,20 @@ class FusedLogitsProcessor:
 
         repetition_penalty = sampling_inputs.repetition_penalty
         if repetition_penalty is not None:
-            scores = _process_repetition_penalty_(scores, all_ids, repetition_penalty)
+            generated_ids = sampling_inputs.generated_ids
+            scores = _process_repetition_penalty_(scores, generated_ids, repetition_penalty)
+
+        if sampling_inputs.max_ngram_size > 0:
+            generated_ids = sampling_inputs.generated_ids
+            scores = _filter_ngram_(
+                scores,
+                sampling_inputs.stop_words,
+                generated_ids,
+                sampling_inputs.ngram_size,
+                sampling_inputs.ngram_threshold,
+                sampling_inputs.max_ngram_size,
+                sampling_inputs.ngram_same_n,
+            )
 
         temperature = sampling_inputs.temperature
         if temperature is not None:

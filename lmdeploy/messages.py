@@ -129,6 +129,10 @@ class GenerationConfig:
     # router replay
     return_routed_experts: bool = False
 
+    # ngram
+    ngram_size: int = 0
+    ngram_threshold: int = 0
+
     def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
         """Convert stop_words/bad_sords to ids and append the ids to
         stop_token_ids/bad_token_ids."""

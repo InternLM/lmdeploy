@@ -124,3 +124,28 @@ def test_filter_minp_sorted():
 
     out = _filter_minp_sorted_(scores, min_p)
     torch.testing.assert_close(out, gt)
+
+
+def test_filter_ngram():
+    from lmdeploy.pytorch.engine.logits_process import _filter_ngram_
+
+    generated_ids = torch.tensor(
+        [[2, 3, 4, 1, 2, 3, 4, 2, 3, 4], [9, 8, 7, 3, 8, 7, 5, 9, 8, 7], [9, 8, 7, 3, 8, 7, 5, 9, 8, 7]],
+        dtype=torch.int64)
+    n = torch.tensor([3, 3, 2], dtype=torch.int64)
+    threshold = torch.tensor([3, 3, 3], dtype=torch.int64)
+
+    batch_size = generated_ids.size(0)
+    max_n = n.max().item()
+    same_n = n.eq(max_n).all().item()
+    vocab_size = 100
+
+    scores = torch.rand(batch_size, vocab_size)
+    stop_words = torch.randint(0, vocab_size, (batch_size, 3), dtype=torch.int64)
+    _filter_ngram_(scores, stop_words, generated_ids, n, threshold, max_n, same_n)
+
+    assert not scores[1].isinf().any().item()
+    assert scores[0].isinf().sum().item() == vocab_size - 1
+    assert scores[2].isinf().sum().item() == vocab_size - 1
+    assert scores[0, stop_words[0, 0]] == 0
+    assert scores[2, stop_words[2, 0]] == 0

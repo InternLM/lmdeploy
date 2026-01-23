@@ -2,7 +2,7 @@
 import enum
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List
 
 import numpy as np
 import torch
@@ -56,12 +56,16 @@ class SamplingParam:
     bad_words: List[int] = field(default_factory=list)
     max_new_tokens: int = 512
     min_new_tokens: int = 0
-    response_format: Optional[str] = None
-    logits_processors: Optional[List[LogitsProcessor]] = None
+    response_format: None | str = None
+    logits_processors: None | List[LogitsProcessor] = None
     out_logits: bool = False
     out_last_hidden_states: bool = False
     num_logprobs: int = -1
     return_routed_experts: bool = False
+
+    # ngram
+    ngram_size: int = 0
+    ngram_threshold: int = 0
 
     @classmethod
     def from_gen_config(cls, gen_config: GenerationConfig):
@@ -144,6 +148,8 @@ class SamplingParam:
             out_logits=(output_logits is not None),
             num_logprobs=logprobs,
             return_routed_experts=gen_config.return_routed_experts,
+            ngram_size=gen_config.ngram_size,
+            ngram_threshold=gen_config.ngram_threshold,
         )
 
 
@@ -262,7 +268,7 @@ class SchedulerSession:
                      adapter_name: str = None,
                      multimodals: MultiModalInputs = None,
                      input_embeddings: List[InputEmbeddings] = None,
-                     migration_request: Optional[MigrationRequest] = None,
+                     migration_request: None | MigrationRequest = None,
                      resp_cache: bool = False,
                      preserve_cache: bool = False) -> 'SchedulerSequence':
         """Add a new message."""
@@ -604,7 +610,7 @@ class SchedulerSequence:
     model_meta: Dict[str, Any] = None
 
     # For Disaggregation
-    migration_request: Optional[MigrationRequest] = None
+    migration_request: None | MigrationRequest = None
     resp_cache: bool = False
     preserve_cache: bool = False
 
@@ -698,7 +704,7 @@ class SchedulerSequence:
         else:
             return None
 
-    def append_routed_experts(self, routed_experts: Union[Tensor, np.ndarray]):
+    def append_routed_experts(self, routed_experts: Tensor | np.ndarray):
         """Append routed experts."""
         if not self.return_routed_experts:
             return
@@ -756,7 +762,7 @@ class SchedulerSequence:
         """Get logits."""
         return self.all_logits.get_logits()
 
-    def append_logits(self, logits: Union[Tensor, np.ndarray]):
+    def append_logits(self, logits: Tensor | np.ndarray):
         """Append logits."""
         if not self.return_logits:
             return
@@ -776,7 +782,7 @@ class SchedulerSequence:
     def record_event(
         self,
         event_type: EventType,
-        timestamp: Optional[float] = None,
+        timestamp: None | float = None,
     ) -> None:
         self.engine_events.append(EngineEvent.new_event(event_type, timestamp))
 

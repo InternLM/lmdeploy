@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from typing import List
 
+import numpy as np
 import torch
 from torch.profiler import record_function
 
@@ -15,7 +16,7 @@ SeqList = List[SchedulerSequence]
 
 def _gather_all_ids(pad_id: int, seqs: SeqList, sampling_inputs: SamplingInputs):
     """Gather history."""
-    if sampling_inputs.repetition_penalty is None and not any(sampling_inputs.logits_processors):
+    if not any(sampling_inputs.logits_processors):
         return None
     batch = len(seqs)
     max_len = max(seq.num_valid_ids for seq in seqs)
@@ -25,6 +26,22 @@ def _gather_all_ids(pad_id: int, seqs: SeqList, sampling_inputs: SamplingInputs)
         if h_len == 0:
             continue
         h_ids = torch.from_numpy(seq.valid_ids)
+        output[idx, -h_len:] = h_ids
+    return output
+
+
+def _gather_generated_ids(pad_id: int, seqs: SeqList, sampling_inputs: SamplingInputs) -> np.ndarray | None:
+    """Gather history."""
+    if sampling_inputs.repetition_penalty is None and sampling_inputs.max_ngram_size == 0:
+        return None
+    batch = len(seqs)
+    max_len = max(seq.num_new_tokens for seq in seqs)
+    output = np.full((batch, max_len), pad_id, dtype=np.int64)
+    for idx, seq in enumerate(seqs):
+        h_len = seq.num_new_tokens
+        if h_len == 0:
+            continue
+        h_ids = seq.generated_ids
         output[idx, -h_len:] = h_ids
     return output
 
@@ -61,6 +78,8 @@ class ARSamplingStrategy(SamplingStrategy):
         num_logprobs = [None] * batch_size
         session_to_cleanup = self.session_to_cleanup
         self.session_to_cleanup = []
+        ngram_sizes = [None] * batch_size
+        ngram_thresholds = [None] * batch_size
 
         def __gather_params():
             """Gather params."""
@@ -84,6 +103,8 @@ class ARSamplingStrategy(SamplingStrategy):
                 stop_words[idx] = sw
                 logits_processors[idx] = param.logits_processors
                 num_logprobs[idx] = param.num_logprobs
+                ngram_sizes[idx] = param.ngram_size
+                ngram_thresholds[idx] = param.ngram_threshold
 
         def __get_topp(top_p):
             """Get topp."""
@@ -165,6 +186,19 @@ class ARSamplingStrategy(SamplingStrategy):
             'seq_id': seq.seq_id,
         } for seq in seqs]
 
+        # ngram
+        max_ngram_size = max(ngram_sizes)
+        if max_ngram_size == 0:
+            ngram_sizes = None
+            ngram_thresholds = None
+            ngram_same_n = True
+        else:
+            ngram_sizes = torch.tensor(ngram_sizes)
+            ngram_thresholds = torch.tensor(ngram_thresholds)
+            ngram_same_n = (ngram_sizes == max_ngram_size).all().item()
+            if ngram_same_n:
+                ngram_sizes = None
+
         sampling_input = SamplingInputs(
             temperature=temperature,
             bad_words=bad_words,
@@ -185,10 +219,15 @@ class ARSamplingStrategy(SamplingStrategy):
             batch_size=batch_size,
             session_ctx=session_ctx,
             session_to_cleanup=session_to_cleanup,
+            ngram_size=ngram_sizes,
+            ngram_threshold=ngram_thresholds,
+            max_ngram_size=max_ngram_size,
+            ngram_same_n=ngram_same_n,
         )
 
         pad_token_id = self.pad_token_id
         sampling_input.all_ids = _gather_all_ids(pad_token_id, seqs, sampling_input)
+        sampling_input.generated_ids_cpu = _gather_generated_ids(pad_token_id, seqs, sampling_input)
         sampling_input.num_ignore_eos = _get_num_ignore_eos(seqs)
         return sampling_input
 
