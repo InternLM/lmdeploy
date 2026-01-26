@@ -29,12 +29,12 @@ def _process_bad_words_(scores: torch.Tensor,
     Args:
         scores (torch.Tensor): A tensor of shape ``[batch_size, vocab_size]``
             containing the logits or scores for each token in the vocabulary.
-        bad_words (torch.LongTensor): A tensor of shape
+        bad_words (torch.Tensor): A tensor of shape
             ``[batch_size, num_bad_words]`` containing token indices that
             should be suppressed. Invalid or masked positions may contain
             negative values; these entries are ignored and not used as
             indices into ``scores``.
-        mask (torch.BoolTensor): A boolean tensor with the same shape as
+        mask (torch.Tensor): A boolean tensor with the same shape as
             ``bad_words``. Positions with ``True`` indicate that the
             corresponding entry in ``bad_words`` is a valid bad-word index
             that should be filtered. Positions with ``False`` are treated as
