@@ -72,10 +72,12 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
 
     session_len = _get_and_verify_max_len(model_config, None)
 
-    if model_format in ['awq', 'gptq']:
+    if model_format in ['awq', 'gptq', 'compressed-tensors']:
         weight_type = 'int4'
         dtype = 'float16'  # force float16 for GPTQ/AWQ weights
         group_size = 128 if group_size == 0 else group_size
+        if model_format == 'compressed-tensors':
+            model_format = 'awq'
     elif model_format == 'fp8':
         weight_type = 'fp8'
         group_size = 128
@@ -147,13 +149,28 @@ def get_tm_model(model_path,
             pass
         elif quant_method == 'mxfp4':
             _group_size = 32
+        elif quant_method == 'compressed-tensors':
+            _config_groups = quant_config.get('config_groups')
+            _group_0 = _config_groups.get('group_0')
+            _format = _group_0.get('format')
+            assert _format == 'pack-quantized', \
+                f'format is {_format}' \
+                f'only pack-quantized format is supported' \
+                f'when quant_method is compressed-tensors'
+            _weights = _group_0.get('weights')
+            _group_size = _weights.get('group_size')
+            _num_bits = _weights.get('num_bits')
+            _type = _weights.get('type')
+            assert _num_bits == 4 and _type == 'int', \
+                'only 4 bit integer weighttype is supported' \
+                'when format is pack-quantized'
         else:
             assert 0, f'unsupported quant_config: {quant_config}'
 
         engine_config.model_format = quant_method
         group_size = _group_size
 
-    if engine_config.model_format in ['awq', 'gptq']:
+    if engine_config.model_format in ['awq', 'gptq', 'compressed-tensors']:
         # Compatible to awq models that are quantized by lmdeploy (<=v0.3.0)
         if not group_size:
             group_size = 128
