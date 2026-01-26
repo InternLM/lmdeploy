@@ -60,7 +60,9 @@ RESTFUL_MODEL_LIST = [
     'meta-llama/Llama-3.2-3B-Instruct', 'Qwen/Qwen3-VL-30B-A3B-Instruct'
 ]
 
-RESTFUL_BASE_MODEL_LIST = ['Qwen/Qwen3-8B-Base', 'internlm/internlm2_5-20b', 'Qwen/Qwen3-4B']
+RESTFUL_BASE_MODEL_LIST = [
+    'Qwen/Qwen3-8B-Base', 'internlm/internlm2_5-20b', 'Qwen/Qwen3-4B', 'internlm/internlm3-8b-instruct'
+]
 
 SUFFIX_INNER_AWQ = '-inner-4bits'
 SUFFIX_INNER_GPTQ = '-inner-gptq'
