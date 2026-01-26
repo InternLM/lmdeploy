@@ -126,11 +126,10 @@ def init_ray_cluster(world_size: int, ray_address: str = None, dp: int = 1, devi
         # Create a new placement group
         placement_group_specs: List[Dict[str, float]] = ([{device_str: 1.0} for _ in range(world_size)])
 
-        gcs_addr = ray.get_runtime_context().gcs_address
-        master_addr = gcs_addr.split(':')[0]
-        current_ip = master_addr
-        # This way, at least bundle is required to be created in a current
-        # node.
+        # Pin at least one bundle to the local node.
+        # This helps multi-node DP keep each dp_rank process's workers co-located with
+        # the node where the process is launched.
+        current_ip = ray.util.get_node_ip_address()
         placement_group_specs[0][f'node:{current_ip}'] = 0.001
 
         # By default, Ray packs resources as much as possible.
