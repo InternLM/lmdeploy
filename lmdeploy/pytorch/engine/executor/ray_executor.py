@@ -18,6 +18,7 @@ from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.ray import RayContext, get_device_str
+from lmdeploy.pytorch.utils import wait_for_async_tasks
 from lmdeploy.utils import get_logger, try_import_deeplink
 
 from .base import ExecutorBase
@@ -53,15 +54,24 @@ def get_ascend_device_rank_mapping(master_addr):
         rank_table = json.load(f)
     try:
         assert master_addr == rank_table['server_list'][0]['server_id'], 'Master address does not match rank table'
-        rank_mapping = {}
-        worker_ips = []
+        rank_mapping: Dict[int, int] = {}
+        worker_ip_by_rank: Dict[int, str] = {}
         for server in rank_table['server_list']:
             node_ip = server['server_id']
             for idx, device in enumerate(server['device']):
-                local_rank = idx
+                # Prefer explicit device_id if present; fall back to enumeration order.
+                local_rank = int(device.get('device_id', idx))
                 global_rank = int(device['rank_id'])
                 rank_mapping[global_rank] = local_rank
-                worker_ips.append(node_ip)
+                worker_ip_by_rank[global_rank] = node_ip
+
+        if len(worker_ip_by_rank) == 0:
+            raise ValueError('Rank table contains no devices.')
+
+        ranks = sorted(worker_ip_by_rank.keys())
+        if ranks[0] != 0 or ranks[-1] != len(ranks) - 1:
+            raise ValueError(f'Rank ids are not contiguous starting from 0: {ranks[:8]}...{ranks[-8:]}')
+        worker_ips = [worker_ip_by_rank[r] for r in range(len(ranks))]
     except Exception as e:
         logger.error(f'Parse rank table file({rank_table})  failed')
         raise e
@@ -357,14 +367,6 @@ class RayExecutor(ExecutorBase):
         """Build cache engine."""
         return ray.get(self.workers[0].get_input_processor.remote())
 
-    async def _prefetch_outputs(self):
-        while True:
-            outs = await self.workers[0].get_outputs.remote()
-            logger.debug(f'Receive {len(outs)} outputs from worker[0].')
-            for out in outs:
-                out = out.to_tensor()
-                self.remote_outs.put_nowait(out)
-
     def _prefetch_task_callback(self, task: asyncio.Task):
         try:
             task.result()
@@ -381,15 +383,61 @@ class RayExecutor(ExecutorBase):
         self.collective_rpc('start')
 
         self.remote_outs = asyncio.Queue()
-        event_loop = asyncio.get_event_loop()
         logger.info('Starting async task RayPrefetchOutput loop.')
-        self._prefetch_task = event_loop.create_task(self._prefetch_outputs(), name='RayExecutorPrefetchOutput')
-        self._prefetch_task.add_done_callback(self._prefetch_task_callback)
+
+    async def wait_tasks(self):
+        """Wait tasks."""
+        dp_rank = self.dist_config.dp_rank
+        tasks_to_cancel = set()
+        event_loop = asyncio.get_event_loop()
+
+        async def _wait_single_worker(worker):
+            try:
+                task = worker.wait_tasks.remote()
+                tasks_to_cancel.add(task)
+                await task
+            except ray.exceptions.ActorDiedError:
+                # It is safe to ignore wait tasks on died actor
+                logger.info('RayExecutor worker has been killed before finish wait_tasks.')
+
+        tasks = [
+            event_loop.create_task(_wait_single_worker(worker), name=f'WorkerWaitTasks_{idx}')
+            for idx, worker in enumerate(self.workers)
+        ]
+        if self._prefetch_task is not None:
+            tasks.append(self._prefetch_task)
+        try:
+            await wait_for_async_tasks(tasks)
+        except asyncio.CancelledError:
+            logger.info(f'RayExecutor DP[{dp_rank}] wait_tasks cancelled.')
+            raise
+        except BaseException:
+            logger.error(f'RayExecutor DP[{dp_rank}] wait_tasks failed.')
+            raise
+        finally:
+            logger.debug(f'RayExecutor DP[{dp_rank}] wait_tasks cleanup.')
+            for task in tasks_to_cancel:
+                try:
+                    ray.cancel(task)
+                except ray.exceptions.ActorDiedError:
+                    logger.debug('RayExecutor worker has been killed before finish cancel task.')
+                except Exception as e:
+                    logger.error(f'RayExecutor DP[{dp_rank}] Cancel wait_tasks failed: {e}')
 
     def stop(self):
         """Stop engine loop."""
+        # TODO: For dp > 1 we currently rely on external teardown (e.g. Ray actor
+        # destruction) instead of explicitly stopping worker loops here. Implementing
+        # coordinated shutdown across multiple dp ranks is non-trivial, especially
+        # when some ranks may have already failed. The explicit stop_async RPC is
+        # therefore only issued when dp == 1.
         if self.dp == 1:
-            self.collective_rpc('stop_async')
+            try:
+                # add timeout might disable dump profile
+                # hope this will not lead to hanging
+                self.collective_rpc('stop_async')
+            except ray.exceptions.ActorDiedError:
+                logger.info('RayExecutor worker has been killed before finish stop_async.')
             logger.debug('RayExecutor workers stopped.')
         if self._prefetch_task is not None:
             self._prefetch_task.cancel()
@@ -403,6 +451,9 @@ class RayExecutor(ExecutorBase):
             try:
                 self.collective_rpc('release', timeout=5.0)
                 logger.debug('RayExecutor workers released.')
+            except ray.exceptions.ActorDiedError:
+                logger.info('RayExecutor worker has been killed before finish release.')
+                [ray.kill(worker) for worker in self.workers]
             except ray.exceptions.GetTimeoutError:
                 logger.info('Ray release timeout, killing workers')
                 [ray.kill(worker) for worker in self.workers]
@@ -423,23 +474,34 @@ class RayExecutor(ExecutorBase):
 
     async def forward_async(self, inputs):
         """Start forward."""
-        # we don't need return of forward async
+
         if self.dag is None:
             self.dag = self._compile_dag()
-        inputs = ray.put(inputs)
-        # make sure in order
-        outs = self.dag.execute(inputs)
-        ray.get(outs)
+            self._prev_inputs = None
+            self._prev_out = None
 
-        # free ray.put inputs
-        try:
-            ray._private.internal_api.free(inputs)
-        except Exception as e:
-            logger.warning(f'Free input ref failed: {e}')
+        if self._prev_out is not None:
+            try:
+                ray.get(self._prev_out)
+            except SystemExit:
+                logger.error('Ray worker exited.')
+                raise
+            finally:
+                # free ray.put inputs
+                try:
+                    ray._private.internal_api.free(self._prev_inputs)
+                except Exception as e:
+                    logger.warning(f'Free input ref failed: {e}')
+
+        self._prev_inputs = ray.put(inputs)
+        # make sure in order
+        self._prev_out = self.dag.execute(self._prev_inputs)
 
     async def get_output_async(self):
         """Get output async."""
-        return await self.remote_outs.get()
+        ret = await self.workers[0].get_outputs.remote()
+        ret = ret.to_tensor()
+        return ret
 
     @contextlib.contextmanager
     def remote_log(self, msg: str):
@@ -572,8 +634,19 @@ class RayExecutor(ExecutorBase):
         if rank_table_file:
             # if rank table file is set, use it to get rank mapping, multiple nodes
             rank_mapping, worker_ips, envs = get_ascend_device_rank_mapping(driver_ip)
-            self.workers = self._sort_workers_by_ip(worker_ips, self.workers)
-            ray.get([worker.set_device.remote(rank_mapping[idx]) for idx, worker in enumerate(self.workers)])
+            rank_start = self.rank_offset
+            rank_end = rank_start + len(self.workers)
+            if rank_end > len(worker_ips):
+                raise ValueError(
+                    'Rank table world_size is smaller than required ranks for current dp_rank. '
+                    f'rank_table_world_size={len(worker_ips)}, required_rank_range=[{rank_start}, {rank_end})')
+
+            # In dp mode each process only owns a slice of global ranks.
+            expected_worker_ips = worker_ips[rank_start:rank_end]
+            self.workers = self._sort_workers_by_ip(expected_worker_ips, self.workers)
+
+            ray.get(
+                [worker.set_device.remote(rank_mapping[rank_start + idx]) for idx, worker in enumerate(self.workers)])
             ray.get([worker.set_env.remote(envs) for worker in self.workers])
         elif not set_rt_visable_devices_by_ray:
             # if rank table file is not set, treat as single node

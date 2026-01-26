@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import math
+from typing import Sequence
 
 import torch
 import triton
@@ -53,8 +54,8 @@ def _load_kv(ptrs, boundary_check: tl.constexpr):
 
 
 @triton.jit
-def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs, loop_start, loop_end, sm_scale, history_mask,
-                       kv_min_loc, causal_mask: tl.constexpr, window_size: tl.constexpr,
+def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs, loop_start, loop_end, sm_scale, alibi_slope,
+                       global_offs_m, history_mask, kv_min_loc, causal_mask: tl.constexpr, window_size: tl.constexpr,
                        logit_softcapping: tl.constexpr, k_bound: tl.constexpr, v_bound: tl.constexpr,
                        shared_kv: tl.constexpr, block_sparse_size: tl.constexpr, BLOCK_N: tl.constexpr,
                        BLOCK_DK1: tl.constexpr):
@@ -115,6 +116,11 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs, loop_start
             m_i_new = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
             qk = qk * qk_scale - m_i_new[:, None]
 
+        if alibi_slope is not None:
+            relative_pos = start_n + offs_n[None, :] - global_offs_m[:, None]
+            bias = -tl.abs(relative_pos).to(tl.float32) * alibi_slope * tl_log2(math.e)
+            qk += bias
+
         # -- compute p, m_i and l_i
         p = tl_exp2(qk)
         alpha = tl_exp2(m_i - m_i_new)
@@ -160,11 +166,14 @@ def _flash_prefill_fwd_kernel(
     k_ptr,
     v_ptr,
     o_ptr,
+    cu_seqlens_q_ptr,
+    cu_seqlens_k_ptr,
     q_start_loc_ptr,
     q_seqlens_ptr,
     kv_start_loc_ptr,
     kv_seqlens_ptr,
     sinks,
+    alibi_slopes_ptr,
     sm_scale,
     stride_qs: tl.constexpr,
     stride_qh: tl.constexpr,
@@ -197,17 +206,24 @@ def _flash_prefill_fwd_kernel(
     head_id = tl.program_id(1)
     batch_id = tl.program_id(2)
 
-    q_seqlen = tl.load(q_seqlens_ptr + batch_id)
+    if cu_seqlens_q_ptr is not None:
+        q_start_loc = tl.load(cu_seqlens_q_ptr + batch_id).to(tl.int32)
+        q_seqlen = tl.load(cu_seqlens_q_ptr + batch_id + 1).to(tl.int32) - q_start_loc
+    else:
+        q_start_loc = tl.load(q_start_loc_ptr + batch_id).to(tl.int32)
+        q_seqlen = tl.load(q_seqlens_ptr + batch_id).to(tl.int32)
+
+    if cu_seqlens_k_ptr is not None:
+        kv_start_loc = tl.load(cu_seqlens_k_ptr + batch_id).to(tl.int32)
+        kv_seqlen = tl.load(cu_seqlens_k_ptr + batch_id + 1).to(tl.int32) - kv_start_loc
+    else:
+        kv_start_loc = tl.load(kv_start_loc_ptr + batch_id).to(tl.int32)
+        kv_seqlen = tl.load(kv_seqlens_ptr + batch_id).to(tl.int32)
 
     if BLOCK_M * start_m >= q_seqlen:
         return
 
     kv_head_id = head_id // kv_group_num
-    q_seqlen = q_seqlen.to(tl.int32)
-    kv_seqlen = tl.load(kv_seqlens_ptr + batch_id).to(tl.int32)
-    q_start_loc = tl.load(q_start_loc_ptr + batch_id).to(tl.int32)
-    kv_start_loc = tl.load(kv_start_loc_ptr + batch_id).to(tl.int32)
-
     history_len = kv_seqlen - q_seqlen
 
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
@@ -242,6 +258,13 @@ def _flash_prefill_fwd_kernel(
         block_shape=(BLOCK_N, BLOCK_DV),
         order=(1, 0),
     )
+
+    # for alibi
+    if alibi_slopes_ptr is not None:
+        alibi_slope = tl.load(alibi_slopes_ptr + head_id)
+    else:
+        alibi_slope = None
+    global_offs_m = history_len + offs_m
 
     if BLOCK_DK + BLOCK_DK1 == head_dim_k:
         k_bound0: tl.constexpr = None
@@ -297,6 +320,8 @@ def _flash_prefill_fwd_kernel(
                                        loop_start,
                                        loop_end,
                                        sm_scale,
+                                       alibi_slope,
+                                       global_offs_m,
                                        history_mask,
                                        kv_min_loc,
                                        causal_mask=False,
@@ -325,6 +350,8 @@ def _flash_prefill_fwd_kernel(
                                        loop_start,
                                        loop_end,
                                        sm_scale,
+                                       alibi_slope,
+                                       global_offs_m,
                                        history_mask,
                                        kv_min_loc,
                                        causal_mask=True,
@@ -445,27 +472,32 @@ def _kernel_meta_rocm(BLOCK_DK: int, shared_kv: bool):
     return BLOCK_M, BLOCK_N, num_warps, num_stages
 
 
-def flash_attention_fwd(
-    q_states: Tensor,
-    k_states: Tensor,
-    v_states: Tensor,
-    o_states: Tensor,
-    q_start_loc: Tensor,
-    q_seqlens: Tensor,
-    kv_start_loc: Tensor,
-    kv_seqlens: Tensor,
-    max_seqlen: int = None,
-    window_size: int = None,
-    sm_scale: float = None,
-    logit_softcapping: float = None,
+def flash_attn_varlen_func(
+    q: Tensor,
+    k: Tensor,
+    v: Tensor,
+    cu_seqlens_q: Tensor = None,
+    cu_seqlens_k: Tensor = None,
+    max_seqlen_q: int = None,
+    max_seqlen_k: int = None,  # not used, just for align with fa interface
+    softmax_scale: float = None,
+    causal: bool = False,
+    window_size: int = (-1, -1),
+    softcap: float = 0.0,
+    # old seqlens
+    q_start_loc: Tensor = None,
+    q_seqlens: Tensor = None,
+    kv_start_loc: Tensor = None,
+    kv_seqlens: Tensor = None,
+    # args not in fa
+    alibi_slopes: Tensor = None,
     sinks: Tensor = None,
-    causal: bool = True,
     block_sparse_size: int = 1,
     kv_layout: str = 'hsd',
 ):
     """Varlen flash Attention forward.
 
-    Support sliding window, softcapping. Note that this kernel will not perform bound check for k,v.
+    Support sliding window, softcapping.
     """
 
     global _nv_cap
@@ -473,7 +505,7 @@ def flash_attention_fwd(
         _nv_cap = torch.cuda.get_device_capability()
 
     def grid(args):
-        return (triton.cdiv(max_seqlen, args['BLOCK_M']), num_heads, batch)
+        return (triton.cdiv(max_seqlen_q, args['BLOCK_M']), num_heads, batch)
 
     if kv_layout == 'shd':
         s_dim, h_dim, d_dim = (0, 1, 2)
@@ -482,25 +514,36 @@ def flash_attention_fwd(
     else:
         raise RuntimeError('Unsupported layout.')
 
-    if max_seqlen is None:
-        max_seqlen = q_states.size(0)
+    if max_seqlen_q is None:
+        max_seqlen_q = q.size(0)
 
     if window_size is None:
         window_size = -1
+    elif isinstance(window_size, Sequence):
+        window_size = window_size[0]
 
-    if logit_softcapping is None:
-        logit_softcapping = -1.0
+    if softcap is None:
+        softcap = -1.0
 
-    head_dim_q = q_states.size(-1)
-    head_dim_k = k_states.size(d_dim)
-    head_dim_v = v_states.size(d_dim)
-    assert head_dim_q == head_dim_k and head_dim_v == o_states.size(-1)
+    head_dim_q = q.size(-1)
+    head_dim_k = k.size(d_dim)
+    head_dim_v = v.size(d_dim)
 
-    if sm_scale is None:
-        sm_scale = 1.0 / (head_dim_q**0.5)
+    o = q.new_empty(*q.size()[:-1], head_dim_v)
+    assert head_dim_q == head_dim_k and head_dim_v == o.size(-1)
 
-    batch, num_heads = q_seqlens.size(0), q_states.size(-2)
-    num_kv_heads = k_states.size(h_dim)
+    if softmax_scale is None:
+        softmax_scale = 1.0 / (head_dim_q**0.5)
+
+    if cu_seqlens_k is None:
+        assert kv_start_loc is not None and kv_seqlens is not None
+    if cu_seqlens_q is None:
+        assert q_start_loc is not None and q_seqlens is not None
+        batch = q_seqlens.size(0)
+    else:
+        batch = cu_seqlens_q.size(0) - 1
+    num_heads = q.size(-2)
+    num_kv_heads = k.size(h_dim)
     kv_group_num = num_heads // num_kv_heads
 
     if sinks is not None:
@@ -509,7 +552,7 @@ def flash_attention_fwd(
 
     BLOCK_DK, BLOCK_DK1, BLOCK_DV = _get_block_d(head_dim_k, head_dim_v)
 
-    shared_kv = k_states.data_ptr() == v_states.data_ptr() and BLOCK_DK == BLOCK_DV
+    shared_kv = k.data_ptr() == v.data_ptr() and BLOCK_DK == BLOCK_DV
 
     num_warps = 4
     hip_mode = getattr(torch.version, 'hip', None) is not None
@@ -530,34 +573,37 @@ def flash_attention_fwd(
 
     BLOCK_M = min(128, BLOCK_M)
     _flash_prefill_fwd_kernel[grid](
-        q_states,
-        k_states,
-        v_states,
-        o_states,
+        q,
+        k,
+        v,
+        o,
+        cu_seqlens_q,
+        cu_seqlens_k,
         q_start_loc,
         q_seqlens,
         kv_start_loc,
         kv_seqlens,
         sinks,
-        sm_scale=sm_scale,
-        stride_qs=q_states.stride(0),
-        stride_qh=q_states.stride(1),
-        stride_qd=q_states.stride(2),
-        stride_ks=k_states.stride(s_dim),
-        stride_kh=k_states.stride(h_dim),
-        stride_kd=k_states.stride(d_dim),
-        stride_vs=v_states.stride(s_dim),
-        stride_vh=v_states.stride(h_dim),
-        stride_vd=v_states.stride(d_dim),
-        stride_os=o_states.stride(0),
-        stride_oh=o_states.stride(1),
-        stride_od=o_states.stride(2),
+        alibi_slopes,
+        sm_scale=softmax_scale,
+        stride_qs=q.stride(0),
+        stride_qh=q.stride(1),
+        stride_qd=q.stride(2),
+        stride_ks=k.stride(s_dim),
+        stride_kh=k.stride(h_dim),
+        stride_kd=k.stride(d_dim),
+        stride_vs=v.stride(s_dim),
+        stride_vh=v.stride(h_dim),
+        stride_vd=v.stride(d_dim),
+        stride_os=o.stride(0),
+        stride_oh=o.stride(1),
+        stride_od=o.stride(2),
         kv_group_num=kv_group_num,
         head_dim_k=head_dim_k,
         head_dim_v=head_dim_v,
         causal=causal,
         window_size=window_size,
-        logit_softcapping=logit_softcapping,
+        logit_softcapping=softcap,
         shared_kv=shared_kv,
         block_sparse_size=block_sparse_size,
         BLOCK_DK=BLOCK_DK,
@@ -569,4 +615,4 @@ def flash_attention_fwd(
         num_stages=num_stages,
     )
 
-    return o_states
+    return o

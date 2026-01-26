@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-
 from pathlib import Path
 from typing import Literal, Union
 
@@ -197,7 +196,7 @@ def update_moe_mapping(model, model_type):
 
 
 def calibrate(model: str,
-              calib_dataset: str = 'ptb',
+              calib_dataset: str = 'wikitext2',
               calib_samples: int = 128,
               calib_seqlen: int = 2048,
               work_dir: str = './work_dir',
@@ -213,7 +212,7 @@ def calibrate(model: str,
     Args:
         model (str): The name or path of the model to be loaded.
         calib_dataset (str, optional): The calibration dataset name.
-            Defaults to 'ptb'.
+            Defaults to 'wikitext2'.
         calib_samples (int, optional): The number of samples for calibration.
             Defaults to 128.
         calib_seqlen (int, optional): The sequence length for calibration.
@@ -237,8 +236,10 @@ def calibrate(model: str,
         work_dir (str): The working directory for outputs.
     """
 
-    assert calib_dataset in ['c4', 'ptb', 'wikitext2', 'pileval'], \
-        'Support only `c4`, `ptb`, `wikitext2` or `pileval`.'
+    assert calib_dataset in ['wikitext2', 'c4', 'pileval',
+                             'gsm8k', 'neuralmagic_calibration', 'open-platypus', 'openwebtext'], \
+        'Support only `wikitext2`, `c4`, `pileval`, `gsm8k`, ' \
+        '`neuralmagic_calibration`, `open-platypus`, `openwebtext`.'
 
     model_type, _ = get_task(model)
     make_compatible_internvl_config(model)
@@ -292,7 +293,7 @@ def calibrate(model: str,
     _prepare_for_calibrate(model, layer_type, HEAD_NAME_MAP[type(model).__name__], device)
 
     print('Loading calibrate dataset ...')
-    calib_loader, _ = get_calib_loaders(calib_dataset, tokenizer, nsamples=calib_samples, seqlen=calib_seqlen)
+    calib_loader = get_calib_loaders(calib_dataset, tokenizer, nsamples=calib_samples, seqlen=calib_seqlen)
 
     # Initialize calibration context
     if search_scale:
@@ -314,7 +315,7 @@ def calibrate(model: str,
                                        device=device)
 
     with calib_ctx:
-        all_data = torch.cat([data if isinstance(data, torch.Tensor) else data[0] for data in calib_loader]).to(device)
+        all_data = torch.cat(calib_loader).to(device)
         calib_ctx.calibrate(all_data)
 
     # Create work directory if not exists

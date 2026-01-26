@@ -12,7 +12,7 @@ namespace turbomind {
 
 class LlamaLinear {
 public:
-    explicit LlamaLinear(cudaStream_t stream);
+    explicit LlamaLinear();
 
     Tensor Forward(const Tensor&           input,  //
                    const LlamaDenseWeight& weight,

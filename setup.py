@@ -180,7 +180,6 @@ if __name__ == '__main__':
             'serve': parse_requirements('requirements/serve.txt'),
         },
         classifiers=[
-            'Programming Language :: Python :: 3.9',
             'Programming Language :: Python :: 3.10',
             'Programming Language :: Python :: 3.11',
             'Programming Language :: Python :: 3.12',

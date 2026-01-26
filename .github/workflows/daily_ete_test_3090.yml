@@ -172,7 +172,7 @@ jobs:
       - name: Install lmdeploy
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
-          python3 -m pip install transformers==4.53.1 datasets==3.6.0 timm
+          python3 -m pip install transformers==4.53.1 datasets==3.6.0
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
@@ -295,6 +295,19 @@ jobs:
       fail-fast: false
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
+        model_path: ['internlm/internlm3-8b-instruct']
+        include:
+          - tp: 1
+            model: internlm3-8b-instruct
+            model_path: internlm/internlm3-8b-instruct
+            case_info: ['chat_completions_v1', 'generate']
+            generate_type: logprob
+            extra: '--logprobs-mode raw_logprobs'
+          - tp: 1
+            model: internlm3-8b-instruct
+            model_path: internlm/internlm3-8b-instruct
+            case_info: ['completions_v1']
+            generate_type: base
     timeout-minutes: 60
     container:
       image: openmmlab/lmdeploy:latest-cu12
@@ -327,27 +340,38 @@ jobs:
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Start restful api
         run: |
-          lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm3-8b-instruct --backend ${{matrix.backend}} > ${{env.REPORT_DIR}}/${{matrix.backend}}.log  2>&1  &
+          lmdeploy serve api_server /nvme/qa_test_models/${{matrix.model_path}} --tp ${{matrix.tp}} --backend ${{matrix.backend}} ${{matrix.extra}} > ${{env.REPORT_DIR}}/${{matrix.backend}}_${{matrix.model}}_${{matrix.generate_type}}_start_restful.log 2>&1 &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 180s
-      - name: Test lmdeploy - restful api
-        timeout-minutes: 75
+          for i in $(seq 1 180)
+          do
+            sleep 5
+            echo "health check try $i"
+            if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
+              echo "health check success"
+              exit 0
+            fi
+          done
+
+          echo "health check fail"
+          kill -15 $restful_pid 2>/dev/null || true
+          exit 1
+      - name: Test lmdeploy - chat_completions_v1
+        if:  contains(matrix.case_info, 'chat_completions_v1')
+        timeout-minutes: 60
         run: |
-          pytest autotest/interface/restful/test_restful_chat_func.py -n 20 -m 'not not_${{matrix.backend}} and not interns1 and not internlm2_5' --alluredir=${{env.REPORT_DIR}}/interface-${{matrix.backend}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'not not_${{matrix.backend}} and not internlm2_5 and not interns1' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Kill api server
-        if: always()
+      - name: Test lmdeploy - completions_v1 - other
+        if: contains(matrix.case_info, 'completions_v1')
+        timeout-minutes: 60
         run: |
-          kill -15 "$restful_pid"
-      - name: Start restful api - base
+          pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}} and not internlm2_5' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+      - name: Test generate - logprob
+        if:  matrix.generate_type == 'logprob' && contains(matrix.case_info, 'generate')
+        timeout-minutes: 60
         run: |
-          lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm3-8b-instruct --backend ${{matrix.backend}} > ${{env.REPORT_DIR}}/${{matrix.backend}}_base.log  2>&1  &
-          echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 180s
-      - name: Test lmdeploy - restful api - base
-        timeout-minutes: 40
-        run: |
-          pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 -m 'not internlm2_5' --alluredir=${{env.REPORT_DIR}}/interface-${{matrix.backend}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/restful/test_restful_generate.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'not not_${{matrix.backend}} and not experts' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Kill api server
         if: always()

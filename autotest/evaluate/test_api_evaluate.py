@@ -7,7 +7,7 @@ from utils.config_utils import get_evaluate_pytorch_model_list, get_evaluate_tur
 from utils.evaluate_utils import eval_test
 from utils.proxy_distributed_utils import ApiServerPerTest, proxy_worker_node_wait
 from utils.ray_distributed_utils import ray_worker_node_wait
-from utils.run_restful_chat import start_proxy_server, start_restful_api, stop_restful_api
+from utils.run_restful_chat import start_proxy_server, start_restful_api, stop_restful_api, terminate_restful_api
 
 
 @pytest.fixture(scope='function')
@@ -17,8 +17,11 @@ def prepare_environment(request, config, worker_id):
     backend = param['backend']
     model_path = config.get('model_path') + '/' + model
     pid, startRes = start_restful_api(config, param, model, model_path, backend, worker_id)
-    yield param
-    stop_restful_api(pid, startRes, param)
+    try:
+        yield param
+    finally:
+        if pid > 0:
+            terminate_restful_api(worker_id, param)
 
 
 @pytest.fixture(scope='function')
@@ -34,7 +37,7 @@ def prepare_environment_judge_evaluate(request, config, worker_id):
             'tp_num':
             2,
             'extra':
-            '--server-name 127.0.0.1 --proxy-url http://127.0.0.1:{} --session-len 65536 '
+            '--server-name 127.0.0.1 --proxy-url http://127.0.0.1:{} --session-len 76000 '
             '--cache-max-entry-count 0.7 '.format(port),
             'cuda_prefix':
             None
@@ -54,7 +57,7 @@ def prepare_environment_judge_evaluate(request, config, worker_id):
     try:
         yield request.param
     finally:
-        stop_restful_api(judge_pid, judge_start_res, request.param)
+        terminate_restful_api(worker_id, request.param)
         stop_restful_api(proxy_pid, proxy_process, request.param)
 
 
@@ -174,6 +177,8 @@ def run_test(config, run_id, prepare_environment, worker_id, test_type='infer', 
     """Run test with specified evaluation configuration."""
     if 'gpt' in prepare_environment.get('model', '').lower():
         eval_config_name = 'gpt'
+    if str(config.get('env_tag')) == 'a100':
+        eval_config_name = f'{eval_config_name}-32k'
     preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
 
     if test_type == 'infer':

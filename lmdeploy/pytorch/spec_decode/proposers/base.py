@@ -35,6 +35,7 @@ def draft_model_forward(
         context = ctx_mgr.build_context(
             inputs=inputs,
             model_config=model_config,
+            cache_config=cache_engine.cache_config,
             kv_caches=kv_caches,
         )
         with ctx_mgr.context(context):

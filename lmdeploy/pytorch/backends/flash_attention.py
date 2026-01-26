@@ -33,7 +33,7 @@ class FlashAttentionBuilder(ABC):
         v_head_dim: int = None,
         causal: bool = True,
         sliding_window: int = None,
-        logical_softcapping: float = None,
+        logit_softcapping: float = None,
         **kwargs,
     ) -> FlashAttentionImpl:
         """build."""

@@ -40,7 +40,7 @@ def save_vl_model(vl_model, model_path, dst_path):
 
 def auto_awq(model: str,
              work_dir: str = './work_dir',
-             calib_dataset: str = 'ptb',
+             calib_dataset: str = 'wikitext2',
              calib_samples: int = 128,
              batch_size: int = 1,
              calib_seqlen: int = 2048,
@@ -58,6 +58,7 @@ def auto_awq(model: str,
         model (str): The path of model in hf format.
         work_dir (str): The working directory to save results.
         calib_dataset (str): The calibration dataset name.
+            Defaults to 'wikitext2'.
         calib_samples (int): The number of samples for calibration.
         batch_size (int): The batch size for running the calib samples.
             Low GPU mem requires small batch_size. Large batch_size

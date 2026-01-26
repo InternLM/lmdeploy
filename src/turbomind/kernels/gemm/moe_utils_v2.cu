@@ -653,10 +653,17 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n] -> n
                 return invoke(_Int<160>, _Int<8>, _Int<10>, _Int<2>);
             }
         }
+        else if (experts <= 512) {
+            if (experts_per_token <= 8) {
+                return invoke(_Int<512>, _Int<8>, _Int<16>, _Int<4>);
+            }
+        }
         return false;
     };
 
     auto success = dispatch();
+
+    sync_check_cuda_error();
 
     TM_CHECK(success) << "unsupported moe config: expert_num=" << experts << ", top_k=" << experts_per_token
                       << ", softmax=" << softmax << ", norm_topk=" << norm_topk;

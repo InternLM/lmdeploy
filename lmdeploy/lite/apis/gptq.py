@@ -12,7 +12,7 @@ def auto_gptq(model: str,
               work_dir: str = './work_dir',
               w_bits: int = 4,
               w_group_size: int = 128,
-              calib_dataset: str = 'ptb',
+              calib_dataset: str = 'wikitext2',
               calib_samples: int = 128,
               calib_seqlen: int = 2048,
               batch_size: int = 1,
@@ -24,6 +24,7 @@ def auto_gptq(model: str,
         model (str): The path of model in hf format.
         work_dir (str): The working directory to save results.
         calib_dataset (str): The calibration dataset name.
+            Defaults to 'wikitext2'.
         calib_samples (int): The number of samples for calibration.
         batch_size (int): The batch size for running the calib samples.
             Low GPU mem requires small batch_size. Large batch_size
@@ -62,10 +63,9 @@ def auto_gptq(model: str,
 
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model_dir, trust_remote_code=True)
     print('Loading calibrate dataset ...')
-    calib_loader, _ = get_calib_loaders(calib_dataset, tokenizer, nsamples=calib_samples, seqlen=calib_seqlen)
-    all_data = [data if isinstance(data, torch.Tensor) else data[0] for data in calib_loader]
+    calib_loader = get_calib_loaders(calib_dataset, tokenizer, nsamples=calib_samples, seqlen=calib_seqlen)
     attention_mask = [1] * calib_seqlen
-    examples = [dict(input_ids=data.flatten().tolist(), attention_mask=attention_mask) for data in all_data]
+    examples = [dict(input_ids=data.flatten().tolist(), attention_mask=attention_mask) for data in calib_loader]
 
     quantize_config = BaseQuantizeConfig(
         bits=w_bits,  # quantize model to 4-bit

@@ -12,13 +12,13 @@
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 
-#include <xgrammar/xgrammar.h>
+#include "xgrammar/compiler.h"
 
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/core/tensor.h"
 #include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/python/dlpack.h"
-#include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
+#include "src/turbomind/turbomind.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/metrics.h"
 
@@ -296,8 +296,10 @@ PYBIND11_MODULE(_turbomind, m)
 {
     py::class_<ft::RequestMetrics, std::shared_ptr<ft::RequestMetrics>>(m, "RequestMetrics")
         .def(py::init())
-        .def_readonly("enque_time", &ft::RequestMetrics::enque_time)
-        .def_readonly("scheduled_time", &ft::RequestMetrics::scheduled_time);
+        .def_property_readonly("enqueue_time",
+                               [](ft::RequestMetrics& m) { return m.enqueue_time.load(std::memory_order_relaxed); })
+        .def_property_readonly("scheduled_time",
+                               [](ft::RequestMetrics& m) { return m.scheduled_time.load(std::memory_order_relaxed); });
 
     py::class_<ft::ScheduleMetrics, std::shared_ptr<ft::ScheduleMetrics>>(m, "ScheduleMetrics")
         .def(py::init())
@@ -501,80 +503,62 @@ PYBIND11_MODULE(_turbomind, m)
             "grammar"_a);
 
     // transformer model
-    using ft::LlamaTritonModel;
-    py::class_<LlamaTritonModel, std::shared_ptr<LlamaTritonModel>>(m, "AbstractTransformerModel")
+    using ft::TurboMind;
+    py::class_<TurboMind, std::shared_ptr<TurboMind>>(m, "TurboMind")
         .def_static(
-            "create_llama_model",
-            [](std::string model_dir,
-               std::string config,
-               std::string weight_type) -> std::shared_ptr<LlamaTritonModel> {
+            "create",
+            [](std::string model_dir, std::string config, std::string weight_type) -> std::shared_ptr<TurboMind> {
                 auto gil_factory = [] {  //
                     // erase the type
                     return std::static_pointer_cast<void>(std::make_shared<ScopedGIL>());
                 };
-                auto no_gil_deleter = [](LlamaTritonModel* ptr) {
+                auto no_gil_deleter = [](TurboMind* ptr) {
                     pybind11::gil_scoped_release release;
                     delete ptr;
                 };
 
-                std::shared_ptr<LlamaTritonModel> model(new LlamaTritonModel(model_dir, config, gil_factory),
-                                                        no_gil_deleter);
+                std::shared_ptr<TurboMind> model(new TurboMind(model_dir, config, gil_factory), no_gil_deleter);
                 return model;
             },
             "model_dir"_a,
             "config"_a      = "",
             "weight_type"_a = "half")
         .def(
-            "create_model_instance",
-            [](LlamaTritonModel* model, int deviceId) { return model->createModelInstance(deviceId); },
-            py::call_guard<py::gil_scoped_release>(),
-            "device_id"_a)
-        .def("create_shared_weights",
-             &LlamaTritonModel::createSharedWeights,
-             py::call_guard<py::gil_scoped_release>(),
-             "device_id"_a,
-             "rank"_a)
+            "create_request",
+            [](TurboMind* model) { return model->CreateRequest(); },
+            py::call_guard<py::gil_scoped_release>())
+        .def("create_weights", &TurboMind::CreateWeights, py::call_guard<py::gil_scoped_release>(), "index"_a)
         .def(
-            "get_params",
-            [](LlamaTritonModel* model, int deviceId, int rank) { return model->getParams(deviceId, rank); },
+            "get_weights",
+            [](TurboMind* model, int index) { return model->GetWeights(index); },
             py::call_guard<py::gil_scoped_release>(),
-            "device_id"_a,
-            "rank"_a)
+            "index"_a)
         .def(
             "process_weight",
-            [](LlamaTritonModel* model, int deviceId, int rank) { model->processWeights(deviceId, rank); },
+            [](TurboMind* model, int index) { model->ProcessWeights(index); },
             py::call_guard<py::gil_scoped_release>(),
-            "device_id"_a,
-            "rank"_a)
+            "index"_a)
         .def(
             "create_engine",
-            [](LlamaTritonModel* model, int deviceId, int rank) { model->createEngine(deviceId, rank); },
+            [](TurboMind* model, int index) { model->CreateEngine(index); },
             py::call_guard<py::gil_scoped_release>(),
-            "device_id"_a,
-            "rank"_a)
+            "index"_a)
         .def(
             "get_schedule_metrics",
-            [](LlamaTritonModel* model, int deviceId, int rank) { return model->getScheduleMetrics(deviceId, rank); },
+            [](TurboMind* model, int index) { return model->GetScheduleMetrics(index); },
             py::call_guard<py::gil_scoped_release>(),
-            "device_id"_a,
-            "rank"_a)
+            "index"_a)
         .def(
             "sleep",
-            [](LlamaTritonModel* model, int deviceId, int level) { model->sleep(deviceId, level); },
+            [](TurboMind* model, int index, int level) { model->Sleep(index, level); },
             py::call_guard<py::gil_scoped_release>(),
-            "device_id"_a,
+            "index"_a,
             "level"_a)
         .def(
             "wakeup",
-            [](LlamaTritonModel* model, int deviceId, const std::vector<std::string>& tags, int rank) {
-                model->wakeup(deviceId, tags, rank);
-            },
+            [](TurboMind* model, int index, const std::vector<std::string>& tags) { model->WakeUp(index, tags); },
             py::call_guard<py::gil_scoped_release>(),
-            "device_id"_a,
-            "tags"_a,
-            "rank"_a)
-        .def("__str__", &LlamaTritonModel::toString)
-        .def("__repr__", &LlamaTritonModel::toString)
-        .def("get_tensor_para_size", &LlamaTritonModel::getTensorParaSize)
-        .def("get_pipeline_para_size", &LlamaTritonModel::getPipelineParaSize);
+            "index"_a,
+            "tags"_a)
+        .def("is_dummy_node", [](TurboMind* model) { return model->is_dummy_node(); });
 }

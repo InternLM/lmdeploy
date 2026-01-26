@@ -6,14 +6,17 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
-#include <iterator>
 #include <memory>
 #include <ostream>
 
-#include <xgrammar/xgrammar.h>
-
 #include "src/turbomind/core/core.h"
+#include "src/turbomind/core/interval.h"
 #include "src/turbomind/utils/metrics.h"
+
+namespace xgrammar {
+class GrammarMatcher;  // forward declaration
+class CompiledGrammar;
+}  // namespace xgrammar
 
 namespace turbomind {
 
@@ -47,38 +50,7 @@ struct GenerationConfig {
     int output_logits            = 0;
 };
 
-template<typename T>
-inline std::ostream& operator<<(std::ostream& os, const std::vector<T>& vec)
-{
-    os << "[";
-    std::copy(vec.begin(), vec.end(), std::ostream_iterator<T>(os, ", "));
-    if (!vec.empty()) {
-        os.seekp(-2, std::ios_base::end);
-    }
-    os << "]";
-    return os;
-}
-
-inline std::ostream& operator<<(std::ostream& os, const GenerationConfig& c)
-{
-    os << "GenerationConfig { ";
-    os << "max_new_tokens=" << c.max_new_tokens;
-    os << ", min_new_tokens=" << c.min_new_tokens;
-    os << ", eos_ids=" << c.eos_ids;
-    os << ", stop_ids=[" << c.stop_ids[0] << ", " << c.stop_ids[1] << "]";
-    os << ", bad_ids=[" << c.bad_ids[0] << ", " << c.bad_ids[1] << "]";
-    os << ", top_p=" << c.top_p;
-    os << ", top_k=" << c.top_k;
-    os << ", min_p=" << c.min_p;
-    os << ", temperature=" << c.temperature;
-    os << ", repetition_penalty=" << c.repetition_penalty;
-    os << ", random_seed=" << c.random_seed;
-    os << ", output_logprobs=" << c.output_logprobs;
-    os << ", output_hidden_states=" << c.output_last_hidden_state;
-    os << ", output_logits=" << c.output_logits;
-    os << " }";
-    return os;
-}
+std::ostream& operator<<(std::ostream& os, const GenerationConfig& c);
 
 struct SessionParam {
     uint64_t id;
@@ -138,7 +110,7 @@ struct Request {
 
     std::shared_ptr<RequestMetrics> metrics;
 
-    int ec;  // set when disabling conflicting requests
+    int ec = 0;  // set when disabling conflicting requests
 
     enum
     {
@@ -151,27 +123,134 @@ struct Request {
         kTooLong       = 6,  // history + prompt > session_len,
         kFinish        = 7,
         kCancel        = 8,
-        kInconsistency = 9,  // Inconsistent request parameters, e.g. prefix caching is not allowed in interactive mode
+        kInconsistency = 9,   // Inconsistent request parameters, e.g. prefix caching is not allowed in interactive mode
+        kNoQueue       = 10,  // No queue available for submitting the request (in current process)
     };
 
-    std::shared_ptr<xgrammar::GrammarMatcher> matcher;
+    std::shared_ptr<xgrammar::CompiledGrammar> grammar;
+    std::shared_ptr<xgrammar::GrammarMatcher>  matcher;
 };
 
-inline void UpdateState(Request& r, int status, int seq_len)
+void UpdateState(Request& r, int status, int seq_len);
+
+class Sequence;
+
+// Unlike `Request` which is shared by all local TP ranks, each rank has its own `RequestCache`.
+struct RequestCache {
+    std::shared_ptr<Request> req;
+    const Sequence*          seq;  // May be NULL in `Update` (seq get erased when req is done)
+    const GenerationConfig&  gen_cfg;
+
+    RequestCache(std::shared_ptr<Request> r, const Sequence& s): req{std::move(r)}, seq{&s}, gen_cfg{req->gen_cfg} {}
+
+    int status = Request::kOk;
+
+    // These members may be opaque handles from individual modules (pointers to forward declared types), but we tend to
+    // keep it simple as long as the complexity is manageable
+
+    int*     token_ids    = nullptr;  // currently the `output_ids` buf of request
+    uint8_t* random_state = nullptr;
+
+    int step0       = 0;  // set at request init, constant, first prefill step
+    int prompt_len  = 0;  // set at request init, constant, first decode step
+    int max_seq_len = 0;  // set at request init, constant
+
+    int hidden_states_offset = 0;  // set at request init, constant
+    int logits_offset        = 0;  // set at request init, constant
+
+    int seq_len = 0;  // set at request init, updated per step
+
+    int input_len   = 0;  // set at schedule (set to `seq.input_len`)
+    int history_len = 0;  // set at schedule (set to `seq.cache_len`)
+
+    bool autoregres = false;  // set at schedule, `seq_len` and `input_ids` taken from the engine
+    bool generating = false;  // set at schedule
+
+    bool done = false;  // set at cancel / update, is the request finished / canceled
+
+    int alpha = 0;  // pending growth of cache_len (draft_len + input_len)
+    int beta  = 0;  // pending growth of seq_len (draft_len + {0,1})
+
+    float rope_base = 0.f;
+
+    Interval output_hidden_states;
+    Interval output_logits;
+};
+
+template<class Archive>
+void serdes(Archive& ar, GenerationConfig& g)
 {
-    try {
-        auto new_state = new RequestState{status, seq_len};
-        auto old_state = r.state->exchange(new_state);
-        if (!old_state && r.forward_cb) {
-            r.forward_cb();
-        }
+    // clang-format off
+    ar & g.max_new_tokens;
+    ar & g.min_new_tokens;
+    ar & g.eos_ids;
+    ar & g.stop_ids[0];
+    ar & g.stop_ids[1];
+    ar & g.bad_ids[0];
+    ar & g.bad_ids[1];
+    ar & g.top_k;
+    ar & g.top_p;
+    ar & g.min_p;
+    ar & g.temperature;
+    ar & g.repetition_penalty;
+    ar & g.random_seed;
+    ar & g.output_logprobs;
+    ar & g.output_last_hidden_state;
+    ar & g.output_logits;
+    // clang-format on
+}
+
+template<class Archive>
+void save_req_output(Archive& ar, const TensorMap& map)
+{
+    // clang-format off
+    ar & map.size();
+    for (const auto& [k, t] : map) {
+        TM_CHECK(t.device().type == kCPU);
+        ar & k;
+        ar & t.layout();
+        ar & t.dtype();
     }
-    catch (const std::exception& e) {
-        TM_LOG_ERROR("Error invoking callback for (%lu): %s", r.id, e.what());
+    // clang-format on
+}
+
+template<class Archive>
+void load_req_output(Archive& ar, TensorMap& map)
+{
+    // clang-format off
+    decltype(map.size()) size;
+    ar & size;
+    for (int i = 0; i < size; ++i) {
+        std::string k;
+        Layout      layout;
+        DataType    dtype;
+        ar & k;
+        ar & layout;
+        ar & dtype;
+        map.emplace(std::move(k), Tensor{layout, dtype, kCPU});
     }
-    catch (...) {
-        TM_LOG_ERROR("Unknown error invoking callback for (%lu)", r.id);
+    // clang-format on
+}
+
+template<class Archive>
+void serdes(Archive& ar, Request& r)
+{
+    // clang-format off
+    ar & r.id;
+    ar & r.unique_id;
+    ar & r.session;
+    ar & r.gen_cfg;
+    ar & r.stream_output;
+    ar & r.inputs;
+    if constexpr(Archive::is_loading) {
+        load_req_output(ar, r.outputs);
+        r.output_ids      = r.outputs.at("output_ids");
+        r.sequence_length = r.outputs.at("sequence_length");
+    } else {
+        save_req_output(ar, r.outputs);
     }
+    ar & r.ec;
+    // clang-format on
 }
 
 }  // namespace turbomind
