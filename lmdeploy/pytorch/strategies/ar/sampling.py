@@ -121,7 +121,6 @@ class ARSamplingStrategy(SamplingStrategy):
                 ret[idx, :bw_len] = bw
 
             mask = ret >= 0
-            ret = ret.where(mask, 0)
             return ret, mask
 
         __gather_params()
