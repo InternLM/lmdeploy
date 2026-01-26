@@ -70,12 +70,19 @@ def _filter_minp_sorted_(scores: torch.Tensor, minp: torch.Tensor, filter_value:
     return scores
 
 
-@lru_cache(maxsize=1)
-def _ngram_one(dtype: torch.dtype, device: torch.device):
-    return torch.ones(1, dtype=dtype, device=device)
+@lru_cache
+def _ngram_one(dtype: torch.dtype, device: torch.device, fill: int = 1):
+    return torch.ones(fill, dtype=dtype, device=device)
 
 
-def ngram(token_ids: torch.Tensor, n: torch.Tensor, threshold: torch.Tensor, max_n: int, same_n: bool = False):
+def ngram(
+    token_ids: torch.Tensor,
+    n: torch.Tensor | None,
+    threshold: torch.Tensor,
+    max_n: int,
+    window_size: torch.Tensor | None,
+    max_window_size: int,
+):
     """Compute n-gram matches between sliding windows and a target sequence.
 
     For each batch, performs cosine similarity checking between:
@@ -98,9 +105,11 @@ def ngram(token_ids: torch.Tensor, n: torch.Tensor, threshold: torch.Tensor, max
         Minimum number of matching windows required for validity, shape (batch_size,).
     max_n : int
         Maximum n-gram length (window size for matching).
-    same_n : bool, default False
-        If True, use full `max_n`-length windows regardless of `n`.
-        If False, mask positions where index < (max_n - n) in the target window.
+    window_size: torch.Tensor | None
+        Effective window size for each batch element, shape (batch_size,).
+        When `same_n=False`, only the last `window_size` tokens are considered for matching.
+    max_window_size: int
+        Maximum window size for matching.
 
     Returns
     -------
@@ -119,9 +128,22 @@ def ngram(token_ids: torch.Tensor, n: torch.Tensor, threshold: torch.Tensor, max
         found = torch.zeros((batch_size, ), dtype=torch.bool, device=token_ids.device)
         return matched_mask, found
     # token_ids could be 0, so we add 1 to avoid div 0
-    token_ids = token_ids.to(torch.float32) + 1
+    token_ids = token_ids.to(torch.float32).log2() + 1
+
+    # Trim to max_window_size
+    if seq_len >= max_window_size:
+        token_ids = token_ids[:, -max_window_size:]
+    max_window_size = token_ids.size(1)
+
+    same_window = window_size is None
+    if not same_window:
+        # fill -1 for window_size < max_window_size
+        mask = torch.arange(max_window_size,
+                            device=token_ids.device).unsqueeze(0) >= (max_window_size - window_size.unsqueeze(1))
+        token_ids.masked_fill_(~mask, -1)
 
     # normalize ids
+    same_n = n is None
     norm = token_ids[:, -max_n:]
     if not same_n:
         # fill 0 for n < max_n
@@ -146,7 +168,7 @@ def ngram(token_ids: torch.Tensor, n: torch.Tensor, threshold: torch.Tensor, max
     match_norm, match_ones = match_norm.chunk(2, dim=0)
 
     # both match result should be close to 1
-    one_tensor = _ngram_one(dtype=match_norm.dtype, device=match_norm.device)
+    one_tensor = _ngram_one(dtype=match_norm.dtype, device=match_norm.device, fill=1)
     matched_mask = match_norm.isclose(one_tensor) & match_ones.isclose(one_tensor)
 
     # threshold
@@ -160,16 +182,20 @@ def _filter_ngram_(
     scores: torch.Tensor,
     stop_words: torch.Tensor,
     generated_ids: torch.Tensor,
-    n: torch.Tensor,
+    n: torch.Tensor | None,
     threshold: torch.Tensor,
     max_n: int,
-    same_n: bool = False,
+    ngram_window_size: torch.Tensor | None,
+    max_ngram_window_size: int,
 ):
-    """Filter ngram."""
+    """Filter ngram.
+
+    if generated ngram found, set all scores -inf, and set stop words to 0. We assume that stop words always exist.
+    """
     if stop_words is None or stop_words.numel() == 0:
         return scores
     # use first stop words
-    _, found = ngram(generated_ids, n, threshold, max_n, same_n)
+    _, found = ngram(generated_ids, n, threshold, max_n, ngram_window_size, max_ngram_window_size)
     stop_words = stop_words[:, 0]
     # fill all scores -inf
     scores.masked_fill_(found[:, None], -float('inf'))
@@ -227,15 +253,16 @@ class SamplingInputs:
     generated_ids_cpu: np.ndarray | None = None
 
     # n gram
-    ngram_size: torch.Tensor = None
-    ngram_threshold: torch.Tensor = None
+    ngram_size: torch.Tensor | None = None
+    ngram_threshold: torch.Tensor | None = None
+    ngram_window_size: torch.Tensor | None = None
     max_ngram_size: int = 0
-    ngram_same_n: bool = False
+    max_ngram_window_size: int = 0
 
     def to_device(self, device: str, non_blocking: bool = False):
         """To device."""
         out_dict = dict()
-        if self.generated_ids_cpu is not None:
+        if self.generated_ids is None and self.generated_ids_cpu is not None:
             self.generated_ids = torch.from_numpy(self.generated_ids_cpu.copy())
         for f in fields(self):
             k = f.name
@@ -312,10 +339,10 @@ class FusedLogitsProcessor:
         if not stream.query():
             await asyncio.sleep(0)
 
-    async def __call__(self, scores: torch.FloatTensor) -> torch.FloatTensor:
+    async def __call__(self, scores: torch.Tensor) -> torch.Tensor:
         r"""
         Args:
-            scores (torch.FloatTensor):
+            scores (torch.Tensor):
                 Prediction scores of a language modeling head.
                 These can be logits for each vocabulary when not using
                 beam search or log softmax for each vocabulary token
@@ -323,7 +350,7 @@ class FusedLogitsProcessor:
 
 
         Return:
-            torch.FloatTensor: The processed prediction scores.
+            torch.Tensor: The processed prediction scores.
 
         """
 
@@ -366,6 +393,8 @@ class FusedLogitsProcessor:
 
         if sampling_inputs.max_ngram_size > 0:
             generated_ids = sampling_inputs.generated_ids
+            assert generated_ids is not None
+            assert sampling_inputs.ngram_threshold is not None
             scores = _filter_ngram_(
                 scores,
                 sampling_inputs.stop_words,
@@ -373,7 +402,8 @@ class FusedLogitsProcessor:
                 sampling_inputs.ngram_size,
                 sampling_inputs.ngram_threshold,
                 sampling_inputs.max_ngram_size,
-                sampling_inputs.ngram_same_n,
+                sampling_inputs.ngram_window_size,
+                sampling_inputs.max_ngram_window_size,
             )
 
         temperature = sampling_inputs.temperature

@@ -128,24 +128,67 @@ def test_filter_minp_sorted():
 
 def test_filter_ngram():
     from lmdeploy.pytorch.engine.logits_process import _filter_ngram_
-
-    generated_ids = torch.tensor(
-        [[2, 3, 4, 1, 2, 3, 4, 2, 3, 4], [9, 8, 7, 3, 8, 7, 5, 9, 8, 7], [9, 8, 7, 3, 8, 7, 5, 9, 8, 7]],
-        dtype=torch.int64)
-    n = torch.tensor([3, 3, 2], dtype=torch.int64)
-    threshold = torch.tensor([3, 3, 3], dtype=torch.int64)
-
-    batch_size = generated_ids.size(0)
-    max_n = n.max().item()
-    same_n = n.eq(max_n).all().item()
     vocab_size = 100
 
+    def _get_emtas(n, window_size):
+        batch_size = generated_ids.size(0)
+        max_n = int(n.max().item())
+        same_n = n.eq(max_n).all().item()
+        max_window_size = int(window_size.max().item())
+        if same_n:
+            n = None
+        return batch_size, max_n, max_window_size, n
+
+    # base test
+    generated_ids = torch.tensor([
+        [2, 3, 4, 1, 2, 3, 4, 2, 3, 4],
+        [9, 8, 7, 3, 8, 7, 5, 9, 8, 7],
+        [9, 8, 7, 3, 8, 7, 5, 9, 8, 7],
+    ],
+                                 dtype=torch.int64)
+    n = torch.tensor([3, 3, 2], dtype=torch.int64)
+    threshold = torch.tensor([3, 3, 3], dtype=torch.int64)
+    window_size = torch.tensor([10, 10, 10], dtype=torch.int64)
+
+    batch_size, max_n, max_window_size, n = _get_emtas(n, window_size)
     scores = torch.rand(batch_size, vocab_size)
     stop_words = torch.randint(0, vocab_size, (batch_size, 3), dtype=torch.int64)
-    _filter_ngram_(scores, stop_words, generated_ids, n, threshold, max_n, same_n)
+    _filter_ngram_(scores, stop_words, generated_ids, n, threshold, max_n, window_size, max_window_size)
 
     assert not scores[1].isinf().any().item()
     assert scores[0].isinf().sum().item() == vocab_size - 1
     assert scores[2].isinf().sum().item() == vocab_size - 1
     assert scores[0, stop_words[0, 0]] == 0
     assert scores[2, stop_words[2, 0]] == 0
+
+    # test no ngram
+    generated_ids = torch.tensor([
+        [2, 3, 4, 1, 2, 3, 4, 2, 3, 4],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    ])
+    n = torch.tensor([3, 0], dtype=torch.int64)
+    threshold = torch.tensor([3, 0], dtype=torch.int64)
+    window_size = torch.tensor([10, 10], dtype=torch.int64)
+    batch_size, max_n, max_window_size, n = _get_emtas(n, window_size)
+
+    scores = torch.rand(batch_size, vocab_size)
+    stop_words = torch.randint(0, vocab_size, (batch_size, 3), dtype=torch.int64)
+    _filter_ngram_(scores, stop_words, generated_ids, n, threshold, max_n, window_size, max_window_size)
+    assert not scores[1].isinf().any().item()
+    assert scores[0].isinf().sum().item() == vocab_size - 1
+
+    # test window
+    generated_ids = torch.tensor([
+        [2, 3, 4, 1, 2, 3, 4, 2, 3, 4],
+        [2, 3, 4, 1, 2, 3, 4, 2, 3, 4],
+    ])
+    n = torch.tensor([2, 0], dtype=torch.int64)
+    threshold = torch.tensor([3, 3], dtype=torch.int64)
+    window_size = torch.tensor([10, 6], dtype=torch.int64)
+    batch_size, max_n, max_window_size, n = _get_emtas(n, window_size)
+
+    scores = torch.rand(batch_size, vocab_size)
+    stop_words = torch.randint(0, vocab_size, (batch_size, 3), dtype=torch.int64)
+    _filter_ngram_(scores, stop_words, generated_ids, n, threshold, max_n, window_size, max_window_size)
+    assert not scores[1].isinf().any().item()
+    assert scores[0].isinf().sum().item() == vocab_size - 1

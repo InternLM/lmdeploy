@@ -66,6 +66,7 @@ class SamplingParam:
     # ngram
     ngram_size: int = 0
     ngram_threshold: int = 0
+    ngram_window_size: int = 1024
 
     @classmethod
     def from_gen_config(cls, gen_config: GenerationConfig):
@@ -150,6 +151,7 @@ class SamplingParam:
             return_routed_experts=gen_config.return_routed_experts,
             ngram_size=gen_config.ngram_size,
             ngram_threshold=gen_config.ngram_threshold,
+            ngram_window_size=gen_config.ngram_window_size,
         )
 
 

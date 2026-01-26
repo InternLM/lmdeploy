@@ -132,6 +132,7 @@ class GenerationConfig:
     # ngram
     ngram_size: int = 0
     ngram_threshold: int = 0
+    ngram_window_size: int = 1024
 
     def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
         """Convert stop_words/bad_sords to ids and append the ids to

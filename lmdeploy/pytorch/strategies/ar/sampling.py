@@ -80,6 +80,7 @@ class ARSamplingStrategy(SamplingStrategy):
         self.session_to_cleanup = []
         ngram_sizes = [None] * batch_size
         ngram_thresholds = [None] * batch_size
+        ngram_window_sizes = [None] * batch_size
 
         def __gather_params():
             """Gather params."""
@@ -105,6 +106,7 @@ class ARSamplingStrategy(SamplingStrategy):
                 num_logprobs[idx] = param.num_logprobs
                 ngram_sizes[idx] = param.ngram_size
                 ngram_thresholds[idx] = param.ngram_threshold
+                ngram_window_sizes[idx] = param.ngram_window_size if param.ngram_window_size > 0 else 1 << 62
 
         def __get_topp(top_p):
             """Get topp."""
@@ -188,16 +190,21 @@ class ARSamplingStrategy(SamplingStrategy):
 
         # ngram
         max_ngram_size = max(ngram_sizes)
+        max_ngram_window_size = max(ngram_window_sizes)
         if max_ngram_size == 0:
             ngram_sizes = None
             ngram_thresholds = None
-            ngram_same_n = True
+            ngram_window_sizes = None
         else:
             ngram_sizes = torch.tensor(ngram_sizes)
             ngram_thresholds = torch.tensor(ngram_thresholds)
+            ngram_window_sizes = torch.tensor(ngram_window_sizes)
             ngram_same_n = (ngram_sizes == max_ngram_size).all().item()
             if ngram_same_n:
                 ngram_sizes = None
+            ngram_same_window_size = (ngram_window_sizes == max_ngram_window_size).all().item()
+            if ngram_same_window_size:
+                ngram_window_sizes = None
 
         sampling_input = SamplingInputs(
             temperature=temperature,
@@ -221,8 +228,9 @@ class ARSamplingStrategy(SamplingStrategy):
             session_to_cleanup=session_to_cleanup,
             ngram_size=ngram_sizes,
             ngram_threshold=ngram_thresholds,
+            ngram_window_size=ngram_window_sizes,
             max_ngram_size=max_ngram_size,
-            ngram_same_n=ngram_same_n,
+            max_ngram_window_size=max_ngram_window_size,
         )
 
         pad_token_id = self.pad_token_id
