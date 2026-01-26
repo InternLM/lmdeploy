@@ -39,5 +39,7 @@ def check_request(request: GenerateReqInput, engine_config: 'TurbomindEngineConf
         return f'The top_k {request.top_k!r} cannot be a negative integer.'
     if not (0 <= request.temperature <= 2):
         return f'The temperature {request.temperature!r} must be in [0, 2]'
+    if not (0 <= request.min_p <= 1):
+        return f'The min_p {request.min_p!r} must be in [0, 1].'
 
     return ''
