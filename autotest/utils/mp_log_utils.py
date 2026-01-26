@@ -33,6 +33,6 @@ def assert_log(config, case_path_tag: str = 'default'):
             if 'result:True, reason:' in line and not result:
                 result = True
 
-    allure.attach.file(log_path, attachment_type=allure.attachment_type.TEXT)
+    allure.attach.file(log_path, name=log_path, attachment_type=allure.attachment_type.TEXT)
     with assume:
         assert result, msg

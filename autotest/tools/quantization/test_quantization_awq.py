@@ -43,5 +43,5 @@ def quantization_all(config, quantization_model_name, origin_model_name, quantiz
         log_path, '_'.join(['quantization', quantization_type,
                             quantization_model_name.split('/')[1]]) + '.log')
 
-    allure.attach.file(quantization_log, attachment_type=allure.attachment_type.TEXT)
+    allure.attach.file(quantization_log, name=quantization_log, attachment_type=allure.attachment_type.TEXT)
     assert result, msg

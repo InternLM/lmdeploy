@@ -39,7 +39,7 @@ def hf_command_line_test(config, case, case_info, run_config, cuda_prefix: str =
 
     result, chat_log, msg = command_test(config, cmd, run_config, case_info, True)
     if chat_log:
-        allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
+        allure.attach.file(chat_log, name=chat_log, attachment_type=allure.attachment_type.TEXT)
     assert result, msg
 
 

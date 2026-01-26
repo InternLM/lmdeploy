@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import time
 
 import allure
 from pytest_assume.plugin import assume
@@ -18,7 +19,8 @@ def run_pipeline_llm_test(config, run_config, common_case_config, worker_id: str
 
     log_path = config.get('log_path')
     case_name = get_case_str_by_config(run_config)
-    pipeline_log = os.path.join(log_path, f'pipeline_llm_{case_name}.log')
+    timestamp = time.strftime('%Y%m%d_%H%M%S')
+    pipeline_log = os.path.join(log_path, f'pipeline_llm_{case_name}_{timestamp}.log')
 
     env = os.environ.copy()
     env['MASTER_PORT'] = str(get_workerid(worker_id) + 29500)
@@ -60,7 +62,7 @@ def run_pipeline_llm_test(config, run_config, common_case_config, worker_id: str
                     file.writelines(f'{case} result: {case_result}, reason: {reason} \n')
                 with assume:
                     assert case_result, reason
-    allure.attach.file(pipeline_log, attachment_type=allure.attachment_type.TEXT)
+    allure.attach.file(pipeline_log, name=pipeline_log, attachment_type=allure.attachment_type.TEXT)
 
 
 def run_pipeline_mllm_test(config, run_config, worker_id: str = '', is_smoke: bool = False):
@@ -72,7 +74,8 @@ def run_pipeline_mllm_test(config, run_config, worker_id: str = '', is_smoke: bo
 
     log_path = config.get('log_path')
     case_name = get_case_str_by_config(run_config)
-    pipeline_log = os.path.join(log_path, f'pipeline_mllm_{case_name}.log')
+    timestamp = time.strftime('%Y%m%d_%H%M%S')
+    pipeline_log = os.path.join(log_path, f'pipeline_mllm_{case_name}_{timestamp}.log')
 
     env = os.environ.copy()
     env['MASTER_PORT'] = str(get_workerid(worker_id) + 29500)
@@ -151,7 +154,7 @@ def run_pipeline_mllm_test(config, run_config, worker_id: str = '', is_smoke: bo
     with open(pipeline_log, 'r', encoding='utf-8') as file:
         output_text = file.read()
     print(output_text)
-    allure.attach.file(pipeline_log, attachment_type=allure.attachment_type.TEXT)
+    allure.attach.file(pipeline_log, name=pipeline_log, attachment_type=allure.attachment_type.TEXT)
 
 
 def get_response_from_output(output_text, case):
@@ -344,7 +347,7 @@ def assert_pipeline_common_log(config, log_name):
     log_path = config.get('log_path')
 
     config_log = os.path.join(log_path, log_name)
-    allure.attach.file(config_log, attachment_type=allure.attachment_type.TEXT)
+    allure.attach.file(config_log, name=config_log, attachment_type=allure.attachment_type.TEXT)
 
     msg = 'result is empty, please check again'
     result = False

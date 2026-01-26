@@ -1,4 +1,5 @@
 import os
+import time
 
 import allure
 import utils.constant as constant
@@ -37,11 +38,12 @@ def throughput_test(config, run_config, worker_id: str = '', is_smoke: bool = Fa
 
     for batch in [128, 256]:
         csv_path = os.path.join(work_dir, f'{batch}.csv')
-        benchmark_log = os.path.join(benchmark_path, f'log_{case_name}_{batch}.log')
+        timestamp = time.strftime('%Y%m%d_%H%M%S')
+        benchmark_log = os.path.join(benchmark_path, f'log_{case_name}_{batch}_{timestamp}.log')
         cmd = ' '.join([command, '--concurrency', str(batch), num_prompts, '--csv ', csv_path]).strip()
 
         result, stderr = execute_command_with_logging(cmd, benchmark_log, env=env)
-        allure.attach.file(benchmark_log, attachment_type=allure.attachment_type.TEXT)
+        allure.attach.file(benchmark_log, name=benchmark_log, attachment_type=allure.attachment_type.TEXT)
 
         if result and not os.path.isfile(csv_path):
             return False, 'result is empty'
@@ -81,7 +83,8 @@ def longtext_throughput_test(config, run_config, worker_id: str = ''):
                                                                        (198000, 1024, 3, '198k-1k', 1)]:
         session_len = input_len + out_len + 1
         csv_path = os.path.join(work_dir, f'{case_name}_{session_info}.csv')
-        benchmark_log = os.path.join(benchmark_path, f'log_{case_name}_{session_info}.log')
+        timestamp = time.strftime('%Y%m%d_%H%M%S')
+        benchmark_log = os.path.join(benchmark_path, f'log_{case_name}_{session_info}_{timestamp}.log')
         cmd = ' '.join([
             command, '--dataset-name random', f'--random-input-len {input_len}', f'--random-output-len {out_len}',
             f'--num-prompts {num_prompts}', f'--concurrency {concurrency}', '--stream-output',
@@ -89,7 +92,7 @@ def longtext_throughput_test(config, run_config, worker_id: str = ''):
         ]).strip()
 
         result, stderr = execute_command_with_logging(cmd, benchmark_log, timeout=7200, env=env)
-        allure.attach.file(benchmark_log, attachment_type=allure.attachment_type.TEXT)
+        allure.attach.file(benchmark_log, name=benchmark_log, attachment_type=allure.attachment_type.TEXT)
 
         if result and not os.path.isfile(csv_path):
             return False, 'result is empty'
@@ -134,7 +137,8 @@ def restful_profile(config, run_config, port, is_smoke: bool = False):
     dataset_path = config.get('dataset_path')
     benchmark_path = os.path.join(config.get('benchmark_path'), 'restful')
     work_dir = os.path.join(benchmark_path, f'wk_{case_name}')
-    benchmark_log = os.path.join(benchmark_path, f'log_{case_name}.log')
+    timestamp = time.strftime('%Y%m%d_%H%M%S')
+    benchmark_log = os.path.join(benchmark_path, f'log_{case_name}_{timestamp}.log')
     os.makedirs(work_dir, exist_ok=True)
 
     http_url = f'{BASE_HTTP_URL}:{port}'  # noqa: E231
@@ -150,7 +154,7 @@ def restful_profile(config, run_config, port, is_smoke: bool = False):
         command += ' --num-prompts 5000'
 
     result, stderr = execute_command_with_logging(command, benchmark_log)
-    allure.attach.file(benchmark_log, attachment_type=allure.attachment_type.TEXT)
+    allure.attach.file(benchmark_log, name=benchmark_log, attachment_type=allure.attachment_type.TEXT)
 
     if result and not os.path.isfile(csv_path):
         return False, 'result is empty'
@@ -164,7 +168,8 @@ def mllm_restful_profile(config, run_config, port, is_smoke: bool = False):
     case_name = get_case_str_by_config(run_config)
     benchmark_path = os.path.join(config.get('benchmark_path'), 'mllm_restful')
     work_dir = os.path.join(benchmark_path, f'wk_{case_name}')
-    benchmark_log = os.path.join(benchmark_path, f'log_{case_name}.log')
+    timestamp = time.strftime('%Y%m%d_%H%M%S')
+    benchmark_log = os.path.join(benchmark_path, f'log_{case_name}_{timestamp}.log')
     os.makedirs(work_dir, exist_ok=True)
 
     http_url = f'{BASE_HTTP_URL}:{port}'  # noqa: E231
@@ -180,7 +185,7 @@ def mllm_restful_profile(config, run_config, port, is_smoke: bool = False):
         command += ' --num-prompts 5000'
 
     result, stderr = execute_command_with_logging(command, benchmark_log)
-    allure.attach.file(benchmark_log, attachment_type=allure.attachment_type.TEXT)
+    allure.attach.file(benchmark_log, name=benchmark_log, attachment_type=allure.attachment_type.TEXT)
 
     if result and not os.path.isfile(csv_path):
         return False, 'result is empty'
@@ -221,7 +226,8 @@ def prefixcache_throughput_test(config, run_config, worker_id: str = ''):
         suffix = 'cache' if enable_prefix_caching else 'no_cache'
 
         for input_len, out_len, num_prompts, session_info, concurrency in test_configs:
-            benchmark_log = os.path.join(benchmark_path, f'log_{case_name}_{session_info}_{suffix}.log')
+            timestamp = time.strftime('%Y%m%d_%H%M%S')
+            benchmark_log = os.path.join(benchmark_path, f'log_{case_name}_{session_info}_{suffix}_{timestamp}.log')
             csv_path = os.path.join(work_dir, f'{session_info}_{suffix}.csv')
 
             command = ' '.join([
@@ -236,7 +242,7 @@ def prefixcache_throughput_test(config, run_config, worker_id: str = ''):
                 command += f' --concurrency {concurrency}'
 
             result, stderr = execute_command_with_logging(command, benchmark_log, env=env)
-            allure.attach.file(benchmark_log, attachment_type=allure.attachment_type.TEXT)
+            allure.attach.file(benchmark_log, name=benchmark_log, attachment_type=allure.attachment_type.TEXT)
 
             if result and not os.path.isfile(csv_path):
                 return False, 'result is empty'

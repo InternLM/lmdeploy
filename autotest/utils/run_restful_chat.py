@@ -85,7 +85,7 @@ def start_openai_service(config, run_config, worker_id):
         except subprocess.TimeoutExpired:
             continue
     file.close()
-    allure.attach.file(server_log, attachment_type=allure.attachment_type.TEXT)
+    allure.attach.file(server_log, name=server_log, attachment_type=allure.attachment_type.TEXT)
     return pid, ''
 
 
@@ -122,14 +122,13 @@ def run_all_step(log_path, case_name, cases_info, port: int = DEFAULT_PORT):
         case_info = cases_info.get(case)
 
         with allure.step(case + ' restful_test - openai chat'):
-            restful_result, restful_log, msg = open_chat_test(log_path, case_name, case, case_info, model, http_url,
-                                                              port)
-            allure.attach.file(restful_log, attachment_type=allure.attachment_type.TEXT)
+            restful_result, restful_log, msg = open_chat_test(log_path, case_name, case_info, http_url)
+            allure.attach.file(restful_log, name=restful_log, attachment_type=allure.attachment_type.TEXT)
         with assume:
             assert restful_result, msg
 
 
-def open_chat_test(log_path, case_name, case, case_info, model, url, port: int = DEFAULT_PORT):
+def open_chat_test(log_path, case_name, case_info, url):
     timestamp = time.strftime('%Y%m%d_%H%M%S')
 
     restful_log = os.path.join(log_path, f'log_restful_{case_name}_{timestamp}.log')
@@ -264,7 +263,7 @@ def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
     file.writelines(str(item) + '\n')
     file.close()
 
-    allure.attach.file(restful_log, attachment_type=allure.attachment_type.TEXT)
+    allure.attach.file(restful_log, name=restful_log, attachment_type=allure.attachment_type.TEXT)
 
     assert 'tiger' in str(response).lower() or '虎' in str(response).lower() or 'ski' in str(
         response).lower() or '滑雪' in str(response).lower(), response
@@ -314,7 +313,7 @@ def _run_reasoning_case(log_path, port: int = DEFAULT_PORT):
             assert '9.11' in reasoning_content and '9.11' in content and len(outputList) > 1, str(outputList)
 
     file.close()
-    allure.attach.file(restful_log, attachment_type=allure.attachment_type.TEXT)
+    allure.attach.file(restful_log, name=restful_log, attachment_type=allure.attachment_type.TEXT)
 
 
 def test_internlm_multiple_round_prompt(client, model):
@@ -663,7 +662,7 @@ def _run_tools_case(log_path, port: int = DEFAULT_PORT):
             if response_list is not None:
                 file.writelines(str(response_list) + '\n')
 
-    allure.attach.file(restful_log, attachment_type=allure.attachment_type.TEXT)
+    allure.attach.file(restful_log, name=restful_log, attachment_type=allure.attachment_type.TEXT)
 
 
 def proxy_health_check(url):
@@ -739,7 +738,7 @@ def start_proxy_server(log_path, port, case_name: str = 'default'):
             break
 
     proxy_file.close()
-    allure.attach.file(proxy_log, attachment_type=allure.attachment_type.TEXT)
+    allure.attach.file(proxy_log, name=proxy_log, attachment_type=allure.attachment_type.TEXT)
 
     print(f'Proxy server started successfully with PID: {pid}')
     return pid, proxy_process

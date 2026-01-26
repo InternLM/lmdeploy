@@ -3,6 +3,7 @@ import glob
 import json
 import os
 import subprocess
+import time
 
 import allure
 import pandas as pd
@@ -147,7 +148,8 @@ def eval_test(model_path, eval_path, case_name, port=DEFAULT_PORT, test_type='in
     try:
 
         work_dir = os.path.join(eval_path, f'wk_{case_name}')
-        eval_log = os.path.join(eval_path, f'log_{case_name}.log')
+        timestamp = time.strftime('%Y%m%d_%H%M%S')
+        eval_log = os.path.join(eval_path, f'log_{case_name}_{timestamp}.log')
         temp_config_path = os.path.join(eval_path, f'temp_{case_name}.py')
 
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -234,7 +236,7 @@ def eval_test(model_path, eval_path, case_name, port=DEFAULT_PORT, test_type='in
 
             result, stderr = execute_command_with_logging(cmd, eval_log, timeout=259200)
 
-            allure.attach.file(eval_log, attachment_type=allure.attachment_type.TEXT)
+            allure.attach.file(eval_log, name=eval_log, attachment_type=allure.attachment_type.TEXT)
 
             if test_type == 'eval':
                 llm_summary(case_name, result, stderr, work_dir, eval_path)
@@ -262,7 +264,8 @@ def eval_test(model_path, eval_path, case_name, port=DEFAULT_PORT, test_type='in
 
 def mllm_eval_test(model_path, eval_path, case_name, port=DEFAULT_PORT, test_type='infer', extra_config={}):
     work_dir = os.path.join(eval_path, f'wk_{case_name}')
-    eval_log = os.path.join(eval_path, f'log_{case_name}.log')
+    timestamp = time.strftime('%Y%m%d_%H%M%S')
+    eval_log = os.path.join(eval_path, f'log_{case_name}_{timestamp}.log')
 
     print(f'Starting VLMEvalKit evaluation for model: {model_path}')
     print(f'Model path: {model_path}')
@@ -279,6 +282,8 @@ def mllm_eval_test(model_path, eval_path, case_name, port=DEFAULT_PORT, test_typ
         cmd = f'python run.py --data MMBench_V11_MINI MMStar_MINI AI2D_MINI OCRBench_MINI --model {case_name} --base-url http://{DEFAULT_SERVER}:empty/v1 --reuse --work-dir {work_dir} --api-nproc 32 --mode eval --judge turbomind_Qwen2.5-32B-Instruct_nccl_tp2_0 --judge-base-url http://{DEFAULT_SERVER}:{port}/v1'  # noqa
 
     result, msg = execute_command_with_logging(cmd, eval_log)
+
+    allure.attach.file(eval_log, name=eval_log, attachment_type=allure.attachment_type.TEXT)
 
     if test_type == 'eval':
         mllm_summary(case_name,
