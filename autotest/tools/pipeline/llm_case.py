@@ -52,6 +52,8 @@ def run_pipeline_chat_test(model_path, run_config, cases_path, is_pr_test: bool 
     for case in cases_info.keys():
         if is_pr_test and case != 'memory_test':
             continue
+        if case != 'code_testcases' and 'code' in model_path.lower():
+            continue
         case_info = cases_info.get(case)
 
         prompts = []

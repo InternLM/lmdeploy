@@ -207,7 +207,7 @@ PYTORCH_LORA_TEST_LLM_GPU1 = [{
         'tp': 1
     },
     'extra_params': {
-        'adapters': 'lora/Llama2-Chinese-7b-Chat-LoRA'
+        'adapters': ['lora/Llama2-Chinese-7b-Chat-LoRA']
     }
 }]
 
@@ -220,7 +220,7 @@ PYTORCH_LORA_TEST_LLM_GPU2 = [{
         'tp': 2
     },
     'extra_params': {
-        'adapters': 'a=lora/2024-01-25_self_dup b=lora/2024-01-25_self'
+        'adapters': ['a=lora/2024-01-25_self_dup', 'b=lora/2024-01-25_self']
     }
 }]
 

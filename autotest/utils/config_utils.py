@@ -121,7 +121,7 @@ def get_cli_common_param(run_config: Dict[str, Any]) -> str:
     # Extra params
     cli_params.append(get_cli_str(extra_params))
 
-    return ' '.join(cli_params)
+    return ' '.join(cli_params).strip()
 
 
 def get_cli_str(config: Dict[str, Any]) -> str:
@@ -129,7 +129,12 @@ def get_cli_str(config: Dict[str, Any]) -> str:
     # Extra params
     for key, value in config.items():
         key = key.replace('_', '-')
-        cli_str.append(f'--{key} {value}' if value else f'--{key}')
+        if value is None:
+            cli_str.append(f'--{key}')
+        elif isinstance(value, list):
+            cli_str.append(f'--{key} {" ".join(map(str, value))}')
+        else:
+            cli_str.append(f'--{key} {value}' if value else f'--{key}')
 
     return ' '.join(cli_str)
 
@@ -556,12 +561,13 @@ def test_cli_common_param():
             'enable_prefix_caching': None,
             'max_batch_size': 2048,
             'session_len': 8192,
-            'cache_max_entry_count': 0.75
+            'cache_max_entry_count': 0.75,
+            'adapters': ['a=lora/2024-01-25_self_dup', 'b=lora/2024-01-25_self']
         }
     }
 
     cli_params = get_cli_common_param(run_config)
-    assert cli_params == '--backend turbomind --communicator nccl --quant-policy 8 --model-format awq --dp 16 --ep 16 --dtype bfloat16 --device ascend --enable-prefix-caching --max-batch-size 2048 --session-len 8192 --cache-max-entry-count 0.75', cli_params  # noqa
+    assert cli_params == '--backend turbomind --communicator nccl --quant-policy 8 --model-format awq --dp 16 --ep 16 --dtype bfloat16 --device ascend --enable-prefix-caching --max-batch-size 2048 --session-len 8192 --cache-max-entry-count 0.75 --adapters a=lora/2024-01-25_self_dup b=lora/2024-01-25_self', cli_params  # noqa
     run_config = {
         'model': 'test/test_dpep16-inner-4bits',
         'backend': 'pytorch',

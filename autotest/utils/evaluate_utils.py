@@ -8,8 +8,8 @@ import allure
 import pandas as pd
 from mmengine.config import Config
 from utils.common_utils import execute_command_with_logging
-from utils.config_utils import get_cli_str, parse_config_by_case
-from utils.constant import DEFAULT_PORT, DEFAULT_SERVER
+from utils.config_utils import get_case_str_by_config, get_cli_str, parse_config_by_case
+from utils.constant import DEFAULT_PORT, DEFAULT_SERVER, EVAL_RUN_CONFIG
 
 
 def write_to_summary(case_name, result, msg, metrics, result_dir):
@@ -195,14 +195,15 @@ def eval_test(model_path, eval_path, case_name, port=DEFAULT_PORT, test_type='in
 
                 cfg = Config.fromfile(temp_config_path)
                 print(f'Using existing temp config file: {temp_config_path}')
-
+                eval_run_config = EVAL_RUN_CONFIG
+                eval_case_name = get_case_str_by_config(eval_run_config)
                 cfg.JUDGE_API_BASE = test_url
                 cfg.JUDGE_MODEL_PATH = model_path
-                cfg.JUDGE_MODEL_NAME = case_name
+                cfg.JUDGE_MODEL_NAME = eval_case_name
 
                 if hasattr(cfg, 'judge_cfg'):
-                    cfg.judge_cfg['path'] = case_name
-                    cfg.judge_cfg['abbr'] = case_name
+                    cfg.judge_cfg['path'] = eval_case_name
+                    cfg.judge_cfg['abbr'] = eval_case_name
                     cfg.judge_cfg['openai_api_base'] = test_url
                     cfg.judge_cfg['tokenizer_path'] = model_path
 

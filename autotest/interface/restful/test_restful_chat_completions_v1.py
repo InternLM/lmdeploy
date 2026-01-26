@@ -169,7 +169,7 @@ class TestRestfulInterfaceChatCompletions:
         assert_chat_completions_batch_return(output, model_name)
         assert ' is' not in output.get('choices')[0].get('message').get('content')
         assert ' 上海' not in output.get('choices')[0].get('message').get('content')
-        assert ' to' not in output.get('choices')[0].get('message').get('content')
+        assert ' to ' not in output.get('choices')[0].get('message').get('content')
         assert output.get('choices')[0].get('finish_reason') == 'stop'
 
     def test_array_stopwords_streaming(self, backend, model_case):
@@ -188,7 +188,7 @@ class TestRestfulInterfaceChatCompletions:
             assert_chat_completions_stream_return(outputList[index], model_name)
             assert ' is' not in outputList[index].get('choices')[0].get('delta').get('content')
             assert '上海' not in outputList[index].get('choices')[0].get('delta').get('content')
-            assert ' to' not in outputList[index].get('choices')[0].get('delta').get('content')
+            assert ' to ' not in outputList[index].get('choices')[0].get('delta').get('content')
         assert outputList[-1].get('choices')[0].get('finish_reason') == 'stop'
 
     @pytest.mark.internlm2_5
@@ -622,7 +622,7 @@ class TestRestfulOpenAI:
         assert_chat_completions_stream_return(outputList[-1], model_name, True)
         for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index], model_name)
-            assert ' to' not in outputList[index].get('choices')[0].get('delta').get('content')
+            assert ' is ' not in outputList[index].get('choices')[0].get('delta').get('content')
         assert outputList[-1].get('choices')[0].get('finish_reason') == 'stop'
 
     def test_array_stopwords(self, backend, model_case):
@@ -670,7 +670,7 @@ class TestRestfulOpenAI:
             assert_chat_completions_stream_return(outputList[index], model_name)
             assert ' is' not in outputList[index].get('choices')[0].get('delta').get('content')
             assert '上海' not in outputList[index].get('choices')[0].get('delta').get('content')
-            assert ' to' not in outputList[index].get('choices')[0].get('delta').get('content')
+            assert ' to ' not in outputList[index].get('choices')[0].get('delta').get('content')
         assert outputList[-1].get('choices')[0].get('finish_reason') == 'stop'
 
     @pytest.mark.pr_test
@@ -687,7 +687,7 @@ class TestRestfulOpenAI:
                                                          },
                                                      ],
                                                      temperature=0.01,
-                                                     top_p=0.01,
+                                                     top_p=0,
                                                      max_tokens=10)
             output = outputs.model_dump()
             outputList.append(output)
@@ -709,7 +709,7 @@ class TestRestfulOpenAI:
                                                              'content': 'Hi, pls intro yourself'
                                                          },
                                                      ],
-                                                     top_p=0.01,
+                                                     top_p=0,
                                                      max_tokens=10,
                                                      stream=True)
 

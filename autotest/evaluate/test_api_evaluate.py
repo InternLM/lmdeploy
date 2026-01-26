@@ -156,13 +156,12 @@ def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_
         eval_run_config['extra_params']['proxy-url'] = f'http://{constant.DEFAULT_SERVER}:{port}'
 
         pid, content = start_openai_service(config, eval_run_config, worker_id)
-        eval_case_name = get_case_str_by_config(eval_run_config)
         try:
             if pid > 0:
                 model_path = os.path.join(config.get('model_path'), eval_run_config.get('model'))
                 eval_test(model_path,
                           eval_path,
-                          eval_case_name,
+                          case_name,
                           port=port,
                           test_type=test_type,
                           extra_config=extra_config,

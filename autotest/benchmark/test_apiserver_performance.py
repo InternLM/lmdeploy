@@ -116,7 +116,7 @@ def test_pytorch_throughput_tp16(config, run_config, worker_id):
 }, {
     'model': 'internlm/internlm2_5-20b-chat',
     'backend': TURBOMIND,
-    'communicator': 'cuda_ipc',
+    'communicator': 'cuda-ipc',
     'quant_policy': 8,
     'parallel_config': {
         'tp': 2
