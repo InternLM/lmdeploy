@@ -52,14 +52,6 @@ class VLAsyncEngine(AsyncEngine):
             _prompts = prompts
         return _prompts
 
-    @classmethod
-    async def async_convert_to_pil_images(cls, messages: List[Dict]) -> List[Dict]:
-        """Convert messages to PIL images.
-
-        Delegates to MultimodalProcessor.
-        """
-        return await MultimodalProcessor.async_convert_to_pil_images(messages)
-
     def batch_infer(self, prompts: Union[VLPromptType, List[Dict], List[VLPromptType], List[List[Dict]]], *args,
                     **kwargs):
         """Inference a batch of prompts."""
