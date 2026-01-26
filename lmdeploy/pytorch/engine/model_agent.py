@@ -323,7 +323,8 @@ class BaseModelAgent:
         self.model_config = model_config
         self.cache_config = cache_config
         # use raw tokenizer
-        monkey_patch_hf_modules_cache()
+        if dist_ctx.dist_config.world_size > 1:
+            monkey_patch_hf_modules_cache()
         self.tokenizer = Tokenizer(model_path).model.model
 
         # asyncio
