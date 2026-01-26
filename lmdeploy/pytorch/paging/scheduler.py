@@ -287,6 +287,43 @@ class Scheduler:
 
         return SchedulerOutput(running=running, swap_in_map=swap_in_map, swap_out_map=swap_out_map, copy_map=copy_map)
 
+    @record_function('schedule_running')
+    def schedule_running(self, running: SeqList, num_decode_tokens: int = 1, prealloc_size: int = 1):
+        """Schedule running sequences.
+
+        This function is used to add blocks for running sequences request would be marked as invalid if not enough
+        blocks can be allocated.
+        """
+        assert len(running) > 0
+        eviction_helper = self.eviction_helper
+
+        valid_mask = [True for _ in running]
+
+        # loop over reverse running
+        rev_running = reversed(running)
+        for idx, seq in enumerate(rev_running):
+            if not seq.status == MessageStatus.RUNNING:
+                valid_mask[idx] = False
+                continue
+
+            num_required_blocks = self.block_manager.num_required_blocks(seq, num_decode_tokens)
+
+            if num_required_blocks == 0:
+                continue
+
+            if eviction_helper.evict_for_seq(seq, self.hanging + self.waiting, prealloc_size):
+                self.block_manager.allocate(seq, prealloc_size)
+                self.block_trie.allocate(seq)
+                continue
+
+            # running to ready
+            seq.state.deactivate()
+            # ready to waiting
+            seq.state.evict()
+            valid_mask[idx] = False
+        valid_mask = list(reversed(valid_mask))
+        return valid_mask
+
     def stop_session(self, session_id: int):
         """Stop session.
 
@@ -321,6 +358,11 @@ class Scheduler:
     def get_block_tables(self, seqs: SeqList):
         """Get block table of the sequences."""
         return [self.block_manager.get_block_table(seq) for seq in seqs]
+
+    def evict_seqs(self, running: SeqList):
+        """Evict running sequences."""
+        for seq in running:
+            seq.state.evict()
 
     def activate_seqs(self, running: SeqList, filter_status: MessageStatus = MessageStatus.READY):
         """Lock running sequence."""

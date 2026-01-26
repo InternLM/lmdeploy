@@ -203,7 +203,7 @@ They differ in the types of supported models and the inference data type. Please
 
 ## Installation
 
-It is recommended installing lmdeploy using pip in a conda environment (python 3.9 - 3.13):
+It is recommended installing lmdeploy using pip in a conda environment (python 3.10 - 3.13):
 
 ```shell
 conda create -n lmdeploy python=3.10 -y
@@ -216,7 +216,7 @@ The default prebuilt package is compiled on **CUDA 12** since v0.3.0.
 For the GeForce RTX 50 series, please install the LMDeploy prebuilt package complied with **CUDA 12.8**
 
 ```shell
-export LMDEPLOY_VERSION=0.11.0
+export LMDEPLOY_VERSION=0.11.1
 export PYTHON_VERSION=310
 pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu128-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu128
 ```

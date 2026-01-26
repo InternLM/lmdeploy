@@ -41,12 +41,7 @@ class TritonLinearBlockedF8Impl(LinearBlockedF8Impl):
                                              trans_scale=True,
                                              scale_fmt=self.scale_fmt)
 
-        out = blocked_gemm_fp8(input_quant,
-                               input_scale,
-                               weight.t(),
-                               scale.t(),
-                               out_dtype=x.dtype,
-                               scale_fmt=self.scale_fmt)
+        out = blocked_gemm_fp8(input_quant, input_scale, weight.t(), scale.t(), out_dtype=x.dtype)
         if bias is not None:
             out += bias
 
@@ -111,10 +106,7 @@ class DeepGemmLinearBlockedF8Impl(LinearBlockedF8Impl):
         random.shuffle(ranges)
         for m in ranges:
             inputs = torch.empty(m, k, dtype=self.out_dtype, device=device)
-            input_quant, input_scale = quant_fp8_tma(inputs,
-                                                     self.block_size,
-                                                     dtype=weight.dtype,
-                                                     scale_fmt=self.scale_fmt)
+            input_quant, input_scale = quant_fp8_tma(inputs, self.block_size, dtype=weight.dtype)
             deep_gemm_fp8(input_quant, input_scale, weight, scale, out_dtype=inputs.dtype)
 
     def forward(self,

@@ -126,7 +126,7 @@ def evaluate(models: List[str],
 
         work_dir = os.path.join(workspace, model)
         cmd_eval = [
-            f'opencompass {config_path_new} -w {work_dir} --reuse --max-num-workers {max_num_workers}'  # noqa: E501
+            f'opencompass {config_path_new} -w {work_dir} --reuse --max-num-workers {max_num_workers} --dump-res-length'  # noqa: E501
         ]
         eval_log = os.path.join(workspace, f'eval.{ori_model}.txt')
         start_time = time.time()

@@ -35,7 +35,6 @@ public:
                             int                layer_id,
                             const ModelParam&  model,
                             const EngineParam& engine,
-                            const LoraParam&   lora_param,
                             const MoeParam&    moe_param);
 
     ~LlamaDecoderLayerWeight();

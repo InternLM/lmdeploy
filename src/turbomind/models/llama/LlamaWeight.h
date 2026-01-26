@@ -35,7 +35,6 @@ struct LlamaWeight: core::Module {
     LlamaWeight(DataType           data_type,
                 const ModelParam&  model_param,
                 const EngineParam& engine_param,
-                const LoraParam&   lora_param,
                 const MoeParam&    moe_param);
 
     ~LlamaWeight();
@@ -65,7 +64,6 @@ struct LlamaWeight: core::Module {
 private:
     const ModelParam  model_param_;
     const EngineParam engine_param_;
-    const LoraParam   lora_param_;
     const MoeParam    moe_param_;
 
     int hidden_units_;

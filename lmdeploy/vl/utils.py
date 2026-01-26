@@ -1,9 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import base64
 import os
 from io import BytesIO
 from typing import Union
 
+import pybase64
 import requests
 from PIL import Image, ImageFile
 
@@ -40,13 +40,13 @@ def encode_image_base64(image: Union[str, Image.Image]) -> str:
         # use dummy image
         image = Image.new('RGB', (32, 32))
         image.save(buffered, format='PNG')
-    res = base64.b64encode(buffered.getvalue()).decode('utf-8')
+    res = pybase64.b64encode(buffered.getvalue()).decode('utf-8')
     return res
 
 
 def load_image_from_base64(image: Union[bytes, str]) -> Image.Image:
     """Load image from base64 format."""
-    return Image.open(BytesIO(base64.b64decode(image)))
+    return Image.open(BytesIO(pybase64.b64decode(image)))
 
 
 def load_image(image_url: Union[str, Image.Image]) -> Image.Image:

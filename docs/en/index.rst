@@ -113,9 +113,12 @@ Documentation
    :caption: API Reference
 
    api/pipeline.rst
+   api/openapi.rst
+   api/cli.rst
 
 Indices and tables
 ==================
 
 * :ref:`genindex`
 * :ref:`search`
+* :ref:`routingtable`

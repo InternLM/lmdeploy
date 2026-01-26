@@ -1,58 +1,10 @@
-"""Unit tests for _merge_message_content function.
-
-This module tests the content field normalization logic that ensures compatibility with vLLM's multimodal content
-handling.
-"""
-from typing import Dict
-
 import pytest
 
-
-def _merge_message_content(msg: Dict) -> Dict:
-    """Merge multimodal content blocks and ensure content field exists.
-
-    This is a copy of the implementation from lmdeploy.serve.async_engine
-    to avoid import dependency issues in tests.
-
-    This function normalizes message content to match vLLM's behavior:
-    1. Missing content field -> add content='' (empty string)
-    2. None content -> convert to content='' (empty string)
-    3. String content -> return as-is
-    4. List content (multimodal) -> merge all text blocks with newline separator
-
-    Args:
-        msg: A message dict with 'role' and optionally 'content' field
-
-    Returns:
-        A message dict with 'content' field guaranteed to exist
-    """
-    # If content is missing or None, convert to empty string (matches vLLM behavior)
-    # This prevents Jinja2 template errors when rendering chat templates
-    if 'content' not in msg or msg['content'] is None:
-        result = dict(msg)
-        result['content'] = ''
-        return result
-
-    # If content is already a string, return as-is
-    if isinstance(msg['content'], str):
-        return msg
-
-    # If content is a list, merge all text blocks into a single string
-    # This matches vLLM's behavior: text_prompt = "\n".join(texts)
-    content_parts = []
-    for block in msg['content']:
-        if isinstance(block, dict) and block.get('type') == 'text':
-            content_parts.append(block.get('text', ''))
-    merged_content = '\n'.join(content_parts)
-
-    # Preserve all other fields in the message (e.g., tool_calls)
-    result = dict(msg)
-    result['content'] = merged_content
-    return result
+from lmdeploy.serve.multimodal_processor import MultimodalProcessor
 
 
 class TestMergeMessageContent:
-    """Test suite for _merge_message_content function."""
+    """Test suite for merge_message_content function."""
 
     def test_missing_content_field(self):
         """Test that missing content field is added with empty string.
@@ -71,7 +23,7 @@ class TestMergeMessageContent:
                 }
             }]
         }
-        result = _merge_message_content(msg)
+        result = MultimodalProcessor.merge_message_content(msg)
 
         assert 'content' in result
         assert result['content'] == ''
@@ -97,7 +49,7 @@ class TestMergeMessageContent:
                 }
             }]
         }
-        result = _merge_message_content(msg)
+        result = MultimodalProcessor.merge_message_content(msg)
 
         assert result['content'] == ''
         assert 'tool_calls' in result
@@ -105,7 +57,7 @@ class TestMergeMessageContent:
     def test_string_content_unchanged(self):
         """Test that string content remains unchanged."""
         msg = {'role': 'user', 'content': 'Hello, world!'}
-        result = _merge_message_content(msg)
+        result = MultimodalProcessor.merge_message_content(msg)
 
         assert result['content'] == 'Hello, world!'
         assert result is msg  # Should return the same object
@@ -113,7 +65,7 @@ class TestMergeMessageContent:
     def test_single_text_block(self):
         """Test extraction of single text block from list content."""
         msg = {'role': 'user', 'content': [{'type': 'text', 'text': 'Single block'}]}
-        result = _merge_message_content(msg)
+        result = MultimodalProcessor.merge_message_content(msg)
 
         assert result['content'] == 'Single block'
 
@@ -136,7 +88,7 @@ class TestMergeMessageContent:
                 'text': 'Third block'
             }]
         }
-        result = _merge_message_content(msg)
+        result = MultimodalProcessor.merge_message_content(msg)
 
         assert result['content'] == 'First block\nSecond block\nThird block'
 
@@ -161,14 +113,14 @@ class TestMergeMessageContent:
                 'text': 'What do you see?'
             }]
         }
-        result = _merge_message_content(msg)
+        result = MultimodalProcessor.merge_message_content(msg)
 
         assert result['content'] == 'Analyze this image:\nWhat do you see?'
 
     def test_empty_list_content(self):
         """Test that empty list content produces empty string."""
         msg = {'role': 'user', 'content': []}
-        result = _merge_message_content(msg)
+        result = MultimodalProcessor.merge_message_content(msg)
 
         assert result['content'] == ''
 
@@ -189,7 +141,7 @@ class TestMergeMessageContent:
                 }
             }]
         }
-        result = _merge_message_content(msg)
+        result = MultimodalProcessor.merge_message_content(msg)
 
         assert result['content'] == ''
 
@@ -208,7 +160,7 @@ class TestMergeMessageContent:
             'name': 'assistant',
             'custom_field': 'custom_value'
         }
-        result = _merge_message_content(msg)
+        result = MultimodalProcessor.merge_message_content(msg)
 
         assert result['content'] == 'Response'
         assert result['tool_calls'] == msg['tool_calls']
@@ -235,7 +187,7 @@ class TestMergeMessageContent:
                 }
             ]
         }
-        result = _merge_message_content(msg)
+        result = MultimodalProcessor.merge_message_content(msg)
 
         # Missing text field should be treated as empty string
         assert result['content'] == 'First\n\nThird'
@@ -257,7 +209,7 @@ class TestMergeMessageContent:
                 }
             }]
         }
-        result = _merge_message_content(msg)
+        result = MultimodalProcessor.merge_message_content(msg)
 
         # Should add content field with empty string
         assert 'content' in result
@@ -316,7 +268,7 @@ class TestMergeMessageContent:
     ])
 def test_merge_message_content_parametrized(msg, expected_content):
     """Parametrized test for various message content scenarios."""
-    result = _merge_message_content(msg)
+    result = MultimodalProcessor.merge_message_content(msg)
     assert result['content'] == expected_content
 
 
@@ -342,7 +294,7 @@ def test_batch_message_processing():
         }]
     }]
 
-    processed = [_merge_message_content(msg) for msg in messages]
+    processed = [MultimodalProcessor.merge_message_content(msg) for msg in messages]
 
     # Verify all messages have content field
     assert all('content' in msg for msg in processed)

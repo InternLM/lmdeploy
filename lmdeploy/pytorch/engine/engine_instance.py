@@ -97,13 +97,12 @@ class EngineInstance(EngineInstanceBase):
         routed_experts = resp.data.get('routed_experts', None) if resp.data else None
         if routed_experts is not None and resp.type in [ResponseType.FINISH, ResponseType.CANCEL]:
             if self._enable_transfer_obj_ref:
-                import base64
-
+                import pybase64
                 import ray
 
                 ref = ray.put(routed_experts)
                 data = ray.cloudpickle.dumps(ref)
-                outputs['routed_experts'] = base64.b64encode(data).decode('utf-8')
+                outputs['routed_experts'] = pybase64.b64encode(data).decode('utf-8')
             else:
                 outputs['routed_experts'] = routed_experts
         return outputs
@@ -166,7 +165,7 @@ class EngineInstance(EngineInstanceBase):
         output_offset = 0
 
         while True:
-            resp = await self.req_sender.async_recv(resp)
+            resp = await self.req_sender.async_recv(resp, wait_main=True)
 
             cache_block_ids = resp.data.get('cache_block_ids', None) if resp.data else None
             req_metrics = resp.data.get('req_metrics', None) if resp.data else None
