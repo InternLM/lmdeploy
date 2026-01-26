@@ -137,7 +137,7 @@ def test_restful_chat_distributed_dpep16(shared_proxy_manager, config, run_confi
 
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize('run_config', get_func_config_list(BACKEND, {'tp': 2}, extra={'enable_prefix_caching': True}))
+@pytest.mark.parametrize('run_config', get_func_config_list(BACKEND, {'tp': 2}, extra={'enable-prefix-caching': None}))
 def test_restful_chat_turbomind_prefix_cache_tp2(config, run_config, common_case_config, worker_id):
     run_llm_test(config, run_config, common_case_config, worker_id)
 
