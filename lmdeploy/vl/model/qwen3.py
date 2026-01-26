@@ -22,9 +22,7 @@ def check_transformers():
 class Qwen3VLModel(VisionModel):
     """Qwen3VL model."""
 
-    _arch = [
-        'Qwen3VLForConditionalGeneration', 'Qwen3VLMoeForConditionalGeneration', 'InternS1ProForConditionalGeneration'
-    ]
+    _arch = ['Qwen3VLForConditionalGeneration', 'Qwen3VLMoeForConditionalGeneration']
 
     def build_preprocessor(self):
         check_transformers()

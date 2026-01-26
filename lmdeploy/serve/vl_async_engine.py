@@ -74,7 +74,10 @@ class VLAsyncEngine(AsyncEngine):
                                                    **kwargs)
         elif isinstance(messages, List):
             has_multimodal_input = any(
-                isinstance(message['content'], list) and any(item['type'] in ['image_url', 'image_data']
+                isinstance(message['content'], list) and any(item['type'] in ['image_url', 'image_data', 'time_series']
+                                                             for item in message['content']) for message in messages)
+            has_time_series_input = any(
+                isinstance(message['content'], list) and any(item['type'] == 'time_series'
                                                              for item in message['content']) for message in messages)
             if not has_multimodal_input:
                 return await super()._get_prompt_input(messages,
@@ -88,7 +91,8 @@ class VLAsyncEngine(AsyncEngine):
             raise RuntimeError(f'unsupported messages {messages}')
 
         chat_template = self.chat_template if do_preprocess else BaseChatTemplate()
-        messages = await self.async_convert_to_pil_images(messages)
+        if not has_time_series_input:
+            messages = await self.async_convert_to_pil_images(messages)
         results = await self.vl_encoder.preprocess(messages, mm_processor_kwargs)
         if self.backend == 'turbomind':
             # for tm engine, this module perform vision embedding after image
