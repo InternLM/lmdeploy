@@ -5,14 +5,16 @@ import torch
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
-from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor
+from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
+from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
 from lmdeploy.pytorch.nn.linear import build_rowwise_linear
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .interns1_pro_ts import InternS1ProTimeSeriesModel
 from .patch import get_build_model_context
 from .qwen3_moe import Qwen3MoeModel
-from .qwen3_vl import Qwen3VLInputProcessor, Qwen3VLVisionModel
+from .qwen3_vl import Qwen3VLVisionModel
 from .utils.cudagraph import CudaGraphMixin
 from .utils.model import DeployModelMixin
 
@@ -43,7 +45,7 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraph
         self.ctx_mgr = ctx_mgr
 
         # build preprocessor
-        self.input_processor = Qwen3VLInputProcessor(self.config)
+        self.input_processor = InternS1ProInputProcessor(self.config, dtype)
 
         # build vision model
         self.visual = Qwen3VLVisionModel(
@@ -62,6 +64,10 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraph
                                             dtype=dtype,
                                             device=device)
 
+        # build time series model
+        if hasattr(config, 'ts_config'):
+            self.time_series = InternS1ProTimeSeriesModel(config.ts_config, dtype=dtype, device=device)
+
         # for router replay
         bm_ctx = get_build_model_context()
         self.enable_return_routed_experts = bm_ctx.enable_return_routed_experts
@@ -79,6 +85,11 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraph
         image_mask: torch.Tensor = None,
         pos_embeds: torch.Tensor = None,
         grid_thw: torch.Tensor = None,
+        # for time series
+        ts_values: torch.Tensor = None,
+        ts_lens: torch.Tensor = None,
+        ts_sr: torch.Tensor = None,
+        ts_mask: torch.Tensor = None,
         **kwargs,
     ):
         """Model forward, return logits."""
@@ -106,6 +117,10 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraph
                 # mask and scatter to create final input embeddings
                 expanded_image_mask = image_mask.unsqueeze(-1).expand_as(inputs_embeds)
                 inputs_embeds = inputs_embeds.masked_scatter(expanded_image_mask, image_embeds)
+
+            elif ts_values is not None:
+                ts_embeds = self.time_series(ts_values, ts_lens, ts_sr)  # [B, T, C]
+                inputs_embeds = inputs_embeds.masked_scatter_(ts_mask[..., None], ts_embeds)
 
         # router replay
         all_routed_experts = None
@@ -157,22 +172,38 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraph
         image_mask = None
         grid_thw = None
         pos_embeds = None
+        # for time series
+        ts_values = None
+        ts_lens = None
+        ts_sr = None
+        ts_mask = None
         if context.input_multimodals is not None:
-            image_data = [input_mm.get('image', []) for input_mm in context.input_multimodals]
-            if len(image_data) > 0:
-                # flatten batch
-                image_data = [data for im_data in image_data for data in im_data]
-                pixel_values = torch.cat([data.data for data in image_data])
-                image_token_id = image_data[0].meta['image_token_id']
-                image_mask = input_ids == image_token_id
-                grid_thw = torch.cat([data.meta['grid_thw'] for data in image_data]).cpu()
-                vis_pos_emb = self.visual.rot_pos_emb(grid_thw)
-                pos_embeds = self.visual.fast_pos_embed_interpolate(grid_thw)
-                vis_cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2],
-                                                         grid_thw[:, 0]).to(pixel_values.device)
-                vis_cu_seqlens = vis_cu_seqlens.cumsum(dim=0, dtype=torch.int32)
-                vis_pos_emb = vis_pos_emb.repeat(1, 2)
-                vis_pos_emb = (vis_pos_emb.cos(), vis_pos_emb.sin())
+            mm_data = [input_mm.get('image', []) for input_mm in context.input_multimodals]
+            # flatten batch
+            mm_data = [data for im_data in mm_data for data in im_data]
+
+            if len(mm_data) > 0:
+                is_time_series = mm_data[0].meta.get('ts_token_id', False)
+
+                if is_time_series:
+                    ts_values = mm_data
+                    ts_token_id = ts_values[0].meta['ts_token_id']
+                    ts_lens = ts_values[0].meta['ts_lens']
+                    ts_sr = ts_values[0].meta['ts_sr']
+                    ts_mask = input_ids == ts_token_id
+                    ts_values = torch.cat([data.data for data in ts_values])
+                else:
+                    pixel_values = torch.cat([data.data for data in mm_data])
+                    image_token_id = mm_data[0].meta['image_token_id']
+                    image_mask = input_ids == image_token_id
+                    grid_thw = torch.cat([data.meta['grid_thw'] for data in mm_data]).cpu()
+                    vis_pos_emb = self.visual.rot_pos_emb(grid_thw)
+                    pos_embeds = self.visual.fast_pos_embed_interpolate(grid_thw)
+                    vis_cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2],
+                                                             grid_thw[:, 0]).to(pixel_values.device)
+                    vis_cu_seqlens = vis_cu_seqlens.cumsum(dim=0, dtype=torch.int32)
+                    vis_pos_emb = vis_pos_emb.repeat(1, 2)
+                    vis_pos_emb = (vis_pos_emb.cos(), vis_pos_emb.sin())
 
         # process vision embeddings
         vision_embeddings = context.input_embeddings
@@ -195,6 +226,11 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraph
             image_mask=image_mask,
             grid_thw=grid_thw,
             pos_embeds=pos_embeds,
+            # for time series
+            ts_values=ts_values,
+            ts_lens=ts_lens,
+            ts_sr=ts_sr,
+            ts_mask=ts_mask,
         )
 
     def rename_weight(self, name: str) -> str:
@@ -277,6 +313,7 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraph
         ]
 
         params_dict = dict(self.named_parameters())
+        buffers_dict = dict(self.named_buffers())
         for name, loaded_weight in weights:
             if 'rotary_emb.inv_freq' in name:
                 continue
@@ -313,9 +350,65 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraph
                         load_weight(param, k, shard_id='k')
                         load_weight(param, v, shard_id='v')
                     else:
-                        param = params_dict[name]
-                        load_weight(param, loaded_weight)
+                        if name in params_dict:
+                            param = params_dict[name]
+                            load_weight(param, loaded_weight)
+                        elif name in buffers_dict:
+                            param = buffers_dict[name]
+                            load_weight(param, loaded_weight)
 
     def get_input_processor(self) -> BaseModelInputProcessor:
         """Get input processor."""
         return self.input_processor
+
+
+class InternS1ProInputProcessor(BaseModelInputProcessor):
+    """InternS1Pro input processor."""
+
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype) -> None:
+        self.config = config
+        self.dtype = dtype
+
+    def preprocess_input(self,
+                         input_ids: List[int],
+                         input_multimodals: List[Dict[str, Any]] = None,
+                         **kwargs) -> PreprocessInputResult:
+        """Prepare multimodal input."""
+        if input_multimodals is None or len(input_multimodals) == 0:
+            return input_ids, input_multimodals
+
+        input_imgs = []
+        for input_mm in input_multimodals:
+            if 'ts_values' in input_mm:
+                ts_values = input_mm['ts_values'].to(self.dtype)
+                offset = input_mm['offset']
+                ts_token_id = input_mm['ts_token_id']
+                ts_lens = input_mm['ts_lens']
+                ts_sr = input_mm['ts_sr']
+                num_pad = input_mm['num_ts_tokens']
+
+                mm_data = MultiModalTensor(data=ts_values,
+                                           start=offset,
+                                           end=offset + num_pad,
+                                           meta=dict(ts_token_id=ts_token_id, ts_lens=ts_lens, ts_sr=ts_sr))
+            else:
+                pixel_values = input_mm['pixel_values'].to(self.dtype)
+                image_grid_thw = input_mm['image_grid_thw']
+                offset = input_mm['offset']
+                start = offset
+                image_token_id = input_mm['image_token_id']
+                num_pad = input_mm['image_tokens']
+                if isinstance(num_pad, torch.Tensor):
+                    num_pad = num_pad.item()
+
+                mm_data = MultiModalTensor(data=pixel_values,
+                                           start=start,
+                                           end=start + num_pad,
+                                           meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
+            input_imgs.append(mm_data)
+
+        result = PreprocessInputResult(
+            input_ids=input_ids,
+            input_multimodals=dict(image=input_imgs),
+        )
+        return result
