@@ -32,7 +32,7 @@ def _gather_all_ids(pad_id: int, seqs: SeqList, sampling_inputs: SamplingInputs)
 
 def _gather_generated_ids(pad_id: int, seqs: SeqList, sampling_inputs: SamplingInputs) -> np.ndarray | None:
     """Gather history."""
-    if sampling_inputs.repetition_penalty is None and sampling_inputs.max_ngram_size == 0:
+    if sampling_inputs.repetition_penalty is None and sampling_inputs.max_repetition_ngram_size == 0:
         return None
     batch = len(seqs)
     max_len = max(seq.num_new_tokens for seq in seqs)
@@ -78,9 +78,9 @@ class ARSamplingStrategy(SamplingStrategy):
         num_logprobs = [None] * batch_size
         session_to_cleanup = self.session_to_cleanup
         self.session_to_cleanup = []
-        ngram_sizes = [None] * batch_size
-        ngram_thresholds = [None] * batch_size
-        ngram_window_sizes = [None] * batch_size
+        repetition_ngram_sizes = [None] * batch_size
+        repetition_ngram_thresholds = [None] * batch_size
+        repetition_ngram_window_sizes = [None] * batch_size
 
         def __gather_params():
             """Gather params."""
@@ -104,9 +104,10 @@ class ARSamplingStrategy(SamplingStrategy):
                 stop_words[idx] = sw
                 logits_processors[idx] = param.logits_processors
                 num_logprobs[idx] = param.num_logprobs
-                ngram_sizes[idx] = param.ngram_size
-                ngram_thresholds[idx] = param.ngram_threshold
-                ngram_window_sizes[idx] = param.ngram_window_size if param.ngram_window_size > 0 else 1 << 62
+                repetition_ngram_sizes[idx] = param.repetition_ngram_size
+                repetition_ngram_thresholds[idx] = param.repetition_ngram_threshold
+                repetition_ngram_window_sizes[
+                    idx] = param.repetition_ngram_window_size if param.repetition_ngram_window_size > 0 else 1 << 62
 
         def __get_topp(top_p):
             """Get topp."""
@@ -188,23 +189,24 @@ class ARSamplingStrategy(SamplingStrategy):
             'seq_id': seq.seq_id,
         } for seq in seqs]
 
-        # ngram
-        max_ngram_size = max(ngram_sizes)
-        max_ngram_window_size = max(ngram_window_sizes)
-        if max_ngram_size == 0:
-            ngram_sizes = None
-            ngram_thresholds = None
-            ngram_window_sizes = None
+        # repetition ngram
+        max_repetition_ngram_size = max(repetition_ngram_sizes)
+        max_repetition_ngram_window_size = max(repetition_ngram_window_sizes)
+        if max_repetition_ngram_size == 0:
+            repetition_ngram_sizes = None
+            repetition_ngram_thresholds = None
+            repetition_ngram_window_sizes = None
         else:
-            ngram_sizes = torch.tensor(ngram_sizes)
-            ngram_thresholds = torch.tensor(ngram_thresholds)
-            ngram_window_sizes = torch.tensor(ngram_window_sizes)
-            ngram_same_n = (ngram_sizes == max_ngram_size).all().item()
-            if ngram_same_n:
-                ngram_sizes = None
-            ngram_same_window_size = (ngram_window_sizes == max_ngram_window_size).all().item()
-            if ngram_same_window_size:
-                ngram_window_sizes = None
+            repetition_ngram_sizes = torch.tensor(repetition_ngram_sizes)
+            repetition_ngram_thresholds = torch.tensor(repetition_ngram_thresholds)
+            repetition_ngram_window_sizes = torch.tensor(repetition_ngram_window_sizes)
+            repetition_ngram_same_n = (repetition_ngram_sizes == max_repetition_ngram_size).all().item()
+            if repetition_ngram_same_n:
+                repetition_ngram_sizes = None
+            repetition_ngram_same_window_size = (
+                repetition_ngram_window_sizes == max_repetition_ngram_window_size).all().item()
+            if repetition_ngram_same_window_size:
+                repetition_ngram_window_sizes = None
 
         sampling_input = SamplingInputs(
             temperature=temperature,
@@ -226,11 +228,11 @@ class ARSamplingStrategy(SamplingStrategy):
             batch_size=batch_size,
             session_ctx=session_ctx,
             session_to_cleanup=session_to_cleanup,
-            ngram_size=ngram_sizes,
-            ngram_threshold=ngram_thresholds,
-            ngram_window_size=ngram_window_sizes,
-            max_ngram_size=max_ngram_size,
-            max_ngram_window_size=max_ngram_window_size,
+            repetition_ngram_size=repetition_ngram_sizes,
+            repetition_ngram_threshold=repetition_ngram_thresholds,
+            repetition_ngram_window_size=repetition_ngram_window_sizes,
+            max_repetition_ngram_size=max_repetition_ngram_size,
+            max_repetition_ngram_window_size=max_repetition_ngram_window_size,
         )
 
         pad_token_id = self.pad_token_id

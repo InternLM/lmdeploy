@@ -64,9 +64,9 @@ class SamplingParam:
     return_routed_experts: bool = False
 
     # ngram
-    ngram_size: int = 0
-    ngram_threshold: int = 0
-    ngram_window_size: int = 1024
+    repetition_ngram_size: int = 0
+    repetition_ngram_threshold: int = 0
+    repetition_ngram_window_size: int = 1024
 
     @classmethod
     def from_gen_config(cls, gen_config: GenerationConfig):
@@ -149,9 +149,9 @@ class SamplingParam:
             out_logits=(output_logits is not None),
             num_logprobs=logprobs,
             return_routed_experts=gen_config.return_routed_experts,
-            ngram_size=gen_config.ngram_size,
-            ngram_threshold=gen_config.ngram_threshold,
-            ngram_window_size=gen_config.ngram_window_size,
+            repetition_ngram_size=gen_config.repetition_ngram_size,
+            repetition_ngram_threshold=gen_config.repetition_ngram_threshold,
+            repetition_ngram_window_size=gen_config.repetition_ngram_window_size,
         )
 
 

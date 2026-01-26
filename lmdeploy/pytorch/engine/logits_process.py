@@ -178,7 +178,7 @@ def ngram(
     return matched_mask, found
 
 
-def _filter_ngram_(
+def _filter_repetition_ngram_(
     scores: torch.Tensor,
     stop_words: torch.Tensor,
     generated_ids: torch.Tensor,
@@ -253,11 +253,11 @@ class SamplingInputs:
     generated_ids_cpu: np.ndarray | None = None
 
     # n gram
-    ngram_size: torch.Tensor | None = None
-    ngram_threshold: torch.Tensor | None = None
-    ngram_window_size: torch.Tensor | None = None
-    max_ngram_size: int = 0
-    max_ngram_window_size: int = 0
+    repetition_ngram_size: torch.Tensor | None = None
+    repetition_ngram_threshold: torch.Tensor | None = None
+    repetition_ngram_window_size: torch.Tensor | None = None
+    max_repetition_ngram_size: int = 0
+    max_repetition_ngram_window_size: int = 0
 
     def to_device(self, device: str, non_blocking: bool = False):
         """To device."""
@@ -391,19 +391,19 @@ class FusedLogitsProcessor:
             generated_ids = sampling_inputs.generated_ids
             scores = _process_repetition_penalty_(scores, generated_ids, repetition_penalty)
 
-        if sampling_inputs.max_ngram_size > 0:
+        if sampling_inputs.max_repetition_ngram_size > 0:
             generated_ids = sampling_inputs.generated_ids
             assert generated_ids is not None
-            assert sampling_inputs.ngram_threshold is not None
-            scores = _filter_ngram_(
+            assert sampling_inputs.repetition_ngram_threshold is not None
+            scores = _filter_repetition_ngram_(
                 scores,
                 sampling_inputs.stop_words,
                 generated_ids,
-                sampling_inputs.ngram_size,
-                sampling_inputs.ngram_threshold,
-                sampling_inputs.max_ngram_size,
-                sampling_inputs.ngram_window_size,
-                sampling_inputs.max_ngram_window_size,
+                sampling_inputs.repetition_ngram_size,
+                sampling_inputs.repetition_ngram_threshold,
+                sampling_inputs.max_repetition_ngram_size,
+                sampling_inputs.repetition_ngram_window_size,
+                sampling_inputs.max_repetition_ngram_window_size,
             )
 
         temperature = sampling_inputs.temperature
