@@ -111,9 +111,9 @@ def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_
 
     work_num = int(8 / run_config.get('parallel_config', {}).get('tp', 1))
     extra_config = {'max-num-workers': min(work_num * 16, 64)}
+    case_name = get_case_str_by_config(run_config)
 
     if test_type == 'infer':
-        case_name = get_case_str_by_config(run_config)
         proxy_pid, proxy_process = start_proxy_server(config.get('server_log_path'), constant.PROXY_PORT,
                                                       f'{case_name}_infer')
         run_config_new = run_config.copy()
@@ -156,13 +156,13 @@ def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_
         eval_run_config['extra_params']['proxy-url'] = f'http://{constant.DEFAULT_SERVER}:{port}'
 
         pid, content = start_openai_service(config, eval_run_config, worker_id)
-        case_name = get_case_str_by_config(eval_run_config)
+        eval_case_name = get_case_str_by_config(eval_run_config)
         try:
             if pid > 0:
                 model_path = os.path.join(config.get('model_path'), eval_run_config.get('model'))
                 eval_test(model_path,
                           eval_path,
-                          case_name,
+                          eval_case_name,
                           port=port,
                           test_type=test_type,
                           extra_config=extra_config,
