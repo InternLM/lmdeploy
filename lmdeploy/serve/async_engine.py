@@ -617,12 +617,6 @@ class AsyncEngine(LogitsMixin):
         """A context manager to make sure server's safe running."""
         logger.debug(f'[model_inst] session {session_id} applying for a model instance')
         assert session_id not in self.id2inst
-
-        # create an abort event for each session
-        abort_event = asyncio.Event()
-        self.session_abort_events[session_id] = abort_event
-
-        inst = None
         free_insts = self._get_free_insts()
         inst = await free_insts.get()
         inst._active = asyncio.Event()
