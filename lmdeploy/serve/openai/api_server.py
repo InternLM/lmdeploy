@@ -312,7 +312,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     The request should be a JSON object with the following fields:
 
     - **model**: model name. Available from /v1/models.
-    - **messages**: string prompt or chat history in OpenAI format. Chat history example:
+    - **messages**: prompt in OpenAI format, for instance
       ``[{"role": "user", "content": "hi"}]``.
     - **temperature** (float): to modulate the next token probability
     - **top_p** (float): If set to float < 1, only the smallest set of most
