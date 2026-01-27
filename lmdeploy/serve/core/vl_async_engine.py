@@ -2,9 +2,7 @@
 from typing import Literal
 
 from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig, VisionConfig
-from lmdeploy.serve.processors import MultimodalProcessor
-from lmdeploy.utils import get_logger, try_import_deeplink
-from lmdeploy.vl.engine import ImageEncoder
+from lmdeploy.utils import get_logger
 
 from .async_engine import AsyncEngine
 
@@ -20,6 +18,10 @@ class VLAsyncEngine(AsyncEngine):
                  backend_config: TurbomindEngineConfig | PytorchEngineConfig | None = None,
                  vision_config: VisionConfig | None = None,
                  **kwargs) -> None:
+        from lmdeploy.serve.processors import MultimodalProcessor
+        from lmdeploy.utils import try_import_deeplink
+        from lmdeploy.vl.engine import ImageEncoder
+
         if backend == 'pytorch':
             try_import_deeplink(backend_config.device_type)
         if backend_config and backend_config.enable_prefix_caching:
