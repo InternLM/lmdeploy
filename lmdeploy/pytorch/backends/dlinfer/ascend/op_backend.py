@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Tuple
+from lmdeploy.pytorch.kernels.triton_ops.fla.triton_utils import init_device_properties_triton
 
 import torch
 import torch.distributed as dist
@@ -382,11 +383,19 @@ class AscendOpsBackend(DlinferOpsBackend):
                 AscendKVQuantMeta.set_value(step_context.block_offsets.device, step_context.model_config.dtype,
                                             record_file, total_layers)
 
+        q_start_loc = step_context.q_start_loc
+        cu_seqlens = torch.cat((q_start_loc, step_context.q_seqlens.sum().unsqueeze(0))).int()
+
+        if step_context.is_decoding:
+            has_initial_state = None
+        else:
+            has_initial_state = ~(step_context.q_seqlens == step_context.kv_seqlens)
+        
         attn_meta_cls = cls.get_attention_metadata_cls()
         attn_metadata = attn_meta_cls(
             step_context.is_decoding,
             step_context.block_offsets,
-            q_start_loc=None,
+            q_start_loc=cu_seqlens,
             q_seqlens=q_seqlens_cpu,
             # kv_seqlens_expanded is only expanded in paged prefill,
             # otherwise it equals kv_seqlens_cpu
@@ -399,7 +408,10 @@ class AscendOpsBackend(DlinferOpsBackend):
             max_kv_seq_len=max_kv_seq_len,
             quant_policy=step_context.kv_quant_policy,
             quant_meta=AscendKVQuantMeta.quant_meta,
+            has_initial_state=has_initial_state,
         )
+
+        init_device_properties_triton()
         step_context.attn_metadata = attn_metadata
 
         cls.dist_meta = get_dist_meta()

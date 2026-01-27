@@ -18,6 +18,9 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_lo
 
 from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
 
+from .qwen3_next_ascend import AscendConv1dImpl, AscendGatedDeltaImpl, build_rmsnorm_gated_ascend, \
+    AscendGatedDeltaMeta
+from lmdeploy.pytorch.backends import get_backend
 
 class GatedDeltaMeta:
 
@@ -196,6 +199,11 @@ class CausalConv1d(nn.Module):
         assert len(split) == 3
         self.split = split
 
+        if get_backend().get_name() == "ascend":
+            self.impl_func = AscendConv1dImpl(activation='silu')
+        else:
+            self.impl_func = NVConv1dImpl(activation='silu')
+
         weight, bias = self.make_weight(
             in_channels,
             out_channels,
@@ -207,7 +215,6 @@ class CausalConv1d(nn.Module):
         )
 
         self.register_weight(weight, bias)
-        self.causal_conv1d_func = CausalConv1dFunc(activation='silu')
 
     @staticmethod
     def make_weight(
@@ -249,8 +256,8 @@ class CausalConv1d(nn.Module):
         default_weight_loader(param, loaded_weight)
 
     def forward(self, x: torch.Tensor, conv_state: torch.Tensor, gated_delta_meta: GatedDeltaMeta):
-        """forward."""
-        return self.causal_conv1d_func(x, self.weight, self.bias, conv_state, gated_delta_meta=gated_delta_meta)
+        """forward 委托给 impl_func"""
+        return self.impl_func(x, self.weight, self.bias, conv_state, gated_delta_meta=gated_delta_meta)
 
 
 class Qwen3NextGatedDeltaNet(nn.Module):
@@ -311,12 +318,16 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         # instantiate once and copy inv_dt in init_weights of PretrainedModel
         self.make_params(self.num_v_heads, device=device)
         self.A_log_exp = None
+ 
+        if get_backend().get_name() == "ascend":
+            self.norm = build_rmsnorm_gated_ascend(self.head_v_dim, eps=self.layer_norm_epsilon, device=device)
+        else:
+            self.norm = build_rmsnorm_gated_nv(self.head_v_dim, 
+                                               eps=self.layer_norm_epsilon,
+                                               activation=self.activation,
+                                               dtype=dtype,
+                                               device=device)
 
-        self.norm = build_rmsnorm_gated(self.head_v_dim,
-                                        eps=self.layer_norm_epsilon,
-                                        activation=self.activation,
-                                        dtype=dtype,
-                                        device=device)
         self.out_proj = build_o_proj(self.value_dim,
                                      self.hidden_size,
                                      bias=False,
@@ -324,7 +335,10 @@ class Qwen3NextGatedDeltaNet(nn.Module):
                                      device=device,
                                      is_tp=True)
 
-        self.gated_delta = GatedDelta()
+        if get_backend().get_name() == "ascend": 
+            self.gated_delta = AscendGatedDeltaImpl()
+        else:
+            self.gated_delta = NVGatedDeltaImpl()
 
     def get_A_log_exp(self):
         if self.A_log_exp is None:
@@ -400,9 +414,8 @@ class Qwen3NextGatedDeltaNet(nn.Module):
     def _load_state(self, past_key_value: Tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
         """Load states from cache."""
         state_ids = gated_delta_meta.state_ids
-        conv_cache, recurrent_cache = past_key_value[:2]
-
-        return conv_cache.index_select(0, state_ids), recurrent_cache.index_select(0, state_ids)
+        conv_cache, recurrent_cache = past_key_value[:2]        
+        return conv_cache, recurrent_cache
 
     def _store_state(self, conv_state: torch.Tensor, recurrent_state: torch.Tensor,
                      past_key_value: Tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
@@ -473,7 +486,7 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         )
 
         # store states
-        self._store_state(conv_state, recurrent_state, past_key_value, gated_delta_meta)
+        # self._store_state(conv_state, recurrent_state, past_key_value, gated_delta_meta)
 
         z_shape_og = z.shape
         core_attn_out = core_attn_out.reshape(-1, core_attn_out.shape[-1])
@@ -854,9 +867,8 @@ class Qwen3NextModel(nn.Module):
         rotary_pos_emb = (cos, sin)
 
         # make seq_idx
-        gated_delta_meta = GatedDeltaMeta(hidden_states.size(1), self.config.linear_conv_kernel_dim, state_ids,
-                                          attn_metadata)
-
+        if get_backend().get_name() == "ascend":
+            gated_delta_meta = AscendGatedDeltaMeta(state_ids, attn_metadata)
         # decoding
         residual = None
         for idx, decoder_layer in enumerate(self.layers):
@@ -953,6 +965,10 @@ class Qwen3NextForCausalLM(nn.Module, CudaGraphMixin):
         attn_metadata = context.attn_metadata
 
         # make past_key_values
+        # past_key_values -> len=12
+        # past_key_values[0][0] -> torch.Size([20393, 64, 1, 256])
+        # context.state_caches[0].shape -> torch.Size([264, 36, 2048, 4])
+        # context.state_caches[1].shape -> torch.Size([264, 36, 8, 128, 128])
         state_caches = list(cache.transpose(0, 1) for cache in context.state_caches)
         state_caches = list(zip(state_caches[0], state_caches[1]))
         past_key_values = list(past_key_values)
@@ -998,7 +1014,7 @@ class Qwen3NextForCausalLM(nn.Module, CudaGraphMixin):
 
         new_inputs = super().fill_buffers_cudagraph(graph_meta=graph_meta, **kwargs)
         state_ids = kwargs['state_ids']
-        input_buffers['state_ids'].fill_(-1)
+        input_buffers['state_ids'].fill_(0)
         input_buffers['state_ids'][:state_ids.size(0)].copy_(state_ids)
         new_inputs['state_ids'] = input_buffers['state_ids']
 
