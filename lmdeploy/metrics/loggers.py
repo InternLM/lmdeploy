@@ -73,10 +73,10 @@ class LoggingStatLogger(StatLoggerBase):
     def record_finish(self, stats: RequestStats):
         pass
 
-    def log_spec_msg(self):
+    def get_spec_msg(self):
         """Get spec decoding logging msg."""
         if self.num_drafts == 0:
-            return
+            return None
 
         draft_acceptance_rate = (self.num_accepted_tokens / self.num_draft_tokens *
                                  100 if self.num_draft_tokens > 0 else float('nan'))
@@ -97,7 +97,6 @@ class LoggingStatLogger(StatLoggerBase):
 
     def log(self):
         now = time.perf_counter()
-        spec_msg = self.log_spec_msg()
 
         # skip logging if no tokens were processed
         if self.total_prompt_tokens == 0 and self.total_generation_tokens == 0:
@@ -108,23 +107,27 @@ class LoggingStatLogger(StatLoggerBase):
         prompt_throughput = self.total_prompt_tokens / (now - self.last_log_time)
         generation_throughput = self.total_generation_tokens / (now - self.last_log_time)
         scheduler_stats = self.last_scheduler_stats
-        self._reset(now)
+        scheduler_stats.num_api_waiting_reqs = scheduler_stats.num_total_reqs - \
+            scheduler_stats.num_completed_reqs - scheduler_stats.num_api_running_reqs
+        spec_msg = self.get_spec_msg()
 
         # format and print
-        log_msg = (f"[{datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')} "
-                   f'DP{self.dp_rank}] '
-                   f'Avg prompt throughput: {prompt_throughput:.1f} tokens/s, '
-                   f'Avg generation throughput: {generation_throughput:.1f} tokens/s, '
-                   f'Finished: {scheduler_stats.num_finished_reqs} reqs, '
-                   f'Unfinished: {scheduler_stats.num_total_reqs-scheduler_stats.num_finished_reqs} reqs, '
-                   f'Running: {scheduler_stats.num_running_reqs} reqs, '
-                   f'Waiting: {scheduler_stats.num_waiting_reqs} reqs, '
-                   f'GPU KV cache usage: {scheduler_stats.gpu_cache_usage * 100 :.1f}%, '
-                   f'Prefix cache hit rate: {scheduler_stats.prefix_cache_hit_rate * 100 :.1f}%')
+        log_msg = (
+            f"[{datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')} DP{self.dp_rank}] "
+            f'Avg thr (in/out): {prompt_throughput:.1f} / {generation_throughput:.1f} tokens/s, '
+            f'API server (completed/running/waiting): {scheduler_stats.num_completed_reqs} / '
+            f'{scheduler_stats.num_api_running_reqs} / {scheduler_stats.num_api_waiting_reqs}, '
+            f'Engine (running/waiting): {scheduler_stats.num_running_reqs} / {scheduler_stats.num_waiting_reqs}, '
+            f'KV cache: {scheduler_stats.gpu_cache_usage * 100 :.1f}%, ')
+
+        if scheduler_stats.prefix_cache_hit_rate != 0:
+            log_msg += f'Prefix cache hit rate: {scheduler_stats.prefix_cache_hit_rate * 100 :.1f}%, '
 
         if spec_msg is not None:
-            log_msg += ', ' + spec_msg
+            log_msg += spec_msg
+
         print(log_msg, flush=True)
+        self._reset(now)
 
 
 class PrometheusStatLogger(StatLoggerBase):
@@ -154,13 +157,18 @@ class PrometheusStatLogger(StatLoggerBase):
         #
         # Scheduler stats
         #
-        self.gauge_scheduler_finished = prometheus_client.Gauge(name='lmdeploy:num_requests_finished',
-                                                                documentation='Number of current finished requests.',
-                                                                labelnames=labelnames).labels(*labelvalues)
+        self.gauge_scheduler_completed = prometheus_client.Gauge(name='lmdeploy:num_requests_completed',
+                                                                 documentation='Number of current completed requests.',
+                                                                 labelnames=labelnames).labels(*labelvalues)
 
-        self.gauge_scheduler_unfinished = prometheus_client.Gauge(
-            name='lmdeploy:num_requests_unfinished',
-            documentation='Number of current unfinished requests.',
+        self.gauge_scheduler_api_running = prometheus_client.Gauge(
+            name='lmdeploy:num_api_requests_running',
+            documentation='Number of requests being processed by the API server.',
+            labelnames=labelnames).labels(*labelvalues)
+
+        self.gauge_scheduler_api_waiting = prometheus_client.Gauge(
+            name='lmdeploy:num_api_requests_waiting',
+            documentation='Number of requests waiting to be processed by the API server.',
             labelnames=labelnames).labels(*labelvalues)
 
         self.gauge_scheduler_running = prometheus_client.Gauge(
@@ -300,8 +308,10 @@ class PrometheusStatLogger(StatLoggerBase):
 
     def record_schedule(self, stats: SchedulerStats) -> None:
         """Report schedule metrics to prometheus."""
-        self.gauge_scheduler_finished.set(stats.num_finished_reqs)
-        self.gauge_scheduler_unfinished.set(stats.num_total_reqs - stats.num_finished_reqs)
+        self.gauge_scheduler_completed.set(stats.num_completed_reqs)
+        self.gauge_scheduler_api_running.set(stats.num_api_running_reqs)
+        self.gauge_scheduler_api_waiting.set(stats.num_total_reqs - stats.num_completed_reqs -
+                                             stats.num_api_running_reqs)
         self.gauge_scheduler_running.set(stats.num_running_reqs)
         self.gauge_scheduler_waiting.set(stats.num_waiting_reqs)
         self.gauge_gpu_cache_usage.set(stats.gpu_cache_usage)
