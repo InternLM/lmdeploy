@@ -474,7 +474,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             else:
                 tools = [item.function.model_dump() for item in request.tools]
     # text completion for string input
-    do_preprocess = False if isinstance(request.messages, str) else request.do_preprocess
     chat_template_kwargs = request.chat_template_kwargs or {}
     if request.enable_thinking is not None:
         logger.warning('`enable_thinking` will be deprecated in the future, '
@@ -493,7 +492,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         stream_response=True,  # always use stream to enable batching
         sequence_start=True,
         sequence_end=True,
-        do_preprocess=do_preprocess,
         adapter_name=adapter_name,
         chat_template_kwargs=chat_template_kwargs or None,
         mm_processor_kwargs=request.mm_processor_kwargs)
