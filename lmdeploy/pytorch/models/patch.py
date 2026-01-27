@@ -187,6 +187,9 @@ def _get_model_class(config, module_map):
 
 def _patch_hf_quant_config(model_cls, model_config: ModelConfig, build_model_ctx: 'BuildModelContext'):
     """Patch quant config to hf config."""
+    if build_model_ctx is None:
+        return model_config
+
     quant_config = build_model_ctx.quant_config
     if hasattr(model_cls, 'update_quant_config'):
         quant_config = model_cls.update_quant_config(quant_config)
