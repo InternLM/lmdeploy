@@ -819,6 +819,8 @@ void Engine::Impl::InternalThreadEntry()
 
             Schedule();
 
+            UpdateScheduleMetrics();
+
             Setup(*d);
 
             d->ready.Record(core::Context::stream());
@@ -888,7 +890,11 @@ void Engine::Impl::UpdateScheduleMetrics()
         m->cached_blocks = seq_mgr_->cached_count();
         m->free_blocks   = seq_mgr_->free_count();
 
+        std::cout << "ScheduleMetrics: " << *m << std::endl;
+
         std::atomic_store_explicit(&metrics_, std::move(m), std::memory_order_release);
+
+
     }
 }
 
