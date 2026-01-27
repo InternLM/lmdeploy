@@ -222,7 +222,7 @@ struct Schedule {
         max_fwd_tokens{max_fwd_tokens},
         max_tmp_tokens{max_tmp_tokens},
         use_count_{std::move(snapshot.use_count)},
-        unlocked_{size},
+        unlocked_(size),  // ! This is a vector, DO NOT brace initialize it
         it_{size}
     {
     }
