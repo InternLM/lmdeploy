@@ -90,8 +90,12 @@ class Qwen3VLTextModel(Qwen3model):
     not a pure text-only model, as DeepStack integrates visual features into the early hidden states.
     """
 
-    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
-        super().__init__(config=config, dtype=dtype, device=device)
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 prefix: str = ''):
+        super().__init__(config=config, dtype=dtype, device=device, prefix=prefix)
 
         # build rotary embedding
         # TODO: zhouxinyu, add triton kernel for interleaved mrope
@@ -279,7 +283,8 @@ class Qwen3VLVisionPatchMerger(nn.Module):
                  config: PretrainedConfig,
                  use_postshuffle_norm=False,
                  dtype: torch.dtype = None,
-                 device: torch.device = None) -> None:
+                 device: torch.device = None,
+                 prefix: str = '') -> None:
         super().__init__()
         self.hidden_size = config.hidden_size * (config.spatial_merge_size**2)
         self.use_postshuffle_norm = use_postshuffle_norm
@@ -294,6 +299,7 @@ class Qwen3VLVisionPatchMerger(nn.Module):
             dtype=dtype,
             device=device,
             is_tp=True,
+            prefix=add_prefix('linear_fc1', prefix),
         )
         self.act_fn = nn.GELU()
         self.linear_fc2 = build_rowwise_linear(
@@ -303,6 +309,7 @@ class Qwen3VLVisionPatchMerger(nn.Module):
             dtype=dtype,
             device=device,
             is_tp=True,
+            prefix=add_prefix('linear_fc2', prefix),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -333,15 +340,26 @@ class Qwen3VLVisionModel(nn.Module):
         self.rotary_pos_emb = Qwen3VLVisionRotaryEmbedding(head_dim // 2, device=device)
 
         self.blocks = nn.ModuleList([
-            Qwen3VLVisionBlock(config, layer_idx, dtype=dtype, device=device, prefix=add_prefix('blocks', prefix))
-            for layer_idx in range(config.depth)
+            Qwen3VLVisionBlock(config,
+                               layer_idx,
+                               dtype=dtype,
+                               device=device,
+                               prefix=add_prefix(f'blocks.{layer_idx}', prefix)) for layer_idx in range(config.depth)
         ])
-        self.merger = Qwen3VLVisionPatchMerger(config=config, use_postshuffle_norm=False, dtype=dtype, device=device)
+        self.merger = Qwen3VLVisionPatchMerger(config=config,
+                                               use_postshuffle_norm=False,
+                                               dtype=dtype,
+                                               device=device,
+                                               prefix=add_prefix('merger', prefix))
 
         self.deepstack_visual_indexes = config.deepstack_visual_indexes
         self.deepstack_merger_list = nn.ModuleList([
-            Qwen3VLVisionPatchMerger(config=config, use_postshuffle_norm=True, dtype=dtype, device=device)
-            for _ in range(len(config.deepstack_visual_indexes))
+            Qwen3VLVisionPatchMerger(config=config,
+                                     use_postshuffle_norm=True,
+                                     dtype=dtype,
+                                     device=device,
+                                     prefix=add_prefix(f'deepstack_merger_list.{ds_idx}', prefix))
+            for ds_idx in range(len(config.deepstack_visual_indexes))
         ])
 
     @staticmethod
@@ -502,7 +520,10 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
         )
 
         # build text model
-        self.language_model = Qwen3VLTextModel(config.text_config, dtype=dtype, device=device)
+        self.language_model = Qwen3VLTextModel(config.text_config,
+                                               dtype=dtype,
+                                               device=device,
+                                               prefix=add_prefix('language_model', prefix))
 
         # build lm_head
         self.lm_head = build_rowwise_linear(config.text_config.hidden_size,
