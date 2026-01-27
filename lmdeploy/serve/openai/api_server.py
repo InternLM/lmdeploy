@@ -622,7 +622,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     async for res in result_generator:
         if await raw_request.is_disconnected():
             # Abort the request if the client disconnects.
-            await session.stop_session()
+            await session.async_abort()
             return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
         final_res = res
         text += res.response
@@ -1136,7 +1136,7 @@ async def pooling(request: PoolingRequest, raw_request: Request = None):
     else:
         return create_error_response(HTTPStatus.BAD_REQUEST, 'Input must be a string or a list.')
 
-    batch_scores = await async_engine._async_get_reward_score(input_ids)
+    batch_scores = await async_engine.async_get_reward_score(input_ids)
     prompt_tokens = sum(len(ids) for ids in input_ids)
     usage = UsageInfo(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=prompt_tokens)
 
@@ -1263,7 +1263,7 @@ def handle_torchrun():
 @router.on_event('startup')
 async def startup_event():
     async_engine = VariableInterface.async_engine
-    async_engine.start_loop(use_async_api=True)
+    async_engine.start_loop(asyncio.get_running_loop(), use_async_api=True)
 
     if VariableInterface.proxy_url is None:
         return

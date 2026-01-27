@@ -1,16 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import asyncio
-import atexit
 import concurrent.futures
 import dataclasses
 import random
 from contextlib import asynccontextmanager
 from copy import deepcopy
-from functools import partial
-from queue import Queue
-from threading import Thread
-from typing import Any, Dict, Iterator, List, Literal
+from typing import Any, Dict, List, Literal
+
+import torch
 
 from lmdeploy.archs import get_model_arch
 from lmdeploy.logger import RequestLogger
@@ -27,7 +25,6 @@ from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger
 
 from .exceptions import SafeRunException
-from .mixin import LogitsMixin
 
 logger = get_logger('lmdeploy')
 
@@ -65,66 +62,8 @@ class GenOut:
                         index=index)
 
 
-class _EventLoopThread:
-
-    def __init__(self, daemon=False):
-        fut = concurrent.futures.Future()
-        self.thread = Thread(target=partial(self._thread_entry, fut), daemon=daemon)
-        self.thread.start()
-        self.loop: asyncio.AbstractEventLoop = fut.result()
-        self.closed = False
-        if daemon:
-            atexit.register(self.close)
-
-    def _thread_entry(self, fut):
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        fut.set_result(loop)
-        try:
-            loop.run_forever()
-        except BaseException as e:
-            logger.error(f'[internal_thread] {type(e).__name__} {e}')
-        finally:
-            try:
-                self._cancel_all_tasks()
-                loop.run_until_complete(loop.shutdown_asyncgens())
-            finally:
-                asyncio.set_event_loop(None)
-                loop.close()
-
-    def _cancel_all_tasks(self):
-        """Modified from asyncio/runners.py."""
-        to_cancel = asyncio.all_tasks(self.loop)
-        if not to_cancel:
-            return
-
-        for task in to_cancel:
-            task.cancel()
-
-        async def _gather():
-            await asyncio.gather(*to_cancel, return_exceptions=True)
-
-        self.loop.run_until_complete(_gather())
-
-        for task in to_cancel:
-            if task.cancelled():
-                continue
-            if task.exception() is not None:
-                self.loop.call_exception_handler({
-                    'message': 'unhandled exception during worker thread shutdown',
-                    'exception': task.exception(),
-                    'task': task,
-                })
-
-    def close(self):
-        if self.closed:
-            return
-        self.closed = True
-        self.loop.call_soon_threadsafe(self.loop.stop)
-        self.thread.join()
-
-
-class AsyncEngine(LogitsMixin):
+# class AsyncEngine(LogitsMixin):
+class AsyncEngine:
     """Async inference engine. Maintaining a bunch of tm_model instances.
 
     Args:
@@ -199,13 +138,11 @@ class AsyncEngine(LogitsMixin):
             self.stop_words = self.stop_words[0][0].tolist()
         self.backend = backend
         self.request_logger = RequestLogger(max_log_len)
-        self.internal_thread = _EventLoopThread(daemon=True)
-        self.limiter: asyncio.Semaphore = None
+
         self.num_spec_token = 0 if backend == 'turbomind' or speculative_config is None \
             else speculative_config.num_speculative_tokens
 
         self.session_mgr = SessionManager()
-        self.session_mgr.attach_event_loop(self.internal_thread.loop)
         self.session_mgr.build_request_handle_pool(self.engine, self.backend_config.max_batch_size)
 
         # build stat loggers
@@ -213,7 +150,6 @@ class AsyncEngine(LogitsMixin):
         self.epoch = 0
 
     def close(self):
-        self.internal_thread.close()
         self.session_mgr.clear()
         self.engine.close()
 
@@ -302,49 +238,6 @@ class AsyncEngine(LogitsMixin):
             self.session_mgr.build_request_handle_pool(self.engine, self.backend_config.max_batch_size)
         self.sleeping_tags = self.sleeping_tags - set(tags)
         self.is_sleeping = bool(self.sleeping_tags)
-
-    def _get_limiter(self):
-        if not self.limiter:
-            self.limiter = asyncio.Semaphore(self.backend_config.max_batch_size)
-        return self.limiter
-
-    def _infer(self, requests: Iterator[Dict], multiplex: bool, pbar=None, loop=None) -> Iterator[Iterator[Response]]:
-
-        async def _sync_resp(g, que: Queue, idx: int, sem: asyncio.Semaphore):
-            async for out in g:
-                que.put(out.to_response(idx))
-            sem.release()
-            if not multiplex:
-                que.put(None)  # sentinel of inner generator
-            if pbar:
-                pbar.update(1)
-
-        que = Queue()
-
-        async def _infer():
-            sem = self._get_limiter()
-            tasks = []
-            for idx, req in enumerate(requests):
-                await sem.acquire()
-                gen = self.generate(**req)
-                dst = que if multiplex else Queue()
-                if not multiplex:
-                    que.put(iter(dst.get, None))
-                # create a task to send the responses
-                task = asyncio.create_task(_sync_resp(gen, dst, idx, sem))
-                tasks.append(task)
-            if not multiplex:  # sentinel of outer generator
-                que.put(None)
-            await asyncio.gather(*tasks)
-            if multiplex:
-                que.put(None)  # sentinel of inner generator
-
-        loop = loop or self.internal_thread.loop
-        # submit the coroutine to async world
-        asyncio.run_coroutine_threadsafe(_infer(),
-                                         loop).add_done_callback(lambda f: None if f.cancelled() else f.result())
-
-        return iter(que.get, None)
 
     def _determine_gen_config(self, session, input_ids, gen_config: GenerationConfig | None = None) -> GenerationConfig:
         """Determine the generation configuration."""
@@ -640,18 +533,7 @@ class AsyncEngine(LogitsMixin):
         #         await session.async_close()
         #     self.session_mgr.remove(session)
 
-    def _run(self, fn=None, coro=None, loop=None):
-        assert (fn or coro) and not (fn and coro)
-        loop = loop or self.internal_thread.loop
-        if fn:
-
-            async def _coro():
-                return fn()
-
-            coro = _coro()
-        return asyncio.run_coroutine_threadsafe(coro, loop)
-
-    def start_loop(self, use_async_api=False):
+    def start_loop(self, loop, use_async_api=False):
         """Start engine loop.
 
         When using pytorch backend with dp > 1, all dp_rank should receive at least one request before it can start
@@ -661,6 +543,7 @@ class AsyncEngine(LogitsMixin):
         The purpose of this function is to allow users to choose whether to use the synchronous interface or the
         asynchronous interface for the pipeline.
         """
+        self.session_mgr.attach_event_loop(loop)
         if hasattr(self.engine, 'start_loop'):
             if use_async_api:
                 return self.engine.start_loop()
@@ -671,7 +554,7 @@ class AsyncEngine(LogitsMixin):
                     res = self.engine.start_loop()
                     fut.set_result(res)
 
-                self.internal_thread.loop.call_soon_threadsafe(_start_loop, fut)
+                loop.call_soon_threadsafe(_start_loop, fut)
                 return fut.result()
         else:
             return True
@@ -694,3 +577,57 @@ class AsyncEngine(LogitsMixin):
         return self.engine.p2p_drop_connect(drop_conn_request)
 
     """ DistServe Async Engine API End """
+
+    async def async_get_reward_score(self, input_ids: List) -> List[float]:
+        """Async version of get_reward_score."""
+        supported_reward_models = ['InternLM2ForRewardModel', 'Qwen2ForRewardModel']
+        if self.arch not in supported_reward_models:
+            raise ValueError(f'{self.arch} is not in reward model list: {supported_reward_models}')
+        assert isinstance(input_ids, List)
+        assert all(isinstance(x, int) for x in input_ids) or all(isinstance(x, List) for x in input_ids)
+        # Make input_ids a list of token_id list
+        input_ids = [input_ids] if isinstance(input_ids[0], int) else input_ids
+
+        logits = await self.async_get_logits(input_ids=input_ids)
+
+        logits = [x.squeeze() for x in logits]
+        scores = [x[-1].cpu().item() for x in logits]
+        return scores
+
+    async def async_get_logits(self,
+                               input_ids,
+                               steps: List[int] | None = None,
+                               sequence_start: bool = True,
+                               sequence_end: bool = True) -> List[torch.Tensor]:
+        assert input_ids and all(isinstance(_, List) for _ in input_ids)
+        assert steps is None or (len(steps) == len(input_ids))
+
+        logits = [None] * len(input_ids)
+
+        async def _proc(session, i):
+            async with session.request_handle() as handle:
+                input_len = len(input_ids[i])
+                # TODO(lvhan): Fix the ugly code later on
+                max_new_tokens = 1 if self.backend == 'turbomind' else 0
+                # The reason to set `top_k=1` is that pt engine crashes at top_k sampling stage
+                # when perform inference on a reward model.
+                gen_config = GenerationConfig(max_new_tokens=max_new_tokens, output_logits='all', top_k=1)
+                async with self.safe_run(handle,
+                                         session=session,
+                                         input_ids=input_ids[i],
+                                         gen_config=gen_config,
+                                         stream_output=False,
+                                         sequence_start=sequence_start,
+                                         sequence_end=sequence_end,
+                                         step=steps[i] if steps else 0) as gen:
+                    async for outputs in gen:
+                        pass
+                    logits[i] = outputs.logits[:input_len, :]
+
+        sessions = [self.session_mgr.get() for _ in range(len(input_ids))]
+        tasks = [_proc(session, i) for i, session in enumerate(sessions)]
+        await asyncio.gather(*tasks)
+        if sequence_end and self.backend == 'pytorch':
+            for session in sessions:
+                await session.async_close()
+        return logits

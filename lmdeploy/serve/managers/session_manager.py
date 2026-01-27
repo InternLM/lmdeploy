@@ -17,7 +17,7 @@ logger = get_logger('lmdeploy')
 class Session:
     """Session for the engine."""
 
-    def __init__(self, session_id: int, session_mgr: 'SessionManager', **kwargs):
+    def __init__(self, session_id: int, session_mgr: SessionManager, **kwargs):
         self.session_id = session_id
         self.prompt: Any = None
         self.response: Response | None = None
@@ -26,8 +26,8 @@ class Session:
         self.step: int = 0
         # event to wait for the session to be active
         self._active: asyncio.Event | None = None
-        self._hnd = None  # inference instance
-        self._session_mgr: 'SessionManager' = weakref.ref(session_mgr)
+        self._handle = None  # inference instance
+        self._session_mgr: SessionManager = weakref.ref(session_mgr)
         self.update(**kwargs)
 
     def update(self, **kwargs):
@@ -65,22 +65,22 @@ class Session:
         self.gen_config = None
         self.step = 0
         self._active = None
-        self._hnd = None
-        del self._session_mgr
+        self._handle = None
+        self._session_mgr = None
         logger.debug(f'Session {self.session_id} has been reset.')
 
     @asynccontextmanager
     async def request_handle(self):
-        if self._hnd is not None:
+        if self._handle is not None:
             raise RuntimeError(f'Session {self.session_id} already has an inference instance.')
         logger.debug(f'[acquire_request_handle] session {self.session_id} acquiring an instance')
 
-        hnd_pool = self._session_mgr().request_handle_pool
-        self._hnd = await hnd_pool.get()
+        hnd_pool = self._session_mgr().request_handle_pool  # 要不要有 ()
+        self._handle = await hnd_pool.get()
         self._active = asyncio.Event()
         logger.debug(f'[acquire_request_handle] session {self.session_id} acquired an instance')
         try:
-            yield self._hnd
+            yield self._handle
         except SafeRunException:
             # SafeRunException is raised by AsyncEngine.safe_run. We don't need to handle it here.
             pass
@@ -90,9 +90,9 @@ class Session:
         finally:
             logger.debug(f'[acquire_request_handle] session {self.session_id} releasing the instance')
             # Return inference instance if it was acquired
-            if self._hnd is not None:
-                hnd_pool.put(self._hnd)
-                self._hnd = None
+            if self._handle is not None:
+                hnd_pool.put(self._handle)
+                self._handle = None
             # MUST set the signal after releasing the instance to avoid race condition
             # refer to async_end method
             self._active.set()
@@ -100,18 +100,16 @@ class Session:
     async def async_abort(self):
         """Abort the session."""
         logger.debug(f'Aborting session {self.session_id}')
-        if self._hnd is not None:
-            await self._hnd.async_cancel(self.session_id)
+        if self._handle is not None:
+            await self._handle.async_cancel(self.session_id)
         # DO NOT reset the session here because it might be used by other components.
         # Leave the cleanup to the caller.
 
     async def async_close(self):
         """End the session."""
         logger.debug(f'Ending session {self.session_id}')
-        if self._hnd is not None:
+        if self._handle is not None:
             await self._active.wait()
-            if self._hnd is not None:
-                raise RuntimeError(f'Session {self.session_id} is not finished yet.')
         async with self.request_handle() as handle:
             try:
                 await handle.async_end(self.session_id)
