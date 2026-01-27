@@ -74,7 +74,7 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
 
     if model_format in ['awq', 'gptq', 'compressed-tensors']:
         weight_type = 'int4'
-        dtype = 'float16'  # force float16 for GPTQ/AWQ weights
+        dtype = 'float16'  # force float16 for int4 quantized weights
         group_size = 128 if group_size == 0 else group_size
         if model_format == 'compressed-tensors':
             model_format = 'awq'
@@ -129,41 +129,33 @@ def get_tm_model(model_path,
         quant_method = quant_config.get('quant_method')
         _group_size = int(quant_config.get('group_size', 0))
         version = quant_config.get('version')
-        assert engine_config.model_format is None or \
-            engine_config.model_format == quant_method, \
-            f'mismatched quant method: user input ' \
-            f'"{engine_config.model_format}" ' \
-            f'vs model quant_config "{quant_method}"'
-        assert not group_size or group_size == _group_size, \
-            f'mismatched quant group size: user input "{group_size}" ' \
-            f'vs model quant_config "{_group_size}"'
+        assert (engine_config.model_format is None
+                or engine_config.model_format == quant_method), (f'mismatched quant method: user input '
+                                                                 f'"{engine_config.model_format}" '
+                                                                 f'vs model quant_config "{quant_method}"')
+        assert (not group_size
+                or group_size == _group_size), (f'mismatched quant group size: user input "{group_size}" '
+                                                f'vs model quant_config "{_group_size}"')
 
         if quant_method == 'awq':
-            assert version == 'gemm', \
-                f'unsupported quant config: {quant_config}'
+            assert (version == 'gemm'), (f'unsupported quant config: {quant_config}')
         elif quant_method == 'gptq':
-            assert not quant_config.get('desc_act', False) and \
-                quant_config.get('sym', True), \
-                f'unsupported quant config: {quant_config}'
+            assert (not quant_config.get('desc_act', False)
+                    and quant_config.get('sym', True)), (f'unsupported quant config: {quant_config}')
         elif quant_method == 'fp8':
             pass
         elif quant_method == 'mxfp4':
             _group_size = 32
         elif quant_method == 'compressed-tensors':
-            _config_groups = quant_config.get('config_groups')
-            _group_0 = _config_groups.get('group_0')
-            _format = _group_0.get('format')
-            assert _format == 'pack-quantized', \
-                f'format is {_format}' \
-                f'only pack-quantized format is supported' \
-                f'when quant_method is compressed-tensors'
-            _weights = _group_0.get('weights')
-            _group_size = _weights.get('group_size')
-            _num_bits = _weights.get('num_bits')
-            _type = _weights.get('type')
-            assert _num_bits == 4 and _type == 'int', \
-                'only 4 bit integer weighttype is supported' \
-                'when format is pack-quantized'
+            _format = quant_config['config_groups']['group_0']['format']
+            assert (_format == 'pack-quantized'), ('compressed-tennsors only supports pack-quantized format, '
+                                                   f'but got {_format}')
+            _weights = quant_config['config_groups']['group_0']['weights']
+            _group_size = _weights['group_size']
+            _num_bits = _weights['num_bits']
+            _type = _weights['type']
+            assert (_num_bits == 4 and _type == 'int'), ('pack-quantized requires 4-bit int, '
+                                                         f'but got {_num_bits}-bit {_type}')
         else:
             assert 0, f'unsupported quant_config: {quant_config}'
 
@@ -174,10 +166,9 @@ def get_tm_model(model_path,
         # Compatible to awq models that are quantized by lmdeploy (<=v0.3.0)
         if not group_size:
             group_size = 128
-        assert group_size == 128, \
-            f'model format is "{engine_config.model_format}" ' \
-            f'but group_size is {group_size}. Currently, only 128 ' \
-            'is supported'
+        assert (group_size == 128), (f'model format is "{engine_config.model_format}" '
+                                     f'but group_size is {group_size}. Currently, only 128 '
+                                     'is supported')
 
     input_model_name = get_input_model_registered_name(model_path, engine_config.model_format)
     input_policy = get_input_policy(engine_config.model_format)
@@ -185,12 +176,10 @@ def get_tm_model(model_path,
                                                      tokenizer_path=model_path,
                                                      input_policy=input_policy)
 
-    output_model_name, tm_cfg = \
-        get_output_model_registered_name_and_config(
-            model_path=model_path,
-            model_format=engine_config.model_format,
-            dtype=engine_config.dtype,
-            group_size=group_size)
+    output_model_name, tm_cfg = (get_output_model_registered_name_and_config(model_path=model_path,
+                                                                             model_format=engine_config.model_format,
+                                                                             dtype=engine_config.dtype,
+                                                                             group_size=group_size))
 
     tm_cfg.model_config.chat_template = chat_template_name
     tm_cfg.model_config.model_name = model_name
