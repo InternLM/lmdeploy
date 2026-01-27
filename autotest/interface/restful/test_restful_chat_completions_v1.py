@@ -286,7 +286,7 @@ class TestRestfulInterfaceChatCompletions:
         for i in range(3):
             for output in api_client.chat_completions_v1(model=model_name,
                                                          messages='Shanghai is',
-                                                         top_p=0.0001,
+                                                         top_p=0.0000000001,
                                                          max_tokens=10):
                 outputList.append(output)
             assert_chat_completions_batch_return(output, model_name)
@@ -305,7 +305,7 @@ class TestRestfulInterfaceChatCompletions:
             for output in api_client.chat_completions_v1(model=model_name,
                                                          messages='Hi, pls intro yourself',
                                                          stream=True,
-                                                         top_p=0.01,
+                                                         top_p=0.0000000001,
                                                          max_tokens=10):
                 outputList.append(output)
             assert_chat_completions_stream_return(outputList[-1], model_name, True)
@@ -687,7 +687,7 @@ class TestRestfulOpenAI:
                                                          },
                                                      ],
                                                      temperature=0.01,
-                                                     top_p=0,
+                                                     top_p=0.0000000001,
                                                      max_tokens=10)
             output = outputs.model_dump()
             outputList.append(output)
@@ -709,7 +709,7 @@ class TestRestfulOpenAI:
                                                              'content': 'Hi, pls intro yourself'
                                                          },
                                                      ],
-                                                     top_p=0,
+                                                     top_p=0.0000000001,
                                                      max_tokens=10,
                                                      stream=True)
 
