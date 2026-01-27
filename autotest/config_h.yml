@@ -13,7 +13,6 @@ device: cuda
 config:
     tp:
         internlm/Intern-S1: 4
-        Qwen/Qwen3-235B-A22B: 8
         Qwen/Qwen3-235B-A22B-FP8: 4
         Qwen/Qwen3-30B-A3B: 2
         Qwen/Qwen3-32B: 2
@@ -22,7 +21,6 @@ config:
         openai/gpt-oss-20b-BF16: 2
         deepseek/DeepSeek-V3.1: 8
         Qwen/Qwen3-30B-A3B-Base: 2
-        Qwen/Qwen2.5-32B-Instruct: 2
         moonshotai/Kimi-K2-Instruct-0905: 16
         Qwen/Qwen3-235B-A22B-Thinking-2507: 8
 
@@ -49,7 +47,6 @@ turbomind_chat_model:
         - Qwen/Qwen3-4B-FP8
         - Qwen/Qwen3-8B-FP8
         - Qwen/Qwen3-14B-FP8
-        - Qwen/Qwen3-235B-A22B
         - Qwen/Qwen3-235B-A22B-FP8
         - Qwen/Qwen3-235B-A22B-Thinking-2507
         - Qwen/Qwen3-30B-A3B
@@ -71,7 +68,6 @@ pytorch_chat_model:
         - Qwen/Qwen3-4B-FP8
         - Qwen/Qwen3-8B-FP8
         - Qwen/Qwen3-14B-FP8
-        - Qwen/Qwen3-235B-A22B
         - Qwen/Qwen3-235B-A22B-Thinking-2507
         - Qwen/Qwen3-235B-A22B-FP8
         - Qwen/Qwen3-30B-A3B
@@ -116,7 +112,6 @@ turbomind_quantization:
         - Qwen/Qwen3-4B-FP8
         - Qwen/Qwen3-8B-FP8
         - Qwen/Qwen3-14B-FP8
-        - Qwen/Qwen3-235B-A22B
         - Qwen/Qwen3-235B-A22B-FP8
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-30B-A3B-FP8
@@ -135,7 +130,6 @@ turbomind_quantization:
         - Qwen/Qwen3-4B-FP8
         - Qwen/Qwen3-8B-FP8
         - Qwen/Qwen3-14B-FP8
-        - Qwen/Qwen3-235B-A22B
         - Qwen/Qwen3-235B-A22B-FP8
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-30B-A3B-FP8
@@ -161,7 +155,6 @@ pytorch_quantization:
         - Qwen/Qwen3-4B-FP8
         - Qwen/Qwen3-8B-FP8
         - Qwen/Qwen3-14B-FP8
-        - Qwen/Qwen3-235B-A22B
         - Qwen/Qwen3-235B-A22B-FP8
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-30B-A3B-FP8
@@ -174,7 +167,7 @@ pytorch_quantization:
 
 longtext_model:
     - Qwen/Qwen3-30B-A3B
-    - Qwen/Qwen3-235B-A22B
+    - Qwen/Qwen3-235B-A22B-Thinking-2507
 
 benchmark_model:
     - internlm/Intern-S1
@@ -183,7 +176,7 @@ benchmark_model:
     - meta-llama/Meta-Llama-3-1-70B-Instruct
     - Qwen/Qwen3-32B
     - Qwen/Qwen3-30B-A3B
-    - Qwen/Qwen3-235B-A22B
+    - Qwen/Qwen3-235B-A22B-Thinking-2507
     - Qwen/Qwen2.5-72B-Instruct
     - openai/gpt-oss-120b
     - openai/gpt-oss-20b

@@ -10,6 +10,7 @@ BACKEND = 'pytorch'
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.gpu_num_1
 @pytest.mark.test_3090
+@pytest.mark.test_ascend
 @pytest.mark.parametrize('run_config', get_func_config_list('pytorch', {'tp': 1}))
 def test_hf_pytorch_chat_tp1(config, run_config, cli_case_config, worker_id):
     run_tests(config, 'chat_testcase', cli_case_config, run_config, worker_id)
@@ -17,6 +18,7 @@ def test_hf_pytorch_chat_tp1(config, run_config, cli_case_config, worker_id):
 
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.gpu_num_2
+@pytest.mark.test_ascend
 @pytest.mark.parametrize('run_config', get_func_config_list(BACKEND, {'tp': 2}))
 def test_hf_pytorch_chat_tp2(config, run_config, cli_case_config, worker_id):
     run_tests(config, 'chat_testcase', cli_case_config, run_config, worker_id)
@@ -24,6 +26,7 @@ def test_hf_pytorch_chat_tp2(config, run_config, cli_case_config, worker_id):
 
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.gpu_num_4
+@pytest.mark.test_ascend
 @pytest.mark.parametrize('run_config', get_func_config_list(BACKEND, {'tp': 4}))
 def test_hf_pytorch_chat_tp4(config, run_config, cli_case_config, worker_id):
     run_tests(config, 'chat_testcase', cli_case_config, run_config, worker_id)
@@ -31,6 +34,7 @@ def test_hf_pytorch_chat_tp4(config, run_config, cli_case_config, worker_id):
 
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.gpu_num_8
+@pytest.mark.test_ascend
 @pytest.mark.parametrize('run_config', get_func_config_list(BACKEND, {'tp': 8}))
 def test_hf_pytorch_chat_tp8(config, run_config, cli_case_config, worker_id):
     run_tests(config, 'chat_testcase', cli_case_config, run_config, worker_id)
@@ -46,6 +50,7 @@ def test_hf_pytorch_chat_tp16(config, run_config, cli_case_config, worker_id):
 
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.gpu_num_1
+@pytest.mark.test_ascend
 @pytest.mark.parametrize('run_config', get_func_config_list(BACKEND, {'tp': 1}, 'base_model'))
 def test_hf_pytorch_base_tp1(config, run_config, cli_case_config, worker_id):
     run_tests(config, 'base_testcase', cli_case_config, run_config, worker_id)
@@ -53,6 +58,7 @@ def test_hf_pytorch_base_tp1(config, run_config, cli_case_config, worker_id):
 
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.gpu_num_2
+@pytest.mark.test_ascend
 @pytest.mark.parametrize('run_config', get_func_config_list(BACKEND, {'tp': 2}, 'base_model'))
 def test_hf_pytorch_base_tp2(config, run_config, cli_case_config, worker_id):
     run_tests(config, 'base_testcase', cli_case_config, run_config, worker_id)

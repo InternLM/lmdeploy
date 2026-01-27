@@ -174,10 +174,6 @@ def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_
             stop_restful_api(proxy_pid, proxy_process)
 
 
-TURBOMIND = 'turbomind'
-PYTORCH = 'pytorch'
-
-
 def get_models(backend, parallel_config):
     return get_func_config_list(backend, parallel_config, func_type='evaluate', extra={'session_len': 65536})
 
@@ -186,7 +182,7 @@ def get_models(backend, parallel_config):
 @pytest.mark.turbomind
 @pytest.mark.gpu_num_1
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(TURBOMIND, {'tp': 1}))
+@pytest.mark.parametrize('run_config', get_models('turbomind', {'tp': 1}))
 def test_turbomind_infer_tp1(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'infer')
 
@@ -195,7 +191,7 @@ def test_turbomind_infer_tp1(config, run_config, worker_id):
 @pytest.mark.turbomind
 @pytest.mark.gpu_num_2
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(TURBOMIND, {'tp': 2}))
+@pytest.mark.parametrize('run_config', get_models('turbomind', {'tp': 2}))
 def test_turbomind_infer_tp2(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'infer')
 
@@ -204,7 +200,7 @@ def test_turbomind_infer_tp2(config, run_config, worker_id):
 @pytest.mark.turbomind
 @pytest.mark.gpu_num_4
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(TURBOMIND, {'tp': 4}))
+@pytest.mark.parametrize('run_config', get_models('turbomind', {'tp': 4}))
 def test_turbomind_infer_tp4(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'infer')
 
@@ -213,7 +209,7 @@ def test_turbomind_infer_tp4(config, run_config, worker_id):
 @pytest.mark.turbomind
 @pytest.mark.gpu_num_8
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(TURBOMIND, {'tp': 8}))
+@pytest.mark.parametrize('run_config', get_models('turbomind', {'tp': 8}))
 def test_turbomind_infer_tp8(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'infer')
 
@@ -223,7 +219,7 @@ def test_turbomind_infer_tp8(config, run_config, worker_id):
 @pytest.mark.gpu_num_1
 @pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(PYTORCH, {'tp': 1}))
+@pytest.mark.parametrize('run_config', get_models('pytorch', {'tp': 1}))
 def test_pytorch_restful_tp1(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'infer')
 
@@ -233,7 +229,7 @@ def test_pytorch_restful_tp1(config, run_config, worker_id):
 @pytest.mark.gpu_num_2
 @pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(PYTORCH, {'tp': 2}))
+@pytest.mark.parametrize('run_config', get_models('pytorch', {'tp': 2}))
 def test_pytorch_restful_tp2(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'infer')
 
@@ -243,7 +239,7 @@ def test_pytorch_restful_tp2(config, run_config, worker_id):
 @pytest.mark.gpu_num_4
 @pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(PYTORCH, {'tp': 4}))
+@pytest.mark.parametrize('run_config', get_models('pytorch', {'tp': 4}))
 def test_pytorch_restful_tp4(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'infer')
 
@@ -253,7 +249,7 @@ def test_pytorch_restful_tp4(config, run_config, worker_id):
 @pytest.mark.gpu_num_8
 @pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(PYTORCH, {'tp': 8}))
+@pytest.mark.parametrize('run_config', get_models('pytorch', {'tp': 8}))
 def test_pytorch_restful_tp8(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'infer')
 
@@ -263,7 +259,7 @@ def test_pytorch_restful_tp8(config, run_config, worker_id):
 @pytest.mark.gpu_num_16
 @pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(PYTORCH, {'tp': 16}))
+@pytest.mark.parametrize('run_config', get_models('pytorch', {'tp': 16}))
 def test_pytorch_restful_tp16(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'infer')
 
@@ -272,7 +268,7 @@ def test_pytorch_restful_tp16(config, run_config, worker_id):
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_distributed_tp16
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(PYTORCH, {'tp': 16}))
+@pytest.mark.parametrize('run_config', get_models('pytorch', {'tp': 16}))
 def test_pytorch_restful_distributed_tp16(shared_ray_manager, config, run_config, worker_id):
     _run_ray_distributed_test(config=config,
                               run_config=run_config,
@@ -285,7 +281,7 @@ def test_pytorch_restful_distributed_tp16(shared_ray_manager, config, run_config
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_distributed_dpep8
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(PYTORCH, {'dp': 8, 'ep': 8}))
+@pytest.mark.parametrize('run_config', get_models('pytorch', {'dp': 8, 'ep': 8}))
 def test_pytorch_restful_distributed_dpep8(shared_proxy_manager, config, run_config, worker_id):
     _run_proxy_distributed_test(config=config,
                                 run_config=run_config,
@@ -298,7 +294,7 @@ def test_pytorch_restful_distributed_dpep8(shared_proxy_manager, config, run_con
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_distributed_dpep16
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(PYTORCH, {'dp': 16, 'ep': 16}))
+@pytest.mark.parametrize('run_config', get_models('pytorch', {'dp': 16, 'ep': 16}))
 def test_pytorch_restful_distributed_dpep16(shared_proxy_manager, config, run_config, worker_id):
     _run_proxy_distributed_test(config=config,
                                 run_config=run_config,
@@ -311,7 +307,7 @@ def test_pytorch_restful_distributed_dpep16(shared_proxy_manager, config, run_co
 @pytest.mark.turbomind
 @pytest.mark.gpu_num_1
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(TURBOMIND, {'tp': 1}))
+@pytest.mark.parametrize('run_config', get_models('turbomind', {'tp': 1}))
 def test_turbomind_eval_tp1(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'eval')
 
@@ -320,7 +316,7 @@ def test_turbomind_eval_tp1(config, run_config, worker_id):
 @pytest.mark.turbomind
 @pytest.mark.gpu_num_2
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(TURBOMIND, {'tp': 2}))
+@pytest.mark.parametrize('run_config', get_models('turbomind', {'tp': 2}))
 def test_turbomind_eval_tp2(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'eval')
 
@@ -329,7 +325,7 @@ def test_turbomind_eval_tp2(config, run_config, worker_id):
 @pytest.mark.turbomind
 @pytest.mark.gpu_num_4
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(TURBOMIND, {'tp': 4}))
+@pytest.mark.parametrize('run_config', get_models('turbomind', {'tp': 4}))
 def test_turbomind_eval_tp4(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'eval')
 
@@ -338,7 +334,7 @@ def test_turbomind_eval_tp4(config, run_config, worker_id):
 @pytest.mark.turbomind
 @pytest.mark.gpu_num_8
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(TURBOMIND, {'tp': 8}))
+@pytest.mark.parametrize('run_config', get_models('turbomind', {'tp': 8}))
 def test_turbomind_eval_tp8(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'eval')
 
@@ -348,7 +344,7 @@ def test_turbomind_eval_tp8(config, run_config, worker_id):
 @pytest.mark.gpu_num_1
 @pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(PYTORCH, {'tp': 1}))
+@pytest.mark.parametrize('run_config', get_models('pytorch', {'tp': 1}))
 def test_pytorch_eval_tp1(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'eval')
 
@@ -358,7 +354,7 @@ def test_pytorch_eval_tp1(config, run_config, worker_id):
 @pytest.mark.gpu_num_2
 @pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(PYTORCH, {'tp': 2}))
+@pytest.mark.parametrize('run_config', get_models('pytorch', {'tp': 2}))
 def test_pytorch_eval_tp2(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'eval')
 
@@ -368,7 +364,7 @@ def test_pytorch_eval_tp2(config, run_config, worker_id):
 @pytest.mark.gpu_num_4
 @pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(PYTORCH, {'tp': 4}))
+@pytest.mark.parametrize('run_config', get_models('pytorch', {'tp': 4}))
 def test_pytorch_eval_tp4(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'eval')
 
@@ -378,7 +374,7 @@ def test_pytorch_eval_tp4(config, run_config, worker_id):
 @pytest.mark.gpu_num_8
 @pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(PYTORCH, {'tp': 8}))
+@pytest.mark.parametrize('run_config', get_models('pytorch', {'tp': 8}))
 def test_pytorch_eval_tp8(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'eval')
 
@@ -388,7 +384,7 @@ def test_pytorch_eval_tp8(config, run_config, worker_id):
 @pytest.mark.gpu_num_16
 @pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(PYTORCH, {'tp': 16}))
+@pytest.mark.parametrize('run_config', get_models('pytorch', {'tp': 16}))
 def test_pytorch_eval_tp16(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'eval')
 
@@ -397,7 +393,7 @@ def test_pytorch_eval_tp16(config, run_config, worker_id):
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_distributed_tp16
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(PYTORCH, {'tp': 16}))
+@pytest.mark.parametrize('run_config', get_models('pytorch', {'tp': 16}))
 def test_pytorch_eval_distributed_tp16(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'eval')
 
@@ -406,7 +402,7 @@ def test_pytorch_eval_distributed_tp16(config, run_config, worker_id):
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_distributed_dpep8
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(PYTORCH, {'dp': 8, 'ep': 8}))
+@pytest.mark.parametrize('run_config', get_models('pytorch', {'dp': 8, 'ep': 8}))
 def test_pytorch_eval_distributed_dpep8(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'eval')
 
@@ -415,6 +411,6 @@ def test_pytorch_eval_distributed_dpep8(config, run_config, worker_id):
 @pytest.mark.turbomind
 @pytest.mark.gpu_num_8
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(TURBOMIND, {'cp': 2, 'tp': 8}))
+@pytest.mark.parametrize('run_config', get_models('turbomind', {'cp': 2, 'tp': 8}))
 def test_turbomind_eval_cp2tp8(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'eval')

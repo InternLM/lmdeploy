@@ -2,9 +2,6 @@ import pytest
 from utils.benchmark_utils import throughput_test
 from utils.config_utils import get_func_config_list, get_workerid
 
-TURBOMIND = 'turbomind'
-PYTORCH = 'pytorch'
-
 
 def get_models(backend, parallel_config):
     run_configs = get_func_config_list(backend, parallel_config, func_type='benchmark')
@@ -15,7 +12,7 @@ def get_models(backend, parallel_config):
 @pytest.mark.turbomind
 @pytest.mark.gpu_num_1
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(backend=TURBOMIND, parallel_config={'tp': 1}))
+@pytest.mark.parametrize('run_config', get_models(backend='turbomind', parallel_config={'tp': 1}))
 def test_turbomind_throughput_tp1(config, run_config, worker_id):
     result, msg = throughput_test(config, run_config, worker_id=worker_id)
     assert result, msg
@@ -24,7 +21,7 @@ def test_turbomind_throughput_tp1(config, run_config, worker_id):
 @pytest.mark.turbomind
 @pytest.mark.gpu_num_2
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(backend=TURBOMIND, parallel_config={'tp': 2}))
+@pytest.mark.parametrize('run_config', get_models(backend='turbomind', parallel_config={'tp': 2}))
 def test_turbomind_throughput_tp2(config, run_config, worker_id):
     result, msg = throughput_test(config, run_config, worker_id=worker_id)
     assert result, msg
@@ -33,7 +30,7 @@ def test_turbomind_throughput_tp2(config, run_config, worker_id):
 @pytest.mark.turbomind
 @pytest.mark.gpu_num_4
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(backend=TURBOMIND, parallel_config={'tp': 4}))
+@pytest.mark.parametrize('run_config', get_models(backend='turbomind', parallel_config={'tp': 4}))
 def test_turbomind_throughput_tp4(config, run_config, worker_id):
     result, msg = throughput_test(config, run_config, worker_id=worker_id)
     assert result, msg
@@ -42,7 +39,7 @@ def test_turbomind_throughput_tp4(config, run_config, worker_id):
 @pytest.mark.turbomind
 @pytest.mark.gpu_num_8
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(backend=TURBOMIND, parallel_config={'tp': 8}))
+@pytest.mark.parametrize('run_config', get_models(backend='turbomind', parallel_config={'tp': 8}))
 def test_turbomind_throughput_tp8(config, run_config, worker_id):
     result, msg = throughput_test(config, run_config, worker_id=worker_id)
     assert result, msg
@@ -51,7 +48,7 @@ def test_turbomind_throughput_tp8(config, run_config, worker_id):
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_1
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(backend=PYTORCH, parallel_config={'tp': 1}))
+@pytest.mark.parametrize('run_config', get_models(backend='pytorch', parallel_config={'tp': 1}))
 def test_pytorch_throughput_tp1(config, run_config, worker_id):
     result, msg = throughput_test(config, run_config, worker_id=worker_id)
     assert result, msg
@@ -60,7 +57,7 @@ def test_pytorch_throughput_tp1(config, run_config, worker_id):
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_2
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(backend=PYTORCH, parallel_config={'tp': 2}))
+@pytest.mark.parametrize('run_config', get_models(backend='pytorch', parallel_config={'tp': 2}))
 def test_pytorch_throughput_tp2(config, run_config, worker_id):
     result, msg = throughput_test(config, run_config, worker_id=worker_id)
     assert result, msg
@@ -69,7 +66,7 @@ def test_pytorch_throughput_tp2(config, run_config, worker_id):
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_4
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(backend=PYTORCH, parallel_config={'tp': 4}))
+@pytest.mark.parametrize('run_config', get_models(backend='pytorch', parallel_config={'tp': 4}))
 def test_pytorch_throughput_tp4(config, run_config, worker_id):
     result, msg = throughput_test(config, run_config, worker_id=worker_id)
     assert result, msg
@@ -78,7 +75,7 @@ def test_pytorch_throughput_tp4(config, run_config, worker_id):
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_8
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(backend=PYTORCH, parallel_config={'tp': 8}))
+@pytest.mark.parametrize('run_config', get_models(backend='pytorch', parallel_config={'tp': 8}))
 def test_pytorch_throughput_tp8(config, run_config, worker_id):
     result, msg = throughput_test(config, run_config, worker_id=worker_id)
     assert result, msg
@@ -87,7 +84,7 @@ def test_pytorch_throughput_tp8(config, run_config, worker_id):
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_16
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_models(backend=PYTORCH, parallel_config={'tp': 16}))
+@pytest.mark.parametrize('run_config', get_models(backend='pytorch', parallel_config={'tp': 16}))
 def test_pytorch_throughput_tp16(config, run_config, worker_id):
     result, msg = throughput_test(config, run_config, worker_id=worker_id)
     assert result, msg
@@ -96,8 +93,8 @@ def test_pytorch_throughput_tp16(config, run_config, worker_id):
 @pytest.mark.function
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config', [{
-    'model': 'internlm/internlm2_5-20b-chat',
-    'backend': TURBOMIND,
+    'model': 'Qwen/Qwen3-30B-A3B',
+    'backend': 'turbomind',
     'communicator': 'cuda-ipc',
     'quant_policy': 0,
     'parallel_config': {
@@ -106,7 +103,7 @@ def test_pytorch_throughput_tp16(config, run_config, worker_id):
     'extra_params': {}
 }, {
     'model': 'Qwen/Qwen3-VL-32B-Instruct',
-    'backend': PYTORCH,
+    'backend': 'pytorch',
     'communicator': 'nccl',
     'quant_policy': 8,
     'parallel_config': {
@@ -124,7 +121,7 @@ def test_throughput_func_tp2(config, run_config, worker_id):
 @pytest.mark.pr_test
 @pytest.mark.parametrize('run_config', [{
     'model': 'meta-llama/Meta-Llama-3-1-8B-Instruct',
-    'backend': TURBOMIND,
+    'backend': 'turbomind',
     'communicator': 'nccl',
     'quant_policy': 0,
     'parallel_config': {
@@ -133,7 +130,7 @@ def test_throughput_func_tp2(config, run_config, worker_id):
     'extra_params': {}
 }, {
     'model': 'Qwen/Qwen3-VL-8B-Instruct',
-    'backend': PYTORCH,
+    'backend': 'pytorch',
     'communicator': 'nccl',
     'quant_policy': 8,
     'parallel_config': {

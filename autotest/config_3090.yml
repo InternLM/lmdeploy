@@ -9,10 +9,6 @@ dataset_path: /nvme/qa_test_models/datasets/ShareGPT_V3_unfiltered_cleaned_split
 env_tag: 3090
 device: cuda
 
-config:
-    tp:
-        empty: 2
-
 turbomind_chat_model:
     tp:
         - meta-llama/Llama-3.2-3B-Instruct

@@ -7,9 +7,9 @@ from utils.constant import DEFAULT_SERVER
 from utils.proxy_distributed_utils import ProxyDistributedManager
 from utils.ray_distributed_utils import RayLMDeployManager
 
-cli_prompt_case_file = 'autotest/chat_prompt_case.yaml'
-common_prompt_case_file = 'autotest/prompt_case.yaml'
-config_file = 'autotest/config.yaml'
+cli_prompt_case_file = 'autotest/chat_prompt_case.yml'
+common_prompt_case_file = 'autotest/prompt_case.yml'
+config_file = 'autotest/config.yml'
 
 PROXY_PORT = 8000
 
@@ -41,7 +41,7 @@ def shared_ray_manager():
     master_addr = DEFAULT_SERVER
     device = os.environ.get('DEVICE', '')
     if device:
-        device_config_path = f'autotest/config-{device}.yaml'
+        device_config_path = f'autotest/config_{device}.yml'
         if os.path.exists(device_config_path):
             config_path = device_config_path
         else:

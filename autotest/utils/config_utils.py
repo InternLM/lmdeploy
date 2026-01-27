@@ -139,10 +139,10 @@ def get_cli_str(config: Dict[str, Any]) -> str:
     return ' '.join(cli_str)
 
 
-def get_parallel_config(config: Dict, model_name: str) -> Dict[str, int]:
+def get_parallel_config(config: Dict, model_name: str) -> List[Dict[str, int]]:
     """Get matched parallel config dict by model name, default tp:1 if no
     match."""
-    result = {}
+    result = []
     base_model = _base_model_name(model_name)
     parallel_configs = config.get('config', {})
 
@@ -152,11 +152,11 @@ def get_parallel_config(config: Dict, model_name: str) -> Dict[str, int]:
         if base_model in model_map:
             conf_value = model_map[base_model]
             if isinstance(conf_value, dict):
-                result.update(conf_value)
+                result.append(conf_value.copy())
             elif isinstance(conf_value, int):
-                result[conf_key] = conf_value
+                result.append({conf_key: conf_value})
 
-    return result if result else {'tp': 1}
+    return result if result else [{'tp': 1}]
 
 
 def _extract_models_from_config(config_value: Any) -> List[str]:
@@ -302,12 +302,11 @@ def get_config() -> Dict[str, Any]:
     """Load & get yaml config file, auto adapt device env & update log path."""
     # Get device env & match config file path
     env_tag = os.environ.get('TEST_ENV')
-    config_path = f'autotest/config-{env_tag}.yaml' if env_tag else 'autotest/config.yaml'
+    config_path = f'autotest/config_{env_tag}.yml' if env_tag else 'autotest/config.yml'
 
     # Fallback to default config if device-specific config not exist
     if env_tag and not os.path.exists(config_path):
-        config_path = 'autotest/config.yaml'
-
+        config_path = 'autotest/config.yml'
     # Load yaml config file safely
     with open(config_path, 'r', encoding='utf-8') as f:
         config = yaml.load(f.read(), Loader=yaml.SafeLoader)
@@ -422,7 +421,7 @@ def unset_device_env_variable():
 def is_model_in_list(config: Dict, parallel_config: Dict[str, int], model: str) -> bool:
     """Check if model matches the target parallel config."""
     model_config = get_parallel_config(config, model)
-    return model_config == parallel_config
+    return parallel_config in model_config
 
 
 def get_case_str_by_config(run_config: Dict[str, Any], is_simple: bool = True) -> str:
@@ -826,7 +825,13 @@ def test_run_config():
     os.unsetenv('TEST_ENV')
 
 
+def test_get_parallel_config():
+    test = get_parallel_config({}, 'empty')
+    assert test == [{'tp': 1}]
+
+
 if __name__ == '__main__':
+    test_get_parallel_config()
     test_cli_common_param()
     test_run_config()
     test_get_case_str_by_config()

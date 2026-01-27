@@ -126,10 +126,10 @@ jobs:
           ref: ${{github.event.inputs.repo_ref || 'main'}}
       - name: Copy repository
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
-        run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r . ${{env.TEST_CODE_PATH}} && mv ${{env.TEST_CODE_PATH}}/autotest/config-h800.yaml ${{env.TEST_CODE_PATH}}/autotest/config.yaml
+        run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r . ${{env.TEST_CODE_PATH}}
       - name: Copy repository - offline
         if: ${{inputs.offline_mode}}
-        run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r ${{env.OFFLINE_CODE_PATH}}/. ${{env.TEST_CODE_PATH}} && mv ${{env.TEST_CODE_PATH}}/autotest/config-h800.yaml ${{env.TEST_CODE_PATH}}/autotest/config.yaml
+        run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r ${{env.OFFLINE_CODE_PATH}}/. ${{env.TEST_CODE_PATH}}
       - name: Download Artifacts
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
