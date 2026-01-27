@@ -704,15 +704,18 @@ class HFChatTemplate(BaseChatTemplate):
             _, _, self.sentinel_system_messages, self.sentinel_system_prompt = self._role_instruction('system')
             self.assistant_start, self.assistant_end, _, _ = self._role_instruction('assistant')
         except Exception:
-            # Some models like google/gemma-2-2b-it forbid system role in messages,
-            # and require conversation roles must alternate user/assistant/user/assistant/...
-            # So we cannot get the system role and assistant role's special token trivivally
+            # Some models, such as google/gemma-2-2b-it, do not support a system role in the message structure.
+            # They require conversation roles to strictly alternate between 'user' and 'assistant'
+            # (e.g., user/assistant/user/assistant...). Consequently, we cannot directly obtain the special
+            # tokens for the system and assistant roles.
             arch, _ = get_model_arch(model_path)
             if arch in ['Gemma2ForCausalLM', 'Gemma3ForConditionalGeneration']:
                 self.sentinel_system_messages = []
                 self.sentinel_system_prompt = '<bos>'
                 self.assistant_start = '<start_of_turn>model\n'
                 self.assistant_end = '<end_of_turn>\n'
+            else:
+                raise RuntimeError(f'apply chat template failed with model {arch} ')
 
     def get_prompt(self, prompt, sequence_start=True, **kwargs):
         messages = [{'role': 'user', 'content': prompt}]
