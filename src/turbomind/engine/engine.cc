@@ -819,6 +819,8 @@ void Engine::Impl::InternalThreadEntry()
 
             Schedule();
 
+            UpdateScheduleMetrics();
+
             Setup(*d);
 
             d->ready.Record(core::Context::stream());
