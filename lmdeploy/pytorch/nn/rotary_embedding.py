@@ -11,13 +11,13 @@ from ..backends.rotary_embedding import (FopeParameters, Llama3Parameters, LongR
                                          YarnParameters)
 
 
-def _get_rope_parameters(config: PretrainedConfig):
+def get_rope_parameters(config: PretrainedConfig):
     """Try get rope parameters from config."""
     if hasattr(config, 'rope_parameters'):
         # for transformers v5
         return config.rope_parameters
     else:
-        return config.rope_scaling
+        return config.get('rope_scaling', None)
 
 
 def _get_default_rope_parameters(config: PretrainedConfig):
@@ -27,14 +27,14 @@ def _get_default_rope_parameters(config: PretrainedConfig):
 
 def _get_linear_scaling_rope_parameters(config: PretrainedConfig):
     """Get linear rope parameters."""
-    rope_scaling = _get_rope_parameters(config=config)
+    rope_scaling = get_rope_parameters(config=config)
     scaling_factor = rope_scaling['factor']
     return dict(emb_type=RopeType.LinearScaling, scaling_factor=scaling_factor)
 
 
 def _get_dynamic_ntk_parameters(config: PretrainedConfig):
     """Get dynamic ntk parameters."""
-    rope_scaling = _get_rope_parameters(config=config)
+    rope_scaling = get_rope_parameters(config=config)
     scaling_factor = rope_scaling['factor']
     return dict(emb_type=RopeType.DynamicNTKScaling, scaling_factor=scaling_factor)
 
@@ -47,7 +47,7 @@ def _get_yarn_parameters(config: PretrainedConfig):
             return 1.0
         return 0.1 * mscale * math.log(scale) + 1.0
 
-    rope_scaling = _get_rope_parameters(config=config)
+    rope_scaling = get_rope_parameters(config=config)
     factor = rope_scaling['factor']
     params = YarnParameters()
     params.beta_fast = rope_scaling.get('beta_fast', params.beta_fast)
@@ -75,7 +75,7 @@ def _get_yarn_parameters(config: PretrainedConfig):
 
 def _get_longrope_parameters(config: PretrainedConfig):
     """Get longrope parameters."""
-    rope_scaling = _get_rope_parameters(config=config)
+    rope_scaling = get_rope_parameters(config=config)
     scaling_factor = rope_scaling.get('factor', 1.0)
     long_factor = rope_scaling['long_factor']
     short_factor = rope_scaling['short_factor']
@@ -93,7 +93,7 @@ def _get_longrope_parameters(config: PretrainedConfig):
 
 def _get_llama3_parameters(config: PretrainedConfig):
     """Get llama rope parameters."""
-    rope_scaling = _get_rope_parameters(config=config)
+    rope_scaling = get_rope_parameters(config=config)
     params = Llama3Parameters()
     scaling_factor = rope_scaling['factor']
     params.low_freq_factor = rope_scaling['low_freq_factor']
@@ -113,7 +113,7 @@ def _get_fope_parameters(config: PretrainedConfig):
         return dict()
 
     params = FopeParameters()
-    rope_scaling = _get_rope_parameters(config=config)
+    rope_scaling = get_rope_parameters(config=config)
     params.num_inv_freq = rope_scaling.get('fope_num_inv_freq', rope_scaling.get('num_inv_freq', params.num_inv_freq))
     params.num_key_value_heads = config.num_key_value_heads
     params.fope_sep_head = rope_scaling['fope_sep_head']
@@ -124,10 +124,9 @@ def build_rotary_params(config: PretrainedConfig):
     """Get scaling_factor rotary params, and emb_type."""
     params = dict(emb_type=RopeType.Default)
     # cannot access config.rope_scaling when the model is "Qwen/Qwen2-Math-RM-72B"
-    rope_scaling = getattr(config, 'rope_scaling', None)
+    rope_scaling = get_rope_parameters(config=config)
     if rope_scaling is not None:
         # BC: "rope_type" was originally "type"
-        rope_scaling = _get_rope_parameters(config=config)
         rope_type_str = rope_scaling.get('rope_type', rope_scaling.get('type', 'default'))
         if rope_type_str == 'fope':
             rope_type_str = 'default'
@@ -186,13 +185,13 @@ def build_rotary_embedding(dim: int,
     return impl
 
 
-def get_rope_theta(config: PretrainedConfig, default: int = 100000) -> int:
+def get_rope_theta(config: PretrainedConfig, default: int = 10000) -> int:
     """Get rope theta from config."""
     if hasattr(config, 'rope_parameters'):
         # for transformers v5
         rope_base = config.rope_parameters.get('rope_theta', default)
     else:
-        rope_base = config.rope_theta
+        rope_base = getattr(config, 'rope_theta', default)
     return rope_base
 
 
@@ -204,7 +203,7 @@ def build_rotary_embedding_from_config(config: PretrainedConfig, device: torch.d
         rope_dim = config.hidden_size // config.num_attention_heads
     rope_max_pos_emb = config.max_position_embeddings
 
-    rope_base = get_rope_theta(config, default=100000)
+    rope_base = get_rope_theta(config, default=10000)
     rope_params = dict(emb_type=emb_type, dim=rope_dim, max_position_embeddings=rope_max_pos_emb, base=rope_base)
     update_params = build_rotary_params(config)
     rope_params.update(update_params)

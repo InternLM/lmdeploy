@@ -11,7 +11,8 @@ from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
 from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_merged_colwise_linear, build_rowwise_linear
-from lmdeploy.pytorch.nn.rotary_embedding import ApplyRotaryEmb, LongRoPEScalingParameters, get_rope_theta
+from lmdeploy.pytorch.nn.rotary_embedding import (ApplyRotaryEmb, LongRoPEScalingParameters, get_rope_parameters,
+                                                  get_rope_theta)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -299,7 +300,7 @@ class MiniCPM3Model(nn.Module):
         rope_dim = config.qk_rope_head_dim
         rope_max_pos_emb = config.max_position_embeddings
         rope_base = get_rope_theta(config)
-        rope_scaling = config.rope_scaling
+        rope_scaling = get_rope_parameters(config)
         if rope_scaling is not None:
             scaling_type = rope_scaling['type']
             assert scaling_type in ['longrope', 'su']

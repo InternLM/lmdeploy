@@ -9,7 +9,7 @@ from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.models.internlm2 import InternLM2Attention, InternLM2MLP
 from lmdeploy.pytorch.nn import RMSNorm, RopeType, build_rotary_embedding
 from lmdeploy.pytorch.nn.linear import build_rowwise_linear
-from lmdeploy.pytorch.nn.rotary_embedding import get_rope_theta
+from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters, get_rope_theta
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -115,7 +115,7 @@ class InternLM2VEModel(nn.Module):
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
 
         # build rotary embedding in Model
-        rope_scaling = config.rope_scaling
+        rope_scaling = get_rope_parameters(config)
         scaling_factor = 1.0
         emb_type = RopeType.LinearScaling
         if rope_scaling is not None:
