@@ -2,6 +2,7 @@ accelerate
 aiohttp
 fastapi
 mmengine-lite
+openai
 openai_harmony
 partial_json_parser
 pillow

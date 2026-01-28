@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import requests
 
@@ -45,7 +45,7 @@ class APIClient:
             api key will be used.
     """
 
-    def __init__(self, api_server_url: str, api_key: Optional[str] = None, **kwargs):
+    def __init__(self, api_server_url: str, api_key: str | None = None, **kwargs):
         self.api_server_url = api_server_url
         self.chat_completions_v1_url = f'{api_server_url}/v1/chat/completions'
         self.completions_v1_url = f'{api_server_url}/v1/completions'
@@ -65,10 +65,7 @@ class APIClient:
         self._available_models = get_model_list(self.models_v1_url, headers=self.headers)
         return self._available_models
 
-    def encode(self,
-               input: Union[str, List[str]],
-               do_preprocess: Optional[bool] = False,
-               add_bos: Optional[bool] = True):
+    def encode(self, input: str | list[str], do_preprocess: bool | None = False, add_bos: bool | None = True):
         """Encode prompts.
 
         Args:
@@ -90,36 +87,35 @@ class APIClient:
     def chat_completions_v1(
         self,
         model: str,
-        messages: Union[str, List[Dict[str, str]]],
-        temperature: Optional[float] = 0.7,
-        top_p: Optional[float] = 1.0,
-        logprobs: Optional[bool] = False,
-        top_logprobs: Optional[int] = 0,
-        n: Optional[int] = 1,
-        max_completion_tokens: Optional[int] = None,
-        max_tokens: Optional[int] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        stream: Optional[bool] = False,
-        presence_penalty: Optional[float] = 0.0,
-        frequency_penalty: Optional[float] = 0.0,
-        user: Optional[str] = None,
-        repetition_penalty: Optional[float] = 1.0,
-        ignore_eos: Optional[bool] = False,
-        skip_special_tokens: Optional[bool] = True,
-        spaces_between_special_tokens: Optional[bool] = True,
+        messages: list[dict[str, str]],
+        temperature: float | None = 0.7,
+        top_p: float | None = 1.0,
+        logprobs: bool | None = False,
+        top_logprobs: int | None = 0,
+        n: int | None = 1,
+        max_completion_tokens: int | None = None,
+        max_tokens: int | None = None,
+        stop: str | list[str] | None = None,
+        stream: bool | None = False,
+        presence_penalty: float | None = 0.0,
+        frequency_penalty: float | None = 0.0,
+        user: str | None = None,
+        repetition_penalty: float | None = 1.0,
+        ignore_eos: bool | None = False,
+        skip_special_tokens: bool | None = True,
+        spaces_between_special_tokens: bool | None = True,
         top_k: int = 40,
-        min_new_tokens: Optional[int] = None,
+        min_new_tokens: int | None = None,
         min_p: float = 0.0,
-        logit_bias: Optional[Dict[str, float]] = None,
-        stream_options: Optional[Dict] = None,
+        logit_bias: dict[str, float] | None = None,
+        stream_options: dict | None = None,
         **kwargs,
     ):
         """Chat completion v1.
 
         Args:
             model: model name. Available from self.available_models.
-            messages: string prompt or chat history in OpenAI format. Chat
-                history example: `[{"role": "user", "content": "hi"}]`.
+            messages: prompt in OpenAI format, e.g. `[{"role": "user", "content": "hi"}]`.
             temperature (float): to modulate the next token probability
             top_p (float): If set to float < 1, only the smallest set of most
                 probable tokens with probabilities that add up to top_p or
@@ -175,23 +171,23 @@ class APIClient:
     def completions_v1(
         self,
         model: str,
-        prompt: Union[str, List[Any]],
-        suffix: Optional[str] = None,
-        temperature: Optional[float] = 0.7,
-        n: Optional[int] = 1,
-        max_completion_tokens: Optional[int] = 16,
-        max_tokens: Optional[int] = 16,
-        stream: Optional[bool] = False,
-        stop: Optional[Union[str, List[str]]] = None,
-        top_p: Optional[float] = 1.0,
-        top_k: Optional[int] = 40,
-        user: Optional[str] = None,
+        prompt: str | list[Any],
+        suffix: str | None = None,
+        temperature: float | None = 0.7,
+        n: int | None = 1,
+        max_completion_tokens: int | None = 16,
+        max_tokens: int | None = 16,
+        stream: bool | None = False,
+        stop: str | list[str] | None = None,
+        top_p: float | None = 1.0,
+        top_k: int | None = 40,
+        user: str | None = None,
         # additional argument of lmdeploy
-        repetition_penalty: Optional[float] = 1.0,
-        ignore_eos: Optional[bool] = False,
-        skip_special_tokens: Optional[bool] = True,
-        spaces_between_special_tokens: Optional[bool] = True,
-        stream_options: Optional[Dict] = None,
+        repetition_penalty: float | None = 1.0,
+        ignore_eos: bool | None = False,
+        skip_special_tokens: bool | None = True,
+        spaces_between_special_tokens: bool | None = True,
+        stream_options: dict | None = None,
         **kwargs,
     ):
         """Chat completion v1.
