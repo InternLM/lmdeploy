@@ -170,9 +170,16 @@ def get_tm_model(model_path,
 
     input_model_name = get_input_model_registered_name(model_path, engine_config.model_format)
     input_policy = get_input_policy(engine_config.model_format)
+
+    if engine_config.model_format == 'fp8' and not quant_config:
+        use_quant_online = True
+    else:
+        use_quant_online = False
+
     input_model = INPUT_MODELS.get(input_model_name)(model_path=model_path,
                                                      tokenizer_path=model_path,
-                                                     input_policy=input_policy)
+                                                     input_policy=input_policy,
+                                                     use_quant_online=use_quant_online)
 
     output_model_name, tm_cfg = get_output_model_registered_name_and_config(model_path=model_path,
                                                                             model_format=engine_config.model_format,
