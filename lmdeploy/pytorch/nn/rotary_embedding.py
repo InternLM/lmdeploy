@@ -17,7 +17,7 @@ def get_rope_parameters(config: PretrainedConfig):
         # for transformers v5
         return config.rope_parameters
     else:
-        return config.get('rope_scaling', None)
+        return getattr(config, 'rope_scaling', None)
 
 
 def _get_default_rope_parameters(config: PretrainedConfig):
