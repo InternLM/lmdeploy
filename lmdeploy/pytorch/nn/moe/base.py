@@ -135,7 +135,8 @@ class MoEForwardDPTP:
         cur_out = self.gemm_func(hidden_states, topk_weights, topk_ids)
         return self.reduce_scatter(cur_out, output_states, tp_sizes)
 
-    def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.Tensor):
+    def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.Tensor,
+                mlp_metadata: MLPMetadata):
         """forward."""
 
         def __slice_tensor(tensor: torch.Tensor, slice_size: int):
@@ -177,6 +178,7 @@ class MoEForwardDPTP:
 
         # pre
         cur_inputs = __slice_and_gather()
+        cur_inputs.update(dict(mlp_metadata=mlp_metadata))
 
         out_handles = []
         # main loop
@@ -185,6 +187,7 @@ class MoEForwardDPTP:
             _, handle = self._gemm_and_reduce_scatter(**cur_inputs)
             out_handles.append(handle)
             cur_inputs = next_inputs
+            cur_inputs.update(dict(mlp_metadata=mlp_metadata))
 
         # post
         _, handle = self._gemm_and_reduce_scatter(**cur_inputs)
@@ -259,12 +262,13 @@ class FusedMoEBase(nn.Module):
 
         if self.tp > 1 and self.tp_mode == TPMode.DP_TP:
 
-            def __gemm_func(hidden_states, topk_weights, topk_ids):
+            def __gemm_func(hidden_states, topk_weights, topk_ids, mlp_metadata):
                 return self.gemm(
                     dict(
                         hidden_states=hidden_states,
                         topk_weights=topk_weights,
                         topk_idx=topk_ids,
+                        mlp_metadata=mlp_metadata,
                         moe_type=MoeType.Default,
                     ))['hidden_states']
 
@@ -319,7 +323,7 @@ class FusedMoEBase(nn.Module):
                 mlp_metadata: MLPMetadata = None):
         """forward."""
         if self.tp > 1 and self.tp_mode == TPMode.DP_TP:
-            return self.forward_dptp.forward(hidden_states, topk_weights, topk_idx)
+            return self.forward_dptp.forward(hidden_states, topk_weights, topk_idx, mlp_metadata)
         else:
             return self.forward_default(hidden_states, topk_weights, topk_idx, mlp_metadata)
 
