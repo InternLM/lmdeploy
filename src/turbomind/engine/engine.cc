@@ -344,7 +344,7 @@ void Engine::Impl::Interrupt(RequestCache& c)
 {
     auto& s = *TM_CHECK_NOTNULL(c.seq);
     if (c.req->session.end_flag) {
-        if (!is_warm_up_) {
+        if (!is_warm_up_ && s.status != Sequence::kCached) {  // At least `Locked` status is required for caching
             seq_mgr_->CacheGeneration(s);
         }
         TM_CHECK(seq_mgr_->Erase(c.req->id));
@@ -691,6 +691,7 @@ void Engine::Impl::Update(BatchData& b, std::vector<Signal>& signals)
     vector<const Sequence*> sequences_to_cache;
 
     for (int i = 0; i < b.rc.size(); ++i) {
+        // In async mode, `seq` may be nullptr when the request is done
         if (auto& c = *b.rc[i]; c.seq) {
             if (auto& s = *c.seq; generating[i]) {
                 c.token_ids[c.seq_len] = output_ids[i];
@@ -714,7 +715,9 @@ void Engine::Impl::Update(BatchData& b, std::vector<Signal>& signals)
                 s.cache_len = sequence_length[i];
             }
             c.done |= finished[i];
-            sequences_to_cache.push_back(c.seq);
+            if (c.seq->status != Sequence::kCached) {  // At least `Locked` status is required for caching
+                sequences_to_cache.push_back(c.seq);
+            }
             // dbg(c.seq_len, c.sequence.cache_len, c.alpha, c.beta, c.is_decoding, c.is_generate);
         }
     }
