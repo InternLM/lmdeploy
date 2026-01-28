@@ -69,7 +69,7 @@ class WeightScaleInv(Parameter):
         f(i, g('weight'), 'weight', identity)
 
 
-class Int4CompressedTensor(Parameter):
+class CompressedWeight(Parameter):
     KEYS = '.weight_packed', '.weight_scale', '.weight_zero_point'
 
     def __call__(self, f, g, i):
@@ -116,8 +116,8 @@ def get_params(keys: List[str], bias=0):
         ps.append(QuantWeightOnly())
     if WeightScaleInv.take(keys):
         ps.append(WeightScaleInv())
-    if Int4CompressedTensor.take(keys):
-        ps.append(Int4CompressedTensor())
+    if CompressedWeight.take(keys):
+        ps.append(CompressedWeight())
     if Mxfp4Weight.take(keys):
         ps.append(Mxfp4Weight())
     if Weight.take(keys):

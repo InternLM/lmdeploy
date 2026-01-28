@@ -136,10 +136,10 @@ def get_tm_model(model_path,
                                                              f'vs model quant_config "{_group_size}"')
 
         if quant_method == 'awq':
-            assert (version == 'gemm'), (f'unsupported quant config: {quant_config}')
+            assert version == 'gemm', f'unsupported quant config: {quant_config}'
         elif quant_method == 'gptq':
             assert not quant_config.get('desc_act', False) and quant_config.get(
-                'sym', True), (f'unsupported quant config: {quant_config}')
+                'sym', True), f'unsupported quant config: {quant_config}'
         elif quant_method == 'fp8':
             pass
         elif quant_method == 'mxfp4':
