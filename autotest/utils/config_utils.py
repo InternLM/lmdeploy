@@ -590,7 +590,7 @@ def test_return_info_turbomind():
     func_chat_tp2 = get_func_config_list(backend, parallel_config={'tp': 2}, model_type='chat_model', func_type='func')
     assert len(func_chat_tp2) == 32, len(func_chat_tp2)
     func_chat_tp8 = get_func_config_list(backend, parallel_config={'tp': 8}, model_type='chat_model', func_type='func')
-    assert len(func_chat_tp8) == 24, len(func_chat_tp8)
+    assert len(func_chat_tp8) == 36, len(func_chat_tp8)
     func_chat_cptp = get_func_config_list(backend,
                                           parallel_config={
                                               'cp': 2,
@@ -598,7 +598,7 @@ def test_return_info_turbomind():
                                           },
                                           model_type='chat_model',
                                           func_type='func')
-    assert len(func_chat_cptp) == 8, len(func_chat_cptp)
+    assert len(func_chat_cptp) == 14, len(func_chat_cptp)
     func_chat_dpep8 = get_func_config_list(backend,
                                            parallel_config={
                                                'dp': 8,
@@ -606,7 +606,7 @@ def test_return_info_turbomind():
                                            },
                                            model_type='chat_model',
                                            func_type='func')
-    assert len(func_chat_dpep8) == 0, len(func_chat_dpep8)
+    assert len(func_chat_dpep8) == 6, len(func_chat_dpep8)
     func_chat_dpep16 = get_func_config_list(backend,
                                             parallel_config={
                                                 'dp': 16,
@@ -694,7 +694,7 @@ def test_return_info_pytorch():
     func_chat_tp2 = get_func_config_list(backend, parallel_config={'tp': 2}, model_type='chat_model', func_type='func')
     assert len(func_chat_tp2) == 19, len(func_chat_tp2)
     func_chat_tp8 = get_func_config_list(backend, parallel_config={'tp': 8}, model_type='chat_model', func_type='func')
-    assert len(func_chat_tp8) == 6, len(func_chat_tp8)
+    assert len(func_chat_tp8) == 9, len(func_chat_tp8)
     func_chat_cptp = get_func_config_list(backend,
                                           parallel_config={
                                               'cp': 2,
@@ -702,7 +702,7 @@ def test_return_info_pytorch():
                                           },
                                           model_type='chat_model',
                                           func_type='func')
-    assert len(func_chat_cptp) == 4, len(func_chat_cptp)
+    assert len(func_chat_cptp) == 7, len(func_chat_cptp)
     func_chat_dpep8 = get_func_config_list(backend,
                                            parallel_config={
                                                'dp': 8,
@@ -710,7 +710,7 @@ def test_return_info_pytorch():
                                            },
                                            model_type='chat_model',
                                            func_type='func')
-    assert len(func_chat_dpep8) == 5, len(func_chat_dpep8)
+    assert len(func_chat_dpep8) == 8, len(func_chat_dpep8)
     func_chat_dpep16 = get_func_config_list(backend,
                                             parallel_config={
                                                 'dp': 16,
@@ -828,6 +828,8 @@ def test_run_config():
 def test_get_parallel_config():
     test = get_parallel_config({}, 'empty')
     assert test == [{'tp': 1}]
+    test = get_parallel_config({'config':{'tp': {'empty': 1}, 'dp_ep': {'empty': {'dp':1, 'ep': 8}},'cp_tp': {'empty': {'cp':8, 'tp': 8}}}}, 'empty')
+    assert test == [{'tp': 1}, {'dp': 1, 'ep': 8}, {'cp': 8, 'tp': 8}]
 
 
 if __name__ == '__main__':

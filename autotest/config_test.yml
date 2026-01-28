@@ -20,6 +20,7 @@ config:
         test/test_vl_tp2_gpqa: 2
         test/test_vl_tp2_int4: 2
         test/test_vl_tp8: 8
+        test/test_allkind: 8
 
     dp_ep:
         test/test_dpep16:
@@ -34,12 +35,18 @@ config:
         test/test_vl_dpep8:
             dp: 8
             ep: 8
+        test/test_allkind:
+            dp: 8
+            ep: 8
 
     cp_tp:
         test/test_cp2tp8:
             cp: 2
             tp: 8
         test/test_vl_cp2tp8:
+            cp: 2
+            tp: 8
+        test/test_allkind:
             cp: 2
             tp: 8
 
@@ -56,9 +63,11 @@ turbomind_chat_model:
         - test/test_vl_tp2_gpqa
         - test/test_vl_tp2_int4
         - test/test_vl_tp8
+        - test/test_allkind
     cp_tp:
         - test/test_cp2tp8
         - test/test_vl_cp2tp8
+        - test/test_allkind
 
 pytorch_chat_model:
     tp:
@@ -74,14 +83,17 @@ pytorch_chat_model:
         - test/test_vl_tp2_gpqa
         - test/test_vl_tp2_int4
         - test/test_vl_tp8
+        - test/test_allkind
     dp_ep:
         - test/test_dpep8
         - test/test_dpep16
         - test/test_vl_dpep8
         - test/test_vl_dpep16
+        - test/test_allkind
     cp_tp:
         - test/test_cp2tp8
         - test/test_vl_cp2tp8
+        - test/test_allkind
 
 turbomind_vl_model:
     tp:
@@ -90,6 +102,7 @@ turbomind_vl_model:
         - test/test_vl_tp2_gpqa
         - test/test_vl_tp2_int4
         - test/test_vl_tp8
+        - test/test_allkind
 
 pytorch_vl_model:
     tp:
@@ -99,9 +112,11 @@ pytorch_vl_model:
         - test/test_vl_tp2_gpqa
         - test/test_vl_tp2_int4
         - test/test_vl_tp8
+        - test/test_allkind
     dp_ep:
         - test/test_vl_dpep8
         - test/test_vl_dpep16
+        - test/test_allkind
 
 turbomind_base_model:
     tp:
