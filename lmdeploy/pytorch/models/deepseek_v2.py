@@ -1187,10 +1187,14 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             if weight_name not in name:
                 continue
             name = name.replace(weight_name, param_name)
+            if name not in params_dict.keys():
+                continue
             param = params_dict[name]
             load_weight(param, loaded_weight, expert_id=expert_id, shard_id=shard_id)
             break
         else:
+            if name not in params_dict.keys():
+                return
             param = params_dict[name]
             load_weight(param, loaded_weight)
 
@@ -1221,6 +1225,8 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                                                                                         dim=1)
             w_vc = w_vc.transpose(1, 2).contiguous()
             kc_param_name = name.replace('.kv_b_proj', '.kc')
+            if kc_param_name not in params_dict.keys():
+                return
             param_kc = params_dict[kc_param_name]
             load_weight(param_kc, w_kc)
             vc_param_name = name.replace('.kv_b_proj', '.vc')
@@ -1267,6 +1273,8 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             else:
                 loaded_weight = loaded_weight.to(device)
                 weight = __update_pe(loaded_weight, head_dim, pe_dim_offset)
+            if name not in params_dict.keys():
+                continue
             param = params_dict[name]
             load_weight(param, weight)
             break
@@ -1284,6 +1292,8 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                 else:
                     __load_kcvc(name, loaded_weight)
             else:
+                if name not in params_dict.keys():
+                    return
                 param = params_dict[name]
                 load_weight(param, loaded_weight)
 
@@ -1371,9 +1381,13 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                     if weight_name not in name:
                         continue
                     name = name.replace(weight_name, param_name)
+                    if name not in params_dict.keys():
+                        continue
                     param = params_dict[name]
                     load_weight(param, loaded_weight, shard_id=shard_id)
                     break
                 else:
+                    if name not in params_dict.keys():
+                        continue
                     param = params_dict[name]
                     load_weight(param, loaded_weight)

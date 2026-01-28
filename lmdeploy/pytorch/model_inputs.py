@@ -257,6 +257,7 @@ class StepContext:
     input_multimodals: List[MultiModalTensor] = None
     vision_inputs: VisionModelInputs = None
     attn_metadata: Any = None
+    mlp_metadata: Any = None
     kv_quant_policy: Literal[0, 4, 8] = 0
     model_metas: List[Dict[str, Any]] = None
     dp_meta: DPMeta = None

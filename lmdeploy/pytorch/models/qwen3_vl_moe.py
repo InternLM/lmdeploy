@@ -33,6 +33,7 @@ class Qwen3VLMoeTextModel(Qwen3MoeModel):
         position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[List[torch.FloatTensor]] = None,
         attn_metadata: Any = None,
+        mlp_metadata: Any = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         mrope_position_ids: torch.LongTensor = None,
         # args for deepstack
@@ -74,6 +75,7 @@ class Qwen3VLMoeTextModel(Qwen3MoeModel):
                 past_key_value=past_key_value,
                 residual=residual,
                 attn_metadata=attn_metadata,
+                mlp_metadata=mlp_metadata,
             )
 
             # add visual features to the hidden states of first several layers
