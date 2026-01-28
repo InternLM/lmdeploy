@@ -23,6 +23,7 @@ class DlinferMLPMetadata(MLPMetadata):
     ep_group: torch.distributed.ProcessGroup = None
     moe_type: MoeType = MoeType.UNDEFINED
     x_active_mask: torch.Tensor = None
+    moe_group_name: str = None
 
 
 class DlinferSoftmaxTopKImpl(SoftmaxTopKImpl[DlinferMLPMetadata]):
@@ -105,7 +106,8 @@ class DlinferFusedMoEImpl(FusedMoEImpl[DlinferMLPMetadata]):
         return fused_moe(hidden_states, gate_up_weights, down_weights, topk_weights, topk_ids, self.top_k,
                          self.renormalize, mlp_metadata.pad_size, mlp_metadata.tp_size, mlp_metadata.ep_size,
                          mlp_metadata.tp_rank, mlp_metadata.ep_rank, mlp_metadata.tp_group, mlp_metadata.ep_group,
-                         mlp_metadata.moe_type, mlp_metadata.x_active_mask, self.expert_ids_per_ep_rank)
+                         mlp_metadata.moe_type, mlp_metadata.x_active_mask, mlp_metadata.moe_group_name,
+                         self.expert_ids_per_ep_rank)
 
 
 class DlinferFusedMoEBuilder(FusedMoEBuilder[DlinferMLPMetadata]):

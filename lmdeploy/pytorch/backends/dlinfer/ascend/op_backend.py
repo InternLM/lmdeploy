@@ -352,6 +352,15 @@ class AscendOpsBackend(DlinferOpsBackend):
                 pad_size = 0
             return pad_size, x_active_mask
 
+        @lru_cache(maxsize=1)
+        def get_moe_group_name(group):
+            if group is None:
+                return None
+            local_rank = torch.distributed.get_rank(group=group)
+            backend = group._get_backend(torch.device('npu'))
+            group_name = backend.get_hccl_comm_name(local_rank)
+            return group_name
+
         q_seqlens_cpu, kv_seqlens_cpu, kv_seqlens_expanded = get_cpu_seqlens(step_context.is_decoding,
                                                                              is_unpaged_prefill)
         q_seqlens_list, kv_seqlens_list = get_list_seqlens(step_context.is_decoding, is_unpaged_prefill, q_seqlens_cpu,
@@ -403,6 +412,7 @@ class AscendOpsBackend(DlinferOpsBackend):
                                    cls.dist_meta.ep_size)
         pad_size, x_active_mask = get_pad_info(actual_tokens_current_rank, runtime_tokens_current_rank,
                                                max_tokens_across_dp, cls.dist_meta.tp_size, moe_type)
+        moe_group_name = get_moe_group_name(cls.dist_meta.ep_group)
         mlp_meta_cls = cls.get_mlp_metadata_cls()
         mlp_metadata = mlp_meta_cls(
             max_tokens_across_dp=max_tokens_across_dp,
@@ -416,6 +426,7 @@ class AscendOpsBackend(DlinferOpsBackend):
             ep_group=cls.dist_meta.ep_group,
             moe_type=moe_type,
             x_active_mask=x_active_mask,
+            moe_group_name=moe_group_name,
         )
         step_context.mlp_metadata = mlp_metadata
         return step_context
