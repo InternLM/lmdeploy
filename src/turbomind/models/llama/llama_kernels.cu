@@ -7,9 +7,11 @@
 #include <utility>
 
 #include <cub/block/block_reduce.cuh>
+#include <cub/block/block_scan.cuh>
 
 #include "src/turbomind/kernels/core/array.h"
 #include "src/turbomind/kernels/core/array_ops.h"
+#include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -434,6 +436,126 @@ void invokeCastFloat2D(const core::Tensor& src, core::Tensor& dst, cudaStream_t 
     else {
         return dispatch_t(std::integral_constant<int, 1>{});
     }
+}
+
+template<class T>
+__global__ void CollectHiddenStates_Kernel(const T* src, const int* idxs, T* dst, int dim)
+{
+    const int bi = blockIdx.x;
+    const int ti = idxs[bi];
+
+    if (ti < 0) {
+        return;
+    }
+
+    src += ti * dim;
+    dst += bi * dim;
+
+    for (int di = threadIdx.x; di < dim; di += blockDim.x) {
+        dst[di] = src[di];
+    }
+}
+
+void CollectHiddenStates(const Tensor& src, const Buffer_<int>& idxs, Ref<Tensor> dst, cudaStream_t st)
+{
+    const auto stride = byte_size(src.dtype(), src.stride(0));
+
+    auto invoke = [&](auto t) {
+        using T           = decltype(t);
+        const int dim     = stride / sizeof(T);
+        const int threads = round_up(min(dim, 1024), WARP_SIZE);
+        const int blocks  = idxs.size();
+        CollectHiddenStates_Kernel<<<blocks, threads, 0, st>>>(
+            (const T*)src.raw_data(), idxs.data(), (T*)dst.get().raw_data(), dim);
+    };
+
+    if (stride % sizeof(uint4) == 0) {
+        invoke(uint4{});
+    }
+    else if (stride % sizeof(uint2) == 0) {
+        invoke(uint2{});
+    }
+    else if (stride % sizeof(uint1) == 0) {
+        invoke(uint1{});
+    }
+    else if (stride % sizeof(ushort) == 0) {
+        invoke(ushort{});
+    }
+    else {
+        TM_CHECK(0) << "unsupported byte stride: " << stride;
+    }
+}
+
+template<int BLOCK_DIM, int MAX_COUNT>
+__global__ void
+BatchPrefixSumKernel(Array<const int*, MAX_COUNT> srcs, Array<int, MAX_COUNT> ns, Array<int*, MAX_COUNT> dsts)
+{
+    const int  bi  = blockIdx.x;
+    const int* src = srcs[bi];
+    int*       dst = dsts[bi];
+    const int  n   = ns[bi];
+
+    using BlockScan = cub::BlockScan<int, BLOCK_DIM>;
+
+    __shared__ typename BlockScan::TempStorage temp_storage;
+
+    int prefix{};
+    for (int i = threadIdx.x; i < round_up(n, BLOCK_DIM); i += BLOCK_DIM) {
+        if (i >= BLOCK_DIM) {
+            __syncthreads();
+        }
+        int data = i < n ? src[i] : 0;
+        int sum{};
+        BlockScan{temp_storage}.ExclusiveSum(data, data, sum);
+        if (i < n) {
+            dst[i] = prefix + data;
+        }
+        prefix += sum;
+    }
+
+    if (threadIdx.x == 0) {
+        dst[n] = prefix;
+    }
+}
+
+void BatchPrefixSum(const int** srcs, const int* ns, int** dsts, int count, cudaStream_t st)
+{
+    constexpr int max_count = 1;
+
+    Array<const int*, max_count> p_srcs{};
+    Array<int*, max_count>       p_dsts{};
+    Array<int, max_count>        p_ns{};
+
+    for (int i = 0; i < count; ++i) {
+        p_srcs[i] = srcs[i];
+        p_dsts[i] = dsts[i];
+        p_ns[i]   = ns[i];
+    }
+
+    TM_CHECK_LE(count, max_count);
+
+    constexpr int block = 256;
+    const int     grid  = count;
+
+    BatchPrefixSumKernel<block><<<grid, block, 0, st>>>(p_srcs, p_ns, p_dsts);
+}
+
+__global__ void AppendTokenIdsKernel(int** token_ids_ptrs, const int* output_ids, const int* positions, int batch_size)
+{
+    int i = threadIdx.x + blockIdx.x * blockDim.x;
+    if (i < batch_size) {
+        int* token_ids = token_ids_ptrs[i];
+        int  pos       = positions[i];
+        token_ids[pos] = output_ids[i];
+    }
+}
+
+void AppendTokenIds(
+    int** token_ids_ptrs, const int* output_ids, const int* positions, int batch_size, cudaStream_t stream)
+{
+    constexpr int block = 128;
+    const int     grid  = cdiv(batch_size, block);
+    AppendTokenIdsKernel<<<grid, block, 0, stream>>>(token_ids_ptrs, output_ids, positions, batch_size);
 }
 
 }  // namespace turbomind

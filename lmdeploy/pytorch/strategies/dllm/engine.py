@@ -48,3 +48,7 @@ class DLLMEngineStrategy(EngineStrategy):
         max_num_loops = block_size // dllm_block_length * 2
         num_loops = min(self.scheduler_config.prefill_interval, max_num_loops)
         return num_loops
+
+    def get_num_decode_tokens(self) -> int:
+        """Get num_decode_tokens."""
+        return self.dllm_block_length

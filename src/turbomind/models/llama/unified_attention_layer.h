@@ -21,20 +21,20 @@
 
 #pragma once
 
-#include <array>
-
 #include <cuda_runtime.h>
 
 #include "src/turbomind/core/core.h"
+#include "src/turbomind/engine/batch.h"
 #include "src/turbomind/kernels/attention/cp_utils.h"
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
-#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
+
+struct AttentionData;
 
 class UnifiedAttentionLayer {
 public:
@@ -44,6 +44,7 @@ public:
     static constexpr int kMaxWorkspaceTokens = 4096;
 
     struct ForwardParam {
+        int               phase;
         Tensor            input;
         Tensor            output;
         const WeightType* weights;
@@ -55,22 +56,18 @@ public:
     UnifiedAttentionLayer(const ModelParam&     model,
                           const AttentionParam& attn,
                           const EngineParam&    engine,
-                          const LoraParam&      lora,
                           int                   tp_size,
-                          const Context&        context);
+                          const Context&        context,
+                          int                   phases,
+                          bool                  init);
+
+    void Run(BatchOp op, int phase, TensorMap& env);
 
     void Forward(ForwardParam p);
 
-    void Initialize(TensorMap& args);
-
-    void Finalize();
-
-    const int* d_cu_q_len()
-    {
-        return d_cu_q_len_;
-    }
-
 private:
+    void Setup(int phase, TensorMap& env);
+
     Tensor forward_mla(const Tensor& hidden_state, const WeightType& weights);
 
     /// TODO: dropping the `T` here requires deep refactor of attention dispatch
@@ -90,55 +87,35 @@ private:
     const AttentionParam param_;
     const EngineParam    engine_param_;
     const ModelParam     model_param_;
-    const LoraParam      lora_param_;
     const Context&       context_;
 
-    cudaStream_t const stream_;
-    LlamaLinear&       linear_;
-    const int          arch_{};
+    int& is_warm_up_;
+
+    LlamaLinear& linear_;
+    const int    arch_{};
 
     cudaStream_t aux_stream_;
     cudaEvent_t  qkv_event_;
     cudaEvent_t  aux_event_;
 
-    std::array<cudaStream_t, 2> streams_;
-
     RNG rng_;
 
     RopeKernelParam rope_param_{};
 
-    ///////////////////////////////////////////////////////
-    /// runtime states
-    int decode_num_;
-    int prefil_num_;
+    std::vector<std::shared_ptr<AttentionData>> data_;
 
-    Tensor_<float> partial_ML_;
+    ///////////////////////////////////////////////////////
+    /// temp runtime buffers
     Tensor_<float> partial_O_;
+    Tensor_<float> partial_ML_;
     Tensor_<int>   split_cnt_;
+    Tensor         tmp_attn_;
 
-    // context parallel
-    CpPostContext cp_fn_ctx_;
+    Buffer_<float> rope_base_buf_;
+    Buffer_<int>   mrope_position_delta_buf_;
+    Buffer_<int>   mrope_length_buf_;
 
-    Event event_;
-
-    Buffer_<int> h_q_len_;
-    Buffer_<int> h_k_len_;
-
-    Buffer_<int> d_cu_x_len_;
-    Buffer_<int> h_cu_x_len_;
-
-    // references into d/h_cu_x_len_
-    int* d_cu_q_len_;
-    int* d_cu_k_len_;
-    int* h_cu_q_len_;
-    int* h_cu_k_len_;
-
-    Buffer_<bool>  finished_;
-    Buffer_<float> rope_base_;
-
-    Buffer_<int>       cu_block_nums_;
-    Buffer_<uintptr_t> kv_block_ptrs_;
-    ///////////////////////////////////////////////////////
+    CpPostContext cp_fn_ctx_;  // context parallel
 };
 
 }  // namespace turbomind

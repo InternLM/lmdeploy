@@ -327,6 +327,7 @@ def parse_args():
     ArgumentHelper.model_format(tb_group, default='hf')
     ArgumentHelper.num_tokens_per_iter(tb_group)
     ArgumentHelper.max_prefill_iters(tb_group)
+    ArgumentHelper.async_(tb_group)
     ArgumentHelper.communicator(tb_group)
 
     args = parser.parse_args()
@@ -348,6 +349,7 @@ def main():
             quant_policy=args.quant_policy,
             num_tokens_per_iter=args.num_tokens_per_iter,
             max_prefill_iters=args.max_prefill_iters,
+            async_=args.async_,
             enable_prefix_caching=args.enable_prefix_caching,
             dtype=args.dtype,
             communicator=args.communicator,

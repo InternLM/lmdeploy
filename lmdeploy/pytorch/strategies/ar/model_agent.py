@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.distributed as dist
@@ -10,11 +10,32 @@ from torch.profiler import record_function
 from lmdeploy.pytorch.distributed import DistContext
 from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.messages import SchedulerSequence
-from lmdeploy.pytorch.model_inputs import ModelInputs
+from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 
 from ..base.model_agent import ExtraInputs, ExtraOutputs, ModelAgentStrategy, StoppingCriteria
 
 SeqList = List[SchedulerSequence]
+
+
+def get_model_inputs_next_decoding(inputs: ModelInputs, input_ids: torch.Tensor, max_q_seqlen: int,
+                                   model_metas) -> ModelInputs:
+    """Next decoding step."""
+    if input_ids.dim() == 1:
+        input_ids = input_ids[None, :]
+    return ModelInputs(
+        input_ids=input_ids,
+        seq_length=torch.full_like(inputs.seq_length, max_q_seqlen),
+        history_lengths=inputs.history_lengths + inputs.seq_length,
+        block_offsets=inputs.block_offsets,
+        is_decoding=True,
+        num_ignored_history=inputs.num_ignored_history,
+        max_q_seqlen=max_q_seqlen,
+        max_kv_seqlen=inputs.max_kv_seqlen + max_q_seqlen,
+        sum_kv_seqlen=inputs.sum_kv_seqlen + inputs.seq_length.numel() * inputs.max_q_seqlen,
+        local_adapter_ids=inputs.local_adapter_ids,
+        model_metas=model_metas,
+        state_offsets=inputs.state_offsets,
+    )
 
 
 @dataclass
@@ -30,6 +51,21 @@ class ARExtraOutputs(ExtraOutputs):
 @dataclass
 class ARStoppingCriteria(StoppingCriteria):
     num_appendable_ids: torch.Tensor
+
+    def clone(self):
+        """clone."""
+        return ARStoppingCriteria(num_appendable_ids=self.num_appendable_ids)
+
+    def merge(self, other: 'ARStoppingCriteria'):
+        """Merge two stopping criteria."""
+        new_num_appendable = torch.cat([self.num_appendable_ids, other.num_appendable_ids], dim=0)
+        return ARStoppingCriteria(num_appendable_ids=new_num_appendable)
+
+    def update(self, delta: ModelInputsDelta):
+        """Update stopping criteria."""
+        indices = delta.indices
+        new_num_appendable = self.num_appendable_ids[indices]
+        return ARStoppingCriteria(num_appendable_ids=new_num_appendable)
 
     @record_function('stopping_criteria')
     def step(self,
@@ -70,7 +106,8 @@ class ARModelAgentStrategy(ModelAgentStrategy):
         """Slice outputs."""
         return extra_inputs
 
-    def _step_sampling_inputs(self, sampling_inputs: SamplingInputs, next_token_ids: torch.Tensor):
+    @record_function('step_sampling_inputs')
+    def step_sampling_inputs(self, sampling_inputs: SamplingInputs, next_token_ids: torch.Tensor, **kwargs):
         """step."""
         sampling_inputs.num_ignore_eos = sampling_inputs.num_ignore_eos - 1
         if sampling_inputs.random_offsets is not None:
@@ -90,22 +127,32 @@ class ARModelAgentStrategy(ModelAgentStrategy):
         num_appendable = torch.tensor(num_appendable)
         return ARStoppingCriteria(num_appendable_ids=num_appendable)
 
-    def make_extra_inputs(self, seqs: 'SeqList') -> ExtraInputs:
+    def make_extra_inputs(self, seqs: 'SeqList', model_inputs: 'ModelInputs') -> ExtraInputs:
         """Create extra inputs."""
         return ARExtraInputs()
 
-    def make_extra_outputs(self, extra_inputs: ARExtraInputs, **kwargs) -> ARExtraOutputs:
+    def make_extra_outputs(self, extra_inputs: ARExtraInputs) -> ARExtraOutputs:
         """Create extra outputs."""
         return ARExtraOutputs()
 
-    def update_inputs_for_next_step(self, model_inputs: 'ModelInputs', sampling_inputs: 'SamplingInputs',
-                                    next_token_ids: torch.Tensor, model_metas: Any, extra_inputs: ARExtraInputs,
-                                    **kwargs):
+    def update_prefill_for_next_step(
+        self,
+        model_inputs: 'ModelInputs',
+        extra_inputs: ARExtraInputs,
+        next_token_ids: torch.Tensor,
+        model_metas: Any,
+        extra_outputs: ARExtraOutputs,
+    ) -> Tuple['ModelInputs', ARExtraInputs]:
+        """Step next decoding."""
+        inputs = get_model_inputs_next_decoding(model_inputs, next_token_ids, max_q_seqlen=1, model_metas=model_metas)
+        return inputs, extra_inputs
+
+    def update_decoding_for_next_step(self, model_inputs: 'ModelInputs', next_token_ids: torch.Tensor, model_metas: Any,
+                                      extra_inputs: ARExtraInputs, **kwargs):
         """Step next inputs."""
         model_inputs.model_metas = model_metas
         step_seqlens = model_inputs.seq_length
         model_inputs.step(next_token_ids, step_seqlens)
-        self._step_sampling_inputs(sampling_inputs, next_token_ids)
         return model_inputs, extra_inputs
 
     def post_sampling(self, inputs: 'ModelInputs', logits: torch.Tensor, next_token_ids: torch.LongTensor,

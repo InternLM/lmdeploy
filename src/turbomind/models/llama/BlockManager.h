@@ -68,8 +68,6 @@ struct Snapshot {
 
 using GetFreeMemSize = std::function<size_t()>;
 
-size_t GetSyncFreeMemSize(Barrier& barrier, std::atomic<size_t>& value);
-
 class BlockManager {
 public:
     explicit BlockManager(

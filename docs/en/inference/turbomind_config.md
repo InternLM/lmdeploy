@@ -10,7 +10,7 @@ Take the `llama-2-7b-chat` model as an example. In TurboMind 2.x, its config.ini
 
 ```toml
 [llama]
-model_name = llama2
+model_name = "llama2"
 tensor_para_size = 1
 head_num = 32
 kv_head_num = 32
@@ -22,7 +22,7 @@ attn_bias = 0
 start_id = 1
 end_id = 2
 session_len = 4104
-weight_type = fp16
+weight_type = "fp16"
 rotary_embedding = 128
 rope_theta = 10000.0
 size_per_head = 128
@@ -33,7 +33,7 @@ step_length = 1
 cache_max_entry_count = 0.5
 cache_block_seq_len = 128
 cache_chunk_size = 1
-enable_prefix_caching = False
+enable_prefix_caching = false
 quant_policy = 0
 max_position_embeddings = 2048
 rope_scaling_factor = 0.0
@@ -43,7 +43,7 @@ use_logn_attn = 0
 These parameters are composed of model attributes and inference parameters. Model attributes include the number of layers, the number of heads, dimensions, etc., and they are **not modifiable**.
 
 ```toml
-model_name = llama2
+model_name = "llama2"
 head_num = 32
 kv_head_num = 32
 vocab_size = 32000
@@ -129,7 +129,7 @@ Taking the `llama-2-7b-chat` model as an example, in TurboMind 1.0, its `config.
 
 ```toml
 [llama]
-model_name = llama2
+model_name = "llama2"
 tensor_para_size = 1
 head_num = 32
 kv_head_num = 32
@@ -141,7 +141,7 @@ attn_bias = 0
 start_id = 1
 end_id = 2
 session_len = 4104
-weight_type = fp16
+weight_type = "fp16"
 rotary_embedding = 128
 rope_theta = 10000.0
 size_per_head = 128
@@ -161,7 +161,7 @@ use_logn_attn = 0
 These parameters are composed of model attributes and inference parameters. Model attributes include the number of layers, the number of heads, dimensions, etc., and they are **not modifiable**.
 
 ```toml
-model_name = llama2
+model_name = "llama2"
 head_num = 32
 kv_head_num = 32
 vocab_size = 32000

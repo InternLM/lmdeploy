@@ -170,6 +170,15 @@ def visualize_pipe_out(outputs, enable_meta: bool = True):
             f"{colored('• Generated Tokens:', meta_color)} {colored(out.generate_token_len, number_color)}",
             f"{colored('• Finish Reason:', meta_color)}    {colored(out.finish_reason, finish_color)}"
         ]
+        if out.routed_experts is not None:
+            shape = tuple(out.routed_experts.shape)
+            meta_content.append(f"{colored('• Routed Experts:', meta_color)}  {colored(shape, number_color)}")
+        if out.logits is not None:
+            shape = tuple(out.logits.shape)
+            meta_content.append(f"{colored('• Logits Shape:', meta_color)}     {colored(shape, number_color)}")
+        if out.logprobs is not None:
+            size = len(out.logprobs)
+            meta_content.append(f"{colored('• Logprobs:', meta_color)}      {colored(size, number_color)}")
 
         lines = '\n'.join(meta_content)
         lines += '\n'

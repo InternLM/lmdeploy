@@ -1,5 +1,5 @@
 OpenAPI Endpoints
-============
+==================
 .. currentmodule:: lmdeploy
 
 OpenAI Compatible API Endpoints

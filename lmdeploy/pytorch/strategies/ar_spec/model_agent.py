@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.distributed as dist
@@ -10,9 +10,9 @@ from torch.profiler import record_function
 from lmdeploy.pytorch.distributed import DistContext
 from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.messages import SchedulerSequence
-from lmdeploy.pytorch.model_inputs import ModelInputs
+from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 
-from ..ar.model_agent import ARStoppingCriteria
+from ..ar.model_agent import ARStoppingCriteria, get_model_inputs_next_decoding
 from ..base.model_agent import ExtraInputs, ExtraOutputs, ModelAgentStrategy
 
 SeqList = List[SchedulerSequence]
@@ -45,6 +45,11 @@ class ARSpecExtraInputs(ExtraInputs):
         handle = dist.broadcast(self.num_rejected_tokens, src=src, group=group, async_op=async_op)
         return handle
 
+    def merge(self, other: 'ARSpecExtraInputs'):
+        """Merge extra inputs."""
+        output_token_ids = torch.cat([self.output_token_ids, other.output_token_ids], dim=0)
+        return ARSpecExtraInputs(output_token_ids=output_token_ids)
+
 
 @dataclass
 class ARSpecExtraOutputs(ExtraOutputs):
@@ -59,6 +64,21 @@ class ARSpecExtraOutputs(ExtraOutputs):
 @dataclass
 class ARSpecStoppingCriteria(ARStoppingCriteria):
     num_appendable_ids: torch.Tensor
+
+    def clone(self):
+        """clone."""
+        return ARSpecStoppingCriteria(num_appendable_ids=self.num_appendable_ids)
+
+    def merge(self, other: 'ARSpecStoppingCriteria'):
+        """Merge two stopping criteria."""
+        new_num_appendable = torch.cat([self.num_appendable_ids, other.num_appendable_ids], dim=0)
+        return ARSpecStoppingCriteria(num_appendable_ids=new_num_appendable)
+
+    def update(self, delta: ModelInputsDelta):
+        """Update stopping criteria."""
+        indices = delta.indices
+        new_num_appendable = self.num_appendable_ids[indices]
+        return ARSpecStoppingCriteria(num_appendable_ids=new_num_appendable)
 
     @record_function('stopping_criteria')
     def step(self,
@@ -119,7 +139,7 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
             extra_inputs.target_logits = logits.unflatten(0, (batch_size, -1))[:, :-1]
         return extra_inputs
 
-    def _step_sampling_inputs(self, sampling_inputs: SamplingInputs, next_token_ids: torch.Tensor):
+    def step_sampling_inputs(self, sampling_inputs: SamplingInputs, next_token_ids: torch.Tensor, **kwargs):
         """step."""
         sampling_inputs.num_ignore_eos = sampling_inputs.num_ignore_eos - 1
 
@@ -135,33 +155,59 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
         num_appendable = torch.tensor(num_appendable)
         return ARSpecStoppingCriteria(num_appendable_ids=num_appendable)
 
-    def make_extra_inputs(self, seqs: 'SeqList') -> ExtraInputs:
+    def make_extra_inputs(self, seqs: 'SeqList', model_inputs: 'ModelInputs') -> ExtraInputs:
         """Create extra inputs."""
         return ARSpecExtraInputs()
 
-    def make_extra_outputs(self, extra_inputs: ARSpecExtraInputs, last_loop_step: bool = False) -> ARSpecExtraOutputs:
+    def update_extra_inputs(self, extra_inputs: ARSpecExtraInputs, delta: 'ModelInputsDelta') -> ARSpecExtraInputs:
+        """Update extra inputs with model inputs delta."""
+        indices = delta.indices
+        output_token_ids = extra_inputs.output_token_ids[indices]
+        return ARSpecExtraInputs(output_token_ids=output_token_ids)
+
+    def make_extra_outputs(self, extra_inputs: ARSpecExtraInputs) -> ARSpecExtraOutputs:
         """Create extra outputs."""
         output = ARSpecExtraOutputs()
-        # only output draft tokens to seq for last loop step
-        if last_loop_step:
-            output.draft_token_ids = extra_inputs.output_draft_token_ids
+        output.draft_token_ids = extra_inputs.output_draft_token_ids
         return output
 
-    def update_inputs_for_next_step(self, model_inputs: 'ModelInputs', sampling_inputs: 'SamplingInputs',
-                                    next_token_ids: torch.Tensor, model_metas: Any, extra_inputs: ARSpecExtraInputs,
-                                    **kwargs):
+    def update_prefill_for_next_step(
+        self,
+        model_inputs: 'ModelInputs',
+        extra_inputs: ARSpecExtraInputs,
+        next_token_ids: torch.Tensor,
+        model_metas: Any,
+        extra_outputs: ARSpecExtraOutputs,
+    ) -> Tuple['ModelInputs', ARSpecExtraInputs]:
+        """Step next decoding."""
+        next_token_ids = next_token_ids[:, None]
+        next_token_ids = torch.cat([next_token_ids, extra_outputs.draft_token_ids], dim=-1)
+        max_q_seqlen = next_token_ids.size(-1)
+        next_token_ids = next_token_ids.flatten()[None, :]
+        inputs = get_model_inputs_next_decoding(model_inputs,
+                                                next_token_ids,
+                                                max_q_seqlen=max_q_seqlen,
+                                                model_metas=model_metas)
+        extra_inputs = ARSpecExtraInputs(output_token_ids=extra_outputs.draft_token_ids)
+        return inputs, extra_inputs
+
+    def update_decoding_for_next_step(self, model_inputs: 'ModelInputs', next_token_ids: torch.Tensor, model_metas: Any,
+                                      extra_inputs: ARSpecExtraInputs, extra_outputs: ARSpecExtraOutputs):
         """Step next inputs."""
         model_inputs.model_metas = model_metas
         step_seqlens = model_inputs.seq_length
         batch_size = step_seqlens.size(0)
 
+        # update extra inputs
+        extra_inputs.output_token_ids = extra_outputs.draft_token_ids
+
+        # update inputs
         step_seqlens = model_inputs.seq_length - extra_inputs.num_rejected_tokens
         input_ids = next_token_ids.new_empty((batch_size, self.num_spec_tokens + 1))
         input_ids[:, 0] = next_token_ids
         input_ids[:, 1:] = extra_inputs.output_draft_token_ids
         input_ids = input_ids.flatten()[None, :]
         model_inputs.step(input_ids, step_seqlens)
-        self._step_sampling_inputs(sampling_inputs, next_token_ids)
         return model_inputs, extra_inputs
 
     def post_sampling(self, inputs: 'ModelInputs', logits: torch.Tensor, next_token_ids: torch.LongTensor,

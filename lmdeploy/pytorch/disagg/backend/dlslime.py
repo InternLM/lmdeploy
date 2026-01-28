@@ -4,7 +4,7 @@ import json
 import os
 from typing import Dict
 
-from dlslime import NVLinkEndpoint, RDMAEndpoint, available_nic
+from dlslime import RDMAEndpoint, available_nic
 
 from lmdeploy.logger import get_logger
 from lmdeploy.pytorch.disagg.backend.backend import MIGRATION_BACKENDS
@@ -25,7 +25,7 @@ class DLSlimeMigrationManagement:
         self.rank = init_request.rank
         self.local_engine_config: DistServeEngineConfig = (init_request.local_engine_config)
         self.remote_engine_config: DistServeEngineConfig = (init_request.remote_engine_config)
-        self.endpoint: Dict[MigrationProtocol, RDMAEndpoint | NVLinkEndpoint] = {}
+        self.endpoint: Dict[MigrationProtocol, RDMAEndpoint] = {}
         if init_request.protocol == MigrationProtocol.RDMA:
             nics = available_nic()
             device_name = nics[self.rank % len(nics)]
@@ -36,6 +36,11 @@ class DLSlimeMigrationManagement:
                 link_type=init_request.rdma_config.link_type.name,
             )
         elif init_request.protocol == MigrationProtocol.NVLINK:
+            try:
+                from dlslime import NVLinkEndpoint
+            except ImportError:
+                logger.warning('Notice: DLSlime not compiled from source with NVLink. Fallback to RDMAEndpoint.')
+                NVLinkEndpoint = RDMAEndpoint
             self.endpoint[MigrationProtocol.NVLINK] = NVLinkEndpoint()
 
     def register_memory_region(self, register_mr_request: DistServeRegisterMRMessage):

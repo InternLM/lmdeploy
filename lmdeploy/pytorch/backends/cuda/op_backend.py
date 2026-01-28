@@ -191,33 +191,7 @@ class CudaOpsBackend(DefaultOpsBackend):
             elif use_flash_attn3_decoding:
                 attn_metadata = cls.update_meta_flashattn(attn_metadata, step_context)
 
-        cross_seqlens = step_context.cross_seqlens
-        cross_kv_seqlens = step_context.cross_kv_seqlens
-        cross_attn_metadata = None
-        if cross_seqlens is not None:
-            fill_seqlens = cross_seqlens
-            if fill_seqlens.sum().item() == 0:
-                fill_seqlens = None
-            cross_kv_start_loc = None
-            cross_kv_flatten_size = None
-            if not step_context.is_decoding and cross_kv_seqlens is not None:
-                cross_kv_start_loc = cross_kv_seqlens.cumsum(0) - cross_kv_seqlens
-                cross_kv_flatten_size = cross_kv_seqlens.sum().item()
-            cross_attn_metadata = attn_meta_cls(
-                step_context.is_decoding,
-                step_context.block_offsets,
-                q_start_loc=q_start_loc,
-                q_seqlens=q_seqlens,
-                kv_start_loc=cross_kv_start_loc,
-                kv_seqlens=cross_kv_seqlens,
-                kv_flatten_size=cross_kv_flatten_size,
-                fill_seqlens=fill_seqlens,
-                quant_policy=step_context.kv_quant_policy,
-                max_kv_seqlen=step_context.max_kv_seqlen,
-            )
-
         step_context.attn_metadata = attn_metadata
-        step_context.cross_attn_metadata = cross_attn_metadata
         return step_context
 
     @staticmethod

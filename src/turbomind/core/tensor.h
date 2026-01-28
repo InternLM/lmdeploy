@@ -340,6 +340,28 @@ public:
         return find(key) != end();
     }
 
+    void produce(const std::string& key, Tensor value)
+    {
+        TM_CHECK(emplace(key, std::move(value)).second);
+    }
+
+    Tensor try_consume(const std::string& key)
+    {
+        if (auto it = find(key); it != end()) {
+            auto value = std::move(it->second);
+            erase(it);
+            return value;
+        }
+        return Tensor{};
+    }
+
+    Tensor consume(const std::string& key)
+    {
+        auto value = try_consume(key);
+        TM_CHECK(value) << get_out_of_range_msg(key);
+        return value;
+    }
+
 private:
     std::string get_out_of_range_msg(const std::string& key) const;
 };

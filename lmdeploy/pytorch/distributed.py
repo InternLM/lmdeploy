@@ -195,6 +195,7 @@ class DistContext:
     mlp_tp_group: DistGroup = None
     moe_tp_group: DistGroup = None
 
+    cpu_group: dist.ProcessGroup = None
     ep_gpu_group: dist.ProcessGroup = None
     ep_gpu_groups: List[dist.ProcessGroup] = None
     dist_config: DistConfig = None
@@ -245,6 +246,9 @@ class DistContext:
             return context
 
         assert dist.is_initialized()
+
+        # cpu group
+        context.cpu_group = dist.new_group(ranks=list(range(world_size)), timeout=timeout, backend=cpu_backend)
 
         # tp
         _build_tp_group(context, timeout, cpu_backend=cpu_backend, ccl_backend=ccl_backend)

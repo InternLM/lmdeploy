@@ -1,31 +1,13 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include <algorithm>
+
 #include "src/turbomind/models/llama/BlockManager.h"
-#include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/debug_utils.h"
 #include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/string_utils.h"
-#include <algorithm>
-#include <iterator>
-#include <stdexcept>
 
 namespace turbomind {
-
-size_t GetSyncFreeMemSize(Barrier& barrier, std::atomic<size_t>& value)
-{
-    size_t free{};
-    size_t total{};
-    check_cuda_error(cudaMemGetInfo(&free, &total));
-
-    // atomicMin
-    auto old = value.load();
-    while (old > free && !value.compare_exchange_weak(old, free)) {}
-
-    // wait for all ranks
-    barrier.wait();
-
-    return value.load();
-}
 
 BlockManager::BlockManager(
     size_t block_size, double block_count, int chunk_size, core::Allocator allocator, GetFreeMemSize get_free_size):
@@ -106,18 +88,18 @@ size_t BlockManager::GetBlockCount(size_t block_size, double ratio, GetFreeMemSi
 
 void BlockManager::Move(std::vector<int>& src, const std::vector<int>& delta, std::vector<int>& dst)
 {
-    FT_CHECK(src.size() >= delta.size());
+    TM_CHECK_GE(src.size(), delta.size());
     std::vector<int> src1(src.size() - delta.size());
     {
         auto end = std::set_difference(src.begin(), src.end(), delta.begin(), delta.end(), src1.begin());
-        FT_CHECK(end == src1.end());
+        TM_CHECK(end == src1.end());
     }
     src.swap(src1);
 
     std::vector<int> dst1(dst.size() + delta.size());
     {
         auto end = std::set_union(dst.begin(), dst.end(), delta.begin(), delta.end(), dst1.begin());
-        FT_CHECK(end == dst1.end());
+        TM_CHECK(end == dst1.end());
     }
     dst.swap(dst1);
 }
@@ -136,10 +118,11 @@ auto BlockManager::Allocate(int count) -> std::pair<BlockIds, UniqueIds>
     for (int i = 0; i < count; ++i) {
         int   idx = free_ids_[i];
         auto& b   = blocks_[idx];
-        FT_CHECK(is_free(b));  // pre-condition: uc == 0 && ts == 0
+        TM_CHECK(is_free(b));  // pre-condition: uc == 0 && ts == 0
         b.use_count = 1;
         b.unique_id = unique_id_++;
-        FT_CHECK(is_active(b));  // post-condition
+        b.timestamp = timestamp_++;
+        TM_CHECK(is_active(b));  // post-condition
         block_ids[i]  = idx;
         unique_ids[i] = b.unique_id;
     }
@@ -153,7 +136,7 @@ auto BlockManager::Allocate(int count) -> std::pair<BlockIds, UniqueIds>
 
 void BlockManager::Evict(int count)
 {
-    FT_CHECK(count <= cached_ids_.size());
+    TM_CHECK_LE(count, cached_ids_.size());
     std::vector<int> idxs(cached_ids_);
     // get first `count` cached ids according to timestamp
     std::nth_element(idxs.begin(), idxs.begin() + count, idxs.end(), [&](int i, int j) {
@@ -167,10 +150,10 @@ void BlockManager::Evict(int count)
     // set as free
     for (const auto& idx : idxs) {
         auto& b = blocks_[idx];
-        FT_CHECK(is_cached(b));
+        TM_CHECK(is_cached(b));  // pre-condition
         b.unique_id = 0;
         b.timestamp = 0;
-        FT_CHECK(is_free(b));
+        TM_CHECK(is_free(b));  // post-condition
     }
 
     Move(cached_ids_, idxs, free_ids_);
@@ -184,10 +167,10 @@ void BlockManager::Free(BlockIds ids)
 
     for (const auto& i : ids) {
         auto& b = blocks_[i];
-        FT_CHECK(is_cached(b));  // uc == 0 && ts != 0
+        TM_CHECK(is_cached(b));  // pre-condition
         b.unique_id = 0;
         b.timestamp = 0;
-        FT_CHECK(is_free(b));
+        TM_CHECK(is_free(b));  // post-condition
     }
 
     Move(cached_ids_, ids, free_ids_);
@@ -200,10 +183,10 @@ int BlockManager::Unlock(const BlockIds& ids)
 
     for (const auto& i : ids) {
         auto& b = blocks_[i];
-        FT_CHECK(is_active(b));  // pre-condition: uc > 0
+        TM_CHECK(is_active(b));  // pre-condition
         if (--b.use_count == 0) {
             unlock.push_back(b.id);
-            FT_CHECK(is_cached(b));  // post-condition
+            TM_CHECK(is_cached(b));  // post-condition
         }
     }
 
@@ -224,7 +207,7 @@ int BlockManager::Lock(const BlockIds& ids)
         auto& b = blocks_[i];
         if (++b.use_count == 1) {
             lock.push_back(i);
-            FT_CHECK(is_active(b));
+            TM_CHECK(is_active(b));  // post-condition
         }
     }
 
@@ -240,14 +223,14 @@ int BlockManager::Lock(const BlockIds& ids)
 void BlockManager::Touch(const BlockIds& ids)
 {
     std::for_each(ids.crbegin(), ids.crend(), [this](int i) {
-        FT_CHECK(is_active(blocks_[i]));
+        TM_CHECK(is_active(blocks_[i]));
         blocks_[i].timestamp = timestamp_++;
     });
 }
 
 int BlockManager::Verify(const std::vector<int>& block_ids, const std::vector<uint64_t>& unique_ids)
 {
-    FT_CHECK(block_ids.size() == unique_ids.size());
+    TM_CHECK_EQ(block_ids.size(), unique_ids.size());
     int valid = block_ids.size();
     for (int i = 0; i < block_ids.size(); ++i) {
         if (unique_id(block_ids[i]) != unique_ids[i]) {
@@ -260,8 +243,8 @@ int BlockManager::Verify(const std::vector<int>& block_ids, const std::vector<ui
         miss += (unique_id(block_ids[i]) != unique_ids[i]);
     }
     // All later blocks should have been invalidated
-    FT_CHECK_WITH_INFO(miss == (int)block_ids.size() - valid,
-                       fmtstr("count = %d, valid = %d, miss = %d", (int)block_ids.size(), valid, miss));
+    TM_CHECK_EQ(miss, (int)block_ids.size() - valid)
+        << fmtstr("count = %d, valid = %d, miss = %d", (int)block_ids.size(), valid, miss);
     return valid;
 }
 

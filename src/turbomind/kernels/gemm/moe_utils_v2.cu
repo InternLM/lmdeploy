@@ -663,6 +663,8 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n] -> n
 
     auto success = dispatch();
 
+    sync_check_cuda_error();
+
     TM_CHECK(success) << "unsupported moe config: expert_num=" << experts << ", top_k=" << experts_per_token
                       << ", softmax=" << softmax << ", norm_topk=" << norm_topk;
 

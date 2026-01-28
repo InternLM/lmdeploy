@@ -293,7 +293,7 @@ class VisionModel(ABC):
         # collect image features from messages
         features = [x['content'] for x in messages if x['role'] == 'forward']
         features = features[0]
-        features = [x.cpu().numpy() for x in features]
+        features = [x.cpu() for x in features]
         # split prompt into segments and validate data
         segs = prompt.split(IMAGE_TOKEN)
         assert len(segs) == len(features) + 1, (f'the number of {IMAGE_TOKEN} is not equal '

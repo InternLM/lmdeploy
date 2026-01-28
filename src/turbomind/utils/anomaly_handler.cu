@@ -225,6 +225,8 @@ struct AnomalyHandler::Impl {
 
             check_cuda_error(cudaStreamSynchronize(stream_));
 
+#if 0
+            int die = 0;
             for (size_t i = 0; i < info_.size(); ++i) {
                 const auto& n_inf = h_count_[i * 2];
                 const auto& n_nan = h_count_[i * 2 + 1];
@@ -234,8 +236,11 @@ struct AnomalyHandler::Impl {
                                    info_[i].c_str(),
                                    std::to_string(n_inf).c_str(),
                                    std::to_string(n_nan).c_str());
+                    ++die;
                 }
             }
+            TM_CHECK_EQ(die, 0);
+#endif
 
             handler(h_is_anomaly_.data(), batch_size_);
         }
@@ -400,6 +405,9 @@ void DebugTensor(Tensor& tensor, const std::string& key, int level)
         AnomalyHandler::instance().CountAndFix((T*)tensor.raw_data(), tensor.size(), key, level);
         // Compare((T*)tensor.raw_data(), tensor.size(), key, kCmpRead, core::Context::stream().handle());
     };
+    if (tensor.size() == 0) {
+        return;
+    }
     TM_DISPATCH_DTYPES(tensor.dtype(), invoke, float, half_t, bfloat16_t);
 }
 

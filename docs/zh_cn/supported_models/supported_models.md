@@ -65,7 +65,6 @@
 |             Llama3             |     8B, 70B     | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |            Llama3.1            |     8B, 70B     | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |            Llama3.2            |     1B, 3B      | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
-|          Llama3.2-VL           |    11B, 90B     | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |             Llama4             | Scout, Maverick | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |            InternLM            |    7B - 20B     | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |           InternLM2            |    7B - 20B     | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
@@ -129,6 +128,7 @@
 ```{note}
 * [1] 目前，Mono-InternVL不支持FP16，因为数值不稳定。请改用BF16
 * [2] 自 0.6.4 之后，PyTorch 引擎移除了对 llava 模型原始格式的支持。我们建议使用它们对应的 transformers 格式的模型。这些模型可以在 https://huggingface.co/llava-hf 中找到
+自 0.11.1 起，PytorchEngine 移除了 mllama 的支持
 ```
 
 ## PyTorchEngine 其他平台

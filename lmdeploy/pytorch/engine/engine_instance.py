@@ -165,7 +165,7 @@ class EngineInstance(EngineInstanceBase):
         output_offset = 0
 
         while True:
-            resp = await self.req_sender.async_recv(resp)
+            resp = await self.req_sender.async_recv(resp, wait_main=True)
 
             cache_block_ids = resp.data.get('cache_block_ids', None) if resp.data else None
             req_metrics = resp.data.get('req_metrics', None) if resp.data else None

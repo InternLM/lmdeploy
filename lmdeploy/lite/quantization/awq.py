@@ -343,7 +343,7 @@ def smooth_layers(layers, fc2fcs, norm2fcs, a_scales, group_size=-1, device='cud
 
         layer.to('cpu')
         torch.cuda.empty_cache()
-        max_memory = torch.cuda.max_memory_allocated() / 1024 / 1024 / 1024
+        max_memory = torch.cuda.max_memory_allocated(device=device) / 1024 / 1024 / 1024
         print(f'{l_name} smooth weight done.'
               f' max gpu memory: {max_memory:.2f} GB')
 
@@ -404,6 +404,6 @@ def awq_layers(layers, fc2fcs, norm2fcs, a_scales, a_ratios=None, group_size=-1,
 
         layer.to('cpu')
         torch.cuda.empty_cache()
-        max_memory = torch.cuda.max_memory_allocated() / 1024 / 1024 / 1024
+        max_memory = torch.cuda.max_memory_allocated(device=device) / 1024 / 1024 / 1024
         print(f'{l_name} smooth weight done.'
               f' max gpu memory: {max_memory:.2f} GB')

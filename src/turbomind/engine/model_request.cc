@@ -6,7 +6,8 @@
 #include <type_traits>
 #include <utility>
 
-#include <xgrammar/xgrammar.h>
+#include "xgrammar/compiler.h"
+#include "xgrammar/matcher.h"
 
 #include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/engine/request.h"
@@ -110,8 +111,8 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
 
     auto metrics = param.enable_metrics ? std::make_shared<RequestMetrics>() : nullptr;
     if (metrics) {
-        metrics->enque_time     = RequestMetrics::timestamp();
-        metrics->scheduled_time = 0;  // will be set later
+        metrics->enqueue_time.store(RequestMetrics::timestamp(), std::memory_order_relaxed);
+        metrics->scheduled_time.store(0, std::memory_order_relaxed);
     }
 
     if (param.session.start_flag) {
@@ -130,10 +131,11 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
     r->sequence_length = outputs_->at("sequence_length");
 
     if (grammar_) {
-        r->matcher = std::make_shared<xgrammar::GrammarMatcher>(*grammar_);
+        r->grammar = std::move(grammar_);
+        r->matcher = std::make_shared<xgrammar::GrammarMatcher>(*r->grammar);
     }
 
-    // Keep a weak reference for canceling the request
+    // Keep a WEAK reference for canceling the request
     request_ = r;
 
     gateway_->push({std::move(r)});

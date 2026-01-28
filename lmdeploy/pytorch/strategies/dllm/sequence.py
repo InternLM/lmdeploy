@@ -11,7 +11,7 @@ from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.pytorch.engine.model_agent import BatchedOutputs
 from lmdeploy.pytorch.messages import (HistoryTokenIds, InputEmbeddings, MessageStatus, MultiModalInputs, SamplingParam,
                                        SchedulerSession, UpdateTokenMode, _to_ndarray)
-from lmdeploy.pytorch.model_inputs import ModelInputs
+from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 
 from ..ar.sequence import SchedulerSequenceDefault
 from ..base.sequence import SequenceStrategy
@@ -46,7 +46,7 @@ class SchedulerSequenceDLLM(SchedulerSequenceDefault):
     def dllm_mask(self):
         start = self.num_history_ids
         end = start + self._num_token_ids
-        return self.history_dllm_mask._token_ids[start:end]
+        return self.history_dllm_mask[start:end]
 
     @property
     def num_valid_ids(self):
@@ -56,11 +56,11 @@ class SchedulerSequenceDLLM(SchedulerSequenceDefault):
     def generated_ids(self) -> np.ndarray:
         end = self.num_valid_ids
         start = end - self.num_new_tokens
-        return self.history_cache._token_ids[start:end]
+        return self.history_cache[start:end]
 
     @property
     def all_dllm_mask(self):
-        return self.history_dllm_mask._token_ids[:self.num_all_ids]
+        return self.history_dllm_mask[:self.num_all_ids]
 
     @property
     def dllm_block_length(self):
@@ -194,6 +194,15 @@ class SchedulerSequenceDLLM(SchedulerSequenceDefault):
         if model_meta is not None:
             self.model_meta = model_meta
 
+    def set_step(self, step: int):
+        """Set step."""
+        # reset dllm mask
+        start = min(step, self.num_history_ids)
+        end = self.num_history_ids
+        if end > start:
+            self.history_dllm_mask[start:end] = DLLM_MASKED
+        super().set_step(step)
+
 
 class DLLMSequenceStrategy(SequenceStrategy):
 
@@ -218,7 +227,8 @@ class DLLMSequenceStrategy(SequenceStrategy):
                                      resp_cache=resp_cache,
                                      preserve_cache=preserve_cache)
 
-    def update_running(self, running: SeqList, batched_outputs: BatchedOutputs, model_inputs: 'ModelInputs') -> None:
+    def update_running(self, running: SeqList, batched_outputs: BatchedOutputs, model_inputs: 'ModelInputs',
+                       delta: 'ModelInputsDelta', **kwargs) -> None:
         """Update running sequences."""
         next_token_ids = batched_outputs.next_token_ids
         stopped = batched_outputs.stopped
@@ -229,11 +239,16 @@ class DLLMSequenceStrategy(SequenceStrategy):
         dllm_mask = batched_outputs.extra_outputs.dllm_mask
         stop_pos = batched_outputs.stop_pos
 
+        if model_inputs is None:
+            is_decoding = delta.is_decoding
+        else:
+            is_decoding = model_inputs.is_decoding
+
         batch_size = len(running)
         next_token_ids = next_token_ids.view(batch_size, -1).numpy()
         dllm_mask = dllm_mask.view(batch_size, -1).numpy()
         stop_pos = stop_pos.tolist()
-        update_mode = UpdateTokenMode.DECODE if model_inputs.is_decoding else UpdateTokenMode.PREFILL
+        update_mode = UpdateTokenMode.DECODE if is_decoding else UpdateTokenMode.PREFILL
         for idx, token in enumerate(next_token_ids):
             msg = running[idx]
             stop = stopped[idx]

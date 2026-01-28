@@ -16,7 +16,7 @@ from lmdeploy.utils import try_import_deeplink
 
 def smooth_quant(model: str,
                  work_dir: str = './work_dir',
-                 calib_dataset: str = 'ptb',
+                 calib_dataset: str = 'wikitext2',
                  calib_samples: int = 128,
                  calib_seqlen: int = 2048,
                  search_scale: bool = False,
