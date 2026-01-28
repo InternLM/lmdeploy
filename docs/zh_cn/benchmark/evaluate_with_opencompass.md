@@ -10,33 +10,44 @@
 
 ## 环境准备
 
-```shell
-pip install lmdeploy
-pip install "opencompass[full]"
+在不同的 Python 虚拟环境中分别安装 LMDeploy 和 OpenCompass，以避免可能的依赖冲突。
 
+- 安装 lmdeploy
+
+```shell
+conda create -n lmdeploy python=3.10 -y
+pip install lmdeploy
 # 下载 lmdeploy 源码，在后续步骤中会使用到 eval/* 中的评测脚本和配置文件
 git clone --depth=1 https://github.com/InternLM/lmdeploy.git
 ```
 
-建议将 LMDeploy 和 OpenCompass 安装在不同的 Python 虚拟环境中，以避免可能的依赖冲突。
+- 安装 opencompass
+
+```shell
+pip install "opencompass[full]"
+```
 
 ## 端到端评测
 
 1. **部署待评测模型**
 
 ```shell
+conda activate lmdeploy
 lmdeploy serve api_server <model_path> --server-port 10000 <--other-options>
 ```
 
 2. **部署评测模型（Judger）**
 
 ```shell
+conda activate lmdeploy
 lmdeploy serve api_server opencompass/CompassVerifier-32B --server-port 20000 --tp 2 --session-len 65536
 ```
 
 3. **生成评测配置并执行评测**
 
 ```shell
+conda activate opencompass
+
 cd {the/root/path/of/lmdeploy/repo}
 
 ## 指定数据集路径。如果在路径下没有找到评测数据集，OC会自动下载
@@ -62,12 +73,15 @@ python eval/eval.py {task_name} \
 1. **部署待评测模型**
 
 ```shell
+conda activate lmdeploy
 lmdeploy serve api_server <model_path> --server-port 10000 <--other-options>
 ```
 
 2. **生成推理配置并执行推理**
 
 ```shell
+conda activate opencompass
+
 cd {the/root/path/of/lmdeploy/repo}
 
 ## 指定数据集路径。如果在路径下没有找到评测数据集，OC会自动下载
@@ -91,12 +105,15 @@ python eval/eval.py {task_name} \
 1. **部署评测模型（Judger）**
 
 ```shell
+conda activate lmdeploy
 lmdeploy serve api_server opencompass/CompassVerifier-32B --server-port 20000 --tp 2
 ```
 
 2. **生成评判配置并执行评判**
 
 ```shell
+conda activate opencompass
+
 cd {the/root/path/of/lmdeploy/repo}
 
 ## 指定数据集路径。如果在路径下没有找到评测数据集，OC会自动下载
