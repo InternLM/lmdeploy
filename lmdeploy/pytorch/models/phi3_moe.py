@@ -9,7 +9,7 @@ from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, LayerNorm, RopeType
 from lmdeploy.pytorch.nn.linear import build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.nn.moe import build_fused_moe
-from lmdeploy.pytorch.nn.rotary_embedding import LongRoPEScalingParameters, build_rotary_embedding
+from lmdeploy.pytorch.nn.rotary_embedding import LongRoPEScalingParameters, build_rotary_embedding, get_rope_theta
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -273,7 +273,7 @@ class PhiMoEModel(nn.Module):
         emb_type = RopeType.LinearScaling
         rope_dim = config.hidden_size // config.num_attention_heads
         rope_max_pos_emb = config.max_position_embeddings
-        rope_base = config.rope_theta
+        rope_base = get_rope_theta(config)
         rope_scaling = config.rope_scaling
         if rope_scaling is not None:
             scaling_type = rope_scaling['type']

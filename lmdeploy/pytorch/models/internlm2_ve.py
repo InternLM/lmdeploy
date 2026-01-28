@@ -9,6 +9,7 @@ from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.models.internlm2 import InternLM2Attention, InternLM2MLP
 from lmdeploy.pytorch.nn import RMSNorm, RopeType, build_rotary_embedding
 from lmdeploy.pytorch.nn.linear import build_rowwise_linear
+from lmdeploy.pytorch.nn.rotary_embedding import get_rope_theta
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -128,7 +129,7 @@ class InternLM2VEModel(nn.Module):
                 raise RuntimeError(f'Unsupported rope type: {rope_type}')
         rope_dim = config.hidden_size // config.num_attention_heads
         rope_max_pos_emb = config.max_position_embeddings
-        rope_base = config.rope_theta
+        rope_base = get_rope_theta(config)
         self.rotary_emb = build_rotary_embedding(
             rope_dim,
             rope_max_pos_emb,
