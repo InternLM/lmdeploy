@@ -75,15 +75,14 @@ class Session:
             raise RuntimeError(f'Session {self.session_id} already has an inference instance.')
         logger.debug(f'[acquire_request_handle] session {self.session_id} acquiring an instance')
 
-        hnd_pool = self._session_mgr().request_handle_pool  # 要不要有 ()
+        hnd_pool = self._session_mgr().request_handle_pool
         self._handle = await hnd_pool.get()
         self._active = asyncio.Event()
         logger.debug(f'[acquire_request_handle] session {self.session_id} acquired an instance')
         try:
             yield self._handle
         except SafeRunException:
-            # SafeRunException is raised by AsyncEngine.safe_run. We don't need to handle it here.
-            pass
+            await self._handle.async_end(self.session_id)
         except Exception as e:
             logger.error(f'Session {self.session_id} failed to acquire an inference instance: {e}')
             raise e
