@@ -19,10 +19,10 @@ class SchedulerStats:
 
         num_total_reqs: API server, the number of all requests received since server start.
         num_completed_reqs: API server, the number of successfully completed requests since server start.
-        num_api_running_reqs: API server, the number of requests being assigned to instance resources.
-        num_api_waiting_reqs: API server, the number of requests waiting for instance resources.
+        num_api_running_reqs: API server, the number of requests being assigned to engine instances.
+        num_api_waiting_reqs: API server, the number of requests waiting for free engine instances.
         num_running_reqs: Engine core, currently executing requests.
-        num_waiting_reqs: Engine core, Requests queued waiting for execution.
+        num_waiting_reqs: Engine core, requests queued waiting for execution.
         gpu_cache_usage: Fraction of GPU KV blocks utilized (0.0 to 1.0).
         prefix_cache_hit_rate: Prefix caching hit rate.
     """
