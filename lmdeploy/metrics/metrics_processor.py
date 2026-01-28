@@ -93,13 +93,21 @@ class MetricsProcessor():
             return
         self.metrics_queue.put_nowait(update_data)
 
-    def increment_total_requests(self):
-        """Increment total requests."""
+    def increase_total_requests(self):
+        """Increase total requests."""
         self.scheduler_stats.num_total_reqs += 1
 
-    def increment_finished_requests(self):
-        """Increment finished requests."""
-        self.scheduler_stats.num_finished_reqs += 1
+    def increase_completed_requests(self):
+        """Increase completed requests."""
+        self.scheduler_stats.num_completed_reqs += 1
+
+    def increase_api_running_requests(self):
+        """Increase API running requests."""
+        self.scheduler_stats.num_api_running_reqs += 1
+
+    def decrease_api_running_requests(self):
+        """Decrease API running requests."""
+        self.scheduler_stats.num_api_running_reqs -= 1
 
 
 metrics_processor = MetricsProcessor()
