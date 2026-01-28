@@ -240,8 +240,9 @@ class Pipeline:
             is still a list with length 1.
         """
         supported_reward_models = ['InternLM2ForRewardModel', 'Qwen2ForRewardModel']
-        if self.arch not in supported_reward_models:
-            raise ValueError(f'{self.arch} is not in reward model list: {supported_reward_models}')
+        arch = self.async_engine.arch
+        if arch not in supported_reward_models:
+            raise ValueError(f'{arch} is not in reward model list: {supported_reward_models}')
         assert isinstance(input_ids, List)
         assert all(isinstance(x, int) for x in input_ids) or all(isinstance(x, List) for x in input_ids)
         # Make input_ids a list of token_id list
