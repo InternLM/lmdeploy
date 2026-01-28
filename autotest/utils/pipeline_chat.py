@@ -33,7 +33,7 @@ def run_pipeline_llm_test(config, run_config, common_case_config, worker_id: str
     run_config_string = run_config_string.replace(' ', '').replace('"', '\\"').replace(',', '\\,')
 
     cuda_prefix = get_cuda_prefix_by_workerid(worker_id, run_config.get('parallel_config'))
-    cmd = f'{cuda_prefix} python3 autotest/tools/pipeline/llm_case.py run_pipeline_chat_test {model_path} {run_config_string} autotest/prompt_case.yaml {is_smoke}'  # noqa E501
+    cmd = f'{cuda_prefix} python3 autotest/tools/pipeline/llm_case.py run_pipeline_chat_test {model_path} {run_config_string} autotest/prompt_case.yml {is_smoke}'  # noqa E501
 
     result, stderr = execute_command_with_logging(cmd, pipeline_log, timeout=1800, env=env)
 

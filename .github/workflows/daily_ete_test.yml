@@ -181,7 +181,6 @@ jobs:
           python3 -m pip install -r requirements/test.txt
           pip install ${{env.DEEPSEEK_VL}} --no-deps
           rm -rf ${{env.DEEPSEEK_VL}}/build
-          python3 -m pip install transformers==4.53.1 datasets==3.6.0
       - name: Check env
         run: |
           python3 -m pip list

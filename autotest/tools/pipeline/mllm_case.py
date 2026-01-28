@@ -110,13 +110,8 @@ def run_pipeline_mllm_test(model_path, run_config, resource_path, is_pr_test: bo
 
     if not is_pr_test:
         if 'internvl' in model_path.lower() and 'internvl2-4b' not in model_path.lower():
-            internvl_vl_testcase(pipe,
-                                 resource_path,
-                                 use_decord=run_config.get('extra_params', {}).get('device', 'cuda') == 'cuda')
-            internvl_vl_testcase(pipe,
-                                 resource_path,
-                                 lang='cn',
-                                 use_decord=run_config.get('extra_params', {}).get('device', 'cuda') == 'cuda')
+            internvl_vl_testcase(pipe, resource_path)
+            internvl_vl_testcase(pipe, resource_path, lang='cn')
         if 'minicpm' in model_path.lower():
             MiniCPM_vl_testcase(pipe, resource_path)
         if 'qwen' in model_path.lower():
@@ -125,7 +120,7 @@ def run_pipeline_mllm_test(model_path, run_config, resource_path, is_pr_test: bo
     pipe.close()
 
 
-def internvl_vl_testcase(pipe, resource_path, lang='en', use_decord=True):
+def internvl_vl_testcase(pipe, resource_path, lang='en'):
     if lang == 'cn':
         description = DESC_ZH
     else:
@@ -172,67 +167,41 @@ def internvl_vl_testcase(pipe, resource_path, lang='en', use_decord=True):
     print(f'[caseresult internvl-separate-images2-{lang} start]' + json.dumps(response.text, ensure_ascii=False) +
           f'[caseresult internvl-separate-images2-{lang} end]\n')
 
-    if use_decord:
+    # video multi-round conversation
+    def get_index(bound, fps, max_frame, first_idx=0, num_segments=32):
+        if bound:
+            start, end = bound[0], bound[1]
+        else:
+            start, end = -100000, 100000
+        start_idx = max(first_idx, round(start * fps))
+        end_idx = min(round(end * fps), max_frame)
+        seg_size = float(end_idx - start_idx) / num_segments
+        frame_indices = np.array(
+            [int(start_idx + (seg_size / 2) + np.round(seg_size * idx)) for idx in range(num_segments)])
+        return frame_indices
 
-        def get_index(bound, fps, max_frame, first_idx=0, num_segments=32):
-            if bound:
-                start, end = bound[0], bound[1]
-            else:
-                start, end = -100000, 100000
-            start_idx = max(first_idx, round(start * fps))
-            end_idx = min(round(end * fps), max_frame)
-            seg_size = float(end_idx - start_idx) / num_segments
-            frame_indices = np.array(
-                [int(start_idx + (seg_size / 2) + np.round(seg_size * idx)) for idx in range(num_segments)])
-            return frame_indices
+    def load_video(video_path, bound=None, num_segments=32):
+        import cv2
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise ValueError(f'Cannot open video file: {video_path}')
 
-        def load_video(video_path, bound=None, num_segments=32):
-            from decord import VideoReader, cpu
-            vr = VideoReader(video_path, ctx=cpu(0), num_threads=1)
-            max_frame = len(vr) - 1
-            fps = float(vr.get_avg_fps())
-            frame_indices = get_index(bound, fps, max_frame, first_idx=0, num_segments=num_segments)
-            imgs = []
-            for frame_index in frame_indices:
-                img = Image.fromarray(vr[frame_index].asnumpy()).convert('RGB')
+        max_frame = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) - 1
+        fps = cap.get(cv2.CAP_PROP_FPS)
+
+        frame_indices = get_index(bound, fps, max_frame, first_idx=0, num_segments=num_segments)
+        imgs = []
+
+        for frame_index in frame_indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+            ret, frame = cap.read()
+            if ret:
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                img = Image.fromarray(rgb_frame).convert('RGB')
                 imgs.append(img)
-            return imgs
-    else:
-        # video multi-round conversation
-        def get_index(bound, fps, max_frame, first_idx=0, num_segments=32):
-            if bound:
-                start, end = bound[0], bound[1]
-            else:
-                start, end = -100000, 100000
-            start_idx = max(first_idx, round(start * fps))
-            end_idx = min(round(end * fps), max_frame)
-            seg_size = float(end_idx - start_idx) / num_segments
-            frame_indices = np.array(
-                [int(start_idx + (seg_size / 2) + np.round(seg_size * idx)) for idx in range(num_segments)])
-            return frame_indices
 
-        def load_video(video_path, bound=None, num_segments=32):
-            import cv2
-            cap = cv2.VideoCapture(video_path)
-            if not cap.isOpened():
-                raise ValueError(f'Cannot open video file: {video_path}')
-
-            max_frame = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) - 1
-            fps = cap.get(cv2.CAP_PROP_FPS)
-
-            frame_indices = get_index(bound, fps, max_frame, first_idx=0, num_segments=num_segments)
-            imgs = []
-
-            for frame_index in frame_indices:
-                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
-                ret, frame = cap.read()
-                if ret:
-                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    img = Image.fromarray(rgb_frame).convert('RGB')
-                    imgs.append(img)
-
-            cap.release()
-            return imgs
+        cap.release()
+        return imgs
 
     video_path = resource_path + '/red-panda.mp4'
     imgs = load_video(video_path, num_segments=8)
