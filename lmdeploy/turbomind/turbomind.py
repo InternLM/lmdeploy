@@ -397,7 +397,7 @@ class TurboMind:
 
     def get_schedule_metrics(self):
         # TODO: support dp
-        tm_metrics = self.model_comm.get_schedule_metrics(0, 0)
+        tm_metrics = self.model_comm.get_schedule_metrics(0)
         return ScheduleMetrics(active_seqs=tm_metrics.active_seqs,
                                waiting_seqs=tm_metrics.waiting_seqs,
                                total_blocks=tm_metrics.total_blocks,
