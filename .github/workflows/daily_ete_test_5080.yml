@@ -339,7 +339,7 @@ jobs:
         run: |
           lmdeploy serve api_server /nvme/qa_test_models/${{matrix.model_path}} --tp ${{matrix.tp}} --backend ${{matrix.backend}} ${{matrix.extra}} > ${{env.REPORT_DIR}}/${{matrix.backend}}_${{matrix.model}}_${{matrix.generate_type}}_start_restful.log 2>&1 &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
-          for i in $(seq 1 180)
+          for i in $(seq 1 50)
           do
             sleep 5
             echo "health check try $i"
