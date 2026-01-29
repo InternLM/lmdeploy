@@ -69,6 +69,15 @@ class WeightScaleInv(Parameter):
         f(i, g('weight'), 'weight', identity)
 
 
+class CompressedWeight(Parameter):
+    KEYS = '.weight_packed', '.weight_scale', '.weight_zero_point'
+
+    def __call__(self, f, g, i):
+        f(i, g('weight_packed'), 'qweight', pack_u4_row)
+        f(i, g('weight_scale'), 'scales', to_half, apply_gs=['w2'])
+        f(i, g('weight_zero_point'), 'zeros', to_half, apply_gs=['w2'])
+
+
 class Mxfp4Weight(Parameter):
     KEYS = '.blocks', '.scales'
 
@@ -107,6 +116,8 @@ def get_params(keys: List[str], bias=0):
         ps.append(QuantWeightOnly())
     if WeightScaleInv.take(keys):
         ps.append(WeightScaleInv())
+    if CompressedWeight.take(keys):
+        ps.append(CompressedWeight())
     if Mxfp4Weight.take(keys):
         ps.append(Mxfp4Weight())
     if Weight.take(keys):

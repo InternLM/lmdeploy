@@ -31,6 +31,7 @@ class Response:
     event: asyncio.Event
     data: Any = None
     err_msg: str = ''
+    is_done: bool = False
     req_metrics: RequestMetrics = None
 
 

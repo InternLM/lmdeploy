@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from contextlib import closing
+
 import fire
 
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
@@ -70,36 +72,38 @@ def main(model_path, backend, **kwargs):
     if backend != 'pytorch':
         # set auto backend mode
         backend = autoget_backend(model_path)
-
-    pipe = build_pipe(model_path, backend, **kwargs)
-    gen_config = build_gen_config(**kwargs)
-    adapter_name = get_adapter_name(**kwargs)
-
     quit = False
-    while not quit:
-        with pipe.session(gen_config) as sess:
-            while True:
-                try:
-                    prompt = input_prompt()
-                except KeyboardInterrupt:
-                    quit = True
-                    break
-                if prompt == 'end':
-                    sess.close()
-                    break
-                if prompt == 'exit':
-                    quit = True
-                    break
-                if prompt.strip() == '':
-                    continue
-                resps = sess(prompt, adapter_name=adapter_name)
-                try:
-                    for resp in resps:
-                        print(resp.text, end='', flush=True)
-                except KeyboardInterrupt:
-                    sess.stop()
-    else:
-        print('exiting...')
+    with build_pipe(model_path, backend, **kwargs) as pipe:
+        gen_config = build_gen_config(**kwargs)
+        adapter_name = get_adapter_name(**kwargs)
+        while not quit:
+            with closing(pipe.session()) as sess:
+                while True:
+                    try:
+                        prompt = input_prompt()
+                    except KeyboardInterrupt:
+                        quit = True
+                        break
+                    if prompt == 'end':
+                        sess.close()
+                        break
+                    if prompt == 'exit':
+                        quit = True
+                        break
+                    if prompt.strip() == '':
+                        continue
+                    resps = pipe.chat(prompt,
+                                      session=sess,
+                                      gen_config=gen_config,
+                                      adapter_name=adapter_name,
+                                      stream_response=True)
+                    try:
+                        for resp in resps:
+                            print(resp.text, end='', flush=True)
+                    except KeyboardInterrupt:
+                        sess.abort()
+        else:
+            print('exiting...')
 
 
 if __name__ == '__main__':
