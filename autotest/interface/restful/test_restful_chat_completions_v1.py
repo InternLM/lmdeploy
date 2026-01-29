@@ -260,7 +260,7 @@ class TestRestfulInterfaceChatCompletions:
                                                              'content': 'Shanghai is'
                                                          },
                                                      ],
-                                                     repetition_penalty=0.1,
+                                                     repetition_penalty=0.0000001,
                                                      temperature=0.01,
                                                      max_tokens=200):
             continue

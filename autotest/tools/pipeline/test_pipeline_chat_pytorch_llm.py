@@ -52,7 +52,7 @@ def test_pipeline_chat_tp16(config, run_config, common_case_config, worker_id):
 @pytest.mark.gpu_num_2
 @pytest.mark.test_ascend
 @pytest.mark.parametrize('run_config', get_func_config_list(BACKEND, {'tp': 2}, extra={'enable-prefix-caching': None}))
-def test_pipeline_chat_turbomind_prefix_cache_tp2(config, run_config, common_case_config, worker_id):
+def test_pipeline_chat_pytorch_prefix_cache_tp2(config, run_config, common_case_config, worker_id):
     run_pipeline_llm_test(config, run_config, common_case_config, worker_id)
 
 
@@ -60,7 +60,7 @@ def test_pipeline_chat_turbomind_prefix_cache_tp2(config, run_config, common_cas
 @pytest.mark.gpu_num_2
 @pytest.mark.pr_test
 @pytest.mark.parametrize('run_config', PYTORCH_PR_TEST_LLM_GPU2)
-def test_hf_turbomind_chat_pr_tp2(config, run_config, common_case_config, worker_id):
+def test_hf_pytorch_chat_pr_tp2(config, run_config, common_case_config, worker_id):
     worker_id = 'gw' + str(3 + get_workerid(worker_id))
     run_pipeline_llm_test(config, run_config, common_case_config, worker_id)
 
@@ -69,7 +69,7 @@ def test_hf_turbomind_chat_pr_tp2(config, run_config, common_case_config, worker
 @pytest.mark.gpu_num_1
 @pytest.mark.pr_test
 @pytest.mark.parametrize('run_config', PYTORCH_PR_TEST_LLM_GPU1)
-def test_hf_turbomind_chat_pr_tp1(config, run_config, common_case_config, worker_id):
+def test_hf_pytorch_chat_pr_tp1(config, run_config, common_case_config, worker_id):
     worker_id = 'gw' + str(6 + get_workerid(worker_id))
     run_pipeline_llm_test(config, run_config, common_case_config, worker_id)
 

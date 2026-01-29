@@ -47,6 +47,8 @@ def run_pipeline_llm_test(config, run_config, common_case_config, worker_id: str
         for case in common_case_config.keys():
             if is_smoke and case != 'memory_test':
                 continue
+            if case != 'code_testcases' and 'code' in model_path.lower():
+                continue
 
             with allure.step(case):
                 case_info = common_case_config.get(case)

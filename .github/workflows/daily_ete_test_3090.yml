@@ -294,7 +294,7 @@ jobs:
       fail-fast: false
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
-        model_path: ['internlm/internlm3-8b-instruct']
+        model_path: ['internlm/internlm3-8b-instruct', 'Qwen/Qwen3-8B']
         include:
           - tp: 1
             model: internlm3-8b-instruct
@@ -303,8 +303,8 @@ jobs:
             generate_type: logprob
             extra: '--logprobs-mode raw_logprobs'
           - tp: 1
-            model: internlm3-8b-instruct
-            model_path: internlm/internlm3-8b-instruct
+            model: Qwen3-8b
+            model_path: Qwen/Qwen3-8B
             case_info: ['completions_v1']
             generate_type: base
     timeout-minutes: 60

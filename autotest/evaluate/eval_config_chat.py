@@ -128,15 +128,22 @@ for item in datasets:
     if 'max_out_len' in item['infer_cfg']['inferencer']:
         del item['infer_cfg']['inferencer']['max_out_len']
 
-infer = dict(runner=dict(
-    type=LocalRunner,
-    max_num_workers=64,
-    retry=0,
-    task=dict(type=OpenICLInferTask),
-), )
+NUM_WORKERS = 8
+
+infer = dict(
+    partitioner=dict(type=NumWorkerPartitioner, num_worker=NUM_WORKERS),
+    runner=dict(
+        type=LocalRunner,
+        max_num_workers=64,
+        retry=0,
+        task=dict(type=OpenICLInferTask),
+    ),
+)
 
 # eval with local runner
 eval = dict(
     partitioner=dict(type=NaivePartitioner, n=10),
     runner=dict(type=LocalRunner, max_num_workers=64, task=dict(type=OpenICLEvalTask)),
 )
+
+infer['partitioner']['num_worker'] = 64

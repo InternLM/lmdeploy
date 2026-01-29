@@ -177,6 +177,16 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
+          for i in $(seq 1 10); do
+            output=$(lmdeploy check_env 2>&1)
+            if echo "$output" | grep -q "CUDA available: False"; then
+              echo "CUDA not available (attempt $i/10), retrying in 5 seconds..."
+              sleep 5
+            else
+              echo "CUDA check passed"
+              break
+            fi
+          done
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -250,6 +260,16 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
+          for i in $(seq 1 10); do
+            output=$(lmdeploy check_env 2>&1)
+            if echo "$output" | grep -q "CUDA available: False"; then
+              echo "CUDA not available (attempt $i/10), retrying in 5 seconds..."
+              sleep 5
+            else
+              echo "CUDA check passed"
+              break
+            fi
+          done
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -329,6 +349,16 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
+          for i in $(seq 1 10); do
+            output=$(lmdeploy check_env 2>&1)
+            if echo "$output" | grep -q "CUDA available: False"; then
+              echo "CUDA not available (attempt $i/10), retrying in 5 seconds..."
+              sleep 5
+            else
+              echo "CUDA check passed"
+              break
+            fi
+          done
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
