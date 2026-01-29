@@ -92,7 +92,6 @@ turbomind_quantization:
 
 pytorch_quantization:
     awq:
-        - internlm/internlm3-8b-instruct
         - OpenGVLab/InternVL2_5-1B
         - Qwen/Qwen3-8B
         - Qwen/Qwen3-4B
