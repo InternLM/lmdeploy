@@ -19,7 +19,7 @@ from lmdeploy.pytorch.nn.eplb import EPLBDispatchInfo, EPLBManager
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_down_linear, build_gateup_linear, build_o_proj,
                                         build_rowwise_linear)
 from lmdeploy.pytorch.nn.moe import MoeType, SoftmaxTopK, build_fused_moe
-from lmdeploy.pytorch.nn.rotary_embedding import get_rope_theta
+from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters, get_rope_theta
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -442,9 +442,10 @@ class DeepseekV2Attention(nn.Module):
 
         self.softmax_scale = self.q_head_dim**(-0.5)
 
-        if config.rope_scaling is not None:
-            mscale_all_dim = config.rope_scaling.get('mscale_all_dim', 0)
-            scaling_factor = config.rope_scaling['factor']
+        rope_scaling = get_rope_parameters(config)
+        if rope_scaling is not None:
+            mscale_all_dim = rope_scaling.get('mscale_all_dim', 0)
+            scaling_factor = rope_scaling['factor']
             if mscale_all_dim:
                 mscale = yarn_get_mscale(scaling_factor, mscale_all_dim)
                 self.softmax_scale = self.softmax_scale * mscale * mscale
