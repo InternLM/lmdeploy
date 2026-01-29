@@ -828,7 +828,26 @@ def test_run_config():
 def test_get_parallel_config():
     test = get_parallel_config({}, 'empty')
     assert test == [{'tp': 1}]
-    test = get_parallel_config({'config':{'tp': {'empty': 1}, 'dp_ep': {'empty': {'dp':1, 'ep': 8}},'cp_tp': {'empty': {'cp':8, 'tp': 8}}}}, 'empty')
+    test = get_parallel_config(
+        {
+            'config': {
+                'tp': {
+                    'empty': 1
+                },
+                'dp_ep': {
+                    'empty': {
+                        'dp': 1,
+                        'ep': 8
+                    }
+                },
+                'cp_tp': {
+                    'empty': {
+                        'cp': 8,
+                        'tp': 8
+                    }
+                }
+            }
+        }, 'empty')
     assert test == [{'tp': 1}, {'dp': 1, 'ep': 8}, {'cp': 8, 'tp': 8}]
 
 

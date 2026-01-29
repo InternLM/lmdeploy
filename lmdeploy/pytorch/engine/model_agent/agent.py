@@ -2,7 +2,7 @@
 import asyncio
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from multiprocessing.reduction import ForkingPickler
 from os import getenv
 from typing import Any, Dict, List, Optional
@@ -36,6 +36,13 @@ from .inputs_maker import build_inputs_maker
 from .profiler import AgentProfiler
 
 logger = get_logger('lmdeploy')
+
+
+@dataclass
+class SleepWakeupState:
+    to_sleep: asyncio.Event = field(default_factory=asyncio.Event)
+    to_wakeup: asyncio.Event = field(default_factory=asyncio.Event)
+    is_sleeping: bool = False
 
 
 @dataclass
@@ -399,6 +406,8 @@ class BaseModelAgent:
                                            self.inputs_strategy,
                                            self.agent_strategy,
                                            device=device)
+        # sleep wakeup state
+        self.state: SleepWakeupState = SleepWakeupState()
 
         # decoding inputs
         self.step_inputs = StepInputs()
@@ -566,7 +575,8 @@ class BaseModelAgent:
 
         # gather dp forward metadata
         batch_size = inputs.seq_length.numel()
-        dp_forward_meta = [int(is_decoding), int(is_dummy), num_tokens]
+        is_sleeping = self.state.is_sleeping
+        dp_forward_meta = [int(is_decoding), int(is_dummy), num_tokens, int(is_sleeping)]
         # check enable_microbatch
         if self.enable_microbatch:
             tokens_num = inputs.input_ids.numel()
@@ -590,8 +600,9 @@ class BaseModelAgent:
 
         # check if all inputs are dummy inputs
         is_all_dummy = gathered_meta[:, 1].all().item()
+        is_all_sleeping = gathered_meta[:, 3].all().item()
         if is_all_dummy:
-            return None
+            return None, is_all_sleeping
 
         # pad batch size for decoding
         all_num_tokens = gathered_meta[:, 2].tolist()
@@ -608,7 +619,7 @@ class BaseModelAgent:
         # update dp meta
         inputs.build_dp_meta(all_num_tokens)
         inputs = self.patched_model.update_inputs(inputs)
-        return inputs
+        return inputs, is_all_sleeping
 
     def _get_inputs_from_delta(
         self,
@@ -793,9 +804,15 @@ class BaseModelAgent:
         is_decoding = inputs.is_decoding
         if dp > 1:
             # update inputs for dp
-            inputs = await self._prepare_dp_v1(inputs)
+            inputs, is_all_sleeping = await self._prepare_dp_v1(inputs)
             # skip dummy forward.
             if inputs is None:
+                if is_all_sleeping:
+                    self.state.to_sleep.set()
+                    await self.state.to_wakeup.wait()
+                    self.state.to_wakeup.clear()
+                    # sync after wakeup
+                    dist.barrier()
                 logger.debug(f'<ForwardTask> rank[{rank}]: all inputs are dummy, skip forward.')
                 await asyncio.sleep(0.01)
                 return
@@ -1177,14 +1194,17 @@ class BaseModelAgent:
             torch.cuda.empty_cache()
 
     @torch.inference_mode()
-    def sleep(self, level: int = 1):
+    async def sleep(self, level: int = 1):
         """Sleep."""
+        self.state.is_sleeping = True
+        await self.state.to_sleep.wait()
         self.cache_engine = None
         self.reset_graph_runner()
         device = 'cpu' if level == 1 else 'meta'
         self.patched_model.get_model().to(device=device, non_blocking=True)
         torch.cuda.synchronize()
         torch.cuda.empty_cache()
+        self.state.to_sleep.clear()
 
     @torch.inference_mode()
     def wakeup(self, tags: Optional[List[str]] = None):
@@ -1203,8 +1223,12 @@ class BaseModelAgent:
                 self.build_model()
                 self.build_graph_runner()
                 self.misc_config.empty_init = old_empty_init
+
         if 'kv_cache' in tags:
             self.build_cache_engine()
+            # wake up signal
+            self.state.is_sleeping = False
+            self.state.to_wakeup.set()
 
     def release(self):
         """release."""
