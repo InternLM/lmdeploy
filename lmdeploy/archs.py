@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
-from typing import Dict, List, Literal, Optional, Union
+from typing import Dict, List, Literal, Tuple
 
 from transformers import AutoConfig
 
@@ -57,8 +57,8 @@ def autoget_backend(model_path: str) -> Literal['turbomind', 'pytorch']:
 
 def autoget_backend_config(
     model_path: str,
-    backend_config: Optional[Union[PytorchEngineConfig, TurbomindEngineConfig]] = None
-) -> Union[PytorchEngineConfig, TurbomindEngineConfig]:
+    backend_config: PytorchEngineConfig | TurbomindEngineConfig | None = None
+) -> Tuple[Literal['turbomind', 'pytorch'], PytorchEngineConfig | TurbomindEngineConfig]:
     """Get backend config automatically.
 
     Args:
@@ -72,14 +72,14 @@ def autoget_backend_config(
     """
     from dataclasses import asdict
 
+    if isinstance(backend_config, PytorchEngineConfig):
+        return 'pytorch', backend_config
+
     backend = autoget_backend(model_path)
-    if backend == 'pytorch':
-        config = PytorchEngineConfig()
-    else:
-        config = TurbomindEngineConfig()
+    config = PytorchEngineConfig() if backend == 'pytorch' else TurbomindEngineConfig()
     if backend_config is not None:
         if type(backend_config) == type(config):
-            return backend_config
+            config = backend_config
         else:
             data = asdict(backend_config)
             for k, v in data.items():
@@ -90,7 +90,7 @@ def autoget_backend_config(
                 config.block_size = backend_config.cache_block_seq_len
             else:
                 config.cache_block_seq_len = backend_config.block_size
-    return config
+    return backend, config
 
 
 def check_vl_llm(config: dict) -> bool:
@@ -126,14 +126,14 @@ def check_vl_llm(config: dict) -> bool:
 
 def get_task(model_path: str):
     """Get pipeline type and pipeline class from model config."""
-    from lmdeploy.serve.async_engine import AsyncEngine
+    from lmdeploy.serve.core import AsyncEngine
 
     if os.path.exists(os.path.join(model_path, 'triton_models', 'weights')):
         # workspace model
         return 'llm', AsyncEngine
     _, config = get_model_arch(model_path)
     if check_vl_llm(config.to_dict()):
-        from lmdeploy.serve.vl_async_engine import VLAsyncEngine
+        from lmdeploy.serve.core import VLAsyncEngine
         return 'vlm', VLAsyncEngine
 
     # default task, pipeline_class
@@ -146,40 +146,27 @@ def get_model_arch(model_path: str):
     Args:
         model_path(str): the model path
     """
-    if os.path.exists(os.path.join(model_path, 'triton_models', 'weights')):
-        # the turbomind model
-        import yaml
-        config_file = os.path.join(model_path, 'triton_models', 'weights', 'config.yaml')
-        with open(config_file, 'r') as f:
-            config = yaml.safe_load(f)
+    try:
+        cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    except Exception as e:  # noqa
+        from transformers import PretrainedConfig
+        cfg = PretrainedConfig.from_pretrained(model_path, trust_remote_code=True)
 
-        from .turbomind.deploy.config import TurbomindModelConfig
-        tm_config = TurbomindModelConfig.from_dict(config)
-
-        return tm_config.model_config.model_arch, tm_config
+    _cfg = cfg.to_dict()
+    if _cfg.get('architectures', None):
+        arch = _cfg['architectures'][0]
+        if _cfg.get('auto_map'):
+            for _, v in _cfg['auto_map'].items():
+                if 'InternLMXComposer2ForCausalLM' in v:
+                    arch = 'InternLMXComposer2ForCausalLM'
+    elif _cfg.get('auto_map', None) and 'AutoModelForCausalLM' in _cfg['auto_map']:
+        arch = _cfg['auto_map']['AutoModelForCausalLM'].split('.')[-1]
+    elif _cfg.get('language_config', None) and _cfg['language_config'].get(
+            'auto_map', None) and 'AutoModelForCausalLM' in _cfg['language_config']['auto_map']:
+        arch = _cfg['language_config']['auto_map']['AutoModelForCausalLM'].split('.')[-1]
     else:
-        # transformers model
-        try:
-            cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-        except Exception as e:  # noqa
-            from transformers import PretrainedConfig
-            cfg = PretrainedConfig.from_pretrained(model_path, trust_remote_code=True)
-
-        _cfg = cfg.to_dict()
-        if _cfg.get('architectures', None):
-            arch = _cfg['architectures'][0]
-            if _cfg.get('auto_map'):
-                for _, v in _cfg['auto_map'].items():
-                    if 'InternLMXComposer2ForCausalLM' in v:
-                        arch = 'InternLMXComposer2ForCausalLM'
-        elif _cfg.get('auto_map', None) and 'AutoModelForCausalLM' in _cfg['auto_map']:
-            arch = _cfg['auto_map']['AutoModelForCausalLM'].split('.')[-1]
-        elif _cfg.get('language_config', None) and _cfg['language_config'].get(
-                'auto_map', None) and 'AutoModelForCausalLM' in _cfg['language_config']['auto_map']:
-            arch = _cfg['language_config']['auto_map']['AutoModelForCausalLM'].split('.')[-1]
-        else:
-            raise RuntimeError(f'Could not find model architecture from config: {_cfg}')
-        return arch, cfg
+        raise RuntimeError(f'Could not find model architecture from config: {_cfg}')
+    return arch, cfg
 
 
 def search_nested_config(config, key):

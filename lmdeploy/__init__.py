@@ -3,10 +3,11 @@
 from .api import client, pipeline, serve
 from .messages import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, VisionConfig
 from .model import ChatTemplateConfig
+from .pipeline import Pipeline
 from .tokenizer import Tokenizer
 from .version import __version__, version_info
 
 __all__ = [
     'pipeline', 'serve', 'client', 'Tokenizer', 'GenerationConfig', '__version__', 'version_info', 'ChatTemplateConfig',
-    'PytorchEngineConfig', 'TurbomindEngineConfig', 'VisionConfig'
+    'PytorchEngineConfig', 'TurbomindEngineConfig', 'VisionConfig', 'Pipeline'
 ]
