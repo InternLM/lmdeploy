@@ -32,7 +32,6 @@ def pack_u4_row(x: torch.Tensor) -> torch.Tensor:
 
 
 def generate_zero_point(g):
-    import torch
     weight_shapes = g('weight_shape')
     result = []
     for weight_shape in weight_shapes:
