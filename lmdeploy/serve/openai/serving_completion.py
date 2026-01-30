@@ -4,10 +4,10 @@ from typing import TYPE_CHECKING
 from .protocol import CompletionRequest
 
 if TYPE_CHECKING:
-    from .api_server import VariableInterface
+    from .api_server import ServerContext
 
 
-def check_request(request: CompletionRequest, server_context: 'VariableInterface') -> str:
+def check_request(request: CompletionRequest, server_context: 'ServerContext') -> str:
     engine_config = server_context.get_engine_config()
     session_manager = server_context.get_session_manager()
     try:
