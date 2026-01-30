@@ -8,7 +8,6 @@ import torch.nn as nn
 
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.backends import OpType, get_backend
-from lmdeploy.pytorch.backends.moe import MLPMetadata
 from lmdeploy.pytorch.config import TPMode
 from lmdeploy.pytorch.distributed import get_dist_manager, get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
@@ -30,9 +29,9 @@ class SoftmaxTopK(nn.Module):
         impl_builder = get_backend().get_layer_impl_builder(OpType.SoftmaxTopK)
         self.impl = impl_builder.build(top_k, dim, n_groups=n_groups)
 
-    def forward(self, x: torch.Tensor, mlp_metadata: MLPMetadata):
+    def forward(self, x: torch.Tensor):
         """forward."""
-        return self.impl.forward(x, mlp_metadata)
+        return self.impl.forward(x)
 
 
 def update_dims(hidden_dim: int, ffn_dim: int):
@@ -135,8 +134,7 @@ class MoEForwardDPTP:
         cur_out = self.gemm_func(hidden_states, topk_weights, topk_ids)
         return self.reduce_scatter(cur_out, output_states, tp_sizes)
 
-    def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.Tensor,
-                mlp_metadata: MLPMetadata):
+    def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.Tensor):
         """forward."""
 
         def __slice_tensor(tensor: torch.Tensor, slice_size: int):
@@ -178,7 +176,6 @@ class MoEForwardDPTP:
 
         # pre
         cur_inputs = __slice_and_gather()
-        cur_inputs.update(dict(mlp_metadata=mlp_metadata))
 
         out_handles = []
         # main loop
@@ -187,7 +184,6 @@ class MoEForwardDPTP:
             _, handle = self._gemm_and_reduce_scatter(**cur_inputs)
             out_handles.append(handle)
             cur_inputs = next_inputs
-            cur_inputs.update(dict(mlp_metadata=mlp_metadata))
 
         # post
         _, handle = self._gemm_and_reduce_scatter(**cur_inputs)
@@ -262,13 +258,12 @@ class FusedMoEBase(nn.Module):
 
         if self.tp > 1 and self.tp_mode == TPMode.DP_TP:
 
-            def __gemm_func(hidden_states, topk_weights, topk_ids, mlp_metadata):
+            def __gemm_func(hidden_states, topk_weights, topk_ids):
                 return self.gemm(
                     dict(
                         hidden_states=hidden_states,
                         topk_weights=topk_weights,
                         topk_idx=topk_ids,
-                        mlp_metadata=mlp_metadata,
                         moe_type=MoeType.Default,
                     ))['hidden_states']
 
@@ -301,8 +296,7 @@ class FusedMoEBase(nn.Module):
         """Forward dptp."""
         return self._forward_dptp
 
-    def forward_default(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_idx: torch.LongTensor,
-                        mlp_metadata: MLPMetadata):
+    def forward_default(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_idx: torch.LongTensor):
         """Default forward."""
         state = {
             'hidden_states': hidden_states,
@@ -311,21 +305,16 @@ class FusedMoEBase(nn.Module):
             'moe_type': MoeType.Default,
         }
         recv_state = self.dispatch(state)
-        recv_state.update({'mlp_metadata': mlp_metadata})
         gemm_state = self.gemm(recv_state)
         out_state = self.combine(gemm_state)
         return out_state['hidden_states']
 
-    def forward(self,
-                hidden_states: torch.Tensor,
-                topk_weights: torch.Tensor,
-                topk_idx: torch.LongTensor,
-                mlp_metadata: MLPMetadata = None):
+    def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_idx: torch.LongTensor):
         """forward."""
         if self.tp > 1 and self.tp_mode == TPMode.DP_TP:
-            return self.forward_dptp.forward(hidden_states, topk_weights, topk_idx, mlp_metadata)
+            return self.forward_dptp.forward(hidden_states, topk_weights, topk_idx)
         else:
-            return self.forward_default(hidden_states, topk_weights, topk_idx, mlp_metadata)
+            return self.forward_default(hidden_states, topk_weights, topk_idx)
 
     def renormalize(self, topk_weights):
         """renormalize."""

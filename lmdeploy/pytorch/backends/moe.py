@@ -1,23 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import functools
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Callable, Generic, List, Optional, TypeVar
+from typing import Callable, List, Optional
 
 import torch
 import torch.distributed as dist
 
 
-@dataclass
-class MLPMetadata:
-    """Base MLP metadata."""
-    ...
-
-
-T = TypeVar('T', bound=MLPMetadata)
-
-
-class SoftmaxTopKImpl(ABC, Generic[T]):
+class SoftmaxTopKImpl(ABC):
     """Softmax topk implementation api."""
 
     @staticmethod
@@ -32,7 +22,7 @@ class SoftmaxTopKImpl(ABC, Generic[T]):
         raise NotImplementedError
 
 
-class SoftmaxTopKBuilder(ABC, Generic[T]):
+class SoftmaxTopKBuilder(ABC):
     """Softmax topk implementation builder."""
 
     @staticmethod
@@ -42,7 +32,7 @@ class SoftmaxTopKBuilder(ABC, Generic[T]):
         raise NotImplementedError
 
 
-class FusedMoEImpl(ABC, Generic[T]):
+class FusedMoEImpl(ABC):
     """Fused moe implementation."""
 
     def update_weights(self, gate_up_weights: torch.Tensor, down_weights: torch.Tensor):
@@ -68,7 +58,7 @@ class FusedMoEImpl(ABC, Generic[T]):
         raise NotImplementedError
 
 
-class FusedMoEBuilder(ABC, Generic[T]):
+class FusedMoEBuilder(ABC):
     """Fused moe builder."""
 
     @staticmethod

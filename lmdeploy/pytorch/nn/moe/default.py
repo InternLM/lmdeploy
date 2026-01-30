@@ -298,14 +298,12 @@ class FusedMoE(FusedMoEBase):
             hidden_states = state['hidden_states']
             topk_weights = state['topk_weights']
             topk_ids = state['topk_idx']
-            mlp_metadata = state['mlp_metadata']
 
             hidden_states = self.impl.forward(hidden_states,
                                               topk_weights,
                                               topk_ids,
                                               self.gate_up.weight,
                                               self.down.weight,
-                                              mlp_metadata,
                                               self.gate_up.bias,
                                               self.down.bias,
                                               self.expert_list,

@@ -16,7 +16,7 @@ from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.utils import get_logger
 
-from ..moe import MoeType
+from ..moe import MOEMetadata, MoeType
 from ..op_backend import DlinferOpsBackend
 
 logger = get_logger('lmdeploy')
@@ -413,8 +413,8 @@ class AscendOpsBackend(DlinferOpsBackend):
         pad_size, x_active_mask = get_pad_info(actual_tokens_current_rank, runtime_tokens_current_rank,
                                                max_tokens_across_dp, cls.dist_meta.tp_size, moe_type)
         moe_group_name = get_moe_group_name(cls.dist_meta.ep_group)
-        mlp_meta_cls = cls.get_mlp_metadata_cls()
-        mlp_metadata = mlp_meta_cls(
+
+        moe_metadata = MOEMetadata(
             max_tokens_across_dp=max_tokens_across_dp,
             pad_size=pad_size,
             dp_size=cls.dist_meta.dp_size,
@@ -428,7 +428,7 @@ class AscendOpsBackend(DlinferOpsBackend):
             x_active_mask=x_active_mask,
             moe_group_name=moe_group_name,
         )
-        step_context.mlp_metadata = mlp_metadata
+        step_context.moe_metadata = moe_metadata
         return step_context
 
     @staticmethod

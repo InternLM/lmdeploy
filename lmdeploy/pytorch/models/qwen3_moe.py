@@ -225,13 +225,12 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
         self,
         hidden_states: torch.Tensor,
         all_routed_experts: torch.Tensor = None,
-        mlp_metadata: Any = None,
     ):
         """forward."""
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
         router_logits = self.gate(hidden_states)
-        topk_weights, topk_ids = self.softmax_topk(router_logits, mlp_metadata)
+        topk_weights, topk_ids = self.softmax_topk(router_logits)
         if all_routed_experts is not None:
             all_routed_experts[:, self.layer_idx, :] = topk_ids
         if get_dist_manager().current_context().dist_config.enable_eplb:
@@ -240,7 +239,6 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
             hidden_states,
             topk_weights,
             topk_ids,
-            mlp_metadata,
         )
 
         out_states = out_states.reshape(batch_size, sequence_length, -1)
@@ -286,7 +284,6 @@ class Qwen3MoeDecoderLayer(nn.Module):
         past_key_value: Optional[List[torch.FloatTensor]],
         residual: Optional[torch.Tensor] = None,
         attn_metadata: Any = None,
-        mlp_metadata: Any = None,
         all_routed_experts: torch.Tensor = None,
     ):
 
@@ -306,7 +303,7 @@ class Qwen3MoeDecoderLayer(nn.Module):
 
         # Fully Connected
         hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
-        hidden_states = self.mlp(hidden_states, all_routed_experts=all_routed_experts, mlp_metadata=mlp_metadata)
+        hidden_states = self.mlp(hidden_states, all_routed_experts=all_routed_experts)
 
         outputs = (hidden_states, residual)
         return outputs
@@ -352,7 +349,6 @@ class Qwen3MoeModel(nn.Module):
         position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[List[torch.FloatTensor]] = None,
         attn_metadata: Any = None,
-        mlp_metadata: Any = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         all_routed_experts: torch.Tensor = None,
     ):
@@ -379,7 +375,6 @@ class Qwen3MoeModel(nn.Module):
                 past_key_value=past_key_value,
                 residual=residual,
                 attn_metadata=attn_metadata,
-                mlp_metadata=mlp_metadata,
                 all_routed_experts=all_routed_experts,
             )
 
@@ -435,7 +430,6 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
         position_ids: torch.Tensor,
         past_key_values: List[List[torch.Tensor]],
         attn_metadata: Any = None,
-        mlp_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
@@ -456,7 +450,6 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
             position_ids=position_ids,
             past_key_values=past_key_values,
             attn_metadata=attn_metadata,
-            mlp_metadata=mlp_metadata,
             inputs_embeds=inputs_embeds,
             all_routed_experts=all_routed_experts,
         )
@@ -483,7 +476,6 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
         input_ids = context.input_ids
         position_ids = context.position_ids
         attn_metadata = context.attn_metadata
-        mlp_metadata = context.mlp_metadata
 
         # process vision embeddings
         vision_embeddings = context.input_embeddings
@@ -499,7 +491,6 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
             position_ids=position_ids,
             past_key_values=past_key_values,
             attn_metadata=attn_metadata,
-            mlp_metadata=mlp_metadata,
             inputs_embeds=inputs_embeds,
         )
 
