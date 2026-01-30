@@ -123,7 +123,7 @@ from lmdeploy import pipeline, GenerationConfig
 
 pipe = pipeline('internlm/internlm2_5-7b-chat')
 
-gen_config=GenerationConfig(output_logits='generation'
+gen_config=GenerationConfig(output_logits='generation',
                             max_new_tokens=10)
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'],
                 gen_config=gen_config)
