@@ -10,7 +10,7 @@ from torch.profiler import record_function
 # from torch import distributed as dist
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.backends import get_backend
-from lmdeploy.pytorch.config import CacheConfig, DLLMConfig, ModelConfig
+from lmdeploy.pytorch.config import CacheConfig, DLLMConfig, ModelConfig, QuantizationConfig
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
 from lmdeploy.pytorch.utils import CtxMgrBase, singleton
 
@@ -390,6 +390,7 @@ class BuildModelContext:
     dllm_config: DLLMConfig = None
     strategy_factory: 'StrategyFactoryBase' = None
     enable_return_routed_experts: bool = False
+    quant_config: QuantizationConfig = field(default_factory=QuantizationConfig)
 
 
 class StepContextManager(CtxMgrBase[StepContext]):
