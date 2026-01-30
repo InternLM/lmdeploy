@@ -50,7 +50,7 @@ class DPForwardInputsMaker:
         batch_size = 2 if dist_config.enable_microbatch else 1
         batch_size = min(self.cache_config.max_batches, batch_size)
         model_inputs = self.inputs_strategy.make_dummy(batch_size,
-                                                       is_decoding,
+                                                       is_decoding=is_decoding,
                                                        device=self.device,
                                                        vocab_size=self.model_config.vocab_size)
         forward_inputs = dict(inputs=model_inputs, )

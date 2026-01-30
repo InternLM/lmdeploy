@@ -6,7 +6,7 @@ import torch
 
 from lmdeploy.utils import get_logger
 
-from .default import TritonAttentionImpl, TritonAttentionMetadata
+from .default import TritonAttentionImpl, TritonAttentionMetadata, _fill_kv_cache_impl, _get_fill_meta
 
 logger = get_logger('lmdeploy')
 
@@ -391,7 +391,7 @@ class FlashMLAImpl(TritonAttentionImpl):
         """Fill kv cache."""
         is_fp8_kvcache = k_cache.dtype == torch.float8_e4m3fn
         if not is_fp8_kvcache:
-            return super()._fill_kv_cache_impl(
+            return _fill_kv_cache_impl(
                 key,
                 value,
                 k_cache,
@@ -408,8 +408,7 @@ class FlashMLAImpl(TritonAttentionImpl):
         assert quant_policy == 0
 
         # fill seqlen args
-        fill_seqlens, fill_max_q_seqlen, fill_q_start_loc = self._get_fill_meta(
-            key,
+        fill_seqlens, fill_max_q_seqlen, fill_q_start_loc = _get_fill_meta(
             attn_metadata,
             max_q_seqlen,
         )

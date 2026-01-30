@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Tuple
 
 import torch
 from torch import nn
@@ -21,8 +21,9 @@ from .utils.cudagraph import CudaGraphMixin
 class Qwen3MoeAttention(nn.Module):
     """Rewrite module of Qwen3MoeAttention."""
 
-    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, layer_id: int, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
+        self.layer_id = layer_id
         quantization_config = getattr(config, 'quantization_config', None)
         num_heads = config.num_attention_heads
         num_key_value_heads = config.num_key_value_heads
@@ -54,6 +55,7 @@ class Qwen3MoeAttention(nn.Module):
             num_kv_heads=num_key_value_heads,
             v_head_size=head_dim,
             sliding_window=getattr(config, 'sliding_window', None),
+            layer_id=layer_id,
         )
 
         # o_proj
@@ -81,8 +83,6 @@ class Qwen3MoeAttention(nn.Module):
         self,
         hidden_states: torch.Tensor,
         rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        attn_metadata: Any = None,
     ):
         """Rewrite of LlamaAttention.forward."""
         # qkv proj
@@ -110,12 +110,6 @@ class Qwen3MoeAttention(nn.Module):
             query_states,
             key_states,
             value_states,
-            past_key_value[0],
-            past_key_value[1],
-            attn_metadata,
-            k_scales_zeros=None if len(past_key_value) == 2 else past_key_value[2],
-            v_scales_zeros=None if len(past_key_value) == 2 else past_key_value[3],
-            inplace=True,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
 
@@ -258,7 +252,7 @@ class Qwen3MoeDecoderLayer(nn.Module):
         quantization_config = getattr(config, 'quantization_config', None)
 
         # build attention layer
-        self.self_attn = Qwen3MoeAttention(config, dtype=dtype, device=device)
+        self.self_attn = Qwen3MoeAttention(config, layer_idx, dtype=dtype, device=device)
 
         # build MLP
         if (layer_idx not in config.mlp_only_layers) and (config.num_experts
@@ -281,9 +275,7 @@ class Qwen3MoeDecoderLayer(nn.Module):
         self,
         hidden_states: torch.Tensor,
         rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[List[torch.FloatTensor]],
-        residual: Optional[torch.Tensor] = None,
-        attn_metadata: Any = None,
+        residual: torch.Tensor | None = None,
         all_routed_experts: torch.Tensor = None,
     ):
 
@@ -297,8 +289,6 @@ class Qwen3MoeDecoderLayer(nn.Module):
         hidden_states = self.self_attn(
             hidden_states=hidden_states,
             rotary_pos_emb=rotary_pos_emb,
-            past_key_value=past_key_value,
-            attn_metadata=attn_metadata,
         )
 
         # Fully Connected
@@ -345,12 +335,10 @@ class Qwen3MoeModel(nn.Module):
 
     def forward(
         self,
-        input_ids: torch.LongTensor = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
-        attn_metadata: Any = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        all_routed_experts: torch.Tensor = None,
+        input_ids: torch.Tensor,
+        position_ids: torch.Tensor,
+        inputs_embeds: torch.FloatTensor | None = None,
+        all_routed_experts: torch.Tensor | None = None,
     ):
         """Rewrite of LlamaModel.forward."""
 
@@ -368,13 +356,10 @@ class Qwen3MoeModel(nn.Module):
         # decoding
         residual = None
         for idx, decoder_layer in enumerate(self.layers):
-            past_key_value = past_key_values[idx]
             hidden_states, residual = decoder_layer(
                 hidden_states,
                 rotary_pos_emb=rotary_pos_emb,
-                past_key_value=past_key_value,
                 residual=residual,
-                attn_metadata=attn_metadata,
                 all_routed_experts=all_routed_experts,
             )
 
@@ -428,8 +413,6 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
-        attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
@@ -448,8 +431,6 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
         hidden_states = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
-            past_key_values=past_key_values,
-            attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
             all_routed_experts=all_routed_experts,
         )
@@ -468,14 +449,13 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
     def prepare_inputs_for_generation(
         self,
         past_key_values: List[List[torch.Tensor]],
-        inputs_embeds: Optional[torch.Tensor] = None,
+        inputs_embeds: torch.Tensor | None = None,
         context: StepContext = None,
     ):
         """Prepare input."""
         # get input_ids, position_ids and attention metadatas
         input_ids = context.input_ids
         position_ids = context.position_ids
-        attn_metadata = context.attn_metadata
 
         # process vision embeddings
         vision_embeddings = context.input_embeddings
@@ -489,8 +469,6 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
         return dict(
             input_ids=input_ids,
             position_ids=position_ids,
-            past_key_values=past_key_values,
-            attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
         )
 

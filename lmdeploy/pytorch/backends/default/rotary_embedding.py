@@ -54,18 +54,14 @@ def _rotary_embedding_fwd(position_ids: torch.Tensor,
     position_ids = position_ids.float() / scaling_factor
     inv_freq_expanded = inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
     position_ids_expanded = position_ids[:, None, :]
-    # Force float32 since bfloat16 loses precision on long contexts
-    # See https://github.com/huggingface/transformers/pull/29285
-    device_type = device_type if isinstance(device_type, str) and device_type != 'mps' else 'cpu'
-    with torch.autocast(device_type=device_type, enabled=False):
-        freqs = (inv_freq_expanded.float() * position_ids_expanded.float()).transpose(1, 2)
-        emb = freqs.repeat(1, 1, 2)
-        cos = emb.cos()
-        sin = emb.sin()
+    freqs = (inv_freq_expanded.float() * position_ids_expanded.float()).transpose(1, 2)
+    emb = freqs.repeat(1, 1, 2)
+    cos = emb.cos()
+    sin = emb.sin()
 
-        if mscale is not None:
-            cos = cos * mscale
-            sin = sin * mscale
+    if mscale is not None:
+        cos = cos * mscale
+        sin = sin * mscale
 
     return cos.to(dtype=dtype), sin.to(dtype=dtype)
 

@@ -15,14 +15,19 @@ class DLLMModelInputsStrategy(ModelInputsStrategy):
                    is_decoding: bool,
                    device: str = 'cpu',
                    dummy_block_id: int = 0,
-                   vocab_size: int = 1) -> ModelInputs:
+                   vocab_size: int = 1,
+                   max_q_seqlen: int | None = None,
+                   num_blocks: int = 1) -> ModelInputs:
         """Create dummy model inputs."""
+        if max_q_seqlen is None:
+            max_q_seqlen = self.block_size
         return make_dummy_inputs(batch_size,
-                                 max_q_seqlen=self.block_size,
+                                 max_q_seqlen=max_q_seqlen,
                                  is_decoding=is_decoding,
                                  device=device,
                                  dummy_block_id=dummy_block_id,
-                                 vocab_size=vocab_size)
+                                 vocab_size=vocab_size,
+                                 num_blocks=num_blocks)
 
     def merge(self, inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
         """Merge model inputs."""

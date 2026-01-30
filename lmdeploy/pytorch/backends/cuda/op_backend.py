@@ -198,7 +198,7 @@ class CudaOpsBackend(DefaultOpsBackend):
     def build_graph_runner(model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
                            backend_config: BackendConfig, device: torch.device):
         """Build graph runner."""
-        from .graph_runner import CUDAGraphRunner
+        from .graph_runner import build_runner
         from .warmup_manager import WarmupMeta, get_warmup_manager
 
         # warmup ops.
@@ -210,7 +210,7 @@ class CudaOpsBackend(DefaultOpsBackend):
         get_warmup_manager().warmup(warmup_meta)
 
         # make graph runner.
-        return CUDAGraphRunner(model, model_config, cache_config, backend_config, device)
+        return build_runner(model, model_config, cache_config, backend_config, device)
 
     @staticmethod
     def device_count():

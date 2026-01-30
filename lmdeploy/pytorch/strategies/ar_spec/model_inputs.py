@@ -23,6 +23,7 @@ class ARSpecModelInputsStrategy(ModelInputsStrategy):
         max_q_seqlen: int = 1,
         target_hidden_size: int = None,
         target_dtype: torch.dtype = torch.bfloat16,
+        num_blocks: int = 1,
     ) -> ModelInputs:
         """Create dummy model inputs."""
         inputs = make_dummy_inputs(batch_size,
@@ -30,7 +31,8 @@ class ARSpecModelInputsStrategy(ModelInputsStrategy):
                                    is_decoding=is_decoding,
                                    device=device,
                                    dummy_block_id=dummy_block_id,
-                                   vocab_size=vocab_size)
+                                   vocab_size=vocab_size,
+                                   num_blocks=num_blocks)
         if target_hidden_size is not None:
             inputs.target_hidden_states = torch.randn((1, batch_size * max_q_seqlen, target_hidden_size),
                                                       dtype=target_dtype,

@@ -169,6 +169,7 @@ def fused_moe_kernel(
     tl.store(c_ptrs, c, mask=mask_sid[:, None])
 
 
+@torch.library.custom_op('lmdeploy::fused_moe_kernel_launcher', mutates_args=['C'])
 def fused_moe_kernel_launcher(
     A: torch.Tensor,
     B: torch.Tensor,
@@ -176,13 +177,13 @@ def fused_moe_kernel_launcher(
     sorted_idx: torch.Tensor,
     exp_start: torch.Tensor,
     exp_end: torch.Tensor,
-    bias: torch.Tensor = None,
+    bias: torch.Tensor | None = None,
     top_k: int = 1,
-    num_tokens: int = None,
+    num_tokens: int | None = None,
     expert_offset: int = 0,
     reindex_a: bool = True,
     reindex_c: bool = True,
-):
+) -> None:
     """Fused moe kernel launcher."""
 
     if num_tokens is None:
@@ -500,12 +501,12 @@ def fused_moe(hidden_states: torch.Tensor,
               topk_weights: torch.Tensor,
               topk_ids: torch.Tensor,
               topk: int,
-              w1_bias: torch.Tensor = None,
-              w2_bias: torch.Tensor = None,
+              w1_bias: torch.Tensor | None = None,
+              w2_bias: torch.Tensor | None = None,
               expert_offset: int = 0,
-              num_experts: int = None,
+              num_experts: int | None = None,
               renormalize: bool = False,
-              act_func: Callable = None) -> torch.Tensor:
+              act_func: Callable | None = None) -> torch.Tensor:
     """Fused moe."""
     M = hidden_states.size(0)
     E, N, _ = w1.shape

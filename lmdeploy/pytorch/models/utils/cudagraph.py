@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import torch
 from torch import Tensor
@@ -9,6 +9,15 @@ from torch.profiler import record_function
 from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
 
 BuffType = Dict[str, Tensor]
+
+
+def get_attn_metadata(kwargs: Dict[str, Any], context: StepContext):
+    """Get attention metadata from kwargs or context."""
+    if 'attn_metadata' in kwargs:
+        attn_metadata = kwargs['attn_metadata']
+    else:
+        attn_metadata = context.attn_metadata
+    return attn_metadata
 
 
 def _get_meta_flashattn(
@@ -70,6 +79,7 @@ class CudaGraphMeta:
     max_batchs: int
     max_tokens: int
     num_blocks: int
+    block_size: int
     is_decoding: int
     device: torch.device
     input_buffers: BuffType = None
@@ -89,13 +99,20 @@ class CudaGraphMixin:
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
-        attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
         """Return True is model support cudagraph."""
+        if 'attn_metadata' in kwargs:
+            attn_metadata = kwargs['attn_metadata']
+        else:
+            step_ctx = get_step_ctx_manager().current_context()
+            attn_metadata = step_ctx.attn_metadata
         return attn_metadata.is_decoding
+
+    def use_torch_compile(self) -> bool:
+        """Return True is model support torch compile."""
+        return False
 
     def make_output_buffers(self, output):
         """Make output buffers."""
@@ -138,20 +155,29 @@ class CudaGraphMixin:
         )
         return scheduler_metadata
 
-    def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, *args, past_key_values: List, **kwargs) -> BuffType:
-        """Make cudagraph buffers from forward inputs."""
-        max_batches = graph_meta.max_batchs
+    def make_buffers_tokens(self, graph_meta: CudaGraphMeta, *args, **kwargs) -> BuffType:
         max_tokens = graph_meta.max_tokens
-        num_blocks = graph_meta.num_blocks
         device = graph_meta.device
-        decode_query_len = graph_meta.decode_query_len
-
         input_buffers: BuffType = dict()
         input_buffers['input_ids'] = torch.randint(0,
                                                    graph_meta.vocab_size, (1, max_tokens),
                                                    dtype=torch.int64,
                                                    device=device)
         input_buffers['position_ids'] = torch.zeros((1, max_tokens), dtype=torch.int64, device=device)
+
+        torch._dynamo.mark_static_address(input_buffers['input_ids'])
+        torch._dynamo.mark_static_address(input_buffers['position_ids'])
+
+        return input_buffers
+
+    def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, *args, **kwargs) -> BuffType:
+        """Make cudagraph buffers from forward inputs."""
+        max_batches = graph_meta.max_batchs
+        num_blocks = graph_meta.num_blocks
+        device = graph_meta.device
+        decode_query_len = graph_meta.decode_query_len
+
+        input_buffers: BuffType = self.make_buffers_tokens(graph_meta, *args, **kwargs)
 
         # flash_mla requires block_offsets and kv_lens int32
         input_buffers['block_offsets'] = torch.zeros((max_batches, num_blocks), dtype=torch.int32, device=device)
@@ -184,7 +210,7 @@ class CudaGraphMixin:
 
         # use fa3 decode kernel for spec decode
         elif graph_meta.use_fa3_decoding is True:
-            block_size = past_key_values[0][0].size(1)
+            block_size = graph_meta.block_size
             input_buffers['scheduler_metadata'] = self.update_meta_flashattn(graph_meta,
                                                                              block_size=block_size,
                                                                              max_seqlen_k=decode_query_len,
@@ -192,11 +218,37 @@ class CudaGraphMixin:
 
         return input_buffers
 
+    @record_function('fill_buffers_tokens')
+    def fill_buffers_tokens(self, graph_meta: CudaGraphMeta, input_ids: Tensor, position_ids: Tensor,
+                            **kwargs) -> BuffType:
+        """Fill token buffers from forward inputs."""
+        input_buffers: BuffType = graph_meta.input_buffers
+
+        _, num_tokens = input_ids.size()
+        # fill buffer
+        input_buffers['input_ids'].random_(0, graph_meta.vocab_size)
+        input_buffers['input_ids'][:, :num_tokens] = input_ids
+        input_buffers['position_ids'][:, :num_tokens] = position_ids
+
+        new_inputs = dict()
+        new_inputs['input_ids'] = input_buffers['input_ids']
+        new_inputs['position_ids'] = input_buffers['position_ids']
+
+        new_inputs.update(kwargs)
+        return new_inputs
+
     @record_function('fill_buffers_cudagraph')
     def fill_buffers_cudagraph(self, graph_meta: CudaGraphMeta, input_ids: Tensor, position_ids: Tensor,
-                               past_key_values: List, attn_metadata: Any, inputs_embeds: Tensor,
-                               **kwargs) -> Dict[str, Tensor]:
+                               inputs_embeds: Tensor, **kwargs) -> Dict[str, Tensor]:
         """Fill cudagraph buffers from forward inputs."""
+
+        # get attn_metadata
+        step_ctx = get_step_ctx_manager().current_context()
+        if 'attn_metadata' in kwargs:
+            attn_metadata = kwargs['attn_metadata']
+            step_ctx.attn_metadata = attn_metadata
+        else:
+            attn_metadata = step_ctx.attn_metadata
 
         block_offsets: Tensor = attn_metadata.block_offsets
         q_start_loc: Tensor = attn_metadata.q_start_loc
@@ -208,9 +260,7 @@ class CudaGraphMixin:
         num_tokens = input_ids.size(-1)
         decode_query_len = graph_meta.decode_query_len
         # fill buffer
-        input_buffers['input_ids'].random_(0, graph_meta.vocab_size)
-        input_buffers['input_ids'][:, :num_tokens] = input_ids
-        input_buffers['position_ids'][:, :num_tokens] = position_ids
+        self.fill_buffers_tokens(graph_meta, input_ids, position_ids, **kwargs)
         input_buffers['block_offsets'][:batch_size, :num_blocks] = block_offsets
 
         qkv = torch.stack((q_start_loc, q_seqlens, kv_seqlens))
@@ -254,7 +304,7 @@ class CudaGraphMixin:
 
         # use fa3 decode kernel for spec decode
         elif graph_meta.use_fa3_decoding is True:
-            block_size = past_key_values[0][0].size(1)
+            block_size = graph_meta.block_size
             scheduler_metadata = self.update_meta_flashattn(
                 graph_meta,
                 block_size=block_size,
@@ -265,10 +315,9 @@ class CudaGraphMixin:
             input_buffers['scheduler_metadata'].copy_(scheduler_metadata)
             attn_metadata.scheduler_metadata = input_buffers['scheduler_metadata']
 
-        new_inputs = dict(
-            past_key_values=past_key_values,
-            attn_metadata=attn_metadata,
-        )
+        new_inputs = dict()
+        if 'attn_metadata' in kwargs:
+            new_inputs['attn_metadata'] = attn_metadata
 
         new_inputs['input_ids'] = input_buffers['input_ids']
         new_inputs['position_ids'] = input_buffers['position_ids']
@@ -278,6 +327,22 @@ class CudaGraphMixin:
 
         new_inputs.update(kwargs)
         return new_inputs
+
+    def mark_dynamic_inputs(self, graph_meta: CudaGraphMeta, **kwargs):
+        """Mark dynamic shapes for torch compile."""
+        step_ctx = get_step_ctx_manager().current_context()
+        attn_metadata = get_attn_metadata(kwargs, step_ctx)
+        attn_metadata.mark_dynamic()
+
+    def mark_dynamic_context(self, graph_meta: CudaGraphMeta, context: StepContext):
+        """Mark dynamic shapes for step context."""
+        torch._dynamo.mark_dynamic(context.q_seqlens, 0)
+        torch._dynamo.mark_dynamic(context.kv_seqlens, 0)
+        torch._dynamo.mark_dynamic(context.q_start_loc, 0)
+
+        torch._dynamo.decorators.mark_unbacked(context.q_seqlens, 0)
+        torch._dynamo.decorators.mark_unbacked(context.kv_seqlens, 0)
+        torch._dynamo.decorators.mark_unbacked(context.q_start_loc, 0)
 
     def update_context_cudagraph(self, graph_meta: CudaGraphMeta, context: StepContext):
         """Update step context with input buffers."""

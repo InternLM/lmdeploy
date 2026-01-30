@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import functools
 from dataclasses import dataclass
-from typing import List
+from typing import List, Sequence
 
 import torch
 
@@ -103,3 +103,21 @@ class GraphRunner:
     def get_capture_batch_sizes(self) -> List[int]:
         """Capture batch sizes."""
         return _get_capture_batch_size_impl(self.cache_config.max_batches)
+
+    def get_capture_prefill_num_tokens(self) -> List[int]:
+        """Capture prefill num tokens."""
+        steps = 1024
+        max_prefill_token_num = self.cache_config.max_prefill_token_num
+        if max_prefill_token_num < steps:
+            return [max_prefill_token_num]
+        else:
+            output = list(range(steps, max_prefill_token_num + 1, steps))
+            if output[-1] != max_prefill_token_num:
+                output.append(max_prefill_token_num)
+            return output
+
+    def bind_pageable_buffers(self, caches: Sequence[Sequence[torch.Tensor]]):
+        """Bind kv cache buffers to attention modules."""
+        for mod in self.model.modules():
+            if hasattr(mod, 'bind_pageable_buffers'):
+                mod.bind_pageable_buffers(caches)
