@@ -513,7 +513,7 @@ class StreamingSemaphore:
     def release(self):
         if not self.val:
             self.val = 1
-            if self.fut:
+            if self.fut and not self.fut.done():
                 self.fut.set_result(None)
 
 

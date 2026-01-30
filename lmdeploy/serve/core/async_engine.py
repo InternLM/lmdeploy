@@ -269,6 +269,8 @@ class AsyncEngine:
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
             logger.error(f'[safe_run] session {session.session_id} exception caught: {type(e).__name__} {e}')
             await session.async_abort()
+            if self.backend == 'pytorch':
+                await handle.async_end(session.session_id)
             raise SafeRunException(f'Safe run exception for session {session.session_id}') from e
         finally:
             await generator.aclose()

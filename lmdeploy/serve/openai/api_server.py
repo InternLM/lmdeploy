@@ -779,7 +779,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         sessions.append(VariableInterface.get_session(request.session_id))
     elif isinstance(request.prompt, list):
         for i in range(len(request.prompt)):
-            sessions.append(VariableInterface.get_session())
+            sessions.append(VariableInterface.get_session(i + 1))
     if isinstance(request.stop, str):
         request.stop = [request.stop]
     random_seed = request.seed if request.seed else None
