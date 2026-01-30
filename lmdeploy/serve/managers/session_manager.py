@@ -85,7 +85,7 @@ class Session:
             pass
         except (asyncio.CancelledError, GeneratorExit) as e:
             logger.error(f'[request_handle] session {self.session_id} exception caught: {e}')
-            self._handle.async_cancel(self.session_id)
+            await self._handle.async_cancel(self.session_id)
         except Exception as e:
             logger.error(f'Session {self.session_id} failed to acquire an inference instance: {e}')
             raise e
@@ -109,7 +109,7 @@ class Session:
 
     async def async_close(self):
         """End the session."""
-        logger.info(f'[session]Ending session {self.session_id}')
+        logger.info(f'[session] Ending session {self.session_id}')
         if self._handle is not None:
             await self._active.wait()
         async with self.request_handle() as handle:
