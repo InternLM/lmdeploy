@@ -12,6 +12,7 @@ from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType, S
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_down_linear, build_gateup_linear, build_o_proj,
                                         build_rowwise_linear)
 from lmdeploy.pytorch.nn.moe import build_fused_moe
+from lmdeploy.pytorch.nn.rotary_embedding import get_rope_theta
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 from lmdeploy.utils import get_logger
 
@@ -390,7 +391,7 @@ class DeepSeekMultiTokenPredictorLayer(nn.Module):
         rope_dim = config.qk_rope_head_dim if getattr(config, 'use_mla', True) else (config.hidden_size //
                                                                                      config.num_attention_heads)
         rope_max_pos_emb = config.max_position_embeddings
-        rope_base = config.rope_theta
+        rope_base = get_rope_theta(config)
 
         rope_params = dict(emb_type=emb_type, dim=rope_dim, max_position_embeddings=rope_max_pos_emb, base=rope_base)
         update_params = build_rotary_params(config)
