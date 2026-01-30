@@ -1,9 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Callable, Optional
+from typing import Callable, Dict, Optional
 
 import torch
 
-from lmdeploy.pytorch.config import QuantizationConfig
+from lmdeploy.pytorch.models.patch import get_build_model_context
 
 from .base import MoeType, SoftmaxTopK  # noqa: F401
 
@@ -19,13 +19,16 @@ def build_fused_moe(
     device: Optional[torch.device] = None,
     all_reduce: bool = True,
     enable_ep: bool = False,
-    quant_config: QuantizationConfig = None,
+    quant_config: Dict = None,
     layer_idx: int = 0,
     act_func: Callable = None,
     prefix: str = '',
 ):
     """Fused moe builder."""
-    quant_method = None if quant_config is None else quant_config.get_quant_method(prefix)
+    quant_method = None
+    if quant_config is not None:
+        quant_config = get_build_model_context().quant_config
+        quant_method = quant_config.get_quant_method(prefix)
 
     if quant_method is None:
         from .default import FusedMoE

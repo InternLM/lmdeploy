@@ -8,6 +8,9 @@ import torch
 from lmdeploy.messages import PytorchEngineConfig
 from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
 from lmdeploy.pytorch.utils import maybe_register_config_serialize_by_value
+from lmdeploy.utils import get_logger
+
+logger = get_logger('lmdeploy')
 
 
 def _update_torch_dtype(config: 'ModelConfig', dtype: str):
@@ -18,9 +21,6 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str):
         dtype (str): user specified data type. Refer to
             `PyTorchEngineConfig.dtype` for detailed info
     """
-    from lmdeploy.utils import get_logger
-    logger = get_logger('lmdeploy')
-
     quantization_config = getattr(config.hf_config, 'quantization_config', dict())
     quant_method = quantization_config.get('quant_method', None)
     if quant_method == 'awq':
@@ -99,8 +99,6 @@ class CacheConfig:
 
     def __post_init__(self):
         """Post init."""
-        from lmdeploy.utils import get_logger
-        logger = get_logger('lmdeploy')
         if self.window_size > 1 and self.enable_prefix_caching:
             logger.warning('Prefix caching is not available for window attention.')
             self.enable_prefix_caching = False
@@ -263,6 +261,32 @@ def _default_check_env(device: str):
     pass
 
 
+def _patch_quantization_config(hf_config: Any, model_format: str = None):
+    """Patch quantization config."""
+    if model_format is None:
+        return hf_config
+
+    if hasattr(hf_config, 'quantization_config'):
+        logger.warning('Can not perform weight quantization on quantized model.')
+        return hf_config
+
+    if model_format == 'fp8':
+        logger.debug('Patch quantization config for fp8.')
+        from lmdeploy.pytorch.envs import scale_fmt
+        quantization_config = dict(quant_method='fp8', fmt='e4m3', weight_block_size=[128, 128], scale_fmt=scale_fmt)
+    else:
+        raise RuntimeError(f'Unsupported weight quantization method: {model_format}')
+
+    hf_config.quantization_config = quantization_config
+    # for vlm models
+    if hasattr(hf_config, 'text_config'):
+        hf_config.text_config.quantization_config = quantization_config
+    elif hasattr(hf_config, 'llm_config'):
+        hf_config.llm_config.quantization_config = quantization_config
+
+    return hf_config
+
+
 @dataclass
 class ModelConfig:
     """Config of model."""
@@ -337,11 +361,13 @@ class ModelConfig:
         from transformers import AutoConfig
 
         from lmdeploy.pytorch.transformers import config_from_pretrained
-        from lmdeploy.utils import get_logger
         hf_config = config_from_pretrained(pretrained_model_name_or_path, trust_remote_code=trust_remote_code)
         if getattr(hf_config, 'model_type', None) in ['phi3']:
             # phi3 + trust_remote_code leads to error when tp.
             hf_config = AutoConfig.from_pretrained(pretrained_model_name_or_path)
+
+        # update quantization config
+        hf_config = _patch_quantization_config(hf_config, model_format=model_format)
 
         model_config = cls.from_hf_config(
             hf_config,
@@ -353,7 +379,6 @@ class ModelConfig:
         )
 
         if hf_overrides is not None:
-            logger = get_logger('lmdeploy')
             logger.warning(f'Overriding HF config with {hf_overrides}')
             override_hf_config(model_config.hf_config, hf_overrides)
 
@@ -361,7 +386,7 @@ class ModelConfig:
         maybe_register_config_serialize_by_value(trust_remote_code)
 
         # add quant_config
-        model_config.quant_config = QuantizationConfig.from_config(hf_config, model_format=model_format)
+        model_config.quant_config = QuantizationConfig.from_config(hf_config)
         return model_config
 
     @classmethod
@@ -537,13 +562,8 @@ class QuantizationConfig:
     hf_quant_config: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_config(cls, hf_config: Any, model_format: str = None):
+    def from_config(cls, hf_config: Any):
         quant_config = getattr(hf_config, 'quantization_config', None)
-        if quant_config is None:
-            if model_format == 'fp8':
-                from lmdeploy.pytorch.envs import scale_fmt
-                quant_config = dict(quant_method='fp8', fmt='e4m3', weight_block_size=[128, 128], scale_fmt=scale_fmt)
-
         if quant_config is None:
             return cls()
 
@@ -599,6 +619,7 @@ class QuantizationConfig:
 
         is_ignore = any([prefix in layer_name for layer_name in self.ignored_layers])
         quant_method = None if is_ignore else self.quant_method
+        print(f'ignore quantization: {is_ignore}, use quant method: {quant_method} Layer {prefix} ')
         return quant_method
 
     def get(self, key, default=None):

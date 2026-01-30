@@ -185,23 +185,6 @@ def _get_model_class(config, module_map):
     raise RuntimeError(f'Can not found rewrite for architectures: {architectures}')
 
 
-def _patch_hf_quant_config(model_cls, model_config: ModelConfig, build_model_ctx: 'BuildModelContext'):
-    """Patch quant config to hf config."""
-    if build_model_ctx is None:
-        return model_config
-
-    quant_config = build_model_ctx.quant_config
-    if hasattr(model_cls, 'update_quant_config'):
-        quant_config = model_cls.update_quant_config(quant_config)
-    setattr(model_config, 'quantization_config', quant_config)
-
-    if hasattr(model_config, 'llm_config'):
-        setattr(model_config.llm_config, 'quantization_config', quant_config)
-    if hasattr(model_config, 'text_config'):
-        setattr(model_config.text_config, 'quantization_config', quant_config)
-    return model_config
-
-
 def build_model_from_hf_config(model_config: PretrainedConfig,
                                dtype: torch.dtype = None,
                                device: torch.device = None,
@@ -214,7 +197,10 @@ def build_model_from_hf_config(model_config: PretrainedConfig,
     if device is None:
         device = torch.device('cuda')
     model_cls = _get_model_class(model_config, module_map)
-    model_config = _patch_hf_quant_config(model_cls, model_config, build_model_ctx)
+    # update quant config
+    if build_model_ctx is not None and hasattr(model_cls, 'update_quant_config'):
+        build_model_ctx.quant_config = model_cls.update_quant_config(build_model_ctx.quant_config)
+
     with build_model_context(build_model_ctx):
         model = model_cls(model_config, ctx_mgr, dtype=dtype, device=device)
     return model.eval()

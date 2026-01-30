@@ -1,9 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from typing import Dict
+
 import torch
 from torch import nn
 
-from lmdeploy.pytorch.config import QuantizationConfig
 from lmdeploy.pytorch.distributed import get_tp_world_rank
+from lmdeploy.pytorch.models.patch import get_build_model_context
 
 from ..backends import OpType, get_backend
 from .utils import chunk_aligned, get_distribute_size
@@ -18,7 +20,7 @@ class RMSNorm(nn.Module):
         eps: float = 1e-6,
         dtype: torch.dtype = None,
         device: torch.device = None,
-        quant_config: QuantizationConfig = None,
+        quant_config: Dict = None,
         tp: bool = False,
         align: int = 1,
         prefix: str = '',
@@ -26,7 +28,11 @@ class RMSNorm(nn.Module):
         super().__init__()
         backend = get_backend()
 
-        quant_method = None if quant_config is None else quant_config.get_quant_method(prefix)
+        quant_method = None
+        if quant_config is not None:
+            quant_config = get_build_model_context().quant_config
+            quant_method = quant_config.get_quant_method(prefix)
+
         w8a8_flag = quant_method == 'smooth_quant'
 
         if w8a8_flag:
