@@ -199,6 +199,7 @@ jobs:
           ln -s /mnt/104/opencompass-data/data ./data
           ln -s /nvme/qa_test_models/resource/nltk_data /usr/share/nltk_data
           execution_mode="${{ github.event.inputs.execution_mode || 'both' }}"
+          ulimit -n 65535
           if [ "$execution_mode" = "both" ] || [ "$execution_mode" = "infer" ]; then
             pytest autotest/evaluate/test_api_evaluate.py -m "${{matrix.gpu_num}} and ${{matrix.backend}} and infer" --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
           fi

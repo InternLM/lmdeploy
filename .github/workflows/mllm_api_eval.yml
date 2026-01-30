@@ -199,6 +199,7 @@ jobs:
           unset HTTP_PROXY;unset HTTPS_PROXY;unset http_proxy;unset https_proxy;
           cd VLMEvalKit && cp -r ../autotest .
           execution_mode="${{ github.event.inputs.execution_mode || 'both' }}"
+          ulimit -n 65535
           if [ "$execution_mode" = "both" ] || [ "$execution_mode" = "infer" ]; then
             pytest autotest/evaluate/test_mllm_api_evaluate.py -m "${{matrix.gpu_num}} and ${{matrix.backend}} and infer" --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
           fi

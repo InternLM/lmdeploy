@@ -149,7 +149,7 @@ def eval_test(model_path, eval_path, case_name, port=DEFAULT_PORT, test_type='in
 
         work_dir = os.path.join(eval_path, f'wk_{case_name}')
         timestamp = time.strftime('%Y%m%d_%H%M%S')
-        eval_log = os.path.join(eval_path, f'log_{case_name}_{timestamp}.log')
+        eval_log = os.path.join(eval_path, f'log_{case_name}_{test_type}_{timestamp}.log')
         temp_config_path = os.path.join(eval_path, f'temp_{case_name}.py')
 
         current_dir = os.path.dirname(os.path.abspath(__file__))

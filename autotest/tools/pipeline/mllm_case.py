@@ -29,9 +29,9 @@ def run_pipeline_mllm_test(model_path, run_config, resource_path, is_pr_test: bo
     parallel_config = run_config.get('parallel_config', {})
 
     if 'pytorch' == backend:
-        backend_config = PytorchEngineConfig(session_len=32576, quant_policy=quant_policy, cache_max_entry_count=0.6)
+        backend_config = PytorchEngineConfig(session_len=65152, quant_policy=quant_policy, cache_max_entry_count=0.6)
     else:
-        backend_config = TurbomindEngineConfig(session_len=32576,
+        backend_config = TurbomindEngineConfig(session_len=65152,
                                                communicator=communicator,
                                                quant_policy=quant_policy,
                                                cache_max_entry_count=0.6)

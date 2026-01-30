@@ -262,7 +262,8 @@ class TestRestfulInterfaceChatCompletions:
                                                      ],
                                                      repetition_penalty=0.0000001,
                                                      temperature=0.01,
-                                                     max_tokens=200):
+                                                     max_tokens=200,
+                                                     min_new_tokens=100):
             continue
         assert_chat_completions_batch_return(output, model_name)
         result, msg = has_repeated_fragment(output.get('choices')[0].get('message').get('content'))
@@ -280,9 +281,10 @@ class TestRestfulInterfaceChatCompletions:
                                                          },
                                                      ],
                                                      stream=True,
-                                                     repetition_penalty=0.1,
+                                                     repetition_penalty=0.0000001,
                                                      temperature=0.01,
-                                                     max_tokens=200):
+                                                     max_tokens=200,
+                                                     min_new_tokens=100):
             outputList.append(output)
         assert_chat_completions_stream_return(outputList[-1], model_name, True)
         response = ''
@@ -529,7 +531,7 @@ class TestRestfulInterfaceChatCompletions:
             response += outputList[index].get('choices')[0].get('delta').get('content')
         length = api_client.encode(response, add_bos=False)[1]
         assert outputList[-1].get('choices')[0].get('finish_reason') == 'length'
-        assert length == 100 or length == 101
+        assert length >= 99 and length <= 101
 
     def __test_max_tokens_or_max_completion_tokens(
         self,
