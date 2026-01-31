@@ -104,29 +104,42 @@ class LlamaDynamicNTKScalingRotaryEmbedding(RotaryEmbeddingImpl):
         super().__init__(dim, base, scaling_factor)
         self.max_position_embeddings = max_position_embeddings
 
-    def _ntk_inv_freq(self, seq_len: torch.Tensor):
+    def _ntk_inv_freq(self, position_ids: torch.Tensor):
         """ntk_inv_freq."""
-        device = seq_len.device
-        base = self.base * ((self.scaling_factor * seq_len / self.max_position_embeddings) -
+        device = position_ids.device
+        seq_lens = (position_ids + 1).clamp_min(self.max_position_embeddings)
+        # (batch_size, lens,)
+        base = self.base * ((self.scaling_factor * seq_lens / self.max_position_embeddings) -
                             (self.scaling_factor - 1))**(self.dim / (self.dim - 2))
-        inv_freq = 1.0 / (base**(torch.arange(0, self.dim, 2, dtype=torch.int64, device=device).float() / self.dim))
+        # (dim,)
+        freq = torch.arange(0, self.dim, 2, dtype=torch.int64, device=device).float() / self.dim
+        # (batch_size, lens, dim)
+        inv_freq = 1.0 / (base[..., None]**freq[None, None, :])
         return inv_freq
+
+    @staticmethod
+    def _rotary_embedding_fwd(position_ids: torch.Tensor, inv_freq: torch.Tensor, dtype: torch.dtype = None):
+        """rotary embedding forward."""
+        if dtype is None:
+            dtype = torch.float16
+        position_ids = position_ids.float()
+        position_ids_expanded = position_ids[..., None]
+        freqs = (inv_freq.float() * position_ids_expanded.float())
+        emb = freqs.repeat(1, 1, 2)
+        cos = emb.cos()
+        sin = emb.sin()
+
+        return cos.to(dtype=dtype), sin.to(dtype=dtype)
 
     def forward(self, x: torch.Tensor, position_ids: torch.Tensor):
         """forward."""
-        device_type = x.device.type
-        dtype = x.dtype
-        seq_len = torch.max(position_ids) + 1
-        ntk_inv_freq = self._ntk_inv_freq(seq_len)
         if self.inv_freq.device != x.device:
             self.inv_freq = self.inv_freq.to(x.device)
-        inv_freq = torch.where(seq_len > self.max_position_embeddings, ntk_inv_freq, self.inv_freq)
+        dtype = x.dtype
+        ntk_inv_freq = self._ntk_inv_freq(position_ids)
+        inv_freq = ntk_inv_freq.where(position_ids[..., None] > self.max_position_embeddings, self.inv_freq)
 
-        cos, sin = _rotary_embedding_fwd(position_ids,
-                                         inv_freq,
-                                         scaling_factor=1.0,
-                                         dtype=dtype,
-                                         device_type=device_type)
+        cos, sin = self._rotary_embedding_fwd(position_ids, inv_freq, dtype=dtype)
         return cos, sin
 
 
