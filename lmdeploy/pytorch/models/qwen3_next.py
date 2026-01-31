@@ -17,6 +17,7 @@ from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader, load_weight
 
 from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
+from .utils.model import DeployModelMixinV1, build_embedding
 
 
 class GatedDeltaMeta:
@@ -811,12 +812,13 @@ class Qwen3NextModel(nn.Module):
         self.config = config
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
-
-        self.embed_tokens = nn.Embedding(config.vocab_size,
-                                         config.hidden_size,
-                                         self.padding_idx,
-                                         dtype=dtype,
-                                         device=device)
+        self.embed_tokens = build_embedding(
+            config.vocab_size,
+            config.hidden_size,
+            self.padding_idx,
+            dtype=dtype,
+            device=device,
+        )
 
         # build all decode layers
         # TODO: use full config.num_hidden_layers
@@ -879,7 +881,7 @@ class Qwen3NextModel(nn.Module):
         return self.embed_tokens
 
 
-class Qwen3NextForCausalLM(nn.Module, CudaGraphMixin):
+class Qwen3NextForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
     """ModelForCausalLM."""
 
     packed_modules_mapping = {
@@ -905,11 +907,7 @@ class Qwen3NextForCausalLM(nn.Module, CudaGraphMixin):
         # build model
         self.model = Qwen3NextModel(config, dtype=dtype, device=device)
         # build lm_head
-        self.lm_head = build_rowwise_linear(config.hidden_size,
-                                            config.vocab_size,
-                                            bias=False,
-                                            dtype=dtype,
-                                            device=device)
+        self.lm_head = self.build_lm_head(config.hidden_size, config.vocab_size, bias=False, dtype=dtype, device=device)
 
     def forward(
         self,
@@ -931,10 +929,6 @@ class Qwen3NextForCausalLM(nn.Module, CudaGraphMixin):
             state_ids=state_ids,
         )
         return hidden_states
-
-    def get_logits(self, hidden_states: torch.Tensor):
-        """Compute logits of the model output."""
-        return self.lm_head(hidden_states)
 
     def get_input_embeddings(self):
         """Get input embeddings."""

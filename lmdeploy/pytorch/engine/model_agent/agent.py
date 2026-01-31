@@ -1066,6 +1066,8 @@ class BaseModelAgent:
             dllm_config=self.misc_config.dllm_config,
             strategy_factory=self.strategy_factory,
             enable_return_routed_experts=enable_return_routed_experts,
+            enforce_fp32_head=self.model_config.enforce_fp32_head,
+            tie_word_embeddings=self.model_config.tie_word_embeddings,
         )
         patched_model = build_patched_model(self.model_config,
                                             device=device,
