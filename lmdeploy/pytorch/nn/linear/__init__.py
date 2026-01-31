@@ -70,6 +70,7 @@ def build_linear(
             is_tp=is_tp,
             all_reduce=all_reduce,
             layer_type=layer_type,
+            dtype=dtype,
         )
     if quant_method == 'smooth_quant':
         return W8A8Linear(in_features,
@@ -229,6 +230,7 @@ def build_merged_colwise_linear(
             device=device,
             is_tp=is_tp,
             layer_type=layer_type,
+            dtype=dtype,
         )
     if quant_method == 'smooth_quant':
         return MergedW8A8Linear(in_features=in_features,
@@ -314,7 +316,8 @@ def build_qkv_proj(in_features: int,
                             bias=bias,
                             device=device,
                             is_tp=is_tp,
-                            num_replicate_kv_heads=num_replicate_kv_heads)
+                            num_replicate_kv_heads=num_replicate_kv_heads,
+                            dtype=dtype)
     if quant_method == 'smooth_quant':
         return QKVW8A8Linear(in_features=in_features,
                              num_q_heads=num_q_heads,
