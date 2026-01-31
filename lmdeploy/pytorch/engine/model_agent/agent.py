@@ -646,6 +646,9 @@ class BaseModelAgent:
             # for second round chat
             self.step_inputs.update_delta(delta, self)
 
+        if inputs.is_first_chunk:
+            self._prev_chunk_output = None
+
         # check long context
         if self._prev_chunk_output is not None:
             # update model metas
