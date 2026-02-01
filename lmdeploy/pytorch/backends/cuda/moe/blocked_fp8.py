@@ -7,6 +7,7 @@ import torch.distributed as dist
 
 from lmdeploy.pytorch.backends.deepep_moe_checker import get_moe_backend
 from lmdeploy.pytorch.backends.moe import FusedMoEBlockedF8Builder, FusedMoEBlockedF8Impl
+from lmdeploy.pytorch.compile_util import custom_op
 from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import fused_moe_blocked_fp8
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
@@ -87,6 +88,96 @@ class TritonFusedMoEBlockedF8Impl(FusedMoEBlockedF8Impl):
         return output
 
 
+def ep_moe_blocked_fp8_forward_impl(
+    hidden_states: torch.Tensor,
+    topk_weights: torch.Tensor,
+    topk_ids: torch.Tensor,
+    gate_up_weights: torch.Tensor,
+    gate_up_scale: torch.Tensor,
+    down_weights: torch.Tensor,
+    down_scale: torch.Tensor,
+    renormalize: bool,
+    ep_size: int,
+    ep_group: dist.ProcessGroup,
+    num_experts: int,
+    hidden_dim: int,
+    block_size: int = 128,
+    top_k: int = 1,
+    out_dtype: torch.dtype = torch.bfloat16,
+    layer_idx: int = 0,
+    expert_list: List[int] | None = None,
+) -> torch.Tensor:
+    """Ep moe blocked fp8 forward impl."""
+    from dlblas.layers.moe.ep_moe import build_deepep_moe
+    hidden_states, topk_weights, topk_ids, split_size = split_inputs_by_attn_tp(hidden_states, topk_weights, topk_ids)
+
+    topk_weights = _renormalize(topk_weights, renormalize)
+    step_ctx = get_step_ctx_manager().current_context()
+    low_latency_mode = step_ctx.is_decoding
+    moe = build_deepep_moe(low_latency_mode,
+                           ep_size,
+                           ep_group,
+                           num_experts,
+                           hidden_dim,
+                           block_size,
+                           top_k,
+                           out_dtype,
+                           layer_idx=layer_idx,
+                           chunk_size=16 * 1024)
+    out_states = moe.forward(hidden_states, topk_weights, topk_ids, gate_up_weights, gate_up_scale, down_weights,
+                             down_scale, expert_list)
+
+    out_states = gather_outputs_by_attn_tp(out_states, split_size)
+    return out_states
+
+
+@custom_op('lmdeploy::fused_moe_ep_blocked_fp8_forward', mutates_args=[], split_prefill=True, split_decoding=False)
+def ep_moe_blocked_fp8_forward(
+    hidden_states: torch.Tensor,
+    topk_weights: torch.Tensor,
+    topk_ids: torch.Tensor,
+    gate_up_weights: torch.Tensor,
+    gate_up_scale: torch.Tensor,
+    down_weights: torch.Tensor,
+    down_scale: torch.Tensor,
+    renormalize: bool,
+    ep_size: int,
+    num_experts: int,
+    hidden_dim: int,
+    block_size: int = 128,
+    top_k: int = 1,
+    out_dtype: torch.dtype = torch.bfloat16,
+    layer_idx: int = 0,
+    expert_list: List[int] | None = None,
+) -> torch.Tensor:
+    """Ep moe blocked fp8 forward op."""
+    dist_ctx = get_dist_manager().current_context()
+    ep_group = dist_ctx.ep_gpu_group
+    return ep_moe_blocked_fp8_forward_impl(hidden_states,
+                                           topk_weights,
+                                           topk_ids,
+                                           gate_up_weights,
+                                           gate_up_scale,
+                                           down_weights,
+                                           down_scale,
+                                           renormalize=renormalize,
+                                           ep_size=ep_size,
+                                           ep_group=ep_group,
+                                           num_experts=num_experts,
+                                           hidden_dim=hidden_dim,
+                                           block_size=block_size,
+                                           top_k=top_k,
+                                           out_dtype=out_dtype,
+                                           layer_idx=layer_idx,
+                                           expert_list=expert_list)
+
+
+@ep_moe_blocked_fp8_forward.register_fake
+def _(hidden_states: torch.Tensor, *args, **kwargs):
+    """Fake op for ep_moe_blocked_fp8_forward."""
+    return torch.empty_like(hidden_states)
+
+
 class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
 
     def __init__(self,
@@ -150,18 +241,57 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
                 act_func: Callable = None,
                 **kwargs):
         """forward."""
-        hidden_states, topk_weights, topk_ids, split_size = split_inputs_by_attn_tp(hidden_states, topk_weights,
-                                                                                    topk_ids)
+        if torch.compiler.is_compiling():
+            return ep_moe_blocked_fp8_forward(
+                hidden_states,
+                topk_weights,
+                topk_ids,
+                gate_up_weights,
+                gate_up_scale,
+                down_weights,
+                down_scale,
+                renormalize=self.renormalize,
+                ep_size=self.ep_size,
+                num_experts=self.num_experts,
+                hidden_dim=self.hidden_dim,
+                block_size=self.block_size,
+                top_k=self.top_k,
+                out_dtype=self.out_dtype,
+                layer_idx=self.layer_idx,
+                expert_list=expert_list,
+            )
+        else:
+            return ep_moe_blocked_fp8_forward_impl(
+                hidden_states,
+                topk_weights,
+                topk_ids,
+                gate_up_weights,
+                gate_up_scale,
+                down_weights,
+                down_scale,
+                renormalize=self.renormalize,
+                ep_size=self.ep_size,
+                ep_group=self.ep_group,
+                num_experts=self.num_experts,
+                hidden_dim=self.hidden_dim,
+                block_size=self.block_size,
+                top_k=self.top_k,
+                out_dtype=self.out_dtype,
+                layer_idx=self.layer_idx,
+                expert_list=expert_list,
+            )
+        # hidden_states, topk_weights, topk_ids, split_size = split_inputs_by_attn_tp(hidden_states, topk_weights,
+        #                                                                             topk_ids)
 
-        topk_weights = self.do_renormalize(topk_weights)
-        step_ctx = get_step_ctx_manager().current_context()
-        low_latency_mode = step_ctx.is_decoding and self.use_deep_gemm
-        moe = self.fusedmoe_build(low_latency_mode)
-        out_states = moe.forward(hidden_states, topk_weights, topk_ids, gate_up_weights, gate_up_scale, down_weights,
-                                 down_scale, expert_list)
+        # topk_weights = self.do_renormalize(topk_weights)
+        # step_ctx = get_step_ctx_manager().current_context()
+        # low_latency_mode = step_ctx.is_decoding and self.use_deep_gemm
+        # moe = self.fusedmoe_build(low_latency_mode)
+        # out_states = moe.forward(hidden_states, topk_weights, topk_ids, gate_up_weights, gate_up_scale, down_weights,
+        #                          down_scale, expert_list)
 
-        out_states = gather_outputs_by_attn_tp(out_states, split_size)
-        return out_states
+        # out_states = gather_outputs_by_attn_tp(out_states, split_size)
+        # return out_states
 
     def do_renormalize(self, topk_weights):
         return _renormalize(topk_weights, self.renormalize)
