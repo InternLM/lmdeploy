@@ -39,13 +39,12 @@ def safe_torch_compile(**compile_kwargs):
     return decorator
 
 
-@safe_torch_compile(dynamic=True)
-def _rotary_embedding_fwd(position_ids: torch.Tensor,
-                          inv_freq: torch.Tensor,
-                          scaling_factor: float,
-                          mscale: float = None,
-                          dtype: torch.dtype = None,
-                          device_type: torch.device = None):
+def _rotary_embedding_fwd_impl(position_ids: torch.Tensor,
+                               inv_freq: torch.Tensor,
+                               scaling_factor: float,
+                               mscale: float | None = None,
+                               dtype: torch.dtype | None = None,
+                               device_type: torch.device | None = None):
     """Rotary embedding forward."""
     if dtype is None:
         dtype = torch.float16
@@ -64,6 +63,19 @@ def _rotary_embedding_fwd(position_ids: torch.Tensor,
         sin = sin * mscale
 
     return cos.to(dtype=dtype), sin.to(dtype=dtype)
+
+
+_rotary_embedding_fwd_impl_compiled = safe_torch_compile(dynamic=True)(_rotary_embedding_fwd_impl)
+
+
+@wraps(_rotary_embedding_fwd_impl)
+def _rotary_embedding_fwd(*args, **kwargs):
+    """Rotary embedding forward with torch.compile."""
+    # dynamic module might leads to more recompile
+    if torch.compiler.is_compiling():
+        return _rotary_embedding_fwd_impl(*args, **kwargs)
+    else:
+        return _rotary_embedding_fwd_impl_compiled(*args, **kwargs)
 
 
 class RotaryEmbeddingImpl(RotaryEmbeddingImpl, nn.Module):

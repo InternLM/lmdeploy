@@ -108,8 +108,6 @@ class TorchCompileSinglePrefillRunner:
         self.model.mark_dynamic_inputs(self.meta, **kwargs)
         self.model.mark_dynamic_context(self.meta, context)
 
-        # attn_metadata = padded_kwargs['attn_metadata']
-        # print(attn_metadata.q_seqlens)
         output = self.graph(**padded_kwargs)
         output = self.model.make_output_buffers(output)
         output = self.model.get_outputs_cudagraph(output, **kwargs)
