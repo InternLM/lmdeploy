@@ -170,6 +170,7 @@ def fused_moe_blocked_f8_kernel(
     tl.store(c_ptrs, c, mask=mask_sid[:, None])
 
 
+@torch.library.custom_op('lmdeploy::fused_moe_blocked_fp8', mutates_args=['C'])
 def fused_moe_blocked_fp8_kernel_launcher(
     A: torch.Tensor,
     A_scale: torch.Tensor,
@@ -179,13 +180,13 @@ def fused_moe_blocked_fp8_kernel_launcher(
     sorted_idx: torch.Tensor,
     exp_start: torch.Tensor,
     exp_end: torch.Tensor,
-    bias: torch.Tensor = None,
+    bias: torch.Tensor | None = None,
     top_k: int = 1,
-    num_tokens: int = None,
+    num_tokens: int | None = None,
     expert_offset: int = 0,
     reindex_a: bool = True,
     reindex_c: bool = True,
-):
+) -> None:
     """Fused moe kernel launcher."""
 
     if num_tokens is None:

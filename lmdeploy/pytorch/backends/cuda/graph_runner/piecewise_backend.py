@@ -105,15 +105,10 @@ class LMDeployPiecewiseBackend:
             logger.debug(f'Graph split into {len(split_items)} submodules')
 
             # Debug Step 1: Analyze graph splitting results
-            # if is_fx_graph_debug_enabled():
-            #     debug_graph_splitting(split_items, split_gm)
-
             logger.debug('Step 2: Wrapping submodules...')
             for item in split_items:
                 submod_name = item.submod_name
                 original_submod = getattr(split_gm, submod_name)
-                # print(11111111, item.is_splitting_graph)
-                # print(original_submod.print_readable())
 
                 if item.is_splitting_graph:
                     wrapped = EagerExecutionWrapper(op_or_module=original_submod, op_name=f'eager_{submod_name}')

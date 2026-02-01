@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Optional
 
 import torch
 import triton
@@ -102,7 +101,7 @@ def _quant_fp8_kernel(
         s_ptr += m_id_stride * stride_sm
 
 
-def _quant_fp8_launcher(A: Tensor, group_size: int, out: Tensor, scales: Tensor, scale_fmt: Optional[str] = None):
+def _quant_fp8_launcher(A: Tensor, group_size: int, out: Tensor, scales: Tensor, scale_fmt: str | None = None):
     """Quant online."""
     assert scale_fmt in (None, 'ue8m0')
     round_scale = 1 if scale_fmt == 'ue8m0' else 0
@@ -160,7 +159,7 @@ def quant_fp8(A: Tensor,
               group_size: int,
               dtype: torch.dtype = torch.float8_e4m3fn,
               trans_scale: bool = False,
-              scale_fmt: Optional[str] = None):
+              scale_fmt: str | None = None) -> list[Tensor]:
     """Quant fp8."""
     assert A.dim() == 2
     M, K = A.shape
@@ -174,11 +173,11 @@ def quant_fp8(A: Tensor,
     return _quant_fp8_launcher(A, group_size, out, scales, scale_fmt=scale_fmt)
 
 
-def quant_fp8_tma(A: Tensor,
-                  group_size: int,
-                  dtype: torch.dtype = torch.float8_e4m3fn,
-                  scale_fmt: Optional[str] = None):
-    """Quant fp8 tma."""
+def _get_quant_fp8_tma_empty_out(
+    A: Tensor,
+    group_size: int,
+    dtype: torch.dtype = torch.float8_e4m3fn,
+):
     from lmdeploy.pytorch.third_party.deep_gemm import ceil_div, get_m_alignment_for_contiguous_layout
     assert A.dim() == 2
     M, K = A.shape
@@ -188,7 +187,29 @@ def quant_fp8_tma(A: Tensor,
     aligned_M = ceil_div(M, alignment) * alignment
     out = A.new_empty(aligned_M, K, dtype=dtype)
     scales = A.new_empty(num_groups, aligned_M, dtype=torch.float32).T
+    return out, scales
+
+
+@torch.library.custom_op('lmdeploy::quant_fp8_tma', mutates_args=[])
+def quant_fp8_tma(A: Tensor,
+                  group_size: int,
+                  dtype: torch.dtype = torch.float8_e4m3fn,
+                  scale_fmt: str | None = None) -> list[Tensor]:
+    """Quant fp8 tma."""
+    out, scales = _get_quant_fp8_tma_empty_out(A, group_size, dtype=dtype)
     return _quant_fp8_launcher(A, group_size, out, scales, scale_fmt=scale_fmt)
+
+
+@quant_fp8_tma.register_fake
+def _(
+    A: Tensor,
+    group_size: int,
+    dtype: torch.dtype = torch.float8_e4m3fn,
+    scale_fmt: str | None = None,
+):
+    """Fake quant fp8 tma."""
+    out, scales = _get_quant_fp8_tma_empty_out(A, group_size, dtype=dtype)
+    return out, scales
 
 
 def _gemm_fp8_tma_pre_hook(nargs):
@@ -477,11 +498,12 @@ def blocked_gemm_fp8(A: Tensor,
     return C
 
 
+@torch.library.custom_op('deepgemm::deep_gemm_fp8', mutates_args=[])
 def deep_gemm_fp8(A: Tensor,
                   A_scale: Tensor,
                   B: Tensor,
                   B_scale: torch.Tensor,
-                  out_dtype: torch.dtype = torch.bfloat16):
+                  out_dtype: torch.dtype = torch.bfloat16) -> Tensor:
     """Deepgemm fp8."""
     from lmdeploy.pytorch.third_party.deep_gemm import fp8_gemm_nt
     M, _ = A.shape
@@ -489,4 +511,14 @@ def deep_gemm_fp8(A: Tensor,
     assert out_dtype == torch.bfloat16, 'DeepGemm requires bf16 output.'
     C = A.new_empty(M, N, dtype=out_dtype)
     fp8_gemm_nt((A, A_scale), (B, B_scale), C, None)
+    return C
+
+
+@deep_gemm_fp8.register_fake
+def _(A: Tensor, A_scale: Tensor, B: Tensor, B_scale: torch.Tensor, out_dtype: torch.dtype = torch.bfloat16) -> Tensor:
+    """Fake deepgemm fp8."""
+    M, _ = A.shape
+    N, _ = B.shape
+    assert out_dtype == torch.bfloat16, 'DeepGemm requires bf16 output.'
+    C = A.new_empty(M, N, dtype=out_dtype)
     return C
