@@ -3,7 +3,7 @@
 本指南旨在介绍如何使用 LMDeploy 的 TurboMind 推理引擎，运行经由 [vllm-project/llm-compressor](https://github.com/vllm-project/llm-compressor)工具量化后的模型。
 目前支持的 `llm-compressor` 量化模型包括：
 
-- 4-bit 量化（例如 AWQ对称量化、AWQ非对称量化、GPTQ对称量化、GPTQ非对称量化）
+- int4 量化（例如 AWQ、GPTQ）
 
 上述量化模型通过 TurboMind 引擎可以在以下 NVIDIA GPU 架构上运行：
 
@@ -81,15 +81,15 @@ lmdeploy serve api_server ./qwen3_30b_a3b_4bit --backend turbomind
 
 ## 精度评测
 
-我们把上述量化模型通过 LMDeploy 部署为服务后，使用 [opencompass](https://github.com/open-compass/opencompass) 评测了其在若干学术数据集上的精度，与原始模型相比，精度误差在可接受范围之内：
+我们把Qwen3-30B-A3B的 AWQ 对称量化模型和 AWQ 非对称量化模型通过 LMDeploy 部署为服务后，使用 [opencompass](https://github.com/open-compass/opencompass) 评测了其在若干学术数据集上的精度，与Qwen3-30B-A3B BF16模型相比，精度误差在可接受范围之内：
 
-| dataset           | Qwen3-30B-A3B bf16 | Qwen3-30B-A3B awq sym | Qwen3-30B-A3B awq asym | diff between bf16 and awq sym | diff between bf16 and awq asym |
-| ----------------- | ------------------ | --------------------- | ---------------------- | ----------------------------- | ------------------------------ |
-| ifeval            | 86.32              | 84.10                 | 84.29                  | -2.22                         | -2.03                          |
-| hle               | 7.00               | 5.47                  | 5.65                   | -1.53                         | -1.35                          |
-| gpqa              | 61.74              | 57.95                 | 57.07                  | -3.79                         | -4.67                          |
-| aime2025          | 73.44              | 64.79                 | 66.67                  | -8.65                         | -6.77                          |
-| mmlu_pro          | 77.85              | 75.77                 | 75.69                  | -2.08                         | -2.16                          |
-| LCBCodeGeneration | 56.67              | 50.86                 | 49.24                  | -5.81                         | -7.43                          |
+| dataset           | bf16  | awq sym | awq asym |
+| ----------------- | ----- | ------- | -------- |
+| ifeval            | 86.32 | 84.10   | 84.29    |
+| hle               | 7.00  | 5.47    | 5.65     |
+| gpqa              | 61.74 | 57.95   | 57.07    |
+| aime2025          | 73.44 | 64.79   | 66.67    |
+| mmlu_pro          | 77.85 | 75.77   | 75.69    |
+| LCBCodeGeneration | 56.67 | 50.86   | 49.24    |
 
 复现方式可以参考[这份](https://lmdeploy.readthedocs.io/zh-cn/latest/benchmark/evaluate_with_opencompass.html)文档
