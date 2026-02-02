@@ -4,7 +4,7 @@ This guide aims to introduce how to use LMDeploy's TurboMind inference engine to
 
 Currently supported `llm-compressor` quantization types include:
 
-- 4-bit asymmetric quantization (e.g., AWQ, GPTQ)
+- 4-bit quantization (e.g., AWQ symmetric quant, AWQ asymmetric quant, GPTQ symmetric quant, GPTQ asymmetric quant)
 
 These quantized models can run via the TurboMind engine on the following NVIDIA GPU architectures:
 
@@ -85,13 +85,13 @@ The default service port is 23333. After the server starts, you can access the s
 
 After deploying the aforementioned quantized model as a service via LMDeploy, we evaluated its accuracy on several academic datasets using [OpenCompass](https://github.com/open-compass/opencompass). Compared with the original model, the accuracy difference is within an acceptable range:
 
-| dataset           | Qwen3-30B-A3B | Qwen3-30B-A3B awq | diff  |
-| ----------------- | ------------- | ----------------- | ----- |
-| ifeval            | 85.77         | 85.77             | 0     |
-| hle               | 2.18          | 1.95              | -0.23 |
-| gpqa              | 51.39         | 49.37             | -2.02 |
-| aime2025          | 18.02         | 19.58             | 1.56  |
-| mmlu_pro          | 74.05         | 72.86             | -1.19 |
-| LCBCodeGeneration | 30.38         | 27.43             | -2.95 |
+| dataset           | Qwen3-30B-A3B bf16 | Qwen3-30B-A3B awq sym | Qwen3-30B-A3B awq asym | diff between bf16 and awq sym | diff between bf16 and awq asym |
+| ----------------- | ------------------ | --------------------- | ---------------------- | ----------------------------- | ------------------------------ |
+| ifeval            | 86.32              | 84.10                 | 84.29                  | -2.22                         | -2.03                          |
+| hle               | 7.00               | 5.47                  | 5.65                   | -1.53                         | -1.35                          |
+| gpqa              | 61.74              | 57.95                 | 57.07                  | -3.79                         | -4.67                          |
+| aime2025          | 73.44              | 64.79                 | 66.67                  | -8.65                         | -6.77                          |
+| mmlu_pro          | 77.85              | 75.77                 | 75.69                  | -2.08                         | -2.16                          |
+| LCBCodeGeneration | 56.67              | 50.86                 | 49.24                  | -5.81                         | -7.43                          |
 
 For reproduction methods, please refer to [this](https://lmdeploy.readthedocs.io/en/latest/benchmark/evaluate_with_opencompass.html) document.
