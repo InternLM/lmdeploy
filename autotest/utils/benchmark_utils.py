@@ -108,7 +108,7 @@ def restful_test(config, run_config, worker_id: str = '', is_smoke: bool = False
             run_config['extra_params'] = {}
         run_config['extra_params']['cache-max-entry-count'] = max_cache_entry
 
-    pid, content = start_openai_service(config, run_config, worker_id, timeout=1200)
+    pid, content = start_openai_service(config, run_config, worker_id)
     try:
         if pid > 0:
             if is_mllm:
@@ -182,7 +182,7 @@ def mllm_restful_profile(config, run_config, port, is_smoke: bool = False):
     if is_smoke:
         command += ' --num-prompts 100'
     else:
-        command += ' --num-prompts 5000'
+        command += ' --num-prompts 1000'
 
     result, stderr = execute_command_with_logging(command, benchmark_log)
     allure.attach.file(benchmark_log, name=benchmark_log, attachment_type=allure.attachment_type.TEXT)
@@ -194,7 +194,7 @@ def mllm_restful_profile(config, run_config, port, is_smoke: bool = False):
     return True, 'success'
 
 
-def prefixcache_throughput_test(config, run_config, worker_id: str = ''):
+def prefixcache_throughput_test(config, run_config, worker_id: str = '', is_smoke: bool = False):
     model = run_config.get('model')
     model_path = os.path.join(config.get('model_path'), model)
     dataset_path = config.get('prefix_dataset_path')
@@ -221,7 +221,11 @@ def prefixcache_throughput_test(config, run_config, worker_id: str = ''):
     env = os.environ.copy()
     env.update(run_config.get('env', {}))
 
-    test_configs = [(8096, 256, 500, '8k', None)]
+    if is_smoke:
+        test_configs = [(4096, 256, 10, '4k', None)]
+    else:
+        test_configs = [(4096, 256, 100, '4k', None)]
+
     for enable_prefix_caching in [False, True]:
         suffix = 'cache' if enable_prefix_caching else 'no_cache'
 

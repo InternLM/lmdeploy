@@ -86,3 +86,30 @@ def test_pytorch_prefix_tp8(config, run_config, worker_id):
 def test_pytorch_prefix_tp16(config, run_config, worker_id):
     result, msg = prefixcache_throughput_test(config, run_config, worker_id=worker_id)
     assert result, msg
+
+
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.gpu_num_2
+@pytest.mark.function
+@pytest.mark.parametrize('run_config', [{
+    'model': 'Qwen/Qwen3-30B-A3B',
+    'backend': 'turbomind',
+    'communicator': 'cuda-ipc',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 2
+    },
+    'extra_params': {}
+}, {
+    'model': 'Qwen/Qwen3-VL-32B-Instruct',
+    'backend': 'pytorch',
+    'communicator': 'nccl',
+    'quant_policy': 8,
+    'parallel_config': {
+        'tp': 2
+    },
+    'extra_params': {}
+}])
+def test_pytorch_prefix_pr_test_tp1(config, run_config, worker_id):
+    result, msg = prefixcache_throughput_test(config, run_config, worker_id=worker_id, is_smoke=True)
+    assert result, msg
