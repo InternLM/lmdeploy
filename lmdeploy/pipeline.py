@@ -285,6 +285,7 @@ class Pipeline:
                 session = self.session_mgr.get()
                 res = self._get_long_text_ppl(session, input_ids=_input_ids, max_input_len=max_input_len)
                 result.append(res)
+                self.session_mgr.remove(session)
             else:
                 _input_ids = [input_ids[indices[i]] for i in range(start, end)]
                 sessions = [self.session_mgr.get() for _ in range(start, end)]
@@ -294,6 +295,8 @@ class Pipeline:
                     max_input_len=max_input_len,
                 )
                 result.extend(res)
+                for session in sessions:
+                    self.session_mgr.remove(session)
         output = list(range(len(result)))
         for index, sorted_index in enumerate(indices):
             output[sorted_index] = result[index]

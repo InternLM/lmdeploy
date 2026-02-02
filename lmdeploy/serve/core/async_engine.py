@@ -624,8 +624,16 @@ class AsyncEngine:
                         pass
                     logits[i] = outputs.logits[:input_len, :]
 
+        create_sessions = False
         if sessions is None:
+            create_sessions = True
             sessions = [self.session_mgr.get() for _ in range(len(input_ids))]
         tasks = [_proc(session, i) for i, session in enumerate(sessions)]
         await asyncio.gather(*tasks)
+        if sequence_end and self.backend == 'pytorch':
+            for session in sessions:
+                await session.async_close()
+        if sequence_end and create_sessions:
+            for session in sessions:
+                self.session_mgr.remove(session)
         return logits
