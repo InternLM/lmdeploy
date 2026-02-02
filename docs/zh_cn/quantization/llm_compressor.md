@@ -1,4 +1,4 @@
-# llm-compressor支持
+# llm-compressor 支持
 
 本指南旨在介绍如何使用 LMDeploy 的 TurboMind 推理引擎，运行经由 [vllm-project/llm-compressor](https://github.com/vllm-project/llm-compressor)工具量化后的模型。
 目前支持的 `llm-compressor` 量化模型包括：
@@ -81,7 +81,7 @@ lmdeploy serve api_server ./qwen3_30b_a3b_4bit --backend turbomind
 
 ## 精度评测
 
-我们把Qwen3-30B-A3B的 AWQ 对称量化模型和 AWQ 非对称量化模型通过 LMDeploy 部署为服务后，使用 [opencompass](https://github.com/open-compass/opencompass) 评测了其在若干学术数据集上的精度，与Qwen3-30B-A3B BF16模型相比，精度误差在可接受范围之内：
+我们把 Qwen3-30B-A3B 的 AWQ 对称量化模型和 AWQ 非对称量化模型通过 LMDeploy 部署为服务后，使用 [opencompass](https://github.com/open-compass/opencompass) 评测了其在若干学术数据集上的精度。AWQ 对称量化和非对称量化的精度表现没有显著差异。与 BF16 相比，在长输出数据集，比如 aime2025（平均 17,635 tokens）、LCB（平均 14,157 tokens），精度下降明显。而在中短输出数据集，比如 ifeval（平均 1,885 tokens）, mmlu_pro（平均 2,826 tokens），精度符合预期。
 
 | dataset           | bf16  | awq sym | awq asym |
 | ----------------- | ----- | ------- | -------- |
