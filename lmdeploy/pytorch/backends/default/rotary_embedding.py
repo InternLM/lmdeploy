@@ -177,10 +177,13 @@ def yarn_find_correction_dim(num_rotations, dim, base=10000, max_position_embedd
 
 
 # Find dim range bounds based on rotations
-def yarn_find_correction_range(low_rot, high_rot, dim, base=10000, max_position_embeddings=2048):
+def yarn_find_correction_range(low_rot, high_rot, dim, base=10000, max_position_embeddings=2048, truncate: bool = True):
     """yarn_find_correction_range."""
-    low = math.floor(yarn_find_correction_dim(low_rot, dim, base, max_position_embeddings))
-    high = math.ceil(yarn_find_correction_dim(high_rot, dim, base, max_position_embeddings))
+    low = yarn_find_correction_dim(low_rot, dim, base, max_position_embeddings)
+    high = yarn_find_correction_dim(high_rot, dim, base, max_position_embeddings)
+    if truncate:
+        low = math.floor(low)
+        high = math.ceil(high)
     return max(low, 0), min(high, dim - 1)  # Clamp values just in case
 
 
@@ -218,6 +221,7 @@ class YarnRotaryEmbeddingImpl(RotaryEmbeddingImpl):
         self.beta_slow = yarn_params.beta_slow
         self.mscale = yarn_params.mscale
         self.mscale_all_dim = yarn_params.mscale_all_dim
+        self.truncate = yarn_params.truncate
 
         # get inv_freq
         freq_extra = 1.0 / (self.base**(torch.arange(0, dim, 2, dtype=torch.float32) / dim))
@@ -228,6 +232,7 @@ class YarnRotaryEmbeddingImpl(RotaryEmbeddingImpl):
             dim,
             self.base,
             self.original_max_position_embeddings,
+            truncate=self.truncate,
         )
         inv_freq_mask = 1.0 - yarn_linear_ramp_mask(low, high, dim // 2).to(dtype=torch.float32)
         inv_freq = freq_inter * (1 - inv_freq_mask) + freq_extra * inv_freq_mask

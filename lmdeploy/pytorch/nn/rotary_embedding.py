@@ -45,6 +45,7 @@ def _get_yarn_parameters(config: PretrainedConfig):
     params.beta_slow = rope_scaling.get('beta_slow', params.beta_slow)
     mscale = rope_scaling.get('mscale', params.mscale)
     mscale_all_dim = rope_scaling.get('mscale_all_dim', params.mscale_all_dim)
+    truncate = rope_scaling.get('truncate', params.truncate)
 
     if 'attention_factor' in rope_scaling:
         attention_factor = rope_scaling.get('attention_factor')
@@ -57,6 +58,7 @@ def _get_yarn_parameters(config: PretrainedConfig):
     params.attention_factor = attention_factor
     params.mscale = mscale
     params.mscale_all_dim = mscale_all_dim
+    params.truncate = truncate
 
     ret = dict(emb_type=RopeType.Yarn, scaling_factor=factor, yarn_params=params)
     if 'original_max_position_embeddings' in rope_scaling:

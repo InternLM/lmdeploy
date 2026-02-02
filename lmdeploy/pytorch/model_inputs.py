@@ -197,6 +197,7 @@ class ModelInputs:
     target_hidden_states: torch.Tensor = None
     target_position_ids: torch.Tensor = None
     is_chunk: bool = False
+    is_first_chunk: bool = True
 
     def step(self, input_ids: torch.Tensor, step_seqlens: torch.Tensor = None):
         """Update input ids."""

@@ -295,6 +295,14 @@ class CUDAGraphRunner(GraphRunner):
     def reset(self):
         """Remove all graphs to prevent hanging on exit."""
         self._runner_map.clear()
+        if get_moe_backend().use_deepep_moe_backend():
+            from dlblas.layers.moe.token_dispatcher import DeepEPBuffer
+
+            if hasattr(DeepEPBuffer, 'destroy'):
+                from torch import distributed as dist
+
+                DeepEPBuffer.destroy()
+                dist.barrier()
 
     def update_inputs(self, inputs):
         """Update inputs."""
