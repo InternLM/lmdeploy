@@ -18,7 +18,7 @@ from lmdeploy.serve.openai.api_client import APIClient
 BASE_HTTP_URL = f'http://{DEFAULT_SERVER}'
 
 
-def start_openai_service(config, run_config, worker_id):
+def start_openai_service(config, run_config, worker_id, timeout: int = 720):
     port = DEFAULT_PORT + get_workerid(worker_id)
     case_name = get_case_str_by_config(run_config)
     timestamp = time.strftime('%Y%m%d_%H%M%S')
@@ -64,7 +64,7 @@ def start_openai_service(config, run_config, worker_id):
 
     http_url = ':'.join([BASE_HTTP_URL, str(port)])
     start_time = int(time.time())
-    start_timeout = 720
+    start_timeout = timeout
 
     time.sleep(5)
     for i in range(start_timeout):

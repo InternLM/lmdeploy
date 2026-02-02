@@ -11,7 +11,7 @@ def get_models(backend, parallel_config):
 @pytest.mark.gpu_num_1
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config', get_models(backend='turbomind', parallel_config={'tp': 1}))
-def test_turbomind_throughput_tp1(config, run_config, worker_id):
+def test_turbomind_apiserver_tp1(config, run_config, worker_id):
     result, msg = restful_test(config, run_config, worker_id=worker_id)
     assert result, msg
 
@@ -20,7 +20,7 @@ def test_turbomind_throughput_tp1(config, run_config, worker_id):
 @pytest.mark.gpu_num_2
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config', get_models(backend='turbomind', parallel_config={'tp': 2}))
-def test_turbomind_throughput_tp2(config, run_config, worker_id):
+def test_turbomind_apiserver_tp2(config, run_config, worker_id):
     result, msg = restful_test(config, run_config, worker_id=worker_id)
     assert result, msg
 
@@ -29,7 +29,7 @@ def test_turbomind_throughput_tp2(config, run_config, worker_id):
 @pytest.mark.gpu_num_4
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config', get_models(backend='turbomind', parallel_config={'tp': 4}))
-def test_turbomind_throughput_tp4(config, run_config, worker_id):
+def test_turbomind_apiserver_tp4(config, run_config, worker_id):
     result, msg = restful_test(config, run_config, worker_id=worker_id)
     assert result, msg
 
@@ -38,7 +38,7 @@ def test_turbomind_throughput_tp4(config, run_config, worker_id):
 @pytest.mark.gpu_num_8
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config', get_models(backend='turbomind', parallel_config={'tp': 8}))
-def test_turbomind_throughput_tp8(config, run_config, worker_id):
+def test_turbomind_apiserver_tp8(config, run_config, worker_id):
     result, msg = restful_test(config, run_config, worker_id=worker_id)
     assert result, msg
 
@@ -47,7 +47,7 @@ def test_turbomind_throughput_tp8(config, run_config, worker_id):
 @pytest.mark.gpu_num_1
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config', get_models(backend='pytorch', parallel_config={'tp': 1}))
-def test_pytorch_throughput_tp1(config, run_config, worker_id):
+def test_pytorch_apiserver_tp1(config, run_config, worker_id):
     result, msg = restful_test(config, run_config, worker_id=worker_id)
     assert result, msg
 
@@ -56,7 +56,7 @@ def test_pytorch_throughput_tp1(config, run_config, worker_id):
 @pytest.mark.gpu_num_2
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config', get_models(backend='pytorch', parallel_config={'tp': 2}))
-def test_pytorch_throughput_tp2(config, run_config, worker_id):
+def test_pytorch_apiserver_tp2(config, run_config, worker_id):
     result, msg = restful_test(config, run_config, worker_id=worker_id)
     assert result, msg
 
@@ -65,7 +65,7 @@ def test_pytorch_throughput_tp2(config, run_config, worker_id):
 @pytest.mark.gpu_num_4
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config', get_models(backend='pytorch', parallel_config={'tp': 4}))
-def test_pytorch_throughput_tp4(config, run_config, worker_id):
+def test_pytorch_apiserver_tp4(config, run_config, worker_id):
     result, msg = restful_test(config, run_config, worker_id=worker_id)
     assert result, msg
 
@@ -74,7 +74,7 @@ def test_pytorch_throughput_tp4(config, run_config, worker_id):
 @pytest.mark.gpu_num_8
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config', get_models(backend='pytorch', parallel_config={'tp': 8}))
-def test_pytorch_throughput_tp8(config, run_config, worker_id):
+def test_pytorch_apiserver_tp8(config, run_config, worker_id):
     result, msg = restful_test(config, run_config, worker_id=worker_id)
     assert result, msg
 
@@ -83,7 +83,7 @@ def test_pytorch_throughput_tp8(config, run_config, worker_id):
 @pytest.mark.gpu_num_16
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config', get_models(backend='pytorch', parallel_config={'tp': 16}))
-def test_pytorch_throughput_tp16(config, run_config, worker_id):
+def test_pytorch_apiserver_tp16(config, run_config, worker_id):
     result, msg = restful_test(config, run_config, worker_id=worker_id)
     assert result, msg
 

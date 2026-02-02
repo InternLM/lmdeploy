@@ -68,7 +68,7 @@ def test_hf_pytorch_base_tp2(config, run_config, cli_case_config, worker_id):
 @pytest.mark.gpu_num_2
 @pytest.mark.pr_test
 @pytest.mark.parametrize('run_config', PYTORCH_PR_TEST_LLM_GPU2)
-def test_hf_turbomind_chat_pr_tp2(config, run_config, cli_case_config, worker_id):
+def test_hf_pytorch_chat_pr_tp2(config, run_config, cli_case_config, worker_id):
     worker_id = 'gw' + str(3 + get_workerid(worker_id))
     run_tests(config, 'chat_testcase', cli_case_config, run_config, worker_id)
 
@@ -77,7 +77,7 @@ def test_hf_turbomind_chat_pr_tp2(config, run_config, cli_case_config, worker_id
 @pytest.mark.gpu_num_1
 @pytest.mark.pr_test
 @pytest.mark.parametrize('run_config', PYTORCH_PR_TEST_LLM_GPU1)
-def test_hf_turbomind_chat_pr_tp1(config, run_config, cli_case_config, worker_id):
+def test_hf_pytorch_chat_pr_tp1(config, run_config, cli_case_config, worker_id):
     worker_id = 'gw' + str(6 + get_workerid(worker_id))
     run_tests(config, 'chat_testcase', cli_case_config, run_config, worker_id)
 
@@ -85,7 +85,7 @@ def test_hf_turbomind_chat_pr_tp1(config, run_config, cli_case_config, worker_id
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize('run_config', [item for item in MODELSCOPE_CONFIG if item['backend'] == BACKEND])
-def test_modelscope_turbomind_chat_tp1(config, run_config, cli_case_config, worker_id):
+def test_modelscope_pytorch_chat_tp1(config, run_config, cli_case_config, worker_id):
     run_config['env'] = {'LMDEPLOY_USE_MODELSCOPE': 'True'}
     run_tests(config, 'chat_testcase', cli_case_config, run_config, worker_id)
 

@@ -108,7 +108,7 @@ def restful_test(config, run_config, worker_id: str = '', is_smoke: bool = False
             run_config['extra_params'] = {}
         run_config['extra_params']['cache-max-entry-count'] = max_cache_entry
 
-    pid, content = start_openai_service(config, run_config, worker_id)
+    pid, content = start_openai_service(config, run_config, worker_id, timeout=1200)
     try:
         if pid > 0:
             if is_mllm:

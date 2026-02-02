@@ -46,7 +46,7 @@ env:
   OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
   DEEPSEEK_VL: /nvme/qa_test_models/offline_pkg/DeepSeek-VL
   LMUData: /nvme/qa_test_models/LMUData
-  LOCAL_LLM: Qwen2.5-32B-Instruct
+  LOCAL_LLM: turbomind_Qwen2.5-32B-Instruct_nccl_tp2_0
   OPENAI_API_KEY: sk-empty
   HF_DATASETS_OFFLINE: 1
   HF_DATASETS_CACHE: /nvme/qa_test_models/hf_datasets
