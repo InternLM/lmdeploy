@@ -1,9 +1,9 @@
-# `llm-compressor` 支持
+# llm-compressor 支持
 
 本指南旨在介绍如何使用 LMDeploy 的 TurboMind 推理引擎，运行经由 [vllm-project/llm-compressor](https://github.com/vllm-project/llm-compressor)工具量化后的模型。
 目前支持的 `llm-compressor` 量化模型包括：
 
-- 4-bit 非对称量化（例如 AWQ、GPTQ）
+- int4 量化（例如 AWQ、GPTQ）
 
 上述量化模型通过 TurboMind 引擎可以在以下 NVIDIA GPU 架构上运行：
 
@@ -81,15 +81,15 @@ lmdeploy serve api_server ./qwen3_30b_a3b_4bit --backend turbomind
 
 ## 精度评测
 
-我们把上述量化模型通过 LMDeploy 部署为服务后，使用 [opencompass](https://github.com/open-compass/opencompass) 评测了其在若干学术数据集上的精度，与原始模型相比，精度误差在可接受范围之内：
+我们把 Qwen3-30B-A3B 的 AWQ 对称量化模型和 AWQ 非对称量化模型通过 LMDeploy 部署为服务后，使用 [opencompass](https://github.com/open-compass/opencompass) 评测了其在若干学术数据集上的精度。AWQ 对称量化和非对称量化的精度表现没有显著差异。与 BF16 相比，在长输出数据集，比如 aime2025（平均 17,635 tokens）、LCB（平均 14,157 tokens），精度下降明显。而在中短输出数据集，比如 ifeval（平均 1,885 tokens）, mmlu_pro（平均 2,826 tokens），精度符合预期。
 
-| dataset           | Qwen3-30B-A3B | Qwen3-30B-A3B awq | diff  |
-| ----------------- | ------------- | ----------------- | ----- |
-| ifeval            | 85.77         | 85.77             | 0     |
-| hle               | 2.18          | 1.95              | -0.23 |
-| gpqa              | 51.39         | 49.37             | -2.02 |
-| aime2025          | 18.02         | 19.58             | 1.56  |
-| mmlu_pro          | 74.05         | 72.86             | -1.19 |
-| LCBCodeGeneration | 30.38         | 27.43             | -2.95 |
+| dataset           | bf16  | awq sym | awq asym |
+| ----------------- | ----- | ------- | -------- |
+| ifeval            | 86.32 | 84.10   | 84.29    |
+| hle               | 7.00  | 5.47    | 5.65     |
+| gpqa              | 61.74 | 57.95   | 57.07    |
+| aime2025          | 73.44 | 64.79   | 66.67    |
+| mmlu_pro          | 77.85 | 75.77   | 75.69    |
+| LCBCodeGeneration | 56.67 | 50.86   | 49.24    |
 
 复现方式可以参考[这份](https://lmdeploy.readthedocs.io/zh-cn/latest/benchmark/evaluate_with_opencompass.html)文档
