@@ -4,6 +4,8 @@ import functools
 
 import torch
 
+from lmdeploy.pytorch.compile_util import CustomOpManager, custom_op
+from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 from lmdeploy.utils import get_logger
 
 from .default import TritonAttentionImpl, TritonAttentionMetadata, _fill_kv_cache_impl, _get_fill_meta
@@ -139,6 +141,8 @@ class FlashMLAImpl(TritonAttentionImpl):
         self.use_fa3 = use_fa3
 
         self.nsa_updater = NSAIndicesUpdater.build()
+
+        self.mod_key = CustomOpManager().register_mod_instance(self)
 
     def _get_flash_mla_sparse_fwd(self):
         if self.flash_mla_sparse_fwd is not None:
@@ -516,7 +520,7 @@ class FlashMLAImpl(TritonAttentionImpl):
         else:
             return self._prefill_triton(query, flatten_k, flatten_v, attn_metadata)
 
-    def forward(
+    def forward_impl(
         self,
         query: torch.Tensor,
         key: torch.Tensor,
@@ -524,36 +528,11 @@ class FlashMLAImpl(TritonAttentionImpl):
         k_cache: torch.Tensor,
         v_cache: torch.Tensor,
         attn_metadata: TritonAttentionMetadata,
-        k_scales_zeros: torch.Tensor = None,
-        v_scales_zeros: torch.Tensor = None,
-        nsa_indices: torch.Tensor = None,
-        **kwargs,
+        k_scales_zeros: torch.Tensor | None = None,
+        v_scales_zeros: torch.Tensor | None = None,
+        nsa_indices: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Forward pass for MLA attention computation.
-
-        This method handles both prefill and decoding stages by:
-        1. Validating NSA requirements (FP8 KV cache)
-        2. Computing max query sequence length
-        3. Filling KV cache if new key/value are provided
-        4. Dispatching to appropriate stage-specific method
-
-        Architecture:
-        - Decoding: Uses flash_mla_with_kvcache with paged KV cache
-        - Prefill: Three paths based on availability and requirements
-          * Sparse (NSA + FP8): flash_mla_sparse_fwd
-          * FA3 optimized: flash_attn_varlen_func with split q_rope/q_nope
-          * Triton fallback: Custom triton kernel
-
-        Args:
-            query: Query tensor.
-            key: Key tensor (None for decoding-only).
-            value: Value tensor (None for decoding-only).
-            k_cache: Key cache tensor.
-            v_cache: Value cache tensor.
-            attn_metadata: Attention metadata containing stage info and indices.
-            k_scales_zeros: Key quantization scales/zeros.
-            v_scales_zeros: Value quantization scales/zeros.
-            nsa_indices: Optional sparse attention indices.
+        """Forward pass for MLA attention computation implementation.
 
         Returns:
             Attention output tensor.
@@ -592,3 +571,112 @@ class FlashMLAImpl(TritonAttentionImpl):
                 k_scales_zeros,
                 v_scales_zeros,
             )
+
+    def forward(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        k_cache: torch.Tensor,
+        v_cache: torch.Tensor,
+        attn_metadata: TritonAttentionMetadata,
+        k_scales_zeros: torch.Tensor | None = None,
+        v_scales_zeros: torch.Tensor | None = None,
+        nsa_indices: torch.Tensor | None = None,
+        **kwargs,
+    ) -> torch.Tensor:
+        """Forward pass for MLA attention computation.
+
+        This method handles both prefill and decoding stages by:
+        1. Validating NSA requirements (FP8 KV cache)
+        2. Computing max query sequence length
+        3. Filling KV cache if new key/value are provided
+        4. Dispatching to appropriate stage-specific method
+
+        Architecture:
+        - Decoding: Uses flash_mla_with_kvcache with paged KV cache
+        - Prefill: Three paths based on availability and requirements
+          * Sparse (NSA + FP8): flash_mla_sparse_fwd
+          * FA3 optimized: flash_attn_varlen_func with split q_rope/q_nope
+          * Triton fallback: Custom triton kernel
+
+        Args:
+            query: Query tensor.
+            key: Key tensor (None for decoding-only).
+            value: Value tensor (None for decoding-only).
+            k_cache: Key cache tensor.
+            v_cache: Value cache tensor.
+            attn_metadata: Attention metadata containing stage info and indices.
+            k_scales_zeros: Key quantization scales/zeros.
+            v_scales_zeros: Value quantization scales/zeros.
+            nsa_indices: Optional sparse attention indices.
+
+        Returns:
+            Attention output tensor.
+        """
+        if torch.compiler.is_compiling():
+            return flash_mla_attention_forward(
+                self.mod_key,
+                query,
+                key,
+                value,
+                k_cache,
+                v_cache,
+                k_scales_zeros=k_scales_zeros,
+                v_scales_zeros=v_scales_zeros,
+                nsa_indices=nsa_indices,
+            )
+        else:
+            return self.forward_impl(
+                query,
+                key,
+                value,
+                k_cache,
+                v_cache,
+                attn_metadata=attn_metadata,
+                k_scales_zeros=k_scales_zeros,
+                v_scales_zeros=v_scales_zeros,
+                nsa_indices=nsa_indices,
+            )
+
+
+@custom_op('lmdeploy::flash_mla_attention_forward',
+           mutates_args=['k_cache', 'v_cache'],
+           split_prefill=True,
+           split_decoding=False)
+def flash_mla_attention_forward(
+    mod_key: int,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    k_cache: torch.Tensor,
+    v_cache: torch.Tensor,
+    k_scales_zeros: torch.Tensor | None = None,
+    v_scales_zeros: torch.Tensor | None = None,
+    nsa_indices: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Flash MLA attention forward op."""
+    instance: 'FlashMLAImpl' = CustomOpManager().get_mod_instance(mod_key)
+    assert isinstance(instance, FlashMLAImpl)
+    step_ctx = get_step_ctx_manager().current_context()
+    attn_metadata: TritonAttentionMetadata = step_ctx.attn_metadata
+    v_cache = k_cache[..., :instance._MLA_NOPE_SIZE]
+    return instance.forward_impl(
+        query,
+        key,
+        value,
+        k_cache,
+        v_cache,
+        attn_metadata=attn_metadata,
+        k_scales_zeros=k_scales_zeros,
+        v_scales_zeros=v_scales_zeros,
+        nsa_indices=nsa_indices,
+    )
+
+
+@flash_mla_attention_forward.register_fake
+def _(mod_key: int, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+    """Fake register for flash_mla_attention_forward."""
+    head_dim = value.size(-1)
+    out_shape = query.shape[:-1] + (head_dim, )
+    return query.new_empty(out_shape)

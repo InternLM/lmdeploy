@@ -323,6 +323,13 @@ def yarn_get_mscale(scale=1, mscale=1):
     return 0.1 * mscale * math.log(scale) + 1.0
 
 
+@torch.library.custom_op('lmdeploy::bmm_inplace', mutates_args=['output'])
+def bmm_inplace(x: torch.Tensor, weight: torch.Tensor, output: torch.Tensor) -> None:
+    # torch compile does not support non-contiguous output
+    # warp it into a custom op
+    torch.bmm(x.transpose(0, 1), weight, out=output.transpose(0, 1))
+
+
 class DeepseekV2BMM(nn.Module):
     """Wrapped bmm."""
 
@@ -359,14 +366,19 @@ class DeepseekV2BMM(nn.Module):
 
     def forward(self, x: torch.Tensor, output: torch.Tensor):
         """forward."""
-        torch.bmm(x.transpose(0, 1), self.weight, out=output.transpose(0, 1))
+        bmm_inplace(x, self.weight, output)
 
 
 class DeepseekV2Attention(nn.Module):
     """Deepseekv2 attention."""
 
-    def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self,
+                 config: Any,
+                 layer_id: int | None = None,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
         super().__init__()
+        self.layer_id = layer_id
         quantization_config = getattr(config, 'quantization_config', None)
         self.q_lora_rank = config.q_lora_rank
         self.hidden_size = config.hidden_size
@@ -454,7 +466,8 @@ class DeepseekV2Attention(nn.Module):
                                   num_kv_heads=num_key_value_heads,
                                   v_head_size=config.kv_lora_rank,
                                   num_replicate_kv_heads=num_replicate_kv_heads,
-                                  use_flash_mla=use_flash_mla)
+                                  use_flash_mla=use_flash_mla,
+                                  layer_id=layer_id)
 
         self.vc = DeepseekV2BMM(self.num_heads, config.kv_lora_rank, self.v_head_dim, dtype=dtype, device=device)
         self.o_proj = build_o_proj(
@@ -509,8 +522,8 @@ class DeepseekV2Attention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        rotary_pos_emb: Tuple[torch.Tensor, torch.Tensor],
+        past_key_value: List[torch.Tensor],
         attn_metadata: Any = None,
     ):
         """Rewrite of LlamaAttention.forward."""
@@ -822,7 +835,7 @@ class DeepseekV2DecoderLayer(nn.Module):
 
         # build attention layer
         if getattr(config, 'use_mla', True):
-            self.self_attn = DeepseekV2Attention(config, dtype=dtype, device=device)
+            self.self_attn = DeepseekV2Attention(config, layer_id=layer_idx, dtype=dtype, device=device)
         else:
             # deepseek-vl2-tiny uses MHA LlamaAttention structure
             from lmdeploy.pytorch.models.llama import LlamaAttention
@@ -846,8 +859,8 @@ class DeepseekV2DecoderLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[List[torch.FloatTensor]],
+        rotary_pos_emb: Tuple[torch.Tensor, torch.Tensor],
+        past_key_value: List[torch.Tensor],
         residual: Optional[torch.Tensor] = None,
         attn_metadata: Any = None,
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor]:
@@ -996,11 +1009,11 @@ class DeepseekV2Model(nn.Module):
 
     def forward(
         self,
-        input_ids: torch.LongTensor = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        input_ids: torch.Tensor,
+        position_ids: torch.Tensor,
+        past_key_values: List[List[torch.Tensor]],
         attn_metadata: Any = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
+        inputs_embeds: torch.Tensor | None = None,
     ):
         """forward."""
         if inputs_embeds is None:
@@ -1029,7 +1042,7 @@ class DeepseekV2Model(nn.Module):
         self,
         input_ids: torch.LongTensor = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        past_key_values: List[List[torch.Tensor]] | None = None,
         attn_metadata: Any = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
     ):
@@ -1132,7 +1145,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         position_ids: torch.Tensor,
         past_key_values: List[List[torch.Tensor]],
         attn_metadata: Any = None,
-        inputs_embeds: torch.Tensor = None,
+        inputs_embeds: torch.Tensor | None = None,
         **kwargs,
     ):
         if get_step_ctx_manager().current_context().enable_microbatch:

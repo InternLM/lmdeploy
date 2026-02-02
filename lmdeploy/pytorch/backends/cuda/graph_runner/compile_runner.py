@@ -18,6 +18,9 @@ from .piecewise_backend import create_backend
 
 logger = get_logger('lmdeploy')
 
+PREFILL_FULLGRAPH = True
+DECODING_FULLGRAPH = True
+
 
 def get_attn_metadata(kwargs: Dict[str, Any], context: StepContext) -> TritonAttentionMetadata:
     """Get attention metadata from kwargs or context."""
@@ -128,10 +131,12 @@ class TorchCompilePrefillRunner:
 
         self._runner_map: Dict[Any, TorchCompileSinglePrefillRunner] = dict()
 
-        self.graph = torch.compile(self.model.forward,
-                                   fullgraph=True,
-                                   dynamic=False,
-                                   backend=create_backend(self.graph_pool_handle, is_decoding=False))
+        self.graph = torch.compile(
+            self.model.forward,
+            fullgraph=PREFILL_FULLGRAPH,
+            dynamic=False,
+            backend=create_backend(self.graph_pool_handle, is_decoding=False),
+        )
 
     def _get_capture_tokens(self, num_tokens: int):
         """Get capture tokens."""
@@ -252,10 +257,12 @@ class TorchCompileDecodingRunner:
 
         self._runner_map: Dict[Any, TorchCompileSingleDecodingRunner] = dict()
 
-        self.graph = torch.compile(self.model.forward,
-                                   fullgraph=True,
-                                   dynamic=False,
-                                   backend=create_backend(self.graph_pool_handle, is_decoding=True))
+        self.graph = torch.compile(
+            self.model.forward,
+            fullgraph=DECODING_FULLGRAPH,
+            dynamic=False,
+            backend=create_backend(self.graph_pool_handle, is_decoding=True),
+        )
 
     def _get_capture_tokens(self, batch_size: int):
         """Get capture tokens."""
@@ -360,14 +367,6 @@ class TorchCompileRunner(GraphRunner):
             graph_pool_handle=self.graph_pool_handle,
         )
 
-    def _get_capture_tokens(self, batch_size: int):
-        """Get capture tokens."""
-        cap_sizes = self.get_capture_batch_sizes()
-        for size in cap_sizes:
-            if size >= batch_size:
-                return size
-        assert False, f'Unsupported batch_size={batch_size}'
-
     def _prepare_inputs(self, **kwargs):
         """Prepare inputs."""
         step_ctx = get_step_ctx_manager().current_context()
@@ -428,11 +427,20 @@ class TorchCompileRunner(GraphRunner):
             return inputs
         is_decoding = inputs.is_decoding
         dp_meta = inputs.dp_meta
-        if is_decoding and dp_meta is not None:
-            meta = self.get_meta()
-            padding_batch_size = meta.padding_batch_size
-            tp_size = self._get_capture_tokens(padding_batch_size)
-            dp_meta.sync_tp_size(tp_size)
+        if dp_meta is not None:
+            if is_decoding:
+                # pad inputs to same tokens
+                meta = self.get_meta()
+                padding_batch_size = meta.padding_batch_size
+                tp_size = self.decoding_runner._get_capture_tokens(padding_batch_size)
+                dp_meta.sync_tp_size(tp_size)
+            else:
+                # pad inputs to next capture size
+                tp_sizes = dp_meta.tp_sizes
+                moe_tp_sizes = dp_meta.moe_tp_sizes
+                tp_sizes = [self.prefill_runner._get_capture_tokens(size) for size in tp_sizes]
+                moe_tp_sizes = [self.prefill_runner._get_capture_tokens(size) for size in moe_tp_sizes]
+                dp_meta.set_tp_sizes(tp_sizes, moe_tp_sizes)
         return inputs
 
     def get_capture_batch_sizes(self) -> List[int]:

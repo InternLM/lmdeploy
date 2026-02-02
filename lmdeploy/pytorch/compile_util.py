@@ -16,8 +16,8 @@ def custom_op(
     mutates_args: str | Iterable[str],
     device_types: device_types_t = None,
     schema: str | None = None,
-    split_prefill: bool = True,
-    split_decoding: bool = True,
+    split_prefill: bool = False,
+    split_decoding: bool = False,
 ) -> Callable[[Callable[..., object]], 'CustomOpDef']:
     ...
 
@@ -31,8 +31,8 @@ def custom_op(
     mutates_args: str | Iterable[str],
     device_types: device_types_t = None,
     schema: str | None = None,
-    split_prefill: bool = True,
-    split_decoding: bool = True,
+    split_prefill: bool = False,
+    split_decoding: bool = False,
 ) -> 'CustomOpDef':
     ...
 
@@ -46,8 +46,8 @@ def custom_op(
     device_types: device_types_t = None,
     schema: str | None = None,
     tags: Sequence[Any] = None,
-    split_prefill: bool = True,
-    split_decoding: bool = True,
+    split_prefill: bool = False,
+    split_decoding: bool = False,
 ):
     """A decorator to mark a function as a custom op for torch.compile."""
 
@@ -71,9 +71,33 @@ class CustomOpManager:
     """Manager for custom ops."""
 
     def __init__(self):
+        from itertools import count
         self._custom_ops = dict()
         self._split_prefill_ops = set()
         self._split_decoding_ops = set()
+
+        # register mod instances
+        self._mod_instances = dict()
+        self.counter = count()
+
+    def register_mod_instance(self, instance: Any):
+        """Register mod instance."""
+        key = next(self.counter)
+        self._mod_instances[key] = instance
+        return key
+
+    def unregister_mod_instance(self, key: int):
+        """Unregister instance."""
+        if key in self._mod_instances:
+            del self._mod_instances[key]
+
+    def get_mod_instance(self, key: int):
+        """Get instance."""
+        return self._mod_instances.get(key, None)
+
+    def clear_mod_instances(self):
+        """Clear all registered mod instances."""
+        self._mod_instances.clear()
 
     def add_custom_op(self, name: str, custom_op: CustomOpDef, split_prefill: bool = True, split_decoding: bool = True):
         """Add custom op."""
