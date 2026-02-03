@@ -24,6 +24,13 @@ ______________________________________________________________________
 ## 最新进展 🎉
 
 <details open>
+<summary><b>2026</b></summary>
+
+- \[2026/02\] 支持 [vllm-project/llm-compressor](https://github.com/vllm-project/llm-compressor) 4bit 对称和非对称量化。 具体操作指南详见[此处](./docs/zh_cn/quantization/llm_compressor.md)
+
+</details>
+
+<details close>
 <summary><b>2025</b></summary>
 </details>
 
@@ -176,6 +183,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>InternVL3.5 (1B-241BA28B)</li>
   <li>Intern-S1 (241B)</li>
   <li>Intern-S1-mini (8.3B)</li>
+  <li>Intern-S1-Pro (1TB)</li>
   <li>Mono-InternVL (2B)</li>
   <li>ChemVLM (8B-26B)</li>
   <li>CogVLM-Chat (17B)</li>
