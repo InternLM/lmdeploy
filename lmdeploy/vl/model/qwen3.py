@@ -26,7 +26,7 @@ class Qwen3VLModel(VisionModel):
 
     def build_preprocessor(self):
         check_transformers()
-        self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=True)
+        self.processor = AutoProcessor.from_pretrained(self.model_path)
         tokenizer = self.processor.tokenizer
         self.image_token = self.processor.image_token
         self.image_token_id = tokenizer.encode(self.image_token)[-1]
