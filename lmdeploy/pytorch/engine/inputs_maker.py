@@ -9,6 +9,7 @@ import torch
 from torch.profiler import record_function
 
 from lmdeploy.pytorch.disagg.config import EngineRole
+from lmdeploy.pytorch.messages import MessageStatus
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, VisionModelInputs
 from lmdeploy.utils import get_logger
 
@@ -179,6 +180,12 @@ class LongContextChunker:
             while len(mms) > 0 and mms[0].end <= self.next_step:
                 mms.pop(0)
         self.multimodals = dict((k, v) for k, v in self.multimodals.items() if len(v) > 0)
+
+    def check_enable(self):
+        if not self.enabled():
+            return
+        if self.seq.status != MessageStatus.RUNNING:
+            self.clear()
 
 
 class InputsMakerAsync:
@@ -583,6 +590,7 @@ class InputsMakerAsync:
             else:
                 inputs, extra_inputs = __create_inputs_chunk(running)
                 delta = None
+            inputs.is_first_chunk = False
             return running, inputs, delta, extra_inputs
 
         def __create_inputs_prefill():
@@ -615,6 +623,7 @@ class InputsMakerAsync:
         swap_in_map = {}
         swap_out_map = {}
 
+        self.long_context_chunker.check_enable()
         if self.long_context_chunker.enabled():
             # long context chunking
             running, inputs, delta, extra_inputs = __create_inputs_long_context_chunk()

@@ -646,6 +646,9 @@ class BaseModelAgent:
             # for second round chat
             self.step_inputs.update_delta(delta, self)
 
+        if inputs.is_first_chunk:
+            self._prev_chunk_output = None
+
         # check long context
         if self._prev_chunk_output is not None:
             # update model metas
@@ -1197,7 +1200,8 @@ class BaseModelAgent:
     async def sleep(self, level: int = 1):
         """Sleep."""
         self.state.is_sleeping = True
-        await self.state.to_sleep.wait()
+        if self.dist_config.dp > 1:
+            await self.state.to_sleep.wait()
         self.cache_engine = None
         self.reset_graph_runner()
         device = 'cpu' if level == 1 else 'meta'
@@ -1228,7 +1232,8 @@ class BaseModelAgent:
             self.build_cache_engine()
             # wake up signal
             self.state.is_sleeping = False
-            self.state.to_wakeup.set()
+            if self.dist_config.dp > 1:
+                self.state.to_wakeup.set()
 
     def release(self):
         """release."""

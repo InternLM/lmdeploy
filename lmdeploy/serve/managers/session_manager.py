@@ -73,21 +73,24 @@ class Session:
     async def request_handle(self):
         if self._handle is not None:
             raise RuntimeError(f'Session {self.session_id} already has an inference instance.')
-        logger.debug(f'[acquire_request_handle] session {self.session_id} acquiring an instance')
+        logger.debug(f'[request_handle] session {self.session_id} acquiring an instance')
 
         hnd_pool = self._session_mgr().request_handle_pool
         self._handle = await hnd_pool.get()
         self._active = asyncio.Event()
-        logger.debug(f'[acquire_request_handle] session {self.session_id} acquired an instance')
+        logger.debug(f'[request_handle] session {self.session_id} acquired an instance')
         try:
             yield self._handle
         except SafeRunException:
-            await self._handle.async_end(self.session_id)
+            pass
+        except (asyncio.CancelledError, GeneratorExit) as e:
+            logger.error(f'[request_handle] session {self.session_id} exception caught: {e}')
+            await self._handle.async_cancel(self.session_id)
         except Exception as e:
             logger.error(f'Session {self.session_id} failed to acquire an inference instance: {e}')
             raise e
         finally:
-            logger.debug(f'[acquire_request_handle] session {self.session_id} releasing the instance')
+            logger.debug(f'[request_handle] session {self.session_id} releasing the instance')
             # Return inference instance if it was acquired
             if self._handle is not None:
                 hnd_pool.put(self._handle)
@@ -98,7 +101,7 @@ class Session:
 
     async def async_abort(self):
         """Abort the session."""
-        logger.debug(f'Aborting session {self.session_id}')
+        logger.info(f'[session] Aborting session {self.session_id}')
         if self._handle is not None:
             await self._handle.async_cancel(self.session_id)
         # DO NOT reset the session here because it might be used by other components.
@@ -106,7 +109,7 @@ class Session:
 
     async def async_close(self):
         """End the session."""
-        logger.debug(f'Ending session {self.session_id}')
+        logger.info(f'[session] Ending session {self.session_id}')
         if self._handle is not None:
             await self._active.wait()
         async with self.request_handle() as handle:

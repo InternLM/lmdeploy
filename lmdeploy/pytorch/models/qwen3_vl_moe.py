@@ -135,6 +135,7 @@ class Qwen3VLMoeForConditionalGeneration(Qwen3VLForConditionalGeneration):
             name = name.replace(weight_name, param_name)
             param = params_dict[name]
             load_weight(param, loaded_weight, expert_id=expert_id, shard_id=shard_id)
+            break
         else:
             param = params_dict[name]
             load_weight(param, loaded_weight)
