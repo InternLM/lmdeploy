@@ -34,7 +34,7 @@ LMDeploy 将持续跟进并扩展对 `llm-compressor` 项目的支持。
 ## 模型量化
 
 `llm-compressor` 提供了丰富的模型量化[用例](https://github.com/vllm-project/llm-compressor/tree/main/examples)，请参考其教程选择 LMDeploy 支持的量化算法，完成模型量化工作。
-LMDeploy 也内置了通过 `llm-compressor` 对 Qwen3-30B-A3B 进行 AWQ 量化的[脚本](https://github.com/InternLM/lmdeploy/examples/lite/qwen3_30b_a3b_awq.py)，供大家进行参考：
+LMDeploy 也内置了通过 `llm-compressor` 对 Qwen3-30B-A3B 进行 AWQ 量化的[脚本](https://github.com/InternLM/lmdeploy/blob/main/examples/lite/qwen3_30b_a3b_awq.py)，供大家进行参考：
 
 ```shell
 # 创建 conda 环境

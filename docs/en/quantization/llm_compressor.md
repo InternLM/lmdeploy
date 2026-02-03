@@ -36,7 +36,7 @@ The remainder of this document consists of the following sections:
 
 `llm-compressor` provides a wealth of model quantization [examples](https://github.com/vllm-project/llm-compressor/tree/main/examples). Please refer to its tutorials to select a quantization algorithm supported by LMDeploy to complete your model quantization work.
 
-LMDeploy also provides a built-in [script](https://github.com/InternLM/lmdeploy/examples/lite/qwen3_30b_a3b_awq.py) for AWQ quantization of **Qwen3-30B-A3B** using `llm-compressor` for your reference:
+LMDeploy also provides a built-in [script](https://github.com/InternLM/lmdeploy/blob/main/examples/lite/qwen3_30b_a3b_awq.py) for AWQ quantization of **Qwen3-30B-A3B** using `llm-compressor` for your reference:
 
 ```shell
 # Create conda environment
