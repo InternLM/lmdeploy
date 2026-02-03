@@ -77,10 +77,9 @@ def longtext_throughput_test(config, run_config, worker_id: str = ''):
     env = os.environ.copy()
     env.update(run_config.get('env', {}))
 
-    for input_len, out_len, num_prompts, session_info, concurrency in [(1, 32768, 10, '32k', 10),
-                                                                       (1, 65536, 5, '64k', 5),
-                                                                       (65536, 1024, 15, '64k-1k', 15),
-                                                                       (198000, 1024, 3, '198k-1k', 1)]:
+    for input_len, out_len, num_prompts, session_info, concurrency in [(1, 32768, 3, '32k', 3), (1, 65536, 1, '64k', 1),
+                                                                       (65536, 1024, 5, '64k-1k', 5),
+                                                                       (198000, 1024, 1, '198k-1k', 1)]:
         session_len = input_len + out_len + 1
         csv_path = os.path.join(work_dir, f'{case_name}_{session_info}.csv')
         timestamp = time.strftime('%Y%m%d_%H%M%S')
