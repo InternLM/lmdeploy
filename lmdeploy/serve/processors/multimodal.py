@@ -85,13 +85,8 @@ class MultimodalProcessor:
         return result
 
     @staticmethod
-    async def async_convert_to_pil_images(messages: List[Dict]) -> List[Dict]:
-        """Scan the provided messages to find image URLs or base64-encoded
-        image data. Loads the images into Pillow image objects.
-
-        Args:
-            messages (List[Dict]): a user request of GPT4V message format
-        """
+    async def async_convert_multimodal_data(messages: List[Dict]) -> List[Dict]:
+        """Convert user-input multimodal data into GPT4V message format."""
         from lmdeploy.vl.utils import load_image
 
         if isinstance(messages, Dict):
@@ -169,7 +164,7 @@ class MultimodalProcessor:
                         message['content'].append(data)
                     except KeyError:
                         logger.error(f'invalid format {message}')
-                elif item['type'] == 'text':
+                elif item['type'] in ['text', 'time_series']:
                     message['content'].append(item)
                 else:
                     logger.error(f'unexpected content type {message}')
@@ -331,7 +326,8 @@ class MultimodalProcessor:
         """Check if messages contain multimodal input (images)."""
         return any(
             isinstance(message.get('content'), list) and any(
-                item.get('type') in ['image_url', 'image_data'] for item in message['content']) for message in messages)
+                item.get('type') in ['image_url', 'image_data', 'time_series'] for item in message['content'])
+            for message in messages)
 
     async def _get_text_prompt_input(self,
                                      prompt: str | List[Dict],
@@ -378,7 +374,7 @@ class MultimodalProcessor:
         """Process multimodal prompt and return processed data for inference
         engines."""
         chat_template = self.chat_template if do_preprocess else BaseChatTemplate()
-        messages = await self.async_convert_to_pil_images(messages)
+        messages = await self.async_convert_multimodal_data(messages)
         results = await self.vl_encoder.preprocess(messages, mm_processor_kwargs)
 
         if self.backend == 'turbomind':

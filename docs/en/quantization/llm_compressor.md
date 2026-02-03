@@ -4,7 +4,7 @@ This guide aims to introduce how to use LMDeploy's TurboMind inference engine to
 
 Currently supported `llm-compressor` quantization types include:
 
-- 4-bit asymmetric quantization (e.g., AWQ, GPTQ)
+- int4 quantization (e.g., AWQ, GPTQ)
 
 These quantized models can run via the TurboMind engine on the following NVIDIA GPU architectures:
 
@@ -36,7 +36,7 @@ The remainder of this document consists of the following sections:
 
 `llm-compressor` provides a wealth of model quantization [examples](https://github.com/vllm-project/llm-compressor/tree/main/examples). Please refer to its tutorials to select a quantization algorithm supported by LMDeploy to complete your model quantization work.
 
-LMDeploy also provides a built-in [script](https://github.com/InternLM/lmdeploy/examples/lite/qwen3_30b_a3b_awq.py) for AWQ quantization of **Qwen3-30B-A3B** using `llm-compressor` for your reference:
+LMDeploy also provides a built-in [script](https://github.com/InternLM/lmdeploy/blob/main/examples/lite/qwen3_30b_a3b_awq.py) for AWQ quantization of **Qwen3-30B-A3B** using `llm-compressor` for your reference:
 
 ```shell
 # Create conda environment
@@ -83,15 +83,15 @@ The default service port is 23333. After the server starts, you can access the s
 
 ## Accuracy Evaluation
 
-After deploying the aforementioned quantized model as a service via LMDeploy, we evaluated its accuracy on several academic datasets using [OpenCompass](https://github.com/open-compass/opencompass). Compared with the original model, the accuracy difference is within an acceptable range:
+After deploying the AWQ symmetric and AWQ asymmetric quantized Qwen3-30B-A3B models as services via LMDeploy, we evaluated their accuracy on several academic datasets using [opencompass](https://github.com/open-compass/opencompass). AWQ symmetric and asymmetric quantization show no significant difference in accuracy. Compared with BF16, accuracy drops significantly on long-output datasets such as aime2025 (avg 17,635 tokens) and LCB (avg 14,157 tokens), while on medium/short-output datasets like ifeval (avg 1,885 tokens) and mmlu_pro (avg 2,826 tokens), the accuracy is as expected.
 
-| dataset           | Qwen3-30B-A3B | Qwen3-30B-A3B awq | diff  |
-| ----------------- | ------------- | ----------------- | ----- |
-| ifeval            | 85.77         | 85.77             | 0     |
-| hle               | 2.18          | 1.95              | -0.23 |
-| gpqa              | 51.39         | 49.37             | -2.02 |
-| aime2025          | 18.02         | 19.58             | 1.56  |
-| mmlu_pro          | 74.05         | 72.86             | -1.19 |
-| LCBCodeGeneration | 30.38         | 27.43             | -2.95 |
+| dataset           | bf16  | awq sym | awq asym |
+| ----------------- | ----- | ------- | -------- |
+| ifeval            | 86.32 | 84.10   | 84.29    |
+| hle               | 7.00  | 5.47    | 5.65     |
+| gpqa              | 61.74 | 57.95   | 57.07    |
+| aime2025          | 73.44 | 64.79   | 66.67    |
+| mmlu_pro          | 77.85 | 75.77   | 75.69    |
+| LCBCodeGeneration | 56.67 | 50.86   | 49.24    |
 
 For reproduction methods, please refer to [this](https://lmdeploy.readthedocs.io/en/latest/benchmark/evaluate_with_opencompass.html) document.

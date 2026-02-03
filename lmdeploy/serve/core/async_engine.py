@@ -598,11 +598,11 @@ class AsyncEngine:
 
     async def async_get_logits(self,
                                input_ids,
-                               steps: List[int] | None = None,
+                               sessions: List['Session'] | None = None,
                                sequence_start: bool = True,
                                sequence_end: bool = True) -> List[torch.Tensor]:
         assert input_ids and all(isinstance(_, List) for _ in input_ids)
-        assert steps is None or (len(steps) == len(input_ids))
+        assert sessions is None or (len(sessions) == len(input_ids))
 
         logits = [None] * len(input_ids)
 
@@ -621,15 +621,21 @@ class AsyncEngine:
                                          stream_output=False,
                                          sequence_start=sequence_start,
                                          sequence_end=sequence_end,
-                                         step=steps[i] if steps else 0) as gen:
+                                         step=session.step) as gen:
                     async for outputs in gen:
                         pass
                     logits[i] = outputs.logits[:input_len, :]
 
-        sessions = [self.session_mgr.get() for _ in range(len(input_ids))]
+        create_sessions = False
+        if sessions is None:
+            create_sessions = True
+            sessions = [self.session_mgr.get() for _ in range(len(input_ids))]
         tasks = [_proc(session, i) for i, session in enumerate(sessions)]
         await asyncio.gather(*tasks)
         if sequence_end and self.backend == 'pytorch':
             for session in sessions:
                 await session.async_close()
+        if sequence_end and create_sessions:
+            for session in sessions:
+                self.session_mgr.remove(session)
         return logits
