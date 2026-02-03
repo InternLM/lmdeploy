@@ -32,13 +32,14 @@ ______________________________________________________________________
 
 <details close>
 <summary><b>2025</b></summary>
-</details>
 
 - 【2025年9月】TurboMind 引擎支持 MXFP4，适用于 NVIDIA V100 及以上 GPU。在 H800 上推理 openai gpt-oss 模型，性能可达 vLLM 的 1.5倍！
 - 【2025年6月】深度优化 FP8 MoE 模型推理
 - 【2025年6月】集成[DLSlime](https://github.com/DeepLink-org/DLSlime)和[Mooncake](https://github.com/kvcache-ai/Mooncake)，实现DeepSeek PD分离部署，向两个团队表示诚挚的感谢！
 - 【2025年4月】集成deepseek-ai组件FlashMLA、DeepGemm、DeepEP、MicroBatch、eplb等，提升DeepSeek推理性能
 - 【2025年1月】新增对DeepSeek V3及R1的支持
+
+</details>
 
 <details close>
 <summary><b>2024</b></summary>
