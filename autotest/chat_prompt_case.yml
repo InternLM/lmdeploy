@@ -20,6 +20,7 @@ base_testcase:
             - xinjiang
             - 新疆
             - introduce
+            - 羊肉
         - len_g:
             10
 chat_testcase:
@@ -39,6 +40,7 @@ chat_testcase:
             - 乌市
             - xinjiang
             - 新疆
+            - 羊肉
     - end:
     - 介绍相应美食#please introduce some delicious foods:
         - not contain:

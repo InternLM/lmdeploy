@@ -132,7 +132,11 @@ def get_cli_str(config: Dict[str, Any]) -> str:
         if value is None:
             cli_str.append(f'--{key}')
         elif isinstance(value, list):
-            cli_str.append(f'--{key} {" ".join(map(str, value))}')
+            tmp_cli = ' '.join(map(str, value))
+            cli_str.append(f'--{key} {tmp_cli}')
+        elif isinstance(value, dict):
+            tmp_cli = ' '.join([f'{k}={v}' for k, v in value.items()])
+            cli_str.append(f'--{key} {tmp_cli}')
         else:
             cli_str.append(f'--{key} {value}' if value else f'--{key}')
 
@@ -561,7 +565,10 @@ def test_cli_common_param():
             'max_batch_size': 2048,
             'session_len': 8192,
             'cache_max_entry_count': 0.75,
-            'adapters': ['a=lora/2024-01-25_self_dup', 'b=lora/2024-01-25_self']
+            'adapters': {
+                'a': 'lora/2024-01-25_self_dup',
+                'b': 'lora/2024-01-25_self'
+            }
         }
     }
 
