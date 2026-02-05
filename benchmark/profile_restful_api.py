@@ -1250,7 +1250,7 @@ def run_benchmark(args_: argparse.Namespace):
               'using `--model`.')
         sys.exit(1)
 
-    if not check_chat_template(args.model_path):
+    if not check_chat_template(model_path):
         print('\nWARNING It is recommended to use the `Chat` or `Instruct` '
               'model for benchmarking.\n'
               'Because when the tokenizer counts the output tokens, if '

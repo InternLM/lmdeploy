@@ -303,7 +303,7 @@ jobs:
             generate_type: logprob
             extra: '--logprobs-mode raw_logprobs'
           - tp: 1
-            model: Qwen3-8b
+            model: Qwen3-8B
             model_path: Qwen/Qwen3-8B
             case_info: ['completions_v1']
             generate_type: base
