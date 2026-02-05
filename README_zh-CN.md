@@ -164,6 +164,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>MiniCPM3 (4B)</li>
   <li>SDAR (1.7B-30B)</li>
   <li>gpt-oss (20B, 120B)</li>
+  <li>GLM-4.7-Flash (30B)</li>
 </ul>
 </td>
 <td>
