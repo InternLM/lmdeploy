@@ -101,13 +101,13 @@ class MetricsProcessor():
         """Increase completed requests."""
         self.scheduler_stats.num_completed_reqs += 1
 
-    def increase_api_running_requests(self):
-        """Increase API running requests."""
-        self.scheduler_stats.num_api_running_reqs += 1
+    def increase_api_routed_requests(self):
+        """Increase API routed requests."""
+        self.scheduler_stats.num_api_routed_reqs += 1
 
-    def decrease_api_running_requests(self):
+    def decrease_api_routed_requests(self):
         """Decrease API running requests."""
-        self.scheduler_stats.num_api_running_reqs -= 1
+        self.scheduler_stats.num_api_routed_reqs -= 1
 
 
 metrics_processor = MetricsProcessor()

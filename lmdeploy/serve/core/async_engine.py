@@ -265,7 +265,7 @@ class AsyncEngine:
     async def safe_run(self, handle, session, **kwargs):
         generator = handle.async_stream_infer(session.session_id, **kwargs)
         try:
-            metrics_processor.increase_api_running_requests()
+            metrics_processor.increase_api_routed_requests()
             yield generator
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
             logger.error(f'[safe_run] session {session.session_id} exception caught: {type(e).__name__} {e}')
@@ -275,7 +275,7 @@ class AsyncEngine:
             raise SafeRunException(f'Safe run exception for session {session.session_id}') from e
         finally:
             await generator.aclose()
-            metrics_processor.decrease_api_running_requests()
+            metrics_processor.decrease_api_routed_requests()
 
     async def generate(
             self,

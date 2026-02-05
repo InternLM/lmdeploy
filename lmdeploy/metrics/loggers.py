@@ -108,15 +108,15 @@ class LoggingStatLogger(StatLoggerBase):
         generation_throughput = self.total_generation_tokens / (now - self.last_log_time)
         scheduler_stats = self.last_scheduler_stats
         scheduler_stats.num_api_waiting_reqs = scheduler_stats.num_total_reqs - \
-            scheduler_stats.num_completed_reqs - scheduler_stats.num_api_running_reqs
+            scheduler_stats.num_completed_reqs - scheduler_stats.num_api_routed_reqs
         spec_msg = self.get_spec_msg()
 
         # format and print
         log_msg = (
             f"[{datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')} DP{self.dp_rank}] "
             f'Avg thr (in/out): {prompt_throughput:.1f} / {generation_throughput:.1f} tokens/s, '
-            f'API server (completed/running/waiting): {scheduler_stats.num_completed_reqs} / '
-            f'{scheduler_stats.num_api_running_reqs} / {scheduler_stats.num_api_waiting_reqs}, '
+            f'API server (completed/routed/waiting): {scheduler_stats.num_completed_reqs} / '
+            f'{scheduler_stats.num_api_routed_reqs} / {scheduler_stats.num_api_waiting_reqs}, '
             f'Engine (running/waiting): {scheduler_stats.num_running_reqs} / {scheduler_stats.num_waiting_reqs}, '
             f'KV cache: {scheduler_stats.gpu_cache_usage * 100 :.1f}%, ')
 
@@ -161,14 +161,14 @@ class PrometheusStatLogger(StatLoggerBase):
                                                                  documentation='Number of current completed requests.',
                                                                  labelnames=labelnames).labels(*labelvalues)
 
-        self.gauge_scheduler_api_running = prometheus_client.Gauge(
-            name='lmdeploy:num_api_requests_running',
-            documentation='Number of requests being processed by the API server.',
+        self.gauge_scheduler_api_routed = prometheus_client.Gauge(
+            name='lmdeploy:num_api_requests_routed',
+            documentation='Number of requests routed to request handles.',
             labelnames=labelnames).labels(*labelvalues)
 
         self.gauge_scheduler_api_waiting = prometheus_client.Gauge(
             name='lmdeploy:num_api_requests_waiting',
-            documentation='Number of requests waiting to be processed by the API server.',
+            documentation='Number of requests waiting for free request handles.',
             labelnames=labelnames).labels(*labelvalues)
 
         self.gauge_scheduler_running = prometheus_client.Gauge(
@@ -309,9 +309,9 @@ class PrometheusStatLogger(StatLoggerBase):
     def record_schedule(self, stats: SchedulerStats) -> None:
         """Report schedule metrics to prometheus."""
         self.gauge_scheduler_completed.set(stats.num_completed_reqs)
-        self.gauge_scheduler_api_running.set(stats.num_api_running_reqs)
+        self.gauge_scheduler_api_routed.set(stats.num_api_routed_reqs)
         self.gauge_scheduler_api_waiting.set(stats.num_total_reqs - stats.num_completed_reqs -
-                                             stats.num_api_running_reqs)
+                                             stats.num_api_routed_reqs)
         self.gauge_scheduler_running.set(stats.num_running_reqs)
         self.gauge_scheduler_waiting.set(stats.num_waiting_reqs)
         self.gauge_gpu_cache_usage.set(stats.gpu_cache_usage)
