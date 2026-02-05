@@ -155,7 +155,7 @@ jobs:
           echo ${{github.event.inputs.base_models}}
           echo ${{github.event.inputs.baes_datasets}}
           export LMDEPLOY_DIR=$(pwd)
-          python3 .github/scripts/action_tools.py evaluate "${{github.event.inputs.base_models}}" "${{github.event.inputs.baes_datasets}}" /root/evaluation-reports/${{ github.run_id }} base
+          python3 .github/scripts/action_tools.py evaluate "${{github.event.inputs.base_models}}" "${{github.event.inputs.baes_datasets}}" /root/evaluation_report/${{ github.run_id }} base
       - name: Clear workspace
         if: always()
         run: |
