@@ -106,7 +106,7 @@ class MetricsProcessor():
         self.scheduler_stats.num_api_routed_reqs += 1
 
     def decrease_api_routed_requests(self):
-        """Decrease API running requests."""
+        """Decrease API routed requests."""
         self.scheduler_stats.num_api_routed_reqs -= 1
 
 
