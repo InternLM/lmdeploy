@@ -661,7 +661,8 @@ class Glm4vForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixin)
             image_mask=image_mask,
         )
 
-    def rename_weight(self, name: str) -> str:
+    @classmethod
+    def rename_weight(cls, name: str) -> str:
         """Rename weight."""
         if name.startswith('model.language_model.'):
             return 'language_model.' + name[len('model.language_model.'):]
