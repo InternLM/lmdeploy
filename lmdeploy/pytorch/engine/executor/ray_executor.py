@@ -286,9 +286,6 @@ class RayExecutor(ExecutorBase):
             self._prefetch_task: asyncio.Task = None
             self.remote_outs: asyncio.Queue = None
 
-            rank_offset = dist_config.dp_rank * attn_tp
-            self.rank_offset = rank_offset
-
             logger.info('Init distributed environment by device.')
             self.rank_offset = dist_config.dp_rank * attn_tp
             self._init_distributed_environment_by_device(device_type)

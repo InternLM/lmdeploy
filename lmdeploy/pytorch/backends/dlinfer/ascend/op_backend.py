@@ -118,11 +118,9 @@ class AscendKVQuantMeta:
 class AscendOpsBackend(DlinferOpsBackend):
     """Ascend layer backend."""
     enable_graph: bool = False
-    half_negative_inf: float = torch.finfo(torch.float16).min
     total_slots = None
     max_batches = None
     dist_meta: DistMeta = None
-    graph_capture_sizes = None
 
     @staticmethod
     def get_name() -> str:
