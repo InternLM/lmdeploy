@@ -14,7 +14,7 @@ from lmdeploy.messages import EngineEvent, EngineOutput, ResponseType, ScheduleM
 class SchedulerStats:
     """Stats associated with the scheduler.
     Desc:
-        Dataflow: client -> API server --> Engine core
+        Dataflow: client --> API server --> Engine core
         API server total  = completed + uncompleted = completed + (api_routed + api_waiting)
         Engine core total = running + waiting = api_routed
 
