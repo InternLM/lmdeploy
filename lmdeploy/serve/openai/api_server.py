@@ -30,7 +30,7 @@ from lmdeploy.pytorch.disagg.config import DistServeEngineConfig
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeCacheFreeRequest, DistServeConnectionRequest,
                                                    DistServeDropConnectionRequest, DistServeInitRequest,
                                                    MigrationRequest)
-from lmdeploy.serve.async_engine import AsyncEngine
+from lmdeploy.serve.core import AsyncEngine
 from lmdeploy.serve.openai.harmony_utils import GptOssChatParser
 from lmdeploy.serve.openai.protocol import ChatCompletionResponse  # noqa: E501
 from lmdeploy.serve.openai.protocol import (AbortRequest, ChatCompletionRequest, ChatCompletionResponseChoice,
@@ -55,7 +55,6 @@ logger = get_logger('lmdeploy')
 class VariableInterface:
     """A IO interface maintaining variables."""
     async_engine: AsyncEngine = None
-    session_id: int = 0
     api_keys: Optional[List[str]] = None
     request_hosts = []
     # following are for registering to proxy server
@@ -68,9 +67,26 @@ class VariableInterface:
     allow_terminate_by_client: bool = False
     enable_abort_handling: bool = False
 
+    @staticmethod
+    def get_session(session_id: int) -> int:
+        session_mgr = VariableInterface.get_session_manager()
+        if session_id == -1:
+            return session_mgr.get()
+        else:
+            return session_mgr.get(session_id)
+
+    @staticmethod
+    def get_session_manager():
+        return VariableInterface.async_engine.session_mgr
+
+    @staticmethod
+    def get_engine_config():
+        return VariableInterface.async_engine.backend_config
+
 
 router = APIRouter()
 get_bearer_token = HTTPBearer(auto_error=False)
+server_context = VariableInterface()
 
 
 async def check_api_key(auth: Optional[HTTPAuthorizationCredentials] = Depends(get_bearer_token), ) -> str:
@@ -146,12 +162,12 @@ def check_request(request) -> Optional[JSONResponse]:
         check_func = check_request
     else:
         # Define an async function that always returns success
-        def always_success(req, backend_config):
+        def always_success(req, server_context):
             return ''
 
         check_func = always_success
 
-    error_msg = check_func(request, VariableInterface.async_engine.backend_config)
+    error_msg = check_func(request, server_context)
     if error_msg:
         return create_error_response(HTTPStatus.BAD_REQUEST, error_msg)
     return None
@@ -383,6 +399,11 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     - **presence_penalty** (replaced with repetition_penalty)
     - **frequency_penalty** (replaced with repetition_penalty)
     """
+    error_check_ret = check_request(request)
+    if error_check_ret is not None:
+        return error_check_ret
+    session = VariableInterface.get_session(request.session_id)
+
     json_request = await raw_request.json()
     migration_request = json_request.pop('migration_request', None)
     with_cache = json_request.pop('with_cache', False)
@@ -390,20 +411,11 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     if migration_request:
         migration_request = MigrationRequest.model_validate(migration_request)
 
-    if request.session_id == -1:
-        VariableInterface.session_id += 1
-        request.session_id = VariableInterface.session_id
-    error_check_ret = check_request(request)
-    if error_check_ret is not None:
-        return error_check_ret
-    if VariableInterface.async_engine.id2step.get(request.session_id, 0) != 0:
-        return create_error_response(HTTPStatus.BAD_REQUEST, f'The session_id {request.session_id!r} is occupied.')
-
     model_name = request.model
     adapter_name = None
     if model_name != VariableInterface.async_engine.model_name:
         adapter_name = model_name  # got a adapter name
-    request_id = str(request.session_id)
+    request_id = str(session.session_id)
     created_time = int(time.time())
     gpt_oss_parser = None
     if VariableInterface.async_engine.arch == 'GptOssForCausalLM':
@@ -486,7 +498,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     enable_thinking = chat_template_kwargs.get('enable_thinking', None)
     result_generator = VariableInterface.async_engine.generate(
         request.messages,
-        request.session_id,
+        session,
         gen_config=gen_config,
         tools=tools,
         reasoning_effort=request.reasoning_effort,
@@ -533,7 +545,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                                                             res.logprobs)
             # Only stream chunk `usage` in the final chunk according to OpenAI API spec
             if (res.finish_reason and request.stream_options and request.stream_options.include_usage):
-                total_tokens = sum([res.history_token_len, res.input_token_len, res.generate_token_len])
+                total_tokens = sum([res.input_token_len, res.generate_token_len])
                 usage = UsageInfo(
                     prompt_tokens=res.input_token_len,
                     completion_tokens=res.generate_token_len,
@@ -610,7 +622,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     async for res in result_generator:
         if await raw_request.is_disconnected():
             # Abort the request if the client disconnects.
-            await VariableInterface.async_engine.stop_session(request.session_id)
+            await session.async_abort()
             return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
         final_res = res
         text += res.response
@@ -671,7 +683,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         cache_block_ids = cache_block_ids[0]
         remote_token_ids = [remote_token_ids[0][-1]]
 
-    total_tokens = sum([final_res.history_token_len, final_res.input_token_len, final_res.generate_token_len])
+    total_tokens = sum([final_res.input_token_len, final_res.generate_token_len])
     usage = UsageInfo(
         prompt_tokens=final_res.input_token_len,
         completion_tokens=final_res.generate_token_len,
@@ -744,6 +756,10 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     - **presence_penalty** (replaced with repetition_penalty)
     - **frequency_penalty** (replaced with repetition_penalty)
     """
+    error_check_ret = check_request(request)
+    if error_check_ret is not None:
+        return error_check_ret
+
     json_request = await raw_request.json()
     migration_request = json_request.pop('migration_request', None)
     with_cache = json_request.pop('with_cache', False)
@@ -751,23 +767,19 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     if migration_request:
         migration_request = MigrationRequest.model_validate(migration_request)
 
-    if request.session_id == -1:
-        VariableInterface.session_id += 1
-        request.session_id = VariableInterface.session_id
-    error_check_ret = check_request(request)
-    if error_check_ret is not None:
-        return error_check_ret
-    if VariableInterface.async_engine.id2step.get(request.session_id, 0) != 0:
-        return create_error_response(HTTPStatus.BAD_REQUEST, f'The session_id {request.session_id!r} is occupied.')
-
     model_name = request.model
     adapter_name = None
     if model_name != VariableInterface.async_engine.model_name:
         adapter_name = model_name  # got a adapter name
     request_id = str(request.session_id)
     created_time = int(time.time())
+    sessions = []
     if isinstance(request.prompt, str):
         request.prompt = [request.prompt]
+        sessions.append(VariableInterface.get_session(request.session_id))
+    elif isinstance(request.prompt, list):
+        for i in range(len(request.prompt)):
+            sessions.append(VariableInterface.get_session(i + 1))
     if isinstance(request.stop, str):
         request.stop = [request.stop]
     random_seed = request.seed if request.seed else None
@@ -792,10 +804,10 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         preserve_cache=preserve_cache,
     )
     generators = []
-    for i in range(len(request.prompt)):
+    for prompt, session in zip(request.prompt, sessions):
         result_generator = VariableInterface.async_engine.generate(
-            request.prompt[i],
-            request.session_id + i,
+            prompt,
+            session,
             gen_config=gen_config,
             stream_response=True,  # always use stream to enable batching
             sequence_start=True,
@@ -842,8 +854,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
                 # Only stream chunk `usage` in the final chunk according to OpenAI API spec
                 if (res.finish_reason and request.stream_options and request.stream_options.include_usage):
                     final_res = res
-                    total_tokens = sum(
-                        [final_res.history_token_len, final_res.input_token_len, final_res.generate_token_len])
+                    total_tokens = sum([final_res.input_token_len, final_res.generate_token_len])
                     usage = UsageInfo(
                         prompt_tokens=final_res.input_token_len,
                         completion_tokens=final_res.generate_token_len,
@@ -915,7 +926,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             cache_block_ids = cache_block_ids[0]
             remote_token_ids = [remote_token_ids[0][-1]]
 
-        total_tokens = sum([final_res.history_token_len, final_res.input_token_len, final_res.generate_token_len])
+        total_tokens = sum([final_res.input_token_len, final_res.generate_token_len])
         usage.prompt_tokens += final_res.input_token_len
         usage.completion_tokens += final_res.generate_token_len
         usage.total_tokens += total_tokens
@@ -939,14 +950,10 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
 
 @router.post('/generate', dependencies=[Depends(check_api_key)])
 async def generate(request: GenerateReqInput, raw_request: Request = None):
-    if request.session_id == -1:
-        VariableInterface.session_id += 1
-        request.session_id = VariableInterface.session_id
     error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
-    if VariableInterface.async_engine.id2step.get(request.session_id, 0) != 0:
-        return create_error_response(HTTPStatus.BAD_REQUEST, f'The session_id {request.session_id!r} is occupied.')
+    session = VariableInterface.get_session(request.session_id)
 
     prompt = request.prompt
     input_ids = request.input_ids
@@ -985,7 +992,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
 
     result_generator = VariableInterface.async_engine.generate(
         messages=prompt,
-        session_id=request.session_id,
+        session_id=session,
         input_ids=input_ids,
         gen_config=gen_config,
         stream_response=True,  # always use stream to enable batching
@@ -1036,7 +1043,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         async for res in result_generator:
             if await raw_request.is_disconnected():
                 # Abort the request if the client disconnects.
-                await VariableInterface.async_engine.stop_session(request.session_id)
+                await session.async_abort()
                 return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
             text += res.response or ''
             output_ids.extend(res.token_ids or [])
@@ -1129,7 +1136,7 @@ async def pooling(request: PoolingRequest, raw_request: Request = None):
     else:
         return create_error_response(HTTPStatus.BAD_REQUEST, 'Input must be a string or a list.')
 
-    batch_scores = await async_engine._async_get_reward_score(input_ids)
+    batch_scores = await async_engine.async_get_reward_score(input_ids)
     prompt_tokens = sum(len(ids) for ids in input_ids)
     usage = UsageInfo(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=prompt_tokens)
 
@@ -1228,7 +1235,8 @@ async def abort_request(request: AbortRequest, raw_request: Request = None):
     if request.abort_all:
         await VariableInterface.async_engine.stop_all_session()
     else:
-        await VariableInterface.async_engine.stop_session(request.session_id)
+        session = VariableInterface.get_session(request.session_id)
+        await session.async_abort()
     return Response(status_code=200)
 
 
@@ -1255,7 +1263,7 @@ def handle_torchrun():
 @router.on_event('startup')
 async def startup_event():
     async_engine = VariableInterface.async_engine
-    async_engine.start_loop(use_async_api=True)
+    async_engine.start_loop(asyncio.get_running_loop(), use_async_api=True)
 
     if VariableInterface.proxy_url is None:
         return

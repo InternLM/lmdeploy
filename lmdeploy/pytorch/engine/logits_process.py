@@ -19,13 +19,37 @@ def _process_temperature_(scores: torch.Tensor, temperature: torch.Tensor):
 
 
 def _process_bad_words_(scores: torch.Tensor,
-                        bad_words: torch.LongTensor,
-                        mask: torch.BoolTensor,
+                        bad_words: torch.Tensor,
+                        mask: torch.Tensor,
                         filter_value: float = -float('inf')):
-    """Process bad words."""
-    filtered_scores = scores.gather(1, bad_words)
+    """Apply bad-word filtering to token scores.
+
+    This function updates ``scores`` in place by setting the scores of
+    "bad" token indices to ``filter_value``.
+    Args:
+        scores (torch.Tensor): A tensor of shape ``[batch_size, vocab_size]``
+            containing the logits or scores for each token in the vocabulary.
+        bad_words (torch.Tensor): A tensor of shape
+            ``[batch_size, num_bad_words]`` containing token indices that
+            should be suppressed. Invalid or masked positions may contain
+            negative values; these entries are ignored and not used as
+            indices into ``scores``.
+        mask (torch.Tensor): A boolean tensor with the same shape as
+            ``bad_words``. Positions with ``True`` indicate that the
+            corresponding entry in ``bad_words`` is a valid bad-word index
+            that should be filtered. Positions with ``False`` are treated as
+            invalid/masked and are not applied to ``scores``.
+        filter_value (float, optional): The value to assign to the scores of
+            bad-word tokens. Defaults to ``-float('inf')``.
+    Returns:
+        torch.Tensor: The ``scores`` tensor after bad-word filtering has
+        been applied.
+    """
+    # invalid badwords might be negative
+    valid_bad_words = bad_words.where(mask, 0)
+    filtered_scores = scores.gather(1, valid_bad_words)
     filtered_scores[mask] = filter_value
-    scores.scatter_(1, bad_words, filtered_scores)
+    scores.scatter_(1, valid_bad_words, filtered_scores)
     return scores
 
 

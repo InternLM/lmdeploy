@@ -14,6 +14,7 @@ from lmdeploy.pytorch.nn.linear import build_o_proj, build_qkv_proj
 from lmdeploy.pytorch.nn.moe import build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .patch import get_build_model_context
 from .utils.cudagraph import CudaGraphMixin
 from .utils.model import DeployModelMixinV1, build_embedding
 
@@ -256,11 +257,14 @@ class GptOssMLP(nn.Module):
                  dtype: torch.dtype = None,
                  device: torch.device = None):
         super().__init__()
+        self.layer_idx = layer_idx
         self.router = GptOssTopKRouter(config, dtype=dtype, device=device)
         self.experts = GptOssExperts(config, layer_idx, dtype=dtype, device=device)
 
-    def forward(self, hidden_states):
+    def forward(self, hidden_states, all_routed_experts: torch.Tensor = None):
         router_scores, router_indices = self.router(hidden_states)  # (num_experts, seq_len)
+        if all_routed_experts is not None:
+            all_routed_experts[:, self.layer_idx, :] = router_indices
         routed_out = self.experts(hidden_states, router_indices=router_indices, routing_weights=router_scores)
         return routed_out
 
@@ -306,6 +310,7 @@ class GptOssDecoderLayer(nn.Module):
         past_key_value: Optional[List[torch.FloatTensor]],
         residual: Optional[torch.Tensor] = None,
         attn_metadata: Any = None,
+        all_routed_experts: torch.Tensor = None,
     ):
 
         if residual is None:
@@ -324,7 +329,7 @@ class GptOssDecoderLayer(nn.Module):
 
         # Fully Connected
         hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
-        hidden_states = self.mlp(hidden_states)
+        hidden_states = self.mlp(hidden_states, all_routed_experts=all_routed_experts)
 
         outputs = (hidden_states, residual)
         return outputs
@@ -362,6 +367,7 @@ class GptOssModel(nn.Module):
         past_key_values: Optional[List[torch.FloatTensor]] = None,
         attn_metadata: Any = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
+        all_routed_experts: torch.Tensor = None,
     ):
         """Rewrite of forward."""
 
@@ -386,6 +392,7 @@ class GptOssModel(nn.Module):
                 past_key_value=past_key_value,
                 residual=residual,
                 attn_metadata=attn_metadata,
+                all_routed_experts=all_routed_experts,
             )
 
         # norm
@@ -422,6 +429,10 @@ class GptOssForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         # build lm_head
         self.lm_head = self.build_lm_head(config.hidden_size, config.vocab_size, bias=False, dtype=dtype, device=device)
 
+        # for router replay
+        bm_ctx = get_build_model_context()
+        self.enable_return_routed_experts = bm_ctx.enable_return_routed_experts
+
     def forward(
         self,
         input_ids: torch.Tensor,
@@ -432,14 +443,28 @@ class GptOssForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         **kwargs,
     ):
         """Model forward, return logits."""
+        # router replay
+        all_routed_experts = None
+        if self.enable_return_routed_experts:
+            if inputs_embeds is not None:
+                num_tokens = inputs_embeds.size(1)
+            else:
+                num_tokens = input_ids.size(1)
+            all_routed_experts = position_ids.new_empty(
+                (num_tokens, self.config.num_hidden_layers, self.config.num_experts_per_tok), dtype=torch.uint16)
+
         hidden_states = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
             past_key_values=past_key_values,
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
+            all_routed_experts=all_routed_experts,
         )
-        return hidden_states
+
+        if all_routed_experts is None:
+            return hidden_states
+        return dict(hidden_states=hidden_states, all_routed_experts=all_routed_experts)
 
     def get_input_embeddings(self):
         """Get input embeddings."""

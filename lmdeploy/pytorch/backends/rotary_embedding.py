@@ -26,6 +26,7 @@ class YarnParameters:
     mscale: int = 1
     mscale_all_dim: int = 0
     attention_factor: int = None
+    truncate: bool = True
 
 
 @dataclass

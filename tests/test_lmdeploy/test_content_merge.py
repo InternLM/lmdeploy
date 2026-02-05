@@ -1,6 +1,6 @@
 import pytest
 
-from lmdeploy.serve.multimodal_processor import MultimodalProcessor
+from lmdeploy.serve.processors import MultimodalProcessor
 
 
 class TestMergeMessageContent:
