@@ -23,7 +23,10 @@ class LlamaReader(BaseReader):
     attn_pattern = r'self_attn'
     ffn_pattern = r'mlp'
 
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool, model_cfg: dict, policy):
+    proj_pattern = 'proj'
+    scale_inv_suffix = '_scale_inv'
+
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool, model_cfg: dict, policy, fp8_quant=False):
         super().__init__()
         self.params = unused_params
         self.params.update(new_params)
@@ -33,6 +36,22 @@ class LlamaReader(BaseReader):
         if tie_word_embeddings:
             self.output_weight_key = self.tok_embeddings_key
         self.processor = policy
+        if fp8_quant:
+            quant_params = self.quant_weight_fp8()
+            self.params.update(quant_params)
+
+    def quant_weight_fp8(self):
+        from lmdeploy.lite.quantization.weight.quant_utils import quant_blocked_fp8
+        target_pattern = re.compile(self.proj_pattern)
+
+        quant_params = {}
+        for name, weight in self.params.items():
+            if target_pattern.search(name) and name.endswith('.weight'):
+                q_weight, scale = quant_blocked_fp8(weight, torch.float8_e4m3fn, block_size=128)
+                quant_params[name] = q_weight
+                quant_params[f'{name}{self.scale_inv_suffix}'] = scale.to(weight.dtype)
+
+        return quant_params
 
     def filter(self, pattern: str):
         params = []
@@ -106,12 +125,13 @@ class LlamaModel(BaseInputModel):
         self.policy = kwargs.get('input_policy')
         _, self.model_config = get_model_arch(model_path)
         self.model_config = self.model_config.to_dict()
+        self.fp8_quant = kwargs.get('fp8_quant', False)
 
     def readers(self):
         mappings = getattr(self.Reader, 'mappings', [])
         loader = create_loader(self.model_path, self.Reader.attn_layer_patten, mappings)
         for i, param in loader.items():
-            reader = self.Reader(param, {}, False, self.model_config, policy=self.policy)
+            reader = self.Reader(param, {}, False, self.model_config, policy=self.policy, fp8_quant=self.fp8_quant)
             yield i, reader
         torch.cuda.empty_cache()
 
