@@ -265,6 +265,7 @@ class AsyncEngine:
     async def safe_run(self, handle, session, **kwargs):
         generator = handle.async_stream_infer(session.session_id, **kwargs)
         try:
+            metrics_processor.increase_api_routed_requests()
             yield generator
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
             logger.error(f'[safe_run] session {session.session_id} exception caught: {type(e).__name__} {e}')
@@ -274,6 +275,7 @@ class AsyncEngine:
             raise SafeRunException(f'Safe run exception for session {session.session_id}') from e
         finally:
             await generator.aclose()
+            metrics_processor.decrease_api_routed_requests()
 
     async def generate(
             self,
@@ -389,13 +391,12 @@ class AsyncEngine:
         if not gen_config.ignore_eos:
             stop_ids = gen_config.stop_token_ids or []
 
-        metrics_processor.increment_total_requests()
-
+        metrics_processor.increase_total_requests()
         async with session.request_handle() as handle:
             if epoch != self.epoch:
                 logger.debug(f'[generate] session {session_id} got aborted before starting inference')
-                # TODO(lvhan): metrics_processor.increment_failed_requests('abort')
-                metrics_processor.increment_finished_requests()
+                # TODO(lvhan): metrics_processor.increase_failed_requests('abort')
+                metrics_processor.increase_completed_requests()
                 yield GenOut(response='',
                              history_token_len=0,
                              input_token_len=len(input_ids),
@@ -467,7 +468,7 @@ class AsyncEngine:
                         out.logits = (outputs.logits[:-hit_stop_token] if hit_stop_token else outputs.logits)
                     yield out
                 # end of generator loop
-                metrics_processor.increment_finished_requests()
+                metrics_processor.increase_completed_requests()
 
                 if not is_error(outputs.status):
                     if outputs.status == ResponseType.CANCEL:
