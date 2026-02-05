@@ -1,30 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
-from dataclasses import dataclass
 from typing import Callable, List
 
 import torch
 
-from lmdeploy.pytorch.kernels.dlinfer import MoeType, fused_moe, moe_gating_topk_softmax
+from lmdeploy.pytorch.kernels.dlinfer import DlinferMoeMetada  # noqa: F401
+from lmdeploy.pytorch.kernels.dlinfer import DlinferMoeType  # noqa: F401
+from lmdeploy.pytorch.kernels.dlinfer import fused_moe, moe_gating_topk_softmax
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 
 from ..moe import FusedMoEBuilder, FusedMoEImpl, SoftmaxTopKBuilder, SoftmaxTopKImpl
-
-
-@dataclass
-class MOEMetadata:
-    max_tokens_across_dp: int = 1
-    pad_size: int = 0
-    dp_size: int = 1
-    tp_size: int = 1
-    ep_size: int = 1
-    tp_rank: int = 0
-    ep_rank: int = 0
-    tp_group: torch.distributed.ProcessGroup = None
-    ep_group: torch.distributed.ProcessGroup = None
-    moe_type: MoeType = MoeType.UNDEFINED
-    x_active_mask: torch.Tensor = None
-    moe_group_name: str = None
 
 
 class DlinferSoftmaxTopKImpl(SoftmaxTopKImpl):
@@ -37,10 +22,9 @@ class DlinferSoftmaxTopKImpl(SoftmaxTopKImpl):
             raise NotImplementedError('Group router not supported')
 
     def forward(self, x: torch.Tensor):
-        moe_metadata = get_step_ctx_manager().current_context().moe_metadata
-        routing_weights, selected_experts = moe_gating_topk_softmax(x, self.top_k, moe_metadata.max_tokens_across_dp,
-                                                                    moe_metadata.pad_size, moe_metadata.tp_size,
-                                                                    moe_metadata.ep_size, moe_metadata.tp_rank)
+        step_context = get_step_ctx_manager().current_context()
+        moe_metadata = getattr(step_context, 'moe_metadata', None)
+        routing_weights, selected_experts = moe_gating_topk_softmax(x, self.top_k, moe_metadata)
         return routing_weights, selected_experts
 
 
@@ -67,11 +51,13 @@ class DlinferFusedMoEImpl(FusedMoEImpl):
         self.renormalize = renormalize
         self.ep_size = ep_size
         self.ep_group = ep_group
-        self.expert_ids_per_ep_rank = torch.tensor(
-            [i % (self.num_experts // self.ep_size) for i in range(num_experts)],
-            dtype=torch.int32,
-            device=torch.npu.current_device(),
-        )
+        self.expert_ids_per_ep_rank = None
+        if self.ep_size > 1:
+            self.expert_ids_per_ep_rank = torch.tensor(
+                [i % (self.num_experts // self.ep_size) for i in range(num_experts)],
+                dtype=torch.int32,
+                device=torch.cuda.current_device(),
+            )
 
     def update_weights(self, gate_up_weights: torch.Tensor, down_weights: torch.Tensor):
         """Update weights."""
@@ -103,13 +89,13 @@ class DlinferFusedMoEImpl(FusedMoEImpl):
         """forward."""
         assert gate_up_bias is None
         assert down_bias is None
-        moe_metadata = get_step_ctx_manager().current_context().moe_metadata
 
+        step_context = get_step_ctx_manager().current_context()
+        moe_metadata = getattr(step_context, 'moe_metadata', None)
+        if moe_metadata is not None:
+            moe_metadata.expert_ids_per_ep_rank = self.expert_ids_per_ep_rank
         return fused_moe(hidden_states, gate_up_weights, down_weights, topk_weights, topk_ids, self.top_k,
-                         self.renormalize, moe_metadata.pad_size, moe_metadata.tp_size, moe_metadata.ep_size,
-                         moe_metadata.tp_rank, moe_metadata.ep_rank, moe_metadata.tp_group, moe_metadata.ep_group,
-                         moe_metadata.moe_type, moe_metadata.x_active_mask, moe_metadata.moe_group_name,
-                         self.expert_ids_per_ep_rank)
+                         self.renormalize, moe_metadata)
 
 
 class DlinferFusedMoEBuilder(FusedMoEBuilder):

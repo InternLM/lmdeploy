@@ -16,7 +16,7 @@ from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.utils import get_logger
 
-from ..moe import MOEMetadata, MoeType
+from ..moe import DlinferMoeMetada, DlinferMoeType
 from ..op_backend import DlinferOpsBackend
 
 logger = get_logger('lmdeploy')
@@ -316,7 +316,7 @@ class AscendOpsBackend(DlinferOpsBackend):
 
         def select_moe_type(max_tokens_across_dp, dp_size, tp_size, ep_size):
             if ep_size <= 1:
-                return MoeType.ALLGATHER
+                return DlinferMoeType.ALLGATHER
             mc2_token_capacity = init_mc2_token_capacity(tp_size)
             is_graph = cls.enable_graph and step_context.is_decoding
             if is_graph:
@@ -324,29 +324,29 @@ class AscendOpsBackend(DlinferOpsBackend):
                 max_tokens_across_dp = math.ceil(max_tokens_across_dp / tp_size) * tp_size
             if SocVersion.is_A2():
                 if max_tokens_across_dp <= mc2_token_capacity and dp_size * tp_size >= 16:
-                    return MoeType.MC2
+                    return DlinferMoeType.MC2
                 else:
-                    return MoeType.ALLGATHER
+                    return DlinferMoeType.ALLGATHER
             elif SocVersion.is_A3():
                 if max_tokens_across_dp <= mc2_token_capacity:
-                    return MoeType.MC2
+                    return DlinferMoeType.MC2
                 else:
-                    return MoeType.ALLTOALL
+                    return DlinferMoeType.ALLTOALL
             else:
                 raise ValueError(f'Unsupported soc_version: {SocVersion.soc_version()}')
 
         def get_pad_info(actual_tokens_current_rank, runtime_tokens_current_rank, max_tokens_across_dp, tp_size,
                          moe_type):
             x_active_mask = None
-            if moe_type == MoeType.MC2:
+            if moe_type == DlinferMoeType.MC2:
                 paded_size = math.ceil(max_tokens_across_dp / tp_size) * tp_size
                 pad_size = paded_size - runtime_tokens_current_rank
                 x_active_mask = torch.ones(actual_tokens_current_rank,
                                            dtype=torch.bool,
                                            device=torch.npu.current_device())
-            elif moe_type == MoeType.ALLTOALL:
+            elif moe_type == DlinferMoeType.ALLTOALL:
                 pad_size = tp_size - runtime_tokens_current_rank
-            elif moe_type == MoeType.ALLGATHER:
+            elif moe_type == DlinferMoeType.ALLGATHER:
                 pad_size = max_tokens_across_dp - runtime_tokens_current_rank
             else:
                 pad_size = 0
@@ -414,7 +414,7 @@ class AscendOpsBackend(DlinferOpsBackend):
                                                max_tokens_across_dp, cls.dist_meta.tp_size, moe_type)
         moe_group_name = get_moe_group_name(cls.dist_meta.ep_group)
 
-        moe_metadata = MOEMetadata(
+        moe_metadata = DlinferMoeMetada(
             max_tokens_across_dp=max_tokens_across_dp,
             pad_size=pad_size,
             dp_size=cls.dist_meta.dp_size,
@@ -464,7 +464,6 @@ class AscendOpsBackend(DlinferOpsBackend):
     @staticmethod
     def support_ray():
         """Support ray."""
-        # return False
         if not _envs.ascend_set_rt_visable_devices_by_ray:
             os.environ['RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES'] = '1'
         return True
