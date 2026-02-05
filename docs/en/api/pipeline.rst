@@ -1,32 +1,19 @@
-inference pipeline
+Inference pipeline
 ==================
 .. currentmodule:: lmdeploy
 
-pipeline
+Pipeline
 --------
 .. autofunction:: pipeline
+.. autoclass:: Pipeline
+   :undoc-members:
+   :show-inheritance:
+   :members: __init__, infer, stream_infer, chat, get_ppl
+   :member-order: bysource
 
-serving
---------
-.. autofunction:: serve
-.. autofunction:: client
-
-
-PytorchEngineConfig
+Config
 -------------------
 .. autoclass:: PytorchEngineConfig
-
-
-TurbomindEngineConfig
----------------------
 .. autoclass:: TurbomindEngineConfig
-
-
-GenerationConfig
-----------------
 .. autoclass:: GenerationConfig
-
-
-ChatTemplateConfig
-------------------
 .. autoclass:: ChatTemplateConfig

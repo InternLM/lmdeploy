@@ -1,8 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass, field, fields
-from typing import TYPE_CHECKING, Any, Dict, List, Literal
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
+import numpy as np
 import torch
+import torch.distributed as torch_dist
 from torch.profiler import record_function
 
 # from torch import distributed as dist
@@ -22,36 +24,33 @@ class DPMeta:
     moe_tp_sizes: List[int] = None
 
     @staticmethod
-    def _gather_tp_sizes(tp: int, seqlen: int, dist_ctx: dist.DistContext, layer_type: str):
+    def _gather_tp_sizes(tp: int, seqlen: int, num_tokens: List[int], dist_ctx: dist.DistContext, layer_type: str):
         """Gather tp size."""
         attn_tp = dist_ctx.dist_config.attn_tp
         if tp > 1 and tp != attn_tp:
             dist_group = dist.get_dist_group(layer_type=layer_type)
             gather_group = dist_group.gpu_gather_group
-            rank = gather_group.rank()
-            tp_size_tensor = torch.zeros(gather_group.size(), dtype=torch.int32, device='cuda')
-            tp_size_tensor[rank].fill_(seqlen)
-            dist.all_gather_into_tensor(tp_size_tensor, tp_size_tensor[rank], group=gather_group)
-            tp_sizes = tp_size_tensor.tolist()
-            assert all(size >= 0 for size in tp_sizes), (f'seqlen: {seqlen}, Invalid tp sizes: {tp_sizes}')
+            ranks = torch_dist.get_process_group_ranks(gather_group)
+            tp_sizes = [num_tokens[r] for r in ranks]
+            assert all(size >= 0 for size in tp_sizes), (f'Invalid tp sizes: {tp_sizes}')
         else:
             tp_sizes = [seqlen]
         return tp_sizes
 
     @classmethod
-    def build(cls, seqlen: int):
+    def build(cls, seqlen: int, num_tokens: List[int]):
         """Get dp meta."""
         dist_ctx = dist.get_dist_manager().current_context()
         dist_config = dist_ctx.dist_config
 
         mlp_tp = dist_config.mlp_tp
-        tp_sizes = cls._gather_tp_sizes(mlp_tp, seqlen, dist_ctx, layer_type='mlp')
+        tp_sizes = cls._gather_tp_sizes(mlp_tp, seqlen, num_tokens, dist_ctx, layer_type='mlp')
 
         moe_tp = dist_config.moe_tp
         if moe_tp == mlp_tp:
             moe_tp_sizes = tp_sizes
         else:
-            moe_tp_sizes = cls._gather_tp_sizes(moe_tp, seqlen, dist_ctx, layer_type='moe')
+            moe_tp_sizes = cls._gather_tp_sizes(moe_tp, seqlen, num_tokens, dist_ctx, layer_type='moe')
 
         return DPMeta(tp_sizes=tp_sizes, moe_tp_sizes=moe_tp_sizes)
 
@@ -64,8 +63,6 @@ class DPMeta:
 class VisionModelInputs:
     """Vision model inputs."""
     history_lengths: torch.LongTensor = None
-    history_image_nums: torch.LongTensor = None
-    history_image_token_lengths: torch.LongTensor = None
     input_embeddings: List[List[torch.Tensor]] = None
     input_embedding_ranges: List[torch.LongTensor] = None
     input_embedding_indexing: torch.BoolTensor = None
@@ -124,55 +121,80 @@ class VisionModelInputs:
         return input_embeddings, input_embedding_indexing
 
 
-def get_flatten_multimodals(vision_inputs: VisionModelInputs):
-    """Get flatten multimodals."""
-    # ignore if vision inputs is None
-    if vision_inputs is None:
-        return []
+@dataclass
+class ModelInputsDelta:
+    """Delta of ModelInputs."""
+    # valid indices
+    indices: Optional[torch.Tensor]
+    # new block offsets
+    block_offsets: torch.Tensor
+    # cpu copy of indices
+    indice_cpu: np.ndarray
+    max_q_seqlen: int
+    max_kv_seqlen: int
+    sum_kv_seqlen: int
+    is_decoding: bool = True
+    # sliding window
+    num_ignored_history: Optional[torch.Tensor] = None
 
-    # ignore if input_multimodals is not valid
-    input_multimodals = vision_inputs.input_multimodals
-    if input_multimodals is None or len(input_multimodals) == 0:
-        return []
+    @property
+    def seq_length(self):
+        """Get seq_length."""
+        batch_size = self.block_offsets.size(0)
+        return torch.full((batch_size, ), self.max_q_seqlen, dtype=torch.long)
 
-    # inputs_mms is a dict with type/data_list
-    # flatten it to a list of (type, data)
-    input_mms = vision_inputs.input_multimodals[0]
-    flatten_mms = []
-    for k, mms in input_mms.items():
-        mms = [(k, mm) for mm in mms]
-        flatten_mms += mms
+    def fill_tensors(self):
+        """Fill tensor fields."""
+        if self.indices is None:
+            self.indice_cpu = self.indice_cpu.copy()
+            self.indices = torch.as_tensor(self.indice_cpu)
 
-    # sort by start time
-    flatten_mms = sorted(flatten_mms, key=lambda mm: mm[1].start)
-    return flatten_mms
+    @torch.inference_mode()
+    def to_device(self, device: str, non_blocking: bool = False):
+        """To device."""
+        out_dict = dict()
+        self.fill_tensors()
+        for f in fields(self):
+            k = f.name
+            v = getattr(self, k)
+            if isinstance(v, torch.Tensor):
+                v = v.to(device, non_blocking=non_blocking)
+            out_dict[k] = v
+
+        return ModelInputsDelta(**out_dict)
+
+    def log_info(self):
+        """Get log info."""
+        ret = (f'num_tokens={self.indices.numel()}, batch_size={self.indices.numel()}'
+               f', is_decoding={self.is_decoding}')
+        return ret
 
 
 @dataclass
 class ModelInputs:
     """Input of the model."""
-    input_ids: torch.LongTensor
-    seq_length: torch.LongTensor
-    history_lengths: torch.LongTensor
-    block_offsets: torch.LongTensor
+    input_ids: torch.Tensor
+    seq_length: torch.Tensor
+    history_lengths: torch.Tensor
+    block_offsets: torch.Tensor
     is_decoding: bool
-    num_ignored_history: torch.LongTensor
+    num_ignored_history: torch.Tensor
     max_q_seqlen: int
     max_kv_seqlen: int
     sum_kv_seqlen: int
-    local_adapter_ids: torch.LongTensor = None
+    local_adapter_ids: torch.Tensor = None
     vision_inputs: VisionModelInputs = None
-    cross_length: torch.LongTensor = None
-    history_cross_length: torch.LongTensor = None
     model_metas: List[Dict[str, Any]] = None
     dp_meta: 'DPMeta' = None
     enable_microbatch: bool = False
     is_dummy: bool = False
-    state_offsets: torch.LongTensor = None
+    state_offsets: torch.Tensor = None
     target_hidden_states: torch.Tensor = None
     target_position_ids: torch.Tensor = None
+    is_chunk: bool = False
+    is_first_chunk: bool = True
 
-    def step(self, input_ids: torch.LongTensor, step_seqlens: torch.Tensor = None):
+    def step(self, input_ids: torch.Tensor, step_seqlens: torch.Tensor = None):
         """Update input ids."""
         assert self.is_decoding
         if step_seqlens is None:
@@ -184,120 +206,6 @@ class ModelInputs:
             input_ids = input_ids[None, :]
         self.input_ids = input_ids
         return self
-
-    def split(self, split_size: int):
-        """Split inputs."""
-
-        def __add_overlapped_multimodal(flatten_mms: List, input_mms: Dict, end: int, mm_end: int):
-            """Add overlapped multimodal data."""
-            nonlocal cross_length
-            while len(flatten_mms) > 0:
-                next_mm = flatten_mms[0]
-                next_start = next_mm[1].start
-                next_end = next_mm[1].end
-
-                # if next multimodal data is not in the current split, break
-                if next_start >= mm_end:
-                    break
-
-                key = next_mm[0]
-                input_mms.setdefault(key, [])
-                input_mms[key].append(next_mm[1])
-                end += max(0, next_end - mm_end)
-                flatten_mms.pop(0)
-
-                # for mllama
-                if cross_length is not None:
-                    encoder_len = next_mm[1].encoder_len
-                    if encoder_len is not None:
-                        cross_length += encoder_len
-            return input_mms, end
-
-        def __make_next_vision_inputs(flatten_mms: List, start: int):
-            """Make vision inputs."""
-            assert len(flatten_mms) > 0
-
-            # start/end of first multimodal data
-            mm_start = flatten_mms[0][1].start
-            mm_end = flatten_mms[0][1].end
-
-            # when split vision inputs, we require multimodal data should be
-            # the start of the split
-            # tttvvv... would be split to ttt|vvv...
-            if mm_start > self.history_lengths + start:
-                end = min(mm_start - self.history_lengths, start + split_size)
-                return None, end
-
-            # split by first multimodal data
-            key, mm = flatten_mms.pop(0)
-            input_mms = {key: [mm]}
-            end = start + mm.end - mm.start
-
-            # try add multimodal data between mm_start and mm_end
-            # we have not found any model with this pattern yet
-            # so basically, nothing would changed
-            input_mms, end = __add_overlapped_multimodal(flatten_mms, input_mms, end, mm_end)
-            vision_inputs = VisionModelInputs(input_multimodals=[input_mms], )
-            return vision_inputs, end
-
-        assert len(self.seq_length) == 1, ('Can not perform split on batched input.')
-
-        input_ids = self.input_ids
-        if input_ids.numel() < split_size:
-            return self
-
-        flatten_mms = get_flatten_multimodals(self.vision_inputs)
-
-        max_seq_len = self.seq_length[0].item()
-        ret = []
-        start = 0
-        max_kv_seqlen = self.max_kv_seqlen - self.max_q_seqlen
-
-        # for mllama
-        history_cross_length = self.history_cross_length
-        cross_length = None
-        if history_cross_length is not None:
-            cross_length = self.history_cross_length.clone()
-        while start < max_seq_len:
-            if len(flatten_mms) > 0:
-                vision_inputs, end = __make_next_vision_inputs(flatten_mms, start)
-            else:
-                vision_inputs = None
-                end = min(max_seq_len, start + split_size)
-
-            max_q_seqlen = end - start
-            if isinstance(max_q_seqlen, torch.Tensor):
-                max_q_seqlen = max_q_seqlen.item()
-            max_kv_seqlen += max_q_seqlen
-            target_hidden_states = self.target_hidden_states[:, start:
-                                                             end] if self.target_hidden_states is not None else None
-            target_position_ids = self.target_position_ids[:,
-                                                           start:end] if self.target_position_ids is not None else None
-            inp = ModelInputs(
-                input_ids=self.input_ids[:, start:end],
-                seq_length=input_ids.new_tensor([end - start]),
-                block_offsets=self.block_offsets,
-                history_lengths=self.history_lengths + start,
-                is_decoding=self.is_decoding,
-                num_ignored_history=self.num_ignored_history,
-                max_q_seqlen=max_q_seqlen,
-                max_kv_seqlen=max_kv_seqlen,
-                sum_kv_seqlen=max_kv_seqlen,
-                local_adapter_ids=self.local_adapter_ids,
-                vision_inputs=vision_inputs,
-                model_metas=self.model_metas,
-                cross_length=cross_length,
-                history_cross_length=history_cross_length,
-                state_offsets=self.state_offsets,
-                target_hidden_states=target_hidden_states,
-                target_position_ids=target_position_ids,
-            )
-            ret.append(inp)
-            history_cross_length = cross_length
-
-            start = end
-
-        return ret
 
     @torch.inference_mode()
     def to_device(self, device: str, non_blocking: bool = False):
@@ -314,9 +222,9 @@ class ModelInputs:
 
         return ModelInputs(**out_dict)
 
-    def build_dp_meta(self):
+    def build_dp_meta(self, num_tokens: List[int]):
         """Build dp meta."""
-        self.dp_meta = DPMeta.build(self.input_ids.numel())
+        self.dp_meta = DPMeta.build(self.input_ids.numel(), num_tokens)
 
     def log_info(self):
         """Get log info."""
@@ -350,9 +258,6 @@ class StepContext:
     input_multimodals: List[MultiModalTensor] = None
     vision_inputs: VisionModelInputs = None
     attn_metadata: Any = None
-    cross_seqlens: torch.LongTensor = None
-    cross_kv_seqlens: torch.LongTensor = None
-    cross_attn_metadata: Any = None
     kv_quant_policy: Literal[0, 4, 8] = 0
     model_metas: List[Dict[str, Any]] = None
     dp_meta: DPMeta = None
@@ -399,12 +304,6 @@ class StepContext:
         attention_mask, position_ids = cls.get_mask_and_position_ids(inputs)
         q_start_loc = q_seqlens.cumsum(0) - q_seqlens
 
-        # cross
-        cross_seqlens = inputs.cross_length
-        cross_kv_seqlens = None
-        if inputs.cross_length is not None:
-            cross_kv_seqlens = (inputs.cross_length + inputs.history_cross_length)
-
         # seq_len + history_length
         kv_seqlens = q_seqlens + history_seqlens
         kv_seqlens -= inputs.num_ignored_history
@@ -430,8 +329,6 @@ class StepContext:
             vision_inputs=inputs.vision_inputs,
             kv_quant_policy=kv_quant_policy,
             model_metas=inputs.model_metas,
-            cross_seqlens=cross_seqlens,
-            cross_kv_seqlens=cross_kv_seqlens,
             dp_meta=inputs.dp_meta,
             enable_microbatch=inputs.enable_microbatch,
             state_caches=state_caches,

@@ -15,11 +15,9 @@ from multiprocessing.reduction import ForkingPickler
 from queue import Queue
 from typing import Any, Dict, List, Optional
 
-import numpy as np
 import pybase64
 import torch
 import yaml
-from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
 from lmdeploy.messages import EngineOutput, GenerationConfig, ResponseType, ScheduleMetrics, TurbomindEngineConfig
@@ -195,28 +193,22 @@ class TurboMind:
     def _process_weights(self):
         """Process weight."""
         with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
-            ranks = [self.node_id * self.gpu_count + device_id for device_id in range(self.gpu_count)]
-            for _ in e.map(self.model_comm.process_weight, range(self.gpu_count), ranks):
+            for _ in e.map(self.model_comm.process_weight, range(self.gpu_count)):
                 pass
 
     def _create_engine(self):
         """Create engine."""
         with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
-            ranks = [self.node_id * self.gpu_count + device_id for device_id in range(self.gpu_count)]
-            for _ in e.map(self.model_comm.create_engine, range(self.gpu_count), ranks):
+            for _ in e.map(self.model_comm.create_engine, range(self.gpu_count)):
                 pass
         self._engine_created = True
 
     def _create_weight(self, model_comm):
         """Allocate weight buffer, load params if from_workspace."""
 
-        engine_cfg = self.config_dict['engine_config']
-        self.node_id = engine_cfg['node_rank']
-
         # create weight
         def _create_weight_func(device_id):
-            rank = self.node_id * self.gpu_count + device_id
-            model_comm.create_shared_weights(device_id, rank)
+            model_comm.create_weights(device_id)
 
         with ThreadPoolExecutor(max_workers=self.gpu_count) as executor:
             futures = []
@@ -233,8 +225,7 @@ class TurboMind:
         tm_params.clear()
 
         def _get_params(device_id, que):
-            rank = self.node_id * self.gpu_count + device_id
-            out = model_comm.get_params(device_id, rank)
+            out = model_comm.get_weights(device_id)
             que.put(out)
 
         que = Queue()
@@ -266,12 +257,6 @@ class TurboMind:
         # update some attributes of `engine_config` which depends on
         # `session_len`
         self.engine_config = engine_config
-        if engine_config.max_prefill_token_num is not None \
-                and engine_config.num_tokens_per_iter == 0:
-            self.engine_config.num_tokens_per_iter = \
-                engine_config.max_prefill_token_num
-            self.engine_config.max_prefill_iters = (self.config.session_len + engine_config.max_prefill_token_num -
-                                                    1) // engine_config.max_prefill_token_num
 
         # pack `self.config` and `self.engine_config` into a dict
         self.config_dict = self.config.to_dict()
@@ -290,9 +275,9 @@ class TurboMind:
 
         self._postprocess_config(tm_model.tm_config, engine_config)
 
-        model_comm = _tm.AbstractTransformerModel.create_llama_model(model_dir='',
-                                                                     config=yaml.safe_dump(self.config_dict),
-                                                                     weight_type=self.config.model_config.weight_type)
+        model_comm = _tm.TurboMind.create(model_dir='',
+                                          config=yaml.safe_dump(self.config_dict),
+                                          weight_type=self.config.model_config.weight_type)
 
         # create empty weight
         self._create_weight(model_comm)
@@ -311,8 +296,7 @@ class TurboMind:
         if tags is None:
             tags = ['weights', 'kv_cache']
         with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
-            ranks = [self.node_id * self.gpu_count + device_id for device_id in range(self.gpu_count)]
-            for _ in e.map(self.model_comm.wakeup, range(self.gpu_count), [tags] * self.gpu_count, ranks):
+            for _ in e.map(self.model_comm.wakeup, range(self.gpu_count), [tags] * self.gpu_count):
                 pass
 
     def update_params(self, request: UpdateParamsRequest):
@@ -413,7 +397,7 @@ class TurboMind:
 
     def get_schedule_metrics(self):
         # TODO: support dp
-        tm_metrics = self.model_comm.get_schedule_metrics(0, 0)
+        tm_metrics = self.model_comm.get_schedule_metrics(0)
         return ScheduleMetrics(active_seqs=tm_metrics.active_seqs,
                                waiting_seqs=tm_metrics.waiting_seqs,
                                total_blocks=tm_metrics.total_blocks,
@@ -501,7 +485,7 @@ def _get_metrics(metrics):
             out.req_metrics = RequestMetrics(token_timestamp=time.time())
         else:
             events = [
-                EngineEvent(EventType.QUEUED, metrics.enque_time / 1000000),
+                EngineEvent(EventType.QUEUED, metrics.enqueue_time / 1000000),
                 EngineEvent(EventType.SCHEDULED, metrics.scheduled_time / 1000000),
             ]
             out.req_metrics = RequestMetrics(token_timestamp=time.time(), engine_events=events)
@@ -529,7 +513,7 @@ class StreamingSemaphore:
     def release(self):
         if not self.val:
             self.val = 1
-            if self.fut:
+            if self.fut and not self.fut.done():
                 self.fut.set_result(None)
 
 
@@ -547,7 +531,7 @@ class TurboMindInstance:
 
         # create model instances
         lazy_init = self.tm_model.config_dict['engine_config'].get('empty_init', False)
-        self._model_inst = None if lazy_init else self._create_model_instance(0)
+        self._model_inst = None if lazy_init else self._create_model_instance()
 
         self.config = config
         self.lock = None
@@ -564,17 +548,18 @@ class TurboMindInstance:
             7: ResponseType.FINISH,
             8: ResponseType.CANCEL,
             9: ResponseType.PREFIX_CACHE_CONFLICT_INTERACTIVE_MODE,
+            10: ResponseType.NO_QUEUE,
             -1: ResponseType.INTERNAL_ENGINE_ERROR,
         }
 
     @property
     def model_inst(self):
         if self._model_inst is None:
-            self._model_inst = self._create_model_instance(0)
+            self._model_inst = self._create_model_instance()
         return self._model_inst
 
-    def _create_model_instance(self, device_id):
-        model_inst = self.tm_model.model_comm.create_model_instance(device_id)
+    def _create_model_instance(self):
+        model_inst = self.tm_model.model_comm.create_request()
         return model_inst
 
     def _get_extra_output_processors(self, outputs: Dict[str, torch.Tensor], gen_config: GenerationConfig,
@@ -598,47 +583,27 @@ class TurboMindInstance:
 
     def prepare_embeddings(self, input_embeddings=None, input_embedding_ranges=None):
         """Convert embeddings."""
-        if input_embeddings is None:
+        if not input_embeddings:
             return None, None
 
+        assert isinstance(input_embeddings, List)
+        assert isinstance(input_embedding_ranges, List)
         assert len(input_embeddings) == len(input_embedding_ranges)
-        if not isinstance(input_embeddings[0], (list, type(None))):
-            input_embeddings = [input_embeddings]
-            input_embedding_ranges = [input_embedding_ranges]
 
-        if all([isinstance(x, type(None)) for x in input_embeddings]):
-            return None, None
+        length = sum([x.shape[0] for x in input_embeddings])
 
-        hidden_dim = None
-        for embeddings in input_embeddings:
-            if embeddings is not None:
-                hidden_dim = embeddings[0].squeeze().shape[-1]
-                break
-        assert hidden_dim is not None
+        _MAP = dict(bfloat16=torch.bfloat16, float16=torch.float16)
+        dtype = _MAP[self.tm_model.config.model_config.data_type]
 
-        # construct input_embeddings
-        for i in range(len(input_embeddings)):
-            item = input_embeddings[i] or []
-            # convert to torch.Tensor if input is np.ndarray
-            if item and isinstance(item[0], np.ndarray):
-                item = [torch.from_numpy(x).squeeze() for x in item]
-            # convert to lookup table type
-            _MAP = dict(float=torch.float, bfloat16=torch.bfloat16, float16=torch.float16, fp8=torch.bfloat16)
-            dtype = _MAP.get(self.tm_model.config.weight_type, torch.float16)
-            item = [x.to(dtype=dtype) for x in item]
-            item = item or [torch.zeros(0, hidden_dim, dtype=dtype)]
-            input_embeddings[i] = item
-        input_embeddings = [torch.cat(x) for x in input_embeddings]
-        input_embeddings = pad_sequence(input_embeddings, batch_first=True)
-        input_embeddings = input_embeddings.reshape(input_embeddings.shape[0], -1).view(torch.int8)
-        # construct input_embedding_ranges
-        for i in range(len(input_embedding_ranges)):
-            item = input_embedding_ranges[i] or []
-            item = torch.IntTensor(item).reshape(-1, 2)
-            input_embedding_ranges[i] = item
-        input_embedding_ranges = pad_sequence(input_embedding_ranges, batch_first=True, padding_value=-1)
+        values = torch.empty((length, input_embeddings[0].shape[-1]), dtype=dtype, device='cpu')
+        ranges = torch.tensor(input_embedding_ranges, dtype=torch.int32, device='cpu')
 
-        return input_embeddings, input_embedding_ranges
+        offset = 0
+        for embeds in input_embeddings:
+            values[offset:offset + embeds.shape[0]].copy_(embeds)
+            offset += embeds.shape[0]
+
+        return values, ranges
 
     def prepare_mrope(self, input_meta: Dict[str, Any], input_len: int):
         mrope_position_ids = input_meta['mrope_position_ids']

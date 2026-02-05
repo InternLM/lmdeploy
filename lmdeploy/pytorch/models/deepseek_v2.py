@@ -13,12 +13,13 @@ from torch import nn
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank, get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager, get_step_ctx_manager
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding,
-                                 build_rotary_params)
+from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, ParallelEmbedding, RMSNorm, RopeType, SiluAndMul,
+                                 build_rotary_embedding, build_rotary_params)
 from lmdeploy.pytorch.nn.eplb import EPLBDispatchInfo, EPLBManager
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_down_linear, build_gateup_linear, build_o_proj,
                                         build_rowwise_linear)
 from lmdeploy.pytorch.nn.moe import MoeType, SoftmaxTopK, build_fused_moe
+from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters, get_rope_theta
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -441,9 +442,10 @@ class DeepseekV2Attention(nn.Module):
 
         self.softmax_scale = self.q_head_dim**(-0.5)
 
-        if config.rope_scaling is not None:
-            mscale_all_dim = config.rope_scaling.get('mscale_all_dim', 0)
-            scaling_factor = config.rope_scaling['factor']
+        rope_scaling = get_rope_parameters(config)
+        if rope_scaling is not None:
+            mscale_all_dim = rope_scaling.get('mscale_all_dim', 0)
+            scaling_factor = rope_scaling['factor']
             if mscale_all_dim:
                 mscale = yarn_get_mscale(scaling_factor, mscale_all_dim)
                 self.softmax_scale = self.softmax_scale * mscale * mscale
@@ -965,11 +967,13 @@ class DeepseekV2Model(nn.Module):
         self.config = config
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
-        self.embed_tokens = nn.Embedding(config.vocab_size,
-                                         config.hidden_size,
-                                         self.padding_idx,
-                                         dtype=dtype,
-                                         device=device)
+        self.embed_tokens = ParallelEmbedding(config.vocab_size,
+                                              config.hidden_size,
+                                              self.padding_idx,
+                                              dtype=dtype,
+                                              device=device,
+                                              is_tp=True)
+
         if get_dist_manager().current_context().dist_config.enable_eplb:
             ep_size_, _ = get_ep_world_rank()
             EPLBManager.init_global_eplb_metadata(ep_size_, config.n_routed_experts, config.num_hidden_layers)
@@ -985,7 +989,7 @@ class DeepseekV2Model(nn.Module):
         rope_dim = config.qk_rope_head_dim if getattr(config, 'use_mla', True) else (config.hidden_size //
                                                                                      config.num_attention_heads)
         rope_max_pos_emb = config.max_position_embeddings
-        rope_base = config.rope_theta
+        rope_base = get_rope_theta(config)
 
         rope_params = dict(emb_type=emb_type, dim=rope_dim, max_position_embeddings=rope_max_pos_emb, base=rope_base)
         update_params = build_rotary_params(config)

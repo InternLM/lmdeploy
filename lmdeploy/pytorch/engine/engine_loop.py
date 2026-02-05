@@ -21,7 +21,7 @@ from .engine import InferOutput, ResponseType, response_reqs
 if TYPE_CHECKING:
     from lmdeploy.pytorch.disagg.conn.engine_conn import EngineP2PConnection
     from lmdeploy.pytorch.engine.model_agent import BatchedOutputs
-    from lmdeploy.pytorch.model_inputs import ModelInputs
+    from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
     from lmdeploy.pytorch.paging import Scheduler
     from lmdeploy.pytorch.strategies.base.sequence import SequenceStrategy
 
@@ -137,7 +137,6 @@ class EngineLoop:
     async def preprocess_loop(self):
         """Preprocess request."""
         while not self.stop_event.is_set():
-            await self.forward_event.wait()
             await self.req_manager.step()
             self.has_runable_event.set()
 
@@ -152,6 +151,9 @@ class EngineLoop:
 
     def _send_resp(self, out: InferOutput):
         """Send response."""
+        # skip cancelled response
+        if out.resp.is_done:
+            return
         resp_type = (ResponseType.FINISH if out.finish else ResponseType.SUCCESS)
         logprobs = None if out.resp.data is None else out.resp.data.get('logprobs', None)
         response_reqs(self.req_manager,
@@ -205,7 +207,6 @@ class EngineLoop:
                     resps += que.get_nowait().values()
             else:
                 resps = (await que.get()).values()
-            await self.forward_event.wait()
             self._send_resps(resps)
 
     @record_function('make_infer_outputs')
@@ -214,10 +215,31 @@ class EngineLoop:
         batched_outputs: 'BatchedOutputs',
         running: 'SeqList',
         model_inputs: 'ModelInputs',
+        delta: 'ModelInputsDelta',
     ):
         """Make infer output."""
-        new_token_timestamp = batched_outputs.new_token_timestamp
+
+        def __get_logit(msg, logits: torch.Tensor, seq_length: List[int], idx: int):
+            logit = logits.split(seq_length)[idx]
+            if len(msg.all_logits) > 0:
+                # for chunked long context
+                msg.append_logits(logit)
+                logit = msg.logits
+                msg.all_logits.resize(0)
+
+            return logit
+
         logits = batched_outputs.logits
+        all_routed_experts = batched_outputs.all_routed_experts
+
+        if model_inputs is not None and model_inputs.is_chunk:
+            # chunk long context does not need to update seqs and outputs
+            seq = running[0]
+            seq.append_routed_experts(all_routed_experts)
+            seq.append_logits(logits)
+            return dict()
+
+        new_token_timestamp = batched_outputs.new_token_timestamp
         logprobs = batched_outputs.logprobs
 
         if logprobs is not None:
@@ -226,7 +248,10 @@ class EngineLoop:
 
         seq_length = [seq.num_token_ids for seq in running]
         is_run = [seq.status == MessageStatus.RUNNING for seq in running]
-        self.seq_strategy.update_running(running=running, batched_outputs=batched_outputs, model_inputs=model_inputs)
+        self.seq_strategy.update_running(running=running,
+                                         batched_outputs=batched_outputs,
+                                         model_inputs=model_inputs,
+                                         delta=delta)
 
         # generate output
         outputs: Dict[int, InferOutput] = dict()
@@ -255,9 +280,9 @@ class EngineLoop:
             # get spec stats info
             spec_info = None
             num_draft_tokens = self.config.num_speculative_tokens
-            if num_draft_tokens is not None and model_inputs.is_decoding and self.config.enable_metrics:
+            if num_draft_tokens is not None and model_inputs is None and self.config.enable_metrics:
                 num_accepted_tokens = (batched_outputs.next_token_ids[idx] > -1).sum() - 1
-                spec_info = dict(num_draft_tokens=num_draft_tokens, num_accepted_tokens=num_accepted_tokens)
+                spec_info = dict(num_draft_tokens=num_draft_tokens, num_accepted_tokens=num_accepted_tokens.item())
             req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events, spec_info=spec_info)
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,
@@ -270,16 +295,15 @@ class EngineLoop:
             outputs[session_id] = out
 
             if msg.return_logits:
-                outputs[session_id].logits = logits.split(seq_length)[idx]
+                logit = __get_logit(msg, logits, seq_length, idx)
+                outputs[session_id].logits = logit
         return outputs
 
     async def _main_loop_try_send_next_inputs(self):
         """Try send next inputs."""
         scheduler = self.scheduler
         if not scheduler.has_unfinished():
-            self.forward_event.set()
             await self.has_runable_event.wait()
-            self.forward_event.clear()
 
         scheduler.collect_migration_done()
         return await self.inputs_maker.send_next_inputs()
@@ -290,26 +314,20 @@ class EngineLoop:
         forward_inputs: Dict[str, Any],
     ):
         """Get outputs and prefetch."""
-        self.forward_event.set()
-        num_loops = forward_inputs['loop_count']
         model_inputs = forward_inputs['inputs']
-        for idx in range(num_loops):
-            # pre-forward before get last token
-            if idx == num_loops - 1:
-                self.scheduler.collect_migration_done()
-                forward_inputs, next_running = await self.inputs_maker.prefetch_next_inputs()
+        delta = forward_inputs['delta']
+        self.inputs_maker.update_running_seqs(running, model_inputs)
 
-            # send output
-            out = await self.executor.get_output_async()
-            if out is not None:
-                step_outputs = self._make_infer_outputs(out, running=running, model_inputs=model_inputs)
-                self.resp_queue.put_nowait(step_outputs)
+        # try prefetch inputs
+        self.scheduler.collect_migration_done()
+        forward_inputs, next_running = await self.inputs_maker.prefetch_next_inputs()
 
-            # lock forward event
-            # make sure that prefetch forward would not wait for detokenize
-            # WARNING: this might have side effect on the performance
-            if idx == num_loops // 2:
-                self.forward_event.clear()
+        # send output
+        out = await self.executor.get_output_async()
+        if out is not None:
+            step_outputs = self._make_infer_outputs(out, running=running, model_inputs=model_inputs, delta=delta)
+            self.resp_queue.put_nowait(step_outputs)
+
         return forward_inputs, next_running
 
     async def main_loop(self):
@@ -317,7 +335,6 @@ class EngineLoop:
 
         Each engine instance would communicate with the engine by queue.
         """
-        forward_event = self.forward_event
         has_runable_event = self.has_runable_event
         scheduler = self.scheduler
         forward_inputs = None
@@ -329,9 +346,7 @@ class EngineLoop:
             logger.warning(f'no next prefill running request, Maybe cache is full, '
                            f'free gpu cache blocks: {scheduler.block_manager.get_num_free_gpu_blocks()}, '
                            f'total gpu cache blocks: {scheduler.block_manager.num_gpu_blocks}')
-            forward_event.set()
             await asyncio.sleep(0.1)
-            forward_event.clear()
 
         while not self.stop_event.is_set():
             if next_running is None:
@@ -340,11 +355,12 @@ class EngineLoop:
                     await __no_running_warning()
                     continue
 
-            with scheduler.seqs_activation(next_running):
-                forward_inputs, next_running = await self._main_loop_get_outputs(
-                    running=next_running,
-                    forward_inputs=forward_inputs,
-                )
+            scheduler.activate_seqs(next_running)
+            forward_inputs, next_running = await self._main_loop_get_outputs(
+                running=next_running,
+                forward_inputs=forward_inputs,
+            )
+            self.inputs_maker.deactivate_evict_seqs()
             has_runable_event.set()
 
     def update_running_migration(self, running: 'SeqList', next_token_ids: np.ndarray, stopped: torch.Tensor,
@@ -379,7 +395,7 @@ class EngineLoop:
             assert len(prefill_block_ids) == len(decode_block_ids), (
                 f'#prefill block ids ({len(prefill_block_ids)}) must equal to '
                 f'#decode block ids ({len(decode_block_ids)})'
-                f'all id length: {len(msg.num_token_ids)}')
+                f'all id length: {msg.num_token_ids}')
             migration_execution_requests.append((
                 migration_request.remote_engine_id,
                 list(zip(prefill_block_ids, decode_block_ids)),

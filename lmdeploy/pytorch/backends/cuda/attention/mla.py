@@ -190,7 +190,7 @@ class FlashMLAImpl(TritonAttentionImpl):
                                                      is_fp8_kvcache=is_fp8_kvcache,
                                                      indices=nsa_indices)
 
-        attn_output = attn_output.squeeze(1)
+        attn_output = attn_output.flatten(0, 1)
         return attn_output
 
     def _prefill_sparse(self, query: torch.Tensor, flatten_k: torch.Tensor, nsa_indices: torch.Tensor,

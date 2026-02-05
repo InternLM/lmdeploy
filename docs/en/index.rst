@@ -80,6 +80,7 @@ Documentation
    quantization/w4a16.md
    quantization/w8a8.md
    quantization/kv_quant.md
+   quantization/llm_compressor.md
 
 .. _benchmark:
 .. toctree::
@@ -114,6 +115,7 @@ Documentation
 
    api/pipeline.rst
    api/openapi.rst
+   api/cli.rst
 
 Indices and tables
 ==================

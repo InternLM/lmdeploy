@@ -84,15 +84,17 @@ with open(spec_dir / 'proxy.yaml', 'w', encoding='utf-8') as f:
 # ones.
 
 extensions = [
+    'myst_parser',
+    'sphinx_argparse_cli',
     'sphinx.ext.autodoc',
+    'sphinx.ext.autosectionlabel',
     'sphinx.ext.autosummary',
+    'sphinx.ext.intersphinx',
     'sphinx.ext.napoleon',
     'sphinx.ext.viewcode',
-    'sphinx.ext.autosectionlabel',
-    'sphinx.ext.intersphinx',
-    'sphinx_tabs.tabs',
-    'myst_parser',
+    'sphinx_autodoc_typehints',
     'sphinx_copybutton',
+    'sphinx_tabs.tabs',
     'sphinxcontrib.mermaid',
     'sphinxcontrib.openapi',
 ]  # yapf: disable
@@ -282,6 +284,8 @@ autodoc_mock_imports = [
     '_turbomind',
     'triton',
 ]
+
+autodoc_type_aliases = {'PydanticDataclass': 'pydantic.dataclasses.PydanticDataclass'}
 
 intersphinx_mapping = {
     'python': ('https://docs.python.org/3.10', None),

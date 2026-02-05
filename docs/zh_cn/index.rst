@@ -81,6 +81,7 @@ LMDeploy 工具箱提供以下核心功能：
    quantization/w4a16.md
    quantization/w8a8.md
    quantization/kv_quant.md
+   quantization/llm_compressor.md
 
 .. _测试基准:
 .. toctree::
@@ -115,6 +116,7 @@ LMDeploy 工具箱提供以下核心功能：
 
    api/pipeline.rst
    api/openapi.rst
+   api/cli.rst
 
 索引与表格
 ==================

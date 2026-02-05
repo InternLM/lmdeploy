@@ -65,7 +65,6 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |             Llama3             |     8B, 70B     | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |            Llama3.1            |     8B, 70B     | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |            Llama3.2            |     1B, 3B      | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
-|          Llama3.2-VL           |    11B, 90B     | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |             Llama4             | Scout, Maverick | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |            InternLM            |    7B - 20B     | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |           InternLM2            |    7B - 20B     | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
@@ -73,6 +72,7 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |           InternLM3            |       8B        | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |           Intern-S1            |      241B       | MLLM |    Yes    |   Yes   |   Yes   | Yes  |   -   |
 |         Intern-S1-mini         |      8.3B       | MLLM |    Yes    |   Yes   |   Yes   | Yes  |   -   |
+|         Intern-S1-Pro          |       1TB       | MLLM |    Yes    |    -    |    -    |  -   |  No   |
 |           Baichuan2            |       7B        | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  No   |
 |           Baichuan2            |       13B       | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |            ChatGLM2            |       6B        | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
@@ -129,6 +129,7 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 ```{note}
 * [1] Currently Mono-InternVL does not support FP16 due to numerical instability. Please use BF16 instead.
 * [2] PyTorch engine removes the support of original llava models after v0.6.4. Please use their corresponding transformers models instead, which can be found in https://huggingface.co/llava-hf
+Starting from version 0.11.1, PytorchEngine no longer provides support for mllama.
 ```
 
 ## PyTorchEngine on Other Platforms

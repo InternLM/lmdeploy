@@ -167,7 +167,7 @@ class Engine:
 
         if stream_output:
             pbar = tqdm(total=len(requests))
-            for output in self.pipe.stream_infer(prompts, gen_configs, do_preprocess=False):
+            for output in self.pipe.stream_infer(prompts, gen_config=gen_configs, do_preprocess=False):
                 index = output.index
                 n_token = output.generate_token_len
                 finish_reason = output.finish_reason
@@ -275,6 +275,7 @@ def parse_args():
     ArgumentHelper.num_tokens_per_iter(tb_group)
     ArgumentHelper.max_prefill_iters(tb_group)
     ArgumentHelper.communicator(tb_group)
+    ArgumentHelper.async_(tb_group)
 
     args = parser.parse_args()
     return args
@@ -285,19 +286,19 @@ def main():
     random.seed(args.seed)
     os.environ['TM_LOG_LEVEL'] = args.log_level
     if args.backend == 'turbomind':
-        engine_config = TurbomindEngineConfig(
-            max_batch_size=args.concurrency,
-            tp=args.tp,
-            cache_max_entry_count=args.cache_max_entry_count,
-            session_len=args.session_len,
-            cache_block_seq_len=args.cache_block_seq_len,
-            model_format=args.model_format,
-            quant_policy=args.quant_policy,
-            num_tokens_per_iter=args.num_tokens_per_iter,
-            max_prefill_iters=args.max_prefill_iters,
-            enable_prefix_caching=args.enable_prefix_caching,
-            communicator=args.communicator,
-        )
+        engine_config = TurbomindEngineConfig(max_batch_size=args.concurrency,
+                                              tp=args.tp,
+                                              cache_max_entry_count=args.cache_max_entry_count,
+                                              session_len=args.session_len,
+                                              cache_block_seq_len=args.cache_block_seq_len,
+                                              model_format=args.model_format,
+                                              quant_policy=args.quant_policy,
+                                              num_tokens_per_iter=args.num_tokens_per_iter,
+                                              max_prefill_iters=args.max_prefill_iters,
+                                              enable_prefix_caching=args.enable_prefix_caching,
+                                              communicator=args.communicator,
+                                              enable_metrics=False,
+                                              async_=args.async_)
     elif args.backend == 'pytorch':
         engine_config = PytorchEngineConfig(
             cache_max_entry_count=args.cache_max_entry_count,

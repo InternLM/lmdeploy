@@ -75,7 +75,7 @@ jobs:
         shell: pwsh
         run: ./builder/windows/setup_cuda.ps1
         env:
-            INPUT_CUDA_VERSION: '12.1.0'
+            INPUT_CUDA_VERSION: '12.6.2'
       - name: Build wheel
         run: |
           python -m build --wheel -o build/wheel

@@ -260,7 +260,7 @@ class FusedMoELowLatency:
     ):
         from dlblas.utils.utils import DisposibleTensor
 
-        from lmdeploy.pytorch.kernels.cuda.activation import silu_and_mul
+        from lmdeploy.pytorch.kernels.cuda.activation import silu_and_mul_moe_ep
         from lmdeploy.pytorch.third_party.deep_gemm import m_grouped_bf16_gemm_nt_masked
         num_groups, m, _ = hidden_states.shape
         n = gate_up_weight.size(1)
@@ -269,12 +269,7 @@ class FusedMoELowLatency:
         m_grouped_bf16_gemm_nt_masked(DisposibleTensor.maybe_unwrap(hidden_states), gate_up_weight, gateup_output,
                                       masked_m, expected_m)
         DisposibleTensor.maybe_dispose(hidden_states)
-        down_input = silu_and_mul(gateup_output.flatten(0, -2))
-        down_input = down_input.view(
-            gateup_output.shape[0],
-            gateup_output.shape[1],
-            gateup_output.shape[2] // 2,
-        )
+        down_input = silu_and_mul_moe_ep(gateup_output, masked_m)
         del gateup_output
         n = gate_down_weight.size(1)
         down_output = down_input.new_empty((num_groups, m, n))
@@ -392,6 +387,8 @@ class FusedMoEEPImpl(TritonFusedMoEImpl):
         try:
             from dlblas.layers.moe.token_dispatcher import DeepEPBuffer, DeepEPMode, use_deepep  # noqa: F401
             get_moe_backend().set_deepep_moe_backend()
+            if hasattr(DeepEPBuffer, 'set_explicitly_destroy'):
+                DeepEPBuffer.set_explicitly_destroy()
         except ImportError:
             logger.warning('For higher performance, please install DeepEP https://github.com/deepseek-ai/DeepEP')
 

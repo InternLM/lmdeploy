@@ -10,7 +10,7 @@ from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.pytorch.engine.model_agent import BatchedOutputs
 from lmdeploy.pytorch.messages import (InputEmbeddings, MessageStatus, MultiModalInputs, SamplingParam,
                                        SchedulerSession, UpdateTokenMode, _to_ndarray)
-from lmdeploy.pytorch.model_inputs import ModelInputs
+from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 
 from ..ar.sequence import ARSequenceStrategy, SchedulerSequenceDefault
 
@@ -40,7 +40,7 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
     def generated_ids(self) -> np.ndarray:
         end = self.num_valid_ids
         start = end - self.num_new_tokens
-        return self.history_cache._token_ids[start:end]
+        return self.history_cache[start:end]
 
     def set_stop_pos(self, pos: int):
         val = self._num_new_valid - pos - 1
@@ -156,7 +156,8 @@ class ARSpecSequenceStrategy(ARSequenceStrategy):
                                        resp_cache=resp_cache,
                                        preserve_cache=preserve_cache)
 
-    def update_running(self, running: SeqList, batched_outputs: BatchedOutputs, model_inputs: 'ModelInputs') -> None:
+    def update_running(self, running: SeqList, batched_outputs: BatchedOutputs, model_inputs: 'ModelInputs',
+                       delta: 'ModelInputsDelta', **kwargs) -> None:
         """Update running sequences."""
         next_token_ids = batched_outputs.next_token_ids
         extra_outputs = batched_outputs.extra_outputs
@@ -167,6 +168,11 @@ class ARSpecSequenceStrategy(ARSequenceStrategy):
             model_metas = [None] * len(running)
         stop_pos = batched_outputs.stop_pos
 
+        if model_inputs is None:
+            is_decoding = delta.is_decoding
+        else:
+            is_decoding = model_inputs.is_decoding
+
         batch_size = len(running)
         next_token_ids = next_token_ids.view(batch_size, -1).numpy()
         if extra_outputs is None or extra_outputs.draft_token_ids is None:
@@ -174,7 +180,7 @@ class ARSpecSequenceStrategy(ARSequenceStrategy):
         else:
             draft_token_ids = extra_outputs.draft_token_ids.numpy()
         stop_pos = stop_pos.tolist()
-        update_mode = UpdateTokenMode.DECODE if model_inputs.is_decoding else UpdateTokenMode.PREFILL
+        update_mode = UpdateTokenMode.DECODE if is_decoding else UpdateTokenMode.PREFILL
 
         for idx, token in enumerate(next_token_ids):
             msg = running[idx]

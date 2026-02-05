@@ -299,6 +299,7 @@ class Engine(EngineBase):
                     _resp: Response = getattr(seq, 'resp', None)
                     if _resp is not None:
                         _resp.type = ResponseType.CANCEL
+                        _resp.is_done = True
                         self.req_manager.response(_resp)
                 resp_type = ResponseType.SUCCESS
             if resp:
@@ -501,7 +502,8 @@ class Engine(EngineBase):
             return
 
         try:
-            await self._loop_main
+            # await self._loop_main
+            await self.req_manager.wait_tasks()
         except asyncio.CancelledError:
             logger.info('Engine main loop cancelled in wait_tasks.')
             raise

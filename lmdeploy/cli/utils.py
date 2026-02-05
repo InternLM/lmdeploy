@@ -388,7 +388,12 @@ class ArgumentHelper:
     def calib_dataset(parser):
         """Add argument calib_dataset to parser."""
 
-        return parser.add_argument('--calib-dataset', type=str, default='ptb', help='The calibration dataset name')
+        return parser.add_argument(
+            '--calib-dataset',
+            type=str,
+            default='wikitext2',
+            choices=['wikitext2', 'c4', 'pileval', 'gsm8k', 'neuralmagic_calibration', 'open-platypus', 'openwebtext'],
+            help='The calibration dataset name.')
 
     @staticmethod
     def calib_samples(parser):
@@ -561,6 +566,16 @@ class ArgumentHelper:
                                    type=int,
                                    default=1,
                                    help='the max number of forward passes in prefill stage')
+
+    @staticmethod
+    def async_(parser):
+        return parser.add_argument('--async',
+                                   type=int,
+                                   default=1,
+                                   choices=[0, 1],
+                                   dest='async_',
+                                   help='Enable async execution (default: 1, enabled). '
+                                   'Set to 0 to disable async mode, 1 to enable it.')
 
     @staticmethod
     def max_prefill_token_num(parser):
