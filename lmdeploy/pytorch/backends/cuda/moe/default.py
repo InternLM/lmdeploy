@@ -387,6 +387,8 @@ class FusedMoEEPImpl(TritonFusedMoEImpl):
         try:
             from dlblas.layers.moe.token_dispatcher import DeepEPBuffer, DeepEPMode, use_deepep  # noqa: F401
             get_moe_backend().set_deepep_moe_backend()
+            if hasattr(DeepEPBuffer, 'set_explicitly_destroy'):
+                DeepEPBuffer.set_explicitly_destroy()
         except ImportError:
             logger.warning('For higher performance, please install DeepEP https://github.com/deepseek-ai/DeepEP')
 

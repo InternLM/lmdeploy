@@ -352,15 +352,16 @@ class Qwen3VLVisionModel(nn.Module):
                                                device=device,
                                                prefix=add_prefix('merger', prefix))
 
-        self.deepstack_visual_indexes = config.deepstack_visual_indexes
-        self.deepstack_merger_list = nn.ModuleList([
-            Qwen3VLVisionPatchMerger(config=config,
-                                     use_postshuffle_norm=True,
-                                     dtype=dtype,
-                                     device=device,
-                                     prefix=add_prefix(f'deepstack_merger_list.{ds_idx}', prefix))
-            for ds_idx in range(len(config.deepstack_visual_indexes))
-        ])
+        if hasattr(config, 'deepstack_visual_indexes'):
+            self.deepstack_visual_indexes = config.deepstack_visual_indexes
+            self.deepstack_merger_list = nn.ModuleList([
+                Qwen3VLVisionPatchMerger(config=config,
+                                         use_postshuffle_norm=True,
+                                         dtype=dtype,
+                                         device=device,
+                                         prefix=add_prefix(f'deepstack_merger_list.{dvi}', prefix))
+                for dvi in range(len(config.deepstack_visual_indexes))
+            ])
 
     @staticmethod
     @lru_cache(maxsize=1024)
@@ -471,7 +472,7 @@ class Qwen3VLVisionModel(nn.Module):
         deepstack_feature_lists = []
         for layer_num, blk in enumerate(self.blocks):
             hidden_states = blk(hidden_states, cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb)
-            if layer_num in self.deepstack_visual_indexes:
+            if hasattr(self, 'deepstack_visual_indexes') and layer_num in self.deepstack_visual_indexes:
                 deepstack_merge_idx = self.deepstack_visual_indexes.index(layer_num)
                 deepstack_feature = self.deepstack_merger_list[deepstack_merge_idx](hidden_states)
                 deepstack_feature_lists.append(deepstack_feature)

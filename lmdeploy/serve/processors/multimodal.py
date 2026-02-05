@@ -1,9 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Tuple
 
-from lmdeploy import Tokenizer
+import PIL
+
 from lmdeploy.model import MODELS, BaseChatTemplate
+from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -17,7 +19,7 @@ class MultimodalProcessor:
                  tokenizer: Tokenizer,
                  chat_template: BaseChatTemplate,
                  vl_encoder=None,
-                 backend: Optional[str] = None):
+                 backend: str | None = None):
         """Initialize MultimodalProcessor.
 
         Args:
@@ -83,13 +85,8 @@ class MultimodalProcessor:
         return result
 
     @staticmethod
-    async def async_convert_to_pil_images(messages: List[Dict]) -> List[Dict]:
-        """Scan the provided messages to find image URLs or base64-encoded
-        image data. Loads the images into Pillow image objects.
-
-        Args:
-            messages (List[Dict]): a user request of GPT4V message format
-        """
+    async def async_convert_multimodal_data(messages: List[Dict]) -> List[Dict]:
+        """Convert user-input multimodal data into GPT4V message format."""
         from lmdeploy.vl.utils import load_image
 
         if isinstance(messages, Dict):
@@ -167,7 +164,7 @@ class MultimodalProcessor:
                         message['content'].append(data)
                     except KeyError:
                         logger.error(f'invalid format {message}')
-                elif item['type'] == 'text':
+                elif item['type'] in ['text', 'time_series']:
                     message['content'].append(item)
                 else:
                     logger.error(f'unexpected content type {message}')
@@ -180,14 +177,14 @@ class MultimodalProcessor:
         return out_messages
 
     async def get_prompt_input(self,
-                               prompt: Union[str, List[Dict]],
+                               prompt: str | List[Dict],
                                do_preprocess: bool,
                                sequence_start: bool,
                                adapter_name: str,
-                               tools: Optional[List[object]] = None,
-                               reasoning_effort: Optional[Literal['low', 'medium', 'high']] = None,
-                               chat_template_kwargs: Optional[Dict] = None,
-                               mm_processor_kwargs: Optional[Dict[str, Any]] = None,
+                               tools: List[object] | None = None,
+                               reasoning_effort: Literal['low', 'medium', 'high'] | None = None,
+                               chat_template_kwargs: Dict | None = None,
+                               mm_processor_kwargs: Dict[str, Any] | None = None,
                                **kwargs):
         """Process prompt and return prompt string and input_ids.
 
@@ -248,20 +245,98 @@ class MultimodalProcessor:
         else:
             raise RuntimeError(f'unsupported prompt type: {type(prompt)}')
 
+    @staticmethod
+    def format_prompts(prompts: Any) -> List[Dict]:
+        """Format prompts."""
+        if not isinstance(prompts, list):
+            prompts = [prompts]
+        # str or batch of str
+        if all(isinstance(prompt, str) for prompt in prompts):
+            return prompts
+        if (MultimodalProcessor._is_openai_message(prompts)
+                or all(MultimodalProcessor._is_openai_message(prompt) for prompt in prompts)):
+            return prompts
+        if all(MultimodalProcessor._is_str_images_pair(prompt) for prompt in prompts):
+            # batch of (prompt, image or [images]) or (image or [images], prompt) ->
+            # [[openai_gpt4v_message], [openai_gpt4v_message], ...]
+            return [[MultimodalProcessor._re_format_prompt_images_pair(prompt)] for prompt in prompts]
+        raise ValueError(f'Unsupported prompts: {prompts}. Only support str, openai message format, '
+                         'or (prompt, image or [images]) or (image or [images], prompt) pair.')
+
+    @staticmethod
+    def _is_openai_message(message) -> bool:
+        """Check if the message conforms to openai message format."""
+        return isinstance(message, list) and all(isinstance(msg, dict) for msg in message)
+
+    @staticmethod
+    def _is_str_images_pair(message) -> bool:
+        """Check if the message is a (prompt, image or [images]) or (image or
+        [images], prompt) pair."""
+        if not (isinstance(message, tuple) and len(message) == 2):
+            return False
+        _1, _2 = message
+        if MultimodalProcessor._is_image(_1) or MultimodalProcessor._is_image_list(_1):
+            _1, _2 = _2, _1
+        return isinstance(_1, str) and (MultimodalProcessor._is_image(_2) or MultimodalProcessor._is_image_list(_2))
+
+    @staticmethod
+    def _is_image(obj) -> bool:
+        # image or image url or base64-encoded image data
+        return (isinstance(obj, PIL.Image.Image)
+                or isinstance(obj, str) and (obj.startswith('http') or obj.startswith('data:image')))
+
+    @staticmethod
+    def _is_image_list(obj) -> bool:
+        return isinstance(obj, list) and all(MultimodalProcessor._is_image(img) for img in obj)
+
+    @staticmethod
+    def _re_format_prompt_images_pair(prompt: Tuple) -> Dict:
+        """Reformat the prompt to openai message format."""
+        from lmdeploy.vl.utils import load_image
+
+        messages = {'role': 'user', 'content': []}
+        prompt, images = prompt
+        prompt_first = True
+        if MultimodalProcessor._is_image(prompt) or MultimodalProcessor._is_image_list(prompt):
+            prompt, images = images, prompt
+            prompt_first = False
+        image_contents = []
+        images = images if isinstance(images, list) else [images]
+        for image in images:
+            # 'image_url': means url or local path to image.
+            # 'image_data': means PIL.Image.Image object.
+            if isinstance(image, str):
+                image = load_image(image)
+                item = {'type': 'image_data', 'image_data': {'data': image}}
+            elif isinstance(image, PIL.Image.Image):
+                item = {'type': 'image_data', 'image_data': {'data': image}}
+            else:
+                raise ValueError('image should be a str(url/path) or PIL.Image.Image')
+            image_contents.append(item)
+
+        if prompt_first:
+            messages['content'].append({'type': 'text', 'text': prompt})
+            messages['content'].extend(image_contents)
+        else:
+            messages['content'].extend(image_contents)
+            messages['content'].append({'type': 'text', 'text': prompt})
+        return messages
+
     def _has_multimodal_input(self, messages: List[Dict]) -> bool:
         """Check if messages contain multimodal input (images)."""
         return any(
             isinstance(message.get('content'), list) and any(
-                item.get('type') in ['image_url', 'image_data'] for item in message['content']) for message in messages)
+                item.get('type') in ['image_url', 'image_data', 'time_series'] for item in message['content'])
+            for message in messages)
 
     async def _get_text_prompt_input(self,
-                                     prompt: Union[str, List[Dict]],
+                                     prompt: str | List[Dict],
                                      do_preprocess: bool,
                                      sequence_start: bool,
                                      adapter_name: str,
-                                     tools: Optional[List[object]] = None,
-                                     reasoning_effort: Optional[Literal['low', 'medium', 'high']] = None,
-                                     chat_template_kwargs: Optional[Dict] = None,
+                                     tools: List[object] | None = None,
+                                     reasoning_effort: Literal['low', 'medium', 'high'] | None = None,
+                                     chat_template_kwargs: Dict | None = None,
                                      **kwargs):
         """Process text-only prompt and return prompt string and input_ids."""
         # Change multimodal data to openai text messages
@@ -292,14 +367,14 @@ class MultimodalProcessor:
                                            do_preprocess: bool,
                                            sequence_start: bool,
                                            adapter_name: str,
-                                           tools: Optional[List[object]] = None,
-                                           chat_template_kwargs: Optional[Dict] = None,
-                                           mm_processor_kwargs: Optional[Dict[str, Any]] = None,
+                                           tools: List[object] | None = None,
+                                           chat_template_kwargs: Dict | None = None,
+                                           mm_processor_kwargs: Dict[str, Any] | None = None,
                                            **kwargs):
         """Process multimodal prompt and return processed data for inference
         engines."""
         chat_template = self.chat_template if do_preprocess else BaseChatTemplate()
-        messages = await self.async_convert_to_pil_images(messages)
+        messages = await self.async_convert_multimodal_data(messages)
         results = await self.vl_encoder.preprocess(messages, mm_processor_kwargs)
 
         if self.backend == 'turbomind':
