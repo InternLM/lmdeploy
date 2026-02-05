@@ -20,7 +20,7 @@ from .qwen2_5_vl import Qwen2_5_VLInputProcessor as Qwen3VLInputProcessor
 from .qwen2_5_vl import Qwen2_5_VLVisionAttention as Qwen3VLVisionAttention
 from .qwen3 import Qwen3model
 from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
-from .utils.model import DeployModelMixin, vlm_model
+from .utils.model import DeployModelMixinV1, vlm_model
 
 
 class Qwen3VLTextRotaryEmbedding(nn.Module):
@@ -448,7 +448,7 @@ class Qwen3VLVisionModel(nn.Module):
         return hidden_states, deepstack_feature_lists
 
 
-class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixin):
+class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMixin):
     """ModelForCausalLM."""
 
     packed_modules_mapping = {
@@ -486,11 +486,11 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
         self.language_model = Qwen3VLTextModel(config.text_config, dtype=dtype, device=device)
 
         # build lm_head
-        self.lm_head = build_rowwise_linear(config.text_config.hidden_size,
-                                            config.text_config.vocab_size,
-                                            bias=False,
-                                            dtype=dtype,
-                                            device=device)
+        self.lm_head = self.build_lm_head(config.text_config.hidden_size,
+                                          config.text_config.vocab_size,
+                                          bias=False,
+                                          dtype=dtype,
+                                          device=device)
 
     def forward(
         self,
@@ -549,15 +549,6 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
             deepstack_visual_embeds=deepstack_visual_embeds,
         )
         return hidden_states
-
-    def get_logits(self, hidden_states: torch.Tensor):
-        """Compute logits of the model output."""
-        return self.lm_head(hidden_states)
-
-    def update_weights(self):
-        """Update weights."""
-        if self.config.tie_word_embeddings:
-            self.lm_head.weight = self.language_model.embed_tokens.weight
 
     def get_input_embeddings(self):
         """Get input embeddings."""
