@@ -119,9 +119,9 @@ class WorkerWrapperBase:
         """warmup."""
         self.model_agent.warmup()
 
-    def sleep(self, level: int = 1):
+    async def sleep(self, level: int = 1):
         """Sleep."""
-        self.model_agent.sleep(level)
+        await self.model_agent.sleep(level)
 
     def wakeup(self, tags: Optional[List[str]] = None):
         """Wakeup."""
