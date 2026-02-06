@@ -24,14 +24,22 @@ ______________________________________________________________________
 ## 最新进展 🎉
 
 <details open>
-<summary><b>2025</b></summary>
+<summary><b>2026</b></summary>
+
+- \[2026/02\] 支持 [vllm-project/llm-compressor](https://github.com/vllm-project/llm-compressor) 4bit 对称和非对称量化。 具体操作指南详见[此处](./docs/zh_cn/quantization/llm_compressor.md)
+
 </details>
+
+<details close>
+<summary><b>2025</b></summary>
 
 - 【2025年9月】TurboMind 引擎支持 MXFP4，适用于 NVIDIA V100 及以上 GPU。在 H800 上推理 openai gpt-oss 模型，性能可达 vLLM 的 1.5倍！
 - 【2025年6月】深度优化 FP8 MoE 模型推理
 - 【2025年6月】集成[DLSlime](https://github.com/DeepLink-org/DLSlime)和[Mooncake](https://github.com/kvcache-ai/Mooncake)，实现DeepSeek PD分离部署，向两个团队表示诚挚的感谢！
 - 【2025年4月】集成deepseek-ai组件FlashMLA、DeepGemm、DeepEP、MicroBatch、eplb等，提升DeepSeek推理性能
 - 【2025年1月】新增对DeepSeek V3及R1的支持
+
+</details>
 
 <details close>
 <summary><b>2024</b></summary>
@@ -156,6 +164,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>MiniCPM3 (4B)</li>
   <li>SDAR (1.7B-30B)</li>
   <li>gpt-oss (20B, 120B)</li>
+  <li>GLM-4.7-Flash (30B)</li>
 </ul>
 </td>
 <td>
@@ -176,6 +185,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>InternVL3.5 (1B-241BA28B)</li>
   <li>Intern-S1 (241B)</li>
   <li>Intern-S1-mini (8.3B)</li>
+  <li>Intern-S1-Pro (1TB)</li>
   <li>Mono-InternVL (2B)</li>
   <li>ChemVLM (8B-26B)</li>
   <li>CogVLM-Chat (17B)</li>
@@ -217,7 +227,7 @@ pip install lmdeploy
 若使用 GeForce RTX 50 系列显卡，请安装基于 **CUDA 12.8** 编译的 LMDeploy 预编译包。
 
 ```shell
-export LMDEPLOY_VERSION=0.11.1
+export LMDEPLOY_VERSION=0.12.0
 export PYTHON_VERSION=310
 pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu128-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu128
 ```

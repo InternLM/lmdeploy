@@ -46,12 +46,14 @@ env:
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
   OUTPUT_FOLDER: cuda12.8_dist_${{ github.run_id }}
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
-  REPORT_DIR: /nvme/qa_test_models/test-reports/${{ github.run_id }}
+  REPORT_DIR: /nvme/qa_test_models/test-reports/${{ inputs.repo_ref || 'main' }}_${{ github.run_id }}
   COV_PARAM: --cov /opt/py3/lib/python3.10/site-packages/lmdeploy
   FAIL_CONFIG: ${{ github.event_name == 'schedule' && github.run_attempt != 1 && '--lf --lfnf none' || '--lf'}}
-  TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy/${{ github.run_id }}
+  TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy/${{ inputs.repo_ref || 'main' }}_${{ github.run_id }}
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
   OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
+  RUN_ID: ${{ inputs.repo_ref || 'main' }}_${{ github.run_id }}
+  TEST_ENV: 5080
 
 jobs:
   linux-build:
@@ -122,10 +124,10 @@ jobs:
           ref: ${{github.event.inputs.repo_ref || 'main'}}
       - name: Copy repository
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
-        run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r . ${{env.TEST_CODE_PATH}} && mv ${{env.TEST_CODE_PATH}}/autotest/config-5080.yaml ${{env.TEST_CODE_PATH}}/autotest/config.yaml
+        run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r . ${{env.TEST_CODE_PATH}}
       - name: Copy repository - offline
         if: ${{inputs.offline_mode}}
-        run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r ${{env.OFFLINE_CODE_PATH}}/. ${{env.TEST_CODE_PATH}} && mv ${{env.TEST_CODE_PATH}}/autotest/config-3090.yaml ${{env.TEST_CODE_PATH}}/autotest/config.yaml
+        run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r ${{env.OFFLINE_CODE_PATH}}/. ${{env.TEST_CODE_PATH}}
       - name: Download Artifacts
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
@@ -172,15 +174,23 @@ jobs:
       - name: Install lmdeploy
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
-          python3 -m pip install transformers==4.53.1 datasets==3.6.0
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
+          for i in $(seq 1 10); do
+            output=$(lmdeploy check_env 2>&1)
+            if echo "$output" | grep -q "CUDA available: False"; then
+              echo "CUDA not available (attempt $i/10), retrying in 5 seconds..."
+              sleep 5
+            else
+              echo "CUDA check passed"
+              break
+            fi
+          done
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
           # remove tmp log in testcase
-          rm -rf /nvme/qa_test_models/autotest_model/log/*
           mkdir ${{env.REPORT_DIR}}/.pytest_cache -p && rm autotest/.pytest_cache -f
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Test lmdeploy - quantization w4a16
@@ -250,11 +260,20 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
+          for i in $(seq 1 10); do
+            output=$(lmdeploy check_env 2>&1)
+            if echo "$output" | grep -q "CUDA available: False"; then
+              echo "CUDA not available (attempt $i/10), retrying in 5 seconds..."
+              sleep 5
+            else
+              echo "CUDA check passed"
+              break
+            fi
+          done
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
           # remove tmp log in testcase
-          rm -rf /nvme/qa_test_models/autotest_model/log/*
           mkdir ${{env.REPORT_DIR}}/.pytest_cache -p && rm autotest/.pytest_cache -f
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Test lmdeploy - chat
@@ -330,18 +349,27 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
+          for i in $(seq 1 10); do
+            output=$(lmdeploy check_env 2>&1)
+            if echo "$output" | grep -q "CUDA available: False"; then
+              echo "CUDA not available (attempt $i/10), retrying in 5 seconds..."
+              sleep 5
+            else
+              echo "CUDA check passed"
+              break
+            fi
+          done
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
           # remove tmp log in testcase
-          rm -rf /nvme/qa_test_models/autotest_model/log/*
           mkdir ${{env.REPORT_DIR}}/.pytest_cache -p && rm autotest/.pytest_cache -f
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Start restful api
         run: |
           lmdeploy serve api_server /nvme/qa_test_models/${{matrix.model_path}} --tp ${{matrix.tp}} --backend ${{matrix.backend}} ${{matrix.extra}} > ${{env.REPORT_DIR}}/${{matrix.backend}}_${{matrix.model}}_${{matrix.generate_type}}_start_restful.log 2>&1 &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
-          for i in $(seq 1 180)
+          for i in $(seq 1 50)
           do
             sleep 5
             echo "health check try $i"

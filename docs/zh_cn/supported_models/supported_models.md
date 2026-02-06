@@ -19,6 +19,7 @@
 |      InternLM-XComposer2.5       |       7B       | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |            Intern-S1             |      241B      | MLLM |    Yes    |   Yes   |   Yes   |  No   |
 |          Intern-S1-mini          |      8.3B      | MLLM |    Yes    |   Yes   |   Yes   |  No   |
+|          Intern-S1-Pro           |      1TB       | MLLM |    Yes    |    -    |    -    |  No   |
 |               Qwen               |   1.8B - 72B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |     Qwen1.5<sup>\[1\]</sup>      |  1.8B - 110B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |      Qwen2<sup>\[2\]</sup>       |   0.5B - 72B   | LLM  |    Yes    |  Yes\*  |  Yes\*  |  Yes  |
@@ -119,6 +120,7 @@
 |       GLM-4.1V-Thinking        |       9B        | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |            GLM-4.5             |      355B       | LLM  |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |          GLM-4.5-Air           |      106B       | LLM  |    Yes    |   Yes   |   Yes   |  -   |   -   |
+|         GLM-4.7-Flash          |       30B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |           CodeGeeX4            |       9B        | LLM  |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |          Phi-3.5-mini          |      3.8B       | LLM  |    Yes    |   Yes   |   No    |  -   |   -   |
 |          Phi-3.5-MoE           |     16x3.8B     | LLM  |    Yes    |   Yes   |   No    |  -   |   -   |

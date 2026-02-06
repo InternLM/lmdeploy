@@ -28,6 +28,7 @@ with read_base():
 MODEL_NAME = ''
 MODEL_PATH = ''
 API_BASE = ''
+JUDGE_MODEL_NAME = ''
 JUDGE_MODEL_PATH = ''
 JUDGE_API_BASE = ''
 
@@ -39,7 +40,7 @@ api_meta_template = dict(round=[
 # Use OpenAISDK to configure LMDeploy OpenAI interface
 models = [
     dict(type=OpenAISDK,
-         abbr=f'{MODEL_NAME}-lmdeploy-api',
+         abbr=f'{MODEL_NAME}',
          path=MODEL_PATH,
          key='EMPTY',
          openai_api_base=API_BASE,
@@ -62,7 +63,8 @@ datasets = sum((v for k, v in locals().items() if k.endswith('_datasets')), []) 
 # LLM judge config: using LLM to evaluate predictions
 judge_cfg = dict(
     type=OpenAISDK,
-    path=JUDGE_MODEL_PATH,
+    abbr=f'{JUDGE_MODEL_NAME}',
+    path=JUDGE_MODEL_NAME,
     key='EMPTY',
     openai_api_base=JUDGE_API_BASE,
     meta_template=dict(round=[
@@ -126,16 +128,13 @@ for item in datasets:
     if 'max_out_len' in item['infer_cfg']['inferencer']:
         del item['infer_cfg']['inferencer']['max_out_len']
 
-#######################################################################
-#                 PART 4  Inference/Evaluation Configuration          #
-#######################################################################
+NUM_WORKERS = 8
 
-# infer with local runner
 infer = dict(
-    partitioner=dict(type=NumWorkerPartitioner, num_worker=8),
+    partitioner=dict(type=NumWorkerPartitioner, num_worker=NUM_WORKERS),
     runner=dict(
         type=LocalRunner,
-        max_num_workers=16,
+        max_num_workers=64,
         retry=0,
         task=dict(type=OpenICLInferTask),
     ),
@@ -144,5 +143,7 @@ infer = dict(
 # eval with local runner
 eval = dict(
     partitioner=dict(type=NaivePartitioner, n=10),
-    runner=dict(type=LocalRunner, max_num_workers=16, task=dict(type=OpenICLEvalTask)),
+    runner=dict(type=LocalRunner, max_num_workers=64, task=dict(type=OpenICLEvalTask)),
 )
+
+infer['partitioner']['num_worker'] = 64

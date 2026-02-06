@@ -39,7 +39,7 @@ def test_process_bad_words():
     ])
     mask = bad_words >= 0
 
-    out_scores = _process_bad_words_(scores, bad_words.where(mask, 0), mask)
+    out_scores = _process_bad_words_(scores, bad_words, mask)
 
     for score, bw in zip(out_scores, bad_words):
         bw = bw.tolist()
