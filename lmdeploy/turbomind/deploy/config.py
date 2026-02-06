@@ -71,6 +71,7 @@ class ModelConfig:
     attn_tp_size: int = 1
     attn_cp_size: int = 1
     mlp_tp_size: int = 1
+    ep_size: int = 1
     model_format: str = 'hf'
     expert_num: List[int] = ()
     expert_router_bias: bool = False

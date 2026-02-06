@@ -423,6 +423,7 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     engine_param_.attn_dp_size = engine["attn_dp_size"].as<int>();
     engine_param_.attn_tp_size = engine["attn_tp_size"].as<int>();
     engine_param_.attn_cp_size = engine["attn_cp_size"].as<int>();
+    engine_param_.ep_size      = engine["ep"].as<int>();
 
     engine_param_.mlp_tp_size = engine["mlp_tp_size"].as<int>();
 
@@ -441,6 +442,7 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     FT_CHECK(engine_param_.mlp_tp_size == comm_size_);
 
     communicator_type_ = engine["communicator"].as<std::string>();
+    TM_CHECK(engine_param_.ep_size == 1 || (communicator_type_ != "nccl"));
 
     moe_param_.experts_per_token = model["experts_per_token"].as<int>(0);
     moe_param_.inter_size        = model["expert_inter_size"].as<int>(0);
@@ -513,7 +515,7 @@ void TurboMind::Impl::CreateContext(int index)
 
     auto& c = ctx->comm;
 
-    c.h_global = group_id_->CreateCommunicator(comm_size_, global_rank, p.node_rank);
+    c.h_global = group_id_->CreateCommunicator(comm_size_ * p.outer_dp_size, global_rank, p.node_rank);
 
     c.h_comm = c.h_global->Split(outer_rank, 0);
 
@@ -525,6 +527,10 @@ void TurboMind::Impl::CreateContext(int index)
 
         c.d_tp_group = 0;
         c.d_cp_group = 0;
+
+        // currently only support single nodes and cuda-ipc backend
+        c.d_ep_group = 0;
+        p.ep_rank    = global_rank % p.ep_size;
 
         if (p.attn_dp_size > 1) {  // has attn_dp
             c.d_tp_group   = c.d_comm->Split(tp_color, 0, 0);

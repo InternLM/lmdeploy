@@ -86,7 +86,27 @@ def complete_parallel_config(cfg: TurbomindEngineConfig):
 
 def update_parallel_config(cfg: TurbomindEngineConfig):
     cfg.device_num = len(cfg.devices) * cfg.nnodes if cfg.devices else cfg.device_num
-    if not complete_parallel_config(cfg):
+    if not complete_parallel_config(cfg) and cfg.ep > 1:
+        assert cfg.nnodes == 1, 'TurboMind does not support multi-node with ep > 1'
+        assert cfg.dp >= cfg.nnodes
+        cfg.communicator = 'cuda-ipc'
+        total = cfg.dp * cfg.ep
+        if not cfg.device_num:
+            count = torch.cuda.device_count() * cfg.nnodes
+            if total < count:
+                count = total
+            cfg.device_num = count
+        assert total % cfg.device_num == 0
+        overlap = total // cfg.device_num
+        attn_dp_size = overlap
+        inner_tp_size = cfg.ep // overlap
+        cfg.outer_dp_size = cfg.dp // overlap
+        cfg.attn_dp_size = overlap // cfg.nnodes
+        cfg.attn_tp_size = inner_tp_size // cfg.cp
+        cfg.attn_cp_size = cfg.cp
+        cfg.mlp_dp_size = 1
+        cfg.mlp_tp_size = cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size
+    elif not complete_parallel_config(cfg):
         total = cfg.dp * cfg.tp
         if not cfg.device_num:
             count = torch.cuda.device_count() * cfg.nnodes
