@@ -260,7 +260,7 @@ void CudaIpcCommImpl::Register(const Allocation& alloc, int group)
     const int ranks = n_ranks(group);
     const int rank  = this->rank(group);
 
-    if (multicast_capability_) {
+    if (multicast_capability_ && ranks > 1) {
 #if __CUDACC_VER_MAJOR__ >= 12
         CUmulticastObjectProp mc_prop{};
         mc_prop.numDevices = ranks;

@@ -1139,4 +1139,24 @@ void invokeMoeSoftmaxMaskTopKGroups(
     std::abort();
 }
 
+void invokeMoeScan_v2(int*         f2n,
+                      int*         f2E,
+                      int*         en2f,
+                      int*         offsets,
+                      int8_t*      masks,
+                      const int*   accum,
+                      int          log_tile,
+                      int          tiles,
+                      int          tokens,
+                      int          tokens_padded,
+                      int          experts,
+                      cudaStream_t st)
+{
+    constexpr int base_log_tile = 9;
+    constexpr int threads       = (1 << base_log_tile) / kMoeGateVecSize;
+    const dim3    blocks(tiles, experts + 1);
+    MoeScanKernel_v2<threads><<<blocks, threads, 0, st>>>(
+        f2n, f2E, en2f, offsets, masks, accum, log_tile, tiles, tokens, tokens_padded, experts);
+}
+
 }  // namespace turbomind

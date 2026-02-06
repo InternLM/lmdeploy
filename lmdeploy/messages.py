@@ -249,6 +249,7 @@ class TurbomindEngineConfig:
     tp: int = 1
     dp: int = 1
     cp: int = 1
+    ep: int = 1
     device_num: int = None
     attn_tp_size: int = None
     attn_cp_size: int = None

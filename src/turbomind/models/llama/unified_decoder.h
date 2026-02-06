@@ -30,9 +30,11 @@ private:
     const size_t hidden_units_;
 
     const int attn_tp_size_;
+    const int attn_tp_rank_;
     const int attn_dp_size_;
     const int attn_dp_rank_;
     const int mlp_tp_size_;
+    const int ep_size_;
 
     const int attn_tp_group_;
 
@@ -47,15 +49,6 @@ private:
     std::unique_ptr<UnifiedAttentionLayer> attn_layer_;
     std::unique_ptr<LlamaFfnLayer>         ffn_layer_;
     std::unique_ptr<MoeFfnLayer>           moe_ffn_layer_;
-
-    void AllreduceResidualRMSnorm(Tensor&       hidden_states,
-                                  Tensor&       residual,
-                                  const Tensor& bias,
-                                  const Tensor& weight,
-                                  int           token_num,
-                                  int           t0,
-                                  int           t1,
-                                  const int*    local_token_nums);
 };
 
 }  // namespace turbomind

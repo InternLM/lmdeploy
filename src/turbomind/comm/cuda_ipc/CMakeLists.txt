@@ -8,6 +8,10 @@ add_library(cuda_ipc_comm STATIC
         allgather.cu
         fused_allreduce.cu
         fused_allreduce_ex.cu
+        a2a_dispatch.cu
+        a2a_combine.cu
+        reduce_scatterv.cu
+        allgatherv.cu
         broadcast.cu)
 
 target_link_libraries(cuda_ipc_comm PRIVATE
