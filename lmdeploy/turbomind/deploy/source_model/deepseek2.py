@@ -13,7 +13,7 @@ class DeepSeek2Reader(LlamaReader):
 
     def moe_ffn_expert(self, e=None, i=None, kind=None):
         if not kind:
-            return self.filter(r'experts')
+            return self.filter(r'experts', i)
         result = []
         for key in ['gate', 'down', 'up']:
             name = f'model.layers.{i}.mlp.experts.{e}.{key}_proj.{kind}'
@@ -25,7 +25,7 @@ class DeepSeek2Reader(LlamaReader):
     def _ffn(self, i: int, kind: str):
         """Get ffn kind for layer i."""
         if not kind:
-            return self.filter(r'mlp' if i == 0 else r'shared_expert\.')
+            return self.filter(r'mlp' if i == 0 else r'shared_expert\.', i)
         result = []
         for key in ['gate', 'down', 'up']:
             name = f'model.layers.{i}.mlp.shared_experts.{key}_proj.{kind}'
@@ -38,7 +38,7 @@ class DeepSeek2Reader(LlamaReader):
 
     def mla(self, i: int, kind: str):
         if not kind:
-            return self.filter(r'self_attn.*proj')
+            return self.filter(r'self_attn.*proj', i)
         result = []
         for key in ['q_a_proj', 'q_b_proj', 'q_proj', 'kv_a_proj_with_mqa', 'kv_b_proj', 'o_proj']:
             tensor = self.params.get(f'{self.attn_layer_prefix}.{i}.self_attn.{key}.{kind}')
