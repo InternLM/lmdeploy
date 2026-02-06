@@ -72,12 +72,13 @@ class CustomOpManager:
 
     def __init__(self):
         from itertools import count
+        from weakref import WeakValueDictionary
         self._custom_ops = dict()
         self._split_prefill_ops = set()
         self._split_decoding_ops = set()
 
         # register mod instances
-        self._mod_instances = dict()
+        self._mod_instances = WeakValueDictionary()
         self.counter = count()
 
     def register_mod_instance(self, instance: Any):

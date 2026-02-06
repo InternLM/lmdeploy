@@ -7,7 +7,7 @@ import torch
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.backends.deepep_moe_checker import get_moe_backend
 from lmdeploy.pytorch.backends.moe import FusedMoEBuilder, FusedMoEImpl
-from lmdeploy.pytorch.compile_util import custom_op
+from lmdeploy.pytorch.compile_util import custom_op, get_custom_op_manager
 from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.kernels.cuda import fused_moe
 from lmdeploy.pytorch.kernels.cuda.fused_moe import _renormalize
@@ -358,78 +358,28 @@ def build_deepep_moe(
                               out_dtype=out_dtype)
 
 
-def fused_moe_ep_forward_impl(
-    hidden_states: torch.Tensor,
-    topk_weights: torch.Tensor,
-    topk_ids: torch.Tensor,
-    gate_up_weights: torch.Tensor,
-    down_weights: torch.Tensor,
-    ep_size: int,
-    ep_group: dist.ProcessGroup,
-    num_experts: int,
-    hidden_dim: int,
-    top_k: int,
-    layer_idx: int = 0,
-    renormalize: bool = False,
-    out_dtype: torch.dtype = torch.bfloat16,
-) -> torch.Tensor:
-    """Fused moe ep forward."""
-    hidden_states, topk_weights, topk_ids, split_size = split_inputs_by_attn_tp(hidden_states, topk_weights, topk_ids)
-    topk_weights = _renormalize(topk_weights, renormalize)
-    step_ctx = get_step_ctx_manager().current_context()
-    low_latency_mode = step_ctx.is_decoding
-    moe = build_deepep_moe(low_latency_mode,
-                           ep_size,
-                           ep_group,
-                           num_experts,
-                           hidden_dim,
-                           top_k=top_k,
-                           layer_idx=layer_idx,
-                           out_dtype=out_dtype)
-    out_states = moe.forward(hidden_states, topk_weights, topk_ids, gate_up_weights, down_weights)
-
-    out_states = gather_outputs_by_attn_tp(out_states, split_size)
-    return out_states
-
-
 @custom_op('lmdeploy::fused_moe_ep_forward', mutates_args=[], split_prefill=True, split_decoding=False)
 def fused_moe_ep_forward(
+    mod_key: int,
     hidden_states: torch.Tensor,
     topk_weights: torch.Tensor,
     topk_ids: torch.Tensor,
     gate_up_weights: torch.Tensor,
     down_weights: torch.Tensor,
-    ep_size: int,
-    num_experts: int,
-    hidden_dim: int,
-    top_k: int,
-    layer_idx: int = 0,
-    renormalize: bool = False,
-    out_dtype: torch.dtype = torch.bfloat16,
 ) -> torch.Tensor:
     """Fused moe ep forward."""
-    from lmdeploy.pytorch.distributed import get_dist_manager
-    dist_ctx = get_dist_manager().current_context()
-    ep_group = dist_ctx.ep_gpu_group
-    return fused_moe_ep_forward_impl(
+    mod = get_custom_op_manager().get_mod_instance(mod_key)  # ensure mod instance is alive
+    return mod.forward_impl(
         hidden_states,
         topk_weights,
         topk_ids,
         gate_up_weights,
         down_weights,
-        ep_size=ep_size,
-        ep_group=ep_group,
-        num_experts=num_experts,
-        hidden_dim=hidden_dim,
-        top_k=top_k,
-        layer_idx=layer_idx,
-        renormalize=renormalize,
-        out_dtype=out_dtype,
     )
 
 
 @fused_moe_ep_forward.register_fake
-def _(hidden_states: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+def _(mod_key: int, hidden_states: torch.Tensor, *args, **kwargs) -> torch.Tensor:
     """Fake fused moe ep forward for shape inference."""
     return torch.empty_like(hidden_states)
 
@@ -471,9 +421,31 @@ class FusedMoEEPImpl(TritonFusedMoEImpl):
 
         # pre-allocate buffer
         self.fusedmoe_build(True)
+        self.mod_key = get_custom_op_manager().register_mod_instance(self)
 
     def update_weights(self, gate_up_weights: torch.Tensor, down_weights: torch.Tensor):
         return gate_up_weights, down_weights
+
+    def forward_impl(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.LongTensor,
+                     gate_up_weights: torch.Tensor, down_weights: torch.Tensor):
+        """Forward impl."""
+        hidden_states, topk_weights, topk_ids, split_size = split_inputs_by_attn_tp(hidden_states, topk_weights,
+                                                                                    topk_ids)
+        topk_weights = _renormalize(topk_weights, self.renormalize)
+        step_ctx = get_step_ctx_manager().current_context()
+        low_latency_mode = step_ctx.is_decoding
+        moe = build_deepep_moe(low_latency_mode,
+                               self.ep_size,
+                               self.ep_group,
+                               self.num_experts,
+                               self.hidden_dim,
+                               top_k=self.top_k,
+                               layer_idx=self.layer_idx,
+                               out_dtype=self.out_dtype)
+        out_states = moe.forward(hidden_states, topk_weights, topk_ids, gate_up_weights, down_weights)
+
+        out_states = gather_outputs_by_attn_tp(out_states, split_size)
+        return out_states
 
     def forward(self,
                 hidden_states: torch.Tensor,
@@ -489,34 +461,20 @@ class FusedMoEEPImpl(TritonFusedMoEImpl):
         assert act_func is None, 'Activation function is not supported in DeepEP MoE.'
         if torch.compiler.is_compiling():
             return fused_moe_ep_forward(
+                self.mod_key,
                 hidden_states,
                 topk_weights,
                 topk_ids,
                 gate_up_weights,
                 down_weights,
-                ep_size=self.ep_size,
-                num_experts=self.num_experts,
-                hidden_dim=self.hidden_dim,
-                top_k=self.top_k,
-                layer_idx=self.layer_idx,
-                renormalize=self.renormalize,
-                out_dtype=self.out_dtype,
             )
         else:
-            return fused_moe_ep_forward_impl(
+            return self.forward_impl(
                 hidden_states,
                 topk_weights,
                 topk_ids,
                 gate_up_weights,
                 down_weights,
-                ep_size=self.ep_size,
-                ep_group=self.ep_group,
-                num_experts=self.num_experts,
-                hidden_dim=self.hidden_dim,
-                top_k=self.top_k,
-                layer_idx=self.layer_idx,
-                renormalize=self.renormalize,
-                out_dtype=self.out_dtype,
             )
 
     def ep_expert_list(self, world_size: int, rank: int):

@@ -4,7 +4,7 @@ import functools
 
 import torch
 
-from lmdeploy.pytorch.compile_util import CustomOpManager, custom_op
+from lmdeploy.pytorch.compile_util import custom_op, get_custom_op_manager
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 from lmdeploy.utils import get_logger
 
@@ -142,7 +142,7 @@ class FlashMLAImpl(TritonAttentionImpl):
 
         self.nsa_updater = NSAIndicesUpdater.build()
 
-        self.mod_key = CustomOpManager().register_mod_instance(self)
+        self.mod_key = get_custom_op_manager().register_mod_instance(self)
 
     def _get_flash_mla_sparse_fwd(self):
         if self.flash_mla_sparse_fwd is not None:
@@ -656,7 +656,7 @@ def flash_mla_attention_forward(
     nsa_indices: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Flash MLA attention forward op."""
-    instance: 'FlashMLAImpl' = CustomOpManager().get_mod_instance(mod_key)
+    instance: 'FlashMLAImpl' = get_custom_op_manager().get_mod_instance(mod_key)
     assert isinstance(instance, FlashMLAImpl)
     step_ctx = get_step_ctx_manager().current_context()
     attn_metadata: TritonAttentionMetadata = step_ctx.attn_metadata

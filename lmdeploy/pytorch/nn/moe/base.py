@@ -8,7 +8,7 @@ import torch.nn as nn
 
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.backends import OpType, get_backend
-from lmdeploy.pytorch.compile_util import CustomOpManager, custom_op
+from lmdeploy.pytorch.compile_util import custom_op, get_custom_op_manager
 from lmdeploy.pytorch.config import TPMode
 from lmdeploy.pytorch.distributed import get_dist_manager, get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
@@ -108,7 +108,7 @@ class MoEForwardDPTP:
         self.gather_group = tp_group.gpu_gather_group
         self.tp_group = tp_group.gpu_group
         self.max_tokens_per_round = max_tokens_per_round * self.attn_tp // self.tp
-        self.key = CustomOpManager().register_mod_instance(self)
+        self.key = get_custom_op_manager().register_mod_instance(self)
 
     def all_gather(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.Tensor,
                    tp_sizes: List[int]):
@@ -199,17 +199,12 @@ class MoEForwardDPTP:
         # wrap a custom op for torch.compile
         return moe_forward_dptp(hidden_states, topk_weights, topk_ids, key=self.key)
 
-    def __del__(self):
-        """Destructor."""
-        manager = CustomOpManager()
-        manager.unregister_mod_instance(self.key)
-
 
 @custom_op('lmdeploy::moe_forward_dptp', mutates_args=[], split_prefill=True, split_decoding=False)
 def moe_forward_dptp(hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.Tensor,
                      key: int) -> torch.Tensor:
     """MoE forward dptp."""
-    instance = CustomOpManager().get_mod_instance(key)
+    instance = get_custom_op_manager().get_mod_instance(key)
     if instance is None:
         raise RuntimeError('MoEForwardDPTP instance not found.')
     return instance.forward_impl(hidden_states, topk_weights, topk_ids)
