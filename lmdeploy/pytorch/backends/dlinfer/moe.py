@@ -4,8 +4,8 @@ from typing import Callable, List
 
 import torch
 
-from lmdeploy.pytorch.kernels.dlinfer import DlinferMoeMetada  # noqa: F401
-from lmdeploy.pytorch.kernels.dlinfer import DlinferMoeType  # noqa: F401
+from lmdeploy.pytorch.kernels.dlinfer import DlinferMoECommType  # noqa: F401
+from lmdeploy.pytorch.kernels.dlinfer import DlinferMoeMetadata  # noqa: F401
 from lmdeploy.pytorch.kernels.dlinfer import fused_moe, moe_gating_topk_softmax
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 

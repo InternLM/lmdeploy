@@ -150,7 +150,7 @@
 |   QWen2.5-VL   | 3B - 72B  | MLLM |       Yes        |       Yes        |       -       |       -       |      Yes       |        -         |    Yes    |    No     |
 |   QWen2-MoE    |  A14.57B  | LLM  |       Yes        |        -         |      No       |      No       |       -        |        -         |    Yes    |     -     |
 |     QWen3      | 0.6B-235B | LLM  |       Yes        |       Yes        |      No       |      No       |      Yes       |       Yes        |    Yes    |    Yes    |
-|  DeepSeek-V2   |    16B    | LLM  |       Yes        |       Yes        |      No       |      No       |       -        |        -         |     -     |     -     |
+|  DeepSeek-V2   |    16B    | LLM  |        No        |       Yes        |      No       |      No       |       -        |        -         |     -     |     -     |
 | InternVL(v1.5) |  2B-26B   | MLLM |       Yes        |        -         |      Yes      |      Yes      |       -        |        -         |    Yes    |     -     |
 |   InternVL2    |  1B-40B   | MLLM |       Yes        |       Yes        |      Yes      |      Yes      |      Yes       |        -         |    Yes    |    Yes    |
 |  InternVL2.5   |  1B-78B   | MLLM |       Yes        |       Yes        |      Yes      |      Yes      |      Yes       |        -         |    Yes    |    Yes    |
