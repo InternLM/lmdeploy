@@ -20,7 +20,7 @@ class GptOssReader(LlamaReader):
 
     def moe_ffn_expert(self, e=None, i=None, kind=None):
         if not kind:
-            return self.filter(r'experts')
+            return self.filter(r'experts', i)
         result = []
         for key in ['gate_up', 'down']:
             name = f'{self.attn_layer_prefix}.{i}.mlp.experts.{key}_proj.{kind}'

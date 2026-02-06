@@ -36,24 +36,38 @@ class LlamaReader(BaseReader):
         if tie_word_embeddings:
             self.output_weight_key = self.tok_embeddings_key
         self.processor = policy
-        if fp8_quant:
+        self.fp8_quant = fp8_quant
+        if self.fp8_quant:
             quant_params = self.quant_weight_fp8()
             self.params.update(quant_params)
 
     def quant_weight_fp8(self):
         from lmdeploy.lite.quantization.weight.quant_utils import quant_blocked_fp8
-        target_pattern = re.compile(self.proj_pattern)
+        if self.__class__.__name__ in ['Qwen2MoeReader', 'Qwen3MoeReader']:
+            ffn_pattern = r'mlp'
+        else:
+            ffn_pattern = self.ffn_pattern
+
+        pattern_str = fr'({self.attn_pattern}|{ffn_pattern}).*{self.proj_pattern}.*\.weight'
+        target_pattern = re.compile(pattern_str)
+
+        if self.__class__.__name__ == 'InternLM2Reader':
+            skip_pattern = re.compile(r'wqkv.*\.weight')
+        else:
+            skip_pattern = None
 
         quant_params = {}
         for name, weight in self.params.items():
             if target_pattern.search(name) and name.endswith('.weight'):
+                if skip_pattern and skip_pattern.search(name):
+                    continue
                 q_weight, scale = quant_blocked_fp8(weight, torch.float8_e4m3fn, block_size=128)
                 quant_params[name] = q_weight
                 quant_params[f'{name}{self.scale_inv_suffix}'] = scale.to(weight.dtype)
 
         return quant_params
 
-    def filter(self, pattern: str):
+    def filter(self, pattern: str, i: int | None):
         params = []
         for k in self.params.keys():
             if re.search(pattern, k):
@@ -86,7 +100,7 @@ class LlamaReader(BaseReader):
 
     def attn(self, i: int, kind: str):
         if not kind:
-            return self.filter(self.attn_pattern)
+            return self.filter(self.attn_pattern, i)
         return self._attn(i, kind)
 
     def attn_norm(self, i: int):
@@ -96,7 +110,7 @@ class LlamaReader(BaseReader):
     def _ffn(self, i: int, kind: str):
         """Get ffn kind for layer i."""
         if not kind:
-            return self.filter(self.ffn_pattern)
+            return self.filter(self.ffn_pattern, i)
         result = []
         for key in ['gate', 'down', 'up']:
             tensor = self.params[f'{self.attn_layer_prefix}.{i}.mlp.{key}_proj.{kind}']
@@ -106,7 +120,7 @@ class LlamaReader(BaseReader):
 
     def ffn(self, i: int, kind: str):
         if not kind:
-            return self.filter(self.ffn_pattern)
+            return self.filter(self.ffn_pattern, i)
         return self._ffn(i, kind)
 
     def ffn_norm(self, i: int):
