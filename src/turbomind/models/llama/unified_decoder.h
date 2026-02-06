@@ -31,12 +31,14 @@ private:
 
     const int attn_tp_size_;
     const int attn_tp_rank_;
+    const int attn_cp_size_;
+    const int attn_cp_rank_;
     const int attn_dp_size_;
     const int attn_dp_rank_;
     const int mlp_tp_size_;
     const int ep_size_;
 
-    const int attn_tp_group_;
+    const int attn_tp_group_;  // attn_tp x attn_cp
 
     const float rmsnorm_eps_;
 

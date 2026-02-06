@@ -25,8 +25,8 @@ struct FusedRMSNormLayer {
         Tensor                  global_hidden_states;
         Tensor                  local_hidden_states;
         Tensor                  local_residual;
-        int                     attn_tp_size;
-        int                     attn_tp_rank;
+        int                     tp_size;
+        int                     tp_rank;
         int                     attn_dp_rank;
         int                     ep_size;
         size_t                  hidden_units;
@@ -53,25 +53,24 @@ struct FusedRMSNormLayer {
     FusedRMSNormLayer(Param param): mode_(param.ep_size > 1 ? FFnMode::kEP : FFnMode::kTP), param_(param)
     {
         if (mode_ == FFnMode::kEP) {
-            token_nums_.reserve(param_.attn_tp_size);
-            counts_.reserve(param_.attn_tp_size);
+            token_nums_.reserve(param_.tp_size);
+            counts_.reserve(param_.tp_size);
 
             const int local_token_num = param_.local_token_nums[param_.attn_dp_rank];
 
-            int q = local_token_num / param_.attn_tp_size;
-            int r = local_token_num % param_.attn_tp_size;
+            int q = local_token_num / param_.tp_size;
+            int r = local_token_num % param_.tp_size;
             int offset{};
-            for (int i = 0; i < param_.attn_tp_size; ++i) {
+            for (int i = 0; i < param_.tp_size; ++i) {
                 token_nums_.push_back(q + (i < r ? 1 : 0));
                 counts_.push_back(token_nums_[i] * param_.hidden_units);
-                if (i < param_.attn_tp_rank) {
+                if (i < param_.tp_rank) {
                     offset += token_nums_[i];
                 }
             }
 
-            partial_hidden_states_ =
-                param_.local_hidden_states.slice({offset, 0}, {token_nums_[param_.attn_tp_rank], -1});
-            partial_local_residual_ = param_.local_residual.slice({offset, 0}, {token_nums_[param_.attn_tp_rank], -1});
+            partial_hidden_states_  = param_.local_hidden_states.slice({offset, 0}, {token_nums_[param_.tp_rank], -1});
+            partial_local_residual_ = param_.local_residual.slice({offset, 0}, {token_nums_[param_.tp_rank], -1});
         }
     }
 
@@ -164,7 +163,7 @@ struct FusedRMSNormLayer {
                                   bias.data_or((void*)nullptr),
                                   partial_hidden_states_.dtype(),
                                   param_.hidden_units,
-                                  token_nums_[param_.attn_tp_rank],
+                                  token_nums_[param_.tp_rank],
                                   param_.rmsnorm_eps,
                                   stream);
         sync_check_cuda_error();
@@ -203,6 +202,8 @@ UnifiedDecoder::UnifiedDecoder(const ModelParam&     model,
     hidden_units_(model.hidden_units),
     attn_tp_size_(engine.attn_tp_size),
     attn_tp_rank_(engine.attn_tp_rank),
+    attn_cp_size_(engine.attn_cp_size),
+    attn_cp_rank_(engine.attn_cp_rank),
     attn_dp_size_(engine.attn_dp_size),
     attn_dp_rank_(engine.attn_dp_rank),
     mlp_tp_size_(engine.mlp_tp_size),
@@ -293,8 +294,8 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
     FusedRMSNormLayer fused_rms_norm_layer({global_hidden_states,
                                             local_hidden_states,
                                             local_residual,
-                                            attn_tp_size_,
-                                            attn_tp_rank_,
+                                            attn_tp_size_ * attn_cp_size_,
+                                            attn_tp_rank_ * attn_cp_size_ + attn_cp_rank_,
                                             attn_dp_rank_,
                                             ep_size_,
                                             hidden_units_,
