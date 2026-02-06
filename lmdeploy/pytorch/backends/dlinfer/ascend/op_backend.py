@@ -47,7 +47,7 @@ class SocVersion:
 
     @classmethod
     @lru_cache(maxsize=1)
-    def soc_version(cls) -> str:
+    def soc_version(cls) -> int:
         return torch.npu.get_soc_version()
 
     @classmethod
@@ -318,7 +318,6 @@ class AscendOpsBackend(DlinferOpsBackend):
             mc2_token_capacity = init_mc2_token_capacity(tp_size)
             is_graph = cls.enable_graph and step_context.is_decoding
             if is_graph:
-                import math
                 max_tokens_across_dp = math.ceil(max_tokens_across_dp / tp_size) * tp_size
             if SocVersion.is_A2():
                 if max_tokens_across_dp <= mc2_token_capacity and dp_size * tp_size >= 16:
@@ -337,8 +336,8 @@ class AscendOpsBackend(DlinferOpsBackend):
                          moe_comm_type):
             x_active_mask = None
             if moe_comm_type == DlinferMoECommType.MC2:
-                paded_size = math.ceil(max_tokens_across_dp / tp_size) * tp_size
-                pad_size = paded_size - padded_tokens_current_rank
+                padded_size = math.ceil(max_tokens_across_dp / tp_size) * tp_size
+                pad_size = padded_size - padded_tokens_current_rank
                 x_active_mask = torch.ones(actual_tokens_current_rank,
                                            dtype=torch.bool,
                                            device=torch.npu.current_device())
