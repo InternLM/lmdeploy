@@ -17,7 +17,7 @@ on:
         required: true
         description: 'Tested TurboMind models list. eg. [turbomind_qwen2_5_1_5b, turbomind_qwen2_5_7b, turbomind_qwen2_5_32b, turbomind_internlm2_5_7b, turbomind_glm_4_9b, turbomind_llama_3_1_8b, turbomind_llama_3_70b, pytorch_qwen2_5_1_5b, pytorch_qwen2_5_7b, pytorch_qwen2_5_32b, pytorch_internlm2_5_7b, pytorch_gemma_2_9b, pytorch_llama_3_70b, pytorch_llama_3_1_8b]'
         type: string
-        default: '[turbomind_qwen2_5_1_5b, turbomind_qwen2_5_7b, turbomind_qwen2_5_32b, turbomind_internlm2_5_7b, turbomind_glm_4_9b, turbomind_llama_3_1_8b, turbomind_llama_3_70b, pytorch_qwen2_5_1_5b, pytorch_qwen2_5_7b, pytorch_qwen2_5_32b, pytorch_internlm2_5_7b, pytorch_gemma_2_9b, pytorch_llama_3_70b, pytorch_llama_3_1_8b]'
+        default: '[turbomind_qwen2_5_1_5b, turbomind_qwen2_5_7b, turbomind_qwen2_5_32b, turbomind_internlm2_5_7b, turbomind_glm_4_9b, turbomind_llama_3_1_8b, turbomind_llama_3_70b, turbomind_qwen3_8b_base, turbomind_qwen3_30b_A3B_base, pytorch_qwen2_5_1_5b, pytorch_qwen2_5_7b, pytorch_qwen2_5_32b, pytorch_internlm2_5_7b, pytorch_gemma_2_9b, pytorch_llama_3_70b, pytorch_llama_3_1_8b, pytorch_qwen3_8b_base, pytorch_qwen3_30b_A3B_base]'
       baes_datasets:
         required: true
         description: 'Tested datasets list. eg. [*mmlu_datasets, *gsm8k_datasets]'
@@ -135,6 +135,8 @@ jobs:
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r /root/models/offline_pkg/requirements.txt
+          python3 -m pip install torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cu128
+          python3 -m pip install nvidia-nccl-cu12==2.29.3
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
