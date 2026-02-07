@@ -175,6 +175,8 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
+          python3 -m pip install torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cu128
+          python3 -m pip install nvidia-nccl-cu12==2.29.3
       - name: Check env
         run: |
           python3 -m pip list
@@ -251,6 +253,8 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
+          python3 -m pip install torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cu128
+          python3 -m pip install nvidia-nccl-cu12==2.29.3
       - name: Check env
         run: |
           python3 -m pip list
@@ -332,6 +336,8 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
+          python3 -m pip install torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cu128
+          python3 -m pip install nvidia-nccl-cu12==2.29.3
       - name: Check env
         run: |
           python3 -m pip list
@@ -410,6 +416,8 @@ jobs:
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
+          python3 -m pip install torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cu128
+          python3 -m pip install nvidia-nccl-cu12==2.29.3
       - name: Get coverage report
         run: |
           pip install coverage
