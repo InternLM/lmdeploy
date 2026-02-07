@@ -63,6 +63,7 @@ class Qwen3ToolParser(ToolParser):
         # tool call
         try:
             start_idx = parsing_content.index(self.tool_start_token)
+            # move to the beginning of tool_start_token
             parser_state.position += start_idx
         except ValueError:
             parser_state.position += len(parsing_content)
@@ -70,8 +71,10 @@ class Qwen3ToolParser(ToolParser):
         try:
             end_idx = parsing_content.index(self.tool_end_token)
         except ValueError:
+            # position holds until tool_end_token is found
             return parsing_content[:start_idx], '', False
-        parser_state.position += len(parsing_content)
+        # move position to the beginning of tool_end_token
+        parser_state.position += (end_idx - start_idx) + len(self.tool_end_token)
         return parsing_content[:start_idx], parsing_content[start_idx + len(self.tool_start_token):end_idx], True
 
     def _parse_delta_tool_call(self, parser_state: ParserState, tool_content: str) -> Optional[DeltaToolCall]:
@@ -83,7 +86,7 @@ class Qwen3ToolParser(ToolParser):
         try:
             tool_call_arr: Dict = json.loads(parsable_arr)
         except json.JSONDecodeError:
-            logger.debug('cannot parse into JSON yet')
+            logger.debug(f'cannot parse tool call info {tool_content} into JSON yet')
             return
 
         fcall = DeltaFunctionCall()
