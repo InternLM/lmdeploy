@@ -63,6 +63,7 @@ class Qwen3ToolParser(ToolParser):
         # tool call
         try:
             start_idx = parsing_content.index(self.tool_start_token)
+            parser_state.position += start_idx
         except ValueError:
             parser_state.position += len(parsing_content)
             return parsing_content, '', False
