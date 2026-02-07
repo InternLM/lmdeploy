@@ -12,12 +12,10 @@ from http import HTTPStatus
 from typing import AsyncGenerator, Dict, List, Literal, Optional, Union
 
 import uvicorn
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
-from fastapi.encoders import jsonable_encoder
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.routing import Mount
 
@@ -85,32 +83,14 @@ class VariableInterface:
 
 
 router = APIRouter()
-get_bearer_token = HTTPBearer(auto_error=False)
 server_context = VariableInterface()
 
 
-async def check_api_key(auth: Optional[HTTPAuthorizationCredentials] = Depends(get_bearer_token), ) -> str:
-    """Check if client provide valid api key.
-
-    Adopted from https://github.com/lm-sys/FastChat/blob/v0.2.35/fastchat/serve/openai_api_server.py#L108-L127
-    """  # noqa
-    if VariableInterface.api_keys:
-        if auth is None or (token := auth.credentials) not in VariableInterface.api_keys:
-            raise HTTPException(
-                status_code=401,
-                detail={
-                    'error': {
-                        'message': 'Please request with valid api key!',
-                        'type': 'invalid_request_error',
-                        'param': None,
-                        'code': 'invalid_api_key',
-                    }
-                },
-            )
-        return token
-    else:
-        # api_keys not set; allow all
-        return None
+async def validate_json_request(raw_request: Request):
+    content_type = raw_request.headers.get('content-type', '').lower()
+    media_type = content_type.split(';', maxsplit=1)[0]
+    if media_type != 'application/json':
+        raise RequestValidationError(errors=["Unsupported Media Type: Only 'application/json' is allowed"])
 
 
 def get_model_list():
@@ -124,7 +104,7 @@ def get_model_list():
     return model_names
 
 
-@router.get('/v1/models', dependencies=[Depends(check_api_key)])
+@router.get('/v1/models')
 def available_models():
     """Show available models."""
     model_cards = []
@@ -318,7 +298,7 @@ def logit_bias_logits_processor(logit_bias: Union[Dict[int, float], Dict[str, fl
     return partial(_logit_bias_processor, clamped_logit_bias)
 
 
-@router.post('/v1/chat/completions', dependencies=[Depends(check_api_key)])
+@router.post('/v1/chat/completions', dependencies=[Depends(validate_json_request)])
 async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
@@ -704,7 +684,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     return response
 
 
-@router.post('/v1/completions', dependencies=[Depends(check_api_key)])
+@router.post('/v1/completions', dependencies=[Depends(validate_json_request)])
 async def completions_v1(request: CompletionRequest, raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
@@ -948,7 +928,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     return response
 
 
-@router.post('/generate', dependencies=[Depends(check_api_key)])
+@router.post('/generate', dependencies=[Depends(validate_json_request)])
 async def generate(request: GenerateReqInput, raw_request: Request = None):
     error_check_ret = check_request(request)
     if error_check_ret is not None:
@@ -1068,7 +1048,7 @@ async def create_embeddings(request: EmbeddingsRequest, raw_request: Request = N
     return create_error_response(HTTPStatus.BAD_REQUEST, 'Unsupported by turbomind.')
 
 
-@router.post('/v1/encode', dependencies=[Depends(check_api_key)])
+@router.post('/v1/encode', dependencies=[Depends(validate_json_request)])
 async def encode(request: EncodeRequest, raw_request: Request = None):
     """Encode prompts.
 
@@ -1098,7 +1078,7 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
         return EncodeResponse(input_ids=encoded, length=length)
 
 
-@router.post('/pooling')
+@router.post('/pooling', dependencies=[Depends(validate_json_request)])
 async def pooling(request: PoolingRequest, raw_request: Request = None):
     """Pooling prompts for reward model.
 
@@ -1152,21 +1132,21 @@ async def pooling(request: PoolingRequest, raw_request: Request = None):
     return response.model_dump()
 
 
-@router.post('/update_weights', dependencies=[Depends(check_api_key)])
+@router.post('/update_weights', dependencies=[Depends(validate_json_request)])
 def update_params(request: UpdateParamsRequest, raw_request: Request = None):
     """Update weights for the model."""
     VariableInterface.async_engine.engine.update_params(request)
     return JSONResponse(content=None)
 
 
-@router.post('/sleep', dependencies=[Depends(check_api_key)])
+@router.post('/sleep', dependencies=[Depends(validate_json_request)])
 async def sleep(raw_request: Request = None):
     level = raw_request.query_params.get('level', '1')
     VariableInterface.async_engine.sleep(int(level))
     return Response(status_code=200)
 
 
-@router.post('/wakeup', dependencies=[Depends(check_api_key)])
+@router.post('/wakeup', dependencies=[Depends(validate_json_request)])
 async def wakeup(raw_request: Request = None):
     tags = raw_request.query_params.getlist('tags')
     tags = tags or None
@@ -1174,7 +1154,7 @@ async def wakeup(raw_request: Request = None):
     return Response(status_code=200)
 
 
-@router.get('/is_sleeping', dependencies=[Depends(check_api_key)])
+@router.get('/is_sleeping', dependencies=[Depends(validate_json_request)])
 async def is_sleeping(raw_request: Request = None):
     is_sleeping = VariableInterface.async_engine.is_sleeping
     return JSONResponse(content={'is_sleeping': is_sleeping})
@@ -1240,7 +1220,7 @@ async def abort_request(request: AbortRequest, raw_request: Request = None):
     return Response(status_code=200)
 
 
-@router.post('/v1/chat/interactive', dependencies=[Depends(check_api_key)], include_in_schema=False)
+@router.post('/v1/chat/interactive', dependencies=[Depends(validate_json_request)], include_in_schema=False)
 async def chat_interactive_v1(request, raw_request: Request = None):
     return create_error_response(
         HTTPStatus.BAD_REQUEST, 'v1/chat/interactive is deprecated, please launch server with --enable-prefix-cache '
@@ -1294,13 +1274,7 @@ async def shutdown_event():
 
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """Handler for RequestValidationError."""
-    return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content=jsonable_encoder({
-            'detail': exc.errors(),
-            'body': exc.body
-        }),
-    )
+    return JSONResponse(status_code=exc.status_code, content=exc.detail, headers=exc.headers)
 
 
 class ConcurrencyLimitMiddleware(BaseHTTPMiddleware):
@@ -1515,6 +1489,11 @@ def serve(model_path: str,
             allow_methods=allow_methods,
             allow_headers=allow_headers,
         )
+
+    if api_keys is not None and (tokens := [key for key in api_keys if key]):
+        from .server_utils import AuthenticationMiddleware
+
+        app.add_middleware(AuthenticationMiddleware, tokens=tokens)
 
     # set the maximum number of concurrent requests
     if max_concurrent_requests is not None:

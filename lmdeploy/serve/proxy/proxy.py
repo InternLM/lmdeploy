@@ -16,7 +16,7 @@ import aiohttp
 import numpy as np
 import requests
 import uvicorn
-from fastapi import BackgroundTasks, Depends, FastAPI, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -25,7 +25,7 @@ from lmdeploy.pytorch.disagg.config import DistServeRDMAConfig, EngineRole, RDMA
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol, MigrationRequest
 from lmdeploy.pytorch.disagg.conn.proxy_conn import PDConnectionPool
 from lmdeploy.pytorch.disagg.messages import PDConnectionMessage
-from lmdeploy.serve.openai.api_server import check_api_key, create_error_response
+from lmdeploy.serve.openai.api_server import create_error_response
 from lmdeploy.serve.openai.protocol import ModelCard  # noqa: E501
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, CompletionRequest, ModelList, ModelPermission
 from lmdeploy.serve.proxy.constants import AIOHTTP_TIMEOUT, LATENCY_DEQUE_LEN, ErrorCodes, RoutingStrategy, err_msg
@@ -57,6 +57,57 @@ def heart_beat_controller(proxy_controller):
         time.sleep(CONTROLLER_HEART_BEAT_EXPIRATION)
         logger.info('Start heart beat check')
         proxy_controller.remove_stale_nodes_by_expiration()
+
+
+class ProxyStreamingResponse(StreamingResponse):
+    """StreamingResponse that can handle exceptions thrown by the generator."""
+
+    async def stream_response(self, send) -> None:
+        try:
+            async for chunk in self.body_iterator:
+                await send({
+                    'type': 'http.response.body',
+                    'body': chunk,
+                    'more_body': True,
+                })
+        except HTTPException as e:
+            # when the generator throws an HTTPException, send the error response
+            error_response = {'status_code': e.status_code, 'detail': e.detail}
+            error_body = json.dumps(error_response).encode()
+
+            # send the error headers
+            await send({
+                'type': 'http.response.start',
+                'status': e.status_code,
+                'headers': [
+                    [b'content-type', b'application/json'],
+                ]
+            })
+
+            # send the error body
+            await send({
+                'type': 'http.response.body',
+                'body': error_body,
+                'more_body': False,
+            })
+        except Exception as e:
+            # handle other exceptions
+            error_response = {'status_code': 500, 'detail': str(e)}
+            error_body = json.dumps(error_response).encode()
+
+            await send({
+                'type': 'http.response.start',
+                'status': 500,
+                'headers': [
+                    [b'content-type', b'application/json'],
+                ]
+            })
+
+            await send({
+                'type': 'http.response.body',
+                'body': error_body,
+                'more_body': False,
+            })
 
 
 class NodeManager:
@@ -372,6 +423,44 @@ class NodeManager:
             logger.error(f'catched an exception: {e}')
             return self.handle_api_timeout(node_url)
 
+    async def forward_raw_stream(self, raw_request: Request, node_url: str, endpoint: str):
+        try:
+            target_url = node_url.rstrip('/') + endpoint
+            headers = self._prepare_headers(raw_request)
+            body_bytes = await raw_request.body()
+            async with aiohttp.ClientSession() as session:
+                async with session.post(target_url, headers=headers, data=body_bytes,
+                                        timeout=self.aiotimeout) as response:
+                    if response.status != 200:
+                        error_body = await response.read()
+                        error_body = json.loads(error_body.decode('utf-8'))
+                        print(f'error_body: {error_body}')
+                        raise HTTPException(status_code=response.status, detail=error_body['detail'])
+                    async for line in response.content:
+                        if line.strip():
+                            yield line + b'\n\n'
+
+        except HTTPException:
+            # raise HTTPException again to be caught by the outer layer
+            raise
+        except (Exception, GeneratorExit, aiohttp.ClientError) as e:  # noqa
+            logger.error(f'catched an exception: {e}')
+            # exception happened, reduce unfinished num
+            yield self.handle_api_timeout(node_url)
+
+    async def forward_raw_request(self, raw_request: Request, node_url: str, endpoint: str):
+        try:
+            target_url = node_url.rstrip('/') + endpoint
+            headers = self._prepare_headers(raw_request)
+            body_bytes = await raw_request.body()
+            async with aiohttp.ClientSession() as session:
+                async with session.post(target_url, headers=headers, data=body_bytes,
+                                        timeout=self.aiotimeout) as response:
+                    return await response.text()
+        except (Exception, GeneratorExit, aiohttp.ClientError, asyncio.CancelledError) as e:  # noqa  # yapf: disable
+            logger.error(f'catched an exception: {e}')
+            return self.handle_api_timeout(node_url)
+
     def pre_call(self, node_url):
         """Preprocess before the request get processed.
 
@@ -403,6 +492,18 @@ class NodeManager:
         background_tasks.add_task(self.post_call, url, start)
         return background_tasks
 
+    def _prepare_headers(self, raw_request: Request) -> Dict[str, str]:
+        headers = dict((name, value) for name, value in raw_request.headers.items() if name.lower() != 'host')
+
+        client_ip = raw_request.client.host if raw_request.client else 'unknown'
+        headers.update({
+            'X-Forwarded-For': client_ip,
+            'X-Forwarded-Host': raw_request.headers.get('host', ''),
+            'X-Forwarded-Proto': raw_request.url.scheme,
+        })
+
+        return headers
+
 
 app = FastAPI(docs_url='/')
 app.add_middleware(
@@ -415,7 +516,7 @@ app.add_middleware(
 node_manager = NodeManager()
 
 
-@app.get('/v1/models', dependencies=[Depends(check_api_key)])
+@app.get('/v1/models')
 def available_models():
     """Show available models."""
     model_cards = []
@@ -424,7 +525,7 @@ def available_models():
     return ModelList(data=model_cards)
 
 
-@app.get('/nodes/status', dependencies=[Depends(check_api_key)])
+@app.get('/nodes/status')
 def node_status():
     """Show nodes status."""
     try:
@@ -433,7 +534,7 @@ def node_status():
         return False
 
 
-@app.post('/nodes/add', dependencies=[Depends(check_api_key)])
+@app.post('/nodes/add')
 def add_node(node: Node, raw_request: Request = None):
     """Add a node to the manager.
 
@@ -454,7 +555,7 @@ def add_node(node: Node, raw_request: Request = None):
         return 'Failed to add, please check the input url.'
 
 
-@app.post('/nodes/remove', dependencies=[Depends(check_api_key)])
+@app.post('/nodes/remove')
 def remove_node(node: Node):
     """Show available models."""
     try:
@@ -467,7 +568,7 @@ def remove_node(node: Node):
         return 'Failed to delete, please check the input url.'
 
 
-@app.post('/nodes/terminate', dependencies=[Depends(check_api_key)])
+@app.post('/nodes/terminate')
 def terminate_node(node: Node):
     """Terminate nodes."""
     try:
@@ -481,7 +582,7 @@ def terminate_node(node: Node):
         return 'Failed to terminate node {node_url}, please check the input url.'
 
 
-@app.get('/nodes/terminate_all', dependencies=[Depends(check_api_key)])
+@app.get('/nodes/terminate_all')
 def terminate_node_all():
     """Terminate nodes."""
     try:
@@ -514,7 +615,7 @@ async def cache_block_gc_to_be_migrated():
     raise NotImplementedError
 
 
-@app.post('/v1/chat/completions', dependencies=[Depends(check_api_key)])
+@app.post('/v1/chat/completions')
 async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
@@ -683,7 +784,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         raise ValueError(f'No serving strategy named {node_manager.serving_strategy}')
 
 
-@app.post('/v1/completions', dependencies=[Depends(check_api_key)])
+@app.post('/v1/completions')
 async def completions_v1(request: CompletionRequest, raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
@@ -876,6 +977,12 @@ def proxy(server_name: str = '0.0.0.0',
     if ssl:
         ssl_keyfile = os.environ['SSL_KEYFILE']
         ssl_certfile = os.environ['SSL_CERTFILE']
+
+    if api_keys is not None and (tokens := [key for key in api_keys if key]):
+        from lmdeploy.serve.openai.server_utils import AuthenticationMiddleware
+
+        app.add_middleware(AuthenticationMiddleware, tokens=tokens)
+
     logger.setLevel(log_level)
     uvicorn_log_level = os.getenv('UVICORN_LOG_LEVEL', 'info').lower()
     uvicorn.run(app=app,
