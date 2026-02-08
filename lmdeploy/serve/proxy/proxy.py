@@ -388,42 +388,7 @@ class NodeManager:
         }
         return json.dumps(ret).encode() + b'\n'
 
-    async def stream_generate(self, request: Dict, node_url: str, endpoint: str):
-        """Return a generator to handle the input request.
-
-        Args:
-            request (Dict): the input request.
-            node_url (str): the node url.
-            endpoint (str): the endpoint. Such as `/v1/chat/completions`.
-        """
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(node_url + endpoint, json=request, timeout=self.aiotimeout) as response:
-                    async for line in response.content:
-                        if line.strip():
-                            yield line + b'\n\n'
-        except (Exception, GeneratorExit, aiohttp.ClientError) as e:  # noqa
-            logger.error(f'catched an exception: {e}')
-            # exception happened, reduce unfinished num
-            yield self.handle_api_timeout(node_url)
-
-    async def generate(self, request: Dict, node_url: str, endpoint: str):
-        """Return a the response of the input request.
-
-        Args:
-            request (Dict): the input request.
-            node_url (str): the node url.
-            endpoint (str): the endpoint. Such as `/v1/chat/completions`.
-        """
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(node_url + endpoint, json=request, timeout=self.aiotimeout) as response:
-                    return await response.text()
-        except (Exception, GeneratorExit, aiohttp.ClientError, asyncio.CancelledError) as e:  # noqa  # yapf: disable
-            logger.error(f'catched an exception: {e}')
-            return self.handle_api_timeout(node_url)
-
-    async def forward_raw_stream(self, raw_request: Request, node_url: str, endpoint: str):
+    async def stream_generate(self, raw_request: Request, node_url: str, endpoint: str):
         try:
             target_url = node_url.rstrip('/') + endpoint
             headers = self._prepare_headers(raw_request)
@@ -448,7 +413,7 @@ class NodeManager:
             # exception happened, reduce unfinished num
             yield self.handle_api_timeout(node_url)
 
-    async def forward_raw_request(self, raw_request: Request, node_url: str, endpoint: str):
+    async def generate(self, raw_request: Request, node_url: str, endpoint: str):
         try:
             target_url = node_url.rstrip('/') + endpoint
             headers = self._prepare_headers(raw_request)
@@ -705,11 +670,11 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         request_dict = request.model_dump()
         start = node_manager.pre_call(node_url)
         if request.stream is True:
-            response = node_manager.stream_generate(request_dict, node_url, '/v1/chat/completions')
+            response = node_manager.stream_generate(raw_request, node_url, '/v1/chat/completions')
             background_task = node_manager.create_background_tasks(node_url, start)
             return StreamingResponse(response, background=background_task, media_type='text/event-stream')
         else:
-            response = await node_manager.generate(request_dict, node_url, '/v1/chat/completions')
+            response = await node_manager.generate(raw_request, node_url, '/v1/chat/completions')
             node_manager.post_call(node_url, start)
             return JSONResponse(json.loads(response))
     elif node_manager.serving_strategy == ServingStrategy.DistServe:
@@ -838,11 +803,11 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         request_dict = request.model_dump()
         start = node_manager.pre_call(node_url)
         if request.stream is True:
-            response = node_manager.stream_generate(request_dict, node_url, '/v1/completions')
+            response = node_manager.stream_generate(raw_request, node_url, '/v1/completions')
             background_task = node_manager.create_background_tasks(node_url, start)
             return StreamingResponse(response, background=background_task, media_type='text/event-stream')
         else:
-            response = await node_manager.generate(request_dict, node_url, '/v1/completions')
+            response = await node_manager.generate(raw_request, node_url, '/v1/completions')
             node_manager.post_call(node_url, start)
             return JSONResponse(json.loads(response))
     elif node_manager.serving_strategy == ServingStrategy.DistServe:
