@@ -5,6 +5,7 @@ Strategy: Separate attention operations (executed eagerly) from compute operatio
 (optimized with ACL Graph) using enable_graph_mode=True.
 """
 
+from collections import defaultdict
 from typing import Any, Callable, Tuple
 
 import torch
@@ -49,6 +50,7 @@ class LMDeployPiecewiseBackend:
         self._is_decoding = is_decoding
 
         self.splitting_ops = self.get_split_ops()
+        self._key = None
 
     def get_split_ops(self) -> list[str]:
         """Get the list of splitting operations."""
@@ -94,7 +96,7 @@ class LMDeployPiecewiseBackend:
                     f'example_inputs count: {len(example_inputs)}, '
                     f'is_decoding: {self._is_decoding}')
 
-        input_buffers = []
+        input_buffers = defaultdict(list)
         try:
             logger.debug('Step 1: Splitting graph...')
             split_gm, split_items = split_graph(gm, self.splitting_ops)
@@ -121,6 +123,7 @@ class LMDeployPiecewiseBackend:
                         is_last_graph=is_last,
                         pool=self._graph_pool,
                         input_buffers=input_buffers,
+                        backend=self,
                     )
 
                     split_gm.__dict__[submod_name] = wrapped
@@ -130,6 +133,12 @@ class LMDeployPiecewiseBackend:
         except Exception as e:
             logger.error(f'Error in LMDeployPiecewiseBackend: {e}', exc_info=True)
             raise
+
+    def set_key(self, key):
+        self._key = key
+
+    def get_key(self):
+        return self._key
 
     def reset(self) -> None:
         """Reset state (for testing)."""

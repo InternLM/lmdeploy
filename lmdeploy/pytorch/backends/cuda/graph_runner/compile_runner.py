@@ -62,6 +62,7 @@ class TorchCompileSinglePrefillRunner:
         self,
         model: torch.nn.Module,
         graph: Callable,
+        key: Any,
         max_batches: int,
         max_tokens: int,
         num_blocks: int,
@@ -74,6 +75,7 @@ class TorchCompileSinglePrefillRunner:
         self.graph = graph
         self.ctx_mgr = model.ctx_mgr
         self.model_config = model_config
+        self.key = key
 
         self.meta = CudaGraphMeta(
             max_batchs=max_batches,
@@ -130,12 +132,13 @@ class TorchCompilePrefillRunner:
         self.graph_pool_handle = graph_pool_handle
 
         self._runner_map: Dict[Any, TorchCompileSinglePrefillRunner] = dict()
+        self._compile_backend = create_backend(self.graph_pool_handle, is_decoding=False)
 
         self.graph = torch.compile(
             self.model.forward,
             fullgraph=PREFILL_FULLGRAPH,
             dynamic=False,
-            backend=create_backend(self.graph_pool_handle, is_decoding=False),
+            backend=self._compile_backend,
         )
 
     def _get_capture_tokens(self, num_tokens: int):
@@ -167,6 +170,7 @@ class TorchCompilePrefillRunner:
             runner = TorchCompileSinglePrefillRunner(
                 self.model,
                 self.graph,
+                key=graph_key,
                 max_batches=max_batches,
                 max_tokens=max_tokens,
                 num_blocks=self.cache_config.num_gpu_blocks,
@@ -177,11 +181,13 @@ class TorchCompilePrefillRunner:
             )
             self._runner_map[graph_key] = runner
         runner = self._runner_map[graph_key]
+        self._compile_backend.set_key(graph_key)
         return runner.forward(**kwargs)
 
     def reset(self):
         """Reset."""
         self._runner_map.clear()
+        self._compile_backend.reset()
 
 
 class TorchCompileSingleDecodingRunner:
@@ -190,6 +196,7 @@ class TorchCompileSingleDecodingRunner:
         self,
         model: torch.nn.Module,
         graph: Callable,
+        key: Any,
         max_batches: int,
         max_tokens: int,
         num_blocks: int,
@@ -202,6 +209,7 @@ class TorchCompileSingleDecodingRunner:
         self.graph = graph
         self.ctx_mgr = model.ctx_mgr
         self.model_config = model_config
+        self.key = key
 
         self.meta = CudaGraphMeta(
             max_batchs=max_batches,
@@ -257,11 +265,12 @@ class TorchCompileDecodingRunner:
 
         self._runner_map: Dict[Any, TorchCompileSingleDecodingRunner] = dict()
 
+        self._compile_backend = create_backend(self.graph_pool_handle, is_decoding=True)
         self.graph = torch.compile(
             self.model.forward,
             fullgraph=DECODING_FULLGRAPH,
             dynamic=False,
-            backend=create_backend(self.graph_pool_handle, is_decoding=True),
+            backend=self._compile_backend,
         )
 
     def _get_capture_tokens(self, batch_size: int):
@@ -308,6 +317,7 @@ class TorchCompileDecodingRunner:
             runner = TorchCompileSingleDecodingRunner(
                 self.model,
                 self.graph,
+                key=graph_key,
                 max_batches=max_batches,
                 max_tokens=max_tokens,
                 num_blocks=self.cache_config.num_gpu_blocks,
@@ -318,11 +328,13 @@ class TorchCompileDecodingRunner:
             )
             self._runner_map[graph_key] = runner
         runner = self._runner_map[graph_key]
+        self._compile_backend.set_key(graph_key)
         return runner.forward(**kwargs)
 
     def reset(self):
         """Reset."""
         self._runner_map.clear()
+        self._compile_backend.reset()
 
 
 class TorchCompileRunner(GraphRunner):

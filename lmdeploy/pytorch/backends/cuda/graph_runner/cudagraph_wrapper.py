@@ -114,7 +114,7 @@ def _mark_outputs_cudagraph(outputs: Any):
                 _mark_is_cudagraph_output(out)
 
 
-class CudagraphPiecewiseWrapper(nn.Module):
+class CudagraphPiecewiseWrapperImpl:
     """Wrapper to force eager execution.
 
     Features:
@@ -189,3 +189,46 @@ class CudagraphPiecewiseWrapper(nn.Module):
     def __del__(self):
         if self._graph is not None:
             del self._graph
+
+
+class CudagraphPiecewiseWrapper(nn.Module):
+    """Wrapper to force eager execution.
+
+    Features:
+    - Wraps operations or modules to always execute in eager mode
+    - Temporarily disables graph mode internally even when outer enable_graph_mode=True
+    """
+
+    def __init__(self, runnable: Callable, is_first_graph: bool, is_last_graph: bool, pool: Tuple[int, int],
+                 input_buffers: Dict[Any, List[torch.Tensor]], backend: Any):
+        super().__init__()
+        self.runnable = runnable
+        self.is_first_graph = is_first_graph
+        self.is_last_graph = is_last_graph
+
+        self.input_args = []
+        self.input_kwargs = {}
+        self.outputs = None
+        self.input_buffers = input_buffers
+        self.backend = backend
+
+        self._pool = pool
+
+        self.impl_map: Dict[Any, CudagraphPiecewiseWrapperImpl] = dict()
+
+    def forward(self, *args, **kwargs) -> Any:
+        key = self.backend.get_key()
+        if key not in self.impl_map:
+            buffers = self.input_buffers[key]
+            wrapper_impl = CudagraphPiecewiseWrapperImpl(
+                self.runnable,
+                self.is_first_graph,
+                self.is_last_graph,
+                pool=self._pool,
+                input_buffers=buffers,
+            )
+            self.impl_map[key] = wrapper_impl
+
+        wrapper_impl = self.impl_map[key]
+
+        return wrapper_impl.forward(*args, **kwargs)

@@ -117,7 +117,7 @@ class BatchedOutputs:
             k = f.name
             v = getattr(self, k)
             if isinstance(v, np.ndarray):
-                v = torch.from_numpy(v)
+                v = torch.from_numpy(v.copy())
             elif hasattr(v, 'to_tensor'):
                 v = v.to_tensor()
             out[k] = v

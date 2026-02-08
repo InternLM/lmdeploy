@@ -97,17 +97,12 @@ class CudaGraphMixin:
 
     def support_cuda_graph(
         self,
-        input_ids: torch.Tensor,
-        position_ids: torch.Tensor,
-        inputs_embeds: torch.Tensor = None,
+        *args,
         **kwargs,
     ):
         """Return True is model support cudagraph."""
-        if 'attn_metadata' in kwargs:
-            attn_metadata = kwargs['attn_metadata']
-        else:
-            step_ctx = get_step_ctx_manager().current_context()
-            attn_metadata = step_ctx.attn_metadata
+        step_ctx = get_step_ctx_manager().current_context()
+        attn_metadata = get_attn_metadata(kwargs, step_ctx)
         return attn_metadata.is_decoding
 
     def use_torch_compile(self) -> bool:
@@ -165,8 +160,9 @@ class CudaGraphMixin:
                                                    device=device)
         input_buffers['position_ids'] = torch.zeros((1, max_tokens), dtype=torch.int64, device=device)
 
-        torch._dynamo.mark_static_address(input_buffers['input_ids'])
-        torch._dynamo.mark_static_address(input_buffers['position_ids'])
+        # try reuse graph
+        torch._dynamo.mark_dynamic(input_buffers['input_ids'], 1)
+        torch._dynamo.mark_dynamic(input_buffers['position_ids'], 1)
 
         return input_buffers
 
