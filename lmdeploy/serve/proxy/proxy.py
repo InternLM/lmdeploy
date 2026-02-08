@@ -16,7 +16,7 @@ import aiohttp
 import numpy as np
 import requests
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -59,55 +59,71 @@ def heart_beat_controller(proxy_controller):
         proxy_controller.remove_stale_nodes_by_expiration()
 
 
+class APIServerException(Exception):
+
+    def __init__(self, status_code: int, body: str, headers: Optional[dict] = None):
+        self.status_code = status_code
+        self.body = body
+        self.headers = headers or {'content-type': 'application/json'}
+
+
 class ProxyStreamingResponse(StreamingResponse):
     """StreamingResponse that can handle exceptions thrown by the generator."""
 
+    def __init__(self, content, **kwargs):
+        super().__init__(content, **kwargs)
+
     async def stream_response(self, send) -> None:
+        iterator = self.body_iterator.__aiter__()
         try:
-            async for chunk in self.body_iterator:
+            # get the first chunk(stream_generate's first yield)
+            first_chunk = await iterator.__anext__()
+
+        except APIServerException as e:
+            await send({'type': 'http.response.start', 'status': e.status_code, 'headers': self.raw_headers})
+            await send({
+                'type': 'http.response.body',
+                'body': e.body,
+                'more_body': False,
+            })
+            return
+
+        # normal case, send the header first
+        await send({
+            'type': 'http.response.start',
+            'status': self.status_code,
+            'headers': self.raw_headers,
+        })
+
+        # send body with the first chunk
+        await send({
+            'type': 'http.response.body',
+            'body': first_chunk,
+            'more_body': True,
+        })
+
+        # continue streaming output
+        try:
+            async for chunk in iterator:
                 await send({
                     'type': 'http.response.body',
                     'body': chunk,
                     'more_body': True,
                 })
-        except HTTPException as e:
-            # when the generator throws an HTTPException, send the error response
-            error_response = {'status_code': e.status_code, 'detail': e.detail}
-            error_body = json.dumps(error_response).encode()
-
-            # send the error headers
-            await send({
-                'type': 'http.response.start',
-                'status': e.status_code,
-                'headers': [
-                    [b'content-type', b'application/json'],
-                ]
-            })
-
-            # send the error body
+        except Exception:
+            error_data = {'error': True, 'status': 500, 'message': 'Internal streaming error'}
             await send({
                 'type': 'http.response.body',
-                'body': error_body,
+                'body': json.dumps(error_data).encode('utf-8'),
                 'more_body': False,
             })
-        except Exception as e:
-            # handle other exceptions
-            error_response = {'status_code': 500, 'detail': str(e)}
-            error_body = json.dumps(error_response).encode()
+            return
 
-            await send({
-                'type': 'http.response.start',
-                'status': 500,
-                'headers': [
-                    [b'content-type', b'application/json'],
-                ]
-            })
-
-            await send({
-                'type': 'http.response.body',
-                'body': error_body,
-                'more_body': False,
-            })
+        await send({
+            'type': 'http.response.body',
+            'body': b'',
+            'more_body': False,
+        })
 
 
 class NodeManager:
@@ -398,15 +414,12 @@ class NodeManager:
                                         timeout=self.aiotimeout) as response:
                     if response.status != 200:
                         error_body = await response.read()
-                        error_body = json.loads(error_body.decode('utf-8'))
-                        print(f'error_body: {error_body}')
-                        raise HTTPException(status_code=response.status, detail=error_body['detail'])
+                        raise APIServerException(status_code=response.status, body=error_body)
                     async for line in response.content:
                         if line.strip():
                             yield line + b'\n\n'
-
-        except HTTPException:
-            # raise HTTPException again to be caught by the outer layer
+        except APIServerException:
+            # raise APIServerException again to be caught by the outer layer
             raise
         except (Exception, GeneratorExit, aiohttp.ClientError) as e:  # noqa
             logger.error(f'catched an exception: {e}')
@@ -672,7 +685,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         if request.stream is True:
             response = node_manager.stream_generate(raw_request, node_url, '/v1/chat/completions')
             background_task = node_manager.create_background_tasks(node_url, start)
-            return StreamingResponse(response, background=background_task, media_type='text/event-stream')
+            return ProxyStreamingResponse(response, background=background_task, media_type='text/event-stream')
         else:
             response = await node_manager.generate(raw_request, node_url, '/v1/chat/completions')
             node_manager.post_call(node_url, start)
