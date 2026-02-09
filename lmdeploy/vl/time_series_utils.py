@@ -50,8 +50,6 @@ def encode_time_series_base64(data: str | np.ndarray) -> str:
         data_info = str(data)[:100] + ' ...' if isinstance(data, str) and len(data) > 100 else str(data)
         logger.error(f'{error}, data={data_info}')
         pickle.dump(np.zeros((6000, 3), dtype=np.float32), buffered)  # dummy
-    import pdb
-    pdb.set_trace()
 
     return pybase64.b64encode(buffered.getvalue()).decode('utf-8')
 

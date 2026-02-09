@@ -100,7 +100,7 @@ class InternS1ProVisionModel(VisionModel):
 
         ts_len = ts_input.shape[0]
 
-        # if sr not provided, set the default value to ts_len / 4
+        # set the default value to ts_len / 4 if sr is not provided
         if sr is None or sr == 0:
             sr = ts_len / 4
 
