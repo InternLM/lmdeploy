@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
-import pickle
 from io import BytesIO
 
 import numpy as np
@@ -44,12 +43,12 @@ def encode_time_series_base64(data: str | np.ndarray) -> str:
         else:
             raise TypeError(f'Expected str or np.ndarray, got {type(data)}')
 
-        pickle.dump(ts_array, buffered)
+        np.save(buffered, ts_array)
 
     except Exception as error:
         data_info = str(data)[:100] + ' ...' if isinstance(data, str) and len(data) > 100 else str(data)
         logger.error(f'{error}, data={data_info}')
-        pickle.dump(np.zeros((6000, 3), dtype=np.float32), buffered)  # dummy
+        np.save(buffered, np.zeros((6000, 3), dtype=np.float32))  # dummy
 
     return pybase64.b64encode(buffered.getvalue()).decode('utf-8')
 
@@ -58,7 +57,7 @@ def load_time_series_from_base64(ts_base64: bytes | str) -> np.ndarray:
     """Load time series from base64 format."""
     if isinstance(ts_base64, str):
         ts_base64 = ts_base64.encode('utf-8')
-    return pickle.loads(pybase64.b64decode(ts_base64))
+    return np.load(BytesIO(pybase64.b64decode(ts_base64)), alow_pickle=False)
 
 
 def load_time_series(data_source: str | np.ndarray) -> np.ndarray:

@@ -352,7 +352,7 @@ class MultimodalProcessor:
 
     def _has_multimodal_input(self, messages: List[Dict]) -> bool:
         """Check if messages contain multimodal input (images)."""
-        multimodal_types = ['image_url', 'image_data', 'time_series_url', 'time_series']
+        multimodal_types = ['image_url', 'image_data', 'time_series_url']
         return any(
             isinstance(message.get('content'), list) and any(
                 item.get('type') in multimodal_types for item in message['content']) for message in messages)

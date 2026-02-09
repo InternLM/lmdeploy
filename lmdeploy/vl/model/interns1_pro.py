@@ -100,9 +100,9 @@ class InternS1ProVisionModel(VisionModel):
 
         ts_len = ts_input.shape[0]
 
-        # set the default value to ts_len / 4 if sr is not provided
-        if sr is None or sr == 0:
-            sr = ts_len / 4
+        # set the default value to ts_len / 4 if sr is not provided or invalid
+        if sr is None or sr <= 0:
+            sr = max(ts_len / 4, 1.0)
 
         # compute num ts tokens
         stride = np.floor(160 / ((1 + np.exp(-sr / 100))**6))
@@ -120,8 +120,8 @@ class InternS1ProVisionModel(VisionModel):
         if self.has_time_series_input:
             time_series = self.collect_time_series(messages)
             outputs = []
-            for ts_input, sr in time_series:
-                sr = sr['sampling_rate'] if sr is not None else None
+            for ts_input, params in time_series:
+                sr = params.get('sampling_rate') if params is not None else None
                 time_series_inputs = self.time_series_processor(ts_input, sr)
                 time_series_inputs.update({'ts_token_id': self.ts_token_id})
                 outputs.append(time_series_inputs)
