@@ -10,7 +10,7 @@ import threading
 import time
 from collections import deque
 from http import HTTPStatus
-from typing import Deque, Dict, List, Literal, Optional, Union
+from typing import Deque, Literal
 
 import aiohttp
 import numpy as np
@@ -41,16 +41,16 @@ logger = get_logger('lmdeploy')
 class Status(BaseModel):
     """Status protocol consists of models' information."""
     role: EngineRole = EngineRole.Hybrid
-    models: Optional[List[str]] = Field(default=[], examples=[[]])
+    models: list[str] = Field(default=[], examples=[[]])
     unfinished: int = 0
     latency: Deque = Field(default=deque(maxlen=LATENCY_DEQUE_LEN), examples=[[]])
-    speed: Optional[int] = Field(default=None, examples=[None])
+    speed: int | None = Field(default=None, examples=[None])
 
 
 class Node(BaseModel):
     """Node protocol consists of url and status."""
     url: str
-    status: Optional[Status] = None
+    status: Status | None = None
 
 
 CONTROLLER_HEART_BEAT_EXPIRATION = int(os.getenv('LMDEPLOY_CONTROLLER_HEART_BEAT_EXPIRATION', 90))
@@ -79,13 +79,13 @@ class NodeManager:
     """
 
     def __init__(self,
-                 config_path: Optional[str] = None,
+                 config_path: str | None = None,
                  serving_strategy: str = 'Hybrid',
                  routing_strategy: str = 'min_expected_latency',
                  migration_protocol: str = 'RDMA',
                  link_type: str = 'RoCE',
                  with_gdr: bool = True,
-                 cache_status: Optional[bool] = True) -> None:
+                 cache_status: bool = True) -> None:
         self.nodes = dict()
         self.serving_strategy = ServingStrategy[serving_strategy]
         self.routing_strategy = RoutingStrategy.from_str(routing_strategy)
@@ -114,7 +114,7 @@ class NodeManager:
         self.pd_connection_pool = PDConnectionPool()
         self.dummy_prefill = False
 
-    def get_nodes(self, role: EngineRole) -> Dict:
+    def get_nodes(self, role: EngineRole) -> dict[str, Status]:
         items = list(self.nodes.items())
         return {node_url: node_status for (node_url, node_status) in items if node_status.role == role}
 
@@ -144,7 +144,7 @@ class NodeManager:
                           config_file,
                           indent=2)
 
-    def add(self, node_url: str, status: Optional[Status] = None):
+    def add(self, node_url: str, status: Status | None = None):
         """Add a node to the manager.
 
         Args:
@@ -312,7 +312,7 @@ class NodeManager:
         else:
             raise ValueError(f'Invalid strategy: {self.routing_strategy}')
 
-    async def check_request_model(self, model_name) -> Optional[JSONResponse]:
+    async def check_request_model(self, model_name) -> JSONResponse | None:
         """Check if a request is valid."""
         if model_name in self.model_list:
             return
@@ -341,7 +341,7 @@ class NodeManager:
         }
         return json.dumps(ret).encode() + b'\n'
 
-    async def stream_generate(self, request: Dict, node_url: str, endpoint: str):
+    async def stream_generate(self, request: dict, node_url: str, endpoint: str):
         """Return a generator to handle the input request.
 
         Args:
@@ -360,7 +360,7 @@ class NodeManager:
             # exception happened, reduce unfinished num
             yield self.handle_api_timeout(node_url)
 
-    async def generate(self, request: Dict, node_url: str, endpoint: str):
+    async def generate(self, request: dict, node_url: str, endpoint: str):
         """Return a the response of the input request.
 
         Args:
@@ -442,7 +442,7 @@ class NodeManager:
         background_tasks.add_task(self.post_call, url, start)
         return background_tasks
 
-    def _prepare_headers(self, raw_request: Request) -> Dict[str, str]:
+    def _prepare_headers(self, raw_request: Request) -> dict[str, str]:
         headers = dict((name, value) for name, value in raw_request.headers.items() if name.lower() != 'host')
 
         client_ip = raw_request.client.host if raw_request.client else 'unknown'
@@ -880,7 +880,7 @@ def proxy(server_name: str = '0.0.0.0',
           server_port: int = 8000,
           serving_strategy: Literal['Hybrid', 'DistServe'] = 'Hybrid',
           routing_strategy: Literal['random', 'min_expected_latency', 'min_observed_latency'] = 'min_expected_latency',
-          api_keys: Optional[Union[List[str], str]] = None,
+          api_keys: list[str] | str | None = None,
           ssl: bool = False,
           log_level: str = 'INFO',
           disable_cache_status: bool = False,
@@ -916,9 +916,8 @@ def proxy(server_name: str = '0.0.0.0',
         with_gdr=True,
     )
     node_manager.cache_status = not disable_cache_status
-    if api_keys is not None:
-        if isinstance(api_keys, str):
-            api_keys = api_keys.split(',')
+    if isinstance(api_keys, str):
+        api_keys = api_keys.split(',')
     if api_keys is not None and (tokens := [key for key in api_keys if key]):
         from lmdeploy.serve.utils.server_utils import AuthenticationMiddleware
 
