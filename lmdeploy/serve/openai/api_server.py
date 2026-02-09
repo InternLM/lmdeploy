@@ -42,6 +42,7 @@ from lmdeploy.serve.openai.protocol import (AbortRequest, ChatCompletionRequest,
                                             TopLogprob, UpdateParamsRequest, UsageInfo)
 from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParser, ReasoningParserManager
 from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParser, ToolParserManager
+from lmdeploy.serve.utils.server_utils import validate_json_request
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
 
@@ -86,13 +87,6 @@ router = APIRouter()
 server_context = VariableInterface()
 
 
-async def validate_json_request(raw_request: Request):
-    content_type = raw_request.headers.get('content-type', '').lower()
-    media_type = content_type.split(';', maxsplit=1)[0]
-    if media_type != 'application/json':
-        raise RequestValidationError(errors=["Unsupported Media Type: Only 'application/json' is allowed"])
-
-
 def get_model_list():
     """Available models.
 
@@ -104,7 +98,7 @@ def get_model_list():
     return model_names
 
 
-@router.get('/v1/models')
+@router.get('/v1/models', dependencies=[Depends(validate_json_request)])
 def available_models():
     """Show available models."""
     model_cards = []

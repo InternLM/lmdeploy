@@ -47,3 +47,11 @@ err_msg = {
     ErrorCodes.SERVICE_UNAVAILABLE: 'The service is unavailable now. May retry later.',
     ErrorCodes.API_TIMEOUT: 'Failed to get response after a period of time'
 }
+
+
+class APIServerException(Exception):
+
+    def __init__(self, status_code: int, body: str, headers: dict | None = None):
+        self.status_code = status_code
+        self.body = body
+        self.headers = headers or {'content-type': 'application/json'}

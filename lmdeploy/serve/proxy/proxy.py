@@ -16,7 +16,7 @@ import aiohttp
 import numpy as np
 import requests
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -28,8 +28,12 @@ from lmdeploy.pytorch.disagg.messages import PDConnectionMessage
 from lmdeploy.serve.openai.api_server import create_error_response
 from lmdeploy.serve.openai.protocol import ModelCard  # noqa: E501
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, CompletionRequest, ModelList, ModelPermission
-from lmdeploy.serve.proxy.constants import AIOHTTP_TIMEOUT, LATENCY_DEQUE_LEN, ErrorCodes, RoutingStrategy, err_msg
+from lmdeploy.serve.proxy.utils import AIOHTTP_TIMEOUT, LATENCY_DEQUE_LEN, ErrorCodes, RoutingStrategy, err_msg
+from lmdeploy.serve.utils.server_utils import validate_json_request
 from lmdeploy.utils import get_logger
+
+from .streaming_resonse import ProxyStreamingResponse
+from .utils import APIServerException
 
 logger = get_logger('lmdeploy')
 
@@ -57,73 +61,6 @@ def heart_beat_controller(proxy_controller):
         time.sleep(CONTROLLER_HEART_BEAT_EXPIRATION)
         logger.info('Start heart beat check')
         proxy_controller.remove_stale_nodes_by_expiration()
-
-
-class APIServerException(Exception):
-
-    def __init__(self, status_code: int, body: str, headers: Optional[dict] = None):
-        self.status_code = status_code
-        self.body = body
-        self.headers = headers or {'content-type': 'application/json'}
-
-
-class ProxyStreamingResponse(StreamingResponse):
-    """StreamingResponse that can handle exceptions thrown by the generator."""
-
-    def __init__(self, content, **kwargs):
-        super().__init__(content, **kwargs)
-
-    async def stream_response(self, send) -> None:
-        iterator = self.body_iterator.__aiter__()
-        try:
-            # get the first chunk(stream_generate's first yield)
-            first_chunk = await iterator.__anext__()
-
-        except APIServerException as e:
-            await send({'type': 'http.response.start', 'status': e.status_code, 'headers': self.raw_headers})
-            await send({
-                'type': 'http.response.body',
-                'body': e.body,
-                'more_body': False,
-            })
-            return
-
-        # normal case, send the header first
-        await send({
-            'type': 'http.response.start',
-            'status': self.status_code,
-            'headers': self.raw_headers,
-        })
-
-        # send body with the first chunk
-        await send({
-            'type': 'http.response.body',
-            'body': first_chunk,
-            'more_body': True,
-        })
-
-        # continue streaming output
-        try:
-            async for chunk in iterator:
-                await send({
-                    'type': 'http.response.body',
-                    'body': chunk,
-                    'more_body': True,
-                })
-        except Exception:
-            error_data = {'error': True, 'status': 500, 'message': 'Internal streaming error'}
-            await send({
-                'type': 'http.response.body',
-                'body': json.dumps(error_data).encode('utf-8'),
-                'more_body': False,
-            })
-            return
-
-        await send({
-            'type': 'http.response.body',
-            'body': b'',
-            'more_body': False,
-        })
 
 
 class NodeManager:
@@ -404,7 +341,42 @@ class NodeManager:
         }
         return json.dumps(ret).encode() + b'\n'
 
-    async def stream_generate(self, raw_request: Request, node_url: str, endpoint: str):
+    async def stream_generate(self, request: Dict, node_url: str, endpoint: str):
+        """Return a generator to handle the input request.
+
+        Args:
+            request (Dict): the input request.
+            node_url (str): the node url.
+            endpoint (str): the endpoint. Such as `/v1/chat/completions`.
+        """
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(node_url + endpoint, json=request, timeout=self.aiotimeout) as response:
+                    async for line in response.content:
+                        if line.strip():
+                            yield line + b'\n\n'
+        except (Exception, GeneratorExit, aiohttp.ClientError) as e:  # noqa
+            logger.error(f'catched an exception: {e}')
+            # exception happened, reduce unfinished num
+            yield self.handle_api_timeout(node_url)
+
+    async def generate(self, request: Dict, node_url: str, endpoint: str):
+        """Return a the response of the input request.
+
+        Args:
+            request (Dict): the input request.
+            node_url (str): the node url.
+            endpoint (str): the endpoint. Such as `/v1/chat/completions`.
+        """
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(node_url + endpoint, json=request, timeout=self.aiotimeout) as response:
+                    return await response.text()
+        except (Exception, GeneratorExit, aiohttp.ClientError, asyncio.CancelledError) as e:  # noqa  # yapf: disable
+            logger.error(f'catched an exception: {e}')
+            return self.handle_api_timeout(node_url)
+
+    async def forward_raw_request_stream_generate(self, raw_request: Request, node_url: str, endpoint: str):
         try:
             target_url = node_url.rstrip('/') + endpoint
             headers = self._prepare_headers(raw_request)
@@ -426,7 +398,7 @@ class NodeManager:
             # exception happened, reduce unfinished num
             yield self.handle_api_timeout(node_url)
 
-    async def generate(self, raw_request: Request, node_url: str, endpoint: str):
+    async def forward_raw_request_generate(self, raw_request: Request, node_url: str, endpoint: str):
         try:
             target_url = node_url.rstrip('/') + endpoint
             headers = self._prepare_headers(raw_request)
@@ -494,7 +466,7 @@ app.add_middleware(
 node_manager = NodeManager()
 
 
-@app.get('/v1/models')
+@app.get('/v1/models', dependencies=[Depends(validate_json_request)])
 def available_models():
     """Show available models."""
     model_cards = []
@@ -503,7 +475,7 @@ def available_models():
     return ModelList(data=model_cards)
 
 
-@app.get('/nodes/status')
+@app.get('/nodes/status', dependencies=[Depends(validate_json_request)])
 def node_status():
     """Show nodes status."""
     try:
@@ -512,7 +484,7 @@ def node_status():
         return False
 
 
-@app.post('/nodes/add')
+@app.post('/nodes/add', dependencies=[Depends(validate_json_request)])
 def add_node(node: Node, raw_request: Request = None):
     """Add a node to the manager.
 
@@ -533,7 +505,7 @@ def add_node(node: Node, raw_request: Request = None):
         return 'Failed to add, please check the input url.'
 
 
-@app.post('/nodes/remove')
+@app.post('/nodes/remove', dependencies=[Depends(validate_json_request)])
 def remove_node(node: Node):
     """Show available models."""
     try:
@@ -546,7 +518,7 @@ def remove_node(node: Node):
         return 'Failed to delete, please check the input url.'
 
 
-@app.post('/nodes/terminate')
+@app.post('/nodes/terminate', dependencies=[Depends(validate_json_request)])
 def terminate_node(node: Node):
     """Terminate nodes."""
     try:
@@ -560,7 +532,7 @@ def terminate_node(node: Node):
         return 'Failed to terminate node {node_url}, please check the input url.'
 
 
-@app.get('/nodes/terminate_all')
+@app.get('/nodes/terminate_all', dependencies=[Depends(validate_json_request)])
 def terminate_node_all():
     """Terminate nodes."""
     try:
@@ -573,7 +545,7 @@ def terminate_node_all():
         return 'Failed to terminate all nodes.'
 
 
-@app.post('/distserve/connection_warmup')
+@app.post('/distserve/connection_warmup', dependencies=[Depends(validate_json_request)])
 async def connection_warmup():
     await asyncio.gather(*[
         node_manager.pd_connection_pool.connect(
@@ -587,13 +559,13 @@ async def connection_warmup():
     return JSONResponse({'SUCCESS': True})
 
 
-@app.post('/distserve/gc')
+@app.post('/distserve/gc', dependencies=[Depends(validate_json_request)])
 async def cache_block_gc_to_be_migrated():
     # TODO (JimyMa): add garbage collection of to be migrated request
     raise NotImplementedError
 
 
-@app.post('/v1/chat/completions')
+@app.post('/v1/chat/completions', dependencies=[Depends(validate_json_request)])
 async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
@@ -680,14 +652,13 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             return node_manager.handle_unavailable_model(request.model)
 
         logger.info(f'A request is dispatched to {node_url}')
-        request_dict = request.model_dump()
         start = node_manager.pre_call(node_url)
         if request.stream is True:
-            response = node_manager.stream_generate(raw_request, node_url, '/v1/chat/completions')
+            response = node_manager.forward_raw_request_stream_generate(raw_request, node_url, '/v1/chat/completions')
             background_task = node_manager.create_background_tasks(node_url, start)
             return ProxyStreamingResponse(response, background=background_task, media_type='text/event-stream')
         else:
-            response = await node_manager.generate(raw_request, node_url, '/v1/chat/completions')
+            response = await node_manager.forward_raw_request_generate(raw_request, node_url, '/v1/chat/completions')
             node_manager.post_call(node_url, start)
             return JSONResponse(json.loads(response))
     elif node_manager.serving_strategy == ServingStrategy.DistServe:
@@ -762,7 +733,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         raise ValueError(f'No serving strategy named {node_manager.serving_strategy}')
 
 
-@app.post('/v1/completions')
+@app.post('/v1/completions', dependencies=[Depends(validate_json_request)])
 async def completions_v1(request: CompletionRequest, raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
@@ -813,14 +784,13 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             return node_manager.handle_unavailable_model(request.model)
 
         logger.info(f'A request is dispatched to {node_url}')
-        request_dict = request.model_dump()
         start = node_manager.pre_call(node_url)
         if request.stream is True:
-            response = node_manager.stream_generate(raw_request, node_url, '/v1/completions')
+            response = node_manager.forward_raw_request_stream_generate(raw_request, node_url, '/v1/completions')
             background_task = node_manager.create_background_tasks(node_url, start)
             return StreamingResponse(response, background=background_task, media_type='text/event-stream')
         else:
-            response = await node_manager.generate(raw_request, node_url, '/v1/completions')
+            response = await node_manager.forward_raw_request_generate(raw_request, node_url, '/v1/completions')
             node_manager.post_call(node_url, start)
             return JSONResponse(json.loads(response))
     elif node_manager.serving_strategy == ServingStrategy.DistServe:
@@ -949,17 +919,15 @@ def proxy(server_name: str = '0.0.0.0',
     if api_keys is not None:
         if isinstance(api_keys, str):
             api_keys = api_keys.split(',')
-        from lmdeploy.serve.openai.api_server import VariableInterface
-        VariableInterface.api_keys = api_keys
+    if api_keys is not None and (tokens := [key for key in api_keys if key]):
+        from lmdeploy.serve.utils.server_utils import AuthenticationMiddleware
+
+        app.add_middleware(AuthenticationMiddleware, tokens=tokens)
+
     ssl_keyfile, ssl_certfile = None, None
     if ssl:
         ssl_keyfile = os.environ['SSL_KEYFILE']
         ssl_certfile = os.environ['SSL_CERTFILE']
-
-    if api_keys is not None and (tokens := [key for key in api_keys if key]):
-        from lmdeploy.serve.openai.server_utils import AuthenticationMiddleware
-
-        app.add_middleware(AuthenticationMiddleware, tokens=tokens)
 
     logger.setLevel(log_level)
     uvicorn_log_level = os.getenv('UVICORN_LOG_LEVEL', 'info').lower()

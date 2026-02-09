@@ -4,9 +4,18 @@ import hashlib
 import secrets
 from collections.abc import Awaitable
 
+from fastapi import Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.datastructures import URL, Headers
 from starlette.types import ASGIApp, Receive, Scope, Send
+
+
+async def validate_json_request(raw_request: Request):
+    content_type = raw_request.headers.get('content-type', '').lower()
+    media_type = content_type.split(';', maxsplit=1)[0]
+    if media_type != 'application/json':
+        raise RequestValidationError(errors=["Unsupported Media Type: Only 'application/json' is allowed"])
 
 
 class AuthenticationMiddleware:
