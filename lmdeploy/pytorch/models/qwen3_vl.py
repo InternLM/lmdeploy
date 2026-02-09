@@ -100,8 +100,6 @@ class Qwen3VLTextModel(Qwen3model):
         self,
         input_ids: torch.LongTensor = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
-        attn_metadata: Any = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         mrope_position_ids: torch.LongTensor = None,
         # args for deepstack
@@ -136,13 +134,10 @@ class Qwen3VLTextModel(Qwen3model):
         # decoding
         residual = None
         for idx, decoder_layer in enumerate(self.layers):
-            past_key_value = past_key_values[idx]
             hidden_states, residual = decoder_layer(
                 hidden_states,
                 rotary_pos_emb=rotary_pos_emb,
-                past_key_value=past_key_value,
                 residual=residual,
-                attn_metadata=attn_metadata,
             )
 
             # add visual features to the hidden states of first several layers
@@ -495,8 +490,6 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
-        attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
         mrope_position_ids: torch.Tensor = None,
         pixel_values: torch.Tensor = None,
@@ -539,8 +532,6 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
         hidden_states = self.language_model(
             input_ids=input_ids,
             position_ids=position_ids,
-            past_key_values=past_key_values,
-            attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
             mrope_position_ids=mrope_position_ids,
             # args for deepstack
@@ -573,7 +564,6 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
         # get input_ids, position_ids and attention metadatas
         input_ids = context.input_ids
         position_ids = context.position_ids
-        attn_metadata = context.attn_metadata
 
         pixel_values = None
         vis_cu_seqlens = None
@@ -612,8 +602,6 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
         return dict(
             input_ids=input_ids,
             position_ids=position_ids,
-            past_key_values=past_key_values,
-            attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
             mrope_position_ids=mrope_position_ids,
             pixel_values=pixel_values,

@@ -457,4 +457,11 @@ class TorchCompileRunner(GraphRunner):
 
     def get_capture_batch_sizes(self) -> List[int]:
         """Capture batch sizes."""
-        return _get_capture_batch_size_impl(self.cache_config.max_batches)
+        output = _get_capture_batch_size_impl(self.cache_config.max_batches)
+
+        # torch compile would specialize batchsize 1
+        # since there are no big difference between 1 and 2
+        # we would just skip it
+        if 1 in output:
+            output.remove(1)
+        return output
