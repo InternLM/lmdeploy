@@ -87,7 +87,7 @@ class MultimodalProcessor:
     @staticmethod
     async def async_convert_multimodal_data(messages: List[Dict]) -> List[Dict]:
         """Convert user-input multimodal data into GPT4V message format."""
-        from lmdeploy.vl.utils import load_image
+        from lmdeploy.vl.utils import load_image, load_time_series
 
         if isinstance(messages, Dict):
             messages = [messages]
@@ -164,7 +164,34 @@ class MultimodalProcessor:
                         message['content'].append(data)
                     except KeyError:
                         logger.error(f'invalid format {message}')
-                elif item['type'] in ['text', 'time_series']:
+                elif item['type'] == 'time_series_url':
+                    """
+                    convert the following item:
+                    {
+                        'type': 'time_series_url',
+                        'time_series_url': {
+                            'url': 'time series url or base64-encoded time series data',
+                            'key': 'value'  # parameters used in time series processing
+                            ...
+                        }
+                    }
+                    to:
+                    {
+                        'type': 'time_series',
+                        'time_series': np.ndarray,
+                        'key': 'value'   # parameters used in time series processing
+                        ...
+                    }
+                    """  # noqa
+                    data = item['time_series_url'].copy()
+                    try:
+                        url = data.pop('url')
+                        time_series = load_time_series(url)
+                        data.update(type='time_series', time_series=time_series)
+                        message['content'].append(data)
+                    except KeyError:
+                        logger.error(f'invalid format {message}')
+                elif item['type'] in ['text']:
                     message['content'].append(item)
                 else:
                     logger.error(f'unexpected content type {message}')
@@ -324,10 +351,10 @@ class MultimodalProcessor:
 
     def _has_multimodal_input(self, messages: List[Dict]) -> bool:
         """Check if messages contain multimodal input (images)."""
+        multimodal_types = ['image_url', 'image_data', 'time_series_url', 'time_series']
         return any(
             isinstance(message.get('content'), list) and any(
-                item.get('type') in ['image_url', 'image_data', 'time_series'] for item in message['content'])
-            for message in messages)
+                item.get('type') in multimodal_types for item in message['content']) for message in messages)
 
     async def _get_text_prompt_input(self,
                                      prompt: str | List[Dict],

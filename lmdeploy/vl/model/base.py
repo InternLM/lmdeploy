@@ -186,6 +186,26 @@ class VisionModel(ABC):
         return images
 
     @staticmethod
+    def collect_time_series(messages):
+        """Gather all time series data along with their respective parameters
+        from the messages and compile them into a single list.
+
+        Args:
+            messages (List[Tuple[np.ndarray, Dict]]): a list of time
+                series data with their corresponding parameters
+        """  # noqa
+        time_series = []
+        for message in messages:
+            content = message['content']
+            if not isinstance(content, List):
+                continue
+            time_series.extend([(x['time_series'], {
+                k: v
+                for k, v in x.items() if k not in {'type', 'time_series'}
+            }) for x in content if x['type'] == 'time_series'])
+        return time_series
+
+    @staticmethod
     def IMAGE_TOKEN_included(messages):
         """Check whether the IMAGE_TOKEN is included in the messages.
 
