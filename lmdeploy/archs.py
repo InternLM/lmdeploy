@@ -112,7 +112,7 @@ def check_vl_llm(config: dict) -> bool:
         'Qwen3VLForConditionalGeneration', 'Qwen3VLMoeForConditionalGeneration', 'MllamaForConditionalGeneration',
         'MolmoForCausalLM', 'Gemma3ForConditionalGeneration', 'Llama4ForConditionalGeneration',
         'InternVLForConditionalGeneration', 'InternS1ForConditionalGeneration', 'InternS1ProForConditionalGeneration',
-        'Glm4vForConditionalGeneration'
+        'InternS1_1_ForConditionalGeneration', 'Glm4vForConditionalGeneration'
     ])
     if arch == 'QWenLMHeadModel' and 'visual' in config:
         return True
