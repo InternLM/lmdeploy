@@ -48,6 +48,10 @@ MODULE_MAP.update({
     'Glm4MoeForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.glm4_moe.Glm4MoeForCausalLM',
 })
 
+# glm4.7
+
+MODULE_MAP.update({'Glm4MoeLiteForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v2.DeepseekV2ForCausalLM'})
+
 # internlm
 MODULE_MAP.update({
     'InternLMForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm.InternLMForCausalLM',
@@ -190,6 +194,16 @@ MODULE_MAP.update({
 MODULE_MAP.update({
     'InternS1ForConditionalGeneration':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internvl3_hf.InternVLForConditionalGeneration'
+})
+
+# interns1-pro
+MODULE_MAP.update({
+    'InternS1ProForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.interns1_pro.InternS1ProForConditionalGeneration',
+})
+MODULE_MAP.update({
+    'InternS1_1_ForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.interns1_pro.InternS1ProForConditionalGeneration',
 })
 
 # mono-internvl

@@ -34,7 +34,7 @@ LMDeploy 将持续跟进并扩展对 `llm-compressor` 项目的支持。
 ## 模型量化
 
 `llm-compressor` 提供了丰富的模型量化[用例](https://github.com/vllm-project/llm-compressor/tree/main/examples)，请参考其教程选择 LMDeploy 支持的量化算法，完成模型量化工作。
-LMDeploy 也内置了通过 `llm-compressor` 对 Qwen3-30B-A3B 进行 AWQ 量化的[脚本](https://github.com/InternLM/lmdeploy/examples/lite/qwen3_30b_a3b_awq.py)，供大家进行参考：
+LMDeploy 也内置了通过 `llm-compressor` 对 Qwen3-30B-A3B 进行 AWQ 量化的[脚本](https://github.com/InternLM/lmdeploy/blob/main/examples/lite/qwen3_30b_a3b_awq.py)，供大家进行参考：
 
 ```shell
 # 创建 conda 环境
@@ -81,15 +81,16 @@ lmdeploy serve api_server ./qwen3_30b_a3b_4bit --backend turbomind
 
 ## 精度评测
 
-我们把 Qwen3-30B-A3B 的 AWQ 对称量化模型和 AWQ 非对称量化模型通过 LMDeploy 部署为服务后，使用 [opencompass](https://github.com/open-compass/opencompass) 评测了其在若干学术数据集上的精度。AWQ 对称量化和非对称量化的精度表现没有显著差异。与 BF16 相比，在长输出数据集，比如 aime2025（平均 17,635 tokens）、LCB（平均 14,157 tokens），精度下降明显。而在中短输出数据集，比如 ifeval（平均 1,885 tokens）, mmlu_pro（平均 2,826 tokens），精度符合预期。
+我们将 Qwen3-8B (Dense) 与 Qwen3-30B-A3B (MoE) 的 AWQ 对称/非对称量化模型通过 LMDeploy 部署为服务，并使用 [opencompass](https://github.com/open-compass/opencompass) 在多个学术数据集上评测。结果显示：Qwen3-8B 的非对称量化整体优于对称量化，而 Qwen3-30B-A3B 在两种量化方式间差异不显著；Qwen3-8B 在对称/非对称量化下与 BF16 模型的精度差异小于 Qwen3-30B-A3B。与 BF16 相比，量化模型在长输出数据集，比如 aime2025 (平均 17,635 tokens)、LCB (平均 14,157 tokens)，精度下降更明显；在中短输出数据集，比如 ifeval (平均 1,885 tokens)，mmlu_pro (平均 2,826)，精度符合预期。
 
-| dataset           | bf16  | awq sym | awq asym |
-| ----------------- | ----- | ------- | -------- |
-| ifeval            | 86.32 | 84.10   | 84.29    |
-| hle               | 7.00  | 5.47    | 5.65     |
-| gpqa              | 61.74 | 57.95   | 57.07    |
-| aime2025          | 73.44 | 64.79   | 66.67    |
-| mmlu_pro          | 77.85 | 75.77   | 75.69    |
-| LCBCodeGeneration | 56.67 | 50.86   | 49.24    |
+| dataset           | Qwen3-8B |         |          | Qwen3-30B-A3B |         |          |
+| ----------------- | -------- | ------- | -------- | ------------- | ------- | -------- |
+|                   | bf16     | awq sym | awq asym | bf16          | awq sym | awq asym |
+| ifeval            | 85.58    | 83.73   | 85.77    | 86.32         | 84.10   | 84.29    |
+| hle               | 5.05     | 5.05    | 5.24     | 7.00          | 5.47    | 5.65     |
+| gpqa              | 59.97    | 56.57   | 59.47    | 61.74         | 57.95   | 57.07    |
+| aime2025          | 69.48    | 64.38   | 63.96    | 73.44         | 64.79   | 66.67    |
+| mmlu_pro          | 73.69    | 71.73   | 72.34    | 77.85         | 75.77   | 75.69    |
+| LCBCodeGeneration | 50.86    | 44.10   | 46.95    | 56.67         | 50.86   | 49.24    |
 
 复现方式可以参考[这份](https://lmdeploy.readthedocs.io/zh-cn/latest/benchmark/evaluate_with_opencompass.html)文档

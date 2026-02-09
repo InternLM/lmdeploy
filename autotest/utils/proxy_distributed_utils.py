@@ -6,6 +6,7 @@ import time
 from typing import Any, Dict, Tuple
 
 import requests
+from utils.config_utils import get_cli_common_param
 from utils.ray_distributed_utils import verify_service_functionality
 
 time_time = time.time
@@ -214,25 +215,16 @@ class ProxyDistributedManager:
 
 class ApiServerPerTest:
 
-    def __init__(self, proxy_manager: ProxyDistributedManager, model_path: str, model_param: Dict[str, Any]):
+    def __init__(self, proxy_manager: ProxyDistributedManager, model_path: str, run_config: Dict[str, Any]):
         self.proxy_manager = proxy_manager
         self.model_path = model_path
-        self.model_param = model_param or {}
+        self.run_config = run_config
 
         self.master_addr = proxy_manager.master_addr
         self.proxy_port = proxy_manager.proxy_port
         self.node_rank = int(os.getenv('NODE_RANK', '0'))
         self.node_count = int(os.getenv('NODE_COUNT', '1'))
         self.proc_per_node = int(os.getenv('PROC_PER_NODE', '1'))
-
-        self.backend = self.model_param.get('backend', 'turbomind')
-        self.communicator = self.model_param.get('communicator', 'nccl')
-        self.quant_policy = self.model_param.get('quant_policy', 0)
-        self.tp = int(self.model_param.get('tp', 1))
-        parallel_config = self.model_param.get('parallel_config', {})
-        self.ep = int(parallel_config.get('ep', 1))
-        self.dp = int(parallel_config.get('dp', 1))
-        self.extra = self.model_param.get('extra', '')
 
         self.expected_instances = self.node_count * self.proc_per_node
         self.is_master = (self.node_rank == 0)
@@ -245,28 +237,12 @@ class ApiServerPerTest:
             'serve',
             'api_server',
             self.model_path,
-            '--backend',
-            str(self.backend),
+            get_cli_common_param(self.run_config),
             '--proxy-url',
             proxy_url,
         ]
         if self.node_count > 1:
             cmd += ['--nnodes', str(self.node_count), '--node-rank', str(self.node_rank)]
-        if self.quant_policy != 0:
-            cmd += ['--quant-policy', str(self.quant_policy)]
-
-        if self.backend == 'turbomind':
-            cmd += ['--communicator', str(self.communicator)]
-
-        if self.ep != 1:
-            cmd += ['--ep', str(self.ep)]
-        if self.dp != 1:
-            cmd += ['--dp', str(self.dp)]
-        if self.tp != 1:
-            cmd += ['--tp', str(self.tp)]
-        if self.extra.strip() != '':
-            extra_args = self.extra.strip().split()
-            cmd.extend(extra_args)
 
         print(f"[API Server] Starting: {' '.join(cmd)}")
         self.api_process = subprocess.Popen(cmd)

@@ -265,6 +265,7 @@ class AsyncEngine:
     async def safe_run(self, handle, session, **kwargs):
         generator = handle.async_stream_infer(session.session_id, **kwargs)
         try:
+            metrics_processor.increase_api_routed_requests()
             yield generator
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
             logger.error(f'[safe_run] session {session.session_id} exception caught: {type(e).__name__} {e}')
@@ -274,6 +275,7 @@ class AsyncEngine:
             raise SafeRunException(f'Safe run exception for session {session.session_id}') from e
         finally:
             await generator.aclose()
+            metrics_processor.decrease_api_routed_requests()
 
     async def generate(
             self,
@@ -389,13 +391,12 @@ class AsyncEngine:
         if not gen_config.ignore_eos:
             stop_ids = gen_config.stop_token_ids or []
 
-        metrics_processor.increment_total_requests()
-
+        metrics_processor.increase_total_requests()
         async with session.request_handle() as handle:
             if epoch != self.epoch:
                 logger.debug(f'[generate] session {session_id} got aborted before starting inference')
-                # TODO(lvhan): metrics_processor.increment_failed_requests('abort')
-                metrics_processor.increment_finished_requests()
+                # TODO(lvhan): metrics_processor.increase_failed_requests('abort')
+                metrics_processor.increase_completed_requests()
                 yield GenOut(response='',
                              history_token_len=0,
                              input_token_len=len(input_ids),
@@ -467,7 +468,7 @@ class AsyncEngine:
                         out.logits = (outputs.logits[:-hit_stop_token] if hit_stop_token else outputs.logits)
                     yield out
                 # end of generator loop
-                metrics_processor.increment_finished_requests()
+                metrics_processor.increase_completed_requests()
 
                 if not is_error(outputs.status):
                     if outputs.status == ResponseType.CANCEL:
@@ -598,11 +599,11 @@ class AsyncEngine:
 
     async def async_get_logits(self,
                                input_ids,
-                               steps: List[int] | None = None,
+                               sessions: List['Session'] | None = None,
                                sequence_start: bool = True,
                                sequence_end: bool = True) -> List[torch.Tensor]:
         assert input_ids and all(isinstance(_, List) for _ in input_ids)
-        assert steps is None or (len(steps) == len(input_ids))
+        assert sessions is None or (len(sessions) == len(input_ids))
 
         logits = [None] * len(input_ids)
 
@@ -621,15 +622,21 @@ class AsyncEngine:
                                          stream_output=False,
                                          sequence_start=sequence_start,
                                          sequence_end=sequence_end,
-                                         step=steps[i] if steps else 0) as gen:
+                                         step=session.step) as gen:
                     async for outputs in gen:
                         pass
                     logits[i] = outputs.logits[:input_len, :]
 
-        sessions = [self.session_mgr.get() for _ in range(len(input_ids))]
+        create_sessions = False
+        if sessions is None:
+            create_sessions = True
+            sessions = [self.session_mgr.get() for _ in range(len(input_ids))]
         tasks = [_proc(session, i) for i, session in enumerate(sessions)]
         await asyncio.gather(*tasks)
         if sequence_end and self.backend == 'pytorch':
             for session in sessions:
                 await session.async_close()
+        if sequence_end and create_sessions:
+            for session in sessions:
+                self.session_mgr.remove(session)
         return logits
