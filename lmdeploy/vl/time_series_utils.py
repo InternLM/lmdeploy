@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import csv
 import os
-from io import BytesIO
+from io import BytesIO, StringIO
 
 import numpy as np
 import pybase64
@@ -57,7 +58,7 @@ def load_time_series_from_base64(ts_base64: bytes | str) -> np.ndarray:
     """Load time series from base64 format."""
     if isinstance(ts_base64, str):
         ts_base64 = ts_base64.encode('utf-8')
-    return np.load(BytesIO(pybase64.b64decode(ts_base64)), alow_pickle=False)
+    return np.load(BytesIO(pybase64.b64decode(ts_base64)), allow_pickle=False)
 
 
 def load_time_series(data_source: str | np.ndarray) -> np.ndarray:
@@ -131,14 +132,19 @@ def _load_path(path: str) -> np.ndarray:
 
 def _load_csv(source: bytes | str) -> np.ndarray:
     """Load CSV from bytes or file path."""
-    try:
-        import pandas as pd
-    except ImportError:
-        raise ImportError('Please install pandas to process csv files.')
-
+    # Read content as text
     if isinstance(source, bytes):
-        return pd.read_csv(BytesIO(source), header=None).values
-    return pd.read_csv(source, header=None).values
+        text = source.decode('utf-8')
+    else:
+        with open(source, 'r', newline='') as f:
+            text = f.read()
+
+    # Parse CSV
+    f = StringIO(text)
+    reader = csv.reader(f)
+    rows = list(reader)
+
+    return np.array(rows, dtype=np.float32)
 
 
 def _load_audio(source: bytes | str) -> np.ndarray:
