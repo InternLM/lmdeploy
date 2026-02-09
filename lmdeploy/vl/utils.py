@@ -1,12 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
-import pickle
 from io import BytesIO
 from typing import Union
 
 import pybase64
 import requests
-from numpy.typing import NDArray
 from PIL import Image, ImageFile
 
 from lmdeploy.utils import get_logger
@@ -83,68 +81,3 @@ def load_image(image_url: Union[str, Image.Image]) -> Image.Image:
         img = Image.new('RGB', (32, 32))
 
     return img
-
-
-def encode_time_series_base64(path: str) -> str:
-    """Encode raw time series data to base64 format."""
-
-    # TODO: zhouxinyu, support url or numpy array input
-    assert type(path) == str, f'Expected path to be a string, but got {type(path)}'
-
-    ext = os.path.splitext(path)[-1].lower()
-    if ext in ['.wav', '.mp3', '.flac']:
-        try:
-            import soundfile as sf
-        except ImportError:
-            raise ImportError('Please install soundfile to process audio files.')
-        ts_input, sr = sf.read(path)  # ts_input: np.ndarray, shape [T] or [T, C]
-    elif ext == '.csv':
-        try:
-            import pandas as pd
-        except ImportError:
-            raise ImportError('Please install pandas to process csv files.')
-        df = pd.read_csv(path, header=None)
-        ts_input = df.values  # [T, C]
-    elif ext == '.npy':
-        try:
-            import numpy as np
-        except ImportError:
-            raise ImportError('Please install numpy to process npy files.')
-        ts_input = np.load(path)  # [T, C]
-    else:
-        raise ValueError(f'Unsupported file format: {ext}')
-
-    # numpy ndarray -> bytes
-    ts_bytes = pickle.dumps(ts_input)
-
-    # bytes -> base64
-    ts_base64 = pybase64.b64encode(ts_bytes).decode('utf-8')
-    return ts_base64
-
-
-def load_time_series_from_base64(ts_base64: str) -> NDArray:
-    """Load time series data from base64 format."""
-    # base64 -> bytes
-    ts_bytes = pybase64.b64decode(ts_base64)
-
-    # bytes -> numpy ndarray
-    ts_input = pickle.loads(ts_bytes)
-    return ts_input
-
-
-def load_time_series(time_series_url: str) -> NDArray:
-    """Load time series data from url or local path."""
-    # TODO: zhouxinyu, support loading time series data from url or numpy array input
-
-    assert type(time_series_url) == str, f'Expected time_series_url to be a string, but got {type(time_series_url)}'
-
-    ts_input = None
-
-    if time_series_url.startswith('http'):
-        pass
-    elif time_series_url.startswith('data:time_series'):
-        ts_input = load_time_series_from_base64(time_series_url.split(',')[1])
-    else:
-        pass
-
-    return ts_input

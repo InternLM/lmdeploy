@@ -87,7 +87,8 @@ class MultimodalProcessor:
     @staticmethod
     async def async_convert_multimodal_data(messages: List[Dict]) -> List[Dict]:
         """Convert user-input multimodal data into GPT4V message format."""
-        from lmdeploy.vl.utils import load_image, load_time_series
+        from lmdeploy.vl.time_series_utils import load_time_series
+        from lmdeploy.vl.utils import load_image
 
         if isinstance(messages, Dict):
             messages = [messages]
