@@ -731,6 +731,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
                 meta.update({'new_seqlen': prev_lens[idx] + new_seqlens[idx]})
         else:
             context.model_metas = [dict(new_seqlen=seqlen) for seqlen in new_seqlens]
+            context.is_model_meta_updated = True
 
         # create new model inputs and context, to get updated position_ids and attn_metadata
         device = input_ids.device
@@ -860,6 +861,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
 
                 # update model metas for the next step
                 context.model_metas = [dict(new_seqlen=seqlen) for seqlen in new_kv_seqlens]
+                context.is_model_meta_updated = True
 
                 # update position ids, attn_metadata
                 new_kv_seqlens = torch.tensor(new_kv_seqlens, device=input_ids.device, dtype=torch.long)
@@ -893,6 +895,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
                 else:
                     # init model metas
                     context.model_metas = [{'new_seqlen': seqlen} for seqlen in seq_lengths.tolist()]
+                    context.is_model_meta_updated = True
 
         if self.is_mono and vision_embedding_indexing is not None:
             all_indices = torch.arange(input_ids.shape[1]).to(input_ids)
