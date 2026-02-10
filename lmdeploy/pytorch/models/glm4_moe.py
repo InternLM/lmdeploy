@@ -177,8 +177,7 @@ class Glm4MoE(nn.Module):
                  layer_idx: int,
                  dtype: torch.dtype = None,
                  device: torch.device = None,
-                 is_tp: bool = True,
-                 all_reduce: bool = False):
+                 is_tp: bool = True):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         self.hidden_dim = config.hidden_size
@@ -217,7 +216,7 @@ class Glm4MoE(nn.Module):
             dtype=dtype,
             device=device,
             quant_config=quantization_config,
-            all_reduce=all_reduce,
+            all_reduce=False,
             layer_idx=layer_idx,
         )
 
@@ -229,7 +228,7 @@ class Glm4MoE(nn.Module):
             dtype=dtype,
             device=device,
             is_tp=is_tp,
-            all_reduce=all_reduce,
+            all_reduce=False,
         )
 
         # get all reduce
