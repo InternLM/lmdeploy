@@ -31,7 +31,8 @@ class Glm4MoeMTPDecoderLayer(Glm4MoeDecoderLayer):
         self.self_attn = Glm4MoeAttention(config, dtype=dtype, device=device, is_tp=False)
 
         if layer_idx >= config.first_k_dense_replace:
-            self.mlp = Glm4MoE(config, layer_idx=layer_idx, dtype=dtype, device=device, is_tp=False, all_reduce=False)
+            self.mlp = Glm4MoE(config, layer_idx=layer_idx, dtype=dtype, device=device, is_tp=False)
+            self.mlp._all_reduce = False
         else:
             self.mlp = Glm4MoeMLP(config, dtype=dtype, device=device, is_tp=False, all_reduce=False)
 
