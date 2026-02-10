@@ -8,12 +8,12 @@ from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul
-from lmdeploy.pytorch.nn.linear import (build_down_linear, build_gateup_linear, build_o_proj, build_qkv_proj,
-                                        build_rowwise_linear)
+from lmdeploy.pytorch.nn.linear import build_down_linear, build_gateup_linear, build_o_proj, build_qkv_proj
 from lmdeploy.pytorch.nn.rotary_embedding import build_rotary_embedding_from_config
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
+from .utils.model import DeployModelMixinV1
 
 
 class Phi3Attention(nn.Module):
@@ -272,7 +272,7 @@ class Phi3Model(nn.Module):
         return self.embed_tokens
 
 
-class Phi3ForCausalLM(nn.Module, CudaGraphMixin):
+class Phi3ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
     """ModelForCausalLM."""
 
     packed_modules_mapping = {
@@ -293,11 +293,7 @@ class Phi3ForCausalLM(nn.Module, CudaGraphMixin):
         # build model
         self.model = Phi3Model(config, dtype=dtype, device=device)
         # build lm_head
-        self.lm_head = build_rowwise_linear(config.hidden_size,
-                                            config.vocab_size,
-                                            bias=False,
-                                            dtype=dtype,
-                                            device=device)
+        self.lm_head = self.build_lm_head(config.hidden_size, config.vocab_size, bias=False, dtype=dtype, device=device)
 
     def forward(
         self,
@@ -317,15 +313,6 @@ class Phi3ForCausalLM(nn.Module, CudaGraphMixin):
             inputs_embeds=inputs_embeds,
         )
         return hidden_states
-
-    def get_logits(self, hidden_states: torch.Tensor):
-        """Compute logits of the model output."""
-        return self.lm_head(hidden_states)
-
-    def update_weights(self):
-        """Update weights."""
-        if self.config.tie_word_embeddings:
-            self.lm_head.weight = self.model.embed_tokens.weight
 
     def get_input_embeddings(self):
         """Get input embeddings."""

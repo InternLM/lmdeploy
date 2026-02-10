@@ -10,12 +10,13 @@ from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, build_rotary_embedding_from_config
-from lmdeploy.pytorch.nn.linear import build_o_proj, build_qkv_proj, build_rowwise_linear
+from lmdeploy.pytorch.nn.linear import build_o_proj, build_qkv_proj
 from lmdeploy.pytorch.nn.moe import build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .patch import get_build_model_context
 from .utils.cudagraph import CudaGraphMixin
+from .utils.model import DeployModelMixinV1, build_embedding
 
 
 class GptOssAttention(nn.Module):
@@ -338,11 +339,14 @@ class GptOssModel(nn.Module):
 
     def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
-        self.embed_tokens = nn.Embedding(config.vocab_size,
-                                         config.hidden_size,
-                                         config.pad_token_id,
-                                         dtype=dtype,
-                                         device=device)
+
+        self.embed_tokens = build_embedding(
+            config.vocab_size,
+            config.hidden_size,
+            config.pad_token_id,
+            dtype=dtype,
+            device=device,
+        )
 
         # build all decode layers
         self.layers = nn.ModuleList([
@@ -401,7 +405,7 @@ class GptOssModel(nn.Module):
         return self.embed_tokens
 
 
-class GptOssForCausalLM(nn.Module, CudaGraphMixin):
+class GptOssForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
     """ModelForCausalLM."""
 
     packed_modules_mapping = {
@@ -423,11 +427,7 @@ class GptOssForCausalLM(nn.Module, CudaGraphMixin):
         # build model
         self.model = GptOssModel(config, dtype=dtype, device=device)
         # build lm_head
-        self.lm_head = build_rowwise_linear(config.hidden_size,
-                                            config.vocab_size,
-                                            bias=False,
-                                            dtype=dtype,
-                                            device=device)
+        self.lm_head = self.build_lm_head(config.hidden_size, config.vocab_size, bias=False, dtype=dtype, device=device)
 
         # for router replay
         bm_ctx = get_build_model_context()
@@ -465,15 +465,6 @@ class GptOssForCausalLM(nn.Module, CudaGraphMixin):
         if all_routed_experts is None:
             return hidden_states
         return dict(hidden_states=hidden_states, all_routed_experts=all_routed_experts)
-
-    def get_logits(self, hidden_states: torch.Tensor):
-        """Compute logits of the model output."""
-        return self.lm_head(hidden_states)
-
-    def update_weights(self):
-        """Update weights."""
-        if self.config.tie_word_embeddings:
-            self.lm_head.weight = self.model.embed_tokens.weight
 
     def get_input_embeddings(self):
         """Get input embeddings."""

@@ -304,6 +304,10 @@ class ModelConfig:
     # check env for model-device combination
     check_env_func: Callable = _default_check_env
 
+    # fp32 lm head
+    enforce_fp32_head: bool = False
+    tie_word_embeddings: bool = False
+
     def get_head_size(self):
         """Get head size."""
         return self.head_dim
@@ -347,11 +351,16 @@ class ModelConfig:
             is_draft_model=is_draft_model,
             spec_method=spec_method,
         )
-
+        enforce_fp32_head = False
         if hf_overrides is not None:
             logger = get_logger('lmdeploy')
             logger.warning(f'Overriding HF config with {hf_overrides}')
+            enforce_fp32_head = hf_overrides.pop('enforce_fp32_head', False)
             override_hf_config(model_config.hf_config, hf_overrides)
+
+        # for fp32 head
+        model_config.enforce_fp32_head = enforce_fp32_head
+        model_config.tie_word_embeddings = getattr(hf_config, 'tie_word_embeddings', False)
 
         # for serialization of transformers modules
         maybe_register_config_serialize_by_value(trust_remote_code)

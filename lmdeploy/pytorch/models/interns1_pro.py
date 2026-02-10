@@ -8,7 +8,6 @@ from transformers.configuration_utils import PretrainedConfig
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
-from lmdeploy.pytorch.nn.linear import build_rowwise_linear
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .interns1_pro_ts import InternS1ProTimeSeriesModel
@@ -16,10 +15,10 @@ from .patch import get_build_model_context
 from .qwen3_moe import Qwen3MoeModel
 from .qwen3_vl import Qwen3VLVisionModel
 from .utils.cudagraph import CudaGraphMixin
-from .utils.model import DeployModelMixin
+from .utils.model import DeployModelMixinV1
 
 
-class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixin):
+class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMixin):
     """ModelForCausalLM."""
 
     packed_modules_mapping = {
@@ -58,11 +57,11 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraph
         self.language_model = Qwen3MoeModel(config.text_config, dtype=dtype, device=device)
 
         # build lm_head
-        self.lm_head = build_rowwise_linear(config.text_config.hidden_size,
-                                            config.text_config.vocab_size,
-                                            bias=False,
-                                            dtype=dtype,
-                                            device=device)
+        self.lm_head = self.build_lm_head(config.text_config.hidden_size,
+                                          config.text_config.vocab_size,
+                                          bias=False,
+                                          dtype=dtype,
+                                          device=device)
 
         # build time series model
         if hasattr(config, 'ts_config'):
@@ -139,15 +138,6 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraph
         if all_routed_experts is None:
             return hidden_states
         return dict(hidden_states=hidden_states, all_routed_experts=all_routed_experts)
-
-    def get_logits(self, hidden_states: torch.Tensor):
-        """Compute logits of the model output."""
-        return self.lm_head(hidden_states)
-
-    def update_weights(self):
-        """Update weights."""
-        if self.config.tie_word_embeddings:
-            self.lm_head.weight = self.language_model.embed_tokens.weight
 
     def get_input_embeddings(self):
         """Get input embeddings."""

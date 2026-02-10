@@ -18,7 +18,7 @@ from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_pr
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
-from .utils.model import DeployModelMixin, vlm_model
+from .utils.model import DeployModelMixinV1, vlm_model
 
 
 class Qwen2_5_PatchEmbed(nn.Module):
@@ -366,7 +366,7 @@ class Qwen2_5_VisionTransformerPretrainedModel(nn.Module):
         return hidden_states
 
 
-class Qwen2_5_VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixin):
+class Qwen2_5_VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMixin):
     """ModelForCausalLM."""
 
     packed_modules_mapping = {
@@ -402,11 +402,7 @@ class Qwen2_5_VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphM
         # build model
         self.model = Qwen2Model(config, dtype=dtype, device=device)
         # build lm_head
-        self.lm_head = build_rowwise_linear(config.hidden_size,
-                                            config.vocab_size,
-                                            bias=False,
-                                            dtype=dtype,
-                                            device=device)
+        self.lm_head = self.build_lm_head(config.hidden_size, config.vocab_size, bias=False, dtype=dtype, device=device)
 
     def forward(
         self,
@@ -446,15 +442,6 @@ class Qwen2_5_VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphM
             mrope_position_ids=mrope_position_ids,
         )
         return hidden_states
-
-    def get_logits(self, hidden_states: torch.Tensor):
-        """Compute logits of the model output."""
-        return self.lm_head(hidden_states)
-
-    def update_weights(self):
-        """Update weights."""
-        if self.config.tie_word_embeddings:
-            self.lm_head.weight = self.model.embed_tokens.weight
 
     def get_input_embeddings(self):
         """Get input embeddings."""
