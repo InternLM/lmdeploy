@@ -52,6 +52,10 @@ MODULE_MAP.update({
 
 MODULE_MAP.update({'Glm4MoeLiteForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v2.DeepseekV2ForCausalLM'})
 
+MODULE_MAP.update({
+    'Glm4MoeMTPModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.glm4moe_mtp.Glm4MoeMTPModel',
+})
+
 # internlm
 MODULE_MAP.update({
     'InternLMForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm.InternLMForCausalLM',
