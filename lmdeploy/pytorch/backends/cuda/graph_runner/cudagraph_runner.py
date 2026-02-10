@@ -13,8 +13,8 @@ from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta
 from lmdeploy.pytorch.strategies.base import StrategyFactoryBase
 from lmdeploy.utils import get_logger
 
-from ..graph_runner import GraphRunner
-from .attention import TritonAttentionMetadata
+from ...graph_runner import GraphRunner
+from ..attention import TritonAttentionMetadata
 
 logger = get_logger('lmdeploy')
 
@@ -56,6 +56,15 @@ def _false(*args, **kwargs):
     return False
 
 
+def get_attn_metadata(kwargs: Dict[str, Any], context: StepContext) -> TritonAttentionMetadata:
+    """Get attention metadata from kwargs or context."""
+    if 'attn_metadata' in kwargs:
+        attn_metadata: TritonAttentionMetadata = kwargs['attn_metadata']
+    else:
+        attn_metadata: TritonAttentionMetadata = context.attn_metadata
+    return attn_metadata
+
+
 class CUDASingleGraphRunner:
     """Cuda single graph runner."""
 
@@ -65,6 +74,7 @@ class CUDASingleGraphRunner:
         max_batches: int,
         max_tokens: int,
         num_blocks: int,
+        block_size: int,
         is_decoding: bool,
         pool: Tuple[int, int],
         model_config: ModelConfig,
@@ -79,6 +89,7 @@ class CUDASingleGraphRunner:
             max_batchs=max_batches,
             max_tokens=max_tokens,
             num_blocks=num_blocks,
+            block_size=block_size,
             is_decoding=is_decoding,
             device=device,
             input_buffers=dict(),
@@ -187,10 +198,10 @@ class CUDAGraphRunner(GraphRunner):
                 return size
         assert False, f'Unsupported batch_size={batch_size}'
 
-    def get_graph_key(self, input_ids: torch.Tensor, position_ids: torch.Tensor, past_key_values: List,
-                      attn_metadata: TritonAttentionMetadata, inputs_embeds: torch.Tensor, **kwargs):
+    def get_graph_key(self, input_ids: torch.Tensor, position_ids: torch.Tensor, inputs_embeds: torch.Tensor, **kwargs):
         """Get graph key."""
         context = self.ctx_mgr.current_context()
+        attn_metadata: TritonAttentionMetadata = get_attn_metadata(kwargs, context)
         is_decoding = context.is_decoding
         batch_size = attn_metadata.q_seqlens.size(0)
         meta = self.get_meta()
@@ -205,10 +216,11 @@ class CUDAGraphRunner(GraphRunner):
 
     def _prepare_inputs(self, **kwargs):
         """Prepare inputs."""
-        assert 'attn_metadata' in kwargs, 'attn_metadata is required for cudagraph.'
-        attn_metadata: TritonAttentionMetadata = kwargs['attn_metadata']
+        step_ctx = get_step_ctx_manager().current_context()
+        attn_metadata: TritonAttentionMetadata = get_attn_metadata(kwargs, step_ctx)
         if not attn_metadata.block_offsets.dtype == torch.int32:
             attn_metadata.block_offsets = attn_metadata.block_offsets.to(torch.int32)
+        step_ctx.attn_metadata = attn_metadata
         return kwargs
 
     def _get_max_tokens(self, graph_key: tuple, input_ids: torch.Tensor, q_seqlens: torch.Tensor):
@@ -236,13 +248,15 @@ class CUDAGraphRunner(GraphRunner):
         max_batches = graph_key[0]
         is_decoding = graph_key[1]
         decode_query_len = graph_key[3]
+        attn_metadata = get_attn_metadata(kwargs, self.ctx_mgr.current_context())
         if graph_key not in self._runner_map:
-            max_tokens = self._get_max_tokens(graph_key, kwargs['input_ids'], kwargs['attn_metadata'].q_seqlens)
+            max_tokens = self._get_max_tokens(graph_key, kwargs['input_ids'], attn_metadata.q_seqlens)
             runner = CUDASingleGraphRunner(
                 self.model,
                 max_batches=max_batches,
                 max_tokens=max_tokens,
                 num_blocks=self.num_blocks,
+                block_size=self.cache_config.block_size,
                 is_decoding=is_decoding,
                 pool=self.graph_pool_handle,
                 model_config=self.model_config,
@@ -306,3 +320,6 @@ class CUDAGraphRunner(GraphRunner):
     def get_capture_batch_sizes(self) -> List[int]:
         """Capture batch sizes."""
         return _get_capture_batch_size_impl(self.cache_config.max_batches)
+
+    def get_capture_prefill_num_tokens(self) -> List[int]:
+        return [self.cache_config.max_prefill_token_num]

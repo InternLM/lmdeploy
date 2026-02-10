@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import torch
 from torch import nn
@@ -31,8 +31,6 @@ class Qwen3VLMoeTextModel(Qwen3MoeModel):
         self,
         input_ids: torch.LongTensor = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
-        attn_metadata: Any = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         mrope_position_ids: torch.LongTensor = None,
         # args for deepstack
@@ -67,13 +65,10 @@ class Qwen3VLMoeTextModel(Qwen3MoeModel):
         # decoding
         residual = None
         for idx, decoder_layer in enumerate(self.layers):
-            past_key_value = past_key_values[idx]
             hidden_states, residual = decoder_layer(
                 hidden_states,
                 rotary_pos_emb=rotary_pos_emb,
-                past_key_value=past_key_value,
                 residual=residual,
-                attn_metadata=attn_metadata,
             )
 
             # add visual features to the hidden states of first several layers

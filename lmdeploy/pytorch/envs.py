@@ -157,6 +157,10 @@ with set_envs():
     # model format
     scale_fmt = os.getenv('LMDEPLOY_SCALE_FMT', None)
 
+    # graph runner
+    force_torch_compile = env_to_bool('LMDEPLOY_FORCE_TORCH_COMPILE', False)
+    disable_graph_buffer_reuse = env_to_bool('LMDEPLOY_DISABLE_GRAPH_BUFFER_REUSE', False)
+
 
 def get_all_envs():
     """Get all environment variables."""
