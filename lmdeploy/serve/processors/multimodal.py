@@ -165,12 +165,12 @@ class MultimodalProcessor:
                         message['content'].append(data)
                     except KeyError:
                         logger.error(f'invalid format {message}')
-                elif item['type'] == 'time_series':
+                elif item['type'] == 'time_series_url':
                     """
                     convert the following item:
                     {
-                        'type': 'time_series',
-                        'time_series': {
+                        'type': 'time_series_url',
+                        'time_series_url': {
                             'url': 'time series url or base64-encoded time series data',
                             'key': 'value'  # parameters used in time series processing
                             ...
@@ -184,7 +184,7 @@ class MultimodalProcessor:
                         ...
                     }
                     """  # noqa
-                    data = item['time_series'].copy()
+                    data = item['time_series_url'].copy()
                     try:
                         url = data.pop('url')
                         time_series = load_time_series(url)
@@ -352,7 +352,7 @@ class MultimodalProcessor:
 
     def _has_multimodal_input(self, messages: List[Dict]) -> bool:
         """Check if messages contain multimodal input (images)."""
-        multimodal_types = ['image_url', 'image_data', 'time_series']
+        multimodal_types = ['image_url', 'image_data', 'time_series_url']
         return any(
             isinstance(message.get('content'), list) and any(
                 item.get('type') in multimodal_types for item in message['content']) for message in messages)
