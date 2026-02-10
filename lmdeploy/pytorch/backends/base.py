@@ -34,6 +34,9 @@ class OpType(Enum):
     NSAIndexFP8 = auto()
     Embedding = auto()
 
+    # MoE rounter
+    RouterNoauxTC = auto()
+
 
 class OpsBackend(ABC):
     """Layer backend abstract."""
