@@ -25,7 +25,7 @@ class W8A8Linear(LinearBase):
                  all_reduce: bool = True,
                  quant_dtype: Optional[torch.dtype] = torch.int8,
                  layer_type: str = 'attn'):
-        super().__init__(dtype=torch.float16,
+        super().__init__(dtype=dtype,
                          device=device,
                          colwise=colwise,
                          is_tp=is_tp,
