@@ -129,7 +129,8 @@ __global__ void RMSNormQK(T*       data,  //
                           int      n,
                           int      token_num,
                           float    eps,
-                          float    inv_dim)
+                          float    inv_dim,
+                          int      w_stride)
 {
     static_assert((max_dim & (max_dim - 1)) == 0);
 
@@ -170,7 +171,7 @@ __global__ void RMSNormQK(T*       data,  //
 
     Array<T, vec_size> w;
     if (di < dim) {
-        Ldg(w, &weight[di]);
+        Ldg(w, &weight[hi * w_stride + di]);
         PRAGMA_UNROLL
         for (int i = 0; i < vec_size; ++i) {
             vec[i] = (T)((float)vec[i] * sum) * w[i];
@@ -209,7 +210,7 @@ void invokeQkRMSNorm(void*        data,
         const int grid_dim  = cdiv(threads, block_dim);
 
         kernel::RMSNormQK<T, float, vec_size, max_dim><<<grid_dim, block_dim, 0, stream>>>(
-            (T*)data, ld, (const T*)weight, head_dim, n, token_num, eps, 1.f / head_dim);
+            (T*)data, ld, (const T*)weight, head_dim, n, token_num, eps, 1.f / head_dim, 0);
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(dtype, invoke);
@@ -223,6 +224,20 @@ void invokeRMSNormQK(Tensor& x, const Tensor& w, float eps, cudaStream_t st)
     std::tie(token_num, head_num, head_dim) = x.shapes(0, 1, 2);
 
     TM_CHECK(x.stride(1) == head_dim);
+
+    // Detect per-head vs shared QK norm based on weight size
+    // shared: w.shape(0) == head_dim, per-head: w.shape(0) == head_num * head_dim
+    const int w_size = w.shape(0);
+    int       w_stride;
+    if (w_size == head_dim) {
+        w_stride = 0;  // shared: same weight for all heads
+    }
+    else {
+        TM_CHECK(w_size == head_num * head_dim) << "qk_norm weight size " << w_size
+                                                << " must be head_dim (" << head_dim
+                                                << ") or head_num*head_dim (" << head_num * head_dim << ")";
+        w_stride = head_dim;  // per-head: stride by head_dim
+    }
 
     auto data   = x.raw_data();
     auto stride = x.stride(0);
@@ -243,7 +258,7 @@ void invokeRMSNormQK(Tensor& x, const Tensor& w, float eps, cudaStream_t st)
         const int grid_dim  = cdiv(threads, block_dim);
 
         kernel::RMSNormQK<T, float, vec_size, max_dim><<<grid_dim, block_dim, 0, st>>>(
-            (T*)data, stride, (const T*)w.raw_data(), head_dim, head_num, token_num, eps, 1.f / head_dim);
+            (T*)data, stride, (const T*)w.raw_data(), head_dim, head_num, token_num, eps, 1.f / head_dim, w_stride);
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(x.dtype(), invoke);

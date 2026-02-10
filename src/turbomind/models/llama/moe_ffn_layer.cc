@@ -8,6 +8,7 @@
 
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
+#include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/moe_ffn_layer.h"
@@ -62,15 +63,17 @@ MoeFfnLayer::MoeFfnLayer(const ModelParam& model, const MoeParam& param, const E
     accum_   = {max_expert_num * kMoeGateMaxTiles, kDEVICE};
 }
 
-Tensor_<float> MoeFfnLayer::Gate(const Tensor& input, const LlamaDenseWeight& gate)
+Tensor_<float> MoeFfnLayer::Gate(const Tensor& input, const LlamaDenseWeight& gate, bool apply_bias)
 {
     auto& weight = gate.weight;
     TM_CHECK_EQ(input.shape(1), weight.shape(0));
     Tensor_<float> logits{{input.shape(0), weight.shape(1)}, kDEVICE};
     linear_.Forward(input, gate, logits);
     sync_check_cuda_error();
-    ApplyBias(logits, gate.bias, core::Context::stream().handle());
-    sync_check_cuda_error();
+    if (apply_bias) {
+        ApplyBias(logits, gate.bias, core::Context::stream().handle());
+        sync_check_cuda_error();
+    }
     return logits;
 }
 
@@ -84,7 +87,9 @@ void MoeFfnLayer::Forward(ForwardParam& p)
 
     FT_CHECK(expert_num);
 
-    auto logits = Gate(p.input, moe.gate);
+    const bool use_sigmoid = (param_.scoring_func == "sigmoid");
+
+    auto logits = Gate(p.input, moe.gate, !use_sigmoid);
 
     TM_DEBUG_TENSOR(logits, "logits", 2);
 
@@ -96,11 +101,29 @@ void MoeFfnLayer::Forward(ForwardParam& p)
     // dump_logits(tokens, layer_id);
 
     bool softmax = true;
+    if (use_sigmoid) {
+        softmax = false;
+    }
     if (param_.topk_method == "group_limited_greedy") {
         invokeMoeSoftmaxMaskTopKGroups(
             logits.data(), tokens, expert_num, expert_num / param_.n_group, param_.topk_group, st);
         sync_check_cuda_error();
         softmax = false;
+    }
+
+    const float* router_bias = nullptr;
+    if (use_sigmoid && moe.gate.bias) {
+        // The gate bias tensor may be stored in the model's data_type (e.g. float16),
+        // but the kernel expects float32. Convert and cache on first use.
+        if (!router_bias_f32_) {
+            const auto  bias_size = moe.gate.bias.size();
+            const auto  src_2d    = moe.gate.bias.view({1, bias_size});
+            Tensor      dst_2d{{1, bias_size}, kFloat, kDEVICE};
+            invokeCastFloat2D(src_2d, dst_2d, st);
+            sync_check_cuda_error();
+            router_bias_f32_ = dst_2d.buffer();
+        }
+        router_bias = router_bias_f32_.data();
     }
 
     /// TODO: fix illegal memory access even if NaN are present in logits
@@ -119,6 +142,8 @@ void MoeFfnLayer::Forward(ForwardParam& p)
                      softmax,
                      param_.norm_topk_prob,
                      param_.routed_scale,
+                     router_bias,
+                     use_sigmoid,
                      st);
     sync_check_cuda_error();
 

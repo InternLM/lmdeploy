@@ -32,11 +32,10 @@ def pack_u4_row(x: torch.Tensor) -> torch.Tensor:
 
 
 def generate_zero_point(g):
-    weight_shapes = g('weight_shape')
+    weight_scales = g('weight_scale')
     result = []
-    for weight_shape in weight_shapes:
-        row, col = weight_shape
-        tensor = torch.full((row, col // 128), 8, dtype=torch.uint8)
+    for scale in weight_scales:
+        tensor = torch.full(scale.shape, 8, dtype=torch.uint8)
         result.append(tensor)
     return (*result, )
 

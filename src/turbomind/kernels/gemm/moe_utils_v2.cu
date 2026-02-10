@@ -271,7 +271,9 @@ __global__ void MoeGateKernel_v8(float*       scales,  // [e,n]
                                  int          top_k,
                                  bool         softmax,
                                  bool         norm_topk,
-                                 float        routed_scale)
+                                 float        routed_scale,
+                                 const float* router_bias,
+                                 bool         use_sigmoid)
 {
     constexpr int max_tiles         = kMoeGateMaxTiles;
     constexpr int threads_per_token = max_expert_num / items_per_thread;  // 8
@@ -298,6 +300,7 @@ __global__ void MoeGateKernel_v8(float*       scales,  // [e,n]
 
     float data[items_per_thread];
     int   idxs[items_per_thread];
+    float orig_data[items_per_thread];
 
 #if 0
     PRAGMA_UNROLL
@@ -428,6 +431,35 @@ __global__ void MoeGateKernel_v8(float*       scales,  // [e,n]
     //     }
     // }
 
+    // Sigmoid mode: apply sigmoid to logits, save original scores, then add bias for top-k selection
+    if (use_sigmoid) {
+        PRAGMA_UNROLL
+        for (int i = 0; i < items_per_thread; ++i) {
+            if (data[i] > -std::numeric_limits<float>::infinity()) {
+                data[i] = 1.0f / (1.0f + expf(-data[i]));
+            }
+            else {
+                data[i] = 0.0f;
+            }
+            orig_data[i] = data[i];  // save original sigmoid scores (without bias)
+        }
+        // Add bias for top-k selection only
+        if (router_bias && ti < token_num) {
+            PRAGMA_UNROLL
+            for (int i = 0; i < items_per_thread; i += access_size) {
+                const int e = ei * items_per_thread + i;
+                if (e < expert_num) {
+                    Array<float, access_size> bias_vec;
+                    Ldg(bias_vec, &router_bias[e]);
+                    PRAGMA_UNROLL
+                    for (int c = 0; c < access_size; ++c) {
+                        data[i + c] += bias_vec[c];
+                    }
+                }
+            }
+        }
+    }
+
     unsigned mask = (unsigned)-1;
     float    max_logit;
 
@@ -504,6 +536,26 @@ __global__ void MoeGateKernel_v8(float*       scales,  // [e,n]
             sum_prob += __shfl_xor_sync((uint32_t)-1, sum_prob, m);
         }
         sum_prob = fdividef(1.f, sum_prob);
+    }
+    else if (use_sigmoid) {
+        // Use original sigmoid scores (without bias) for weight computation
+        PRAGMA_UNROLL
+        for (int i = 0; i < items_per_thread; ++i) {
+            if (used[i]) {
+                sum_prob += orig_data[i];
+            }
+        }
+        // Reduce across threads
+        PRAGMA_UNROLL
+        for (int m = threads_per_token / 2; m >= 1; m /= 2) {
+            sum_prob += __shfl_xor_sync((uint32_t)-1, sum_prob, m);
+        }
+        sum_prob = fdividef(1.f, sum_prob);
+        // Replace data with orig_data for the selected experts
+        PRAGMA_UNROLL
+        for (int i = 0; i < items_per_thread; ++i) {
+            data[i] = orig_data[i];
+        }
     }
     else {
         sum_prob = 1.f;
@@ -583,6 +635,8 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n] -> n
                       bool         softmax,
                       bool         norm_topk,
                       float        routed_scale,
+                      const float* router_bias,
+                      bool         use_sigmoid,
                       cudaStream_t st)
 {
     constexpr int base_log_tile = 9;
@@ -616,12 +670,14 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n] -> n
                 experts_per_token,
                 softmax,
                 norm_topk,
-                routed_scale);
+                routed_scale,
+                router_bias,
+                use_sigmoid);
 
         return true;
     };
 
-    if (!softmax && norm_topk) {
+    if (!softmax && !use_sigmoid && norm_topk) {
         // norm top-k is part of softmax impl
         TM_CHECK(0) << softmax << " " << norm_topk;
     }
