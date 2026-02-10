@@ -26,7 +26,7 @@ class InternS1ProVisionModel(VisionModel):
     Basically the same preprocessing as Qwen3VL, but with Time Series support.
     """
 
-    _arch = ['InternS1ProForConditionalGeneration']
+    _arch = ['InternS1ProForConditionalGeneration', 'InternS1_1_ForConditionalGeneration']
 
     def build_preprocessor(self):
         check_transformers()
