@@ -9,12 +9,10 @@ future test modules) without duplication.
 import json
 
 from openai import OpenAI
-
 from utils.constant import DEFAULT_PORT
 
 BASE_HTTP_URL = 'http://localhost'
 BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
-
 
 #: Supported reasoning parser names (from lmdeploy ReasoningParserManager)
 REASONING_PARSER_NAMES = ['deepseek-r1', 'qwen-qwq', 'intern-s1']
@@ -22,8 +20,6 @@ REASONING_PARSER_NAMES = ['deepseek-r1', 'qwen-qwq', 'intern-s1']
 #: Think-tag delimiters used by DeepSeek-R1 and QwenQwQ parsers
 THINK_START_TOKEN = '<think>'
 THINK_END_TOKEN = '</think>'
-
-
 
 #: Supported tool parser names (from lmdeploy ToolParserManager)
 TOOL_PARSER_NAMES = ['qwen', 'qwen3', 'qwen2d5', 'internlm', 'intern-s1', 'llama3']
@@ -56,7 +52,6 @@ REASONING_PARSER_MARK_MAP = {
     'intern-s1': 'qwenqwq_parser',
 }
 
-
 # -- Basic tools (English) --------------------------------------------------
 
 WEATHER_TOOL = {
@@ -70,7 +65,7 @@ WEATHER_TOOL = {
                 'city': {
                     'type': 'string',
                     'description': 'The city to find the weather for, '
-                                   'e.g. San Francisco',
+                    'e.g. San Francisco',
                 },
                 'state': {
                     'type': 'string',
@@ -184,7 +179,9 @@ NESTED_PARAM_TOOL = {
                 'attendees': {
                     'type': 'array',
                     'description': 'List of attendee emails',
-                    'items': {'type': 'string'},
+                    'items': {
+                        'type': 'string'
+                    },
                 },
                 'priority': {
                     'type': 'string',
@@ -225,8 +222,6 @@ ALL_OPTIONAL_TOOL = {
 }
 
 
-
-
 def get_client_and_model(base_url=None):
     """Return an ``OpenAI`` client and the first available model name."""
     url = base_url or BASE_URL
@@ -237,34 +232,29 @@ def get_client_and_model(base_url=None):
 
 # -- Assertion helpers -------------------------------------------------------
 
+
 def assert_tool_call_fields(tool_call):
     """Assert a single tool call object has all required fields."""
-    assert tool_call.type == 'function', (
-        f'tool_call.type should be "function", got {tool_call.type}')
-    assert tool_call.function is not None, (
-        'tool_call.function should not be None')
-    assert isinstance(tool_call.id, str), (
-        f'tool_call.id should be a string, got {type(tool_call.id)}')
-    assert len(tool_call.id) >= 1, (
-        f'tool_call.id should be non-empty, got "{tool_call.id}"')
-    assert isinstance(tool_call.function.name, str), (
-        f'function.name should be a string, got {type(tool_call.function.name)}')
-    assert len(tool_call.function.name) > 0, (
-        'function.name should be non-empty')
-    assert isinstance(tool_call.function.arguments, str), (
-        f'function.arguments should be a string, '
-        f'got {type(tool_call.function.arguments)}')
+    assert tool_call.type == 'function', (f'tool_call.type should be "function", got {tool_call.type}')
+    assert tool_call.function is not None, ('tool_call.function should not be None')
+    assert isinstance(tool_call.id, str), (f'tool_call.id should be a string, got {type(tool_call.id)}')
+    assert len(tool_call.id) >= 1, (f'tool_call.id should be non-empty, got "{tool_call.id}"')
+    assert isinstance(tool_call.function.name,
+                      str), (f'function.name should be a string, got {type(tool_call.function.name)}')
+    assert len(tool_call.function.name) > 0, ('function.name should be non-empty')
+    assert isinstance(tool_call.function.arguments, str), (f'function.arguments should be a string, '
+                                                           f'got {type(tool_call.function.arguments)}')
 
 
 def assert_arguments_parseable(arguments_str):
     """Assert *arguments_str* is valid JSON dict; return the parsed dict."""
     parsed = json.loads(arguments_str)
-    assert isinstance(parsed, dict), (
-        f'Parsed arguments should be a dict, got {type(parsed)}')
+    assert isinstance(parsed, dict), (f'Parsed arguments should be a dict, got {type(parsed)}')
     return parsed
 
 
 # -- Stream consumption helpers ----------------------------------------------
+
 
 def collect_stream_tool_call(stream):
     """Consume a streaming response and return aggregated tool-call data.
@@ -309,8 +299,7 @@ def collect_stream_tool_call(stream):
 def collect_stream_parallel_tool_calls(stream):
     """Consume a streaming response that may contain parallel tool calls.
 
-    Returns (tool_calls_data, finish_reason_count) where tool_calls_data
-    is a dict  index -> {name, args_str, id}.
+    Returns (tool_calls_data, finish_reason_count) where tool_calls_data is a dict  index -> {name, args_str, id}.
     """
     tool_calls_data = {}
     finish_reason_count = 0
@@ -325,7 +314,9 @@ def collect_stream_parallel_tool_calls(stream):
                 idx = stc.index if stc.index is not None else 0
                 if idx not in tool_calls_data:
                     tool_calls_data[idx] = {
-                        'name': None, 'args_str': '', 'id': None,
+                        'name': None,
+                        'args_str': '',
+                        'id': None,
                     }
                 if stc.id:
                     tool_calls_data[idx]['id'] = stc.id
@@ -333,8 +324,7 @@ def collect_stream_parallel_tool_calls(stream):
                     if stc.function.name:
                         tool_calls_data[idx]['name'] = stc.function.name
                     if stc.function.arguments:
-                        tool_calls_data[idx]['args_str'] += (
-                            stc.function.arguments)
+                        tool_calls_data[idx]['args_str'] += (stc.function.arguments)
 
     return tool_calls_data, finish_reason_count
 
@@ -353,7 +343,8 @@ def collect_stream_content(stream):
 
 
 def collect_stream_reasoning(stream):
-    """Consume a streaming response, collecting reasoning + content + tool calls.
+    """Consume a streaming response, collecting reasoning + content + tool
+    calls.
 
     Returns a dict with keys:
         reasoning_content   – aggregated reasoning string
@@ -406,7 +397,9 @@ def collect_stream_reasoning(stream):
                 idx = stc.index if stc.index is not None else 0
                 if idx not in result['tool_calls']:
                     result['tool_calls'][idx] = {
-                        'name': None, 'args_str': '', 'id': None,
+                        'name': None,
+                        'args_str': '',
+                        'id': None,
                     }
                 if stc.id:
                     result['tool_calls'][idx]['id'] = stc.id
@@ -414,13 +407,13 @@ def collect_stream_reasoning(stream):
                     if stc.function.name:
                         result['tool_calls'][idx]['name'] = stc.function.name
                     if stc.function.arguments:
-                        result['tool_calls'][idx]['args_str'] += (
-                            stc.function.arguments)
+                        result['tool_calls'][idx]['args_str'] += (stc.function.arguments)
 
     return result
 
 
 # -- Reasoning extraction helpers -------------------------------------------
+
 
 def get_reasoning_content(message):
     """Extract reasoning_content from a chat completion message.
@@ -471,6 +464,7 @@ def get_reasoning_tokens(response):
 
 # -- Message-building helpers -----------------------------------------------
 
+
 def build_messages_with_tool_response(
     tool_call_id='call_test_001',
     function_name='get_current_weather',
@@ -486,8 +480,10 @@ def build_messages_with_tool_response(
             'content': "What's the weather like in Dallas, TX?",
         },
         {
-            'role': 'assistant',
-            'content': None,
+            'role':
+            'assistant',
+            'content':
+            None,
             'tool_calls': [{
                 'id': tool_call_id,
                 'type': 'function',
@@ -521,8 +517,10 @@ def build_messages_with_parallel_tool_responses():
             'content': "What's the weather in Dallas, TX and San Francisco, CA?",
         },
         {
-            'role': 'assistant',
-            'content': None,
+            'role':
+            'assistant',
+            'content':
+            None,
             'tool_calls': [
                 {
                     'id': 'call_001',
@@ -569,17 +567,19 @@ def build_reasoning_tool_roundtrip_messages(tool_call_id='call_reason_001'):
         {
             'role': 'system',
             'content': 'You are a helpful assistant that can use tools. '
-                       'Think through problems step by step.',
+            'Think through problems step by step.',
         },
         {
             'role': 'user',
             'content': "I'm visiting Dallas, TX. Should I bring an umbrella?",
         },
         {
-            'role': 'assistant',
-            'content': 'Let me think about this. To answer whether you need '
-                       'an umbrella, I should check the current weather in '
-                       'Dallas, TX.',
+            'role':
+            'assistant',
+            'content':
+            'Let me think about this. To answer whether you need '
+            'an umbrella, I should check the current weather in '
+            'Dallas, TX.',
             'tool_calls': [{
                 'id': tool_call_id,
                 'type': 'function',
@@ -590,9 +590,12 @@ def build_reasoning_tool_roundtrip_messages(tool_call_id='call_reason_001'):
             }],
         },
         {
-            'role': 'tool',
-            'tool_call_id': tool_call_id,
-            'content': json.dumps({
+            'role':
+            'tool',
+            'tool_call_id':
+            tool_call_id,
+            'content':
+            json.dumps({
                 'temperature': 95,
                 'unit': 'fahrenheit',
                 'description': 'Sunny with clear skies',

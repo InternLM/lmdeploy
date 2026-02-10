@@ -1,38 +1,23 @@
 import json
-import re
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 from utils.constant import BACKEND_LIST, RESTFUL_MODEL_LIST
-from utils.tool_reasoning_definitions import (
-    CALCULATOR_TOOL,
-    REASONING_PARSER_NAMES,
-    SEARCH_TOOL,
-    THINK_END_TOKEN,
-    THINK_START_TOKEN,
-    WEATHER_TOOL,
-    WEATHER_TOOL_CN,
-    assert_arguments_parseable,
-    assert_tool_call_fields,
-    build_messages_with_tool_response,
-    build_reasoning_tool_roundtrip_messages,
-    collect_stream_reasoning,
-    get_client_and_model,
-    get_reasoning_content,
-    get_reasoning_tokens,
-)
+from utils.tool_reasoning_definitions import (CALCULATOR_TOOL, REASONING_PARSER_NAMES, SEARCH_TOOL, THINK_END_TOKEN,
+                                              THINK_START_TOKEN, WEATHER_TOOL, WEATHER_TOOL_CN,
+                                              assert_arguments_parseable, assert_tool_call_fields,
+                                              build_reasoning_tool_roundtrip_messages, collect_stream_reasoning,
+                                              get_client_and_model, get_reasoning_content, get_reasoning_tokens)
 
-_LMDEPLOY_ROOT = str(
-    Path(__file__).resolve().parents[3] / 'lmdeploy'
-)
+_LMDEPLOY_ROOT = str(Path(__file__).resolve().parents[3] / 'lmdeploy')
 _PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
 for _p in (_PROJECT_ROOT, _LMDEPLOY_ROOT):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-# Lazy imports – only used by parser unit-test classes
+# Lazy imports - only used by parser unit-test classes
 _deepseek_parser_cls = None
 _qwen_parser_cls = None
 _parser_manager = None
@@ -111,13 +96,11 @@ def _apply_parser_marks(cls):
     return cls
 
 
-
-
 MESSAGES_REASONING_BASIC = [
     {
         'role': 'system',
         'content': 'You are a helpful assistant. Think step by step '
-                   'before answering.',
+        'before answering.',
     },
     {
         'role': 'user',
@@ -127,16 +110,20 @@ MESSAGES_REASONING_BASIC = [
 
 MESSAGES_REASONING_COMPLEX = [
     {
-        'role': 'system',
-        'content': 'You are a math tutor. Always think through the problem '
-                   'step by step before providing the final answer.',
+        'role':
+        'system',
+        'content':
+        'You are a math tutor. Always think through the problem '
+        'step by step before providing the final answer.',
     },
     {
-        'role': 'user',
-        'content': 'A train leaves station A at 60 km/h and another train '
-                   'leaves station B at 80 km/h. If the stations are 280 km '
-                   'apart and trains leave at the same time heading towards '
-                   'each other, when will they meet?',
+        'role':
+        'user',
+        'content':
+        'A train leaves station A at 60 km/h and another train '
+        'leaves station B at 80 km/h. If the stations are 280 km '
+        'apart and trains leave at the same time heading towards '
+        'each other, when will they meet?',
     },
 ]
 
@@ -149,14 +136,16 @@ MESSAGES_REASONING_SIMPLE = [
 
 MESSAGES_REASONING_WEATHER_TOOL = [
     {
-        'role': 'system',
-        'content': 'You are a helpful assistant that can use tools. '
-                   'Think step by step before deciding whether to use a tool.',
+        'role':
+        'system',
+        'content':
+        'You are a helpful assistant that can use tools. '
+        'Think step by step before deciding whether to use a tool.',
     },
     {
         'role': 'user',
         'content': "I'm traveling to Dallas, TX tomorrow. Should I pack "
-                   'an umbrella? Check the weather first.',
+        'an umbrella? Check the weather first.',
     },
 ]
 
@@ -168,7 +157,7 @@ MESSAGES_REASONING_CN = [
     {
         'role': 'user',
         'content': '一辆火车从A站以60公里/小时出发，另一辆从B站以80公里/小时出发。'
-                   '如果两站相距280公里，两车相向而行，何时相遇？',
+        '如果两站相距280公里，两车相向而行，何时相遇？',
     },
 ]
 
@@ -188,25 +177,24 @@ MESSAGES_REASONING_MULTI_TURN = [
     {
         'role': 'user',
         'content': 'Now what is the sum of the first 100 natural numbers? '
-                   'Explain your reasoning.',
+        'Explain your reasoning.',
     },
 ]
 
 MESSAGES_REASONING_PARALLEL_TOOLS = [
     {
-        'role': 'system',
-        'content': 'You are a helpful assistant. Think about what tools to '
-                   'use, then call them. You can call multiple tools at once.',
+        'role':
+        'system',
+        'content':
+        'You are a helpful assistant. Think about what tools to '
+        'use, then call them. You can call multiple tools at once.',
     },
     {
         'role': 'user',
         'content': "What's the weather in Dallas, TX? "
-                   'Also calculate 37 * 43.',
+        'Also calculate 37 * 43.',
     },
 ]
-
-
-
 
 
 @_apply_parser_marks
@@ -218,8 +206,7 @@ class TestReasoningParserManager:
         mgr = _get_parser_manager()
         for name in REASONING_PARSER_NAMES:
             cls = mgr.get(name)
-            assert cls is not None, (
-                f'Parser "{name}" not found in ReasoningParserManager')
+            assert cls is not None, (f'Parser "{name}" not found in ReasoningParserManager')
 
     def test_deepseek_r1_registered(self):
         mgr = _get_parser_manager()
@@ -234,7 +221,7 @@ class TestReasoningParserManager:
         assert cls.__name__ == 'QwenQwQReasoningParser'
 
     def test_intern_s1_registered(self):
-        """intern-s1 should map to QwenQwQReasoningParser."""
+        """Intern-s1 should map to QwenQwQReasoningParser."""
         mgr = _get_parser_manager()
         cls = mgr.get('intern-s1')
         assert cls is not None
@@ -282,7 +269,8 @@ class TestDeepSeekR1ParserNonStreaming:
         assert '7' in final
 
     def test_no_think_tags_at_all(self):
-        """No think tags → treated as all-reasoning content (DeepSeek-R1 behaviour)."""
+        """No think tags → treated as all-reasoning content (DeepSeek-R1
+        behaviour)."""
         tok = _make_mock_tokenizer()
         parser = _get_deepseek_parser_cls()(tok)
         req = _make_mock_request()
@@ -326,11 +314,9 @@ class TestDeepSeekR1ParserNonStreaming:
         parser = _get_deepseek_parser_cls()(tok)
         req = _make_mock_request()
 
-        model_output = (
-            '<think>\nStep 1: calculate 37 * 40 = 1480\n'
-            'Step 2: calculate 37 * 3 = 111\n'
-            'Step 3: 1480 + 111 = 1591\n</think>The answer is 1591.'
-        )
+        model_output = ('<think>\nStep 1: calculate 37 * 40 = 1480\n'
+                        'Step 2: calculate 37 * 3 = 111\n'
+                        'Step 3: 1480 + 111 = 1591\n</think>The answer is 1591.')
         reasoning, final = parser.extract_reasoning_content(model_output, req)
 
         assert reasoning is not None
@@ -344,9 +330,6 @@ class TestDeepSeekR1ParserNonStreaming:
 @pytest.mark.deepseek_r1_parser
 class TestDeepSeekR1ParserStreaming:
     """Unit tests for DeepSeekR1ReasoningParser streaming extraction."""
-
-    def _token_id(self, token_str, vocab):
-        return vocab.get(token_str, -1)
 
     def test_think_start_token_only(self):
         """Single <think> token → return None (skip)."""
@@ -696,10 +679,8 @@ class TestReasoningParserEdgeCases:
         parser = _get_deepseek_parser_cls()(tok)
         req = _make_mock_request()
 
-        model_output = (
-            '<think>Let\'s check: 2 > 1 & 3 < 5, also "quoted" text</think>'
-            'All good.'
-        )
+        model_output = ('<think>Let\'s check: 2 > 1 & 3 < 5, also "quoted" text</think>'
+                        'All good.')
         reasoning, final = parser.extract_reasoning_content(model_output, req)
 
         assert reasoning is not None
@@ -711,10 +692,8 @@ class TestReasoningParserEdgeCases:
         parser = _get_qwen_parser_cls()(tok)
         req = _make_mock_request()
 
-        model_output = (
-            '<think>Let\'s check: 2 > 1 & 3 < 5, also "quoted" text</think>'
-            'All good.'
-        )
+        model_output = ('<think>Let\'s check: 2 > 1 & 3 < 5, also "quoted" text</think>'
+                        'All good.')
         reasoning, final = parser.extract_reasoning_content(model_output, req)
 
         assert reasoning is not None
@@ -722,7 +701,8 @@ class TestReasoningParserEdgeCases:
 
     @pytest.mark.parametrize('parser_name', REASONING_PARSER_NAMES)
     def test_parser_instantiation(self, parser_name):
-        """Every registered parser should be instantiable with a mock tokenizer."""
+        """Every registered parser should be instantiable with a mock
+        tokenizer."""
         mgr = _get_parser_manager()
         cls = mgr.get(parser_name)
         assert cls is not None
@@ -773,10 +753,8 @@ class TestReasoningBasic:
         choice = response.choices[0]
         # At minimum, the model must produce some output
         has_reasoning = get_reasoning_content(choice.message) is not None
-        has_content = (choice.message.content is not None
-                       and len(choice.message.content.strip()) > 0)
-        assert has_reasoning or has_content, (
-            'Model must produce reasoning_content or content (or both)')
+        has_content = (choice.message.content is not None and len(choice.message.content.strip()) > 0)
+        assert has_reasoning or has_content, ('Model must produce reasoning_content or content (or both)')
 
 
 @_apply_marks
@@ -803,8 +781,7 @@ class TestReasoningStreaming:
 
         # Model should produce reasoning and/or content
         total_output = result['reasoning_content'] + result['content']
-        assert len(total_output) > 0, (
-            'Stream should produce reasoning or content')
+        assert len(total_output) > 0, ('Stream should produce reasoning or content')
 
     def test_reasoning_chunks_count(self, backend, model_case):
         """For complex questions, expect multiple reasoning chunks."""
@@ -822,8 +799,7 @@ class TestReasoningStreaming:
         result = collect_stream_reasoning(stream)
 
         if result['reasoning_chunks'] > 0:
-            assert len(result['reasoning_content']) > 10, (
-                'Complex question should produce substantial reasoning')
+            assert len(result['reasoning_content']) > 10, ('Complex question should produce substantial reasoning')
 
 
 @_apply_marks
@@ -831,7 +807,8 @@ class TestReasoningStreamConsistency:
     """Reasoning output should be consistent across modes."""
 
     def test_reasoning_presence_consistent(self, backend, model_case):
-        """If non-streaming has reasoning, streaming should too (and vice versa)."""
+        """If non-streaming has reasoning, streaming should too (and vice
+        versa)."""
         client, model_name = get_client_and_model()
 
         # Non-streaming
@@ -862,8 +839,7 @@ class TestReasoningStreamConsistency:
         ns_total = (ns_reasoning or '') + ns_content
         s_total = result['reasoning_content'] + result['content']
 
-        assert len(ns_total) > 0 and len(s_total) > 0, (
-            'Both streaming and non-streaming should produce output')
+        assert len(ns_total) > 0 and len(s_total) > 0, ('Both streaming and non-streaming should produce output')
 
 
 @_apply_marks
@@ -888,8 +864,7 @@ class TestReasoningContentQuality:
         full_output = (reasoning or '') + content
 
         # For a train problem, expect some mathematical reasoning
-        assert len(full_output) > 20, (
-            'Complex problem should produce substantial output')
+        assert len(full_output) > 20, ('Complex problem should produce substantial output')
 
     def test_reasoning_not_duplicated_in_content(self, backend, model_case):
         """Reasoning and content should not be identical."""
@@ -909,8 +884,7 @@ class TestReasoningContentQuality:
 
         if reasoning and content:
             # They can overlap but should not be exactly the same
-            assert reasoning.strip() != content.strip(), (
-                'reasoning_content and content should differ')
+            assert reasoning.strip() != content.strip(), ('reasoning_content and content should differ')
 
 
 @_apply_marks
@@ -918,7 +892,8 @@ class TestReasoningWithToolCalls:
     """Model reasons THEN calls a tool."""
 
     def test_reasoning_before_tool_call(self, backend, model_case):
-        """For tool-triggering questions, model should reason then call tool."""
+        """For tool-triggering questions, model should reason then call
+        tool."""
         client, model_name = get_client_and_model()
 
         response = client.chat.completions.create(
@@ -952,7 +927,9 @@ class TestReasoningWithToolCalls:
             tools=[WEATHER_TOOL],
             tool_choice={
                 'type': 'function',
-                'function': {'name': 'get_current_weather'},
+                'function': {
+                    'name': 'get_current_weather'
+                },
             },
             logprobs=False,
         )
@@ -1063,12 +1040,10 @@ class TestReasoningWithToolChoice:
         )
 
         choice = response.choices[0]
-        assert (choice.message.tool_calls is None
-                or len(choice.message.tool_calls) == 0)
+        assert (choice.message.tool_calls is None or len(choice.message.tool_calls) == 0)
 
         has_reasoning = get_reasoning_content(choice.message) is not None
-        has_content = (choice.message.content is not None
-                       and len(choice.message.content.strip()) > 0)
+        has_content = (choice.message.content is not None and len(choice.message.content.strip()) > 0)
         assert has_reasoning or has_content
 
     def test_reasoning_tool_choice_specific(self, backend, model_case):
@@ -1083,7 +1058,9 @@ class TestReasoningWithToolChoice:
             tools=[WEATHER_TOOL, SEARCH_TOOL],
             tool_choice={
                 'type': 'function',
-                'function': {'name': 'get_current_weather'},
+                'function': {
+                    'name': 'get_current_weather'
+                },
             },
             logprobs=False,
         )
@@ -1199,7 +1176,7 @@ class TestReasoningTokenAccounting:
     """Verify token usage includes reasoning tokens when available."""
 
     def test_usage_present(self, backend, model_case):
-        """usage field should be present and have positive counts."""
+        """Usage field should be present and have positive counts."""
         client, model_name = get_client_and_model()
 
         response = client.chat.completions.create(
@@ -1214,8 +1191,7 @@ class TestReasoningTokenAccounting:
         assert response.usage.prompt_tokens > 0
         assert response.usage.total_tokens > 0
         assert response.usage.completion_tokens > 0
-        assert response.usage.total_tokens == (
-            response.usage.prompt_tokens + response.usage.completion_tokens)
+        assert response.usage.total_tokens == (response.usage.prompt_tokens + response.usage.completion_tokens)
 
     def test_reasoning_tokens_if_available(self, backend, model_case):
         """If reasoning_tokens is exposed, it should be non-negative."""
@@ -1232,8 +1208,7 @@ class TestReasoningTokenAccounting:
         rt = get_reasoning_tokens(response)
         if rt is not None:
             assert rt >= 0, f'reasoning_tokens should be >= 0, got {rt}'
-            assert rt <= response.usage.completion_tokens, (
-                'reasoning_tokens should not exceed completion_tokens')
+            assert rt <= response.usage.completion_tokens, ('reasoning_tokens should not exceed completion_tokens')
 
 
 @_apply_marks
@@ -1285,7 +1260,7 @@ class TestReasoningMultilingual:
             {
                 'role': 'system',
                 'content': '你是一个有用的助手，可以使用工具。'
-                           '请先思考是否需要使用工具。',
+                '请先思考是否需要使用工具。',
             },
             {
                 'role': 'user',
@@ -1414,7 +1389,9 @@ class TestReasoningResponseValidation:
             tools=[WEATHER_TOOL],
             tool_choice={
                 'type': 'function',
-                'function': {'name': 'get_current_weather'},
+                'function': {
+                    'name': 'get_current_weather'
+                },
             },
             logprobs=False,
         )
@@ -1449,7 +1426,7 @@ class TestReasoningEdgeCases:
         assert len(full) > 0
 
     def test_no_think_tags_leaked_to_content(self, backend, model_case):
-        """<think>/<\\/think> tags should not appear in final content."""
+        """<think>/</think> tags should not appear in final content."""
         client, model_name = get_client_and_model()
 
         response = client.chat.completions.create(
@@ -1462,10 +1439,8 @@ class TestReasoningEdgeCases:
 
         content = response.choices[0].message.content
         if content:
-            assert THINK_START_TOKEN not in content, (
-                f'<think> should not leak into content: {content[:100]}')
-            assert THINK_END_TOKEN not in content, (
-                f'</think> should not leak into content: {content[:100]}')
+            assert THINK_START_TOKEN not in content, (f'<think> should not leak into content: {content[:100]}')
+            assert THINK_END_TOKEN not in content, (f'</think> should not leak into content: {content[:100]}')
 
     def test_no_think_tags_leaked_streaming(self, backend, model_case):
         """Streaming: <think> tags should not appear in content chunks."""
@@ -1500,8 +1475,7 @@ class TestReasoningEdgeCases:
 
         choice = response.choices[0]
         assert choice.message.role == 'assistant'
-        assert (choice.message.tool_calls is None
-                or len(choice.message.tool_calls) == 0)
+        assert (choice.message.tool_calls is None or len(choice.message.tool_calls) == 0)
 
         reasoning = get_reasoning_content(choice.message)
         content = choice.message.content or ''
@@ -1524,8 +1498,7 @@ class TestReasoningEdgeCases:
 
             choice = response.choices[0]
             assert choice.message.role == 'assistant'
-            assert (choice.message.tool_calls is None
-                    or len(choice.message.tool_calls) == 0)
+            assert (choice.message.tool_calls is None or len(choice.message.tool_calls) == 0)
         except Exception:
             # Some backends reject empty tools list
             pass

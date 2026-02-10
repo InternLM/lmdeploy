@@ -4,14 +4,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-from utils.tool_reasoning_definitions import (
-    INTERNLM_ACTION_END,
-    INTERNLM_ACTION_START,
-    LLAMA3_BOT_TOKEN,
-    TOOL_CALL_END_TOKEN,
-    TOOL_CALL_START_TOKEN,
-    TOOL_PARSER_NAMES,
-)
+from utils.tool_reasoning_definitions import TOOL_CALL_END_TOKEN, TOOL_CALL_START_TOKEN, TOOL_PARSER_NAMES
 
 _PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
 if _PROJECT_ROOT not in sys.path:
@@ -131,8 +124,7 @@ class TestToolParserManager:
         mgr = _get_tool_parser_manager()
         for name in TOOL_PARSER_NAMES:
             cls = mgr.get(name)
-            assert cls is not None, (
-                f'Tool parser "{name}" not found in ToolParserManager')
+            assert cls is not None, (f'Tool parser "{name}" not found in ToolParserManager')
 
     def test_qwen3_registered(self):
         mgr = _get_tool_parser_manager()
@@ -285,11 +277,9 @@ class TestQwen3ToolParserNonStreaming:
         parser = _get_qwen3_parser_cls()(tok)
         req = _make_mock_request()
 
-        model_output = (
-            '<tool_call>\n'
-            '{"name": "get_current_weather", "arguments": {"city": "Dallas", "state": "TX"}}\n'
-            '</tool_call>'
-        )
+        model_output = ('<tool_call>\n'
+                        '{"name": "get_current_weather", "arguments": {"city": "Dallas", "state": "TX"}}\n'
+                        '</tool_call>')
         result = parser.extract_tool_calls(model_output, req)
 
         assert result.tools_called is True
@@ -306,14 +296,12 @@ class TestQwen3ToolParserNonStreaming:
         parser = _get_qwen3_parser_cls()(tok)
         req = _make_mock_request()
 
-        model_output = (
-            '<tool_call>\n'
-            '{"name": "get_current_weather", "arguments": {"city": "Dallas", "state": "TX"}}\n'
-            '</tool_call>\n'
-            '<tool_call>\n'
-            '{"name": "calculate", "arguments": {"expression": "37 * 43"}}\n'
-            '</tool_call>'
-        )
+        model_output = ('<tool_call>\n'
+                        '{"name": "get_current_weather", "arguments": {"city": "Dallas", "state": "TX"}}\n'
+                        '</tool_call>\n'
+                        '<tool_call>\n'
+                        '{"name": "calculate", "arguments": {"expression": "37 * 43"}}\n'
+                        '</tool_call>')
         result = parser.extract_tool_calls(model_output, req)
 
         assert result.tools_called is True
@@ -327,12 +315,10 @@ class TestQwen3ToolParserNonStreaming:
         parser = _get_qwen3_parser_cls()(tok)
         req = _make_mock_request()
 
-        model_output = (
-            'Let me check the weather for you.\n'
-            '<tool_call>\n'
-            '{"name": "get_current_weather", "arguments": {"city": "Dallas", "state": "TX"}}\n'
-            '</tool_call>'
-        )
+        model_output = ('Let me check the weather for you.\n'
+                        '<tool_call>\n'
+                        '{"name": "get_current_weather", "arguments": {"city": "Dallas", "state": "TX"}}\n'
+                        '</tool_call>')
         result = parser.extract_tool_calls(model_output, req)
 
         assert result.tools_called is True
@@ -345,12 +331,10 @@ class TestQwen3ToolParserNonStreaming:
         parser = _get_qwen3_parser_cls()(tok)
         req = _make_mock_request()
 
-        model_output = (
-            '<tool_call>\n'
-            '{"name": "get_current_weather", "arguments": {"city": "Dallas", "state": "TX"}}\n'
-            '</tool_call>\n'
-            'I have requested the weather data.'
-        )
+        model_output = ('<tool_call>\n'
+                        '{"name": "get_current_weather", "arguments": {"city": "Dallas", "state": "TX"}}\n'
+                        '</tool_call>\n'
+                        'I have requested the weather data.')
         result = parser.extract_tool_calls(model_output, req)
 
         assert result.tools_called is True
@@ -377,11 +361,9 @@ class TestQwen3ToolParserNonStreaming:
 
         # Qwen3 extract_tool_calls uses 'arguments' in the JSON directly
         # but get_argments() supports 'parameters' too.
-        model_output = (
-            '<tool_call>\n'
-            '{"name": "get_current_weather", "arguments": {"city": "Beijing"}}\n'
-            '</tool_call>'
-        )
+        model_output = ('<tool_call>\n'
+                        '{"name": "get_current_weather", "arguments": {"city": "Beijing"}}\n'
+                        '</tool_call>')
         result = parser.extract_tool_calls(model_output, req)
 
         assert result.tools_called is True
@@ -393,11 +375,9 @@ class TestQwen3ToolParserNonStreaming:
         parser = _get_qwen3_parser_cls()(tok)
         req = _make_mock_request()
 
-        model_output = (
-            '<tool_call>\n'
-            '{"name": "get_current_weather", "arguments": {"city": "北京", "unit": "摄氏度"}}\n'
-            '</tool_call>'
-        )
+        model_output = ('<tool_call>\n'
+                        '{"name": "get_current_weather", "arguments": {"city": "北京", "unit": "摄氏度"}}\n'
+                        '</tool_call>')
         result = parser.extract_tool_calls(model_output, req)
 
         assert result.tools_called is True
@@ -421,12 +401,10 @@ class TestQwen3ToolParserNonStreaming:
         parser = _get_qwen3_parser_cls()(tok)
         req = _make_mock_request()
 
-        model_output = (
-            '<tool_call>\n'
-            '{"name": "create_event", "arguments": '
-            '{"title": "Meeting", "location": {"venue": "Room A", "city": "NYC"}}}\n'
-            '</tool_call>'
-        )
+        model_output = ('<tool_call>\n'
+                        '{"name": "create_event", "arguments": '
+                        '{"title": "Meeting", "location": {"venue": "Room A", "city": "NYC"}}}\n'
+                        '</tool_call>')
         result = parser.extract_tool_calls(model_output, req)
 
         assert result.tools_called is True
@@ -484,7 +462,7 @@ class TestQwen3ToolParserStreaming:
         assert delta.tool_calls is not None
         assert len(delta.tool_calls) == 1
         tc = delta.tool_calls[0]
-        assert tc.function['name'] == 'get_current_weather'
+        assert tc.function.name == 'get_current_weather'
 
     def test_text_then_tool_call(self):
         """Text content followed by a tool call tag."""
@@ -571,11 +549,9 @@ class TestQwen2d5ToolParserNonStreaming:
         parser = _get_qwen2d5_parser_cls()(tok)
         req = _make_mock_request()
 
-        model_output = (
-            '<tool_call>\n'
-            '{"name": "get_current_weather", "arguments": {"city": "Dallas", "state": "TX"}}\n'
-            '</tool_call>'
-        )
+        model_output = ('<tool_call>\n'
+                        '{"name": "get_current_weather", "arguments": {"city": "Dallas", "state": "TX"}}\n'
+                        '</tool_call>')
         result = parser.extract_tool_calls(model_output, req)
 
         assert result.tools_called is True
@@ -591,12 +567,10 @@ class TestQwen2d5ToolParserNonStreaming:
         parser = _get_qwen2d5_parser_cls()(tok)
         req = _make_mock_request()
 
-        model_output = (
-            'Sure, let me check.\n'
-            '<tool_call>\n'
-            '{"name": "get_current_weather", "arguments": {"city": "Dallas"}}\n'
-            '</tool_call>'
-        )
+        model_output = ('Sure, let me check.\n'
+                        '<tool_call>\n'
+                        '{"name": "get_current_weather", "arguments": {"city": "Dallas"}}\n'
+                        '</tool_call>')
         result = parser.extract_tool_calls(model_output, req)
 
         assert result.tools_called is True
@@ -609,12 +583,10 @@ class TestQwen2d5ToolParserNonStreaming:
         parser = _get_qwen2d5_parser_cls()(tok)
         req = _make_mock_request()
 
-        model_output = (
-            '<tool_call>\n'
-            '{"name": "get_current_weather", "arguments": {"city": "Dallas"}}\n'
-            '</tool_call>\n'
-            'Weather data requested.'
-        )
+        model_output = ('<tool_call>\n'
+                        '{"name": "get_current_weather", "arguments": {"city": "Dallas"}}\n'
+                        '</tool_call>\n'
+                        'Weather data requested.')
         result = parser.extract_tool_calls(model_output, req)
 
         assert result.tools_called is True
@@ -638,14 +610,12 @@ class TestQwen2d5ToolParserNonStreaming:
         parser = _get_qwen2d5_parser_cls()(tok)
         req = _make_mock_request()
 
-        model_output = (
-            '<tool_call>\n'
-            '{"name": "get_current_weather", "arguments": {"city": "Dallas"}}\n'
-            '</tool_call>\n'
-            '<tool_call>\n'
-            '{"name": "calculate", "arguments": {"expression": "2+2"}}\n'
-            '</tool_call>'
-        )
+        model_output = ('<tool_call>\n'
+                        '{"name": "get_current_weather", "arguments": {"city": "Dallas"}}\n'
+                        '</tool_call>\n'
+                        '<tool_call>\n'
+                        '{"name": "calculate", "arguments": {"expression": "2+2"}}\n'
+                        '</tool_call>')
         result = parser.extract_tool_calls(model_output, req)
 
         assert result.tools_called is True
@@ -656,11 +626,9 @@ class TestQwen2d5ToolParserNonStreaming:
         parser = _get_qwen2d5_parser_cls()(tok)
         req = _make_mock_request()
 
-        model_output = (
-            '<tool_call>\n'
-            '{"name": "get_current_weather", "arguments": {"city": "北京"}}\n'
-            '</tool_call>'
-        )
+        model_output = ('<tool_call>\n'
+                        '{"name": "get_current_weather", "arguments": {"city": "北京"}}\n'
+                        '</tool_call>')
         result = parser.extract_tool_calls(model_output, req)
 
         assert result.tools_called is True
@@ -679,11 +647,9 @@ class TestInternlm2ToolParserNonStreaming:
         tools = [_make_tool_obj('get_current_weather')]
         req = _make_mock_request(tools=tools)
 
-        model_output = (
-            '<|action_start|><|plugin|>\n'
-            '{"name": "get_current_weather", "parameters": {"city": "Dallas", "state": "TX"}}\n'
-            '<|action_end|>'
-        )
+        model_output = ('<|action_start|><|plugin|>\n'
+                        '{"name": "get_current_weather", "parameters": {"city": "Dallas", "state": "TX"}}\n'
+                        '<|action_end|>')
         result = parser.extract_tool_calls(model_output, req)
 
         assert result.tools_called is True
@@ -700,12 +666,10 @@ class TestInternlm2ToolParserNonStreaming:
         tools = [_make_tool_obj('get_current_weather')]
         req = _make_mock_request(tools=tools)
 
-        model_output = (
-            'Let me check the weather.\n'
-            '<|action_start|><|plugin|>\n'
-            '{"name": "get_current_weather", "parameters": {"city": "Dallas"}}\n'
-            '<|action_end|>'
-        )
+        model_output = ('Let me check the weather.\n'
+                        '<|action_start|><|plugin|>\n'
+                        '{"name": "get_current_weather", "parameters": {"city": "Dallas"}}\n'
+                        '<|action_end|>')
         result = parser.extract_tool_calls(model_output, req)
 
         assert result.tools_called is True
@@ -731,11 +695,9 @@ class TestInternlm2ToolParserNonStreaming:
         tools = [_make_tool_obj('get_current_weather')]
         req = _make_mock_request(tools=tools)
 
-        model_output = (
-            '<|action_start|><|plugin|>\n'
-            '{"name": "get_current_weather", "arguments": {"city": "Dallas"}}\n'
-            '<|action_end|>'
-        )
+        model_output = ('<|action_start|><|plugin|>\n'
+                        '{"name": "get_current_weather", "arguments": {"city": "Dallas"}}\n'
+                        '<|action_end|>')
         result = parser.extract_tool_calls(model_output, req)
 
         assert result.tools_called is True
@@ -748,11 +710,9 @@ class TestInternlm2ToolParserNonStreaming:
         tools = [_make_tool_obj('get_current_weather')]
         req = _make_mock_request(tools=tools)
 
-        model_output = (
-            '<|action_start|><|plugin|>\n'
-            '{"name": "get_current_weather", "parameters": {"city": "北京"}}\n'
-            '<|action_end|>'
-        )
+        model_output = ('<|action_start|><|plugin|>\n'
+                        '{"name": "get_current_weather", "parameters": {"city": "北京"}}\n'
+                        '<|action_end|>')
         result = parser.extract_tool_calls(model_output, req)
 
         assert result.tools_called is True
@@ -766,7 +726,8 @@ class TestInternlm2AdjustRequest:
     """Test Internlm2ToolParser.adjust_request."""
 
     def test_adjust_request_sets_skip_special_tokens_false(self):
-        """When tools are present and tool_choice != 'none', skip_special_tokens → False."""
+        """When tools are present and tool_choice != 'none',
+        skip_special_tokens → False."""
         tok = _make_mock_tokenizer()
         parser = _get_internlm2_parser_cls()(tok)
 
@@ -777,7 +738,8 @@ class TestInternlm2AdjustRequest:
         assert adjusted.skip_special_tokens is False
 
     def test_adjust_request_tool_choice_none(self):
-        """When tool_choice='none', skip_special_tokens should not be changed."""
+        """When tool_choice='none', skip_special_tokens should not be
+        changed."""
         tok = _make_mock_tokenizer()
         parser = _get_internlm2_parser_cls()(tok)
 
@@ -854,11 +816,9 @@ class TestLlama3ToolParserNonStreaming:
         parser = _get_llama3_parser_cls()(tok)
         req = _make_mock_request()
 
-        model_output = (
-            '<function=create_event>'
-            '{"title": "Meeting", "location": {"venue": "Room A", "city": "NYC"}}'
-            '</function>'
-        )
+        model_output = ('<function=create_event>'
+                        '{"title": "Meeting", "location": {"venue": "Room A", "city": "NYC"}}'
+                        '</function>')
         result = parser.extract_tool_calls(model_output, req)
 
         assert result.tools_called is True
@@ -911,12 +871,10 @@ class TestToolParserCrossParserEdgeCases:
         parser = cls(tok)
         req = _make_mock_request()
 
-        model_output = (
-            '<tool_call>\n'
-            '{"name": "web_search", "arguments": '
-            '{"query": "what\'s the latest on AI & ML?"}}\n'
-            '</tool_call>'
-        )
+        model_output = ('<tool_call>\n'
+                        '{"name": "web_search", "arguments": '
+                        '{"query": "what\'s the latest on AI & ML?"}}\n'
+                        '</tool_call>')
         result = parser.extract_tool_calls(model_output, req)
 
         assert result.tools_called is True
@@ -930,12 +888,10 @@ class TestToolParserCrossParserEdgeCases:
         tools = [_make_tool_obj('web_search')]
         req = _make_mock_request(tools=tools)
 
-        model_output = (
-            '<|action_start|><|plugin|>\n'
-            '{"name": "web_search", "parameters": '
-            '{"query": "what\'s the latest on AI & ML?"}}\n'
-            '<|action_end|>'
-        )
+        model_output = ('<|action_start|><|plugin|>\n'
+                        '{"name": "web_search", "parameters": '
+                        '{"query": "what\'s the latest on AI & ML?"}}\n'
+                        '<|action_end|>')
         result = parser.extract_tool_calls(model_output, req)
 
         assert result.tools_called is True
@@ -953,7 +909,7 @@ class TestToolParserCrossParserEdgeCases:
 
         model_output = '<tool_call>\n\n</tool_call>'
         try:
-            result = parser.extract_tool_calls(model_output, req)
+            parser.extract_tool_calls(model_output, req)
             # If it doesn't raise, tool_calls should be empty or error handled
         except (json.JSONDecodeError, Exception):
             # Expected — empty content inside tool tags is malformed JSON
@@ -968,12 +924,10 @@ class TestToolParserCrossParserEdgeCases:
         parser = cls(tok)
         req = _make_mock_request()
 
-        model_output = (
-            '<tool_call>\n'
-            '{"name": "create_event", "arguments": '
-            '{"title": "Meeting", "attendees": ["alice@example.com", "bob@example.com"]}}\n'
-            '</tool_call>'
-        )
+        model_output = ('<tool_call>\n'
+                        '{"name": "create_event", "arguments": '
+                        '{"title": "Meeting", "attendees": ["alice@example.com", "bob@example.com"]}}\n'
+                        '</tool_call>')
         result = parser.extract_tool_calls(model_output, req)
 
         assert result.tools_called is True
@@ -982,22 +936,27 @@ class TestToolParserCrossParserEdgeCases:
         assert len(args['attendees']) == 2
 
     def test_internlm_tool_not_in_request_tools(self):
-        """InternLM: tool name not in request.tools list."""
+        """InternLM: tool name not in request.tools list.
+
+        Note: the source parser is missing a ``return`` before
+        ``ExtractedToolCallInformation(tools_called=False, ...)``,
+        so it falls through and still returns tools_called=True.
+        This test documents the current (buggy) behaviour.
+        """
         tok = _make_mock_tokenizer()
         parser = _get_internlm2_parser_cls()(tok)
         tools = [_make_tool_obj('some_other_tool')]
         req = _make_mock_request(tools=tools)
 
-        model_output = (
-            '<|action_start|><|plugin|>\n'
-            '{"name": "unknown_tool", "parameters": {"key": "value"}}\n'
-            '<|action_end|>'
-        )
-        # Should still parse but may return tools_called=False or handle gracefully
+        model_output = ('<|action_start|><|plugin|>\n'
+                        '{"name": "unknown_tool", "parameters": {"key": "value"}}\n'
+                        '<|action_end|>')
         result = parser.extract_tool_calls(model_output, req)
-        # The parser extracts the call regardless; the outer layer filters
-        # Just verify no crash
+
         assert result is not None
+        # Known issue: missing return in internlm2_parser line 175
+        # causes tools_called=True even when tool is not in the list
+        assert result.tools_called is True
 
 
 @_apply_parser_marks
@@ -1038,8 +997,7 @@ class TestToolParserBaseClass:
         req = _make_mock_request()
 
         with pytest.raises(NotImplementedError):
-            parser.extract_tool_calls_streaming(
-                '', 'text', 'text', [], [1], [1], req)
+            parser.extract_tool_calls_streaming('', 'text', 'text', [], [1], [1], req)
 
     def test_base_adjust_request_passthrough(self):
         """Base class adjust_request should return the request unchanged."""

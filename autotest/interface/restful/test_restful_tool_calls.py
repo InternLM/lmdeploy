@@ -2,22 +2,12 @@ import json
 
 import pytest
 from utils.constant import BACKEND_LIST, RESTFUL_MODEL_LIST
-from utils.tool_reasoning_definitions import (
-    ALL_OPTIONAL_TOOL,
-    CALCULATOR_TOOL,
-    NESTED_PARAM_TOOL,
-    SEARCH_TOOL,
-    WEATHER_TOOL,
-    WEATHER_TOOL_CN,
-    assert_arguments_parseable,
-    assert_tool_call_fields,
-    build_messages_with_parallel_tool_responses,
-    build_messages_with_tool_response,
-    collect_stream_content,
-    collect_stream_parallel_tool_calls,
-    collect_stream_tool_call,
-    get_client_and_model,
-)
+from utils.tool_reasoning_definitions import (ALL_OPTIONAL_TOOL, CALCULATOR_TOOL, NESTED_PARAM_TOOL, SEARCH_TOOL,
+                                              WEATHER_TOOL, WEATHER_TOOL_CN, assert_arguments_parseable,
+                                              assert_tool_call_fields, build_messages_with_parallel_tool_responses,
+                                              build_messages_with_tool_response, collect_stream_content,
+                                              collect_stream_parallel_tool_calls, collect_stream_tool_call,
+                                              get_client_and_model)
 
 _CLASS_MARKS = [
     pytest.mark.order(8),
@@ -37,9 +27,11 @@ def _apply_marks(cls):
 
 MESSAGES_ASKING_FOR_WEATHER = [
     {
-        'role': 'system',
-        'content': 'You are a helpful assistant that can use tools. '
-                   'When asked about weather, use the get_current_weather tool.',
+        'role':
+        'system',
+        'content':
+        'You are a helpful assistant that can use tools. '
+        'When asked about weather, use the get_current_weather tool.',
     },
     {
         'role': 'user',
@@ -49,9 +41,11 @@ MESSAGES_ASKING_FOR_WEATHER = [
 
 MESSAGES_ASKING_FOR_SEARCH = [
     {
-        'role': 'system',
-        'content': 'You are a helpful assistant with access to tools. '
-                   'Use the web_search tool when asked to look something up.',
+        'role':
+        'system',
+        'content':
+        'You are a helpful assistant with access to tools. '
+        'Use the web_search tool when asked to look something up.',
     },
     {
         'role': 'user',
@@ -63,7 +57,7 @@ MESSAGES_ASKING_FOR_CALCULATION = [
     {
         'role': 'system',
         'content': 'You are a helpful assistant. When asked math questions, '
-                   'use the calculate tool.',
+        'use the calculate tool.',
     },
     {
         'role': 'user',
@@ -75,7 +69,7 @@ MESSAGES_ASKING_FOR_WEATHER_CN = [
     {
         'role': 'system',
         'content': '你是一个有用的助手，可以使用工具。'
-                   '当被问到天气时，请使用get_current_weather工具。',
+        '当被问到天气时，请使用get_current_weather工具。',
     },
     {
         'role': 'user',
@@ -92,31 +86,34 @@ MESSAGES_NO_TOOL_NEEDED = [
 
 MESSAGES_PARALLEL_WEATHER = [
     {
-        'role': 'system',
-        'content': 'You are a helpful assistant. When asked about weather '
-                   'in multiple cities, call the weather tool for each city '
-                   'separately.',
+        'role':
+        'system',
+        'content':
+        'You are a helpful assistant. When asked about weather '
+        'in multiple cities, call the weather tool for each city '
+        'separately.',
     },
     {
         'role': 'user',
         'content': "What's the weather in Dallas, TX and also in "
-                   'San Francisco, CA?',
+        'San Francisco, CA?',
     },
 ]
 
 MESSAGES_PARALLEL_MIXED = [
     {
-        'role': 'system',
-        'content': 'You are a helpful assistant with access to multiple tools. '
-                   'You can call multiple tools in parallel when needed.',
+        'role':
+        'system',
+        'content':
+        'You are a helpful assistant with access to multiple tools. '
+        'You can call multiple tools in parallel when needed.',
     },
     {
         'role': 'user',
         'content': "What's the weather in Dallas, TX? "
-                   'Also calculate 1234 * 5678.',
+        'Also calculate 1234 * 5678.',
     },
 ]
-
 
 
 @_apply_marks
@@ -211,11 +208,9 @@ class TestToolCallStreamConsistency:
         r = collect_stream_tool_call(stream)
         s_args = json.loads(r['args_str'])
 
-        assert ns_name == r['function_name'], (
-            f'Function name mismatch: non-stream={ns_name}, '
-            f'stream={r["function_name"]}')
-        assert ns_args == s_args, (
-            f'Arguments mismatch: non-stream={ns_args}, stream={s_args}')
+        assert ns_name == r['function_name'], (f'Function name mismatch: non-stream={ns_name}, '
+                                               f'stream={r["function_name"]}')
+        assert ns_args == s_args, (f'Arguments mismatch: non-stream={ns_args}, stream={s_args}')
 
 
 @_apply_marks
@@ -263,8 +258,7 @@ class TestToolCallChoice:
 
         choice = response.choices[0]
         assert choice.message.role == 'assistant'
-        assert (choice.message.tool_calls is None
-                or len(choice.message.tool_calls) == 0)
+        assert (choice.message.tool_calls is None or len(choice.message.tool_calls) == 0)
         assert choice.message.content is not None
         assert choice.finish_reason in ('stop', 'length')
 
@@ -288,8 +282,8 @@ class TestToolCallChoice:
             delta = chunk.choices[0].delta
             if delta.content:
                 chunks.append(delta.content)
-            assert (not delta.tool_calls or len(delta.tool_calls) == 0), (
-                'tool_choice="none" but got tool_calls in stream')
+            assert (not delta.tool_calls
+                    or len(delta.tool_calls) == 0), ('tool_choice="none" but got tool_calls in stream')
 
         assert len(chunks) > 0
 
@@ -343,8 +337,7 @@ class TestToolCallChoice:
             assert_arguments_parseable(r['args_str'])
             assert r['finish_reason'] == 'tool_calls'
         except Exception as e:
-            pytest.skip(
-                f'tool_choice="required" streaming not supported: {e}')
+            pytest.skip(f'tool_choice="required" streaming not supported: {e}')
 
     # -- specific function ---------------------------------------------------
     def test_tool_choice_specific_function(self, backend, model_case):
@@ -359,7 +352,9 @@ class TestToolCallChoice:
             tools=[WEATHER_TOOL, SEARCH_TOOL],
             tool_choice={
                 'type': 'function',
-                'function': {'name': 'get_current_weather'},
+                'function': {
+                    'name': 'get_current_weather'
+                },
             },
             logprobs=False,
         )
@@ -387,7 +382,9 @@ class TestToolCallChoice:
             tools=[WEATHER_TOOL, SEARCH_TOOL],
             tool_choice={
                 'type': 'function',
-                'function': {'name': 'get_current_weather'},
+                'function': {
+                    'name': 'get_current_weather'
+                },
             },
             logprobs=False,
             stream=True,
@@ -471,11 +468,15 @@ class TestToolCallArgumentsParsing:
         client, model_name = get_client_and_model()
 
         messages = [
-            {'role': 'system',
-             'content': 'You are a helpful weather assistant. '
-                        'Always use the weather tool and specify the unit.'},
-            {'role': 'user',
-             'content': 'What is the weather in Miami, FL in celsius?'},
+            {
+                'role': 'system',
+                'content': 'You are a helpful weather assistant. '
+                'Always use the weather tool and specify the unit.'
+            },
+            {
+                'role': 'user',
+                'content': 'What is the weather in Miami, FL in celsius?'
+            },
         ]
 
         response = client.chat.completions.create(
@@ -486,7 +487,9 @@ class TestToolCallArgumentsParsing:
             tools=[WEATHER_TOOL],
             tool_choice={
                 'type': 'function',
-                'function': {'name': 'get_current_weather'},
+                'function': {
+                    'name': 'get_current_weather'
+                },
             },
             logprobs=False,
         )
@@ -494,8 +497,7 @@ class TestToolCallArgumentsParsing:
         tc = response.choices[0].message.tool_calls[0]
         parsed = json.loads(tc.function.arguments)
         if 'unit' in parsed:
-            assert parsed['unit'] in ('celsius', 'fahrenheit'), (
-                f'unit should be from enum, got "{parsed["unit"]}"')
+            assert parsed['unit'] in ('celsius', 'fahrenheit'), (f'unit should be from enum, got "{parsed["unit"]}"')
 
 
 @_apply_marks
@@ -516,8 +518,7 @@ class TestToolCallMultipleTools:
 
         choice = response.choices[0]
         if choice.message.tool_calls and len(choice.message.tool_calls) > 0:
-            assert choice.message.tool_calls[0].function.name == (
-                'get_current_weather')
+            assert choice.message.tool_calls[0].function.name == ('get_current_weather')
 
     def test_selects_calculator_tool(self, backend, model_case):
         client, model_name = get_client_and_model()
@@ -599,8 +600,7 @@ class TestToolCallMultipleTools:
             tc = choice.message.tool_calls[0]
             assert_tool_call_fields(tc)
             assert_arguments_parseable(tc.function.arguments)
-            assert tc.function.name == 'get_current_weather', (
-                f'Expected weather tool, got "{tc.function.name}"')
+            assert tc.function.name == 'get_current_weather', (f'Expected weather tool, got "{tc.function.name}"')
 
 
 @_apply_marks
@@ -630,8 +630,7 @@ class TestToolCallParallel:
                 assert 'city' in parsed and 'state' in parsed
 
             ids = [tc.id for tc in tool_calls]
-            assert len(set(ids)) == len(ids), (
-                f'IDs should be unique, got {ids}')
+            assert len(set(ids)) == len(ids), (f'IDs should be unique, got {ids}')
             assert response.choices[0].finish_reason == 'tool_calls'
         elif tool_calls and len(tool_calls) == 1:
             assert_tool_call_fields(tool_calls[0])
@@ -654,10 +653,8 @@ class TestToolCallParallel:
         assert fr_count == 1
 
         for idx, data in tc_data.items():
-            assert data['name'] is not None, (
-                f'Index {idx}: missing function name')
-            assert len(data['args_str']) > 0, (
-                f'Index {idx}: missing arguments')
+            assert data['name'] is not None, (f'Index {idx}: missing function name')
+            assert len(data['args_str']) > 0, (f'Index {idx}: missing arguments')
             parsed = json.loads(data['args_str'])
             assert isinstance(parsed, dict)
 
@@ -686,8 +683,7 @@ class TestToolCallParallel:
 
             names = {tc.function.name for tc in tool_calls}
             if len(names) >= 2:
-                assert ('get_current_weather' in names
-                        or 'calculate' in names)
+                assert ('get_current_weather' in names or 'calculate' in names)
         elif tool_calls and len(tool_calls) == 1:
             assert_tool_call_fields(tool_calls[0])
             assert_arguments_parseable(tool_calls[0].function.arguments)
@@ -713,8 +709,7 @@ class TestToolCallWithResults:
         choice = response.choices[0]
         assert choice.finish_reason in ('stop', 'length')
         assert choice.message.role == 'assistant'
-        assert (choice.message.tool_calls is None
-                or len(choice.message.tool_calls) == 0)
+        assert (choice.message.tool_calls is None or len(choice.message.tool_calls) == 0)
         assert choice.message.content and len(choice.message.content) > 0
         assert '98' in choice.message.content or 'Dallas' in choice.message.content
 
@@ -783,8 +778,8 @@ class TestToolCallWithResults:
             delta = chunk.choices[0].delta
             if delta.content:
                 chunks.append(delta.content)
-            assert (not delta.tool_calls or len(delta.tool_calls) == 0), (
-                'Should not have tool calls after providing results')
+            assert (not delta.tool_calls
+                    or len(delta.tool_calls) == 0), ('Should not have tool calls after providing results')
         assert len(chunks) > 0
 
 
@@ -859,10 +854,14 @@ class TestToolCallMultilingual:
         client, model_name = get_client_and_model()
 
         messages = [
-            {'role': 'system',
-             'content': 'You are a helpful assistant. Use the search tool.'},
-            {'role': 'user',
-             'content': '请搜索一下"人工智能最新进展"'},
+            {
+                'role': 'system',
+                'content': 'You are a helpful assistant. Use the search tool.'
+            },
+            {
+                'role': 'user',
+                'content': '请搜索一下"人工智能最新进展"'
+            },
         ]
 
         response = client.chat.completions.create(
@@ -889,13 +888,19 @@ class TestToolCallComplexParams:
         client, model_name = get_client_and_model()
 
         messages = [
-            {'role': 'system',
-             'content': 'You are a helpful assistant. Use the create_event '
-                        'tool when asked to schedule events.'},
-            {'role': 'user',
-             'content': 'Schedule a team meeting titled "Sprint Review" at '
-                        'the Conference Room in New York with attendees '
-                        'alice@example.com and bob@example.com, high priority.'},
+            {
+                'role': 'system',
+                'content': 'You are a helpful assistant. Use the create_event '
+                'tool when asked to schedule events.'
+            },
+            {
+                'role':
+                'user',
+                'content':
+                'Schedule a team meeting titled "Sprint Review" at '
+                'the Conference Room in New York with attendees '
+                'alice@example.com and bob@example.com, high priority.'
+            },
         ]
 
         response = client.chat.completions.create(
@@ -927,12 +932,16 @@ class TestToolCallComplexParams:
         client, model_name = get_client_and_model()
 
         messages = [
-            {'role': 'system',
-             'content': 'You are a logging assistant. '
-                        'Use the log_message tool to log messages.'},
-            {'role': 'user',
-             'content': 'Log an info message saying '
-                        '"System started successfully".'},
+            {
+                'role': 'system',
+                'content': 'You are a logging assistant. '
+                'Use the log_message tool to log messages.'
+            },
+            {
+                'role': 'user',
+                'content': 'Log an info message saying '
+                '"System started successfully".'
+            },
         ]
 
         response = client.chat.completions.create(
@@ -953,8 +962,7 @@ class TestToolCallComplexParams:
             if 'message' in parsed:
                 assert isinstance(parsed['message'], str)
             if 'level' in parsed:
-                assert parsed['level'] in (
-                    'debug', 'info', 'warning', 'error')
+                assert parsed['level'] in ('debug', 'info', 'warning', 'error')
 
 
 @_apply_marks
@@ -973,7 +981,9 @@ class TestToolCallResponseValidation:
             tools=[WEATHER_TOOL],
             tool_choice={
                 'type': 'function',
-                'function': {'name': 'get_current_weather'},
+                'function': {
+                    'name': 'get_current_weather'
+                },
             },
             logprobs=False,
         )
@@ -1006,9 +1016,7 @@ class TestToolCallResponseValidation:
         choice = response.choices[0]
         if choice.message.tool_calls and len(choice.message.tool_calls) > 0:
             assert response.usage.completion_tokens > 0
-            assert response.usage.total_tokens == (
-                response.usage.prompt_tokens
-                + response.usage.completion_tokens)
+            assert response.usage.total_tokens == (response.usage.prompt_tokens + response.usage.completion_tokens)
 
     def test_model_and_metadata_fields(self, backend, model_case):
         """Response must contain model, id, and created."""
@@ -1084,8 +1092,7 @@ class TestToolCallEdgeCases:
             choice = response.choices[0]
             assert choice.message.role == 'assistant'
             assert choice.message.content is not None
-            assert (choice.message.tool_calls is None
-                    or len(choice.message.tool_calls) == 0)
+            assert (choice.message.tool_calls is None or len(choice.message.tool_calls) == 0)
         except Exception:
             # Some backends reject an empty tools list
             pass
@@ -1131,7 +1138,7 @@ class TestToolCallEdgeCases:
             assert tc.id.strip() == tc.id
 
     def test_multi_turn_conversation(self, backend, model_case):
-        """tool call → result → follow-up question → possible second call."""
+        """Tool call → result → follow-up question → possible second call."""
         client, model_name = get_client_and_model()
 
         messages = build_messages_with_tool_response()
@@ -1165,12 +1172,18 @@ class TestToolCallEdgeCases:
         client, model_name = get_client_and_model()
 
         messages = [
-            {'role': 'system',
-             'content': 'You are a helpful assistant that can use tools.'},
-            {'role': 'user',
-             'content': 'Search for "what\'s the latest on AI & ML?" '
-                        '(include results with special chars: <>, "quotes", '
-                        'and unicode: café, naïve, résumé)'},
+            {
+                'role': 'system',
+                'content': 'You are a helpful assistant that can use tools.'
+            },
+            {
+                'role':
+                'user',
+                'content':
+                'Search for "what\'s the latest on AI & ML?" '
+                '(include results with special chars: <>, "quotes", '
+                'and unicode: café, naïve, résumé)'
+            },
         ]
 
         response = client.chat.completions.create(
