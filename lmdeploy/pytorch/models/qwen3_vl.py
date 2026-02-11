@@ -13,6 +13,7 @@ from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import LayerNorm
 from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_rowwise_linear
+from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .qwen2_5_vl import Qwen2_5_VisionRotaryEmbedding as Qwen3VLVisionRotaryEmbedding
@@ -32,6 +33,9 @@ class Qwen3VLTextRotaryEmbedding(nn.Module):
             self.rope_type = config.rope_scaling.get('rope_type', 'default')
         else:
             self.rope_type = 'default'
+
+        self._pack_for_trans5(config)
+
         self.max_seq_len_cached = config.max_position_embeddings
         self.original_max_seq_len = config.max_position_embeddings
 
@@ -43,6 +47,14 @@ class Qwen3VLTextRotaryEmbedding(nn.Module):
         self.original_inv_freq = self.inv_freq
 
         self.mrope_section = config.rope_scaling.get('mrope_section', [24, 20, 20])
+
+    def _pack_for_trans5(self, config):
+        if self.rope_type == 'default' and 'default' not in ROPE_INIT_FUNCTIONS:
+            # transformers 5 has removed default in ROPE_INIT_FUNCTIONS
+            self.rope_type = 'linear'
+            rope_parameters = get_rope_parameters(config)
+            if 'factor' not in rope_parameters:
+                rope_parameters['factor'] = 1.0
 
     def apply_interleaved_mrope(self, freqs, mrope_section):
         """Apply interleaved MRoPE to 3D rotary embeddings.
