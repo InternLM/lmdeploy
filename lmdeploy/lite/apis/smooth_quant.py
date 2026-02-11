@@ -116,7 +116,7 @@ def smooth_quant(model: str,
         parent = model.get_submodule(parent_name)
         setattr(parent, child_name, q_norm)
         norm.to('cpu')
-        q_linear.to('cpu')
+        q_norm.to('cpu')
         torch.cuda.empty_cache()
 
     quant_dtype_s = str(quant_dtype).split('.')[1]
