@@ -28,7 +28,7 @@ class InternLM2Reader(LlamaReader):
             if re.search(pattern, k):
                 params.append(k)
 
-        if self.fp8_quant and pattern == self.attn_pattern and self.__class__.__name__ == 'InternLM2Reader':
+        if self.fp8_quant and pattern == self.attn_pattern:
             from lmdeploy.lite.quantization.weight.quant_utils import quant_blocked_fp8
             q, k, v = (None, ) * 3
             kv_head_num = self.model_cfg['num_key_value_heads']
@@ -62,7 +62,7 @@ class InternLM2Reader(LlamaReader):
 
     def _attn(self, i: int, kind: str):
         """Get q, k, v, o kind for layer i."""
-        if self.fp8_quant and kind == 'weight_scale_inv' and self.__class__.__name__ == 'InternLM2Reader':
+        if self.fp8_quant and kind == 'weight_scale_inv':
             result = []
             for key in ['q', 'k', 'v', 'o']:
                 tensor = self.params.get(f'{self.attn_layer_prefix}.{i}.{self.attn_pattern}.w{key}.{kind}')

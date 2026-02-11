@@ -170,10 +170,7 @@ def get_tm_model(model_path,
 
     input_model_name = get_input_model_registered_name(model_path, engine_config.model_format)
 
-    if engine_config.model_format == 'fp8' and not quant_config:
-        fp8_quant = True
-    else:
-        fp8_quant = False
+    fp8_quant = (engine_config.model_format == 'fp8' and not quant_config)
     input_policy = get_input_policy(engine_config.model_format)
     input_model = INPUT_MODELS.get(input_model_name)(model_path=model_path,
                                                      tokenizer_path=model_path,
