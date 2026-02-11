@@ -4,6 +4,7 @@ from typing import Dict, Iterable, List, Tuple
 
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
@@ -11,13 +12,33 @@ from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.model_inputs import StepContextManager
 from lmdeploy.pytorch.nn import RMSNorm
 from lmdeploy.pytorch.nn.linear import build_rowwise_linear
-from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
+from lmdeploy.pytorch.nn.moe import build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .qwen2_5_vl import Qwen2_5_VLInputProcessor as Qwen3_5MoeInputProcessor
 from .qwen3_5 import (Qwen3_5Attention, Qwen3_5DecoderLayer, Qwen3_5ForConditionalGeneration, Qwen3_5GatedDeltaNet,
                       Qwen3_5MLP, Qwen3_5Model, Qwen3_5TextModel, Qwen3_5TextRotaryEmbedding)
 from .qwen3_5 import Qwen3_5VisionModel as Qwen3_5MoeVisionModel
+
+
+class Qwen3_5MoeTopKRouter(nn.Module):
+
+    def __init__(self, config, dtype: torch.dtype | None = None, device: torch.device | None = None):
+        super().__init__()
+        self.top_k = config.num_experts_per_tok
+        self.num_experts = config.num_experts
+        self.hidden_dim = config.hidden_size
+        self.weight = nn.Parameter(torch.zeros(self.num_experts, self.hidden_dim, dtype=dtype, device=device))
+
+    def forward(self, hidden_states):
+        hidden_states = hidden_states.reshape(-1, self.hidden_dim)
+        router_logits = F.linear(hidden_states, self.weight)  # (seq_len, num_experts)
+        router_logits = torch.nn.functional.softmax(router_logits, dtype=torch.float, dim=-1)
+        router_top_value, router_indices = torch.topk(router_logits, self.top_k, dim=-1)  # (seq_len, top_k)
+        router_top_value /= router_top_value.sum(dim=-1, keepdim=True)
+        router_top_value = router_top_value.to(router_logits.dtype)
+        router_scores = router_top_value
+        return router_logits, router_scores, router_indices
 
 
 class Qwen3_5MoeSparseMoeBlock(nn.Module):
@@ -36,29 +57,15 @@ class Qwen3_5MoeSparseMoeBlock(nn.Module):
         self.ffn_dim = config.moe_intermediate_size
         self.num_experts = config.num_experts
         self.top_k = config.num_experts_per_tok
-        self.norm_topk_prob = config.norm_topk_prob
-        self.renormalize = self.norm_topk_prob
 
-        self.gate = build_rowwise_linear(
-            self.hidden_dim,
-            self.num_experts,
-            bias=False,
-            dtype=dtype,
-            device=device,
-            is_tp=False,
-        )
-
-        self.softmax_topk = SoftmaxTopK(
-            self.top_k,
-            n_groups=getattr(config, 'router_n_groups', -1),
-        )
+        self.gate = Qwen3_5MoeTopKRouter(config, dtype=dtype, device=device)
 
         self.experts = build_fused_moe(
             self.hidden_dim,
             self.ffn_dim,
             self.num_experts,
             top_k=self.top_k,
-            renormalize=self.renormalize,
+            renormalize=False,
             dtype=dtype,
             device=device,
             quant_config=quantization_config,
@@ -88,9 +95,8 @@ class Qwen3_5MoeSparseMoeBlock(nn.Module):
     def forward(self, hidden_states: torch.Tensor):
         """forward."""
         batch_size, sequence_length, hidden_dim = hidden_states.shape
-        hidden_states = hidden_states.view(-1, hidden_dim)
-        router_logits = self.gate(hidden_states)
-        topk_weights, topk_ids = self.softmax_topk(router_logits)
+        hidden_states = hidden_states.reshape(-1, hidden_dim)
+        router_logits, topk_weights, topk_ids = self.gate(hidden_states)
         out_states = self.experts(
             hidden_states,
             topk_weights,
@@ -250,10 +256,14 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
             ('.qkv_proj', '.v_proj', 'v'),
             ('.gate_up_proj', '.gate_proj', 0),
             ('.gate_up_proj', '.up_proj', 1),
+            ('.in_proj_qkvz', '.in_proj_qkv', 'qkv'),
+            ('.in_proj_qkvz', '.in_proj_z', 'z'),
+            ('.in_proj_ba', '.in_proj_b', 'b'),
+            ('.in_proj_ba', '.in_proj_a', 'a'),
         ]
 
         # expert map
-        num_experts = self.config.num_experts
+        num_experts = self.config.text_config.num_experts
         expert_params_mapping = []
         for exp_id in range(num_experts):
             gate_param = ('.experts.gate_up', f'.experts.{exp_id}.gate_proj', exp_id, 'gate')
@@ -278,7 +288,6 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
 
-            name = name.replace('.block_sparse_moe.', '.mlp.')
             if '.experts' in name and '.shared_expert' not in name:
                 self._load_weight_experts(name, loaded_weight, params_dict, expert_params_mapping=expert_params_mapping)
             else:
