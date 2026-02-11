@@ -22,9 +22,9 @@ safetensors
 sentencepiece
 shortuuid
 tiktoken
-torch>=2.3.1,<2.9.0
-torch-npu>=2.3.1,<2.9.0
-torchvision>=0.18.1,<0.24.0
+torch>=2.3.1,<2.10.0
+torch-npu>=2.3.1,<2.10.0
+torchvision>=0.18.1,<0.25.0
 transformers
 uvicorn
 xgrammar
