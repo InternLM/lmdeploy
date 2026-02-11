@@ -2,12 +2,11 @@
 from typing import Tuple
 
 import torch
-from torch import nn
 
 from lmdeploy.pytorch.backends import OpType, get_backend
 
 
-class NoauxTCRounter(nn.Module):
+class NoauxTCRouter(torch.nn.Module):
 
     def __init__(
         self,

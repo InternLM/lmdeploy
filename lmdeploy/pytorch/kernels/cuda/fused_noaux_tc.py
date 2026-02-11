@@ -4,7 +4,6 @@ import triton
 import triton.language as tl
 
 
-# flake8: noqa
 @triton.autotune(
     configs=[
         triton.Config({}, num_warps=1, num_stages=1),
@@ -76,7 +75,6 @@ def _noaux_routing_kernel(
     selected_mask = tl.zeros((BLOCK_SIZE, ), dtype=tl.int1)
     group_scores_copy = group_scores
     for _ in range(topk_group):
-        max_val_g = tl.max(group_scores_copy, axis=0)
         max_idx_g = tl.argmax(group_scores_copy, axis=0)  # group index
         # mark experts in this group
         group_start = max_idx_g * group_size
@@ -95,8 +93,6 @@ def _noaux_routing_kernel(
     off_tmp = pid * tmp_scores_stride_0 + idx * tmp_scores_stride_1
     tl.store(tmp_scores_ptr + off_tmp, tmp_scores, mask=mask)
 
-
-# flake8: qa
 
 # ---------------------------------------------------------------------------
 # Wrappers and Benchmarking Logic (Kept exactly as requested)

@@ -14,13 +14,13 @@ def _compute_scores(scoring_func: str, logits: torch.Tensor):
     elif scoring_func == 'sigmoid':
         scores = logits.sigmoid()
     else:
-        raise NotImplementedError('insupportable scoring function '
+        raise NotImplementedError('unsupported scoring function '
                                   f'for MoE gating: {scoring_func}')
     return scores
 
 
 @functools.lru_cache
-def get_group_offsets(n_groups: int, group_size: int, device: str):
+def get_group_offsets(n_groups: int, group_size: int, device: str | torch.device) -> torch.Tensor:
     group_offsets = (torch.arange(n_groups, device=device) * group_size).view(1, -1, 1)  # [1, n_groups, 1]
     return group_offsets
 

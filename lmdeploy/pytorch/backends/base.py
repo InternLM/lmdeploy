@@ -34,7 +34,7 @@ class OpType(Enum):
     NSAIndexFP8 = auto()
     Embedding = auto()
 
-    # MoE rounter
+    # MoE router
     RouterNoauxTC = auto()
 
 

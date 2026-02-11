@@ -1,5 +1,6 @@
-import torch
 import pytest
+import torch
+
 
 def reference_noaux_tc_routing(
     logits: torch.Tensor,
@@ -37,6 +38,7 @@ def reference_noaux_tc_routing(
 
 
 class TestNoauxTC:
+
     @pytest.fixture(autouse=True)
     def auto_context(self):
         origin_dtype = torch.get_default_dtype()
@@ -53,19 +55,19 @@ class TestNoauxTC:
     @pytest.fixture
     def batch_size(self):
         yield 32
-    
+
     @pytest.fixture
     def num_experts(self):
         yield 256
-    
+
     @pytest.fixture
     def logits(self, batch_size, num_experts):
         yield torch.randn(batch_size, num_experts)
-    
+
     @pytest.fixture
     def bias(self, num_experts):
         yield torch.randn(num_experts)
-    
+
     @pytest.fixture
     def kwargs(self):
         yield {
@@ -76,14 +78,14 @@ class TestNoauxTC:
             'renormalize': True,
             'routed_scaling_factor': 2.5,
         }
-    
+
     @pytest.fixture
     def gt(self, logits, bias, kwargs):
         yield reference_noaux_tc_routing(logits, bias, **kwargs)
 
     def test_noaux_tc_router(self, logits, bias, kwargs, gt):
         from lmdeploy.pytorch.kernels.cuda.fused_noaux_tc import fused_noaux_tc_routing
-        
+
         out_weights, out_ids = fused_noaux_tc_routing(logits, bias, **kwargs)
         gt_weights, gt_ids = gt
 

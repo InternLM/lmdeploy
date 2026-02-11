@@ -586,17 +586,17 @@ class MoEGate(nn.Module):
         self.weight = nn.Parameter(
             torch.empty((self.n_routed_experts, self.gating_dim), dtype=torch.float32, device=device))
         if self.topk_method == 'noaux_tc':
-            from lmdeploy.pytorch.nn.moe.route import NoauxTCRounter
+            from lmdeploy.pytorch.nn.moe.route import NoauxTCRouter
             self.e_score_correction_bias = nn.Parameter(
                 torch.empty((self.n_routed_experts, ), dtype=torch.float32, device=device))
-            self.noaux_tc_router = NoauxTCRounter(self.scoring_func,
-                                                  top_k=self.top_k,
-                                                  n_group=self.n_group,
-                                                  topk_group=self.topk_group,
-                                                  n_routed_experts=self.n_routed_experts,
-                                                  routed_scaling_factor=self.routed_scaling_factor,
-                                                  renormalize=self.renormalize,
-                                                  router_n_groups=self.router_n_groups)
+            self.noaux_tc_router = NoauxTCRouter(self.scoring_func,
+                                                 top_k=self.top_k,
+                                                 n_group=self.n_group,
+                                                 topk_group=self.topk_group,
+                                                 n_routed_experts=self.n_routed_experts,
+                                                 routed_scaling_factor=self.routed_scaling_factor,
+                                                 renormalize=self.renormalize,
+                                                 router_n_groups=self.router_n_groups)
         self.softmax_topk = SoftmaxTopK(self.top_k, n_groups=self.router_n_groups)
         self.fake_eplb = getenv('LMDEPLOY_FAKE_EPLB', 'False').lower() == 'true'
         self.eplb_dispatch_info = info
@@ -608,9 +608,19 @@ class MoEGate(nn.Module):
         elif self.scoring_func == 'sigmoid':
             scores = logits.sigmoid()
         else:
-            raise NotImplementedError('insupportable scoring function '
+            raise NotImplementedError('unsupported scoring function '
                                       f'for MoE gating: {self.scoring_func}')
         return scores
+
+    def _postprocess_topk_weight(self, topk_weight: torch.Tensor):
+        if self.renormalize:
+            denominator = topk_weight.sum(dim=-1, keepdim=True) + 1e-20
+            topk_weight = topk_weight / denominator
+            if not topk_weight.is_contiguous():
+                topk_weight = topk_weight.contiguous()
+        if not self.renormalize:
+            topk_weight = topk_weight * self.routed_scaling_factor
+        return topk_weight
 
     def forward(self, hidden_states: torch.Tensor):
         """forward."""
@@ -623,13 +633,7 @@ class MoEGate(nn.Module):
         if self.topk_method == 'greedy':
             topk_weight, topk_idx = self.softmax_topk(router_logits)
 
-            if self.renormalize:
-                denominator = topk_weight.sum(dim=-1, keepdim=True) + 1e-20
-                topk_weight = topk_weight / denominator
-                if not topk_weight.is_contiguous():
-                    topk_weight = topk_weight.contiguous()
-            if not self.renormalize:
-                topk_weight = topk_weight * self.routed_scaling_factor
+            topk_weight = self._postprocess_topk_weight(topk_weight)
         elif self.topk_method == 'group_limited_greedy':
             scores = router_logits
             grouped_logits = scores.unflatten(-1, (self.n_group, -1))
@@ -642,13 +646,7 @@ class MoEGate(nn.Module):
             scores = grouped_logits.flatten(1, 2)
             topk_weight, topk_idx = self.softmax_topk(scores)
 
-            if self.renormalize:
-                denominator = topk_weight.sum(dim=-1, keepdim=True) + 1e-20
-                topk_weight = topk_weight / denominator
-                if not topk_weight.is_contiguous():
-                    topk_weight = topk_weight.contiguous()
-            if not self.renormalize:
-                topk_weight = topk_weight * self.routed_scaling_factor
+            topk_weight = self._postprocess_topk_weight(topk_weight)
         elif self.topk_method == 'noaux_tc':
             topk_weight, topk_idx = self.noaux_tc_router(router_logits, self.e_score_correction_bias)
         else:

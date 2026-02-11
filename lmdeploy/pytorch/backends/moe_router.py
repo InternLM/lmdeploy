@@ -6,7 +6,7 @@ import torch
 
 
 class RouterNoauxTCImpl(ABC):
-    """Softmax topk implementation api."""
+    """Noaux tc implementation api."""
 
     @abstractmethod
     def forward(self, logits: torch.Tensor, bias: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -15,7 +15,7 @@ class RouterNoauxTCImpl(ABC):
 
 
 class RouterNoauxTCBuilder(ABC):
-    """Softmax topk implementation builder."""
+    """Noaux tc implementation builder."""
 
     @staticmethod
     @abstractmethod
