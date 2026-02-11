@@ -724,6 +724,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         # update model metas
         prev_lens = [0] * len(context.model_metas)
         has_model_metas = context.model_metas is not None and context.model_metas[0] is not None
+        context.is_model_meta_updated = has_model_metas
         if has_model_metas:
             prev_lens = [meta.get('new_seqlen', 0) for meta in context.model_metas]
 
@@ -850,6 +851,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
             inputs_embeds[:, vision_embedding_indexing, :] = vision_embeddings.to(inputs_embeds)
 
         has_model_metas = context.model_metas is not None and context.model_metas[0] is not None
+        context.is_model_meta_updated = has_model_metas
         if context.is_decoding:
             if has_model_metas:
                 # NOTE, zhouxinyu, we need to consider the increasing batch in the decoding stage
