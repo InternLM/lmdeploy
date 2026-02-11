@@ -13,8 +13,10 @@ from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import LayerNorm
 from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_rowwise_linear
+from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .patch import add_prefix
 from .qwen2_5_vl import Qwen2_5_VisionRotaryEmbedding as Qwen3VLVisionRotaryEmbedding
 from .qwen2_5_vl import Qwen2_5_VLInputProcessor as Qwen3VLInputProcessor
 from .qwen2_5_vl import Qwen2_5_VLVisionAttention as Qwen3VLVisionAttention
@@ -32,6 +34,9 @@ class Qwen3VLTextRotaryEmbedding(nn.Module):
             self.rope_type = config.rope_scaling.get('rope_type', 'default')
         else:
             self.rope_type = 'default'
+
+        self._pack_for_trans5(config)
+
         self.max_seq_len_cached = config.max_position_embeddings
         self.original_max_seq_len = config.max_position_embeddings
 
@@ -43,6 +48,14 @@ class Qwen3VLTextRotaryEmbedding(nn.Module):
         self.original_inv_freq = self.inv_freq
 
         self.mrope_section = config.rope_scaling.get('mrope_section', [24, 20, 20])
+
+    def _pack_for_trans5(self, config):
+        if self.rope_type == 'default' and 'default' not in ROPE_INIT_FUNCTIONS:
+            # transformers 5 has removed default in ROPE_INIT_FUNCTIONS
+            self.rope_type = 'linear'
+            rope_parameters = get_rope_parameters(config)
+            if 'factor' not in rope_parameters:
+                rope_parameters['factor'] = 1.0
 
     def apply_interleaved_mrope(self, freqs, mrope_section):
         """Apply interleaved MRoPE to 3D rotary embeddings.
@@ -89,8 +102,12 @@ class Qwen3VLTextModel(Qwen3model):
     not a pure text-only model, as DeepStack integrates visual features into the early hidden states.
     """
 
-    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
-        super().__init__(config=config, dtype=dtype, device=device)
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 prefix: str = ''):
+        super().__init__(config=config, dtype=dtype, device=device, prefix=prefix)
 
         # build rotary embedding
         # TODO: zhouxinyu, add triton kernel for interleaved mrope
@@ -199,34 +216,40 @@ class Qwen3VLVisionPatchEmbed(nn.Module):
 class Qwen3VLVisionMLP(nn.Module):
     """Vision mlp."""
 
-    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 prefix: str = ''):
         super().__init__()
         from transformers.activations import ACT2FN
         hidden_dim = config.hidden_size
         intermediate_size = config.intermediate_size
         quantization_config = getattr(config, 'quantization_config', None)
         # gate up
-        self.linear_fc1 = build_colwise_linear(
-            hidden_dim,
-            intermediate_size,
-            bias=True,
-            dtype=dtype,
-            device=device,
-            quant_config=quantization_config,
-            is_tp=True,
-        )
+        self.linear_fc1 = build_colwise_linear(hidden_dim,
+                                               intermediate_size,
+                                               bias=True,
+                                               dtype=dtype,
+                                               device=device,
+                                               quant_config=quantization_config,
+                                               is_tp=True,
+                                               prefix=add_prefix('linear_fc1', prefix))
 
         # gelu_pytorch_tanh
         self.act = ACT2FN[config.hidden_act]
 
         # down
-        self.linear_fc2 = build_rowwise_linear(intermediate_size,
-                                               hidden_dim,
-                                               bias=True,
-                                               dtype=dtype,
-                                               device=device,
-                                               quant_config=quantization_config,
-                                               is_tp=True)
+        self.linear_fc2 = build_rowwise_linear(
+            intermediate_size,
+            hidden_dim,
+            bias=True,
+            dtype=dtype,
+            device=device,
+            quant_config=quantization_config,
+            is_tp=True,
+            prefix=add_prefix('linear_fc2', prefix),
+        )
 
     def forward(self, x):
         """forward."""
@@ -236,19 +259,22 @@ class Qwen3VLVisionMLP(nn.Module):
 class Qwen3VLVisionBlock(nn.Module):
     """Vision block."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 layer_idx: int,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(
+        self,
+        config: PretrainedConfig,
+        layer_idx: int,
+        dtype: torch.dtype = None,
+        device: torch.device = None,
+        prefix: str = '',
+    ):
         super().__init__()
         self.layer_idx = layer_idx
         self.norm1 = LayerNorm(config.hidden_size, eps=1e-6, dtype=dtype, device=device)
         self.norm2 = LayerNorm(config.hidden_size, eps=1e-6, dtype=dtype, device=device)
 
-        self.attn = Qwen3VLVisionAttention(config, dtype=dtype, device=device)
+        self.attn = Qwen3VLVisionAttention(config, dtype=dtype, device=device, prefix=add_prefix('attn', prefix))
 
-        self.mlp = Qwen3VLVisionMLP(config, dtype=dtype, device=device)
+        self.mlp = Qwen3VLVisionMLP(config, dtype=dtype, device=device, prefix=add_prefix('mlp', prefix))
 
     def forward(self,
                 hidden_states: torch.Tensor,
@@ -269,7 +295,8 @@ class Qwen3VLVisionPatchMerger(nn.Module):
                  config: PretrainedConfig,
                  use_postshuffle_norm=False,
                  dtype: torch.dtype = None,
-                 device: torch.device = None) -> None:
+                 device: torch.device = None,
+                 prefix: str = '') -> None:
         super().__init__()
         self.hidden_size = config.hidden_size * (config.spatial_merge_size**2)
         self.use_postshuffle_norm = use_postshuffle_norm
@@ -284,6 +311,7 @@ class Qwen3VLVisionPatchMerger(nn.Module):
             dtype=dtype,
             device=device,
             is_tp=True,
+            prefix=add_prefix('linear_fc1', prefix),
         )
         self.act_fn = nn.GELU()
         self.linear_fc2 = build_rowwise_linear(
@@ -293,6 +321,7 @@ class Qwen3VLVisionPatchMerger(nn.Module):
             dtype=dtype,
             device=device,
             is_tp=True,
+            prefix=add_prefix('linear_fc2', prefix),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -305,7 +334,11 @@ class Qwen3VLVisionPatchMerger(nn.Module):
 class Qwen3VLVisionModel(nn.Module):
     """Vision transformer."""
 
-    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 prefix: str = ''):
         super().__init__()
         self.config = config
         self.spatial_merge_size = config.spatial_merge_size
@@ -318,15 +351,28 @@ class Qwen3VLVisionModel(nn.Module):
         head_dim = config.hidden_size // config.num_heads
         self.rotary_pos_emb = Qwen3VLVisionRotaryEmbedding(head_dim // 2, device=device)
 
-        self.blocks = nn.ModuleList(
-            [Qwen3VLVisionBlock(config, layer_idx, dtype=dtype, device=device) for layer_idx in range(config.depth)])
-        self.merger = Qwen3VLVisionPatchMerger(config=config, use_postshuffle_norm=False, dtype=dtype, device=device)
+        self.blocks = nn.ModuleList([
+            Qwen3VLVisionBlock(config,
+                               layer_idx,
+                               dtype=dtype,
+                               device=device,
+                               prefix=add_prefix(f'blocks.{layer_idx}', prefix)) for layer_idx in range(config.depth)
+        ])
+        self.merger = Qwen3VLVisionPatchMerger(config=config,
+                                               use_postshuffle_norm=False,
+                                               dtype=dtype,
+                                               device=device,
+                                               prefix=add_prefix('merger', prefix))
 
         if hasattr(config, 'deepstack_visual_indexes'):
             self.deepstack_visual_indexes = config.deepstack_visual_indexes
             self.deepstack_merger_list = nn.ModuleList([
-                Qwen3VLVisionPatchMerger(config=config, use_postshuffle_norm=True, dtype=dtype, device=device)
-                for _ in range(len(config.deepstack_visual_indexes))
+                Qwen3VLVisionPatchMerger(config=config,
+                                         use_postshuffle_norm=True,
+                                         dtype=dtype,
+                                         device=device,
+                                         prefix=add_prefix(f'deepstack_merger_list.{dvi}', prefix))
+                for dvi in range(len(config.deepstack_visual_indexes))
             ])
 
     @staticmethod
@@ -463,11 +509,14 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
         ],
     }
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 ctx_mgr: StepContextManager,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(
+        self,
+        config: PretrainedConfig,
+        ctx_mgr: StepContextManager,
+        dtype: torch.dtype = None,
+        device: torch.device = None,
+        prefix: str = '',
+    ):
         super().__init__()
         self.config = config
         self.ctx_mgr = ctx_mgr
@@ -480,10 +529,14 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
             config.vision_config,
             dtype=dtype,
             device=device,
+            prefix=add_prefix('visual', prefix),
         )
 
         # build text model
-        self.language_model = Qwen3VLTextModel(config.text_config, dtype=dtype, device=device)
+        self.language_model = Qwen3VLTextModel(config.text_config,
+                                               dtype=dtype,
+                                               device=device,
+                                               prefix=add_prefix('language_model', prefix))
 
         # build lm_head
         self.lm_head = build_rowwise_linear(config.text_config.hidden_size,
@@ -625,7 +678,8 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
             pos_embeds=pos_embeds,
         )
 
-    def rename_weight(self, name: str) -> str:
+    @classmethod
+    def rename_weight(cls, name: str) -> str:
         """Rename weight."""
         if name.startswith('model.language_model.'):
             return 'language_model.' + name[len('model.language_model.'):]

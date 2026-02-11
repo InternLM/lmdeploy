@@ -618,12 +618,14 @@ class Qwen3_5GatedDeltaNet(nn.Module):
                                                  is_tp=True)
         # dirty patch to qkvz
         self.in_proj_qkvz.weight.weight_loader = self.weight_loader_qkvz
+
         self.in_proj_ba = build_colwise_linear(self.hidden_size,
                                                projection_size_ba,
                                                bias=False,
                                                dtype=dtype,
                                                device=device,
                                                is_tp=True)
+        self.in_proj_ba.weight.weight_loader = self.weight_loader_ba
 
         # time step projection (discretization)
         # instantiate once and copy inv_dt in init_weights of PretrainedModel
@@ -661,25 +663,59 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         self.A_log.weight_loader = self.weight_loader_a_dt
         self.dt_bias.weight_loader = self.weight_loader_a_dt
 
-    def weight_loader_qkvz(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor):
+    def weight_loader_qkvz(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shard_id: str):
         """Weight loader qkvz."""
         tp, rank = get_tp_world_rank()
+
         split_arg_list_qkvz = [
             self.head_k_dim,
             self.head_k_dim,
             (self.kv_ratio * self.head_v_dim),
             (self.kv_ratio * self.head_v_dim),
         ]
-        sum_split = sum(split_arg_list_qkvz)
-        loaded_weight = loaded_weight.unflatten(0, (-1, sum_split))
-        q, k, v, z = loaded_weight.split(split_arg_list_qkvz, dim=1)
-        q = q.chunk(tp, dim=0)[rank]
-        k = k.chunk(tp, dim=0)[rank]
-        v = v.chunk(tp, dim=0)[rank]
-        z = z.chunk(tp, dim=0)[rank]
 
-        loaded_weight = torch.cat([q, k, v, z], dim=1)
-        loaded_weight = loaded_weight.flatten(0, 1)
+        params = param.unflatten(0, (-1, sum(split_arg_list_qkvz))).split(split_arg_list_qkvz, dim=1)
+
+        if shard_id == 'qkv':
+            tp, rank = get_tp_world_rank()
+            split_arg_list_qkv = split_arg_list_qkvz[:3]
+            sum_split = sum(split_arg_list_qkv)
+            loaded_weight = loaded_weight.unflatten(0, (-1, sum_split))
+            q, k, v = loaded_weight.split(split_arg_list_qkv, dim=1)
+            q = q.chunk(tp, dim=0)[rank]
+            k = k.chunk(tp, dim=0)[rank]
+            v = v.chunk(tp, dim=0)[rank]
+
+            default_weight_loader(params[0], q)
+            default_weight_loader(params[1], k)
+            default_weight_loader(params[2], v)
+            # loaded_weight = torch.cat([q, k, v], dim=1)
+            # loaded_weight = loaded_weight.flatten(0, 1)
+
+            # param = param[:loaded_weight.size(0)]
+            # default_weight_loader(param, loaded_weight)
+        elif shard_id == 'z':
+            loaded_weight = loaded_weight.unflatten(0, (-1, split_arg_list_qkvz[-1]))
+            sharded_weight = loaded_weight.chunk(tp, dim=0)[rank]
+            default_weight_loader(params[-1], sharded_weight)
+        else:
+            raise ValueError(f'shard_id {shard_id} not supported for weight_loader_qkvz')
+
+    def weight_loader_ba(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shard_id: str):
+        """Weight loader b and a."""
+        tp, rank = get_tp_world_rank()
+        split_map = dict(b=0, a=1)
+        assert shard_id in split_map, f'shard_id {shard_id} not in {split_map}'
+
+        # (num_v_heads * kv_ratio) -> (num_v_heads // tp, kv_ratio)
+        loaded_weight = loaded_weight.unflatten(0, (-1, self.kv_ratio))
+        loaded_weight = loaded_weight.chunk(tp, dim=0)[rank]
+
+        # slice param
+        split_id = split_map[shard_id]
+        param = param.unflatten(0, (-1, 2 * self.kv_ratio)).chunk(2, dim=1)[split_id]
+
+        # copy
         default_weight_loader(param, loaded_weight)
 
     def weight_loader_a_dt(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor):
@@ -1261,8 +1297,8 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
         # build model
         self.model = Qwen3_5Model(config, dtype=dtype, device=device)
         # build lm_head
-        self.lm_head = build_rowwise_linear(config.hidden_size,
-                                            config.vocab_size,
+        self.lm_head = build_rowwise_linear(config.text_config.hidden_size,
+                                            config.text_config.vocab_size,
                                             bias=False,
                                             dtype=dtype,
                                             device=device)
@@ -1327,7 +1363,7 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
         state_caches = list(zip(state_caches[0], state_caches[1]))
         past_key_values = list(past_key_values)
         new_past_key_values = []
-        for layer_type in self.config.layer_types:
+        for layer_type in self.config.text_config.layer_types:
             if layer_type == 'linear_attention':
                 new_past_key_values.append(state_caches.pop(0))
             elif layer_type == 'full_attention':
@@ -1406,6 +1442,10 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
             ('.qkv_proj', '.v_proj', 'v'),
             ('.gate_up_proj', '.gate_proj', 0),
             ('.gate_up_proj', '.up_proj', 1),
+            ('.in_proj_qkvz', '.in_proj_qkv', 'qkv'),
+            ('.in_proj_qkvz', '.in_proj_z', 'z'),
+            ('.in_proj_ba', '.in_proj_b', 'b'),
+            ('.in_proj_ba', '.in_proj_a', 'a'),
         ]
 
         rms_norm_keys = ['model.norm', '.input_layernorm', '.post_attention_layernorm', '.q_norm', '.k_norm']

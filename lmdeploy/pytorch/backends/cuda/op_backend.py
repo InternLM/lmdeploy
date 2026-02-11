@@ -68,6 +68,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.NSAIndexFP8:
             from .nsa import TritonNSAIndexFP8Builder
             return TritonNSAIndexFP8Builder
+        elif layer_type == OpType.RouterNoauxTC:
+            from .moe_router import TritonRouterNoauxTCBuilder
+            return TritonRouterNoauxTCBuilder
         else:
             logger.debug(f'Op {layer_type} fallback to default implementation.')
             return super().get_layer_impl_builder(layer_type)

@@ -21,8 +21,9 @@ class Qwen3_5ModelConfigBuilder(AutoModelConfigBuilder):
 
         # update num layers
         num_layers = cfg.num_layers
-        num_full_layers = num_layers // text_config.full_attention_interval
-        num_delta_layers = num_full_layers * (text_config.full_attention_interval - 1)
+        layer_types = text_config.layer_types
+        num_delta_layers = sum([1 for lt in layer_types if lt == 'linear_attention'])
+        num_full_layers = num_layers - num_delta_layers
         cfg.num_layers = num_full_layers
 
         # set state shapes

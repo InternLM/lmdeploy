@@ -175,7 +175,7 @@ class Qwen3_5MoeModel(Qwen3_5Model):
         nn.Module.__init__(self)
 
         self.visual = Qwen3_5MoeVisionModel(config.vision_config, dtype=dtype, device=device)
-        self.language_model = Qwen3_5TextModel(config.text_config, dtype=dtype, device=device)
+        self.language_model = Qwen3_5MoeTextModel(config.text_config, dtype=dtype, device=device)
 
 
 class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
@@ -208,8 +208,8 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
         # build model
         self.model = Qwen3_5MoeModel(config, dtype=dtype, device=device)
         # build lm_head
-        self.lm_head = build_rowwise_linear(config.hidden_size,
-                                            config.vocab_size,
+        self.lm_head = build_rowwise_linear(config.text_config.hidden_size,
+                                            config.text_config.vocab_size,
                                             bias=False,
                                             dtype=dtype,
                                             device=device)
