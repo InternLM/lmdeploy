@@ -17,6 +17,7 @@ from lmdeploy.pytorch.nn import ApplyRotaryEmb, FlashAttention, RMSNorm, SiluAnd
 from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .patch import add_prefix
 from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
 from .utils.model import DeployModelMixin, vlm_model
 
@@ -71,7 +72,11 @@ class Qwen2_5_VisionRotaryEmbedding(nn.Module):
 class Qwen2_5_VLVisionAttention(nn.Module):
     """Vision attention."""
 
-    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 prefix: str = ''):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         dim = config.hidden_size
@@ -80,16 +85,15 @@ class Qwen2_5_VLVisionAttention(nn.Module):
         self.head_dim = head_dim
 
         # packed qkv
-        self.qkv = build_qkv_proj(
-            dim,
-            num_q_heads=num_heads,
-            num_kv_heads=num_heads,
-            head_size=head_dim,
-            bias=True,
-            quant_config=quantization_config,
-            dtype=dtype,
-            device=device,
-        )
+        self.qkv = build_qkv_proj(dim,
+                                  num_q_heads=num_heads,
+                                  num_kv_heads=num_heads,
+                                  head_size=head_dim,
+                                  bias=True,
+                                  quant_config=quantization_config,
+                                  dtype=dtype,
+                                  device=device,
+                                  prefix=add_prefix('qkv', prefix))
 
         # rotary embedding
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
@@ -102,13 +106,16 @@ class Qwen2_5_VLVisionAttention(nn.Module):
         )
 
         # o_proj
-        self.proj = build_rowwise_linear(dim,
-                                         dim,
-                                         bias=True,
-                                         quant_config=quantization_config,
-                                         dtype=dtype,
-                                         device=device,
-                                         is_tp=True)
+        self.proj = build_rowwise_linear(
+            dim,
+            dim,
+            bias=True,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device,
+            is_tp=True,
+            prefix=add_prefix('proj', prefix),
+        )
 
     def forward(self, hidden_states: torch.Tensor, cu_seqlens: torch.Tensor,
                 rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor]) -> torch.Tensor:
