@@ -747,7 +747,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
                                        max_kv_seqlen=kv_seqlens.max().item(),
                                        sum_kv_seqlen=kv_seqlens.sum().item(),
                                        model_metas=context.model_metas)
-        new_ctx = self.ctx_mgr.build_context(new_model_inputs, crt_ctx.model_config)
+        new_ctx = self.ctx_mgr.build_context(new_model_inputs, crt_ctx.model_config, crt_ctx.cache_config)
 
         # update attributes of the context in model agent
         context.q_seqlens = new_ctx.q_seqlens
