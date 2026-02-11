@@ -117,8 +117,6 @@ class Qwen2Model(LlamaModel):
 
 class Qwen2MoeReader(LlamaReader):
 
-    ffn_pattern = r'shared_expert\.'
-
     def moe_ffn_expert(self, e=None, i=None, kind=None):
         if not kind:
             return self.filter(r'experts', i)
@@ -136,13 +134,18 @@ class Qwen2MoeReader(LlamaReader):
     def _ffn(self, i: int, kind: str):
         """Get ffn kind for layer i."""
         if not kind:
-            return self.filter(self.ffn_pattern, i)
+            return self.filter(r'shared_expert\.', i)
         result = []
         for key in ['gate', 'down', 'up']:
             tensor = self.params[f'{self.attn_layer_prefix}.{i}.mlp.shared_expert.{key}_proj.{kind}']
             tensor = self.transform(tensor, kind)
             result.append(tensor)
         return (*result, )
+
+    def ffn(self, i: int, kind: str):
+        if not kind:
+            return self.filter(r'shared_expert\.', i)
+        return self._ffn(i, kind)
 
     def moe_ffn_shared_gate(self, i):
         return self.params.get(f'{self.attn_layer_prefix}.{i}.mlp.shared_expert_gate.weight')

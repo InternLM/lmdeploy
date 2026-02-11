@@ -43,12 +43,7 @@ class LlamaReader(BaseReader):
 
     def quant_weight_fp8(self):
         from lmdeploy.lite.quantization.weight.quant_utils import quant_blocked_fp8
-        if self.__class__.__name__ in ['Qwen2MoeReader', 'Qwen3MoeReader']:
-            ffn_pattern = r'mlp'
-        else:
-            ffn_pattern = self.ffn_pattern
-
-        pattern_str = fr'({self.attn_pattern}|{ffn_pattern}).*{self.proj_pattern}.*\.weight'
+        pattern_str = fr'({self.attn_pattern}|{self.ffn_pattern}).*{self.proj_pattern}.*\.weight'
         target_pattern = re.compile(pattern_str)
 
         if self.__class__.__name__ == 'InternLM2Reader':
