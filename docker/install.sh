@@ -71,12 +71,13 @@ if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]] && [[ "${PYTHON_VERSION}" != "3.9" ]
 fi
 
 # install pre-built flash attention 3 wheel
+pip install ninja
 if [[ "${CUDA_VERSION_SHORT}" = "cu128" ]]; then
     FA3_WHEELS_URL="https://windreamer.github.io/flash-attention3-wheels/cu128_torch280"
-    pip install flash_attn_3 --find-links ${FA3_WHEELS_URL} --extra-index-url https://download.pytorch.org/whl/cu128
+    pip install flash_attn_3 --find-links ${FA3_WHEELS_URL} -i https://download.pytorch.org/whl/cu128
 elif [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
     FA3_WHEELS_URL="https://windreamer.github.io/flash-attention3-wheels/cu130_torch290"
-    pip install flash_attn_3 --find-links ${FA3_WHEELS_URL} --extra-index-url https://download.pytorch.org/whl/cu130
+    pip install flash_attn_3 --find-links ${FA3_WHEELS_URL} -i https://download.pytorch.org/whl/cu130
 fi
 
 # install pre-built flash attention wheel

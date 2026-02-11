@@ -19,6 +19,7 @@ from lmdeploy.pytorch.nn.eplb import EPLBDispatchInfo, EPLBManager
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_down_linear, build_gateup_linear, build_o_proj,
                                         build_rowwise_linear)
 from lmdeploy.pytorch.nn.moe import MoeType, SoftmaxTopK, build_fused_moe
+from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters, get_rope_theta
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -441,9 +442,10 @@ class DeepseekV2Attention(nn.Module):
 
         self.softmax_scale = self.q_head_dim**(-0.5)
 
-        if config.rope_scaling is not None:
-            mscale_all_dim = config.rope_scaling.get('mscale_all_dim', 0)
-            scaling_factor = config.rope_scaling['factor']
+        rope_scaling = get_rope_parameters(config)
+        if rope_scaling is not None:
+            mscale_all_dim = rope_scaling.get('mscale_all_dim', 0)
+            scaling_factor = rope_scaling.get('factor', 1.0)
             if mscale_all_dim:
                 mscale = yarn_get_mscale(scaling_factor, mscale_all_dim)
                 self.softmax_scale = self.softmax_scale * mscale * mscale
@@ -584,8 +586,17 @@ class MoEGate(nn.Module):
         self.weight = nn.Parameter(
             torch.empty((self.n_routed_experts, self.gating_dim), dtype=torch.float32, device=device))
         if self.topk_method == 'noaux_tc':
+            from lmdeploy.pytorch.nn.moe.route import NoauxTCRouter
             self.e_score_correction_bias = nn.Parameter(
                 torch.empty((self.n_routed_experts, ), dtype=torch.float32, device=device))
+            self.noaux_tc_router = NoauxTCRouter(self.scoring_func,
+                                                 top_k=self.top_k,
+                                                 n_group=self.n_group,
+                                                 topk_group=self.topk_group,
+                                                 n_routed_experts=self.n_routed_experts,
+                                                 routed_scaling_factor=self.routed_scaling_factor,
+                                                 renormalize=self.renormalize,
+                                                 router_n_groups=self.router_n_groups)
         self.softmax_topk = SoftmaxTopK(self.top_k, n_groups=self.router_n_groups)
         self.fake_eplb = getenv('LMDEPLOY_FAKE_EPLB', 'False').lower() == 'true'
         self.eplb_dispatch_info = info
@@ -597,13 +608,22 @@ class MoEGate(nn.Module):
         elif self.scoring_func == 'sigmoid':
             scores = logits.sigmoid()
         else:
-            raise NotImplementedError('insupportable scoring function '
+            raise NotImplementedError('unsupported scoring function '
                                       f'for MoE gating: {self.scoring_func}')
         return scores
 
+    def _postprocess_topk_weight(self, topk_weight: torch.Tensor):
+        if self.renormalize:
+            denominator = topk_weight.sum(dim=-1, keepdim=True) + 1e-20
+            topk_weight = topk_weight / denominator
+            if not topk_weight.is_contiguous():
+                topk_weight = topk_weight.contiguous()
+        if not self.renormalize:
+            topk_weight = topk_weight * self.routed_scaling_factor
+        return topk_weight
+
     def forward(self, hidden_states: torch.Tensor):
         """forward."""
-        sequence_length, hidden_dim = hidden_states.shape
         router_logits = F.linear(hidden_states.to(self.weight.dtype), self.weight)
         if self.fake_eplb:
             # Forcefully manipulate router_logits to simulate expert load balancing (EPLB).
@@ -612,6 +632,8 @@ class MoEGate(nn.Module):
 
         if self.topk_method == 'greedy':
             topk_weight, topk_idx = self.softmax_topk(router_logits)
+
+            topk_weight = self._postprocess_topk_weight(topk_weight)
         elif self.topk_method == 'group_limited_greedy':
             scores = router_logits
             grouped_logits = scores.unflatten(-1, (self.n_group, -1))
@@ -623,44 +645,12 @@ class MoEGate(nn.Module):
             grouped_logits = grouped_logits.masked_fill(group_mask, 0.0)
             scores = grouped_logits.flatten(1, 2)
             topk_weight, topk_idx = self.softmax_topk(scores)
+
+            topk_weight = self._postprocess_topk_weight(topk_weight)
         elif self.topk_method == 'noaux_tc':
-            scores = self._compute_scores(router_logits)
-            scores_for_choice = scores.view(sequence_length, -1) + self.e_score_correction_bias[None]
-            if self.router_n_groups > 0:
-                assert scores_for_choice.shape[-1] % self.router_n_groups == 0, \
-                    f'{scores_for_choice.shape[-1]} cannot be divided by {self.router_n_groups}'
-                per_group_top_k = self.top_k // self.router_n_groups
-                group_size = scores_for_choice.shape[-1] // self.router_n_groups
-                group_offsets = self.softmax_topk.impl.get_group_offsets(self.router_n_groups,
-                                                                         group_size,
-                                                                         device=scores_for_choice.device)
-                scores_for_choice = scores_for_choice.unflatten(-1, (self.router_n_groups, group_size))
-                topk_weight, topk_idx = torch.topk(scores_for_choice, per_group_top_k, dim=-1)
-                topk_idx = (topk_idx + group_offsets).flatten(-2, -1)
-                topk_weight = topk_weight.flatten(-2, -1)
-            else:
-                group_scores = (scores_for_choice.view(sequence_length, self.n_group,
-                                                       -1).topk(2, dim=-1)[0].sum(dim=-1))  # [n, n_group]
-                group_idx = torch.topk(group_scores, k=self.topk_group, dim=-1, sorted=False)[1]  # [n, top_k_group]
-                group_mask = torch.zeros_like(group_scores)  # [n, n_group]
-                group_mask.scatter_(1, group_idx, 1)  # [n, n_group]
-                score_mask = (group_mask.unsqueeze(-1).expand(sequence_length, self.n_group,
-                                                              self.n_routed_experts // self.n_group).reshape(
-                                                                  sequence_length, -1))  # [n, e]
-                tmp_scores = scores_for_choice.masked_fill(~score_mask.bool(), 0.0)  # [n, e]
-                _, topk_idx = torch.topk(tmp_scores, k=self.top_k, dim=-1, sorted=False)
-                topk_weight = scores.gather(1, topk_idx)
+            topk_weight, topk_idx = self.noaux_tc_router(router_logits, self.e_score_correction_bias)
         else:
             raise RuntimeError(f'Unsupported topk_method: {self.topk_method}')
-
-        if self.renormalize:
-            denominator = topk_weight.sum(dim=-1, keepdim=True) + 1e-20
-            topk_weight = topk_weight / denominator
-            if not topk_weight.is_contiguous():
-                topk_weight = topk_weight.contiguous()
-
-        if not self.renormalize or self.topk_method == 'noaux_tc':
-            topk_weight = topk_weight * self.routed_scaling_factor
 
         if self.eplb_dispatch_info is not None:
             topk_idx = EPLBManager.topk_ids_logical_to_physical(topk_idx, self.eplb_dispatch_info)
@@ -987,7 +977,7 @@ class DeepseekV2Model(nn.Module):
         rope_dim = config.qk_rope_head_dim if getattr(config, 'use_mla', True) else (config.hidden_size //
                                                                                      config.num_attention_heads)
         rope_max_pos_emb = config.max_position_embeddings
-        rope_base = config.rope_theta
+        rope_base = get_rope_theta(config)
 
         rope_params = dict(emb_type=emb_type, dim=rope_dim, max_position_embeddings=rope_max_pos_emb, base=rope_base)
         update_params = build_rotary_params(config)

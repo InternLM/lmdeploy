@@ -27,7 +27,7 @@ class BaseSpecModelAgent:
         """Set model config."""
         pass
 
-    def build_model(self, empty_init: bool, target_model=None, model_format=None, build_model_ctx=None):
+    def build_model(self, empty_init: bool, target_model=None, build_model_ctx=None):
         """Build draft model."""
         pass
 

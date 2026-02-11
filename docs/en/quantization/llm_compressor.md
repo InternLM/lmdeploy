@@ -83,15 +83,16 @@ The default service port is 23333. After the server starts, you can access the s
 
 ## Accuracy Evaluation
 
-After deploying the AWQ symmetric and AWQ asymmetric quantized Qwen3-30B-A3B models as services via LMDeploy, we evaluated their accuracy on several academic datasets using [opencompass](https://github.com/open-compass/opencompass). AWQ symmetric and asymmetric quantization show no significant difference in accuracy. Compared with BF16, accuracy drops significantly on long-output datasets such as aime2025 (avg 17,635 tokens) and LCB (avg 14,157 tokens), while on medium/short-output datasets like ifeval (avg 1,885 tokens) and mmlu_pro (avg 2,826 tokens), the accuracy is as expected.
+Aftering deploying AWQ symmetric/asymmetric quantized models of Qwen3-8B (Dense) and Qwen3-30B-A3B (MoE) as services via LMDeploy, we evaluated their accuracy on several academic datasets using [opencompass](https://github.com/open-compass/opencompass). Results indicate that, for Qwen3-8B, asymmetric quantization generally outperforms symmetric quantization, while Qwen3-30B-A3B shows no substantial difference between symmetric and asymmetric quantization. Compared with BF16, Qwen3-8B shows a smaller accuracy gap under both symmetric and asymmetric quantization than Qwen3-30B-A3B. Compared with BF16, accuracy drops significantly on long-output datasets such as aime2025 (avg 17,635 tokens) and LCB (avg 14,157 tokens), while on medium/short-output datasets like ifeval (avg 1,885 tokens) and mmlu_pro (avg 2,826 tokens), the accuracy is as expected.
 
-| dataset           | bf16  | awq sym | awq asym |
-| ----------------- | ----- | ------- | -------- |
-| ifeval            | 86.32 | 84.10   | 84.29    |
-| hle               | 7.00  | 5.47    | 5.65     |
-| gpqa              | 61.74 | 57.95   | 57.07    |
-| aime2025          | 73.44 | 64.79   | 66.67    |
-| mmlu_pro          | 77.85 | 75.77   | 75.69    |
-| LCBCodeGeneration | 56.67 | 50.86   | 49.24    |
+| dataset           | Qwen3-8B |         |          | Qwen3-30B-A3B |         |          |
+| ----------------- | -------- | ------- | -------- | ------------- | ------- | -------- |
+|                   | bf16     | awq sym | awq asym | bf16          | awq sym | awq asym |
+| ifeval            | 85.58    | 83.73   | 85.77    | 86.32         | 84.10   | 84.29    |
+| hle               | 5.05     | 5.05    | 5.24     | 7.00          | 5.47    | 5.65     |
+| gpqa              | 59.97    | 56.57   | 59.47    | 61.74         | 57.95   | 57.07    |
+| aime2025          | 69.48    | 64.38   | 63.96    | 73.44         | 64.79   | 66.67    |
+| mmlu_pro          | 73.69    | 71.73   | 72.34    | 77.85         | 75.77   | 75.69    |
+| LCBCodeGeneration | 50.86    | 44.10   | 46.95    | 56.67         | 50.86   | 49.24    |
 
 For reproduction methods, please refer to [this](https://lmdeploy.readthedocs.io/en/latest/benchmark/evaluate_with_opencompass.html) document.

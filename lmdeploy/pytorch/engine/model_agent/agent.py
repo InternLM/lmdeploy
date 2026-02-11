@@ -179,7 +179,7 @@ def model_forward(
             if not isinstance(output, Dict):
                 output = dict(hidden_states=output)
             # InternVL-3.5-Flash will change the seqlen, model_metas during forward
-            if context.model_metas is not None and context.model_metas[0] is not None:
+            if getattr(context, 'is_model_meta_updated', False):
                 model_metas = context.model_metas
             output['model_metas'] = model_metas
             output['seq_length'] = context.q_seqlens[:len(inputs.seq_length)]
@@ -1066,11 +1066,9 @@ class BaseModelAgent:
             dllm_config=self.misc_config.dllm_config,
             strategy_factory=self.strategy_factory,
             enable_return_routed_experts=enable_return_routed_experts,
+            quant_config=self.model_config.quant_config,
         )
-        patched_model = build_patched_model(self.model_config,
-                                            device=device,
-                                            model_format=self.misc_config.model_format,
-                                            build_model_ctx=build_model_ctx)
+        patched_model = build_patched_model(self.model_config, device=device, build_model_ctx=build_model_ctx)
         logger.debug(msg_with_rank(rank, 'loading weights.'))
         if not self.misc_config.empty_init:
             load_model_weights(patched_model, model_path, device=device)
@@ -1086,7 +1084,6 @@ class BaseModelAgent:
             self._build_model()
             self.spec_agent.build_model(self.misc_config.empty_init,
                                         self.patched_model,
-                                        model_format=self.misc_config.model_format,
                                         build_model_ctx=self.build_model_ctx)
 
     def build_graph_runner(self):

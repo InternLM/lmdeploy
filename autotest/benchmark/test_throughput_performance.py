@@ -1,82 +1,118 @@
-import os
-
 import pytest
 from utils.benchmark_utils import throughput_test
-from utils.config_utils import get_benchmark_model_list, get_cuda_id_by_workerid, get_cuda_prefix_by_workerid
+from utils.config_utils import get_func_config_list, get_workerid
 
 
+def get_models(backend, parallel_config):
+    run_configs = get_func_config_list(backend, parallel_config, func_type='benchmark')
+    return [item for item in run_configs
+            if 'gpt' not in item['model']]  # gpt models are excluded because of openai_harmony is not supported yet
+
+
+@pytest.mark.turbomind
 @pytest.mark.gpu_num_1
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_benchmark_model_list(parallel_config=1, kvint_list=[4, 8]))
-def test_throughput_tp1(config, run_id, run_config, worker_id):
-    result, msg = throughput_test(config,
-                                  run_id,
-                                  run_config,
-                                  cuda_prefix=get_cuda_prefix_by_workerid(worker_id, parallel_config=1),
-                                  worker_id=worker_id)
-
+@pytest.mark.parametrize('run_config', get_models(backend='turbomind', parallel_config={'tp': 1}))
+def test_turbomind_throughput_tp1(config, run_config, worker_id):
+    result, msg = throughput_test(config, run_config, worker_id=worker_id)
     assert result, msg
 
 
+@pytest.mark.turbomind
 @pytest.mark.gpu_num_2
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_benchmark_model_list(parallel_config=2, kvint_list=[4, 8]))
-def test_throughput_tp2(config, run_id, run_config, worker_id):
-    result, msg = throughput_test(config,
-                                  run_id,
-                                  run_config,
-                                  cuda_prefix=get_cuda_prefix_by_workerid(worker_id, parallel_config=2),
-                                  worker_id=worker_id)
-
+@pytest.mark.parametrize('run_config', get_models(backend='turbomind', parallel_config={'tp': 2}))
+def test_turbomind_throughput_tp2(config, run_config, worker_id):
+    result, msg = throughput_test(config, run_config, worker_id=worker_id)
     assert result, msg
 
 
+@pytest.mark.turbomind
 @pytest.mark.gpu_num_4
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_benchmark_model_list(parallel_config=4, kvint_list=[4, 8]))
-def test_throughput_tp4(config, run_id, run_config, worker_id):
-    result, msg = throughput_test(config,
-                                  run_id,
-                                  run_config,
-                                  cuda_prefix=get_cuda_prefix_by_workerid(worker_id, parallel_config=4),
-                                  worker_id=worker_id)
-
+@pytest.mark.parametrize('run_config', get_models(backend='turbomind', parallel_config={'tp': 4}))
+def test_turbomind_throughput_tp4(config, run_config, worker_id):
+    result, msg = throughput_test(config, run_config, worker_id=worker_id)
     assert result, msg
 
 
+@pytest.mark.turbomind
 @pytest.mark.gpu_num_8
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('run_config', get_benchmark_model_list(parallel_config=4, kvint_list=[4, 8]))
-def test_throughput_tp8(config, run_id, run_config, worker_id):
-    result, msg = throughput_test(config,
-                                  run_id,
-                                  run_config,
-                                  cuda_prefix=get_cuda_prefix_by_workerid(worker_id, parallel_config=8),
-                                  worker_id=worker_id)
+@pytest.mark.parametrize('run_config', get_models(backend='turbomind', parallel_config={'tp': 8}))
+def test_turbomind_throughput_tp8(config, run_config, worker_id):
+    result, msg = throughput_test(config, run_config, worker_id=worker_id)
+    assert result, msg
 
+
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_1
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_models(backend='pytorch', parallel_config={'tp': 1}))
+def test_pytorch_throughput_tp1(config, run_config, worker_id):
+    result, msg = throughput_test(config, run_config, worker_id=worker_id)
+    assert result, msg
+
+
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_2
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_models(backend='pytorch', parallel_config={'tp': 2}))
+def test_pytorch_throughput_tp2(config, run_config, worker_id):
+    result, msg = throughput_test(config, run_config, worker_id=worker_id)
+    assert result, msg
+
+
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_4
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_models(backend='pytorch', parallel_config={'tp': 4}))
+def test_pytorch_throughput_tp4(config, run_config, worker_id):
+    result, msg = throughput_test(config, run_config, worker_id=worker_id)
+    assert result, msg
+
+
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_models(backend='pytorch', parallel_config={'tp': 8}))
+def test_pytorch_throughput_tp8(config, run_config, worker_id):
+    result, msg = throughput_test(config, run_config, worker_id=worker_id)
+    assert result, msg
+
+
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_16
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_models(backend='pytorch', parallel_config={'tp': 16}))
+def test_pytorch_throughput_tp16(config, run_config, worker_id):
+    result, msg = throughput_test(config, run_config, worker_id=worker_id)
     assert result, msg
 
 
 @pytest.mark.function
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config', [{
-    'model': 'internlm/internlm2_5-20b-chat',
-    'backend': 'pytorch',
-    'tp_num': 2
-}, {
-    'model': 'internlm/internlm2_5-20b-chat-inner-4bits',
+    'model': 'Qwen/Qwen3-30B-A3B',
     'backend': 'turbomind',
+    'communicator': 'cuda-ipc',
     'quant_policy': 0,
-    'tp_num': 2
+    'parallel_config': {
+        'tp': 2
+    },
+    'extra_params': {}
+}, {
+    'model': 'Qwen/Qwen3-VL-32B-Instruct',
+    'backend': 'pytorch',
+    'communicator': 'nccl',
+    'quant_policy': 8,
+    'parallel_config': {
+        'tp': 2
+    },
+    'extra_params': {}
 }])
-def test_throughput_func_tp2(config, run_id, run_config, worker_id):
-    result, msg = throughput_test(config,
-                                  run_id,
-                                  run_config,
-                                  cuda_prefix=get_cuda_prefix_by_workerid(worker_id, parallel_config=2),
-                                  worker_id=worker_id,
-                                  is_smoke=True)
-
+def test_throughput_func_tp2(config, run_config, worker_id):
+    result, msg = throughput_test(config, run_config, worker_id=worker_id, is_smoke=True)
     assert result, msg
 
 
@@ -85,25 +121,24 @@ def test_throughput_func_tp2(config, run_id, run_config, worker_id):
 @pytest.mark.pr_test
 @pytest.mark.parametrize('run_config', [{
     'model': 'meta-llama/Meta-Llama-3-1-8B-Instruct',
-    'backend': 'pytorch',
-    'tp_num': 1
-}, {
-    'model': 'meta-llama/Meta-Llama-3-1-8B-Instruct',
     'backend': 'turbomind',
+    'communicator': 'nccl',
     'quant_policy': 0,
-    'tp_num': 1
+    'parallel_config': {
+        'tp': 1
+    },
+    'extra_params': {}
+}, {
+    'model': 'Qwen/Qwen3-VL-8B-Instruct',
+    'backend': 'pytorch',
+    'communicator': 'nccl',
+    'quant_policy': 8,
+    'parallel_config': {
+        'tp': 1
+    },
+    'extra_params': {}
 }])
-def test_throughput_prtest_tp1(config, run_id, run_config, worker_id):
-    device_type = os.environ.get('DEVICE', 'cuda')
-    if device_type == 'ascend':
-        env_var = 'ASCEND_RT_VISIBLE_DEVICES='
-    else:
-        env_var = 'CUDA_VISIBLE_DEVICES='
-    result, msg = throughput_test(config,
-                                  run_id,
-                                  run_config,
-                                  cuda_prefix=f'{env_var}' + str(int(get_cuda_id_by_workerid(worker_id)) + 5),
-                                  worker_id=worker_id,
-                                  is_smoke=True)
-
+def test_throughput_prtest_tp1(config, run_config, worker_id):
+    worker_id = 'gw' + str(6 + get_workerid(worker_id))
+    result, msg = throughput_test(config, run_config, worker_id=worker_id, is_smoke=True)
     assert result, msg

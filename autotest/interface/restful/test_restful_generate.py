@@ -9,10 +9,10 @@ from typing import Any, Dict, List
 import pytest
 import requests
 from transformers import AutoTokenizer
-from utils.constant import BACKEND_LIST, RESTFUL_MODEL_LIST
+from utils.constant import BACKEND_LIST, DEFAULT_SERVER, RESTFUL_MODEL_LIST
 from utils.toolkit import encode_text, parse_sse_stream
 
-BASE_HTTP_URL = 'http://127.0.0.1'
+BASE_HTTP_URL = f'http://{DEFAULT_SERVER}'
 DEFAULT_PORT = 23333
 BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
 

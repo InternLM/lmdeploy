@@ -1,8 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from typing import Tuple
+
 import dlinfer.ops as ext_ops
+from dlinfer.utils.type_annotation import MoeMetadata as DlinferMoeMetadata
 from torch import Tensor
 
 
-def moe_gating_topk_softmax(router_logits: Tensor, topk: int):
-    routing_weights, selected_experts = ext_ops.moe_gating_topk_softmax(router_logits, topk)
+def moe_gating_topk_softmax(router_logits: Tensor, topk: int,
+                            moe_metadata: DlinferMoeMetadata) -> Tuple[Tensor, Tensor]:
+    routing_weights, selected_experts = ext_ops.moe_gating_topk_softmax(router_logits, topk, moe_metadata)
     return routing_weights, selected_experts

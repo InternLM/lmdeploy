@@ -466,7 +466,7 @@ class InputsMakerAsync:
         if self.scheduler.cache_config.window_size > 0:
             num_ignored_history = torch.tensor([msg.num_ignored_history for msg in valid_seqs])
         else:
-            num_ignored_history = None
+            num_ignored_history = torch.zeros(len(valid_seqs), dtype=torch.long)
 
         kv_seqlens = [seq.num_all_ids + max_q_seqlen for seq in valid_seqs]
         sum_kv_seqlen = sum(kv_seqlens) + batch_size * max_q_seqlen
