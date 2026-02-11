@@ -32,7 +32,7 @@ from lmdeploy.serve.proxy.utils import AIOHTTP_TIMEOUT, LATENCY_DEQUE_LEN, Error
 from lmdeploy.serve.utils.server_utils import validate_json_request
 from lmdeploy.utils import get_logger
 
-from .streaming_resonse import ProxyStreamingResponse
+from .streaming_response import ProxyStreamingResponse
 from .utils import APIServerException
 
 logger = get_logger('lmdeploy')
@@ -356,7 +356,7 @@ class NodeManager:
                         if line.strip():
                             yield line + b'\n\n'
         except (Exception, GeneratorExit, aiohttp.ClientError) as e:  # noqa
-            logger.error(f'catched an exception: {e}')
+            logger.error(f'caught an exception: {e}')
             # exception happened, reduce unfinished num
             yield self.handle_api_timeout(node_url)
 
@@ -373,7 +373,7 @@ class NodeManager:
                 async with session.post(node_url + endpoint, json=request, timeout=self.aiotimeout) as response:
                     return await response.text()
         except (Exception, GeneratorExit, aiohttp.ClientError, asyncio.CancelledError) as e:  # noqa  # yapf: disable
-            logger.error(f'catched an exception: {e}')
+            logger.error(f'caught an exception: {e}')
             return self.handle_api_timeout(node_url)
 
     async def forward_raw_request_stream_generate(self, raw_request: Request, node_url: str, endpoint: str):
@@ -394,7 +394,7 @@ class NodeManager:
             # raise APIServerException again to be caught by the outer layer
             raise
         except (Exception, GeneratorExit, aiohttp.ClientError) as e:  # noqa
-            logger.error(f'catched an exception: {e}')
+            logger.error(f'caught an exception: {e}')
             # exception happened, reduce unfinished num
             yield self.handle_api_timeout(node_url)
 
@@ -408,7 +408,7 @@ class NodeManager:
                                         timeout=self.aiotimeout) as response:
                     return await response.text()
         except (Exception, GeneratorExit, aiohttp.ClientError, asyncio.CancelledError) as e:  # noqa  # yapf: disable
-            logger.error(f'catched an exception: {e}')
+            logger.error(f'caught an exception: {e}')
             return self.handle_api_timeout(node_url)
 
     def pre_call(self, node_url):
@@ -466,7 +466,7 @@ app.add_middleware(
 node_manager = NodeManager()
 
 
-@app.get('/v1/models', dependencies=[Depends(validate_json_request)])
+@app.get('/v1/models')
 def available_models():
     """Show available models."""
     model_cards = []
@@ -475,7 +475,7 @@ def available_models():
     return ModelList(data=model_cards)
 
 
-@app.get('/nodes/status', dependencies=[Depends(validate_json_request)])
+@app.get('/nodes/status')
 def node_status():
     """Show nodes status."""
     try:
@@ -788,7 +788,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         if request.stream is True:
             response = node_manager.forward_raw_request_stream_generate(raw_request, node_url, '/v1/completions')
             background_task = node_manager.create_background_tasks(node_url, start)
-            return StreamingResponse(response, background=background_task, media_type='text/event-stream')
+            return ProxyStreamingResponse(response, background=background_task, media_type='text/event-stream')
         else:
             response = await node_manager.forward_raw_request_generate(raw_request, node_url, '/v1/completions')
             node_manager.post_call(node_url, start)

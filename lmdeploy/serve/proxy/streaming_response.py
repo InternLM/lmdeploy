@@ -20,7 +20,8 @@ class ProxyStreamingResponse(StreamingResponse):
             first_chunk = await iterator.__anext__()
 
         except APIServerException as e:
-            await send({'type': 'http.response.start', 'status': e.status_code, 'headers': self.raw_headers})
+            headers = self._convert_headers_to_asgi(e.headers) if e.headers else self.raw_headers
+            await send({'type': 'http.response.start', 'status': e.status_code, 'headers': headers})
             await send({
                 'type': 'http.response.body',
                 'body': e.body,
@@ -64,3 +65,7 @@ class ProxyStreamingResponse(StreamingResponse):
             'body': b'',
             'more_body': False,
         })
+
+    def _convert_headers_to_asgi(self, headers: dict) -> list[tuple[bytes, bytes]]:
+        """Convert dict headers to ASGI raw header tuples."""
+        return [(name.lower().encode('latin-1'), str(value).encode('latin-1')) for name, value in headers.items()]

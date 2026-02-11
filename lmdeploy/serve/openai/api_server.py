@@ -12,11 +12,11 @@ from http import HTTPStatus
 from typing import AsyncGenerator, Literal
 
 import uvicorn
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from requests.api import request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.routing import Mount
 
@@ -98,7 +98,7 @@ def get_model_list():
     return model_names
 
 
-@router.get('/v1/models', dependencies=[Depends(validate_json_request)])
+@router.get('/v1/models')
 def available_models():
     """Show available models."""
     model_cards = []
@@ -1134,7 +1134,7 @@ def update_params(request: UpdateParamsRequest, raw_request: Request = None):
 
 
 @router.post('/sleep', dependencies=[Depends(validate_json_request)])
-async def sleep(raw_request: request = None):
+async def sleep(raw_request: Request = None):
     level = raw_request.query_params.get('level', '1')
     VariableInterface.async_engine.sleep(int(level))
     return Response(status_code=200)
@@ -1148,8 +1148,8 @@ async def wakeup(raw_request: Request = None):
     return Response(status_code=200)
 
 
-@router.get('/is_sleeping', dependencies=[Depends(validate_json_request)])
-async def is_sleeping(raw_request: Request = None):
+@router.get('/is_sleeping')
+async def is_sleeping():
     is_sleeping = VariableInterface.async_engine.is_sleeping
     return JSONResponse(content={'is_sleeping': is_sleeping})
 
@@ -1268,7 +1268,13 @@ async def shutdown_event():
 
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """Handler for RequestValidationError."""
-    return JSONResponse(status_code=exc.status_code, content=exc.detail, headers=exc.headers)
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content=jsonable_encoder({
+            'detail': exc.errors(),
+            'body': exc.body
+        }),
+    )
 
 
 class ConcurrencyLimitMiddleware(BaseHTTPMiddleware):

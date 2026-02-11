@@ -32,6 +32,13 @@ class AuthenticationMiddleware:
     def __init__(self, app: ASGIApp, tokens: list[str]) -> None:
         self.app = app
         self.api_tokens = [hashlib.sha256(t.encode('utf-8')).digest() for t in tokens]
+        # Path prefixes that bypass authentication
+        self.skip_prefixes = [
+            '/health',  # Health check endpoints
+            '/docs',  # Swagger UI documentation
+            '/redoc',  # ReDoc documentation
+            '/nodes',  # Endpoints about node operation between proxy and api_server
+        ]
 
     def verify_token(self, headers: Headers) -> bool:
         authorization_header_value = headers.get('Authorization')
@@ -51,15 +58,17 @@ class AuthenticationMiddleware:
         return token_match
 
     def __call__(self, scope: Scope, receive: Receive, send: Send) -> Awaitable[None]:
-        if scope['type'] not in ('http', 'websocket') or scope['method'] == 'OPTIONS':
+        if scope['type'] not in ('http', 'websocket'):
             # scope["type"] can be "lifespan" or "startup" for example,
             # in which case we don't need to do anything
             return self.app(scope, receive, send)
+        if scope['type'] == 'http' and scope['method'] == 'OPTIONS':
+            return self.app(scope, receive, send)
+
         root_path = scope.get('root_path', '')
         url_path = URL(scope=scope).path.removeprefix(root_path)
         headers = Headers(scope=scope)
-        # Type narrow to satisfy mypy.
-        if url_path.startswith('/v1') and not self.verify_token(headers):
+        if not any(url_path.startswith(path) for path in self.skip_prefixes) and not self.verify_token(headers):
             response = JSONResponse(content={'error': 'Unauthorized'}, status_code=401)
             return response(scope, receive, send)
         return self.app(scope, receive, send)
