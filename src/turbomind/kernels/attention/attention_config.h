@@ -8,6 +8,7 @@
 #include "impl_16816.h"
 #include "impl_1688.h"
 #include "impl_884.h"
+#include "impl_simt.h"
 #include "linear_iterator.h"
 #include "mainloop_sm70.h"
 #include "mainloop_sm80.h"
@@ -70,6 +71,20 @@ struct AttentionConfig<arch::Sm75, T, HeadDim, Ctype>: Base_64x64_16x64 {
     using Attention = Impl<MMA_1688, T, T, 1, CTA_Q, CTA_S, 1, WARP_Q, WARP_S, HeadDim, 2>;
     using CacheIter = GetCacheIterFactory<Ctype, T, CTA_S, HeadDim>;
     using Kernel    = AttentionUniversal<arch::Sm75, Mainloop<arch::Sm70, Attention>, CacheIter, AttentionCtaMap>;
+};
+
+template<class T, CacheType Ctype>
+struct AttentionConfig<arch::Sm70, T, 576, Ctype> {
+    // CTA_S reduced from 64 to 32 so shared memory fits within V100's 96 KB limit.
+    // CTA_Q=1 because the SIMT kernel processes exactly 1 Q position per CTA.
+    static constexpr int CTA_Q  = 1;
+    static constexpr int CTA_S  = 32;
+    static constexpr int WARP_Q = 1;
+    static constexpr int WARP_S = 32;
+
+    using Attention = Impl<MMA_SIMT, T, T, 1, CTA_Q, CTA_S, 1, WARP_Q, WARP_S, 576, 2>;
+    using CacheIter = GetCacheIterFactory<Ctype, T, CTA_S, 576>;
+    using Kernel    = AttentionUniversal<arch::Sm70, Mainloop<arch::Sm70, Attention>, CacheIter, AttentionCtaMap>;
 };
 
 template<class T, int HeadDim, CacheType Ctype>

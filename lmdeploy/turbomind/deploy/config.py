@@ -83,6 +83,8 @@ class ModelConfig:
     topk_group: int = 1
     topk_method: str = 'greedy'
     moe_group_num: int = 1
+    scoring_func: str = 'softmax'
+    router_n_groups: int = -1
     # MLA
     q_lora_rank: int = 0
     kv_lora_rank: int = 0

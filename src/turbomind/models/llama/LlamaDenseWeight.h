@@ -173,6 +173,9 @@ struct MoeFfnWeight: core::Module {
     LlamaDenseWeight gate;
     LlamaDenseWeight shared_gate;
 
+    /// Per-expert score correction bias for noaux_tc routing (optional; used when topk_method == "noaux_tc")
+    Tensor score_correction_bias;
+
     std::vector<std::unique_ptr<LlamaFfnWeight>> experts;
 
     // reference into `experts`

@@ -164,6 +164,15 @@ class BaseOutputModel(ABC):
                     torch_tensor = torch_tensor.half()
             if name in tm_params:
                 for tm_tensor in tm_params[name]:
+                    # Match TurboMind tensor dtype to avoid byte_size mismatch (e.g. f32 256b vs f16 128b)
+                    try:
+                        import _turbomind as _tm
+                        if tm_tensor.type == _tm.DataType.TYPE_FP32 and torch_tensor.dtype == torch.float16:
+                            torch_tensor = torch_tensor.float()
+                        elif tm_tensor.type == _tm.DataType.TYPE_FP16 and torch_tensor.dtype == torch.float32:
+                            torch_tensor = torch_tensor.half()
+                    except Exception:
+                        pass
                     tm_tensor.copy_from(torch_tensor)
                 tm_params.pop(name)
         else:

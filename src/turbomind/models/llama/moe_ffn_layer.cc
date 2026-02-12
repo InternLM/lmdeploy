@@ -95,31 +95,56 @@ void MoeFfnLayer::Forward(ForwardParam& p)
 
     // dump_logits(tokens, layer_id);
 
-    bool softmax = true;
-    if (param_.topk_method == "group_limited_greedy") {
-        invokeMoeSoftmaxMaskTopKGroups(
-            logits.data(), tokens, expert_num, expert_num / param_.n_group, param_.topk_group, st);
-        sync_check_cuda_error();
-        softmax = false;
+    if (param_.topk_method == "noaux_tc") {
+        TM_CHECK_EQ(param_.n_group, 1);
+        TM_CHECK_EQ(param_.topk_group, 1);
+        const float* correction_bias =
+            (moe.score_correction_bias.size() > 0) ? moe.score_correction_bias.data<float>() : nullptr;
+        invokeMoeGate_NoAuxTC(f2n_.data(),
+                              f2E_.data(),
+                              en2f_.data(),
+                              offsets_.data(),
+                              scales_.data(),
+                              masks_.data(),
+                              accum_.data(),
+                              logits.data(),
+                              correction_bias,
+                              tokens,
+                              padded,
+                              expert_num,
+                              param_.experts_per_token,
+                              param_.norm_topk_prob,
+                              param_.routed_scale,
+                              param_.scoring_func == "sigmoid",
+                              st);
     }
+    else {
+        bool softmax = true;
+        if (param_.topk_method == "group_limited_greedy") {
+            invokeMoeSoftmaxMaskTopKGroups(
+                logits.data(), tokens, expert_num, expert_num / param_.n_group, param_.topk_group, st);
+            sync_check_cuda_error();
+            softmax = false;
+        }
 
-    /// TODO: fix illegal memory access even if NaN are present in logits
-    invokeMoeGate_V2(f2n_.data(),
-                     f2E_.data(),
-                     en2f_.data(),
-                     offsets_.data(),
-                     scales_.data(),
-                     masks_.data(),
-                     accum_.data(),
-                     logits.data(),
-                     tokens,
-                     padded,
-                     expert_num,
-                     param_.experts_per_token,
-                     softmax,
-                     param_.norm_topk_prob,
-                     param_.routed_scale,
-                     st);
+        /// TODO: fix illegal memory access even if NaN are present in logits
+        invokeMoeGate_V2(f2n_.data(),
+                        f2E_.data(),
+                        en2f_.data(),
+                        offsets_.data(),
+                        scales_.data(),
+                        masks_.data(),
+                        accum_.data(),
+                        logits.data(),
+                        tokens,
+                        padded,
+                        expert_num,
+                        param_.experts_per_token,
+                        softmax,
+                        param_.norm_topk_prob,
+                        param_.routed_scale,
+                        st);
+    }
     sync_check_cuda_error();
 
     if (is_warm_up_) {

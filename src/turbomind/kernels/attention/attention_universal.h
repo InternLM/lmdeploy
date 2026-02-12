@@ -49,7 +49,9 @@ struct AttentionUniversal {
 
     using SharedStorage = typename Mainloop::SharedStorage;
 
-    static constexpr bool kProcessKV = CTA_Q == 1;
+    // Only process KV inline during decoding (DecodingCtaMap), not during context attention
+    // (AttentionCtaMap), even when CTA_Q == 1 (e.g. SIMT kernels).
+    static constexpr bool kProcessKV = std::is_same_v<CtaMap, attention::DecodingCtaMap>;
 
     const int q_group_size_;
     const int q_head_per_cta_;

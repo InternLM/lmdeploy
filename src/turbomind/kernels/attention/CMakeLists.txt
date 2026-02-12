@@ -41,6 +41,22 @@ add_library(attention STATIC
             codegen/decoding_sm80_64_f16_u8.cu
             codegen/attention_sm80_192.cu
             codegen/decoding_sm80_192.cu
+            codegen/attention_sm70_576_f16.cu
+            codegen/attention_sm75_576_f16.cu
+            codegen/attention_sm80_576_f16.cu
+            codegen/attention_sm80_576_bf16.cu
+            codegen/decoding_sm70_576_f16_f16.cu
+            codegen/decoding_sm70_576_f16_u4.cu
+            codegen/decoding_sm70_576_f16_u8.cu
+            codegen/decoding_sm75_576_f16_f16.cu
+            codegen/decoding_sm75_576_f16_u4.cu
+            codegen/decoding_sm75_576_f16_u8.cu
+            codegen/decoding_sm80_576_f16_f16.cu
+            codegen/decoding_sm80_576_f16_u4.cu
+            codegen/decoding_sm80_576_f16_u8.cu
+            codegen/decoding_sm80_576_bf16_bf16.cu
+            codegen/decoding_sm80_576_bf16_u4.cu
+            codegen/decoding_sm80_576_bf16_u8.cu
             )
 set_property(TARGET attention PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET attention PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)

@@ -86,8 +86,6 @@ class LlamaReader(BaseReader):
         return (*result, )
 
     def ffn(self, i: int, kind: str):
-        if not kind:
-            return self.filter(self.ffn_pattern)
         return self._ffn(i, kind)
 
     def ffn_norm(self, i: int):
@@ -132,10 +130,15 @@ class LlamaModel(BaseInputModel):
         head_dim = model_arg.get('head_dim', None)
         head_dim = head_dim or hidden_units // attn_head_num
         # compute rope param
-        rope_theta = float(model_arg.get('rope_theta', 10000.0))
+        if 'rope_parameters' in model_arg:
+            # transformers v5.0.0 aggregates rope settings into rope_parameters
+            rope_scaling = model_arg['rope_parameters']
+            rope_theta = float(rope_scaling.get('rope_theta', 10000.0))
+        else:
+            rope_theta = float(model_arg.get('rope_theta', 10000.0))
+            rope_scaling = model_arg.get('rope_scaling', None)
         max_position_embeddings = int(model_arg.get('max_position_embeddings', 0))
         rope_param = RopeParam(type='default', base=rope_theta, dim=head_dim)
-        rope_scaling = model_arg.get('rope_scaling', None)
         if isinstance(rope_scaling, dict):
             llama2_scaling_type = rope_scaling.get('type', '')
             llama3_scaling_type = rope_scaling.get('rope_type', '')

@@ -91,6 +91,24 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
     if model_arch == 'GptOssForCausalLM':
         weight_type = dtype
 
+    # When attention weights are not quantized (e.g. AWQ with self_attn in
+    # modules_to_not_convert), the non-expert weight_type must be fp16 so
+    # the C++ engine allocates fp16 ".weight" buffers that match the names
+    # the Python converter writes.  Only MoE experts keep int4 via
+    # expert_weight_type.
+    if model_format in ['awq', 'gptq'] and weight_type != dtype:
+        quant_config = getattr(model_config, 'quantization_config', None)
+        if quant_config is None:
+            quant_config = {}
+        if isinstance(quant_config, dict):
+            modules_to_not_convert = quant_config.get(
+                'modules_to_not_convert') or []
+        else:
+            modules_to_not_convert = getattr(
+                quant_config, 'modules_to_not_convert', None) or []
+        if any('self_attn' in m for m in modules_to_not_convert):
+            weight_type = dtype
+
     config.model_config.model_arch = model_arch
     config.model_config.data_type = dtype
     config.model_config.weight_type = weight_type
@@ -125,6 +143,7 @@ def get_tm_model(model_path,
     """
     _, cfg = get_model_arch(model_path)
     quant_config = search_nested_config(cfg.to_dict(), 'quantization_config')
+    mixed_awq = False
     if quant_config:
         quant_method = quant_config.get('quant_method')
         _group_size = int(quant_config.get('group_size', 0))
@@ -137,6 +156,9 @@ def get_tm_model(model_path,
 
         if quant_method == 'awq':
             assert version == 'gemm', f'unsupported quant config: {quant_config}'
+            modules_to_not_convert = quant_config.get('modules_to_not_convert') or []
+            if any('self_attn' in name for name in modules_to_not_convert):
+                mixed_awq = True
         elif quant_method == 'gptq':
             assert not quant_config.get('desc_act', False) and quant_config.get(
                 'sym', True), f'unsupported quant config: {quant_config}'
@@ -178,6 +200,12 @@ def get_tm_model(model_path,
                                                                             model_format=engine_config.model_format,
                                                                             dtype=engine_config.dtype,
                                                                             group_size=group_size)
+
+    if mixed_awq:
+        # Mixed-precision AWQ: attention weights are fp16 (not quantized),
+        # but expert weights remain as int4 AWQ for efficient inference.
+        tm_cfg.model_config.weight_type = tm_cfg.model_config.data_type
+        # expert_weight_type stays as 'int4' (set by get_output_model_registered_name_and_config)
 
     tm_cfg.model_config.chat_template = chat_template_name
     tm_cfg.model_config.model_name = model_name

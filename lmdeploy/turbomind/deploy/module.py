@@ -4,7 +4,7 @@ from functools import partial
 
 import torch
 
-from .parameter import get_params
+from .parameter import get_params, identity
 from .source_model.base import BaseReader
 from .target_model.base import BaseOutputModel
 
@@ -121,9 +121,57 @@ class Ffn(Module):
         self.model.save_split(w2, fmt.format(idx, 'w2', kind), split_dim=0, split_num=self.tp, copy=is_lora_b)
 
     def apply(self, i: int, r: BaseReader):
-        if not self.inter_size[i]:
+        if i >= len(self.inter_size) or not self.inter_size[i]:
             return
-        for e in get_params(r.ffn(i, None)):
+        keys = r.ffn(i, None)
+
+        # ========== Mixed-precision AWQ Support (TODO: move to C++ engine) ==========
+        # Workaround: When attention is fp16 but shared_experts are AWQ int4,
+        # TurboMind C++ engine allocates fp16 buffers (based on weight_type) but
+        # doesn't have code to load AWQ weights in this case. So we dequantize
+        # at conversion time as a temporary solution.
+        #
+        # Proper fix: Add expert_weight_type config and teach C++ to handle
+        # mixed-precision properly (keep int4, use int4 kernels).
+        # See: https://github.com/InternLM/lmdeploy/issues/XXXX
+        if keys and self.model.model_config.model_format == 'awq' and self.model.model_config.weight_type in [
+                'float16', 'bfloat16'] and any(k.endswith('.qweight') for k in keys):
+            try:
+                from lmdeploy.pytorch.backends.default.awq_modules import dequantize_gemm
+            except Exception:
+                dequantize_gemm = None
+
+            if dequantize_gemm is not None and hasattr(r, 'params'):
+                def _find_raw(suffix):
+                    for k in keys:
+                        if k.endswith(suffix):
+                            return r.params.get(k)
+                    return None
+
+                gs = self.group_size
+                qw1 = _find_raw('gate_proj.qweight')
+                qz1 = _find_raw('gate_proj.qzeros')
+                sc1 = _find_raw('gate_proj.scales')
+                qw2 = _find_raw('down_proj.qweight')
+                qz2 = _find_raw('down_proj.qzeros')
+                sc2 = _find_raw('down_proj.scales')
+                qw3 = _find_raw('up_proj.qweight')
+                qz3 = _find_raw('up_proj.qzeros')
+                sc3 = _find_raw('up_proj.scales')
+
+                if all(x is not None for x in (qw1, qz1, sc1, qw2, qz2, sc2, qw3, qz3, sc3)):
+                    qw1, qz1, sc1 = qw1.cuda(), qz1.cuda(), sc1.cuda()
+                    qw2, qz2, sc2 = qw2.cuda(), qz2.cuda(), sc2.cuda()
+                    qw3, qz3, sc3 = qw3.cuda(), qz3.cuda(), sc3.cuda()
+
+                    w1 = dequantize_gemm(qw1, qz1, sc1, 4, gs).t()
+                    w2 = dequantize_gemm(qw2, qz2, sc2, 4, gs).t()
+                    w3 = dequantize_gemm(qw3, qz3, sc3, 4, gs).t()
+                    self._export(self.inter_size[i], self._ffn, i, (w1, w2, w3), 'weight', identity)
+                    return
+        # ========== End AWQ workaround ==========
+
+        for e in get_params(keys):
             e(partial(self._export, self.inter_size[i], self._ffn), partial(r.ffn, i), i)
 
 
@@ -146,10 +194,13 @@ class MoeFfn(Ffn):
         self.shared_gate = model.model_config.moe_shared_gate
 
     def apply(self, i: int, r: BaseReader):
-        if self.expert_num[i] == 0:
+        if i >= len(self.expert_num) or self.expert_num[i] == 0:
             return
-        for p in get_params(r.moe_ffn_expert(), 1):
-            for e in range(self.expert_num[i]):
+
+        # Export expert weights with outer loop over experts (not params)
+        # to ensure each expert's full weight set is grouped together
+        for e in range(self.expert_num[i]):
+            for p in get_params(r.moe_ffn_expert(), 1):
                 fmt = self._moe_ffn_expert.replace('E', str(e))
                 p(partial(self._export, self.inter_size, fmt), partial(r.moe_ffn_expert, e, i), i)
 
@@ -159,6 +210,13 @@ class MoeFfn(Ffn):
         bias = r.moe_ffn_gate(i, 'bias')
         if bias is not None:
             self.model.save_split(bias, self._moe_ffn_gate.format(i, 'bias'))
+
+        # Export score_correction_bias for noaux_tc routing (GLM 4.7 Flash)
+        correction_bias = getattr(r, 'moe_ffn_gate_correction_bias', None)
+        if callable(correction_bias):
+            correction = correction_bias(i)
+            if correction is not None:
+                self.model.save_split(correction, self._moe_ffn_gate.format(i, 'score_correction_bias'))
 
         if self.shared_gate:
             shared_gate = transpose(r.moe_ffn_shared_gate(i))
@@ -278,26 +336,95 @@ class MLA(Module):
     def _export(self, idx: int, xs, kind: str, pack_fn, **kwargs):
         if all(x is None for x in xs):
             return
-        q_a, q_b, q, kv_a, kv_b, o = map(transpose, xs)
+        q_a, q_b, q, kv_a, kv_b, o = xs
+
+        cfg = self.model.model_config
+        head_num = cfg.head_num
+        kv_lora_rank = cfg.kv_lora_rank
+        qk_rope_dim = cfg.qk_rope_dim
+        size_per_head = cfg.size_per_head
+        v_head_dim = cfg.v_head_dim
+
+        # ========== MLA Weight Folding for Dimension Mismatch ==========
+        # When kv_lora_rank != qk_nope_dim (e.g., GLM 4.7 Flash: 512 != 512+64=576),
+        # fold the kc/vc compression/decompression BMMs into q_b_proj/o_proj weights
+        # at conversion time to avoid runtime overhead.
+        if kind == 'weight' and kv_lora_rank and q is None and q_b is not None and kv_b is not None and o is not None:
+            if not (torch.is_floating_point(q_b) and torch.is_floating_point(kv_b) and torch.is_floating_point(o)):
+                raise ValueError('MLA weight folding requires floating-point attention weights.')
+
+            orig_q_head_dim = q_b.size(0) // head_num
+            orig_qk_nope_dim = orig_q_head_dim - qk_rope_dim
+            orig_kv_dim_total = kv_b.size(0) // head_num
+            orig_v_head_dim = o.size(1) // head_num
+            actual_orig_qk_nope_dim = orig_kv_dim_total - orig_v_head_dim
+
+            if abs(orig_qk_nope_dim - actual_orig_qk_nope_dim) > 1:
+                raise ValueError(f'Dimension mismatch: inferred qk_nope from q_b ({orig_qk_nope_dim}) != '
+                                 f'inferred from kv_b ({actual_orig_qk_nope_dim})')
+
+            orig_qk_nope_dim = actual_orig_qk_nope_dim
+            target_nope_dim = size_per_head - qk_rope_dim
+            target_v_head_dim = v_head_dim
+
+            if orig_qk_nope_dim != target_nope_dim or orig_v_head_dim != target_v_head_dim:
+                if target_nope_dim != kv_lora_rank or target_v_head_dim != kv_lora_rank:
+                    raise ValueError(f'MLA folding expects v_head_dim and nope_dim to equal kv_lora_rank, '
+                                     f'got nope={target_nope_dim}, v_head={target_v_head_dim}, rank={kv_lora_rank}')
+
+                if kv_b.size(1) != kv_lora_rank:
+                    raise ValueError(f'kv_b_proj second dim must equal kv_lora_rank for MLA folding, '
+                                     f'got {kv_b.size(1)} != {kv_lora_rank}')
+
+                # Split kv_b into kc and vc
+                kv_b_per_head = kv_b.reshape(head_num, orig_qk_nope_dim + orig_v_head_dim, kv_lora_rank)
+                kc_w = kv_b_per_head[:, :orig_qk_nope_dim, :]
+                vc_w = kv_b_per_head[:, orig_qk_nope_dim:, :]
+
+                # Fold kc into q_b_proj
+                q_b_per_head = q_b.reshape(head_num, orig_q_head_dim, q_b.size(1))
+                q_nope_w = q_b_per_head[:, :orig_qk_nope_dim, :]
+                q_rope_w = q_b_per_head[:, orig_qk_nope_dim:, :]
+                q_nope_expanded = torch.bmm(kc_w.transpose(1, 2), q_nope_w)
+                q_b_folded = torch.cat([q_nope_expanded, q_rope_w], dim=1)
+                q_b = q_b_folded.reshape(head_num * size_per_head, q_b.size(1))
+
+                # Fold vc into o_proj
+                o_per_head = o.reshape(o.size(0), head_num, orig_v_head_dim)
+                o_folded = torch.bmm(o_per_head.permute(1, 0, 2), vc_w)
+                o = o_folded.permute(1, 0, 2).reshape(o.size(0), head_num * kv_lora_rank)
+
+                # Set kv_b to identity (kc/vc are now absorbed)
+                eye = torch.eye(kv_lora_rank, dtype=kv_b.dtype, device=kv_b.device)
+                kv_b = torch.cat([eye, eye], dim=0).repeat(head_num, 1)
+        # ========== End MLA Weight Folding ==========
+
+        # Transpose after folding
+        q_a, q_b, q, kv_a, kv_b, o = map(transpose, (q_a, q_b, q, kv_a, kv_b, o))
 
         if q is not None:
             q_b = q
 
-        cfg = self.model.model_config
-
-        o = o.reshape(cfg.head_num, cfg.v_head_dim, -1)
-        o = torch.nn.functional.pad(o, (0, 0, 0, cfg.size_per_head - cfg.v_head_dim, 0, 0))
-        o = o.view(cfg.head_num * cfg.size_per_head, cfg.hidden_units)
+        # Pad o_proj to size_per_head if present
+        if o is not None:
+            o = o.reshape(head_num, v_head_dim, -1)
+            o = torch.nn.functional.pad(o, (0, 0, 0, size_per_head - v_head_dim, 0, 0))
+            o = o.view(head_num * size_per_head, cfg.hidden_units)
 
         tp = self.model.attn_tp_size
 
+        # Export MLA weights (handle None for folded-away tensors)
         if q_a is not None:
             self.model.save_split(pack_fn(q_a), self._mla.format(idx, 'q_a_proj', kind))
         q_b_name = 'q_proj' if q_a is None else 'q_b_proj'
-        self.model.save_split(pack_fn(q_b), self._mla.format(idx, q_b_name, kind), split_dim=-1, split_num=tp)
-        self.model.save_split(pack_fn(kv_a), self._mla.format(idx, 'kv_a_proj', kind))
-        self.model.save_split(pack_fn(kv_b), self._mla.format(idx, 'kv_b_proj', kind), split_dim=-1, split_num=tp)
-        self.model.save_split(pack_fn(o), self._mla.format(idx, 'wo', kind), split_dim=0, split_num=tp)
+        if q_b is not None:
+            self.model.save_split(pack_fn(q_b), self._mla.format(idx, q_b_name, kind), split_dim=-1, split_num=tp)
+        if kv_a is not None:
+            self.model.save_split(pack_fn(kv_a), self._mla.format(idx, 'kv_a_proj', kind))
+        if kv_b is not None:
+            self.model.save_split(pack_fn(kv_b), self._mla.format(idx, 'kv_b_proj', kind), split_dim=-1, split_num=tp)
+        if o is not None:
+            self.model.save_split(pack_fn(o), self._mla.format(idx, 'wo', kind), split_dim=0, split_num=tp)
 
     _layernorm = 'layers.{0}.attention.{1}_a_layernorm'
 

@@ -570,6 +570,11 @@ MoeFfnWeight::MoeFfnWeight(int             layer_id,
     gate.emplace(hidden_dim, expert_num, data_type, param.router_bias, data_type, 1);
     register_module("gate", gate);
 
+    if (param.topk_method == "noaux_tc") {
+        score_correction_bias = Tensor{{expert_num}, kFloat, kDEVICE};
+        register_parameter("gate.score_correction_bias", score_correction_bias);
+    }
+
     method = param.method;
 
     const bool is_cublas_gemm = method == MoeParam::kNaive && byte_size(weight_type, 8) == 16;

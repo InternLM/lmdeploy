@@ -66,6 +66,8 @@ struct MoeParam {
     int         topk_group;
     std::string topk_method;
     int         n_group;
+    std::string scoring_func;
+    int         router_n_groups;
 
     std::vector<int> expert_num;
 };
