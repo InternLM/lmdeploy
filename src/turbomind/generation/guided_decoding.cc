@@ -62,7 +62,7 @@ void GuidedDecoding::FillMask(int phase, TensorMap& env)
                     matcher->FillNextTokenBitmask(&dlbitmask, i);
                 }
                 else {
-                    std::fill_n(bitmask_buf_.data() + i * bitmask_buf_.stride(0), bitmask_buf_.stride(0), 0);
+                    std::fill_n(bitmask_buf_.data() + i * bitmask_buf_.stride(0), bitmask_buf_.stride(0), static_cast<int32_t>(-1));
                 }
             }
         }
