@@ -1,30 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import torch
-
 from lmdeploy.pytorch.config import ModelConfig
 
 from .builder import AutoModelConfigBuilder
 from .utils import flash_mla_available
-
-
-def _check_env_v32(device: str = 'cuda'):
-    """Environment check."""
-    if device != 'cuda':
-        return
-
-    # check cuda
-    try:
-        import fast_hadamard_transform  # noqa: F401
-    except ImportError:
-        raise ImportError('Deepseek V3.2 requires <fast_hadamard_transform>.')
-
-    try:
-        import flash_mla  # noqa: F401
-    except ImportError:
-        raise ImportError('Deepseek V3.2 requires <flash_mla>.')
-
-    if not hasattr(flash_mla, 'flash_mla_sparse_fwd'):
-        raise RuntimeError('Latest flash_mla is required: https://github.com/deepseek-ai/FlashMLA.')
 
 
 class DeepseekV2ModelConfigBuilder(AutoModelConfigBuilder):
@@ -32,7 +10,7 @@ class DeepseekV2ModelConfigBuilder(AutoModelConfigBuilder):
     @classmethod
     def condition(cls, hf_config):
         """config."""
-        return hf_config.model_type in ['deepseek_v3', 'deepseek_v2', 'deepseek_v32', 'kimi_k2']
+        return hf_config.model_type in ['deepseek_v3', 'deepseek_v2', 'kimi_k2']
 
     @classmethod
     def build(cls, hf_config, model_path: str = None, is_draft_model: bool = False, spec_method: str = None, **kwargs):
@@ -77,13 +55,4 @@ class DeepseekV2ModelConfigBuilder(AutoModelConfigBuilder):
             use_flash_mla=hf_config.use_flash_mla,
             model_paradigm=model_paradigm,
         )
-
-        if hf_config.model_type == 'deepseek_v32':
-            assert hf_config.use_flash_mla, 'DeepSeek-V3.2 requires flash_mla to be available.'
-            index_k_shape = ([hf_config.index_head_dim], torch.float8_e4m3fn)
-            index_k_scale_shape = ([1], torch.float32)
-            config.cache_shapes = [index_k_shape, index_k_scale_shape]
-            config.use_mla_fp8_cache = True
-            config.mla_index_topk = hf_config.index_topk
-            config.check_env_func = _check_env_v32
         return config

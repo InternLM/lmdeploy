@@ -126,6 +126,7 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |         Phi-3.5-vision         |      4.2B       | MLLM |    Yes    |   Yes   |   No    |  -   |   -   |
 |              SDAR              |    1.7B-30B     | LLM  |    Yes    |   Yes   |   No    |  -   |   -   |
 |         GLM-4.7-Flash          |       30B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
+|             GLM-5              |      754B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 
 ```{note}
 * [1] Currently Mono-InternVL does not support FP16 due to numerical instability. Please use BF16 instead.
