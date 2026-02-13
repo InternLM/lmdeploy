@@ -1,5 +1,5 @@
 # yapf: disable
-from lmdeploy.vl.utils import encode_image_base64, load_image, load_image_from_base64
+from lmdeploy.vl.image_utils import encode_image_base64, load_image, load_image_from_base64
 
 # yapf: enable
 

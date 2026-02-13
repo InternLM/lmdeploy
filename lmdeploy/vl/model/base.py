@@ -186,6 +186,23 @@ class VisionModel(ABC):
         return images
 
     @staticmethod
+    def collect_videos(messages):
+        """Gather all videos along with their respective parameters from the
+        messages and compile them into a single list."""
+
+        videos = []
+        for message in messages:
+            content = message['content']
+            if not isinstance(content, List):
+                continue
+
+            videos.extend([(x['video'], {
+                k: v
+                for k, v in x.items() if k not in {'type', 'video'}
+            }) for x in content if x['type'] == 'video'])
+        return videos
+
+    @staticmethod
     def collect_time_series(messages):
         """Gather all time series data along with their respective parameters
         from the messages and compile them into a single list.

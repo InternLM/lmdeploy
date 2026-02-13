@@ -7,7 +7,7 @@ from PIL import Image
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
 from lmdeploy.vl import load_image
 from lmdeploy.vl.constants import IMAGE_TOKEN
-from lmdeploy.vl.utils import encode_image_base64
+from lmdeploy.vl.image_utils import encode_image_base64
 
 gen_config = GenerationConfig(max_new_tokens=500, min_new_tokens=10)
 

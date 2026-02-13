@@ -87,8 +87,9 @@ class MultimodalProcessor:
     @staticmethod
     async def async_convert_multimodal_data(messages: List[Dict]) -> List[Dict]:
         """Convert user-input multimodal data into GPT4V message format."""
+        from lmdeploy.vl.image_utils import load_image
         from lmdeploy.vl.time_series_utils import load_time_series
-        from lmdeploy.vl.utils import load_image
+        from lmdeploy.vl.video_utils import fetch_video
 
         if isinstance(messages, Dict):
             messages = [messages]
@@ -165,6 +166,39 @@ class MultimodalProcessor:
                         message['content'].append(data)
                     except KeyError:
                         logger.error(f'invalid format {message}')
+                elif item['type'] == 'video_url':
+                    """
+                    convert the following item:
+                    {
+                        'type': 'video_url',
+                        'video_url': {
+                            'url': 'video url or base64-encoded video data',
+                            'key': 'value'  # parameters used in video processing
+                            ...
+                        }
+                    }
+                    to:
+                    {
+                        'type': 'video',
+                        'video': torch.Tensor,  # nframes x C x H x W
+                        'video_metadata': Dict(str, Any),  # fps, frame_indices, total_num_frames, video_backend
+                        'key': 'value'   # parameters used in video processing
+                        ...
+                    }
+                    """
+                    data = item['video_url'].copy()
+                    try:
+                        url = data.pop('url')
+                        # FIXME: zhouxinyu, currently we transform to required format in utils
+                        # modify util functions to use url directly similar to load_image
+                        required_item = {'type': 'video', 'video': item['video_url']['url']}
+                        video_input = fetch_video(required_item, image_patch_size=16, return_video_metadata=True)
+                        video = video_input[0]
+                        video_metadata = video_input[1]
+                        data = dict(type='video', video=video, video_metadata=video_metadata)
+                        message['content'].append(data)
+                    except KeyError:
+                        logger.error(f'invalid format {message}')
                 elif item['type'] == 'time_series_url':
                     """
                     convert the following item:
@@ -192,7 +226,7 @@ class MultimodalProcessor:
                         message['content'].append(data)
                     except KeyError:
                         logger.error(f'invalid format {message}')
-                elif item['type'] in ['text']:
+                elif item['type'] == 'text':
                     message['content'].append(item)
                 else:
                     logger.error(f'unexpected content type {message}')
@@ -320,7 +354,7 @@ class MultimodalProcessor:
     @staticmethod
     def _re_format_prompt_images_pair(prompt: Tuple) -> Dict:
         """Reformat the prompt to openai message format."""
-        from lmdeploy.vl.utils import load_image
+        from lmdeploy.vl.image_utils import load_image
 
         messages = {'role': 'user', 'content': []}
         prompt, images = prompt
@@ -352,7 +386,7 @@ class MultimodalProcessor:
 
     def _has_multimodal_input(self, messages: List[Dict]) -> bool:
         """Check if messages contain multimodal input (images)."""
-        multimodal_types = ['image_url', 'image_data', 'time_series_url']
+        multimodal_types = ['image_url', 'image_data', 'video_url', 'time_series_url']
         return any(
             isinstance(message.get('content'), list) and any(
                 item.get('type') in multimodal_types for item in message['content']) for message in messages)
