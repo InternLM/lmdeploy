@@ -351,6 +351,10 @@ class AsyncEngine:
             # TODO(lvhan) VLM doesn't support input_ids as an argument.
             # Figure out a graceful way to handle the invalid input
             prompt_input = dict(input_ids=input_ids)
+
+        if gen_config is None:
+            gen_config = GenerationConfig()
+
         if gen_config.max_new_tokens is None:
             max_new_tokens = max(0, self.session_len - session.step - len(input_ids))
             if max_new_tokens == 0:
