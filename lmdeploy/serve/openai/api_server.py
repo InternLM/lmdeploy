@@ -9,7 +9,7 @@ import time
 from contextlib import asynccontextmanager
 from functools import partial
 from http import HTTPStatus
-from typing import AsyncGenerator, Dict, List, Literal, Optional, Union
+from typing import AsyncGenerator, Literal
 
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
@@ -17,7 +17,6 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.routing import Mount
 
@@ -44,6 +43,7 @@ from lmdeploy.serve.openai.protocol import (AbortRequest, ChatCompletionRequest,
                                             TopLogprob, UpdateParamsRequest, UsageInfo)
 from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParser, ReasoningParserManager
 from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParser, ToolParserManager
+from lmdeploy.serve.utils.server_utils import validate_json_request
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
 
@@ -55,15 +55,14 @@ logger = get_logger('lmdeploy')
 class VariableInterface:
     """A IO interface maintaining variables."""
     async_engine: AsyncEngine = None
-    api_keys: Optional[List[str]] = None
     request_hosts = []
     # following are for registering to proxy server
-    proxy_url: Optional[str] = None
-    api_server_url: Optional[str] = None
+    proxy_url: str | None = None
+    api_server_url: str | None = None
     # following are for reasoning parsers
-    reasoning_parser: Optional[ReasoningParser] = None
+    reasoning_parser: ReasoningParser | None = None
     # following is for tool parsers
-    tool_parser: Optional[ToolParser] = None
+    tool_parser: ToolParser | None = None
     allow_terminate_by_client: bool = False
     enable_abort_handling: bool = False
 
@@ -85,32 +84,7 @@ class VariableInterface:
 
 
 router = APIRouter()
-get_bearer_token = HTTPBearer(auto_error=False)
 server_context = VariableInterface()
-
-
-async def check_api_key(auth: Optional[HTTPAuthorizationCredentials] = Depends(get_bearer_token), ) -> str:
-    """Check if client provide valid api key.
-
-    Adopted from https://github.com/lm-sys/FastChat/blob/v0.2.35/fastchat/serve/openai_api_server.py#L108-L127
-    """  # noqa
-    if VariableInterface.api_keys:
-        if auth is None or (token := auth.credentials) not in VariableInterface.api_keys:
-            raise HTTPException(
-                status_code=401,
-                detail={
-                    'error': {
-                        'message': 'Please request with valid api key!',
-                        'type': 'invalid_request_error',
-                        'param': None,
-                        'code': 'invalid_api_key',
-                    }
-                },
-            )
-        return token
-    else:
-        # api_keys not set; allow all
-        return None
 
 
 def get_model_list():
@@ -124,7 +98,7 @@ def get_model_list():
     return model_names
 
 
-@router.get('/v1/models', dependencies=[Depends(check_api_key)])
+@router.get('/v1/models')
 def available_models():
     """Show available models."""
     model_cards = []
@@ -145,7 +119,7 @@ def create_error_response(status: HTTPStatus, message: str, error_type='invalid_
                         status_code=status.value)
 
 
-def check_request(request) -> Optional[JSONResponse]:
+def check_request(request) -> JSONResponse | None:
     """Check if a request is valid."""
     if hasattr(request, 'model') and request.model not in get_model_list():
         return create_error_response(HTTPStatus.NOT_FOUND, f'The model {request.model!r} does not exist.')
@@ -174,11 +148,11 @@ def check_request(request) -> Optional[JSONResponse]:
 
 
 def _create_completion_logprobs(tokenizer: Tokenizer,
-                                token_ids: List[int] = None,
-                                logprobs: List[Dict[int, float]] = None,
+                                token_ids: list[int] | None = None,
+                                logprobs: list[dict[int, float]] | None = None,
                                 skip_special_tokens: bool = True,
                                 offset: int = 0,
-                                all_token_ids: List[int] = None,
+                                all_token_ids: list[int] | None = None,
                                 state: DetokenizeState = None,
                                 spaces_between_special_tokens: bool = True):
     """Create openai LogProbs for completion.
@@ -233,8 +207,8 @@ def _create_completion_logprobs(tokenizer: Tokenizer,
 
 
 def _create_chat_completion_logprobs(tokenizer: Tokenizer,
-                                     token_ids: List[int] = None,
-                                     logprobs: List[Dict[int, float]] = None):
+                                     token_ids: list[int] | None = None,
+                                     logprobs: list[dict[int, float]] | None = None):
     """Create openai LogProbs for chat.completion.
 
     Args:
@@ -248,7 +222,7 @@ def _create_chat_completion_logprobs(tokenizer: Tokenizer,
     if token_ids is None or logprobs is None:
         return None
 
-    content: List[ChatCompletionTokenLogprob] = []
+    content: list[ChatCompletionTokenLogprob] = []
     for token_id, tops in zip(token_ids, logprobs):
         item = ChatCompletionTokenLogprob(token='', bytes=[], logprob=0.0, top_logprobs=[])
         for top_id, prob in tops.items():
@@ -288,11 +262,11 @@ async def terminate():
 
 
 # modified from https://github.com/vllm-project/vllm/blob/v0.5.4/vllm/entrypoints/openai/logits_processors.py#L51  # noqa
-def logit_bias_logits_processor(logit_bias: Union[Dict[int, float], Dict[str, float]], tokenizer) -> LogitsProcessor:
+def logit_bias_logits_processor(logit_bias: dict[int, float] | dict[str, float], tokenizer) -> LogitsProcessor:
     try:
         # Convert token_id to integer
         # Clamp the bias between -100 and 100 per OpenAI API spec
-        clamped_logit_bias: Dict[int, float] = {
+        clamped_logit_bias: dict[int, float] = {
             int(token_id): min(100.0, max(-100.0, bias))
             for token_id, bias in logit_bias.items()
         }
@@ -318,7 +292,7 @@ def logit_bias_logits_processor(logit_bias: Union[Dict[int, float], Dict[str, fl
     return partial(_logit_bias_processor, clamped_logit_bias)
 
 
-@router.post('/v1/chat/completions', dependencies=[Depends(check_api_key)])
+@router.post('/v1/chat/completions', dependencies=[Depends(validate_json_request)])
 async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
@@ -346,7 +320,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
       1.0 means no penalty
     - **stop** (str | List[str] | None): To stop generating further
       tokens. Only accept stop words that's encoded to one token idex.
-    - **response_format** (Dict | None): To generate response according to given
+    - **response_format** (dict | None): To generate response according to given
       schema. Examples:
 
       .. code-block:: json
@@ -366,8 +340,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         }
 
       or ``{"type": "regex_schema", "regex_schema": "call me [A-Za-z]{1,10}"}``
-    - **logit_bias** (Dict): Bias to logits. Only supported in pytorch engine.
-    - **tools** (List): A list of tools the model may call. Currently, only
+    - **logit_bias** (dict): Bias to logits. Only supported in pytorch engine.
+    - **tools** (list): A list of tools the model may call. Currently, only
       internlm2 functions are supported as a tool. Use this to specify a
       list of functions for which the model can generate JSON inputs.
     - **tool_choice** (str | object): Controls which (if any) tool is called by
@@ -512,9 +486,9 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
     def create_stream_response_json(index: int,
                                     delta_message: DeltaMessage,
-                                    finish_reason: Optional[str] = None,
-                                    logprobs: Optional[LogProbs] = None,
-                                    usage: Optional[UsageInfo] = None) -> str:
+                                    finish_reason: str | None = None,
+                                    logprobs: LogProbs | None = None,
+                                    usage: UsageInfo | None = None) -> str:
         choice_data = ChatCompletionResponseStreamChoice(index=index,
                                                          delta=delta_message,
                                                          finish_reason=finish_reason,
@@ -576,7 +550,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                     if tool_delta is not None:
                         delta_message.tool_calls = tool_delta.tool_calls
                         delta_message.content = tool_delta.content
-                        if isinstance(tool_delta.tool_calls, List) and len(tool_delta.tool_calls):
+                        if isinstance(tool_delta.tool_calls, list) and len(tool_delta.tool_calls):
                             streaming_tools = True
                 elif (request.tool_choice != 'none' and request.tools is not None
                       and VariableInterface.tool_parser is None):
@@ -644,7 +618,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             try:
                 tool_call_info = VariableInterface.tool_parser.extract_tool_calls(text, request=request)
                 text, tool_calls = tool_call_info.content, tool_call_info.tool_calls
-                if isinstance(tool_calls, List) and len(tool_calls):
+                if isinstance(tool_calls, list) and len(tool_calls):
                     if final_res.finish_reason == 'stop':
                         final_res.finish_reason = 'tool_calls'
 
@@ -704,7 +678,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     return response
 
 
-@router.post('/v1/completions', dependencies=[Depends(check_api_key)])
+@router.post('/v1/completions', dependencies=[Depends(validate_json_request)])
 async def completions_v1(request: CompletionRequest, raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
@@ -731,7 +705,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     - **repetition_penalty** (float): The parameter for repetition penalty.
       1.0 means no penalty
     - **user** (str): A unique identifier representing your end-user.
-    - **stop** (str | List[str] | None): To stop generating further
+    - **stop** (str | list[str] | None): To stop generating further
       tokens. Only accept stop words that's encoded to one token idex.
 
     Additional arguments supported by LMDeploy:
@@ -818,10 +792,10 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
 
     def create_stream_response_json(index: int,
                                     text: str,
-                                    finish_reason: Optional[str] = None,
-                                    logprobs: Optional[LogProbs] = None,
-                                    gen_tokens: Optional[List[int]] = None,
-                                    usage: Optional[UsageInfo] = None) -> str:
+                                    finish_reason: str | None = None,
+                                    logprobs: LogProbs | None = None,
+                                    gen_tokens: list[int] | None = None,
+                                    usage: UsageInfo | None = None) -> str:
         choice_data = CompletionResponseStreamChoice(index=index,
                                                      text=text,
                                                      gen_tokens=gen_tokens,
@@ -948,7 +922,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     return response
 
 
-@router.post('/generate', dependencies=[Depends(check_api_key)])
+@router.post('/generate', dependencies=[Depends(validate_json_request)])
 async def generate(request: GenerateReqInput, raw_request: Request = None):
     error_check_ret = check_request(request)
     if error_check_ret is not None:
@@ -961,7 +935,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
     if image_data is not None:
         # convert to openai format
         image_input = []
-        if not isinstance(image_data, List):
+        if not isinstance(image_data, list):
             image_data = [image_data]
         for img in image_data:
             if isinstance(img, str):
@@ -1068,13 +1042,13 @@ async def create_embeddings(request: EmbeddingsRequest, raw_request: Request = N
     return create_error_response(HTTPStatus.BAD_REQUEST, 'Unsupported by turbomind.')
 
 
-@router.post('/v1/encode', dependencies=[Depends(check_api_key)])
+@router.post('/v1/encode', dependencies=[Depends(validate_json_request)])
 async def encode(request: EncodeRequest, raw_request: Request = None):
     """Encode prompts.
 
     The request should be a JSON object with the following fields:
 
-    - **input**: the prompt to be encoded. In str or List[str] format.
+    - **input**: the prompt to be encoded. In str or list[str] format.
     - **do_preprocess**: whether do preprocess or not. Default to False.
     - **add_bos**: True when it is the beginning of a conversation. False when it
       is not. Default to True.
@@ -1098,7 +1072,7 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
         return EncodeResponse(input_ids=encoded, length=length)
 
 
-@router.post('/pooling')
+@router.post('/pooling', dependencies=[Depends(validate_json_request)])
 async def pooling(request: PoolingRequest, raw_request: Request = None):
     """Pooling prompts for reward model.
 
@@ -1111,7 +1085,7 @@ async def pooling(request: PoolingRequest, raw_request: Request = None):
     The request should be a JSON object with the following fields:
 
     - **model** (str): model name. Available from /v1/models.
-    - **input** (List[int] | List[List[int]] | str | List[str]): input text to be embed
+    - **input** (list[int] | list[list[int]] | str | list[str]): input text to be embed
     """
 
     async_engine = VariableInterface.async_engine
@@ -1122,14 +1096,14 @@ async def pooling(request: PoolingRequest, raw_request: Request = None):
     # Normalize all inputs to be a batch (List[List[int]])
     if isinstance(request_input, str):
         input_ids = [async_engine.tokenizer.encode(request_input)]
-    elif isinstance(request_input, List):
+    elif isinstance(request_input, list):
         if not request_input:
             return create_error_response(HTTPStatus.BAD_REQUEST, 'Input list cannot be empty.')
-        if isinstance(request_input[0], str):  # List[str]
+        if isinstance(request_input[0], str):  # list[str]
             input_ids = [async_engine.tokenizer.encode(p) for p in request_input]
-        elif isinstance(request_input[0], int):  # List[int]
+        elif isinstance(request_input[0], int):  # list[int]
             input_ids = [request_input]
-        elif isinstance(request_input[0], List):  # List[List[int]]
+        elif isinstance(request_input[0], list):  # list[list[int]]
             input_ids = request_input
         else:
             return create_error_response(HTTPStatus.BAD_REQUEST, 'Input list contains an invalid type.')
@@ -1152,21 +1126,21 @@ async def pooling(request: PoolingRequest, raw_request: Request = None):
     return response.model_dump()
 
 
-@router.post('/update_weights', dependencies=[Depends(check_api_key)])
+@router.post('/update_weights', dependencies=[Depends(validate_json_request)])
 def update_params(request: UpdateParamsRequest, raw_request: Request = None):
     """Update weights for the model."""
     VariableInterface.async_engine.engine.update_params(request)
     return JSONResponse(content=None)
 
 
-@router.post('/sleep', dependencies=[Depends(check_api_key)])
+@router.post('/sleep', dependencies=[Depends(validate_json_request)])
 async def sleep(raw_request: Request = None):
     level = raw_request.query_params.get('level', '1')
     VariableInterface.async_engine.sleep(int(level))
     return Response(status_code=200)
 
 
-@router.post('/wakeup', dependencies=[Depends(check_api_key)])
+@router.post('/wakeup', dependencies=[Depends(validate_json_request)])
 async def wakeup(raw_request: Request = None):
     tags = raw_request.query_params.getlist('tags')
     tags = tags or None
@@ -1174,8 +1148,8 @@ async def wakeup(raw_request: Request = None):
     return Response(status_code=200)
 
 
-@router.get('/is_sleeping', dependencies=[Depends(check_api_key)])
-async def is_sleeping(raw_request: Request = None):
+@router.get('/is_sleeping')
+async def is_sleeping():
     is_sleeping = VariableInterface.async_engine.is_sleeping
     return JSONResponse(content={'is_sleeping': is_sleeping})
 
@@ -1240,7 +1214,7 @@ async def abort_request(request: AbortRequest, raw_request: Request = None):
     return Response(status_code=200)
 
 
-@router.post('/v1/chat/interactive', dependencies=[Depends(check_api_key)], include_in_schema=False)
+@router.post('/v1/chat/interactive', dependencies=[Depends(validate_json_request)], include_in_schema=False)
 async def chat_interactive_v1(request, raw_request: Request = None):
     return create_error_response(
         HTTPStatus.BAD_REQUEST, 'v1/chat/interactive is deprecated, please launch server with --enable-prefix-cache '
@@ -1315,7 +1289,7 @@ class ConcurrencyLimitMiddleware(BaseHTTPMiddleware):
             return response
 
 
-def set_parsers(reasoning_parser: Optional[str] = None, tool_parser: Optional[str] = None):
+def set_parsers(reasoning_parser: str | None = None, tool_parser: str | None = None):
     """Set tool parser and reasoning parsers."""
     # set reasoning parser
     if reasoning_parser is not None:
@@ -1337,7 +1311,7 @@ def set_parsers(reasoning_parser: Optional[str] = None, tool_parser: Optional[st
             )
 
 
-def mount_metrics(app: FastAPI, backend_config: Union[PytorchEngineConfig, TurbomindEngineConfig]):
+def mount_metrics(app: FastAPI, backend_config: PytorchEngineConfig | TurbomindEngineConfig):
     if not getattr(backend_config, 'enable_metrics', False):
         return
 
@@ -1352,8 +1326,7 @@ def mount_metrics(app: FastAPI, backend_config: Union[PytorchEngineConfig, Turbo
     app.routes.append(metrics_route)
 
 
-def create_lifespan_handler(backend_config: Union[PytorchEngineConfig, TurbomindEngineConfig],
-                            async_engine: AsyncEngine):
+def create_lifespan_handler(backend_config: PytorchEngineConfig | TurbomindEngineConfig, async_engine: AsyncEngine):
     """Factory function to create a lifespan handler."""
 
     @asynccontextmanager
@@ -1386,28 +1359,28 @@ def create_lifespan_handler(backend_config: Union[PytorchEngineConfig, Turbomind
 
 
 def serve(model_path: str,
-          model_name: Optional[str] = None,
+          model_name: str | None = None,
           backend: Literal['turbomind', 'pytorch'] = 'turbomind',
-          backend_config: Optional[Union[PytorchEngineConfig, TurbomindEngineConfig]] = None,
-          chat_template_config: Optional[ChatTemplateConfig] = None,
+          backend_config: PytorchEngineConfig | TurbomindEngineConfig | None = None,
+          chat_template_config: ChatTemplateConfig | None = None,
           server_name: str = '0.0.0.0',
           server_port: int = 23333,
-          allow_origins: List[str] = ['*'],
+          allow_origins: list[str] = ['*'],
           allow_credentials: bool = True,
-          allow_methods: List[str] = ['*'],
-          allow_headers: List[str] = ['*'],
+          allow_methods: list[str] = ['*'],
+          allow_headers: list[str] = ['*'],
           log_level: str = 'ERROR',
-          api_keys: Optional[Union[List[str], str]] = None,
+          api_keys: list[str] | str | None = None,
           ssl: bool = False,
-          proxy_url: Optional[str] = None,
-          max_log_len: int = None,
+          proxy_url: str | None = None,
+          max_log_len: int | None = None,
           disable_fastapi_docs: bool = False,
-          max_concurrent_requests: Optional[int] = None,
-          reasoning_parser: Optional[str] = None,
-          tool_call_parser: Optional[str] = None,
+          max_concurrent_requests: int | None = None,
+          reasoning_parser: str | None = None,
+          tool_call_parser: str | None = None,
           allow_terminate_by_client: bool = False,
           enable_abort_handling: bool = False,
-          speculative_config: Optional[SpeculativeConfig] = None,
+          speculative_config: SpeculativeConfig | None = None,
           **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -1467,10 +1440,9 @@ def serve(model_path: str,
 
     VariableInterface.allow_terminate_by_client = allow_terminate_by_client
     VariableInterface.enable_abort_handling = enable_abort_handling
-    if api_keys is not None:
-        if isinstance(api_keys, str):
-            api_keys = api_keys.split(',')
-        VariableInterface.api_keys = api_keys
+
+    if isinstance(api_keys, str):
+        api_keys = api_keys.split(',')
     ssl_keyfile, ssl_certfile, http_or_https = None, None, 'http'
     if ssl:
         ssl_keyfile = os.environ['SSL_KEYFILE']
@@ -1515,6 +1487,11 @@ def serve(model_path: str,
             allow_methods=allow_methods,
             allow_headers=allow_headers,
         )
+
+    if api_keys is not None and (tokens := [key for key in api_keys if key]):
+        from lmdeploy.serve.utils.server_utils import AuthenticationMiddleware
+
+        app.add_middleware(AuthenticationMiddleware, tokens=tokens)
 
     # set the maximum number of concurrent requests
     if max_concurrent_requests is not None:

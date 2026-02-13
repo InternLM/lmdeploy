@@ -10,7 +10,7 @@ import threading
 import time
 from collections import deque
 from http import HTTPStatus
-from typing import Deque, Dict, List, Literal, Optional, Union
+from typing import Deque, Literal
 
 import aiohttp
 import numpy as np
@@ -25,11 +25,15 @@ from lmdeploy.pytorch.disagg.config import DistServeRDMAConfig, EngineRole, RDMA
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol, MigrationRequest
 from lmdeploy.pytorch.disagg.conn.proxy_conn import PDConnectionPool
 from lmdeploy.pytorch.disagg.messages import PDConnectionMessage
-from lmdeploy.serve.openai.api_server import check_api_key, create_error_response
+from lmdeploy.serve.openai.api_server import create_error_response
 from lmdeploy.serve.openai.protocol import ModelCard  # noqa: E501
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, CompletionRequest, ModelList, ModelPermission
-from lmdeploy.serve.proxy.constants import AIOHTTP_TIMEOUT, LATENCY_DEQUE_LEN, ErrorCodes, RoutingStrategy, err_msg
+from lmdeploy.serve.proxy.utils import AIOHTTP_TIMEOUT, LATENCY_DEQUE_LEN, ErrorCodes, RoutingStrategy, err_msg
+from lmdeploy.serve.utils.server_utils import validate_json_request
 from lmdeploy.utils import get_logger
+
+from .streaming_response import ProxyStreamingResponse
+from .utils import APIServerException
 
 logger = get_logger('lmdeploy')
 
@@ -37,16 +41,16 @@ logger = get_logger('lmdeploy')
 class Status(BaseModel):
     """Status protocol consists of models' information."""
     role: EngineRole = EngineRole.Hybrid
-    models: Optional[List[str]] = Field(default=[], examples=[[]])
+    models: list[str] = Field(default=[], examples=[[]])
     unfinished: int = 0
     latency: Deque = Field(default=deque(maxlen=LATENCY_DEQUE_LEN), examples=[[]])
-    speed: Optional[int] = Field(default=None, examples=[None])
+    speed: int | None = Field(default=None, examples=[None])
 
 
 class Node(BaseModel):
     """Node protocol consists of url and status."""
     url: str
-    status: Optional[Status] = None
+    status: Status | None = None
 
 
 CONTROLLER_HEART_BEAT_EXPIRATION = int(os.getenv('LMDEPLOY_CONTROLLER_HEART_BEAT_EXPIRATION', 90))
@@ -75,13 +79,13 @@ class NodeManager:
     """
 
     def __init__(self,
-                 config_path: Optional[str] = None,
+                 config_path: str | None = None,
                  serving_strategy: str = 'Hybrid',
                  routing_strategy: str = 'min_expected_latency',
                  migration_protocol: str = 'RDMA',
                  link_type: str = 'RoCE',
                  with_gdr: bool = True,
-                 cache_status: Optional[bool] = True) -> None:
+                 cache_status: bool = True) -> None:
         self.nodes = dict()
         self.serving_strategy = ServingStrategy[serving_strategy]
         self.routing_strategy = RoutingStrategy.from_str(routing_strategy)
@@ -110,7 +114,7 @@ class NodeManager:
         self.pd_connection_pool = PDConnectionPool()
         self.dummy_prefill = False
 
-    def get_nodes(self, role: EngineRole) -> Dict:
+    def get_nodes(self, role: EngineRole) -> dict[str, Status]:
         items = list(self.nodes.items())
         return {node_url: node_status for (node_url, node_status) in items if node_status.role == role}
 
@@ -140,7 +144,7 @@ class NodeManager:
                           config_file,
                           indent=2)
 
-    def add(self, node_url: str, status: Optional[Status] = None):
+    def add(self, node_url: str, status: Status | None = None):
         """Add a node to the manager.
 
         Args:
@@ -308,7 +312,7 @@ class NodeManager:
         else:
             raise ValueError(f'Invalid strategy: {self.routing_strategy}')
 
-    async def check_request_model(self, model_name) -> Optional[JSONResponse]:
+    async def check_request_model(self, model_name) -> JSONResponse | None:
         """Check if a request is valid."""
         if model_name in self.model_list:
             return
@@ -337,7 +341,7 @@ class NodeManager:
         }
         return json.dumps(ret).encode() + b'\n'
 
-    async def stream_generate(self, request: Dict, node_url: str, endpoint: str):
+    async def stream_generate(self, request: dict, node_url: str, endpoint: str):
         """Return a generator to handle the input request.
 
         Args:
@@ -352,11 +356,11 @@ class NodeManager:
                         if line.strip():
                             yield line + b'\n\n'
         except (Exception, GeneratorExit, aiohttp.ClientError) as e:  # noqa
-            logger.error(f'catched an exception: {e}')
+            logger.error(f'caught an exception: {e}')
             # exception happened, reduce unfinished num
             yield self.handle_api_timeout(node_url)
 
-    async def generate(self, request: Dict, node_url: str, endpoint: str):
+    async def generate(self, request: dict, node_url: str, endpoint: str):
         """Return a the response of the input request.
 
         Args:
@@ -369,7 +373,42 @@ class NodeManager:
                 async with session.post(node_url + endpoint, json=request, timeout=self.aiotimeout) as response:
                     return await response.text()
         except (Exception, GeneratorExit, aiohttp.ClientError, asyncio.CancelledError) as e:  # noqa  # yapf: disable
-            logger.error(f'catched an exception: {e}')
+            logger.error(f'caught an exception: {e}')
+            return self.handle_api_timeout(node_url)
+
+    async def forward_raw_request_stream_generate(self, raw_request: Request, node_url: str, endpoint: str):
+        try:
+            target_url = node_url.rstrip('/') + endpoint
+            headers = self._prepare_headers(raw_request)
+            body_bytes = await raw_request.body()
+            async with aiohttp.ClientSession() as session:
+                async with session.post(target_url, headers=headers, data=body_bytes,
+                                        timeout=self.aiotimeout) as response:
+                    if response.status != 200:
+                        error_body = await response.read()
+                        raise APIServerException(status_code=response.status, body=error_body)
+                    async for line in response.content:
+                        if line.strip():
+                            yield line + b'\n\n'
+        except APIServerException:
+            # raise APIServerException again to be caught by the outer layer
+            raise
+        except (Exception, GeneratorExit, aiohttp.ClientError) as e:  # noqa
+            logger.error(f'caught an exception: {e}')
+            # exception happened, reduce unfinished num
+            yield self.handle_api_timeout(node_url)
+
+    async def forward_raw_request_generate(self, raw_request: Request, node_url: str, endpoint: str):
+        try:
+            target_url = node_url.rstrip('/') + endpoint
+            headers = self._prepare_headers(raw_request)
+            body_bytes = await raw_request.body()
+            async with aiohttp.ClientSession() as session:
+                async with session.post(target_url, headers=headers, data=body_bytes,
+                                        timeout=self.aiotimeout) as response:
+                    return await response.text()
+        except (Exception, GeneratorExit, aiohttp.ClientError, asyncio.CancelledError) as e:  # noqa  # yapf: disable
+            logger.error(f'caught an exception: {e}')
             return self.handle_api_timeout(node_url)
 
     def pre_call(self, node_url):
@@ -403,6 +442,18 @@ class NodeManager:
         background_tasks.add_task(self.post_call, url, start)
         return background_tasks
 
+    def _prepare_headers(self, raw_request: Request) -> dict[str, str]:
+        headers = dict((name, value) for name, value in raw_request.headers.items() if name.lower() != 'host')
+
+        client_ip = raw_request.client.host if raw_request.client else 'unknown'
+        headers.update({
+            'X-Forwarded-For': client_ip,
+            'X-Forwarded-Host': raw_request.headers.get('host', ''),
+            'X-Forwarded-Proto': raw_request.url.scheme,
+        })
+
+        return headers
+
 
 app = FastAPI(docs_url='/')
 app.add_middleware(
@@ -415,7 +466,7 @@ app.add_middleware(
 node_manager = NodeManager()
 
 
-@app.get('/v1/models', dependencies=[Depends(check_api_key)])
+@app.get('/v1/models')
 def available_models():
     """Show available models."""
     model_cards = []
@@ -424,7 +475,7 @@ def available_models():
     return ModelList(data=model_cards)
 
 
-@app.get('/nodes/status', dependencies=[Depends(check_api_key)])
+@app.get('/nodes/status')
 def node_status():
     """Show nodes status."""
     try:
@@ -433,7 +484,7 @@ def node_status():
         return False
 
 
-@app.post('/nodes/add', dependencies=[Depends(check_api_key)])
+@app.post('/nodes/add', dependencies=[Depends(validate_json_request)])
 def add_node(node: Node, raw_request: Request = None):
     """Add a node to the manager.
 
@@ -454,7 +505,7 @@ def add_node(node: Node, raw_request: Request = None):
         return 'Failed to add, please check the input url.'
 
 
-@app.post('/nodes/remove', dependencies=[Depends(check_api_key)])
+@app.post('/nodes/remove', dependencies=[Depends(validate_json_request)])
 def remove_node(node: Node):
     """Show available models."""
     try:
@@ -467,7 +518,7 @@ def remove_node(node: Node):
         return 'Failed to delete, please check the input url.'
 
 
-@app.post('/nodes/terminate', dependencies=[Depends(check_api_key)])
+@app.post('/nodes/terminate', dependencies=[Depends(validate_json_request)])
 def terminate_node(node: Node):
     """Terminate nodes."""
     try:
@@ -481,7 +532,7 @@ def terminate_node(node: Node):
         return 'Failed to terminate node {node_url}, please check the input url.'
 
 
-@app.get('/nodes/terminate_all', dependencies=[Depends(check_api_key)])
+@app.get('/nodes/terminate_all', dependencies=[Depends(validate_json_request)])
 def terminate_node_all():
     """Terminate nodes."""
     try:
@@ -494,7 +545,7 @@ def terminate_node_all():
         return 'Failed to terminate all nodes.'
 
 
-@app.post('/distserve/connection_warmup')
+@app.post('/distserve/connection_warmup', dependencies=[Depends(validate_json_request)])
 async def connection_warmup():
     await asyncio.gather(*[
         node_manager.pd_connection_pool.connect(
@@ -508,13 +559,13 @@ async def connection_warmup():
     return JSONResponse({'SUCCESS': True})
 
 
-@app.post('/distserve/gc')
+@app.post('/distserve/gc', dependencies=[Depends(validate_json_request)])
 async def cache_block_gc_to_be_migrated():
     # TODO (JimyMa): add garbage collection of to be migrated request
     raise NotImplementedError
 
 
-@app.post('/v1/chat/completions', dependencies=[Depends(check_api_key)])
+@app.post('/v1/chat/completions', dependencies=[Depends(validate_json_request)])
 async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
@@ -601,14 +652,13 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             return node_manager.handle_unavailable_model(request.model)
 
         logger.info(f'A request is dispatched to {node_url}')
-        request_dict = request.model_dump()
         start = node_manager.pre_call(node_url)
         if request.stream is True:
-            response = node_manager.stream_generate(request_dict, node_url, '/v1/chat/completions')
+            response = node_manager.forward_raw_request_stream_generate(raw_request, node_url, '/v1/chat/completions')
             background_task = node_manager.create_background_tasks(node_url, start)
-            return StreamingResponse(response, background=background_task, media_type='text/event-stream')
+            return ProxyStreamingResponse(response, background=background_task, media_type='text/event-stream')
         else:
-            response = await node_manager.generate(request_dict, node_url, '/v1/chat/completions')
+            response = await node_manager.forward_raw_request_generate(raw_request, node_url, '/v1/chat/completions')
             node_manager.post_call(node_url, start)
             return JSONResponse(json.loads(response))
     elif node_manager.serving_strategy == ServingStrategy.DistServe:
@@ -683,7 +733,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         raise ValueError(f'No serving strategy named {node_manager.serving_strategy}')
 
 
-@app.post('/v1/completions', dependencies=[Depends(check_api_key)])
+@app.post('/v1/completions', dependencies=[Depends(validate_json_request)])
 async def completions_v1(request: CompletionRequest, raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
@@ -734,14 +784,13 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             return node_manager.handle_unavailable_model(request.model)
 
         logger.info(f'A request is dispatched to {node_url}')
-        request_dict = request.model_dump()
         start = node_manager.pre_call(node_url)
         if request.stream is True:
-            response = node_manager.stream_generate(request_dict, node_url, '/v1/completions')
+            response = node_manager.forward_raw_request_stream_generate(raw_request, node_url, '/v1/completions')
             background_task = node_manager.create_background_tasks(node_url, start)
-            return StreamingResponse(response, background=background_task, media_type='text/event-stream')
+            return ProxyStreamingResponse(response, background=background_task, media_type='text/event-stream')
         else:
-            response = await node_manager.generate(request_dict, node_url, '/v1/completions')
+            response = await node_manager.forward_raw_request_generate(raw_request, node_url, '/v1/completions')
             node_manager.post_call(node_url, start)
             return JSONResponse(json.loads(response))
     elif node_manager.serving_strategy == ServingStrategy.DistServe:
@@ -831,7 +880,7 @@ def proxy(server_name: str = '0.0.0.0',
           server_port: int = 8000,
           serving_strategy: Literal['Hybrid', 'DistServe'] = 'Hybrid',
           routing_strategy: Literal['random', 'min_expected_latency', 'min_observed_latency'] = 'min_expected_latency',
-          api_keys: Optional[Union[List[str], str]] = None,
+          api_keys: list[str] | str | None = None,
           ssl: bool = False,
           log_level: str = 'INFO',
           disable_cache_status: bool = False,
@@ -867,15 +916,18 @@ def proxy(server_name: str = '0.0.0.0',
         with_gdr=True,
     )
     node_manager.cache_status = not disable_cache_status
-    if api_keys is not None:
-        if isinstance(api_keys, str):
-            api_keys = api_keys.split(',')
-        from lmdeploy.serve.openai.api_server import VariableInterface
-        VariableInterface.api_keys = api_keys
+    if isinstance(api_keys, str):
+        api_keys = api_keys.split(',')
+    if api_keys is not None and (tokens := [key for key in api_keys if key]):
+        from lmdeploy.serve.utils.server_utils import AuthenticationMiddleware
+
+        app.add_middleware(AuthenticationMiddleware, tokens=tokens)
+
     ssl_keyfile, ssl_certfile = None, None
     if ssl:
         ssl_keyfile = os.environ['SSL_KEYFILE']
         ssl_certfile = os.environ['SSL_CERTFILE']
+
     logger.setLevel(log_level)
     uvicorn_log_level = os.getenv('UVICORN_LOG_LEVEL', 'info').lower()
     uvicorn.run(app=app,
