@@ -96,7 +96,7 @@ class Ffn(Module):
 
     def __init__(self, model: BaseOutputModel):
         self.model = model
-        self.tp = model.mlp_tp_size
+        self.tp = model.mlp_tp_size if model.model_config.ep_size == 1 else 1
         # inter_sizes in config are padded and may be different from what's
         # in the weights
         self.inter_size = model.model_config.inter_size

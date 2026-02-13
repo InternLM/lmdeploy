@@ -31,6 +31,7 @@ add_library(gemm2
         kernel/sm90_64n32_8.cu
         cublas.cu
         moe_utils_v2.cu
+        moe_a2a_utils.cu
         test/test_utils.cu
 )
 

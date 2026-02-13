@@ -64,6 +64,26 @@ public:
         throw std::runtime_error("not implemented");
     }
 
+    virtual void ReduceScatterV(const void*   sendbuff,  //
+                                void*         recvbuff,
+                                const size_t* counts,
+                                DataType      type,
+                                int           group,
+                                cudaStream_t  stream)
+    {
+        throw std::runtime_error("not implemented");
+    }
+
+    virtual void AllGatherV(const void*   sendbuff,  //
+                            void*         recvbuff,
+                            const size_t* counts,
+                            DataType      type,
+                            int           group,
+                            cudaStream_t  stream)
+    {
+        throw std::runtime_error("not implemented");
+    }
+
     virtual void AllreduceResidualBiasRMSnorm(void*        hidden,
                                               void*        residual,
                                               const void*  bias,
