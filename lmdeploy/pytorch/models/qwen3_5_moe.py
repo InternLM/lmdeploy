@@ -256,10 +256,9 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
             ('.qkv_proj', '.v_proj', 'v'),
             ('.gate_up_proj', '.gate_proj', 0),
             ('.gate_up_proj', '.up_proj', 1),
-            ('.in_proj_qkvz', '.in_proj_qkv', 'qkv'),
-            ('.in_proj_qkvz', '.in_proj_z', 'z'),
-            ('.in_proj_ba', '.in_proj_b', 'b'),
-            ('.in_proj_ba', '.in_proj_a', 'a'),
+            ('.in_proj_zba', '.in_proj_z', 'z'),
+            ('.in_proj_zba', '.in_proj_b', 'b'),
+            ('.in_proj_zba', '.in_proj_a', 'a'),
         ]
 
         # expert map

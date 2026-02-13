@@ -37,6 +37,8 @@ class GatedDeltaMeta:
         # state_ids, fill invalid state with state_ids[0]
         self.valid_state = state_ids >= 0
         self.state_ids = torch.where(self.valid_state, state_ids, state_ids[0])
+
+        # we assume 0 is dummy state, shared by all invalid states.
         self.state_ids = self.state_ids.clamp(0)
 
 
@@ -260,14 +262,6 @@ def store_state(conv_state: torch.Tensor, recurrent_state: torch.Tensor,
     """Store states to cache."""
     conv_cache, recurrent_cache = past_key_value[:2]
     state_ids = gated_delta_meta.state_ids
-    valid_state = gated_delta_meta.valid_state
-
-    # fill invalid state with state[0]
-    conv_dim = conv_state.dim()
-    recurrent_dim = recurrent_state.dim()
-    conv_state = torch.where(valid_state.view(-1, *[1] * (conv_dim - 1)), conv_state, conv_state[:1])
-    recurrent_state = torch.where(valid_state.view(-1, *[1] * (recurrent_dim - 1)), recurrent_state,
-                                  recurrent_state[:1])
 
     conv_cache = conv_cache.index_copy_(0, state_ids, conv_state)
     recurrent_cache = recurrent_cache.index_copy_(0, state_ids, recurrent_state.to(recurrent_cache.dtype))
