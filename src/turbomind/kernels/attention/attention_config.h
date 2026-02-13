@@ -75,14 +75,16 @@ struct AttentionConfig<arch::Sm75, T, HeadDim, Ctype>: Base_64x64_16x64 {
 
 template<class T, CacheType Ctype>
 struct AttentionConfig<arch::Sm70, T, 576, Ctype> {
-    // CTA_S reduced from 64 to 32 so shared memory fits within V100's 96 KB limit.
-    // CTA_Q=1 because the SIMT kernel processes exactly 1 Q position per CTA.
-    static constexpr int CTA_Q  = 1;
+    // MMA_884 config for Volta V100 with HeadDim=576 (GLM-4.7-Flash)
+    // Shared memory: max(Q=16×580×2, K+V+P=75KB) < 96KB V100 limit
+    // CTA_Q=16 (minimum for MMA_884 with WARP_Q=16)
+    // CTA_S=32 (reduced from 64 to fit shared memory)
+    static constexpr int CTA_Q  = 16;
     static constexpr int CTA_S  = 32;
-    static constexpr int WARP_Q = 1;
+    static constexpr int WARP_Q = 16;
     static constexpr int WARP_S = 32;
 
-    using Attention = Impl<MMA_SIMT, T, T, 1, CTA_Q, CTA_S, 1, WARP_Q, WARP_S, 576, 2>;
+    using Attention = Impl<MMA_884, T, T, 1, CTA_Q, CTA_S, 1, WARP_Q, WARP_S, 576, 2>;
     using CacheIter = GetCacheIterFactory<Ctype, T, CTA_S, 576>;
     using Kernel    = AttentionUniversal<arch::Sm70, Mainloop<arch::Sm70, Attention>, CacheIter, AttentionCtaMap>;
 };
