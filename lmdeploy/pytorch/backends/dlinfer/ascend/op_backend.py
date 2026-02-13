@@ -187,7 +187,8 @@ class AscendOpsBackend(DlinferOpsBackend):
                     repeat_interleave, used for attention metadata.
             """
             if is_decoding:
-                q_seqlens_cpu = None
+                q_seqlens_cpu = None if AscendOpsBackend.enable_graph else torch.arange(1, step_context.kv_seqlens.size(0) + 1,
+                                                                                           dtype=torch.int32)
                 kv_seqlens_cpu = kv_seqlens_expanded = step_context.kv_seqlens.cpu()
             elif is_unpaged_prefill:
                 q_seqlens_cpu = step_context.q_seqlens.cpu()
