@@ -9,6 +9,10 @@ from ..default.moe_router import DefaultRouterNoauxTCImpl
 from ..moe_router import RouterNoauxTCBuilder, RouterNoauxTCImpl
 
 
+def is_power_of_two(n):
+    return n > 0 and (n & (n - 1)) == 0
+
+
 class TritonRouterNoauxTCImpl(DefaultRouterNoauxTCImpl):
 
     def __init__(
@@ -33,9 +37,29 @@ class TritonRouterNoauxTCImpl(DefaultRouterNoauxTCImpl):
             router_n_groups=router_n_groups,
         )
 
+        self.enable_custom_kernel = self.should_enable_custom_kernel()
+
+    def should_enable_custom_kernel(self) -> bool:
+        if self.router_n_groups > 0:
+            return False
+
+        if self.scoring_func != 'sigmoid':
+            return False
+
+        if self.n_routed_experts % 32 != 0:
+            return False
+
+        if not is_power_of_two(self.n_routed_experts):
+            return False
+
+        if not is_power_of_two(self.n_group):
+            return False
+
+        return True
+
     def forward(self, logits: torch.Tensor, bias: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Router forward."""
-        if self.router_n_groups <= 0 and self.scoring_func == 'sigmoid' and self.n_routed_experts % 32 == 0:
+        if self.enable_custom_kernel:
             return fused_noaux_tc_routing(
                 logits,
                 bias,
