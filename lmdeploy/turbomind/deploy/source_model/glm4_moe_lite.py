@@ -6,7 +6,7 @@ Weight layout follows HuggingFace checkpoint with model.layers.* (same family as
 """
 
 from .base import INPUT_MODELS
-from .deepseek2 import DeepSeek2Reader, DeepSeek2Model
+from .deepseek2 import DeepSeek2Model, DeepSeek2Reader
 
 
 class Glm4MoeLiteReader(DeepSeek2Reader):
@@ -24,8 +24,7 @@ class Glm4MoeLiteReader(DeepSeek2Reader):
 
     def moe_ffn_gate_correction_bias(self, i: int):
         """Per-expert score correction bias for noaux_tc routing."""
-        return self.params.get(
-            f'{self.attn_layer_prefix}.{i}.mlp.gate.e_score_correction_bias')
+        return self.params.get(f'{self.attn_layer_prefix}.{i}.mlp.gate.e_score_correction_bias')
 
 
 @INPUT_MODELS.register_module(name='glm4-moe-lite')

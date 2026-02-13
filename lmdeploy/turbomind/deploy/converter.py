@@ -117,11 +117,9 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
         if quant_config is None:
             quant_config = {}
         if isinstance(quant_config, dict):
-            modules_to_not_convert = quant_config.get(
-                'modules_to_not_convert') or []
+            modules_to_not_convert = quant_config.get('modules_to_not_convert') or []
         else:
-            modules_to_not_convert = getattr(
-                quant_config, 'modules_to_not_convert', None) or []
+            modules_to_not_convert = getattr(quant_config, 'modules_to_not_convert', None) or []
         if any('self_attn' in m for m in modules_to_not_convert):
             weight_type = dtype
 

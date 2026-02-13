@@ -4,7 +4,7 @@ from functools import partial
 
 import torch
 
-from .parameter import get_params, identity
+from .parameter import get_params
 from .source_model.base import BaseReader
 from .target_model.base import BaseOutputModel
 
