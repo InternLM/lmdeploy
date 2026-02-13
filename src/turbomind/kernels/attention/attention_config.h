@@ -76,10 +76,12 @@ struct AttentionConfig<arch::Sm75, T, HeadDim, Ctype>: Base_64x64_16x64 {
 template<class T, CacheType Ctype>
 struct AttentionConfig<arch::Sm70, T, 576, Ctype> {
     // MMA_884 config for Volta V100 with HeadDim=576 (GLM-4.7-Flash)
-    // Shared memory: max(Q=16×580×2, K+V+P=75KB) < 96KB V100 limit
-    // CTA_Q=16 (minimum for MMA_884 with WARP_Q=16)
-    // CTA_S=32 (reduced from 64 to fit shared memory)
-    static constexpr int CTA_Q  = 16;
+    // CTA_Q=64 with WARP_Q=16 gives 4 warps (matching the generic Sm70 config),
+    // maximizing tensor core utilization and latency hiding.
+    // CTA_S=32 (reduced from 64 to fit shared memory with HeadDim=576).
+    // Shared memory: max(Q=64×580×2=72.5KB, K+V+P=32×580×2+32×576×2+64×36×2=76.8KB)
+    //              = 76.8KB < 96KB V100 limit
+    static constexpr int CTA_Q  = 64;
     static constexpr int CTA_S  = 32;
     static constexpr int WARP_Q = 16;
     static constexpr int WARP_S = 32;
