@@ -8,7 +8,7 @@ class MixtralReader(LlamaReader):
 
     def moe_ffn_expert(self, e=None, i=None, kind=None):
         if not kind:
-            return self.filter(r'experts')
+            return self.filter(r'experts', i)
         result = []
         for x in ['w1', 'w2', 'w3']:
             name = f'model.layers.{i}.block_sparse_moe.experts.{e}.{x}.{kind}'
