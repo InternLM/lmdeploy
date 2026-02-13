@@ -31,7 +31,7 @@
       "pattern": "^https://kexue.fm"
     },
     {
-      "pattern":"^https://wiki.python.org/moin/DebuggingWithGdb"
+      "pattern": "^https://wiki.python.org/moin/DebuggingWithGdb"
     }
   ],
   "httpHeaders": [
