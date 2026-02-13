@@ -58,7 +58,8 @@ class DeepseekV2ModelConfigBuilder(AutoModelConfigBuilder):
             num_layers = hf_config.num_nextn_predict_layers
             hf_config.architectures[0] = 'DeepseekMTPModel'
             # remove for correct mapping when building the patched model
-            del hf_config.auto_map
+            if hasattr(hf_config, 'auto_map'):
+                del hf_config.auto_map
 
         if is_draft_model or spec_method is not None:
             model_paradigm = 'ar_spec'
