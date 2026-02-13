@@ -383,6 +383,7 @@ class Qwen3_5GatedDeltaNet(nn.Module):
                                                 dtype=dtype,
                                                 device=device,
                                                 is_tp=True)
+        self.in_proj_qkv.weight.weight_loader = self.weight_loader_qkv
         self.in_proj_zba = build_merged_colwise_linear(
             self.hidden_size,
             [self.value_dim, self.num_v_heads, self.num_v_heads],
@@ -429,24 +430,25 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         self.A_log.weight_loader = self.weight_loader_a_dt
         self.dt_bias.weight_loader = self.weight_loader_a_dt
 
+    def weight_loader_qkv(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor):
+        """Weight loader for qkv projection."""
+        tp, rank = get_tp_world_rank()
+        q, k, v = loaded_weight.split([self.key_dim, self.key_dim, self.value_dim], dim=0)
+        q = q.chunk(tp, dim=0)[rank]
+        k = k.chunk(tp, dim=0)[rank]
+        v = v.chunk(tp, dim=0)[rank]
+        loaded_weight = torch.cat([q, k, v], dim=0)
+        default_weight_loader(param, loaded_weight)
+
     def weight_loader_a_dt(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor):
         """Weight loader."""
         tp, rank = get_tp_world_rank()
         loaded_weight = loaded_weight.chunk(tp, dim=0)[rank]
         default_weight_loader(param, loaded_weight)
 
-    def fix_query_key_value_ordering_v1(self, mixed_qkv: torch.Tensor, mixed_zba: torch.Tensor):
+    def fix_zba_ordering(self, mixed_zba: torch.Tensor):
         """Derives `query`, `key` and `value` tensors from `mixed_qkv` and
         `mixed_zba`."""
-        # qkv
-        split_arg_list_qkv = [
-            self.head_k_dim,
-            self.head_k_dim,
-            (self.kv_ratio * self.head_v_dim),
-        ]
-        mixed_qkv = mixed_qkv.unflatten(-1, (-1, sum(split_arg_list_qkv)))
-        query, key, value = torch.split(mixed_qkv, split_arg_list_qkv, dim=-1)
-        value = value.reshape(*value.shape[:-2], -1, self.head_v_dim)
 
         # zba
         split_arg_list_zba = [self.head_v_dim * self.kv_ratio, self.kv_ratio, self.kv_ratio]
@@ -455,7 +457,7 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         z, b, a = torch.split(mixed_zba, split_arg_list_zba, dim=-1)
         # [..., ng, np/ng * hn] -> [..., np, hn]
         z = z.unflatten(-1, (-1, self.head_v_dim))
-        return query, key, value, z, b, a
+        return z, b, a
 
     def _load_state(self, past_key_value: Tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
         """Load states from cache."""
@@ -483,10 +485,9 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         # inputs proj
         projected_states_qkv = self.in_proj_qkv(hidden_states)
         projected_states_zba = self.in_proj_zba(hidden_states)
-        query, key, value, z, b, a = self.fix_query_key_value_ordering_v1(projected_states_qkv, projected_states_zba)
-        query, key, value = (x.reshape(*x.shape[:-2], -1) for x in (query, key, value))
+        z, b, a = self.fix_zba_ordering(projected_states_zba)
 
-        mixed_qkv = torch.cat((query, key, value), dim=-1)
+        mixed_qkv = projected_states_qkv
         mixed_qkv, conv_state = self.conv1d(mixed_qkv, conv_state, gated_delta_meta=gated_delta_meta)
 
         tp = (self.key_dim * 2 + self.value_dim) // mixed_qkv.size(-1)

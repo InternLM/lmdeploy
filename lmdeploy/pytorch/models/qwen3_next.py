@@ -128,7 +128,6 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         mixed_qkvz = mixed_qkvz.unflatten(-1, (-1, sum(split_arg_list_qkvz)))
         query, key, value, z = torch.split(mixed_qkvz, split_arg_list_qkvz, dim=-1)
         # [..., ng, np/ng * hn] -> [..., np, hn]
-        value = value.reshape(*value.shape[:-2], -1, self.head_v_dim)
         z = z.reshape(*z.shape[:-2], -1, self.head_v_dim)
 
         # chunk_ba
@@ -166,7 +165,7 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         projected_states_qkvz = self.in_proj_qkvz(hidden_states)
         projected_states_ba = self.in_proj_ba(hidden_states)
         query, key, value, z, b, a = self.fix_query_key_value_ordering(projected_states_qkvz, projected_states_ba)
-        query, key, value = (x.reshape(*x.shape[:-2], -1) for x in (query, key, value))
+        query, key, value = (x.flatten(-2, -1) for x in (query, key, value))
 
         mixed_qkv = torch.cat((query, key, value), dim=-1)
         mixed_qkv, conv_state = self.conv1d(mixed_qkv, conv_state, gated_delta_meta=gated_delta_meta)
