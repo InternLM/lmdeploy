@@ -469,19 +469,10 @@ class StateCacheEngine:
     def allocate_caches(num_caches: int, state_shapes: List[Tuple[Tuple[int], torch.dtype]], device: torch.device):
         """Allocate cache implement."""
 
-        cache_dtype = torch.int8
         if len(state_shapes) == 0 or num_caches == 0:
-            return torch.empty((0, 0), dtype=cache_dtype, device=device), []
+            return torch.empty((0, 0), dtype=torch.uint8, device=device), []
 
-        # state_shapes = [((36, 4, 2048), torch.bfloat16), ((36, 8, 128, 128), torch.bfloat16)]
-        cache_descs = []
-        for shape, dtype in state_shapes:
-            if len(shape) == 3:
-                # for ascend
-                cache_descs.append(CacheDesc((shape[0], shape[2], shape[1]), dtype))
-            else:
-                cache_descs.append(CacheDesc(shape, dtype))
-        # cache_descs = [CacheDesc(shape, dtype) for shape, dtype in state_shapes]
+        cache_descs = [CacheDesc(shape, dtype) for shape, dtype in state_shapes]
 
         # get mempool size
         mem_pool_size = 0
@@ -489,7 +480,7 @@ class StateCacheEngine:
             mem_pool_size += desc.aligned_size
 
         # create pool
-        mem_pool = torch.zeros((num_caches, mem_pool_size), dtype=cache_dtype, device=device)
+        mem_pool = torch.zeros((num_caches, mem_pool_size), dtype=torch.uint8, device=device)
 
         # slice caches
         caches = []
