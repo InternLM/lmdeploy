@@ -121,6 +121,7 @@
 |            GLM-4.5             |      355B       | LLM  |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |          GLM-4.5-Air           |      106B       | LLM  |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |         GLM-4.7-Flash          |       30B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
+|             GLM-5              |      754B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |           CodeGeeX4            |       9B        | LLM  |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |          Phi-3.5-mini          |      3.8B       | LLM  |    Yes    |   Yes   |   No    |  -   |   -   |
 |          Phi-3.5-MoE           |     16x3.8B     | LLM  |    Yes    |   Yes   |   No    |  -   |   -   |

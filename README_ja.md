@@ -143,6 +143,7 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>SDAR (1.7B-30B)</li>
   <li>gpt-oss (20B, 120B)</li>
   <li>GLM-4.7-Flash (30B)</li>
+  <li>GLM-5 (754B)</li>
 </ul>
 </td>
 <td>
