@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from typing import List
 
+import numpy as np
 import torch
 from torch.profiler import record_function
 
@@ -42,14 +43,33 @@ class DLLMSamplingStrategy(ARSamplingStrategy):
             'random_offsets',
             'all_ids',
             'num_ignore_eos',
+            'ngram_size',
+            'ngram_threshold',
         ]
         for name in update_attr_names:
             attr = getattr(out, name)
             if attr is None:
                 continue
-            repeats = (dllm_block_length, ) + (1, ) * (attr.dim())
-            attr = attr[None].repeat(*repeats).flatten(0, 1)
+            if attr.dim() == 1:
+                repeats = (dllm_block_length, 1)
+                attr = attr[None].repeat(*repeats).flatten(0, 1)
+            elif attr.dim() == 2:
+                repeats = (1, dllm_block_length, 1)
+                attr = attr[:, None].repeat(*repeats).flatten(0, 1)
+            else:
+                repeats = (dllm_block_length, ) + (1, ) * (attr.dim())
+                attr = attr[None].repeat(*repeats).flatten(0, 1)
             setattr(out, name, attr)
+
+        # update generated_ids_cpu
+        if out.generated_ids_cpu is not None:
+            generated_ids_cpu = out.generated_ids_cpu
+            if generated_ids_cpu.shape[1] == 0:
+                out.generated_ids_cpu = np.repeat(generated_ids_cpu, dllm_block_length, axis=0)
+            else:
+                generated_ids_cpu = np.repeat(generated_ids_cpu[:, None], dllm_block_length, axis=1)
+                generated_ids_cpu = np.reshape(generated_ids_cpu, (-1, generated_ids_cpu.shape[-1]))
+                out.generated_ids_cpu = generated_ids_cpu
 
         if len(out.response_formats) > 0:
             new_resp_formats = []

@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from typing import List
 
+import numpy as np
 import torch
 from torch.profiler import record_function
 
@@ -15,7 +16,7 @@ SeqList = List[SchedulerSequence]
 
 def _gather_all_ids(pad_id: int, seqs: SeqList, sampling_inputs: SamplingInputs):
     """Gather history."""
-    if sampling_inputs.repetition_penalty is None and not any(sampling_inputs.logits_processors):
+    if not any(sampling_inputs.logits_processors):
         return None
     batch = len(seqs)
     max_len = max(seq.num_valid_ids for seq in seqs)
@@ -25,6 +26,22 @@ def _gather_all_ids(pad_id: int, seqs: SeqList, sampling_inputs: SamplingInputs)
         if h_len == 0:
             continue
         h_ids = torch.from_numpy(seq.valid_ids)
+        output[idx, -h_len:] = h_ids
+    return output
+
+
+def _gather_generated_ids(pad_id: int, seqs: SeqList, sampling_inputs: SamplingInputs) -> np.ndarray | None:
+    """Gather history."""
+    if sampling_inputs.repetition_penalty is None and sampling_inputs.max_repetition_ngram_size == 0:
+        return None
+    batch = len(seqs)
+    max_len = max(seq.num_new_tokens for seq in seqs)
+    output = np.full((batch, max_len), pad_id, dtype=np.int64)
+    for idx, seq in enumerate(seqs):
+        h_len = seq.num_new_tokens
+        if h_len == 0:
+            continue
+        h_ids = seq.generated_ids
         output[idx, -h_len:] = h_ids
     return output
 
@@ -61,6 +78,9 @@ class ARSamplingStrategy(SamplingStrategy):
         num_logprobs = [None] * batch_size
         session_to_cleanup = self.session_to_cleanup
         self.session_to_cleanup = []
+        repetition_ngram_sizes = [None] * batch_size
+        repetition_ngram_thresholds = [None] * batch_size
+        repetition_ngram_window_sizes = [None] * batch_size
 
         def __gather_params():
             """Gather params."""
@@ -84,6 +104,10 @@ class ARSamplingStrategy(SamplingStrategy):
                 stop_words[idx] = sw
                 logits_processors[idx] = param.logits_processors
                 num_logprobs[idx] = param.num_logprobs
+                repetition_ngram_sizes[idx] = param.repetition_ngram_size
+                repetition_ngram_thresholds[idx] = param.repetition_ngram_threshold
+                repetition_ngram_window_sizes[
+                    idx] = param.repetition_ngram_window_size if param.repetition_ngram_window_size > 0 else 1 << 62
 
         def __get_topp(top_p):
             """Get topp."""
@@ -164,6 +188,25 @@ class ARSamplingStrategy(SamplingStrategy):
             'seq_id': seq.seq_id,
         } for seq in seqs]
 
+        # repetition ngram
+        max_repetition_ngram_size = max(repetition_ngram_sizes)
+        max_repetition_ngram_window_size = max(repetition_ngram_window_sizes)
+        if max_repetition_ngram_size == 0:
+            repetition_ngram_sizes = None
+            repetition_ngram_thresholds = None
+            repetition_ngram_window_sizes = None
+        else:
+            repetition_ngram_sizes = torch.tensor(repetition_ngram_sizes)
+            repetition_ngram_thresholds = torch.tensor(repetition_ngram_thresholds)
+            repetition_ngram_window_sizes = torch.tensor(repetition_ngram_window_sizes)
+            repetition_ngram_same_n = (repetition_ngram_sizes == max_repetition_ngram_size).all().item()
+            if repetition_ngram_same_n:
+                repetition_ngram_sizes = None
+            repetition_ngram_same_window_size = (
+                repetition_ngram_window_sizes == max_repetition_ngram_window_size).all().item()
+            if repetition_ngram_same_window_size:
+                repetition_ngram_window_sizes = None
+
         sampling_input = SamplingInputs(
             temperature=temperature,
             bad_words=bad_words,
@@ -184,10 +227,16 @@ class ARSamplingStrategy(SamplingStrategy):
             batch_size=batch_size,
             session_ctx=session_ctx,
             session_to_cleanup=session_to_cleanup,
+            repetition_ngram_size=repetition_ngram_sizes,
+            repetition_ngram_threshold=repetition_ngram_thresholds,
+            repetition_ngram_window_size=repetition_ngram_window_sizes,
+            max_repetition_ngram_size=max_repetition_ngram_size,
+            max_repetition_ngram_window_size=max_repetition_ngram_window_size,
         )
 
         pad_token_id = self.pad_token_id
         sampling_input.all_ids = _gather_all_ids(pad_token_id, seqs, sampling_input)
+        sampling_input.generated_ids_cpu = _gather_generated_ids(pad_token_id, seqs, sampling_input)
         sampling_input.num_ignore_eos = _get_num_ignore_eos(seqs)
         return sampling_input
 
