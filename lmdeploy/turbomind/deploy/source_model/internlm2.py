@@ -42,6 +42,8 @@ class InternLM2Reader(LlamaReader):
 
     def _ffn(self, i: int, kind: str):
         """Get ffn kind for layer i."""
+        if not kind:
+            return self.filter(self.ffn_pattern)
         result = []
         for key in ['w1', 'w2', 'w3']:
             tensor = self.params[f'{self.attn_layer_prefix}.{i}.feed_forward.{key}.{kind}']

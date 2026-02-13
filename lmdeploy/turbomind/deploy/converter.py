@@ -53,8 +53,10 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
     if dtype == 'auto':
         # pick dtype by device as default
         dtype = 'bfloat16' if has_bf16 else 'float16'
-        # dtype from model
-        torch_dtype = getattr(model_config, 'torch_dtype', None)
+        # dtype from model (prefer `dtype` over deprecated `torch_dtype`)
+        torch_dtype = getattr(model_config, 'dtype', None)
+        if torch_dtype is None:
+            torch_dtype = getattr(model_config, 'torch_dtype', None)
         if not torch_dtype:
             if model_arch in ['QWenLMHeadModel', 'GptOssForCausalLM']:
                 torch_dtype = torch.bfloat16
