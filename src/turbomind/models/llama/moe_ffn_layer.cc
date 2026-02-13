@@ -90,12 +90,10 @@ void MoeFfnLayer::Forward(ForwardParam& p)
 
     const auto st = core::Context::stream().handle();
 
-    check_cuda_error(cudaMemsetAsync(accum_.data(), 0, sizeof(int) * expert_num * kMoeGateMaxTiles, st));
-    check_cuda_error(cudaMemsetAsync(masks_.data(), -1, sizeof(int8_t) * expert_num * padded, st));
-
     // dump_logits(tokens, layer_id);
 
     if (param_.topk_method == "noaux_tc") {
+        // invokeMoeGate_NoAuxTC clears accum and masks internally
         TM_CHECK_EQ(param_.n_group, 1);
         TM_CHECK_EQ(param_.topk_group, 1);
         const float* correction_bias =
@@ -119,6 +117,9 @@ void MoeFfnLayer::Forward(ForwardParam& p)
                               st);
     }
     else {
+        // V2: accum must be cleared by caller; masks cleared internally
+        check_cuda_error(cudaMemsetAsync(accum_.data(), 0, sizeof(int) * expert_num * kMoeGateMaxTiles, st));
+
         bool softmax = true;
         if (param_.topk_method == "group_limited_greedy") {
             invokeMoeSoftmaxMaskTopKGroups(

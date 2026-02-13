@@ -16,6 +16,10 @@
 
 namespace turbomind {
 
+namespace attention {
+struct DecodingCtaMap;
+}  // namespace attention
+
 template<class Arch_, class Mainloop, class CacheIteratorFactory_, class CtaMap_>
 struct AttentionUniversal {
 

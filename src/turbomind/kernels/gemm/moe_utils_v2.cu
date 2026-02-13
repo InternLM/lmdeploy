@@ -806,9 +806,6 @@ __global__ void MoeGateNoAuxTCKernel(float*       scales,   // [top_k, tokens]
             scales[k * tokens + ti] = topk_val[k] * routed_scale;
         }
 
-        for (int e = 0; e < experts; e++) {
-            masks[e * tokens_padded + ti] = -1;
-        }
         for (int k = 0; k < top_k; k++) {
             masks[topk_idx[k] * tokens_padded + ti] = (int8_t)k;
         }

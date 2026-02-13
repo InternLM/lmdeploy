@@ -163,7 +163,7 @@ class LlamaModel(BaseInputModel):
             elif scaling_type == 'llama3':
                 low_freq_factor = rope_scaling.get('low_freq_factor', 1.0)
                 high_freq_factor = rope_scaling.get('high_freq_factor', 1.0)
-                original_max_position_embeddings = model_arg['rope_scaling'].get('original_max_position_embeddings', 0)
+                original_max_position_embeddings = rope_scaling.get('original_max_position_embeddings', 0)
                 rope_param.type = 'llama3'
                 rope_param.factor = scaling_factor
                 rope_param.low_freq_factor = low_freq_factor
