@@ -27,6 +27,8 @@ void invokeMoeGate_V2(int*         f2n,
                       bool         softmax,
                       bool         norm_topk,
                       float        routed_scale,
+                      const float* router_bias,
+                      bool         use_sigmoid,
                       cudaStream_t st);
 
 void invokeMoeDispatch(Ref<Tensor>   out_,  //

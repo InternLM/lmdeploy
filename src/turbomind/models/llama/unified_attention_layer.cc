@@ -603,15 +603,32 @@ void UnifiedAttentionLayer::qk_norm(Tensor& qkv, const WeightType& weights)
 
     const auto token_num = qkv.shape(0);
 
-    auto qkv3 = qkv.view({token_num, -1, (int)size_per_head_});
+    if (model_param_.qk_norm_type == "per_token") {
+        // MiniMax-M2 style: RMS norm across all heads combined (per-token, not per-head).
+        // Q shape: (tokens, local_heads * head_dim), K shape: (tokens, local_kv_heads * head_dim)
+        const int q_dim = local_head_num_ * size_per_head_;
+        const int k_dim = local_kv_head_num_ * size_per_head_;
 
-    auto q = qkv3.slice({0, 0, 0}, {-1, (int)local_head_num_, -1});
-    invokeRMSNormQK(q, weights.q_a_layernorm, model_param_.norm_eps, stream);
-    sync_check_cuda_error();
+        auto q = qkv.view({token_num, -1}).slice({0, 0}, {-1, (int)q_dim});
+        invokeRMSNorm(q, q, weights.q_a_layernorm, model_param_.norm_eps, stream);
+        sync_check_cuda_error();
 
-    auto k = qkv3.slice({0, (int)local_head_num_, 0}, {-1, (int)local_kv_head_num_, -1});
-    invokeRMSNormQK(k, weights.kv_a_layernorm, model_param_.norm_eps, aux_stream_);
-    sync_check_cuda_error();
+        auto k = qkv.view({token_num, -1}).slice({0, (int)q_dim}, {-1, (int)k_dim});
+        invokeRMSNorm(k, k, weights.kv_a_layernorm, model_param_.norm_eps, aux_stream_);
+        sync_check_cuda_error();
+    }
+    else {
+        // Standard per-head QK norm (e.g. Qwen3)
+        auto qkv3 = qkv.view({token_num, -1, (int)size_per_head_});
+
+        auto q = qkv3.slice({0, 0, 0}, {-1, (int)local_head_num_, -1});
+        invokeRMSNormQK(q, weights.q_a_layernorm, model_param_.norm_eps, stream);
+        sync_check_cuda_error();
+
+        auto k = qkv3.slice({0, (int)local_head_num_, 0}, {-1, (int)local_kv_head_num_, -1});
+        invokeRMSNormQK(k, weights.kv_a_layernorm, model_param_.norm_eps, aux_stream_);
+        sync_check_cuda_error();
+    }
 
     check_cuda_error(cudaEventRecord(aux_event_, aux_stream_));
     check_cuda_error(cudaStreamWaitEvent(stream, aux_event_));

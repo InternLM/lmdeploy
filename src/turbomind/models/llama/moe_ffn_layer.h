@@ -27,7 +27,7 @@ public:
     void Combine(ForwardParam& p);
 
 private:
-    Tensor_<float> Gate(const Tensor& input, const LlamaDenseWeight& gate);
+    Tensor_<float> Gate(const Tensor& input, const LlamaDenseWeight& gate, bool apply_bias = true);
 
     void dump_logits(int token_num, int layer_id, int expert_num);
 
@@ -57,6 +57,8 @@ private:
 
     Tensor         temp_;
     Tensor_<float> shared_scales_;
+
+    Buffer_<float> router_bias_f32_;  // cached float32 copy of router bias for sigmoid mode
     ///////////////////////////////////////////////////////
 };
 

@@ -56,6 +56,8 @@ SUPPORTED_ARCHS = dict(
     # mixtral
     MixtralForCausalLM='mixtral',
     MolmoForCausalLM='molmo',
+    # minimax-m2
+    MiniMaxM2ForCausalLM='minimax-m2',
 )
 
 
