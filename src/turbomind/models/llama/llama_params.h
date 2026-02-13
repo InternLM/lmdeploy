@@ -34,8 +34,21 @@ struct ModelParam {
     bool     attn_sink;
     bool     mlp_bias;
     DataType data_type;
-    DataType weight_type;
-    DataType expert_weight_type;
+
+    // Weight types for mixed quantization support.
+    // Models like mixed AWQ (e.g. QuantTrio GLM-4.7-Flash) quantize FFN/expert
+    // weights to int4 but keep attention weights as fp16. GptOss mxfp4 quantizes
+    // only MoE experts to e2m1 while keeping attention and shared experts as fp16.
+    //
+    //                  weight_type   ffn_weight_type   expert_weight_type
+    //  Pure fp16       float16       float16           float16
+    //  Full AWQ        int4          int4              int4
+    //  Mixed AWQ       float16       int4              int4
+    //  GptOss mxfp4    bfloat16      bfloat16          e2m1
+    DataType weight_type;           // attention weights
+    DataType expert_weight_type;    // MoE routed expert weights
+    DataType ffn_weight_type;       // dense FFN / shared expert weights
+
     int      group_size;
     MLAParam mla;
     bool     qk_norm;

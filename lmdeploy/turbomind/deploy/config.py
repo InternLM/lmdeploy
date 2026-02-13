@@ -67,6 +67,7 @@ class ModelConfig:
     data_type: str = None
     weight_type: str = None
     expert_weight_type: str = None
+    ffn_weight_type: str = None
     session_len: int = None
     attn_tp_size: int = 1
     attn_cp_size: int = 1

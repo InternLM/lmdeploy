@@ -91,11 +91,27 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
     if model_arch == 'GptOssForCausalLM':
         weight_type = dtype
 
+    # Three weight types control allocation for mixed quantization:
+    #   weight_type        - attention weights
+    #   ffn_weight_type    - dense FFN / shared expert weights
+    #   expert_weight_type - MoE routed expert weights
+    #
+    # The assignment order matters:
+    #   1. expert_weight_type = original weight_type (before any overrides)
+    #   2. GptOss override:   weight_type -> dtype  (attn + shared experts are fp16)
+    #   3. ffn_weight_type  = weight_type           (captures post-GptOss value)
+    #   4. Mixed AWQ override: weight_type -> dtype  (only attn becomes fp16)
+    #
+    #                  weight_type   ffn_weight_type   expert_weight_type
+    #  Pure fp16       float16       float16           float16
+    #  Full AWQ        int4          int4              int4
+    #  Mixed AWQ       float16       int4              int4
+    #  GptOss mxfp4    bfloat16      bfloat16          e2m1
+    ffn_weight_type = weight_type
+
     # When attention weights are not quantized (e.g. AWQ with self_attn in
-    # modules_to_not_convert), the non-expert weight_type must be fp16 so
-    # the C++ engine allocates fp16 ".weight" buffers that match the names
-    # the Python converter writes.  Only MoE experts keep int4 via
-    # expert_weight_type.
+    # modules_to_not_convert), weight_type becomes fp16 for attention.
+    # ffn_weight_type and expert_weight_type retain int4.
     if model_format in ['awq', 'gptq'] and weight_type != dtype:
         quant_config = getattr(model_config, 'quantization_config', None)
         if quant_config is None:
@@ -113,6 +129,7 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
     config.model_config.data_type = dtype
     config.model_config.weight_type = weight_type
     config.model_config.expert_weight_type = expert_weight_type
+    config.model_config.ffn_weight_type = ffn_weight_type
     config.model_config.model_format = model_format
     config.model_config.group_size = group_size
     config.model_config.session_len = session_len

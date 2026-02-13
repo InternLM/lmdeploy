@@ -125,52 +125,6 @@ class Ffn(Module):
             return
         keys = r.ffn(i, None)
 
-        # ========== Mixed-precision AWQ Support (TODO: move to C++ engine) ==========
-        # Workaround: When attention is fp16 but shared_experts are AWQ int4,
-        # TurboMind C++ engine allocates fp16 buffers (based on weight_type) but
-        # doesn't have code to load AWQ weights in this case. So we dequantize
-        # at conversion time as a temporary solution.
-        #
-        # Proper fix: Add expert_weight_type config and teach C++ to handle
-        # mixed-precision properly (keep int4, use int4 kernels).
-        # See: https://github.com/InternLM/lmdeploy/issues/XXXX
-        if keys and self.model.model_config.model_format == 'awq' and self.model.model_config.weight_type in [
-                'float16', 'bfloat16'] and any(k.endswith('.qweight') for k in keys):
-            try:
-                from lmdeploy.pytorch.backends.default.awq_modules import dequantize_gemm
-            except Exception:
-                dequantize_gemm = None
-
-            if dequantize_gemm is not None and hasattr(r, 'params'):
-                def _find_raw(suffix):
-                    for k in keys:
-                        if k.endswith(suffix):
-                            return r.params.get(k)
-                    return None
-
-                gs = self.group_size
-                qw1 = _find_raw('gate_proj.qweight')
-                qz1 = _find_raw('gate_proj.qzeros')
-                sc1 = _find_raw('gate_proj.scales')
-                qw2 = _find_raw('down_proj.qweight')
-                qz2 = _find_raw('down_proj.qzeros')
-                sc2 = _find_raw('down_proj.scales')
-                qw3 = _find_raw('up_proj.qweight')
-                qz3 = _find_raw('up_proj.qzeros')
-                sc3 = _find_raw('up_proj.scales')
-
-                if all(x is not None for x in (qw1, qz1, sc1, qw2, qz2, sc2, qw3, qz3, sc3)):
-                    qw1, qz1, sc1 = qw1.cuda(), qz1.cuda(), sc1.cuda()
-                    qw2, qz2, sc2 = qw2.cuda(), qz2.cuda(), sc2.cuda()
-                    qw3, qz3, sc3 = qw3.cuda(), qz3.cuda(), sc3.cuda()
-
-                    w1 = dequantize_gemm(qw1, qz1, sc1, 4, gs).t()
-                    w2 = dequantize_gemm(qw2, qz2, sc2, 4, gs).t()
-                    w3 = dequantize_gemm(qw3, qz3, sc3, 4, gs).t()
-                    self._export(self.inter_size[i], self._ffn, i, (w1, w2, w3), 'weight', identity)
-                    return
-        # ========== End AWQ workaround ==========
-
         for e in get_params(keys):
             e(partial(self._export, self.inter_size[i], self._ffn), partial(r.ffn, i), i)
 

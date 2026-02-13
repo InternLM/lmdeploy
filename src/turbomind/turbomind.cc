@@ -466,6 +466,8 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
 
     model_param_.weight_type        = data_type_from_string(model["weight_type"].as<std::string>());
     model_param_.expert_weight_type = data_type_from_string(model["expert_weight_type"].as<std::string>());
+    model_param_.ffn_weight_type    = data_type_from_string(
+        model["ffn_weight_type"].as<std::string>(model["weight_type"].as<std::string>()));
 
     if (auto method = get_moe_method()) {
         moe_param_.method = *method;
