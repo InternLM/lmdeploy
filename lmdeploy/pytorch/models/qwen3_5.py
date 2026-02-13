@@ -37,7 +37,7 @@ class Qwen3_5VisionPatchEmbed(nn.Module):
         self.in_channels = config.in_channels
         self.embed_dim = config.hidden_size
 
-        kernel_size = [self.temporal_patch_size, self.patch_size, self.patch_size]
+        kernel_size = (self.temporal_patch_size, self.patch_size, self.patch_size)
         self.proj = nn.Conv3d(self.in_channels,
                               self.embed_dim,
                               kernel_size=kernel_size,
@@ -367,10 +367,10 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         self.conv1d = CausalConv1d(
             in_channels=self.conv_dim,
             out_channels=self.conv_dim,
-            bias=False,
             kernel_size=self.conv_kernel_size,
-            groups=self.conv_dim,
             split=[self.key_dim, self.key_dim, self.value_dim],
+            bias=False,
+            groups=self.conv_dim,
             dtype=dtype,
             device=device,
         )
@@ -419,11 +419,11 @@ class Qwen3_5GatedDeltaNet(nn.Module):
 
         return self.A_log_exp
 
-    def make_params(self, num_v_heads: int, device: torch.device):
+    def make_params(self, num_v_heads: int, device: torch.device | None):
         tp, _ = get_tp_world_rank()
         num_v_heads = num_v_heads // tp
-        A = torch.empty(num_v_heads, device=device).uniform_(0, 16)
-        dt_bias = torch.empty(num_v_heads, device=device).uniform_(0, 1)
+        A = torch.empty(num_v_heads, device=device)
+        dt_bias = torch.empty(num_v_heads, device=device)
 
         self.register_parameter('A_log', nn.Parameter(torch.log(A)))
         self.register_parameter('dt_bias', nn.Parameter(dt_bias))
@@ -603,7 +603,7 @@ class Qwen3_5Attention(nn.Module):
         self,
         hidden_states: torch.Tensor,
         rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Tuple[torch.Tensor],
+        past_key_value: Tuple[torch.Tensor, torch.Tensor],
         attn_metadata: Any,
     ):
         """Rewrite of LlamaAttention.forward."""

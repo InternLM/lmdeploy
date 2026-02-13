@@ -49,10 +49,10 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         self.conv1d = CausalConv1d(
             in_channels=self.conv_dim,
             out_channels=self.conv_dim,
-            bias=False,
             kernel_size=self.conv_kernel_size,
-            groups=self.conv_dim,
             split=[self.key_dim, self.key_dim, self.value_dim],
+            bias=False,
+            groups=self.conv_dim,
             dtype=dtype,
             device=device,
         )
@@ -98,11 +98,11 @@ class Qwen3NextGatedDeltaNet(nn.Module):
 
         return self.A_log_exp
 
-    def make_params(self, num_v_heads: int, device: torch.device):
+    def make_params(self, num_v_heads: int, device: torch.device | None):
         tp, _ = get_tp_world_rank()
         num_v_heads = num_v_heads // tp
-        A = torch.empty(num_v_heads, device=device).uniform_(0, 16)
-        dt_bias = torch.empty(num_v_heads, device=device).uniform_(0, 1)
+        A = torch.empty(num_v_heads, device=device)
+        dt_bias = torch.empty(num_v_heads, device=device)
 
         self.register_parameter('A_log', nn.Parameter(torch.log(A)))
         self.register_parameter('dt_bias', nn.Parameter(dt_bias))
@@ -120,23 +120,26 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         `mixed_ba`."""
         # qkvz
         split_arg_list_qkvz = [
-            self.head_k_dim,
-            self.head_k_dim,
+            self.head_k_dim * 2,
             (self.kv_ratio * self.head_v_dim),
             (self.kv_ratio * self.head_v_dim),
         ]
         mixed_qkvz = mixed_qkvz.unflatten(-1, (-1, sum(split_arg_list_qkvz)))
-        query, key, value, z = torch.split(mixed_qkvz, split_arg_list_qkvz, dim=-1)
+        qk, value, z = torch.split(mixed_qkvz, split_arg_list_qkvz, dim=-1)
+        qk = qk.unflatten(-1, (2, self.head_k_dim))
+        qk = qk.transpose(-3, -2).flatten(-3, -1)
+        value = value.flatten(-2, -1)
+        mixed_qkv = torch.cat((qk, value), dim=-1)
         # [..., ng, np/ng * hn] -> [..., np, hn]
         z = z.reshape(*z.shape[:-2], -1, self.head_v_dim)
 
         # chunk_ba
         mixed_ba = mixed_ba.unflatten(-1, (-1, 2 * self.kv_ratio))
         b, a = mixed_ba.chunk(2, -1)
-        # [..., ng, np/ng * hn] -> [..., np, hn]
-        b = b.flatten(-2, -1)
-        a = a.flatten(-2, -1)
-        return query, key, value, z, b, a
+        # do sigmoid and float here to prevent contiguous kernel
+        b = b.sigmoid().flatten(-2, -1)
+        a = a.float().flatten(-2, -1)
+        return mixed_qkv, z, b, a
 
     def _load_state(self, past_key_value: Tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
         """Load states from cache."""
@@ -164,10 +167,8 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         # inputs proj
         projected_states_qkvz = self.in_proj_qkvz(hidden_states)
         projected_states_ba = self.in_proj_ba(hidden_states)
-        query, key, value, z, b, a = self.fix_query_key_value_ordering(projected_states_qkvz, projected_states_ba)
-        query, key, value = (x.flatten(-2, -1) for x in (query, key, value))
+        mixed_qkv, z, b, a = self.fix_query_key_value_ordering(projected_states_qkvz, projected_states_ba)
 
-        mixed_qkv = torch.cat((query, key, value), dim=-1)
         mixed_qkv, conv_state = self.conv1d(mixed_qkv, conv_state, gated_delta_meta=gated_delta_meta)
 
         tp = (self.key_dim * 2 + self.value_dim) // mixed_qkv.size(-1)
@@ -184,9 +185,9 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         key = key.unflatten(-1, (-1, self.head_k_dim))
         value = value.unflatten(-1, (-1, self.head_v_dim))
 
-        beta = b.sigmoid()
+        beta = b
         # If the model is loaded in fp16, without the .float() here, A might be -inf
-        g = self.get_A_log_exp() * F.softplus(a.float() + self.dt_bias)
+        g = self.get_A_log_exp() * F.softplus(a + self.dt_bias)
         if self.kv_ratio > 1:
             query = query.repeat_interleave(self.kv_ratio, dim=-2)
             key = key.repeat_interleave(self.kv_ratio, dim=-2)

@@ -1,9 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Any, Tuple
+from typing import Any, Sequence, Tuple
 
 import torch
 from torch import nn
+from torch.profiler import record_function
 
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader
@@ -94,6 +95,7 @@ class CausalConv1dFunc:
         out = self.causal_conv1d_update(x[0], conv_state, weight, bias, activation=self.activation)
         return out[None], conv_state
 
+    @record_function('causal_conv1d')
     def __call__(
         self,
         x: torch.Tensor,
@@ -170,11 +172,11 @@ class CausalConv1d(nn.Module):
         in_channels: int,
         out_channels: int,
         kernel_size: int | Tuple[int],
+        split: Sequence[int],
         groups: int = 1,
         bias: bool = True,
-        split=None,
-        device=None,
-        dtype=None,
+        device: str | torch.device | None = None,
+        dtype: torch.dtype | None = None,
     ):
         super().__init__()
         tp, rank = get_tp_world_rank()
@@ -186,7 +188,7 @@ class CausalConv1d(nn.Module):
         assert len(split) == 3
         self.split = split
 
-        weight, bias = self.make_weight(
+        weight, w_bias = self.make_weight(
             in_channels,
             out_channels,
             kernel_size=kernel_size,
@@ -196,7 +198,7 @@ class CausalConv1d(nn.Module):
             dtype=dtype,
         )
 
-        self.register_weight(weight, bias)
+        self.register_weight(weight, w_bias)
         self.causal_conv1d_func = CausalConv1dFunc(activation='silu')
 
     @staticmethod
@@ -206,8 +208,8 @@ class CausalConv1d(nn.Module):
         kernel_size: int | Tuple[int],
         groups: int = 1,
         bias: bool = True,
-        device=None,
-        dtype=None,
+        device: str | torch.device | None = None,
+        dtype: torch.dtype | None = None,
     ):
         weight_shape = (out_channels, in_channels // groups,
                         kernel_size if isinstance(kernel_size, int) else kernel_size[0])
@@ -215,16 +217,16 @@ class CausalConv1d(nn.Module):
 
         weight = torch.empty(weight_shape, device=device, dtype=dtype)
         if bias_shape is not None:
-            bias = torch.empty(bias_shape, device=device, dtype=dtype)
+            w_bias = torch.empty(bias_shape, device=device, dtype=dtype)
         else:
-            bias = None
-        return weight, bias
+            w_bias = None
+        return weight, w_bias
 
-    def register_weight(self, weight: torch.Tensor, bias: torch.Tensor | None = None):
+    def register_weight(self, weight: torch.Tensor, w_bias: torch.Tensor | None = None):
         self.register_parameter('weight', nn.Parameter(weight))
         self.weight.weight_loader = self.weight_loader
-        if bias is not None:
-            self.register_parameter('bias', nn.Parameter(bias))
+        if w_bias is not None:
+            self.register_parameter('bias', nn.Parameter(w_bias))
             self.bias.weight_loader = self.weight_loader
         else:
             self.register_parameter('bias', None)
@@ -243,6 +245,7 @@ class CausalConv1d(nn.Module):
         return self.causal_conv1d_func(x, self.weight, self.bias, conv_state, gated_delta_meta=gated_delta_meta)
 
 
+@record_function('gated_delta_load_state')
 def load_state(past_key_value: Tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
     """Load states from cache."""
     state_ids = gated_delta_meta.state_ids
@@ -251,6 +254,7 @@ def load_state(past_key_value: Tuple[torch.Tensor, torch.Tensor], gated_delta_me
     return conv_cache.index_select(0, state_ids), recurrent_cache.index_select(0, state_ids)
 
 
+@record_function('gated_delta_store_state')
 def store_state(conv_state: torch.Tensor, recurrent_state: torch.Tensor,
                 past_key_value: Tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
     """Store states to cache."""
