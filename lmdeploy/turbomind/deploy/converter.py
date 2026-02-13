@@ -53,8 +53,10 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
     if dtype == 'auto':
         # pick dtype by device as default
         dtype = 'bfloat16' if has_bf16 else 'float16'
-        # dtype from model
-        torch_dtype = getattr(model_config, 'torch_dtype', None)
+        # dtype from model (prefer `dtype` over deprecated `torch_dtype`)
+        torch_dtype = getattr(model_config, 'dtype', None)
+        if torch_dtype is None:
+            torch_dtype = getattr(model_config, 'torch_dtype', None)
         if not torch_dtype:
             if model_arch in ['QWenLMHeadModel', 'GptOssForCausalLM']:
                 torch_dtype = torch.bfloat16
@@ -91,10 +93,43 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
     if model_arch == 'GptOssForCausalLM':
         weight_type = dtype
 
+    # Three weight types control allocation for mixed quantization:
+    #   weight_type        - attention weights
+    #   ffn_weight_type    - dense FFN / shared expert weights
+    #   expert_weight_type - MoE routed expert weights
+    #
+    # The assignment order matters:
+    #   1. expert_weight_type = original weight_type (before any overrides)
+    #   2. GptOss override:   weight_type -> dtype  (attn + shared experts are fp16)
+    #   3. ffn_weight_type  = weight_type           (captures post-GptOss value)
+    #   4. Mixed AWQ override: weight_type -> dtype  (only attn becomes fp16)
+    #
+    #                  weight_type   ffn_weight_type   expert_weight_type
+    #  Pure fp16       float16       float16           float16
+    #  Full AWQ        int4          int4              int4
+    #  Mixed AWQ       float16       int4              int4
+    #  GptOss mxfp4    bfloat16      bfloat16          e2m1
+    ffn_weight_type = weight_type
+
+    # When attention weights are not quantized (e.g. AWQ with self_attn in
+    # modules_to_not_convert), weight_type becomes fp16 for attention.
+    # ffn_weight_type and expert_weight_type retain int4.
+    if model_format in ['awq', 'gptq'] and weight_type != dtype:
+        quant_config = getattr(model_config, 'quantization_config', None)
+        if quant_config is None:
+            quant_config = {}
+        if isinstance(quant_config, dict):
+            modules_to_not_convert = quant_config.get('modules_to_not_convert') or []
+        else:
+            modules_to_not_convert = getattr(quant_config, 'modules_to_not_convert', None) or []
+        if any('self_attn' in m for m in modules_to_not_convert):
+            weight_type = dtype
+
     config.model_config.model_arch = model_arch
     config.model_config.data_type = dtype
     config.model_config.weight_type = weight_type
     config.model_config.expert_weight_type = expert_weight_type
+    config.model_config.ffn_weight_type = ffn_weight_type
     config.model_config.model_format = model_format
     config.model_config.group_size = group_size
     config.model_config.session_len = session_len
@@ -125,6 +160,7 @@ def get_tm_model(model_path,
     """
     _, cfg = get_model_arch(model_path)
     quant_config = search_nested_config(cfg.to_dict(), 'quantization_config')
+    mixed_awq = False
     if quant_config:
         quant_method = quant_config.get('quant_method')
         _group_size = int(quant_config.get('group_size', 0))
@@ -137,6 +173,9 @@ def get_tm_model(model_path,
 
         if quant_method == 'awq':
             assert version == 'gemm', f'unsupported quant config: {quant_config}'
+            modules_to_not_convert = quant_config.get('modules_to_not_convert') or []
+            if any('self_attn' in name for name in modules_to_not_convert):
+                mixed_awq = True
         elif quant_method == 'gptq':
             assert not quant_config.get('desc_act', False) and quant_config.get(
                 'sym', True), f'unsupported quant config: {quant_config}'
@@ -178,6 +217,12 @@ def get_tm_model(model_path,
                                                                             model_format=engine_config.model_format,
                                                                             dtype=engine_config.dtype,
                                                                             group_size=group_size)
+
+    if mixed_awq:
+        # Mixed-precision AWQ: attention weights are fp16 (not quantized),
+        # but expert weights remain as int4 AWQ for efficient inference.
+        tm_cfg.model_config.weight_type = tm_cfg.model_config.data_type
+        # expert_weight_type stays as 'int4' (set by get_output_model_registered_name_and_config)
 
     tm_cfg.model_config.chat_template = chat_template_name
     tm_cfg.model_config.model_name = model_name

@@ -68,6 +68,7 @@ LlamaDecoderLayerWeight::LlamaDecoderLayerWeight(
     mlp_tp_size_(engine.mlp_tp_size),
     mlp_tp_rank_(engine.mlp_tp_rank)
 {
+    // Attention uses weight_type (fp16 in mixed quant scenarios)
     self_attn_weights.reset(new LlamaAttentionWeight{hidden_units_,
                                                      size_per_head_,
                                                      head_num_,
@@ -84,8 +85,16 @@ LlamaDecoderLayerWeight::LlamaDecoderLayerWeight(
                                                      model.attn_sink});
     register_module("attention", *self_attn_weights);
 
+    // Dense layers (no MoE) use weight_type for FFN, since models like
+    // GLM-4.7-Flash-AWQ exclude the entire dense layer from quantization
+    // ("model.layers.0." in modules_to_not_convert).  MoE layers use
+    // ffn_weight_type for their shared experts (int4 for mixed AWQ,
+    // bfloat16 for GptOss mxfp4, same as weight_type otherwise).
     if (inter_size_) {
-        const bool is_cublas_gemm = byte_size(weight_type_, 8) == 16;
+        const bool is_moe_layer = layer_id < (int)moe_param.expert_num.size()
+                                  && moe_param.expert_num[layer_id];
+        const DataType ffn_wtype = is_moe_layer ? model.ffn_weight_type : weight_type_;
+        const bool     is_cublas_gemm = byte_size(ffn_wtype, 8) == 16;
         ffn_weights.reset(new LlamaFfnWeight{
             hidden_units_,
             inter_size_,
@@ -93,7 +102,7 @@ LlamaDecoderLayerWeight::LlamaDecoderLayerWeight(
             mlp_tp_size_,
             mlp_tp_rank_,
             data_type_,
-            weight_type_,
+            ffn_wtype,
             model.group_size,
             model.act_type,
             is_fuse_silu_act() && !is_cublas_gemm,
@@ -101,6 +110,7 @@ LlamaDecoderLayerWeight::LlamaDecoderLayerWeight(
         register_module("feed_forward", *ffn_weights);
     }
 
+    // MoE routed experts use expert_weight_type (int4 for AWQ, e2m1 for mxfp4)
     if (layer_id < moe_param.expert_num.size() && moe_param.expert_num[layer_id]) {
         moe_weights.reset(new MoeFfnWeight{layer_id,
                                            moe_param,

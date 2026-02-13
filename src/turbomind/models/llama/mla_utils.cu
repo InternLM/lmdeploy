@@ -27,33 +27,37 @@ __global__ void mla_copy_qkv_kernel(T*       qkv,
 
     const int kv_b_dim = nope_dim + v_head_dim;
 
-    // for (int hi = threadIdx.y; hi < head_num; hi += blockDim.y) {
-    const int          hi = threadIdx.y;
-    Array<T, vec_size> data{};
-    if (type == 0) {  // Q
-        if (di * vec_size < rope_dim) {
-            Ldg(data, &q[ti * head_num * head_dim + hi * head_dim + nope_dim + di * vec_size]);
+    for (int hi = threadIdx.y; hi < head_num; hi += blockDim.y) {
+        Array<T, vec_size> data;
+        if (type == 0) {  // Q
+            if (di * vec_size < rope_dim) {
+                Ldg(data, &q[ti * head_num * head_dim + hi * head_dim + nope_dim + di * vec_size]);
+            }
+            else {
+                Ldg(data, &q[ti * head_num * head_dim + hi * head_dim + di * vec_size - rope_dim]);
+            }
         }
-        else {
-            Ldg(data, &q[ti * head_num * head_dim + hi * head_dim + di * vec_size - rope_dim]);
+        else if (type == 1) {  // K
+            if (di * vec_size < rope_dim) {
+                Ldg(data, &kv_a[ti * (kv_lora_rank + rope_dim) + kv_lora_rank + di * vec_size]);
+            }
+            else {
+                Ldg(data, &kv_b[ti * head_num * kv_b_dim + hi * kv_b_dim + di * vec_size - rope_dim]);
+            }
         }
+        else {  // V
+            if (di * vec_size < v_head_dim) {
+                Ldg(data, &kv_b[ti * head_num * kv_b_dim + hi * kv_b_dim + nope_dim + di * vec_size]);
+            }
+            else {
+                for (int i = 0; i < vec_size; ++i) {
+                    data[i] = T(0);
+                }
+            }
+        }
+        const int stride = 3 * head_num * head_dim;
+        Store(&qkv[ti * stride + type * head_num * head_dim + hi * head_dim + di * vec_size], data);
     }
-    else if (type == 1) {  // K
-        if (di * vec_size < rope_dim) {
-            Ldg(data, &kv_a[ti * (kv_lora_rank + rope_dim) + kv_lora_rank + di * vec_size]);
-        }
-        else {
-            Ldg(data, &kv_b[ti * head_num * kv_b_dim + hi * kv_b_dim + di * vec_size - rope_dim]);
-        }
-    }
-    else {  // V
-        if (di * vec_size < v_head_dim) {
-            Ldg(data, &kv_b[ti * head_num * kv_b_dim + hi * kv_b_dim + nope_dim + di * vec_size]);
-        }
-    }
-    const int stride = 3 * head_num * head_dim;
-    Store(&qkv[ti * stride + type * head_num * head_dim + hi * head_dim + di * vec_size], data);
-    // }
 }
 
 template<class T>

@@ -8,6 +8,7 @@
 #include "impl_16816.h"
 #include "impl_1688.h"
 #include "impl_884.h"
+#include "impl_simt.h"
 #include "linear_iterator.h"
 #include "mainloop_sm70.h"
 #include "mainloop_sm80.h"
@@ -70,6 +71,24 @@ struct AttentionConfig<arch::Sm75, T, HeadDim, Ctype>: Base_64x64_16x64 {
     using Attention = Impl<MMA_1688, T, T, 1, CTA_Q, CTA_S, 1, WARP_Q, WARP_S, HeadDim, 2>;
     using CacheIter = GetCacheIterFactory<Ctype, T, CTA_S, HeadDim>;
     using Kernel    = AttentionUniversal<arch::Sm75, Mainloop<arch::Sm70, Attention>, CacheIter, AttentionCtaMap>;
+};
+
+template<class T, CacheType Ctype>
+struct AttentionConfig<arch::Sm70, T, 576, Ctype> {
+    // MMA_884 config for Volta V100 with HeadDim=576 (GLM-4.7-Flash)
+    // CTA_Q=64 with WARP_Q=16 gives 4 warps (matching the generic Sm70 config),
+    // maximizing tensor core utilization and latency hiding.
+    // CTA_S=32 (reduced from 64 to fit shared memory with HeadDim=576).
+    // Shared memory: max(Q=64×580×2=72.5KB, K+V+P=32×580×2+32×576×2+64×36×2=76.8KB)
+    //              = 76.8KB < 96KB V100 limit
+    static constexpr int CTA_Q  = 64;
+    static constexpr int CTA_S  = 32;
+    static constexpr int WARP_Q = 16;
+    static constexpr int WARP_S = 32;
+
+    using Attention = Impl<MMA_884, T, T, 1, CTA_Q, CTA_S, 1, WARP_Q, WARP_S, 576, 2>;
+    using CacheIter = GetCacheIterFactory<Ctype, T, CTA_S, 576>;
+    using Kernel    = AttentionUniversal<arch::Sm70, Mainloop<arch::Sm70, Attention>, CacheIter, AttentionCtaMap>;
 };
 
 template<class T, int HeadDim, CacheType Ctype>

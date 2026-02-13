@@ -67,6 +67,15 @@ struct DecodingConfig<arch::Sm75, T, Tkv, Qh_, HeadDim> {
 
 //////////////////////////////////////////////////////////////
 
+template<class T, class Tkv, int Qh>
+struct DecodingConfig<arch::Sm70, T, Tkv, Qh, 576> {
+    // CTA_S reduced from 64 to 32 so shared memory fits within V100's 96 KB limit.
+    static constexpr int kH = Qh % 3 == 0 ? 3 : (Qh % 2 == 0 ? 2 : 1);
+    using Attention         = Impl<MMA_SIMT, T, Tkv, kH, 1, 32, kH, 1, 16, 576, 2>;
+    using CacheIter         = GetBlockIterFactory<T, Tkv, 32, 576>;
+    using Kernel = AttentionUniversal<arch::Sm70, Mainloop<arch::Sm70, Attention>, CacheIter, DecodingCtaMap>;
+};
+
 template<class T, class Tkv, int Qh, int HeadDim>
 struct DecodingConfig<arch::Sm70, T, Tkv, Qh, HeadDim> {
     // Qh >= 4 is not beneficial for sm_70

@@ -67,6 +67,7 @@ class ModelConfig:
     data_type: str = None
     weight_type: str = None
     expert_weight_type: str = None
+    ffn_weight_type: str = None
     session_len: int = None
     attn_tp_size: int = 1
     attn_cp_size: int = 1
@@ -83,6 +84,8 @@ class ModelConfig:
     topk_group: int = 1
     topk_method: str = 'greedy'
     moe_group_num: int = 1
+    scoring_func: str = 'softmax'
+    router_n_groups: int = -1
     # MLA
     q_lora_rank: int = 0
     kv_lora_rank: int = 0
