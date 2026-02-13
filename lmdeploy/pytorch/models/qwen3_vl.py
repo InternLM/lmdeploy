@@ -9,8 +9,9 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS, dynamic_rope_update
 
-from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor
+from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
+from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
 from lmdeploy.pytorch.nn import LayerNorm
 from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_rowwise_linear
 from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters
@@ -18,7 +19,6 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .patch import add_prefix
 from .qwen2_5_vl import Qwen2_5_VisionRotaryEmbedding as Qwen3VLVisionRotaryEmbedding
-from .qwen2_5_vl import Qwen2_5_VLInputProcessor as Qwen3VLInputProcessor
 from .qwen2_5_vl import Qwen2_5_VLVisionAttention as Qwen3VLVisionAttention
 from .qwen3 import Qwen3model
 from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
@@ -637,13 +637,23 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
         pos_embeds = None
         if context.input_multimodals is not None:
             image_data = [input_mm.get('image', []) for input_mm in context.input_multimodals]
-            if len(image_data) > 0:
-                # flatten batch
-                image_data = [data for im_data in image_data for data in im_data]
-                pixel_values = torch.cat([data.data for data in image_data])
-                image_token_id = image_data[0].meta['image_token_id']
+            video_data = [input_mm.get('video', []) for input_mm in context.input_multimodals]
+
+            visual_data = []
+            if len(image_data) > 0 and len(image_data[0]) > 0:
+                visual_data = [data for im_data in image_data for data in im_data]
+                image_token_id = visual_data[0].meta['image_token_id']
                 image_mask = input_ids == image_token_id
-                grid_thw = torch.cat([data.meta['grid_thw'] for data in image_data]).cpu()
+            elif len(video_data) > 0 and len(video_data[0]) > 0:
+                visual_data = [data for vid_data in video_data for data in vid_data]
+                video_token_id = visual_data[0].meta['video_token_id']
+                image_mask = input_ids == video_token_id
+
+            if len(visual_data) > 0:
+                pixel_values = torch.cat([data.data for data in visual_data])
+                # images: this is the original grid
+                # videos: this is t rows of [1, h, w]
+                grid_thw = torch.cat([data.meta['grid_thw'] for data in visual_data]).cpu()
                 vis_pos_emb = self.visual.rot_pos_emb(grid_thw)
                 pos_embeds = self.visual.fast_pos_embed_interpolate(grid_thw)
                 vis_cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2],
@@ -802,9 +812,11 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
         mrope_position_ids = []
         new_model_metas = []
         for pos_ids, model_meta, input_mm in zip(batched_pos_ids, model_metas, input_multimodals):
-            images = []
+            visual_items = []
             if input_mm is not None:
-                images = input_mm.get('image', [])
+                visual_items.extend(input_mm.get('image', []))
+                visual_items.extend(input_mm.get('video', []))
+
             if model_meta is None or 'mrope_delta' not in model_meta:
                 mrope_delta = 0
             else:
@@ -813,19 +825,53 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
             pos_start = pos_ids[0].item()
             mrope_pos_ids = pos_ids + mrope_delta
             mrope_pos_ids = mrope_pos_ids[None].expand(3, -1).clone()
-            for img in images:
-                grid_thw = img.meta['grid_thw'][0].tolist()
-                _, h, w = grid_thw
-                h //= 2
-                w //= 2
-                num_pad = img.end - img.start - max(h, w)
+
+            for item in visual_items:
+                item_grid_thw = item.meta['grid_thw']
+
+                # process each frame/image in the grid
+                # For images: 1 row
+                # For videos: T rows (each frame is treated separately)
+                for frame_idx in range(item_grid_thw.shape[0]):
+                    frame_grid = item_grid_thw[frame_idx].tolist()  # [t, h, w] where t=1
+                    t, h, w = frame_grid
+
+                    # calculate merged dimensions (spatial_merge_size = 2)
+                    h_merged = h // 2
+                    w_merged = w // 2
+
+                    # total tokens for this frame
+                    num_frame_tokens = t * h_merged * w_merged
+
+                    # calculate position ids for this frame
+                    frame_pos_ids = self._get_multimodal_pos_ids(frame_grid, pos_ids.device)
+
+                    # calculate fill positions
+                    # for the first frame, use item.start; for subsequent frames, calculate based on previous frames
+                    if frame_idx == 0:
+                        fill_start = item.start - pos_start
+                    else:
+                        # calculate start based on previous frames
+                        prev_frames_tokens = frame_idx * num_frame_tokens
+                        fill_start = (item.start - pos_start) + prev_frames_tokens
+
+                    fill_end = fill_start + num_frame_tokens
+
+                    # add position offset
+                    frame_pos_ids += mrope_pos_ids[:, fill_start:fill_start + 1]
+
+                    # update position ids
+                    mrope_pos_ids[:, fill_start:fill_end] = frame_pos_ids
+
+                # calculate padding for the entire visual item (all frames)
+                total_visual_tokens = item_grid_thw.shape[0] * (item_grid_thw[0, 1].item() //
+                                                                2) * (item_grid_thw[0, 2].item() // 2)
+                num_pad = (item.end - item.start) - total_visual_tokens
                 mrope_delta -= num_pad
-                fill_start = img.start - pos_start
-                fill_end = img.end - pos_start
-                img_pos_ids = self._get_multimodal_pos_ids(grid_thw, pos_ids.device)
-                img_pos_ids += mrope_pos_ids[:, fill_start:fill_start + 1]
-                mrope_pos_ids[:, fill_end:] -= num_pad
-                mrope_pos_ids[:, fill_start:fill_end] = img_pos_ids
+
+                # update position ids after the visual item
+                visual_end = item.end - pos_start
+                mrope_pos_ids[:, visual_end:] -= num_pad
 
             mrope_position_ids.append(mrope_pos_ids)
             new_model_metas.append(dict(mrope_delta=mrope_delta))
@@ -851,3 +897,75 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
 
 
 InputMultiModalType = List[Dict[str, Any]]
+
+
+class Qwen3VLInputProcessor(BaseModelInputProcessor):
+    """Qwen3 input processor."""
+
+    def __init__(self, config: PretrainedConfig) -> None:
+        self.config = config
+
+    def preprocess_input(self,
+                         input_ids: List[int],
+                         input_multimodals: List[Dict[str, Any]] = None,
+                         **kwargs) -> PreprocessInputResult:
+        """Prepare multimodal input."""
+        if input_multimodals is None or len(input_multimodals) == 0:
+            return input_ids, input_multimodals
+
+        input_mm_data = []
+        is_video = False
+        for input_mm in input_multimodals:
+            if 'pixel_values_videos' in input_mm:
+                is_video = True
+                # FIXME: zhouxinyu, input_mm is currently not a dict but a BatchFeature object
+                pixel_values_videos = input_mm.pixel_values_videos
+                video_grid_thw = input_mm.video_grid_thw
+                offset = input_mm.offset
+                start = offset
+                video_token_id = input_mm.video_token_id
+                num_pad = input_mm.video_tokens
+                if isinstance(num_pad, torch.Tensor):
+                    num_pad = num_pad.item()
+
+                # since we use timestamps to separate videos
+                # like <t1> <vision_start> <frame1> <vision_end> <t2> <vision_start> <frame2> <vision_end>
+                # the video_grid_thw should also be split
+                video_grid_thw = torch.repeat_interleave(video_grid_thw, video_grid_thw[:, 0], dim=0)
+                video_grid_thw[:, 0] = 1
+
+                mm_data = MultiModalTensor(data=pixel_values_videos,
+                                           start=start,
+                                           end=start + num_pad,
+                                           meta=dict(
+                                               grid_thw=video_grid_thw,
+                                               video_token_id=video_token_id,
+                                           ))
+            else:
+                pixel_values = input_mm['pixel_values']
+                image_grid_thw = input_mm['image_grid_thw']
+                offset = input_mm['offset']
+                start = offset
+                image_token_id = input_mm['image_token_id']
+                num_pad = input_mm['image_tokens']
+                if isinstance(num_pad, torch.Tensor):
+                    num_pad = num_pad.item()
+
+                mm_data = MultiModalTensor(data=pixel_values,
+                                           start=start,
+                                           end=start + num_pad,
+                                           meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
+            input_mm_data.append(mm_data)
+
+        if is_video:
+            result = PreprocessInputResult(
+                input_ids=input_ids,
+                input_multimodals=dict(video=input_mm_data),
+            )
+        else:
+            result = PreprocessInputResult(
+                input_ids=input_ids,
+                input_multimodals=dict(image=input_mm_data),
+            )
+
+        return result

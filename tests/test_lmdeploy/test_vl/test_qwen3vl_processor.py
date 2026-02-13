@@ -2,8 +2,8 @@ import copy
 
 import pytest
 
+from lmdeploy.vl.image_utils import load_image
 from lmdeploy.vl.model.qwen3 import Qwen3VLModel
-from lmdeploy.vl.utils import load_image
 
 QWEN3VL_MODELS = [
     'Qwen/Qwen3-VL-4B-Instruct',

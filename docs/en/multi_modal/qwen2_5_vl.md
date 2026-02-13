@@ -99,7 +99,7 @@ import numpy as np
 from lmdeploy import pipeline, GenerationConfig
 from decord import VideoReader, cpu
 from lmdeploy.vl.constants import IMAGE_TOKEN
-from lmdeploy.vl.utils import encode_image_base64
+from lmdeploy.vl.image_utils import encode_image_base64
 from PIL import Image
 pipe = pipeline('Qwen/Qwen2.5-VL-7B-Instruct', log_level='INFO')
 
