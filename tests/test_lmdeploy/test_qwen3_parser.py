@@ -358,3 +358,48 @@ def test_no_think_nonstream():
     first_message = resp.choices[0].message
     assert first_message.content == '你好呀！✨ 很高兴见到你！'
     assert first_message.reasoning_content is None
+
+
+THINK_START_SEQUENCE = ['<think>', '\n']
+TRUNCATED_SEQUENCE = ['OK', ', ', 'user', ' ', 'sends']
+
+
+@pytest.mark.parametrize(
+    'sequence, expected_content, expected_reasoning_content',
+    [
+        # without think start token
+        (TRUNCATED_SEQUENCE, ''.join(TRUNCATED_SEQUENCE), None),
+        # with think start token
+        (THINK_START_SEQUENCE + TRUNCATED_SEQUENCE, None, ''.join(TRUNCATED_SEQUENCE)),
+    ])
+def test_truncated_think_nonstream(sequence, expected_content, expected_reasoning_content):
+
+    tokenizer = DummyTokenizer()
+    VariableInterface.tool_parser = Qwen3ToolParser(tokenizer=tokenizer)
+    VariableInterface.reasoning_parser = QwenQwQReasoningParser(tokenizer=tokenizer)
+    req = ChatCompletionRequest(model='qwen', messages=[], stream=False)
+    resp: ChatCompletionResponse = _chat_completion_v1(req, sequence)
+
+    assert len(resp.choices) == 1
+    first_message = resp.choices[0].message
+    assert first_message.content == expected_content
+    assert first_message.reasoning_content == expected_reasoning_content
+
+
+@pytest.mark.parametrize(
+    'sequence, expected_content, expected_reasoning_content',
+    [
+        # without think start token
+        (TRUNCATED_SEQUENCE, ''.join(TRUNCATED_SEQUENCE), ''),
+        # with think start token
+        (THINK_START_SEQUENCE + TRUNCATED_SEQUENCE, '', ''.join(TRUNCATED_SEQUENCE)),
+    ])
+def test_truncated_think_stream(sequence, expected_content, expected_reasoning_content):
+    tokenizer = DummyTokenizer()
+    VariableInterface.tool_parser = Qwen3ToolParser(tokenizer=tokenizer)
+    VariableInterface.reasoning_parser = QwenQwQReasoningParser(tokenizer=tokenizer)
+    req = ChatCompletionRequest(model='qwen', messages=[], stream=True)
+    content, reasoning_content, tool_calls = _stream_parse(req, sequence)
+
+    assert content == expected_content
+    assert reasoning_content.lstrip() == expected_reasoning_content
