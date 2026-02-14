@@ -286,6 +286,28 @@ class FusedLogitsProcessor:
     def sampling(self, logits: torch.Tensor):
         """sampling."""
         sampling_inputs = self.sampling_inputs
+        
+        def _softmax_scores(scores: torch.Tensor):
+            """softmax scores."""
+            # if score has inf, replace it with max or min finite value, then do softmax
+            if torch.isinf(scores).any():
+                dtype = scores.dtype
+                
+                if dtype in [torch.float16, torch.float32, torch.float64]:
+                    max_finite_value = torch.finfo(dtype).max
+                    min_finite_value = torch.finfo(dtype).min
+                elif dtype in [torch.int8, torch.int16, torch.int32, torch.int64]:
+                    max_finite_value = torch.iinfo(dtype).max
+                    min_finite_value = torch.iinfo(dtype).min
+                else:
+                    raise TypeError("Unsupported data type")
+
+                device = scores.device
+                
+                scores = torch.where(scores == float('inf'), torch.tensor(max_finite_value, dtype=dtype, device=device), scores)
+                scores = torch.where(scores == float('-inf'), torch.tensor(min_finite_value, dtype=dtype, device=device), scores)
+            softmax_scores = scores.softmax(dim=1)
+            return softmax_scores
 
         def __random_sampling(scores: torch.Tensor, indices: torch.LongTensor):
             """Random sampling."""
@@ -307,7 +329,7 @@ class FusedLogitsProcessor:
             if min_p is not None:
                 scores = _filter_minp_sorted_(scores, min_p)
 
-            softmax_scores = scores.softmax(1)
+            softmax_scores = _softmax_scores(scores)
 
             seeds = sampling_inputs.random_seeds
             offsets = sampling_inputs.random_offsets
