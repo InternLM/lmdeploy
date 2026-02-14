@@ -89,6 +89,7 @@ LMDeploy 工具箱提供以下核心功能：
    :caption: 测试基准
 
    benchmark/benchmark.md
+   benchmark/deepseekv3.md
    benchmark/evaluate_with_opencompass.md
    benchmark/evaluate_with_vlmevalkit.md
 
