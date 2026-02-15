@@ -187,7 +187,7 @@ void ApplyRepetitionPenalty(Tensor&               logits,
         if (smem_size > (48 << 10)) {
             TM_CHECK_EQ(cudaFuncSetAttribute(func, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size), 0);
         }
-        TM_LOG_ERROR("smem_size = %d", smem_size);
+        TM_LOG_DEBUG("smem_size = %d", smem_size);
         func<<<bsz, 1024, smem_size, stream>>>(
             logits.data<T>(), penalties.data(), token_ids_ptrs.data(), sequence_length.data(), vocab_size, mask_size);
     };
