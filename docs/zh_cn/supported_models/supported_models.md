@@ -85,7 +85,7 @@
 |             QWen2              |   0.5B - 72B    | LLM  |    Yes    |   Yes   |   No    | Yes  |  Yes  |
 |            Qwen2.5             |   0.5B - 72B    | LLM  |    Yes    |   Yes   |   No    | Yes  |  Yes  |
 |             Qwen3              |   0.6B - 235B   | LLM  |    Yes    |   Yes   |  Yes\*  |  -   |  Yes  |
-|            QWen3.5             |        ?        | MLLM |    Yes    |   No    |   No    |  No  |  No   |
+|            QWen3.5             |      397B       | MLLM |    Yes    |   No    |   No    |  No  |  No   |
 |           QWen3-Next           |       80B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |            QWen2-VL            |     2B, 7B      | MLLM |    Yes    |   Yes   |   No    |  No  |  Yes  |
 |           QWen2.5-VL           |    3B - 72B     | MLLM |    Yes    |   No    |   No    |  No  |  No   |
