@@ -26,6 +26,7 @@ ______________________________________________________________________
 <details open>
 <summary><b>2026</b></summary>
 
+- \[2026/02\] Support [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35)
 - \[2026/02\] Support [vllm-project/llm-compressor](https://github.com/vllm-project/llm-compressor) 4bit symmetric/asymmetric quantization. Refer [here](./docs/en/quantization/llm_compressor.md) for detailed guide
 
 </details>

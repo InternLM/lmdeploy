@@ -26,6 +26,7 @@ ______________________________________________________________________
 <details open>
 <summary><b>2026</b></summary>
 
+- \[2026/02\] 支持 [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35)
 - \[2026/02\] 支持 [vllm-project/llm-compressor](https://github.com/vllm-project/llm-compressor) 4bit 对称和非对称量化。 具体操作指南详见[此处](./docs/zh_cn/quantization/llm_compressor.md)
 
 </details>
