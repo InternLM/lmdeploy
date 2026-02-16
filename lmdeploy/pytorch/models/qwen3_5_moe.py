@@ -223,6 +223,8 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
     def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
                              expert_params_mapping: List):
         """Load weight experts."""
+        # this func is not used, but it has same layout with tranformers implementation
+        # so I will keep it for now.
         # load fused weights
         for (param_name, weight_name, expert_id, shard_id) in expert_params_mapping:
             if weight_name not in name:
@@ -234,6 +236,29 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
         else:
             param = params_dict[name]
             load_weight(param, loaded_weight)
+
+    def _load_weight_fused_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter]):
+        """Load weight of fused expert weights."""
+        num_experts = self.config.text_config.num_experts
+        fused_gateup_name = 'gate_up_proj'
+        fused_down_name = 'down_proj'
+        if fused_gateup_name in name:
+
+            for expert_id in range(num_experts):
+                param_name = name.replace(f'experts.{fused_gateup_name}', 'experts.gate_up.weight')
+                param = params_dict[param_name]
+                weight = loaded_weight[expert_id]
+                w1, w3 = weight.chunk(2, 0)
+                load_weight(param, w1, expert_id=expert_id, shard_id='gate')
+                load_weight(param, w3, expert_id=expert_id, shard_id='up')
+
+        elif fused_down_name in name:
+
+            for expert_id in range(num_experts):
+                param_name = name.replace(f'experts.{fused_down_name}', 'experts.down.weight')
+                param = params_dict[param_name]
+                w2 = loaded_weight[expert_id]
+                load_weight(param, w2, expert_id=expert_id, shard_id='down')
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         """Load weights."""
@@ -288,7 +313,7 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
                 continue
 
             if '.experts' in name and '.shared_expert' not in name:
-                self._load_weight_experts(name, loaded_weight, params_dict, expert_params_mapping=expert_params_mapping)
+                self._load_weight_fused_experts(name, loaded_weight, params_dict)
             else:
                 for (param_name, weight_name, shard_id) in stacked_params_mapping:
                     if weight_name not in name:
