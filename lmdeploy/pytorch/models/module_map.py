@@ -166,6 +166,18 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_vl_moe.Qwen3VLMoeForConditionalGeneration',
 })
 
+# qwen3.5
+MODULE_MAP.update({
+    'Qwen3_5ForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_5.Qwen3_5ForConditionalGeneration',
+})
+
+# qwen3.5 moe
+MODULE_MAP.update({
+    'Qwen3_5MoeForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_5_moe.Qwen3_5MoeForConditionalGeneration',
+})
+
 # starcoder2
 MODULE_MAP.update({
     'Starcoder2ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.starcoder2.Starcoder2ForCausalLM',

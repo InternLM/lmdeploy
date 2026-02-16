@@ -18,9 +18,9 @@ class RMSNorm(nn.Module):
         self,
         hidden_size: int,
         eps: float = 1e-6,
-        dtype: torch.dtype = None,
-        device: torch.device = None,
-        quant_config: Dict = None,
+        dtype: torch.dtype | None = None,
+        device: torch.device | None = None,
+        quant_config: Dict | None = None,
         tp: bool = False,
         align: int = 1,
         prefix: str = '',
@@ -61,7 +61,7 @@ class RMSNorm(nn.Module):
         param.copy_(loaded_weight)
 
     @staticmethod
-    def create_weight(hidden_size: int, dtype: torch.dtype = None, device: torch.device = None):
+    def create_weight(hidden_size: int, dtype: torch.dtype | None = None, device: torch.device | None = None):
         """Create weight."""
         if dtype is None:
             dtype = torch.float16
@@ -82,8 +82,8 @@ class LayerNorm(nn.Module):
                  hidden_size: int,
                  eps: float = 1e-6,
                  bias: bool = True,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+                 dtype: torch.dtype | None = None,
+                 device: torch.device | None = None):
         super().__init__()
         backend = get_backend()
         builder = backend.get_layer_impl_builder(OpType.LayerNorm)
@@ -93,7 +93,10 @@ class LayerNorm(nn.Module):
         self.impl = builder.build(hidden_size, eps)
 
     @staticmethod
-    def create_weight(hidden_size: int, bias: bool = True, dtype: torch.dtype = None, device: torch.device = None):
+    def create_weight(hidden_size: int,
+                      bias: bool = True,
+                      dtype: torch.dtype | None = None,
+                      device: torch.device | None = None):
         """Create weight."""
         if dtype is None:
             dtype = torch.float16
@@ -107,6 +110,6 @@ class LayerNorm(nn.Module):
 
         return weight, bias
 
-    def forward(self, x: torch.Tensor, residual: torch.Tensor = None):
+    def forward(self, x: torch.Tensor, residual: torch.Tensor | None = None):
         """forward."""
         return self.impl.forward(x, self.weight, self.bias, residual)
