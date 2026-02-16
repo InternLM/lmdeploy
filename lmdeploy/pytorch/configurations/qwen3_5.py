@@ -17,6 +17,10 @@ class Qwen3_5ModelConfigBuilder(AutoModelConfigBuilder):
     def build(cls, hf_config, model_path: str = None, tp: int = 1, **kwargs):
         """build."""
         text_config = hf_config.text_config
+        # propagate quantization_config from top-level hf_config into text_config
+        quantization_config = getattr(hf_config, 'quantization_config', None)
+        if quantization_config is not None and not hasattr(text_config, 'quantization_config'):
+            text_config.quantization_config = quantization_config
         cfg = DefaultModelConfigBuilder.build(text_config, model_path, tp=tp, **kwargs)
 
         # update num layers

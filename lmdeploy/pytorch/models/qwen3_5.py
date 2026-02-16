@@ -725,10 +725,9 @@ class Qwen3_5TextRotaryEmbedding(nn.Module):
 
     def __init__(self, config: PretrainedConfig, device=None):
         super().__init__()
-        if hasattr(config, 'rope_scaling') and config.rope_scaling is not None:
-            self.rope_type = config.rope_scaling.get('rope_type', 'default')
-        else:
-            self.rope_type = 'default'
+        rope_scaling = get_rope_parameters(config)
+        assert rope_scaling is not None, 'RoPE scaling parameters must be provided in the config for Qwen3.5 models.'
+        self.rope_type = rope_scaling.get('rope_type', 'default')
 
         self.max_seq_len_cached = config.max_position_embeddings
         self.original_max_seq_len = config.max_position_embeddings
@@ -743,7 +742,7 @@ class Qwen3_5TextRotaryEmbedding(nn.Module):
         self.register_buffer('inv_freq', inv_freq, persistent=False)
         self.original_inv_freq = self.inv_freq
 
-        self.mrope_section = config.rope_scaling.get('mrope_section', [11, 11, 10])
+        self.mrope_section = rope_scaling.get('mrope_section', [11, 11, 10])
 
     @staticmethod
     def compute_default_rope_parameters(
@@ -804,13 +803,11 @@ class Qwen3_5TextRotaryEmbedding(nn.Module):
         inv_freq_expanded = self.inv_freq[None, None, :, None].float().expand(3, position_ids.shape[1], -1, 1)
         position_ids_expanded = position_ids[:, :, None, :].float()  # shape (3, bs, 1, positions)
 
-        device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != 'mps' else 'cpu'
-        with torch.autocast(device_type=device_type, enabled=False):  # Force float32
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(2, 3)
-            freqs = self.apply_interleaved_mrope(freqs, self.mrope_section)
-            emb = torch.cat((freqs, freqs), dim=-1)
-            cos = emb.cos() * self.attention_scaling
-            sin = emb.sin() * self.attention_scaling
+        freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(2, 3)
+        freqs = self.apply_interleaved_mrope(freqs, self.mrope_section)
+        emb = torch.cat((freqs, freqs), dim=-1)
+        cos = emb.cos() * self.attention_scaling
+        sin = emb.sin() * self.attention_scaling
 
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
@@ -1198,11 +1195,10 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
         input_buffers['state_ids'] = state_ids
         return input_buffers
 
-    def fill_buffers_cudagraph(self, graph_meta: CudaGraphMeta, **kwargs):
+    def fill_buffers_cudagraph(self, graph_meta: CudaGraphMeta, *args, **kwargs):
         """Fill cudagraph buffers from forward inputs."""
         input_buffers = graph_meta.input_buffers
-
-        new_inputs = super().fill_buffers_cudagraph(graph_meta=graph_meta, **kwargs)
+        new_inputs = super().fill_buffers_cudagraph(graph_meta, *args, **kwargs)
         state_ids = kwargs['state_ids']
         input_buffers['state_ids'].fill_(-1)
         input_buffers['state_ids'][:state_ids.size(0)].copy_(state_ids)
