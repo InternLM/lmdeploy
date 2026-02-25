@@ -266,7 +266,10 @@ def _patch_quantization_config(hf_config: Any, model_format: str = None):
     if model_format is None:
         return hf_config
 
-    if hasattr(hf_config, 'quantization_config'):
+    # skip the quantized llm and vlm models
+    if hasattr(hf_config, 'quantization_config') or \
+        (hasattr(hf_config, 'llm_config') and hasattr(hf_config.llm_config, 'quantization_config')) \
+            or (hasattr(hf_config, 'text_config') and hasattr(hf_config.text_config, 'quantization_config')):
         logger.warning('Can not perform weight quantization on quantized model.')
         return hf_config
 
@@ -564,6 +567,14 @@ class QuantizationConfig:
     @classmethod
     def from_config(cls, hf_config: Any):
         quant_config = getattr(hf_config, 'quantization_config', None)
+
+        if quant_config is None:
+            if hasattr(hf_config, 'llm_config') and hasattr(hf_config.llm_config, 'quantization_config'):
+                quant_config = hf_config.llm_config.quantization_config
+            elif hasattr(hf_config, 'text_config') and hasattr(hf_config.text_config, 'quantization_config'):
+                quant_config = hf_config.text_config.quantization_config
+
+        # no quant config found in hf config
         if quant_config is None:
             return cls()
 
@@ -619,7 +630,6 @@ class QuantizationConfig:
 
         is_ignore = any([prefix in layer_name for layer_name in self.ignored_layers])
         quant_method = None if is_ignore else self.quant_method
-        print(f'ignore quantization: {is_ignore}, use quant method: {quant_method} Layer {prefix} ')
         return quant_method
 
     def get(self, key, default=None):
