@@ -41,6 +41,8 @@ class GatedDeltaMeta:
         # we assume 0 is dummy state, shared by all invalid states.
         self.state_ids = self.state_ids.clamp(0)
 
+        self.conv_state_indices = self.state_ids.to(torch.int32)
+
 
 class CausalConv1dFunc:
 
@@ -64,6 +66,7 @@ class CausalConv1dFunc:
         """
         seq_idx = gated_delta_meta.seq_idx
         conv_idx = gated_delta_meta.conv_idx
+        state_ids = gated_delta_meta.state_ids
 
         assert x.dim() == 3
         x = x.transpose(-2, -1)
@@ -72,9 +75,12 @@ class CausalConv1dFunc:
             weight = weight[:, 0]
 
         # fill conv state
+        # TODO: find efficient way to fill conv state without gather + scatter
+        final_state = conv_state.index_select(0, state_ids)
         batch_size = conv_state.size(0)
         conv_idx = conv_idx[:, None].expand(-1, x.size(1), -1)
-        torch.gather(x.expand(batch_size, -1, -1), -1, conv_idx, out=conv_state)
+        torch.gather(x.expand(batch_size, -1, -1), -1, conv_idx, out=final_state)
+        conv_state = conv_state.index_copy_(0, state_ids, final_state)
 
         out = self.causal_conv1d_fn(
             x,
@@ -90,11 +96,23 @@ class CausalConv1dFunc:
         # store conv_state
         return out, conv_state
 
-    def conv1d_update(self, x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, conv_state: torch.Tensor):
+    def conv1d_update(
+        self,
+        x: torch.Tensor,
+        weight: torch.Tensor,
+        bias: torch.Tensor,
+        conv_state: torch.Tensor,
+        conv_state_indices: torch.Tensor,
+    ):
         if weight.dim() == 3:
             assert weight.size(1) == 1
             weight = weight[:, 0]
-        out = self.causal_conv1d_update(x[0], conv_state, weight, bias, activation=self.activation)
+        out = self.causal_conv1d_update(x[0],
+                                        conv_state,
+                                        weight,
+                                        bias,
+                                        activation=self.activation,
+                                        conv_state_indices=conv_state_indices)
         return out[None], conv_state
 
     @record_function('causal_conv1d')
@@ -107,7 +125,8 @@ class CausalConv1dFunc:
         gated_delta_meta: GatedDeltaMeta,
     ):
         if gated_delta_meta.is_decoding:
-            return self.conv1d_update(x, weight, bias, conv_state)
+            conv_state_indices = gated_delta_meta.conv_state_indices
+            return self.conv1d_update(x, weight, bias, conv_state, conv_state_indices)
         return self.conv1d_func(x, weight, bias, conv_state, gated_delta_meta=gated_delta_meta)
 
 
@@ -253,7 +272,7 @@ def load_state(past_key_value: Tuple[torch.Tensor, torch.Tensor], gated_delta_me
     state_ids = gated_delta_meta.state_ids
     conv_cache, recurrent_cache = past_key_value[:2]
 
-    return conv_cache.index_select(0, state_ids), recurrent_cache.index_select(0, state_ids)
+    return conv_cache, recurrent_cache.index_select(0, state_ids)
 
 
 @record_function('gated_delta_store_state')
@@ -263,5 +282,4 @@ def store_state(conv_state: torch.Tensor, recurrent_state: torch.Tensor,
     conv_cache, recurrent_cache = past_key_value[:2]
     state_ids = gated_delta_meta.state_ids
 
-    conv_cache = conv_cache.index_copy_(0, state_ids, conv_state)
     recurrent_cache = recurrent_cache.index_copy_(0, state_ids, recurrent_state.to(recurrent_cache.dtype))
