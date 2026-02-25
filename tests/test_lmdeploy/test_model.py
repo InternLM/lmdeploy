@@ -247,7 +247,7 @@ def test_deepseek_vl2(model_path_or_name):
     assert ref == lm_res
 
 
-@pytest.mark.parametrize('model_path', ['Qwen/Qwen3-30B-A3B', 'Qwen/Qwen2.5-7B-Instruct'])
+@pytest.mark.parametrize('model_path', ['Qwen/Qwen3-30B-A3B', 'Qwen/Qwen2.5-7B-Instruct', 'Qwen/Qwen3.5-35B-A3B'])
 @pytest.mark.parametrize('enable_thinking', [True, False, None])
 def test_qwen3(model_path, enable_thinking):
     from transformers import AutoTokenizer
@@ -318,7 +318,8 @@ def test_interns1(model_path, enable_thinking, has_user_sys):
     assert ref == lm_res
 
 
-@pytest.mark.parametrize('model_path', ['Qwen/Qwen1.5-7B-Chat', 'Qwen/Qwen2.5-7B-Instruct', 'Qwen/Qwen3-8B'])
+@pytest.mark.parametrize('model_path',
+                         ['Qwen/Qwen1.5-7B-Chat', 'Qwen/Qwen2.5-7B-Instruct', 'Qwen/Qwen3-8B', 'Qwen/Qwen3.5-35B-A3B'])
 def test_HFChatTemplate_get_prompt_sequence_start_False_Qwen(model_path):
     model = MODELS.get('hf')(model_path=model_path)
     assert model.stop_words == ['<|im_end|>']
@@ -362,7 +363,7 @@ def test_HFChatTemplate_DeepSeek_thinking(model_path):
     assert model.get_prompt(prompt, sequence_start=False) == f'<｜User｜>{prompt}<｜Assistant｜><think>\n'
 
 
-@pytest.mark.parametrize('model_path', ['Qwen/Qwen3-VL-8B-Instruct'])
+@pytest.mark.parametrize('model_path', ['Qwen/Qwen3-VL-8B-Instruct', 'Qwen/Qwen3.5-35B-A3B'])
 def test_HFChatTemplate_Qwen3_VL_with_vision_id(model_path):
     model = MODELS.get('hf')(model_path=model_path)
 
