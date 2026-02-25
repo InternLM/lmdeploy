@@ -4,6 +4,7 @@ cloudpickle
 einops
 fastapi
 fire
+flash-linear-attention
 mmengine-lite
 numpy
 openai

@@ -6,6 +6,7 @@ import torch
 from torch import nn
 from torch.profiler import record_function
 
+from lmdeploy.pytorch.backends import OpType, get_backend
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader
 
@@ -47,13 +48,11 @@ class GatedDeltaMeta:
 class CausalConv1dFunc:
 
     def __init__(self, activation: str = 'silu'):
-        try:
-            import causal_conv1d
-            self.causal_conv1d_fn = causal_conv1d.causal_conv1d_fn
-            self.causal_conv1d_update = causal_conv1d.causal_conv1d_update
-        except Exception:
-            raise RuntimeError(
-                'causal_conv1d is not installed, please refer to https://github.com/Dao-AILab/causal-conv1d')
+        backend = get_backend()
+        builder = backend.get_layer_impl_builder(OpType.CausalConv1d)
+        impl = builder.build()
+        self.causal_conv1d_fn = impl.conv1d_fn
+        self.causal_conv1d_update = impl.update_fn
         self.activation = activation
 
     def conv1d_func(self, x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, conv_state: torch.Tensor,
@@ -279,7 +278,7 @@ def load_state(past_key_value: Tuple[torch.Tensor, torch.Tensor], gated_delta_me
 def store_state(conv_state: torch.Tensor, recurrent_state: torch.Tensor,
                 past_key_value: Tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
     """Store states to cache."""
-    conv_cache, recurrent_cache = past_key_value[:2]
+    _, recurrent_cache = past_key_value[:2]
     state_ids = gated_delta_meta.state_ids
 
     recurrent_cache = recurrent_cache.index_copy_(0, state_ids, recurrent_state.to(recurrent_cache.dtype))

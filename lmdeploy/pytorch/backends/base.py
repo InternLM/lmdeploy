@@ -37,6 +37,9 @@ class OpType(Enum):
     # MoE router
     RouterNoauxTC = auto()
 
+    # Gated Delta
+    CausalConv1d = auto()
+
 
 class OpsBackend(ABC):
     """Layer backend abstract."""
