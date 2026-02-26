@@ -3,6 +3,8 @@ import tilelang
 import tilelang.language as T
 import torch
 
+# The kernels below is modified from: https://github.com/Dao-AILab/causal-conv1d
+
 
 @tilelang.jit(pass_configs={
     tilelang.PassConfigKey.TL_ENABLE_FAST_MATH: True,

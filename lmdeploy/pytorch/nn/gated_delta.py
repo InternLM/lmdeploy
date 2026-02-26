@@ -9,10 +9,22 @@ from torch.profiler import record_function
 from lmdeploy.pytorch.backends import OpType, get_backend
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader
+from lmdeploy.utils import get_logger
+
+logger = get_logger('lmdeploy')
 
 
 def build_rmsnorm_gated(hidden_size: int, eps=1e-6, **kwargs):
+    # TODO: used custom kernel
     from fla.modules import FusedRMSNormGated
+    try:
+        # avoid unwanted specialize
+        from fla.modules.fused_norm_gate import layer_norm_gated_fwd_kernel
+        keys = layer_norm_gated_fwd_kernel.fn.keys
+        if 'NB' in keys:
+            keys.remove('NB')
+    except Exception:
+        logger.debug('patch layer_norm_gated_fwd_kernel autotuning failed.')
     return FusedRMSNormGated(hidden_size, eps=eps, **kwargs)
 
 
@@ -156,6 +168,10 @@ class GatedDelta:
         cu_seqlens = gated_delta_meta.cu_seqlens
 
         if not is_decoding:
+            if self.use_qk_l2norm_in_kernel:
+                # l2norm in fla would recompile when seqlen changed.
+                query = torch.nn.functional.normalize(query, p=2, dim=-1)
+                key = torch.nn.functional.normalize(key, p=2, dim=-1)
             core_attn_out, last_recurrent_state = self.chunk_gated_delta_rule(
                 query,
                 key,
@@ -164,7 +180,7 @@ class GatedDelta:
                 beta=beta,
                 initial_state=recurrent_state,
                 output_final_state=True,
-                use_qk_l2norm_in_kernel=self.use_qk_l2norm_in_kernel,
+                use_qk_l2norm_in_kernel=False,
                 cu_seqlens=cu_seqlens,
             )
         else:
