@@ -62,6 +62,7 @@ class ModelConfig:
     window_size: List[int] = field(default_factory=list)
     attn_sink: bool = False
     qk_norm: bool = False
+    qk_norm_type: str = 'per_head'
     size_per_head: int = 128
     group_size: int = 32
     data_type: str = None
@@ -82,6 +83,7 @@ class ModelConfig:
     routed_scale: float = 1.0
     topk_group: int = 1
     topk_method: str = 'greedy'
+    scoring_func: str = 'softmax'
     moe_group_num: int = 1
     # MLA
     q_lora_rank: int = 0

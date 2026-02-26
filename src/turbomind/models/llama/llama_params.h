@@ -37,9 +37,10 @@ struct ModelParam {
     DataType weight_type;
     DataType expert_weight_type;
     int      group_size;
-    MLAParam mla;
-    bool     qk_norm;
-    int      tune_layer_num;
+    MLAParam    mla;
+    bool        qk_norm;
+    std::string qk_norm_type;  // "per_head" (default) or "per_token" (MiniMax-M2 style)
+    int         tune_layer_num;
 
     ActivationType act_type;
 
@@ -65,6 +66,7 @@ struct MoeParam {
 
     int         topk_group;
     std::string topk_method;
+    std::string scoring_func;  // "softmax" or "sigmoid"
     int         n_group;
 
     std::vector<int> expert_num;

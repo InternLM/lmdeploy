@@ -390,9 +390,10 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
         model_param_.window_size.push_back(it->as<int>());
     }
 
-    model_param_.attn_bias  = model["attn_bias"].as<int>(0);
-    model_param_.qk_norm    = model["qk_norm"].as<bool>();
-    model_param_.group_size = model["group_size"].as<int>(0);
+    model_param_.attn_bias      = model["attn_bias"].as<int>(0);
+    model_param_.qk_norm        = model["qk_norm"].as<bool>();
+    model_param_.qk_norm_type   = model["qk_norm_type"].as<std::string>("per_head");
+    model_param_.group_size     = model["group_size"].as<int>(0);
 
     attn_param_.softmax_scale = attention["softmax_scale"].as<float>(0);
     // logn attn for qwen model
@@ -451,6 +452,7 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     moe_param_.topk_method       = model["topk_method"].as<std::string>("greedy");
     moe_param_.n_group           = model["moe_group_num"].as<int>(1);
     moe_param_.router_bias       = model["expert_router_bias"].as<bool>();
+    moe_param_.scoring_func      = model["scoring_func"].as<std::string>("softmax");
     YAML::Node expert_num        = model["expert_num"];
     for (auto it = expert_num.begin(); it != expert_num.end(); ++it) {
         moe_param_.expert_num.push_back(it->as<int>());

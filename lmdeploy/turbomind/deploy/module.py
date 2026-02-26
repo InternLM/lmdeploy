@@ -22,6 +22,35 @@ def permute_v2(x: torch.Tensor, size_per_head: int = 128):
     return x.view(-1, head_num, 2, size_per_head // 2).transpose(2, 3).reshape(x.shape)
 
 
+def permute_v2_partial(x: torch.Tensor, size_per_head: int, rotary_dim: int):
+    """Permute only the first `rotary_dim` dims within each head for
+    TurboMind's interleaved RoPE layout. Non-RoPE dims are left as-is.
+
+    This is needed for partial rotary models (e.g. MiniMax-M2.1 where
+    rotary_dim=64 but head_dim=128).
+    """
+    assert x.size(-1) > 1
+    output_dims = x.size(-1)
+    head_num = output_dims // size_per_head
+    non_rope_dim = size_per_head - rotary_dim
+
+    # reshape to (*, head_num, size_per_head)
+    orig_shape = x.shape
+    x = x.view(-1, head_num, size_per_head) if x.dim() >= 2 else x.view(head_num, size_per_head)
+
+    # split each head into rope part and non-rope part
+    rope_part = x[..., :rotary_dim]      # (..., head_num, rotary_dim)
+    rest_part = x[..., rotary_dim:]      # (..., head_num, non_rope_dim)
+
+    # permute only the rope part: interleave first/second halves
+    rope_part = rope_part.view(*rope_part.shape[:-1], 2, rotary_dim // 2)
+    rope_part = rope_part.transpose(-2, -1).reshape(*rope_part.shape[:-2], rotary_dim)
+
+    # recombine
+    x = torch.cat([rope_part, rest_part], dim=-1)
+    return x.reshape(orig_shape)
+
+
 def merge_qkv_v2(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, tp: int):
     """
         Contract: x.size(-1) is output dims
@@ -181,14 +210,27 @@ class Attn(Module):
         self.qk_norm = model.model_config.qk_norm
         self.attn_sink = model.model_config.attn_sink
         self.group_size = max(1, model.model_config.group_size)
+        # rotary_dim for partial rotary models (e.g. MiniMax-M2.1)
+        rope_param = getattr(model.attention_config, 'rope_param', None)
+        self.rotary_dim = rope_param.dim if rope_param else self.head_dim
+
+    def _permute(self, x):
+        """Permute Q/K weights for TurboMind's interleaved RoPE layout.
+
+        Uses partial permutation when rotary_dim < head_dim to avoid
+        corrupting non-RoPE dimensions.
+        """
+        if self.rotary_dim < self.head_dim:
+            return permute_v2_partial(x, self.head_dim, self.rotary_dim)
+        return permute_v2(x, self.head_dim)
 
     def _reorder_and_merge(self, qkvo, gs: int):
         q, k, v, o = qkvo
         # reorder output dim for tm's rotary embedding layout
         if self.model.permute_qk:
             if gs == 1:
-                q = permute_v2(q, self.head_dim)
-                k = permute_v2(k, self.head_dim)
+                q = self._permute(q)
+                k = self._permute(k)
             else:
                 assert gs % self.head_dim == 0
         qkv = merge_qkv_v2(q, k, v, self.tp)
@@ -254,10 +296,25 @@ class Attn(Module):
         if self.qk_norm:
             q, k = r.qk_norm(i)
             if self.model.permute_qk:
-                q = permute_v2(q, self.head_dim)
-                k = permute_v2(k, self.head_dim)
-            self.model.save_split(q, self._attn.format(i, 'q_norm', '')[:-1])
-            self.model.save_split(k, self._attn.format(i, 'k_norm', '')[:-1])
+                q = self._permute(q)
+                k = self._permute(k)
+            head_num = self.model.model_config.head_num
+            kv_head_num = self.model.model_config.kv_head_num
+            # C++ allocates per-head buffers: (local_head_num * head_dim)
+            # Shared QK norm (head_dim,): broadcast to per-head size
+            # Per-head QK norm (num_heads * head_dim,): split across TP
+            if q.numel() == self.head_dim:
+                q = q.repeat(head_num // self.tp)
+            if k.numel() == self.head_dim:
+                k = k.repeat(kv_head_num // self.tp)
+            # Handle repeat_kv: replicate per-head K norm weights
+            if self.model.repeat_kv and k.numel() > self.head_dim:
+                k = k.view(-1, self.head_dim).repeat_interleave(
+                    self.model.repeat_kv, dim=0).reshape(-1)
+            q_name = self._attn.format(i, 'q_norm', '')[:-1]
+            k_name = self._attn.format(i, 'k_norm', '')[:-1]
+            self.model.save_split(q, q_name, split_dim=-1, split_num=self.tp)
+            self.model.save_split(k, k_name, split_dim=-1, split_num=self.tp)
         if self.attn_sink:
             sinks = r.attn_sinks(i)
             self.model.save_split(sinks, self._attn.format(i, 'sinks', '')[:-1], split_dim=-1, split_num=self.tp)

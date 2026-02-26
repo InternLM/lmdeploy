@@ -282,10 +282,10 @@ LlamaAttentionWeight::LlamaAttentionWeight(int      hidden_dim,
             hidden_dim, (head_num + 2 * kv_head_num) * head_dim / tp_size, data_type, bias, weight_type, group_size);
         register_module("w_qkv", qkv, tp_rank);
         if (qk_norm) {
-            q_a_layernorm  = Tensor{{head_dim}, data_type, kDEVICE};
-            kv_a_layernorm = Tensor{{head_dim}, data_type, kDEVICE};
-            register_parameter("q_norm", q_a_layernorm);
-            register_parameter("k_norm", kv_a_layernorm);
+            q_a_layernorm  = Tensor{{head_num * head_dim / tp_size}, data_type, kDEVICE};
+            kv_a_layernorm = Tensor{{kv_head_num * head_dim / tp_size}, data_type, kDEVICE};
+            register_parameter(std::to_string(tp_rank) + ".q_norm", q_a_layernorm);
+            register_parameter(std::to_string(tp_rank) + ".k_norm", kv_a_layernorm);
         }
     }
     else {

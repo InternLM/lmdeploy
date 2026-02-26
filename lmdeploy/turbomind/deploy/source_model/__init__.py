@@ -9,6 +9,7 @@ from .internvl import InternVLModel  # noqa: F401
 from .llama import LlamaModel  # noqa: F401
 from .llava import LlavaModel  # noqa: F401
 from .minicpmv import MiniCPMVModel  # noqa: F401
+from .minimax_m2 import MiniMaxM2Model  # noqa: F401
 from .mixtral import MixtralModel  # noqa: F401
 from .molmo import MolmoModel  # noqa: F401
 from .qwen import QwenModel  # noqa: F401
