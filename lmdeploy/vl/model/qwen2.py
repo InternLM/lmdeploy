@@ -48,7 +48,7 @@ class Qwen2VLModel(VisionModel):
             item = dict(type='image', image=image)
             item.update({key: params[key] for key in params.keys() if key in optional_keys})
             image_inputs, _ = process_vision_info([dict(content=[item])])
-            result = self.processor.image_processor(images=image_inputs, videos=None, return_tensors='pt')
+            result = self.processor.image_processor(images=image_inputs, return_tensors='pt')
             merge_length = self.processor.image_processor.merge_size**2
             image_tokens = result['image_grid_thw'].prod(dim=1) // merge_length
             result.update(dict(image_size=image.size, image_tokens=image_tokens, image_token_id=self.image_token_id))
@@ -81,6 +81,7 @@ class Qwen2VLModel(VisionModel):
                     # transformers >= 4.52.0 modified model structure
                     # https://github.com/huggingface/transformers/blob/v4.52.0/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L1791-L1800
                     model.visual = model.model.visual
+                model.visual = model.model.visual
                 del model.model
                 del model.lm_head
                 model.half()
@@ -117,6 +118,10 @@ class Qwen2VLModel(VisionModel):
             pixel_values = torch.cat(pixel_values, dim=0).to(device)
             image_grid_thw = torch.cat(image_grid_thw, dim=0).to(device)
             image_embeds = self.model.visual(pixel_values, grid_thw=image_grid_thw)
+            if hasattr(image_embeds, 'pooler_output'):
+                # transformers >= 5.0.0, the type if image_embeds is `BaseModelOutputWithPooling`
+                # rather than torch.Tensor
+                image_embeds = image_embeds.pooler_output
             merge_length = self.processor.image_processor.merge_size**2
             split_size = image_grid_thw.prod(dim=1) // merge_length
             image_embeds = image_embeds.split(split_size.tolist())

@@ -132,8 +132,12 @@ class LlamaModel(BaseInputModel):
     def __init__(self, model_path: str, tokenizer_path: str, **kwargs: dict):
         super().__init__(model_path, tokenizer_path)
         self.policy = kwargs.get('input_policy')
-        _, self.model_config = get_model_arch(model_path)
-        self.model_config = self.model_config.to_dict()
+        _, model_config = get_model_arch(model_path)
+        if hasattr(model_config, 'text_config'):
+            model_config = model_config.text_config
+        elif hasattr(model_config, 'llm_config'):
+            model_config = model_config.llm_config
+        self.model_config = model_config.to_dict()
         self.fp8_quant = kwargs.get('fp8_quant', False)
 
     def readers(self):
@@ -171,13 +175,8 @@ class LlamaModel(BaseInputModel):
         max_position_embeddings = int(model_arg.get('max_position_embeddings', 0))
         rope_param = RopeParam(type='default', base=rope_theta, dim=head_dim)
         if isinstance(rope_scaling, dict):
-            llama2_scaling_type = rope_scaling.get('type', '')
-            llama3_scaling_type = rope_scaling.get('rope_type', '')
-            if llama2_scaling_type and llama3_scaling_type \
-                    and llama2_scaling_type != llama3_scaling_type:
-                raise ValueError(f'Ambiguous rope_scaling in config: {model_arg}')
-            scaling_type = llama2_scaling_type if llama2_scaling_type \
-                else llama3_scaling_type
+            # llama2_scaling_type = rope_scaling.get('type', '')
+            scaling_type = rope_scaling.get('rope_type', '')
             if rope_scaling.get('mrope_section') is not None:
                 # TODO: treat mrope as an option to the common rope functions
                 scaling_type = 'mrope'
