@@ -1233,7 +1233,11 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
         position_ids = context.position_ids
 
         mrope_deltas = [meta['mrope_delta'] for meta in model_metas]
-        mrope_deltas = position_ids.new_tensor(mrope_deltas)
+        mrope_deltas_cpu = torch.tensor(mrope_deltas, device='cpu')
+        if (mrope_deltas_cpu == mrope_deltas_cpu[0]).all():
+            mrope_deltas = position_ids.new_full((len(mrope_deltas), ), mrope_deltas[0])
+        else:
+            mrope_deltas = position_ids.new_tensor(mrope_deltas)
         mrope_position_ids = position_ids + mrope_deltas[None]
         mrope_position_ids = mrope_position_ids.expand(3, -1)
 

@@ -6,7 +6,23 @@ import torch
 
 from lmdeploy.pytorch.config import QuantizationConfig
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor
-from lmdeploy.pytorch.model_inputs import StepContext
+from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, StepContext
+
+
+class BaseModelMetaProcessor:
+    """Model meta processor base class."""
+
+    def update_inputs(self, inputs: ModelInputs, device: torch.device) -> ModelInputs:
+        """Update model inputs."""
+        return inputs
+
+    def update_delta(self, inputs: ModelInputs, delta: ModelInputsDelta) -> ModelInputs:
+        """Update model inputs for delta."""
+        return inputs
+
+    def merge(self, inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
+        """Merge model inputs with deltas."""
+        return inputs
 
 
 class DeployModelMixin:
@@ -51,6 +67,10 @@ class DeployModelMixin:
     def get_input_processor(self) -> BaseModelInputProcessor:
         """Get input processor."""
         return None
+
+    def get_modelmeta_processor(self) -> BaseModelMetaProcessor:
+        """Get model meta preprocessor."""
+        return BaseModelMetaProcessor()
 
     @classmethod
     def update_quant_config(cls, quant_config: QuantizationConfig):
