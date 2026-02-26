@@ -784,7 +784,7 @@ class HFChatTemplate(BaseChatTemplate):
             return system_start, system_end, messages, prompt
         except Exception:
             # Some models, such as google/gemma-2-2b-it, do not support a system role in the message structure.
-            return None, None, [], self.tokenizer.bos_token
+            return None, None, [], self.tokenizer.bos_token or ''
 
     @classmethod
     def match(cls, model_path: str) -> Optional[str]:
