@@ -382,13 +382,14 @@ class AscendOpsBackend(DlinferOpsBackend):
                 AscendKVQuantMeta.set_value(step_context.block_offsets.device, step_context.model_config.dtype,
                                             record_file, total_layers)
 
-        q_start_loc = step_context.q_start_loc
-        cu_seqlens = torch.cat((q_start_loc, step_context.q_seqlens.sum().unsqueeze(0))).int()
-
-        if step_context.is_decoding:
-            has_initial_state = None
-        else:
-            has_initial_state = ~(step_context.q_seqlens == step_context.kv_seqlens)
+        cu_seqlens = None
+        has_initial_state = None
+        
+        if step_context.state_offsets is not None:
+            q_start_loc = step_context.q_start_loc
+            cu_seqlens = torch.cat((q_start_loc, step_context.q_seqlens.sum().unsqueeze(0))).int()
+            if not step_context.is_decoding:
+                has_initial_state = ~(step_context.q_seqlens == step_context.kv_seqlens)
         
         attn_meta_cls = cls.get_attention_metadata_cls()
         attn_metadata = attn_meta_cls(
