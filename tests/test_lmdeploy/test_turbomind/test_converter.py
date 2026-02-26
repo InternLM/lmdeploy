@@ -27,9 +27,8 @@ def test_torch_dtype_fallback():
 def test_ffn_reader_kind_none():
     """FFN readers must handle kind=None (returns filter list, not tensors).
 
-    This is the probe call from Ffn.apply() to discover parameter keys before
-    loading actual tensor data. A missing guard causes KeyError with 'None' in
-    the key string (regression test for InternLM2Reader._ffn bug).
+    This is the probe call from Ffn.apply() to discover parameter keys before loading actual tensor data. A missing
+    guard causes KeyError with 'None' in the key string (regression test for InternLM2Reader._ffn bug).
     """
     import re
 
@@ -59,6 +58,7 @@ def test_ffn_reader_kind_none():
     # InternLM2Reader with kind=None should also return filtered key list
     reader2 = InternLM2Reader.__new__(InternLM2Reader)
     reader2.params = dict(fake_params)
+    reader2.fp8_quant = None
     reader2.ffn_pattern = r'feed_forward'
     result2 = reader2._ffn(0, None)
     assert isinstance(result2, list)
