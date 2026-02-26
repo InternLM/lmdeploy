@@ -81,6 +81,7 @@ class TestCausalConv1dUpdate:
         torch.testing.assert_close(conv_state_clone, conv_state, rtol=1e-3, atol=1e-3)
 
 
+@pytest.mark.skipif(not do_test(), reason='tilelang or causal_conv1d is not available')
 class TestCausalConv1dFn:
 
     @pytest.fixture
