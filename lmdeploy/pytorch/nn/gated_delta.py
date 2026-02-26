@@ -47,14 +47,10 @@ class GatedDeltaMeta:
         self.conv_idx = self.cu_seqlens[1:, None] + range_idx[None]
         self.conv_idx = self.conv_idx.clamp_min(0)
 
-        # state_ids, fill invalid state with state_ids[0]
-        self.valid_state = state_ids >= 0
-        self.state_ids = torch.where(self.valid_state, state_ids, state_ids[0])
-
+        self.conv_state_indices = state_ids.to(torch.int32)
         # we assume 0 is dummy state, shared by all invalid states.
-        self.state_ids = self.state_ids.clamp(0)
-
-        self.conv_state_indices = self.state_ids.to(torch.int32)
+        self.valid_state = state_ids >= 0
+        self.state_ids = state_ids.clamp(0)
 
 
 class CausalConv1dFunc:
