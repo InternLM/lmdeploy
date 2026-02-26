@@ -71,15 +71,17 @@ if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]] && [[ "${PYTHON_VERSION}" != "3.9" ]
 fi
 
 # install pre-built flash attention 3 wheel
+pip install ninja
 if [[ "${CUDA_VERSION_SHORT}" = "cu128" ]]; then
     FA3_WHEELS_URL="https://windreamer.github.io/flash-attention3-wheels/cu128_torch280"
-    pip install flash_attn_3 --find-links ${FA3_WHEELS_URL} --extra-index-url https://download.pytorch.org/whl/cu128
+    pip install flash_attn_3 --find-links ${FA3_WHEELS_URL} -i https://download.pytorch.org/whl/cu128
 elif [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
     FA3_WHEELS_URL="https://windreamer.github.io/flash-attention3-wheels/cu130_torch290"
-    pip install flash_attn_3 --find-links ${FA3_WHEELS_URL} --extra-index-url https://download.pytorch.org/whl/cu130
+    pip install flash_attn_3 --find-links ${FA3_WHEELS_URL} -i https://download.pytorch.org/whl/cu130
 fi
 
 # install pre-built flash attention wheel
+
 PLATFORM="linux_x86_64"
 PY_VERSION=$(python3 - <<'PY'
 import torch, sys
@@ -93,11 +95,13 @@ PY
 
 read TORCH_VER CUDA_VER CXX11ABI PY_TAG <<< "$PY_VERSION"
 
-WHEEL="flash_attn-${FA_VERSION}+cu${CUDA_VER}torch${TORCH_VER}cxx11abi${CXX11ABI}-${PY_TAG}-${PY_TAG}-${PLATFORM}.whl"
-BASE_URL="https://github.com/Dao-AILab/flash-attention/releases/download/v${FA_VERSION}"
-FULL_URL="${BASE_URL}/${WHEEL}"
+if [[ "${CUDA_VER}" == "12" ]]; then
+    WHEEL="flash_attn-${FA_VERSION}+cu${CUDA_VER}torch${TORCH_VER}cxx11abi${CXX11ABI}-${PY_TAG}-${PY_TAG}-${PLATFORM}.whl"
+    BASE_URL="https://github.com/Dao-AILab/flash-attention/releases/download/v${FA_VERSION}"
+    FULL_URL="${BASE_URL}/${WHEEL}"
 
-pip install "$FULL_URL"
+    pip install "$FULL_URL"
+fi
 
 # install requirements/serve.txt dependencies such as timm
 pip install -r /tmp/requirements/serve.txt
@@ -106,4 +110,9 @@ pip install -r /tmp/requirements/serve.txt
 if [[ "${CUDA_VERSION_SHORT}" = "cu118" ]]; then
     rm -rf /opt/py3/lib/python${PYTHON_VERSION}/site-packages/nvidia/nccl
     cp -R /nccl /opt/py3/lib/python${PYTHON_VERSION}/site-packages/nvidia/
+elif [[ "${CUDA_VERSION_SHORT}" = "cu128" ]]; then
+    # As described in https://github.com/InternLM/lmdeploy/pull/4313,
+    # window registration may cause memory leaks in NCCL 2.27, NCCL 2.28+ resolves the issue,
+    # but turbomind engine will use nccl GIN for EP in future, which is brought in since 2.29
+    pip install "nvidia-nccl-cu12>2.29"
 fi

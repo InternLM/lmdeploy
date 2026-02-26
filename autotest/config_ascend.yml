@@ -1,23 +1,24 @@
 model_path: /mnt/vc-intern-delivery/qa-llm-cicd/qa_test_models
 resource_path: /mnt/vc-intern-delivery/qa-llm-cicd/resource
 log_path: /mnt/vc-intern-delivery/qa-llm-cicd/log
-eval_log_path: /mnt/vc-intern-delivery/qa-llm-cicd/evaluation_report
-mllm_eval_log_path: /mnt/vc-intern-delivery/qa-llm-cicd/mllm_evaluation_report
-benchmark_path: /mnt/vc-intern-delivery/qa-llm-cicd/benchmark-reports
+eval_path: /mnt/vc-intern-delivery/qa-llm-cicd/evaluation_report
+mllm_eval_path: /mnt/vc-intern-delivery/qa-llm-cicd/mllm_evaluation_report
+benchmark_path: /mnt/vc-intern-delivery/qa-llm-cicd/benchmark_report
 dataset_path: /mnt/vc-intern-delivery/qa-llm-cicd/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
 prefix_dataset_path: /mnt/vc-intern-delivery/qa-llm-cicd/datasets/prefix_cache_test.json
 env_tag: ascend
+device: ascend
 
-tp_config:
-    Qwen3-30B-A3B: 4
-    Qwen3-235B-A22B: 16
-    Qwen3-32B: 4
-    Qwen3-8B: 2
-    Intern-S1: 16
-    Intern-S1-mini: 2
-    InternVL3_5-8B: 2
-    InternVL3_5-38B: 4
-    Qwen2.5-32B-Instruct: 4
+config:
+    tp:
+        Qwen/Qwen3-30B-A3B: 4
+        Qwen/Qwen3-235B-A22B: 16
+        Qwen/Qwen3-32B: 4
+        Qwen/Qwen3-8B: 2
+        internlm/Intern-S1: 16
+        internlm/Intern-S1-mini: 2
+        OpenGVLab/InternVL3_5-8B: 2
+        OpenGVLab/InternVL3_5-38B: 4
 
 pytorch_chat_model:
     tp:

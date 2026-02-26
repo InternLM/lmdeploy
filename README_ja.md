@@ -141,6 +141,9 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>Phi-4-mini (3.8B)</li>
   <li>MiniCPM3 (4B)</li>
   <li>SDAR (1.7B-30B)</li>
+  <li>gpt-oss (20B, 120B)</li>
+  <li>GLM-4.7-Flash (30B)</li>
+  <li>GLM-5 (754B)</li>
 </ul>
 </td>
 <td>

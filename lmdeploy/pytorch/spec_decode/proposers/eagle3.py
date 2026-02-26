@@ -17,15 +17,8 @@ logger = get_logger('lmdeploy')
 @SPEC_PROPOSERS.register_module(name='eagle3')
 class Eagle3(DeepseekMTP):
 
-    def build_model(self,
-                    empty_init: bool,
-                    target_model: torch.nn.Module = None,
-                    model_format=None,
-                    build_model_ctx=None):
-        super().build_model(empty_init,
-                            target_model=target_model,
-                            model_format=model_format,
-                            build_model_ctx=build_model_ctx)
+    def build_model(self, empty_init: bool, target_model: torch.nn.Module = None, build_model_ctx=None):
+        super().build_model(empty_init, target_model=target_model, build_model_ctx=build_model_ctx)
         self.draft_id_to_target_id = self.model.draft_id_to_target_id
         if not self.model.include_embed_tokens:
             logger.info('Using embed_tokens from target model.')

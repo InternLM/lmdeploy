@@ -11,7 +11,7 @@ from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .interns1_pro_ts import InternS1ProTimeSeriesModel
-from .patch import get_build_model_context
+from .patch import add_prefix, get_build_model_context
 from .qwen3_moe import Qwen3MoeModel
 from .qwen3_vl import Qwen3VLVisionModel
 from .utils.cudagraph import CudaGraphMixin
@@ -37,7 +37,8 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGra
                  config: PretrainedConfig,
                  ctx_mgr: StepContextManager,
                  dtype: torch.dtype = None,
-                 device: torch.device = None):
+                 device: torch.device = None,
+                 prefix: str = ''):
         super().__init__()
 
         self.config = config
@@ -51,10 +52,14 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGra
             config.vision_config,
             dtype=dtype,
             device=device,
+            prefix=add_prefix('visual', prefix=prefix),
         )
 
         # build text model
-        self.language_model = Qwen3MoeModel(config.text_config, dtype=dtype, device=device)
+        self.language_model = Qwen3MoeModel(config.text_config,
+                                            dtype=dtype,
+                                            device=device,
+                                            prefix=add_prefix('language_model', prefix=prefix))
 
         # build lm_head
         self.lm_head = self.build_lm_head(config.text_config.hidden_size,
@@ -223,7 +228,8 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGra
             ts_mask=ts_mask,
         )
 
-    def rename_weight(self, name: str) -> str:
+    @classmethod
+    def rename_weight(cls, name: str) -> str:
         """Rename weight."""
         if name.startswith('model.language_model.'):
             return 'language_model.' + name[len('model.language_model.'):]

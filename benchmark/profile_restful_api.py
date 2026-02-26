@@ -847,7 +847,7 @@ def sample_image_requests(
         buf = io.BytesIO()
         img.save(buf, format=image_format, quality=85)
         encoded = pybase64.b64encode(buf.getvalue()).decode('utf-8')
-        image_data = f'data:image/{image_format};base64,{encoded}'
+        image_data = f'data:image/{image_format};base64,{encoded}'  # noqa
         image_bytes = len(image_data.encode('utf-8'))
         return img, image_data, image_bytes
 
@@ -880,7 +880,7 @@ def sample_image_requests(
     print(f'#Input tokens: {np.sum([x.prompt_len for x in dataset])}')
     print(f'#Output tokens: {np.sum([x.output_len for x in dataset])}')
     print(f'\nCreated {len(dataset)} {image_content} {image_format} images \
-            with average {avg_image_bytes} bytes per request')
+            with average {avg_image_bytes} bytes per request')  # noqa
     return dataset
 
 
@@ -1239,23 +1239,24 @@ def run_benchmark(args_: argparse.Namespace):
                   '`--host` and `--port`.')
             sys.exit(1)
 
+    # Read dataset
+    backend = args.backend
+    model_id = args.model
+    model_path = args.model_path if args.model_path is not None else args.model
+    tokenizer_id = args.tokenizer if args.tokenizer is not None else model_path
+
     if args.model is None:
         print('No model specified or found. Please provide a model '
               'using `--model`.')
         sys.exit(1)
 
-    if not check_chat_template(args.model):
+    if not check_chat_template(model_path):
         print('\nWARNING It is recommended to use the `Chat` or `Instruct` '
               'model for benchmarking.\n'
               'Because when the tokenizer counts the output tokens, if '
               'there is gibberish, it might count incorrectly.\n')
 
     print(f'{args}\n')
-
-    # Read dataset
-    backend = args.backend
-    model_id = args.model
-    tokenizer_id = args.tokenizer if args.tokenizer is not None else args.model
 
     tokenizer = get_tokenizer(tokenizer_id)
 
@@ -1279,7 +1280,7 @@ def run_benchmark(args_: argparse.Namespace):
             dataset_path=args.dataset_path,
         )
     elif args.dataset_name == 'image':
-        processor = get_processor(model_id)
+        processor = get_processor(model_path)
         input_requests = sample_image_requests(
             num_requests=args.num_prompts,
             image_count=args.image_count,
@@ -1372,6 +1373,11 @@ if __name__ == '__main__':
         type=str,
         help='Name or path of the model. If not set, the default model will '
         'request /v1/models for conf.',
+    )
+    parser.add_argument(
+        '--model-path',
+        type=str,
+        help='Path to the model. If not set, the default model will be model',
     )
     parser.add_argument(
         '--tokenizer',

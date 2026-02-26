@@ -53,12 +53,9 @@ class SpecModelAgent(BaseSpecModelAgent):
         """Set model config."""
         self.model_config = model_config
 
-    def build_model(self, empty_init: bool, target_model=None, model_format=None, build_model_ctx=None):
+    def build_model(self, empty_init: bool, target_model=None, build_model_ctx=None):
         """Build draft model."""
-        self.proposer.build_model(empty_init,
-                                  target_model=target_model,
-                                  model_format=model_format,
-                                  build_model_ctx=build_model_ctx)
+        self.proposer.build_model(empty_init, target_model=target_model, build_model_ctx=build_model_ctx)
 
     def build_graph_runner(self):
         """Build graph runner."""

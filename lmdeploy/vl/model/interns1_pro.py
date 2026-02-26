@@ -26,7 +26,7 @@ class InternS1ProVisionModel(VisionModel):
     Basically the same preprocessing as Qwen3VL, but with Time Series support.
     """
 
-    _arch = ['InternS1ProForConditionalGeneration']
+    _arch = ['InternS1ProForConditionalGeneration', 'InternS1_1_ForConditionalGeneration']
 
     def build_preprocessor(self):
         check_transformers()
@@ -82,19 +82,49 @@ class InternS1ProVisionModel(VisionModel):
             for message in messages)
         self.has_time_series_input = has_time_series_input
 
+    def time_series_processor(self, ts_input, sr):
+        if not isinstance(ts_input, np.ndarray):
+            ts_input = np.array(ts_input, dtype=np.float32)
+
+        mean = ts_input.mean(axis=0, keepdims=True)
+        std = ts_input.std(axis=0, keepdims=True)
+        ts_input = (ts_input - mean) / (std + 1e-8)
+
+        # truncate to 240k to avoid OOM
+        max_ts_len = 240000
+        if len(ts_input) > max_ts_len:
+            ts_input = ts_input[:max_ts_len]
+
+        if ts_input.ndim == 1:
+            ts_input = ts_input[:, None]  # [T,C]
+
+        ts_len = ts_input.shape[0]
+
+        # set the default value to ts_len / 4 if sr is not provided or invalid
+        if sr is None or sr <= 0:
+            sr = max(ts_len / 4, 1.0)
+
+        # compute num ts tokens
+        stride = np.floor(160 / ((1 + np.exp(-sr / 100))**6))
+        patch_size = stride * 2
+        embed_length = (np.ceil((ts_len - patch_size) / stride) + 1)
+        num_ts_tokens = int((embed_length // 2 + 1) // 2)
+
+        return dict(ts_values=[ts_input], ts_sr=[sr], ts_lens=[ts_len], num_ts_tokens=[num_ts_tokens])
+
     def preprocess(self, messages: List[Dict], mm_processor_kwargs: Optional[Dict[str, Any]] = None) -> List[Dict]:
         """Refer to `super().preprocess()` for spec."""
 
         self.check_time_series_input(messages)
 
         if self.has_time_series_input:
-            time_series_inputs = self.processor.time_series_preprocessor(messages)
-            time_series_inputs = self.processor.time_series_processor(
-                ts_paths=time_series_inputs['time_series_paths'],
-                sampling_rates=time_series_inputs['time_series_sampling_rates'])
-            time_series_inputs.update({'ts_token_id': self.ts_token_id})
-            outputs = [time_series_inputs]
-
+            time_series = self.collect_time_series(messages)
+            outputs = []
+            for ts_input, params in time_series:
+                sr = params.get('sampling_rate') if params is not None else None
+                time_series_inputs = self.time_series_processor(ts_input, sr)
+                time_series_inputs.update({'ts_token_id': self.ts_token_id})
+                outputs.append(time_series_inputs)
         else:
             min_pixels, max_pixels = self.get_processor_args(mm_processor_kwargs)
 
@@ -181,7 +211,7 @@ class InternS1ProVisionModel(VisionModel):
                 ts_tokens = preps[i - 1]['num_ts_tokens']
 
                 # NOTE: zhouxinyu, better to be valid type in the processor
-                ts_tokens = int(ts_tokens[0])
+                ts_tokens = ts_tokens[0]
                 ts_array = np.array(preps[i - 1]['ts_values'])
 
                 preps[i - 1].update(num_ts_tokens=ts_tokens)

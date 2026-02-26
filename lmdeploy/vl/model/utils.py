@@ -9,8 +9,7 @@ from typing import Callable, Dict, Iterator, List, MutableSequence, Union
 import torch
 import torch.nn as nn
 from safetensors.torch import load_file
-from transformers.utils import (SAFE_WEIGHTS_INDEX_NAME, SAFE_WEIGHTS_NAME, WEIGHTS_INDEX_NAME, WEIGHTS_NAME,
-                                is_safetensors_available)
+from transformers.utils import SAFE_WEIGHTS_INDEX_NAME, SAFE_WEIGHTS_NAME, WEIGHTS_INDEX_NAME, WEIGHTS_NAME
 from transformers.utils.hub import get_checkpoint_shard_files
 
 
@@ -30,8 +29,7 @@ def get_used_weight_files(folder: str, state_dict: Dict[str, torch.Tensor]) -> L
         index_file = _index_file
     elif os.path.exists(_safe_index_file):
         index_file = _safe_index_file
-    elif is_safetensors_available() and os.path.isfile(os.path.join(folder,
-                                                                    SAFE_WEIGHTS_NAME)):  # Single safetensor file
+    elif os.path.isfile(os.path.join(folder, SAFE_WEIGHTS_NAME)):  # Single safetensor file
         return [SAFE_WEIGHTS_NAME]
     elif os.path.isfile(os.path.join(folder, WEIGHTS_NAME)):
         return [WEIGHTS_NAME]

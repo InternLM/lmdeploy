@@ -164,6 +164,8 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>MiniCPM3 (4B)</li>
   <li>SDAR (1.7B-30B)</li>
   <li>gpt-oss (20B, 120B)</li>
+  <li>GLM-4.7-Flash (30B)</li>
+  <li>GLM-5 (754B)</li>
 </ul>
 </td>
 <td>
@@ -226,7 +228,7 @@ pip install lmdeploy
 若使用 GeForce RTX 50 系列显卡，请安装基于 **CUDA 12.8** 编译的 LMDeploy 预编译包。
 
 ```shell
-export LMDEPLOY_VERSION=0.12.0
+export LMDEPLOY_VERSION=0.12.1
 export PYTHON_VERSION=310
 pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu128-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu128
 ```

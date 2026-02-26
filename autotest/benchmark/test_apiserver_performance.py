@@ -1,95 +1,134 @@
 import pytest
 from utils.benchmark_utils import restful_test
-from utils.config_utils import get_benchmark_model_list
-from utils.run_restful_chat import start_restful_api, terminate_restful_api
+from utils.config_utils import get_func_config_list
 
 
-@pytest.fixture(scope='function', autouse=True)
-def prepare_environment(request, config, worker_id):
-    param = request.param
-    model = param['model']
-    backend = param['backend']
-    model_path = config.get('model_path') + '/' + model
-
-    pid, startRes = start_restful_api(config, param, model, model_path, backend, worker_id)
-    try:
-        yield param
-    finally:
-        if pid > 0:
-            terminate_restful_api(worker_id, param)
+def get_models(backend, parallel_config):
+    return get_func_config_list(backend, parallel_config, func_type='benchmark')
 
 
-def getModelList(tp_num):
-    model_list = get_benchmark_model_list(tp_num, kvint_list=[4, 8])
-    new_model_list = []
-    for model in model_list:
-        if model['backend'] == 'pytorch':
-            model['extra'] = '--max-batch-size 256 --cache-max-entry-count 0.8'
-        elif 'Llama-2' in model['model']:
-            model['extra'] = '--max-batch-size 256 --cache-max-entry-count 0.95'
-        elif 'internlm2' in model['model']:
-            model['extra'] = '--max-batch-size 256 --cache-max-entry-count 0.9'
-        else:
-            model['extra'] = '--max-batch-size 256'
-        model['cuda_prefix'] = None
-        new_model_list.append(model)
-    return new_model_list
-
-
+@pytest.mark.turbomind
 @pytest.mark.gpu_num_1
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment', getModelList(tp_num=1), indirect=True)
-def test_restful_tp1(config, run_id, prepare_environment, worker_id):
-    result, msg = restful_test(config, run_id, prepare_environment, worker_id=worker_id)
-
+@pytest.mark.parametrize('run_config', get_models(backend='turbomind', parallel_config={'tp': 1}))
+def test_turbomind_apiserver_tp1(config, run_config, worker_id):
+    result, msg = restful_test(config, run_config, worker_id=worker_id)
     assert result, msg
 
 
+@pytest.mark.turbomind
 @pytest.mark.gpu_num_2
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment', getModelList(tp_num=2), indirect=True)
-def test_restful_tp2(config, run_id, prepare_environment, worker_id):
-    result, msg = restful_test(config, run_id, prepare_environment, worker_id=worker_id)
-
+@pytest.mark.parametrize('run_config', get_models(backend='turbomind', parallel_config={'tp': 2}))
+def test_turbomind_apiserver_tp2(config, run_config, worker_id):
+    result, msg = restful_test(config, run_config, worker_id=worker_id)
     assert result, msg
 
 
+@pytest.mark.turbomind
 @pytest.mark.gpu_num_4
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment', getModelList(tp_num=4), indirect=True)
-def test_restful_tp4(config, run_id, prepare_environment, worker_id):
-    result, msg = restful_test(config, run_id, prepare_environment, worker_id=worker_id)
-
+@pytest.mark.parametrize('run_config', get_models(backend='turbomind', parallel_config={'tp': 4}))
+def test_turbomind_apiserver_tp4(config, run_config, worker_id):
+    result, msg = restful_test(config, run_config, worker_id=worker_id)
     assert result, msg
 
 
+@pytest.mark.turbomind
 @pytest.mark.gpu_num_8
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment', getModelList(tp_num=8), indirect=True)
-def test_restful_tp8(config, run_id, prepare_environment, worker_id):
-    result, msg = restful_test(config, run_id, prepare_environment, worker_id=worker_id)
+@pytest.mark.parametrize('run_config', get_models(backend='turbomind', parallel_config={'tp': 8}))
+def test_turbomind_apiserver_tp8(config, run_config, worker_id):
+    result, msg = restful_test(config, run_config, worker_id=worker_id)
+    assert result, msg
 
+
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_1
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_models(backend='pytorch', parallel_config={'tp': 1}))
+def test_pytorch_apiserver_tp1(config, run_config, worker_id):
+    result, msg = restful_test(config, run_config, worker_id=worker_id)
+    assert result, msg
+
+
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_2
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_models(backend='pytorch', parallel_config={'tp': 2}))
+def test_pytorch_apiserver_tp2(config, run_config, worker_id):
+    result, msg = restful_test(config, run_config, worker_id=worker_id)
+    assert result, msg
+
+
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_4
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_models(backend='pytorch', parallel_config={'tp': 4}))
+def test_pytorch_apiserver_tp4(config, run_config, worker_id):
+    result, msg = restful_test(config, run_config, worker_id=worker_id)
+    assert result, msg
+
+
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_models(backend='pytorch', parallel_config={'tp': 8}))
+def test_pytorch_apiserver_tp8(config, run_config, worker_id):
+    result, msg = restful_test(config, run_config, worker_id=worker_id)
+    assert result, msg
+
+
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_16
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_models(backend='pytorch', parallel_config={'tp': 16}))
+def test_pytorch_apiserver_tp16(config, run_config, worker_id):
+    result, msg = restful_test(config, run_config, worker_id=worker_id)
     assert result, msg
 
 
 @pytest.mark.function
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment', [{
-    'model': 'internlm/internlm2_5-20b-chat',
+@pytest.mark.gpu_num_2
+@pytest.mark.parametrize('run_config', [{
+    'model': 'Qwen/Qwen3-30B-A3B',
     'backend': 'pytorch',
-    'tp_num': 2,
-    'extra': '--max-batch-size 256 --cache-max-entry-count 0.9',
-    'cuda_prefix': None
-}, {
-    'model': 'internlm/internlm2_5-20b-chat-inner-4bits',
-    'backend': 'turbomind',
+    'communicator': 'nccl',
     'quant_policy': 0,
-    'tp_num': 2,
-    'extra': '--max-batch-size 256 --cache-max-entry-count 0.9',
-    'cuda_prefix': None
-}],
-                         indirect=True)
-def test_restful_func_tp2(config, run_id, prepare_environment, worker_id):
-    result, msg = restful_test(config, run_id, prepare_environment, worker_id=worker_id, is_smoke=True)
+    'parallel_config': {
+        'tp': 2
+    },
+    'extra_params': {}
+}, {
+    'model': 'Qwen/Qwen3-30B-A3B',
+    'backend': 'turbomind',
+    'communicator': 'nccl',
+    'quant_policy': 4,
+    'parallel_config': {
+        'tp': 2
+    },
+    'extra_params': {}
+}, {
+    'model': 'Qwen/Qwen3-30B-A3B',
+    'backend': 'turbomind',
+    'communicator': 'cuda-ipc',
+    'quant_policy': 8,
+    'parallel_config': {
+        'tp': 2
+    },
+    'extra_params': {}
+}, {
+    'model': 'Qwen/Qwen3-VL-32B-Instruct',
+    'backend': 'pytorch',
+    'communicator': 'nccl',
+    'quant_policy': 8,
+    'parallel_config': {
+        'tp': 2
+    },
+    'extra_params': {}
+}])
+def test_restful_func_tp2(config, run_config, worker_id):
+    result, msg = restful_test(config, run_config, worker_id=worker_id, is_smoke=True)
 
     assert result, msg
