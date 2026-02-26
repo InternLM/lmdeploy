@@ -121,7 +121,7 @@ class DeployModelMixinV1(DeployModelMixin):
                       **kwargs):
         """Build LM Head."""
         bm_ctx = get_build_model_context()
-        head_dtype = torch.float32 if bm_ctx.enforce_fp32_head else dtype
+        head_dtype = torch.float32 if bm_ctx.fp32_lm_head else dtype
         lm_head = build_rowwise_linear(
             hidden_size,
             vocab_size,
@@ -163,7 +163,7 @@ def build_embedding(vocab_size: int,
 
     # run with fp32 only when share weights with lm_head
     force_dtype = None
-    if bm_ctx.enforce_fp32_head and bm_ctx.tie_word_embeddings:
+    if bm_ctx.fp32_lm_head and bm_ctx.tie_word_embeddings:
         force_dtype = torch.float32
 
     return ParallelEmbedding(
