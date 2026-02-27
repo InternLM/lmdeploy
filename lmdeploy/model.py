@@ -778,7 +778,7 @@ class HFChatTemplate(BaseChatTemplate):
             prompt = self.tokenizer.apply_chat_template(messages, tokenize=False)
             system_pos = prompt.find('sentinel')
             if system_pos == -1:
-                return None, None, [], self.tokenizer.bos_token
+                return None, None, [], self.tokenizer.bos_token or ''
             system_start = prompt[:system_pos]
             system_end = prompt[system_pos + len('sentinel'):]
             return system_start, system_end, messages, prompt
