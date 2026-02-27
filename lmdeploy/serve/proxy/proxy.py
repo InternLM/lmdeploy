@@ -916,8 +916,6 @@ def proxy(server_name: str = '0.0.0.0',
         with_gdr=True,
     )
     node_manager.cache_status = not disable_cache_status
-    if isinstance(api_keys, str):
-        api_keys = api_keys.split(',')
     if api_keys is not None and (tokens := [key for key in api_keys if key]):
         from lmdeploy.serve.utils.server_utils import AuthenticationMiddleware
 

@@ -11,7 +11,7 @@ from starlette.datastructures import URL, Headers
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 
-async def validate_json_request(raw_request: Request):
+def validate_json_request(raw_request: Request):
     content_type = raw_request.headers.get('content-type', '').lower()
     media_type = content_type.split(';', maxsplit=1)[0]
     if media_type != 'application/json':

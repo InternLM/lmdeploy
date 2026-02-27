@@ -1441,8 +1441,6 @@ def serve(model_path: str,
     VariableInterface.allow_terminate_by_client = allow_terminate_by_client
     VariableInterface.enable_abort_handling = enable_abort_handling
 
-    if isinstance(api_keys, str):
-        api_keys = api_keys.split(',')
     ssl_keyfile, ssl_certfile, http_or_https = None, None, 'http'
     if ssl:
         ssl_keyfile = os.environ['SSL_KEYFILE']
