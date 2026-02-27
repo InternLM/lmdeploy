@@ -41,9 +41,9 @@ class CogVLMVisionModel(VisionModel):
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """Refer to the spec of `super().preprocess`"""
-        images = self.collect_images(messages)
+        images = self.collect_multimodal_items(messages)
         outputs = []
-        for image, _ in images:
+        for modality, image, _ in images:
             image = image.convert('RGB')
             pixel_values = self.image_transform(image)
             outputs.append(

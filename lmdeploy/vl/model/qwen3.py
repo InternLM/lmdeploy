@@ -5,6 +5,7 @@ import torch
 from transformers import AutoProcessor
 
 from lmdeploy.utils import get_logger
+from lmdeploy.vl.constants import Modality
 from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
 
 logger = get_logger('lmdeploy')
@@ -27,7 +28,6 @@ class Qwen3VLModel(VisionModel):
     def build_preprocessor(self):
         check_transformers()
         self.processor = AutoProcessor.from_pretrained(self.model_path)
-        # tokenizer = self.processor.tokenizer
         self.image_token = self.processor.image_token
         self.image_token_id = self.processor.image_token_id
 
@@ -38,7 +38,9 @@ class Qwen3VLModel(VisionModel):
         self.vision_end_token = self.processor.vision_end_token
         self.vision_end_token_id = self.processor.vision_end_token_id
 
-    def get_processor_args(self, mm_processor_kwargs: Optional[Dict[str, Any]] = None):
+        self.contains_video_input = False
+
+    def get_processor_args(self, mm_processor_kwargs: Dict[str, Any] | None = None):
         min_pixels = self.processor.image_processor.size['shortest_edge']
         max_pixels = self.processor.image_processor.size['longest_edge']
 
@@ -74,85 +76,73 @@ class Qwen3VLModel(VisionModel):
 
         return min_pixels, max_pixels
 
-    def check_video_input(self, messages):
-        has_video_input = any(
-            isinstance(message['content'], list) and any(item['type'] == 'video' for item in message['content'])
-            for message in messages)
-        self.has_video_input = has_video_input
-
     def _preprocess_image(self,
-                          messages: List[Dict],
-                          mm_processor_kwargs: Optional[Dict[str, Any]] = None) -> List[Dict]:
+                          data: List[Any],
+                          params: Dict[str, Any],
+                          mm_processor_kwargs: Dict[str, Any] | None = None) -> List[Dict]:
+
+        image = data.convert('RGB')
         min_pixels, max_pixels = self.get_processor_args(mm_processor_kwargs)
 
-        images = self.collect_images(messages)
-        outputs = []
-        for image, params in images:
-            image = image.convert('RGB')
-
-            result = self.processor.image_processor(images=image,
-                                                    size={
-                                                        'shortest_edge': min_pixels,
-                                                        'longest_edge': max_pixels
-                                                    },
-                                                    return_tensors='pt')
-            merge_length = self.processor.image_processor.merge_size**2
-            image_tokens = result['image_grid_thw'].prod(dim=1) // merge_length
-            result.update(dict(image_size=image.size, image_tokens=image_tokens, image_token_id=self.image_token_id))
-            outputs.append(result)
-        return outputs
+        result = self.processor.image_processor(images=image,
+                                                size={
+                                                    'shortest_edge': min_pixels,
+                                                    'longest_edge': max_pixels
+                                                },
+                                                return_tensors='pt')
+        merge_length = self.processor.image_processor.merge_size**2
+        image_tokens = result['image_grid_thw'].prod(dim=1) // merge_length
+        result.update(dict(image_size=image.size, image_tokens=image_tokens, image_token_id=self.image_token_id))
+        return result
 
     def _preprocess_video(self,
-                          messages: List[Dict],
+                          data: List[Any],
+                          params: Dict[str, Any],
                           mm_processor_kwargs: Optional[Dict[str, Any]] = None) -> List[Dict]:
-        videos = self.collect_videos(messages)
 
-        outputs = []
-        for video, params in videos:
-            metadata = params['video_metadata']
-            # since qwen-vl-utils has resize the images/videos, \
-            # we should pass do_resize=False to avoid duplicate operation in processor
-            video_kwargs = dict(return_metadata=True,
-                                do_resize=False,
-                                do_sample_frames=False,
-                                video_metadata=metadata,
-                                return_tensors='pt')
-            result = self.processor.video_processor(videos=video, **video_kwargs)
-            video_grid_thw = result['video_grid_thw']
+        metadata = params['video_metadata']
+        # since qwen-vl-utils has resize the images/videos, \
+        # we should pass do_resize=False to avoid duplicate operation in processor
+        video_kwargs = dict(return_metadata=True,
+                            do_resize=False,
+                            do_sample_frames=False,
+                            video_metadata=metadata,
+                            return_tensors='pt')
+        result = self.processor.video_processor(videos=data, **video_kwargs)
+        video_grid_thw = result['video_grid_thw']
 
-            # derive video_tokens
-            merge_length = self.processor.video_processor.merge_size**2
-            if metadata.get('fps') is None:
-                logger.warning_once(
-                    'Qwen3VL requires frame timestamps to construct prompts, '
-                    'but the `fps` of the input video could not be inferred. '
-                    'Probably `video_metadata` was missing from inputs and you passed pre-sampled frames. '
-                    'Defaulting to `fps=24`. Please provide `video_metadata` for more accurate results.')
-                metadata['fps'] = metadata['fps'] or 24
+        merge_length = self.processor.video_processor.merge_size**2
+        if metadata.get('fps') is None:
+            logger.warning_once('Qwen3VL: fps not found, defaulting to 24.')
+            metadata['fps'] = metadata['fps'] or 24
 
-            # if timestamps are not provided, calculate them
-            curr_timestamp = self.processor._calculate_timestamps(
-                metadata['frames_indices'],
-                metadata['fps'],
-                self.processor.video_processor.merge_size,
-            )
+        # if timestamps are not provided, calculate them
+        curr_timestamp = self.processor._calculate_timestamps(
+            metadata['frames_indices'],
+            metadata['fps'],
+            self.processor.video_processor.merge_size,
+        )
 
-            frame_seqlen = video_grid_thw[0][1:].prod() // merge_length
-            result.update(curr_timestamp=curr_timestamp, frame_seqlen=frame_seqlen, video_token_id=self.video_token_id)
-            outputs.append(result)
+        frame_seqlen = video_grid_thw[0][1:].prod() // merge_length
+        result.update(curr_timestamp=curr_timestamp, frame_seqlen=frame_seqlen, video_token_id=self.video_token_id)
+        return result
 
-        return outputs
-
-    def preprocess(self, messages: List[Dict], mm_processor_kwargs: Optional[Dict[str, Any]] = None) -> List[Dict]:
+    def preprocess(self, messages: List[Dict], mm_processor_kwargs: Dict[str, Any] | None = None) -> List[Dict]:
         """Refer to `super().preprocess()` for spec."""
-
-        self.check_video_input(messages)
-
         outputs = []
-        if self.has_video_input:
-            outputs = self._preprocess_video(messages, mm_processor_kwargs)
-        else:
-            outputs = self._preprocess_image(messages, mm_processor_kwargs)
+
+        mm_items = self.collect_multimodal_items(messages)
+        for modality, data, params in mm_items:
+            if modality == Modality.IMAGE:
+                result = self._preprocess_image(data, params, mm_processor_kwargs)
+            elif modality == Modality.VIDEO:
+                self.contains_video_input = True
+                result = self._preprocess_video(data, params, mm_processor_kwargs)
+            else:
+                logger.error(f'unsupported modality {modality} in qwen3vl')
+
+            result.update(modality=modality)
+            outputs.append(result)
 
         messages.append(dict(role='preprocess', content=outputs))
         return messages
@@ -180,8 +170,8 @@ class Qwen3VLModel(VisionModel):
         return prompt, self.image_token
 
     def to_pytorch_aux_video(self, messages, prompt, VIDEO_TOKEN, tokenizer, sequence_start):
-        """Return to the information needed by pytorch engine for video input
-        case."""
+        """Pack the video input to the compatible format with pytorch
+        engine."""
 
         # collect all preprocessing result from messages
         preps = [x['content'] for x in messages if x['role'] == 'preprocess']
@@ -189,7 +179,6 @@ class Qwen3VLModel(VisionModel):
         preps = preps[0]
 
         # split prompt into segments and validate data
-        # <|vision_start|><|video_pad|><|vision_end|>
         segs = prompt.split(self.vision_start_token + self.video_token + self.vision_end_token)
         assert len(segs) == len(preps) + 1, (f'the number of {self.video_token} is not equal '
                                              f'to input videos, {len(segs) - 1} vs {len(preps)}')
@@ -204,6 +193,8 @@ class Qwen3VLModel(VisionModel):
 
                 video_grid_thw = preps[i - 1]['video_grid_thw']
                 curr_timestamp = preps[i - 1]['curr_timestamp']
+
+                # update prompt with timestamp index tokens and vid pad tokens
                 video_placeholder = ''
                 for frame_idx in range(video_grid_thw[0][0]):
                     curr_time = curr_timestamp[frame_idx]
@@ -227,12 +218,11 @@ class Qwen3VLModel(VisionModel):
                    chat_template,
                    tokenizer,
                    sequence_start,
-                   chat_template_kwargs: Optional[Dict] = None,
+                   chat_template_kwargs: Dict | None = None,
                    **kwargs):
         """Return to the information needed by pytorch engine."""
-        if self.has_video_input:
-            # directly generate prompt for video input case, no backward compatibility to consider in this case
-            prompt = chat_template.messages2prompt(messages, sequence_start, **chat_template_kwargs)
+        if self.contains_video_input:
+            prompt, _ = self.proc_messages(messages, chat_template, sequence_start, chat_template_kwargs)
 
             return self.to_pytorch_aux_video(messages, prompt, self.video_token, tokenizer, sequence_start)
         else:
@@ -253,7 +243,7 @@ class Qwen3VLModel(VisionModel):
                      chat_template,
                      tokenizer,
                      sequence_start,
-                     chat_template_kwargs: Optional[Dict] = None,
+                     chat_template_kwargs: Dict | None = None,
                      **kwargs):
         # TODO: implement for turbomind
         pass

@@ -7,7 +7,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
+from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.nn.linear import build_rowwise_linear
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
@@ -393,10 +393,10 @@ class InternS1ProInputProcessor(BaseModelInputProcessor):
                 ts_sr = input_mm['ts_sr']
                 num_pad = input_mm['num_ts_tokens']
 
-                mm_data = MultiModalTensor(data=ts_values,
-                                           start=offset,
-                                           end=offset + num_pad,
-                                           meta=dict(ts_token_id=ts_token_id, ts_lens=ts_lens, ts_sr=ts_sr))
+                mm_data = MultiModalData(data=ts_values,
+                                         start=offset,
+                                         end=offset + num_pad,
+                                         meta=dict(ts_token_id=ts_token_id, ts_lens=ts_lens, ts_sr=ts_sr))
             else:
                 pixel_values = input_mm['pixel_values'].to(self.dtype)
                 image_grid_thw = input_mm['image_grid_thw']
@@ -407,10 +407,10 @@ class InternS1ProInputProcessor(BaseModelInputProcessor):
                 if isinstance(num_pad, torch.Tensor):
                     num_pad = num_pad.item()
 
-                mm_data = MultiModalTensor(data=pixel_values,
-                                           start=start,
-                                           end=start + num_pad,
-                                           meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
+                mm_data = MultiModalData(data=pixel_values,
+                                         start=start,
+                                         end=start + num_pad,
+                                         meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(

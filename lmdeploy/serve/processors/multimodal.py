@@ -5,10 +5,19 @@ from typing import Any, Dict, List, Literal, Tuple
 import PIL
 
 from lmdeploy.model import MODELS, BaseChatTemplate
+from lmdeploy.pytorch.multimodal.data_type import Modality
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
+
+MODALITY_MAP = {
+    'image_url': Modality.IMAGE,
+    'image_data': Modality.IMAGE,
+    'video_url': Modality.VIDEO,
+    'audio_url': Modality.AUDIO,
+    'time_series_url': Modality.TIME_SERIES,
+}
 
 
 class MultimodalProcessor:
@@ -110,127 +119,49 @@ class MultimodalProcessor:
             # the role is a user and the content is a list, in which there
             # might be image_url or image_data
             assert isinstance(content, List)
-            message = dict(role=role, content=[])
+
+            out_message = dict(role=role, content=[])
             for item in content:
-                # image url or base64-encoded image data
-                if item['type'] == 'image_url':
-                    """
-                    convert the following item:
-                    {
-                        'type': 'image_url',
-                        'image_url': {
-                            'url': 'image url or base64-encoded image data',
-                            'key': 'value'  # parameters used in image processing
-                            ...
-                        }
-                    }
-                    to:
-                    {
-                        'type': 'image',
-                        'image': Pillow.Image,
-                        'key': 'value'   # parameters used in image processing
-                        ...
-                    }
-                    """  # noqa
-                    data = item['image_url'].copy()
-                    try:
-                        url = data.pop('url')
-                        image = load_image(url)
-                        data.update(type='image', image=image)
-                        message['content'].append(data)
-                    except KeyError:
-                        logger.error(f'invalid format {message}')
-                elif item['type'] == 'image_data':
-                    """
-                    convert the following item:
-                    {
-                        'type': 'image_data',
-                        'image_data': {
-                            'data': Pillow.Image,
-                            'key': 'value'  # parameters used in image processing
-                            ...
-                        }
-                    }
-                    to:
-                    {
-                        'type': 'image',
-                        'image': Pillow.Image,
-                        'key': 'value'   # parameters used in image processing
-                        ...
-                    }
-                    """  # noqa
-                    data = item['image_data'].copy()
-                    try:
-                        image = data.pop('data')
-                        data.update(type='image', image=image)
-                        message['content'].append(data)
-                    except KeyError:
-                        logger.error(f'invalid format {message}')
-                elif item['type'] == 'video_url':
-                    """
-                    convert the following item:
-                    {
-                        'type': 'video_url',
-                        'video_url': {
-                            'url': 'video url or base64-encoded video data',
-                            'key': 'value'  # parameters used in video processing
-                            ...
-                        }
-                    }
-                    to:
-                    {
+                raw_type = item.get('type')
+
+                if raw_type == 'text':
+                    out_message['content'].append(item)
+                    continue
+
+                modality = MODALITY_MAP.get(raw_type)
+                if modality is None:
+                    logger.error(f'unexpected content type {raw_type} in message {in_messages[i]}')
+                    continue
+
+                raw_params = item[raw_type].copy()
+                data_src = raw_params.pop('url', None) or raw_params.pop('data', None)
+
+                if modality == Modality.IMAGE:
+                    data = load_image(data_src)
+                elif modality == Modality.VIDEO:
+                    # TODO: zhouxinyu, change fetch_video similar to load_image
+                    video_input = fetch_video({
                         'type': 'video',
-                        'video': torch.Tensor,  # nframes x C x H x W
-                        'video_metadata': Dict(str, Any),  # fps, frame_indices, total_num_frames, video_backend
-                        'key': 'value'   # parameters used in video processing
-                        ...
-                    }
-                    """
-                    data = item['video_url'].copy()
-                    try:
-                        url = data.pop('url')
-                        # FIXME: zhouxinyu, currently we transform to required format in utils
-                        # modify util functions to use url directly similar to load_image
-                        required_item = {'type': 'video', 'video': item['video_url']['url']}
-                        video_input = fetch_video(required_item, image_patch_size=16, return_video_metadata=True)
-                        video = video_input[0]
-                        video_metadata = video_input[1]
-                        data = dict(type='video', video=video, video_metadata=video_metadata)
-                        message['content'].append(data)
-                    except KeyError:
-                        logger.error(f'invalid format {message}')
-                elif item['type'] == 'time_series_url':
-                    """
-                    convert the following item:
-                    {
-                        'type': 'time_series_url',
-                        'time_series_url': {
-                            'url': 'time series url or base64-encoded time series data',
-                            'key': 'value'  # parameters used in time series processing
-                            ...
-                        }
-                    }
-                    to:
-                    {
-                        'type': 'time_series',
-                        'time_series': np.ndarray,
-                        'key': 'value'   # parameters used in time series processing
-                        ...
-                    }
-                    """  # noqa
-                    data = item['time_series_url'].copy()
-                    try:
-                        url = data.pop('url')
-                        time_series = load_time_series(url)
-                        data.update(type='time_series', time_series=time_series)
-                        message['content'].append(data)
-                    except KeyError:
-                        logger.error(f'invalid format {message}')
-                elif item['type'] == 'text':
-                    message['content'].append(item)
-                else:
-                    logger.error(f'unexpected content type {message}')
-            out_messages[i] = message
+                        'video': data_src
+                    },
+                                              image_patch_size=16,
+                                              return_video_metadata=True)
+                    data = video_input[0]  # nframes x C x H x W
+                    raw_params['video_metadata'] = video_input[1]
+                elif modality == Modality.AUDIO:
+                    raise NotImplementedError('audio is unsupported yet')
+                elif modality == Modality.TIME_SERIES:
+                    data = load_time_series(data_src)
+
+                out_message['content'].append({
+                    # unfied type. image_url, image_data -> image
+                    'type': modality.name.lower(),
+                    'modality': modality,
+                    'data': data,
+                    **raw_params
+                })
+
+            out_messages[i] = out_message
 
         await asyncio.gather(*[
             asyncio.get_event_loop().run_in_executor(None, _inner_call, i, messages, out_messages)
@@ -446,19 +377,19 @@ class MultimodalProcessor:
             # embedding_ranges and so on. All the returned values are passed
             # to tm engine for token generation
             results = await self.vl_encoder.async_infer(results)
-            results = await self.vl_encoder.wrap_for_turbomind(results,
-                                                               chat_template,
-                                                               self.tokenizer,
-                                                               sequence_start,
+            results = await self.vl_encoder.wrap_for_turbomind(messages=results,
+                                                               chat_template=chat_template,
+                                                               tokenizer=self.tokenizer,
+                                                               sequence_start=sequence_start,
                                                                tools=tools,
                                                                chat_template_kwargs=chat_template_kwargs)
         elif self.backend == 'pytorch':
             # for pt engine, this module only conduct the image preprocessing
             # It leaves the vision embedding to the pt engine
-            results = await self.vl_encoder.wrap_for_pytorch(results,
-                                                             chat_template,
-                                                             self.tokenizer,
-                                                             sequence_start,
+            results = await self.vl_encoder.wrap_for_pytorch(messages=results,
+                                                             chat_template=chat_template,
+                                                             tokenizer=self.tokenizer,
+                                                             sequence_start=sequence_start,
                                                              tools=tools,
                                                              chat_template_kwargs=chat_template_kwargs)
         return results

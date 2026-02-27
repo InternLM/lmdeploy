@@ -34,7 +34,6 @@ class InternS1ProVisionModel(VisionModel):
         tokenizer = self.processor.tokenizer
         self.image_token = self.processor.image_token
         self.image_token_id = tokenizer.encode(self.image_token)[-1]
-        self.mm_processor_kwargs = None
 
         # Time Series tokens
         self.ts_token = getattr(self.processor, 'ts_token', None)
@@ -118,7 +117,7 @@ class InternS1ProVisionModel(VisionModel):
         self.check_time_series_input(messages)
 
         if self.has_time_series_input:
-            time_series = self.collect_time_series(messages)
+            time_series = self.collect_multimodal_items(messages)
             outputs = []
             for ts_input, params in time_series:
                 sr = params.get('sampling_rate') if params is not None else None
@@ -128,9 +127,9 @@ class InternS1ProVisionModel(VisionModel):
         else:
             min_pixels, max_pixels = self.get_processor_args(mm_processor_kwargs)
 
-            images = self.collect_images(messages)
+            images = self.collect_multimodal_items(messages)
             outputs = []
-            for image, params in images:
+            for modality, image, params in images:
                 image = image.convert('RGB')
 
                 result = self.processor.image_processor(images=image,

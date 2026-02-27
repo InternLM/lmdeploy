@@ -71,9 +71,9 @@ class QwenVisionModel(VisionModel):
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """Refers to `super.preprocess() for spec."""
-        images = self.collect_images(messages)
+        images = self.collect_multimodal_items(messages)
         outputs = []
-        for image, params in images:
+        for modality, image, params in images:
             image = image.convert('RGB')
             pixel_values = self.image_transform(image)
             outputs.append(
