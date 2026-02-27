@@ -130,6 +130,53 @@ public:
                      int          group,
                      cudaStream_t stream) override;
 
+    void ReduceScatterV(const void*   sendbuff,  //
+                        void*         recvbuff,
+                        const size_t* counts,
+                        DataType      type,
+                        int           group,
+                        cudaStream_t  stream) override;
+
+    void AllGatherV(const void*   sendbuff,  //
+                    void*         recvbuff,
+                    const size_t* counts,
+                    DataType      type,
+                    int           group,
+                    cudaStream_t  stream) override;
+
+    void AllToAllNotifyDispatch(int*         symm_meta,
+                                int*         num_input_hidden,
+                                int*         num_output_hidden,
+                                int*         token_idx_in_rank,
+                                int          token_num,
+                                int          group,
+                                cudaStream_t stream);
+
+    void AllToAllDispatch(void*        symm_hidden,
+                          float*       symm_scales,
+                          int8_t*      symm_masks,
+                          int*         meta,
+                          void*        hidden,
+                          float*       topk_scales,
+                          int*         topk_experts,
+                          int*         token_idx_in_rank,
+                          int          token_num,
+                          int          dim,
+                          int          expert_per_token,
+                          DataType     type,
+                          int          group,
+                          cudaStream_t stream);
+
+    void AllToAllCombine(void*        hidden,
+                         int*         meta,
+                         void*        symm_hidden,
+                         int*         token_idx_in_rank,
+                         int          token_num,
+                         int          dim,
+                         DataType     type,
+                         int          group,
+                         cudaStream_t stream);
+
 private:
     template<class T>
     inline SymmetricPtr_V2<T> get_symmetric_v2(T* ptr, int group)

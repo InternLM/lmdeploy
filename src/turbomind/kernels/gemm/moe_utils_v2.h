@@ -61,4 +61,18 @@ std::vector<int> SampleUniform(int token_num, int expert_num, int exp_per_tok, s
 
 std::vector<int> SampleBalanced(int token_num, int expert_num, int exp_per_tok, std::mt19937& g);
 
+// Launch MoeScanKernel_v2 only (for reuse from a2a path).
+void invokeMoeScan_v2(int*         f2n,
+                      int*         f2E,
+                      int*         en2f,
+                      int*         offsets,
+                      int8_t*      masks,
+                      const int*   accum,
+                      int          log_tile,
+                      int          tiles,
+                      int          tokens,
+                      int          tokens_padded,
+                      int          experts,
+                      cudaStream_t st);
+
 }  // namespace turbomind
