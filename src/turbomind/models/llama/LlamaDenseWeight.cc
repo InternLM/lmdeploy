@@ -303,16 +303,16 @@ LlamaAttentionWeight::LlamaAttentionWeight(int      hidden_dim,
             register_module("q_proj", q_proj, tp_rank);
         }
         kv_a_proj.emplace(hidden_dim, mla.kv_lora_rank + mla.qk_rope_dim, data_type, false, weight_type, group_size);
-        kv_b_proj.emplace(mla.kv_lora_rank,
-                          head_num * (qk_nope_dim + mla.v_head_dim) / tp_size,
-                          data_type,
-                          false,
-                          weight_type,
-                          group_size);
+        // kv_b_proj.emplace(mla.kv_lora_rank,
+        //                   head_num * (qk_nope_dim + mla.v_head_dim) / tp_size,
+        //                   data_type,
+        //                   false,
+        //                   weight_type,
+        //                   group_size);
 
-        kv_a_layernorm = Tensor{{kv_b_proj.input_dim}, data_type, kDEVICE};
+        kv_a_layernorm = Tensor{{mla.kv_lora_rank}, data_type, kDEVICE};
         register_module("kv_a_proj", kv_a_proj);
-        register_module("kv_b_proj", kv_b_proj, tp_rank);
+        // register_module("kv_b_proj", kv_b_proj, tp_rank);
         register_parameter("kv_a_layernorm", kv_a_layernorm);
     }
     output.emplace((head_num * head_dim) / tp_size, hidden_dim, data_type, bias, weight_type, group_size);
@@ -333,7 +333,7 @@ void LlamaAttentionWeight::prepare()
         &q_a_proj,
         &q_b_proj,
         &kv_a_proj,
-        &kv_b_proj,
+        // &kv_b_proj,
     };
     for (auto& w : weights) {
         w->preprocess();

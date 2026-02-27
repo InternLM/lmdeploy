@@ -375,8 +375,8 @@ class MLA(Module):
             self.model.save_split(pack_fn(q_b), self._mla.format(idx, q_b_name, kind), split_dim=-1, split_num=tp)
         if kv_a is not None:
             self.model.save_split(pack_fn(kv_a), self._mla.format(idx, 'kv_a_proj', kind))
-        if kv_b is not None:
-            self.model.save_split(pack_fn(kv_b), self._mla.format(idx, 'kv_b_proj', kind), split_dim=-1, split_num=tp)
+        # if kv_b is not None:
+        #     self.model.save_split(pack_fn(kv_b), self._mla.format(idx, 'kv_b_proj', kind), split_dim=-1, split_num=tp)
         if o is not None:
             self.model.save_split(pack_fn(o), self._mla.format(idx, 'wo', kind), split_dim=0, split_num=tp)
 

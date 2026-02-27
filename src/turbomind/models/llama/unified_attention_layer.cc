@@ -534,14 +534,13 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
 
 Tensor UnifiedAttentionLayer::forward_mla(const Tensor& hidden_state, const WeightType& w)
 {
-    const int q_lora_rank  = w.q_a_proj.output_dim;
-    const int kv_lora_rank = w.kv_b_proj.input_dim;
-    const int qk_rope_dim  = w.kv_a_proj.output_dim - kv_lora_rank;
-    const int qk_nope_dim  = std::max(w.q_b_proj.output_dim, w.q_proj.output_dim) / local_head_num_ - qk_rope_dim;
-    const int v_head_dim   = w.kv_b_proj.output_dim / local_head_num_ - qk_nope_dim;
 
     const auto token_num = hidden_state.shape(0);
     const auto dtype     = hidden_state.dtype();
+
+    const int q_lora_rank  = w.q_a_proj.output_dim;
+    const int kv_lora_rank = w.kv_a_layernorm.size();
+    const int qk_rope_dim  = w.kv_a_proj.output_dim - kv_lora_rank;
 
     Tensor q;
 
@@ -569,23 +568,17 @@ Tensor UnifiedAttentionLayer::forward_mla(const Tensor& hidden_state, const Weig
     invokeRMSNorm(kv_a, kv_a, w.kv_a_layernorm, model_param_.norm_eps, stream);
     sync_check_cuda_error();
 
-    Tensor kv_b = linear_.Forward(kv_a, w.kv_b_proj);
-    sync_check_cuda_error();
-
     const int local_q_kv_head_num = local_head_num_ + 2 * local_kv_head_num_;
 
     Tensor qkv{{token_num, local_q_kv_head_num, (int)size_per_head_}, dtype, hidden_state.device()};
     MLACopyQKV(dtype,
                qkv.raw_data(),
                q.raw_data(),
-               kv_a.raw_data(),
-               kv_b.raw_data(),
+               kv_a_k_pe.raw_data(),
                token_num,
                local_head_num_,
-               qk_nope_dim,
-               qk_rope_dim,
                kv_lora_rank,
-               v_head_dim,
+               qk_rope_dim,
                stream);
     sync_check_cuda_error();
 

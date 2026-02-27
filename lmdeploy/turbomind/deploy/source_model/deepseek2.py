@@ -118,19 +118,13 @@ class DeepSeek2Model(LlamaModel):
             softmax_scale = q_head_dim**(-0.5)
         elif kv_lora_rank and kv_lora_rank != qk_nope_dim:
             softmax_scale = q_head_dim**(-0.5)
-        # MLA projects the single compressed KV latent to all attention
-        # heads via kv_b_proj, so kv_head_num must equal head_num.
-        # The C++ MLACopyQKV kernel writes 3*head_num*head_dim values
-        # but the QKV buffer is sized (head_num + 2*kv_head_num)*head_dim;
-        # a mismatch causes buffer overflow and wrong V offsets.
-        if kv_lora_rank:
-            info['kv_head_num'] = info['head_num']
 
         info.update(kv_lora_rank=kv_lora_rank,
                     q_lora_rank=cfg['q_lora_rank'] or 0,
                     qk_rope_dim=qk_rope_dim,
                     v_head_dim=v_head_dim,
                     size_per_head=size_per_head,
+                    kv_head_num=1,
                     expert_num=expert_num,
                     expert_inter_size=expert_inter_size,
                     experts_per_token=experts_per_token,
