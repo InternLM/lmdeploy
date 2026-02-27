@@ -352,22 +352,20 @@ class AsyncEngine:
             # Figure out a graceful way to handle the invalid input
             prompt_input = dict(input_ids=input_ids)
 
-        if gen_config is None:
-            gen_config = GenerationConfig()
+        gen_config = self._determine_gen_config(session, input_ids, gen_config=gen_config)
 
-        if gen_config.max_new_tokens is None:
-            max_new_tokens = max(0, self.session_len - session.step - len(input_ids))
-            if max_new_tokens == 0:
-                logger.error(f'run out of tokens. session={session_id}.')
-                yield GenOut(response='',
-                             history_token_len=session.step,
-                             input_token_len=len(input_ids),
-                             generate_token_len=0,
-                             finish_reason='length',
-                             token_ids=[])
-                if sequence_end is True and sequence_start is False:
-                    await session.async_close()
-                return
+        if gen_config.max_new_tokens == 0:
+            logger.info(f'run out of tokens. session={session_id}.')
+            yield GenOut(response='',
+                         history_token_len=session.step,
+                         input_token_len=len(input_ids),
+                         generate_token_len=0,
+                         finish_reason='length',
+                         token_ids=[])
+            if sequence_end is True and sequence_start is False:
+                await session.async_close()
+            return
+
         if self.backend_config.enable_prefix_caching and (gen_config.output_last_hidden_state == 'all'
                                                           or gen_config.output_logits == 'all'):
             errmsg = ('lmdeploy does not support outputting all token\'s logits or last_hidden_state '
@@ -388,8 +386,6 @@ class AsyncEngine:
 
         def is_error(status):
             return status not in [ResponseType.SUCCESS, ResponseType.FINISH, ResponseType.CANCEL]
-
-        gen_config = self._determine_gen_config(session, input_ids, gen_config=gen_config)
 
         stop_ids = []
         if not gen_config.ignore_eos:
