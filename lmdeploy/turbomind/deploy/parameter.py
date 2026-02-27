@@ -23,7 +23,7 @@ def to_fp8(x: torch.Tensor):
 
 
 def pack_u4_row(x: torch.Tensor) -> torch.Tensor:
-    assert x.dtype == torch.uint8
+    assert x.dtype == torch.uint8, f'x.dtype: {x.dtype}'
     xs = x.view(*x.shape[:-1], -1, 8).split(1, dim=-1)
     a = torch.zeros(xs[0].shape, dtype=torch.int32, device=x.device)
     for t in reversed(xs):
