@@ -91,9 +91,8 @@ LlamaDecoderLayerWeight::LlamaDecoderLayerWeight(
     // ffn_weight_type for their shared experts (int4 for mixed AWQ,
     // bfloat16 for GptOss mxfp4, same as weight_type otherwise).
     if (inter_size_) {
-        const bool is_moe_layer = layer_id < (int)moe_param.expert_num.size()
-                                  && moe_param.expert_num[layer_id];
-        const DataType ffn_wtype = is_moe_layer ? model.ffn_weight_type : weight_type_;
+        const bool     is_moe_layer   = layer_id < (int)moe_param.expert_num.size() && moe_param.expert_num[layer_id];
+        const DataType ffn_wtype      = is_moe_layer ? model.ffn_weight_type : weight_type_;
         const bool     is_cublas_gemm = byte_size(ffn_wtype, 8) == 16;
         ffn_weights.reset(new LlamaFfnWeight{
             hidden_units_,

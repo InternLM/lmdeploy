@@ -130,21 +130,21 @@ void MoeFfnLayer::Forward(ForwardParam& p)
 
         /// TODO: fix illegal memory access even if NaN are present in logits
         invokeMoeGate_V2(f2n_.data(),
-                        f2E_.data(),
-                        en2f_.data(),
-                        offsets_.data(),
-                        scales_.data(),
-                        masks_.data(),
-                        accum_.data(),
-                        logits.data(),
-                        tokens,
-                        padded,
-                        expert_num,
-                        param_.experts_per_token,
-                        softmax,
-                        param_.norm_topk_prob,
-                        param_.routed_scale,
-                        st);
+                         f2E_.data(),
+                         en2f_.data(),
+                         offsets_.data(),
+                         scales_.data(),
+                         masks_.data(),
+                         accum_.data(),
+                         logits.data(),
+                         tokens,
+                         padded,
+                         expert_num,
+                         param_.experts_per_token,
+                         softmax,
+                         param_.norm_topk_prob,
+                         param_.routed_scale,
+                         st);
     }
     sync_check_cuda_error();
 
