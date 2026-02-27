@@ -96,9 +96,9 @@ class MultimodalProcessor:
     @staticmethod
     async def async_convert_multimodal_data(messages: List[Dict]) -> List[Dict]:
         """Convert user-input multimodal data into GPT4V message format."""
-        from lmdeploy.vl.image_utils import load_image
-        from lmdeploy.vl.time_series_utils import load_time_series
-        from lmdeploy.vl.video_utils import fetch_video
+        from lmdeploy.vl.media_io.image import load_image
+        from lmdeploy.vl.media_io.time_series import load_time_series
+        from lmdeploy.vl.media_io.video import fetch_video
 
         if isinstance(messages, Dict):
             messages = [messages]
@@ -285,7 +285,7 @@ class MultimodalProcessor:
     @staticmethod
     def _re_format_prompt_images_pair(prompt: Tuple) -> Dict:
         """Reformat the prompt to openai message format."""
-        from lmdeploy.vl.image_utils import load_image
+        from lmdeploy.vl.media_io.image import load_image
 
         messages = {'role': 'user', 'content': []}
         prompt, images = prompt
