@@ -4,6 +4,7 @@ from functools import lru_cache
 import torch
 
 from ..causal_conv1d import CausalConv1dBuilder, CausalConv1dImpl
+from .utils import has_tilelang
 
 
 class CausalConv1dTilelangImpl(CausalConv1dImpl):
@@ -54,15 +55,6 @@ class CausalConv1dDaoImpl(CausalConv1dTilelangImpl):
         except Exception:
             raise RuntimeError(
                 'causal_conv1d is not installed, please refer to https://github.com/Dao-AILab/causal-conv1d')
-
-
-@lru_cache
-def has_tilelang():
-    try:
-        import tilelang  # noqa: F401
-        return True
-    except ImportError:
-        return False
 
 
 @lru_cache
