@@ -47,14 +47,14 @@ def fused_recurrent_gated_delta_rule_fwd(H,
 
     @T.prim_func
     def fused_recurrent_gated_delta_rule_main(
-            Query: T.StridedTensor([B, H, K], dtype=dtype, strides=q_stride),
-            Key: T.StridedTensor([B, H, K], dtype=dtype, strides=k_stride),
-            Value: T.StridedTensor([B, HV, V], dtype=dtype, strides=v_stride),
-            G: T.Tensor([B, HV], dtype=g_dtype),
-            Beta: T.Tensor([B, HV], dtype=beta_dtype),
-            State: T.StridedTensor([N, HV, K, V], dtype=dtype, strides=state_stride),
-            Out: T.Tensor([B, HV, V], dtype=dtype),
-            StateIndices: T.Tensor([B], dtype=torch.int64),
+        Query: T.StridedTensor([B, H, K], dtype=dtype, strides=q_stride),
+        Key: T.StridedTensor([B, H, K], dtype=dtype, strides=k_stride),
+        Value: T.StridedTensor([B, HV, V], dtype=dtype, strides=v_stride),
+        Out: T.Tensor([B, HV, V], dtype=dtype),
+        G: T.Tensor([B, HV], dtype=g_dtype),
+        Beta: T.Tensor([B, HV], dtype=beta_dtype),
+        State: T.StridedTensor([N, HV, K, V], dtype=dtype, strides=state_stride),
+        StateIndices: T.Tensor([B], dtype=torch.int64) = None,
     ):
         with T.Kernel(T.ceildiv(V, v_per_cta), B * HV, threads=num_threads) as (v_start, bhv_idx):
             tidx = T.get_thread_binding(0)
@@ -94,6 +94,8 @@ def fused_recurrent_gated_delta_rule_fwd(H,
             if use_qk_l2norm_in_kernel:
                 k_sum = T.alloc_var(T.float32)
                 q_sum = T.alloc_var(T.float32)
+                k_sum = 0
+                q_sum = 0
                 for i in T.Unroll(k_per_thr):
                     k_sum += k_local[i] * k_local[i]
                     q_sum += q_local[i] * q_local[i]
@@ -149,8 +151,10 @@ def fused_recurrent_gated_delta_rule_fwd(H,
             # store states
             if output_final_state and state_id >= 0:
                 for j in T.Unroll(k_per_thr):
-                    for i in T.Vectorized(v_per_warp):
-                        State[state_id, hv_id, k_off + j, v_off + i] = h_local[j, i]
+                    if (k_off + j) < K:
+                        for i in T.Vectorized(v_per_warp):
+                            if v_off + i < V:
+                                State[state_id, hv_id, k_off + j, v_off + i] = h_local[j, i]
 
             # compute output
             o_local = T.alloc_local([v_per_warp], dtype)
@@ -221,6 +225,10 @@ def fused_recurrent_gated_delta_rule(
 
     o = torch.empty_like(v)
     final_state = initial_state
+    if final_state is not None:
+        state_stride = final_state.stride()
+    else:
+        state_stride = (0, 0, 0, 0)
 
     q, k, v = q[:, 0], k[:, 0], v[:, 0]
     g = g[..., 0, :] if g is not None else None
@@ -234,7 +242,7 @@ def fused_recurrent_gated_delta_rule(
                                                   q_stride=q.stride(),
                                                   k_stride=k.stride(),
                                                   v_stride=v.stride(),
-                                                  state_stride=final_state.stride(),
+                                                  state_stride=state_stride,
                                                   scale=scale,
                                                   dtype=q.dtype,
                                                   g_dtype=g_dtype,
@@ -246,7 +254,7 @@ def fused_recurrent_gated_delta_rule(
                                                   use_state_indices=state_indices is not None,
                                                   num_warps=num_warps)
 
-    kernel(q, k, v, g, beta, final_state, o[:, 0], state_indices)
+    kernel(q, k, v, o[:, 0], g, beta, final_state, state_indices)
 
     if not output_final_state:
         final_state = None

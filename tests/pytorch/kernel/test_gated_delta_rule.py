@@ -5,7 +5,7 @@ import torch
 def do_test():
     try:
         import tilelang  # noqa: F401
-        return True
+        return torch.cuda.is_available()
     except Exception:
         return False
 

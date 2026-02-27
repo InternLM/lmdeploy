@@ -12,14 +12,15 @@ def has_fla():
     try:
         from fla.ops.gated_delta_rule import chunk_gated_delta_rule  # noqa: F401
         return True
-    except ImportError:
+    except Exception:
         return False
 
 
 class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
 
     def __init__(self):
-        assert has_fla() and has_tilelang(), 'fla and tilelang are required for CudaGatedDeltaRuleImpl'
+        if not has_fla() or not has_tilelang():
+            raise ImportError('fla and tilelang is required for CudaGatedDeltaRuleImpl')
         from fla.ops.gated_delta_rule import chunk_gated_delta_rule
 
         from lmdeploy.pytorch.kernels.cuda.gated_delta_rule import fused_recurrent_gated_delta_rule

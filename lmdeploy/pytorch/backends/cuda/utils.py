@@ -7,5 +7,5 @@ def has_tilelang():
     try:
         import tilelang  # noqa: F401
         return True
-    except ImportError:
+    except Exception:
         return False
