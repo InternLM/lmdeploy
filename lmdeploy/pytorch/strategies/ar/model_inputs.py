@@ -46,6 +46,11 @@ def merge_model_inputs(inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
     if inputs.model_metas is not None and other.model_metas is not None:
         model_metas = inputs.model_metas + other.model_metas
 
+    # ssm
+    state_offsets = None
+    if inputs.state_offsets is not None:
+        state_offsets = torch.cat([inputs.state_offsets, other.state_offsets], dim=0)
+
     return ModelInputs(
         input_ids=input_ids,
         seq_length=seq_length,
@@ -58,6 +63,7 @@ def merge_model_inputs(inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
         sum_kv_seqlen=inputs.sum_kv_seqlen + other.sum_kv_seqlen,
         local_adapter_ids=local_adapter_ids,
         model_metas=model_metas,
+        state_offsets=state_offsets,
     )
 
 

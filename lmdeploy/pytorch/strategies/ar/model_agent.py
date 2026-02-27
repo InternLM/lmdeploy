@@ -22,6 +22,9 @@ def get_model_inputs_next_decoding(inputs: ModelInputs, input_ids: torch.Tensor,
     """Next decoding step."""
     if input_ids.dim() == 1:
         input_ids = input_ids[None, :]
+    state_offsets = inputs.state_offsets
+    if state_offsets is not None:
+        state_offsets = state_offsets.clone()
     return ModelInputs(
         input_ids=input_ids,
         seq_length=torch.full_like(inputs.seq_length, max_q_seqlen),
@@ -34,7 +37,7 @@ def get_model_inputs_next_decoding(inputs: ModelInputs, input_ids: torch.Tensor,
         sum_kv_seqlen=inputs.sum_kv_seqlen + inputs.seq_length.numel() * inputs.max_q_seqlen,
         local_adapter_ids=inputs.local_adapter_ids,
         model_metas=model_metas,
-        state_offsets=inputs.state_offsets,
+        state_offsets=state_offsets,
     )
 
 
