@@ -7,16 +7,16 @@ namespace turbomind {
 
 using namespace attention;
 
-template bool invokeDecoding<Decoding<arch::Sm80, nv_bfloat16, nv_bfloat16, 1, 576>>(
-    const AttentionParams<nv_bfloat16>& params);
+template bool
+invokeDecoding<Decoding<arch::Sm80, nv_bfloat16, nv_bfloat16, 1, 576>>(const AttentionParams<nv_bfloat16>& params);
 
-template bool invokeDecoding<Decoding<arch::Sm80, nv_bfloat16, nv_bfloat16, 2, 576>>(
-    const AttentionParams<nv_bfloat16>& params);
+template bool
+invokeDecoding<Decoding<arch::Sm80, nv_bfloat16, nv_bfloat16, 2, 576>>(const AttentionParams<nv_bfloat16>& params);
 
-template bool invokeDecoding<Decoding<arch::Sm80, nv_bfloat16, nv_bfloat16, 8, 576>>(
-    const AttentionParams<nv_bfloat16>& params);
+template bool
+invokeDecoding<Decoding<arch::Sm80, nv_bfloat16, nv_bfloat16, 8, 576>>(const AttentionParams<nv_bfloat16>& params);
 
-template bool invokeDecoding<Decoding<arch::Sm80, nv_bfloat16, nv_bfloat16, 16, 576>>(
-    const AttentionParams<nv_bfloat16>& params);
+template bool
+invokeDecoding<Decoding<arch::Sm80, nv_bfloat16, nv_bfloat16, 16, 576>>(const AttentionParams<nv_bfloat16>& params);
 
 }  // namespace turbomind

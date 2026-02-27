@@ -691,20 +691,20 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n] -> n
 // noaux_tc: scores = scoring_func(logits), scores_for_choice = scores + correction_bias,
 // top-k on scores_for_choice, weights from scores; renormalize; apply routed_scale.
 // Threading: one token per block, threads cooperate over expert dimension.
-__global__ void MoeGateNoAuxTCKernel(float*       scales,   // [top_k, tokens]
-                                    int8_t*      masks,    // [experts, tokens_padded]
-                                    int*         accum,    // [experts, tiles]
-                                    const float* logits,   // [tokens, experts]
-                                    const float* bias,     // [experts] or nullptr
-                                    int          tokens,
-                                    int          tokens_padded,
-                                    int          experts,
-                                    int          top_k,
-                                    bool         norm_topk,
-                                    float        routed_scale,
-                                    int          log_tile,
-                                    int          tiles,
-                                    bool         use_sigmoid)
+__global__ void MoeGateNoAuxTCKernel(float*       scales,  // [top_k, tokens]
+                                     int8_t*      masks,   // [experts, tokens_padded]
+                                     int*         accum,   // [experts, tiles]
+                                     const float* logits,  // [tokens, experts]
+                                     const float* bias,    // [experts] or nullptr
+                                     int          tokens,
+                                     int          tokens_padded,
+                                     int          experts,
+                                     int          top_k,
+                                     bool         norm_topk,
+                                     float        routed_scale,
+                                     int          log_tile,
+                                     int          tiles,
+                                     bool         use_sigmoid)
 {
     const int ti = blockIdx.x;  // one token per block
     if (ti >= tokens) {
@@ -712,16 +712,16 @@ __global__ void MoeGateNoAuxTCKernel(float*       scales,   // [top_k, tokens]
     }
 
     extern __shared__ char smem[];
-    float* scores = (float*)smem;
-    float* scores_for_choice = scores + experts;
+    float*                 scores            = (float*)smem;
+    float*                 scores_for_choice = scores + experts;
 
     const float* row = logits + ti * experts;
 
     if (use_sigmoid) {
         // Sigmoid scoring: scores[e] = 1 / (1 + exp(-logit[e]))
         for (int e = threadIdx.x; e < experts; e += blockDim.x) {
-            float s = 1.0f / (1.0f + expf(-row[e]));
-            scores[e] = s;
+            float s              = 1.0f / (1.0f + expf(-row[e]));
+            scores[e]            = s;
             scores_for_choice[e] = s + (bias ? bias[e] : 0.f);
         }
     }
@@ -739,7 +739,7 @@ __global__ void MoeGateNoAuxTCKernel(float*       scales,   // [top_k, tokens]
 
         float sum_exp = 0.f;
         for (int e = threadIdx.x; e < experts; e += blockDim.x) {
-            float s = expf(row[e] - max_logit);
+            float s   = expf(row[e] - max_logit);
             scores[e] = s;
             sum_exp += s;
         }
@@ -747,8 +747,8 @@ __global__ void MoeGateNoAuxTCKernel(float*       scales,   // [top_k, tokens]
         __syncthreads();
 
         for (int e = threadIdx.x; e < experts; e += blockDim.x) {
-            float s = scores[e] / (sum_exp + 1e-20f);
-            scores[e] = s;
+            float s              = scores[e] / (sum_exp + 1e-20f);
+            scores[e]            = s;
             scores_for_choice[e] = s + (bias ? bias[e] : 0.f);
         }
     }
@@ -784,7 +784,7 @@ __global__ void MoeGateNoAuxTCKernel(float*       scales,   // [top_k, tokens]
                 }
             }
             if (best_e < 0) {
-                best_e     = 0;
+                best_e      = 0;
                 topk_val[k] = 0.f;
             }
             else {
@@ -819,29 +819,29 @@ __global__ void MoeGateNoAuxTCKernel(float*       scales,   // [top_k, tokens]
 }
 
 void invokeMoeGate_NoAuxTC(int*         f2n,
-                          int*         f2E,
-                          int*         en2f,
-                          int*         offsets,
-                          float*       scales,
-                          void*        masks,
-                          int*         accum,
-                          const float* logits,
-                          const float* correction_bias,
-                          int          tokens,
-                          int          tokens_padded,
-                          int          experts,
-                          int          exp_per_tok,
-                          bool         norm_topk_prob,
-                          float        routed_scale,
-                          bool         use_sigmoid,
-                          cudaStream_t st)
+                           int*         f2E,
+                           int*         en2f,
+                           int*         offsets,
+                           float*       scales,
+                           void*        masks,
+                           int*         accum,
+                           const float* logits,
+                           const float* correction_bias,
+                           int          tokens,
+                           int          tokens_padded,
+                           int          experts,
+                           int          exp_per_tok,
+                           bool         norm_topk_prob,
+                           float        routed_scale,
+                           bool         use_sigmoid,
+                           cudaStream_t st)
 {
     TM_CHECK(exp_per_tok > 0);
     TM_CHECK_LE(exp_per_tok, 32);
     TM_CHECK_LE(exp_per_tok, experts);
 
     constexpr int base_log_tile = 9;
-    int          log_tile      = base_log_tile;
+    int           log_tile      = base_log_tile;
     while (((tokens_padded + (1 << log_tile) - 1) >> log_tile) > kMoeGateMaxTiles) {
         ++log_tile;
     }
@@ -855,8 +855,8 @@ void invokeMoeGate_NoAuxTC(int*         f2n,
     while (block_dim < experts && block_dim < 256) {
         block_dim *= 2;  // next power of 2
     }
-    const int blocks  = tokens;
-    const size_t smem = sizeof(float) * experts * 2;
+    const int    blocks = tokens;
+    const size_t smem   = sizeof(float) * experts * 2;
 
     MoeGateNoAuxTCKernel<<<blocks, block_dim, smem, st>>>(scales,
                                                           (int8_t*)masks,
@@ -875,17 +875,8 @@ void invokeMoeGate_NoAuxTC(int*         f2n,
 
     constexpr int scan_threads = (1 << base_log_tile) / kMoeGateVecSize;
     const dim3    scan_blocks(tiles, experts + 1);
-    MoeScanKernel_v2<scan_threads><<<scan_blocks, scan_threads, 0, st>>>(f2n,
-                                                                        f2E,
-                                                                        en2f,
-                                                                        offsets,
-                                                                        (int8_t*)masks,
-                                                                        accum,
-                                                                        log_tile,
-                                                                        tiles,
-                                                                        tokens,
-                                                                        tokens_padded,
-                                                                        experts);
+    MoeScanKernel_v2<scan_threads><<<scan_blocks, scan_threads, 0, st>>>(
+        f2n, f2E, en2f, offsets, (int8_t*)masks, accum, log_tile, tiles, tokens, tokens_padded, experts);
 }
 
 template<int vec_size, int block_dim, class T>

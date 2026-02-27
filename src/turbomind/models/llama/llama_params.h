@@ -45,9 +45,9 @@ struct ModelParam {
     //  Full AWQ        int4          int4              int4
     //  Mixed AWQ       float16       int4              int4
     //  GptOss mxfp4    bfloat16      bfloat16          e2m1
-    DataType weight_type;           // attention weights
-    DataType expert_weight_type;    // MoE routed expert weights
-    DataType ffn_weight_type;       // dense FFN / shared expert weights
+    DataType weight_type;         // attention weights
+    DataType expert_weight_type;  // MoE routed expert weights
+    DataType ffn_weight_type;     // dense FFN / shared expert weights
 
     int      group_size;
     MLAParam mla;
