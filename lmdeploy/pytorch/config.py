@@ -30,6 +30,9 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str):
         return config
 
     torch_dtype = getattr(config.hf_config, 'dtype', None)
+    if torch_dtype is None and hasattr(config.hf_config, 'text_config'):
+        torch_dtype = getattr(config.hf_config.text_config, 'dtype', None)
+
     if torch_dtype is None:
         torch_dtype = getattr(config.hf_config, 'torch_dtype', None)
 

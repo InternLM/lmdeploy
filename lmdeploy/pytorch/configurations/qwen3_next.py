@@ -10,12 +10,6 @@ def _check_env_qwen3_next(device: str):
     if device != 'cuda':
         return
 
-    # check cuda
-    try:
-        import causal_conv1d  # noqa: F401
-    except ImportError:
-        raise ImportError('Qwen3-Next cuda support requires https://github.com/Dao-AILab/causal-conv1d.')
-
     try:
         import fla  # noqa: F401
     except ImportError:

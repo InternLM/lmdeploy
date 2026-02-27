@@ -450,6 +450,8 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     moe_param_.topk_group        = model["topk_group"].as<int>(1);
     moe_param_.topk_method       = model["topk_method"].as<std::string>("greedy");
     moe_param_.n_group           = model["moe_group_num"].as<int>(1);
+    moe_param_.scoring_func      = model["scoring_func"].as<std::string>("softmax");
+    moe_param_.router_n_groups   = model["router_n_groups"].as<int>(-1);
     moe_param_.router_bias       = model["expert_router_bias"].as<bool>();
     YAML::Node expert_num        = model["expert_num"];
     for (auto it = expert_num.begin(); it != expert_num.end(); ++it) {
@@ -464,6 +466,8 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
 
     model_param_.weight_type        = data_type_from_string(model["weight_type"].as<std::string>());
     model_param_.expert_weight_type = data_type_from_string(model["expert_weight_type"].as<std::string>());
+    model_param_.ffn_weight_type    = data_type_from_string(
+        model["ffn_weight_type"].as<std::string>(model["weight_type"].as<std::string>()));
 
     if (auto method = get_moe_method()) {
         moe_param_.method = *method;

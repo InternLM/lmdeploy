@@ -166,9 +166,9 @@ class LlamaModel(BaseInputModel):
         head_dim = head_dim or hidden_units // attn_head_num
         # compute rope param
         if 'rope_parameters' in model_arg:
-            # transformers v5.0.0 aggregates all rope-related parameters into 'rope_parameters'
+            # transformers v5.0.0 aggregates rope settings into rope_parameters
             rope_scaling = model_arg['rope_parameters']
-            rope_theta = rope_scaling.get('rope_theta', 10000.0)
+            rope_theta = float(rope_scaling.get('rope_theta', 10000.0))
         else:
             rope_theta = float(model_arg.get('rope_theta', 10000.0))
             rope_scaling = model_arg.get('rope_scaling', None)
