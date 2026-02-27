@@ -12,8 +12,8 @@ import torch
 
 from lmdeploy.archs import get_model_arch
 from lmdeploy.logger import RequestLogger
-from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig, Response, ResponseType, SpeculativeConfig,
-                               TurbomindEngineConfig)
+from lmdeploy.messages import (EngineOutput, GenerationConfig, PytorchEngineConfig, Response, ResponseType,
+                               SpeculativeConfig, TurbomindEngineConfig)
 from lmdeploy.metrics.metrics_processor import metrics_processor
 from lmdeploy.metrics.stats import IterationStats, RequestStats, SpeculativeDecodingStats
 from lmdeploy.model import ChatTemplateConfig, get_chat_template
@@ -423,6 +423,10 @@ class AsyncEngine:
                 logger.debug(f'[generate] session {session_id} started')
                 hit_stop_token = 0
                 req_stats = RequestStats(prompt_tokens=input_len)  # per-request stats
+
+                # We use this as default outputs in case the async_stream_infer of the Engine yields empty generator.
+                outputs = EngineOutput(ResponseType.INTERNAL_ENGINE_ERROR, [])
+
                 async for outputs in gen:
                     iteration_stats = IterationStats()  # per-iteration stats
                     specdecode_stats = SpeculativeDecodingStats(
