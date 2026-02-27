@@ -185,6 +185,8 @@ struct AttentionUniversal {
         constexpr int ITER_C = Map::kIterC;
         constexpr int ITER_S = Map::kIterS;
 
+        constexpr bool HAS_V = !(kHeadDim == 576 && false);
+
         Vec vec_Q[ITER_S][ITER_C]{};  // [QxH, D]
         Vec vec_K[1][ITER_C];
         Vec vec_V[1][ITER_C];
@@ -209,7 +211,9 @@ struct AttentionUniversal {
                     if constexpr (kProcessKV) {  // duplicate loads in s
                         if (s == 0) {
                             Ldg(vec_K[0][c], &params.k[k_idx]);
-                            Ldg(vec_V[0][c], &params.v[k_idx]);
+                            if constexpr (HAS_V) {
+                                Ldg(vec_V[0][c], &params.v[k_idx]);
+                            }
                         }
                     }
                 }
@@ -259,7 +263,9 @@ struct AttentionUniversal {
 
             if constexpr (!std::is_same_v<T, Tkv>) {
                 warp_stats<Map::kWarpThreadC>(param_K, vec_K, bitsof<Tkv>);
-                warp_stats<Map::kWarpThreadC>(param_V, vec_V, bitsof<Tkv>);
+                if constexpr (HAS_V) {
+                    warp_stats<Map::kWarpThreadC>(param_V, vec_V, bitsof<Tkv>);
+                }
             }
 
             Array<Tkv, kVecSize> out_K[1][ITER_C];
@@ -270,7 +276,9 @@ struct AttentionUniversal {
             PRAGMA_UNROLL
             for (int c = 0; c < ITER_C; ++c) {
                 out_K[0][c] = conv_K(vec_K[0][c]);
-                out_V[0][c] = conv_V(vec_V[0][c]);
+                if constexpr (HAS_V) {
+                    out_V[0][c] = conv_V(vec_V[0][c]);
+                }
             }
 
             iterator.block_head_.with(
@@ -283,13 +291,17 @@ struct AttentionUniversal {
                         const int di = offset.x + c * Map::kDeltaC;
                         if (qi < CTA_Q) {
                             Store(&k_cache[di], out_K[0][c]);
-                            Store(&v_cache[di], out_V[0][c]);
+                            if constexpr (HAS_V) {
+                                Store(&v_cache[di], out_V[0][c]);
+                            }
                         }
                     }
                     if constexpr (!std::is_same_v<T, Tkv>) {
                         if (qi < CTA_Q && offset.x == 0) {
                             StoreQuantParam<Tkv>(k_param, param_K[0]);
-                            StoreQuantParam<Tkv>(v_param, param_V[0]);
+                            if constexpr (HAS_V) {
+                                StoreQuantParam<Tkv>(v_param, param_V[0]);
+                            }
                         }
                     }
                 });

@@ -362,7 +362,7 @@ class MLA(Module):
         # Pad o_proj to size_per_head if present
         if o is not None:
             o = o.reshape(head_num, v_head_dim, -1)
-            o = torch.nn.functional.pad(o, (0, 0, 0, size_per_head - v_head_dim, 0, 0))
+            o = torch.nn.functional.pad(o, (0, 0, size_per_head - v_head_dim, 0, 0, 0))
             o = o.view(head_num * size_per_head, cfg.hidden_units)
 
         tp = self.model.attn_tp_size

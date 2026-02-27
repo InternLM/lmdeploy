@@ -227,6 +227,7 @@ void Engine::Impl::CreateSequenceManager()
         cache_block_seq_len,
         elem_bits == dbits ? 0 : dbits,
         elem_bits,
+        false,  // share_kv_
     };
 
     const auto get_free_size = [&] {  //

@@ -301,9 +301,6 @@ void UnifiedAttentionLayer::Forward(ForwardParam p)
 
     const auto& weights = *p.weights;
 
-    // [L, 2, H, s, D]
-    const size_t layer_offset = layer_id * 2 * local_kv_head_num_ * param_.cache_block_seq_len * size_per_head_;
-
     Tensor qkv;
 
     auto& d = *data_.at(p.phase);
@@ -368,7 +365,11 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
     else {
         attn = {{q_count, (int)local_head_num_ * (int)size_per_head_}, dtype, device};
     }
-    Tensor tmp_kv{{(int)local_kv_head_num_, 2, d.prefill.k_sum + MAX_CTA_S, (int)size_per_head_}, dtype, device};
+
+    const bool is_mla = 0;//model_param_.mla.kv_lora_rank > 0;
+
+    Tensor tmp_kv{
+        {(int)local_kv_head_num_, is_mla ? 1 : 2, d.prefill.k_sum + MAX_CTA_S, (int)size_per_head_}, dtype, device};
 
     auto CreateParams = [&](int offset, AttentionData::Stat stat, int max_kv_splits, cudaStream_t stream) {
         AttentionParams<T> params{};
@@ -376,10 +377,16 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         // Batch offset for `out` and `q` are computed inside the kernel
         params.out = (T*)attn.raw_data();
 
-        params.q      = (T*)qkv.raw_data();
-        params.k      = params.q + local_head_num_ * size_per_head_;
-        params.v      = params.k + local_kv_head_num_ * size_per_head_;
-        params.stride = (local_head_num_ + 2 * local_kv_head_num_) * size_per_head_;
+        params.q = (T*)qkv.raw_data();
+        params.k = params.q + local_head_num_ * size_per_head_;
+        if (is_mla) {
+            params.v      = params.k;
+            params.stride = (local_head_num_ + 1 * local_kv_head_num_) * size_per_head_;
+        }
+        else {
+            params.v      = params.k + local_kv_head_num_ * size_per_head_;
+            params.stride = (local_head_num_ + 2 * local_kv_head_num_) * size_per_head_;
+        }
 
         if (weights.qkv.bias) {
             params.q_bias = (T*)weights.qkv.bias.data_or<T>(nullptr);
@@ -400,9 +407,20 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
                                                        (int)param_.cache_block_seq_len};
 
         // prefill only
-        params.linear_iter_params = LinearIteratorParams{tmp_kv.raw_data(),  //
-                                                         int(2 * stat.k_sum * size_per_head_),
-                                                         int(stat.k_sum * size_per_head_)};
+        if (is_mla) {
+            params.linear_iter_params = LinearIteratorParams{
+                tmp_kv.raw_data(),            // flattened KV
+                stat.k_sum * size_per_head_,  // stride to next head
+                0                             // stride from K to V
+            };
+        }
+        else {
+            params.linear_iter_params = LinearIteratorParams{
+                tmp_kv.raw_data(),                // flattened KV
+                stat.k_sum * size_per_head_ * 2,  // stride to next head
+                stat.k_sum * size_per_head_       // stride from K to V
+            };
+        }
 
         params.finished = d.finished.data() + offset;
         params.cu_q_len = d.q_offsets.data() + offset;
