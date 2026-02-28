@@ -199,7 +199,8 @@ class Pipeline:
                                       multiplex=True,
                                       sequence_start=sequence_start,
                                       sequence_end=False,
-                                      step=session.step)
+                                      step=session.step,
+                                      **kwargs)
 
         def _gen():
             resp = None

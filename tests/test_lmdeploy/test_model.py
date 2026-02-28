@@ -247,7 +247,7 @@ def test_deepseek_vl2(model_path_or_name):
     assert ref == lm_res
 
 
-@pytest.mark.parametrize('model_path', ['Qwen/Qwen3-30B-A3B', 'Qwen/Qwen2.5-7B-Instruct'])
+@pytest.mark.parametrize('model_path', ['Qwen/Qwen3-30B-A3B', 'Qwen/Qwen2.5-7B-Instruct', 'Qwen/Qwen3.5-35B-A3B'])
 @pytest.mark.parametrize('enable_thinking', [True, False, None])
 def test_qwen3(model_path, enable_thinking):
     from transformers import AutoTokenizer
@@ -328,20 +328,14 @@ def test_HFChatTemplate_get_prompt_sequence_start_False_Qwen(model_path):
                             sequence_start=False) == f'<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n'
 
 
-@pytest.mark.parametrize('model_path', ['internlm/Intern-S1', 'internlm/Intern-S1-mini'])
-def test_InternS1_thinking(model_path):
-    pass
+@pytest.mark.parametrize('model_path', ['Qwen/Qwen3.5-35B-A3B'])
+def test_HFChatTemplate_get_prompt_sequence_start_False_Qwen3_5(model_path):
+    model = MODELS.get('hf')(model_path=model_path)
+    assert model.stop_words == ['<|im_end|>']
 
-
-@pytest.mark.parametrize('model_path', [''])
-def test_InternVL(model_path):
-    pass
-
-
-@pytest.mark.parametrize('model_path', [''])
-def test_HFChatTemplate_llama(model_path):
-    # TODO: add a huggingface token to github
-    pass
+    prompt = 'How to apply chat template using transformers?'
+    assert model.get_prompt(
+        prompt, sequence_start=False) == f'<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n<think>\n'
 
 
 @pytest.mark.parametrize('model_path', ['deepseek-ai/DeepSeek-V3'])
@@ -362,7 +356,7 @@ def test_HFChatTemplate_DeepSeek_thinking(model_path):
     assert model.get_prompt(prompt, sequence_start=False) == f'<｜User｜>{prompt}<｜Assistant｜><think>\n'
 
 
-@pytest.mark.parametrize('model_path', ['Qwen/Qwen3-VL-8B-Instruct'])
+@pytest.mark.parametrize('model_path', ['Qwen/Qwen3-VL-8B-Instruct', 'Qwen/Qwen3.5-35B-A3B'])
 def test_HFChatTemplate_Qwen3_VL_with_vision_id(model_path):
     model = MODELS.get('hf')(model_path=model_path)
 
