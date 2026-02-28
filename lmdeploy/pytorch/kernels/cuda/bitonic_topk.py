@@ -6,9 +6,13 @@ from triton.language import core
 from triton.language.standard import _log2
 
 try:
+    # For Triton >= 3.6.0, core.get_int_dtype must be wrapped with
+    # triton.runtime.jit.constexpr_function to be usable as a constexpr helper
+    # inside @triton.jit kernels. This try/except keeps compatibility with
+    # older Triton versions where constexpr_function is not available.
     get_int_dtype = triton.runtime.jit.constexpr_function(core.get_int_dtype)
 except Exception:
-    # for triton<3.6.0, there is no `triton.runtime.jit.constexpr_function`
+    # fallback to original function if constexpr_function is not available (Triton < 3.6.0)
     get_int_dtype = core.get_int_dtype
 
 
