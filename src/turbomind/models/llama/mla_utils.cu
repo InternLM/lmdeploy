@@ -36,9 +36,11 @@ __global__ void mla_copy_qkv_kernel(T*       qkv,        // [s, head_num + 2, kv
         }
     }
     else if (type == 1) {  // K/V
-        if (di * vec_size < head_dim) {
-            Ldg(data, &kv_a_k_pe[ti * head_dim + di * vec_size + offset]);
-            Store(&qkv[ti * (head_num + 1) * head_dim + (head_num + 0) * head_dim + di * vec_size], data);
+        if (threadIdx.y == 0) {
+            if (di * vec_size < head_dim) {
+                Ldg(data, &kv_a_k_pe[ti * head_dim + di * vec_size + offset]);
+                Store(&qkv[ti * (head_num + 1) * head_dim + (head_num + 0) * head_dim + di * vec_size], data);
+            }
         }
     }
 }
