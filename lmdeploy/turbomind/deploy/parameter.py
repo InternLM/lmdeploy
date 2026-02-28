@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import abstractmethod
-from typing import List
 
 import torch
 
@@ -45,7 +44,7 @@ class Parameter:
     KEY = ()
 
     @classmethod
-    def take(cls, keys: List[str]):
+    def take(cls, keys: list[str]):
         if not any(k.endswith(cls.KEYS[0]) for k in keys):
             return False
         xs = []
@@ -126,7 +125,7 @@ class PLora(Parameter):
         f(i, g('Plora_B.weight'), 'lora_b.weight', identity)
 
 
-def get_params(keys: List[str], bias=0):
+def get_params(keys: list[str], bias=0):
     ps = []
     if PLora.take(keys):
         ps.append(PLora())

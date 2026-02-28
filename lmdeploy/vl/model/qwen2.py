@@ -1,6 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict, List, Tuple
-
 import torch
 
 from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
@@ -35,7 +33,7 @@ class Qwen2VLModel(VisionModel):
         self.image_token = self.processor.image_token
         self.image_token_id = tokenizer.encode(self.image_token)[-1]
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refer to `super().preprocess()` for spec."""
         from qwen_vl_utils import process_vision_info
 
@@ -93,12 +91,12 @@ class Qwen2VLModel(VisionModel):
             self.model = model.eval()
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
-            messages(List[Dict]): the outputs of `preprocess`
+            messages(list[dict]): the outputs of `preprocess`
             max_batch_size(int): the max batch size when forwarding vision
                 model
         Return:
@@ -163,8 +161,8 @@ class Qwen2VLModel(VisionModel):
 
     @staticmethod
     def get_mrope_info(seq_len: int,
-                       grid_thws: List[Tuple[int, int, int]] = None,
-                       ranges: List[Tuple[int, int]] = None):
+                       grid_thws: list[tuple[int, int, int]] = None,
+                       ranges: list[tuple[int, int]] = None):
         mrope_position_ids = [torch.arange(ranges[0][0]).expand(3, -1)]
         st_idx = ranges[0][0]
         for i, (grid_thw, embedding_range) in enumerate(zip(grid_thws, ranges)):

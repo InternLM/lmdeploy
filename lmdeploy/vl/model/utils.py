@@ -2,7 +2,7 @@
 
 import inspect
 from contextlib import contextmanager
-from typing import Callable, List, MutableSequence, Union
+from typing import Callable, MutableSequence
 
 import torch
 
@@ -26,7 +26,7 @@ def disable_logging():
     logging.disable(previous_level)
 
 
-def _set_func(origin_func_path: Union[str, None], rewrite_func: Callable, origin_func: Callable = None):
+def _set_func(origin_func_path: str | None, rewrite_func: Callable, origin_func: Callable = None):
     """Replace old function with the new function.
 
     Args:
@@ -72,7 +72,7 @@ def _set_func(origin_func_path: Union[str, None], rewrite_func: Callable, origin
 
 
 @contextmanager
-def rewrite_ctx(origin_func_path: List[Union[str, Callable]], rewrite_func: List[Callable]):
+def rewrite_ctx(origin_func_path: list[str | Callable], rewrite_func: list[Callable]):
     """Rewrite context."""
     assert len(origin_func_path) == len(rewrite_func)
     origin_func_list = []
