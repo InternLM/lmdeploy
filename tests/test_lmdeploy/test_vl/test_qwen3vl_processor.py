@@ -2,7 +2,7 @@ import copy
 
 import pytest
 
-from lmdeploy.vl.media_io.image import load_image
+from lmdeploy.vl.media.image import load_image
 from lmdeploy.vl.model.qwen3 import Qwen3VLModel
 
 QWEN3VL_MODELS = [

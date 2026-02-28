@@ -97,7 +97,7 @@ print(out.text)
 
 ```python
 from lmdeploy import pipeline, GenerationConfig
-from lmdeploy.vl.media_io.image import encode_image_base64
+from lmdeploy.vl.media.image import encode_image_base64
 import torch
 from PIL import Image
 from transformers import AutoModel, AutoTokenizer

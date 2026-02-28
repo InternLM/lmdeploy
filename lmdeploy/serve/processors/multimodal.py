@@ -94,11 +94,11 @@ class MultimodalProcessor:
         return result
 
     @staticmethod
-    async def async_convert_multimodal_data(messages: List[Dict]) -> List[Dict]:
+    async def async_parse_multimodal_item(messages: List[Dict]) -> List[Dict]:
         """Convert user-input multimodal data into GPT4V message format."""
-        from lmdeploy.vl.media_io.image import load_image
-        from lmdeploy.vl.media_io.time_series import load_time_series
-        from lmdeploy.vl.media_io.video import fetch_video
+        from lmdeploy.vl.media.image import load_image
+        from lmdeploy.vl.media.time_series import load_time_series
+        from lmdeploy.vl.media.video import fetch_video
 
         if isinstance(messages, Dict):
             messages = [messages]
@@ -285,7 +285,7 @@ class MultimodalProcessor:
     @staticmethod
     def _re_format_prompt_images_pair(prompt: Tuple) -> Dict:
         """Reformat the prompt to openai message format."""
-        from lmdeploy.vl.media_io.image import load_image
+        from lmdeploy.vl.media.image import load_image
 
         messages = {'role': 'user', 'content': []}
         prompt, images = prompt
@@ -367,7 +367,7 @@ class MultimodalProcessor:
         """Process multimodal prompt and return processed data for inference
         engines."""
         chat_template = self.chat_template if do_preprocess else BaseChatTemplate()
-        messages = await self.async_convert_multimodal_data(messages)
+        messages = await self.async_parse_multimodal_item(messages)
         results = await self.vl_encoder.preprocess(messages, mm_processor_kwargs)
 
         if self.backend == 'turbomind':
