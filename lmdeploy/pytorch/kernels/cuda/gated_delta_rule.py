@@ -33,8 +33,9 @@ def fused_recurrent_gated_delta_rule_fwd(H,
     num_elems = 128 // num_bits
     warp_size = 32
     k_per_thr = T.ceildiv(K, warp_size)
-    v_per_warp = num_elems * 2
-    v_per_cta = v_per_warp * num_warps
+    v_per_warp = num_elems
+    num_waves = 2
+    v_per_cta = v_per_warp * num_warps * num_waves
 
     B = T.dynamic('B')
     N = B if not use_state_indices else T.dynamic('N')
@@ -114,64 +115,66 @@ def fused_recurrent_gated_delta_rule_fwd(H,
             if use_g:
                 g = T.cast(G[b_id, hv_id], T.float32)
             else:
-                g = 0
+                g = 0.0
             g_exp = T.exp(g)
             if use_beta:
                 beta = T.cast(Beta[b_id, hv_id], T.float32)
             else:
-                beta = 1
+                beta = 1.0
 
-            v_off = v_start * v_per_cta + warp_id * v_per_warp
+            for wave_id in range(num_waves):
+                v_warp_off = wave_id * num_warps * v_per_warp + warp_id * v_per_warp
+                v_off = v_start * v_per_cta + v_warp_off
 
-            # load states local
-            h_local = T.alloc_local([k_per_thr, v_per_warp], T.float32)
-            for j in T.Unroll(k_per_thr):
-                k_idx = k_off + j
-                for i in T.Vectorized(v_per_warp):
-                    h_local[j, i] = h_smem[k_idx, warp_id * v_per_warp + i]
+                # load v
+                v_local = T.alloc_local([v_per_warp], dtype)
+                for i in T.Parallel(v_per_warp):
+                    v_idx = (v_off + i) % V
+                    v_local[i] = Value[b_id, hv_id, v_idx]
 
-            # load v
-            v_local = T.alloc_local([v_per_warp], dtype)
-            for i in T.Parallel(v_per_warp):
-                v_idx = (v_off + i) % V
-                v_local[i] = Value[b_id, hv_id, v_idx]
-
-            # update states
-            for i in T.Unroll(v_per_warp):
-                hk = T.alloc_var(T.float32)
-                hk = 0
+                # load states local
+                h_local = T.alloc_local([k_per_thr, v_per_warp], T.float32)
                 for j in T.Unroll(k_per_thr):
-                    h_local[j, i] = h_local[j, i] * g_exp
-                    hk += h_local[j, i] * k_local[j]
-                hk = T.warp_reduce_sum(hk)
-                v = (v_local[i] - hk) * beta
-                for j in T.Unroll(k_per_thr):
-                    h_local[j, i] = h_local[j, i] + k_local[j] * v
+                    k_idx = k_off + j
+                    for i in T.Vectorized(v_per_warp):
+                        h_local[j, i] = h_smem[k_idx, v_warp_off + i]
 
-            # store states
-            if output_final_state and state_id >= 0:
-                for j in T.Unroll(k_per_thr):
-                    if (k_off + j) < K:
-                        for i in T.Vectorized(v_per_warp):
-                            if v_off + i < V:
-                                State[state_id, hv_id, k_off + j, v_off + i] = h_local[j, i]
+                # update states
+                for i in T.Unroll(v_per_warp):
+                    hk = T.alloc_var(T.float32)
+                    hk = 0
+                    for j in T.Unroll(k_per_thr):
+                        h_local[j, i] = h_local[j, i] * g_exp
+                        hk += h_local[j, i] * k_local[j]
+                    hk = T.warp_reduce_sum(hk)
+                    v = (v_local[i] - hk) * beta
+                    for j in T.Unroll(k_per_thr):
+                        h_local[j, i] = h_local[j, i] + k_local[j] * v
 
-            # compute output
-            o_local = T.alloc_local([v_per_warp], dtype)
-            for i in T.Unroll(v_per_warp):
-                # o = q * h
-                o = T.alloc_var(T.float32)
-                o = 0.0
-                for j in T.Unroll(k_per_thr):
-                    o += q_local[j] * h_local[j, i]
-                o = T.warp_reduce_sum(o)
-                o_local[i] = o
+                # store states
+                if output_final_state and state_id >= 0:
+                    for j in T.Unroll(k_per_thr):
+                        if (k_off + j) < K:
+                            for i in T.Vectorized(v_per_warp):
+                                if v_off + i < V:
+                                    State[state_id, hv_id, k_off + j, v_off + i] = h_local[j, i]
 
-            if lane_id == 0 and state_id >= 0:
-                for i in T.Vectorized(v_per_warp):
-                    v_idx = (v_off + i)
-                    if v_idx < V:
-                        Out[b_id, hv_id, v_idx] = o_local[i]
+                # compute output
+                o_local = T.alloc_local([v_per_warp], dtype)
+                for i in T.Unroll(v_per_warp):
+                    # o = q * h
+                    o = T.alloc_var(T.float32)
+                    o = 0.0
+                    for j in T.Unroll(k_per_thr):
+                        o += q_local[j] * h_local[j, i]
+                    o = T.warp_reduce_sum(o)
+                    o_local[i] = o
+
+                if lane_id == 0 and state_id >= 0:
+                    for i in T.Vectorized(v_per_warp):
+                        v_idx = (v_off + i)
+                        if v_idx < V:
+                            Out[b_id, hv_id, v_idx] = o_local[i]
 
     return fused_recurrent_gated_delta_rule_main
 
