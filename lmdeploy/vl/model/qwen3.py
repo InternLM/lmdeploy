@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import torch
 from transformers import AutoProcessor
@@ -27,18 +27,16 @@ class Qwen3VLModel(VisionModel):
 
     def build_preprocessor(self):
         check_transformers()
+
         self.processor = AutoProcessor.from_pretrained(self.model_path)
         self.image_token = self.processor.image_token
         self.image_token_id = self.processor.image_token_id
 
+        self.contains_video_input = False
         self.video_token = self.processor.video_token
         self.video_token_id = self.processor.video_token_id
         self.vision_start_token = self.processor.vision_start_token
-        self.vision_start_token_id = self.processor.vision_start_token_id
         self.vision_end_token = self.processor.vision_end_token
-        self.vision_end_token_id = self.processor.vision_end_token_id
-
-        self.contains_video_input = False
 
     def get_processor_args(self, mm_processor_kwargs: Dict[str, Any] | None = None):
         min_pixels = self.processor.image_processor.size['shortest_edge']
@@ -98,7 +96,7 @@ class Qwen3VLModel(VisionModel):
     def _preprocess_video(self,
                           data: List[Any],
                           params: Dict[str, Any],
-                          mm_processor_kwargs: Optional[Dict[str, Any]] = None) -> List[Dict]:
+                          mm_processor_kwargs: Dict[str, Any] | None = None) -> List[Dict]:
 
         metadata = params['video_metadata']
         # since qwen-vl-utils has resize the images/videos, \
@@ -133,6 +131,7 @@ class Qwen3VLModel(VisionModel):
 
         mm_items = self.collect_multimodal_items(messages)
         for modality, data, params in mm_items:
+            result = {}
             if modality == Modality.IMAGE:
                 result = self._preprocess_image(data, params, mm_processor_kwargs)
             elif modality == Modality.VIDEO:

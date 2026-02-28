@@ -15,10 +15,10 @@ from lmdeploy.pytorch.nn.linear import build_rowwise_linear
 from lmdeploy.pytorch.nn.moe import build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
-from .qwen2_5_vl import Qwen2_5_VLInputProcessor as Qwen3_5MoeInputProcessor
 from .qwen3_5 import (Qwen3_5Attention, Qwen3_5DecoderLayer, Qwen3_5ForConditionalGeneration, Qwen3_5GatedDeltaNet,
                       Qwen3_5MLP, Qwen3_5Model, Qwen3_5TextModel, Qwen3_5TextRotaryEmbedding)
 from .qwen3_5 import Qwen3_5VisionModel as Qwen3_5MoeVisionModel
+from .qwen3_vl import Qwen3VLInputProcessor as Qwen3_5MoeInputProcessor
 
 
 class Qwen3_5MoeTopKRouter(nn.Module):

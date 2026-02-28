@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 from functools import lru_cache
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Tuple
 
 import numpy as np
 import torch
@@ -117,23 +117,16 @@ class Qwen3VLTextModel(Qwen3model):
     def forward(
         self,
         input_ids: torch.LongTensor = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: List[torch.FloatTensor] | None = None,
         attn_metadata: Any = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
+        inputs_embeds: torch.FloatTensor | None = None,
         mrope_position_ids: torch.LongTensor = None,
         # args for deepstack
-        visual_pos_masks: Optional[torch.Tensor] = None,
-        deepstack_visual_embeds: Optional[list[torch.Tensor]] = None,
+        visual_pos_masks: torch.Tensor | None = None,
+        deepstack_visual_embeds: List[torch.Tensor] | None = None,
     ):
-        """visual_pos_masks (`torch.Tensor` of shape `(batch_size, seqlen)`,
-        *optional*):
-
-        The mask of the visual positions. deepstack_visual_embeds (`list[torch.Tensor]`, *optional*):     The deepstack
-        visual embeddings. The shape is (num_layers, visual_seqlen, embed_dim).     The feature is extracted from the
-        different visual encoder layers, and fed to the decoder     hidden states. It's from the paper DeepStack (
-        https://arxiv.org/abs/2406.04)
-        """
+        """Rewrite of LlamaModel.forward."""
 
         # token embedding
         if inputs_embeds is None:
@@ -280,7 +273,7 @@ class Qwen3VLVisionBlock(nn.Module):
     def forward(self,
                 hidden_states: torch.Tensor,
                 cu_seqlens: torch.Tensor,
-                rotary_pos_emb: Optional[torch.Tensor] = None) -> torch.Tensor:
+                rotary_pos_emb: torch.Tensor | None = None) -> torch.Tensor:
         hidden_states = hidden_states + self.attn(
             self.norm1(hidden_states),
             cu_seqlens=cu_seqlens,
@@ -620,7 +613,7 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
     def prepare_inputs_for_generation(
         self,
         past_key_values: List[List[torch.Tensor]],
-        inputs_embeds: Optional[torch.Tensor] = None,
+        inputs_embeds: torch.Tensor | None = None,
         context: StepContext = None,
     ):
         """Prepare input."""
@@ -637,20 +630,18 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
         grid_thw = None
         pos_embeds = None
         if context.input_multimodals is not None:
-            visual_data = [input_mm.get('mm_data', []) for input_mm in context.input_multimodals]
+            vision_inputs = [input_mm.get('mm_data', []) for input_mm in context.input_multimodals]
 
-            if len(visual_data) > 0:
-                visual_data = [item for sublist in visual_data for item in sublist]
-                pixel_values = torch.cat([data.data for data in visual_data])
-                image_token_id = visual_data[0].meta.get('image_token_id')
-                video_token_id = visual_data[0].meta.get('video_token_id')
+            if len(vision_inputs) > 0:
+                vision_inputs = [item for sublist in vision_inputs for item in sublist]
+                pixel_values = torch.cat([inp.data for inp in vision_inputs])
+                image_token_id = vision_inputs[0].meta.get('image_token_id')
+                video_token_id = vision_inputs[0].meta.get('video_token_id')
                 if image_token_id:
                     image_mask = input_ids == image_token_id
                 elif video_token_id:
                     image_mask = input_ids == video_token_id
-                # images: this is the original grid
-                # videos: this is t rows of [1, h, w]
-                grid_thw = torch.cat([data.meta['grid_thw'] for data in visual_data]).cpu()
+                grid_thw = torch.cat([data.meta['grid_thw'] for data in vision_inputs]).cpu()
                 vis_pos_emb = self.visual.rot_pos_emb(grid_thw)
                 pos_embeds = self.visual.fast_pos_embed_interpolate(grid_thw)
                 vis_cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2],
@@ -889,7 +880,7 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
 
     def update_model_metas(self,
                            past_key_values: List[List[torch.Tensor]],
-                           inputs_embeds: Optional[torch.Tensor] = None,
+                           inputs_embeds: torch.Tensor | None = None,
                            context: StepContext = None):
         """Update model meta."""
         if context.is_decoding:
