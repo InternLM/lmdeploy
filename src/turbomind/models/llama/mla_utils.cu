@@ -31,20 +31,14 @@ __global__ void mla_copy_qkv_kernel(T*       qkv,        // [s, head_num + 2, kv
         for (int hi = threadIdx.y; hi < head_num; hi += blockDim.y) {
             if (di * vec_size < head_dim) {
                 Load(data, &q[ti * head_num * head_dim + hi * head_dim + di * vec_size + offset]);
-                Store(&qkv[ti * (head_num + 2) * head_dim + hi * head_dim + di * vec_size], data);
+                Store(&qkv[ti * (head_num + 1) * head_dim + hi * head_dim + di * vec_size], data);
             }
         }
     }
-    else if (type == 1) {  // K
+    else if (type == 1) {  // K/V
         if (di * vec_size < head_dim) {
             Ldg(data, &kv_a_k_pe[ti * head_dim + di * vec_size + offset]);
-            Store(&qkv[ti * (head_num + 2) * head_dim + (head_num + 0) * head_dim + di * vec_size], data);
-        }
-    }
-    else if (type == 2) {  // V
-        if (di * vec_size < head_dim) {
-            Ldg(data, &kv_a_k_pe[ti * head_dim + di * vec_size + offset]);
-            Store(&qkv[ti * (head_num + 2) * head_dim + (head_num + 1) * head_dim + di * vec_size], data);
+            Store(&qkv[ti * (head_num + 1) * head_dim + (head_num + 0) * head_dim + di * vec_size], data);
         }
     }
 }
@@ -70,7 +64,7 @@ void invokeMLACopyQKV(T*           qkv,
         block.y /= 2;
     }
 
-    const dim3 grid(token_num, 3);
+    const dim3 grid(token_num, 2);
 
     mla_copy_qkv_kernel<T, vec_size>
         <<<grid, block, 0, stream>>>(qkv, q, kv_a_k_pe, head_num, head_dim, kv_lora_rank, rope_dim);

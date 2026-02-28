@@ -79,10 +79,14 @@ struct AttentionUniversal {
     __device__ void ApplyBias(
         VecQ& vec_Q, VecKV& vec_K, VecKV& vec_V, const ParamType& params, int head_idx, int kv_head_idx, int2 offset)
     {
-        using Map              = typename Impl::ThreadMapQ;
+        using Map = typename Impl::ThreadMapQ;
+
         constexpr int kVecSize = Map::kAccessC;
         constexpr int ITER_C   = Map::kIterC;
         constexpr int ITER_S   = Map::kIterS;
+
+        constexpr bool HAS_V = kHeadDim != 576;
+
         if constexpr (kProcessKV) {
             Array<T, kVecSize> bias_K[ITER_C];
             Array<T, kVecSize> bias_V[ITER_C];
@@ -93,7 +97,7 @@ struct AttentionUniversal {
                 if (params.k_bias) {
                     Ldg(bias_K[c], &params.k_bias[k_idx]);
                 }
-                if (params.v_bias) {
+                if (params.v_bias && HAS_V) {
                     Ldg(bias_V[c], &params.v_bias[k_idx]);
                 }
             }
@@ -103,7 +107,7 @@ struct AttentionUniversal {
                 if (params.k_bias) {
                     vec_K[0][c] = vec_K[0][c] + bias_K[c];
                 }
-                if (params.v_bias) {
+                if (params.v_bias && HAS_V) {
                     vec_V[0][c] = vec_V[0][c] + bias_V[c];
                 }
             }
@@ -185,7 +189,7 @@ struct AttentionUniversal {
         constexpr int ITER_C = Map::kIterC;
         constexpr int ITER_S = Map::kIterS;
 
-        constexpr bool HAS_V = !(kHeadDim == 576 && false);
+        constexpr bool HAS_V = kHeadDim != 576;
 
         Vec vec_Q[ITER_S][ITER_C]{};  // [QxH, D]
         Vec vec_K[1][ITER_C];

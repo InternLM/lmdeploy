@@ -223,11 +223,11 @@ void Engine::Impl::CreateSequenceManager()
 
     SequenceManager::BlockConfig block_config{
         (int)model_param.head_dim,
-        (int)model_param.kv_head_num,
+        (int)model_param.kv_head_num / param_.attn_tp_size,
         cache_block_seq_len,
         elem_bits == dbits ? 0 : dbits,
         elem_bits,
-        false,  // share_kv_
+        model_param.head_dim == 576,  // share kv
     };
 
     const auto get_free_size = [&] {  //

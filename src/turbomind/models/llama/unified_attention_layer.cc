@@ -366,7 +366,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         attn = {{q_count, (int)local_head_num_ * (int)size_per_head_}, dtype, device};
     }
 
-    const bool is_mla = 0;//model_param_.mla.kv_lora_rank > 0;
+    const bool is_mla = model_param_.mla.kv_lora_rank > 0;
 
     Tensor tmp_kv{
         {(int)local_kv_head_num_, is_mla ? 1 : 2, d.prefill.k_sum + MAX_CTA_S, (int)size_per_head_}, dtype, device};
@@ -586,9 +586,9 @@ Tensor UnifiedAttentionLayer::forward_mla(const Tensor& hidden_state, const Weig
     invokeRMSNorm(kv_a, kv_a, w.kv_a_layernorm, model_param_.norm_eps, stream);
     sync_check_cuda_error();
 
-    const int local_q_kv_head_num = local_head_num_ + 2 * local_kv_head_num_;
+    const int local_q_kv_head_num = local_head_num_ + 1 * local_kv_head_num_;
 
-    Tensor qkv{{token_num, local_q_kv_head_num, (int)size_per_head_}, dtype, hidden_state.device()};
+    Tensor qkv{{token_num, local_q_kv_head_num, size_per_head_}, dtype, hidden_state.device()};
     MLACopyQKV(dtype,
                qkv.raw_data(),
                q.raw_data(),

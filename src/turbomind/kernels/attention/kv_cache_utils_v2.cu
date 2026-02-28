@@ -238,7 +238,7 @@ void invokeProcessKV_v2(char**                 blocks,
         constexpr int kHeadDim = dim;
         FT_CHECK(head_dim == kHeadDim);
 
-        constexpr bool kShareKV = kHeadDim == 576 && false;
+        constexpr bool kShareKV = kHeadDim == 576;
 
         block::Layout block_layout{block::Config<T, Tkv, kHeadDim, kShareKV>{head_num, block_seq_len}};
 
@@ -482,7 +482,7 @@ void invokeFlattenKV_v2(T*                     k,
         constexpr int kHeadDim = dim;
         FT_CHECK(head_dim == kHeadDim);
 
-        constexpr bool kShareKV = kHeadDim == 576 && false;
+        constexpr bool kShareKV = kHeadDim == 576;
 
         block::Layout block_layout{block::Config<T, Tkv, kHeadDim, kShareKV>{head_num, block_seq_len}};
 
