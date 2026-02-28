@@ -15,7 +15,7 @@ class ChatGLMModelConfigBuilder(AutoModelConfigBuilder):
     def build(cls, hf_config, model_path: str = None, **kwargs):
         """build."""
         head_dim = hf_config.hidden_size // hf_config.num_attention_heads
-        bos_token_id = hf_config.bos_token_id
+        bos_token_id = getattr(hf_config, 'bos_token_id', None)
         if bos_token_id is None:
             bos_token_id = hf_config.pad_token_id
 

@@ -406,11 +406,13 @@ class Qwen2_5_VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphM
             dtype=dtype,
             device=device,
         )
+        # get text_config
+        text_config = getattr(config, 'text_config', config)
         # build model
-        self.model = Qwen2Model(config, dtype=dtype, device=device)
+        self.model = Qwen2Model(text_config, dtype=dtype, device=device)
         # build lm_head
-        self.lm_head = build_rowwise_linear(config.hidden_size,
-                                            config.vocab_size,
+        self.lm_head = build_rowwise_linear(text_config.hidden_size,
+                                            text_config.vocab_size,
                                             bias=False,
                                             dtype=dtype,
                                             device=device)

@@ -48,7 +48,7 @@ class Qwen2VLModel(VisionModel):
             item = dict(type='image', image=image)
             item.update({key: params[key] for key in params.keys() if key in optional_keys})
             image_inputs, _ = process_vision_info([dict(content=[item])])
-            result = self.processor.image_processor(images=image_inputs, videos=None, return_tensors='pt')
+            result = self.processor.image_processor(images=image_inputs, return_tensors='pt')
             merge_length = self.processor.image_processor.merge_size**2
             image_tokens = result['image_grid_thw'].prod(dim=1) // merge_length
             result.update(dict(image_size=image.size, image_tokens=image_tokens, image_token_id=self.image_token_id))
