@@ -225,3 +225,15 @@ def visualize_chat_completions(outputs, enable_meta: bool = True):
         resps.append(resp)
 
     return visualize_pipe_out(resps, enable_meta=enable_meta)
+
+
+sources = None
+
+
+def dump_tilelang_source(kernel, path: str = 'sources/tvm_kernels.cu'):
+    global sources
+    if sources is not None:
+        return
+    sources = kernel.get_kernel_source()
+    with open(path, 'w') as f:
+        f.write(sources)

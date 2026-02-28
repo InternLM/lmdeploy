@@ -683,12 +683,14 @@ class HFChatTemplate(BaseChatTemplate):
     """
 
     def __init__(self, model_path: str = '', **kwargs):
-
+        self.model_path = model_path
         try:
             from transformers import AutoTokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-            # Verify if the model can perform apply_chat_template with user roles.
-            self._role_instruction('user')
+            # Verify if the model can perform apply_chat_template with different roles.
+            self.user_start, self.user_end, _, _ = self._user_instruction()
+            self.assistant_start, self.assistant_end, _, _ = self._assistant_instruction()
+            _, _, self.sentinel_system_messages, self.sentinel_system_prompt = self._system_instruction()
             self.stop_words = []
             if hasattr(self.tokenizer, 'eos_token') and self.tokenizer.eos_token is not None:
                 self.stop_words.append(self.tokenizer.eos_token)
@@ -700,22 +702,6 @@ class HFChatTemplate(BaseChatTemplate):
                 self.stop_words.append('<|call|>')
         except Exception as e:
             raise ValueError(f'Try apply_chat_template failed: {e}')
-        try:
-            _, _, self.sentinel_system_messages, self.sentinel_system_prompt = self._role_instruction('system')
-            self.assistant_start, self.assistant_end, _, _ = self._role_instruction('assistant')
-        except Exception:
-            # Some models, such as google/gemma-2-2b-it, do not support a system role in the message structure.
-            # They require conversation roles to strictly alternate between 'user' and 'assistant'
-            # (e.g., user/assistant/user/assistant...). Consequently, we cannot directly obtain the special
-            # tokens for the system and assistant roles.
-            arch, _ = get_model_arch(model_path)
-            if arch in ['Gemma2ForCausalLM', 'Gemma3ForConditionalGeneration']:
-                self.sentinel_system_messages = []
-                self.sentinel_system_prompt = '<bos>'
-                self.assistant_start = '<start_of_turn>model\n'
-                self.assistant_end = '<end_of_turn>\n'
-            else:
-                raise RuntimeError(f'apply chat template failed with model {arch} ')
 
     def get_prompt(self, prompt, sequence_start=True, **kwargs):
         messages = [{'role': 'user', 'content': prompt}]
@@ -756,13 +742,49 @@ class HFChatTemplate(BaseChatTemplate):
             prompt = prompt.replace('commentary, ', '', 1)
         return prompt
 
-    def _role_instruction(self, role):
-        messages = [{'role': role, 'content': 'sentinel'}]
+    def _user_instruction(self):
+        """Extract user message template markers from the tokenizer's chat
+        template."""
+
+        messages = [{'role': 'user', 'content': 'sentinel'}]
         prompt = self.tokenizer.apply_chat_template(messages, tokenize=False)
-        role_pos = prompt.find('sentinel')
-        role_start = prompt[:role_pos]
-        role_end = prompt[role_pos + len('sentinel'):]
-        return role_start, role_end, messages, prompt
+        user_pos = prompt.find('sentinel')
+        user_start = prompt[:user_pos]
+        user_end = prompt[user_pos + len('sentinel'):]
+        return user_start, user_end, messages, prompt
+
+    def _assistant_instruction(self):
+        """Extract assistant message template markers from the tokenizer's chat
+        template."""
+
+        # Some models, such as google/gemma-2-2b-it, require conversation roles to strictly
+        # alternate between 'user' and 'assistant' (e.g., user/assistant/user/assistant...).
+        # Consequently, we construct test messages containing both user and assistant roles
+        # with special tokens, and parse the assistant tag according to user markers and
+        # special tokens.
+        messages = [{'role': 'user', 'content': 'placeholder'}, {'role': 'assistant', 'content': 'sentinel'}]
+        prompt = self.tokenizer.apply_chat_template(messages, tokenize=False)
+        user_end_pos = prompt.find(self.user_end)
+        assistant_pos = prompt.find('sentinel')
+        assistant_start = prompt[user_end_pos + len(self.user_end):assistant_pos]
+        assistant_end = prompt[assistant_pos + len('sentinel'):]
+        return assistant_start, assistant_end, messages, prompt
+
+    def _system_instruction(self):
+        """Extract system message template markers from the tokenizer's chat
+        template."""
+        messages = [{'role': 'system', 'content': 'sentinel'}]
+        try:
+            prompt = self.tokenizer.apply_chat_template(messages, tokenize=False)
+            system_pos = prompt.find('sentinel')
+            if system_pos == -1:
+                return None, None, [], self.tokenizer.bos_token or ''
+            system_start = prompt[:system_pos]
+            system_end = prompt[system_pos + len('sentinel'):]
+            return system_start, system_end, messages, prompt
+        except Exception:
+            # Some models, such as google/gemma-2-2b-it, do not support a system role in the message structure.
+            return None, None, [], self.tokenizer.bos_token or ''
 
     @classmethod
     def match(cls, model_path: str) -> Optional[str]:

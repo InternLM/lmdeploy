@@ -110,24 +110,29 @@ class Session:
     async def async_close(self):
         """End the session."""
         logger.info(f'[session] Ending session {self.session_id}')
+        if self._handle is None and self.step == 0:
+            return
         if self._handle is not None:
             await self._active.wait()
         async with self.request_handle() as handle:
             try:
                 await handle.async_end(self.session_id)
-            except (Exception, asyncio.CancelledError, GeneratorExit) as e:
-                logger.error(f'[async_end] exception caught: {e}')
+            except (Exception, asyncio.CancelledError, GeneratorExit):
+                logger.exception('[async_end] exception caught')
         self.reset()
 
     def abort(self):
         """Abort the session in sync mode."""
-        self._run(self.async_abort())
+        if self._session_mgr is not None:
+            self._run(self.async_abort()).result()
 
     def close(self):
         """End the session in sync mode."""
-        self._run(self.async_close())
+        if self._session_mgr is not None:
+            self._run(self.async_close()).result()
 
     def _run(self, coro):
+        assert self._session_mgr is not None, 'Session manager is not initialized'
         return asyncio.run_coroutine_threadsafe(coro, self._session_mgr().loop)
 
 

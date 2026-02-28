@@ -71,6 +71,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.RouterNoauxTC:
             from .moe_router import TritonRouterNoauxTCBuilder
             return TritonRouterNoauxTCBuilder
+        elif layer_type == OpType.CausalConv1d:
+            from .causal_conv1d import CausalConv1dCudaBuilder
+            return CausalConv1dCudaBuilder
         else:
             logger.debug(f'Op {layer_type} fallback to default implementation.')
             return super().get_layer_impl_builder(layer_type)
