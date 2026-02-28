@@ -5,7 +5,11 @@ import triton.language as tl
 from triton.language import core
 from triton.language.standard import _log2
 
-get_int_dtype = triton.runtime.jit.constexpr_function(core.get_int_dtype)
+try:
+    get_int_dtype = triton.runtime.jit.constexpr_function(core.get_int_dtype)
+except Exception:
+    # for triton<3.6.0, there is no `triton.runtime.jit.constexpr_function`
+    get_int_dtype = core.get_int_dtype
 
 
 @triton.jit
