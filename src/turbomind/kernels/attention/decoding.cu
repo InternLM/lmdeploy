@@ -45,7 +45,7 @@ void dispatchDecoding(const AttentionParams<T>& params)
         constexpr int kHeadDim = dim;
 
         if (kHeadDim == 576) {
-            return invokeDecoding<Decoding<Arch, T, Tkv, 8, kHeadDim>>(params); // faster than Qh=16
+            return invokeDecoding<Decoding<Arch, T, Tkv, 8, kHeadDim>>(params);  // faster than Qh=16
         }
 
         if (0) {}

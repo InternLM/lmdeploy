@@ -327,13 +327,7 @@ LlamaAttentionWeight::LlamaAttentionWeight(int      hidden_dim,
 void LlamaAttentionWeight::prepare()
 {
     std::vector weights{
-        &qkv,
-        &output,
-        &q_a_proj,
-        &q_a_proj,
-        &q_b_proj,
-        &kv_a_proj,
-        // &kv_b_proj,
+        &qkv, &output, &q_a_proj, &q_a_proj, &q_b_proj, &kv_a_proj  // &kv_b_proj,
     };
     for (auto& w : weights) {
         w->preprocess();
