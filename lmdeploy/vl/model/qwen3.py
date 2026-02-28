@@ -137,8 +137,6 @@ class Qwen3VLModel(VisionModel):
             elif modality == Modality.VIDEO:
                 self.contains_video_input = True
                 result = self._preprocess_video(data, params, mm_processor_kwargs)
-            else:
-                logger.error(f'unsupported modality {modality} in qwen3vl')
 
             result.update(modality=modality)
             outputs.append(result)
@@ -220,12 +218,11 @@ class Qwen3VLModel(VisionModel):
                    chat_template_kwargs: Dict | None = None,
                    **kwargs):
         """Return to the information needed by pytorch engine."""
-        if self.contains_video_input:
-            prompt, _ = self.proc_messages(messages, chat_template, sequence_start, chat_template_kwargs)
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start, chat_template_kwargs)
 
+        if self.contains_video_input:
             return self.to_pytorch_aux_video(messages, prompt, self.video_token, tokenizer, sequence_start)
         else:
-            prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start, chat_template_kwargs)
             return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
 
     def build_model(self):

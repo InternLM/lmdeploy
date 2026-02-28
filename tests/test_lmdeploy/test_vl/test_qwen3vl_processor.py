@@ -2,7 +2,6 @@ import copy
 
 import pytest
 
-from lmdeploy.vl.constants import Modality
 from lmdeploy.vl.media.image import load_image
 from lmdeploy.vl.model.qwen3 import Qwen3VLModel
 
@@ -36,7 +35,6 @@ def sample_messages():
             },
             {
                 'type': 'image',
-                'modality': Modality.IMAGE,
                 'data': pil_image
             },
         ]

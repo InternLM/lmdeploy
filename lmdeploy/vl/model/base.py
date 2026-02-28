@@ -172,7 +172,7 @@ class VisionModel(ABC):
         Args:
             messages (List[Dict]): a list of message
         Returns:
-            List[Tuple[Any, Dict]]: a list of (data, params) for each multimodal item
+            List[Tuple[Any, Dict]]: a list of (modality, data, params) for each multimodal item
         """
         multimodal_items = []
         for message in messages:
@@ -181,17 +181,12 @@ class VisionModel(ABC):
                 continue
 
             for x in content:
-                if not isinstance(x, dict) or 'type' not in x:
+                modality = x.get('type')
+                if not isinstance(x, dict) or 'type' not in x or modality == 'text':
                     continue
 
-                if x['type'] == 'text':
-                    continue
-
-                modality = x.get('modality')
                 data = x.get('data')
-
-                # everything else are considered extra parameters
-                params = {k: v for k, v in x.items() if k not in ['type', 'modality', 'data']}
+                params = {k: v for k, v in x.items() if k not in ['type', 'data']}
                 multimodal_items.append((modality, data, params))
 
         return multimodal_items
