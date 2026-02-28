@@ -85,10 +85,10 @@ def fused_recurrent_gated_delta_rule_fwd(H,
             # load q, k, g, beta
             q_local = T.alloc_local([k_per_thr], T.float32)
             k_local = T.alloc_local([k_per_thr], T.float32)
-            for i in T.Parallel(k_per_thr):
+            for i in T.Vectorized(k_per_thr):
                 k_idx = (k_off + i) % K
                 q_local[i] = Query[b_id, h_id, k_idx]
-            for i in T.Parallel(k_per_thr):
+            for i in T.Vectorized(k_per_thr):
                 k_idx = (k_off + i) % K
                 k_local[i] = Key[b_id, h_id, k_idx]
 
@@ -109,7 +109,7 @@ def fused_recurrent_gated_delta_rule_fwd(H,
                     k_local[i] = k_local[i] * k_norm
                     q_local[i] = q_local[i] * q_norm
 
-            for i in T.Parallel(k_per_thr):
+            for i in T.Vectorized(k_per_thr):
                 q_local[i] = q_local[i] * scale
 
             # load g, beta
@@ -129,7 +129,7 @@ def fused_recurrent_gated_delta_rule_fwd(H,
 
                 # load v
                 v_local = T.alloc_local([v_per_warp], dtype)
-                for i in T.Parallel(v_per_warp):
+                for i in T.Vectorized(v_per_warp):
                     v_idx = (v_off + i) % V
                     v_local[i] = Value[b_id, hv_id, v_idx]
 
