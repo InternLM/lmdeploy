@@ -7,12 +7,14 @@ future test modules) without duplication.
 """
 
 import json
+import os
+import re
 
 from openai import OpenAI
 from utils.constant import DEFAULT_PORT
 
-BASE_HTTP_URL = 'http://localhost'
-BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
+BASE_HTTP_URL = os.environ.get('LMDEPLOY_BASE_URL', 'http://localhost')
+BASE_URL = os.environ.get('LMDEPLOY_API_URL', ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)]))
 
 #: Supported reasoning parser names (from lmdeploy ReasoningParserManager)
 REASONING_PARSER_NAMES = ['deepseek-r1', 'qwen-qwq', 'intern-s1']
@@ -118,7 +120,7 @@ CALCULATOR_TOOL = {
     },
 }
 
-# -- Chinese tool (vLLM issue #12869) ---------------------------------------
+# -- Chinese tool ------------------------------------------------------------
 
 WEATHER_TOOL_CN = {
     'type': 'function',
@@ -227,6 +229,85 @@ def get_client_and_model(base_url=None):
     url = base_url or BASE_URL
     client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{url}/v1')
     model_name = client.models.list().data[0].id
+    return client, model_name
+
+
+# -- Logging / client helpers ------------------------------------------------
+
+
+class StreamTee:
+    """Transparent iterator proxy: yields every chunk unchanged while
+    recording each ``repr(chunk)`` to the log file."""
+
+    def __init__(self, stream, log_file):
+        self._stream = stream
+        self._log_file = log_file
+
+    def __iter__(self):
+        try:
+            for chunk in self._stream:
+                try:
+                    with open(self._log_file, 'a', encoding='utf-8') as f:
+                        f.write(repr(chunk) + '\n')
+                except Exception:
+                    pass
+                yield chunk
+        except Exception:
+            raise
+
+
+def setup_log_file(config, test_name, category):
+    """Compute log-file path and ensure the directory exists.
+
+    Parameters
+    ----------
+    config : dict
+        Test configuration (must contain ``log_path`` or defaults to
+        ``./logs``).
+    test_name : str
+        Raw test node name (will be sanitised for filesystem safety).
+    category : str
+        Subdirectory under *log_path*, e.g. ``'tool_calls'`` or
+        ``'reasoning'``.
+
+    Returns
+    -------
+    str
+        Full path to the log file.
+    """
+    safe_test_name = re.sub(r'[^\w\.-]', '_', test_name)
+    log_base = config.get('log_path', './logs')
+    log_dir = os.path.join(log_base, category)
+    os.makedirs(log_dir, exist_ok=True)
+    return os.path.join(log_dir, f'{safe_test_name}.log')
+
+
+def make_logged_client(log_file):
+    """Return ``(client, model_name)`` with transparent logging.
+
+    Every ``chat.completions.create`` call is intercepted to:
+
+    1. Inject ``extra_body={'spaces_between_special_tokens': False}``.
+    2. For streaming calls, wrap the iterator with :class:`StreamTee`.
+    3. For non-streaming calls, append ``repr(response)`` to *log_file*.
+    """
+    client, model_name = get_client_and_model()
+    _original_create = client.chat.completions.create
+
+    def _logged_create(*args, **kwargs):
+        kwargs.setdefault('extra_body', dict(spaces_between_special_tokens=False))
+        is_stream = kwargs.get('stream', False)
+        result = _original_create(*args, **kwargs)
+        if is_stream:
+            return StreamTee(result, log_file)
+        try:
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write(repr(result) + '\n')
+        except Exception:
+            pass
+        return result
+
+    client.chat.completions.create = _logged_create
     return client, model_name
 
 
@@ -351,7 +432,9 @@ def collect_stream_reasoning(stream):
         content             – aggregated final content string
         tool_calls          – dict  index -> {name, args_str, id}
         finish_reason       – last non-None finish_reason
+        finish_reason_count – how many chunks carried a non-None finish_reason
         role                – first non-None role value
+        role_count          – how many chunks carried a non-None role
         chunk_count         – total number of chunks received
         reasoning_chunks    – number of chunks containing reasoning
         content_chunks      – number of chunks containing content
@@ -361,7 +444,9 @@ def collect_stream_reasoning(stream):
         'content': '',
         'tool_calls': {},
         'finish_reason': None,
+        'finish_reason_count': 0,
         'role': None,
+        'role_count': 0,
         'chunk_count': 0,
         'reasoning_chunks': 0,
         'content_chunks': 0,
@@ -375,10 +460,12 @@ def collect_stream_reasoning(stream):
 
         if choice.finish_reason is not None:
             result['finish_reason'] = choice.finish_reason
+            result['finish_reason_count'] += 1
 
         delta = choice.delta
         if delta.role:
             result['role'] = delta.role
+            result['role_count'] += 1
 
         # -- reasoning_content (lmdeploy extension field) -------------------
         rc = getattr(delta, 'reasoning_content', None)
