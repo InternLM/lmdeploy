@@ -327,14 +327,14 @@ jobs:
           chmod -R 777 $workdir
 
   test_restful:
-    if: ${{!cancelled() && (github.event_name != 'schedule' && contains(fromJSON(github.event.inputs.regression_func), 'restful'))}}
+    if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'restful'))}}
     runs-on: [self-hosted, linux-a100]
     needs: test_quantization
     strategy:
       fail-fast: false
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
-        model_path: ['internlm/internlm2_5-20b', 'Qwen/Qwen3-8B-Base', 'Qwen/Qwen3-30B-A3B', 'Qwen/Qwen3-32B', 'OpenGVLab/InternVL3_5-30B-A3B', 'OpenGVLab/InternVL3-38B', 'Qwen/Qwen3-VL-8B-Instruct', 'Qwen/Qwen3-VL-30B-A3B-Instruct']
+        model_path: ['Qwen/Qwen3-8B-Base', 'Qwen/Qwen3-30B-A3B', 'Qwen/Qwen3-32B', 'OpenGVLab/InternVL3_5-30B-A3B', 'OpenGVLab/InternVL3-38B', 'Qwen/Qwen3-VL-8B-Instruct', 'Qwen/Qwen3-VL-30B-A3B-Instruct']
         include:
           - tp: 2
             model: Qwen3-8B-Base

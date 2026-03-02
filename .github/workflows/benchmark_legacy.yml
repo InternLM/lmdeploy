@@ -1,4 +1,4 @@
-name: benchmark_test
+name: benchmark_test_legacy
 
 on:
   workflow_dispatch:

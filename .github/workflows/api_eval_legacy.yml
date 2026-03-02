@@ -1,4 +1,4 @@
-name: api_eval
+name: api_eval_legacy
 
 on:
   workflow_dispatch:

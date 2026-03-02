@@ -1,4 +1,4 @@
-name: mllm_api_eval
+name: mllm_api_eval_legacy
 
 on:
   workflow_dispatch:
