@@ -21,16 +21,19 @@ def _run_ray_distributed_test(
     assert manager is not None, 'Manager instance must be provided'
     if 'gpt' in run_config.get('model', '').lower():
         eval_config_name = 'gpt'
-        preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
+    elif 'intern-s1-pro' in run_config.get('model', '').lower():
+        eval_config_name = 'intern-s1-pro'
+    if str(config.get('env_tag')) == 'ascend':
+        eval_config_name = f'{eval_config_name}-2batch'
+
+    preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
 
     if manager.is_master:
-        model_name = run_config['model']
-        model_path = os.path.join(config['model_path'], model_name)
-        preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
+        model_path = os.path.join(config['model_path'], run_config['model'])
         eval_path = config.get('eval_path')
 
         # Start API Server for current model (master node starts/stops, worker nodes verify)
-        manager.start_lmdeploy_api_server(model_path=model_path, run_config=run_config)
+        manager.start_lmdeploy_api_server(config=config, run_config=run_config)
 
         try:
             print(f'🧪 Master node executing {test_type} test ({eval_config_name})...')
@@ -63,12 +66,17 @@ def _run_proxy_distributed_test(config,
 
     if 'gpt' in run_config.get('model', '').lower():
         eval_config_name = 'gpt'
+    elif 'intern-s1-pro' in run_config.get('model', '').lower():
+        eval_config_name = 'intern-s1-pro'
+
+    if str(config.get('env_tag')) == 'ascend':
+        eval_config_name = f'{eval_config_name}-2batch'
 
     preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
     model_name = run_config['model']
     model_path = os.path.join(config['model_path'], model_name)
 
-    api_server = ApiServerPerTest(proxy_manager=manager, model_path=model_path, run_config=run_config)
+    api_server = ApiServerPerTest(proxy_manager=manager, config=config, run_config=run_config)
     api_server.start()
 
     try:
@@ -104,8 +112,14 @@ def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_
     """Run test with specified evaluation configuration."""
     if 'gpt' in run_config.get('model', '').lower():
         eval_config_name = 'gpt'
+    elif 'sdar' in run_config.get('model', '').lower():
+        eval_config_name = 'sdar'
+    elif 'intern-s1-pro' in run_config.get('model', '').lower():
+        eval_config_name = 'intern-s1-pro'
     if str(config.get('env_tag')) == 'a100':
         eval_config_name = f'{eval_config_name}-32k'
+    elif str(config.get('env_tag')) == 'ascend':
+        eval_config_name = f'{eval_config_name}-2batch'
     preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
     eval_path = config.get('eval_path')
 
@@ -212,6 +226,15 @@ def test_turbomind_infer_tp4(config, run_config, worker_id):
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config', get_models('turbomind', {'tp': 8}))
 def test_turbomind_infer_tp8(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'infer')
+
+
+@pytest.mark.infer
+@pytest.mark.turbomind
+@pytest.mark.gpu_num_cp2tp8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_models('turbomind', {'cp': 2, 'tp': 8}))
+def test_turbomind_infer_cp2tp8(config, run_config, worker_id):
     run_eval_test(config, run_config, worker_id, 'infer')
 
 
@@ -409,8 +432,17 @@ def test_pytorch_eval_distributed_dpep8(config, run_config, worker_id):
 
 
 @pytest.mark.eval
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_distributed_dpep16
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_models('pytorch', {'dp': 16, 'ep': 16}))
+def test_pytorch_eval_distributed_dpep16(config, run_config, worker_id):
+    run_eval_test(config, run_config, worker_id, 'eval')
+
+
+@pytest.mark.eval
 @pytest.mark.turbomind
-@pytest.mark.gpu_num_8
+@pytest.mark.gpu_num_cp2tp8
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config', get_models('turbomind', {'cp': 2, 'tp': 8}))
 def test_turbomind_eval_cp2tp8(config, run_config, worker_id):

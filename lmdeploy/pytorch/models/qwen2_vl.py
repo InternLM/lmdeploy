@@ -633,7 +633,11 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         # build model
         self.model = Qwen2Model(text_config, dtype=dtype, device=device)
         # build lm_head
-        self.lm_head = self.build_lm_head(config.hidden_size, config.vocab_size, bias=False, dtype=dtype, device=device)
+        self.lm_head = self.build_lm_head(text_config.hidden_size,
+                                          text_config.vocab_size,
+                                          bias=False,
+                                          dtype=dtype,
+                                          device=device)
 
     def forward(
         self,

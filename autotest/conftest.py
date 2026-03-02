@@ -39,9 +39,9 @@ def common_case_config():
 @pytest.fixture(scope='session')
 def shared_ray_manager():
     master_addr = DEFAULT_SERVER
-    device = os.environ.get('DEVICE', '')
-    if device:
-        device_config_path = f'autotest/config_{device}.yml'
+    env_tag = os.environ.get('TEST_ENV')
+    if env_tag:
+        device_config_path = f'autotest/config_{env_tag}.yml'
         if os.path.exists(device_config_path):
             config_path = device_config_path
         else:
@@ -51,7 +51,8 @@ def shared_ray_manager():
 
     with open(config_path) as f:
         env_config = yaml.load(f.read(), Loader=yaml.SafeLoader)
-    log_dir = env_config.get('log_path', '/tmp/lmdeploy_test')
+    run_id = os.environ.get('RUN_ID', 'local_run')
+    log_dir = os.path.join(env_config.get('server_log_path', '/tmp/lmdeploy_test'), str(run_id).replace('/', '_'))
 
     manager = RayLMDeployManager(master_addr=master_addr, api_port=PROXY_PORT, log_dir=log_dir, health_check=True)
 

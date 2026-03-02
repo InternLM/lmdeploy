@@ -5,15 +5,15 @@ server_log_path: /mnt/shared-storage-user/llmrazor-share/qa-llm-cicd/cicd-autote
 eval_path: /mnt/shared-storage-user/llmrazor-share/qa-llm-cicd/cicd-autotest/eval_resource/evaluation_report
 mllm_eval_path: /mnt/shared-storage-user/llmrazor-share/qa-llm-cicd/cicd-autotest/eval_resource/mllm_evaluation_report
 benchmark_path: /mnt/shared-storage-user/llmrazor-share/qa-llm-cicd/cicd-autotest/eval_resource/benchmark_report
-dataset_path: /mnt/shared-storage-user/auto-eval-pipeline/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
-prefix_dataset_path: /mnt/shared-storage-user/auto-eval-pipeline/datasets/prefix_cache_test.json
+dataset_path: /mnt/shared-storage-user/llmrazor-share/qa-llm-cicd/cicd-autotest/eval_resource/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
+prefix_dataset_path: /mnt/shared-storage-user/llmrazor-share/qa-llm-cicd/cicd-autotest/eval_resource/datasets/prefix_cache_test.json
 env_tag: h
 device: cuda
 
 config:
     tp:
         internlm/Intern-S1: 4
-        Qwen/Qwen3-235B-A22B-FP8: 4
+        Qwen/Qwen3-235B-A22B-Thinking-2507-FP8: 4
         Qwen/Qwen3-30B-A3B: 2
         Qwen/Qwen3-32B: 2
         openai/gpt-oss-120b: 2
@@ -21,8 +21,10 @@ config:
         openai/gpt-oss-20b-BF16: 2
         deepseek/DeepSeek-V3.1: 8
         Qwen/Qwen3-30B-A3B-Base: 2
+        JetLM/SDAR-30B-A3B-Sci: 2
         moonshotai/Kimi-K2-Instruct-0905: 16
         Qwen/Qwen3-235B-A22B-Thinking-2507: 8
+        internlm/Intern-S1-Pro-FP8: 16
 
     dp_ep:
         moonshotai/Kimi-K2-Instruct-0905:
@@ -31,6 +33,9 @@ config:
         Qwen/Qwen3-235B-A22B-Thinking-2507:
             dp: 8
             ep: 8
+        internlm/Intern-S1-Pro-FP8:
+            dp: 16
+            ep: 16
 
     cp_tp:
         Qwen/Qwen3-235B-A22B-Thinking-2507:
@@ -47,7 +52,7 @@ turbomind_chat_model:
         - Qwen/Qwen3-4B-FP8
         - Qwen/Qwen3-8B-FP8
         - Qwen/Qwen3-14B-FP8
-        - Qwen/Qwen3-235B-A22B-FP8
+        - Qwen/Qwen3-235B-A22B-Thinking-2507-FP8
         - Qwen/Qwen3-235B-A22B-Thinking-2507
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-30B-A3B-FP8
@@ -69,7 +74,7 @@ pytorch_chat_model:
         - Qwen/Qwen3-8B-FP8
         - Qwen/Qwen3-14B-FP8
         - Qwen/Qwen3-235B-A22B-Thinking-2507
-        - Qwen/Qwen3-235B-A22B-FP8
+        - Qwen/Qwen3-235B-A22B-Thinking-2507-FP8
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-30B-A3B-FP8
         - Qwen/Qwen3-32B
@@ -78,9 +83,12 @@ pytorch_chat_model:
         - unsloth/gpt-oss-20b-BF16
         - deepseek/DeepSeek-V3.1
         - moonshotai/Kimi-K2-Instruct-0905
+        - internlm/Intern-S1-Pro-FP8
+        - JetLM/SDAR-30B-A3B-Sci
     dp_ep:
         - moonshotai/Kimi-K2-Instruct-0905
         - Qwen/Qwen3-235B-A22B-Thinking-2507
+        - internlm/Intern-S1-Pro-FP8
 
 turbomind_vl_model:
     tp:
@@ -112,7 +120,7 @@ turbomind_quantization:
         - Qwen/Qwen3-4B-FP8
         - Qwen/Qwen3-8B-FP8
         - Qwen/Qwen3-14B-FP8
-        - Qwen/Qwen3-235B-A22B-FP8
+        - Qwen/Qwen3-235B-A22B-Thinking-2507-FP8
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-30B-A3B-FP8
         - Qwen/Qwen3-32B
@@ -130,7 +138,7 @@ turbomind_quantization:
         - Qwen/Qwen3-4B-FP8
         - Qwen/Qwen3-8B-FP8
         - Qwen/Qwen3-14B-FP8
-        - Qwen/Qwen3-235B-A22B-FP8
+        - Qwen/Qwen3-235B-A22B-Thinking-2507-FP8
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-30B-A3B-FP8
         - Qwen/Qwen3-32B
@@ -155,15 +163,20 @@ pytorch_quantization:
         - Qwen/Qwen3-4B-FP8
         - Qwen/Qwen3-8B-FP8
         - Qwen/Qwen3-14B-FP8
-        - Qwen/Qwen3-235B-A22B-FP8
+        - Qwen/Qwen3-235B-A22B-Thinking-2507-FP8
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-30B-A3B-FP8
         - Qwen/Qwen3-32B
         - Qwen/Qwen3-32B-FP8
         - moonshotai/Kimi-K2-Instruct-0905
         - Qwen/Qwen3-235B-A22B-Thinking-2507
+        - internlm/Intern-S1-Pro-FP8
+        - JetLM/SDAR-30B-A3B-Sci
+        - deepseek/DeepSeek-V3.1
     no_kvint8:
         - Qwen/Qwen3-235B-A22B-Thinking-2507
+        - internlm/Intern-S1-Pro-FP8
+        - deepseek/DeepSeek-V3.1
 
 longtext_model:
     - Qwen/Qwen3-30B-A3B
@@ -194,6 +207,8 @@ evaluate_model:
     - unsloth/gpt-oss-120b-BF16
     - deepseek/DeepSeek-V3.1
     - moonshotai/Kimi-K2-Instruct-0905
+    - internlm/Intern-S1-Pro-FP8
+    - JetLM/SDAR-30B-A3B-Sci
 
 mllm_evaluate_model:
     - internlm/Intern-S1
