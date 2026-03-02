@@ -37,8 +37,7 @@ INTERNLM_ACTION_END = '<|action_end|>'
 #: Llama 3 bot token
 LLAMA3_BOT_TOKEN = '<|python_tag|>'
 
-#: Mapping: server 启动时的 --tool-call-parser / --reasoning-parser 值 → pytest -m 表达式
-#: 用于根据当前 server 使用的 parser 筛选对应的 case
+#: Mapping: --tool-call-parser / --reasoning-parser value -> pytest -m expression
 TOOL_PARSER_MARK_MAP = {
     'qwen': 'qwen3_parser',
     'qwen3': 'qwen3_parser',
