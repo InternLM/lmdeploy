@@ -86,7 +86,7 @@ turbomind_vl_model:
         - internlm/Intern-S1
         - internlm/Intern-S1-mini
         - OpenGVLab/InternVL3-8B
-        - OpenGVLab/InternVL2_5-8b
+        - OpenGVLab/InternVL2_5-8B
         - OpenGVLab/Mini-InternVL-Chat-2B-V1-5
         - OpenGVLab/InternVL2-Llama3-76B-AWQ
         - Qwen/Qwen2.5-VL-7B-Instruct

@@ -158,7 +158,8 @@ def open_chat_test(log_path, case_name, case_info, url):
                                                  max_completion_tokens=1024,
                                                  stream=True)
 
-        output_chunks = []
+        content_chunks = []
+        reasoning_content_chunks = []
         for output in outputs:
             # Safely handle streaming chunks: choices may be empty and content may be None
             if not getattr(output, 'choices', None):
@@ -168,15 +169,16 @@ def open_chat_test(log_path, case_name, case_info, url):
             reasoning_content = getattr(delta, 'reasoning_content', None) if delta is not None else None
             content = getattr(delta, 'content', None) if delta is not None else None
             if reasoning_content:
-                output_chunks.append(reasoning_content)
+                reasoning_content_chunks.append(reasoning_content)
             if content:
-                output_chunks.append(content)
-        output_content = ''.join(output_chunks)
+                content_chunks.append(content)
+        reasoning_content = ''.join(reasoning_content_chunks)
+        output_content = ''.join(content_chunks)
 
-        file.writelines('output:' + output_content + '\n')
+        file.writelines(f'reasoning_content :{reasoning_content}, content: {output_content}\n')
         messages.append({'role': 'assistant', 'content': output_content})
 
-        case_result, reason = assert_result(output_content, prompt_detail.values(), model_name)
+        case_result, reason = assert_result(reasoning_content + output_content, prompt_detail.values(), model_name)
         file.writelines('result:' + str(case_result) + ',reason:' + reason + '\n')
         if not case_result:
             msg += reason
