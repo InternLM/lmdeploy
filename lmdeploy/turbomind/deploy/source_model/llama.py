@@ -137,7 +137,10 @@ class LlamaModel(BaseInputModel):
             model_config = model_config.text_config
         elif hasattr(model_config, 'llm_config'):
             model_config = model_config.llm_config
-        self.model_config = model_config.to_dict()
+        if hasattr(model_config, 'to_dict'):
+            self.model_config = model_config.to_dict()
+        else:
+            self.model_config = model_config
         self.fp8_quant = kwargs.get('fp8_quant', False)
 
     def readers(self):
