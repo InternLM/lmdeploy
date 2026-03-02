@@ -12,6 +12,30 @@ SUFFIX_INNER_GPTQ = '-inner-gptq'
 SUFFIX_INNER_W8A8 = '-inner-w8a8'
 
 
+def resolve_extra_params(extra_params: Dict[str, Any], model_base_path: str) -> None:
+    """Resolve relative model paths in extra_params to absolute paths.
+
+    Centralised helper so that every call-site does not need its own
+    ``if key in extra_params …`` guard – adding a new key here is enough.
+    """
+    # Keys in extra_params whose string values are relative model paths
+    model_path_keys = ['speculative-draft-model']
+
+    # Flat string-valued keys
+    for key in model_path_keys:
+        if key in extra_params:
+            value = extra_params[key]
+            if value and isinstance(value, str) and not os.path.isabs(value):
+                extra_params[key] = os.path.join(model_base_path, value)
+
+    # Nested speculative_config (pipeline usage)
+    spec_cfg = extra_params.get('speculative_config')
+    if isinstance(spec_cfg, dict) and 'model' in spec_cfg:
+        model = spec_cfg['model']
+        if model and isinstance(model, str) and not os.path.isabs(model):
+            spec_cfg['model'] = os.path.join(model_base_path, model)
+
+
 def get_func_config_list(backend: str,
                          parallel_config: Dict[str, int],
                          model_type: str = 'chat_model',
@@ -85,6 +109,20 @@ def get_func_config_list(backend: str,
             run_config['extra_params']['dllm-block-length'] = 4
             run_config['extra_params']['dllm-denoising-steps'] = 4
             run_config['extra_params']['dllm-confidence-threshold'] = 0.9
+
+        if 'kimi' in run_config['model'].lower():
+            para_conf = run_config.get('parallel_config', {})
+            if para_conf.get('dp', 0) == 16 and para_conf.get('ep', 0) == 16:
+                run_config['extra_params']['max-batch-size'] = 256
+
+        if 'Intern-S1-Pro-FP8' in run_config['model'] or 'Intern-S1-Pro-BF16' in run_config['model']:
+            if 'Intern-S1-Pro-FP8' in run_config['model']:
+                run_config['extra_params']['model-format'] = 'fp8'
+            para_conf = run_config.get('parallel_config', {})
+            # For dpep16 configuration, add max-prefill-token-num
+            if para_conf.get('dp', 0) == 16 and para_conf.get('ep', 0) == 16:
+                run_config['extra_params']['max-prefill-token-num'] = 1024
+                run_config['extra_params']['max-batch-size'] = 128
 
     return run_configs
 
@@ -336,7 +374,7 @@ def get_cuda_prefix_by_workerid(worker_id: Optional[str], parallel_config: Dict[
     """Get cuda/ascend visible devices env prefix by worker id & parallel
     config."""
     para_conf = parallel_config or {}
-    device_type = para_conf.get('device', 'cuda')
+    device_type = os.environ.get('DEVICE', 'cuda')
 
     tp_num = para_conf.get('tp')
     if not tp_num:
@@ -380,7 +418,7 @@ def _get_communicator_list(config: Dict, backend: str, parallel_config: Dict[str
     device = config.get('device', None)
 
     if device == 'ascend':
-        return ['hccl']
+        return ['nccl']
     if backend == 'pytorch':
         return ['nccl']
     if ('cp' in parallel_config or 'dp' in parallel_config or 'ep' in parallel_config):
@@ -577,7 +615,7 @@ def test_cli_common_param():
     run_config = {
         'model': 'test/test_dpep16-inner-4bits',
         'backend': 'pytorch',
-        'communicator': 'hccl',
+        'communicator': 'nccl',
         'quant_policy': 0,
         'parallel_config': {
             'tp': 8
@@ -585,7 +623,7 @@ def test_cli_common_param():
     }
 
     cli_params = get_cli_common_param(run_config)
-    assert cli_params == '--backend pytorch --communicator hccl --model-format awq --tp 8', cli_params
+    assert cli_params == '--backend pytorch --communicator nccl --model-format awq --tp 8', cli_params
     os.unsetenv('TEST_ENV')
 
 
@@ -811,7 +849,7 @@ def test_run_config():
     run_config2 = get_func_config_list(backend, parallel_config={'tp': 1}, model_type='chat_model', func_type='func')[0]
     assert run_config2['model'] == 'test/test_tp1'
     assert run_config2['backend'] == 'pytorch'
-    assert run_config2['communicator'] == 'hccl'
+    assert run_config2['communicator'] == 'nccl'
     assert run_config2['quant_policy'] == 0
     assert run_config2['parallel_config'] == {'tp': 1}
     run_config3 = get_func_config_list(backend,
@@ -824,7 +862,7 @@ def test_run_config():
                                        })[0]
     assert run_config3['model'] == 'test/test_tp1'
     assert run_config3['backend'] == 'pytorch'
-    assert run_config3['communicator'] == 'hccl'
+    assert run_config3['communicator'] == 'nccl'
     assert run_config3['quant_policy'] == 0
     assert run_config3['parallel_config'] == {'tp': 1}
     assert run_config3['extra_params']['speculative_algorithm'] == 'eagle'
