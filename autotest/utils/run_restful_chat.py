@@ -160,10 +160,8 @@ def open_chat_test(log_path, case_name, case_info, url):
 
         output_content = ''
         for output in outputs:
-            output_content += output.model_dump().get('choices')[0].get('delta').get('content', '')
+            output_content += output.model_dump().get('choices')[0].get('delta', {}).get('content', '')
 
-        if output_content is None:
-            output_content = ''
         file.writelines('output:' + output_content + '\n')
         messages.append({'role': 'assistant', 'content': output_content})
 

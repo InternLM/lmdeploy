@@ -137,7 +137,7 @@ TURBOMIND_FALLBACK_TEST_MLLM_GPU1 = [{
     },
     'extra_params': {}
 }, {
-    'model': 'THUDM/glm-4v-9b-inner-4bits',
+    'model': 'THUDM/glm-4v-9b',
     'backend': 'turbomind',
     'communicator': 'nccl',
     'quant_policy': 0,

@@ -37,7 +37,7 @@ on:
         required: true
         description: 'regression functions'
         type: string
-        default: "['quant', 'tools','restful','pipeline','benchmark','evaluation']"
+        default: "['quant', 'tools','restful','pipeline','evaluation']"
   schedule:
     - cron:  '00 14 * * 0-4'
 
@@ -532,64 +532,6 @@ jobs:
           rm -rf $workdir
           mkdir $workdir
           chmod -R 777 $workdir
-
-
-  test_benchmark:
-    if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'benchmark'))}}
-    runs-on: [self-hosted, linux-a100]
-    needs: test_quantization
-    timeout-minutes: 120
-    container:
-      image: openmmlab/lmdeploy:latest-cu12.8
-      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
-      volumes:
-        - /nvme/github-actions/pip-cache:/root/.cache/pip
-        - /nvme/github-actions/packages:/root/packages
-        - /nvme/qa_test_models:/nvme/qa_test_models
-        - /nvme/huggingface_hub:/nvme/huggingface_hub
-        - /mnt/121:/mnt/121
-        - /mnt/104:/mnt/104
-        - /mnt/bigdisk:/mnt/bigdisk
-        - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
-    steps:
-      - name: Copy repository and Artifacts
-        run: |
-          cp -r ${{env.TEST_CODE_PATH}}/. .
-          mkdir ${{env.REPORT_DIR}} -p
-          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
-      - name: Install lmdeploy - dependency
-        run: |
-          python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
-      - name: Install lmdeploy
-        run: |
-          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
-          python3 -m pip install -r requirements/test.txt
-          pip install ${{env.DEEPSEEK_VL}} --no-deps
-          rm -rf ${{env.DEEPSEEK_VL}}/build
-      - name: Check env
-        run: |
-          pip install transformers==4.57.6
-          python3 -m pip list
-          lmdeploy check_env
-          rm -rf allure-results
-          # remove tmp log in testcase
-          mkdir ${{env.REPORT_DIR}}/.pytest_cache -p && rm autotest/.pytest_cache -f
-          ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
-      - name: Test benchmark script
-        run: |
-          pytest autotest/benchmark -n 4 -m function ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Clear workfile
-        if: always()
-        run: |
-          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 $REPORT_DIR
-          export workdir=$(pwd)
-          cd ..
-          rm -rf $workdir
-          mkdir $workdir
-          chmod -R 777 $workdir
-
 
   get_coverage_report:
     if: ${{!cancelled()}}
