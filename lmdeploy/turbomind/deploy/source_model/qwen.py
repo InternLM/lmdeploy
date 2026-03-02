@@ -268,10 +268,8 @@ class Qwen3_5ReaderMixin:
     def _attn(self, i: int, kind: str):
         """Override to handle mixed QKV(fp16) + O(AWQ) attention layers.
 
-        Some AWQ-quantized Qwen3.5 models keep QKV in fp16 while
-        quantizing only the O projection.  TurboMind requires uniform
-        weight types per layer, so we dequantize O to fp16 at export
-        time.
+        Some AWQ-quantized Qwen3.5 models keep QKV in fp16 while quantizing only the O projection.  TurboMind requires
+        uniform weight types per layer, so we dequantize O to fp16 at export time.
         """
         prefix = f'{self.attn_layer_prefix}.{i}.self_attn'
         q_is_fp16 = f'{prefix}.q_proj.weight' in self.params

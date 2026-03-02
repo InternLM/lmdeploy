@@ -25,8 +25,8 @@ def permute_v2(x: torch.Tensor, size_per_head: int = 128):
 def permute_v2_partial(x: torch.Tensor, size_per_head: int, rotary_dim: int):
     """Permute only the first rotary_dim elements of each head.
 
-    Used when partial_rotary_factor < 1.0: only the rotary portion needs
-    interleaving for TurboMind's RoPE kernel layout.
+    Used when partial_rotary_factor < 1.0: only the rotary portion needs interleaving for TurboMind's RoPE kernel
+    layout.
     """
     assert x.size(-1) > 1
     output_dims = x.size(-1)
