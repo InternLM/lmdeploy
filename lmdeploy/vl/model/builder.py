@@ -15,6 +15,7 @@ from .deepseek_vl2 import DeepSeek2VisionModel  # noqa F401
 from .gemma3_vl import Gemma3VisionModel  # noqa F401
 from .glm4_1v import GLM4_1_VisionModel  # noqa F401
 from .glm4_v import GLM4VisionModel  # noqa F401
+from .interns1_pro import InternS1ProVisionModel  # noqa F401
 from .internvl import InternVLVisionModel  # noqa F401
 from .internvl3_hf import InternVL3VisionModel  # noqa F401
 from .internvl_llava import InternVLLlavaVisionModel  # noqa F401
@@ -29,6 +30,7 @@ from .phi3_vision import Phi3VisionModel  # noqa F401
 from .qwen import QwenVisionModel  # noqa F401
 from .qwen2 import Qwen2VLModel  # noqa F401
 from .qwen3 import Qwen3VLModel  # noqa F401
+from .qwen3_5 import Qwen3_5Model  # noqa F401
 from .xcomposer2 import Xcomposer2VisionModel  # noqa F401
 from .yi import YiVisionModel  # noqa F401
 

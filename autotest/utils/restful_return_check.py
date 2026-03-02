@@ -116,7 +116,7 @@ def assert_completions_stream_return(output,
 
 def has_repeated_fragment(text, repeat_count=5):
     pattern = r'(.+?)\1{' + str(repeat_count - 1) + ',}'
-    match = re.search(pattern, text)
+    match = re.search(pattern, text.replace('\n', ''))
     if match:
         repeated_fragment = match.group(1)
         start_pos = match.start()

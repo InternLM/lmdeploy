@@ -167,7 +167,7 @@ class Engine:
 
         if stream_output:
             pbar = tqdm(total=len(requests))
-            for output in self.pipe.stream_infer(prompts, gen_configs, do_preprocess=False):
+            for output in self.pipe.stream_infer(prompts, gen_config=gen_configs, do_preprocess=False):
                 index = output.index
                 n_token = output.generate_token_len
                 finish_reason = output.finish_reason

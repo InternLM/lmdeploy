@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import abstractmethod
-from typing import List
 
 import torch
 
@@ -23,7 +22,7 @@ def to_fp8(x: torch.Tensor):
 
 
 def pack_u4_row(x: torch.Tensor) -> torch.Tensor:
-    assert x.dtype == torch.uint8
+    assert x.dtype == torch.uint8, f'x.dtype: {x.dtype}'
     xs = x.view(*x.shape[:-1], -1, 8).split(1, dim=-1)
     a = torch.zeros(xs[0].shape, dtype=torch.int32, device=x.device)
     for t in reversed(xs):
@@ -31,11 +30,21 @@ def pack_u4_row(x: torch.Tensor) -> torch.Tensor:
     return a.squeeze(dim=-1)
 
 
+def generate_zero_point(g):
+    weight_shapes = g('weight_shape')
+    result = []
+    for weight_shape in weight_shapes:
+        row, col = weight_shape
+        tensor = torch.full((row, col // 128), 8, dtype=torch.uint8)
+        result.append(tensor)
+    return (*result, )
+
+
 class Parameter:
     KEY = ()
 
     @classmethod
-    def take(cls, keys: List[str]):
+    def take(cls, keys: list[str]):
         if not any(k.endswith(cls.KEYS[0]) for k in keys):
             return False
         xs = []
@@ -44,7 +53,7 @@ class Parameter:
                 xs.append(k)
         for x in xs:
             keys.remove(x)
-        return True
+        return xs
 
     @abstractmethod
     def __call__(cls, f, g, i):
@@ -67,6 +76,23 @@ class WeightScaleInv(Parameter):
     def __call__(self, f, g, i):
         f(i, g('weight_scale_inv'), 'scales', to_float, apply_gs=['w1', 'w3', 'w2'])
         f(i, g('weight'), 'weight', identity)
+
+
+class CompressedWeight(Parameter):
+    KEYS = '.weight_packed', '.weight_scale', '.weight_zero_point'
+
+    def __init__(self, xs):
+        self.has_zero_point = False
+        if any(key.endswith(self.KEYS[2]) for key in xs):
+            self.has_zero_point = True
+
+    def __call__(self, f, g, i):
+        f(i, g('weight_packed'), 'qweight', pack_u4_row)
+        f(i, g('weight_scale'), 'scales', to_half, apply_gs=['w2'])
+        if self.has_zero_point:
+            f(i, g('weight_zero_point'), 'zeros', to_half, apply_gs=['w2'])
+        else:
+            f(i, generate_zero_point(g), 'zeros', to_half, apply_gs=['w2'])
 
 
 class Mxfp4Weight(Parameter):
@@ -99,7 +125,7 @@ class PLora(Parameter):
         f(i, g('Plora_B.weight'), 'lora_b.weight', identity)
 
 
-def get_params(keys: List[str], bias=0):
+def get_params(keys: list[str], bias=0):
     ps = []
     if PLora.take(keys):
         ps.append(PLora())
@@ -107,6 +133,9 @@ def get_params(keys: List[str], bias=0):
         ps.append(QuantWeightOnly())
     if WeightScaleInv.take(keys):
         ps.append(WeightScaleInv())
+    xs = CompressedWeight.take(keys)
+    if xs:
+        ps.append(CompressedWeight(xs))
     if Mxfp4Weight.take(keys):
         ps.append(Mxfp4Weight())
     if Weight.take(keys):

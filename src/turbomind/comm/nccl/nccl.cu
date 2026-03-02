@@ -75,12 +75,16 @@ static NcclApis& nccl_apis()
             dst     = reinterpret_cast<T>(dlsym(handle, name));
         };
         if (version >= NCCL_VERSION(2, 27, 0)) {
+            if (version < NCCL_VERSION(2, 28, 0)) {
+                TM_LOG_WARNING(
+                    "[NCCL] Window registration may cause memory leaks in NCCL 2.27, use NCCL 2.28+ or disable the feature by setting NCCL_WIN_ENABLE=0.");
+            }
             load_symbol(apis.ncclCommWindowRegister, "ncclCommWindowRegister");
             load_symbol(apis.ncclCommWindowDeregister, "ncclCommWindowDeregister");
         }
         else {
             TM_LOG_WARNING(
-                "[NCCL] Window registration is not supported by NCCL %d, use NCCL 2.27+ for better performance.",
+                "[NCCL] Window registration is not supported by NCCL %d, use NCCL 2.28+ for better performance.",
                 version);
         }
         if (version >= NCCL_VERSION(2, 19, 0)) {

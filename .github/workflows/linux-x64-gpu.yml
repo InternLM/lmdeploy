@@ -48,13 +48,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
       - name: Build
-        uses: addnab/docker-run-action@v3
-        with:
-          image: openmmlab/lmdeploy-builder:cuda${{ matrix.cudaver }}
-          options: -v ${{ github.workspace }}:/work
-          run: |
-            cd /work
-            source /opt/conda/bin/activate
-            conda activate py310
-            pip install build
-            python -m build --wheel
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/work \
+            -w /work \
+            openmmlab/lmdeploy-builder:cuda${{ matrix.cudaver }} \
+            bash -c "
+              source /opt/conda/bin/activate && \
+              conda activate py310 && \
+              pip install build && \
+              python -m build --wheel
+            "

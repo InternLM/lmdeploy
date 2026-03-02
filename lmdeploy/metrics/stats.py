@@ -13,18 +13,29 @@ from lmdeploy.messages import EngineEvent, EngineOutput, ResponseType, ScheduleM
 @dataclass
 class SchedulerStats:
     """Stats associated with the scheduler.
+    Desc:
+        Dataflow: client --> API server --> Engine core
+        API server total  = completed + uncompleted = completed + (api_routed + api_waiting)
+        Engine core total = running + waiting = api_routed
 
     Attributes:
-        num_total_reqs: The number of all requests received since server start.
-        num_finished_reqs: The number of successfully completed requests since server start.
-        num_running_reqs: Currently executing requests.
-        num_waiting_reqs: Requests queued waiting for execution.
+        num_total_reqs: API server, the number of all requests received since server start.
+        num_completed_reqs: API server, the number of successfully completed requests since server start.
+        num_api_routed_reqs: API server, the number of requests routed to request handles.
+        num_api_waiting_reqs: API server, the number of requests waiting for free request handles.
+        num_running_reqs: Engine core, currently executing requests.
+        num_waiting_reqs: Engine core, requests queued waiting for execution.
         gpu_cache_usage: Fraction of GPU KV blocks utilized (0.0 to 1.0).
         prefix_cache_hit_rate: Prefix caching hit rate.
     """
 
+    # api server
     num_total_reqs: int = 0
-    num_finished_reqs: int = 0
+    num_completed_reqs: int = 0
+    num_api_routed_reqs: int = 0
+    num_api_waiting_reqs: int = 0
+
+    # engine core
     num_running_reqs: int = 0
     num_waiting_reqs: int = 0
     gpu_cache_usage: float = 0.0
@@ -33,7 +44,9 @@ class SchedulerStats:
     def __repr__(self):
         return ('SchedulerStats(\n'
                 f'  num_total_reqs={self.num_total_reqs},\n'
-                f'  num_finished_reqs={self.num_finished_reqs},\n'
+                f'  num_completed_reqs={self.num_completed_reqs},\n'
+                f'  num_api_routed_reqs={self.num_api_routed_reqs},\n'
+                f'  num_api_waiting_reqs={self.num_api_waiting_reqs},\n'
                 f'  num_running_reqs={self.num_running_reqs},\n'
                 f'  num_waiting_reqs={self.num_waiting_reqs},\n'
                 f'  gpu_cache_usage={self.gpu_cache_usage:.6f},\n'

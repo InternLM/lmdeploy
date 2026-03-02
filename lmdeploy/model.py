@@ -6,6 +6,7 @@ from typing import List, Literal, Optional, Union
 
 from mmengine import Registry
 
+from lmdeploy.archs import get_model_arch
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -682,22 +683,21 @@ class HFChatTemplate(BaseChatTemplate):
     """
 
     def __init__(self, model_path: str = '', **kwargs):
+        self.model_path = model_path
         try:
-            from transformers import AutoConfig, AutoTokenizer, PretrainedConfig
+            from transformers import AutoTokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-            self.system_start, self.system_end = self._role_instruction('system')
-            self.user_start, self.user_end = self._role_instruction('user')
-            self.assistant_start, self.assistant_end = self._role_instruction('assistant')
+            # Verify if the model can perform apply_chat_template with different roles.
+            self.user_start, self.user_end, _, _ = self._user_instruction()
+            self.assistant_start, self.assistant_end, _, _ = self._assistant_instruction()
+            _, _, self.sentinel_system_messages, self.sentinel_system_prompt = self._system_instruction()
             self.stop_words = []
             if hasattr(self.tokenizer, 'eos_token') and self.tokenizer.eos_token is not None:
                 self.stop_words.append(self.tokenizer.eos_token)
             if hasattr(self.tokenizer, 'eot_token') and self.tokenizer.eot_token is not None:
                 self.stop_words.append(self.tokenizer.eot_token)
-            try:
-                cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-            except Exception as e:  # noqa
-                cfg = PretrainedConfig.from_pretrained(model_path, trust_remote_code=True)
-            self.is_gpt_oss = getattr(cfg, 'architectures', [''])[0] == 'GptOssForCausalLM'
+            arch, _ = get_model_arch(model_path)
+            self.is_gpt_oss = arch == 'GptOssForCausalLM'
             if self.is_gpt_oss:
                 self.stop_words.append('<|call|>')
         except Exception as e:
@@ -727,17 +727,14 @@ class HFChatTemplate(BaseChatTemplate):
                                                         **kwargs)
         else:
             # Use a sentinel position to avoid the influence of default system role in the tokenizer's chat template
-            sentinel_messages = [{'role': 'system', 'content': 'This is a sentinel position'}]
-            sentinel_prompt = self.tokenizer.apply_chat_template(sentinel_messages,
-                                                                 tokenize=False,
-                                                                 add_generation_prompt=False)
-            prompt = self.tokenizer.apply_chat_template(sentinel_messages + messages,
+            # in interactive chat mode
+            messages = self.sentinel_system_messages + messages if self.sentinel_system_messages else messages
+            prompt = self.tokenizer.apply_chat_template(messages,
                                                         tokenize=False,
                                                         add_generation_prompt=add_generation_prompt,
                                                         **kwargs)
-            # remove the sentinel part
-            prompt = prompt[len(sentinel_prompt):]
-
+            # Remove the sentinel part.
+            prompt = prompt[len(self.sentinel_system_prompt):] if len(self.sentinel_system_prompt) > 0 else prompt
         if messages[-1]['role'] == 'assistant' and len(self.assistant_end) > 0:
             prompt = prompt[:-len(self.assistant_end)]  # prefix of response to let the model complete the response
         if self.is_gpt_oss and not kwargs.get('tools'):
@@ -745,13 +742,49 @@ class HFChatTemplate(BaseChatTemplate):
             prompt = prompt.replace('commentary, ', '', 1)
         return prompt
 
-    def _role_instruction(self, role):
-        messages = [{'role': role, 'content': 'sentinel'}]
+    def _user_instruction(self):
+        """Extract user message template markers from the tokenizer's chat
+        template."""
+
+        messages = [{'role': 'user', 'content': 'sentinel'}]
         prompt = self.tokenizer.apply_chat_template(messages, tokenize=False)
-        role_pos = prompt.find('sentinel')
-        role_start = prompt[:role_pos]
-        role_end = prompt[role_pos + len('sentinel'):]
-        return role_start, role_end
+        user_pos = prompt.find('sentinel')
+        user_start = prompt[:user_pos]
+        user_end = prompt[user_pos + len('sentinel'):]
+        return user_start, user_end, messages, prompt
+
+    def _assistant_instruction(self):
+        """Extract assistant message template markers from the tokenizer's chat
+        template."""
+
+        # Some models, such as google/gemma-2-2b-it, require conversation roles to strictly
+        # alternate between 'user' and 'assistant' (e.g., user/assistant/user/assistant...).
+        # Consequently, we construct test messages containing both user and assistant roles
+        # with special tokens, and parse the assistant tag according to user markers and
+        # special tokens.
+        messages = [{'role': 'user', 'content': 'placeholder'}, {'role': 'assistant', 'content': 'sentinel'}]
+        prompt = self.tokenizer.apply_chat_template(messages, tokenize=False)
+        user_end_pos = prompt.find(self.user_end)
+        assistant_pos = prompt.find('sentinel')
+        assistant_start = prompt[user_end_pos + len(self.user_end):assistant_pos]
+        assistant_end = prompt[assistant_pos + len('sentinel'):]
+        return assistant_start, assistant_end, messages, prompt
+
+    def _system_instruction(self):
+        """Extract system message template markers from the tokenizer's chat
+        template."""
+        messages = [{'role': 'system', 'content': 'sentinel'}]
+        try:
+            prompt = self.tokenizer.apply_chat_template(messages, tokenize=False)
+            system_pos = prompt.find('sentinel')
+            if system_pos == -1:
+                return None, None, [], self.tokenizer.bos_token or ''
+            system_start = prompt[:system_pos]
+            system_end = prompt[system_pos + len('sentinel'):]
+            return system_start, system_end, messages, prompt
+        except Exception:
+            # Some models, such as google/gemma-2-2b-it, do not support a system role in the message structure.
+            return None, None, [], self.tokenizer.bos_token or ''
 
     @classmethod
     def match(cls, model_path: str) -> Optional[str]:

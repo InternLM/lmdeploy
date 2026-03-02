@@ -72,6 +72,7 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |           InternLM3            |       8B        | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |           Intern-S1            |      241B       | MLLM |    Yes    |   Yes   |   Yes   | Yes  |   -   |
 |         Intern-S1-mini         |      8.3B       | MLLM |    Yes    |   Yes   |   Yes   | Yes  |   -   |
+|         Intern-S1-Pro          |       1TB       | MLLM |    Yes    |    -    |    -    |  -   |  No   |
 |           Baichuan2            |       7B        | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  No   |
 |           Baichuan2            |       13B       | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |            ChatGLM2            |       6B        | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
@@ -88,6 +89,7 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |            QWen2-VL            |     2B, 7B      | MLLM |    Yes    |   Yes   |   No    |  No  |  Yes  |
 |           QWen2.5-VL           |    3B - 72B     | MLLM |    Yes    |   No    |   No    |  No  |  No   |
 |            QWen3-VL            |    2B - 235B    | MLLM |    Yes    |   No    |   No    |  No  |  No   |
+|            QWen3.5             |    27B-397B     | MLLM |    Yes    |   No    |   No    |  No  |  No   |
 |          DeepSeek-MoE          |       16B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |          DeepSeek-V2           |    16B, 236B    | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |         DeepSeek-V2.5          |      236B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
@@ -124,6 +126,8 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |          Phi-3.5-MoE           |     16x3.8B     | LLM  |    Yes    |   Yes   |   No    |  -   |   -   |
 |         Phi-3.5-vision         |      4.2B       | MLLM |    Yes    |   Yes   |   No    |  -   |   -   |
 |              SDAR              |    1.7B-30B     | LLM  |    Yes    |   Yes   |   No    |  -   |   -   |
+|         GLM-4.7-Flash          |       30B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
+|             GLM-5              |      754B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 
 ```{note}
 * [1] Currently Mono-InternVL does not support FP16 due to numerical instability. Please use BF16 instead.

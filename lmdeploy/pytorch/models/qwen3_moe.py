@@ -14,14 +14,19 @@ from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_pr
 from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
-from .patch import get_build_model_context
+from .patch import add_prefix, get_build_model_context
 from .utils.cudagraph import CudaGraphMixin
+from .utils.model import DeployModelMixinV1, build_embedding
 
 
 class Qwen3MoeAttention(nn.Module):
     """Rewrite module of Qwen3MoeAttention."""
 
-    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 prefix: str = ''):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         num_heads = config.num_attention_heads
@@ -42,8 +47,8 @@ class Qwen3MoeAttention(nn.Module):
             num_replicate_kv_heads=num_replicate_kv_heads,
             dtype=dtype,
             device=device,
+            prefix=add_prefix('qkv_proj', prefix),
         )
-
         # rotary embedding
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
 
@@ -57,25 +62,34 @@ class Qwen3MoeAttention(nn.Module):
         )
 
         # o_proj
-        self.o_proj = build_rowwise_linear(num_heads * head_dim,
-                                           hidden_size,
-                                           bias=config.attention_bias,
-                                           quant_config=quantization_config,
-                                           dtype=dtype,
-                                           device=device,
-                                           is_tp=True)
+        self.o_proj = build_rowwise_linear(
+            num_heads * head_dim,
+            hidden_size,
+            bias=config.attention_bias,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device,
+            is_tp=True,
+            prefix=add_prefix('o_proj', prefix),
+        )
 
         # q, k norm
-        self.q_norm = RMSNorm(head_dim,
-                              config.rms_norm_eps,
-                              quant_config=quantization_config,
-                              dtype=dtype,
-                              device=device)
-        self.k_norm = RMSNorm(head_dim,
-                              config.rms_norm_eps,
-                              quant_config=quantization_config,
-                              dtype=dtype,
-                              device=device)
+        self.q_norm = RMSNorm(
+            head_dim,
+            config.rms_norm_eps,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device,
+            prefix=add_prefix('q_norm', prefix),
+        )
+        self.k_norm = RMSNorm(
+            head_dim,
+            config.rms_norm_eps,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device,
+            prefix=add_prefix('k_norm', prefix),
+        )
 
     def forward(
         self,
@@ -133,7 +147,8 @@ class Qwen3MoeMLP(nn.Module):
                  dtype: torch.dtype = None,
                  device: torch.device = None,
                  is_tp: bool = True,
-                 all_reduce: bool = True):
+                 all_reduce: bool = True,
+                 prefix: str = ''):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         if intermediate_size is None:
@@ -147,20 +162,24 @@ class Qwen3MoeMLP(nn.Module):
             device=device,
             quant_config=quantization_config,
             is_tp=is_tp,
+            prefix=add_prefix('gate_up_proj', prefix),
         )
 
         # silu and mul
         self.act_fn = SiluAndMul(inplace=True)
 
         # down
-        self.down_proj = build_rowwise_linear(intermediate_size,
-                                              config.hidden_size,
-                                              bias=False,
-                                              quant_config=quantization_config,
-                                              dtype=dtype,
-                                              device=device,
-                                              is_tp=is_tp,
-                                              all_reduce=all_reduce)
+        self.down_proj = build_rowwise_linear(
+            intermediate_size,
+            config.hidden_size,
+            bias=False,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device,
+            is_tp=is_tp,
+            all_reduce=all_reduce,
+            prefix=add_prefix('down_proj', prefix),
+        )
 
     def forward(self, x):
         """forward."""
@@ -176,7 +195,8 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
                  config: PretrainedConfig,
                  layer_idx: int,
                  dtype: torch.dtype = None,
-                 device: torch.device = None):
+                 device: torch.device = None,
+                 prefix: str = ''):
         super().__init__()
         # TODO: zhouxinyu, determine modules_to_not_convert from config file
         quantization_config = getattr(config, 'quantization_config', None)
@@ -219,6 +239,7 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
             quant_config=quantization_config,
             all_reduce=True,
             layer_idx=layer_idx,
+            prefix=add_prefix('experts', prefix),
         )
 
     def forward(
@@ -248,34 +269,50 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
 class Qwen3MoeDecoderLayer(nn.Module):
     """Decoder layer."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 layer_idx: int,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(
+        self,
+        config: PretrainedConfig,
+        layer_idx: int,
+        dtype: torch.dtype = None,
+        device: torch.device = None,
+        prefix: str = '',
+    ):
         super().__init__()
         self.layer_idx = layer_idx
         quantization_config = getattr(config, 'quantization_config', None)
 
         # build attention layer
-        self.self_attn = Qwen3MoeAttention(config, dtype=dtype, device=device)
+        self.self_attn = Qwen3MoeAttention(config, dtype=dtype, device=device, prefix=add_prefix('self_attn', prefix))
 
         # build MLP
         if (layer_idx not in config.mlp_only_layers) and (config.num_experts
                                                           > 0) and ((layer_idx + 1) % config.decoder_sparse_step == 0):
-            self.mlp = Qwen3MoeSparseMoeBlock(config, layer_idx=layer_idx, dtype=dtype, device=device)
+            self.mlp = Qwen3MoeSparseMoeBlock(config,
+                                              layer_idx=layer_idx,
+                                              dtype=dtype,
+                                              device=device,
+                                              prefix=add_prefix('mlp', prefix))
         else:
-            self.mlp = Qwen3MoeMLP(config, intermediate_size=config.intermediate_size, dtype=dtype, device=device)
+            self.mlp = Qwen3MoeMLP(config,
+                                   intermediate_size=config.intermediate_size,
+                                   dtype=dtype,
+                                   device=device,
+                                   prefix=add_prefix('mlp', prefix))
 
         # build input layer norm
         self.input_layernorm = RMSNorm(config.hidden_size,
                                        config.rms_norm_eps,
                                        quant_config=quantization_config,
                                        dtype=dtype,
-                                       device=device)
+                                       device=device,
+                                       prefix=add_prefix('input_layernorm', prefix))
 
         # build attention layer norm
-        self.post_attention_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
+        self.post_attention_layernorm = RMSNorm(config.hidden_size,
+                                                config.rms_norm_eps,
+                                                dtype=dtype,
+                                                device=device,
+                                                prefix=add_prefix('post_attention_layernorm', prefix))
 
     def forward(
         self,
@@ -312,16 +349,21 @@ class Qwen3MoeDecoderLayer(nn.Module):
 class Qwen3MoeModel(nn.Module):
     """model."""
 
-    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 prefix: str = ''):
         super().__init__()
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
-
-        self.embed_tokens = nn.Embedding(config.vocab_size,
-                                         config.hidden_size,
-                                         self.padding_idx,
-                                         dtype=dtype,
-                                         device=device)
+        self.embed_tokens = build_embedding(
+            config.vocab_size,
+            config.hidden_size,
+            self.padding_idx,
+            dtype=dtype,
+            device=device,
+        )
 
         if get_dist_manager().current_context().dist_config.enable_eplb:
             ep_size, _ = get_ep_world_rank()
@@ -333,12 +375,20 @@ class Qwen3MoeModel(nn.Module):
 
         # build all decode layers
         self.layers = nn.ModuleList([
-            Qwen3MoeDecoderLayer(config, layer_idx, dtype=dtype, device=device)
+            Qwen3MoeDecoderLayer(config,
+                                 layer_idx,
+                                 dtype=dtype,
+                                 device=device,
+                                 prefix=add_prefix(f'layers.{layer_idx}', prefix))
             for layer_idx in range(config.num_hidden_layers)
         ])
 
         # build norm
-        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
+        self.norm = RMSNorm(config.hidden_size,
+                            config.rms_norm_eps,
+                            dtype=dtype,
+                            device=device,
+                            prefix=add_prefix('norm', prefix))
 
         # build rotary embedding
         self.rotary_emb = build_rotary_embedding_from_config(config, device=device)
@@ -388,7 +438,7 @@ class Qwen3MoeModel(nn.Module):
         return self.embed_tokens
 
 
-class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
+class Qwen3MoeForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
     """ModelForCausalLM."""
 
     packed_modules_mapping = {
@@ -403,23 +453,28 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
         ],
     }
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 ctx_mgr: StepContextManager,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(
+        self,
+        config: PretrainedConfig,
+        ctx_mgr: StepContextManager,
+        dtype: torch.dtype = None,
+        device: torch.device = None,
+        prefix: str = '',
+    ):
         super().__init__()
         self.config = config
         self.ctx_mgr = ctx_mgr
 
         # build model
-        self.model = Qwen3MoeModel(config, dtype=dtype, device=device)
+        self.model = Qwen3MoeModel(config, dtype=dtype, device=device, prefix=add_prefix('model', prefix))
         # build lm_head
-        self.lm_head = build_rowwise_linear(config.hidden_size,
-                                            config.vocab_size,
-                                            bias=False,
-                                            dtype=dtype,
-                                            device=device)
+        self.lm_head = self.build_lm_head(
+            config.hidden_size,
+            config.vocab_size,
+            bias=False,
+            dtype=dtype,
+            device=device,
+        )
         # for router replay
         bm_ctx = get_build_model_context()
         self.enable_return_routed_experts = bm_ctx.enable_return_routed_experts
@@ -456,10 +511,6 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
         if all_routed_experts is None:
             return hidden_states
         return dict(hidden_states=hidden_states, all_routed_experts=all_routed_experts)
-
-    def get_logits(self, hidden_states: torch.Tensor):
-        """Compute logits of the model output."""
-        return self.lm_head(hidden_states)
 
     def get_input_embeddings(self):
         """Get input embeddings."""

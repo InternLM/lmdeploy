@@ -10,7 +10,7 @@ from torch.profiler import record_function
 # from torch import distributed as dist
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.backends import get_backend
-from lmdeploy.pytorch.config import CacheConfig, DLLMConfig, ModelConfig
+from lmdeploy.pytorch.config import CacheConfig, DLLMConfig, ModelConfig, QuantizationConfig
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
 from lmdeploy.pytorch.utils import CtxMgrBase, singleton
 
@@ -192,6 +192,7 @@ class ModelInputs:
     target_hidden_states: torch.Tensor = None
     target_position_ids: torch.Tensor = None
     is_chunk: bool = False
+    is_first_chunk: bool = True
 
     def step(self, input_ids: torch.Tensor, step_seqlens: torch.Tensor = None):
         """Update input ids."""
@@ -389,6 +390,9 @@ class BuildModelContext:
     dllm_config: DLLMConfig = None
     strategy_factory: 'StrategyFactoryBase' = None
     enable_return_routed_experts: bool = False
+    quant_config: QuantizationConfig = field(default_factory=QuantizationConfig)
+    fp32_lm_head: bool = False
+    tie_word_embeddings: bool = False
 
 
 class StepContextManager(CtxMgrBase[StepContext]):

@@ -1,9 +1,9 @@
+import multiprocessing as mp
 import os
 
 import numpy as np
 import pytest
-from utils.config_utils import set_device_env_variable
-from utils.get_run_config import close_pipeline, get_tp_num
+from utils.config_utils import set_device_env_variable, unset_device_env_variable
 
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
 
@@ -21,33 +21,41 @@ SESSION_LEN_CONFIG = {
     'meta-llama/Meta-Llama-3-1-8B-Instruct': SESSION_LEN_128K,
     'internlm/Intern-S1-mini': SESSION_LEN_128K,
     'internlm/Intern-S1': SESSION_LEN_128K,
-    'meta-llama/Meta-Llama-3-1-70B-Instruct': SESSION_LEN_128K
+    'meta-llama/Meta-Llama-3-1-70B-Instruct': SESSION_LEN_128K,
 }
+
+
+def run_case_in_spawn(target, args):
+    ctx = mp.get_context('spawn')
+    process = ctx.Process(target=target, args=args)
+    process.start()
+    process.join()
 
 
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize(
     'model', ['internlm/Intern-S1-mini', 'internlm/internlm2_5-7b-chat', 'internlm/internlm2_5-7b-chat-inner-4bits'])
 def test_history_issue_tp1(config, model, worker_id):
-    log_name = ''.join(['pipeline_longtext_issue_', worker_id, '.log'])
     if 'gw' in worker_id:
         set_device_env_variable(worker_id)
-    stream_infer_basic(config, model, log_name)
+    run_case_in_spawn(stream_infer_worker, (config, model, 1))
+    if 'gw' in worker_id:
+        unset_device_env_variable()
 
 
 @pytest.mark.gpu_num_2
 @pytest.mark.parametrize('model', ['Qwen/Qwen3-32B', 'Qwen/Qwen3-32B-inner-4bits', 'Qwen/Qwen3-30B-A3B'])
 def test_history_issue_tp2(config, model, worker_id):
-    log_name = ''.join(['pipeline_longtext_issue_', worker_id, '.log'])
     if 'gw' in worker_id:
         set_device_env_variable(worker_id, parallel_config=2)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    stream_infer_basic(config, model, log_name)
+    run_case_in_spawn(stream_infer_worker, (config, model, 2))
+    if 'gw' in worker_id:
+        unset_device_env_variable()
 
 
-def stream_infer_basic(config, model, log_name):
-    tp_num = get_tp_num(config, model)
-    model_path = '/'.join([config.get('model_path'), model])
+def stream_infer_worker(config, model, tp_num):
+    model_path = os.path.join(config.get('model_path'), model)
 
     backend_config = TurbomindEngineConfig(session_len=SESSION_LEN, tp=tp_num)
     pipe = pipeline(model_path, backend_config=backend_config)
@@ -65,7 +73,7 @@ def stream_infer_basic(config, model, log_name):
         continue
     print(outputs)
 
-    close_pipeline(pipe)
+    pipe.close()
 
 
 @pytest.mark.gpu_num_1
@@ -78,7 +86,10 @@ def test_long_test_passkey_tp1(config, model, backend, worker_id):
     log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
     if 'gw' in worker_id:
         set_device_env_variable(worker_id)
-    passkey_retrival(config, model, backend, log_name, 1, SESSION_LEN_CONFIG.get(model, SESSION_LEN_128K))
+    run_case_in_spawn(passkey_retrival_worker,
+                      (config, model, backend, log_name, 1, SESSION_LEN_CONFIG.get(model, SESSION_LEN_128K)))
+    if 'gw' in worker_id:
+        unset_device_env_variable()
 
 
 @pytest.mark.gpu_num_2
@@ -89,7 +100,10 @@ def test_long_test_passkey_tp2(config, model, backend, worker_id):
     if 'gw' in worker_id:
         set_device_env_variable(worker_id, parallel_config=2)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    passkey_retrival(config, model, backend, log_name, 2, SESSION_LEN_CONFIG.get(model, SESSION_LEN_128K))
+    run_case_in_spawn(passkey_retrival_worker,
+                      (config, model, backend, log_name, 2, SESSION_LEN_CONFIG.get(model, SESSION_LEN_128K)))
+    if 'gw' in worker_id:
+        unset_device_env_variable()
 
 
 @pytest.mark.gpu_num_4
@@ -100,7 +114,10 @@ def test_long_test_passkey_tp4(config, model, backend, worker_id):
     if 'gw' in worker_id:
         set_device_env_variable(worker_id, parallel_config=4)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    passkey_retrival(config, model, backend, log_name, 4, SESSION_LEN_CONFIG.get(model, SESSION_LEN_128K))
+    run_case_in_spawn(passkey_retrival_worker,
+                      (config, model, backend, log_name, 4, SESSION_LEN_CONFIG.get(model, SESSION_LEN_128K)))
+    if 'gw' in worker_id:
+        unset_device_env_variable()
 
 
 @pytest.mark.gpu_num_8
@@ -112,7 +129,10 @@ def test_long_test_passkey_tp8(config, model, backend, worker_id):
     if 'gw' in worker_id:
         set_device_env_variable(worker_id, parallel_config=8)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    passkey_retrival(config, model, backend, log_name, 8, SESSION_LEN_CONFIG.get(model, SESSION_LEN_128K))
+    run_case_in_spawn(passkey_retrival_worker,
+                      (config, model, backend, log_name, 8, SESSION_LEN_CONFIG.get(model, SESSION_LEN_128K)))
+    if 'gw' in worker_id:
+        unset_device_env_variable()
 
 
 YARN_CONFIG = {'rope_scaling': {'rope_type': 'yarn', 'factor': 4.0, 'original_max_position_embeddings': 32768}}
@@ -125,7 +145,7 @@ NTK_CONFIG = {
 }
 
 
-def passkey_retrival(config, model, backend, log_name, tp_num, session_len: int = SESSION_LEN_128K):
+def passkey_retrival_worker(config, model, backend, log_name, tp_num, session_len: int = SESSION_LEN_128K):
     model_path = '/'.join([config.get('model_path'), model])
     if backend == 'turbomind':
         if 'qwen' in model.lower():
@@ -171,7 +191,7 @@ def passkey_retrival(config, model, backend, log_name, tp_num, session_len: int 
     pass_key2, prompt = get_passkey_prompt(pipe, session_len)
     response2 = pipe([prompt] * 2, gen_config=gen_config)
 
-    close_pipeline(pipe)
+    pipe.close()
 
     assert str(pass_key1) in response1.text, str(response1)
     assert str(pass_key2) in response2[0].text and str(pass_key2) in response2[1].text, str(response2)

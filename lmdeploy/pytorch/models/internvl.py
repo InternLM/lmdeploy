@@ -19,7 +19,7 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .patch import build_model_from_hf_config
 from .utils.cudagraph import CudaGraphMixin
-from .utils.model import DeployModelMixin, vlm_model
+from .utils.model import DeployModelMixinV1, vlm_model
 
 
 class Gating(nn.Module):
@@ -444,7 +444,7 @@ class InternVisionModel(nn.Module):
         return last_hidden_state
 
 
-class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
+class InternVLChatModel(nn.Module, DeployModelMixinV1, CudaGraphMixin):
 
     def __init__(self,
                  config: PretrainedConfig,
@@ -472,7 +472,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
             self.vision_model = InternVisionModel(vision_config, dtype=dtype, device=device)
 
         self.language_model = build_model_from_hf_config(llm_config, dtype=dtype, device=device)
-
+        self.lm_head = self.language_model.lm_head
         vit_hidden_size = config.vision_config.hidden_size
         llm_hidden_size = config.llm_config.hidden_size
         self.downsample_ratio = config.downsample_ratio
@@ -724,6 +724,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         # update model metas
         prev_lens = [0] * len(context.model_metas)
         has_model_metas = context.model_metas is not None and context.model_metas[0] is not None
+        context.is_model_meta_updated = has_model_metas
         if has_model_metas:
             prev_lens = [meta.get('new_seqlen', 0) for meta in context.model_metas]
 
@@ -746,7 +747,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
                                        max_kv_seqlen=kv_seqlens.max().item(),
                                        sum_kv_seqlen=kv_seqlens.sum().item(),
                                        model_metas=context.model_metas)
-        new_ctx = self.ctx_mgr.build_context(new_model_inputs, crt_ctx.model_config)
+        new_ctx = self.ctx_mgr.build_context(new_model_inputs, crt_ctx.model_config, crt_ctx.cache_config)
 
         # update attributes of the context in model agent
         context.q_seqlens = new_ctx.q_seqlens
@@ -801,10 +802,6 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
                                                position_ids=position_ids,
                                                attn_metadata=attn_metadata)
 
-    def get_logits(self, hidden_states: torch.Tensor):
-        """Compute logits of the model output."""
-        return self.language_model.get_logits(hidden_states)
-
     def get_input_embeddings(self):
         """Get input embeddings."""
         return self.language_model.get_input_embeddings()
@@ -850,6 +847,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
             inputs_embeds[:, vision_embedding_indexing, :] = vision_embeddings.to(inputs_embeds)
 
         has_model_metas = context.model_metas is not None and context.model_metas[0] is not None
+        context.is_model_meta_updated = has_model_metas
         if context.is_decoding:
             if has_model_metas:
                 # NOTE, zhouxinyu, we need to consider the increasing batch in the decoding stage

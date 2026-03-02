@@ -79,7 +79,6 @@ class Qwen3VLModel(VisionModel):
             image = image.convert('RGB')
 
             result = self.processor.image_processor(images=image,
-                                                    videos=None,
                                                     size={
                                                         'shortest_edge': min_pixels,
                                                         'longest_edge': max_pixels
