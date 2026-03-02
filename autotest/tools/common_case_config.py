@@ -1,5 +1,5 @@
 TURBOMIND_PR_TEST_LLM_GPU2 = [{
-    'model': 'internlm/internlm2_5-20b-chat',
+    'model': 'Qwen/Qwen3-30B-A3B',
     'backend': 'turbomind',
     'communicator': 'cuda-ipc',
     'quant_policy': 0,
@@ -8,7 +8,7 @@ TURBOMIND_PR_TEST_LLM_GPU2 = [{
     },
     'extra_params': {}
 }, {
-    'model': 'internlm/internlm2_5-20b-chat-inner-4bits',
+    'model': 'Qwen/Qwen3-32B-inner-4bits',
     'backend': 'turbomind',
     'communicator': 'nccl',
     'quant_policy': 8,
@@ -28,7 +28,7 @@ TURBOMIND_PR_TEST_LLM_GPU2 = [{
 }]
 
 TURBOMIND_PR_TEST_LLM_GPU1 = [{
-    'model': 'OpenGVLab/InternVL3-8B',
+    'model': 'Qwen/Qwen3-0.6B',
     'backend': 'turbomind',
     'communicator': 'cuda-ipc',
     'quant_policy': 0,
@@ -37,7 +37,7 @@ TURBOMIND_PR_TEST_LLM_GPU1 = [{
     },
     'extra_params': {}
 }, {
-    'model': 'OpenGVLab/InternVL3-8B',
+    'model': 'Qwen/Qwen3-8B',
     'backend': 'turbomind',
     'communicator': 'nccl',
     'quant_policy': 8,
@@ -48,7 +48,7 @@ TURBOMIND_PR_TEST_LLM_GPU1 = [{
 }]
 
 TURBOMIND_PR_TEST_MLLM_GPU1 = [{
-    'model': 'liuhaotian/llava-v1.6-vicuna-7b',
+    'model': 'Qwen/Qwen2.5-VL-7B-Instruct',
     'backend': 'turbomind',
     'communicator': 'cuda-ipc',
     'quant_policy': 0,
@@ -57,7 +57,7 @@ TURBOMIND_PR_TEST_MLLM_GPU1 = [{
     },
     'extra_params': {}
 }, {
-    'model': 'OpenGVLab/InternVL2-4B',
+    'model': 'Qwen/Qwen2.5-VL-7B-Instruct',
     'backend': 'turbomind',
     'communicator': 'nccl',
     'quant_policy': 8,
@@ -65,13 +65,24 @@ TURBOMIND_PR_TEST_MLLM_GPU1 = [{
         'tp': 1
     },
     'extra_params': {}
+}]
+
+TURBOMIND_PR_TEST_MLLM_GPU2 = [{
+    'model': 'OpenGVLab/InternVL3_5-30B-A3B',
+    'backend': 'turbomind',
+    'communicator': 'cuda-ipc',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 2
+    },
+    'extra_params': {}
 }, {
-    'model': 'OpenGVLab/InternVL3-8B',
+    'model': 'OpenGVLab/InternVL3_5-30B-A3B',
     'backend': 'turbomind',
     'communicator': 'nccl',
     'quant_policy': 8,
     'parallel_config': {
-        'tp': 1
+        'tp': 2
     },
     'extra_params': {}
 }]
@@ -97,7 +108,7 @@ TURBOMIND_FALLBACK_TEST_LLM_GPU2 = [{
     },
     'extra_params': {}
 }, {
-    'model': 'deepseek-ai/deepseek-moe-16b-chat',
+    'model': 'google/gemma-2-27b-it',
     'backend': 'turbomind',
     'communicator': 'nccl',
     'quant_policy': 8,
@@ -134,19 +145,10 @@ TURBOMIND_FALLBACK_TEST_MLLM_GPU1 = [{
         'tp': 1
     },
     'extra_params': {}
-}, {
-    'model': 'OpenGVLab/InternVL2-4B',
-    'backend': 'turbomind',
-    'communicator': 'nccl',
-    'quant_policy': 0,
-    'parallel_config': {
-        'tp': 1
-    },
-    'extra_params': {}
 }]
 
 TURBOMIND_LOGPROBS_TEST_LLM_GPU2 = [{
-    'model': 'internlm/internlm2_5-20b-chat',
+    'model': 'Qwen/Qwen3-30B-A3B',
     'backend': 'turbomind',
     'communicator': 'nccl',
     'quant_policy': 0,
@@ -227,7 +229,7 @@ PYTORCH_LORA_TEST_LLM_GPU2 = [{
 }]
 
 PYTORCH_PR_TEST_LLM_GPU2 = [{
-    'model': 'internlm/internlm2_5-20b-chat',
+    'model': 'Qwen/Qwen3-30B-A3B',
     'backend': 'pytorch',
     'communicator': 'nccl',
     'quant_policy': 8,
@@ -256,7 +258,7 @@ PYTORCH_PR_TEST_LLM_GPU1 = [{
     },
     'extra_params': {}
 }, {
-    'model': 'OpenGVLab/InternVL3-8B',
+    'model': 'Qwen/Qwen3-0.6B',
     'backend': 'pytorch',
     'communicator': 'nccl',
     'quant_policy': 8,
@@ -267,16 +269,6 @@ PYTORCH_PR_TEST_LLM_GPU1 = [{
 }]
 
 BASE_TOOLCALL_TEST_LLM = [{
-    'model': 'internlm/internlm2_5-7b-chat',
-    'communicator': 'nccl',
-    'quant_policy': 0,
-    'parallel_config': {
-        'tp': 1
-    },
-    'extra_params': {
-        'tool-call-parser': 'internlm'
-    }
-}, {
     'model': 'Qwen/Qwen2.5-7B-Instruct',
     'communicator': 'nccl',
     'quant_policy': 0,
@@ -285,16 +277,6 @@ BASE_TOOLCALL_TEST_LLM = [{
     },
     'extra_params': {
         'tool-call-parser': 'qwen'
-    }
-}, {
-    'model': 'internlm/internlm2_5-20b-chat',
-    'communicator': 'nccl',
-    'quant_policy': 0,
-    'parallel_config': {
-        'tp': 2
-    },
-    'extra_params': {
-        'tool-call-parser': 'internlm'
     }
 }, {
     'model': 'meta-llama/Meta-Llama-3-1-70B-Instruct',

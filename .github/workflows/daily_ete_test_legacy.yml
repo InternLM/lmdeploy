@@ -1,4 +1,4 @@
-name: daily_ete_test
+name: daily_ete_test_legacy
 
 on:
   workflow_dispatch:
@@ -54,6 +54,7 @@ env:
   OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
   DEEPSEEK_VL: /nvme/qa_test_models/offline_pkg/DeepSeek-VL
   RUN_ID: ${{ inputs.repo_ref || 'main' }}_${{ github.run_id }}
+  TEST_ENV: legacy
 
 jobs:
   linux-build:
@@ -183,6 +184,7 @@ jobs:
           rm -rf ${{env.DEEPSEEK_VL}}/build
       - name: Check env
         run: |
+          pip install transformers==4.57.6
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -267,6 +269,7 @@ jobs:
           rm -rf ${{env.DEEPSEEK_VL}}/build
       - name: Check env
         run: |
+          pip install transformers==4.57.6
           python3 -m pip list
           lmdeploy check_env
           cp -r /nvme/qa_test_models/offline_pkg/lora .
@@ -327,88 +330,30 @@ jobs:
           chmod -R 777 $workdir
 
   test_restful:
-    if: ${{!cancelled() && (github.event_name != 'schedule' && contains(fromJSON(github.event.inputs.regression_func), 'restful'))}}
+    if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'restful'))}}
     runs-on: [self-hosted, linux-a100]
     needs: test_quantization
     strategy:
       fail-fast: false
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
-        model_path: ['internlm/internlm2_5-20b', 'Qwen/Qwen3-8B-Base', 'Qwen/Qwen3-30B-A3B', 'Qwen/Qwen3-32B', 'OpenGVLab/InternVL3_5-30B-A3B', 'OpenGVLab/InternVL3-38B', 'Qwen/Qwen3-VL-8B-Instruct', 'Qwen/Qwen3-VL-30B-A3B-Instruct']
+        model_path: ['internlm/Intern-S1', 'internlm/internlm2_5-20b-chat', 'internlm/internlm2_5-20b']
         include:
           - tp: 2
-            model: Qwen3-8B-Base
-            model_path: Qwen/Qwen3-8B-Base
-            case_info: ['completions_v1']
+            model: internlm2_5-20b-chat
+            model_path: internlm/internlm2_5-20b-chat
+            case_info: ['chat_completions_v1', 'generate']
             generate_type: base
           - tp: 2
-            model: Qwen3-30B-A3B
-            model_path: Qwen/Qwen3-30B-A3B
+            model: internlm2_5-20b
+            model_path: internlm/internlm2_5-20b
+            case_info: ['completions_v1']
+            generate_type: base
+          - tp: 8
+            model: Intern-S1
+            model_path: internlm/Intern-S1
             case_info: ['chat_completions_v1', 'generate']
-            generate_type: all
-            extra: '--logprobs-mode raw_logprobs --enable-return-routed-experts'
-            backend: pytorch
-          - tp: 2
-            model: Qwen3-30B-A3B
-            model_path: Qwen/Qwen3-30B-A3B
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs'
-            backend: turbomind
-          - tp: 2
-            model: InternVL3_5-30B-A3B
-            model_path: OpenGVLab/InternVL3_5-30B-A3B
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs --enable-return-routed-experts'
-            backend: pytorch
-          - tp: 2
-            model: InternVL3_5-30B-A3B
-            model_path: OpenGVLab/InternVL3_5-30B-A3B
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs'
-            backend: turbomind
-          - tp: 2
-            model: Qwen3-VL-30B-A3B-Instruct
-            model_path: Qwen/Qwen3-VL-30B-A3B-Instruct
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs --enable-return-routed-experts'
-            backend: pytorch
-          - tp: 2
-            model: Qwen3-VL-30B-A3B-Instruct
-            model_path: Qwen/Qwen3-VL-30B-A3B-Instruct
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs'
-            backend: turbomind
-          - tp: 2
-            model: Qwen3-32B
-            model_path: Qwen/Qwen3-32B
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs'
-          - tp: 1
-            model: Qwen3-VL-8B-Instruct
-            model_path: Qwen/Qwen3-VL-8B-Instruct
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs --enable-return-routed-experts'
-            backend: pytorch
-          - tp: 1
-            model: Qwen3-VL-8B-Instruct
-            model_path: Qwen/Qwen3-VL-8B-Instruct
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs'
-            backend: turbomind
-          - tp: 2
-            model: InternVL3-38B
-            model_path: OpenGVLab/InternVL3-38B
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs'
+            generate_type: base
     timeout-minutes: 60
     container:
       image: openmmlab/lmdeploy:latest-cu12.8
@@ -437,6 +382,7 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
+          pip install transformers==4.57.6
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -557,6 +503,7 @@ jobs:
           rm -rf ${{env.DEEPSEEK_VL}}/build
       - name: Check env
         run: |
+          pip install transformers==4.57.6
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -621,6 +568,7 @@ jobs:
           rm -rf ${{env.DEEPSEEK_VL}}/build
       - name: Check env
         run: |
+          pip install transformers==4.57.6
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
