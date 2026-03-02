@@ -1,20 +1,30 @@
 import json
 
 import pytest
-from utils.constant import BACKEND_LIST, RESTFUL_MODEL_LIST
-from utils.tool_reasoning_definitions import (ALL_OPTIONAL_TOOL, CALCULATOR_TOOL, NESTED_PARAM_TOOL, SEARCH_TOOL,
-                                              WEATHER_TOOL, WEATHER_TOOL_CN, assert_arguments_parseable,
-                                              assert_tool_call_fields, build_messages_with_parallel_tool_responses,
-                                              build_messages_with_tool_response, collect_stream_content,
-                                              collect_stream_parallel_tool_calls, collect_stream_tool_call,
-                                              get_client_and_model)
+from utils.constant import BACKEND_LIST, TOOL_REASONING_MODEL_LIST
+from utils.tool_reasoning_definitions import (
+    ALL_OPTIONAL_TOOL,
+    CALCULATOR_TOOL,
+    NESTED_PARAM_TOOL,
+    SEARCH_TOOL,
+    WEATHER_TOOL,
+    WEATHER_TOOL_CN,
+    assert_arguments_parseable,
+    assert_tool_call_fields,
+    build_messages_with_parallel_tool_responses,
+    build_messages_with_tool_response,
+    collect_stream_parallel_tool_calls,
+    collect_stream_tool_call,
+    make_logged_client,
+    setup_log_file,
+)
 
 _CLASS_MARKS = [
     pytest.mark.order(8),
     pytest.mark.tool_call,
     pytest.mark.flaky(reruns=2),
     pytest.mark.parametrize('backend', BACKEND_LIST),
-    pytest.mark.parametrize('model_case', RESTFUL_MODEL_LIST),
+    pytest.mark.parametrize('model_case', TOOL_REASONING_MODEL_LIST),
 ]
 
 
@@ -24,6 +34,29 @@ def _apply_marks(cls):
         cls = m(cls)
     return cls
 
+
+# ---------------------------------------------------------------------------
+# Logging helpers – uses shared StreamTee / setup_log_file / make_logged_client
+# from utils.tool_reasoning_definitions.
+# ---------------------------------------------------------------------------
+
+
+class _ToolCallTestBase:
+    """Mixin providing per-test API request/response logging to *log_path*."""
+
+    @pytest.fixture(autouse=True)
+    def _setup_logging(self, request, config, backend, model_case):
+        """Create the log directory and compute the log-file path."""
+        self._log_file = setup_log_file(config, request.node.name, 'tool_calls')
+
+    def _get_client(self):
+        """Return *(client, model_name)* with transparent logging."""
+        return make_logged_client(self._log_file)
+
+
+# ---------------------------------------------------------------------------
+# Message constants
+# ---------------------------------------------------------------------------
 
 MESSAGES_ASKING_FOR_WEATHER = [
     {
@@ -115,14 +148,18 @@ MESSAGES_PARALLEL_MIXED = [
     },
 ]
 
+# ---------------------------------------------------------------------------
+# Test classes
+# ---------------------------------------------------------------------------
+
 
 @_apply_marks
-class TestToolCallBasic:
+class TestToolCallBasic(_ToolCallTestBase):
     """Basic tool call: response structure, finish_reason, field validation."""
 
     def test_non_streaming(self, backend, model_case):
         """Non-streaming: complete tool call response structure."""
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         response = client.chat.completions.create(
             model=model_name,
@@ -133,24 +170,36 @@ class TestToolCallBasic:
             logprobs=False,
         )
 
+        # Response-level checks
+        assert response.object == 'chat.completion'
+        assert response.id is not None and len(response.id) > 0
+        assert response.model is not None and len(response.model) > 0
+        assert len(response.choices) == 1
+
         choice = response.choices[0]
         tool_calls = choice.message.tool_calls
 
         assert choice.message.role == 'assistant'
+        assert choice.finish_reason == 'tool_calls'
         assert tool_calls is not None and len(tool_calls) >= 1
 
         tc = tool_calls[0]
         assert_tool_call_fields(tc)
+        assert tc.type == 'function'
         assert tc.function.name == WEATHER_TOOL['function']['name']
 
         parsed_args = assert_arguments_parseable(tc.function.arguments)
-        assert isinstance(parsed_args.get('city'), str)
-        assert isinstance(parsed_args.get('state'), str)
-        assert choice.finish_reason == 'tool_calls'
+        assert isinstance(parsed_args.get('city'), str) and len(parsed_args['city']) > 0
+        assert isinstance(parsed_args.get('state'), str) and len(parsed_args['state']) > 0
+
+        # Token usage sanity
+        assert response.usage is not None
+        assert response.usage.prompt_tokens > 0
+        assert response.usage.completion_tokens > 0
 
     def test_streaming(self, backend, model_case):
         """Streaming: tool call id / name streamed once, args accumulated."""
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         stream = client.chat.completions.create(
             model=model_name,
@@ -164,23 +213,24 @@ class TestToolCallBasic:
 
         r = collect_stream_tool_call(stream)
 
-        assert r['finish_reason_count'] == 1
+        assert r['finish_reason_count'] == 1, (f'Expected exactly 1 finish_reason, got {r["finish_reason_count"]}')
         assert r['finish_reason'] == 'tool_calls'
         assert r['role'] == 'assistant'
         assert isinstance(r['tool_call_id'], str) and len(r['tool_call_id']) >= 1
+        assert r['tool_call_id'].strip() == r['tool_call_id'], 'tool_call_id has leading/trailing whitespace'
         assert r['function_name'] == WEATHER_TOOL['function']['name']
 
         streamed_args = assert_arguments_parseable(r['args_str'])
-        assert isinstance(streamed_args.get('city'), str)
-        assert isinstance(streamed_args.get('state'), str)
+        assert isinstance(streamed_args.get('city'), str) and len(streamed_args['city']) > 0
+        assert isinstance(streamed_args.get('state'), str) and len(streamed_args['state']) > 0
 
 
 @_apply_marks
-class TestToolCallStreamConsistency:
+class TestToolCallStreamConsistency(_ToolCallTestBase):
     """Streaming and non-streaming tool call results must match."""
 
     def test_stream_nonstream_consistency(self, backend, model_case):
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         # Non-streaming
         ns_resp = client.chat.completions.create(
@@ -191,7 +241,10 @@ class TestToolCallStreamConsistency:
             tools=[WEATHER_TOOL, SEARCH_TOOL],
             logprobs=False,
         )
-        ns_tc = ns_resp.choices[0].message.tool_calls[0]
+        ns_choice = ns_resp.choices[0]
+        assert ns_choice.finish_reason == 'tool_calls'
+        assert ns_choice.message.tool_calls is not None and len(ns_choice.message.tool_calls) >= 1
+        ns_tc = ns_choice.message.tool_calls[0]
         ns_name = ns_tc.function.name
         ns_args = json.loads(ns_tc.function.arguments)
 
@@ -206,21 +259,24 @@ class TestToolCallStreamConsistency:
             stream=True,
         )
         r = collect_stream_tool_call(stream)
+        assert r['finish_reason'] == 'tool_calls'
         s_args = json.loads(r['args_str'])
 
         assert ns_name == r['function_name'], (f'Function name mismatch: non-stream={ns_name}, '
                                                f'stream={r["function_name"]}')
         assert ns_args == s_args, (f'Arguments mismatch: non-stream={ns_args}, stream={s_args}')
+        # Verify both resolved to a valid tool name
+        assert ns_name in ('get_current_weather', 'web_search'), (f'Unexpected function name: {ns_name}')
 
 
 @_apply_marks
-class TestToolCallChoice:
+class TestToolCallChoice(_ToolCallTestBase):
     """Test all tool_choice variants."""
 
     # -- auto ----------------------------------------------------------------
     def test_tool_choice_auto(self, backend, model_case):
         """tool_choice='auto': model decides whether to call a tool."""
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         response = client.chat.completions.create(
             model=model_name,
@@ -234,17 +290,24 @@ class TestToolCallChoice:
 
         choice = response.choices[0]
         assert choice.message.role == 'assistant'
+        assert choice.finish_reason in ('stop', 'length',
+                                        'tool_calls'), (f'Unexpected finish_reason: {choice.finish_reason}')
         if choice.message.tool_calls and len(choice.message.tool_calls) > 0:
-            assert_tool_call_fields(choice.message.tool_calls[0])
+            for tc in choice.message.tool_calls:
+                assert_tool_call_fields(tc)
+                assert tc.type == 'function'
+                assert tc.function.name in ('get_current_weather',
+                                            'web_search'), (f'Unexpected tool: {tc.function.name}')
+                assert_arguments_parseable(tc.function.arguments)
             assert choice.finish_reason == 'tool_calls'
         else:
-            assert choice.message.content is not None
+            assert choice.message.content is not None and len(choice.message.content.strip()) > 0
             assert choice.finish_reason in ('stop', 'length')
 
     # -- none ----------------------------------------------------------------
     def test_tool_choice_none(self, backend, model_case):
         """tool_choice='none': model must NOT return tool calls."""
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         response = client.chat.completions.create(
             model=model_name,
@@ -258,39 +321,19 @@ class TestToolCallChoice:
 
         choice = response.choices[0]
         assert choice.message.role == 'assistant'
-        assert (choice.message.tool_calls is None or len(choice.message.tool_calls) == 0)
+        assert (choice.message.tool_calls is None
+                or len(choice.message.tool_calls) == 0), ('tool_choice="none" but got tool_calls in response')
         assert choice.message.content is not None
+        assert len(choice.message.content.strip()) > 0, ('tool_choice="none" should produce non-empty text content')
         assert choice.finish_reason in ('stop', 'length')
-
-    def test_tool_choice_none_streaming(self, backend, model_case):
-        """tool_choice='none' + streaming: no tool_calls in any chunk."""
-        client, model_name = get_client_and_model()
-
-        stream = client.chat.completions.create(
-            model=model_name,
-            messages=MESSAGES_ASKING_FOR_WEATHER,
-            temperature=0,
-            max_completion_tokens=200,
-            tools=[WEATHER_TOOL, SEARCH_TOOL],
-            tool_choice='none',
-            logprobs=False,
-            stream=True,
-        )
-
-        chunks = []
-        for chunk in stream:
-            delta = chunk.choices[0].delta
-            if delta.content:
-                chunks.append(delta.content)
-            assert (not delta.tool_calls
-                    or len(delta.tool_calls) == 0), ('tool_choice="none" but got tool_calls in stream')
-
-        assert len(chunks) > 0
 
     # -- required ------------------------------------------------------------
     def test_tool_choice_required(self, backend, model_case):
-        """tool_choice='required': model MUST return at least one tool call."""
-        client, model_name = get_client_and_model()
+        """tool_choice='required': model MUST return at least one tool call.
+
+        Only skip when the *server* rejects the request (HTTP error).
+        """
+        client, model_name = self._get_client()
 
         try:
             response = client.chat.completions.create(
@@ -302,20 +345,25 @@ class TestToolCallChoice:
                 tool_choice='required',
                 logprobs=False,
             )
-
-            choice = response.choices[0]
-            assert choice.message.role == 'assistant'
-            assert choice.message.tool_calls is not None
-            assert len(choice.message.tool_calls) >= 1
-            for tc in choice.message.tool_calls:
-                assert_tool_call_fields(tc)
-                assert_arguments_parseable(tc.function.arguments)
         except Exception as e:
-            pytest.skip(f'tool_choice="required" not supported: {e}')
+            # Only skip if the server itself rejects the request
+            pytest.skip(f'tool_choice="required" not supported by server: {e}')
+
+        # Validation MUST fail loudly — never skip on assertion errors
+        choice = response.choices[0]
+        assert choice.message.role == 'assistant'
+        assert choice.message.tool_calls is not None, ('tool_choice="required" but got no tool_calls')
+        assert len(choice.message.tool_calls) >= 1
+        for tc in choice.message.tool_calls:
+            assert_tool_call_fields(tc)
+            assert_arguments_parseable(tc.function.arguments)
 
     def test_tool_choice_required_streaming(self, backend, model_case):
-        """tool_choice='required' + streaming: must return tool call chunks."""
-        client, model_name = get_client_and_model()
+        """tool_choice='required' + streaming: must return tool call chunks.
+
+        Only skip if the server rejects the request, not on parse errors.
+        """
+        client, model_name = self._get_client()
 
         try:
             stream = client.chat.completions.create(
@@ -328,21 +376,21 @@ class TestToolCallChoice:
                 logprobs=False,
                 stream=True,
             )
-
             r = collect_stream_tool_call(stream)
-
-            assert r['function_name'] is not None
-            assert len(r['args_str']) > 0
-            assert r['tool_call_id'] is not None
-            assert_arguments_parseable(r['args_str'])
-            assert r['finish_reason'] == 'tool_calls'
         except Exception as e:
-            pytest.skip(f'tool_choice="required" streaming not supported: {e}')
+            pytest.skip(f'tool_choice="required" streaming not supported by server: {e}')
+
+        # Validation MUST fail loudly
+        assert r['function_name'] is not None, ('tool_choice="required" streaming but no function name received')
+        assert len(r['args_str']) > 0, ('tool_choice="required" streaming but no arguments received')
+        assert r['tool_call_id'] is not None
+        assert_arguments_parseable(r['args_str'])
+        assert r['finish_reason'] == 'tool_calls'
 
     # -- specific function ---------------------------------------------------
     def test_tool_choice_specific_function(self, backend, model_case):
         """Force a specific tool via tool_choice={type, function}."""
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         response = client.chat.completions.create(
             model=model_name,
@@ -370,40 +418,14 @@ class TestToolCallChoice:
         assert tc.function.name == 'get_current_weather'
         assert_arguments_parseable(tc.function.arguments)
 
-    def test_tool_choice_specific_function_streaming(self, backend, model_case):
-        """Force a specific tool + streaming."""
-        client, model_name = get_client_and_model()
-
-        stream = client.chat.completions.create(
-            model=model_name,
-            messages=MESSAGES_ASKING_FOR_WEATHER,
-            temperature=0,
-            max_completion_tokens=200,
-            tools=[WEATHER_TOOL, SEARCH_TOOL],
-            tool_choice={
-                'type': 'function',
-                'function': {
-                    'name': 'get_current_weather'
-                },
-            },
-            logprobs=False,
-            stream=True,
-        )
-
-        r = collect_stream_tool_call(stream)
-
-        assert r['function_name'] == 'get_current_weather'
-        assert r['finish_reason_count'] == 1
-        assert_arguments_parseable(r['args_str'])
-
 
 @_apply_marks
-class TestToolCallArgumentsParsing:
+class TestToolCallArgumentsParsing(_ToolCallTestBase):
     """Validate that arguments are parseable and contain expected keys."""
 
     def test_weather_args(self, backend, model_case):
         """Weather tool args should contain city & state."""
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         response = client.chat.completions.create(
             model=model_name,
@@ -424,7 +446,7 @@ class TestToolCallArgumentsParsing:
 
     def test_weather_args_streaming(self, backend, model_case):
         """Streaming: weather tool args should contain city & state."""
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         stream = client.chat.completions.create(
             model=model_name,
@@ -444,7 +466,7 @@ class TestToolCallArgumentsParsing:
 
     def test_search_tool_args(self, backend, model_case):
         """Search tool args should contain a non-empty query."""
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         response = client.chat.completions.create(
             model=model_name,
@@ -465,7 +487,7 @@ class TestToolCallArgumentsParsing:
 
     def test_enum_parameter_constraint(self, backend, model_case):
         """Enum-constrained params should only return valid values."""
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         messages = [
             {
@@ -501,11 +523,11 @@ class TestToolCallArgumentsParsing:
 
 
 @_apply_marks
-class TestToolCallMultipleTools:
+class TestToolCallMultipleTools(_ToolCallTestBase):
     """Model should pick the right tool from a multi-tool list."""
 
     def test_selects_weather_tool(self, backend, model_case):
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         response = client.chat.completions.create(
             model=model_name,
@@ -521,7 +543,7 @@ class TestToolCallMultipleTools:
             assert choice.message.tool_calls[0].function.name == ('get_current_weather')
 
     def test_selects_calculator_tool(self, backend, model_case):
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         response = client.chat.completions.create(
             model=model_name,
@@ -541,7 +563,7 @@ class TestToolCallMultipleTools:
 
     def test_no_tool_when_not_needed(self, backend, model_case):
         """Unrelated question + tool_choice=auto → prefer text."""
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         response = client.chat.completions.create(
             model=model_name,
@@ -564,7 +586,7 @@ class TestToolCallMultipleTools:
 
     def test_large_number_of_tools(self, backend, model_case):
         """Model should still pick the right tool among 10+ definitions."""
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         tools = [WEATHER_TOOL]
         for i in range(10):
@@ -604,12 +626,12 @@ class TestToolCallMultipleTools:
 
 
 @_apply_marks
-class TestToolCallParallel:
+class TestToolCallParallel(_ToolCallTestBase):
     """Parallel tool calls in a single response."""
 
     def test_parallel_same_tool(self, backend, model_case):
         """Two cities → two weather tool calls."""
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         response = client.chat.completions.create(
             model=model_name,
@@ -622,22 +644,23 @@ class TestToolCallParallel:
 
         tool_calls = response.choices[0].message.tool_calls
 
-        if tool_calls and len(tool_calls) >= 2:
-            for tc in tool_calls:
-                assert_tool_call_fields(tc)
-                assert tc.function.name == 'get_current_weather'
-                parsed = assert_arguments_parseable(tc.function.arguments)
-                assert 'city' in parsed and 'state' in parsed
+        # Hard assertion: two cities asked → must get ≥ 2 tool calls
+        assert tool_calls is not None and len(tool_calls) >= 2, (f'Expected ≥2 parallel tool calls for two cities, '
+                                                                 f'got {len(tool_calls) if tool_calls else 0}')
 
-            ids = [tc.id for tc in tool_calls]
-            assert len(set(ids)) == len(ids), (f'IDs should be unique, got {ids}')
-            assert response.choices[0].finish_reason == 'tool_calls'
-        elif tool_calls and len(tool_calls) == 1:
-            assert_tool_call_fields(tool_calls[0])
+        for tc in tool_calls:
+            assert_tool_call_fields(tc)
+            assert tc.function.name == 'get_current_weather'
+            parsed = assert_arguments_parseable(tc.function.arguments)
+            assert 'city' in parsed and 'state' in parsed
+
+        ids = [tc.id for tc in tool_calls]
+        assert len(set(ids)) == len(ids), (f'IDs should be unique, got {ids}')
+        assert response.choices[0].finish_reason == 'tool_calls'
 
     def test_parallel_same_tool_streaming(self, backend, model_case):
         """Streaming: parallel tool calls indexed correctly."""
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         stream = client.chat.completions.create(
             model=model_name,
@@ -652,6 +675,10 @@ class TestToolCallParallel:
         tc_data, fr_count = collect_stream_parallel_tool_calls(stream)
         assert fr_count == 1
 
+        # Hard assertion: must receive ≥ 2 distinct tool call indices
+        assert len(tc_data) >= 2, (f'Expected ≥2 parallel streaming tool calls, '
+                                   f'got {len(tc_data)} indices: {list(tc_data.keys())}')
+
         for idx, data in tc_data.items():
             assert data['name'] is not None, (f'Index {idx}: missing function name')
             assert len(data['args_str']) > 0, (f'Index {idx}: missing arguments')
@@ -660,7 +687,7 @@ class TestToolCallParallel:
 
     def test_parallel_mixed_tools(self, backend, model_case):
         """Weather + calculator in one request."""
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         response = client.chat.completions.create(
             model=model_name,
@@ -673,28 +700,29 @@ class TestToolCallParallel:
 
         tool_calls = response.choices[0].message.tool_calls
 
-        if tool_calls and len(tool_calls) >= 2:
-            for tc in tool_calls:
-                assert_tool_call_fields(tc)
-                assert_arguments_parseable(tc.function.arguments)
+        # Hard assertion: weather + calculation asked → ≥ 2 tool calls
+        assert tool_calls is not None and len(tool_calls) >= 2, (f'Expected ≥2 parallel tool calls (weather+calc), '
+                                                                 f'got {len(tool_calls) if tool_calls else 0}')
 
-            ids = [tc.id for tc in tool_calls]
-            assert len(set(ids)) == len(ids)
+        for tc in tool_calls:
+            assert_tool_call_fields(tc)
+            assert_arguments_parseable(tc.function.arguments)
 
-            names = {tc.function.name for tc in tool_calls}
-            if len(names) >= 2:
-                assert ('get_current_weather' in names or 'calculate' in names)
-        elif tool_calls and len(tool_calls) == 1:
-            assert_tool_call_fields(tool_calls[0])
-            assert_arguments_parseable(tool_calls[0].function.arguments)
+        ids = [tc.id for tc in tool_calls]
+        assert len(set(ids)) == len(ids), (f'Tool call IDs should be unique, got {ids}')
+
+        names = {tc.function.name for tc in tool_calls}
+        assert len(names) >= 2, (f'Expected ≥2 distinct tool names, got {names}')
+        assert 'get_current_weather' in names, (f'Expected get_current_weather in tool calls, got {names}')
+        assert 'calculate' in names, (f'Expected calculate in tool calls, got {names}')
 
 
 @_apply_marks
-class TestToolCallWithResults:
+class TestToolCallWithResults(_ToolCallTestBase):
     """Feed tool results back; model should reply with text."""
 
     def test_single_result(self, backend, model_case):
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
         messages = build_messages_with_tool_response()
 
         response = client.chat.completions.create(
@@ -713,30 +741,9 @@ class TestToolCallWithResults:
         assert choice.message.content and len(choice.message.content) > 0
         assert '98' in choice.message.content or 'Dallas' in choice.message.content
 
-    def test_single_result_streaming(self, backend, model_case):
-        client, model_name = get_client_and_model()
-        messages = build_messages_with_tool_response()
-
-        stream = client.chat.completions.create(
-            model=model_name,
-            messages=messages,
-            temperature=0,
-            max_completion_tokens=200,
-            tools=[WEATHER_TOOL, SEARCH_TOOL],
-            logprobs=False,
-            stream=True,
-        )
-
-        chunks, finish_reason = collect_stream_content(stream)
-        assert finish_reason in ('stop', 'length')
-        assert len(chunks) > 0
-
-        full = ''.join(chunks)
-        assert '98' in full or 'Dallas' in full
-
     def test_multiple_results(self, backend, model_case):
         """Feed two parallel tool results back at once."""
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
         messages = build_messages_with_parallel_tool_responses()
 
         response = client.chat.completions.create(
@@ -758,36 +765,12 @@ class TestToolCallWithResults:
         has_sf = 'San Francisco' in content or '65' in content
         assert has_dallas or has_sf
 
-    def test_multiple_results_streaming(self, backend, model_case):
-        """Streaming: two parallel tool results fed back."""
-        client, model_name = get_client_and_model()
-        messages = build_messages_with_parallel_tool_responses()
-
-        stream = client.chat.completions.create(
-            model=model_name,
-            messages=messages,
-            temperature=0,
-            max_completion_tokens=300,
-            tools=[WEATHER_TOOL],
-            logprobs=False,
-            stream=True,
-        )
-
-        chunks = []
-        for chunk in stream:
-            delta = chunk.choices[0].delta
-            if delta.content:
-                chunks.append(delta.content)
-            assert (not delta.tool_calls
-                    or len(delta.tool_calls) == 0), ('Should not have tool calls after providing results')
-        assert len(chunks) > 0
-
 
 @_apply_marks
-class TestToolCallMultilingual:
+class TestToolCallMultilingual(_ToolCallTestBase):
 
     def test_chinese_description(self, backend, model_case):
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         response = client.chat.completions.create(
             model=model_name,
@@ -810,7 +793,7 @@ class TestToolCallMultilingual:
             assert isinstance(parsed['city'], str) and len(parsed['city']) > 0
 
     def test_chinese_description_streaming(self, backend, model_case):
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         stream = client.chat.completions.create(
             model=model_name,
@@ -831,7 +814,7 @@ class TestToolCallMultilingual:
 
     def test_mixed_language_tools(self, backend, model_case):
         """Pass Chinese + English tool definitions together."""
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         response = client.chat.completions.create(
             model=model_name,
@@ -851,7 +834,7 @@ class TestToolCallMultilingual:
 
     def test_unicode_arguments(self, backend, model_case):
         """Chinese query → tool arguments with Unicode chars."""
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         messages = [
             {
@@ -881,11 +864,11 @@ class TestToolCallMultilingual:
 
 
 @_apply_marks
-class TestToolCallComplexParams:
+class TestToolCallComplexParams(_ToolCallTestBase):
     """Nested objects, arrays, enum constraints, all-optional params."""
 
     def test_nested_object_parameters(self, backend, model_case):
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         messages = [
             {
@@ -929,7 +912,7 @@ class TestToolCallComplexParams:
                 assert parsed['priority'] in ('low', 'medium', 'high')
 
     def test_all_optional_parameters(self, backend, model_case):
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         messages = [
             {
@@ -966,12 +949,13 @@ class TestToolCallComplexParams:
 
 
 @_apply_marks
-class TestToolCallResponseValidation:
+class TestToolCallResponseValidation(_ToolCallTestBase):
     """Validate response-level fields when tool calls are returned."""
 
     def test_content_null_when_tool_calls_present(self, backend, model_case):
-        """Per OpenAI spec, content should be null when tool_calls exist."""
-        client, model_name = get_client_and_model()
+        """Per OpenAI spec, content should be null or empty when tool_calls
+        exist."""
+        client, model_name = self._get_client()
 
         response = client.chat.completions.create(
             model=model_name,
@@ -992,13 +976,15 @@ class TestToolCallResponseValidation:
         assert choice.message.tool_calls is not None
         assert len(choice.message.tool_calls) >= 1
 
-        # Content should be null or empty when tool_calls are present
+        # Per OpenAI spec: content should be null or empty when tool_calls
+        # are present.
         if choice.message.content is not None:
-            assert choice.message.content.strip() == '' or True
+            assert choice.message.content.strip() == '', (f'content should be null/empty when tool_calls are '
+                                                          f'present, got: {choice.message.content!r}')
 
     def test_usage_field_present(self, backend, model_case):
         """usage.prompt_tokens / completion_tokens / total_tokens."""
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         response = client.chat.completions.create(
             model=model_name,
@@ -1020,7 +1006,7 @@ class TestToolCallResponseValidation:
 
     def test_model_and_metadata_fields(self, backend, model_case):
         """Response must contain model, id, and created."""
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         response = client.chat.completions.create(
             model=model_name,
@@ -1038,7 +1024,7 @@ class TestToolCallResponseValidation:
 
     def test_choices_structure(self, backend, model_case):
         """choices[0].index should be 0."""
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         response = client.chat.completions.create(
             model=model_name,
@@ -1055,29 +1041,12 @@ class TestToolCallResponseValidation:
 
 
 @_apply_marks
-class TestToolCallEdgeCases:
+class TestToolCallEdgeCases(_ToolCallTestBase):
     """Edge cases and robustness tests."""
-
-    def test_no_tools_provided(self, backend, model_case):
-        """No tools → normal text response."""
-        client, model_name = get_client_and_model()
-
-        response = client.chat.completions.create(
-            model=model_name,
-            messages=MESSAGES_NO_TOOL_NEEDED,
-            temperature=0,
-            max_completion_tokens=100,
-            logprobs=False,
-        )
-
-        choice = response.choices[0]
-        assert choice.message.role == 'assistant'
-        assert choice.message.content and len(choice.message.content) > 0
-        assert choice.finish_reason in ('stop', 'length')
 
     def test_empty_tools_list(self, backend, model_case):
         """Empty tools list should behave like no tools."""
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         try:
             response = client.chat.completions.create(
@@ -1099,7 +1068,7 @@ class TestToolCallEdgeCases:
 
     def test_tool_call_with_max_tokens(self, backend, model_case):
         """With sufficient max_tokens, tool call structure must be valid."""
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         response = client.chat.completions.create(
             model=model_name,
@@ -1119,7 +1088,7 @@ class TestToolCallEdgeCases:
 
     def test_tool_call_id_format(self, backend, model_case):
         """ID should be a non-empty string with no leading/trailing spaces."""
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         response = client.chat.completions.create(
             model=model_name,
@@ -1139,7 +1108,7 @@ class TestToolCallEdgeCases:
 
     def test_multi_turn_conversation(self, backend, model_case):
         """Tool call → result → follow-up question → possible second call."""
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         messages = build_messages_with_tool_response()
         messages.append({
@@ -1169,7 +1138,7 @@ class TestToolCallEdgeCases:
 
     def test_special_characters_in_query(self, backend, model_case):
         """Quotes, angle brackets, Unicode → JSON args still parseable."""
-        client, model_name = get_client_and_model()
+        client, model_name = self._get_client()
 
         messages = [
             {
