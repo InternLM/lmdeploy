@@ -292,6 +292,7 @@ class InternLM2ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         self.model = InternLM2Model(config, dtype=dtype, device=device)
         # build lm_head
         self.output = self.build_lm_head(config.hidden_size, config.vocab_size, bias=False, dtype=dtype, device=device)
+        self.lm_head = self.output
 
     def forward(
         self,
@@ -311,10 +312,6 @@ class InternLM2ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             inputs_embeds=inputs_embeds,
         )
         return hidden_states
-
-    def get_logits(self, hidden_states: torch.Tensor):
-        """Compute logits of the model output."""
-        return self.output(hidden_states)
 
     def get_input_embeddings(self):
         """Get input embeddings."""
