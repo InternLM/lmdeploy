@@ -8,7 +8,7 @@ ENV CUDA_VERSION_SHORT=cu130
 FROM nvidia/cuda:12.8.1-devel-ubuntu22.04 AS cu12.8
 ENV CUDA_VERSION_SHORT=cu128
 
-FROM nvidia/cuda:12.6.3-devel-ubuntu22.04 AS cu12.6
+FROM nvidia/cuda:12.6.3-devel-ubuntu22.04 AS cu12
 ENV CUDA_VERSION_SHORT=cu126
 
 
@@ -53,7 +53,7 @@ ENV CUDA_VERSION_SHORT=cu130
 FROM nvidia/cuda:12.8.1-base-ubuntu22.04 AS cu12.8-base
 ENV CUDA_VERSION_SHORT=cu128
 
-FROM nvidia/cuda:12.6.3-base-ubuntu22.04 AS cu12.6-base
+FROM nvidia/cuda:12.6.3-base-ubuntu22.04 AS cu12-base
 ENV CUDA_VERSION_SHORT=cu126
 
 FROM ${CUDA_VERSION}-base AS final
