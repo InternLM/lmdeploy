@@ -526,7 +526,7 @@ jobs:
   get_coverage_report:
     if: ${{!cancelled()}}
     runs-on: [self-hosted, linux-a100]
-    needs: [test_tools, test_restful, test_pipeline, test_benchmark]
+    needs: [test_tools, test_restful, test_pipeline]
     timeout-minutes: 5
     container:
       image: openmmlab/lmdeploy:latest-cu12.8
