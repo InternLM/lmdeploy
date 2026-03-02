@@ -113,15 +113,11 @@ class DeployModelMixinV1(DeployModelMixin):
 
     def get_logits(self, hidden_states: torch.Tensor):
         """Compute logits of the model output."""
-        head_dtype = self.get_lm_head().weight.dtype
+        head_dtype = self.lm_head.weight.dtype
         if hidden_states.dtype != head_dtype:
             hidden_states = hidden_states.to(dtype=head_dtype)
-        hidden_states = self.get_lm_head()(hidden_states)
+        hidden_states = self.lm_head(hidden_states)
         return hidden_states
-
-    def get_lm_head(self):
-        """Get lm_head."""
-        return self.lm_head
 
     def get_input_embeddings(self):
         """Get embeds."""
@@ -130,7 +126,7 @@ class DeployModelMixinV1(DeployModelMixin):
     def update_weights(self):
         """Update weights."""
         if getattr(self.config, 'tie_word_embeddings', False):
-            self.get_lm_head().weight = self.get_input_embeddings().weight
+            self.lm_head.weight = self.get_input_embeddings().weight
 
     def build_lm_head(self,
                       hidden_size: int,

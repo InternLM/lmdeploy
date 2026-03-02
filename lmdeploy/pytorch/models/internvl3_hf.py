@@ -453,6 +453,7 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphM
         self.vision_tower = InternVLVisionModel(config.vision_config, dtype=dtype, device=device)
         self.multi_modal_projector = InternVLMultiModalProjector(config, dtype=dtype, device=device)
         self.language_model = build_model_from_hf_config(config.text_config, dtype=dtype, device=device)
+        self.lm_head = self.language_model.lm_head
         self.vision_feature_layer = config.vision_feature_layer
         self.vision_feature_select_strategy = config.vision_feature_select_strategy
 
@@ -484,10 +485,6 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphM
 
         torch._dynamo.mark_dynamic(pixel_values, dims)
         self.has_compiled_vit = True
-
-    def get_lm_head(self):
-        """Get lm_head."""
-        return self.language_model.get_lm_head()
 
     def get_input_embeddings(self):
         """Get input embeddings."""

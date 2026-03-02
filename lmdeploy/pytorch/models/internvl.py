@@ -472,7 +472,7 @@ class InternVLChatModel(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             self.vision_model = InternVisionModel(vision_config, dtype=dtype, device=device)
 
         self.language_model = build_model_from_hf_config(llm_config, dtype=dtype, device=device)
-
+        self.lm_head = self.language_model.lm_head
         vit_hidden_size = config.vision_config.hidden_size
         llm_hidden_size = config.llm_config.hidden_size
         self.downsample_ratio = config.downsample_ratio
@@ -801,10 +801,6 @@ class InternVLChatModel(nn.Module, DeployModelMixinV1, CudaGraphMixin):
                                                past_key_values=past_key_values,
                                                position_ids=position_ids,
                                                attn_metadata=attn_metadata)
-
-    def get_lm_head(self):
-        """Get lm_head."""
-        return self.language_model.get_lm_head()
 
     def get_input_embeddings(self):
         """Get input embeddings."""
