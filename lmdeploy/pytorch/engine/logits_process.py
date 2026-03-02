@@ -8,6 +8,7 @@ import numpy as np
 import torch
 
 from lmdeploy.messages import LogitsProcessor
+from lmdeploy.pytorch import envs
 
 from ..messages import SchedulerSequence
 from .guided_process import GuidedDecodingManager
@@ -80,7 +81,6 @@ def ngram(
     n: torch.Tensor | None,
     threshold: torch.Tensor,
     max_n: int,
-    window_size: torch.Tensor | None,
     max_window_size: int,
 ):
     """Compute n-gram matches between sliding windows and a target sequence.
@@ -105,9 +105,6 @@ def ngram(
         Minimum number of matching windows required for validity, shape (batch_size,).
     max_n : int
         Maximum n-gram length (window size for matching).
-    window_size: torch.Tensor | None
-        Effective window size for each batch element, shape (batch_size,).
-        When `same_n=False`, only the last `window_size` tokens are considered for matching.
     max_window_size: int
         Maximum window size for matching.
 
@@ -128,19 +125,12 @@ def ngram(
         found = torch.zeros((batch_size, ), dtype=torch.bool, device=token_ids.device)
         return matched_mask, found
     # token_ids could be 0, so we add 1 to avoid div 0
-    token_ids = token_ids.to(torch.float32).log2() + 1
+    token_ids = (token_ids + 1).to(torch.float32).log2()
 
     # Trim to max_window_size
     if seq_len >= max_window_size:
         token_ids = token_ids[:, -max_window_size:]
     max_window_size = token_ids.size(1)
-
-    same_window = window_size is None
-    if not same_window:
-        # fill -1 for window_size < max_window_size
-        mask = torch.arange(max_window_size,
-                            device=token_ids.device).unsqueeze(0) >= (max_window_size - window_size.unsqueeze(1))
-        token_ids.masked_fill_(~mask, -1)
 
     # normalize ids
     same_n = n is None
@@ -185,7 +175,6 @@ def _filter_repetition_ngram_(
     n: torch.Tensor | None,
     threshold: torch.Tensor,
     max_n: int,
-    ngram_window_size: torch.Tensor | None,
     max_ngram_window_size: int,
 ):
     """Filter ngram.
@@ -195,7 +184,7 @@ def _filter_repetition_ngram_(
     if stop_words is None or stop_words.numel() == 0:
         return scores
     # use first stop words
-    _, found = ngram(generated_ids, n, threshold, max_n, ngram_window_size, max_ngram_window_size)
+    _, found = ngram(generated_ids, n, threshold, max_n, max_ngram_window_size)
     stop_words = stop_words[:, 0]
     # fill all scores -inf
     scores.masked_fill_(found[:, None], -float('inf'))
@@ -255,9 +244,7 @@ class SamplingInputs:
     # n gram
     repetition_ngram_size: torch.Tensor | None = None
     repetition_ngram_threshold: torch.Tensor | None = None
-    repetition_ngram_window_size: torch.Tensor | None = None
     max_repetition_ngram_size: int = 0
-    max_repetition_ngram_window_size: int = 0
 
     def to_device(self, device: str, non_blocking: bool = False):
         """To device."""
@@ -395,6 +382,7 @@ class FusedLogitsProcessor:
             generated_ids = sampling_inputs.generated_ids
             assert generated_ids is not None
             assert sampling_inputs.repetition_ngram_threshold is not None
+            max_repetition_ngram_window_size = envs.repetition_window_size
             scores = _filter_repetition_ngram_(
                 scores,
                 sampling_inputs.stop_words,
@@ -402,8 +390,7 @@ class FusedLogitsProcessor:
                 sampling_inputs.repetition_ngram_size,
                 sampling_inputs.repetition_ngram_threshold,
                 sampling_inputs.max_repetition_ngram_size,
-                sampling_inputs.repetition_ngram_window_size,
-                sampling_inputs.max_repetition_ngram_window_size,
+                max_repetition_ngram_window_size,
             )
 
         temperature = sampling_inputs.temperature

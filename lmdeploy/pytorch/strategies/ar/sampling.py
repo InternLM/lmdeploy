@@ -80,7 +80,6 @@ class ARSamplingStrategy(SamplingStrategy):
         self.session_to_cleanup = []
         repetition_ngram_sizes = [None] * batch_size
         repetition_ngram_thresholds = [None] * batch_size
-        repetition_ngram_window_sizes = [None] * batch_size
 
         def __gather_params():
             """Gather params."""
@@ -106,8 +105,6 @@ class ARSamplingStrategy(SamplingStrategy):
                 num_logprobs[idx] = param.num_logprobs
                 repetition_ngram_sizes[idx] = param.repetition_ngram_size
                 repetition_ngram_thresholds[idx] = param.repetition_ngram_threshold
-                repetition_ngram_window_sizes[
-                    idx] = param.repetition_ngram_window_size if param.repetition_ngram_window_size > 0 else 1 << 62
 
         def __get_topp(top_p):
             """Get topp."""
@@ -191,22 +188,15 @@ class ARSamplingStrategy(SamplingStrategy):
 
         # repetition ngram
         max_repetition_ngram_size = max(repetition_ngram_sizes)
-        max_repetition_ngram_window_size = max(repetition_ngram_window_sizes)
         if max_repetition_ngram_size == 0:
             repetition_ngram_sizes = None
             repetition_ngram_thresholds = None
-            repetition_ngram_window_sizes = None
         else:
             repetition_ngram_sizes = torch.tensor(repetition_ngram_sizes)
             repetition_ngram_thresholds = torch.tensor(repetition_ngram_thresholds)
-            repetition_ngram_window_sizes = torch.tensor(repetition_ngram_window_sizes)
             repetition_ngram_same_n = (repetition_ngram_sizes == max_repetition_ngram_size).all().item()
             if repetition_ngram_same_n:
                 repetition_ngram_sizes = None
-            repetition_ngram_same_window_size = (
-                repetition_ngram_window_sizes == max_repetition_ngram_window_size).all().item()
-            if repetition_ngram_same_window_size:
-                repetition_ngram_window_sizes = None
 
         sampling_input = SamplingInputs(
             temperature=temperature,
@@ -230,9 +220,7 @@ class ARSamplingStrategy(SamplingStrategy):
             session_to_cleanup=session_to_cleanup,
             repetition_ngram_size=repetition_ngram_sizes,
             repetition_ngram_threshold=repetition_ngram_thresholds,
-            repetition_ngram_window_size=repetition_ngram_window_sizes,
             max_repetition_ngram_size=max_repetition_ngram_size,
-            max_repetition_ngram_window_size=max_repetition_ngram_window_size,
         )
 
         pad_token_id = self.pad_token_id

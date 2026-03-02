@@ -66,7 +66,6 @@ class SamplingParam:
     # ngram
     repetition_ngram_size: int = 0
     repetition_ngram_threshold: int = 0
-    repetition_ngram_window_size: int = 1024
 
     @classmethod
     def from_gen_config(cls, gen_config: GenerationConfig):
@@ -151,7 +150,6 @@ class SamplingParam:
             return_routed_experts=gen_config.return_routed_experts,
             repetition_ngram_size=gen_config.repetition_ngram_size,
             repetition_ngram_threshold=gen_config.repetition_ngram_threshold,
-            repetition_ngram_window_size=gen_config.repetition_ngram_window_size,
         )
 
 
