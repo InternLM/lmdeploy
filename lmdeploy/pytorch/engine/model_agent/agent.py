@@ -415,6 +415,9 @@ class BaseModelAgent:
         # long context
         self._prev_chunk_output: Dict = None
 
+        # make dummy meta
+        self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(model_config)
+
     @contextmanager
     def all_context(self):
         device_mgr = get_device_manager()
@@ -461,7 +464,8 @@ class BaseModelAgent:
             inputs = self.inputs_strategy.make_dummy(max_batches,
                                                      is_decoding=False,
                                                      device='cuda',
-                                                     vocab_size=self.model_config.vocab_size)
+                                                     vocab_size=self.model_config.vocab_size,
+                                                     meta=self.make_dummy_meta)
             if dp > 1:
                 num_tokens = inputs.input_ids.numel()
                 inputs.build_dp_meta([num_tokens] * world_size)
@@ -480,7 +484,8 @@ class BaseModelAgent:
                 inputs = self.inputs_strategy.make_dummy(num_tokens,
                                                          is_decoding=True,
                                                          device='cuda',
-                                                         vocab_size=self.model_config.vocab_size)
+                                                         vocab_size=self.model_config.vocab_size,
+                                                         meta=self.make_dummy_meta)
                 if dp > 1:
                     num_tokens = inputs.input_ids.numel()
                     inputs.build_dp_meta([num_tokens] * world_size)

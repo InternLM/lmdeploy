@@ -1,4 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from .data_type import MultiModalData, MultiModalTensor
+from .data_type import MultiModalTensor
 
-__all__ = ['MultiModalData', 'MultiModalTensor']
+__all__ = ['MultiModalTensor']

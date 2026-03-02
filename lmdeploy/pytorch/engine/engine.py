@@ -54,10 +54,13 @@ class InferOutput:
     routed_experts: torch.Tensor = None
 
 
-def _build_seq_meta(cache_config: CacheConfig, seq_strategy: Any, sampling_strategy: Any):
+def _build_seq_meta(model_config: ModelConfig, cache_config: CacheConfig, seq_strategy: Any, sampling_strategy: Any):
     from lmdeploy.pytorch.messages import SequenceMeta
 
-    seq_meta = SequenceMeta(cache_config.block_size, strategy=seq_strategy, sampling_strategy=sampling_strategy)
+    seq_meta = SequenceMeta(cache_config.block_size,
+                            strategy=seq_strategy,
+                            sampling_strategy=sampling_strategy,
+                            use_mrope=model_config.use_mrope)
     return seq_meta
 
 
@@ -156,7 +159,8 @@ class Engine(EngineBase):
         self.input_processor = self.executor.get_input_processor()
         cache_config = self.executor.cache_config
         self.adapter_manager = self._build_adapter_manager(adapters)
-        self.seq_meta = _build_seq_meta(cache_config,
+        self.seq_meta = _build_seq_meta(model_config=self.model_config,
+                                        cache_config=cache_config,
                                         seq_strategy=self.seq_strategy,
                                         sampling_strategy=self.sampling_strategy)
         self.scheduler = Scheduler(scheduler_config, cache_config, seq_meta=self.seq_meta)

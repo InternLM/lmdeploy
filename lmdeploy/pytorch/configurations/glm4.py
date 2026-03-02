@@ -17,8 +17,10 @@ class Glm4MoeLiteModelConfigBuilder(DeepseekV2ModelConfigBuilder):
             hf_config.scoring_func = 'sigmoid'
         if not hasattr(hf_config, 'moe_layer_freq'):
             hf_config.moe_layer_freq = 1
-        return super().build(hf_config,
-                             model_path=model_path,
-                             is_draft_model=is_draft_model,
-                             spec_method=spec_method,
-                             **kwargs)
+        cfg = super().build(hf_config,
+                            model_path=model_path,
+                            is_draft_model=is_draft_model,
+                            spec_method=spec_method,
+                            **kwargs)
+        cfg.use_mrope = True
+        return cfg

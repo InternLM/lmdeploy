@@ -54,10 +54,12 @@ class InputsMakerConfig:
     dp: int = 1
     spec_decoding: bool = False
     enable_chunked_prefill: bool = False
+    use_mrope: bool = False
 
     @staticmethod
     def from_engine(engine: 'Engine'):
         cache_config = engine.cache_config
+        model_config = engine.model_config
         return InputsMakerConfig(
             spec_decoding=engine.specdecode_config is not None,
             max_batches=cache_config.max_batches,
@@ -66,6 +68,7 @@ class InputsMakerConfig:
             is_ssm=len(cache_config.states_shapes) > 0,
             dp=engine.dist_config.dp,
             enable_chunked_prefill=engine.misc_config.enable_chunked_prefill,
+            use_mrope=model_config.use_mrope,
         )
 
 
@@ -379,6 +382,11 @@ class InputsMakerAsync:
             state_offsets = torch.tensor([msg.logical_state for msg in messages])
             model_inputs.state_offsets = state_offsets
 
+        if self.config.use_mrope:
+            mrope_pos_ids = [msg.mrope_pos_ids for msg in messages]
+            mrope_pos_ids = torch.as_tensor(np.concatenate(mrope_pos_ids)).T
+            model_inputs.mrope_pos_ids = mrope_pos_ids
+
         return model_inputs
 
     @torch.inference_mode()
@@ -435,6 +443,12 @@ class InputsMakerAsync:
         # ssm
         if self.config.is_ssm:
             model_inputs.state_offsets = torch.tensor([seq.logical_state])
+
+        # mrope
+        if self.config.use_mrope:
+            mrope_pos_ids = seq.mrope_pos_ids[:chunk_size]
+            mrope_pos_ids = torch.as_tensor(mrope_pos_ids).T
+            model_inputs.mrope_pos_ids = mrope_pos_ids
 
         return model_inputs
 

@@ -46,7 +46,7 @@ class Scheduler:
         self,
         scheduler_config: SchedulerConfig,
         cache_config: CacheConfig,
-        seq_meta: SequenceMeta = None,
+        seq_meta: SequenceMeta | None = None,
     ) -> None:
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config

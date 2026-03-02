@@ -1,7 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
+import numpy as np
 import torch
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
@@ -810,92 +811,6 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
 
         return new_inputs
 
-    def _get_model_metas(self, context: StepContext):
-        """Get model metas."""
-        model_metas = context.model_metas
-        if model_metas is None:
-            batch_size = context.q_seqlens.numel()
-            return [dict(mrope_delta=0)] * batch_size
-        return [dict(mrope_delta=0) if meta is None else meta for meta in model_metas]
-
-    def _update_model_meta_decoding(self, context: StepContext):
-        """Update model meta for decoding."""
-        model_metas = self._get_model_metas(context)
-        position_ids = context.position_ids
-
-        mrope_deltas = [meta['mrope_delta'] for meta in model_metas]
-        mrope_deltas = position_ids.new_tensor(mrope_deltas)
-        mrope_position_ids = position_ids + mrope_deltas[None]
-        mrope_position_ids = mrope_position_ids.expand(3, -1)
-
-        context.mrope_position_ids = mrope_position_ids
-        return model_metas
-
-    def _get_multimodal_pos_ids(self, grid_thw: list, device: torch.device):
-        """Get mrope ids."""
-        t, h, w = grid_thw
-        h //= 2
-        w //= 2
-        stride = torch.tensor([h * w, w, 1], device=device)[:, None]
-        size = torch.tensor([t, h, w], device=device)[:, None]
-        pos_ids = torch.arange(t * h * w, device=device)[None].expand(3, -1)
-        pos_ids = pos_ids // stride % size
-        return pos_ids
-
-    def _update_model_meta_prefilling(self, context: StepContext):
-        """Update model meta for prefilling."""
-        model_metas = self._get_model_metas(context)
-        input_multimodals = context.input_multimodals
-        if input_multimodals is None:
-            input_multimodals = [None] * len(model_metas)
-        position_ids = context.position_ids
-        batched_pos_ids = position_ids[0].split(context.q_seqlens.tolist())
-        mrope_position_ids = []
-        new_model_metas = []
-        for pos_ids, model_meta, input_mm in zip(batched_pos_ids, model_metas, input_multimodals):
-            images = []
-            if input_mm is not None:
-                images = input_mm.get('image', [])
-            if model_meta is None or 'mrope_delta' not in model_meta:
-                mrope_delta = 0
-            else:
-                mrope_delta = model_meta['mrope_delta']
-
-            pos_start = pos_ids[0].item()
-            mrope_pos_ids = pos_ids + mrope_delta
-            mrope_pos_ids = mrope_pos_ids[None].expand(3, -1).clone()
-            for img in images:
-                grid_thw = img.meta['grid_thw'][0].tolist()
-                _, h, w = grid_thw
-                h //= 2
-                w //= 2
-                num_pad = img.end - img.start - max(h, w)
-                mrope_delta -= num_pad
-                fill_start = img.start - pos_start
-                fill_end = img.end - pos_start
-                img_pos_ids = self._get_multimodal_pos_ids(grid_thw, pos_ids.device)
-                img_pos_ids += mrope_pos_ids[:, fill_start:fill_start + 1]
-                mrope_pos_ids[:, fill_end:] -= num_pad
-                mrope_pos_ids[:, fill_start:fill_end] = img_pos_ids
-
-            mrope_position_ids.append(mrope_pos_ids)
-            new_model_metas.append(dict(mrope_delta=mrope_delta))
-
-        mrope_position_ids = torch.cat(mrope_position_ids, dim=1)
-        context.mrope_position_ids = mrope_position_ids
-
-        return new_model_metas
-
-    def update_model_metas(self,
-                           past_key_values: List[List[torch.Tensor]],
-                           inputs_embeds: Optional[torch.Tensor] = None,
-                           context: StepContext = None):
-        """Update model meta."""
-        if context.is_decoding:
-            return self._update_model_meta_decoding(context)
-        else:
-            return self._update_model_meta_prefilling(context)
-
     def get_input_processor(self) -> BaseModelInputProcessor:
         """Get input processor."""
         return self.input_processor
@@ -909,6 +824,23 @@ class Qwen2VLInputProcessor(BaseModelInputProcessor):
 
     def __init__(self, config: PretrainedConfig) -> None:
         self.config = config
+
+    @staticmethod
+    def _get_multimodal_pos_ids(grid_thw: Sequence[int]) -> np.ndarray:
+        """Get mrope ids."""
+        t, h, w = grid_thw
+        h = h // 2
+        w = w // 2
+        stride = np.array([h * w, w, 1])[None]
+        size = np.array([t, h, w])[None]
+        pos_ids = np.arange(t * h * w)[:, None].repeat(3, axis=1)
+        pos_ids = pos_ids // stride % size
+        return pos_ids
+
+    @staticmethod
+    def make_mrope(grid_thw: torch.Tensor, ):
+        img_pos_ids = Qwen2VLInputProcessor._get_multimodal_pos_ids(grid_thw[0].tolist())
+        return img_pos_ids
 
     def preprocess_input(self,
                          input_ids: List[int],
@@ -929,9 +861,12 @@ class Qwen2VLInputProcessor(BaseModelInputProcessor):
             if isinstance(num_pad, torch.Tensor):
                 num_pad = num_pad.item()
 
+            mrope_pos_ids = self.make_mrope(image_grid_thw)
+
             mm_data = MultiModalTensor(data=pixel_values,
                                        start=start,
                                        end=start + num_pad,
+                                       mrope_pos_ids=mrope_pos_ids,
                                        meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
             input_imgs.append(mm_data)
 

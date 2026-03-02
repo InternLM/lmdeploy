@@ -176,6 +176,7 @@ class SequenceMeta:
     block_size: int
     strategy: 'SequenceStrategy' = None
     sampling_strategy: 'SamplingStrategy' = None
+    use_mrope: bool = False
 
 
 class SequenceManager:
@@ -532,6 +533,25 @@ class HistoryLogits(_HistoryDataBase):
         return ret
 
 
+class HistoryMropePosIds(_HistoryDataBase):
+    """History mrope position ids."""
+    ALLOC_SIZE = 64
+
+    def __init__(self, pos_ids: np.ndarray | None = None, dtype: np.dtype = np.int64):
+        super().__init__(pos_ids, dtype)
+
+    def _create_empty_array(self, dtype):
+        """Create empty array.
+
+        Override in subclass for different shapes.
+        """
+        return np.empty((self.ALLOC_SIZE, 3), dtype=dtype)
+
+    def _get_pad_width(self, reserve_size: int):
+        """Get pad width for multi-dimensional array."""
+        return ((0, reserve_size), (0, 0))
+
+
 class HistoryMultiModals:
 
     def __init__(self, multimodals: MultiModalInputs = None):
@@ -616,6 +636,9 @@ class SchedulerSequence:
 
     # logits
     all_logits: HistoryLogits = field(default_factory=HistoryLogits)
+
+    # mrope
+    history_mrope_pos_ids: HistoryMropePosIds = field(default_factory=HistoryMropePosIds)
 
     def __post_init__(self):
         """Post init."""
@@ -756,6 +779,13 @@ class SchedulerSequence:
         """Get logits."""
         return self.all_logits.get_logits()
 
+    @property
+    def mrope_pos_ids(self):
+        """Get mrope pos ids."""
+        start = self.num_history_ids
+        end = start + self._num_token_ids
+        return self.history_mrope_pos_ids[start:end]
+
     def append_logits(self, logits: Union[Tensor, np.ndarray]):
         """Append logits."""
         if not self.return_logits:
@@ -796,6 +826,58 @@ class SchedulerSequence:
             return
         multimodals = HistoryMultiModals.update_multimodals(multimodals, self.num_valid_ids)
         self.history_multimodals.add_inputs(multimodals)
+
+    def _update_mrope_pos_ids(self):
+        """Update mrope pos ids."""
+        if not self._seq_meta.use_mrope:
+            return
+
+        num_rope_pos = len(self.history_mrope_pos_ids)
+        num_appends = self.num_all_ids - num_rope_pos
+
+        if num_appends == 0:
+            return
+
+        if num_rope_pos == 0:
+            next_pos = 0
+        else:
+            next_pos = self.history_mrope_pos_ids[-1].max() + 1
+
+        multimodals = self.history_multimodals.get_datas(num_rope_pos, self.num_all_ids)
+        if multimodals is None or len(multimodals) == 0:
+            if num_appends == 1:
+                pos_ids = np.array([[next_pos] * 3], dtype=np.int64)
+            else:
+                pos_ids = np.arange(next_pos, next_pos + num_appends, dtype=np.int64)
+                pos_ids = pos_ids[:, None].repeat(3, axis=1)
+        else:
+            pos_ids = []
+            assert len(multimodals) == 1
+            modal_datas = list(multimodals.values())[0]
+            mm_offset = next_pos
+            for modal_data in modal_datas:
+                mm_start = modal_data.start + mm_offset
+
+                # tokens
+                if next_pos < mm_start:
+                    text_pos_ids = np.arange(next_pos, mm_start, dtype=np.int64)
+                    pos_ids.append(text_pos_ids[:, None].repeat(3, axis=1))
+
+                # imgs
+                mm_pos_ids = modal_data.mrope_pos_ids
+                assert mm_pos_ids is not None, (
+                    'MROPE position ids is required for multimodal inputs when use_mrope is True.')
+                new_pos = mm_pos_ids[-1].max() + 1
+                next_pos = mm_start + new_pos
+                mm_offset = mm_offset + new_pos - mm_pos_ids.shape[0]
+                pos_ids.append(mm_pos_ids + mm_start)
+
+            # add final text part
+            text_pos_ids = np.arange(next_pos, num_appends + mm_offset, dtype=np.int64)
+            pos_ids.append(text_pos_ids[:, None].repeat(3, axis=1))
+            pos_ids = np.concatenate(pos_ids, axis=0)
+
+        self.history_mrope_pos_ids.append(pos_ids)
 
     def update_token_ids(self,
                          token_ids: Tensor,

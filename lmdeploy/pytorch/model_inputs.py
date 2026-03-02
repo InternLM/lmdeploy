@@ -182,17 +182,20 @@ class ModelInputs:
     max_q_seqlen: int
     max_kv_seqlen: int
     sum_kv_seqlen: int
-    local_adapter_ids: torch.Tensor = None
-    vision_inputs: VisionModelInputs = None
-    model_metas: List[Dict[str, Any]] = None
-    dp_meta: 'DPMeta' = None
+    local_adapter_ids: torch.Tensor | None = None
+    vision_inputs: VisionModelInputs | None = None
+    model_metas: List[Dict[str, Any]] | None = None
+    dp_meta: DPMeta | None = None
     enable_microbatch: bool = False
     is_dummy: bool = False
-    state_offsets: torch.Tensor = None
-    target_hidden_states: torch.Tensor = None
-    target_position_ids: torch.Tensor = None
+    state_offsets: torch.Tensor | None = None
+    target_hidden_states: torch.Tensor | None = None
+    target_position_ids: torch.Tensor | None = None
     is_chunk: bool = False
     is_first_chunk: bool = True
+
+    # mrope, shape(3, sum_seqlens)
+    mrope_pos_ids: torch.Tensor | None = None
 
     def step(self, input_ids: torch.Tensor, step_seqlens: torch.Tensor = None):
         """Update input ids."""
@@ -205,6 +208,9 @@ class ModelInputs:
         if input_ids.dim() == 1:
             input_ids = input_ids[None, :]
         self.input_ids = input_ids
+
+        if self.mrope_pos_ids is not None:
+            self.mrope_pos_ids = self.mrope_pos_ids + self.seq_length[None]
         return self
 
     @torch.inference_mode()
@@ -251,23 +257,26 @@ class StepContext:
     kv_caches: List
     is_decoding: bool
     sum_kv_seqlen: int
-    max_kv_seqlen: int = None
-    local_adapter_ids: torch.LongTensor = None
-    input_embeddings: torch.Tensor = None
-    input_embedding_indexing: torch.Tensor = None
-    input_multimodals: List[MultiModalTensor] = None
-    vision_inputs: VisionModelInputs = None
+    max_kv_seqlen: int | None = None
+    local_adapter_ids: torch.LongTensor | None = None
+    input_embeddings: torch.Tensor | None = None
+    input_embedding_indexing: torch.Tensor | None = None
+    input_multimodals: List[MultiModalTensor] | None = None
+    vision_inputs: VisionModelInputs | None = None
     attn_metadata: Any = None
     kv_quant_policy: Literal[0, 4, 8] = 0
-    model_metas: List[Dict[str, Any]] = None
-    dp_meta: DPMeta = None
+    model_metas: List[Dict[str, Any]] | None = None
+    dp_meta: DPMeta | None = None
     enable_microbatch: bool = False
     # for draft model
-    target_hidden_states: torch.Tensor = None
+    target_hidden_states: torch.Tensor | None = None
 
     # states for ssm
-    state_caches: List = None
-    state_offsets: torch.LongTensor = None
+    state_caches: List | None = None
+    state_offsets: torch.LongTensor | None = None
+
+    # mrope
+    mrope_pos_ids: torch.Tensor | None = None
 
     _outputs: Dict = field(default_factory=dict)
 
@@ -277,8 +286,8 @@ class StepContext:
         inputs: ModelInputs,
         model_config: ModelConfig,
         cache_config: CacheConfig,
-        kv_caches: List = None,
-        state_caches: List = None,
+        kv_caches: List | None = None,
+        state_caches: List | None = None,
         kv_quant_policy: Literal[0, 4, 8] = 0,
     ):
         """Build step context.
@@ -334,6 +343,7 @@ class StepContext:
             state_caches=state_caches,
             state_offsets=inputs.state_offsets,
             target_hidden_states=inputs.target_hidden_states,
+            mrope_pos_ids=inputs.mrope_pos_ids,
         )
 
         ret = get_backend().update_step_context(ret)
@@ -406,8 +416,8 @@ class StepContextManager(CtxMgrBase[StepContext]):
         inputs: ModelInputs,
         model_config: ModelConfig,
         cache_config: CacheConfig,
-        kv_caches: List = None,
-        state_caches: List = None,
+        kv_caches: List | None = None,
+        state_caches: List | None = None,
         kv_quant_policy: Literal[0, 4, 8] = 0,
     ):
         """Build context."""

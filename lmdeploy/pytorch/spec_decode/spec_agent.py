@@ -45,6 +45,9 @@ class SpecModelAgent(BaseSpecModelAgent):
         self.cache_config = specdecode_config.cache_config
         self.num_spec_tokens = specdecode_config.num_speculative_tokens
 
+        # make dummy meta
+        self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(self.model_config)
+
     def set_cache_config(self, cache_config: CacheConfig):
         """Set all cache config."""
         self.cache_config = cache_config
@@ -194,7 +197,8 @@ class SpecModelAgent(BaseSpecModelAgent):
                                                  device='cuda',
                                                  vocab_size=self.model_config.vocab_size,
                                                  target_hidden_size=target_hidden_size,
-                                                 target_dtype=self.model_config.dtype)
+                                                 target_dtype=self.model_config.dtype,
+                                                 meta=self.make_dummy_meta)
 
         self._forward_impl(inputs)
 
@@ -203,26 +207,24 @@ class SpecModelAgent(BaseSpecModelAgent):
 
         for batch_size in capture_batch_sizes:
             # decode with num_spec_tokens + 1 per seq
-            inputs = self.inputs_strategy.make_dummy(
-                batch_size,
-                is_decoding=True,
-                device='cuda',
-                vocab_size=self.model_config.vocab_size,
-                max_q_seqlen=self.num_spec_tokens + 1,
-                target_hidden_size=target_hidden_size,
-                target_dtype=self.model_config.dtype,
-            )
+            inputs = self.inputs_strategy.make_dummy(batch_size,
+                                                     is_decoding=True,
+                                                     device='cuda',
+                                                     vocab_size=self.model_config.vocab_size,
+                                                     max_q_seqlen=self.num_spec_tokens + 1,
+                                                     target_hidden_size=target_hidden_size,
+                                                     target_dtype=self.model_config.dtype,
+                                                     meta=self.make_dummy_meta)
             self._forward_impl(inputs)
             # decode 1 tokens per sequence
-            inputs = self.inputs_strategy.make_dummy(
-                batch_size,
-                is_decoding=True,
-                device='cuda',
-                vocab_size=self.model_config.vocab_size,
-                max_q_seqlen=1,
-                target_hidden_size=self.model_config.hidden_size,
-                target_dtype=self.model_config.dtype,
-            )
+            inputs = self.inputs_strategy.make_dummy(batch_size,
+                                                     is_decoding=True,
+                                                     device='cuda',
+                                                     vocab_size=self.model_config.vocab_size,
+                                                     max_q_seqlen=1,
+                                                     target_hidden_size=self.model_config.hidden_size,
+                                                     target_dtype=self.model_config.dtype,
+                                                     meta=self.make_dummy_meta)
             self._forward_impl(inputs)
 
     def reset_graph_runner(self):

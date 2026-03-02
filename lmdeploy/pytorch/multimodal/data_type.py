@@ -1,26 +1,23 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass, fields
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List
 
+import numpy as np
 from torch import Tensor
 
-
-class MultiModalData:
-    pass
-
-
-MultiModalDataList = List[MultiModalData]
-
-NestedTensor = Union[Tensor, List[Tensor]]
+NestedTensor = Tensor | List[Tensor]
 
 
 @dataclass
 class MultiModalTensor:
     data: NestedTensor
     start: int
-    end: int = None
-    encoder_len: int = None
-    meta: Dict[str, Any] = None
+    end: int | None = None
+    encoder_len: int | None = None
+    meta: Dict[str, Any] | None = None
+
+    # for qwen-vl
+    mrope_pos_ids: np.ndarray | None = None
 
     def __post_init__(self):
         if self.end is None:
