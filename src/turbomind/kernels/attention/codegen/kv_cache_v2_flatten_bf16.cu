@@ -1,0 +1,30 @@
+// Copyright (c) OpenMMLab. All rights reserved.
+
+#include "../kv_cache_utils_v2_impl.cuh"
+
+namespace turbomind {
+
+#if ENABLE_BF16
+template void invokeFlattenKV_v2(nv_bfloat16*           k,
+                                 nv_bfloat16*           v,
+                                 char**                 blocks,
+                                 const int*             cu_k_len,
+                                 const int*             cu_block_num,
+                                 const RopeKernelParam& rope_param,
+                                 int64_t                stride_b,
+                                 int64_t                stride_c,
+                                 int64_t                stride_h,
+                                 int64_t                stride_s,
+                                 int                    block_seq_len,
+                                 int                    layer_id,
+                                 int                    cp_rank,
+                                 cutlass::FastDivmod    cp_size,
+                                 int                    max_seq_len,
+                                 int                    head_num,
+                                 int                    head_dim,
+                                 int                    batch_size,
+                                 int                    quant_policy,
+                                 cudaStream_t           stream);
+#endif
+
+}  // namespace turbomind
