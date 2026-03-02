@@ -146,7 +146,11 @@ class DeepSeek2Model(LlamaModel):
             info['router_n_groups'] = cfg['router_n_groups']
         rope_param: RopeParam = info['rope_param']
         rope_param.dim = qk_rope_dim
-        rope_scaling = cfg.get('rope_scaling')
+        if 'rope_parameters' in cfg:
+            # transformers v5.0.0 aggregates all rope-related parameters into 'rope_parameters'
+            rope_scaling = cfg['rope_parameters']
+        else:
+            rope_scaling = cfg.get('rope_scaling')
         if rope_scaling and rope_scaling.get('type') == 'yarn':
             attention_factor, yarn_scale = get_yarn_params(rope_scaling)
             yarn_scale *= q_head_dim**(-0.5)

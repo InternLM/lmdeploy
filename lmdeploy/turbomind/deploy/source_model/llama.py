@@ -132,8 +132,12 @@ class LlamaModel(BaseInputModel):
     def __init__(self, model_path: str, tokenizer_path: str, **kwargs: dict):
         super().__init__(model_path, tokenizer_path)
         self.policy = kwargs.get('input_policy')
-        _, self.model_config = get_model_arch(model_path)
-        self.model_config = self.model_config.to_dict()
+        _, model_config = get_model_arch(model_path)
+        if hasattr(model_config, 'text_config'):
+            model_config = model_config.text_config
+        elif hasattr(model_config, 'llm_config'):
+            model_config = model_config.llm_config
+        self.model_config = model_config.to_dict()
         self.fp8_quant = kwargs.get('fp8_quant', False)
 
     def readers(self):
@@ -171,27 +175,21 @@ class LlamaModel(BaseInputModel):
         max_position_embeddings = int(model_arg.get('max_position_embeddings', 0))
         rope_param = RopeParam(type='default', base=rope_theta, dim=head_dim)
         if isinstance(rope_scaling, dict):
-            llama2_scaling_type = rope_scaling.get('type', '')
-            llama3_scaling_type = rope_scaling.get('rope_type', '')
-            if llama2_scaling_type and llama3_scaling_type \
-                    and llama2_scaling_type != llama3_scaling_type:
-                raise ValueError(f'Ambiguous rope_scaling in config: {model_arg}')
-            scaling_type = llama2_scaling_type if llama2_scaling_type \
-                else llama3_scaling_type
+            rope_type = rope_scaling.get('rope_type', '') or rope_scaling.get('type', '')
             if rope_scaling.get('mrope_section') is not None:
                 # TODO: treat mrope as an option to the common rope functions
-                scaling_type = 'mrope'
+                rope_type = 'mrope'
             scaling_factor = rope_scaling.get('factor', 0.0)
-            if scaling_type == 'default':
+            if rope_type == 'default':
                 pass
-            elif scaling_type == 'dynamic':
+            elif rope_type == 'dynamic':
                 rope_param.type = 'dynamic'
                 rope_param.factor = scaling_factor
                 rope_param.max_position_embeddings = max_position_embeddings
-            elif scaling_type == 'linear':
+            elif rope_type == 'linear':
                 rope_param.type = 'linear'
                 rope_param.factor = scaling_factor
-            elif scaling_type == 'llama3':
+            elif rope_type == 'llama3':
                 low_freq_factor = rope_scaling.get('low_freq_factor', 1.0)
                 high_freq_factor = rope_scaling.get('high_freq_factor', 1.0)
                 original_max_position_embeddings = rope_scaling.get('original_max_position_embeddings', 0)
@@ -200,7 +198,7 @@ class LlamaModel(BaseInputModel):
                 rope_param.low_freq_factor = low_freq_factor
                 rope_param.high_freq_factor = high_freq_factor
                 rope_param.original_max_position_embeddings = original_max_position_embeddings
-            elif scaling_type == 'yarn':
+            elif rope_type == 'yarn':
                 attention_factor = rope_scaling.get('attention_factor', None)
                 if attention_factor is None:
                     attention_factor = 0.1 * math.log(scaling_factor) + 1.0
@@ -217,12 +215,12 @@ class LlamaModel(BaseInputModel):
                 rope_param.attention_factor = attention_factor
                 rope_param.beta_fast = beta_fast
                 rope_param.beta_slow = beta_slow
-            elif scaling_type == 'mrope':
+            elif rope_type == 'mrope':
                 mrope_section = rope_scaling.get('mrope_section')
                 rope_param.type = 'mrope'
                 rope_param.mrope_section = mrope_section
             else:
-                raise RuntimeError(f'Unsupported rope type: {scaling_type}')
+                raise RuntimeError(f'Unsupported rope type: {rope_type}')
 
         return dict(size_per_head=head_dim,
                     num_layer=num_layer,

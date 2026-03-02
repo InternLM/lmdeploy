@@ -1,6 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict, List, Tuple
-
 import torch
 
 from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
@@ -35,7 +33,7 @@ class Qwen2VLModel(VisionModel):
         self.image_token = self.processor.image_token
         self.image_token_id = tokenizer.encode(self.image_token)[-1]
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refer to `super().preprocess()` for spec."""
         from qwen_vl_utils import process_vision_info
 
@@ -48,7 +46,7 @@ class Qwen2VLModel(VisionModel):
             item = dict(type='image', image=image)
             item.update({key: params[key] for key in params.keys() if key in optional_keys})
             image_inputs, _ = process_vision_info([dict(content=[item])])
-            result = self.processor.image_processor(images=image_inputs, videos=None, return_tensors='pt')
+            result = self.processor.image_processor(images=image_inputs, return_tensors='pt')
             merge_length = self.processor.image_processor.merge_size**2
             image_tokens = result['image_grid_thw'].prod(dim=1) // merge_length
             result.update(dict(image_size=image.size, image_tokens=image_tokens, image_token_id=self.image_token_id))
@@ -77,10 +75,7 @@ class Qwen2VLModel(VisionModel):
                 if hasattr(config, 'text_config'):
                     config.text_config.tie_word_embeddings = False
                 model = AutoModelCls._from_config(config)
-                if hasattr(AutoModelCls, 'visual'):
-                    # transformers >= 4.52.0 modified model structure
-                    # https://github.com/huggingface/transformers/blob/v4.52.0/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L1791-L1800
-                    model.visual = model.model.visual
+                model.visual = model.model.visual
                 del model.model
                 del model.lm_head
                 model.half()
@@ -96,12 +91,12 @@ class Qwen2VLModel(VisionModel):
             self.model = model.eval()
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
-            messages(List[Dict]): the outputs of `preprocess`
+            messages(list[dict]): the outputs of `preprocess`
             max_batch_size(int): the max batch size when forwarding vision
                 model
         Return:
@@ -117,6 +112,10 @@ class Qwen2VLModel(VisionModel):
             pixel_values = torch.cat(pixel_values, dim=0).to(device)
             image_grid_thw = torch.cat(image_grid_thw, dim=0).to(device)
             image_embeds = self.model.visual(pixel_values, grid_thw=image_grid_thw)
+            if hasattr(image_embeds, 'pooler_output'):
+                # transformers >= 5.0.0, the type if image_embeds is `BaseModelOutputWithPooling`
+                # rather than torch.Tensor
+                image_embeds = image_embeds.pooler_output
             merge_length = self.processor.image_processor.merge_size**2
             split_size = image_grid_thw.prod(dim=1) // merge_length
             image_embeds = image_embeds.split(split_size.tolist())
@@ -162,8 +161,8 @@ class Qwen2VLModel(VisionModel):
 
     @staticmethod
     def get_mrope_info(seq_len: int,
-                       grid_thws: List[Tuple[int, int, int]] = None,
-                       ranges: List[Tuple[int, int]] = None):
+                       grid_thws: list[tuple[int, int, int]] = None,
+                       ranges: list[tuple[int, int]] = None):
         mrope_position_ids = [torch.arange(ranges[0][0]).expand(3, -1)]
         st_idx = ranges[0][0]
         for i, (grid_thw, embedding_range) in enumerate(zip(grid_thws, ranges)):
