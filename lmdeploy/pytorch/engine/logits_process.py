@@ -157,6 +157,7 @@ def ngram(
     max_window_size = token_ids.size(1)
 
     # normalize ids
+    # we would set n=None if n shared same value. Read lmdeploy/pytorch/strategies/ar/sampling.py for more details
     same_n = n is None
     norm = token_ids[:, -max_n:]
     if not same_n:
