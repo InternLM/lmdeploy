@@ -53,6 +53,7 @@ env:
   HF_HUB_OFFLINE: 1
   HF_EVALUATE_OFFLINE: 1
   RUN_ID: ${{ inputs.repo_ref }}_${{ github.run_id }}
+  TEST_ENV: legacy
 
 jobs:
   linux-build:
