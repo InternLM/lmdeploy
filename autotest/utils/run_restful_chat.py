@@ -158,9 +158,20 @@ def open_chat_test(log_path, case_name, case_info, url):
                                                  max_completion_tokens=1024,
                                                  stream=True)
 
-        output_content = ''
+        output_chunks = []
         for output in outputs:
-            output_content += output.model_dump().get('choices')[0].get('delta', {}).get('content', '')
+            # Safely handle streaming chunks: choices may be empty and content may be None
+            if not getattr(output, 'choices', None):
+                continue
+            choice = output.choices[0]
+            delta = getattr(choice, 'delta', None)
+            reasoning_content = getattr(delta, 'reasoning_content', None) if delta is not None else None
+            content = getattr(delta, 'content', None) if delta is not None else None
+            if reasoning_content:
+                output_chunks.append(reasoning_content)
+            if content:
+                output_chunks.append(content)
+        output_content = ''.join(output_chunks)
 
         file.writelines('output:' + output_content + '\n')
         messages.append({'role': 'assistant', 'content': output_content})

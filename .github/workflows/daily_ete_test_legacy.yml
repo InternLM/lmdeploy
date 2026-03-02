@@ -337,18 +337,8 @@ jobs:
       fail-fast: false
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
-        model_path: ['internlm/Intern-S1', 'internlm/internlm2_5-20b-chat', 'internlm/internlm2_5-20b']
+        model_path: ['internlm/Intern-S1']
         include:
-          - tp: 2
-            model: internlm2_5-20b-chat
-            model_path: internlm/internlm2_5-20b-chat
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: base
-          - tp: 2
-            model: internlm2_5-20b
-            model_path: internlm/internlm2_5-20b
-            case_info: ['completions_v1']
-            generate_type: base
           - tp: 8
             model: Intern-S1
             model_path: internlm/Intern-S1

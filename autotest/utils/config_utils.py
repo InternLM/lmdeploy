@@ -81,8 +81,8 @@ def get_func_config_list(backend: str,
         if config.get('env_tag', '') in ['3090', '5080']:
             run_config['extra_params']['cache-max-entry-count'] = 0.5
 
-        if config.get('env_tag', '') == '' and ('Qwen3-235B-A22B' in run_config['model']
-                                                or run_config['model'] == 'internlm/Intern-S1'):
+        if config.get('env_tag', '') in ['a100'] and ('Qwen3-235B-A22B' in run_config['model']
+                                                      or run_config['model'] == 'internlm/Intern-S1'):
             run_config['extra_params']['cache-max-entry-count'] = 0.6
 
         if 'sdar' in run_config['model'].lower():

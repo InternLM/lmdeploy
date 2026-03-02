@@ -128,6 +128,7 @@ turbomind_quantization:
         # - allenai/Molmo-7B-D-0924  This modeling file requires the following packages that were not found in your environment: tensorflow. Run `pip install tensorflow`
         - THUDM/codegeex4-all-9b
     gptq:
+        - empty
     no_kvint4:
         - OpenGVLab/InternVL3-8B
         - openbmb/MiniCPM-V-2_6
