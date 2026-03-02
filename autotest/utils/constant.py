@@ -71,13 +71,12 @@ RESTFUL_MODEL_LIST = [
 
 TOOL_REASONING_MODEL_LIST = [
     'Qwen/Qwen3-8B-FP8',
-    'Qwen/Qwen3-32B-FP8',
-    'Qwen/Qwen3-30B-A3B-FP8',
-    'Qwen/Qwen2.5-7B-Instruct',
-    'internlm/Intern-S1-mini',
     'internlm/Intern-S1-Pro-FP8',
-    'meta-llama/Meta-Llama-3-1-8B-Instruct',
-    'deepseek/DeepSeek-V3',
+    'internlm/internlm2_5-7b-chat',
+    'Qwen/Qwen2.5-7B-Instruct',
+    'meta-llama/Meta-Llama-3-1-70B-Instruct',
+    'deepseek/DeepSeek-R1-Distill-Llama-8B',
+    'deepseek/DeepSeek-R1-Distill-Qwen-32B',
 ]
 
 RESTFUL_BASE_MODEL_LIST = [

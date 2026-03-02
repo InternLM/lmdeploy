@@ -5,7 +5,8 @@ from unittest.mock import MagicMock
 
 import pytest
 from utils.constant import BACKEND_LIST, TOOL_REASONING_MODEL_LIST
-from utils.tool_reasoning_definitions import (
+
+from utils.tool_reasoning_definitions import (  # isort: skip
     CALCULATOR_TOOL, REASONING_PARSER_NAMES, SEARCH_TOOL, THINK_END_TOKEN, THINK_START_TOKEN, WEATHER_TOOL,
     WEATHER_TOOL_CN, assert_arguments_parseable, assert_tool_call_fields, build_messages_with_tool_response,
     build_reasoning_tool_roundtrip_messages, collect_stream_reasoning, get_reasoning_content, get_reasoning_tokens,
@@ -129,6 +130,17 @@ def _run_streaming_extraction(parser, deltas, vocab):
 
 
 # ---------------------------------------------------------------------------
+# Shared constants for parser unit tests
+# ---------------------------------------------------------------------------
+
+_DEFAULT_VOCAB = {'<think>': 100, '</think>': 101}
+
+_BOTH_PARSERS = pytest.mark.parametrize('parser_factory', [
+    pytest.param(_get_deepseek_parser_cls, id='deepseek'),
+    pytest.param(_get_qwen_parser_cls, id='qwen'),
+])
+
+# ---------------------------------------------------------------------------
 # Marks
 # ---------------------------------------------------------------------------
 
@@ -219,6 +231,9 @@ class _ReasoningTestBase:
         create_kwargs.setdefault('temperature', 0)
         create_kwargs.setdefault('max_completion_tokens', 1024)
         create_kwargs.setdefault('logprobs', False)
+        extra_body = create_kwargs.pop('extra_body', {})
+        extra_body.setdefault('enable_thinking', True)
+        create_kwargs['extra_body'] = extra_body
 
         if stream:
             resp = client.chat.completions.create(model=model_name, messages=messages, stream=True, **create_kwargs)
@@ -466,64 +481,52 @@ class TestReasoningParserManager:
 class TestDeepSeekR1ParserNonStreaming:
     """Unit tests for DeepSeekR1ReasoningParser.extract_reasoning_content."""
 
+    @pytest.fixture(autouse=True)
+    def _setup(self):
+        self.tok = _make_mock_tokenizer()
+        self.parser = _get_deepseek_parser_cls()(self.tok)
+        self.req = _make_mock_request()
+
     def test_full_think_tags(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_deepseek_parser_cls()(tok)
-        req = _make_mock_request()
         model_output = '<think>Let me think step by step...</think>The answer is 42.'
-        reasoning, final = parser.extract_reasoning_content(model_output, req)
+        reasoning, final = self.parser.extract_reasoning_content(model_output, self.req)
         assert reasoning is not None
         assert 'step by step' in reasoning
         assert final is not None
         assert '42' in final
 
     def test_missing_start_tag(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_deepseek_parser_cls()(tok)
-        req = _make_mock_request()
         model_output = 'I need to reason about this...</think>The answer is 7.'
-        reasoning, final = parser.extract_reasoning_content(model_output, req)
+        reasoning, final = self.parser.extract_reasoning_content(model_output, self.req)
         assert reasoning is not None
         assert final is not None
         assert '7' in final
 
     def test_no_think_tags_at_all(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_deepseek_parser_cls()(tok)
-        req = _make_mock_request()
         model_output = 'Just a plain answer without reasoning.'
-        reasoning, final = parser.extract_reasoning_content(model_output, req)
+        reasoning, final = self.parser.extract_reasoning_content(model_output, self.req)
         assert reasoning == model_output
         assert final is None
 
     def test_empty_reasoning(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_deepseek_parser_cls()(tok)
-        req = _make_mock_request()
         model_output = '<think></think>Direct answer.'
-        reasoning, final = parser.extract_reasoning_content(model_output, req)
+        reasoning, final = self.parser.extract_reasoning_content(model_output, self.req)
         assert reasoning is not None
         assert final is not None
         assert 'Direct answer' in final
 
     def test_only_think_tags(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_deepseek_parser_cls()(tok)
-        req = _make_mock_request()
         model_output = '<think>All reasoning, no final answer.</think>'
-        reasoning, final = parser.extract_reasoning_content(model_output, req)
+        reasoning, final = self.parser.extract_reasoning_content(model_output, self.req)
         assert reasoning is not None
         assert 'reasoning' in reasoning.lower()
         assert final is None
 
     def test_multiline_reasoning(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_deepseek_parser_cls()(tok)
-        req = _make_mock_request()
         model_output = ('<think>\nStep 1: calculate 37 * 40 = 1480\n'
                         'Step 2: calculate 37 * 3 = 111\n'
                         'Step 3: 1480 + 111 = 1591\n</think>The answer is 1591.')
-        reasoning, final = parser.extract_reasoning_content(model_output, req)
+        reasoning, final = self.parser.extract_reasoning_content(model_output, self.req)
         assert reasoning is not None
         assert 'Step 1' in reasoning
         assert 'Step 3' in reasoning
@@ -531,29 +534,20 @@ class TestDeepSeekR1ParserNonStreaming:
         assert '1591' in final
 
     def test_unclosed_think_tag(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_deepseek_parser_cls()(tok)
-        req = _make_mock_request()
         model_output = '<think>I am still reasoning about this problem...'
-        reasoning, final = parser.extract_reasoning_content(model_output, req)
+        reasoning, final = self.parser.extract_reasoning_content(model_output, self.req)
         assert reasoning == model_output
         assert final is None
 
     def test_empty_model_output(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_deepseek_parser_cls()(tok)
-        req = _make_mock_request()
-        reasoning, final = parser.extract_reasoning_content('', req)
+        reasoning, final = self.parser.extract_reasoning_content('', self.req)
         assert reasoning == ''
         assert final is None
 
     def test_multiple_think_blocks(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_deepseek_parser_cls()(tok)
-        req = _make_mock_request()
         model_output = ('<think>first reasoning</think>middle text'
                         '<think>second reasoning</think>final text')
-        reasoning, final = parser.extract_reasoning_content(model_output, req)
+        reasoning, final = self.parser.extract_reasoning_content(model_output, self.req)
         assert reasoning is not None
         assert 'first reasoning' in reasoning
         assert final is not None
@@ -561,11 +555,8 @@ class TestDeepSeekR1ParserNonStreaming:
         assert '<think>second reasoning</think>' in final
 
     def test_newlines_between_think_and_content(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_deepseek_parser_cls()(tok)
-        req = _make_mock_request()
         model_output = '<think>Step 1: 37*43=1591</think>\n\nThe answer is 1591.'
-        reasoning, final = parser.extract_reasoning_content(model_output, req)
+        reasoning, final = self.parser.extract_reasoning_content(model_output, self.req)
         assert reasoning is not None
         assert '1591' in reasoning
         assert final is not None
@@ -573,11 +564,8 @@ class TestDeepSeekR1ParserNonStreaming:
                                           f'got: {repr(final[:20])}')
 
     def test_single_newline_between_think_and_content(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_deepseek_parser_cls()(tok)
-        req = _make_mock_request()
         model_output = '<think>reasoning</think>\nThe answer.'
-        reasoning, final = parser.extract_reasoning_content(model_output, req)
+        reasoning, final = self.parser.extract_reasoning_content(model_output, self.req)
         assert reasoning == 'reasoning'
         assert final is not None
         assert final.startswith('\n')
@@ -588,131 +576,106 @@ class TestDeepSeekR1ParserNonStreaming:
 class TestDeepSeekR1ParserStreaming:
     """Unit tests for DeepSeekR1ReasoningParser streaming extraction."""
 
+    @pytest.fixture(autouse=True)
+    def _setup(self):
+        self.tok = _make_mock_tokenizer(_DEFAULT_VOCAB)
+        self.parser = _get_deepseek_parser_cls()(self.tok)
+
     def test_think_start_token_only(self):
-        vocab = {'<think>': 100, '</think>': 101}
-        tok = _make_mock_tokenizer(vocab)
-        parser = _get_deepseek_parser_cls()(tok)
-        result = parser.extract_reasoning_content_streaming(previous_text='',
-                                                            current_text='<think>',
-                                                            delta_text='<think>',
-                                                            previous_token_ids=[],
-                                                            current_token_ids=[100],
-                                                            delta_token_ids=[100])
+        result = self.parser.extract_reasoning_content_streaming(previous_text='',
+                                                                 current_text='<think>',
+                                                                 delta_text='<think>',
+                                                                 previous_token_ids=[],
+                                                                 current_token_ids=[100],
+                                                                 delta_token_ids=[100])
         assert result is None
 
     def test_think_end_token_only(self):
-        vocab = {'<think>': 100, '</think>': 101}
-        tok = _make_mock_tokenizer(vocab)
-        parser = _get_deepseek_parser_cls()(tok)
-        result = parser.extract_reasoning_content_streaming(previous_text='<think>Some reasoning',
-                                                            current_text='<think>Some reasoning</think>',
-                                                            delta_text='</think>',
-                                                            previous_token_ids=[100, 200, 201],
-                                                            current_token_ids=[100, 200, 201, 101],
-                                                            delta_token_ids=[101])
+        result = self.parser.extract_reasoning_content_streaming(previous_text='<think>Some reasoning',
+                                                                 current_text='<think>Some reasoning</think>',
+                                                                 delta_text='</think>',
+                                                                 previous_token_ids=[100, 200, 201],
+                                                                 current_token_ids=[100, 200, 201, 101],
+                                                                 delta_token_ids=[101])
         assert result is not None
         assert result.content == ''
 
     def test_reasoning_continues(self):
-        vocab = {'<think>': 100, '</think>': 101}
-        tok = _make_mock_tokenizer(vocab)
-        parser = _get_deepseek_parser_cls()(tok)
-        result = parser.extract_reasoning_content_streaming(previous_text='<think>Step 1',
-                                                            current_text='<think>Step 1: multiply',
-                                                            delta_text=': multiply',
-                                                            previous_token_ids=[100, 200],
-                                                            current_token_ids=[100, 200, 201],
-                                                            delta_token_ids=[201])
+        result = self.parser.extract_reasoning_content_streaming(previous_text='<think>Step 1',
+                                                                 current_text='<think>Step 1: multiply',
+                                                                 delta_text=': multiply',
+                                                                 previous_token_ids=[100, 200],
+                                                                 current_token_ids=[100, 200, 201],
+                                                                 delta_token_ids=[201])
         assert result is not None
         assert result.reasoning_content == ': multiply'
 
     def test_reasoning_ends_in_delta(self):
-        vocab = {'<think>': 100, '</think>': 101}
-        tok = _make_mock_tokenizer(vocab)
-        parser = _get_deepseek_parser_cls()(tok)
-        result = parser.extract_reasoning_content_streaming(previous_text='<think>Step 1',
-                                                            current_text='<think>Step 1. Done</think>Answer',
-                                                            delta_text='. Done</think>Answer',
-                                                            previous_token_ids=[100, 200],
-                                                            current_token_ids=[100, 200, 201, 101, 300],
-                                                            delta_token_ids=[201, 101, 300])
+        result = self.parser.extract_reasoning_content_streaming(previous_text='<think>Step 1',
+                                                                 current_text='<think>Step 1. Done</think>Answer',
+                                                                 delta_text='. Done</think>Answer',
+                                                                 previous_token_ids=[100, 200],
+                                                                 current_token_ids=[100, 200, 201, 101, 300],
+                                                                 delta_token_ids=[201, 101, 300])
         assert result is not None
         assert '. Done' in result.reasoning_content
         assert result.content == 'Answer'
 
     def test_content_after_think_end(self):
-        vocab = {'<think>': 100, '</think>': 101}
-        tok = _make_mock_tokenizer(vocab)
-        parser = _get_deepseek_parser_cls()(tok)
-        result = parser.extract_reasoning_content_streaming(previous_text='<think>Reasoning</think>Prev',
-                                                            current_text='<think>Reasoning</think>Prev content',
-                                                            delta_text=' content',
-                                                            previous_token_ids=[100, 200, 101, 300],
-                                                            current_token_ids=[100, 200, 101, 300, 301],
-                                                            delta_token_ids=[301])
+        result = self.parser.extract_reasoning_content_streaming(previous_text='<think>Reasoning</think>Prev',
+                                                                 current_text='<think>Reasoning</think>Prev content',
+                                                                 delta_text=' content',
+                                                                 previous_token_ids=[100, 200, 101, 300],
+                                                                 current_token_ids=[100, 200, 101, 300, 301],
+                                                                 delta_token_ids=[301])
         assert result is not None
         assert result.content == ' content'
 
     def test_no_think_in_previous_with_end_in_delta(self):
-        vocab = {'<think>': 100, '</think>': 101}
-        tok = _make_mock_tokenizer(vocab)
-        parser = _get_deepseek_parser_cls()(tok)
-        result = parser.extract_reasoning_content_streaming(previous_text='Some reasoning text',
-                                                            current_text='Some reasoning text</think>Final',
-                                                            delta_text='</think>Final',
-                                                            previous_token_ids=[200, 201],
-                                                            current_token_ids=[200, 201, 101, 300],
-                                                            delta_token_ids=[101, 300])
+        result = self.parser.extract_reasoning_content_streaming(previous_text='Some reasoning text',
+                                                                 current_text='Some reasoning text</think>Final',
+                                                                 delta_text='</think>Final',
+                                                                 previous_token_ids=[200, 201],
+                                                                 current_token_ids=[200, 201, 101, 300],
+                                                                 delta_token_ids=[101, 300])
         assert result is not None
         assert result.content == 'Final'
 
     def test_no_think_tags_at_all_streaming(self):
-        vocab = {'<think>': 100, '</think>': 101}
-        tok = _make_mock_tokenizer(vocab)
-        parser = _get_deepseek_parser_cls()(tok)
-        result = parser.extract_reasoning_content_streaming(previous_text='',
-                                                            current_text='Just a plain answer.',
-                                                            delta_text='Just a plain answer.',
-                                                            previous_token_ids=[],
-                                                            current_token_ids=[200, 201, 202],
-                                                            delta_token_ids=[200, 201, 202])
+        result = self.parser.extract_reasoning_content_streaming(previous_text='',
+                                                                 current_text='Just a plain answer.',
+                                                                 delta_text='Just a plain answer.',
+                                                                 previous_token_ids=[],
+                                                                 current_token_ids=[200, 201, 202],
+                                                                 delta_token_ids=[200, 201, 202])
         assert result is not None
         assert result.reasoning_content == 'Just a plain answer.'
         assert result.content is None
 
     def test_empty_reasoning_streaming(self):
-        vocab = {'<think>': 100, '</think>': 101}
-        tok = _make_mock_tokenizer(vocab)
-        parser = _get_deepseek_parser_cls()(tok)
-        result = parser.extract_reasoning_content_streaming(previous_text='',
-                                                            current_text='<think></think>Direct answer.',
-                                                            delta_text='<think></think>Direct answer.',
-                                                            previous_token_ids=[],
-                                                            current_token_ids=[100, 101, 200, 201],
-                                                            delta_token_ids=[100, 101, 200, 201])
+        result = self.parser.extract_reasoning_content_streaming(previous_text='',
+                                                                 current_text='<think></think>Direct answer.',
+                                                                 delta_text='<think></think>Direct answer.',
+                                                                 previous_token_ids=[],
+                                                                 current_token_ids=[100, 101, 200, 201],
+                                                                 delta_token_ids=[100, 101, 200, 201])
         assert result is not None
         assert result.reasoning_content is not None
         assert result.content is not None
         assert 'Direct answer' in result.content
 
     def test_only_think_tags_streaming(self):
-        vocab = {'<think>': 100, '</think>': 101}
-        tok = _make_mock_tokenizer(vocab)
-        parser = _get_deepseek_parser_cls()(tok)
-        result = parser.extract_reasoning_content_streaming(previous_text='<think>All reasoning here.',
-                                                            current_text='<think>All reasoning here.</think>',
-                                                            delta_text='</think>',
-                                                            previous_token_ids=[100, 200, 201],
-                                                            current_token_ids=[100, 200, 201, 101],
-                                                            delta_token_ids=[101])
+        result = self.parser.extract_reasoning_content_streaming(previous_text='<think>All reasoning here.',
+                                                                 current_text='<think>All reasoning here.</think>',
+                                                                 delta_text='</think>',
+                                                                 previous_token_ids=[100, 200, 201],
+                                                                 current_token_ids=[100, 200, 201, 101],
+                                                                 delta_token_ids=[101])
         assert result is not None
         assert result.content == ''
 
     def test_multiline_reasoning_streaming(self):
-        vocab = {'<think>': 100, '</think>': 101}
-        tok = _make_mock_tokenizer(vocab)
-        parser = _get_deepseek_parser_cls()(tok)
-        result = parser.extract_reasoning_content_streaming(
+        result = self.parser.extract_reasoning_content_streaming(
             previous_text='<think>Step 1: calculate\n',
             current_text='<think>Step 1: calculate\nStep 2: add\nStep 3: done',
             delta_text='Step 2: add\nStep 3: done',
@@ -723,53 +686,43 @@ class TestDeepSeekR1ParserStreaming:
         assert result.reasoning_content == 'Step 2: add\nStep 3: done'
 
     def test_unclosed_think_tag_streaming(self):
-        vocab = {'<think>': 100, '</think>': 101}
-        tok = _make_mock_tokenizer(vocab)
-        parser = _get_deepseek_parser_cls()(tok)
-        result = parser.extract_reasoning_content_streaming(previous_text='<think>I am still reasoning',
-                                                            current_text='<think>I am still reasoning about this...',
-                                                            delta_text=' about this...',
-                                                            previous_token_ids=[100, 200, 201],
-                                                            current_token_ids=[100, 200, 201, 202, 203],
-                                                            delta_token_ids=[202, 203])
+        result = self.parser.extract_reasoning_content_streaming(
+            previous_text='<think>I am still reasoning',
+            current_text='<think>I am still reasoning about this...',
+            delta_text=' about this...',
+            previous_token_ids=[100, 200, 201],
+            current_token_ids=[100, 200, 201, 202, 203],
+            delta_token_ids=[202, 203])
         assert result is not None
         assert result.reasoning_content == ' about this...'
         assert result.content is None
 
     def test_empty_model_output_streaming(self):
-        vocab = {'<think>': 100, '</think>': 101}
-        tok = _make_mock_tokenizer(vocab)
-        parser = _get_deepseek_parser_cls()(tok)
-        result = parser.extract_reasoning_content_streaming(previous_text='',
-                                                            current_text='',
-                                                            delta_text='',
-                                                            previous_token_ids=[],
-                                                            current_token_ids=[],
-                                                            delta_token_ids=[])
+        result = self.parser.extract_reasoning_content_streaming(previous_text='',
+                                                                 current_text='',
+                                                                 delta_text='',
+                                                                 previous_token_ids=[],
+                                                                 current_token_ids=[],
+                                                                 delta_token_ids=[])
         if result is not None:
             assert (result.reasoning_content or '') == ''
             assert (result.content or '') == ''
 
     def test_multiple_think_blocks_streaming(self):
-        vocab = {'<think>': 100, '</think>': 101}
-        tok = _make_mock_tokenizer(vocab)
-        parser = _get_deepseek_parser_cls()(tok)
-        result = parser.extract_reasoning_content_streaming(previous_text='<think>first reasoning</think>middle text',
-                                                            current_text=('<think>first reasoning</think>middle text'
-                                                                          '<think>second reasoning</think>final'),
-                                                            delta_text='<think>second reasoning</think>final',
-                                                            previous_token_ids=[100, 200, 101, 300],
-                                                            current_token_ids=[100, 200, 101, 300, 100, 201, 101, 301],
-                                                            delta_token_ids=[100, 201, 101, 301])
+        result = self.parser.extract_reasoning_content_streaming(
+            previous_text='<think>first reasoning</think>middle text',
+            current_text=('<think>first reasoning</think>middle text'
+                          '<think>second reasoning</think>final'),
+            delta_text='<think>second reasoning</think>final',
+            previous_token_ids=[100, 200, 101, 300],
+            current_token_ids=[100, 200, 101, 300, 100, 201, 101, 301],
+            delta_token_ids=[100, 201, 101, 301])
         assert result is not None
         assert result.content is not None
         assert '<think>second reasoning</think>' in result.content
 
     def test_newlines_between_think_and_content_streaming(self):
-        vocab = {'<think>': 100, '</think>': 101}
-        tok = _make_mock_tokenizer(vocab)
-        parser = _get_deepseek_parser_cls()(tok)
-        result = parser.extract_reasoning_content_streaming(
+        result = self.parser.extract_reasoning_content_streaming(
             previous_text='<think>Step 1: reasoning',
             current_text='<think>Step 1: reasoning. Done</think>\n\nThe answer is 1591.',
             delta_text='. Done</think>\n\nThe answer is 1591.',
@@ -783,15 +736,12 @@ class TestDeepSeekR1ParserStreaming:
         assert '1591' in result.content
 
     def test_newline_only_content_streaming(self):
-        vocab = {'<think>': 100, '</think>': 101}
-        tok = _make_mock_tokenizer(vocab)
-        parser = _get_deepseek_parser_cls()(tok)
-        result = parser.extract_reasoning_content_streaming(previous_text='<think>reasoning',
-                                                            current_text='<think>reasoning</think>\n\n',
-                                                            delta_text='</think>\n\n',
-                                                            previous_token_ids=[100, 200],
-                                                            current_token_ids=[100, 200, 101, 300],
-                                                            delta_token_ids=[101, 300])
+        result = self.parser.extract_reasoning_content_streaming(previous_text='<think>reasoning',
+                                                                 current_text='<think>reasoning</think>\n\n',
+                                                                 delta_text='</think>\n\n',
+                                                                 previous_token_ids=[100, 200],
+                                                                 current_token_ids=[100, 200, 101, 300],
+                                                                 delta_token_ids=[101, 300])
         assert result is not None
         assert result.content == '\n\n'
 
@@ -801,63 +751,51 @@ class TestDeepSeekR1ParserStreaming:
 class TestQwenQwQParserNonStreaming:
     """Unit tests for QwenQwQReasoningParser.extract_reasoning_content."""
 
+    @pytest.fixture(autouse=True)
+    def _setup(self):
+        self.tok = _make_mock_tokenizer()
+        self.parser = _get_qwen_parser_cls()(self.tok)
+        self.req = _make_mock_request()
+
     def test_full_think_tags(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_qwen_parser_cls()(tok)
-        req = _make_mock_request()
         model_output = '<think>Let me reason about this...</think>The answer is 42.'
-        reasoning, final = parser.extract_reasoning_content(model_output, req)
+        reasoning, final = self.parser.extract_reasoning_content(model_output, self.req)
         assert reasoning is not None
         assert 'reason' in reasoning.lower()
         assert final is not None
         assert '42' in final
 
     def test_missing_start_tag(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_qwen_parser_cls()(tok)
-        req = _make_mock_request()
         model_output = 'Reasoning here...</think>Final answer.'
-        reasoning, final = parser.extract_reasoning_content(model_output, req)
+        reasoning, final = self.parser.extract_reasoning_content(model_output, self.req)
         assert reasoning is not None
         assert final is not None
         assert 'Final answer' in final
 
     def test_newline_stripping(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_qwen_parser_cls()(tok)
-        req = _make_mock_request()
         model_output = '<think>\nStep 1: think\nStep 2: conclude\n</think>Done.'
-        reasoning, final = parser.extract_reasoning_content(model_output, req)
+        reasoning, final = self.parser.extract_reasoning_content(model_output, self.req)
         assert reasoning is not None
         assert not reasoning.startswith('\n')
         assert not reasoning.endswith('\n')
         assert final is not None
 
     def test_only_reasoning_no_content(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_qwen_parser_cls()(tok)
-        req = _make_mock_request()
         model_output = '<think>Only reasoning content here.</think>'
-        reasoning, final = parser.extract_reasoning_content(model_output, req)
+        reasoning, final = self.parser.extract_reasoning_content(model_output, self.req)
         assert reasoning is not None
         assert final is None
 
     def test_empty_reasoning_tags(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_qwen_parser_cls()(tok)
-        req = _make_mock_request()
         model_output = '<think></think>Direct answer.'
-        reasoning, final = parser.extract_reasoning_content(model_output, req)
+        reasoning, final = self.parser.extract_reasoning_content(model_output, self.req)
         assert final is not None
         assert 'Direct answer' in final
 
     def test_multiple_think_blocks(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_qwen_parser_cls()(tok)
-        req = _make_mock_request()
         model_output = ('<think>first reasoning</think>middle text'
                         '<think>second reasoning</think>final text')
-        reasoning, final = parser.extract_reasoning_content(model_output, req)
+        reasoning, final = self.parser.extract_reasoning_content(model_output, self.req)
         assert reasoning is not None
         assert 'first reasoning' in reasoning
         assert final is not None
@@ -865,11 +803,8 @@ class TestQwenQwQParserNonStreaming:
         assert '<think>second reasoning</think>' in final
 
     def test_newlines_between_think_and_content(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_qwen_parser_cls()(tok)
-        req = _make_mock_request()
         model_output = '<think>\nStep 1: 37*43=1591\n</think>\n\nThe answer is 1591.'
-        reasoning, final = parser.extract_reasoning_content(model_output, req)
+        reasoning, final = self.parser.extract_reasoning_content(model_output, self.req)
         assert reasoning is not None
         assert not reasoning.startswith('\n')
         assert not reasoning.endswith('\n')
@@ -878,52 +813,37 @@ class TestQwenQwQParserNonStreaming:
         assert final.startswith('\n\n')
 
     def test_single_newline_between_think_and_content(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_qwen_parser_cls()(tok)
-        req = _make_mock_request()
         model_output = '<think>\nreasoning\n</think>\nThe answer.'
-        reasoning, final = parser.extract_reasoning_content(model_output, req)
+        reasoning, final = self.parser.extract_reasoning_content(model_output, self.req)
         assert reasoning == 'reasoning'
         assert final is not None
         assert final.startswith('\n')
 
     def test_unclosed_think_should_return_reasoning(self):
         """<think> without </think> → reasoning should be preserved."""
-        tok = _make_mock_tokenizer()
-        parser = _get_qwen_parser_cls()(tok)
-        req = _make_mock_request()
         model_output = '<think>I am still reasoning about this problem...'
-        reasoning, final = parser.extract_reasoning_content(model_output, req)
+        reasoning, final = self.parser.extract_reasoning_content(model_output, self.req)
         assert reasoning is not None, ('reasoning should not be None when <think> is present but unclosed')
         assert reasoning == 'I am still reasoning about this problem...'
         assert final is None
 
     def test_no_tags_all_reasoning(self):
         """No think tags at all → everything is reasoning."""
-        tok = _make_mock_tokenizer()
-        parser = _get_qwen_parser_cls()(tok)
-        req = _make_mock_request()
         model_output = 'Plain output without any think tokens.'
-        reasoning, final = parser.extract_reasoning_content(model_output, req)
+        reasoning, final = self.parser.extract_reasoning_content(model_output, self.req)
         assert reasoning is not None
         assert reasoning == model_output
         assert final is None
 
     def test_empty_input(self):
         """Edge case: empty string → ('', None)."""
-        tok = _make_mock_tokenizer()
-        parser = _get_qwen_parser_cls()(tok)
-        req = _make_mock_request()
-        reasoning, final = parser.extract_reasoning_content('', req)
+        reasoning, final = self.parser.extract_reasoning_content('', self.req)
         assert final is None
 
     def test_prefix_before_think_tags(self):
         """Text before <think> causes wrong content extraction."""
-        tok = _make_mock_tokenizer()
-        parser = _get_qwen_parser_cls()(tok)
-        req = _make_mock_request()
         model_output = 'Some prefix<think>reasoning here</think>The answer.'
-        reasoning, final = parser.extract_reasoning_content(model_output, req)
+        reasoning, final = self.parser.extract_reasoning_content(model_output, self.req)
         assert reasoning is not None
         assert 'reasoning here' in reasoning
         assert final is not None
@@ -932,22 +852,16 @@ class TestQwenQwQParserNonStreaming:
 
     def test_prefix_only_whitespace_before_think(self):
         """Whitespace-only prefix before <think>."""
-        tok = _make_mock_tokenizer()
-        parser = _get_qwen_parser_cls()(tok)
-        req = _make_mock_request()
         model_output = ' <think>reasoning</think>answer'
-        reasoning, final = parser.extract_reasoning_content(model_output, req)
+        reasoning, final = self.parser.extract_reasoning_content(model_output, self.req)
         assert reasoning is not None
         assert final is not None
         assert final == 'answer'
 
     def test_unclosed_think_with_newlines(self):
         r"""<think>\nreasoning\n without </think>."""
-        tok = _make_mock_tokenizer()
-        parser = _get_qwen_parser_cls()(tok)
-        req = _make_mock_request()
         model_output = '<think>\nI am reasoning step by step\n'
-        reasoning, final = parser.extract_reasoning_content(model_output, req)
+        reasoning, final = self.parser.extract_reasoning_content(model_output, self.req)
         assert reasoning is not None
         assert 'reasoning step by step' in reasoning
         assert final is None
@@ -958,84 +872,75 @@ class TestQwenQwQParserNonStreaming:
 class TestQwenQwQParserStreaming:
     """Unit tests for QwenQwQReasoningParser streaming extraction."""
 
+    @pytest.fixture(autouse=True)
+    def _setup(self):
+        self.tok = _make_mock_tokenizer(_DEFAULT_VOCAB)
+        self.parser = _get_qwen_parser_cls()(self.tok)
+
     def test_think_start_text_skipped(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_qwen_parser_cls()(tok)
-        result = parser.extract_reasoning_content_streaming(previous_text='',
-                                                            current_text='<think>',
-                                                            delta_text='<think>',
-                                                            previous_token_ids=[],
-                                                            current_token_ids=[100],
-                                                            delta_token_ids=[100])
+        result = self.parser.extract_reasoning_content_streaming(previous_text='',
+                                                                 current_text='<think>',
+                                                                 delta_text='<think>',
+                                                                 previous_token_ids=[],
+                                                                 current_token_ids=[100],
+                                                                 delta_token_ids=[100])
         assert result is not None
         assert result.content == ''
 
     def test_think_end_text_skipped(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_qwen_parser_cls()(tok)
-        result = parser.extract_reasoning_content_streaming(previous_text='<think>Some text',
-                                                            current_text='<think>Some text</think>',
-                                                            delta_text='</think>',
-                                                            previous_token_ids=[100, 200],
-                                                            current_token_ids=[100, 200, 101],
-                                                            delta_token_ids=[101])
+        result = self.parser.extract_reasoning_content_streaming(previous_text='<think>Some text',
+                                                                 current_text='<think>Some text</think>',
+                                                                 delta_text='</think>',
+                                                                 previous_token_ids=[100, 200],
+                                                                 current_token_ids=[100, 200, 101],
+                                                                 delta_token_ids=[101])
         assert result is not None
         assert result.content == ''
 
     def test_reasoning_continues(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_qwen_parser_cls()(tok)
-        result = parser.extract_reasoning_content_streaming(previous_text='<think>Step 1',
-                                                            current_text='<think>Step 1, Step 2',
-                                                            delta_text=', Step 2',
-                                                            previous_token_ids=[100, 200],
-                                                            current_token_ids=[100, 200, 201],
-                                                            delta_token_ids=[201])
+        result = self.parser.extract_reasoning_content_streaming(previous_text='<think>Step 1',
+                                                                 current_text='<think>Step 1, Step 2',
+                                                                 delta_text=', Step 2',
+                                                                 previous_token_ids=[100, 200],
+                                                                 current_token_ids=[100, 200, 201],
+                                                                 delta_token_ids=[201])
         assert result is not None
         assert result.reasoning_content == ', Step 2'
 
     def test_reasoning_ends_in_delta(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_qwen_parser_cls()(tok)
-        result = parser.extract_reasoning_content_streaming(previous_text='<think>Step 1',
-                                                            current_text='<think>Step 1. Final</think>Result',
-                                                            delta_text='. Final</think>Result',
-                                                            previous_token_ids=[100, 200],
-                                                            current_token_ids=[100, 200, 201, 101, 300],
-                                                            delta_token_ids=[201, 101, 300])
+        result = self.parser.extract_reasoning_content_streaming(previous_text='<think>Step 1',
+                                                                 current_text='<think>Step 1. Final</think>Result',
+                                                                 delta_text='. Final</think>Result',
+                                                                 previous_token_ids=[100, 200],
+                                                                 current_token_ids=[100, 200, 201, 101, 300],
+                                                                 delta_token_ids=[201, 101, 300])
         assert result is not None
         assert '. Final' in (result.reasoning_content or '')
         assert result.content == 'Result'
 
     def test_content_after_think_closed(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_qwen_parser_cls()(tok)
-        result = parser.extract_reasoning_content_streaming(previous_text='<think>Reasoning</think>Prev',
-                                                            current_text='<think>Reasoning</think>Prev more',
-                                                            delta_text=' more',
-                                                            previous_token_ids=[100, 200, 101, 300],
-                                                            current_token_ids=[100, 200, 101, 300, 301],
-                                                            delta_token_ids=[301])
+        result = self.parser.extract_reasoning_content_streaming(previous_text='<think>Reasoning</think>Prev',
+                                                                 current_text='<think>Reasoning</think>Prev more',
+                                                                 delta_text=' more',
+                                                                 previous_token_ids=[100, 200, 101, 300],
+                                                                 current_token_ids=[100, 200, 101, 300, 301],
+                                                                 delta_token_ids=[301])
         assert result is not None
         assert result.content == ' more'
 
     def test_no_think_tags_streaming(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_qwen_parser_cls()(tok)
-        result = parser.extract_reasoning_content_streaming(previous_text='',
-                                                            current_text='Plain answer without reasoning.',
-                                                            delta_text='Plain answer without reasoning.',
-                                                            previous_token_ids=[],
-                                                            current_token_ids=[200, 201, 202],
-                                                            delta_token_ids=[200, 201, 202])
+        result = self.parser.extract_reasoning_content_streaming(previous_text='',
+                                                                 current_text='Plain answer without reasoning.',
+                                                                 delta_text='Plain answer without reasoning.',
+                                                                 previous_token_ids=[],
+                                                                 current_token_ids=[200, 201, 202],
+                                                                 delta_token_ids=[200, 201, 202])
         assert result is not None
         assert result.content == 'Plain answer without reasoning.'
         assert result.reasoning_content is None
 
     def test_missing_start_tag_streaming(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_qwen_parser_cls()(tok)
-        result = parser.extract_reasoning_content_streaming(
+        result = self.parser.extract_reasoning_content_streaming(
             previous_text='Reasoning without start tag',
             current_text='Reasoning without start tag</think>Final answer.',
             delta_text='</think>Final answer.',
@@ -1046,86 +951,75 @@ class TestQwenQwQParserStreaming:
         assert result.content == 'Final answer.'
 
     def test_only_reasoning_no_content_streaming(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_qwen_parser_cls()(tok)
-        result = parser.extract_reasoning_content_streaming(previous_text='<think>Only reasoning content.',
-                                                            current_text='<think>Only reasoning content.</think>',
-                                                            delta_text='</think>',
-                                                            previous_token_ids=[100, 200],
-                                                            current_token_ids=[100, 200, 101],
-                                                            delta_token_ids=[101])
+        result = self.parser.extract_reasoning_content_streaming(previous_text='<think>Only reasoning content.',
+                                                                 current_text='<think>Only reasoning content.</think>',
+                                                                 delta_text='</think>',
+                                                                 previous_token_ids=[100, 200],
+                                                                 current_token_ids=[100, 200, 101],
+                                                                 delta_token_ids=[101])
         assert result is not None
         assert result.content == ''
 
     def test_empty_reasoning_tags_streaming(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_qwen_parser_cls()(tok)
-        result = parser.extract_reasoning_content_streaming(previous_text='',
-                                                            current_text='<think></think>Direct answer.',
-                                                            delta_text='<think></think>Direct answer.',
-                                                            previous_token_ids=[],
-                                                            current_token_ids=[100, 101, 200],
-                                                            delta_token_ids=[100, 101, 200])
+        result = self.parser.extract_reasoning_content_streaming(previous_text='',
+                                                                 current_text='<think></think>Direct answer.',
+                                                                 delta_text='<think></think>Direct answer.',
+                                                                 previous_token_ids=[],
+                                                                 current_token_ids=[100, 101, 200],
+                                                                 delta_token_ids=[100, 101, 200])
         assert result is not None
         assert result.content is not None
         assert 'Direct answer' in result.content
 
     def test_newline_in_reasoning_streaming(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_qwen_parser_cls()(tok)
-        result = parser.extract_reasoning_content_streaming(previous_text='<think>\nStep 1: think',
-                                                            current_text='<think>\nStep 1: think\nStep 2: conclude\n',
-                                                            delta_text='\nStep 2: conclude\n',
-                                                            previous_token_ids=[100, 200, 201],
-                                                            current_token_ids=[100, 200, 201, 202, 203],
-                                                            delta_token_ids=[202, 203])
+        result = self.parser.extract_reasoning_content_streaming(
+            previous_text='<think>\nStep 1: think',
+            current_text='<think>\nStep 1: think\nStep 2: conclude\n',
+            delta_text='\nStep 2: conclude\n',
+            previous_token_ids=[100, 200, 201],
+            current_token_ids=[100, 200, 201, 202, 203],
+            delta_token_ids=[202, 203])
         assert result is not None
         assert result.reasoning_content == '\nStep 2: conclude\n'
 
     def test_unclosed_think_tag_streaming(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_qwen_parser_cls()(tok)
-        result = parser.extract_reasoning_content_streaming(previous_text='<think>I am still reasoning',
-                                                            current_text='<think>I am still reasoning about this...',
-                                                            delta_text=' about this...',
-                                                            previous_token_ids=[100, 200, 201],
-                                                            current_token_ids=[100, 200, 201, 202, 203],
-                                                            delta_token_ids=[202, 203])
+        result = self.parser.extract_reasoning_content_streaming(
+            previous_text='<think>I am still reasoning',
+            current_text='<think>I am still reasoning about this...',
+            delta_text=' about this...',
+            previous_token_ids=[100, 200, 201],
+            current_token_ids=[100, 200, 201, 202, 203],
+            delta_token_ids=[202, 203])
         assert result is not None
         assert result.reasoning_content == ' about this...'
         assert result.content is None
 
     def test_empty_model_output_streaming(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_qwen_parser_cls()(tok)
-        result = parser.extract_reasoning_content_streaming(previous_text='',
-                                                            current_text='',
-                                                            delta_text='',
-                                                            previous_token_ids=[],
-                                                            current_token_ids=[],
-                                                            delta_token_ids=[])
+        result = self.parser.extract_reasoning_content_streaming(previous_text='',
+                                                                 current_text='',
+                                                                 delta_text='',
+                                                                 previous_token_ids=[],
+                                                                 current_token_ids=[],
+                                                                 delta_token_ids=[])
         if result is not None:
             assert (result.reasoning_content or '') == ''
             assert (result.content or '') == ''
 
     def test_multiple_think_blocks_streaming(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_qwen_parser_cls()(tok)
-        result = parser.extract_reasoning_content_streaming(previous_text='<think>first reasoning</think>middle text',
-                                                            current_text=('<think>first reasoning</think>middle text'
-                                                                          '<think>second reasoning</think>final'),
-                                                            delta_text='<think>second reasoning</think>final',
-                                                            previous_token_ids=[100, 200, 101, 300],
-                                                            current_token_ids=[100, 200, 101, 300, 100, 201, 101, 301],
-                                                            delta_token_ids=[100, 201, 101, 301])
+        result = self.parser.extract_reasoning_content_streaming(
+            previous_text='<think>first reasoning</think>middle text',
+            current_text=('<think>first reasoning</think>middle text'
+                          '<think>second reasoning</think>final'),
+            delta_text='<think>second reasoning</think>final',
+            previous_token_ids=[100, 200, 101, 300],
+            current_token_ids=[100, 200, 101, 300, 100, 201, 101, 301],
+            delta_token_ids=[100, 201, 101, 301])
         assert result is not None
         assert result.content is not None
         assert '<think>second reasoning</think>' in result.content
 
     def test_newlines_between_think_and_content_streaming(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_qwen_parser_cls()(tok)
-        result = parser.extract_reasoning_content_streaming(
+        result = self.parser.extract_reasoning_content_streaming(
             previous_text='<think>Step 1: reasoning',
             current_text='<think>Step 1: reasoning. Done</think>\n\nThe answer is 1591.',
             delta_text='. Done</think>\n\nThe answer is 1591.',
@@ -1139,25 +1033,21 @@ class TestQwenQwQParserStreaming:
         assert '1591' in result.content
 
     def test_newline_only_content_streaming(self):
-        tok = _make_mock_tokenizer()
-        parser = _get_qwen_parser_cls()(tok)
-        result = parser.extract_reasoning_content_streaming(previous_text='<think>reasoning',
-                                                            current_text='<think>reasoning</think>\n\n',
-                                                            delta_text='</think>\n\n',
-                                                            previous_token_ids=[100, 200],
-                                                            current_token_ids=[100, 200, 101, 300],
-                                                            delta_token_ids=[101, 300])
+        result = self.parser.extract_reasoning_content_streaming(previous_text='<think>reasoning',
+                                                                 current_text='<think>reasoning</think>\n\n',
+                                                                 delta_text='</think>\n\n',
+                                                                 previous_token_ids=[100, 200],
+                                                                 current_token_ids=[100, 200, 101, 300],
+                                                                 delta_token_ids=[101, 300])
         assert result is not None
         assert result.content == '\n\n'
 
     def test_unclosed_think_should_return_reasoning(self):
         """<think> without </think> → reasoning should be accumulated across
         all deltas and content should remain None."""
-        vocab = {'<think>': 100, '</think>': 101}
-        tok = _make_mock_tokenizer(vocab)
-        parser = _get_qwen_parser_cls()(tok)
+        parser = _get_qwen_parser_cls()(_make_mock_tokenizer(_DEFAULT_VOCAB))
         deltas = ['<think>', 'I am still ', 'reasoning about ', 'this problem...']
-        reasoning, content = _run_streaming_extraction(parser, deltas, vocab)
+        reasoning, content = _run_streaming_extraction(parser, deltas, _DEFAULT_VOCAB)
         assert reasoning is not None, ('reasoning should not be None when '
                                        '<think> is present but unclosed')
         assert 'I am still reasoning about this problem...' == reasoning
@@ -1166,22 +1056,18 @@ class TestQwenQwQParserStreaming:
     def test_no_tags_all_reasoning_streaming(self):
         """No think tags at all → everything is reasoning (Qwen treats tag-less
         output as content)."""
-        vocab = {'<think>': 100, '</think>': 101}
-        tok = _make_mock_tokenizer(vocab)
-        parser = _get_qwen_parser_cls()(tok)
+        parser = _get_qwen_parser_cls()(_make_mock_tokenizer(_DEFAULT_VOCAB))
         deltas = ['Plain output ', 'without any ', 'think tokens.']
-        reasoning, content = _run_streaming_extraction(parser, deltas, vocab)
+        reasoning, content = _run_streaming_extraction(parser, deltas, _DEFAULT_VOCAB)
         full_text = 'Plain output without any think tokens.'
         # Qwen streaming without tags emits content (not reasoning)
         assert (reasoning or '') + (content or '') == full_text
 
     def test_prefix_before_think_tags_streaming(self):
         """Text before <think> must not corrupt content (streaming)."""
-        vocab = {'<think>': 100, '</think>': 101}
-        tok = _make_mock_tokenizer(vocab)
-        parser = _get_qwen_parser_cls()(tok)
+        parser = _get_qwen_parser_cls()(_make_mock_tokenizer(_DEFAULT_VOCAB))
         deltas = ['Some prefix', '<think>', 'reasoning here', '</think>', 'The answer.']
-        reasoning, content = _run_streaming_extraction(parser, deltas, vocab)
+        reasoning, content = _run_streaming_extraction(parser, deltas, _DEFAULT_VOCAB)
         assert reasoning is not None
         assert 'reasoning here' in reasoning
         assert content is not None
@@ -1190,22 +1076,18 @@ class TestQwenQwQParserStreaming:
 
     def test_prefix_only_whitespace_before_think_streaming(self):
         """Whitespace-only prefix before <think> (streaming)."""
-        vocab = {'<think>': 100, '</think>': 101}
-        tok = _make_mock_tokenizer(vocab)
-        parser = _get_qwen_parser_cls()(tok)
+        parser = _get_qwen_parser_cls()(_make_mock_tokenizer(_DEFAULT_VOCAB))
         deltas = [' ', '<think>', 'reasoning', '</think>', 'answer']
-        reasoning, content = _run_streaming_extraction(parser, deltas, vocab)
+        reasoning, content = _run_streaming_extraction(parser, deltas, _DEFAULT_VOCAB)
         assert reasoning is not None
         assert content is not None
         assert 'answer' in content
 
     def test_unclosed_think_with_newlines_streaming(self):
         r"""<think>\nreasoning\n without </think> (streaming)."""
-        vocab = {'<think>': 100, '</think>': 101}
-        tok = _make_mock_tokenizer(vocab)
-        parser = _get_qwen_parser_cls()(tok)
+        parser = _get_qwen_parser_cls()(_make_mock_tokenizer(_DEFAULT_VOCAB))
         deltas = ['<think>', '\n', 'I am reasoning ', 'step by step', '\n']
-        reasoning, content = _run_streaming_extraction(parser, deltas, vocab)
+        reasoning, content = _run_streaming_extraction(parser, deltas, _DEFAULT_VOCAB)
         assert reasoning is not None, ('reasoning should not be None for unclosed '
                                        '<think> with newlines')
         assert 'reasoning step by step' in reasoning
@@ -1214,12 +1096,10 @@ class TestQwenQwQParserStreaming:
     def test_think_tag_embedded_in_delta_should_not_leak(self):
         """<think> embedded in a larger delta must not leak into
         reasoning_content."""
-        vocab = {'<think>': 100, '</think>': 101}
-        tok = _make_mock_tokenizer(vocab)
-        parser = _get_qwen_parser_cls()(tok)
+        parser = _get_qwen_parser_cls()(_make_mock_tokenizer(_DEFAULT_VOCAB))
         # <think> is part of a larger delta, not a separate token
         deltas = ['<think>I am reasoning', ' step by step', '</think>', 'The answer.']
-        reasoning, content = _run_streaming_extraction(parser, deltas, vocab)
+        reasoning, content = _run_streaming_extraction(parser, deltas, _DEFAULT_VOCAB)
         assert reasoning is not None
         assert THINK_START_TOKEN not in reasoning, ('<think> tag leaked into reasoning_content')
         assert THINK_END_TOKEN not in reasoning, ('</think> tag leaked into reasoning_content')
@@ -1229,11 +1109,9 @@ class TestQwenQwQParserStreaming:
 
     def test_think_tag_embedded_with_end_in_same_delta(self):
         """<think>.....</think> all in one large delta."""
-        vocab = {'<think>': 100, '</think>': 101}
-        tok = _make_mock_tokenizer(vocab)
-        parser = _get_qwen_parser_cls()(tok)
+        parser = _get_qwen_parser_cls()(_make_mock_tokenizer(_DEFAULT_VOCAB))
         deltas = ['<think>short reasoning</think>answer']
-        reasoning, content = _run_streaming_extraction(parser, deltas, vocab)
+        reasoning, content = _run_streaming_extraction(parser, deltas, _DEFAULT_VOCAB)
         assert reasoning is not None
         assert THINK_START_TOKEN not in reasoning, ('<think> tag leaked into reasoning_content')
         assert 'short reasoning' in reasoning
@@ -1243,11 +1121,9 @@ class TestQwenQwQParserStreaming:
     def test_think_tag_embedded_no_end_token(self):
         """<think> embedded in delta, output truncated (no </think> at all) —
         tag must not appear in reasoning."""
-        vocab = {'<think>': 100, '</think>': 101}
-        tok = _make_mock_tokenizer(vocab)
-        parser = _get_qwen_parser_cls()(tok)
+        parser = _get_qwen_parser_cls()(_make_mock_tokenizer(_DEFAULT_VOCAB))
         deltas = ['<think>I am reasoning about', ' a complex problem...']
-        reasoning, content = _run_streaming_extraction(parser, deltas, vocab)
+        reasoning, content = _run_streaming_extraction(parser, deltas, _DEFAULT_VOCAB)
         assert reasoning is not None
         assert THINK_START_TOKEN not in reasoning, ('<think> tag leaked into reasoning_content '
                                                     'when output is truncated')
@@ -1264,10 +1140,7 @@ class TestQwenQwQParserStreaming:
 class TestReasoningParserEdgeCases:
     """Edge cases that both parsers should handle identically."""
 
-    @pytest.mark.parametrize('parser_factory', [
-        pytest.param(_get_deepseek_parser_cls, id='deepseek'),
-        pytest.param(_get_qwen_parser_cls, id='qwen'),
-    ])
+    @_BOTH_PARSERS
     def test_unicode_in_reasoning(self, parser_factory):
         """Chinese / Unicode content inside think tags."""
         tok = _make_mock_tokenizer()
@@ -1280,10 +1153,7 @@ class TestReasoningParserEdgeCases:
         assert final is not None
         assert '1591' in final
 
-    @pytest.mark.parametrize('parser_factory', [
-        pytest.param(_get_deepseek_parser_cls, id='deepseek'),
-        pytest.param(_get_qwen_parser_cls, id='qwen'),
-    ])
+    @_BOTH_PARSERS
     def test_very_long_reasoning(self, parser_factory):
         """Long reasoning content should be fully extracted."""
         tok = _make_mock_tokenizer()
@@ -1297,10 +1167,7 @@ class TestReasoningParserEdgeCases:
         assert 'Step 99' in reasoning
         assert final == 'Final.'
 
-    @pytest.mark.parametrize('parser_factory', [
-        pytest.param(_get_deepseek_parser_cls, id='deepseek'),
-        pytest.param(_get_qwen_parser_cls, id='qwen'),
-    ])
+    @_BOTH_PARSERS
     def test_special_chars_in_reasoning(self, parser_factory):
         """Special characters inside think tags."""
         tok = _make_mock_tokenizer()
@@ -1372,19 +1239,13 @@ class TestReasoningParserInitErrors:
 # Parser dual-mode tests (already parametrized)
 # ---------------------------------------------------------------------------
 
-_DEFAULT_VOCAB = {'<think>': 100, '</think>': 101}
-
 
 @_apply_parser_marks
 class TestReasoningParserDualMode:
     """Same extraction scenario verified in both streaming and non-
     streaming."""
 
-    @pytest.mark.parametrize('parser_factory', [
-        _get_deepseek_parser_cls,
-        _get_qwen_parser_cls,
-    ],
-                             ids=['deepseek', 'qwen'])
+    @_BOTH_PARSERS
     def test_simple_extraction_both_modes(self, parser_factory):
         tok = _make_mock_tokenizer()
         parser = parser_factory()(tok)
@@ -1398,11 +1259,7 @@ class TestReasoningParserDualMode:
         assert ns_content is not None and s_content is not None
         assert ns_content.strip() == s_content.strip()
 
-    @pytest.mark.parametrize('parser_factory', [
-        _get_deepseek_parser_cls,
-        _get_qwen_parser_cls,
-    ],
-                             ids=['deepseek', 'qwen'])
+    @_BOTH_PARSERS
     def test_no_end_token_both_modes(self, parser_factory):
         tok = _make_mock_tokenizer()
         parser = parser_factory()(tok)
@@ -1415,11 +1272,7 @@ class TestReasoningParserDualMode:
         assert ns_content is None
         assert s_reasoning is not None
 
-    @pytest.mark.parametrize('parser_factory', [
-        _get_deepseek_parser_cls,
-        _get_qwen_parser_cls,
-    ],
-                             ids=['deepseek', 'qwen'])
+    @_BOTH_PARSERS
     def test_empty_output_both_modes(self, parser_factory):
         tok = _make_mock_tokenizer()
         parser = parser_factory()(tok)
@@ -1429,11 +1282,7 @@ class TestReasoningParserDualMode:
         assert isinstance(ns_reasoning, (str, type(None)))
         assert isinstance(ns_content, (str, type(None)))
 
-    @pytest.mark.parametrize('parser_factory', [
-        _get_deepseek_parser_cls,
-        _get_qwen_parser_cls,
-    ],
-                             ids=['deepseek', 'qwen'])
+    @_BOTH_PARSERS
     def test_incremental_deltas_both_modes(self, parser_factory):
         tok = _make_mock_tokenizer()
         parser = parser_factory()(tok)
@@ -1455,10 +1304,7 @@ class TestReasoningParserDualMode:
 class TestReasoningParserAdvancedEdgeCases:
     """Advanced edge cases — parametrized over both parsers."""
 
-    @pytest.mark.parametrize('parser_factory', [
-        pytest.param(_get_deepseek_parser_cls, id='deepseek'),
-        pytest.param(_get_qwen_parser_cls, id='qwen'),
-    ])
+    @_BOTH_PARSERS
     def test_multiple_end_tokens(self, parser_factory):
         """Multiple </think> tokens: should stop at the first one."""
         tok = _make_mock_tokenizer()
@@ -1469,10 +1315,7 @@ class TestReasoningParserAdvancedEdgeCases:
         assert reasoning is not None and 'First' in reasoning
         assert content is not None and 'Middle' in content
 
-    @pytest.mark.parametrize('parser_factory', [
-        pytest.param(_get_deepseek_parser_cls, id='deepseek'),
-        pytest.param(_get_qwen_parser_cls, id='qwen'),
-    ])
+    @_BOTH_PARSERS
     def test_nested_think_tokens(self, parser_factory):
         """Nested <think> inside <think>."""
         tok = _make_mock_tokenizer()
@@ -1484,10 +1327,7 @@ class TestReasoningParserAdvancedEdgeCases:
         assert 'Outer' in reasoning and 'Inner' in reasoning
         assert content is not None and 'Content' in content
 
-    @pytest.mark.parametrize('parser_factory', [
-        pytest.param(_get_deepseek_parser_cls, id='deepseek'),
-        pytest.param(_get_qwen_parser_cls, id='qwen'),
-    ])
+    @_BOTH_PARSERS
     def test_malformed_similar_tokens(self, parser_factory):
         """Tags like <thinking> should be treated as plain text."""
         tok = _make_mock_tokenizer()
@@ -1498,10 +1338,7 @@ class TestReasoningParserAdvancedEdgeCases:
         assert reasoning == model_output
         assert content is None
 
-    @pytest.mark.parametrize('parser_factory', [
-        pytest.param(_get_deepseek_parser_cls, id='deepseek'),
-        pytest.param(_get_qwen_parser_cls, id='qwen'),
-    ])
+    @_BOTH_PARSERS
     def test_streaming_no_end_token(self, parser_factory):
         """Streaming with only start token — reasoning continues."""
         tok = _make_mock_tokenizer()
