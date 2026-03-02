@@ -271,6 +271,9 @@ void invokeProcessKV_v2(char**                 blocks,
         else if (head_dim == 192) {
             return invoke(tkv, std::integral_constant<int, 192>{});
         }
+        else if (head_dim == 256) {
+            return invoke(tkv, std::integral_constant<int, 256>{});
+        }
         else if (head_dim == 576) {
             return invoke(tkv, std::integral_constant<int, 576>{});
         }
@@ -511,6 +514,9 @@ void invokeFlattenKV_v2(T*                     k,
         }
         else if (head_dim == 192) {
             return invoke(tkv, std::integral_constant<int, 192>{});
+        }
+        else if (head_dim == 256) {
+            return invoke(tkv, std::integral_constant<int, 256>{});
         }
         else if (head_dim == 576) {
             return invoke(tkv, std::integral_constant<int, 576>{});

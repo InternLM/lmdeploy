@@ -39,6 +39,7 @@
 
 #include "src/turbomind/macro.h"
 
+#include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_rope.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/mla_utils.h"
@@ -331,6 +332,24 @@ void UnifiedAttentionLayer::Forward(ForwardParam p)
 
     Tensor attn = [&]() -> Tensor { TM_DISPATCH_PRIMARY_DTYPES_RET(qkv.dtype(), invoke); }();
 
+    // Apply sigmoid gating: attn *= sigmoid(gate)
+    // Gate is stored at the end of each token's QKV: [Q|K|V|Gate]
+    if (model_param_.attn_output_gate) {
+        const int  q_count     = qkv.shape(0);
+        const int  attn_dim    = local_head_num_ * size_per_head_;
+        const int  gate_offset = (local_head_num_ + 2 * local_kv_head_num_) * size_per_head_;
+        const int  qkv_stride  = (2 * local_head_num_ + 2 * local_kv_head_num_) * size_per_head_;
+        const auto stream      = core::Context::stream().handle();
+        invokeSigmoidGateMultiply(attn.raw_data(),
+                                  (const char*)qkv.raw_data() + gate_offset * byte_size(qkv.dtype(), 1),
+                                  attn_dim,
+                                  qkv_stride,
+                                  q_count,
+                                  qkv.dtype(),
+                                  stream);
+        sync_check_cuda_error();
+    }
+
     TM_DEBUG_TENSOR(attn, Concat("attn", layer_id), 3);
 
     // if (d.dbg_size) {
@@ -384,8 +403,15 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
             params.stride = (local_head_num_ + 1 * local_kv_head_num_) * size_per_head_;
         }
         else {
-            params.v      = params.k + local_kv_head_num_ * size_per_head_;
-            params.stride = (local_head_num_ + 2 * local_kv_head_num_) * size_per_head_;
+            params.v = params.k + local_kv_head_num_ * size_per_head_;
+            // When attn_output_gate, QKV layout is [Q|K|V|Gate] per token
+            // stride must account for the extra gate portion at the end
+            if (model_param_.attn_output_gate) {
+                params.stride = (2 * local_head_num_ + 2 * local_kv_head_num_) * size_per_head_;
+            }
+            else {
+                params.stride = (local_head_num_ + 2 * local_kv_head_num_) * size_per_head_;
+            }
         }
 
         if (weights.qkv.bias) {

@@ -52,7 +52,11 @@ struct ThreadMapQ {
     }
 };
 
-template<int DimC, int DimS, int AccessC, int WarpCount, int WarpThreadC = lowbit(DimC) / AccessC>
+template<int DimC,
+         int DimS,
+         int AccessC,
+         int WarpCount,
+         int WarpThreadC = (lowbit(DimC) / AccessC <= WARP_SIZE ? lowbit(DimC) / AccessC : WARP_SIZE)>
 struct RakedThreadMap {
     static constexpr int kDimC = DimC;
     static constexpr int kDimS = DimS;

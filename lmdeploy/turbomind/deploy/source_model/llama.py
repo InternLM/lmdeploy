@@ -155,7 +155,7 @@ class LlamaModel(BaseInputModel):
         norm_eps = model_arg['rms_norm_eps']
         attn_head_num = model_arg['num_attention_heads']
         vocab_size = model_arg['vocab_size']
-        inter_size = model_arg['intermediate_size']
+        inter_size = model_arg.get('intermediate_size', 0)
         if 'num_key_value_heads' in model_arg:
             kv_head_num = model_arg['num_key_value_heads']
         else:
