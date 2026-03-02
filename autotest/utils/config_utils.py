@@ -40,7 +40,7 @@ def get_func_config_list(backend: str,
                          parallel_config: dict[str, int],
                          model_type: str = 'chat_model',
                          func_type: str = 'func',
-                         extra: dict[str, Any] | None = None) -> list[dict]:
+                         extra: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Generate all valid running config combinations (communicator + quant
     policy + model).
 
@@ -185,7 +185,7 @@ def get_cli_str(config: dict[str, Any]) -> str:
     return ' '.join(cli_str)
 
 
-def get_parallel_config(config: dict, model_name: str) -> list[dict[str, int]]:
+def get_parallel_config(config: dict[str, Any], model_name: str) -> list[dict[str, int]]:
     """Get matched parallel config dict by model name, default tp:1 if no
     match."""
     result = []
@@ -217,7 +217,7 @@ def _extract_models_from_config(config_value: Any) -> list[str]:
     return models
 
 
-def get_model_list(config: dict,
+def get_model_list(config: dict[str, Any],
                    backend: str,
                    parallel_config: dict[str, int] | None = None,
                    model_type: str = 'chat_model',
@@ -256,7 +256,7 @@ def get_model_list(config: dict,
     return extended_models
 
 
-def _filter_by_test_func_type(config: dict, model_list: list[str], func_type: str) -> list[str]:
+def _filter_by_test_func_type(config: dict[str, Any], model_list: list[str], func_type: str) -> list[str]:
     """Filter model list by test function type, return intersection of two
     model sets."""
     if func_type == 'func':
@@ -270,7 +270,8 @@ def _filter_by_test_func_type(config: dict, model_list: list[str], func_type: st
     return list(set(filtered_models) & set(model_list))
 
 
-def _extend_turbomind_quant_models(quant_config: dict, base_models: list, target_list: list) -> None:
+def _extend_turbomind_quant_models(quant_config: dict[str, Any], base_models: list[str],
+                                   target_list: list[str]) -> None:
     """Append turbomind quantization models to target list (AWQ 4bits +
     GPTQ)"""
     no_awq_models = quant_config.get('no_awq', [])
@@ -284,7 +285,7 @@ def _extend_turbomind_quant_models(quant_config: dict, base_models: list, target
             target_list.append(model_name + SUFFIX_INNER_GPTQ)
 
 
-def _extend_pytorch_quant_models(quant_config: dict, base_models: list, target_list: list) -> None:
+def _extend_pytorch_quant_models(quant_config: dict[str, Any], base_models: list[str], target_list: list[str]) -> None:
     """Append pytorch quantization models to target list (AWQ 4bits + W8A8)"""
     # Append AWQ quantization models
     for model_name in quant_config.get('awq', []):
@@ -296,7 +297,7 @@ def _extend_pytorch_quant_models(quant_config: dict, base_models: list, target_l
             target_list.append(model_name + SUFFIX_INNER_W8A8)
 
 
-def _is_kvint_model(config: dict, backend: str, model: str, quant_policy: int) -> bool:
+def _is_kvint_model(config: dict[str, Any], backend: str, model: str, quant_policy: int) -> bool:
     """Check if model supports the kv quantization policy, quant_policy=0
     always return True."""
     if quant_policy == 0:
@@ -417,7 +418,9 @@ def is_quantization_model(model: str) -> bool:
     return any(key in lower_name for key in ('awq', '4bits', 'w4', 'int4'))
 
 
-def _get_communicator_list(config: dict, backend: str, parallel_config: dict[str, int] | None = None) -> list[str]:
+def _get_communicator_list(config: dict[str, Any],
+                           backend: str,
+                           parallel_config: dict[str, int] | None = None) -> list[str]:
     """Get available communicator list by device and parallel config."""
     device = config.get('device', None)
 
@@ -433,7 +436,7 @@ def _get_communicator_list(config: dict, backend: str, parallel_config: dict[str
     return ['nccl', 'cuda-ipc']
 
 
-def set_device_env_variable(worker_id, parallel_config: dict[str, int] | None = None):
+def set_device_env_variable(worker_id: str | None, parallel_config: dict[str, int] | None = None) -> None:
     """Set device environment variable based on the device type."""
     device = os.environ.get('DEVICE', 'cuda')
 
@@ -464,7 +467,7 @@ def unset_device_env_variable():
             del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-def is_model_in_list(config: dict, parallel_config: dict[str, int], model: str) -> bool:
+def is_model_in_list(config: dict[str, Any], parallel_config: dict[str, int], model: str) -> bool:
     """Check if model matches the target parallel config."""
     model_config = get_parallel_config(config, model)
     return parallel_config in model_config

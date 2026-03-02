@@ -150,7 +150,7 @@ class RayLMDeployManager:
             print(f'💥 Ray startup failed: {e.stderr}')
             raise
 
-    def start_lmdeploy_api_server(self, config: dict, run_config: dict):
+    def start_lmdeploy_api_server(self, config: dict[str, Any], run_config: dict[str, Any]) -> None:
         """
         Master node: Start LMDeploy API Server and wait for it to be ready.
         Worker nodes: Do not start the service, only verify that the master node's API Server is ready.

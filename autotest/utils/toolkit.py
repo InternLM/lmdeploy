@@ -3,7 +3,7 @@ from functools import lru_cache
 from transformers import AutoTokenizer
 
 
-def parse_sse_stream(content: str) -> list:
+def parse_sse_stream(content: str) -> list[str]:
     """Parse SSE (Server-Sent Events) stream content into a list of events.
 
     Each event is either a JSON string or "[DONE]".
