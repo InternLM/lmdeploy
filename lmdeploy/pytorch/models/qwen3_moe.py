@@ -16,6 +16,7 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .patch import add_prefix, get_build_model_context
 from .utils.cudagraph import CudaGraphMixin
+from .utils.model import DeployModelMixinV1, build_embedding
 
 
 class Qwen3MoeAttention(nn.Module):
@@ -356,12 +357,13 @@ class Qwen3MoeModel(nn.Module):
         super().__init__()
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
-
-        self.embed_tokens = nn.Embedding(config.vocab_size,
-                                         config.hidden_size,
-                                         self.padding_idx,
-                                         dtype=dtype,
-                                         device=device)
+        self.embed_tokens = build_embedding(
+            config.vocab_size,
+            config.hidden_size,
+            self.padding_idx,
+            dtype=dtype,
+            device=device,
+        )
 
         if get_dist_manager().current_context().dist_config.enable_eplb:
             ep_size, _ = get_ep_world_rank()
@@ -436,7 +438,7 @@ class Qwen3MoeModel(nn.Module):
         return self.embed_tokens
 
 
-class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
+class Qwen3MoeForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
     """ModelForCausalLM."""
 
     packed_modules_mapping = {
@@ -466,13 +468,12 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
         # build model
         self.model = Qwen3MoeModel(config, dtype=dtype, device=device, prefix=add_prefix('model', prefix))
         # build lm_head
-        self.lm_head = build_rowwise_linear(
+        self.lm_head = self.build_lm_head(
             config.hidden_size,
             config.vocab_size,
             bias=False,
             dtype=dtype,
             device=device,
-            prefix=add_prefix('lm_head', prefix),
         )
         # for router replay
         bm_ctx = get_build_model_context()
@@ -510,10 +511,6 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
         if all_routed_experts is None:
             return hidden_states
         return dict(hidden_states=hidden_states, all_routed_experts=all_routed_experts)
-
-    def get_logits(self, hidden_states: torch.Tensor):
-        """Compute logits of the model output."""
-        return self.lm_head(hidden_states)
 
     def get_input_embeddings(self):
         """Get input embeddings."""

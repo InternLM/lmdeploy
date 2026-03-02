@@ -333,3 +333,55 @@ REASONING_TEST_LLM = [{
 } for item in BASE_REASONING_TEST_LLM] + [{
     **item, 'backend': 'pytorch'
 } for item in BASE_REASONING_TEST_LLM]
+
+BASE_SPECULATIVE_DECODING_PIPELINE_TEST_LLM = [{
+    'model': 'meta-llama/Meta-Llama-3-1-8B-Instruct',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 1
+    },
+    'extra_params': {
+        'max_batch_size': 128,
+        'speculative_config': {
+            'method': 'eagle3',
+            'num_speculative_tokens': 3,
+            'model': 'yuhuili/EAGLE3-LLaMA3.1-Instruct-8B'
+        }
+    }
+}]
+
+SPECULATIVE_DECODING_PIPELINE_TEST_LLM = [{
+    **item, 'backend': 'pytorch'
+} for item in BASE_SPECULATIVE_DECODING_PIPELINE_TEST_LLM]
+
+BASE_SPECULATIVE_DECODING_RESTFUL_TEST_LLM = [{
+    'model': 'meta-llama/Meta-Llama-3-1-8B-Instruct',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 1
+    },
+    'extra_params': {
+        'speculative-draft-model': 'yuhuili/EAGLE3-LLaMA3.1-Instruct-8B',
+        'speculative-algorithm': 'eagle3',
+        'speculative-num-draft-tokens': 3,
+        'max-batch-size': 128
+    }
+}, {
+    'model': 'deepseek/DeepSeek-V3',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 16
+    },
+    'extra_params': {
+        'speculative-algorithm': 'deepseek_mtp',
+        'speculative-num-draft-tokens': 3,
+        'max-batch-size': 128
+    }
+}]
+
+SPECULATIVE_DECODING_RESTFUL_TEST_LLM = [{
+    **item, 'backend': 'pytorch'
+} for item in BASE_SPECULATIVE_DECODING_RESTFUL_TEST_LLM]

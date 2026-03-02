@@ -30,6 +30,7 @@ from .phi3_vision import Phi3VisionModel  # noqa F401
 from .qwen import QwenVisionModel  # noqa F401
 from .qwen2 import Qwen2VLModel  # noqa F401
 from .qwen3 import Qwen3VLModel  # noqa F401
+from .qwen3_5 import Qwen3_5Model  # noqa F401
 from .xcomposer2 import Xcomposer2VisionModel  # noqa F401
 from .yi import YiVisionModel  # noqa F401
 

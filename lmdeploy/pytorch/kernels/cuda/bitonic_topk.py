@@ -5,6 +5,16 @@ import triton.language as tl
 from triton.language import core
 from triton.language.standard import _log2
 
+try:
+    # For Triton >= 3.6.0, core.get_int_dtype must be wrapped with
+    # triton.runtime.jit.constexpr_function to be usable as a constexpr helper
+    # inside @triton.jit kernels. This try/except keeps compatibility with
+    # older Triton versions where constexpr_function is not available.
+    get_int_dtype = triton.runtime.jit.constexpr_function(core.get_int_dtype)
+except Exception:
+    # fallback to original function if constexpr_function is not available (Triton < 3.6.0)
+    get_int_dtype = core.get_int_dtype
+
 
 @triton.jit
 def _indicator(n_dims: core.constexpr, j: core.constexpr):
@@ -15,7 +25,7 @@ def _indicator(n_dims: core.constexpr, j: core.constexpr):
 
 @triton.jit
 def _flip_along_middle(x, n_dims, i):
-    idtype = core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
+    idtype = get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
     ix = x.to(idtype, bitcast=True)
     iy = ix ^ tl.xor_sum(ix, n_dims - 1 - i, True)
     y = iy.to(x.dtype, bitcast=True)

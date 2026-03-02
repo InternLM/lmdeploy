@@ -53,6 +53,8 @@ SUPPORTED_ARCHS = dict(
     # chatglm2/3, glm4
     ChatGLMModel='glm4',
     ChatGLMForConditionalGeneration='glm4',
+    # glm4-moe-lite (e.g. GLM-4.7-Flash)
+    Glm4MoeLiteForCausalLM='glm4-moe-lite',
     # mixtral
     MixtralForCausalLM='mixtral',
     MolmoForCausalLM='molmo',
@@ -125,6 +127,9 @@ def is_supported(model_path: str):
                 # TM hasn't supported allenai/Molmo-7B-O-0924 yet
                 support_by_turbomind = kv_heads is not None
             elif arch == 'DeepseekV2ForCausalLM':
+                if getattr(cfg, 'vision_config', None) is not None:
+                    support_by_turbomind = False
+            elif arch == 'Glm4MoeLiteForCausalLM':
                 if getattr(cfg, 'vision_config', None) is not None:
                     support_by_turbomind = False
 

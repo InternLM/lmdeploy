@@ -26,6 +26,7 @@ ______________________________________________________________________
 <details open>
 <summary><b>2026</b></summary>
 
+- \[2026/02\] Support [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35)
 - \[2026/02\] Support [vllm-project/llm-compressor](https://github.com/vllm-project/llm-compressor) 4bit symmetric/asymmetric quantization. Refer [here](./docs/en/quantization/llm_compressor.md) for detailed guide
 
 </details>
@@ -163,6 +164,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>SDAR (1.7B-30B)</li>
   <li>gpt-oss (20B, 120B)</li>
   <li>GLM-4.7-Flash (30B)</li>
+  <li>GLM-5 (754B)</li>
 </ul>
 </td>
 <td>
@@ -174,6 +176,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>Qwen2-VL (2B, 7B, 72B)</li>
   <li>Qwen2.5-VL (3B, 7B, 72B)</li>
   <li>Qwen3-VL (2B - 235B)</li>
+  <li>Qwen3.5</li>
   <li>DeepSeek-VL (7B)</li>
   <li>DeepSeek-VL2 (3B, 16B, 27B)</li>
   <li>InternVL-Chat (v1.1-v1.5)</li>

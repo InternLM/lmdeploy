@@ -28,6 +28,7 @@ def safe_torch_compile(**compile_kwargs):
             if compiled_func is None:
                 try:
                     compiled_func = torch.compile(func, **compile_kwargs)
+                    return compiled_func(*args, **kwargs)
                 except Exception:
                     compile_failed = True
                     return func(*args, **kwargs)

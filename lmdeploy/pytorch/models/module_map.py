@@ -52,6 +52,9 @@ MODULE_MAP.update({
 
 MODULE_MAP.update({'Glm4MoeLiteForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v2.DeepseekV2ForCausalLM'})
 
+# glm5
+MODULE_MAP.update({'GlmMoeDsaForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v32.DeepseekV32ForCausalLM'})
+
 # internlm
 MODULE_MAP.update({
     'InternLMForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm.InternLMForCausalLM',
@@ -164,6 +167,18 @@ MODULE_MAP.update({
 MODULE_MAP.update({
     'Qwen3VLMoeForConditionalGeneration':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_vl_moe.Qwen3VLMoeForConditionalGeneration',
+})
+
+# qwen3.5
+MODULE_MAP.update({
+    'Qwen3_5ForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_5.Qwen3_5ForConditionalGeneration',
+})
+
+# qwen3.5 moe
+MODULE_MAP.update({
+    'Qwen3_5MoeForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_5_moe.Qwen3_5MoeForConditionalGeneration',
 })
 
 # starcoder2

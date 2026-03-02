@@ -1,5 +1,4 @@
 from functools import lru_cache
-from typing import List
 
 from transformers import AutoTokenizer
 
@@ -31,7 +30,7 @@ def _load_tokenizer_cached(model_path: str):
         raise RuntimeError(f"Failed to load tokenizer from '{model_path}': {e}")
 
 
-def encode_text(model_path: str, text: str) -> List[int]:
+def encode_text(model_path: str, text: str) -> list[int]:
     tokenizer = _load_tokenizer_cached(model_path)
 
     encoded = tokenizer.encode(text)

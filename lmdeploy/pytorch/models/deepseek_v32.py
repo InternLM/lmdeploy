@@ -81,7 +81,6 @@ class Indexer(nn.Module):
                                                  device=device,
                                                  is_tp=False)
         self.softmax_scale = self.head_dim**-0.5
-        self.scale_fmt = quant_config['scale_fmt']
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
         self.indexer_topk = IndexerTopKFP8(self.index_topk, self.softmax_scale, block_size=128, fill=-1)
 
@@ -201,8 +200,8 @@ class DeepseekV32Attention(DeepseekV2Attention):
         rope_scaling = get_rope_parameters(config)
         if rope_scaling is not None:
             mscale_all_dim = rope_scaling.get('mscale_all_dim', 0)
-            scaling_factor = rope_scaling['factor']
             if mscale_all_dim:
+                scaling_factor = rope_scaling['factor']
                 mscale = yarn_get_mscale(scaling_factor, mscale_all_dim)
                 self.softmax_scale = self.softmax_scale * mscale * mscale
 

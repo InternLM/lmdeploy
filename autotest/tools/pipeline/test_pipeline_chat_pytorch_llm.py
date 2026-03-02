@@ -1,6 +1,7 @@
 import pytest
 from tools.common_case_config import (MODELSCOPE_CONFIG, PYTORCH_LORA_TEST_LLM_GPU1, PYTORCH_LORA_TEST_LLM_GPU2,
-                                      PYTORCH_PR_TEST_LLM_GPU1, PYTORCH_PR_TEST_LLM_GPU2)
+                                      PYTORCH_PR_TEST_LLM_GPU1, PYTORCH_PR_TEST_LLM_GPU2,
+                                      SPECULATIVE_DECODING_PIPELINE_TEST_LLM)
 from utils.config_utils import get_func_config_list, get_workerid
 from utils.pipeline_chat import run_pipeline_llm_test
 
@@ -94,3 +95,13 @@ def test_pytorch_chat_with_lora_tp1(config, run_config, common_case_config, work
 @pytest.mark.parametrize('run_config', PYTORCH_LORA_TEST_LLM_GPU2)
 def test_pytorch_chat_with_lora_tp2(config, run_config, common_case_config, worker_id):
     run_pipeline_llm_test(config, run_config, common_case_config, worker_id)
+
+
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.gpu_num_1
+@pytest.mark.parametrize(
+    'run_config', [item for item in SPECULATIVE_DECODING_PIPELINE_TEST_LLM if item['parallel_config'].get('tp') == 1])
+def test_pipeline_chat_speculative_decoding_tp1(config, run_config, common_case_config, worker_id):
+    case_config = {k: v for k, v in common_case_config.items() if k == 'memory_test'}
+    run_pipeline_llm_test(config, run_config, case_config, worker_id)
