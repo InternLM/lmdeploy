@@ -146,14 +146,6 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         """Load states from cache."""
         return gated_delta_util.load_state(past_key_value=past_key_value, gated_delta_meta=gated_delta_meta)
 
-    def _store_state(self, conv_state: torch.Tensor, recurrent_state: torch.Tensor,
-                     past_key_value: Tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
-        """Store states to cache."""
-        return gated_delta_util.store_state(conv_state=conv_state,
-                                            recurrent_state=recurrent_state,
-                                            past_key_value=past_key_value,
-                                            gated_delta_meta=gated_delta_meta)
-
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -202,9 +194,6 @@ class Qwen3NextGatedDeltaNet(nn.Module):
             recurrent_state=recurrent_state,
             gated_delta_meta=gated_delta_meta,
         )
-
-        # store states
-        self._store_state(conv_state, recurrent_state, past_key_value, gated_delta_meta)
 
         z_shape_og = z.shape
         core_attn_out = core_attn_out.reshape(-1, core_attn_out.shape[-1])
