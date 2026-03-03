@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import List
 
 import numpy as np
 import torch
@@ -11,7 +10,7 @@ from lmdeploy.pytorch.model_inputs import ModelInputsDelta
 
 from ..base.sampling import SamplingStrategy
 
-SeqList = List[SchedulerSequence]
+SeqList = list[SchedulerSequence]
 
 
 def _gather_all_ids(pad_id: int, seqs: SeqList, sampling_inputs: SamplingInputs):

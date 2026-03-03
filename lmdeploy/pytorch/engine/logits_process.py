@@ -2,7 +2,7 @@
 import asyncio
 from dataclasses import dataclass, fields
 from functools import lru_cache
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import numpy as np
 import torch
@@ -148,8 +148,8 @@ def ngram(
         matched_mask = torch.zeros((batch_size, 0), dtype=torch.bool, device=token_ids.device)
         found = torch.zeros((batch_size, ), dtype=torch.bool, device=token_ids.device)
         return matched_mask, found
-    # token_ids could be 0, so we add 1 to avoid div 0
-    token_ids = (token_ids + 1).to(torch.float32).log2()
+    # token_ids could be 0, so we add 2 to avoid div 0
+    token_ids = (token_ids + 2).to(torch.float32).log2()
 
     # Trim to max_window_size
     if seq_len >= max_window_size:
@@ -229,7 +229,7 @@ def _multinomial_sampling(scores: torch.Tensor,
     return multinomial_sampling(scores, seeds, offsets, indices)
 
 
-SeqList = List[SchedulerSequence]
+SeqList = list[SchedulerSequence]
 
 
 @dataclass
@@ -254,14 +254,14 @@ class SamplingInputs:
     random_offsets: torch.Tensor = None
     max_top_k: int = 1
     min_top_p: float = 1.0
-    response_formats: Tuple[str] = ()
-    logits_processors: List[List[LogitsProcessor]] = None
+    response_formats: list[str, ...] = ()
+    logits_processors: list[list[LogitsProcessor]] = None
     max_num_logprobs: None | int = None
     all_ids: None | torch.Tensor = None
     num_ignore_eos: torch.Tensor = None
     batch_size: int = 0
-    session_ctx: None | List[Dict[str, Any]] = None
-    session_to_cleanup: None | List[int] = None
+    session_ctx: None | list[dict[str, Any]] = None
+    session_to_cleanup: None | list[int] = None
     # for repetition_penalty and ngram
     generated_ids: torch.Tensor | None = None
     generated_ids_cpu: np.ndarray | None = None
@@ -500,7 +500,7 @@ class FusedLogitsProcessor:
 
         return logprobs, indices.to(torch.int32)
 
-    def cleanup_sessions(self, session_ids: List[int]):
+    def cleanup_sessions(self, session_ids: list[int]):
         if self.guided_decoding_manager:
             for session_id in session_ids:
                 self.guided_decoding_manager.remove_processor(session_id)

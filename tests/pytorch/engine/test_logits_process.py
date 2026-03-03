@@ -174,3 +174,16 @@ def test_filter_ngram():
     _filter_repetition_ngram_(scores, stop_words, generated_ids, n, threshold, max_n, max_window_size)
     assert not scores[1].isinf().any().item()
     assert scores[0].isinf().sum().item() == vocab_size - 1
+
+    # test ids all 0
+    generated_ids = torch.tensor([
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    ])
+    n = torch.tensor([3], dtype=torch.int64)
+    threshold = torch.tensor([3], dtype=torch.int64)
+    batch_size, max_n, max_window_size, n = _get_emtas(n, 10)
+
+    scores = torch.rand(batch_size, vocab_size)
+    stop_words = torch.randint(0, vocab_size, (batch_size, 3), dtype=torch.int64)
+    _filter_repetition_ngram_(scores, stop_words, generated_ids, n, threshold, max_n, max_window_size)
+    assert scores[0].isinf().sum().item() == vocab_size - 1
