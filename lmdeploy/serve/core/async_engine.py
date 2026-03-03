@@ -294,6 +294,7 @@ class AsyncEngine:
             input_ids: List | None = None,
             enable_thinking: bool | None = None,
             chat_template_kwargs: Dict | None = None,
+            media_io_kwargs: Dict[str, Any] | None = None,
             mm_processor_kwargs: Dict[str, Any] | None = None,
             **kwargs):
         """Generate responses.
@@ -338,6 +339,7 @@ class AsyncEngine:
                                                                         tools=tools,
                                                                         reasoning_effort=reasoning_effort,
                                                                         chat_template_kwargs=chat_template_kwargs,
+                                                                        media_io_kwargs=media_io_kwargs,
                                                                         mm_processor_kwargs=mm_processor_kwargs,
                                                                         **kwargs)
             prompt = prompt_input['prompt']

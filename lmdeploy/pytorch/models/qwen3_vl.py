@@ -910,26 +910,7 @@ class Qwen3VLInputProcessor(BaseModelInputProcessor):
         input_mm_data = []
         for input_mm in input_multimodals:
             modality = input_mm.get('modality')
-            if modality == Modality.VIDEO:
-                # FIXME: input_mm is currently not a dict but a BatchFeature object
-                pixel_values_videos = input_mm.pixel_values_videos
-                video_grid_thw = input_mm.video_grid_thw
-                offset = input_mm.offset
-                start = offset
-                video_token_id = input_mm.video_token_id
-                num_pad = input_mm.video_tokens
-                if isinstance(num_pad, torch.Tensor):
-                    num_pad = num_pad.item()
-
-                mm_data = MultiModalData(modality=modality,
-                                         data=pixel_values_videos,
-                                         start=start,
-                                         end=start + num_pad,
-                                         meta=dict(
-                                             grid_thw=video_grid_thw,
-                                             video_token_id=video_token_id,
-                                         ))
-            elif modality == Modality.IMAGE:
+            if modality == Modality.IMAGE:
                 pixel_values = input_mm['pixel_values']
                 image_grid_thw = input_mm['image_grid_thw']
                 offset = input_mm['offset']
@@ -944,6 +925,25 @@ class Qwen3VLInputProcessor(BaseModelInputProcessor):
                                          start=start,
                                          end=start + num_pad,
                                          meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
+
+            elif modality == Modality.VIDEO:
+                pixel_values_videos = input_mm['pixel_values_videos']
+                video_grid_thw = input_mm['video_grid_thw']
+                offset = input_mm['offset']
+                start = offset
+                video_token_id = input_mm['video_token_id']
+                num_pad = input_mm['video_tokens']
+                if isinstance(num_pad, torch.Tensor):
+                    num_pad = num_pad.item()
+
+                mm_data = MultiModalData(modality=modality,
+                                         data=pixel_values_videos,
+                                         start=start,
+                                         end=start + num_pad,
+                                         meta=dict(
+                                             grid_thw=video_grid_thw,
+                                             video_token_id=video_token_id,
+                                         ))
             input_mm_data.append(mm_data)
 
         result = PreprocessInputResult(input_ids=input_ids, input_multimodals=dict(mm_data=input_mm_data))

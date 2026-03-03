@@ -181,8 +181,11 @@ class VisionModel(ABC):
                 continue
 
             for x in content:
+                if not isinstance(x, dict):
+                    continue
+
                 modality = x.get('type')
-                if not isinstance(x, dict) or 'type' not in x or modality == 'text':
+                if modality is None or modality == 'text':
                     continue
 
                 data = x.get('data')

@@ -98,11 +98,10 @@ class Qwen3VLModel(VisionModel):
                           params: Dict[str, Any],
                           mm_processor_kwargs: Dict[str, Any] | None = None) -> List[Dict]:
 
+        # TODO: zhouxinyu, apply transformers smart_resize using per-request kwargs
         metadata = params['video_metadata']
-        # since qwen-vl-utils has resize the images/videos, \
-        # we should pass do_resize=False to avoid duplicate operation in processor
         video_kwargs = dict(return_metadata=True,
-                            do_resize=False,
+                            do_resize=True,
                             do_sample_frames=False,
                             video_metadata=metadata,
                             return_tensors='pt')
@@ -191,7 +190,7 @@ class Qwen3VLModel(VisionModel):
                 video_grid_thw = preps[i - 1]['video_grid_thw']
                 curr_timestamp = preps[i - 1]['curr_timestamp']
 
-                # update prompt with timestamp index tokens and vid pad tokens
+                # update prompt with timestamp index tokens and video pad tokens
                 video_placeholder = ''
                 for frame_idx in range(video_grid_thw[0][0]):
                     curr_time = curr_timestamp[frame_idx]

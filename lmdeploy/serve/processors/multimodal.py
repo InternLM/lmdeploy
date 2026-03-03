@@ -5,9 +5,13 @@ from typing import Any, Dict, List, Literal, Tuple
 import PIL
 
 from lmdeploy.model import MODELS, BaseChatTemplate
-from lmdeploy.pytorch.multimodal.data_type import Modality
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
+from lmdeploy.vl.constants import Modality
+from lmdeploy.vl.media.connection import load_from_url
+from lmdeploy.vl.media.image import ImageMediaIO
+from lmdeploy.vl.media.time_series import TimeSeriesMediaIO
+from lmdeploy.vl.media.video import VideoMediaIO
 
 logger = get_logger('lmdeploy')
 
@@ -86,19 +90,18 @@ class MultimodalProcessor:
         return result
 
     @staticmethod
-    async def async_parse_multimodal_item(messages: List[Dict]) -> List[Dict]:
+    async def async_parse_multimodal_item(messages: List[Dict],
+                                          media_io_kwargs: Dict[str, Any] | None = None) -> List[Dict]:
         """Convert user-input multimodal data into GPT4V message format."""
-        from lmdeploy.vl.media.image import load_image
-        from lmdeploy.vl.media.time_series import load_time_series
-        from lmdeploy.vl.media.video import fetch_video
 
         if isinstance(messages, Dict):
             messages = [messages]
         assert isinstance(messages, List)
 
         out_messages = [None] * len(messages)
+        media_io_kwargs = media_io_kwargs or {}
 
-        def _inner_call(i, in_messages, out_messages):
+        def _parse_multimodal_item(i, in_messages, out_messages, media_io_kwargs):
             role = in_messages[i]['role']
             content = in_messages[i]['content']
             assert role in ['system', 'user', 'assistant'], \
@@ -121,21 +124,25 @@ class MultimodalProcessor:
                     continue
 
                 item_params = item.get(item_type).copy()
-                data_src = item_params.pop('url', None) or item_params.pop('data', None)
+                # TODO: zhouxinyu, support image_data array inputs
+                url = item_params.pop('url', None) or item_params.pop('data', None)
 
                 modality = None
+                data = None
+                metadata = None
                 if item_type in ['image_url', 'image_data']:
                     modality = Modality.IMAGE
-                    data = load_image(data_src)
+                    image_io = ImageMediaIO(**media_io_kwargs.get('image', {}))
+                    data = load_from_url(url, image_io)
                 elif item_type == 'video_url':
                     modality = Modality.VIDEO
-                    ele = {'type': 'video', 'video': data_src}
-                    video_input = fetch_video(ele=ele, image_patch_size=16, return_video_metadata=True)
-                    data = video_input[0]  # n_frames x c x h x w
-                    item_params['video_metadata'] = video_input[1]
+                    video_io = VideoMediaIO(media_io_kwargs.get('video', {}))
+                    data, metadata = load_from_url(url, video_io)
+                    item_params['video_metadata'] = metadata
                 elif item_type == 'time_series_url':
                     modality = Modality.TIME_SERIES
-                    data = load_time_series(data_src)
+                    ts_io = TimeSeriesMediaIO(media_io_kwargs.get('time_series_url', {}))
+                    data = load_from_url(url, ts_io)
                 else:
                     raise NotImplementedError(f'unknown type: {item_type}')
 
@@ -144,8 +151,8 @@ class MultimodalProcessor:
             out_messages[i] = out_message
 
         await asyncio.gather(*[
-            asyncio.get_event_loop().run_in_executor(None, _inner_call, i, messages, out_messages)
-            for i in range(len(messages))
+            asyncio.get_event_loop().run_in_executor(None, _parse_multimodal_item, i, messages, out_messages,
+                                                     media_io_kwargs) for i in range(len(messages))
         ])
         return out_messages
 
@@ -157,6 +164,7 @@ class MultimodalProcessor:
                                tools: List[object] | None = None,
                                reasoning_effort: Literal['low', 'medium', 'high'] | None = None,
                                chat_template_kwargs: Dict | None = None,
+                               media_io_kwargs: Dict[str, Any] | None = None,
                                mm_processor_kwargs: Dict[str, Any] | None = None,
                                **kwargs):
         """Process prompt and return prompt string and input_ids.
@@ -172,6 +180,7 @@ class MultimodalProcessor:
             tools: Optional list of tools.
             reasoning_effort: Optional reasoning effort level.
             chat_template_kwargs: Optional kwargs for chat template.
+            media_io_kwargs: Optional kwargs for media IO operations.
             mm_processor_kwargs: Optional kwargs for multimodal processor.
             **kwargs: Additional keyword arguments.
 
@@ -213,6 +222,7 @@ class MultimodalProcessor:
                                                            adapter_name=adapter_name,
                                                            tools=tools,
                                                            chat_template_kwargs=chat_template_kwargs,
+                                                           media_io_kwargs=media_io_kwargs,
                                                            mm_processor_kwargs=mm_processor_kwargs,
                                                            **kwargs)
         else:
@@ -342,12 +352,13 @@ class MultimodalProcessor:
                                            adapter_name: str,
                                            tools: List[object] | None = None,
                                            chat_template_kwargs: Dict | None = None,
+                                           media_io_kwargs: Dict[str, Any] | None = None,
                                            mm_processor_kwargs: Dict[str, Any] | None = None,
                                            **kwargs):
         """Process multimodal prompt and return processed data for inference
         engines."""
         chat_template = self.chat_template if do_preprocess else BaseChatTemplate()
-        messages = await self.async_parse_multimodal_item(messages)
+        messages = await self.async_parse_multimodal_item(messages, media_io_kwargs)
         results = await self.vl_encoder.preprocess(messages, mm_processor_kwargs)
 
         if self.backend == 'turbomind':

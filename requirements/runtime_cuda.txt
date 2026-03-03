@@ -9,6 +9,7 @@ mmengine-lite
 numpy
 openai
 openai_harmony
+opencv-python-headless
 partial_json_parser
 peft<=0.14.0
 pillow
