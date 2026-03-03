@@ -228,7 +228,7 @@ class Qwen3_5ReaderMixin:
     (``Qwen3_5MoeRMSNormGated``) uses standard weight and is NOT affected.
     """
 
-    attn_layer_patten = r'(?:model\.language_model\.|model\.)layers\.([0-9]+)\.'
+    attn_layer_pattern = r'(?:model\.language_model\.|model\.)layers\.([0-9]+)\.'
 
     _LINEAR_ATTN_KEYS = ['conv1d', 'in_proj_qkv', 'in_proj_z', 'in_proj_b', 'in_proj_a', 'out_proj', 'A_log', 'dt_bias']
 

@@ -193,7 +193,7 @@ void invokeQkRMSNorm(void*        data,
 {
 
     auto launch = [&](auto max_dim_c) {
-        constexpr int kMaxDim = decltype(max_dim_c)::value;
+        constexpr int kMaxDim = std::decay_t<decltype(max_dim_c)>::value;
         TM_CHECK_LE(head_dim, kMaxDim);
 
         auto invoke = [&](auto t) {
@@ -236,7 +236,7 @@ void invokeRMSNormQK(Tensor& x, const Tensor& w, float eps, cudaStream_t st)
     auto stride = x.stride(0);
 
     auto launch = [&](auto max_dim_c) {
-        constexpr int kMaxDim = decltype(max_dim_c)::value;
+        constexpr int kMaxDim = std::decay_t<decltype(max_dim_c)>::value;
         TM_CHECK_LE(head_dim, kMaxDim);
 
         auto invoke = [&](auto t) {

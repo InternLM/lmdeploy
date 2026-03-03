@@ -29,7 +29,10 @@ def permute_v2_partial(x: torch.Tensor, size_per_head: int, rotary_dim: int):
     layout.
     """
     assert x.size(-1) > 1
+    assert rotary_dim % 2 == 0, f'rotary_dim must be even, got {rotary_dim}'
+    assert rotary_dim <= size_per_head, f'rotary_dim ({rotary_dim}) must be <= size_per_head ({size_per_head})'
     output_dims = x.size(-1)
+    assert output_dims % size_per_head == 0, f'output_dims ({output_dims}) must be divisible by size_per_head ({size_per_head})'
     head_num = output_dims // size_per_head
     orig_shape = x.shape
     if x.dim() == 1:
@@ -483,6 +486,37 @@ class LinearAttn(Module):
     def __init__(self, model: BaseOutputModel):
         self.model = model
         self.tp = model.attn_tp_size
+        cfg = model.model_config
+        self.key_dim = cfg.linear_num_key_heads * cfg.linear_key_head_dim
+        self.value_dim = cfg.linear_num_value_heads * cfg.linear_value_head_dim
+
+    def _tp_interleave_qkv(self, tensor, dim):
+        """Split a concatenated [Q, K, V] tensor into components, reshape each
+        for TP interleaving, and re-concatenate.
+
+        in_proj_qkv layout along ``dim``: Q(key_dim) | K(key_dim) | V(value_dim).
+        A naive split doesn't respect component boundaries when key_dim and
+        value_dim differ.  This method splits Q/K/V, reshapes each to
+        ``(tp, -1)`` along ``dim``, concatenates per-TP-shard, then flattens
+        so that a subsequent ``save_split(split_dim=dim)`` gives each rank the
+        correct portion.
+        """
+        if dim < 0:
+            dim = tensor.dim() + dim
+        q, k, v = torch.split(tensor, [self.key_dim, self.key_dim, self.value_dim], dim=dim)
+
+        def reshape(x):
+            # Move TP axis to a new dimension right after ``dim``
+            shape = list(x.shape)
+            d = shape[dim]
+            new_shape = shape[:dim] + [self.tp, d // self.tp] + shape[dim + 1:]
+            return x.view(new_shape)
+
+        parts = torch.cat([reshape(q), reshape(k), reshape(v)], dim=dim + 1)
+        # Collapse tp and per-shard dims back
+        shape = list(parts.shape)
+        final_shape = shape[:dim] + [shape[dim] * shape[dim + 1]] + shape[dim + 2:]
+        return parts.reshape(final_shape)
 
     def apply(self, i: int, r: BaseReader):
         layer_types = getattr(self.model.model_config, 'layer_types', [])
@@ -499,6 +533,10 @@ class LinearAttn(Module):
                 if tensor is None:
                     continue
                 if name == 'conv1d':
+                    # conv1d shape: (conv_dim, 1, d_conv) where
+                    # conv_dim = key_dim*2 + value_dim.  Interleave Q/K/V
+                    # portions along dim 0 before splitting for TP.
+                    tensor = self._tp_interleave_qkv(tensor, dim=0)
                     self.model.save_split(tensor,
                                           self._linear_attn.format(i, name, kind),
                                           split_dim=0,
@@ -514,6 +552,17 @@ class LinearAttn(Module):
                     self.model.save_split(transpose(tensor),
                                           self._linear_attn.format(i, name, kind),
                                           split_dim=0,
+                                          split_num=self.tp)
+                elif name == 'in_proj_qkv':
+                    # in_proj_qkv: (conv_dim, hidden) where conv_dim =
+                    # key_dim*2 + value_dim.  After transpose the QKV
+                    # components are along dim -1.  Interleave for TP so
+                    # each shard gets the correct Q/K/V slice.
+                    t = transpose(tensor)
+                    t = self._tp_interleave_qkv(t, dim=-1)
+                    self.model.save_split(t,
+                                          self._linear_attn.format(i, name, kind),
+                                          split_dim=-1,
                                           split_num=self.tp)
                 else:
                     self.model.save_split(transpose(tensor),
