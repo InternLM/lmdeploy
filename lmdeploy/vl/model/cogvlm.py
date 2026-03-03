@@ -70,7 +70,7 @@ class CogVLMVisionModel(VisionModel):
             prompt_messages.append(dict(role='user', content=content[0], num_images=n_images))
 
         from lmdeploy.model import Vicuna
-        llm_chat_template = Vicuna(eoa=chat_template.eoa, stop_words=chat_template.stop_words)
+        llm_chat_template = Vicuna(eoa='</s>', stop_words=chat_template.stop_words)
         prompt = ''
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         for i, msg in enumerate(prompt_messages):

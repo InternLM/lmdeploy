@@ -39,6 +39,7 @@ class OpType(Enum):
 
     # Gated Delta
     CausalConv1d = auto()
+    GatedDeltaRule = auto()
 
 
 class OpsBackend(ABC):

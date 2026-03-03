@@ -334,6 +334,10 @@ class ModelConfig:
     # check env for model-device combination
     check_env_func: Callable = _default_check_env
 
+    # fp32 lm head
+    fp32_lm_head: bool = False
+    tie_word_embeddings: bool = False
+
     # quant config
     quant_config: 'QuantizationConfig' = None
 
@@ -383,10 +387,15 @@ class ModelConfig:
             is_draft_model=is_draft_model,
             spec_method=spec_method,
         )
-
+        fp32_lm_head = False
         if hf_overrides is not None:
             logger.warning(f'Overriding HF config with {hf_overrides}')
+            fp32_lm_head = hf_overrides.pop('fp32_lm_head', False)
             override_hf_config(model_config.hf_config, hf_overrides)
+
+        # for fp32 head
+        model_config.fp32_lm_head = fp32_lm_head
+        model_config.tie_word_embeddings = getattr(hf_config, 'tie_word_embeddings', False)
 
         # for serialization of transformers modules
         maybe_register_config_serialize_by_value(trust_remote_code)

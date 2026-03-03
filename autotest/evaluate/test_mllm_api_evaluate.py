@@ -11,11 +11,11 @@ def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_
     extra_config = constant.MLLM_EVAL_CONFIGS.get(eval_config_name, {})
     eval_path = config.get('mllm_eval_path')
     case_name = get_case_str_by_config(run_config)
-
     if test_type == 'infer':
         proxy_pid, proxy_process = start_proxy_server(config.get('server_log_path'), constant.PROXY_PORT,
                                                       f'{case_name}_infer')
-        work_num = int(8 / run_config.get('parallel_config', {}).get('tp', 1))
+        total_gpus = int(os.environ.get('TOTAL_GPU_COUNT', '8'))
+        work_num = int(total_gpus / run_config.get('parallel_config', {}).get('tp', 1))
         run_config_new = run_config.copy()
         if 'extra_params' not in run_config_new:
             run_config_new['extra_params'] = {}

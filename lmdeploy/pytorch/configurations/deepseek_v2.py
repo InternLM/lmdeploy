@@ -41,12 +41,13 @@ class DeepseekV2ModelConfigBuilder(AutoModelConfigBuilder):
         if is_draft_model or spec_method is not None:
             model_paradigm = 'ar_spec'
 
+        bos_token_id = getattr(hf_config, 'bos_token_id', None)
         config = ModelConfig(
             hidden_size=hf_config.hidden_size,
             num_layers=num_layers,
             num_attention_heads=num_attention_heads,
             num_key_value_heads=num_key_value_heads,
-            bos_token_id=hf_config.bos_token_id,
+            bos_token_id=bos_token_id,
             eos_token_id=hf_config.eos_token_id,
             head_dim=head_dim,
             k_head_dim=k_head_dim,

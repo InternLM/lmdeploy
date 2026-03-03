@@ -20,7 +20,7 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .patch import build_model_from_hf_config
 from .utils.cudagraph import CudaGraphMixin
-from .utils.model import DeployModelMixin, vlm_model
+from .utils.model import DeployModelMixinV1, vlm_model
 
 
 @torch.compile(dynamic=True)
@@ -439,7 +439,7 @@ class InternVLMultiModalProjector(nn.Module):
         return hidden_states
 
 
-class InternVLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixin):
+class InternVLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMixin):
 
     def __init__(self,
                  config: PretrainedConfig,
@@ -453,6 +453,7 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMix
         self.vision_tower = InternVLVisionModel(config.vision_config, dtype=dtype, device=device)
         self.multi_modal_projector = InternVLMultiModalProjector(config, dtype=dtype, device=device)
         self.language_model = build_model_from_hf_config(config.text_config, dtype=dtype, device=device)
+        self.lm_head = self.language_model.lm_head
         self.vision_feature_layer = config.vision_feature_layer
         self.vision_feature_select_strategy = config.vision_feature_select_strategy
 
@@ -484,10 +485,6 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMix
 
         torch._dynamo.mark_dynamic(pixel_values, dims)
         self.has_compiled_vit = True
-
-    def get_logits(self, hidden_states: torch.Tensor):
-        """Compute logits of the model output."""
-        return self.language_model.get_logits(hidden_states)
 
     def get_input_embeddings(self):
         """Get input embeddings."""

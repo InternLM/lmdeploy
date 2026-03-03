@@ -811,7 +811,6 @@ class Llama4ForConditionalGeneration(nn.Module, CudaGraphMixin):
         self._update_quant_config(config)
         self.language_model = Llama4ForCausalLM(config.text_config, ctx_mgr, dtype=dtype, device=device)
         self.vocab_size = config.text_config.vocab_size
-        self.pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else -1
 
         self.input_processor = Llama4InputProcessor(config, dtype)
 

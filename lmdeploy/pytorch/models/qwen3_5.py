@@ -26,7 +26,7 @@ from .qwen2_5_vl import Qwen2_5_VisionRotaryEmbedding as Qwen3_5VisionRotaryEmbe
 from .qwen2_5_vl import Qwen2_5_VLVisionAttention as Qwen3_5VisionAttention
 from .qwen3_vl import Qwen3VLInputProcessor as Qwen3_5InputProcessor
 from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
-from .utils.model import DeployModelMixin, vlm_model
+from .utils.model import DeployModelMixinV1, vlm_model
 
 
 class Qwen3_5VisionPatchEmbed(nn.Module):
@@ -464,14 +464,6 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         """Load states from cache."""
         return gated_delta_util.load_state(past_key_value=past_key_value, gated_delta_meta=gated_delta_meta)
 
-    def _store_state(self, conv_state: torch.Tensor, recurrent_state: torch.Tensor,
-                     past_key_value: Tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
-        """Store states to cache."""
-        return gated_delta_util.store_state(conv_state=conv_state,
-                                            recurrent_state=recurrent_state,
-                                            past_key_value=past_key_value,
-                                            gated_delta_meta=gated_delta_meta)
-
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -521,9 +513,6 @@ class Qwen3_5GatedDeltaNet(nn.Module):
             recurrent_state=recurrent_state,
             gated_delta_meta=gated_delta_meta,
         )
-
-        # store states
-        self._store_state(conv_state, recurrent_state, past_key_value, gated_delta_meta)
 
         z_shape_og = z.shape
         core_attn_out = core_attn_out.reshape(-1, core_attn_out.shape[-1])
@@ -960,7 +949,7 @@ class Qwen3_5Model(nn.Module):
         return self.language_model.get_input_embeddings()
 
 
-class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixin):
+class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMixin):
     """ModelForCausalLM."""
 
     packed_modules_mapping = {
@@ -990,11 +979,11 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
         # build model
         self.model = Qwen3_5Model(config, dtype=dtype, device=device)
         # build lm_head
-        self.lm_head = build_rowwise_linear(config.text_config.hidden_size,
-                                            config.text_config.vocab_size,
-                                            bias=False,
-                                            dtype=dtype,
-                                            device=device)
+        self.lm_head = self.build_lm_head(config.text_config.hidden_size,
+                                          config.text_config.vocab_size,
+                                          bias=False,
+                                          dtype=dtype,
+                                          device=device)
 
     def forward(
         self,
@@ -1030,10 +1019,6 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
             grid_thw=grid_thw,
         )
         return hidden_states
-
-    def get_logits(self, hidden_states: torch.Tensor):
-        """Compute logits of the model output."""
-        return self.lm_head(hidden_states)
 
     def get_input_embeddings(self):
         """Get input embeddings."""
