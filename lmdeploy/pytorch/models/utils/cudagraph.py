@@ -320,7 +320,7 @@ class CudaGraphMixin:
 
         # mrope
         if graph_meta.use_mrope:
-            context.mrope_pos_ids = input_buffers['mrope_position_ids']
+            context.mrope_position_ids = input_buffers['mrope_position_ids']
 
         # ssm
         if graph_meta.is_ssm:

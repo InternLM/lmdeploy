@@ -276,7 +276,7 @@ class StepContext:
     state_offsets: torch.LongTensor | None = None
 
     # mrope
-    mrope_pos_ids: torch.Tensor | None = None
+    mrope_position_ids: torch.Tensor | None = None
 
     _outputs: Dict = field(default_factory=dict)
 
@@ -343,7 +343,7 @@ class StepContext:
             state_caches=state_caches,
             state_offsets=inputs.state_offsets,
             target_hidden_states=inputs.target_hidden_states,
-            mrope_pos_ids=inputs.mrope_pos_ids,
+            mrope_position_ids=inputs.mrope_pos_ids,
         )
 
         ret = get_backend().update_step_context(ret)
