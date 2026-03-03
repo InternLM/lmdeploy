@@ -25,18 +25,25 @@ using Decoding = typename DecodingConfig<Arch, T, Tkv, Qh, HeadDim>::Kernel;
 
 //////////////////////////////////////////////////////////////
 template<class T, int Qh, int HeadDim>
-struct DecodingConfig<arch::Sm80, T, T, Qh, HeadDim, std::enable_if_t<!(Qh > 2)>> {
+struct DecodingConfig<arch::Sm80, T, T, Qh, HeadDim, std::enable_if_t<!(Qh > 2) && HeadDim != 576>> {
     using Attention = Impl<MMA_SIMT, T, T, Qh, 1, 64, Qh, 1, 16, HeadDim, 3>;
     using CacheIter = GetBlockIterFactory<T, T, 64, HeadDim>;
     using Kernel    = AttentionUniversal<arch::Sm80, Mainloop<Sm80_CpAsync<3>, Attention>, CacheIter, DecodingCtaMap>;
 };
 
 template<class T, int Qh_, int HeadDim>
-struct DecodingConfig<arch::Sm80, T, T, Qh_, HeadDim, std::enable_if_t<(Qh_ > 2)>> {
+struct DecodingConfig<arch::Sm80, T, T, Qh_, HeadDim, std::enable_if_t<(Qh_ > 2) && HeadDim != 576>> {
     static constexpr int Qh = (Qh_ + 7) / 8 * 8;
     using Attention         = Impl<MMA_81616, T, T, Qh, 1, 64, Qh, 1, 16, HeadDim, 3>;
     using CacheIter         = GetBlockIterFactory<T, T, 64, HeadDim>;
     using Kernel = AttentionUniversal<arch::Sm80, Mainloop<Sm80_CpAsync<3>, Attention>, CacheIter, DecodingCtaMap>;
+};
+
+template<class T, int Qh_>
+struct DecodingConfig<arch::Sm80, T, T, Qh_, 576> {
+    using Attention = Impl<MMA_81616, T, T, 16, 1, 32, 8, 1, 16, 576, 2>;
+    using CacheIter = GetBlockIterFactory<T, T, 32, 576>;
+    using Kernel    = AttentionUniversal<arch::Sm80, Mainloop<Sm80_CpAsync<2>, Attention>, CacheIter, DecodingCtaMap>;
 };
 
 template<class T, int Qh_, int HeadDim>
@@ -57,6 +64,13 @@ struct DecodingConfig<arch::Sm80, T, uint4_t, Qh_, HeadDim> {
 
 //////////////////////////////////////////////////////////////
 
+template<class T, class Tkv, int Qh>
+struct DecodingConfig<arch::Sm75, T, Tkv, Qh, 576> {
+    using Attention = Impl<MMA_81616, T, T, 16, 1, 16, 8, 1, 16, 576, 2>;
+    using CacheIter = GetBlockIterFactory<T, T, 16, 576>;
+    using Kernel    = AttentionUniversal<arch::Sm75, Mainloop<arch::Sm70, Attention>, CacheIter, DecodingCtaMap>;
+};
+
 template<class T, class Tkv, int Qh_, int HeadDim>
 struct DecodingConfig<arch::Sm75, T, Tkv, Qh_, HeadDim> {
     static constexpr int Qh = (Qh_ + 7) / 8 * 8;
@@ -69,11 +83,9 @@ struct DecodingConfig<arch::Sm75, T, Tkv, Qh_, HeadDim> {
 
 template<class T, class Tkv, int Qh>
 struct DecodingConfig<arch::Sm70, T, Tkv, Qh, 576> {
-    // CTA_S reduced from 64 to 32 so shared memory fits within V100's 96 KB limit.
-    static constexpr int kH = Qh % 3 == 0 ? 3 : (Qh % 2 == 0 ? 2 : 1);
-    using Attention         = Impl<MMA_SIMT, T, Tkv, kH, 1, 32, kH, 1, 16, 576, 2>;
-    using CacheIter         = GetBlockIterFactory<T, Tkv, 32, 576>;
-    using Kernel = AttentionUniversal<arch::Sm70, Mainloop<arch::Sm70, Attention>, CacheIter, DecodingCtaMap>;
+    using Attention = Impl<MMA_SIMT, T, Tkv, 2, 1, 16, 1, 1, 8, 576, 2>;
+    using CacheIter = GetBlockIterFactory<T, Tkv, 16, 576>;
+    using Kernel    = AttentionUniversal<arch::Sm70, Mainloop<arch::Sm70, Attention>, CacheIter, DecodingCtaMap>;
 };
 
 template<class T, class Tkv, int Qh, int HeadDim>

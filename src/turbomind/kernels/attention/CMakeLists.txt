@@ -61,7 +61,7 @@ add_library(attention STATIC
 set_property(TARGET attention PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET attention PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 target_compile_options(attention PRIVATE -O3
-    $<$<COMPILE_LANGUAGE:CUDA>:-use_fast_math --expt-relaxed-constexpr>)
+    $<$<COMPILE_LANGUAGE:CUDA>:-use_fast_math --expt-relaxed-constexpr -Xptxas=-v --threads 16>)
 target_link_libraries(attention PRIVATE nvidia::cutlass::cutlass)
 
 if (BUILD_TEST)
