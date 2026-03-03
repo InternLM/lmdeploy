@@ -111,9 +111,15 @@ struct AttentionConfig<arch::Sm75, T, 256, Ctype> {
 
 template<class T, CacheType Ctype>
 struct AttentionConfig<arch::Sm70, T, 256, Ctype> {
-    static constexpr int CTA_Q  = 64;
+    // MMA_884 config for Volta V100 with HeadDim=256
+    // CTA_Q=128 (increased from 64) with WARP_Q=64 gives 4 warps
+    // This maximizes tensor core utilization and hides instruction latency.
+    // CTA_S=32 (keeps shared memory usage well under 96KB limit)
+    // Shared memory: Q=128×260×2=66.5KB, K+V+P=32×260×2+32×256×2+128×36×2=42.2KB
+    // Max smem required is 66.5KB < 96KB.
+    static constexpr int CTA_Q  = 128;
     static constexpr int CTA_S  = 32;
-    static constexpr int WARP_Q = 16;
+    static constexpr int WARP_Q = 64;
     static constexpr int WARP_S = 32;
 
     using Attention = Impl<MMA_884, T, T, 1, CTA_Q, CTA_S, 1, WARP_Q, WARP_S, 256, 2>;
