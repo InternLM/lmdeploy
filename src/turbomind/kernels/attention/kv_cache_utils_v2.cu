@@ -43,6 +43,8 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
     constexpr int ITER_C = Map::kIterC;
     constexpr int ITER_S = Map::kIterS;
 
+    constexpr bool HAS_V = !(typename BlockLayout::Config{}.is_share_kv());
+
     const int token_idx = blockIdx.x * CTA_S;  // local offset into `input_length`
     const int head_idx  = blockIdx.y;
     const int batch_idx = blockIdx.z;
@@ -76,7 +78,7 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
             Ldg(bias_K[c], &k_bias[head_idx * HeadDim + di]);
         }
     }
-    if (v_bias) {
+    if (v_bias && HAS_V) {
         PRAGMA_UNROLL
         for (int c = 0; c < ITER_C; ++c) {
             const int di = offset.x + c * Map::kDeltaC;
@@ -94,7 +96,9 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
                 (batch_idx * stride_b + qi_beg * stride_c + qi * stride_s + head_idx * stride_h) * HeadDim + di;
             if (qi < q_len) {
                 Ldg(vec_K[s][c], &k[index]);
-                Ldg(vec_V[s][c], &v[index]);
+                if constexpr (HAS_V) {
+                    Ldg(vec_V[s][c], &v[index]);
+                }
             }
         }
     }
@@ -109,7 +113,7 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
             }
         }
     }
-    if (v_bias) {
+    if (v_bias && HAS_V) {
         using namespace ops;
         PRAGMA_UNROLL
         for (int s = 0; s < ITER_S; ++s) {
@@ -139,7 +143,9 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
 
     if constexpr (!std::is_same_v<T, Tkv>) {
         warp_stats<Map::kWarpThreadC>(param_K, vec_K, bitsof<Tkv>);
-        warp_stats<Map::kWarpThreadC>(param_V, vec_V, bitsof<Tkv>);
+        if constexpr (HAS_V) {
+            warp_stats<Map::kWarpThreadC>(param_V, vec_V, bitsof<Tkv>);
+        }
     }
 
     Array<Tkv, kVecSize> out_K[ITER_S][ITER_C];
@@ -152,7 +158,9 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
         PRAGMA_UNROLL
         for (int c = 0; c < ITER_C; ++c) {
             out_K[s][c] = conv_K(vec_K[s][c]);
-            out_V[s][c] = conv_V(vec_V[s][c]);
+            if constexpr (HAS_V) {
+                out_V[s][c] = conv_V(vec_V[s][c]);
+            }
         }
     }
 
@@ -173,12 +181,16 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
                 for (int c = 0; c < ITER_C; ++c) {
                     int di = offset.x + c * Map::kDeltaC;
                     Store(&k_cache[di], out_K[s][c]);
-                    Store(&v_cache[di], out_V[s][c]);
+                    if constexpr (HAS_V) {
+                        Store(&v_cache[di], out_V[s][c]);
+                    }
                 }
                 if constexpr (!std::is_same_v<T, Tkv>) {
                     if (offset.x == 0) {
                         StoreQuantParam<Tkv>(k_param, param_K[s]);
-                        StoreQuantParam<Tkv>(v_param, param_V[s]);
+                        if constexpr (HAS_V) {
+                            StoreQuantParam<Tkv>(v_param, param_V[s]);
+                        }
                         // if (ti == history_len) {
                         // printf("src %d %f %f\n", ti, (float)param_K[s][0], (float)param_K[s][1]);
                         // }
@@ -226,7 +238,9 @@ void invokeProcessKV_v2(char**                 blocks,
         constexpr int kHeadDim = dim;
         FT_CHECK(head_dim == kHeadDim);
 
-        block::Layout block_layout{block::Config<T, Tkv, kHeadDim>{head_num, block_seq_len}};
+        constexpr bool kShareKV = kHeadDim == 576;
+
+        block::Layout block_layout{block::Config<T, Tkv, kHeadDim, kShareKV>{head_num, block_seq_len}};
 
         ProcessKV_v2<Tkv, CTA_S, kHeadDim, WARPS><<<grid, block, 0, stream>>>(blocks,
                                                                               k,
@@ -256,6 +270,9 @@ void invokeProcessKV_v2(char**                 blocks,
         }
         else if (head_dim == 192) {
             return invoke(tkv, std::integral_constant<int, 192>{});
+        }
+        else if (head_dim == 576) {
+            return invoke(tkv, std::integral_constant<int, 576>{});
         }
         FT_CHECK(0);
     };
@@ -324,6 +341,8 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*              k,
     constexpr int ITER_C = Map::kIterC;
     constexpr int ITER_S = Map::kIterS;
 
+    constexpr bool HAS_V = !(typename BlockLayout::Config{}.is_share_kv());
+
     const int token_idx = blockIdx.x * CTA_S;
     const int head_idx  = blockIdx.y;
     const int batch_idx = blockIdx.z;
@@ -368,11 +387,15 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*              k,
                 for (int c = 0; c < ITER_C; ++c) {
                     int di = offset.x + c * Map::kDeltaC;
                     Ldg(vec_K[s][c], &k_cache[di]);
-                    Ldg(vec_V[s][c], &v_cache[di]);
+                    if constexpr (HAS_V) {
+                        Ldg(vec_V[s][c], &v_cache[di]);
+                    }
                 }
                 if constexpr (!std::is_same_v<T, Tkv>) {
                     Ldg(param_K[s], k_param);
-                    Ldg(param_V[s], v_param);
+                    if constexpr (HAS_V) {
+                        Ldg(param_V[s], v_param);
+                    }
                 }
             });
         }
@@ -385,7 +408,9 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*              k,
         PRAGMA_UNROLL
         for (int c = 0; c < ITER_C; ++c) {
             out_K[s][c] = conv_K(vec_K[s][c]);
-            out_V[s][c] = conv_V(vec_V[s][c]);
+            if constexpr (HAS_V) {
+                out_V[s][c] = conv_V(vec_V[s][c]);
+            }
         }
     }
 
@@ -415,7 +440,9 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*              k,
                     (batch_idx * stride_b + ti_beg * stride_c + local_ti * stride_s + head_idx * stride_h) * HeadDim
                     + di;
                 Store(&k[index], out_K[s][c]);
-                Store(&v[index], out_V[s][c]);
+                if constexpr (HAS_V) {
+                    Store(&v[index], out_V[s][c]);
+                }
             }
         }
     }
@@ -455,7 +482,9 @@ void invokeFlattenKV_v2(T*                     k,
         constexpr int kHeadDim = dim;
         FT_CHECK(head_dim == kHeadDim);
 
-        block::Layout block_layout{block::Config<T, Tkv, kHeadDim>{head_num, block_seq_len}};
+        constexpr bool kShareKV = kHeadDim == 576;
+
+        block::Layout block_layout{block::Config<T, Tkv, kHeadDim, kShareKV>{head_num, block_seq_len}};
 
         flattenKV_v2<CTA_S, kHeadDim, kWarpCnt><<<grid, block, 0, stream>>>(k,
                                                                             v,
@@ -482,6 +511,9 @@ void invokeFlattenKV_v2(T*                     k,
         }
         else if (head_dim == 192) {
             return invoke(tkv, std::integral_constant<int, 192>{});
+        }
+        else if (head_dim == 576) {
+            return invoke(tkv, std::integral_constant<int, 576>{});
         }
         FT_CHECK(0);
     };

@@ -5,6 +5,7 @@ import fire
 import yaml
 
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
+from lmdeploy.messages import SpeculativeConfig
 
 gen_config = GenerationConfig(max_new_tokens=500, min_new_tokens=10)
 
@@ -35,15 +36,25 @@ def run_pipeline_chat_test(model_path, run_config, cases_path, is_pr_test: bool 
     if 'tp' in parallel_config and parallel_config['tp'] > 1:
         backend_config.tp = parallel_config['tp']
 
+    # Extract speculative_config from extra_params if present
+    speculative_config = None
+    spec_cfg = extra_params.pop('speculative_config', None)
+    if isinstance(spec_cfg, dict):
+        speculative_config = SpeculativeConfig(**spec_cfg)
+
     # Extra params
+    # Map CLI param names to PytorchEngineConfig attribute names
+    param_name_map = {'device': 'device_type'}
     for key, value in extra_params.items():
+        attr_name = param_name_map.get(key, key)
         try:
-            setattr(backend_config, key, value)
+            setattr(backend_config, attr_name, value)
         except AttributeError:
-            print(f"Warning: Cannot set attribute '{key}' on backend_config. Skipping.")
+            print(f"Warning: Cannot set attribute '{attr_name}' on backend_config. Skipping.")
 
     print('backend_config config: ' + str(backend_config))
-    pipe = pipeline(model_path, backend_config=backend_config)
+    print('speculative_config config: ' + str(speculative_config))
+    pipe = pipeline(model_path, backend_config=backend_config, speculative_config=speculative_config)
 
     cases_path = os.path.join(cases_path)
     with open(cases_path) as f:

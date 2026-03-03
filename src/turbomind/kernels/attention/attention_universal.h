@@ -16,6 +16,10 @@
 
 namespace turbomind {
 
+namespace attention {
+struct DecodingCtaMap;
+}  // namespace attention
+
 template<class Arch_, class Mainloop, class CacheIteratorFactory_, class CtaMap_>
 struct AttentionUniversal {
 
@@ -49,7 +53,9 @@ struct AttentionUniversal {
 
     using SharedStorage = typename Mainloop::SharedStorage;
 
-    static constexpr bool kProcessKV = CTA_Q == 1;
+    // Only process KV inline during decoding (DecodingCtaMap), not during context attention
+    // (AttentionCtaMap), even when CTA_Q == 1 (e.g. SIMT kernels).
+    static constexpr bool kProcessKV = std::is_same_v<CtaMap, attention::DecodingCtaMap>;
 
     const int q_group_size_;
     const int q_head_per_cta_;
@@ -73,10 +79,14 @@ struct AttentionUniversal {
     __device__ void ApplyBias(
         VecQ& vec_Q, VecKV& vec_K, VecKV& vec_V, const ParamType& params, int head_idx, int kv_head_idx, int2 offset)
     {
-        using Map              = typename Impl::ThreadMapQ;
+        using Map = typename Impl::ThreadMapQ;
+
         constexpr int kVecSize = Map::kAccessC;
         constexpr int ITER_C   = Map::kIterC;
         constexpr int ITER_S   = Map::kIterS;
+
+        constexpr bool HAS_V = kHeadDim != 576;
+
         if constexpr (kProcessKV) {
             Array<T, kVecSize> bias_K[ITER_C];
             Array<T, kVecSize> bias_V[ITER_C];
@@ -87,7 +97,7 @@ struct AttentionUniversal {
                 if (params.k_bias) {
                     Ldg(bias_K[c], &params.k_bias[k_idx]);
                 }
-                if (params.v_bias) {
+                if (params.v_bias && HAS_V) {
                     Ldg(bias_V[c], &params.v_bias[k_idx]);
                 }
             }
@@ -97,7 +107,7 @@ struct AttentionUniversal {
                 if (params.k_bias) {
                     vec_K[0][c] = vec_K[0][c] + bias_K[c];
                 }
-                if (params.v_bias) {
+                if (params.v_bias && HAS_V) {
                     vec_V[0][c] = vec_V[0][c] + bias_V[c];
                 }
             }
@@ -179,6 +189,8 @@ struct AttentionUniversal {
         constexpr int ITER_C = Map::kIterC;
         constexpr int ITER_S = Map::kIterS;
 
+        constexpr bool HAS_V = kHeadDim != 576;
+
         Vec vec_Q[ITER_S][ITER_C]{};  // [QxH, D]
         Vec vec_K[1][ITER_C];
         Vec vec_V[1][ITER_C];
@@ -203,7 +215,9 @@ struct AttentionUniversal {
                     if constexpr (kProcessKV) {  // duplicate loads in s
                         if (s == 0) {
                             Ldg(vec_K[0][c], &params.k[k_idx]);
-                            Ldg(vec_V[0][c], &params.v[k_idx]);
+                            if constexpr (HAS_V) {
+                                Ldg(vec_V[0][c], &params.v[k_idx]);
+                            }
                         }
                     }
                 }
@@ -253,7 +267,9 @@ struct AttentionUniversal {
 
             if constexpr (!std::is_same_v<T, Tkv>) {
                 warp_stats<Map::kWarpThreadC>(param_K, vec_K, bitsof<Tkv>);
-                warp_stats<Map::kWarpThreadC>(param_V, vec_V, bitsof<Tkv>);
+                if constexpr (HAS_V) {
+                    warp_stats<Map::kWarpThreadC>(param_V, vec_V, bitsof<Tkv>);
+                }
             }
 
             Array<Tkv, kVecSize> out_K[1][ITER_C];
@@ -264,7 +280,9 @@ struct AttentionUniversal {
             PRAGMA_UNROLL
             for (int c = 0; c < ITER_C; ++c) {
                 out_K[0][c] = conv_K(vec_K[0][c]);
-                out_V[0][c] = conv_V(vec_V[0][c]);
+                if constexpr (HAS_V) {
+                    out_V[0][c] = conv_V(vec_V[0][c]);
+                }
             }
 
             iterator.block_head_.with(
@@ -277,13 +295,17 @@ struct AttentionUniversal {
                         const int di = offset.x + c * Map::kDeltaC;
                         if (qi < CTA_Q) {
                             Store(&k_cache[di], out_K[0][c]);
-                            Store(&v_cache[di], out_V[0][c]);
+                            if constexpr (HAS_V) {
+                                Store(&v_cache[di], out_V[0][c]);
+                            }
                         }
                     }
                     if constexpr (!std::is_same_v<T, Tkv>) {
                         if (qi < CTA_Q && offset.x == 0) {
                             StoreQuantParam<Tkv>(k_param, param_K[0]);
-                            StoreQuantParam<Tkv>(v_param, param_V[0]);
+                            if constexpr (HAS_V) {
+                                StoreQuantParam<Tkv>(v_param, param_V[0]);
+                            }
                         }
                     }
                 });

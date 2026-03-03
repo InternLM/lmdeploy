@@ -15,10 +15,6 @@ class InternVLReader(LlamaReader):
     norm_weight_key = 'language_model.model.norm.weight'
     output_weight_key = 'language_model.lm_head.weight'
 
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool, model_cfg: dict, **kwargs):
-        model_cfg = model_cfg.get('llm_config') or model_cfg.get('text_config')
-        super().__init__(new_params, unused_params, last_bin, model_cfg, **kwargs)
-
 
 # Note the subtle difference in keys
 class InternVL2Reader(InternLM2Reader):
@@ -30,10 +26,6 @@ class InternVL2Reader(InternLM2Reader):
     norm_weight_key = 'language_model.model.norm.weight'
     output_weight_key = 'language_model.output.weight'
 
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool, model_cfg: dict, **kwargs):
-        model_cfg = model_cfg.get('llm_config')
-        super().__init__(new_params, unused_params, last_bin, model_cfg, **kwargs)
-
 
 class InternVL3d5Reader(Qwen3Reader):
     attn_layer_prefix = 'language_model.model.layers'
@@ -41,10 +33,6 @@ class InternVL3d5Reader(Qwen3Reader):
     tok_embeddings_key = 'language_model.model.embed_tokens.weight'
     norm_weight_key = 'language_model.model.norm.weight'
     output_weight_key = 'language_model.lm_head.weight'
-
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool, model_cfg: dict, **kwargs):
-        model_cfg = model_cfg.get('llm_config') or model_cfg.get('text_config')
-        super().__init__(new_params, unused_params, last_bin, model_cfg, **kwargs)
 
 
 class InternVL3d5Qwen3MoEReader(Qwen3MoeReader):
@@ -54,10 +42,6 @@ class InternVL3d5Qwen3MoEReader(Qwen3MoeReader):
     norm_weight_key = 'language_model.model.norm.weight'
     output_weight_key = 'language_model.lm_head.weight'
 
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool, model_cfg: dict, **kwargs):
-        model_cfg = model_cfg.get('llm_config') or model_cfg.get('text_config')
-        super().__init__(new_params, unused_params, last_bin, model_cfg, **kwargs)
-
 
 class InternVL3d5GptOSSReader(GptOssReader):
     attn_layer_prefix = 'language_model.model.layers'
@@ -65,10 +49,6 @@ class InternVL3d5GptOSSReader(GptOssReader):
     tok_embeddings_key = 'language_model.model.embed_tokens.weight'
     norm_weight_key = 'language_model.model.norm.weight'
     output_weight_key = 'language_model.lm_head.weight'
-
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool, model_cfg: dict, **kwargs):
-        model_cfg = model_cfg.get('llm_config') or model_cfg.get('text_config')
-        super().__init__(new_params, unused_params, last_bin, model_cfg, **kwargs)
 
 
 class InternS1Reader(Qwen3MoeReader):
@@ -80,12 +60,6 @@ class InternS1Reader(Qwen3MoeReader):
     norm_weight_key = 'model.language_model.norm.weight'
     output_weight_key = 'lm_head.weight'
 
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool, model_cfg: dict, **kwargs):
-        model_cfg = model_cfg.get('text_config')
-        if model_cfg is None:
-            raise ValueError(f'Miss "text_config" in model config: {model_cfg}')
-        super().__init__(new_params, unused_params, last_bin, model_cfg, **kwargs)
-
 
 class InternS1MiniReader(Qwen3Reader):
 
@@ -94,12 +68,6 @@ class InternS1MiniReader(Qwen3Reader):
     tok_embeddings_key = 'model.language_model.embed_tokens.weight'
     norm_weight_key = 'model.language_model.norm.weight'
     output_weight_key = 'lm_head.weight'
-
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool, model_cfg: dict, **kwargs):
-        model_cfg = model_cfg.get('text_config')
-        if model_cfg is None:
-            raise ValueError(f'Miss "text_config" in model config: {model_cfg}')
-        super().__init__(new_params, unused_params, last_bin, model_cfg, **kwargs)
 
 
 @INPUT_MODELS.register_module(name='internvl')

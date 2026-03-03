@@ -51,11 +51,14 @@ def run_pipeline_mllm_test(model_path, run_config, resource_path, is_pr_test: bo
         backend_config.tp = parallel_config['tp']
 
     # Extra params
+    # Map CLI param names to PytorchEngineConfig attribute names
+    param_name_map = {'device': 'device_type'}
     for key, value in extra_params.items():
+        attr_name = param_name_map.get(key, key)
         try:
-            setattr(backend_config, key, value)
+            setattr(backend_config, attr_name, value)
         except AttributeError:
-            print(f"Warning: Cannot set attribute '{key}' on backend_config. Skipping.")
+            print(f"Warning: Cannot set attribute '{attr_name}' on backend_config. Skipping.")
 
     print('backend_config config: ' + str(backend_config))
     pipe = pipeline(model_path, backend_config=backend_config)

@@ -8,7 +8,8 @@ import psutil
 import requests
 from openai import OpenAI
 from pytest_assume.plugin import assume
-from utils.config_utils import get_case_str_by_config, get_cli_common_param, get_cuda_prefix_by_workerid, get_workerid
+from utils.config_utils import (get_case_str_by_config, get_cli_common_param, get_cuda_prefix_by_workerid, get_workerid,
+                                resolve_extra_params)
 from utils.constant import DEFAULT_PORT, DEFAULT_SERVER
 from utils.restful_return_check import assert_chat_completions_batch_return
 from utils.rule_condition_assert import assert_result
@@ -35,6 +36,9 @@ def start_openai_service(config, run_config, worker_id, timeout: int = 1200):
     # Ensure extra_params exists before modifying
     if 'extra_params' not in run_config:
         run_config['extra_params'] = {}
+
+    resolve_extra_params(run_config['extra_params'], config.get('model_path'))
+
     run_config['extra_params']['server-port'] = str(port)
     run_config['extra_params']['allow-terminate-by-client'] = None
     model_name = case_name if run_config['extra_params'].get(

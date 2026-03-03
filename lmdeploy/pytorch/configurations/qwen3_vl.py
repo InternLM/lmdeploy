@@ -8,11 +8,15 @@ class Qwen3VLModelConfigBuilder(AutoModelConfigBuilder):
     @classmethod
     def condition(cls, hf_config):
         """config."""
-        return hf_config.model_type in ['qwen3_vl', 'qwen3_vl_moe']
+        return hf_config.model_type in ['qwen2_vl', 'qwen2_5_vl', 'qwen3_vl', 'qwen3_vl_moe']
 
     @classmethod
     def build(cls, hf_config, model_path: str = None, **kwargs):
         """build."""
+        if not hasattr(hf_config, 'text_config'):
+            # for transformers <= 5
+            return DefaultModelConfigBuilder.build(hf_config, model_path, **kwargs)
+
         if hasattr(hf_config, 'quantization_config') and not hasattr(hf_config.text_config, 'quantization_config'):
             setattr(hf_config.text_config, 'quantization_config', hf_config.quantization_config)
         cfg = DefaultModelConfigBuilder.build(hf_config.text_config, model_path, **kwargs)
