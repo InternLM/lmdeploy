@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from contextlib import contextmanager
-from typing import List
 
 
 class Timer:
@@ -187,7 +186,7 @@ def visualize_pipe_out(outputs, enable_meta: bool = True):
     # Main loop
     print(colored('━' * term_size, border_color))
 
-    outputs: List[Response] = outputs
+    outputs: list[Response] = outputs
     for idx, out in enumerate(outputs):
         header = f'OUTPUT [{idx + 1}/{len(outputs)}]'
         header_formatted = colored(f'✦ {header}', 'light_magenta', attrs=['bold'])

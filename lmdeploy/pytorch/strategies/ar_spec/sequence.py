@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 from torch import Tensor
@@ -14,7 +14,7 @@ from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 
 from ..ar.sequence import ARSequenceStrategy, SchedulerSequenceDefault
 
-SeqList = List['SchedulerSequenceARSpec']
+SeqList = list['SchedulerSequenceARSpec']
 
 
 @dataclass
@@ -110,8 +110,8 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
     def update_token_ids(self,
                          token_ids: Tensor,
                          multimodals: MultiModalInputs = None,
-                         embeddings: List[InputEmbeddings] = None,
-                         model_meta: Dict[str, Any] = None,
+                         embeddings: list[InputEmbeddings] = None,
+                         model_meta: dict[str, Any] = None,
                          draft_token_ids: Tensor = None,
                          mode: UpdateTokenMode = UpdateTokenMode.INPUTS,
                          **kwargs):
@@ -144,7 +144,7 @@ class ARSpecSequenceStrategy(ARSequenceStrategy):
                       session: 'SchedulerSession',
                       sampling_param: 'SamplingParam' = None,
                       adapter_name: str = None,
-                      migration_request: Optional[MigrationRequest] = None,
+                      migration_request: MigrationRequest | None = None,
                       resp_cache: bool = False,
                       preserve_cache: bool = False) -> 'SchedulerSequenceARSpec':
         """Make sequence."""

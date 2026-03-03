@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import math
-from typing import Optional, Tuple, Union
 
 import torch
 from torch import nn
@@ -224,7 +223,7 @@ class InternS1ProTimeSeriesMultiChannelAdaptiveSubsampling(nn.Module):
         # conv1
         # treat each channel as an independent sample and feed it into conv1
         x = x.reshape(num_patch * C, 1, patch_len)
-        x = nn.functional.relu((self.conv(x)))  # [B*C, D1, L]
+        x = nn.functional.relu(self.conv(x))  # [B*C, D1, L]
         x = x.permute(2, 0, 1)  # [L, B*C, D1]
 
         x = self.pos_encoder(x)  # [L, B*C, D1]
@@ -272,11 +271,11 @@ class InternS1ProTimeSeriesModel(nn.Module):
 
     def forward(
         self,
-        time_series_signals: Optional[torch.FloatTensor] = None,
-        ts_lens: Optional[torch.Tensor] = None,
-        sr: Optional[torch.Tensor] = None,
-        time_series_embeds: Optional[torch.FloatTensor] = None,
-    ) -> Union[Tuple]:
+        time_series_signals: torch.FloatTensor | None = None,
+        ts_lens: torch.Tensor | None = None,
+        sr: torch.Tensor | None = None,
+        time_series_embeds: torch.FloatTensor | None = None,
+    ) -> tuple:
         if time_series_signals is None and time_series_embeds is None:
             raise ValueError('You have to specify time_series_signals or time_series_embeds')
 

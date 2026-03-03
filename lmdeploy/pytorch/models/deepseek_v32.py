@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Sequence, Tuple
+from collections.abc import Sequence
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -88,7 +89,7 @@ class Indexer(nn.Module):
                 x: torch.Tensor,
                 qr: torch.Tensor,
                 freqs_cis: torch.Tensor,
-                index_cache: Tuple[torch.Tensor, torch.Tensor],
+                index_cache: tuple[torch.Tensor, torch.Tensor],
                 attn_metadata: Any = None):
         q = self.wq_b(qr)
         q = q.unflatten(-1, (-1, self.head_dim))
@@ -270,7 +271,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
         past_key_value: Sequence[torch.Tensor] = None,
         attn_metadata: Any = None,
     ):

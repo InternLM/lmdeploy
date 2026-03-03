@@ -5,7 +5,6 @@ import ast
 import math
 import warnings
 from contextlib import contextmanager
-from typing import Dict, List
 
 import torch
 from PIL import Image
@@ -295,7 +294,7 @@ class LlavaVisionModel(LlavaHfVisionModel):
         image_features = self.mm_projector(image_features)
         return image_features
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refer to `super().preprocess() for spec."""
         images = self.collect_images(messages)
         outputs = []
@@ -311,7 +310,7 @@ class LlavaVisionModel(LlavaHfVisionModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 

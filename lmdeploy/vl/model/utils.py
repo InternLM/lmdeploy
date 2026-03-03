@@ -1,8 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import inspect
+from collections.abc import Callable, MutableSequence
 from contextlib import contextmanager
-from typing import Callable, MutableSequence
 
 import torch
 

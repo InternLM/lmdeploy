@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Optional, Sequence, Union
+from collections.abc import Sequence
 
 import torch
 
@@ -29,8 +29,8 @@ def fast_round_scale_torch(amax: torch.Tensor, fp8_max: torch.Tensor) -> torch.T
 
 def _get_quant_scaling(weight: torch.Tensor,
                        fp8_dtype: torch.dtype,
-                       dim: Union[int, Sequence[int]],
-                       scale_fmt: Optional[str] = None):
+                       dim: int | Sequence[int],
+                       scale_fmt: str | None = None):
     """Get the scaling factor for FP8 quantization."""
     finfo = torch.finfo(fp8_dtype)
     fmax = finfo.max
@@ -47,7 +47,7 @@ def _get_quant_scaling(weight: torch.Tensor,
 def quant_blocked_fp8(weight: torch.Tensor,
                       fp8_dtype: torch.dtype,
                       block_size: int = 128,
-                      scale_fmt: Optional[str] = None):
+                      scale_fmt: str | None = None):
     """Quantize the weight tensor to blocked FP8 format."""
     assert scale_fmt in (None, 'ue8m0'), f'Unsupported scale_fmt: {scale_fmt}'
 

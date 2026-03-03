@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import torch
 from torch import Tensor
@@ -8,7 +8,7 @@ from torch.profiler import record_function
 
 from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
 
-BuffType = Dict[str, Tensor]
+BuffType = dict[str, Tensor]
 
 
 def _get_meta_flashattn(
@@ -21,9 +21,9 @@ def _get_meta_flashattn(
         cache_seqlens: torch.Tensor,
         qkv_dtype=torch.bfloat16,
         headdim_v=None,
-        cu_seqlens_q: Optional[torch.Tensor] = None,
-        cu_seqlens_k_new: Optional[torch.Tensor] = None,
-        page_size: Optional[int] = None,
+        cu_seqlens_q: torch.Tensor | None = None,
+        cu_seqlens_k_new: torch.Tensor | None = None,
+        page_size: int | None = None,
         causal=True,
         window_size=(-1, -1),  # -1 means infinite context window
         num_splits=0,
@@ -77,7 +77,7 @@ class CudaGraphMeta:
     vocab_size: int = 1
     use_mla_fp8_cache: bool = False
     use_flash_mla: bool = False
-    mla_index_topk: Optional[int] = None
+    mla_index_topk: int | None = None
     decode_query_len: int = 1
     use_fa3_decoding: bool = False
 
@@ -89,7 +89,7 @@ class CudaGraphMixin:
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
         **kwargs,
@@ -102,7 +102,7 @@ class CudaGraphMixin:
         if isinstance(output, torch.Tensor):
             output_buffers = dict(hidden_states=output)
         else:
-            assert isinstance(output, Dict)
+            assert isinstance(output, dict)
             output_buffers = output
         return output_buffers
 
@@ -138,7 +138,7 @@ class CudaGraphMixin:
         )
         return scheduler_metadata
 
-    def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, *args, past_key_values: List, **kwargs) -> BuffType:
+    def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, *args, past_key_values: list, **kwargs) -> BuffType:
         """Make cudagraph buffers from forward inputs."""
         max_batches = graph_meta.max_batchs
         max_tokens = graph_meta.max_tokens
@@ -194,8 +194,8 @@ class CudaGraphMixin:
 
     @record_function('fill_buffers_cudagraph')
     def fill_buffers_cudagraph(self, graph_meta: CudaGraphMeta, input_ids: Tensor, position_ids: Tensor,
-                               past_key_values: List, attn_metadata: Any, inputs_embeds: Tensor,
-                               **kwargs) -> Dict[str, Tensor]:
+                               past_key_values: list, attn_metadata: Any, inputs_embeds: Tensor,
+                               **kwargs) -> dict[str, Tensor]:
         """Fill cudagraph buffers from forward inputs."""
 
         block_offsets: Tensor = attn_metadata.block_offsets
@@ -293,7 +293,7 @@ class CudaGraphMixin:
         context.kv_seqlens = input_buffers['kv_seqlens']
         context.q_start_loc = input_buffers['q_start_loc']
 
-    def get_outputs_cudagraph(self, output_buffers: Dict[str, torch.Tensor], input_ids: Tensor, **kwargs):
+    def get_outputs_cudagraph(self, output_buffers: dict[str, torch.Tensor], input_ids: Tensor, **kwargs):
         """Get outputs from buffers."""
         num_tokens = input_ids.size(-1)
         outputs = dict()

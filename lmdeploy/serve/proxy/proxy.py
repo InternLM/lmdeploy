@@ -10,7 +10,7 @@ import threading
 import time
 from collections import deque
 from http import HTTPStatus
-from typing import Deque, Literal
+from typing import Literal
 
 import aiohttp
 import numpy as np
@@ -43,7 +43,7 @@ class Status(BaseModel):
     role: EngineRole = EngineRole.Hybrid
     models: list[str] = Field(default=[], examples=[[]])
     unfinished: int = 0
-    latency: Deque = Field(default=deque(maxlen=LATENCY_DEQUE_LEN), examples=[[]])
+    latency: deque = Field(default=deque(maxlen=LATENCY_DEQUE_LEN), examples=[[]])
     speed: int | None = Field(default=None, examples=[None])
 
 
@@ -96,7 +96,7 @@ class NodeManager:
         if config_path is not None:
             self.config_path = config_path
         if osp.exists(self.config_path) and self.cache_status:
-            with open(self.config_path, 'r') as config_file:
+            with open(self.config_path) as config_file:
                 if os.path.getsize(self.config_path) > 0:
                     logger.info(f'loading node configuration: {self.config_path}')
                     config = json.load(config_file)
@@ -443,7 +443,7 @@ class NodeManager:
         return background_tasks
 
     def _prepare_headers(self, raw_request: Request) -> dict[str, str]:
-        headers = dict((name, value) for name, value in raw_request.headers.items() if name.lower() != 'host')
+        headers = {name: value for name, value in raw_request.headers.items() if name.lower() != 'host'}
 
         client_ip = raw_request.client.host if raw_request.client else 'unknown'
         headers.update({

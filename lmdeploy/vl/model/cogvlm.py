@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict, List
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
@@ -39,7 +38,7 @@ class CogVLMVisionModel(VisionModel):
         else:
             raise NotImplementedError('turbomind has not supported cogvlm yet')
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refer to the spec of `super().preprocess`"""
         images = self.collect_images(messages)
         outputs = []

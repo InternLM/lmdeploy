@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 from functools import partial
-from typing import Union
 
 import torch
 from torch import nn
@@ -13,7 +12,7 @@ from lmdeploy.lite.utils import (bimap_name_mod, collect_target_modules, concat_
                                  split_decoder_layer_inputs)
 
 
-class CalibrationContext():
+class CalibrationContext:
     """Calibration context manager for model quantization.
 
     Parameters:
@@ -30,8 +29,8 @@ class CalibrationContext():
     def __init__(self,
                  model: nn.Module,
                  tokenizer: PreTrainedTokenizer,
-                 layer_type: Union[str, type],
-                 norm_type: Union[str, type],
+                 layer_type: str | type,
+                 norm_type: str | type,
                  batch_size: int = 1,
                  device: str = 'cuda',
                  **kwargs) -> None:
@@ -339,8 +338,8 @@ class CalibrationContextV2(CalibrationContext):
     def __init__(self,
                  model: nn.Module,
                  tokenizer: PreTrainedTokenizer,
-                 layer_type: Union[str, type],
-                 norm_type: Union[str, type],
+                 layer_type: str | type,
+                 norm_type: str | type,
                  batch_size: int = 1,
                  device: str = 'cuda',
                  search_scale: bool = True,

@@ -2,7 +2,7 @@
 import asyncio
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, List, Optional
+from typing import Any
 
 from lmdeploy.messages import ResponseType
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
@@ -54,7 +54,7 @@ class MPEngine(EngineBase):
         """sleep."""
         return self._collective_rpc('sleep', level)
 
-    def wakeup(self, tags: Optional[List[str]] = None):
+    def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
         return self._collective_rpc('wakeup', tags)
 

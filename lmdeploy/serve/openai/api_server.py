@@ -6,10 +6,11 @@ import json
 import os
 import re
 import time
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from functools import partial
 from http import HTTPStatus
-from typing import AsyncGenerator, Literal
+from typing import Literal
 
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status

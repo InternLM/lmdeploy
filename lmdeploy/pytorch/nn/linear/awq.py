@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, List, Optional
+from typing import Any
 
 import torch
 
@@ -21,7 +21,7 @@ class AwqLinear(LinearBase):
         w_bit: int,
         group_size: int,
         bias: bool,
-        device: Optional[torch.device] = None,
+        device: torch.device | None = None,
         colwise: bool = True,
         is_tp: bool = False,
         all_reduce: bool = True,
@@ -68,7 +68,7 @@ class AwqLinear(LinearBase):
                                 qweight: torch.Tensor,
                                 scales: torch.Tensor,
                                 qzeros: torch.Tensor,
-                                bias: Optional[torch.Tensor] = None):
+                                bias: torch.Tensor | None = None):
         """Register all parameters."""
         qweight = torch.nn.Parameter(qweight, requires_grad=False)
         scales = torch.nn.Parameter(scales, requires_grad=False)
@@ -173,13 +173,13 @@ class MergedAwqLinear(AwqLinear):
 
     def __init__(self,
                  in_features: int,
-                 all_out_features: List[int],
+                 all_out_features: list[int],
                  w_bit: int,
                  group_size: int,
                  bias: bool,
-                 device: Optional[torch.device] = None,
+                 device: torch.device | None = None,
                  is_tp: bool = True,
-                 out_names: Optional[List[int]] = None,
+                 out_names: list[int] | None = None,
                  layer_type: str = 'attn'):
         self.init_tp_args(is_tp, all_reduce=False, colwise=True, layer_type=layer_type)
 
@@ -192,7 +192,7 @@ class MergedAwqLinear(AwqLinear):
         if out_names is None:
             out_names = torch.arange(len(self.all_out_features)).tolist()
         assert len(out_names) == len(self.all_out_features)
-        self.out_names_map = dict((name, idx) for idx, name in enumerate(out_names))
+        self.out_names_map = {name: idx for idx, name in enumerate(out_names)}
         out_features = sum(all_out_features)
         super().__init__(in_features,
                          out_features,
@@ -225,7 +225,7 @@ class MergedAwqLinear(AwqLinear):
         """Get io features."""
         return in_features, out_features
 
-    def _update_all_out_features(self, all_out_features: List[int], w_bit: int, group_size: int):
+    def _update_all_out_features(self, all_out_features: list[int], w_bit: int, group_size: int):
         """Update all out features."""
         world_size, rank = self.get_tp_world_rank()
         new_all_out_features = []
@@ -280,7 +280,7 @@ class QKVAwqLinear(MergedAwqLinear, QKVMixin):
                  w_bit: int,
                  group_size: int,
                  bias: bool = False,
-                 device: Optional[torch.device] = None,
+                 device: torch.device | None = None,
                  is_tp: bool = True,
                  num_replicate_kv_heads: int = 1):
         self.init_tp_args(is_tp, all_reduce=False, colwise=True, layer_type='attn')
@@ -309,7 +309,7 @@ class QKVAwqLinear(MergedAwqLinear, QKVMixin):
                          out_names=out_names,
                          layer_type='attn')
 
-    def _update_all_out_features(self, all_out_features: List[int], w_bit: int, group_size: int):
+    def _update_all_out_features(self, all_out_features: list[int], w_bit: int, group_size: int):
         """Update all out features."""
         return all_out_features
 

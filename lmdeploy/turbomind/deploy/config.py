@@ -2,7 +2,6 @@
 import inspect
 import json
 from dataclasses import asdict, field, fields
-from typing import List
 
 # use pydantic.dataclasses.dataclass to check data type
 from pydantic.dataclasses import dataclass
@@ -55,11 +54,11 @@ class ModelConfig:
     # of token_embedding
     embedding_size: int = 0
     num_layer: int = None
-    inter_size: List[int] = None
+    inter_size: list[int] = None
     norm_eps: float = None
     attn_bias: int = 0
     mlp_bias: bool = False
-    window_size: List[int] = field(default_factory=list)
+    window_size: list[int] = field(default_factory=list)
     attn_sink: bool = False
     qk_norm: bool = False
     size_per_head: int = 128
@@ -73,7 +72,7 @@ class ModelConfig:
     attn_cp_size: int = 1
     mlp_tp_size: int = 1
     model_format: str = 'hf'
-    expert_num: List[int] = ()
+    expert_num: list[int] = ()
     expert_router_bias: bool = False
     expert_inter_size: int = 0
     experts_per_token: int = 0
@@ -115,7 +114,7 @@ class RopeParam:
     low_freq_factor: float = None
     high_freq_factor: float = None
     original_max_position_embeddings: int = None
-    mrope_section: List[int] = None
+    mrope_section: list[int] = None
 
 
 @dataclass

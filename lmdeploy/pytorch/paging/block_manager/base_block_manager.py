@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import time
-from typing import Dict
 
 import numpy as np
 
@@ -213,7 +212,7 @@ class BaseBlockManager:
 
         self.allocator = LogicalAllocator(num_cpu_blocks, num_gpu_blocks, num_gpu_reserved)
 
-        self.block_tables: Dict[int, BlockTable] = {}
+        self.block_tables: dict[int, BlockTable] = {}
 
     @classmethod
     def num_required_blocks(cls, obj: SchedulerSequence, prealloc_size: int = 0):

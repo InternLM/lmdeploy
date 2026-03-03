@@ -2,7 +2,6 @@
 import asyncio
 import json
 import os
-from typing import Dict
 
 from dlslime import RDMAEndpoint, available_nic
 
@@ -25,7 +24,7 @@ class DLSlimeMigrationManagement:
         self.rank = init_request.rank
         self.local_engine_config: DistServeEngineConfig = (init_request.local_engine_config)
         self.remote_engine_config: DistServeEngineConfig = (init_request.remote_engine_config)
-        self.endpoint: Dict[MigrationProtocol, RDMAEndpoint] = {}
+        self.endpoint: dict[MigrationProtocol, RDMAEndpoint] = {}
         if init_request.protocol == MigrationProtocol.RDMA:
             nics = available_nic()
             device_name = nics[self.rank % len(nics)]
@@ -76,7 +75,7 @@ class DLSlimeBackend(MigrationBackendImpl):
     """DLSlime Transfer Engine."""
 
     def __init__(self):
-        self.links: Dict[str, DLSlimeMigrationManagement] = {}
+        self.links: dict[str, DLSlimeMigrationManagement] = {}
 
     def p2p_initialize(self, init_request: DistServeInitRequest):
         self.links[init_request.remote_engine_id] = DLSlimeMigrationManagement(init_request)

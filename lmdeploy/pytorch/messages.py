@@ -2,7 +2,7 @@
 import enum
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
@@ -24,8 +24,8 @@ if TYPE_CHECKING:
 logger = get_logger('lmdeploy')
 
 # vlm input type from pipeline
-InputEmbeddingType = List[np.ndarray]
-InputEmbeddingRangeType = List[List[int]]
+InputEmbeddingType = list[np.ndarray]
+InputEmbeddingRangeType = list[list[int]]
 
 
 @dataclass
@@ -52,12 +52,12 @@ class SamplingParam:
     repetition_penalty: float = 1.0
     ignore_eos: bool = False
     random_seed: int = None
-    stop_words: List[int] = field(default_factory=list)
-    bad_words: List[int] = field(default_factory=list)
+    stop_words: list[int] = field(default_factory=list)
+    bad_words: list[int] = field(default_factory=list)
     max_new_tokens: int = 512
     min_new_tokens: int = 0
-    response_format: Optional[str] = None
-    logits_processors: Optional[List[LogitsProcessor]] = None
+    response_format: str | None = None
+    logits_processors: list[LogitsProcessor] | None = None
     out_logits: bool = False
     out_last_hidden_states: bool = False
     num_logprobs: int = -1
@@ -167,7 +167,7 @@ class MessageStatus(enum.Enum):
     MIGRATION_DONE = enum.auto()
 
 
-SeqMap = Dict[int, 'SchedulerSequence']
+SeqMap = dict[int, 'SchedulerSequence']
 
 
 @dataclass
@@ -183,7 +183,7 @@ class SequenceManager:
 
     def __init__(self, seq_meta: SequenceMeta) -> None:
         self._seq_map: SeqMap = dict()
-        self._status_seq_map: Dict[MessageStatus, SeqMap] = defaultdict(dict)
+        self._status_seq_map: dict[MessageStatus, SeqMap] = defaultdict(dict)
 
         self.seq_meta = seq_meta
         self._seq_count = 0
@@ -261,8 +261,8 @@ class SchedulerSession:
                      sampling_param: SamplingParam = None,
                      adapter_name: str = None,
                      multimodals: MultiModalInputs = None,
-                     input_embeddings: List[InputEmbeddings] = None,
-                     migration_request: Optional[MigrationRequest] = None,
+                     input_embeddings: list[InputEmbeddings] = None,
+                     migration_request: MigrationRequest | None = None,
                      resp_cache: bool = False,
                      preserve_cache: bool = False) -> 'SchedulerSequence':
         """Add a new message."""
@@ -319,12 +319,12 @@ def _round_up(x, n):
 class HistoryEmbeddings:
     """History embeddings."""
 
-    def __init__(self, embeddings: List[InputEmbeddings] = None):
-        self._embeddings: List[InputEmbeddings] = []
+    def __init__(self, embeddings: list[InputEmbeddings] = None):
+        self._embeddings: list[InputEmbeddings] = []
         if embeddings is not None:
             self._embeddings.extend(embeddings)
 
-    def append(self, embeddings: List[InputEmbeddings]):
+    def append(self, embeddings: list[InputEmbeddings]):
         self._embeddings.extend(embeddings)
 
     def clone(self):
@@ -601,15 +601,15 @@ class SchedulerSequence:
     output_start_pos: int = 0
     meta: Any = None
     num_ignored_history: int = 0
-    model_meta: Dict[str, Any] = None
+    model_meta: dict[str, Any] = None
 
     # For Disaggregation
-    migration_request: Optional[MigrationRequest] = None
+    migration_request: MigrationRequest | None = None
     resp_cache: bool = False
     preserve_cache: bool = False
 
     # For logging
-    engine_events: List[EngineEvent] = field(default_factory=list)
+    engine_events: list[EngineEvent] = field(default_factory=list)
 
     # for router replay
     all_routed_experts: HistoryRouterExperts = field(default_factory=HistoryRouterExperts)
@@ -656,7 +656,7 @@ class SchedulerSequence:
         return self.history_cache[start:end]
 
     @property
-    def input_embeddings(self) -> List[InputEmbeddings]:
+    def input_embeddings(self) -> list[InputEmbeddings]:
         """Get current embeddings."""
         start = self.history_image_num
         end = start + self._num_images
@@ -698,7 +698,7 @@ class SchedulerSequence:
         else:
             return None
 
-    def append_routed_experts(self, routed_experts: Union[Tensor, np.ndarray]):
+    def append_routed_experts(self, routed_experts: Tensor | np.ndarray):
         """Append routed experts."""
         if not self.return_routed_experts:
             return
@@ -756,7 +756,7 @@ class SchedulerSequence:
         """Get logits."""
         return self.all_logits.get_logits()
 
-    def append_logits(self, logits: Union[Tensor, np.ndarray]):
+    def append_logits(self, logits: Tensor | np.ndarray):
         """Append logits."""
         if not self.return_logits:
             return
@@ -776,11 +776,11 @@ class SchedulerSequence:
     def record_event(
         self,
         event_type: EventType,
-        timestamp: Optional[float] = None,
+        timestamp: float | None = None,
     ) -> None:
         self.engine_events.append(EngineEvent.new_event(event_type, timestamp))
 
-    def _update_embeddings(self, embeddings: List[InputEmbeddings]):
+    def _update_embeddings(self, embeddings: list[InputEmbeddings]):
         """Update input embeddings."""
         self._num_history_images += self._num_images
         if embeddings is None:
@@ -800,8 +800,8 @@ class SchedulerSequence:
     def update_token_ids(self,
                          token_ids: Tensor,
                          multimodals: MultiModalInputs = None,
-                         embeddings: List[InputEmbeddings] = None,
-                         model_meta: Dict[str, Any] = None,
+                         embeddings: list[InputEmbeddings] = None,
+                         model_meta: dict[str, Any] = None,
                          mode: UpdateTokenMode = UpdateTokenMode.INPUTS,
                          **kwargs):
         """Update token ids, old token ids will be added to history."""

@@ -1,9 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import List, Tuple
 
 from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
 
-PreparedInputs = Tuple[List[int], MultiModalInputs]
+PreparedInputs = tuple[list[int], MultiModalInputs]
 
 
 class MultiModalMixin:

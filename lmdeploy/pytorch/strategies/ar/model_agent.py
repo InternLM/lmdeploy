@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import torch
 import torch.distributed as dist
@@ -14,7 +14,7 @@ from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 
 from ..base.model_agent import ExtraInputs, ExtraOutputs, ModelAgentStrategy, StoppingCriteria
 
-SeqList = List[SchedulerSequence]
+SeqList = list[SchedulerSequence]
 
 
 def get_model_inputs_next_decoding(inputs: ModelInputs, input_ids: torch.Tensor, max_q_seqlen: int,
@@ -74,8 +74,8 @@ class ARStoppingCriteria(StoppingCriteria):
     def step(self,
              token_ids: torch.Tensor,
              stop_words: torch.Tensor,
-             inputs: Optional[ModelInputs] = None,
-             extra_inputs: Optional[ARExtraInputs] = None):
+             inputs: ModelInputs | None = None,
+             extra_inputs: ARExtraInputs | None = None):
         """Check whether to stop generation."""
         num_appendable_ids = self.num_appendable_ids - 1
         stopped = num_appendable_ids <= 0
@@ -105,7 +105,7 @@ class ARModelAgentStrategy(ModelAgentStrategy):
         return inputs[last_idx]
 
     def slice_extra_inputs(self, extra_inputs: ARExtraInputs, model_inputs: ModelInputs,
-                           model_outputs: Dict[str, torch.Tensor], **kwargs) -> ARExtraInputs:
+                           model_outputs: dict[str, torch.Tensor], **kwargs) -> ARExtraInputs:
         """Slice outputs."""
         return extra_inputs
 
@@ -145,7 +145,7 @@ class ARModelAgentStrategy(ModelAgentStrategy):
         next_token_ids: torch.Tensor,
         model_metas: Any,
         extra_outputs: ARExtraOutputs,
-    ) -> Tuple['ModelInputs', ARExtraInputs]:
+    ) -> tuple['ModelInputs', ARExtraInputs]:
         """Step next decoding."""
         inputs = get_model_inputs_next_decoding(model_inputs, next_token_ids, max_q_seqlen=1, model_metas=model_metas)
         return inputs, extra_inputs

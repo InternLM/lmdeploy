@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 from dataclasses import dataclass, fields
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import torch
 
@@ -101,14 +101,14 @@ def _multinomial_sampling(scores: torch.Tensor,
     return multinomial_sampling(scores, seeds, offsets, indices)
 
 
-SeqList = List[SchedulerSequence]
+SeqList = list[SchedulerSequence]
 
 
 @dataclass
 class SamplingInputsDelta:
     num_ignore_eos: torch.Tensor = None
     random_offsets: torch.Tensor = None
-    all_ids: Optional[torch.Tensor] = None
+    all_ids: torch.Tensor | None = None
 
 
 @dataclass
@@ -126,14 +126,14 @@ class SamplingInputs:
     random_offsets: torch.Tensor = None
     max_top_k: int = 1
     min_top_p: float = 1.0
-    response_formats: Tuple[str] = ()
-    logits_processors: List[List[LogitsProcessor]] = None
-    max_num_logprobs: Optional[int] = None
-    all_ids: Optional[torch.Tensor] = None
+    response_formats: tuple[str] = ()
+    logits_processors: list[list[LogitsProcessor]] = None
+    max_num_logprobs: int | None = None
+    all_ids: torch.Tensor | None = None
     num_ignore_eos: torch.Tensor = None
     batch_size: int = 0
-    session_ctx: Optional[List[Dict[str, Any]]] = None
-    session_to_cleanup: Optional[List[int]] = None
+    session_ctx: list[dict[str, Any]] | None = None
+    session_to_cleanup: list[int] | None = None
 
     def to_device(self, device: str, non_blocking: bool = False):
         """To device."""
@@ -192,8 +192,8 @@ class FusedLogitsProcessor:
     def __init__(
         self,
         sampling_inputs: SamplingInputs,
-        logprobs_mode: Optional[str] = None,
-        guided_decoding_manager: Optional[GuidedDecodingManager] = None,
+        logprobs_mode: str | None = None,
+        guided_decoding_manager: GuidedDecodingManager | None = None,
     ):
         self.sampling_inputs: SamplingInputs = sampling_inputs
         self.logprobs_mode = logprobs_mode
@@ -346,7 +346,7 @@ class FusedLogitsProcessor:
 
         return logprobs, indices.to(torch.int32)
 
-    def cleanup_sessions(self, session_ids: List[int]):
+    def cleanup_sessions(self, session_ids: list[int]):
         if self.guided_decoding_manager:
             for session_id in session_ids:
                 self.guided_decoding_manager.remove_processor(session_id)

@@ -3,7 +3,6 @@ import asyncio
 import enum
 import os
 from collections import defaultdict
-from typing import Dict, Set, Tuple
 
 import aiohttp
 import requests
@@ -65,19 +64,19 @@ class PDConnectionPool:
     def __init__(self):
         # all prefill and decode instances
         # TODO (JimyMa): Maybe encoding instances
-        self.prefill_endpoints: Set[str] = set()
-        self.decode_endpoints: Set[str] = set()
+        self.prefill_endpoints: set[str] = set()
+        self.decode_endpoints: set[str] = set()
 
         # Links of PD Connection.
-        self.pool: Dict[Tuple[str, str], PDConnectionState] = {}
+        self.pool: dict[tuple[str, str], PDConnectionState] = {}
 
         # put migrating session to `self.migration_session_shelf` for increasing fault tolerance
         # if a session is finished, then pop it from `self.migration_session_shelf`
         # if a decode instance is disconnected, then gc all blocks of these sessions in prefill instance.
-        self.migration_session_shelf: Dict[str, Set[int]] = defaultdict(set)
+        self.migration_session_shelf: dict[str, set[int]] = defaultdict(set)
 
         # conn_perform handler queue
-        self.waiting_conn: asyncio.Queue[Tuple[PDConnectionMessage, asyncio.Event]] = (asyncio.Queue())
+        self.waiting_conn: asyncio.Queue[tuple[PDConnectionMessage, asyncio.Event]] = (asyncio.Queue())
 
         # conn Registry Lock
         self.conn_lock = asyncio.Lock()
@@ -112,10 +111,10 @@ class PDConnectionPool:
             # TODO(JimyMa): handle side-effect by kvcache migration
             self.decode_endpoints.remove(endpoint)
 
-    def shelf_prefill_session(self, conn_key: Tuple[str, str], session_id: int):
+    def shelf_prefill_session(self, conn_key: tuple[str, str], session_id: int):
         self.migration_session_shelf[conn_key].add(session_id)
 
-    def unshelf_prefill_session(self, conn_key: Tuple[str, str], session_id: int):
+    def unshelf_prefill_session(self, conn_key: tuple[str, str], session_id: int):
         self.migration_session_shelf[conn_key].remove(session_id)
 
     async def connect(self, conn_req: PDConnectionMessage):
@@ -264,11 +263,11 @@ class PDConnectionPool:
             return False
         return link.status == PDConnectionStatus.Connected
 
-    def drop(self, pd_key: Tuple[str, str]):
+    def drop(self, pd_key: tuple[str, str]):
         left = pd_key[0]
         right = pd_key[1]
 
-        def cache_free(server_endpoint, cache_free_request: DistServeCacheFreeRequest) -> Dict:
+        def cache_free(server_endpoint, cache_free_request: DistServeCacheFreeRequest) -> dict:
             try:
                 requests.post(get_server_api(server_endpoint, 'distserve/free_cache'),
                               json=cache_free_request.model_dump(mode='json'))
