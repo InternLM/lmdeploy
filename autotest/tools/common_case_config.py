@@ -48,7 +48,7 @@ TURBOMIND_PR_TEST_LLM_GPU1 = [{
 }]
 
 TURBOMIND_PR_TEST_MLLM_GPU1 = [{
-    'model': 'Qwen/Qwen2.5-VL-7B-Instruct',
+    'model': 'OpenGVLab/InternVL3-8B',
     'backend': 'turbomind',
     'communicator': 'cuda-ipc',
     'quant_policy': 0,
@@ -57,7 +57,7 @@ TURBOMIND_PR_TEST_MLLM_GPU1 = [{
     },
     'extra_params': {}
 }, {
-    'model': 'Qwen/Qwen2.5-VL-7B-Instruct',
+    'model': 'OpenGVLab/InternVL3-8B',
     'backend': 'turbomind',
     'communicator': 'nccl',
     'quant_policy': 8,

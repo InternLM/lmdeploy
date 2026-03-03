@@ -1,7 +1,7 @@
 import pytest
 from tools.common_case_config import (TURBOMIND_FALLBACK_TEST_MLLM_GPU1, TURBOMIND_PR_TEST_MLLM_GPU1,
                                       TURBOMIND_PR_TEST_MLLM_GPU2)
-from utils.config_utils import get_func_config_list
+from utils.config_utils import get_func_config_list, get_workerid
 from utils.pipeline_chat import run_pipeline_mllm_test
 
 BACKEND = 'turbomind'
@@ -54,6 +54,7 @@ def test_restful_chat_fallback_backend_tp1(config, run_config, worker_id):
 @pytest.mark.pr_test
 @pytest.mark.parametrize('run_config', TURBOMIND_PR_TEST_MLLM_GPU1)
 def test_pipeline_pr_test(config, run_config, worker_id):
+    worker_id = 'gw' + str(6 + get_workerid(worker_id))
     run_pipeline_mllm_test(config, run_config, worker_id, is_smoke=True)
 
 
@@ -62,4 +63,5 @@ def test_pipeline_pr_test(config, run_config, worker_id):
 @pytest.mark.pr_test
 @pytest.mark.parametrize('run_config', TURBOMIND_PR_TEST_MLLM_GPU2)
 def test_pipeline_pr_tp2_test(config, run_config, worker_id):
+    worker_id = 'gw' + str(3 + get_workerid(worker_id))
     run_pipeline_mllm_test(config, run_config, worker_id, is_smoke=True)

@@ -17,6 +17,7 @@ config:
         OpenGVLab/InternVL3-38B: 2
         Qwen/Qwen3-235B-A22B: 8
         Qwen/Qwen3-30B-A3B: 2
+        Qwen/Qwen3-32B: 2
         Qwen/Qwen3-VL-30B-A3B-Instruct: 2
         Qwen/Qwen3-30B-A3B-Base: 2
         Qwen/Qwen2.5-VL-32B-Instruct: 2
@@ -35,11 +36,13 @@ turbomind_chat_model:
         - meta-llama/Meta-Llama-3-8B-Instruct
         - internlm/internlm3-8b-instruct
         - internlm/internlm3-8b-instruct-awq
+        - OpenGVLab/InternVL3-8B
         - OpenGVLab/InternVL3-38B
         - OpenGVLab/InternVL3_5-30B-A3B
         - Qwen/Qwen3-0.6B
         - Qwen/Qwen3-4B
         - Qwen/Qwen3-8B
+        - Qwen/Qwen3-32B
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-30B-A3B-GPTQ-Int4
         - Qwen/Qwen3-235B-A22B
@@ -60,11 +63,13 @@ pytorch_chat_model:
         - meta-llama/Meta-Llama-3-1-70B-Instruct
         - meta-llama/Meta-Llama-3-8B-Instruct
         - internlm/internlm3-8b-instruct
+        - OpenGVLab/InternVL3-8B
         - OpenGVLab/InternVL3-38B
         - OpenGVLab/InternVL3_5-30B-A3B
         - Qwen/Qwen3-0.6B
         - Qwen/Qwen3-4B
         - Qwen/Qwen3-8B
+        - Qwen/Qwen3-32B
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-235B-A22B
         - Qwen/Qwen3-30B-A3B-GPTQ-Int4
@@ -80,6 +85,7 @@ pytorch_chat_model:
 
 turbomind_vl_model:
     tp:
+        - OpenGVLab/InternVL3-8B
         - OpenGVLab/InternVL3-38B
         - OpenGVLab/InternVL3_5-30B-A3B
         - Qwen/Qwen2.5-VL-7B-Instruct
@@ -87,6 +93,7 @@ turbomind_vl_model:
 
 pytorch_vl_model:
     tp:
+        - OpenGVLab/InternVL3-8B
         - OpenGVLab/InternVL3_5-30B-A3B
         - Qwen/Qwen3-VL-8B-Instruct
         - Qwen/Qwen3-VL-30B-A3B-Instruct
@@ -128,6 +135,7 @@ turbomind_quantization:
         - Qwen/Qwen3-0.6B
         - Qwen/Qwen3-4B
         - Qwen/Qwen3-8B
+        - Qwen/Qwen3-32B
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-30B-A3B-GPTQ-Int4
         - Qwen/Qwen3-235B-A22B
@@ -166,6 +174,7 @@ pytorch_quantization:
         - Qwen/Qwen3-0.6B
         - Qwen/Qwen3-4B
         - Qwen/Qwen3-8B
+        - Qwen/Qwen3-32B
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-235B-A22B
         - Qwen/Qwen3-30B-A3B-GPTQ-Int4
