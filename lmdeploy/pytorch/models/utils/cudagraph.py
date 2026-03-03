@@ -80,6 +80,8 @@ class CudaGraphMeta:
     mla_index_topk: Optional[int] = None
     decode_query_len: int = 1
     use_fa3_decoding: bool = False
+    is_ssm: bool = False
+    use_mrope: bool = False
 
 
 class CudaGraphMixin:
@@ -190,6 +192,15 @@ class CudaGraphMixin:
                                                                              max_seqlen_k=decode_query_len,
                                                                              cache_seqlens=input_buffers['kv_seqlens'])
 
+        # mrope
+        if graph_meta.use_mrope:
+            input_buffers['mrope_position_ids'] = torch.zeros(3, max_tokens, dtype=torch.int64, device=device)
+
+        # ssm
+        if graph_meta.is_ssm:
+            state_ids = torch.full((max_batches, ), -1, dtype=torch.int64, device=device)
+            input_buffers['state_ids'] = state_ids
+
         return input_buffers
 
     @record_function('fill_buffers_cudagraph')
@@ -269,6 +280,7 @@ class CudaGraphMixin:
             past_key_values=past_key_values,
             attn_metadata=attn_metadata,
         )
+        new_inputs.update(kwargs)
 
         new_inputs['input_ids'] = input_buffers['input_ids']
         new_inputs['position_ids'] = input_buffers['position_ids']
@@ -276,7 +288,20 @@ class CudaGraphMixin:
         if inputs_embeds is not None:
             new_inputs['inputs_embeds'] = input_buffers['inputs_embeds']
 
-        new_inputs.update(kwargs)
+        # mrope
+        if graph_meta.use_mrope:
+            mrope_position_ids = kwargs.get('mrope_position_ids', None)
+            if mrope_position_ids is not None:
+                input_buffers['mrope_position_ids'][:, :num_tokens] = mrope_position_ids
+                new_inputs['mrope_position_ids'] = input_buffers['mrope_position_ids']
+
+        # ssm
+        if graph_meta.is_ssm:
+            state_ids = kwargs['state_ids']
+            input_buffers['state_ids'].fill_(-1)
+            input_buffers['state_ids'][:state_ids.size(0)].copy_(state_ids)
+            new_inputs['state_ids'] = input_buffers['state_ids']
+
         return new_inputs
 
     def update_context_cudagraph(self, graph_meta: CudaGraphMeta, context: StepContext):
@@ -292,6 +317,14 @@ class CudaGraphMixin:
         context.q_seqlens = input_buffers['q_seqlens']
         context.kv_seqlens = input_buffers['kv_seqlens']
         context.q_start_loc = input_buffers['q_start_loc']
+
+        # mrope
+        if graph_meta.use_mrope:
+            context.mrope_pos_ids = input_buffers['mrope_position_ids']
+
+        # ssm
+        if graph_meta.is_ssm:
+            context.state_offsets = input_buffers['state_ids']
 
     def get_outputs_cudagraph(self, output_buffers: Dict[str, torch.Tensor], input_ids: Tensor, **kwargs):
         """Get outputs from buffers."""

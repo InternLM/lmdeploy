@@ -24,7 +24,7 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_lo
 from .qwen2_5_vl import Qwen2_5_VisionRotaryEmbedding as Qwen3_5VisionRotaryEmbedding
 from .qwen2_5_vl import Qwen2_5_VLInputProcessor as Qwen3_5InputProcessor
 from .qwen2_5_vl import Qwen2_5_VLVisionAttention as Qwen3_5VisionAttention
-from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
+from .utils.cudagraph import CudaGraphMixin
 from .utils.model import DeployModelMixinV1, vlm_model
 
 
@@ -1174,46 +1174,6 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
                             break
                     param = params_dict[name]
                     load_weight(param, loaded_weight)
-
-    def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, **kwargs):
-        """Make cudagraph buffers from forward inputs."""
-
-        max_batchs = graph_meta.max_batchs
-        device = graph_meta.device
-        max_tokens = graph_meta.max_tokens
-
-        input_buffers = super().make_buffers_cudagraph(graph_meta=graph_meta, **kwargs)
-        mrope_position_ids = kwargs.get('mrope_position_ids', None)
-        if mrope_position_ids is not None:
-            input_buffers['mrope_position_ids'] = mrope_position_ids.new_zeros(3, max_tokens)
-
-        state_ids = torch.full((max_batchs, ), -1, dtype=torch.long, device=device)
-        input_buffers['state_ids'] = state_ids
-        return input_buffers
-
-    def fill_buffers_cudagraph(self, graph_meta: CudaGraphMeta, *args, **kwargs):
-        """Fill cudagraph buffers from forward inputs."""
-        input_buffers = graph_meta.input_buffers
-        new_inputs = super().fill_buffers_cudagraph(graph_meta, *args, **kwargs)
-        state_ids = kwargs['state_ids']
-        input_buffers['state_ids'].fill_(-1)
-        input_buffers['state_ids'][:state_ids.size(0)].copy_(state_ids)
-        new_inputs['state_ids'] = input_buffers['state_ids']
-
-        input_ids = kwargs.get('input_ids')
-        num_tokens = input_ids.size(-1)
-        new_batch_size = graph_meta.max_batchs
-
-        is_decoding = graph_meta.is_decoding
-        mrope_position_ids = kwargs.get('mrope_position_ids', None)
-        if mrope_position_ids is not None:
-            input_buffers['mrope_position_ids'][:, :num_tokens] = mrope_position_ids
-            if is_decoding:
-                new_inputs['mrope_position_ids'] = input_buffers['mrope_position_ids'][:, :new_batch_size]
-            else:
-                new_inputs['mrope_position_ids'] = input_buffers['mrope_position_ids']
-
-        return new_inputs
 
     def get_input_processor(self) -> BaseModelInputProcessor:
         """Get input processor."""

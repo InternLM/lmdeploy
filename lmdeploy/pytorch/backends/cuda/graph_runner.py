@@ -89,6 +89,8 @@ class CUDASingleGraphRunner:
             mla_index_topk=getattr(self.model_config, 'mla_index_topk', None),
             decode_query_len=decode_query_len,
             use_fa3_decoding=model_config.model_paradigm == 'ar_spec',
+            is_ssm=len(model_config.states_shapes) > 0,
+            use_mrope=model_config.use_mrope,
         )
         self.device = device
         self.max_batches = max_batches
