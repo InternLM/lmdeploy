@@ -25,11 +25,18 @@ struct GatedDeltaNetWeight: public core::Module {
 
     void prepare();
 
-    // Projections matching HF: in_proj_qkv, in_proj_z, in_proj_b, in_proj_a, out_proj
+    // Individual projections – populated at load time from the checkpoint.
+    // After prepare() completes they are released (null-ed) to free HBM.
     LlamaDenseWeight in_proj_qkv;  // hidden -> key_dim*2 + value_dim
     LlamaDenseWeight in_proj_z;    // hidden -> value_dim (output gate)
     LlamaDenseWeight in_proj_b;    // hidden -> num_v_heads (beta, per-head scalar)
     LlamaDenseWeight in_proj_a;    // hidden -> num_v_heads (alpha/dt, per-head scalar)
+
+    // Fused projection: hidden -> (conv_dim + value_dim + 2*v_heads_tp).
+    // Built from the four above in prepare(); used for all inference GEMMs.
+    // Reduces p.input HBM reads from 4× to 1× per forward pass.
+    LlamaDenseWeight in_proj_all;
+
     LlamaDenseWeight out_proj;     // value_dim -> hidden
 
     // Non-dense parameters
