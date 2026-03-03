@@ -7,5 +7,4 @@ if [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
 else
     pip install nvidia-nccl-cu12
 fi
-
 python3 -m build -w -o /wheels -v .
