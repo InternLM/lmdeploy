@@ -42,7 +42,7 @@ conda create -n lmdeploy python=3.10 -y
 conda activate lmdeploy
 
 # 安装 llm-compressor
-pip install llm-compressor
+pip install llmcompressor
 
 # 下载 lmdeploy 源码，运行量化用用例
 git clone https://github.com/InternLM/lmdeploy

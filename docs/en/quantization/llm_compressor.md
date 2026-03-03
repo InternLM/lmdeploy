@@ -44,7 +44,7 @@ conda create -n lmdeploy python=3.10 -y
 conda activate lmdeploy
 
 # Install llm-compressor
-pip install llm-compressor
+pip install llmcompressor
 
 # Clone lmdeploy source code and run the quantization example
 git clone https://github.com/InternLM/lmdeploy
