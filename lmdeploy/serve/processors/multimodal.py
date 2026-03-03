@@ -90,69 +90,66 @@ class MultimodalProcessor:
         return result
 
     @staticmethod
+    def _parse_multimodal_item(i: int, in_messages: List[Dict], out_messages: List[Dict], media_io_kwargs: Dict[str,
+                                                                                                                Any]):
+        """Synchronous helper to parse a single multimodal message item."""
+        role = in_messages[i]['role']
+        content = in_messages[i]['content']
+        assert role in ['system', 'user', 'assistant'], \
+            f'unsupported role "{role}"'
+
+        if role != 'user' or isinstance(content, str):
+            out_messages[i] = in_messages[i]
+            return
+
+        assert isinstance(content, list)
+        out_message = dict(role=role, content=[])
+
+        for item in content:
+            item_type = item.get('type')
+            if item_type == 'text':
+                out_message['content'].append(item)
+                continue
+
+            item_params = item.get(item_type, {}).copy()
+            url = item_params.pop('url', None) or item_params.pop('data', None)
+
+            if item_type in ['image_url', 'image_data']:
+                # TODO: zhouxinyu, support image_data array inputs
+                modality = Modality.IMAGE
+                media_io = ImageMediaIO(**media_io_kwargs.get('image', {}))
+                data = load_from_url(url, media_io)
+            elif item_type == 'video_url':
+                modality = Modality.VIDEO
+                media_io = VideoMediaIO(image_io=ImageMediaIO(), **media_io_kwargs.get('video', {}))
+                data, metadata = load_from_url(url, media_io)
+                item_params['video_metadata'] = metadata
+            elif item_type == 'time_series_url':
+                modality = Modality.TIME_SERIES
+                media_io = TimeSeriesMediaIO(**media_io_kwargs.get('time_series', {}))
+                data = load_from_url(url, media_io)
+            else:
+                raise NotImplementedError(f'unknown type: {item_type}')
+
+            out_message['content'].append({'type': modality, 'data': data, **item_params})
+
+        out_messages[i] = out_message
+
+    @staticmethod
     async def async_parse_multimodal_item(messages: List[Dict],
                                           media_io_kwargs: Dict[str, Any] | None = None) -> List[Dict]:
         """Convert user-input multimodal data into GPT4V message format."""
-
-        if isinstance(messages, Dict):
+        if isinstance(messages, dict):
             messages = [messages]
         assert isinstance(messages, List)
 
         out_messages = [None] * len(messages)
         media_io_kwargs = media_io_kwargs or {}
-
-        def _parse_multimodal_item(i, in_messages, out_messages, media_io_kwargs):
-            role = in_messages[i]['role']
-            content = in_messages[i]['content']
-            assert role in ['system', 'user', 'assistant'], \
-                f'unsupported role "{role}"'
-            if role != 'user' or isinstance(content, str):
-                # the content is a user's prompt or an assistant's prompt,
-                # returning it directly
-                out_messages[i] = in_messages[i]
-                return
-            # the role is a user and the content is a list, in which there
-            # might be image_url or image_data
-            assert isinstance(content, List)
-
-            out_message = dict(role=role, content=[])
-            for item in content:
-                item_type = item.get('type')
-
-                if item_type == 'text':
-                    out_message['content'].append(item)
-                    continue
-
-                item_params = item.get(item_type).copy()
-                # TODO: zhouxinyu, support image_data array inputs
-                url = item_params.pop('url', None) or item_params.pop('data', None)
-
-                modality = None
-                data = None
-                metadata = None
-                if item_type in ['image_url', 'image_data']:
-                    modality = Modality.IMAGE
-                    image_io = ImageMediaIO(**media_io_kwargs.get('image', {}))
-                    data = load_from_url(url, image_io)
-                elif item_type == 'video_url':
-                    modality = Modality.VIDEO
-                    video_io = VideoMediaIO(media_io_kwargs.get('video', {}))
-                    data, metadata = load_from_url(url, video_io)
-                    item_params['video_metadata'] = metadata
-                elif item_type == 'time_series_url':
-                    modality = Modality.TIME_SERIES
-                    ts_io = TimeSeriesMediaIO(media_io_kwargs.get('time_series_url', {}))
-                    data = load_from_url(url, ts_io)
-                else:
-                    raise NotImplementedError(f'unknown type: {item_type}')
-
-                out_message['content'].append({'type': modality, 'data': data, **item_params})
-
-            out_messages[i] = out_message
+        loop = asyncio.get_event_loop()
 
         await asyncio.gather(*[
-            asyncio.get_event_loop().run_in_executor(None, _parse_multimodal_item, i, messages, out_messages,
-                                                     media_io_kwargs) for i in range(len(messages))
+            loop.run_in_executor(None, MultimodalProcessor._parse_multimodal_item, i, messages, out_messages,
+                                 media_io_kwargs) for i in range(len(messages))
         ])
         return out_messages
 

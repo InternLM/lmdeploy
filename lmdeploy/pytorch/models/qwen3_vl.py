@@ -621,18 +621,20 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         grid_thw = None
         pos_embeds = None
         if context.input_multimodals is not None:
-            vision_inputs = [input_mm.get('mm_data', []) for input_mm in context.input_multimodals]
+            mm_inputs = [input_mm.get('mm_data', []) for input_mm in context.input_multimodals]
+            # flatten batch
+            mm_inputs = [item for sublist in mm_inputs for item in sublist]
 
-            if len(vision_inputs) > 0:
-                vision_inputs = [item for sublist in vision_inputs for item in sublist]
-                pixel_values = torch.cat([inp.data for inp in vision_inputs])
-                image_token_id = vision_inputs[0].meta.get('image_token_id')
-                video_token_id = vision_inputs[0].meta.get('video_token_id')
-                if image_token_id:
-                    image_mask = input_ids == image_token_id
-                elif video_token_id:
-                    image_mask = input_ids == video_token_id
-                grid_thw = torch.cat([data.meta['grid_thw'] for data in vision_inputs]).cpu()
+            if len(mm_inputs) > 0:
+                modality = mm_inputs[0].modality
+                pixel_values = torch.cat([inp.data for inp in mm_inputs])
+
+                image_token_id = mm_inputs[0].meta.get('image_token_id')
+                video_token_id = mm_inputs[0].meta.get('video_token_id')
+                mm_token_id = image_token_id if modality == Modality.IMAGE else video_token_id
+                image_mask = (input_ids == mm_token_id)
+
+                grid_thw = torch.cat([data.meta['grid_thw'] for data in mm_inputs]).cpu()
                 vis_pos_emb = self.visual.rot_pos_emb(grid_thw)
                 pos_embeds = self.visual.fast_pos_embed_interpolate(grid_thw)
                 vis_cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2],
@@ -916,7 +918,6 @@ class Qwen3VLInputProcessor(BaseModelInputProcessor):
                                          start=start,
                                          end=start + num_pad,
                                          meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
-
             elif modality == Modality.VIDEO:
                 pixel_values_videos = input_mm['pixel_values_videos']
                 video_grid_thw = input_mm['video_grid_thw']

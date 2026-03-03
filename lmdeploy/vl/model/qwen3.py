@@ -27,11 +27,13 @@ class Qwen3VLModel(VisionModel):
 
     def build_preprocessor(self):
         check_transformers()
-
         self.processor = AutoProcessor.from_pretrained(self.model_path)
+
+        # image tokens
         self.image_token = self.processor.image_token
         self.image_token_id = self.processor.image_token_id
 
+        # video tokens
         self.contains_video_input = False
         self.video_token = self.processor.video_token
         self.video_token_id = self.processor.video_token_id
