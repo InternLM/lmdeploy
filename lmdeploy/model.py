@@ -737,6 +737,14 @@ class HFChatTemplate(BaseChatTemplate):
             prompt = prompt[len(self.sentinel_system_prompt):] if len(self.sentinel_system_prompt) > 0 else prompt
         if messages[-1]['role'] == 'assistant' and len(self.assistant_end) > 0:
             prompt = prompt[:-len(self.assistant_end)]  # prefix of response to let the model complete the response
+        elif add_generation_prompt:
+            # Force the model to generate the <think> tag by stripping it from the prompt end
+            # (e.g. Qwen models inject it directly into the prompt template)
+            if prompt.endswith('<think>\n\n'):
+                prompt = prompt[:-len('<think>\n\n')]
+            elif prompt.endswith('<think>\n'):
+                prompt = prompt[:-len('<think>\n')]
+        
         if self.is_gpt_oss and not kwargs.get('tools'):
             # for gpt-oss model, remove this seems more conducive to instruction following.
             prompt = prompt.replace('commentary, ', '', 1)
