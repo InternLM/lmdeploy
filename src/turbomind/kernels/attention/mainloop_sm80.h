@@ -96,7 +96,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
     template<int head_dim, class CacheIter, class StoreS, int Stages_>
     __device__ void Run(Sm80_CpAsync<Stages_>,
                         std::integral_constant<int, head_dim>,
-                        std::false_type, // is MLA
+                        std::false_type,  // is MLA
                         FragQ&         frag_Q,
                         CacheIter&     cache_iter,
                         FragO&         frag_O,
@@ -223,7 +223,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
     template<class CacheIter, class StoreS>
     __device__ void Run(Sm80_CpAsync<2>,
                         std::integral_constant<int, 192>,
-                        std::false_type, // is MLA
+                        std::false_type,  // is MLA
                         FragQ&         frag_Q,
                         CacheIter&     cache_iter,
                         FragO&         frag_O,
@@ -329,7 +329,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
     template<int head_dim, class CacheIter, class StoreS>
     __device__ void Run(Sm80_CpAsync<2>,
                         std::integral_constant<int, head_dim>,
-                        std::false_type, // is MLA
+                        std::false_type,  // is MLA
                         FragQ&         frag_Q,
                         CacheIter&     cache_iter_,
                         FragO&         frag_O,
@@ -506,7 +506,8 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
             __pipeline_commit();
             cache_iter.Advance();
 
-            Impl::ComputeQK(state_QK, frag_S, pipe_iter.r, [](int) {}, [] {});
+            Impl::ComputeQK(
+                state_QK, frag_S, pipe_iter.r, [](int) {}, [] {});
 
             if constexpr (is_mask) {
                 ApplyCasualMask(frag_S, offset_Q, offset_K, window_size);
@@ -517,7 +518,8 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
             Impl::ConvertStoP(frag_S, state_PV.frag_P, storage);
 
             state_PV.Load(0, pipe_iter.r);
-            Impl::ComputePV(state_PV, frag_O, pipe_iter.r, [](int) {}, [] {});
+            Impl::ComputePV(
+                state_PV, frag_O, pipe_iter.r, [](int) {}, [] {});
 
             Wait();
             state_QK.Load(0, (++pipe_iter).r);

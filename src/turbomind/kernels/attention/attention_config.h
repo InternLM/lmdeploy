@@ -65,9 +65,9 @@ struct AttentionConfig<arch::Sm80, T, 576, CacheType::kLinear> {
     static constexpr int CTA_S  = 32;
     static constexpr int WARP_Q = 16;
     static constexpr int WARP_S = CTA_S;
-    using Attention = Impl<MMA_16816, T, T, 1, CTA_Q, CTA_S, 1, WARP_Q, WARP_S, 576, 2>;
-    using CacheIter = LinearIteratorFactory<T, CTA_S, 576>;
-    using Kernel    = AttentionUniversal<arch::Sm80, Mainloop<Sm80_CpAsync<2>, Attention>, CacheIter, AttentionCtaMap>;
+    using Attention             = Impl<MMA_16816, T, T, 1, CTA_Q, CTA_S, 1, WARP_Q, WARP_S, 576, 2>;
+    using CacheIter             = LinearIteratorFactory<T, CTA_S, 576>;
+    using Kernel = AttentionUniversal<arch::Sm80, Mainloop<Sm80_CpAsync<2>, Attention>, CacheIter, AttentionCtaMap>;
 };
 
 template<class T, int HeadDim>
@@ -84,9 +84,9 @@ struct AttentionConfig<arch::Sm75, T, 576, CacheType::kLinear> {
     static constexpr int CTA_S  = 32;
     static constexpr int WARP_Q = 16;
     static constexpr int WARP_S = CTA_S;
-    using Attention = Impl<MMA_1688, T, T, 1, CTA_Q, CTA_S, 1, WARP_Q, WARP_S, 576, 2>;
-    using CacheIter = LinearIteratorFactory<T, CTA_S, 576>;
-    using Kernel    = AttentionUniversal<arch::Sm75, Mainloop<arch::Sm70, Attention>, CacheIter, AttentionCtaMap>;
+    using Attention             = Impl<MMA_1688, T, T, 1, CTA_Q, CTA_S, 1, WARP_Q, WARP_S, 576, 2>;
+    using CacheIter             = LinearIteratorFactory<T, CTA_S, 576>;
+    using Kernel = AttentionUniversal<arch::Sm75, Mainloop<arch::Sm70, Attention>, CacheIter, AttentionCtaMap>;
 };
 
 template<class T, int HeadDim, CacheType Ctype>
