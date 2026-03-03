@@ -112,7 +112,7 @@ struct LlamaAttentionWeight: public core::Module {
     LlamaDenseWeight q_a_proj;
     LlamaDenseWeight q_b_proj;
     LlamaDenseWeight kv_a_proj;
-    LlamaDenseWeight kv_b_proj;
+    // LlamaDenseWeight kv_b_proj;
 
     Tensor q_a_layernorm;
     Tensor kv_a_layernorm;
