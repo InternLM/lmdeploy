@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from __future__ import annotations
+
 import asyncio
 import atexit
 import concurrent.futures
@@ -128,7 +130,7 @@ class Pipeline:
 
     def stream_infer(self,
                      prompts: list[str] | str | list[dict] | list[list[dict]] | tuple | list[tuple],
-                     sessions: 'Session' | list['Session'] | None = None,
+                     sessions: Session | list[Session] | None = None,
                      gen_config: GenerationConfig | list[GenerationConfig] | None = None,
                      do_preprocess: bool = True,
                      adapter_name: str | None = None,
@@ -168,12 +170,12 @@ class Pipeline:
         self.async_engine.close()
 
     def chat(self,
-             prompt: str | tuple[str, 'Image' | list['Image']],
+             prompt: str | tuple[str, Image | list[Image]],
              session=None,
              gen_config: GenerationConfig | None = None,
              stream_response=False,
              adapter_name=None,
-             **kwargs) -> 'Session' | Iterator:
+             **kwargs) -> Session | Iterator:
         """Chat.
 
         Args:
@@ -228,7 +230,7 @@ class Pipeline:
 
         return session
 
-    def session(self) -> 'Session':
+    def session(self) -> Session:
         """Create a new session."""
         return self.session_mgr.get()
 
@@ -333,7 +335,7 @@ class Pipeline:
 
     def _request_generator(self,
                            prompts: list[str] | str | list[dict] | list[list[dict]],
-                           sessions: list['Session'] | 'Session' | None = None,
+                           sessions: list[Session] | Session | None = None,
                            gen_config: GenerationConfig | list[GenerationConfig] | None = None,
                            **kwargs):
         """Generate requests."""
@@ -471,7 +473,7 @@ class Pipeline:
         return loss_sum / target_count
 
     def _get_ppl(self,
-                 sessions: list['Session'],
+                 sessions: list[Session],
                  input_ids: list[list[int]],
                  max_input_len: int,
                  target_ids=None,
