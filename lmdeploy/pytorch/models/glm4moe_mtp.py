@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Dict, Iterable, List, Tuple
+from typing import Iterable
 
 import torch
 from torch import nn
@@ -22,7 +22,7 @@ class Glm4MoeMTPDecoderLayer(Glm4MoeDecoderLayer):
                  layer_idx: int,
                  dtype: torch.dtype = None,
                  device: torch.device = None):
-        super().__init__(config, layer_idx, dtype=dtype, device=device)
+        nn.Module.__init__(self)
         self.layer_idx = layer_idx
         quantization_config = getattr(config, 'quantization_config', None)
 
@@ -75,8 +75,8 @@ class Glm4MoeMTPModel(DeepseekMTPModel):
             build_rotary_embedding_func=build_rotary_embedding_from_config,
         )
 
-    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
-                             expert_params_mapping: List):
+    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
+                             expert_params_mapping: list[list[str]]):
         """Load weight experts."""
         for (param_name, weight_name, expert_id, shard_id) in expert_params_mapping:
             if weight_name not in name:
@@ -89,7 +89,7 @@ class Glm4MoeMTPModel(DeepseekMTPModel):
             param = params_dict[name]
             load_weight(param, loaded_weight)
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
 
         def __skip_nextn(name, nextn_keys):
