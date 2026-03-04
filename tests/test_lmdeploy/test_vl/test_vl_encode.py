@@ -6,6 +6,7 @@ from lmdeploy.vl import (encode_image_base64, encode_time_series_base64, encode_
 
 def test_image_encode_decode():
     url = 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg'
+
     img1 = load_image(url)
     # use PNG for lossless pixel-perfect comparison
     b64 = encode_image_base64(url, format='PNG')
@@ -19,6 +20,7 @@ def test_image_encode_decode():
 def test_video_encode_decode():
     # url = 'https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2-VL/space_woaudio.mp4'
     url = 'https://raw.githubusercontent.com/CUHKSZzxy/Online-Data/main/clip_3_removed.mp4'
+
     # num_frames=4 to keep test fast
     vid1, meta1 = load_video(url, num_frames=4)
     b64 = encode_video_base64(url, num_frames=4, format='JPEG')
@@ -31,15 +33,18 @@ def test_video_encode_decode():
         'video_backend': 'opencv',
         'frames_indices': [0, 165, 331, 497]
     }
+
     assert vid1.shape == vid2.shape
-    # JPEG is lossy, so we check mean pixel difference is small
-    assert np.mean(np.abs(vid1.astype(float) - vid2.astype(float))) < 2.0
+    assert np.mean(np.abs(vid1.astype(float) - vid2.astype(float))) < 2.0  # JPEG is lossy
     assert meta1 == gt_meta
+    assert meta1['total_num_frames'] == gt_meta['total_num_frames']
+    assert meta1['frames_indices'] == gt_meta['frames_indices']
 
 
 def test_time_series_encode_decode():
-    # url = "https://raw.githubusercontent.com/CUHKSZzxy/Online-Data/main/0092638_seism.npy"
+    # url = "https://huggingface.co/internlm/Intern-S1-Pro/raw/main/0092638_seism.npy"
     url = 'https://raw.githubusercontent.com/CUHKSZzxy/Online-Data/main/0092638_seism.npy'
+
     ts1 = load_time_series(url)
     b64 = encode_time_series_base64(url)
     ts2 = load_time_series(f'data:time_series/npy;base64,{b64}')

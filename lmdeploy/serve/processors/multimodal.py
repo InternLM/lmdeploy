@@ -112,22 +112,24 @@ class MultimodalProcessor:
                 continue
 
             item_params = item.get(item_type, {}).copy()
-            url = item_params.pop('url', None) or item_params.pop('data', None)
+            data_src = item_params.pop('url', None) or item_params.pop('data', None)
 
-            if item_type in ['image_url', 'image_data']:
-                # TODO: zhouxinyu, support image_data array inputs
+            if item_type == 'image_data':
                 modality = Modality.IMAGE
-                media_io = ImageMediaIO(**media_io_kwargs.get('image', {}))
-                data = load_from_url(url, media_io)
+                data = data_src
+            elif item_type == 'image_url':
+                modality = Modality.IMAGE
+                img_io = ImageMediaIO(**media_io_kwargs.get('image', {}))
+                data = load_from_url(data_src, img_io)
             elif item_type == 'video_url':
                 modality = Modality.VIDEO
-                media_io = VideoMediaIO(image_io=ImageMediaIO(), **media_io_kwargs.get('video', {}))
-                data, metadata = load_from_url(url, media_io)
+                vid_io = VideoMediaIO(image_io=ImageMediaIO(), **media_io_kwargs.get('video', {}))
+                data, metadata = load_from_url(data_src, vid_io)
                 item_params['video_metadata'] = metadata
             elif item_type == 'time_series_url':
                 modality = Modality.TIME_SERIES
-                media_io = TimeSeriesMediaIO(**media_io_kwargs.get('time_series', {}))
-                data = load_from_url(url, media_io)
+                ts_io = TimeSeriesMediaIO(**media_io_kwargs.get('time_series', {}))
+                data = load_from_url(data_src, ts_io)
             else:
                 raise NotImplementedError(f'unknown type: {item_type}')
 

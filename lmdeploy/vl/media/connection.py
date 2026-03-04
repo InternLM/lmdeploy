@@ -53,6 +53,7 @@ def _load_file_url(url_spec: ParseResult, media_io: MediaIO[_M]) -> _M:
 
 
 def load_from_url(url: str, media_io: MediaIO[_M]) -> _M:
+    """Load media from a HTTP, data or file url."""
     url_spec = urlparse(url)
 
     if url_spec.scheme and url_spec.scheme.startswith('http'):
