@@ -22,14 +22,14 @@ class WeightOnlyQLinear(nn.Module):
         group_size (int): size of the quantization group.
         in_features (int): size of each input sample.
         out_features (int): size of each output sample.
-        bias (Tensor, optional): Defaults to None.
+        bias (bool): Defaults to True.
     """
 
     def __init__(
         self,
         in_features: int,
         out_features: int,
-        bias: torch.Tensor | None = True,
+        bias: bool = True,
         w_bit: int = 4,
         symmetry: bool = False,
         group_size: int = 128,
