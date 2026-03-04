@@ -278,4 +278,4 @@ class TorchVisionVideoLoader(VideoLoader):
         tmp_file.write(data)
         tmp_file.close()
 
-        self.load_file(Path(tmp_file.name), num_frames=num_frames, **kwargs)
+        return self.load_file(Path(tmp_file.name), num_frames=num_frames, **kwargs)
