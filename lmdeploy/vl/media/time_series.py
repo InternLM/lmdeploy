@@ -22,8 +22,8 @@ class TimeSeriesMediaIO(MediaIO[npt.NDArray]):
         self.kwargs = kwargs
 
     def load_bytes(self, data: bytes) -> npt.NDArray:
-        time_series_arr = np.load(BytesIO(data), allow_pickle=False)
-        return time_series_arr
+        ts_array = np.load(BytesIO(data), allow_pickle=False)
+        return ts_array
 
     def load_base64(self, media_type: str, data: str) -> npt.NDArray:
         return self.load_bytes(pybase64.b64decode(data))
@@ -35,10 +35,10 @@ class TimeSeriesMediaIO(MediaIO[npt.NDArray]):
             return np.load(filepath)
         elif suffix == '.csv':
             try:
-                time_series_arr = np.genfromtxt(filepath, delimiter=',', dtype=np.float32)
-                if time_series_arr.size == 0:
+                ts_array = np.genfromtxt(filepath, delimiter=',', dtype=np.float32)
+                if ts_array.size == 0:
                     raise ValueError(f'CSV file {filepath} yielded no data.')
-                return time_series_arr
+                return ts_array
             except Exception as e:
                 logger.error(f'Failed to load CSV {filepath}: {e}')
                 raise
@@ -48,8 +48,8 @@ class TimeSeriesMediaIO(MediaIO[npt.NDArray]):
             except ImportError:
                 raise ImportError('Please install soundfile via `pip install soundfile`.')
 
-            time_series_arr, _ = sf.read(filepath)
-            return time_series_arr
+            ts_array, _ = sf.read(filepath)
+            return ts_array
 
         raise ValueError(f'Unsupported file format: {suffix}')
 

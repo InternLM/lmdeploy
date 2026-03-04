@@ -165,7 +165,7 @@ class Qwen3VLModel(VisionModel):
         else:
             prompt_messages = messages
         prompt = chat_template.messages2prompt(prompt_messages, sequence_start, **chat_template_kwargs)
-        return prompt, self.image_token
+        return prompt
 
     def to_pytorch_aux_video(self, messages, prompt, VIDEO_TOKEN, tokenizer, sequence_start):
         """Pack the video input to the compatible format with pytorch
@@ -219,12 +219,12 @@ class Qwen3VLModel(VisionModel):
                    chat_template_kwargs: Dict | None = None,
                    **kwargs):
         """Return to the information needed by pytorch engine."""
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start, chat_template_kwargs)
+        prompt = self.proc_messages(messages, chat_template, sequence_start, chat_template_kwargs)
 
         if self.contains_video_input:
             return self.to_pytorch_aux_video(messages, prompt, self.video_token, tokenizer, sequence_start)
         else:
-            return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
+            return self.to_pytorch_aux(messages, prompt, self.image_token, tokenizer, sequence_start)
 
     def build_model(self):
         # TODO: implement for turbomind

@@ -11,7 +11,6 @@ from typing import Any
 
 import numpy as np
 import numpy.typing as npt
-import torch
 
 from lmdeploy.utils import get_logger
 
@@ -72,7 +71,7 @@ class OpenCVVideoLoader(VideoLoader):
 
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        frames = np.empty((num_expected_frames, height, width, 3), dtype=np.uint8)
+        frames = np.empty((num_expected_frames, height, width, 3), dtype=np.uint8)  # THWC
 
         i = 0
         valid_frame_indices = []
@@ -177,8 +176,6 @@ class OpenCVVideoLoader(VideoLoader):
             # sampling behavior
             # "do_sample_frames": valid_num_frames == total_frames_num,
         }
-
-        frames = torch.from_numpy(frames).permute(0, 3, 1, 2)  # TCHW
         return frames, metadata
 
 
@@ -194,13 +191,47 @@ class DecordVideoLoader(VideoLoader):
 
         num_frames_to_sample, frame_idx = self.smart_nframes(total_frames_num, num_frames, fps, duration)
 
-        video = vr.get_batch(frame_idx).asnumpy()  # TWHC
-        video = np.transpose(video, (0, 3, 1, 2))  # TCHW
+        video = vr.get_batch(frame_idx).asnumpy()  # THWC
         metadata = {
             'total_num_frames': total_frames_num,
             'fps': fps,
             'duration': duration,
             'video_backend': 'decord',
+            'frames_indices': frame_idx,
+        }
+        return video, metadata
+
+    @classmethod
+    def load_bytes(self, data: bytes, num_frames: int = -1, **kwargs) -> tuple[npt.NDArray, dict[str, Any]]:
+        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+        tmp_file.write(data)
+        tmp_file.close()
+
+        return self.load_file(Path(tmp_file.name), num_frames=num_frames, **kwargs)
+
+
+class TorchCodecVideoLoader(VideoLoader):
+
+    @classmethod
+    def load_file(self, filepath: Path, num_frames: int = -1, **kwargs) -> tuple[npt.NDArray, dict[str, Any]]:
+        # torchcodec requires matched ffmpeg, torchcodec, and torch versions
+        # ffmpeg 5.1.2, torch 2.8.0, torchcodec 0.7.0 are verified to work together
+        from torchcodec.decoders import VideoDecoder
+
+        torch_codec_num_threads = 8
+        decoder = VideoDecoder(str(filepath), num_ffmpeg_threads=torch_codec_num_threads)
+        total_frames_num = decoder.metadata.num_frames
+        fps = decoder.metadata.average_fps
+        duration = total_frames_num / fps if fps > 0 else 0
+
+        num_frames_to_sample, frame_idx = self.smart_nframes(total_frames_num, num_frames, fps, duration)
+
+        video = decoder.get_frames_at(frame_idx).data
+        metadata = {
+            'total_num_frames': total_frames_num,
+            'fps': fps,
+            'duration': duration,
+            'video_backend': 'torchcodec',
             'frames_indices': frame_idx,
         }
         return video, metadata
@@ -223,7 +254,7 @@ class TorchVisionVideoLoader(VideoLoader):
         video, audio, info = torchvision.io.read_video(
             filepath,
             pts_unit='sec',
-            output_format='TCHW',
+            output_format='THWC',
         )
         total_frames_num = video.size(0)
         fps = info['video_fps']
@@ -248,40 +279,3 @@ class TorchVisionVideoLoader(VideoLoader):
         tmp_file.close()
 
         self.load_file(Path(tmp_file.name), num_frames=num_frames, **kwargs)
-
-
-class TorchCodecVideoLoader(VideoLoader):
-
-    @classmethod
-    def load_file(self, filepath: Path, num_frames: int = -1, **kwargs) -> tuple[npt.NDArray, dict[str, Any]]:
-        # torchcodec requires matched ffmpeg, torchcodec, and torch versions
-        # ffmpeg 5.1.2, torch 2.8.0, torchcodec 0.7.0 are verified to work together
-        from torchcodec.decoders import VideoDecoder
-
-        torch_codec_num_threads = 8
-        decoder = VideoDecoder(str(filepath), num_ffmpeg_threads=torch_codec_num_threads)
-        total_frames_num = decoder.metadata.num_frames
-        fps = decoder.metadata.average_fps
-        duration = total_frames_num / fps if fps > 0 else 0
-
-        num_frames_to_sample, frame_idx = self.smart_nframes(total_frames_num, num_frames, fps, duration)
-
-        video = decoder.get_frames_at(frame_idx).data
-        import pdb
-        pdb.set_trace()
-        metadata = {
-            'total_num_frames': total_frames_num,
-            'fps': fps,
-            'duration': duration,
-            'video_backend': 'torchcodec',
-            'frames_indices': frame_idx,
-        }
-        return video, metadata
-
-    @classmethod
-    def load_bytes(self, data: bytes, num_frames: int = -1, **kwargs) -> tuple[npt.NDArray, dict[str, Any]]:
-        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-        tmp_file.write(data)
-        tmp_file.close()
-
-        return self.load_file(Path(tmp_file.name), num_frames=num_frames, **kwargs)

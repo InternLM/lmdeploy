@@ -5,9 +5,11 @@ from io import BytesIO
 from pathlib import Path
 
 import pybase64
-from PIL import Image
+from PIL import Image, ImageFile
 
 from .base import MediaIO
+
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
 class ImageMediaIO(MediaIO[Image.Image]):

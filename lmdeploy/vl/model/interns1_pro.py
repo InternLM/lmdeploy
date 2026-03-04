@@ -216,11 +216,6 @@ class InternS1ProVisionModel(VisionModel):
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         messages = [x for x in messages if x['role'] not in ['preprocess', 'forward']]
 
-        if self.contains_ts_input:
-            prompt_messages = messages
-            prompt = chat_template.messages2prompt(prompt_messages, sequence_start, tools=tools, **chat_template_kwargs)
-            return prompt, self.ts_token
-
         if VisionModel.IMAGE_TOKEN_included(messages):
             # backward compatibility
             for message in messages:
@@ -234,8 +229,13 @@ class InternS1ProVisionModel(VisionModel):
                 prompt_messages.append(dict(role='user', content=prompt))
         else:
             prompt_messages = messages
+
+        # time series input requires enabling_thinking = False
+        if self.contains_ts_input:
+            chat_template_kwargs['enable_thinking'] = False
+
         prompt = chat_template.messages2prompt(prompt_messages, sequence_start, tools=tools, **chat_template_kwargs)
-        return prompt, self.image_token
+        return prompt
 
     def to_pytorch_aux_video(self, messages, prompt, VIDEO_TOKEN, tokenizer, sequence_start):
         """Pack the video input to the compatible format with pytorch
@@ -324,26 +324,18 @@ class InternS1ProVisionModel(VisionModel):
                    chat_template_kwargs: Optional[Dict] = None,
                    **kwargs):
         """Return to the information needed by pytorch engine."""
-        if self.contains_video_input:
-            prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start, chat_template_kwargs)
+        prompt = self.proc_messages(messages,
+                                    chat_template,
+                                    sequence_start,
+                                    tools=tools,
+                                    chat_template_kwargs=chat_template_kwargs)
 
+        if self.contains_video_input:
             return self.to_pytorch_aux_video(messages, prompt, self.video_token, tokenizer, sequence_start)
         elif self.contains_ts_input:
-            # time series input requires enabling_thinking = False
-            chat_template_kwargs = {'enable_thinking': False}
-            prompt, TS_TOKEN = self.proc_messages(messages,
-                                                  chat_template,
-                                                  sequence_start,
-                                                  tools=tools,
-                                                  chat_template_kwargs=chat_template_kwargs)
-            return self.to_pytorch_aux_ts(messages, prompt, TS_TOKEN, tokenizer, sequence_start)
+            return self.to_pytorch_aux_ts(messages, prompt, self.ts_token, tokenizer, sequence_start)
         else:
-            prompt, IMAGE_TOKEN = self.proc_messages(messages,
-                                                     chat_template,
-                                                     sequence_start,
-                                                     tools=tools,
-                                                     chat_template_kwargs=chat_template_kwargs)
-            return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
+            return self.to_pytorch_aux(messages, prompt, self.image_token, tokenizer, sequence_start)
 
     def build_model(self):
         # TODO: implement for turbomind

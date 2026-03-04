@@ -1,39 +1,83 @@
-# yapf: disable
-from lmdeploy.vl import encode_image_base64, load_image
+import numpy as np
 
-# yapf: enable
-
-
-def test_encode_image_base64():
-    url = 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg'  # noqa E501
-    im1 = load_image(url)
-    base64 = encode_image_base64(url)
-    im2 = load_image(base64)
-    assert im1 == im2.convert('RGB')
+from lmdeploy.vl import (encode_image_base64, encode_time_series_base64, encode_video_base64, load_image,
+                         load_time_series, load_video)
 
 
-def test_load_truncated_image():
+def test_image_encode_decode():
+    url = 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg'
+    img1 = load_image(url)
+    # use PNG for lossless pixel-perfect comparison
+    b64 = encode_image_base64(url, format='PNG')
+    img2 = load_image(f'data:image/png;base64,{b64}')
+
+    assert img1.size == img2.size
+    assert img1.mode == img2.mode
+    assert img1.tobytes() == img2.tobytes()
+
+
+def test_video_encode_decode():
+    # url = 'https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2-VL/space_woaudio.mp4'
+    url = 'https://raw.githubusercontent.com/CUHKSZzxy/Online-Data/main/clip_3_removed.mp4'
+    # num_frames=4 to keep test fast
+    vid1, meta1 = load_video(url, num_frames=4)
+    b64 = encode_video_base64(url, num_frames=4, format='JPEG')
+    vid2, meta2 = load_video(f'data:video/jpeg;base64,{b64}')
+
+    gt_meta = {
+        'total_num_frames': 498,
+        'fps': 29.97002997002997,
+        'duration': 16.616600000000002,
+        'video_backend': 'opencv',
+        'frames_indices': [0, 165, 331, 497]
+    }
+    assert vid1.shape == vid2.shape
+    # JPEG is lossy, so we check mean pixel difference is small
+    assert np.mean(np.abs(vid1.astype(float) - vid2.astype(float))) < 2.0
+    assert meta1 == gt_meta
+
+
+def test_time_series_encode_decode():
+    # url = "https://raw.githubusercontent.com/CUHKSZzxy/Online-Data/main/0092638_seism.npy"
+    url = 'https://raw.githubusercontent.com/CUHKSZzxy/Online-Data/main/0092638_seism.npy'
+    ts1 = load_time_series(url)
+    b64 = encode_time_series_base64(url)
+    ts2 = load_time_series(f'data:time_series/npy;base64,{b64}')
+
+    assert ts1.shape == ts2.shape
+    assert np.allclose(ts1, ts2)
+
+
+def test_image_modes():
+    import numpy as np
+    from PIL import Image
+
+    grayscale_img = Image.fromarray(np.zeros((100, 100), dtype=np.uint8), mode='L')
+    b64 = encode_image_base64(grayscale_img)  # should convert L -> RGB internally
+
+    img_out = load_image(f'data:image/png;base64,{b64}')
+    assert img_out.mode == 'RGB'
+
+
+def test_truncated_image():
     url = 'https://github.com/irexyc/lmdeploy/releases/download/v0.0.1/tr.jpeg'
     im = load_image(url)
     assert im.width == 1638
     assert im.height == 2048
 
 
-def test_load_invalid_url():
-    url = ('https://raw.githubusercontent.com/open-mmlab/'
-           'mmdeploy/main/tests/data/tiger.jpeg')
-    # invalid
-    im1 = load_image(url[:-1])
-    assert im1.width == 32
-    assert im1.height == 32
-    # valid
-    im2 = load_image(url)
-    assert im2.height == 182
-    assert im2.width == 278
+def test_single_frame_video():
+    url = 'https://raw.githubusercontent.com/CUHKSZzxy/Online-Data/main/clip_3_removed.mp4'
+    vid, meta = load_video(url, num_frames=1)
+    assert vid.shape[0] == 1
+
+    b64 = encode_video_base64(vid)
+    assert isinstance(b64, str)
+    assert ',' not in b64  # should only be one JPEG block, no commas
 
 
-def test_load_invalid_base64():
-    base64 = 'data:image/jpeg;base64,xxx'
-    im = load_image(base64)
-    assert im.width == 32
-    assert im.height == 32
+def test_invalid_inputs():
+    # non-existent local path
+    import pytest
+    with pytest.raises(Exception):
+        load_image('/non_existent/path/image.jpg')

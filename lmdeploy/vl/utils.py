@@ -24,14 +24,13 @@ def load_video(video_url: str, **kwargs) -> Tuple[npt.NDArray, Dict[str, Any]]:
 
 
 def load_time_series(ts_url: str, **kwargs) -> npt.NDArray:
-    """Fetch and decode time-series data from a URL or path or base64
-    string.."""
+    """Fetch and decode time-series from a URL or path or base64 string.."""
     ts_io = TimeSeriesMediaIO(**kwargs)
     return load_from_url(ts_url, ts_io)
 
 
 def encode_image_base64(image: str | Image.Image, format: str = 'PNG', **kwargs) -> str:
-    """Encode an image path or PIL image to a base64 string."""
+    """Encode image (path or PIL image) to a base64 string."""
     if isinstance(image, str):
         image = load_image(image, **kwargs)
     image_io = ImageMediaIO(**kwargs)
