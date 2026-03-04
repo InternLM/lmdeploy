@@ -37,7 +37,7 @@ struct GatedDeltaNetWeight: public core::Module {
     // Reduces p.input HBM reads from 4× to 1× per forward pass.
     LlamaDenseWeight in_proj_all;
 
-    LlamaDenseWeight out_proj;     // value_dim -> hidden
+    LlamaDenseWeight out_proj;  // value_dim -> hidden
 
     // Non-dense parameters
     Tensor conv1d;   // depthwise conv weights: (conv_dim, 1, d_conv) flattened

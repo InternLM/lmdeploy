@@ -122,8 +122,8 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
         //    Output columns are ordered: [qkv | z | b | a]
         //    where the split dims are: conv_dim_, value_dim_, v_heads_tp_, v_heads_tp_
         // =================================================================
-        const int v_heads_tp = num_v_heads_;     // already TP-sharded
-        Tensor all_proj = linear_.Forward(p.input, weights.in_proj_all);
+        const int v_heads_tp = num_v_heads_;  // already TP-sharded
+        Tensor    all_proj   = linear_.Forward(p.input, weights.in_proj_all);
         sync_check_cuda_error();
 
         // Pointer-arithmetic slices — no copies, no allocations.
@@ -141,9 +141,9 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
         //    b_raw and a_raw are sliced from the fused projection output.
         //    Stride between tokens is all_col elements.
         // =================================================================
-        const int bg_total   = token_num * num_v_heads_;
-        const int b_offset   = conv_dim_ + value_dim_;       // column offset to b logits
-        const int a_offset   = b_offset + v_heads_tp;        // column offset to a logits
+        const int bg_total = token_num * num_v_heads_;
+        const int b_offset = conv_dim_ + value_dim_;  // column offset to b logits
+        const int a_offset = b_offset + v_heads_tp;   // column offset to a logits
         Tensor    beta{{token_num, num_v_heads_}, dtype, device};
         Tensor    g_tensor{{token_num, num_v_heads_}, dtype, device};
 
@@ -208,13 +208,11 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
             T* conv_state_ptr      = nullptr;
             T* recurrent_state_ptr = nullptr;
             if (rc.conv_states) {
-                conv_state_ptr =
-                    rc.conv_states.data<T>() + state_layer_idx * (conv_dim_ * d_conv_);
+                conv_state_ptr = rc.conv_states.data<T>() + state_layer_idx * (conv_dim_ * d_conv_);
             }
             if (rc.recurrent_states) {
                 recurrent_state_ptr =
-                    rc.recurrent_states.data<T>()
-                    + state_layer_idx * (num_v_heads_ * key_head_dim_ * value_head_dim_);
+                    rc.recurrent_states.data<T>() + state_layer_idx * (num_v_heads_ * key_head_dim_ * value_head_dim_);
             }
 
             // ----- 3a. Fused Causal Conv1d + SiLU -----
@@ -251,7 +249,7 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
                                               beta_ptr,
                                               g_ptr,
                                               recurrent_state_ptr,
-                                              1,           // batch_size = 1 per request
+                                              1,  // batch_size = 1 per request
                                               num_v_heads_,
                                               num_k_heads_,
                                               key_head_dim_,
@@ -279,7 +277,15 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
 
             // ----- 3c. RMSNormGated -----
             const int N = seq_len * num_v_heads_;
-            invokeRMSNormGated(out_ptr, z_row_ptr, weights.norm.data<T>(), norm_eps_, N, value_head_dim_, all_col, num_v_heads_, stream);
+            invokeRMSNormGated(out_ptr,
+                               z_row_ptr,
+                               weights.norm.data<T>(),
+                               norm_eps_,
+                               N,
+                               value_head_dim_,
+                               all_col,
+                               num_v_heads_,
+                               stream);
             sync_check_cuda_error();
 
             token_offset += seq_len;

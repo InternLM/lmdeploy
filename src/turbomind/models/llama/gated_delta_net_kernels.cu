@@ -42,23 +42,40 @@ __device__ __forceinline__ float block_l2_inv_norm(float partial_sq, float* smem
 }
 
 // Helper to accumulate squares of a 16-bit type scalar or vector2 using float32 arithmetic
-template <typename T>
-__device__ __forceinline__ float sq_acc(T val) { return (float)val * (float)val; }
+template<typename T>
+__device__ __forceinline__ float sq_acc(T val)
+{
+    return (float)val * (float)val;
+}
 
 #if defined(__CUDA_ARCH__)
-__device__ __forceinline__ float sq_acc(half2 val) {
+__device__ __forceinline__ float sq_acc(half2 val)
+{
     float2 fval = __half22float2(val);
     return fval.x * fval.x + fval.y * fval.y;
 }
-__device__ __forceinline__ float sq_acc(nv_bfloat162 val) {
+__device__ __forceinline__ float sq_acc(nv_bfloat162 val)
+{
     float2 fval = __bfloat1622float2(val);
     return fval.x * fval.x + fval.y * fval.y;
 }
 
-__device__ __forceinline__ float2 to_float2(half2 v) { return __half22float2(v); }
-__device__ __forceinline__ float2 to_float2(nv_bfloat162 v) { return __bfloat1622float2(v); }
-__device__ __forceinline__ half2 to_vec2(float2 v, half) { return __float22half2_rn(v); }
-__device__ __forceinline__ nv_bfloat162 to_vec2(float2 v, nv_bfloat16) { return __float22bfloat162_rn(v); }
+__device__ __forceinline__ float2 to_float2(half2 v)
+{
+    return __half22float2(v);
+}
+__device__ __forceinline__ float2 to_float2(nv_bfloat162 v)
+{
+    return __bfloat1622float2(v);
+}
+__device__ __forceinline__ half2 to_vec2(float2 v, half)
+{
+    return __float22half2_rn(v);
+}
+__device__ __forceinline__ nv_bfloat162 to_vec2(float2 v, nv_bfloat16)
+{
+    return __float22bfloat162_rn(v);
+}
 #endif
 
 // =============================================================================
@@ -78,14 +95,14 @@ __global__ void causal_conv1d_decode_kernel(
 
     T* state = conv_states + (b * conv_dim + c) * d_conv;
 
-    #pragma unroll
+#pragma unroll
     for (int d = 0; d < d_conv - 1; ++d)
         state[d] = state[d + 1];
     state[d_conv - 1] = in[b * conv_dim + c];
 
     const T* w   = weight + c * d_conv;
     float    acc = 0.0f;
-    #pragma unroll
+#pragma unroll
     for (int d = 0; d < d_conv; ++d)
         acc += static_cast<float>(state[d]) * static_cast<float>(w[d]);
     if (bias)
@@ -112,7 +129,7 @@ __global__ void causal_conv1d_prefill_kernel(
 
     const T* w   = weight + c * d_conv;
     float    acc = 0.0f;
-    #pragma unroll
+#pragma unroll
     for (int d = 0; d < d_conv; ++d) {
         int   src_t = t - (d_conv - 1 - d);
         float val   = 0.0f;
@@ -147,8 +164,7 @@ void invokeCausalConv1d(T*           out,
         const int threads = 256;
         const int blocks  = (n + threads - 1) / threads;
         dim3      grid(blocks, batch_size);
-        causal_conv1d_decode_kernel<<<grid, threads, 0, stream>>>(
-            out, in, weight, bias, conv_states, conv_dim, d_conv);
+        causal_conv1d_decode_kernel<<<grid, threads, 0, stream>>>(out, in, weight, bias, conv_states, conv_dim, d_conv);
     }
     else {
         const int n       = batch_size * conv_dim * seq_len;
@@ -208,11 +224,12 @@ __global__ void recurrent_delta_rule_kernel(T*       v_out,
     // --- In-kernel L2-normalize Q (Vectorized) ---
     float q_sq = 0.f;
     if (key_head_dim % 2 == 0) {
-        using T2 = typename std::conditional<std::is_same<T, half>::value, half2, nv_bfloat162>::type;
+        using T2           = typename std::conditional<std::is_same<T, half>::value, half2, nv_bfloat162>::type;
         const T2* q_ptr_v2 = reinterpret_cast<const T2*>(q_ptr);
         for (int kd = threadIdx.x; kd < key_head_dim / 2; kd += blockDim.x)
             q_sq += sq_acc(q_ptr_v2[kd]);
-    } else {
+    }
+    else {
         for (int kd = threadIdx.x; kd < key_head_dim; kd += blockDim.x)
             q_sq += sq_acc(q_ptr[kd]);
     }
@@ -221,11 +238,12 @@ __global__ void recurrent_delta_rule_kernel(T*       v_out,
     // --- In-kernel L2-normalize K (Vectorized) ---
     float k_sq = 0.f;
     if (key_head_dim % 2 == 0) {
-        using T2 = typename std::conditional<std::is_same<T, half>::value, half2, nv_bfloat162>::type;
+        using T2           = typename std::conditional<std::is_same<T, half>::value, half2, nv_bfloat162>::type;
         const T2* k_ptr_v2 = reinterpret_cast<const T2*>(k_ptr);
         for (int kd = threadIdx.x; kd < key_head_dim / 2; kd += blockDim.x)
             k_sq += sq_acc(k_ptr_v2[kd]);
-    } else {
+    }
+    else {
         for (int kd = threadIdx.x; kd < key_head_dim; kd += blockDim.x)
             k_sq += sq_acc(k_ptr[kd]);
     }
@@ -277,8 +295,8 @@ void invokeRecurrentGatedDeltaRule(T*           v_out,
     const int num_blocks = batch_size * num_v_heads;
     if (num_blocks == 0)
         return;
-    const int     threads  = std::min(256, value_head_dim);
-    const size_t  smem_sz  = ((threads + 31) / 32) * sizeof(float);
+    const int    threads = std::min(256, value_head_dim);
+    const size_t smem_sz = ((threads + 31) / 32) * sizeof(float);
     recurrent_delta_rule_kernel<<<num_blocks, threads, smem_sz, stream>>>(
         v_out, qkv_in, beta, g, recurrent_state, num_v_heads, num_k_heads, key_head_dim, value_head_dim, k_dim_total);
 }
@@ -316,7 +334,7 @@ __global__ void gated_delta_rule_prefill_kernel(T*       v_out,
     const int conv_dim   = 2 * k_dim_total + num_v_heads * value_head_dim;
     const int v_dim      = num_v_heads * value_head_dim;
 
-    T*       s_ptr = state + h * state_size;
+    T*          s_ptr = state + h * state_size;
     const float scale = rsqrtf((float)key_head_dim);
 
     __shared__ float smem[32];
@@ -334,11 +352,12 @@ __global__ void gated_delta_rule_prefill_kernel(T*       v_out,
         // --- In-kernel L2-normalize Q (Vectorized) ---
         float q_sq = 0.f;
         if (key_head_dim % 2 == 0) {
-            using T2 = typename std::conditional<std::is_same<T, half>::value, half2, nv_bfloat162>::type;
+            using T2           = typename std::conditional<std::is_same<T, half>::value, half2, nv_bfloat162>::type;
             const T2* q_ptr_v2 = reinterpret_cast<const T2*>(q_ptr);
             for (int kd = threadIdx.x; kd < key_head_dim / 2; kd += blockDim.x)
                 q_sq += sq_acc(q_ptr_v2[kd]);
-        } else {
+        }
+        else {
             for (int kd = threadIdx.x; kd < key_head_dim; kd += blockDim.x)
                 q_sq += sq_acc(q_ptr[kd]);
         }
@@ -347,11 +366,12 @@ __global__ void gated_delta_rule_prefill_kernel(T*       v_out,
         // --- In-kernel L2-normalize K (Vectorized) ---
         float k_sq = 0.f;
         if (key_head_dim % 2 == 0) {
-            using T2 = typename std::conditional<std::is_same<T, half>::value, half2, nv_bfloat162>::type;
+            using T2           = typename std::conditional<std::is_same<T, half>::value, half2, nv_bfloat162>::type;
             const T2* k_ptr_v2 = reinterpret_cast<const T2*>(k_ptr);
             for (int kd = threadIdx.x; kd < key_head_dim / 2; kd += blockDim.x)
                 k_sq += sq_acc(k_ptr_v2[kd]);
-        } else {
+        }
+        else {
             for (int kd = threadIdx.x; kd < key_head_dim; kd += blockDim.x)
                 k_sq += sq_acc(k_ptr[kd]);
         }
@@ -371,8 +391,8 @@ __global__ void gated_delta_rule_prefill_kernel(T*       v_out,
             const float delta = ((float)v_ptr[vd] - kv_mem) * beta_val;
 
             for (int kd = 0; kd < key_head_dim; ++kd)
-                s_ptr[kd * value_head_dim + vd] = static_cast<T>(
-                    (float)s_ptr[kd * value_head_dim + vd] + (float)k_ptr[kd] * k_inv_norm * delta);
+                s_ptr[kd * value_head_dim + vd] =
+                    static_cast<T>((float)s_ptr[kd * value_head_dim + vd] + (float)k_ptr[kd] * k_inv_norm * delta);
         }
         __syncthreads();
 
@@ -407,8 +427,17 @@ void invokeGatedDeltaRulePrefill(T*           v_out,
     // One block per v_head; threads cover value_head_dim
     const int    threads = std::min(256, value_head_dim);
     const size_t smem_sz = ((threads + 31) / 32) * sizeof(float);
-    gated_delta_rule_prefill_kernel<<<num_v_heads, threads, smem_sz, stream>>>(
-        v_out, qkv_in, beta, g, recurrent_state, seq_len, num_v_heads, num_k_heads, key_head_dim, value_head_dim, k_dim_total);
+    gated_delta_rule_prefill_kernel<<<num_v_heads, threads, smem_sz, stream>>>(v_out,
+                                                                               qkv_in,
+                                                                               beta,
+                                                                               g,
+                                                                               recurrent_state,
+                                                                               seq_len,
+                                                                               num_v_heads,
+                                                                               num_k_heads,
+                                                                               key_head_dim,
+                                                                               value_head_dim,
+                                                                               k_dim_total);
 }
 
 // =============================================================================
@@ -422,37 +451,38 @@ __global__ void compute_beta_g_kernel(
 #if defined(__CUDA_ARCH__)
     if (total % 2 == 0 && num_v_heads % 2 == 0) {
         if (tid < total / 2) {
-            using T2 = typename std::conditional<std::is_same<T, half>::value, half2, nv_bfloat162>::type;
-            T2* beta_v2 = reinterpret_cast<T2*>(beta_out);
-            T2* g_v2 = reinterpret_cast<T2*>(g_out);
-            const T2* b_v2 = reinterpret_cast<const T2*>(b_in);
-            const T2* a_v2 = reinterpret_cast<const T2*>(a_in);
-            
+            using T2          = typename std::conditional<std::is_same<T, half>::value, half2, nv_bfloat162>::type;
+            T2*       beta_v2 = reinterpret_cast<T2*>(beta_out);
+            T2*       g_v2    = reinterpret_cast<T2*>(g_out);
+            const T2* b_v2    = reinterpret_cast<const T2*>(b_in);
+            const T2* a_v2    = reinterpret_cast<const T2*>(a_in);
+
             float2 b_val = to_float2(b_v2[tid]);
             float2 a_val = to_float2(a_v2[tid]);
-            
+
             int h0 = (tid * 2) % num_v_heads;
             int h1 = (tid * 2 + 1) % num_v_heads;
-            
+
             float Al0 = static_cast<float>(A_log[h0]);
             float dt0 = static_cast<float>(dt_bias[h0]);
             float Al1 = static_cast<float>(A_log[h1]);
             float dt1 = static_cast<float>(dt_bias[h1]);
-            
-            float beta0 = 1.0f / (1.0f + expf(-b_val.x));
-            float sum0 = a_val.x + dt0;
-            float sp0 = sum0 > 20.0f ? sum0 : logf(1.0f + expf(sum0));
+
+            float beta0  = 1.0f / (1.0f + expf(-b_val.x));
+            float sum0   = a_val.x + dt0;
+            float sp0    = sum0 > 20.0f ? sum0 : logf(1.0f + expf(sum0));
             float g_val0 = -expf(Al0) * sp0;
-            
-            float beta1 = 1.0f / (1.0f + expf(-b_val.y));
-            float sum1 = a_val.y + dt1;
-            float sp1 = sum1 > 20.0f ? sum1 : logf(1.0f + expf(sum1));
+
+            float beta1  = 1.0f / (1.0f + expf(-b_val.y));
+            float sum1   = a_val.y + dt1;
+            float sp1    = sum1 > 20.0f ? sum1 : logf(1.0f + expf(sum1));
             float g_val1 = -expf(Al1) * sp1;
-            
+
             beta_v2[tid] = to_vec2(make_float2(beta0, beta1), T{});
-            g_v2[tid] = to_vec2(make_float2(g_val0, g_val1), T{});
+            g_v2[tid]    = to_vec2(make_float2(g_val0, g_val1), T{});
         }
-    } else
+    }
+    else
 #endif
     {
         if (tid >= total)
@@ -487,11 +517,12 @@ void invokeComputeBetaG(T*           beta_out,
 {
     const int threads = 256;
     if (total % 2 == 0 && num_v_heads % 2 == 0) {
-        const int blocks  = (total / 2 + threads - 1) / threads;
+        const int blocks = (total / 2 + threads - 1) / threads;
         compute_beta_g_kernel<<<blocks, threads, 0, stream>>>(
             beta_out, g_out, b_in, a_in, A_log, dt_bias, total, num_v_heads);
-    } else {
-        const int blocks  = (total + threads - 1) / threads;
+    }
+    else {
+        const int blocks = (total + threads - 1) / threads;
         compute_beta_g_kernel<<<blocks, threads, 0, stream>>>(
             beta_out, g_out, b_in, a_in, A_log, dt_bias, total, num_v_heads);
     }
@@ -501,16 +532,17 @@ void invokeComputeBetaG(T*           beta_out,
 // RMSNorm * SiLU-Gate (fused output normalization)
 // =============================================================================
 template<typename T>
-__global__ void rms_norm_gated_kernel(T* hidden, const T* gate, const T* weight, float eps, int N, int head_dim, int gate_stride, int num_heads)
+__global__ void rms_norm_gated_kernel(
+    T* hidden, const T* gate, const T* weight, float eps, int N, int head_dim, int gate_stride, int num_heads)
 {
     const int row = blockIdx.x;
     if (row >= N)
         return;
 
-    T*       h = hidden + row * head_dim;
+    T*        h         = hidden + row * head_dim;
     const int token_idx = row / num_heads;
     const int head_idx  = row % num_heads;
-    const T* g = gate + token_idx * gate_stride + head_idx * head_dim;
+    const T*  g         = gate + token_idx * gate_stride + head_idx * head_dim;
 
     __shared__ float smem[32];
     float            sum_sq = 0.0f;
@@ -561,28 +593,22 @@ void invokeRMSNormGated(T*           hidden,
 // Fused Conv1d + SiLU for row-major layout
 // =============================================================================
 template<typename T>
-__global__ void fused_conv1d_decode_kernel(T*       out,
-                                           const T* in,
-                                           const T* weight,
-                                           const T* bias,
-                                           T*       state,
-                                           int      conv_dim,
-                                           int      d_conv,
-                                           int      in_stride)
+__global__ void fused_conv1d_decode_kernel(
+    T* out, const T* in, const T* weight, const T* bias, T* state, int conv_dim, int d_conv, int in_stride)
 {
     const int c = blockIdx.x * blockDim.x + threadIdx.x;
     if (c >= conv_dim)
         return;
 
     T* s = state + c * d_conv;
-    #pragma unroll
+#pragma unroll
     for (int d = 0; d < d_conv - 1; ++d)
         s[d] = s[d + 1];
     s[d_conv - 1] = in[c];
 
     const T* w   = weight + c * d_conv;
     float    acc = 0.0f;
-    #pragma unroll
+#pragma unroll
     for (int d = 0; d < d_conv; ++d)
         acc += static_cast<float>(s[d]) * static_cast<float>(w[d]);
     if (bias)
@@ -591,15 +617,8 @@ __global__ void fused_conv1d_decode_kernel(T*       out,
 }
 
 template<typename T>
-__global__ void fused_conv1d_prefill_kernel(T*       out,
-                                            const T* in,
-                                            const T* weight,
-                                            const T* bias,
-                                            T*       state,
-                                            int      conv_dim,
-                                            int      seq_len,
-                                            int      d_conv,
-                                            int      in_stride)
+__global__ void fused_conv1d_prefill_kernel(
+    T* out, const T* in, const T* weight, const T* bias, T* state, int conv_dim, int seq_len, int d_conv, int in_stride)
 {
     const int tid   = blockIdx.x * blockDim.x + threadIdx.x;
     const int total = seq_len * conv_dim;
@@ -611,7 +630,7 @@ __global__ void fused_conv1d_prefill_kernel(T*       out,
 
     const T* w   = weight + c * d_conv;
     float    acc = 0.0f;
-    #pragma unroll
+#pragma unroll
     for (int d = 0; d < d_conv; ++d) {
         int   src_t = t - (d_conv - 1 - d);
         float val   = 0.0f;
@@ -667,14 +686,15 @@ __global__ void silu_kernel(T* data, int n)
 #if defined(__CUDA_ARCH__)
     if (n % 2 == 0) {
         if (tid < n / 2) {
-            using T2 = typename std::conditional<std::is_same<T, half>::value, half2, nv_bfloat162>::type;
-            T2* data_v2 = reinterpret_cast<T2*>(data);
-            float2 fval = to_float2(data_v2[tid]);
-            fval.x = fval.x / (1.0f + expf(-fval.x));
-            fval.y = fval.y / (1.0f + expf(-fval.y));
-            data_v2[tid] = to_vec2(fval, T{});
+            using T2       = typename std::conditional<std::is_same<T, half>::value, half2, nv_bfloat162>::type;
+            T2*    data_v2 = reinterpret_cast<T2*>(data);
+            float2 fval    = to_float2(data_v2[tid]);
+            fval.x         = fval.x / (1.0f + expf(-fval.x));
+            fval.y         = fval.y / (1.0f + expf(-fval.y));
+            data_v2[tid]   = to_vec2(fval, T{});
         }
-    } else
+    }
+    else
 #endif
     {
         if (tid >= n)
@@ -689,10 +709,11 @@ void invokeSiLU(T* data, int n, cudaStream_t stream)
 {
     const int threads = 256;
     if (n % 2 == 0) {
-        const int blocks  = (n / 2 + threads - 1) / threads;
+        const int blocks = (n / 2 + threads - 1) / threads;
         silu_kernel<<<blocks, threads, 0, stream>>>(data, n);
-    } else {
-        const int blocks  = (n + threads - 1) / threads;
+    }
+    else {
+        const int blocks = (n + threads - 1) / threads;
         silu_kernel<<<blocks, threads, 0, stream>>>(data, n);
     }
 }
@@ -703,13 +724,13 @@ void invokeSiLU(T* data, int n, cudaStream_t stream)
 
 #define INSTANTIATE(T)                                                                                                 \
     template void invokeCausalConv1d(T*, const T*, const T*, const T*, T*, int, int, int, int, cudaStream_t);          \
-    template void invokeFusedConv1dSiLU(T*, const T*, const T*, const T*, T*, int, int, int, int, int, cudaStream_t);       \
+    template void invokeFusedConv1dSiLU(T*, const T*, const T*, const T*, T*, int, int, int, int, int, cudaStream_t);  \
     template void invokeRecurrentGatedDeltaRule(                                                                       \
-        T*, const T*, const T*, const T*, T*, int, int, int, int, int, int, cudaStream_t);                            \
+        T*, const T*, const T*, const T*, T*, int, int, int, int, int, int, cudaStream_t);                             \
     template void invokeGatedDeltaRulePrefill(                                                                         \
-        T*, const T*, const T*, const T*, T*, int, int, int, int, int, int, cudaStream_t);                            \
+        T*, const T*, const T*, const T*, T*, int, int, int, int, int, int, cudaStream_t);                             \
     template void invokeComputeBetaG(T*, T*, const T*, const T*, const T*, const T*, int, int, cudaStream_t);          \
-    template void invokeRMSNormGated(T*, const T*, const T*, float, int, int, int, int, cudaStream_t);                           \
+    template void invokeRMSNormGated(T*, const T*, const T*, float, int, int, int, int, cudaStream_t);                 \
     template void invokeSiLU(T*, int, cudaStream_t);
 
 INSTANTIATE(half)

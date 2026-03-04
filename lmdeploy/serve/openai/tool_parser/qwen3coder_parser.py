@@ -2,15 +2,12 @@
 import json
 import re
 from dataclasses import dataclass
-from typing import Dict, Optional, Sequence, Union, Tuple, Any
+from typing import Any, Dict, Optional, Sequence, Tuple, Union
 
 import shortuuid
 
-from lmdeploy.serve.openai.protocol import (ChatCompletionRequest,
-                                            DeltaFunctionCall, DeltaMessage,
-                                            DeltaToolCall,
-                                            ExtractedToolCallInformation,
-                                            FunctionCall, ToolCall)
+from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, DeltaFunctionCall, DeltaMessage, DeltaToolCall,
+                                            ExtractedToolCallInformation, FunctionCall, ToolCall)
 from lmdeploy.utils import get_logger
 
 from .tool_parser import ToolParser, ToolParserManager
@@ -35,13 +32,8 @@ class ParserState(object):
 class Qwen3CoderToolParser(ToolParser):
     """Parser for Qwen3 Coder model's tool call format.
 
-    Handles the extraction of tool calls from Qwen3 Coder's output format,
-    which uses purely XML tags
-    for function names and parameters, e.g.,
-    <tool_call>
-    <function=func_name>
-    <parameter=arg_name>arg_value</parameter>
-    </function>
+    Handles the extraction of tool calls from Qwen3 Coder's output format, which uses purely XML tags for function names
+    and parameters, e.g., <tool_call> <function=func_name> <parameter=arg_name>arg_value</parameter> </function>
     </tool_call>
     """
 
@@ -54,11 +46,9 @@ class Qwen3CoderToolParser(ToolParser):
         self.param_prefix = '<parameter='
         self.param_end_token = '</parameter>'
 
-        self.tool_call_pat = re.compile(r'\n*<tool_call>(.*?)</tool_call>',
-                                        re.DOTALL)
+        self.tool_call_pat = re.compile(r'\n*<tool_call>(.*?)</tool_call>', re.DOTALL)
 
-    def _split(self, parser_state: ParserState,
-               parsing_content: str) -> Tuple[str, str, bool]:
+    def _split(self, parser_state: ParserState, parsing_content: str) -> Tuple[str, str, bool]:
         """Split content into tuple: (text_content, tool_content, has_tool_end)"""
         try:
             start_idx = parsing_content.index(self.tool_start_token)
@@ -70,28 +60,21 @@ class Qwen3CoderToolParser(ToolParser):
         try:
             end_idx = parsing_content.index(self.tool_end_token)
         except ValueError:
-            return parsing_content[:start_idx], parsing_content[
-                start_idx:], False
+            return parsing_content[:start_idx], parsing_content[start_idx:], False
 
         rem = end_idx - start_idx
         parser_state.position += rem + len(self.tool_end_token)
-        return parsing_content[:start_idx], parsing_content[
-            start_idx:end_idx + len(self.tool_end_token)], True
+        return parsing_content[:start_idx], parsing_content[start_idx:end_idx + len(self.tool_end_token)], True
 
-    def _extract_params(
-            self, content: str) -> Tuple[Optional[str], Dict[str, Any], bool]:
+    def _extract_params(self, content: str) -> Tuple[Optional[str], Dict[str, Any], bool]:
         """Parse XML tool content into components."""
-        content = content.replace(self.tool_start_token,
-                                  '').replace(self.tool_end_token, '').strip()
+        content = content.replace(self.tool_start_token, '').replace(self.tool_end_token, '').strip()
 
         func_name = None
         func_start = content.find(self.func_prefix)
         if func_start != -1:
             name_start = func_start + len(self.func_prefix)
-            terminators = [
-                idx for idx in (content.find('>', name_start),
-                                content.find('\n', name_start)) if idx != -1
-            ]
+            terminators = [idx for idx in (content.find('>', name_start), content.find('\n', name_start)) if idx != -1]
             if terminators:
                 func_name = content[name_start:min(terminators)].strip()
 
@@ -103,10 +86,7 @@ class Qwen3CoderToolParser(ToolParser):
                 break
 
             name_start = param_start + len(self.param_prefix)
-            terminators = [
-                idx for idx in (content.find('>', name_start),
-                                content.find('\n', name_start)) if idx != -1
-            ]
+            terminators = [idx for idx in (content.find('>', name_start), content.find('\n', name_start)) if idx != -1]
             if not terminators:
                 break
 
@@ -153,8 +133,7 @@ class Qwen3CoderToolParser(ToolParser):
             parser_state = ParserState()
             setattr(request, '_tool_parser_state', parser_state)
 
-        split_result = self._split(parser_state,
-                                   current_text[parser_state.position:])
+        split_result = self._split(parser_state, current_text[parser_state.position:])
         text_content, tool_content, has_tool_end = split_result
 
         delta = DeltaMessage()
@@ -170,14 +149,12 @@ class Qwen3CoderToolParser(ToolParser):
                 parser_state.json_closed = False
                 parser_state.emitted_params = set()
 
-            func_name, args_dict, is_func_closed = self._extract_params(
-                tool_content)
+            func_name, args_dict, is_func_closed = self._extract_params(tool_content)
 
             fcall_delta = DeltaFunctionCall()
             has_updates = False
 
-            if func_name and not getattr(parser_state, 'has_emitted_name',
-                                         False):
+            if func_name and not getattr(parser_state, 'has_emitted_name', False):
                 fcall_delta.name = func_name
                 parser_state.has_emitted_name = True
                 has_updates = True
@@ -190,14 +167,12 @@ class Qwen3CoderToolParser(ToolParser):
 
             for k, v in args_dict.items():
                 if k not in parser_state.emitted_params:
-                    prefix = ', ' if len(
-                        parser_state.emitted_params) > 0 else ''
+                    prefix = ', ' if len(parser_state.emitted_params) > 0 else ''
                     serialized = json.dumps(v, ensure_ascii=False)
                     json_fragments.append(f'{prefix}"{k}": {serialized}')
                     parser_state.emitted_params.add(k)
 
-            if is_func_closed and not getattr(parser_state, 'json_closed',
-                                              False):
+            if is_func_closed and not getattr(parser_state, 'json_closed', False):
                 if getattr(parser_state, 'has_emitted_json_start', False):
                     json_fragments.append('}')
                     parser_state.json_closed = True
@@ -246,9 +221,7 @@ class Qwen3CoderToolParser(ToolParser):
             if func_name:
                 tool_calls.append(
                     ToolCall(function=FunctionCall(
-                        name=func_name,
-                        arguments=json.dumps(args_dict, ensure_ascii=False
-                                             ) if args_dict else '{}')))
+                        name=func_name, arguments=json.dumps(args_dict, ensure_ascii=False) if args_dict else '{}')))
 
         if scan_pos < len(text):
             buf.append(text[scan_pos:])

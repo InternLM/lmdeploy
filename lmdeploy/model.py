@@ -744,7 +744,7 @@ class HFChatTemplate(BaseChatTemplate):
                 prompt = prompt[:-len('<think>\n\n')]
             elif prompt.endswith('<think>\n'):
                 prompt = prompt[:-len('<think>\n')]
-        
+
         if self.is_gpt_oss and not kwargs.get('tools'):
             # for gpt-oss model, remove this seems more conducive to instruction following.
             prompt = prompt.replace('commentary, ', '', 1)

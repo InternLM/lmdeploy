@@ -32,7 +32,8 @@ def permute_v2_partial(x: torch.Tensor, size_per_head: int, rotary_dim: int):
     assert rotary_dim % 2 == 0, f'rotary_dim must be even, got {rotary_dim}'
     assert rotary_dim <= size_per_head, f'rotary_dim ({rotary_dim}) must be <= size_per_head ({size_per_head})'
     output_dims = x.size(-1)
-    assert output_dims % size_per_head == 0, f'output_dims ({output_dims}) must be divisible by size_per_head ({size_per_head})'
+    assert output_dims % size_per_head == 0, (f'output_dims ({output_dims}) must be divisible by '
+                                              f'size_per_head ({size_per_head})')
     head_num = output_dims // size_per_head
     orig_shape = x.shape
     if x.dim() == 1:
@@ -560,10 +561,7 @@ class LinearAttn(Module):
                     # each shard gets the correct Q/K/V slice.
                     t = transpose(tensor)
                     t = self._tp_interleave_qkv(t, dim=-1)
-                    self.model.save_split(t,
-                                          self._linear_attn.format(i, name, kind),
-                                          split_dim=-1,
-                                          split_num=self.tp)
+                    self.model.save_split(t, self._linear_attn.format(i, name, kind), split_dim=-1, split_num=self.tp)
                 else:
                     self.model.save_split(transpose(tensor),
                                           self._linear_attn.format(i, name, kind),

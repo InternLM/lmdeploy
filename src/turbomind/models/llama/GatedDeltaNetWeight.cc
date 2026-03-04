@@ -69,12 +69,8 @@ GatedDeltaNetWeight::GatedDeltaNetWeight(int      hidden_dim,
 // each source "column block" is scattered into the correct column range of
 // the destination in one pass per source.
 // ---------------------------------------------------------------------------
-static void concat_weights_4(const Tensor& a,
-                              const Tensor& b,
-                              const Tensor& c,
-                              const Tensor& d,
-                              Tensor&       dst,
-                              cudaStream_t  st)
+static void
+concat_weights_4(const Tensor& a, const Tensor& b, const Tensor& c, const Tensor& d, Tensor& dst, cudaStream_t st)
 {
     // Tensors are (K=input_dim, M=output_dim) in row-major order.
     // Each row of `dst` is [a_row | b_row | c_row | d_row].
@@ -96,8 +92,8 @@ static void concat_weights_4(const Tensor& a,
     char* dst_ptr = reinterpret_cast<char*>(dst.raw_data());
 
     // Columns [0, M_a)
-    check_cuda_error(cudaMemcpy2DAsync(
-        dst_ptr, dst_pitch, a.raw_data(), src_pitch_a, src_pitch_a, K, cudaMemcpyDefault, st));
+    check_cuda_error(
+        cudaMemcpy2DAsync(dst_ptr, dst_pitch, a.raw_data(), src_pitch_a, src_pitch_a, K, cudaMemcpyDefault, st));
 
     // Columns [M_a, M_a+M_b)
     check_cuda_error(cudaMemcpy2DAsync(
@@ -141,8 +137,8 @@ void GatedDeltaNetWeight::prepare()
     //   shape (hidden_dim,  conv_dim + value_dim + 2*v_heads_tp)
     //   = [in_proj_qkv | in_proj_z | in_proj_b | in_proj_a]  (column-wise)
     const int out_all = in_proj_qkv.output_dim  //
-                        + in_proj_z.output_dim   //
-                        + in_proj_b.output_dim   //
+                        + in_proj_z.output_dim  //
+                        + in_proj_b.output_dim  //
                         + in_proj_a.output_dim;
 
     in_proj_all.emplace(in_proj_qkv.input_dim,

@@ -43,7 +43,7 @@ def autoget_backend(model_path: str) -> Literal['turbomind', 'pytorch']:
     if is_turbomind_installed:
         if not turbomind_has:
             logger.warning('Fallback to pytorch engine because '
-                           f'`{model_path}` not supported by turbomind'
+                           f'{model_path!r} not supported by turbomind'
                            ' engine.')
     else:
         logger.warning('Fallback to pytorch engine because turbomind engine is not '
