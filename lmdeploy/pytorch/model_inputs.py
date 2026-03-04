@@ -210,7 +210,7 @@ class ModelInputs:
         self.input_ids = input_ids
 
         if self.mrope_pos_ids is not None:
-            self.mrope_pos_ids = self.mrope_pos_ids + self.seq_length[None]
+            self.mrope_pos_ids = self.mrope_pos_ids + step_seqlens[None]
         return self
 
     @torch.inference_mode()

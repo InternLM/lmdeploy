@@ -430,10 +430,11 @@ class BaseModelAgent:
         self.cache_config = cache_config
         self.spec_agent.set_cache_config(spec_cache_config)
 
-    def set_model_config(self, model_config: ModelConfig, spec_model_config: ModelConfig = None):
+    def set_model_config(self, model_config: ModelConfig, spec_model_config: ModelConfig | None = None):
         """Set model config."""
         self.model_config = model_config
         self.spec_agent.set_model_config(spec_model_config)
+        self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(model_config)
 
     def get_free_mem(self):
         """Gather available memory."""
