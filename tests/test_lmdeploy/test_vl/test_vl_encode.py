@@ -57,7 +57,7 @@ def test_image_modes():
     import numpy as np
     from PIL import Image
 
-    grayscale_img = Image.fromarray(np.zeros((100, 100), dtype=np.uint8), mode='L')
+    grayscale_img = Image.fromarray(np.zeros((100, 100), dtype=np.uint8)).convert('L')
     b64 = encode_image_base64(grayscale_img)  # should convert L -> RGB internally
 
     img_out = load_image(f'data:image/png;base64,{b64}')

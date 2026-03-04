@@ -237,7 +237,7 @@ class InternS1ProVisionModel(VisionModel):
             chat_template_kwargs['enable_thinking'] = False
 
         prompt = chat_template.messages2prompt(prompt_messages, sequence_start, tools=tools, **chat_template_kwargs)
-        return prompt
+        return prompt, None
 
     def to_pytorch_aux_video(self, messages, prompt, VIDEO_TOKEN, tokenizer, sequence_start):
         """Pack the video input to the compatible format with pytorch
@@ -326,11 +326,11 @@ class InternS1ProVisionModel(VisionModel):
                    chat_template_kwargs: Optional[Dict] = None,
                    **kwargs):
         """Return to the information needed by pytorch engine."""
-        prompt = self.proc_messages(messages,
-                                    chat_template,
-                                    sequence_start,
-                                    tools=tools,
-                                    chat_template_kwargs=chat_template_kwargs)
+        prompt, _ = self.proc_messages(messages,
+                                       chat_template,
+                                       sequence_start,
+                                       tools=tools,
+                                       chat_template_kwargs=chat_template_kwargs)
 
         if self.contains_video_input:
             return self.to_pytorch_aux_video(messages, prompt, self.video_token, tokenizer, sequence_start)
