@@ -95,7 +95,7 @@ class Qwen3_5MoeSparseMoeBlock(nn.Module):
         else:
             self._all_reduce = False
 
-    def forward(self, hidden_states: torch.Tensor, all_routed_experts: torch.Tensor = None):
+    def forward(self, hidden_states: torch.Tensor, all_routed_experts: torch.Tensor | None = None):
         """forward."""
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.reshape(-1, hidden_dim)

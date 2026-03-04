@@ -356,7 +356,7 @@ class Qwen3_5MLP(nn.Module):
             prefix=add_prefix('down_proj', prefix),
         )
 
-    def forward(self, x, all_routed_experts: torch.Tensor = None):
+    def forward(self, x, all_routed_experts: torch.Tensor | None = None):
         """forward."""
         gate_up = self.gate_up_proj(x)
         act = self.act_fn(gate_up)
