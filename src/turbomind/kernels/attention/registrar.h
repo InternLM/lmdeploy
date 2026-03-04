@@ -16,7 +16,7 @@ public:
     void add()
     {
         kernels_.emplace_back(std::make_unique<KernelImpl<T>>());
-        std::cout << "add kernel: " << to_string(kernels_.back()->desc()) << std::endl;
+        // std::cout << "add kernel: " << to_string(kernels_.back()->desc()) << std::endl;
     }
 
     std::vector<std::unique_ptr<Kernel>> release()

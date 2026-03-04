@@ -28,7 +28,6 @@ public:
 
     static Registry& instance();
 
-
 private:
     bool Add(std::unique_ptr<Kernel> kernel);
 

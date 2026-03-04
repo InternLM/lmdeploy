@@ -10,7 +10,8 @@
 namespace turbomind::attention {
 
 struct AttnDesc {
-    enum Mode {
+    enum Mode
+    {
         kPrefill,
         kDecoding
     };

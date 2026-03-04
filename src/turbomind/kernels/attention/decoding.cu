@@ -28,7 +28,7 @@ void dispatchDecoding(const AttentionParams<T>& params)
     desc.kv_quant       = kv_quant;
     desc.query_group_sz = query_group_sz;
 
-    auto& reg = Registry::instance();
+    auto& reg    = Registry::instance();
     auto* kernel = reg.Find(desc);
 
     TM_CHECK(kernel) << "No decoding kernel found: " + to_string(desc);

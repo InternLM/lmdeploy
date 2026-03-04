@@ -5,9 +5,9 @@
 #include "src/turbomind/kernels/attention/cta_map.h"
 #include "src/turbomind/kernels/attention/impl.h"
 #include "src/turbomind/kernels/attention/impl_81616.h"
-#include "src/turbomind/kernels/attention/registrar.h"
 #include "src/turbomind/kernels/attention/mainloop.h"
 #include "src/turbomind/kernels/attention/mainloop_sm70.h"
+#include "src/turbomind/kernels/attention/registrar.h"
 
 namespace turbomind::attention {
 
@@ -18,10 +18,11 @@ constexpr int kStages  = 2;
 
 // Qh = (Qh_+7)/8*8: Qh_=1..8 → Qh=8, Qh_=9 → Qh=16
 template<class T, class Tkv, int Qh>
-using KT = AttentionUniversal<arch::Sm75,
-    Mainloop<arch::Sm70, Impl<MMA_81616, T, Tkv, Qh, 1, kCTA_S, Qh, 1, kWARP_S, kHeadDim, kStages>>,
-    GetBlockIterFactory<T, Tkv, kCTA_S, kHeadDim>,
-    DecodingCtaMap>;
+using KT =
+    AttentionUniversal<arch::Sm75,
+                       Mainloop<arch::Sm70, Impl<MMA_81616, T, Tkv, Qh, 1, kCTA_S, Qh, 1, kWARP_S, kHeadDim, kStages>>,
+                       GetBlockIterFactory<T, Tkv, kCTA_S, kHeadDim>,
+                       DecodingCtaMap>;
 
 namespace {
 Registrar reg([](Collector& c) {

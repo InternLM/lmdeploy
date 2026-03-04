@@ -5,9 +5,9 @@
 #include "src/turbomind/kernels/attention/cta_map.h"
 #include "src/turbomind/kernels/attention/impl.h"
 #include "src/turbomind/kernels/attention/impl_simt.h"
-#include "src/turbomind/kernels/attention/registrar.h"
 #include "src/turbomind/kernels/attention/mainloop.h"
 #include "src/turbomind/kernels/attention/mainloop_sm70.h"
+#include "src/turbomind/kernels/attention/registrar.h"
 
 namespace turbomind::attention {
 

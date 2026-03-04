@@ -12,10 +12,10 @@ void dispatchAttention(const AttentionParams<T>& params)
 {
     using namespace attention;
 
-    auto& reg = Registry::instance();
+    auto&    reg = Registry::instance();
     AttnDesc desc{};
-    desc.mode     = AttnDesc::kPrefill;
-    desc.head_dim = params.size_per_head;
+    desc.mode      = AttnDesc::kPrefill;
+    desc.head_dim  = params.size_per_head;
     desc.data_type = data_type_v<T>;
 
     auto* kernel = reg.Find(desc);

@@ -1,14 +1,14 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "src/turbomind/kernels/attention/attention_universal.h"
 #include "src/turbomind/kernels/attention/arch.h"
+#include "src/turbomind/kernels/attention/attention_universal.h"
 #include "src/turbomind/kernels/attention/block_iterator.h"
 #include "src/turbomind/kernels/attention/cta_map.h"
 #include "src/turbomind/kernels/attention/impl.h"
 #include "src/turbomind/kernels/attention/impl_81616.h"
-#include "src/turbomind/kernels/attention/registrar.h"
 #include "src/turbomind/kernels/attention/mainloop.h"
 #include "src/turbomind/kernels/attention/mainloop_sm80.h"
+#include "src/turbomind/kernels/attention/registrar.h"
 
 namespace turbomind::attention {
 
@@ -40,6 +40,6 @@ Registrar reg([](Collector& c) {
     c.add<Decoding_Q<nv_bfloat16, uint4_t>>();
 #endif
 });
-}
+}  // namespace
 
 }  // namespace turbomind::attention
