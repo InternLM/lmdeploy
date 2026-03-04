@@ -23,7 +23,8 @@ class DlinferSoftmaxTopKImpl(SoftmaxTopKImpl):
     def forward(self, x: torch.Tensor):
         step_context = get_step_ctx_manager().current_context()
         moe_metadata = getattr(step_context, 'moe_metadata', None)
-        moe_metadata.router_n_groups = self.n_groups
+        if moe_metadata is not None:
+            moe_metadata.router_n_groups = self.n_groups
         routing_weights, selected_experts = moe_gating_topk_softmax(x, self.top_k, moe_metadata)
         return routing_weights, selected_experts
 
