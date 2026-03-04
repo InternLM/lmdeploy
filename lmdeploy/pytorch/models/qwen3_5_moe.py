@@ -14,6 +14,7 @@ from lmdeploy.pytorch.nn import RMSNorm
 from lmdeploy.pytorch.nn.moe import build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .patch import add_prefix, get_build_model_context
 from .qwen2_5_vl import Qwen2_5_VLInputProcessor as Qwen3_5MoeInputProcessor
 from .qwen3_5 import (Qwen3_5Attention, Qwen3_5DecoderLayer, Qwen3_5ForConditionalGeneration, Qwen3_5GatedDeltaNet,
                       Qwen3_5MLP, Qwen3_5Model, Qwen3_5TextModel, Qwen3_5TextRotaryEmbedding)
@@ -47,7 +48,8 @@ class Qwen3_5MoeSparseMoeBlock(nn.Module):
                  config: PretrainedConfig,
                  layer_idx: int,
                  dtype: torch.dtype | None = None,
-                 device: torch.device | None = None):
+                 device: torch.device | None = None,
+                 prefix: str = ''):
         super().__init__()
         # TODO: zhouxinyu, determine modules_to_not_convert from config file
         quantization_config = getattr(config, 'quantization_config', None)
@@ -70,6 +72,7 @@ class Qwen3_5MoeSparseMoeBlock(nn.Module):
             quant_config=quantization_config,
             all_reduce=False,
             layer_idx=layer_idx,
+            prefix=add_prefix('experts', prefix),
         )
 
         self.shared_expert = Qwen3_5MLP(
@@ -79,6 +82,7 @@ class Qwen3_5MoeSparseMoeBlock(nn.Module):
             device=device,
             is_tp=True,
             all_reduce=False,
+            prefix=add_prefix('shared_expert', prefix),
         )
         self.shared_expert_gate = torch.nn.Linear(config.hidden_size, 1, bias=False, device=device, dtype=dtype)
 
@@ -91,11 +95,13 @@ class Qwen3_5MoeSparseMoeBlock(nn.Module):
         else:
             self._all_reduce = False
 
-    def forward(self, hidden_states: torch.Tensor):
+    def forward(self, hidden_states: torch.Tensor, all_routed_experts: torch.Tensor = None):
         """forward."""
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.reshape(-1, hidden_dim)
         router_logits, topk_weights, topk_ids = self.gate(hidden_states)
+        if all_routed_experts is not None:
+            all_routed_experts[:, self.layer_idx, :] = topk_ids
         out_states = self.experts(
             hidden_states,
             topk_weights,
@@ -116,11 +122,14 @@ class Qwen3_5MoeSparseMoeBlock(nn.Module):
 class Qwen3_5MoeDecoderLayer(Qwen3_5DecoderLayer):
     """Decoder layer."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 layer_idx: int,
-                 dtype: torch.dtype | None = None,
-                 device: torch.device | None = None):
+    def __init__(
+        self,
+        config: PretrainedConfig,
+        layer_idx: int,
+        dtype: torch.dtype | None = None,
+        device: torch.device | None = None,
+        prefix: str = '',
+    ):
         nn.Module.__init__(self)
         self.layer_idx = layer_idx
         quantization_config = getattr(config, 'quantization_config', None)
@@ -128,19 +137,34 @@ class Qwen3_5MoeDecoderLayer(Qwen3_5DecoderLayer):
         # build attention layer
         self.layer_type = config.layer_types[layer_idx]
         if self.layer_type == 'linear_attention':
-            self.linear_attn = Qwen3_5GatedDeltaNet(config, layer_idx, dtype=dtype, device=device)
+            self.linear_attn = Qwen3_5GatedDeltaNet(config,
+                                                    layer_idx,
+                                                    dtype=dtype,
+                                                    device=device,
+                                                    prefix=add_prefix('linear_attn', prefix))
         elif self.layer_type == 'full_attention':
-            self.self_attn = Qwen3_5Attention(config, layer_idx, dtype=dtype, device=device)
+            self.self_attn = Qwen3_5Attention(config,
+                                              layer_idx,
+                                              dtype=dtype,
+                                              device=device,
+                                              prefix=add_prefix('self_attn', prefix))
 
         # build MLP
-        self.mlp = Qwen3_5MoeSparseMoeBlock(config, layer_idx, dtype=dtype, device=device)
+        self.mlp = Qwen3_5MoeSparseMoeBlock(config,
+                                            layer_idx,
+                                            dtype=dtype,
+                                            device=device,
+                                            prefix=add_prefix('mlp', prefix))
 
         # build input layer norm
-        self.input_layernorm = RMSNorm(config.hidden_size,
-                                       config.rms_norm_eps,
-                                       quant_config=quantization_config,
-                                       dtype=dtype,
-                                       device=device)
+        self.input_layernorm = RMSNorm(
+            config.hidden_size,
+            config.rms_norm_eps,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device,
+            prefix=add_prefix('input_layernorm', prefix),
+        )
 
         # build attention layer norm
         self.post_attention_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
@@ -148,7 +172,11 @@ class Qwen3_5MoeDecoderLayer(Qwen3_5DecoderLayer):
 
 class Qwen3_5MoeTextModel(Qwen3_5TextModel):
 
-    def __init__(self, config: PretrainedConfig, dtype: torch.dtype | None = None, device: torch.device | None = None):
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype | None = None,
+                 device: torch.device | None = None,
+                 prefix: str = ''):
         nn.Module.__init__(self)
         self.config = config
         self.padding_idx = config.pad_token_id
@@ -163,7 +191,11 @@ class Qwen3_5MoeTextModel(Qwen3_5TextModel):
         # build all decode layers
         # TODO: use full config.num_hidden_layers
         self.layers = nn.ModuleList([
-            Qwen3_5MoeDecoderLayer(config, layer_idx, dtype=dtype, device=device)
+            Qwen3_5MoeDecoderLayer(config,
+                                   layer_idx,
+                                   dtype=dtype,
+                                   device=device,
+                                   prefix=add_prefix(f'layers.{layer_idx}', prefix))
             for layer_idx in range(self.config.num_hidden_layers)
         ])
 
@@ -176,11 +208,21 @@ class Qwen3_5MoeTextModel(Qwen3_5TextModel):
 
 class Qwen3_5MoeModel(Qwen3_5Model):
 
-    def __init__(self, config: PretrainedConfig, dtype: torch.dtype | None = None, device: torch.device | None = None):
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype | None = None,
+                 device: torch.device | None = None,
+                 prefix: str = ''):
         nn.Module.__init__(self)
 
-        self.visual = Qwen3_5MoeVisionModel(config.vision_config, dtype=dtype, device=device)
-        self.language_model = Qwen3_5MoeTextModel(config.text_config, dtype=dtype, device=device)
+        self.visual = Qwen3_5MoeVisionModel(config.vision_config,
+                                            dtype=dtype,
+                                            device=device,
+                                            prefix=add_prefix('visual', prefix))
+        self.language_model = Qwen3_5MoeTextModel(config.text_config,
+                                                  dtype=dtype,
+                                                  device=device,
+                                                  prefix=add_prefix('language_model', prefix))
 
 
 class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
@@ -202,7 +244,8 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
                  config: PretrainedConfig,
                  ctx_mgr: StepContextManager,
                  dtype: torch.dtype | None = None,
-                 device: torch.device | None = None):
+                 device: torch.device | None = None,
+                 prefix: str = ''):
         nn.Module.__init__(self)
         self.config = config
         self.ctx_mgr = ctx_mgr
@@ -211,13 +254,16 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
         self.input_processor = Qwen3_5MoeInputProcessor(self.config)
 
         # build model
-        self.model = Qwen3_5MoeModel(config, dtype=dtype, device=device)
+        self.model = Qwen3_5MoeModel(config, dtype=dtype, device=device, prefix=add_prefix('model', prefix))
         # build lm_head
         self.lm_head = self.build_lm_head(config.text_config.hidden_size,
                                           config.text_config.vocab_size,
                                           bias=False,
                                           dtype=dtype,
                                           device=device)
+        # for router replay
+        bm_ctx = get_build_model_context()
+        self.enable_return_routed_experts = bm_ctx.enable_return_routed_experts
 
     def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
                              expert_params_mapping: List):
