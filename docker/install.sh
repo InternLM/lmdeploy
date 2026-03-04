@@ -51,13 +51,13 @@ fi
 
 
 pip install /wheels/*.whl
-pip install cuda-python dlblas==0.0.7 dlslime==0.0.2.post1
+pip install dlblas==0.0.7 dlslime==0.0.2.post1
 
 # install pre-built flash attention wheel
 PLATFORM="linux_x86_64"
 PY_VERSION=$(python3 - <<'PY'
 import torch, sys
-torch_ver = '.'.join(torch.__version__.split('.')[:2])
+torch_ver = ''.join(torch.__version__.split('+')[0].split('.'))
 cuda_ver  = torch.version.cuda.split('.')[0]
 cxx11abi  = str(torch.compiled_with_cxx11_abi()).upper()
 py_tag    = f"cp{sys.version_info.major}{sys.version_info.minor}"
@@ -67,29 +67,16 @@ PY
 
 read TORCH_VER CUDA_VER CXX11ABI PY_TAG <<< "$PY_VERSION"
 
-if [[ "${CUDA_VER}" == "12" ]]; then
-    FA_VERSION=2.8.3
-    WHEEL="flash_attn-${FA_VERSION}+cu${CUDA_VER}torch${TORCH_VER}cxx11abi${CXX11ABI}-${PY_TAG}-${PY_TAG}-${PLATFORM}.whl"
-    BASE_URL="https://github.com/Dao-AILab/flash-attention/releases/download/v${FA_VERSION}"
-    FULL_URL="${BASE_URL}/${WHEEL}"
-
-    pip install "$FULL_URL"
-fi
-
 # install pre-built flash attention 3 wheel
 pip install ninja einops packaging
-FA3_WHEELS_URL="https://windreamer.github.io/flash-attention3-wheels/${CUDA_VERSION_SHORT}_torch${TORCH_INFO}"
+FA3_WHEELS_URL="https://windreamer.github.io/flash-attention3-wheels/${CUDA_VERSION_SHORT}_torch${TORCH_VER}"
     pip install --no-index flash_attn_3 --find-links ${FA3_WHEELS_URL}
 
 
 # install requirements/serve.txt dependencies such as timm
 pip install -r /tmp/requirements/serve.txt
 
-# copy nccl
-if [[ "${CUDA_VERSION_SHORT}" = "cu118" ]]; then
-    rm -rf /opt/py3/lib/python${PYTHON_VERSION}/site-packages/nvidia/nccl
-    cp -R /nccl /opt/py3/lib/python${PYTHON_VERSION}/site-packages/nvidia/
-elif [[ "${CUDA_VERSION_SHORT}" = "cu128" ]]; then
+if [[ "${CUDA_VERSION_SHORT}" = "cu128" ]]; then
     # As described in https://github.com/InternLM/lmdeploy/pull/4313,
     # window registration may cause memory leaks in NCCL 2.27, NCCL 2.28+ resolves the issue,
     # but turbomind engine will use nccl GIN for EP in future, which is brought in since 2.29
