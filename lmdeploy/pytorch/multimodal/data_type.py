@@ -1,11 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass, fields
-from typing import Any, Dict, List
+from typing import Any
 
 import numpy as np
 from torch import Tensor
 
-NestedTensor = Tensor | List[Tensor]
+NestedTensor = Tensor | list[Tensor]
 
 
 @dataclass
@@ -14,7 +14,7 @@ class MultiModalTensor:
     start: int
     end: int | None = None
     encoder_len: int | None = None
-    meta: Dict[str, Any] | None = None
+    meta: dict[str, Any] | None = None
 
     # for qwen-vl
     mrope_pos_ids: np.ndarray | None = None
@@ -53,4 +53,4 @@ class MultiModalTensor:
         return MultiModalTensor(**out_dict)
 
 
-MultiModalInputs = Dict[str, List[MultiModalTensor]]
+MultiModalInputs = dict[str, list[MultiModalTensor]]
