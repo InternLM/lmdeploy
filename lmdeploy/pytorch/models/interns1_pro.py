@@ -4,12 +4,12 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import torch
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
-from vl.constants import Modality
 
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
+from lmdeploy.vl.constants import Modality
 
 from .interns1_pro_ts import InternS1ProTimeSeriesModel
 from .patch import add_prefix, get_build_model_context

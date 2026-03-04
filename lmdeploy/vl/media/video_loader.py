@@ -3,6 +3,7 @@
 # adapted from https://github.com/QwenLM/Qwen3-VL/blob/main/qwen-vl-utils/src/qwen_vl_utils/vision_process.py
 
 import math
+import os
 import tempfile
 from abc import abstractmethod
 from io import BytesIO
@@ -25,7 +26,7 @@ class VideoLoader:
         raise NotImplementedError
 
     @classmethod
-    def smart_nframes(self, total_frames_num: int, num_frames: int, fps: int, duration: int) -> list[int]:
+    def smart_nframes(self, total_frames_num: int, num_frames: int, fps: int, duration: int) -> tuple[int, list[int]]:
         # resample video to target num_frames and fps
         # - the minimum of the two will be used
         num_frames_to_sample = total_frames_num
@@ -204,10 +205,16 @@ class DecordVideoLoader(VideoLoader):
     @classmethod
     def load_bytes(self, data: bytes, num_frames: int = -1, **kwargs) -> tuple[npt.NDArray, dict[str, Any]]:
         tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-        tmp_file.write(data)
-        tmp_file.close()
-
-        return self.load_file(Path(tmp_file.name), num_frames=num_frames, **kwargs)
+        try:
+            tmp_file.write(data)
+            tmp_file.close()
+            return self.load_file(Path(tmp_file.name), num_frames=num_frames, **kwargs)
+        finally:
+            # always cleanup, even if load_file crashes
+            try:
+                os.unlink(tmp_file.name)
+            except OSError:
+                pass  # file might not exist if write failed
 
 
 class TorchCodecVideoLoader(VideoLoader):
@@ -239,10 +246,16 @@ class TorchCodecVideoLoader(VideoLoader):
     @classmethod
     def load_bytes(self, data: bytes, num_frames: int = -1, **kwargs) -> tuple[npt.NDArray, dict[str, Any]]:
         tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-        tmp_file.write(data)
-        tmp_file.close()
-
-        return self.load_file(Path(tmp_file.name), num_frames=num_frames, **kwargs)
+        try:
+            tmp_file.write(data)
+            tmp_file.close()
+            return self.load_file(Path(tmp_file.name), num_frames=num_frames, **kwargs)
+        finally:
+            # always cleanup, even if load_file crashes
+            try:
+                os.unlink(tmp_file.name)
+            except OSError:
+                pass  # file might not exist if write failed
 
 
 class TorchVisionVideoLoader(VideoLoader):
@@ -275,7 +288,13 @@ class TorchVisionVideoLoader(VideoLoader):
     @classmethod
     def load_bytes(self, data: bytes, num_frames: int = -1, **kwargs) -> tuple[npt.NDArray, dict[str, Any]]:
         tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-        tmp_file.write(data)
-        tmp_file.close()
-
-        return self.load_file(Path(tmp_file.name), num_frames=num_frames, **kwargs)
+        try:
+            tmp_file.write(data)
+            tmp_file.close()
+            return self.load_file(Path(tmp_file.name), num_frames=num_frames, **kwargs)
+        finally:
+            # always cleanup, even if load_file crashes
+            try:
+                os.unlink(tmp_file.name)
+            except OSError:
+                pass  # file might not exist if write failed

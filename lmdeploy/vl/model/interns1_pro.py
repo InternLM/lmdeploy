@@ -38,16 +38,16 @@ class InternS1ProVisionModel(VisionModel):
         self.image_token_id = self.processor.image_token_id
 
         # video tokens
-        self.contains_video_input = False
         self.video_token = self.processor.video_token
         self.video_token_id = self.processor.video_token_id
-        self.vision_start_token = self.processor.vision_start_token
-        self.vision_end_token = self.processor.vision_end_token
 
         # time series tokens
-        self.contains_ts_input = False
         self.ts_token = getattr(self.processor, 'ts_token', None)
         self.ts_token_id = getattr(self.processor, 'ts_token_id', None)
+
+        # vision start and end tokens
+        self.vision_start_token = self.processor.vision_start_token
+        self.vision_end_token = self.processor.vision_end_token
 
     def get_processor_args(self, mm_processor_kwargs: Optional[Dict[str, Any]] = None):
         min_pixels = self.processor.image_processor.size['shortest_edge']
@@ -185,6 +185,8 @@ class InternS1ProVisionModel(VisionModel):
     def preprocess(self, messages: List[Dict], mm_processor_kwargs: Dict[str, Any] | None = None) -> List[Dict]:
         """Refer to `super().preprocess()` for spec."""
         outputs = []
+        self.contains_video_input = False
+        self.contains_ts_input = False
 
         mm_items = self.collect_multimodal_items(messages)
         for modality, data, params in mm_items:

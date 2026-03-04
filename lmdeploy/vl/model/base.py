@@ -172,7 +172,7 @@ class VisionModel(ABC):
         Args:
             messages (List[Dict]): a list of message
         Returns:
-            List[Tuple[Any, Dict]]: a list of (modality, data, params) for each multimodal item
+            List[Tuple[Modality, Any, Dict]]: a list of (modality, data, params) for each multimodal item
         """
         multimodal_items = []
         for message in messages:

@@ -141,7 +141,7 @@ class MultimodalProcessor:
         """Convert user-input multimodal data into GPT4V message format."""
         if isinstance(messages, dict):
             messages = [messages]
-        assert isinstance(messages, List)
+        assert isinstance(messages, list)
 
         out_messages = [None] * len(messages)
         media_io_kwargs = media_io_kwargs or {}
@@ -272,7 +272,7 @@ class MultimodalProcessor:
     @staticmethod
     def _re_format_prompt_images_pair(prompt: Tuple) -> Dict:
         """Reformat the prompt to openai message format."""
-        from lmdeploy.vl.media.image import load_image
+        from lmdeploy.vl import load_image
 
         messages = {'role': 'user', 'content': []}
         prompt, images = prompt

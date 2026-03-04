@@ -32,7 +32,7 @@ class TimeSeriesMediaIO(MediaIO[npt.NDArray]):
         suffix = filepath.suffix.lower()
 
         if suffix == '.npy':
-            return np.load(filepath)
+            return np.load(filepath, allow_pickle=False)
         elif suffix == '.csv':
             try:
                 ts_array = np.genfromtxt(filepath, delimiter=',', dtype=np.float32)

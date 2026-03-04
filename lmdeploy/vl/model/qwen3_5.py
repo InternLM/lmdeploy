@@ -27,11 +27,15 @@ class Qwen3_5Model(Qwen3VLModel):
         check_transformers()
 
         self.processor = AutoProcessor.from_pretrained(self.model_path)
+
+        # image tokens
         self.image_token = self.processor.image_token
         self.image_token_id = self.processor.image_token_id
 
-        self.contains_video_input = False
+        # video tokens
         self.video_token = self.processor.video_token
         self.video_token_id = self.processor.video_token_id
+
+        # vision start and end tokens
         self.vision_start_token = self.processor.vision_start_token
         self.vision_end_token = self.processor.vision_end_token
