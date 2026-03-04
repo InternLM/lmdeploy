@@ -1,6 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include "attention.h"
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/attention/registry.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
@@ -15,7 +16,7 @@ void dispatchAttention(const AttentionParams<T>& params)
     AttnDesc desc{};
     desc.mode     = AttnDesc::kPrefill;
     desc.head_dim = params.size_per_head;
-    desc.is_bf16  = std::is_same_v<T, nv_bfloat16>;
+    desc.data_type = data_type_v<T>;
 
     auto* kernel = reg.Find(desc);
 

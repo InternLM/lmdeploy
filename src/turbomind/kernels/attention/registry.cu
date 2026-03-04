@@ -3,8 +3,15 @@
 #include "src/turbomind/kernels/attention/arch.h"
 #include "src/turbomind/kernels/attention/registrar.h"
 #include "src/turbomind/kernels/attention/registry.h"
+#include "src/turbomind/kernels/core/math.h"
 
 namespace turbomind::attention {
+
+namespace {
+
+constexpr float kMaxWasteRatio = 1.f;
+
+}  // namespace
 
 Registry::Registry(std::shared_ptr<cudaDeviceProp> device_prop):
     device_prop_{std::move(device_prop)}, arch_{device_prop_->major * 100 + device_prop_->minor * 10}
@@ -39,18 +46,29 @@ bool Registry::Add(std::unique_ptr<Kernel> kernel)
 
 const Kernel* Registry::Find(const AttnDesc& desc) const
 {
-    const Kernel* best = nullptr;
+    const int threshold = static_cast<int>(kMaxWasteRatio * desc.query_group_sz);
+
+    const Kernel*             best = nullptr;
+    std::tuple<int, int, int> cost{};
+
     for (const auto* k : ptrs_) {
         const auto& d = k->desc();
         if (d.mode != desc.mode || d.head_dim != desc.head_dim  //
-            || d.is_bf16 != desc.is_bf16 || d.kv_quant != desc.kv_quant) {
+            || d.data_type != desc.data_type || d.kv_quant != desc.kv_quant) {
             continue;
         }
-        if (d.qh < desc.qh) {
-            continue;
+        if (desc.mode == AttnDesc::kDecoding) {
+            const int ctas  = cdiv(desc.query_group_sz, d.qh);
+            const int waste = d.qh * ctas - desc.query_group_sz;
+
+            const auto v = std::make_tuple(waste > threshold, ctas, waste);
+            if (!best || v < cost) {
+                best = k;
+                cost = v;
+            }
         }
-        if (!best || d.qh < best->desc().qh) {
-            best = k;
+        else {  // attention, return on first match
+            return k;
         }
     }
     return best;

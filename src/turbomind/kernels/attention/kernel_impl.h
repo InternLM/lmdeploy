@@ -34,10 +34,10 @@ class KernelImpl: public Kernel {
 public:
     KernelImpl()
     {
-        desc_.mode     = kIsDecoding ? AttnDesc::kDecoding : AttnDesc::kPrefill;
-        desc_.arch     = K::Arch::value;
-        desc_.head_dim = K::kHeadDim;
-        desc_.is_bf16  = std::is_same_v<typename K::T, nv_bfloat16>;
+        desc_.mode      = kIsDecoding ? AttnDesc::kDecoding : AttnDesc::kPrefill;
+        desc_.arch      = K::Arch::value;
+        desc_.head_dim  = K::kHeadDim;
+        desc_.data_type = data_type_v<typename K::T>;
 
         if constexpr (kIsDecoding) {
             desc_.kv_quant = kv_quant_from_type<typename K::Tkv>();

@@ -1,6 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include "decoding.h"
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/attention/registry.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -19,14 +20,13 @@ void dispatchDecoding(const AttentionParams<T>& params)
     FT_CHECK(!(is_kv_int4 && is_kv_int8));
 
     int kv_quant = is_kv_int4 ? 4 : (is_kv_int8 ? 8 : 0);
-    int qh       = (params.size_per_head == 576) ? 8 : (query_group_sz > 8) ? 9 : query_group_sz;
 
     AttnDesc desc{};
-    desc.mode     = AttnDesc::kDecoding;
-    desc.head_dim = params.size_per_head;
-    desc.is_bf16  = std::is_same_v<T, nv_bfloat16>;
-    desc.kv_quant = kv_quant;
-    desc.qh       = qh;
+    desc.mode           = AttnDesc::kDecoding;
+    desc.head_dim       = params.size_per_head;
+    desc.data_type      = data_type_v<T>;
+    desc.kv_quant       = kv_quant;
+    desc.query_group_sz = query_group_sz;
 
     auto& reg = Registry::instance();
     auto* kernel = reg.Find(desc);
