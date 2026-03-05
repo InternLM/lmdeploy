@@ -123,7 +123,7 @@ def run_all_step(log_path, case_name, cases_info, port: int = DEFAULT_PORT):
     if model is None:
         assert False, 'server not start correctly'
     for case in cases_info.keys():
-        if case != 'code_testcases' and 'code' in model.lower():
+        if case != 'code_testcase' and 'code' in model.lower():
             continue
         case_info = cases_info.get(case)
 

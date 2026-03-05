@@ -24,11 +24,9 @@ config:
         OpenGVLab/InternVL2_5-38B: 4
         OpenGVLab/InternVL2-40B: 4
         Qwen/Qwen2.5-72B-Instruct: 4
-        deepseek-ai/DeepSeek-V2-Lite-Chat: 2
         deepseek-ai/deepseek-vl-1.3b-chat: 2
         baichuan-inc/Baichuan2-13B-Chat: 2
         mistralai/Mixtral-8x7B-Instruct-v0.1: 2
-        liuhaotian/llava-v1.5-13b: 2
         google/gemma-2-27b-it: 2
         OpenGVLab/InternVL2-Llama3-76B-AWQ: 4
         unsloth/gpt-oss-20b-BF16: 2
@@ -49,7 +47,6 @@ turbomind_chat_model:
         - Qwen/Qwen2.5-VL-7B-Instruct
         - Qwen/Qwen2-VL-7B-Instruct
         - baichuan-inc/Baichuan2-7B-Chat
-        - liuhaotian/llava-v1.5-13b
         - liuhaotian/llava-v1.6-vicuna-7b
         - codellama/CodeLlama-7b-Instruct-hf
         # - allenai/Molmo-7B-D-0924  This modeling file requires the following packages that were not found in your environment: tensorflow. Run `pip install tensorflow`
@@ -73,7 +70,6 @@ pytorch_chat_model:
         - google/gemma-7b-it
         - baichuan-inc/Baichuan2-13B-Chat
         - deepseek-ai/deepseek-moe-16b-chat
-        - deepseek-ai/DeepSeek-V2-Lite-Chat
         - THUDM/chatglm2-6b
         - microsoft/Phi-4-mini-instruct
 
@@ -87,7 +83,6 @@ turbomind_vl_model:
         - OpenGVLab/InternVL2-Llama3-76B-AWQ
         - Qwen/Qwen2.5-VL-7B-Instruct
         - Qwen/Qwen2-VL-7B-Instruct
-        - liuhaotian/llava-v1.5-13b
         - liuhaotian/llava-v1.6-vicuna-7b
 
 pytorch_vl_model:
@@ -118,7 +113,6 @@ turbomind_quantization:
         - Qwen/Qwen2.5-VL-7B-Instruct
         - Qwen/Qwen2-VL-7B-Instruct
         - OpenGVLab/InternVL3_5-30B-A3B
-        - deepseek-ai/DeepSeek-V2-Lite-Chat
         - codellama/CodeLlama-7b-Instruct-hf
         # - allenai/Molmo-7B-D-0924  This modeling file requires the following packages that were not found in your environment: tensorflow. Run `pip install tensorflow`
     gptq:
@@ -152,7 +146,7 @@ pytorch_quantization:
         - microsoft/Phi-3.5-vision-instruct
         - unsloth/gpt-oss-20b-BF16
     no_kvint8:
-        - deepseek-ai/DeepSeek-V2-Lite-Chat
+        - empty
 
 longtext_benchmark_model:
     - internlm/Intern-S1-mini
