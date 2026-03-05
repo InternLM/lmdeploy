@@ -99,7 +99,7 @@ class DeployModelMixin:
                 if '.experts' in layer_name:
                     added_ignore_layers.add(layer_name.split('.experts', 1)[0] + '.experts')
                 else:
-                    added_ignore_layers.add(layer_name.replace('.down_proj', '.down_proj'))
+                    added_ignore_layers.add(layer_name)
 
         added_ignore_layers = list(added_ignore_layers)
 

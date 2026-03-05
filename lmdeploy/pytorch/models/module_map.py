@@ -52,6 +52,11 @@ MODULE_MAP.update({
 
 MODULE_MAP.update({'Glm4MoeLiteForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v2.DeepseekV2ForCausalLM'})
 
+# glm4.7 mtp
+MODULE_MAP.update({
+    'Glm4MoeMTPModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.glm4moe_mtp.Glm4MoeMTPModel',
+})
+
 # glm5
 MODULE_MAP.update({'GlmMoeDsaForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v32.DeepseekV32ForCausalLM'})
 
