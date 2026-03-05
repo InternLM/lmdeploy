@@ -61,6 +61,10 @@ public:
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(
             &info_.max_active_ctas, func, info_.num_warps * WARP_SIZE, info_.dynamic_smem_size);
 
+        int device_id{};
+        cudaGetDevice(&device_id);
+        cudaDeviceGetAttribute(&info_.sm_count, cudaDevAttrMultiProcessorCount, device_id);
+
         info_.name = to_string(desc_);
     }
 
@@ -68,10 +72,10 @@ public:
     {
         const auto& p = *static_cast<const typename K::ParamType*>(params);
         if constexpr (kIsDecoding) {
-            return invokeDecoding<K>(p);
+            return invokeDecoding<K>(p, info_.sm_count, info_.max_active_ctas);
         }
         else {
-            invokeAttention<K>(p);
+            invokeAttention<K>(p, info_.sm_count, info_.max_active_ctas);
             return true;
         }
     }

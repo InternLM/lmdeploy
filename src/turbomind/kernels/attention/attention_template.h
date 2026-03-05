@@ -10,7 +10,7 @@
 namespace turbomind {
 
 template<class Kernel>
-void invokeAttention(const typename Kernel::ParamType& params)
+void invokeAttention(const typename Kernel::ParamType& params, int sm_count, int max_active_ctas)
 {
     static const size_t kSmemSize = sizeof(typename Kernel::SharedStorage);
 
@@ -29,21 +29,6 @@ void invokeAttention(const typename Kernel::ParamType& params)
 
     static const auto kernel_func = &attention_kernel<Kernel>;
 
-    thread_local const int2 caps = [&] {
-        auto err = cudaFuncSetAttribute(kernel_func, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize);
-        if (err) {
-            std::cout << cudaGetErrorString(err) << "\n";
-            std::abort();
-        }
-        int device_id{};
-        cudaGetDevice(&device_id);
-        int sm_count{};
-        cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device_id);
-        int max_active_ctas{};
-        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_active_ctas, kernel_func, block.x, kSmemSize);
-        return int2{sm_count, max_active_ctas};
-    }();
-
     const int max_cp_k_len    = cdiv(params.max_k_len, (int)params.cp_size);
     const int tile_count      = cdiv(std::min(max_cp_k_len, params.window_size), Kernel::CTA_S);
     const int max_split_count = std::min(params.max_split_k, tile_count);
@@ -55,7 +40,7 @@ void invokeAttention(const typename Kernel::ParamType& params)
     dim3 grid = cta_map.get_grid_shape();
 
     const int grid_size = grid.x * grid.y * grid.z;
-    const int split_cnt = GetSplitCount(max_split_count, grid_size, caps.y, caps.x, 8);
+    const int split_cnt = GetSplitCount(max_split_count, grid_size, max_active_ctas, sm_count, 8);
 
     // printf("max split cnt: %d, split cnt: %d\n", max_split_count, split_cnt);
 
