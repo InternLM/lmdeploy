@@ -22,7 +22,7 @@ void dispatchAttention(const AttentionParams<T>& params)
 
     TM_CHECK(kernel) << "No attention kernel found: " + to_string(desc);
 
-    kernel->Launch(&params);
+    kernel->Launch(&params, reg.sm_count());
 }
 
 template void dispatchAttention(const AttentionParams<half>& params);

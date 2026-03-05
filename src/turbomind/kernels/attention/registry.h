@@ -26,6 +26,11 @@ public:
         return ptrs_;
     }
 
+    int sm_count() const noexcept
+    {
+        return device_prop_->multiProcessorCount;
+    }
+
     static Registry& instance();
 
 private:

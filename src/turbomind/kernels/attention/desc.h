@@ -48,7 +48,6 @@ struct KernelDesc {
 };
 
 struct KernelInfo {
-    int                sm_count;
     int                dynamic_smem_size;
     int                max_active_ctas;
     int                num_warps;

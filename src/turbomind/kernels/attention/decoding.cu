@@ -33,7 +33,7 @@ void dispatchDecoding(const AttentionParams<T>& params)
 
     TM_CHECK(kernel) << "No decoding kernel found: " + to_string(desc);
 
-    kernel->Launch(&params);
+    kernel->Launch(&params, reg.sm_count());
 }
 
 template void dispatchDecoding(const AttentionParams<half>& params);
