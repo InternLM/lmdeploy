@@ -16,9 +16,9 @@ constexpr int kHeadDim = 576;
 // MLA config for all Tkv: CTA_H=16, CTA_S=16, WARP_H=8, WARP_S=16, Stages=2
 template<class T, class Tkv>
 using KT = AttentionUniversal<arch::Sm75,
-    Mainloop<arch::Sm70, Impl<MMA_81616, T, Tkv, 16, 1, 16, 8, 1, 16, kHeadDim, 2>>,
-    GetBlockIterFactory<T, Tkv, 16, kHeadDim>,
-    DecodingCtaMap>;
+                              Mainloop<arch::Sm70, Impl<MMA_81616, T, Tkv, 16, 1, 32, 8, 1, 16, kHeadDim, 2>>,
+                              GetBlockIterFactory<T, Tkv, 32, kHeadDim>,
+                              DecodingCtaMap>;
 
 namespace {
 Registrar reg([](Collector& c) {

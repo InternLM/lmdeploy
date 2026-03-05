@@ -16,17 +16,19 @@ constexpr int kHeadDim = 576;
 
 // Non-quant MLA config: CTA_H=16, CTA_S=32, WARP_H=8, WARP_S=16, Stages=2
 template<class T>
-using Decoding_F = AttentionUniversal<arch::Sm80,
-    Mainloop<Sm80_CpAsync<2>, Impl<MMA_81616, T, T, 16, 1, 32, 8, 1, 16, kHeadDim, 2>>,
-    GetBlockIterFactory<T, T, 32, kHeadDim>,
-    DecodingCtaMap>;
+using Decoding_F =
+    AttentionUniversal<arch::Sm80,
+                       Mainloop<Sm80_CpAsync<2>, Impl<MMA_81616, T, T, 16, 1, 32, 8, 1, 16, kHeadDim, 2>>,
+                       GetBlockIterFactory<T, T, 32, kHeadDim>,
+                       DecodingCtaMap>;
 
 // Quant config: CTA_H=8, CTA_S=64, WARP_H=8, WARP_S=16, Stages=5
 template<class T, class Tkv>
-using Decoding_Q = AttentionUniversal<arch::Sm80,
-    Mainloop<Sm80_CpAsync<5>, Impl<MMA_81616, T, Tkv, 8, 1, 64, 8, 1, 16, kHeadDim, 5>>,
-    GetBlockIterFactory<T, Tkv, 64, kHeadDim>,
-    DecodingCtaMap>;
+using Decoding_Q =
+    AttentionUniversal<arch::Sm80,
+                       Mainloop<Sm80_CpAsync<5>, Impl<MMA_81616, T, Tkv, 8, 1, 64, 8, 1, 16, kHeadDim, 5>>,
+                       GetBlockIterFactory<T, Tkv, 64, kHeadDim>,
+                       DecodingCtaMap>;
 
 namespace {
 Registrar reg([](Collector& c) {

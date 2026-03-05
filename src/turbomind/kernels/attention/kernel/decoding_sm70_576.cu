@@ -16,9 +16,9 @@ constexpr int kHeadDim = 576;
 // CTA_H=2, CTA_S=16, WARP_H=1, WARP_S=8, Stages=2
 template<class T, class Tkv>
 using KT = AttentionUniversal<arch::Sm70,
-    Mainloop<arch::Sm70, Impl<MMA_SIMT, T, Tkv, 2, 1, 16, 1, 1, 8, kHeadDim, 2>>,
-    GetBlockIterFactory<T, Tkv, 16, kHeadDim>,
-    DecodingCtaMap>;
+                              Mainloop<arch::Sm70, Impl<MMA_SIMT, T, Tkv, 2, 1, 16, 1, 1, 8, kHeadDim, 2>>,
+                              GetBlockIterFactory<T, Tkv, 16, kHeadDim>,
+                              DecodingCtaMap>;
 
 namespace {
 Registrar reg([](Collector& c) {
