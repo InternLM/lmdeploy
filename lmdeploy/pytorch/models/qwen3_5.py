@@ -22,6 +22,7 @@ from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader, load_weight
 from lmdeploy.vl.constants import Modality
 
+from .patch import add_prefix
 from .qwen2_5_vl import Qwen2_5_VisionRotaryEmbedding as Qwen3_5VisionRotaryEmbedding
 from .qwen2_5_vl import Qwen2_5_VLVisionAttention as Qwen3_5VisionAttention
 from .qwen3_vl import Qwen3VLInputProcessor as Qwen3_5InputProcessor
@@ -58,7 +59,11 @@ class Qwen3_5VisionPatchEmbed(nn.Module):
 class Qwen3_5VisionMLP(nn.Module):
     """Vision mlp."""
 
-    def __init__(self, config: PretrainedConfig, dtype: torch.dtype | None = None, device: torch.device | None = None):
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype | None = None,
+                 device: torch.device | None = None,
+                 prefix: str = ''):
         super().__init__()
         from transformers.activations import ACT2FN
         hidden_dim = config.hidden_size
@@ -73,19 +78,23 @@ class Qwen3_5VisionMLP(nn.Module):
             device=device,
             quant_config=quantization_config,
             is_tp=True,
+            prefix=add_prefix('linear_fc1', prefix),
         )
 
         # gelu_pytorch_tanh
         self.act = ACT2FN[config.hidden_act]
 
         # down
-        self.linear_fc2 = build_rowwise_linear(intermediate_size,
-                                               hidden_dim,
-                                               bias=True,
-                                               dtype=dtype,
-                                               device=device,
-                                               quant_config=quantization_config,
-                                               is_tp=True)
+        self.linear_fc2 = build_rowwise_linear(
+            intermediate_size,
+            hidden_dim,
+            bias=True,
+            dtype=dtype,
+            device=device,
+            quant_config=quantization_config,
+            is_tp=True,
+            prefix=add_prefix('linear_fc2', prefix),
+        )
 
     def forward(self, x):
         """forward."""
@@ -99,15 +108,16 @@ class Qwen3_5VisionBlock(nn.Module):
                  config: PretrainedConfig,
                  layer_idx: int,
                  dtype: torch.dtype | None = None,
-                 device: torch.device | None = None):
+                 device: torch.device | None = None,
+                 prefix: str = ''):
         super().__init__()
         self.layer_idx = layer_idx
         self.norm1 = LayerNorm(config.hidden_size, eps=1e-6, dtype=dtype, device=device)
         self.norm2 = LayerNorm(config.hidden_size, eps=1e-6, dtype=dtype, device=device)
 
-        self.attn = Qwen3_5VisionAttention(config, dtype=dtype, device=device)
+        self.attn = Qwen3_5VisionAttention(config, dtype=dtype, device=device, prefix=add_prefix('attn', prefix))
 
-        self.mlp = Qwen3_5VisionMLP(config, dtype=dtype, device=device)
+        self.mlp = Qwen3_5VisionMLP(config, dtype=dtype, device=device, prefix=add_prefix('mlp', prefix))
 
     def forward(self,
                 hidden_states: torch.Tensor,
@@ -164,7 +174,11 @@ class Qwen3_5VisionPatchMerger(nn.Module):
 class Qwen3_5VisionModel(nn.Module):
     """qwen3.5 vision model."""
 
-    def __init__(self, config: PretrainedConfig, dtype: torch.dtype | None = None, device: torch.device | None = None):
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype | None = None,
+                 device: torch.device | None = None,
+                 prefix: str = ''):
         super().__init__()
         self.config = config
         self.spatial_merge_size = config.spatial_merge_size
@@ -177,8 +191,13 @@ class Qwen3_5VisionModel(nn.Module):
         head_dim = config.hidden_size // config.num_heads
         self.rotary_pos_emb = Qwen3_5VisionRotaryEmbedding(head_dim // 2, device=device)
 
-        self.blocks = nn.ModuleList(
-            [Qwen3_5VisionBlock(config, layer_idx, dtype=dtype, device=device) for layer_idx in range(config.depth)])
+        self.blocks = nn.ModuleList([
+            Qwen3_5VisionBlock(config,
+                               layer_idx,
+                               dtype=dtype,
+                               device=device,
+                               prefix=add_prefix(f'blocks.{layer_idx}', prefix)) for layer_idx in range(config.depth)
+        ])
         self.merger = Qwen3_5VisionPatchMerger(config=config, use_postshuffle_norm=False, dtype=dtype, device=device)
 
     @staticmethod
@@ -304,7 +323,8 @@ class Qwen3_5MLP(nn.Module):
                  dtype: torch.dtype | None = None,
                  device: torch.device | None = None,
                  is_tp: bool = True,
-                 all_reduce: bool = True):
+                 all_reduce: bool = True,
+                 prefix: str = ''):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         if intermediate_size is None:
@@ -318,22 +338,26 @@ class Qwen3_5MLP(nn.Module):
             device=device,
             quant_config=quantization_config,
             is_tp=is_tp,
+            prefix=add_prefix('gate_up_proj', prefix),
         )
 
         # silu and mul
         self.act_fn = SiluAndMul(inplace=True)
 
         # down
-        self.down_proj = build_rowwise_linear(intermediate_size,
-                                              config.hidden_size,
-                                              bias=False,
-                                              quant_config=quantization_config,
-                                              dtype=dtype,
-                                              device=device,
-                                              is_tp=is_tp,
-                                              all_reduce=all_reduce)
+        self.down_proj = build_rowwise_linear(
+            intermediate_size,
+            config.hidden_size,
+            bias=False,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device,
+            is_tp=is_tp,
+            all_reduce=all_reduce,
+            prefix=add_prefix('down_proj', prefix),
+        )
 
-    def forward(self, x):
+    def forward(self, x, all_routed_experts: torch.Tensor | None = None):
         """forward."""
         gate_up = self.gate_up_proj(x)
         act = self.act_fn(gate_up)
@@ -343,11 +367,14 @@ class Qwen3_5MLP(nn.Module):
 class Qwen3_5GatedDeltaNet(nn.Module):
     """Gated deltanet."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 layer_idx: int,
-                 dtype: torch.dtype | None = None,
-                 device: torch.device | None = None):
+    def __init__(
+        self,
+        config: PretrainedConfig,
+        layer_idx: int,
+        dtype: torch.dtype | None = None,
+        device: torch.device | None = None,
+        prefix: str = '',
+    ):
         super().__init__()
         self.hidden_size = config.hidden_size
         self.num_v_heads = config.linear_num_value_heads
@@ -532,7 +559,8 @@ class Qwen3_5Attention(nn.Module):
                  config: PretrainedConfig,
                  layer_idx: int,
                  dtype: torch.dtype | None = None,
-                 device: torch.device | None = None):
+                 device: torch.device | None = None,
+                 prefix: str = ''):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         num_heads = config.num_attention_heads
@@ -555,6 +583,7 @@ class Qwen3_5Attention(nn.Module):
             num_replicate_kv_heads=num_replicate_kv_heads,
             dtype=dtype,
             device=device,
+            prefix=add_prefix('qkv_proj', prefix),
         )
 
         # rotary embedding
@@ -569,25 +598,34 @@ class Qwen3_5Attention(nn.Module):
         )
 
         # o_proj
-        self.o_proj = build_o_proj(num_heads * head_dim,
-                                   hidden_size,
-                                   bias=config.attention_bias,
-                                   quant_config=quantization_config,
-                                   dtype=dtype,
-                                   device=device,
-                                   is_tp=True)
+        self.o_proj = build_o_proj(
+            num_heads * head_dim,
+            hidden_size,
+            bias=config.attention_bias,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device,
+            is_tp=True,
+            prefix=add_prefix('o_proj', prefix),
+        )
 
         # q, k norm
-        self.q_norm = RMSNorm(head_dim,
-                              config.rms_norm_eps,
-                              quant_config=quantization_config,
-                              dtype=dtype,
-                              device=device)
-        self.k_norm = RMSNorm(head_dim,
-                              config.rms_norm_eps,
-                              quant_config=quantization_config,
-                              dtype=dtype,
-                              device=device)
+        self.q_norm = RMSNorm(
+            head_dim,
+            config.rms_norm_eps,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device,
+            prefix=add_prefix('q_norm', prefix),
+        )
+        self.k_norm = RMSNorm(
+            head_dim,
+            config.rms_norm_eps,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device,
+            prefix=add_prefix('k_norm', prefix),
+        )
 
     def forward(
         self,
@@ -646,7 +684,8 @@ class Qwen3_5DecoderLayer(nn.Module):
                  config: PretrainedConfig,
                  layer_idx: int,
                  dtype: torch.dtype | None = None,
-                 device: torch.device | None = None):
+                 device: torch.device | None = None,
+                 prefix: str = ''):
         super().__init__()
         self.layer_idx = layer_idx
         quantization_config = getattr(config, 'quantization_config', None)
@@ -654,19 +693,34 @@ class Qwen3_5DecoderLayer(nn.Module):
         # build attention layer
         self.layer_type = config.layer_types[layer_idx]
         if self.layer_type == 'linear_attention':
-            self.linear_attn = Qwen3_5GatedDeltaNet(config, layer_idx, dtype=dtype, device=device)
+            self.linear_attn = Qwen3_5GatedDeltaNet(config,
+                                                    layer_idx,
+                                                    dtype=dtype,
+                                                    device=device,
+                                                    prefix=add_prefix('linear_attn', prefix))
         elif self.layer_type == 'full_attention':
-            self.self_attn = Qwen3_5Attention(config, layer_idx, dtype=dtype, device=device)
+            self.self_attn = Qwen3_5Attention(config,
+                                              layer_idx,
+                                              dtype=dtype,
+                                              device=device,
+                                              prefix=add_prefix('self_attn', prefix))
 
         # build MLP
-        self.mlp = Qwen3_5MLP(config, intermediate_size=config.intermediate_size, dtype=dtype, device=device)
+        self.mlp = Qwen3_5MLP(config,
+                              intermediate_size=config.intermediate_size,
+                              dtype=dtype,
+                              device=device,
+                              prefix=add_prefix('mlp', prefix))
 
         # build input layer norm
-        self.input_layernorm = RMSNorm(config.hidden_size,
-                                       config.rms_norm_eps,
-                                       quant_config=quantization_config,
-                                       dtype=dtype,
-                                       device=device)
+        self.input_layernorm = RMSNorm(
+            config.hidden_size,
+            config.rms_norm_eps,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device,
+            prefix=add_prefix('input_layernorm', prefix),
+        )
 
         # build attention layer norm
         self.post_attention_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
@@ -679,6 +733,7 @@ class Qwen3_5DecoderLayer(nn.Module):
         residual: torch.Tensor | None,
         attn_metadata: Any,
         gated_delta_meta: GatedDeltaMeta,
+        all_routed_experts: torch.Tensor | None = None,
     ):
 
         if residual is None:
@@ -704,7 +759,7 @@ class Qwen3_5DecoderLayer(nn.Module):
 
         # Fully Connected
         hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
-        hidden_states = self.mlp(hidden_states)
+        hidden_states = self.mlp(hidden_states, all_routed_experts=all_routed_experts)
 
         outputs = (hidden_states, residual)
         return outputs
@@ -805,7 +860,11 @@ class Qwen3_5TextRotaryEmbedding(nn.Module):
 class Qwen3_5TextModel(nn.Module):
     """qwen3.5 text model."""
 
-    def __init__(self, config: PretrainedConfig, dtype: torch.dtype | None = None, device: torch.device | None = None):
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype | None = None,
+                 device: torch.device | None = None,
+                 prefix: str = ''):
         super().__init__()
         self.config = config
         self.padding_idx = config.pad_token_id
@@ -820,7 +879,11 @@ class Qwen3_5TextModel(nn.Module):
         # build all decode layers
         # TODO: use full config.num_hidden_layers
         self.layers = nn.ModuleList([
-            Qwen3_5DecoderLayer(config, layer_idx, dtype=dtype, device=device)
+            Qwen3_5DecoderLayer(config,
+                                layer_idx,
+                                dtype=dtype,
+                                device=device,
+                                prefix=add_prefix(f'layers.{layer_idx}', prefix))
             for layer_idx in range(self.config.num_hidden_layers)
         ])
 
@@ -839,6 +902,7 @@ class Qwen3_5TextModel(nn.Module):
         state_ids: torch.Tensor,
         inputs_embeds: torch.Tensor | None = None,
         mrope_position_ids: torch.Tensor | None = None,
+        all_routed_experts: torch.Tensor | None = None,
     ):
         """Rewrite of LlamaModel.forward."""
 
@@ -872,6 +936,7 @@ class Qwen3_5TextModel(nn.Module):
                 residual=residual,
                 attn_metadata=attn_metadata,
                 gated_delta_meta=gated_delta_meta,
+                all_routed_experts=all_routed_experts,
             )
 
         # norm
@@ -886,11 +951,21 @@ class Qwen3_5TextModel(nn.Module):
 
 class Qwen3_5Model(nn.Module):
 
-    def __init__(self, config: PretrainedConfig, dtype: torch.dtype | None = None, device: torch.device | None = None):
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype | None = None,
+                 device: torch.device | None = None,
+                 prefix: str = ''):
         super().__init__()
 
-        self.visual = Qwen3_5VisionModel(config.vision_config, dtype=dtype, device=device)
-        self.language_model = Qwen3_5TextModel(config.text_config, dtype=dtype, device=device)
+        self.visual = Qwen3_5VisionModel(config.vision_config,
+                                         dtype=dtype,
+                                         device=device,
+                                         prefix=add_prefix('visual', prefix))
+        self.language_model = Qwen3_5TextModel(config.text_config,
+                                               dtype=dtype,
+                                               device=device,
+                                               prefix=add_prefix('language_model', prefix))
 
     def forward(
         self,
@@ -907,6 +982,7 @@ class Qwen3_5Model(nn.Module):
         image_mask: torch.Tensor | None = None,
         pos_embeds: torch.Tensor | None = None,
         grid_thw: torch.Tensor | None = None,
+        all_routed_experts: torch.Tensor | None = None,
     ):
         """Model forward, return logits."""
 
@@ -941,6 +1017,7 @@ class Qwen3_5Model(nn.Module):
             state_ids=state_ids,
             inputs_embeds=inputs_embeds,
             mrope_position_ids=mrope_position_ids,
+            all_routed_experts=all_routed_experts,
         )
         return hidden_states
 
@@ -968,7 +1045,8 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
                  config: PretrainedConfig,
                  ctx_mgr: StepContextManager,
                  dtype: torch.dtype | None = None,
-                 device: torch.device | None = None):
+                 device: torch.device | None = None,
+                 prefix: str = ''):
         super().__init__()
         self.config = config
         self.ctx_mgr = ctx_mgr
@@ -977,13 +1055,15 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         self.input_processor = Qwen3_5InputProcessor(self.config)
 
         # build model
-        self.model = Qwen3_5Model(config, dtype=dtype, device=device)
+        self.model = Qwen3_5Model(config, dtype=dtype, device=device, prefix=add_prefix('model', prefix))
         # build lm_head
         self.lm_head = self.build_lm_head(config.text_config.hidden_size,
                                           config.text_config.vocab_size,
                                           bias=False,
                                           dtype=dtype,
                                           device=device)
+        # dense model
+        self.enable_return_routed_experts = False
 
     def forward(
         self,
@@ -1003,6 +1083,13 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         **kwargs,
     ):
         """Model forward, return logits."""
+        all_routed_experts = None
+        if self.enable_return_routed_experts:
+            config = self.config.text_config
+            num_tokens = input_ids.size(1)
+            all_routed_experts = position_ids.new_empty(
+                (num_tokens, config.num_hidden_layers, config.num_experts_per_tok), dtype=torch.uint16)
+
         hidden_states = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
@@ -1017,8 +1104,11 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
             image_mask=image_mask,
             pos_embeds=pos_embeds,
             grid_thw=grid_thw,
+            all_routed_experts=all_routed_experts,
         )
-        return hidden_states
+        if all_routed_experts is None:
+            return hidden_states
+        return dict(hidden_states=hidden_states, all_routed_experts=all_routed_experts)
 
     def get_input_embeddings(self):
         """Get input embeddings."""
@@ -1069,8 +1159,8 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
                 image_mask = (input_ids == mm_token_id)
 
                 grid_thw = torch.cat([data.meta['grid_thw'] for data in mm_inputs]).cpu()
-                vis_pos_emb = self.visual.rot_pos_emb(grid_thw)
-                pos_embeds = self.visual.fast_pos_embed_interpolate(grid_thw)
+                vis_pos_emb = self.model.visual.rot_pos_emb(grid_thw)
+                pos_embeds = self.model.visual.fast_pos_embed_interpolate(grid_thw)
                 vis_cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2],
                                                          grid_thw[:, 0]).to(pixel_values.device)
                 vis_cu_seqlens = vis_cu_seqlens.cumsum(dim=0, dtype=torch.int32)
