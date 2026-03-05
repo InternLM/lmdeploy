@@ -43,3 +43,7 @@ wget -q https://github.com/NVIDIA/gdrcopy/archive/refs/tags/v${GDRCOPY_VERSION}.
 && cd gdrcopy-${GDRCOPY_VERSION}/packages \
 && CUDA=/usr/local/cuda ./build-deb-packages.sh \
 && mv ./*.deb /wheels
+
+# Clean up build artifacts
+cd / && rm -rf gdrcopy-${GDRCOPY_VERSION}
+apt-get clean -y && rm -rf /var/lib/apt/lists/*

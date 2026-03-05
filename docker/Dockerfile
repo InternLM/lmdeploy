@@ -14,7 +14,6 @@ ENV CUDA_VERSION_SHORT=cu126
 # Builder image
 FROM ${CUDA_VERSION} AS dev
 ARG PYTHON_VERSION=3.10
-ARG NCCL_BRANCH=v2.26.6-1
 
 ENV PATH=/opt/py3/bin:/root/.local/bin:${PATH}
 ENV DEBIAN_FRONTEND=noninteractive
