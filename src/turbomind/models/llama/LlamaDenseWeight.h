@@ -99,7 +99,8 @@ struct LlamaAttentionWeight: public core::Module {
                          DataType weight_type,
                          int      group_size,
                          int      window_size,
-                         bool     sink);
+                         bool     sink,
+                         bool     attn_output_gate = false);
 
     void prepare();
 

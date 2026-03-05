@@ -22,6 +22,9 @@ add_library(Llama STATIC
         llama_kernels.cu
         llama_utils.cu
         mla_utils.cu
+        GatedDeltaNetWeight.cc
+        GatedDeltaNetLayer.cc
+        gated_delta_net_kernels.cu
 )
 set_property(TARGET Llama PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET Llama PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)

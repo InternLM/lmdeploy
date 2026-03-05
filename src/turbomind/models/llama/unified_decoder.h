@@ -1,6 +1,7 @@
 #pragma once
 
 #include "src/turbomind/comm/device_comm.h"
+#include "src/turbomind/models/llama/GatedDeltaNetLayer.h"
 #include "src/turbomind/models/llama/LlamaDecoderLayerWeight.h"
 #include "src/turbomind/models/llama/LlamaFfnLayer.h"
 #include "src/turbomind/models/llama/context.h"
@@ -45,6 +46,7 @@ private:
     int& is_warm_up_;
 
     std::unique_ptr<UnifiedAttentionLayer> attn_layer_;
+    std::unique_ptr<GatedDeltaNetLayer>    linear_attn_layer_;
     std::unique_ptr<LlamaFfnLayer>         ffn_layer_;
     std::unique_ptr<MoeFfnLayer>           moe_ffn_layer_;
 

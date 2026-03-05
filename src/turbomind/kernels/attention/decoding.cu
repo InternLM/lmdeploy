@@ -100,6 +100,9 @@ void dispatchDecoding(const AttentionParams<T>& params)
         else if (params.size_per_head == 64) {
             return dispatch_kv(arch, std::integral_constant<int, 64>{});
         }
+        else if (params.size_per_head == 256) {
+            return dispatch_kv(arch, std::integral_constant<int, 256>{});
+        }
         else if (params.size_per_head == 576) {
             return dispatch_kv(arch, std::integral_constant<int, 576>{});
         }

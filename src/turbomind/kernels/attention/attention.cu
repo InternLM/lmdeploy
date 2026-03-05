@@ -47,6 +47,9 @@ void dispatchAttention(const AttentionParams<T>& params)
     else if (params.size_per_head == 128) {
         return dispatch(std::integral_constant<int, 128>{});
     }
+    else if (params.size_per_head == 256) {
+        return dispatch(std::integral_constant<int, 256>{});
+    }
     else if (params.size_per_head == 576) {
         return dispatch(std::integral_constant<int, 576>{});
     }

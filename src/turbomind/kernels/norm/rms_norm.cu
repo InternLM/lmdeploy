@@ -192,24 +192,32 @@ void invokeQkRMSNorm(void*        data,
                      cudaStream_t stream)
 {
 
-    constexpr constant<128> max_dim{};
-    TM_CHECK_LE(head_dim, max_dim);
-
     auto invoke = [&](auto t) {
         using T = decltype(t);
 
-        constexpr int vec_size = sizeof(uint4) / sizeof(T);
-        // Captured constexpr may not be constant to MSVC
-        constexpr int thr_per_qk = max_dim.value / vec_size;
+        auto launch = [&](auto max_dim_c) {
+            constexpr int kMaxDim = std::decay_t<decltype(max_dim_c)>::value;
+            TM_CHECK_LE(head_dim, kMaxDim);
 
-        FT_CHECK(head_dim % vec_size == 0);
+            constexpr int vec_size   = sizeof(uint4) / sizeof(T);
+            constexpr int thr_per_qk = kMaxDim / vec_size;
 
-        const int threads   = thr_per_qk * n * (int64_t)token_num;
-        const int block_dim = 512;
-        const int grid_dim  = cdiv(threads, block_dim);
+            FT_CHECK(head_dim % vec_size == 0);
 
-        kernel::RMSNormQK<T, float, vec_size, max_dim><<<grid_dim, block_dim, 0, stream>>>(
-            (T*)data, ld, (const T*)weight, head_dim, n, token_num, eps, 1.f / head_dim);
+            const int threads   = thr_per_qk * n * (int64_t)token_num;
+            const int block_dim = 512;
+            const int grid_dim  = cdiv(threads, block_dim);
+
+            kernel::RMSNormQK<T, float, vec_size, kMaxDim><<<grid_dim, block_dim, 0, stream>>>(
+                (T*)data, ld, (const T*)weight, head_dim, n, token_num, eps, 1.f / head_dim);
+        };
+
+        if (head_dim <= 128) {
+            launch(constant<128>{});
+        }
+        else {
+            launch(constant<256>{});
+        }
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(dtype, invoke);
@@ -227,23 +235,32 @@ void invokeRMSNormQK(Tensor& x, const Tensor& w, float eps, cudaStream_t st)
     auto data   = x.raw_data();
     auto stride = x.stride(0);
 
-    constexpr constant<128> max_dim{};
-    TM_CHECK_LE(head_dim, max_dim);
-
     auto invoke = [&](auto t) {
         using T = decltype(t);
 
-        constexpr int vec_size   = sizeof(uint4) / sizeof(T);
-        constexpr int thr_per_qk = max_dim.value / vec_size;
+        auto launch = [&](auto max_dim_c) {
+            constexpr int kMaxDim = std::decay_t<decltype(max_dim_c)>::value;
+            TM_CHECK_LE(head_dim, kMaxDim);
 
-        TM_CHECK(head_dim % vec_size == 0);
+            constexpr int vec_size   = sizeof(uint4) / sizeof(T);
+            constexpr int thr_per_qk = kMaxDim / vec_size;
 
-        const int threads   = token_num * head_num * thr_per_qk;
-        const int block_dim = 512;
-        const int grid_dim  = cdiv(threads, block_dim);
+            TM_CHECK(head_dim % vec_size == 0);
 
-        kernel::RMSNormQK<T, float, vec_size, max_dim><<<grid_dim, block_dim, 0, st>>>(
-            (T*)data, stride, (const T*)w.raw_data(), head_dim, head_num, token_num, eps, 1.f / head_dim);
+            const int threads   = token_num * head_num * thr_per_qk;
+            const int block_dim = 512;
+            const int grid_dim  = cdiv(threads, block_dim);
+
+            kernel::RMSNormQK<T, float, vec_size, kMaxDim><<<grid_dim, block_dim, 0, st>>>(
+                (T*)data, stride, (const T*)w.raw_data(), head_dim, head_num, token_num, eps, 1.f / head_dim);
+        };
+
+        if (head_dim <= 128) {
+            launch(constant<128>{});
+        }
+        else {
+            launch(constant<256>{});
+        }
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(x.dtype(), invoke);

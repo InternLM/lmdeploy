@@ -1,3 +1,6 @@
+// Copyright (c) OpenMMLab. All rights reserved.
+#ifndef TURBOMIND_CORE_MODULE_H
+#define TURBOMIND_CORE_MODULE_H
 
 #include "src/turbomind/core/tensor.h"
 
@@ -9,10 +12,10 @@ public:
 
     Module();
 
-    Module(const Module&) = delete;
+    Module(const Module&)            = delete;
     Module& operator=(const Module&) = delete;
 
-    Module(Module&&) noexcept = delete;
+    Module(Module&&) noexcept            = delete;
     Module& operator=(Module&&) noexcept = delete;
 
     void register_module(std::string name, Module& module, std::optional<int> index = {});
@@ -34,3 +37,5 @@ protected:
 };
 
 }  // namespace turbomind::core
+
+#endif  // TURBOMIND_CORE_MODULE_H

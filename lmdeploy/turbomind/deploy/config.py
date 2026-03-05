@@ -91,6 +91,18 @@ class ModelConfig:
     kv_lora_rank: int = 0
     qk_rope_dim: int = 0
     v_head_dim: int = 0
+    # Qwen 3.5
+    layer_types: List[str] = field(default_factory=list)
+    linear_key_head_dim: int = 0
+    linear_value_head_dim: int = 0
+    linear_conv_kernel_dim: int = 0
+    linear_num_key_heads: int = 0
+    linear_num_value_heads: int = 0
+    attn_output_gate: bool = False
+    # Per-layer expert weight type override: layer indices whose
+    # MoE experts are unquantized (fp16) despite expert_weight_type=int4.
+    # Populated from modules_to_not_convert patterns like 'model.layers.0.'.
+    unquantized_expert_layers: List[int] = field(default_factory=list)
     # tuning
     tune_layer_num: int = 1
 

@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <map>
 #include <regex>
+#include <set>
 #include <string>
 
 #include "src/turbomind/core/data_type.h"
@@ -58,12 +59,26 @@ struct ModelParam {
 
     std::vector<int> window_size;
     std::vector<int> inter_size;
+    std::vector<int> layer_types;
+
+    // Qwen3.5 Gated DeltaNet linear attention params
+    int linear_key_head_dim    = 0;
+    int linear_value_head_dim  = 0;
+    int linear_conv_kernel_dim = 0;
+    int linear_num_key_heads   = 0;
+    int linear_num_value_heads = 0;
+
+    bool attn_output_gate = false;  // Qwen3.5: doubles Q projection in full-attention layers
+
+    // Layer indices whose MoE experts use data_type (fp16) instead of
+    // expert_weight_type (e.g. int4).  Populated from modules_to_not_convert
+    // patterns like 'model.layers.0.'.
+    std::set<int> unquantized_expert_layers;
 };
 
 /// TODO: rename all `gate` in the context of MoE router to `router`
 struct MoeParam {
-    enum Method
-    {
+    enum Method {
         kNaive,
         kFused
     } method;
