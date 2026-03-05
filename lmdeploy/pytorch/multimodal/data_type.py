@@ -9,7 +9,7 @@ NestedTensor = Tensor | list[Tensor]
 
 
 @dataclass
-class MultiModalTensor:
+class MultiModalData:
     data: NestedTensor
     start: int
     end: int | None = None
@@ -50,7 +50,7 @@ class MultiModalTensor:
                 new_meta[k] = v
 
         out_dict['meta'] = new_meta
-        return MultiModalTensor(**out_dict)
+        return MultiModalData(**out_dict)
 
 
-MultiModalInputs = dict[str, list[MultiModalTensor]]
+MultiModalInputs = dict[str, list[MultiModalData]]

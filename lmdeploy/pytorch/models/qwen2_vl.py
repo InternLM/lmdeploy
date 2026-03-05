@@ -9,7 +9,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
+from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, FlashAttention, LayerNorm, RMSNorm, SiluAndMul,
                                  build_rotary_embedding_from_config)
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_merged_colwise_linear, build_qkv_proj,
@@ -824,11 +824,11 @@ class Qwen2VLInputProcessor(BaseModelInputProcessor):
 
             mrope_pos_ids = self.make_mrope(image_grid_thw)
 
-            mm_data = MultiModalTensor(data=pixel_values,
-                                       start=start,
-                                       end=start + num_pad,
-                                       mrope_pos_ids=mrope_pos_ids,
-                                       meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
+            mm_data = MultiModalData(data=pixel_values,
+                                     start=start,
+                                     end=start + num_pad,
+                                     mrope_pos_ids=mrope_pos_ids,
+                                     meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(
