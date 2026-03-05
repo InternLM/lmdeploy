@@ -70,7 +70,27 @@ class VideoMediaIO(MediaIO[tuple[npt.NDArray, dict[str, Any]]]):
                 'image/jpeg',
             )
 
-            return np.stack([np.asarray(load_frame(frame_data)) for frame_data in data.split(',')]), {}
+            # NOTE: known issue in https://github.com/QwenLM/Qwen3-VL/issues/1643
+            # when passing a video as a sequence of JPEG frames, we cannot obtain the video metadata
+            # therefore we construct a default metadata dictionary with common values.
+            frames = np.stack([np.asarray(load_frame(frame_data)) for frame_data in data.split(',')])
+
+            total_frames_num = int(frames.shape[0])
+            fps = float(self.kwargs.get('fps', 2))  # default to 2 fps if not specified
+            duration = (total_frames_num / fps) if fps > 0 else 0
+            frame_idx = list(range(total_frames_num))
+
+            metadata = {
+                'total_num_frames': total_frames_num,
+                'fps': fps,
+                'duration': duration,
+                'video_backend': 'jpeg_sequence',
+                'frames_indices': frame_idx,
+            }
+
+            logger.info('Loading video from base64-encoded JPEG frames misses video metadata.'
+                        f'Fall back to default metadata values:\n{metadata}')
+            return frames, metadata
 
         return self.load_bytes(base64.b64decode(data))
 

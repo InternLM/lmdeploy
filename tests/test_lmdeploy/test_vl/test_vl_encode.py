@@ -36,7 +36,6 @@ def test_video_encode_decode():
 
     assert vid1.shape == vid2.shape
     assert np.mean(np.abs(vid1.astype(float) - vid2.astype(float))) < 2.0  # JPEG is lossy
-    assert meta1 == gt_meta
     assert meta1['total_num_frames'] == gt_meta['total_num_frames']
     assert meta1['frames_indices'] == gt_meta['frames_indices']
 
