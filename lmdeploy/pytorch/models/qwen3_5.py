@@ -1383,7 +1383,7 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
                     grid_thw[:, 0] = 1
 
                     position_ids_list = []
-                    input_tokens = context.input_ids.tolist()[0]  # FIXME: batch-wise ?
+                    input_tokens = context.input_ids.tolist()[0]
 
                     st = 0
                     # treat each frame separately as a single image

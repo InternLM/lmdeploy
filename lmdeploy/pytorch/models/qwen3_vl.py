@@ -828,7 +828,7 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
                     grid_thw[:, 0] = 1
 
                     position_ids_list = []
-                    input_tokens = context.input_ids.tolist()[0]  # FIXME: batch-wise ?
+                    input_tokens = context.input_ids.tolist()[0]
 
                     st = 0
                     # treat each frame separately as a single image
@@ -892,6 +892,45 @@ class Qwen3VLInputProcessor(BaseModelInputProcessor):
     def __init__(self, config: PretrainedConfig) -> None:
         self.config = config
 
+    def _make_image_mm_data(self, input_mm: Dict[str, Any]) -> MultiModalData:
+        """Make image MultiModalData."""
+        pixel_values = input_mm['pixel_values']
+        image_grid_thw = input_mm['image_grid_thw']
+        offset = input_mm['offset']
+        start = offset
+        image_token_id = input_mm['image_token_id']
+        num_pad = input_mm['image_tokens']
+        if isinstance(num_pad, torch.Tensor):
+            num_pad = num_pad.item()
+
+        mm_data = MultiModalData(modality=Modality.IMAGE,
+                                 data=pixel_values,
+                                 start=start,
+                                 end=start + num_pad,
+                                 meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
+        return mm_data
+
+    def _make_video_mm_data(self, input_mm: Dict[str, Any]) -> MultiModalData:
+        """Make video MultiModalData."""
+        pixel_values_videos = input_mm['pixel_values_videos']
+        video_grid_thw = input_mm['video_grid_thw']
+        offset = input_mm['offset']
+        start = offset
+        video_token_id = input_mm['video_token_id']
+        num_pad = input_mm['video_tokens']
+        if isinstance(num_pad, torch.Tensor):
+            num_pad = num_pad.item()
+
+        mm_data = MultiModalData(modality=Modality.VIDEO,
+                                 data=pixel_values_videos,
+                                 start=start,
+                                 end=start + num_pad,
+                                 meta=dict(
+                                     grid_thw=video_grid_thw,
+                                     video_token_id=video_token_id,
+                                 ))
+        return mm_data
+
     def preprocess_input(self,
                          input_ids: List[int],
                          input_multimodals: List[Dict[str, Any]] = None,
@@ -904,38 +943,9 @@ class Qwen3VLInputProcessor(BaseModelInputProcessor):
         for input_mm in input_multimodals:
             modality = input_mm.get('modality')
             if modality == Modality.IMAGE:
-                pixel_values = input_mm['pixel_values']
-                image_grid_thw = input_mm['image_grid_thw']
-                offset = input_mm['offset']
-                start = offset
-                image_token_id = input_mm['image_token_id']
-                num_pad = input_mm['image_tokens']
-                if isinstance(num_pad, torch.Tensor):
-                    num_pad = num_pad.item()
-
-                mm_data = MultiModalData(modality=modality,
-                                         data=pixel_values,
-                                         start=start,
-                                         end=start + num_pad,
-                                         meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
+                mm_data = self._make_image_mm_data(input_mm)
             elif modality == Modality.VIDEO:
-                pixel_values_videos = input_mm['pixel_values_videos']
-                video_grid_thw = input_mm['video_grid_thw']
-                offset = input_mm['offset']
-                start = offset
-                video_token_id = input_mm['video_token_id']
-                num_pad = input_mm['video_tokens']
-                if isinstance(num_pad, torch.Tensor):
-                    num_pad = num_pad.item()
-
-                mm_data = MultiModalData(modality=modality,
-                                         data=pixel_values_videos,
-                                         start=start,
-                                         end=start + num_pad,
-                                         meta=dict(
-                                             grid_thw=video_grid_thw,
-                                             video_token_id=video_token_id,
-                                         ))
+                mm_data = self._make_video_mm_data(input_mm)
             input_mm_data.append(mm_data)
 
         result = PreprocessInputResult(input_ids=input_ids, input_multimodals=dict(mm_data=input_mm_data))
