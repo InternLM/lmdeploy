@@ -1,8 +1,12 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include "src/turbomind/kernels/attention/registry.h"
+
+#include <memory>
+#include <tuple>
+
 #include "src/turbomind/kernels/attention/arch.h"
 #include "src/turbomind/kernels/attention/registrar.h"
-#include "src/turbomind/kernels/attention/registry.h"
 #include "src/turbomind/kernels/core/math.h"
 
 namespace turbomind::attention {
