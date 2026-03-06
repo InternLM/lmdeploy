@@ -15,9 +15,6 @@ config:
         meta-llama/Llama-4-Scout-17B-16E-Instruct: 4
         meta-llama/Meta-Llama-3-1-70B-Instruct: 4
         internlm/Intern-S1: 8
-        internlm/internlm2_5-20b-chat: 2
-        internlm/internlm2_5-20b: 2
-        internlm/internlm2_5-7b-chat-1m: 4
         OpenGVLab/InternVL3-38B: 2
         OpenGVLab/InternVL2_5-26B: 2
         OpenGVLab/InternVL2_5-26B-MPO: 2
