@@ -515,6 +515,14 @@ class RayExecutor(ExecutorBase):
         ray.get(self.workers[0].remote_log_end.remote(handle))
 
     def _sort_workers(self, driver_ip: str, workers: List[RayWorkerWrapper]):
+        """Sort workers."""
+        if not _envs.ray_external_pg_bundles:
+            return self._sort_workers_by_driver_then_worker_ip(driver_ip, workers)
+        else:
+            # do not sort when external bundle indices are specified
+            return workers
+
+    def _sort_workers_by_driver_then_worker_ip(self, driver_ip: str, workers: List[RayWorkerWrapper]):
         """Sort workers by ip."""
         worker_ips = ray.get([worker.get_node_ip.remote() for worker in workers])
 
@@ -566,20 +574,17 @@ class RayExecutor(ExecutorBase):
         sorted_workers = [item[0] for item in sorted_worker_ip_map]
         return sorted_workers
 
-    def _valid_bundle_id(self, bundle_id: int):
-        """Check if a bundle is valid only when self.use_external_ray=True."""
-        if (not self.ray_ctx.owned_pg and _envs.ray_external_pg_bundles
-                and bundle_id not in _envs.ray_external_pg_bundles):
-            return False
-        return True
-
     def _init_workers_ray(self, placement_group: PlacementGroup, worker_kwargs: dict):
         """Init worker ray."""
         device_str = get_device_str()
         bundle_indices = []
-        for bundle_id, bundle in enumerate(placement_group.bundle_specs):
-            if bundle.get(device_str, 0) and self._valid_bundle_id(bundle_id):
-                bundle_indices.append(bundle_id)
+        if not _envs.ray_external_pg_bundles:
+            for bundle_id, bundle in enumerate(placement_group.bundle_specs):
+                if bundle.get(device_str, 0):
+                    bundle_indices.append(bundle_id)
+        else:
+            # use external specified bundle indices，keep the order as well
+            bundle_indices = _envs.ray_external_pg_bundles.copy()
         attn_tp = self.dist_config.attn_tp
         bundle_indices = bundle_indices[:attn_tp]
 
