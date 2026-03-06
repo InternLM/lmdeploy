@@ -95,7 +95,7 @@ class VideoMediaIO(MediaIO[tuple[npt.NDArray, dict[str, Any]]]):
         return self.load_bytes(base64.b64decode(data))
 
     def load_file(self, filepath: Path) -> tuple[npt.NDArray, dict[str, Any]]:
-        return self.video_loader.load_file(filepath)
+        return self.video_loader.load_file(filepath, num_frames=self.num_frames, **self.kwargs)
 
     def encode_base64(
         self,
