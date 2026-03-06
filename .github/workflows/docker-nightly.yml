@@ -59,7 +59,7 @@ jobs:
 
   publish_inner_docker_image:
     runs-on: image-sync-inner
-    environment: 'prod'
+    needs: publish_docker_image
     env:
       INNER_TAG: "registry.h.pjlab.org.cn/ailab-puyu-puyu_gpu/lmdeploy:nightly-cu12.8"
     steps:
