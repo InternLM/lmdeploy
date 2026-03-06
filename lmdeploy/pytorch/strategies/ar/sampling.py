@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from typing import List
 
+import numpy as np
 import torch
 from torch.profiler import record_function
 
@@ -54,7 +55,7 @@ class ARSamplingStrategy(SamplingStrategy):
         min_p = [None] * batch_size
         bad_words = [None] * batch_size
         stop_words = [None] * batch_size
-        random_seeds = [torch.seed() & 0xffffffff] * batch_size
+        random_seeds = [np.random.randint(0xffffffff)] * batch_size
         random_offsets = [None] * batch_size
         response_formats = [None] * batch_size
         logits_processors = [None] * batch_size

@@ -614,7 +614,7 @@ class BaseModelAgent:
 
         # update if enable_microbatch
         if self.enable_microbatch:
-            inputs.enable_microbatch = gathered_meta[:, 3].all().item()
+            inputs.enable_microbatch = gathered_meta[:, 4].all().item()
 
         # update dp meta
         inputs.build_dp_meta(all_num_tokens)

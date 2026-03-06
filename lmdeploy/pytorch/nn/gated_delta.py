@@ -140,13 +140,9 @@ class CausalConv1dFunc:
 class GatedDelta:
 
     def __init__(self, use_qk_l2norm_in_kernel: bool = True):
-        try:
-            from fla.ops.gated_delta_rule import chunk_gated_delta_rule, fused_recurrent_gated_delta_rule
-            self.chunk_gated_delta_rule = chunk_gated_delta_rule
-            self.fused_recurrent_gated_delta_rule = fused_recurrent_gated_delta_rule
-        except Exception:
-            raise RuntimeError(
-                'fla is not installed, please refer to https://github.com/fla-org/flash-linear-attention')
+        backend = get_backend()
+        builder = backend.get_layer_impl_builder(OpType.GatedDeltaRule)
+        self.impl = builder.build()
         self.use_qk_l2norm_in_kernel = use_qk_l2norm_in_kernel
 
     def __call__(
@@ -162,26 +158,24 @@ class GatedDelta:
         """call."""
         is_decoding = gated_delta_meta.is_decoding
         cu_seqlens = gated_delta_meta.cu_seqlens
+        state_ids = gated_delta_meta.state_ids
 
         if not is_decoding:
-            if self.use_qk_l2norm_in_kernel:
-                # l2norm in fla would recompile when seqlen changed.
-                query = torch.nn.functional.normalize(query, p=2, dim=-1)
-                key = torch.nn.functional.normalize(key, p=2, dim=-1)
-            core_attn_out, last_recurrent_state = self.chunk_gated_delta_rule(
+            core_attn_out, last_recurrent_state = self.impl.chunk_gated_delta_rule(
                 query,
                 key,
                 value,
                 g=g,
                 beta=beta,
                 initial_state=recurrent_state,
+                state_indices=state_ids,
                 output_final_state=True,
-                use_qk_l2norm_in_kernel=False,
+                use_qk_l2norm_in_kernel=self.use_qk_l2norm_in_kernel,
                 cu_seqlens=cu_seqlens,
             )
         else:
             # qkvgb (1, seqlen, ...) -> (seqlen, 1, ...)
-            core_attn_out, last_recurrent_state = self.fused_recurrent_gated_delta_rule(
+            core_attn_out, last_recurrent_state = self.impl.fused_recurrent_gated_delta_rule(
                 query[0, :, None],
                 key[0, :, None],
                 value[0, :, None],
@@ -190,6 +184,7 @@ class GatedDelta:
                 initial_state=recurrent_state,
                 output_final_state=True,
                 use_qk_l2norm_in_kernel=self.use_qk_l2norm_in_kernel,
+                state_indices=state_ids,
             )
             # out (seqlen, 1, ...) -> (1, seqlen, ...)
             core_attn_out = core_attn_out[None, :, 0]
@@ -280,17 +275,4 @@ class CausalConv1d(nn.Module):
 @record_function('gated_delta_load_state')
 def load_state(past_key_value: Tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
     """Load states from cache."""
-    state_ids = gated_delta_meta.state_ids
-    conv_cache, recurrent_cache = past_key_value[:2]
-
-    return conv_cache, recurrent_cache.index_select(0, state_ids)
-
-
-@record_function('gated_delta_store_state')
-def store_state(conv_state: torch.Tensor, recurrent_state: torch.Tensor,
-                past_key_value: Tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
-    """Store states to cache."""
-    _, recurrent_cache = past_key_value[:2]
-    state_ids = gated_delta_meta.state_ids
-
-    recurrent_cache = recurrent_cache.index_copy_(0, state_ids, recurrent_state.to(recurrent_cache.dtype))
+    return past_key_value[:2]

@@ -12,7 +12,7 @@ namespace turbomind {
 
 namespace block {
 
-template<class T, class Tkv, int HeadDim>
+template<class T, class Tkv, int HeadDim, bool ShareKV = false>
 struct Config {
     int head_num_;
     int block_len_;
@@ -45,6 +45,11 @@ struct Config {
     TM_HOST_DEVICE constexpr int block_len() const
     {
         return block_len_;
+    }
+
+    TM_HOST_DEVICE constexpr bool is_share_kv() const
+    {
+        return ShareKV;
     }
 };
 
@@ -135,6 +140,18 @@ struct Layout {
         return config_;
     }
 
+    TM_HOST_DEVICE constexpr bool is_share_kv() const
+    {
+        // return 0;
+        return config().is_share_kv();
+    }
+
+    TM_HOST_DEVICE constexpr int kv_num() const
+    {
+        // return 2;
+        return is_share_kv() ? 1 : 2;
+    }
+
     TM_HOST_DEVICE int token_data_size() const
     {
         return config().q_bits() * config().head_dim() / 8;
@@ -142,7 +159,7 @@ struct Layout {
 
     TM_HOST_DEVICE int token_param_size() const
     {
-        return config().t_bits() * 2 / 8;
+        return config().t_bits() * 2 / 8;  // 2 for scales/zeros
     }
 
     TM_HOST_DEVICE int head_data_size() const
@@ -158,7 +175,7 @@ struct Layout {
     TM_HOST_DEVICE int layer_size() const
     {
         // TODO: enforce alignment
-        return config().head_num() * 2 * head_data_size() + config().head_num() * 2 * head_param_size();
+        return config().head_num() * kv_num() * head_data_size() + config().head_num() * kv_num() * head_param_size();
     }
 
     TM_HOST_DEVICE int block_size(int layer_num) const
@@ -173,7 +190,7 @@ struct Layout {
 
     TM_HOST_DEVICE int v_data(int layer, int head, int token) const
     {
-        return k_data(layer, head, token) + head_data_size();
+        return k_data(layer, head, token) + (is_share_kv() ? 0 : head_data_size());
     }
 
     TM_HOST_DEVICE int k_param(int layer, int head, int token) const
@@ -183,7 +200,7 @@ struct Layout {
 
     TM_HOST_DEVICE int v_param(int layer, int head, int token) const
     {
-        return k_param(layer, head, token) + head_param_size();
+        return k_param(layer, head, token) + (is_share_kv() ? 0 : head_param_size());
     }
 
     TM_HOST_DEVICE int layer_data(int layer) const
@@ -198,12 +215,12 @@ struct Layout {
 
     TM_HOST_DEVICE int head_data(int head) const
     {
-        return head * 2 * head_data_size();
+        return head * kv_num() * head_data_size();
     }
 
     TM_HOST_DEVICE int head_param(int head) const
     {
-        return head * 2 * head_param_size();
+        return head * kv_num() * head_param_size();
     }
 
     TM_HOST_DEVICE int token_data(int ti) const

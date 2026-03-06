@@ -57,6 +57,13 @@ repos:
     -   id: check-copyright
         args: ["lmdeploy"]
 
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v11.1.0
+    hooks:
+      - id: clang-format
+        files: ^src/
+        types_or: [c, c++, cuda]
+
 exclude: |
   (?x)(
     ^cmake/.*\.patch$

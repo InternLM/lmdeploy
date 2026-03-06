@@ -68,11 +68,13 @@ public:
         int block_len_;
         int t_bits_;
         int q_bits_;
+        bool share_kv_;
         int t_bits() const { return t_bits_; }
         int q_bits() const { return q_bits_; }
         int head_dim() const { return head_dim_; }
         int head_num() const { return head_num_; }
         int block_len() const { return block_len_; }
+        bool is_share_kv() const { return share_kv_; }
     };
     // clang-format on
 

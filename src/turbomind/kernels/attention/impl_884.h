@@ -17,6 +17,8 @@ struct Impl<MMA_884, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, He
     using T   = T_;
     using Tkv = T_;
 
+    static constexpr bool MLA = false;
+
     static constexpr int CTA_H    = CTA_H_;
     static constexpr int CTA_Q    = CTA_Q_;
     static constexpr int CTA_S    = CTA_S_;

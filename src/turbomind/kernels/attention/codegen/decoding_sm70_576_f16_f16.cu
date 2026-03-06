@@ -7,10 +7,6 @@ namespace turbomind {
 
 using namespace attention;
 
-template bool invokeDecoding<Decoding<arch::Sm70, half, half, 1, 576>>(const AttentionParams<half>& params);
-
 template bool invokeDecoding<Decoding<arch::Sm70, half, half, 2, 576>>(const AttentionParams<half>& params);
-
-template bool invokeDecoding<Decoding<arch::Sm70, half, half, 3, 576>>(const AttentionParams<half>& params);
 
 }  // namespace turbomind
