@@ -11,8 +11,8 @@
 #include <vector>
 
 #include "src/turbomind/core/data_type.h"
-#include "src/turbomind/core/serdes.h"
 #include "src/turbomind/core/logger.h"
+#include "src/turbomind/core/serdes.h"
 
 namespace turbomind::comm {
 

@@ -26,9 +26,8 @@ static std::string Timestamp()
 {
     auto now = std::chrono::system_clock::now();
     auto t   = std::chrono::system_clock::to_time_t(now);
-    auto us  = std::chrono::duration_cast<std::chrono::microseconds>(
-                   now - std::chrono::system_clock::from_time_t(t))
-                   .count();
+    auto us =
+        std::chrono::duration_cast<std::chrono::microseconds>(now - std::chrono::system_clock::from_time_t(t)).count();
     std::tm tm_buf;
 #ifdef _WIN32
     if (::localtime_s(&tm_buf, &t) != 0) {
@@ -42,12 +41,12 @@ static std::string Timestamp()
     }
 #endif
     return fmt::format("{:02}{:02}.{:02}:{:02}:{:02}.{:06}",
-                      tm->tm_mon + 1,
-                      tm->tm_mday,
-                      tm->tm_hour,
-                      tm->tm_min,
-                      tm->tm_sec,
-                      static_cast<int>(us));
+                       tm->tm_mon + 1,
+                       tm->tm_mday,
+                       tm->tm_hour,
+                       tm->tm_min,
+                       tm->tm_sec,
+                       static_cast<int>(us));
 }
 
 // ---------------------------------------------------------------------------
@@ -86,11 +85,15 @@ static fmt::text_style StyleFor(Logger::Level level)
 // AsyncLogWorker internals — entirely private to this translation unit
 // ---------------------------------------------------------------------------
 
-enum class RecordKind { kNormal, kStop };
+enum class RecordKind
+{
+    kNormal,
+    kStop
+};
 
 struct LogRecord {
-    RecordKind    kind    = RecordKind::kNormal;
-    Logger::Level level   = Logger::Level::kInfo;
+    RecordKind    kind  = RecordKind::kNormal;
+    Logger::Level level = Logger::Level::kInfo;
     std::string   message;
 };
 
@@ -98,7 +101,7 @@ class AsyncLogWorker {
 public:
     static AsyncLogWorker& Instance();
 
-    AsyncLogWorker(const AsyncLogWorker&)            = delete;
+    AsyncLogWorker(const AsyncLogWorker&) = delete;
     AsyncLogWorker& operator=(const AsyncLogWorker&) = delete;
 
     void Enqueue(LogRecord record);
@@ -136,7 +139,7 @@ Logger::Logger()
         return;
     }
     else {
-        using Entry = std::pair<std::string_view, Level>;
+        using Entry                                        = std::pair<std::string_view, Level>;
         static constexpr std::array<Entry, 7> kNameToLevel = {{
             {"TRACE", Level::kTrace},
             {"DEBUG", Level::kDebug},
@@ -208,7 +211,8 @@ void Logger::Enqueue(Level level, const char* file, int line, std::string messag
         record.level   = level;
         record.message = std::move(line_str);
         AsyncLogWorker::Instance().Enqueue(std::move(record));
-    } else {
+    }
+    else {
         fmt::print(stderr, StyleFor(level), "{}", line_str);
     }
 }
@@ -228,7 +232,7 @@ AsyncLogWorker& AsyncLogWorker::Instance()
     return worker;
 }
 
-AsyncLogWorker::AsyncLogWorker() : thread_(&AsyncLogWorker::Run, this) {}
+AsyncLogWorker::AsyncLogWorker(): thread_(&AsyncLogWorker::Run, this) {}
 
 AsyncLogWorker::~AsyncLogWorker()
 {

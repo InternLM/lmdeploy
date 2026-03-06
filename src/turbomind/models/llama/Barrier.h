@@ -2,8 +2,8 @@
 
 #pragma once
 
-#include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/core/logger.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #ifndef _MSC_VER
 #include <pthread.h>
 #endif

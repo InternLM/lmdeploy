@@ -23,8 +23,8 @@
 #include "src/turbomind/engine/batch.h"
 #include "src/turbomind/engine/request.h"
 
-#include "src/turbomind/utils/constant.h"
 #include "src/turbomind/core/logger.h"
+#include "src/turbomind/utils/constant.h"
 
 namespace turbomind {
 

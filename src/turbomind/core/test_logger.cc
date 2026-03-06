@@ -94,9 +94,8 @@ TEST_CASE("Logger: format arguments", "[logger]")
     auto& log = Logger::Instance();
     log.set_level(Logger::Level::kTrace);
 
-    auto output = CaptureStderr([&] {
-        log.Log(Logger::Level::kDebug, "int={} float={:.2f} str={}", 42, 3.14f, std::string("world"));
-    });
+    auto output = CaptureStderr(
+        [&] { log.Log(Logger::Level::kDebug, "int={} float={:.2f} str={}", 42, 3.14f, std::string("world")); });
 
     REQUIRE(output.find("int=42") != std::string::npos);
     REQUIRE(output.find("float=3.14") != std::string::npos);

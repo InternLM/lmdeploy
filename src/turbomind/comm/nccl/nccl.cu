@@ -13,8 +13,8 @@
 #include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/comm/host_comm.h"
 #include "src/turbomind/core/check.h"
-#include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/core/logger.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/string_utils.h"
 
 #include "src/turbomind/kernels/norm/rms_norm.h"
@@ -98,7 +98,7 @@ static NcclApis& nccl_apis()
         }
         else {
             TM_LOG_WARN("[NCCL] Splitting communicators is not supported by NCCL {}, use NCCL 2.18+ if needed.",
-                           version);
+                        version);
         }
         return apis;
     }();

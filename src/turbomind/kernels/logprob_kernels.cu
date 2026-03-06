@@ -26,10 +26,10 @@
 #include "3rdparty/cub/cub.cuh"
 #endif
 
+#include "src/turbomind/core/logger.h"
 #include "src/turbomind/kernels/logprob_kernels.h"
 #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
 #include "src/turbomind/macro.h"
-#include "src/turbomind/core/logger.h"
 
 namespace turbomind {
 

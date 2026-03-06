@@ -8,10 +8,10 @@
 #include <thrust/host_vector.h>
 
 #include "src/turbomind/core/data_type.h"
+#include "src/turbomind/core/logger.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/core/logger.h"
 #include "src/turbomind/utils/memory_utils.h"
 
 namespace turbomind {

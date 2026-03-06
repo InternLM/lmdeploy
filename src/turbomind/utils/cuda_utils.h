@@ -32,9 +32,9 @@
 #endif
 
 #include "src/turbomind/core/check.h"
+#include "src/turbomind/core/logger.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/utils/cuda_bf16_wrapper.h"
-#include "src/turbomind/core/logger.h"
 
 namespace turbomind {
 
@@ -101,7 +101,7 @@ void syncAndCheck(const char* const file, int const line);
         const char* p_str{};                                                                                           \
         cuGetErrorString(ec, &p_str);                                                                                  \
         p_str    = p_str ? p_str : "Unknown error";                                                                    \
-        auto msg = fmt::format("[TM][ERROR] CUDA driver error: {}:{} '{}'", __FILE__, __LINE__, p_str);               \
+        auto msg = fmt::format("[TM][ERROR] CUDA driver error: {}:{} '{}'", __FILE__, __LINE__, p_str);                \
         throw std::runtime_error(msg.c_str());                                                                         \
     }
 

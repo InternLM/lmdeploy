@@ -2,9 +2,9 @@
 
 #include <algorithm>
 
+#include "src/turbomind/core/logger.h"
 #include "src/turbomind/models/llama/BlockManager.h"
 #include "src/turbomind/utils/debug_utils.h"
-#include "src/turbomind/core/logger.h"
 #include "src/turbomind/utils/string_utils.h"
 
 namespace turbomind {

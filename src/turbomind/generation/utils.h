@@ -37,11 +37,11 @@ void init_stop_bad_words(G getter, const char* key, const Rs& rs, T* h_buf, T* d
                                  kMaxStopBadWordsLen)
                 - offsets.begin();
             TM_LOG_WARN("[InitializeSampling] [{}] {} length ({}) exceeds {}, truncated to {}",
-                           rs[i]->req->id,
-                           key,
-                           offsets.back(),
-                           kMaxStopBadWordsLen,
-                           trunc_offset_size);
+                        rs[i]->req->id,
+                        key,
+                        offsets.back(),
+                        kMaxStopBadWordsLen,
+                        trunc_offset_size);
             if (trunc_offset_size > 0) {
                 int trunc_token_size = offsets[trunc_offset_size - 1];
                 copy_tokens[i]       = std::make_pair(token_ids.data(), trunc_token_size);

@@ -10,10 +10,10 @@
 
 #include "src/turbomind/comm/host_comm.h"
 #include "src/turbomind/core/check.h"
+#include "src/turbomind/core/logger.h"
 #include "src/turbomind/engine/request.h"
 #include "src/turbomind/engine/request_queue.h"
 #include "src/turbomind/engine/signal_buffer.h"
-#include "src/turbomind/core/logger.h"
 
 namespace turbomind {
 

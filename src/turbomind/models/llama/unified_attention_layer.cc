@@ -45,9 +45,9 @@
 #include "src/turbomind/models/llama/mla_utils.h"
 #include "src/turbomind/models/llama/unified_attention_layer.h"
 
+#include "src/turbomind/core/logger.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/core/logger.h"
 
 // #include "dbg.h"
 
