@@ -69,7 +69,7 @@ class DeepSeek2VisionModel(VisionModel):
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """Refers to the spec of `super.preprocess()"""
-        images = self.collect_images(messages)
+        images = self.collect_multimodal_items(messages)
 
         # convert to upstream api formats
         images = [img_parameter[0] for img_parameter in images]
