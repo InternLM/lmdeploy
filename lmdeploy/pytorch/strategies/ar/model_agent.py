@@ -25,6 +25,12 @@ def get_model_inputs_next_decoding(inputs: ModelInputs, input_ids: torch.Tensor,
     state_offsets = inputs.state_offsets
     if state_offsets is not None:
         state_offsets = state_offsets.clone()
+
+    # mrope
+    mrope_pos_ids = inputs.mrope_pos_ids
+    if mrope_pos_ids is not None:
+        index = inputs.seq_length.cumsum(0) - 1
+        mrope_pos_ids = mrope_pos_ids[:, index] + 1
     return ModelInputs(
         input_ids=input_ids,
         seq_length=torch.full_like(inputs.seq_length, max_q_seqlen),
@@ -38,6 +44,7 @@ def get_model_inputs_next_decoding(inputs: ModelInputs, input_ids: torch.Tensor,
         local_adapter_ids=inputs.local_adapter_ids,
         model_metas=model_metas,
         state_offsets=state_offsets,
+        mrope_pos_ids=mrope_pos_ids,
     )
 
 

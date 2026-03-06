@@ -136,6 +136,8 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
         if model_meta is not None:
             self.model_meta = model_meta
 
+        self._update_mrope_pos_ids()
+
 
 class ARSpecSequenceStrategy(ARSequenceStrategy):
 
