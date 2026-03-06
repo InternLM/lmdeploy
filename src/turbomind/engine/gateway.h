@@ -13,7 +13,7 @@
 #include "src/turbomind/engine/request.h"
 #include "src/turbomind/engine/request_queue.h"
 #include "src/turbomind/engine/signal_buffer.h"
-#include "src/turbomind/utils/logger.h"
+#include "src/turbomind/core/logger.h"
 
 namespace turbomind {
 
@@ -33,7 +33,7 @@ public:
         std::lock_guard lock{mutex_};
         for (const auto& x : seq_ids) {
             if (auto [it, success] = map_.emplace(x, rank); !success) {
-                TM_LOG_WARNING("[TM][Gateway] Duplicated binding for %lu, %d vs %d", x, rank, it->second);
+                TM_LOG_WARN("[TM][Gateway] Duplicated binding for {}, {} vs {}", x, rank, it->second);
             }
         }
     }
@@ -44,10 +44,10 @@ public:
         for (const auto& x : seq_ids) {
             auto it = map_.find(x);
             if (it == map_.end()) {
-                TM_LOG_WARNING("[TM][Gateway] No entry found for unbinding %lu, %d", x, rank);
+                TM_LOG_WARN("[TM][Gateway] No entry found for unbinding {}, {}", x, rank);
             }
             else if (it->second != rank) {
-                TM_LOG_WARNING("[TM][Gateway] Mismatched entry for unbinding %lu, %d vs %d", x, rank, it->second);
+                TM_LOG_WARN("[TM][Gateway] Mismatched entry for unbinding {}, {} vs {}", x, rank, it->second);
             }
             else {
                 map_.erase(it);
@@ -84,7 +84,7 @@ public:
 
     void set_threshold(int value)
     {
-        TM_LOG_INFO("set threshold %d -> %d", dp_thr_, value);
+        TM_LOG_INFO("set threshold {} -> {}", dp_thr_, value);
         dp_thr_ = value;
     }
 

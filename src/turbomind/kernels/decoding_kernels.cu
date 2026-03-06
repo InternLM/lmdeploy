@@ -15,6 +15,7 @@
  */
 
 #include "src/turbomind/kernels/decoding_kernels.h"
+#include "src/turbomind/utils/string_utils.h"
 #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
 #include "src/turbomind/utils/cuda_type_utils.cuh"
 #include "src/turbomind/utils/cuda_utils.h"

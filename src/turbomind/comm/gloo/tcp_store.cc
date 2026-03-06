@@ -9,7 +9,7 @@
 #include <gloo/transport/tcp/socket.h>
 
 #include "src/turbomind/comm/gloo/tcp_store.h"
-#include "src/turbomind/utils/logger.h"
+#include "src/turbomind/core/logger.h"
 
 namespace turbomind::comm {
 
@@ -148,7 +148,7 @@ TCPStore::TCPStore(const std::string& host, int port)
             }
         }
         catch (const std::exception& e) {
-            TM_LOG_WARNING("[TM][COMM] Failed to connect to store after %d retries: %s", retry, e.what());
+            TM_LOG_WARN("[TM][COMM] Failed to connect to store after {} retries: {}", retry, e.what());
             std::this_thread::sleep_for(std::chrono::seconds(1));
             retry += 1;
         }
@@ -209,7 +209,7 @@ void TCPStore::wait(const std::vector<std::string>& keys, const std::chrono::mil
                 ss << key << " ";
             }
             ss << "]";
-            TM_LOG_ERROR("[TM][COMM] %s, elapsed %lld s", ss.str().c_str(), elapsed.count());
+            TM_LOG_ERROR("[TM][COMM] {}, elapsed {} s", ss.str(), elapsed.count());
             throw std::runtime_error("Wait timeout for key(s): " + ss.str());
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));

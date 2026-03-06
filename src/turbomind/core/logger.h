@@ -10,6 +10,11 @@
 
 namespace turbomind::core {
 
+struct SourceLocation {
+    const char* file;
+    int         line;
+};
+
 class Logger {
 public:
     enum class Level {
@@ -18,6 +23,7 @@ public:
         kInfo    = 20,
         kWarning = 30,
         kError   = 40,
+        kFatal   = 50,
     };
 
     // Returns the thread-local Logger instance.
@@ -30,7 +36,15 @@ public:
     void Log(Level level, fmt::format_string<Args...> fmt_str, Args&&... args)
     {
         if (level_ <= level) {
-            Enqueue(level, fmt::format(fmt_str, std::forward<Args>(args)...));
+            Enqueue(level, nullptr, 0, fmt::format(fmt_str, std::forward<Args>(args)...));
+        }
+    }
+
+    template<typename... Args>
+    void Log(Level level, SourceLocation loc, fmt::format_string<Args...> fmt_str, Args&&... args)
+    {
+        if (level_ <= level) {
+            Enqueue(level, loc.file, loc.line, fmt::format(fmt_str, std::forward<Args>(args)...));
         }
     }
 
@@ -41,10 +55,6 @@ public:
         return level_;
     }
 
-    // Blocks until all previously enqueued log records have been written.
-    // In sync mode this is a no-op (output is already written by the caller).
-    static void Flush();
-
     bool is_async() const
     {
         return async_;
@@ -54,9 +64,10 @@ private:
     Logger();
 
     void Enqueue(Level level, std::string message);
+    void Enqueue(Level level, const char* file, int line, std::string message);
 
     static std::string LevelName(Level level);
-    static std::string Prefix(Level level);
+    static std::string Prefix(Level level, const char* file, int line);
 
 #ifndef NDEBUG
     Level level_ = Level::kDebug;
@@ -69,17 +80,18 @@ private:
 }  // namespace turbomind::core
 
 // ---------------------------------------------------------------------------
-// Convenience macros — distinct from the old TM_LOG_* to avoid collisions.
+// Convenience macros
 // ---------------------------------------------------------------------------
-#define TM2_LOG(level, ...)                                                                                            \
+#define TM_LOG(level, ...)                                                                                             \
     do {                                                                                                               \
         if (turbomind::core::Logger::Instance().get_level() <= (level)) {                                              \
-            turbomind::core::Logger::Instance().Log((level), __VA_ARGS__);                                             \
+            turbomind::core::Logger::Instance().Log((level), turbomind::core::SourceLocation{__FILE__, __LINE__}, __VA_ARGS__); \
         }                                                                                                              \
     } while (0)
 
-#define TM2_LOG_TRACE(...)   TM2_LOG(turbomind::core::Logger::Level::kTrace, __VA_ARGS__)
-#define TM2_LOG_DEBUG(...)   TM2_LOG(turbomind::core::Logger::Level::kDebug, __VA_ARGS__)
-#define TM2_LOG_INFO(...)    TM2_LOG(turbomind::core::Logger::Level::kInfo, __VA_ARGS__)
-#define TM2_LOG_WARNING(...) TM2_LOG(turbomind::core::Logger::Level::kWarning, __VA_ARGS__)
-#define TM2_LOG_ERROR(...)   TM2_LOG(turbomind::core::Logger::Level::kError, __VA_ARGS__)
+#define TM_LOG_TRACE(...)   TM_LOG(turbomind::core::Logger::Level::kTrace, __VA_ARGS__)
+#define TM_LOG_DEBUG(...)   TM_LOG(turbomind::core::Logger::Level::kDebug, __VA_ARGS__)
+#define TM_LOG_INFO(...)    TM_LOG(turbomind::core::Logger::Level::kInfo, __VA_ARGS__)
+#define TM_LOG_WARN(...)   TM_LOG(turbomind::core::Logger::Level::kWarning, __VA_ARGS__)
+#define TM_LOG_ERROR(...)  TM_LOG(turbomind::core::Logger::Level::kError, __VA_ARGS__)
+#define TM_LOG_FATAL(...)  TM_LOG(turbomind::core::Logger::Level::kFatal, __VA_ARGS__)

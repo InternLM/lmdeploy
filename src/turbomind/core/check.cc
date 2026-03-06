@@ -5,7 +5,7 @@
 #include <sstream>
 
 #include "src/turbomind/core/check.h"
-#include "src/turbomind/utils/logger.h"
+#include "src/turbomind/core/logger.h"
 
 namespace turbomind::core {
 

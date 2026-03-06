@@ -4,9 +4,11 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
-#include <future>
+#include <cstring>
+#include <ctime>
 #include <string_view>
 #include <thread>
 
@@ -14,6 +16,48 @@
 #include <fmt/color.h>
 
 namespace turbomind::core {
+
+// ---------------------------------------------------------------------------
+// Timestamp: MMDD.HH:MM:SS.uuuuuu (dot connects date and time).
+// Same approach as glog: system_clock::now(), to_time_t, localtime_r; microseconds
+// as time since start of current second (no modulo).
+// ---------------------------------------------------------------------------
+static std::string Timestamp()
+{
+    auto now = std::chrono::system_clock::now();
+    auto t   = std::chrono::system_clock::to_time_t(now);
+    auto us  = std::chrono::duration_cast<std::chrono::microseconds>(
+                   now - std::chrono::system_clock::from_time_t(t))
+                   .count();
+    std::tm tm_buf;
+#ifdef _WIN32
+    if (::localtime_s(&tm_buf, &t) != 0) {
+        return "0000.00:00:00.000000";
+    }
+    std::tm* tm = &tm_buf;
+#else
+    std::tm* tm = ::localtime_r(&t, &tm_buf);
+    if (tm == nullptr) {
+        return "0000.00:00:00.000000";
+    }
+#endif
+    return fmt::format("{:02}{:02}.{:02}:{:02}:{:02}.{:06}",
+                      tm->tm_mon + 1,
+                      tm->tm_mday,
+                      tm->tm_hour,
+                      tm->tm_min,
+                      tm->tm_sec,
+                      static_cast<int>(us));
+}
+
+// ---------------------------------------------------------------------------
+// Basename of __FILE__ (substring after last '/')
+// ---------------------------------------------------------------------------
+static const char* Basename(const char* file)
+{
+    const char* last_slash = std::strrchr(file, '/');
+    return last_slash != nullptr ? last_slash + 1 : file;
+}
 
 // ---------------------------------------------------------------------------
 // Color palette per log level
@@ -26,10 +70,12 @@ static fmt::text_style StyleFor(Logger::Level level)
         case Logger::Level::kDebug:
             return fmt::fg(fmt::color::cyan);
         case Logger::Level::kInfo:
-            return fmt::fg(fmt::color::green);
+            return {};
         case Logger::Level::kWarning:
             return fmt::fg(fmt::color::yellow);
         case Logger::Level::kError:
+            return fmt::fg(fmt::color::red) | fmt::emphasis::bold;
+        case Logger::Level::kFatal:
             return fmt::fg(fmt::color::red) | fmt::emphasis::bold;
         default:
             return {};
@@ -40,13 +86,12 @@ static fmt::text_style StyleFor(Logger::Level level)
 // AsyncLogWorker internals — entirely private to this translation unit
 // ---------------------------------------------------------------------------
 
-enum class RecordKind { kNormal, kFlush, kStop };
+enum class RecordKind { kNormal, kStop };
 
 struct LogRecord {
-    RecordKind          kind          = RecordKind::kNormal;
-    Logger::Level       level         = Logger::Level::kInfo;
-    std::string         message;
-    std::promise<void>* flush_promise = nullptr;
+    RecordKind    kind    = RecordKind::kNormal;
+    Logger::Level level   = Logger::Level::kInfo;
+    std::string   message;
 };
 
 class AsyncLogWorker {
@@ -57,7 +102,6 @@ public:
     AsyncLogWorker& operator=(const AsyncLogWorker&) = delete;
 
     void Enqueue(LogRecord record);
-    void Flush();
 
     ~AsyncLogWorker();
 
@@ -93,12 +137,14 @@ Logger::Logger()
     }
     else {
         using Entry = std::pair<std::string_view, Level>;
-        static constexpr std::array<Entry, 5> kNameToLevel = {{
+        static constexpr std::array<Entry, 7> kNameToLevel = {{
             {"TRACE", Level::kTrace},
             {"DEBUG", Level::kDebug},
             {"INFO", Level::kInfo},
+            {"WARN", Level::kWarning},
             {"WARNING", Level::kWarning},
             {"ERROR", Level::kError},
+            {"FATAL", Level::kFatal},
         }};
 
         const std::string_view name{level_env};
@@ -110,7 +156,7 @@ Logger::Logger()
         else {
             fmt::print(stderr,
                        StyleFor(Level::kWarning),
-                       "[TM][WARNING] Invalid TM_LOG_LEVEL='{}'. Using default level.\n",
+                       "[TM][WARN] Invalid TM_LOG_LEVEL='{}'. Using default level.\n",
                        level_env);
         }
     }
@@ -119,16 +165,6 @@ Logger::Logger()
 void Logger::set_level(Level level)
 {
     level_ = level;
-}
-
-void Logger::Flush()
-{
-    if (TM_LIKELY(Instance().async_)) {
-        AsyncLogWorker::Instance().Flush();
-    }
-    else {
-        std::fflush(stderr);
-    }
 }
 
 std::string Logger::LevelName(Level level)
@@ -141,34 +177,45 @@ std::string Logger::LevelName(Level level)
         case Level::kInfo:
             return "INFO";
         case Level::kWarning:
-            return "WARNING";
+            return "WARN";
         case Level::kError:
             return "ERROR";
+        case Level::kFatal:
+            return "FATAL";
         default:
             return "UNKNOWN";
     }
 }
 
-std::string Logger::Prefix(Level level)
+std::string Logger::Prefix(Level level, const char* file, int line)
 {
-    return fmt::format("[TM][{}] ", LevelName(level));
+    std::string s = fmt::format("[TM][{}][{}]", LevelName(level), Timestamp());
+    if (file != nullptr) {
+        s += fmt::format("[{}:{}]", Basename(file), line);
+    }
+    s += " ";
+    return s;
+}
+
+void Logger::Enqueue(Level level, const char* file, int line, std::string message)
+{
+    std::string line_str = Prefix(level, file, line);
+    line_str.reserve(line_str.size() + message.size() + 1);
+    line_str.append(std::move(message));
+    line_str += '\n';
+    if (TM_LIKELY(async_ && level != Level::kFatal)) {
+        LogRecord record;
+        record.level   = level;
+        record.message = std::move(line_str);
+        AsyncLogWorker::Instance().Enqueue(std::move(record));
+    } else {
+        fmt::print(stderr, StyleFor(level), "{}", line_str);
+    }
 }
 
 void Logger::Enqueue(Level level, std::string message)
 {
-    std::string line = Prefix(level);
-    line.reserve(line.size() + message.size() + 1);
-    line.append(std::move(message));
-    line += '\n';
-    if (TM_LIKELY(async_)) {
-        LogRecord record;
-        record.level   = level;
-        record.message = std::move(line);
-        AsyncLogWorker::Instance().Enqueue(std::move(record));
-    }
-    else {
-        fmt::print(stderr, StyleFor(level), "{}", line);
-    }
+    Enqueue(level, nullptr, 0, std::move(message));
 }
 
 // ---------------------------------------------------------------------------
@@ -196,19 +243,6 @@ void AsyncLogWorker::Enqueue(LogRecord record)
     queue_.enqueue(std::move(record));
 }
 
-void AsyncLogWorker::Flush()
-{
-    std::promise<void> promise;
-    auto               future = promise.get_future();
-
-    LogRecord sentinel;
-    sentinel.kind          = RecordKind::kFlush;
-    sentinel.flush_promise = &promise;
-    queue_.enqueue(std::move(sentinel));
-
-    future.get();
-}
-
 void AsyncLogWorker::Run()
 {
     LogRecord record;
@@ -216,14 +250,15 @@ void AsyncLogWorker::Run()
         queue_.wait_dequeue(record);
 
         if (record.kind == RecordKind::kStop) {
+            // Drain remaining records so we don't lose messages enqueued before shutdown.
+            while (queue_.try_dequeue(record)) {
+                if (record.kind != RecordKind::kStop) {
+                    fmt::print(stderr, StyleFor(record.level), "{}", record.message);
+                }
+            }
             break;
         }
-        else if (record.kind == RecordKind::kFlush) {
-            record.flush_promise->set_value();
-        }
-        else {
-            fmt::print(stderr, StyleFor(record.level), "{}", record.message);
-        }
+        fmt::print(stderr, StyleFor(record.level), "{}", record.message);
     }
 }
 

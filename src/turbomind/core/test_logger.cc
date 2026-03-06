@@ -13,43 +13,45 @@
 
 using turbomind::core::Logger;
 
+// Tests run in sync mode (TM_LOG_ASYNC=0) so log output is written inline and
+// CaptureStderr sees complete output when fn() returns.
+static bool SetSyncModeForTests()
+{
+    return ::setenv("TM_LOG_ASYNC", "0", 1) == 0;
+}
+static bool kSyncMode = SetSyncModeForTests();
+
 // ---------------------------------------------------------------------------
 // Stderr capture helper
 // ---------------------------------------------------------------------------
-// Redirects stderr to a pipe, runs `fn`, flushes the async worker, then
-// restores stderr and returns everything that was written.
+// Redirects stderr to a pipe, runs `fn`, restores stderr, returns what was written.
+// A background reader drains the pipe so it never fills (avoids blocking when
+// multiple threads write in sync mode). Requires sync mode (TM_LOG_ASYNC=0).
 static std::string CaptureStderr(std::function<void()> fn)
 {
-    // Save real stderr fd.
     int saved = ::dup(STDERR_FILENO);
     REQUIRE(saved >= 0);
 
-    // Create pipe: read end = pipefd[0], write end = pipefd[1].
     std::array<int, 2> pipefd{};
     REQUIRE(::pipe(pipefd.data()) == 0);
-
-    // Point stderr at the write end.
     REQUIRE(::dup2(pipefd[1], STDERR_FILENO) >= 0);
     ::close(pipefd[1]);
 
+    std::string output;
+    std::thread reader([&output, read_fd = pipefd[0]]() {
+        char    buf[4096];
+        ssize_t n;
+        while ((n = ::read(read_fd, buf, sizeof(buf))) > 0) {
+            output.append(buf, static_cast<size_t>(n));
+        }
+        ::close(read_fd);
+    });
+
     fn();
 
-    // Drain the async worker before we read.
-    Logger::Flush();
-
-    // Restore real stderr.
     REQUIRE(::dup2(saved, STDERR_FILENO) >= 0);
     ::close(saved);
-
-    // Read everything from the pipe.
-    std::string output;
-    char        buf[4096];
-    ssize_t     n;
-    while ((n = ::read(pipefd[0], buf, sizeof(buf))) > 0) {
-        output.append(buf, static_cast<size_t>(n));
-    }
-    ::close(pipefd[0]);
-
+    reader.join();
     return output;
 }
 
@@ -81,7 +83,9 @@ TEST_CASE("Logger: prefix format", "[logger]")
 
     auto output = CaptureStderr([&] { log.Log(Logger::Level::kInfo, "hello"); });
 
-    REQUIRE(output.find("[TM][INFO]") != std::string::npos);
+    // New format: [TM][MMDD HH:MM:SS.uuuuuu][LEVEL] message (no file/line for direct Log)
+    REQUIRE(output.find("[TM]") != std::string::npos);
+    REQUIRE(output.find("[INFO]") != std::string::npos);
     REQUIRE(output.find("hello") != std::string::npos);
 }
 
@@ -149,25 +153,31 @@ TEST_CASE("Logger: macros emit correct prefix", "[logger]")
     Logger::Instance().set_level(Logger::Level::kTrace);
 
     auto output = CaptureStderr([&] {
-        TM2_LOG_TRACE("trace-msg");
-        TM2_LOG_DEBUG("debug-msg");
-        TM2_LOG_INFO("info-msg");
-        TM2_LOG_WARNING("warn-msg");
-        TM2_LOG_ERROR("error-msg");
+        TM_LOG_TRACE("trace-msg");
+        TM_LOG_DEBUG("debug-msg");
+        TM_LOG_INFO("info-msg");
+        TM_LOG_WARN("warn-msg");
+        TM_LOG_ERROR("error-msg");
     });
 
-    REQUIRE(output.find("[TM][TRACE]") != std::string::npos);
-    REQUIRE(output.find("[TM][DEBUG]") != std::string::npos);
-    REQUIRE(output.find("[TM][INFO]") != std::string::npos);
-    REQUIRE(output.find("[TM][WARNING]") != std::string::npos);
-    REQUIRE(output.find("[TM][ERROR]") != std::string::npos);
+    // Format: [TM][MMDD HH:MM:SS.uuuuuu][LEVEL][basename:line] message
+    REQUIRE(output.find("[TM]") != std::string::npos);
+    REQUIRE(output.find("[TRACE]") != std::string::npos);
+    REQUIRE(output.find("[DEBUG]") != std::string::npos);
+    REQUIRE(output.find("[INFO]") != std::string::npos);
+    REQUIRE(output.find("[WARN]") != std::string::npos);
+    REQUIRE(output.find("[ERROR]") != std::string::npos);
+    // Macros pass __FILE__ and __LINE__: expect basename and line in output
+    REQUIRE(output.find("test_logger.cc:") != std::string::npos);
+    // Glog-style timestamp: MMDD HH:MM:SS.uuuuuu (contains space, colon, dot for time)
+    REQUIRE(output.find(".") != std::string::npos);
 
     Logger::Instance().set_level(Logger::Level::kDebug);
 }
 
 TEST_CASE("Logger: TM_LOG_ASYNC=0 selects sync mode", "[logger]")
 {
-    // Sync mode: output is written by the calling thread, no Flush() needed.
+    // Sync mode: output is written by the calling thread.
     ::setenv("TM_LOG_ASYNC", "0", /*overwrite=*/1);
 
     std::string output;
@@ -183,7 +193,7 @@ TEST_CASE("Logger: TM_LOG_ASYNC=0 selects sync mode", "[logger]")
             auto& log = Logger::Instance();
             REQUIRE_FALSE(log.is_async());
             log.Log(Logger::Level::kInfo, "sync-message");
-            // No Flush() call — sync mode writes inline.
+            // Sync mode writes inline.
 
             REQUIRE(::dup2(saved, STDERR_FILENO) >= 0);
             ::close(saved);
@@ -201,11 +211,12 @@ TEST_CASE("Logger: TM_LOG_ASYNC=0 selects sync mode", "[logger]")
     ::unsetenv("TM_LOG_ASYNC");
 
     REQUIRE(output.find("sync-message") != std::string::npos);
-    REQUIRE(output.find("[TM][INFO]") != std::string::npos);
+    REQUIRE(output.find("[INFO]") != std::string::npos);
 }
 
 TEST_CASE("Logger: async ordering under concurrent producers", "[logger]")
 {
+    ::setenv("TM_LOG_ASYNC", "0", 1);  // ensure worker threads use sync mode so capture sees all output
     Logger::Instance().set_level(Logger::Level::kTrace);
 
     constexpr int kThreads   = 4;
@@ -218,7 +229,7 @@ TEST_CASE("Logger: async ordering under concurrent producers", "[logger]")
         for (int t = 0; t < kThreads; ++t) {
             threads.emplace_back([t] {
                 for (int i = 0; i < kPerThread; ++i) {
-                    TM2_LOG_INFO("thread={} i={}", t, i);
+                    TM_LOG_INFO("thread={} i={}", t, i);
                 }
             });
         }

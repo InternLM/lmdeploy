@@ -740,9 +740,9 @@ struct TestComm {
         std::mt19937                  gen{};
         std::uniform_int_distribution dist{0, 31};  // 5 mantissa bits
 
-        TM_LOG_INFO("dp_size_0 %d, tp_size_0 %d", dp_size_0, tp_size_0);
-        TM_LOG_INFO("dp_size_1 %d, tp_size_1 %d", dp_size_1, tp_size_1);
-        TM_LOG_INFO("inner_tp %d", inner_tp);
+        TM_LOG_INFO("dp_size_0 {}, tp_size_0 {}", dp_size_0, tp_size_0);
+        TM_LOG_INFO("dp_size_1 {}, tp_size_1 {}", dp_size_1, tp_size_1);
+        TM_LOG_INFO("inner_tp {}", inner_tp);
 
         vector tokens = tokens_;
         for (auto& x : tokens) {
@@ -885,7 +885,7 @@ struct TestComm {
             for (const auto& n : tokens) {
                 if (n % dp_size_1) {
                     if (g_rank == 0) {
-                        TM_LOG_INFO("Skipped %d", n);
+                        TM_LOG_INFO("Skipped {}", n);
                     }
                     continue;
                 }

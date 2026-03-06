@@ -23,7 +23,7 @@
 
 #include "src/turbomind/comm/gloo/tcp_store.h"
 #include "src/turbomind/comm/host_comm.h"
-#include "src/turbomind/utils/logger.h"
+#include "src/turbomind/core/logger.h"
 
 namespace turbomind::comm {
 
@@ -346,7 +346,7 @@ class GlooGroupId: public HostGroupId {
     void Initialize() override
     {
         info_ = GlobalStoreFactory::Instance().New();
-        TM_LOG_INFO("[TM][COMM] GlooGroupId=%s", info_.c_str());
+        TM_LOG_INFO("[TM][COMM] GlooGroupId={}", info_);
     }
 
     void Export(std::ostream& os) override

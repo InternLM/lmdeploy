@@ -7,7 +7,7 @@
 #include <string>
 #include <type_traits>
 
-#include "src/turbomind/utils/logger.h"
+#include "src/turbomind/core/logger.h"
 
 namespace turbomind {
 
@@ -40,7 +40,7 @@ auto GetEnv()
         if (is_set) {
             std::stringstream ss;
             ss << x;
-            TM_LOG_INFO("[%s] %s=%s", E::prefix, E::name, ss.str().c_str());
+            TM_LOG_INFO("[{}] {}={}", E::prefix, E::name, ss.str());
         }
         return x;
     }();

@@ -4,7 +4,7 @@
 
 #include "src/turbomind/models/llama/BlockManager.h"
 #include "src/turbomind/utils/debug_utils.h"
-#include "src/turbomind/utils/logger.h"
+#include "src/turbomind/core/logger.h"
 #include "src/turbomind/utils/string_utils.h"
 
 namespace turbomind {
@@ -30,9 +30,9 @@ BlockManager::BlockManager(
         chunk_size_ = chunk_size;
     }
 
-    TM_LOG_INFO("[BlockManager] block_size = %.3f MB", (float)block_size_ / (1 << 20));
-    TM_LOG_INFO("[BlockManager] max_block_count = %d", max_block_count_);
-    TM_LOG_INFO("[BlockManager] chunk_size = %d", chunk_size_);
+    TM_LOG_INFO("[BlockManager] block_size = {:.3f} MB", (float)block_size_ / (1 << 20));
+    TM_LOG_INFO("[BlockManager] max_block_count = {}", max_block_count_);
+    TM_LOG_INFO("[BlockManager] chunk_size = {}", chunk_size_);
 
     blocks_.reserve(max_block_count_);
 

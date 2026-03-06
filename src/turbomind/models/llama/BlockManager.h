@@ -5,7 +5,7 @@
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/models/llama/Barrier.h"
 #include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/utils/logger.h"
+#include "src/turbomind/core/logger.h"
 #include <algorithm>
 #include <atomic>
 #include <cstdint>

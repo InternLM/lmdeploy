@@ -69,7 +69,7 @@ static void parse_default_rope_param(const YAML::Node& node, RopeParam& param)
     param.base = node["base"].as<float>();
     param.dim  = node["dim"].as<int>();
     if (param.base == 0.f || param.dim == 0) {
-        TM_LOG_ERROR("invalid rope param: base = %f, dim = %d", param.base, param.dim);
+        TM_LOG_ERROR("invalid rope param: base = {}, dim = {}", param.base, param.dim);
         FT_CHECK(0);
     }
 }
@@ -309,20 +309,20 @@ struct TurboMind::Impl {
     {
         if (!engine_param_.max_context_token_num) {
             engine_param_.max_context_token_num = engine_param_.session_len;
-            TM_LOG_WARNING("[TM] `max_context_token_num` is not set, default to %d.",
+            TM_LOG_WARN("[TM] `max_context_token_num` is not set, default to {}.",
                            (int)engine_param_.max_context_token_num);
         }
 
         if (engine_param_.max_context_token_num <= engine_param_.max_batch_size) {
             engine_param_.max_context_token_num *= engine_param_.session_len;
-            TM_LOG_WARNING("[TM] `max_context_token_num` = %d.", (int)engine_param_.max_context_token_num);
+            TM_LOG_WARN("[TM] `max_context_token_num` = {}.", (int)engine_param_.max_context_token_num);
         }
     }
 };
 
 TurboMind::Impl::~Impl()
 {
-    TM_LOG_INFO(__PRETTY_FUNCTION__);
+    TM_LOG_INFO("{}", __PRETTY_FUNCTION__);
     if (gateway_) {
         gateway_->shutdown();
     }
@@ -665,7 +665,7 @@ void TurboMind::Impl::WarmUp(int index)
         std::ifstream ifs(str);
         const int     n_imported = linear.Import(ifs);
         if (index == 0) {
-            TM_LOG_INFO("[GEMM] %d records imported", n_imported);
+            TM_LOG_INFO("[GEMM] {} records imported", n_imported);
         }
         return;
     }
@@ -698,7 +698,7 @@ void TurboMind::Impl::WarmUp(int index)
         }
 
         auto str = Join(bss.begin(), bss.end(), ", ");
-        TM_LOG_INFO("[Engine] Warm-up lengths: %s", str.c_str());
+        TM_LOG_INFO("[Engine] Warm-up lengths: {}", str);
 
         if (!bss.empty()) {
             const auto                         max_bs = *std::max_element(bss.begin(), bss.end());
@@ -713,7 +713,7 @@ void TurboMind::Impl::WarmUp(int index)
 
             for (auto token_num : bss) {
 
-                TM_LOG_INFO("[WarmUp] %d", token_num);
+                TM_LOG_INFO("[WarmUp] {}", token_num);
 
                 auto r = CreateRequest();
 
@@ -746,13 +746,13 @@ void TurboMind::Impl::WarmUp(int index)
                 }
 
                 if (status != Request::kFinish) {
-                    TM_LOG_ERROR("[Engine] Warm-up for %d tokens failed with status %d", (int)token_num, (int)status);
+                    TM_LOG_ERROR("[Engine] Warm-up for {} tokens failed with status {}", (int)token_num, (int)status);
                 }
             }
 
             auto tock = std::chrono::steady_clock::now();
 
-            TM_LOG_INFO("[WarmUp] Warm-up finished in %.2f seconds.",
+            TM_LOG_INFO("[WarmUp] Warm-up finished in {:.2f} seconds.",
                         std::chrono::duration<float, std::ratio<1, 1>>(tock - tick).count());
         }
     }
@@ -766,7 +766,7 @@ void TurboMind::Impl::WarmUp(int index)
         if (auto path = std::getenv("TM_GEMM_EXPORT")) {
             std::ofstream ofs(path);
             const auto    n_records = linear.Export(ofs);
-            TM_LOG_INFO("[GEMM] %d records exported.", n_records);
+            TM_LOG_INFO("[GEMM] {} records exported.", n_records);
         }
 
         gateway_->set_threshold(1);

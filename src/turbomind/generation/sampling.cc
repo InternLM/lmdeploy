@@ -24,7 +24,7 @@
 #include "src/turbomind/engine/request.h"
 
 #include "src/turbomind/utils/constant.h"
-#include "src/turbomind/utils/logger.h"
+#include "src/turbomind/core/logger.h"
 
 namespace turbomind {
 
@@ -87,7 +87,7 @@ void Sampling::Forward(int phase, TensorMap& args)
     // step2:
     //  - sampling from left and sorted scores
 
-    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("{} start", __PRETTY_FUNCTION__);
 
     auto& d = *data_.at(phase);
 
@@ -168,7 +168,7 @@ void Sampling::Forward(int phase, TensorMap& args)
         sync_check_cuda_error();
     }
 
-    TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("{} stop", __PRETTY_FUNCTION__);
 }
 
 void Sampling::Setup(int phase, TensorMap& env)

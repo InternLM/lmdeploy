@@ -39,6 +39,19 @@ option(BUILD_FAST_MATH "Build in fast math mode" ON)
 
 include(FetchContent)
 
+FetchContent_Declare(
+  fmt
+  GIT_REPOSITORY https://github.com/fmtlib/fmt.git
+  GIT_TAG        11.1.4
+  GIT_SHALLOW    ON
+  GIT_PROGRESS   TRUE
+  USES_TERMINAL_DOWNLOAD TRUE
+  EXCLUDE_FROM_ALL
+)
+FetchContent_MakeAvailable(fmt)
+set_target_properties(fmt PROPERTIES POSITION_INDEPENDENT_CODE ON)
+include_directories(${fmt_SOURCE_DIR}/include)
+
 if (BUILD_TEST)
   FetchContent_Declare(
     Catch2
@@ -269,6 +282,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-relaxed-constexpr")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --std=c++${CXX_STD}")
+# Suppress nvcc warning 128 (loop not reachable) in fmt headers - nvcc false positive
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --diag-suppress=128")
 
 string(REPLACE "-O2" "" CMAKE_CXX_FLAGS_RELEASE         "${CMAKE_CXX_FLAGS_RELEASE}")
 string(REPLACE "-O2" "" CMAKE_CUDA_FLAGS_RELEASE        "${CMAKE_CUDA_FLAGS_RELEASE}")

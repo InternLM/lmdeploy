@@ -49,7 +49,7 @@ void Gateway::push(std::shared_ptr<Request> r)
         queues_[rank]->push({std::move(r)});
     }
     else {
-        TM_LOG_ERROR("[Gateway] Failed to find a binded queue for %lu", r->session.id);
+        TM_LOG_ERROR("[Gateway] Failed to find a binded queue for {}", r->session.id);
         notify({[r = std::move(r)] { UpdateState(*r, Request::kInvalid, 0); }});
     }
 }
@@ -134,7 +134,7 @@ void Gateway::kill(std::shared_ptr<Request> r)
         queues_[rank]->kill(std::move(r));
     }
     else {
-        TM_LOG_ERROR("[Gateway] Failed to find a binded queue for %lu", r->session.id);
+        TM_LOG_ERROR("[Gateway] Failed to find a binded queue for {}", r->session.id);
         notify({[r = std::move(r)] {  //
             UpdateState(*r, Request::kInvalid, 0);
         }});

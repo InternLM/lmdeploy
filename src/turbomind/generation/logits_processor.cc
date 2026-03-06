@@ -66,7 +66,7 @@ void LogitsProcessor::Forward(int phase, TensorMap& env)
 {
     // apply repetition penalty -> ban bad words -> min length penalty -> temperature penalty
     // the order is same with transformerss
-    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("{} start", __PRETTY_FUNCTION__);
 
     Tensor_<float>      logits          = env.at("logits");
     const Buffer_<int*> token_ids_ptrs  = env.at("token_ids_ptrs").buffer();
@@ -115,12 +115,12 @@ void LogitsProcessor::Forward(int phase, TensorMap& env)
         sync_check_cuda_error();
     }
 
-    TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("{} stop", __PRETTY_FUNCTION__);
 }
 
 void LogitsProcessor::Setup(int phase, TensorMap& env)
 {
-    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("{} start", __PRETTY_FUNCTION__);
 
     auto& d = *data_.at(phase);
 
@@ -199,13 +199,13 @@ void LogitsProcessor::Setup(int phase, TensorMap& env)
                     continue;
                 }
                 if (TM_UNLIKELY(eos_ids.size() > kMaxEndIdsSize)) {
-                    TM_LOG_WARNING("[InitializeSampling] [%ld] eos length (%d) exceeds %d, truncated to %d",
-                                   (long)rs[i]->req->id,
-                                   (int)eos_ids.size(),
+                    TM_LOG_WARN("[InitializeSampling] [{}] eos length ({}) exceeds {}, truncated to {}",
+                                   rs[i]->req->id,
+                                   eos_ids.size(),
                                    kMaxEndIdsSize,
                                    kMaxEndIdsSize);
                 }
-                std::copy_n(eos_ids.begin(), std::min((int)eos_ids.size(), kMaxEndIdsSize), h_end_ids);
+                std::copy_n(eos_ids.begin(), std::min(static_cast<int>(eos_ids.size()), kMaxEndIdsSize), h_end_ids);
                 h_end_ids += max_length;
             }
             copy(buf_->end_ids_buf, bsz * max_length, d.end_ids_buf);
@@ -213,7 +213,7 @@ void LogitsProcessor::Setup(int phase, TensorMap& env)
         }
     }
 
-    TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("{} stop", __PRETTY_FUNCTION__);
 }
 
 }  // namespace turbomind

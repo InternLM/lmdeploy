@@ -8,7 +8,7 @@
 #include "src/turbomind/kernels/attention/block.h"
 #include "src/turbomind/models/llama/BlockManager.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
-#include "src/turbomind/utils/logger.h"
+#include "src/turbomind/core/logger.h"
 
 // #include "dbg.h"
 
@@ -136,7 +136,7 @@ SequenceManager::SequenceManager(const ModelParam& model_param,
     if (enable_prefix_caching) {
         block_trie_ = std::make_shared<BlockTrie>(block_config.block_len_, block_manager_);
     }
-    TM_LOG_WARNING("[SegMgr] prefix caching is %s", enable_prefix_caching ? "enabled" : "disabled");
+    TM_LOG_WARN("[SegMgr] prefix caching is {}", enable_prefix_caching ? "enabled" : "disabled");
 }
 
 const Sequence* SequenceManager::Create(uint64_t id)
@@ -145,13 +145,13 @@ const Sequence* SequenceManager::Create(uint64_t id)
     auto     it = sequences_.find(id);
     if (it != sequences_.end()) {
         if (rank_ == 0) {
-            TM_LOG_WARNING("[SeqMgr][Create] Removing conflicting ID %llu", id);
+            TM_LOG_WARN("[SeqMgr][Create] Removing conflicting ID {}", id);
         }
         Erase(it);
     }
     it = sequences_.emplace_hint(it, id, std::move(sequence));
     if (rank_ == 0) {
-        TM_LOG_INFO("[SeqMgr][Create] ID %llu", id);
+        TM_LOG_INFO("[SeqMgr][Create] ID {}", id);
     }
     return &it->second;
 }
@@ -272,10 +272,10 @@ void SequenceManager::CachePrompt(const Sequences& sequences, int active_size)
             const auto& [block_ids, unique_ids] = block_trie_->Cache(seq, seq.prompt);
             if (rank_ == 0) {
                 // clang-format off
-                TM_LOG_INFO("[SeqMgr][CachePrompt] ID %llu, cached blocks %d, tokens %d", seq.id,
+                TM_LOG_INFO("[SeqMgr][CachePrompt] ID {}, cached blocks {}, tokens {}", seq.id,
                             (int)block_ids.size(), (int)seq.prompt.size());
-                TM_LOG_DEBUG("[SeqMgr][CachePrompt] ID %llu, cached block_ids %s, unique_ids %s", seq.id,
-                             vector2string(block_ids).c_str(), vector2string(unique_ids).c_str());
+                TM_LOG_DEBUG("[SeqMgr][CachePrompt] ID {}, cached block_ids {}, unique_ids {}", seq.id,
+                             vector2string(block_ids), vector2string(unique_ids));
                 // clang-format on
             }
             if (seq.cache_len >= seq.prompt.size()) {
@@ -295,10 +295,10 @@ void SequenceManager::CacheGeneration(const Sequence& seq)
 
     if (rank_ == 0) {
         // clang-format off
-        TM_LOG_INFO("[SeqMgr][CacheGeneration] ID %llu, cached blocks %d, tokens %d",
+        TM_LOG_INFO("[SeqMgr][CacheGeneration] ID {}, cached blocks {}, tokens {}",
                     seq.id, (int)block_ids.size(), (int)seq.tokens.size());
-        TM_LOG_DEBUG("[SeqMgr][CacheGeneration] ID %llu, cached block_ids %s, unique_ids %s", seq.id,
-                     vector2string(block_ids).c_str(), vector2string(unique_ids).c_str());
+        TM_LOG_DEBUG("[SeqMgr][CacheGeneration] ID {}, cached block_ids {}, unique_ids {}", seq.id,
+                     vector2string(block_ids), vector2string(unique_ids));
         // clang-format on
     }
 }
@@ -595,9 +595,9 @@ void SequenceManager::PrefixMatch(Sequences& sequences, const std::vector<int>& 
 
         if (rank_ == 0) {
             // clang-format off
-            TM_LOG_INFO("[SeqMgr][match] ID %llu, hit blocks %d, cache_len %d", seq.id, (int)block_ids.size(), seq.cache_len);
-            TM_LOG_DEBUG("[SeqMgr][match] ID %llu, hit block_ids %s, unique_ids %s", seq.id,
-                         vector2string(block_ids).c_str(), vector2string(unique_ids).c_str());
+            TM_LOG_INFO("[SeqMgr][match] ID {}, hit blocks {}, cache_len {}", seq.id, (int)block_ids.size(), seq.cache_len);
+            TM_LOG_DEBUG("[SeqMgr][match] ID {}, hit block_ids {}, unique_ids {}", seq.id,
+                         vector2string(block_ids), vector2string(unique_ids));
             // clang-format on
         }
 
@@ -616,10 +616,10 @@ void SequenceManager::PrefixMatch(Sequences& sequences, const std::vector<int>& 
 
         if (rank_ == 0) {
             // clang-format off
-            TM_LOG_INFO("[SeqMgr][match] ID %llu, after matching, blocks %d, cache_len %d",
+            TM_LOG_INFO("[SeqMgr][match] ID {}, after matching, blocks {}, cache_len {}",
                         seq.id, seq.blocks.size(), seq.cache_len);
-            TM_LOG_DEBUG("[SeqMgr][match] ID %llu, after matching, block_ids %s, unique_ids %s", seq.id,
-                         vector2string(seq.blocks).c_str(), vector2string(seq.block_unique_ids).c_str());
+            TM_LOG_DEBUG("[SeqMgr][match] ID {}, after matching, block_ids {}, unique_ids {}", seq.id,
+                         vector2string(seq.blocks), vector2string(seq.block_unique_ids));
             // clang-format on
         }
     }
@@ -694,7 +694,7 @@ auto SequenceManager::Materialize(Sequences             sequences,
 
     // release preempted blocks -> cached
     if (!schedule.victims.empty()) {
-        TM_LOG_INFO("[SeqMgr] #victim: %d", (int)schedule.victims.size());
+        TM_LOG_WARN("[SeqMgr] #victim: {}", (int)schedule.victims.size());
         for (const auto& p : schedule.victims) {
             UpdateAndSetUnlock(*p);
         }
