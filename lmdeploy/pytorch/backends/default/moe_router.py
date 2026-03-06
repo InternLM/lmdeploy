@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import functools
-from typing import Tuple
 
 import torch
 
@@ -52,7 +51,7 @@ class DefaultRouterNoauxTCImpl(RouterNoauxTCImpl):
         # n_group
         self.router_n_groups = router_n_groups
 
-    def _forward_router_n_groups(self, scores_for_choice: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _forward_router_n_groups(self, scores_for_choice: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         assert scores_for_choice.shape[-1] % self.router_n_groups == 0, \
             f'{scores_for_choice.shape[-1]} cannot be divided by {self.router_n_groups}'
         per_group_top_k = self.top_k // self.router_n_groups
@@ -65,7 +64,7 @@ class DefaultRouterNoauxTCImpl(RouterNoauxTCImpl):
         return topk_weight, topk_idx
 
     def _forward_default(self, scores: torch.Tensor, scores_for_choice: torch.Tensor,
-                         sequence_length: int) -> Tuple[torch.Tensor, torch.Tensor]:
+                         sequence_length: int) -> tuple[torch.Tensor, torch.Tensor]:
         group_scores = (scores_for_choice.view(sequence_length, self.n_group,
                                                -1).topk(2, dim=-1)[0].sum(dim=-1))  # [n, n_group]
         group_idx = torch.topk(group_scores, k=self.topk_group, dim=-1, sorted=False)[1]  # [n, top_k_group]
@@ -90,7 +89,7 @@ class DefaultRouterNoauxTCImpl(RouterNoauxTCImpl):
         topk_weight = topk_weight * self.routed_scaling_factor
         return topk_weight
 
-    def forward(self, logits: torch.Tensor, bias: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, logits: torch.Tensor, bias: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Router forward."""
         sequence_length = logits.shape[0]
 

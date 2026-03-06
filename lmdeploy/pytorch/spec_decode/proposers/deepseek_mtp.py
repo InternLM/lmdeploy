@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict
 
 import torch
 
@@ -16,7 +15,7 @@ logger = get_logger('lmdeploy')
 class DeepseekMTP(BaseSpecProposer):
 
     def get_outputs(self,
-                    model_outputs: Dict[str, torch.Tensor],
+                    model_outputs: dict[str, torch.Tensor],
                     model_inputs: ModelInputs,
                     extra_inputs: ARSpecExtraInputs = None):
         """Get outputs."""

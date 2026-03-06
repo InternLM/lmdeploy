@@ -2,8 +2,9 @@
 import asyncio
 import enum
 import logging
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Coroutine, Dict, List
+from typing import Any
 
 from lmdeploy.messages import RequestMetrics, ResponseType
 from lmdeploy.utils import get_logger
@@ -45,7 +46,7 @@ class Request:
     resp: Response = None
 
 
-ReqList = List[Request]
+ReqList = list[Request]
 
 
 def _run_until_complete(future: Awaitable):
@@ -69,7 +70,7 @@ class RequestSender:
     """
     sender_id: int
     manager: 'RequestManager'
-    resp_dict: Dict[int, List[Response]] = field(default_factory=dict)
+    resp_dict: dict[int, list[Response]] = field(default_factory=dict)
 
     @classmethod
     def new(cls, sender_id: int, manager: 'RequestManager'):
@@ -99,7 +100,7 @@ class RequestSender:
         """Async rq_que put."""
         self.req_que.put_nowait(reqs)
 
-    def _gather_request(self, req_types: List[RequestType], data: List[Any]):
+    def _gather_request(self, req_types: list[RequestType], data: list[Any]):
         """Gather requests."""
         if self.manager._loop_task is None:
             self.manager.create_loop_task()
@@ -119,7 +120,7 @@ class RequestSender:
             reqs.append(req)
         return resps, reqs
 
-    def batched_send_async(self, req_types: List[RequestType], data: List[Any]):
+    def batched_send_async(self, req_types: list[RequestType], data: list[Any]):
         """Batched send request asynchronize."""
         resps, reqs = self._gather_request(req_types, data)
         self._req_put(reqs)
@@ -166,9 +167,9 @@ class RequestManager:
     """Request manager."""
 
     def __init__(self):
-        self.senders: Dict[int, RequestSender] = dict()
-        self.callbacks: Dict[RequestType, Callable] = dict()
-        self.request_priority: List[RequestType] = [
+        self.senders: dict[int, RequestSender] = dict()
+        self.callbacks: dict[RequestType, Callable] = dict()
+        self.request_priority: list[RequestType] = [
             RequestType.STOP_ENGINE, RequestType.ADD_SESSION, RequestType.STOP_SESSION, RequestType.END_SESSION,
             RequestType.ADD_MESSAGE
         ]
@@ -293,7 +294,7 @@ class RequestManager:
             return False
         return not self.requests.empty()
 
-    async def get_all_requests(self) -> Dict[RequestType, List[Request]]:
+    async def get_all_requests(self) -> dict[RequestType, list[Request]]:
         """Get all requests in current queue."""
         num_reqs = self.requests.qsize()
         reqs: ReqList = []
@@ -315,7 +316,7 @@ class RequestManager:
             __proc_reqs(elem)
 
         # gather requests
-        reqs_by_type: Dict[RequestType, List[Request]] = dict((t, []) for t in RequestType)
+        reqs_by_type: dict[RequestType, list[Request]] = {t: [] for t in RequestType}
         for req in reqs:
             reqs_by_type[req.type].append(req)
         return reqs_by_type
@@ -324,7 +325,7 @@ class RequestManager:
         """Bind handler for given request type."""
         self.callbacks[req_type] = callback
 
-    def set_request_priority(self, priority: List[RequestType]):
+    def set_request_priority(self, priority: list[RequestType]):
         """Set the priority of request type."""
         self.request_priority = priority
 

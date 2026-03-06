@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from pathlib import Path
-from typing import Literal, Union
+from typing import Literal
 
 import torch
 from torch import nn
@@ -76,7 +76,7 @@ HEAD_NAME_MAP = {
 
 
 def _prepare_for_calibrate(model: nn.Module,
-                           layer_type: Union[str, type],
+                           layer_type: str | type,
                            head_name: str = 'lm_head',
                            device: str = 'cuda',
                            prefix: str = '') -> None:
@@ -191,7 +191,7 @@ def update_moe_mapping(model, model_type):
     norm2fcs = NORM_FCS_MAP[LAYER_TYPE_MAP[model_type]]
     updated_norm2fcs = dict()
     for norm, fc in norm2fcs.items():
-        updated_norm2fcs.update({norm: list(set([v.format(i=i) for v in fc for i in range(num_experts)]))})
+        updated_norm2fcs.update({norm: list({v.format(i=i) for v in fc for i in range(num_experts)})})
     NORM_FCS_MAP[LAYER_TYPE_MAP[model_type]] = updated_norm2fcs
 
 

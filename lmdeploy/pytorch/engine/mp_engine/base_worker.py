@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any
 
 from lmdeploy.messages import EngineOutput
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
@@ -101,7 +101,7 @@ class EngineWorkerBase:
         """sleep."""
         return self.engine.sleep(level)
 
-    def wakeup(self, tags: Optional[List[str]] = None):
+    def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
         return self.engine.wakeup(tags)
 

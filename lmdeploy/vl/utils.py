@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
 from io import BytesIO
-from typing import Union
 
 import pybase64
 import requests
@@ -12,7 +11,7 @@ from lmdeploy.utils import get_logger
 logger = get_logger('lmdeploy')
 
 
-def encode_image_base64(image: Union[str, Image.Image]) -> str:
+def encode_image_base64(image: str | Image.Image) -> str:
     """Encode raw data to base64 format."""
     buffered = BytesIO()
     FETCH_TIMEOUT = int(os.environ.get('LMDEPLOY_FETCH_TIMEOUT', 10))
@@ -44,12 +43,12 @@ def encode_image_base64(image: Union[str, Image.Image]) -> str:
     return res
 
 
-def load_image_from_base64(image: Union[bytes, str]) -> Image.Image:
+def load_image_from_base64(image: bytes | str) -> Image.Image:
     """Load image from base64 format."""
     return Image.open(BytesIO(pybase64.b64decode(image)))
 
 
-def load_image(image_url: Union[str, Image.Image]) -> Image.Image:
+def load_image(image_url: str | Image.Image) -> Image.Image:
     """Load image from url, local path or openai GPT4V."""
     FETCH_TIMEOUT = int(os.environ.get('LMDEPLOY_FETCH_TIMEOUT', 10))
     headers = {

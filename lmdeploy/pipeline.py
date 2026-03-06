@@ -1,13 +1,16 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from __future__ import annotations
+
 import asyncio
 import atexit
 import concurrent.futures
 import os
+from collections.abc import Iterator
 from contextlib import closing
 from functools import partial
 from queue import Queue
 from threading import Thread
-from typing import TYPE_CHECKING, Dict, Iterator, List, Tuple
+from typing import TYPE_CHECKING
 
 import torch
 import tqdm
@@ -81,8 +84,8 @@ class Pipeline:
         self.async_engine.start_loop(self.internal_thread.loop, use_async_api=False)
 
     def infer(self,
-              prompts: List[str] | str | List[Dict] | List[List[Dict]] | Tuple | List[Tuple],
-              gen_config: GenerationConfig | List[GenerationConfig] | None = None,
+              prompts: list[str] | str | list[dict] | list[list[dict]] | tuple | list[tuple],
+              gen_config: GenerationConfig | list[GenerationConfig] | None = None,
               do_preprocess: bool = True,
               adapter_name: str | None = None,
               use_tqdm: bool = False,
@@ -126,9 +129,9 @@ class Pipeline:
         return self.infer(*args, **kwargs)
 
     def stream_infer(self,
-                     prompts: List[str] | str | List[Dict] | List[List[Dict]] | Tuple | List[Tuple],
-                     sessions: 'Session' | List['Session'] | None = None,
-                     gen_config: GenerationConfig | List[GenerationConfig] | None = None,
+                     prompts: list[str] | str | list[dict] | list[list[dict]] | tuple | list[tuple],
+                     sessions: Session | list[Session] | None = None,
+                     gen_config: GenerationConfig | list[GenerationConfig] | None = None,
                      do_preprocess: bool = True,
                      adapter_name: str | None = None,
                      stream_response: bool = True,
@@ -167,12 +170,12 @@ class Pipeline:
         self.async_engine.close()
 
     def chat(self,
-             prompt: str | Tuple[str, 'Image' | List['Image']],
+             prompt: str | tuple[str, Image | list[Image]],
              session=None,
              gen_config: GenerationConfig | None = None,
              stream_response=False,
              adapter_name=None,
-             **kwargs) -> 'Session' | Iterator:
+             **kwargs) -> Session | Iterator:
         """Chat.
 
         Args:
@@ -227,11 +230,11 @@ class Pipeline:
 
         return session
 
-    def session(self) -> 'Session':
+    def session(self) -> Session:
         """Create a new session."""
         return self.session_mgr.get()
 
-    def get_reward_score(self, input_ids: List) -> List[float]:
+    def get_reward_score(self, input_ids: list) -> list[float]:
         """Get reward score.
 
         Args:
@@ -244,8 +247,8 @@ class Pipeline:
         arch = self.async_engine.arch
         if arch not in supported_reward_models:
             raise ValueError(f'{arch} is not in reward model list: {supported_reward_models}')
-        assert isinstance(input_ids, List)
-        assert all(isinstance(x, int) for x in input_ids) or all(isinstance(x, List) for x in input_ids)
+        assert isinstance(input_ids, list)
+        assert all(isinstance(x, int) for x in input_ids) or all(isinstance(x, list) for x in input_ids)
         # Make input_ids a list of token_id list
         input_ids = [input_ids] if isinstance(input_ids[0], int) else input_ids
         logits = self._run(coro=self.async_engine.async_get_logits(input_ids=input_ids)).result()
@@ -253,7 +256,7 @@ class Pipeline:
         scores = [x[-1].cpu().item() for x in logits]
         return scores
 
-    def get_ppl(self, input_ids: List[int] | List[List[int]]) -> List[float]:
+    def get_ppl(self, input_ids: list[int] | list[list[int]]) -> list[float]:
         """Get perplexity scores given a list of input tokens that have to be
         of the same length.
 
@@ -263,7 +266,7 @@ class Pipeline:
         Returns:
             List[float]: A list of perplexity scores.
         """
-        assert isinstance(input_ids, List)
+        assert isinstance(input_ids, list)
         if isinstance(input_ids[0], int):
             input_ids = [input_ids]
         assert all(len(_) > 1 for _ in input_ids)
@@ -304,8 +307,8 @@ class Pipeline:
         return output
 
     def __call__(self,
-                 prompts: List[str] | str | List[Dict] | List[List[Dict]],
-                 gen_config: GenerationConfig | List[GenerationConfig] | None = None,
+                 prompts: list[str] | str | list[dict] | list[list[dict]],
+                 gen_config: GenerationConfig | list[GenerationConfig] | None = None,
                  **kwargs):
         return self.infer(prompts, gen_config=gen_config, **kwargs)
 
@@ -328,12 +331,12 @@ class Pipeline:
     def _is_single(prompts):
         """Check if prompts is a single prompt."""
         return (isinstance(prompts, str) or (isinstance(prompts, tuple) and len(prompts) == 2)
-                or (isinstance(prompts, list) and len(prompts) > 0 and isinstance(prompts[0], Dict)))
+                or (isinstance(prompts, list) and len(prompts) > 0 and isinstance(prompts[0], dict)))
 
     def _request_generator(self,
-                           prompts: List[str] | str | List[Dict] | List[List[Dict]],
-                           sessions: List['Session'] | 'Session' | None = None,
-                           gen_config: GenerationConfig | List[GenerationConfig] | None = None,
+                           prompts: list[str] | str | list[dict] | list[list[dict]],
+                           sessions: list[Session] | Session | None = None,
+                           gen_config: GenerationConfig | list[GenerationConfig] | None = None,
                            **kwargs):
         """Generate requests."""
         is_single = self._is_single(prompts)
@@ -372,7 +375,7 @@ class Pipeline:
             self.limiter = asyncio.Semaphore(self.backend_config.max_batch_size)
         return self.limiter
 
-    def _infer(self, requests: Iterator[Dict], multiplex: bool, pbar=None, loop=None) -> Iterator[Iterator[Response]]:
+    def _infer(self, requests: Iterator[dict], multiplex: bool, pbar=None, loop=None) -> Iterator[Iterator[Response]]:
 
         async def _sync_resp(g, que: Queue, idx: int, sem: asyncio.Semaphore):
             async for out in g:
@@ -470,13 +473,13 @@ class Pipeline:
         return loss_sum / target_count
 
     def _get_ppl(self,
-                 sessions: List['Session'],
-                 input_ids: List[List[int]],
+                 sessions: list[Session],
+                 input_ids: list[list[int]],
                  max_input_len: int,
                  target_ids=None,
                  sequence_start: bool = True,
                  sequence_end: bool = True):
-        assert (isinstance(input_ids, List) and all(isinstance(_, List) for _ in input_ids))
+        assert (isinstance(input_ids, list) and all(isinstance(_, list) for _ in input_ids))
         assert target_ids is None or len(target_ids) == len(input_ids)
         assert len(sessions) == len(input_ids)
 

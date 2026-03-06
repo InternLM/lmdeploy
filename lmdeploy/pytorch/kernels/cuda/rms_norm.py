@@ -191,8 +191,8 @@ if __name__ == '__main__':
 
         torch_cost = (t1 - t0) / N_REPEATS * 1000
         triton_cost = (t2 - t1) / N_REPEATS * 1000
-        print('input {} weight {} dtype {}\n  torch {:.3f} triton {:.3f} (ms)\n'.format(
-            input.shape, weight.shape, dtype, torch_cost, triton_cost))
+        print(f'input {input.shape} weight {weight.shape} dtype {dtype}\n  '
+              f'torch {torch_cost:.3f} triton {triton_cost:.3f} (ms)\n')
 
     test_rms_norm(1, 8128, 5120, torch.float16)
     test_rms_norm(1, 8128, 5120, torch.float32)

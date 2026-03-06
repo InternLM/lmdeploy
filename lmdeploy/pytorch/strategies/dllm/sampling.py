@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import List
 
 import torch
 from torch.profiler import record_function
@@ -11,7 +10,7 @@ from lmdeploy.pytorch.model_inputs import ModelInputsDelta
 from ..ar.sampling import ARSamplingStrategy
 from .model_agent import DLLMExtraInputs
 
-SeqList = List[SchedulerSequence]
+SeqList = list[SchedulerSequence]
 
 
 class DLLMSamplingStrategy(ARSamplingStrategy):

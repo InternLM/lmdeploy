@@ -2,7 +2,7 @@
 import logging
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 import torch
@@ -131,7 +131,7 @@ class LongContextChunker:
 
         start = seq.num_history_ids
         end = start + llm_chunk_size
-        out_multimodals: 'MultiModalInputs' = defaultdict(list)
+        out_multimodals: MultiModalInputs = defaultdict(list)
         for modal_type, mm in self.multimodal_iter():
             assert mm.start >= start, 'multimodal data should be sorted by start'
             if mm.start >= end:
@@ -158,7 +158,7 @@ class LongContextChunker:
 
     def clear(self):
         """Clear."""
-        self.seq: 'SchedulerSequence' = None
+        self.seq: SchedulerSequence = None
         self.multimodals: MultiModalInputs = defaultdict(list)
         self.next_step: int = 0
         self.max_prefill_num: int = self.max_prefill_token_num
@@ -179,7 +179,7 @@ class LongContextChunker:
         for mms in self.multimodals.values():
             while len(mms) > 0 and mms[0].end <= self.next_step:
                 mms.pop(0)
-        self.multimodals = dict((k, v) for k, v in self.multimodals.items() if len(v) > 0)
+        self.multimodals = {k: v for k, v in self.multimodals.items() if len(v) > 0}
 
     def check_enable(self):
         if not self.enabled():
@@ -219,8 +219,8 @@ class InputsMakerAsync:
 
         # running seqs
         # mark the seqs that have been sent to executor
-        self.running_seqs: List['SchedulerSequence'] = []
-        self.to_evict_seqs: List['SchedulerSequence'] = []
+        self.running_seqs: list[SchedulerSequence] = []
+        self.to_evict_seqs: list[SchedulerSequence] = []
 
         # long context chunker
         self.long_context_chunker = LongContextChunker(config.max_prefill_token_num)
@@ -453,8 +453,8 @@ class InputsMakerAsync:
 
         valid_mask = np.array(valid_mask)
         indices_cpu = np.arange(0, batch_size)[valid_mask]
-        valid_seqs: List['SchedulerSequence'] = [self.running_seqs[i] for i in indices_cpu]
-        invalid_seqs: List['SchedulerSequence'] = [self.running_seqs[i] for i in range(batch_size) if not valid_mask[i]]
+        valid_seqs: list[SchedulerSequence] = [self.running_seqs[i] for i in indices_cpu]
+        invalid_seqs: list[SchedulerSequence] = [self.running_seqs[i] for i in range(batch_size) if not valid_mask[i]]
         if len(valid_seqs) == 0:
             return None, valid_seqs, invalid_seqs
 
@@ -498,8 +498,8 @@ class InputsMakerAsync:
 
         valid_mask = np.array(valid_mask, dtype=bool)
         indices_cpu = np.arange(0, batch_size)[valid_mask]
-        valid_seqs: List['SchedulerSequence'] = [self.running_seqs[i] for i in indices_cpu]
-        invalid_seqs: List['SchedulerSequence'] = [self.running_seqs[i] for i in range(batch_size) if not valid_mask[i]]
+        valid_seqs: list[SchedulerSequence] = [self.running_seqs[i] for i in indices_cpu]
+        invalid_seqs: list[SchedulerSequence] = [self.running_seqs[i] for i in range(batch_size) if not valid_mask[i]]
 
         num_decode_tokens = self.engine_strategy.get_num_decode_tokens()
         max_q_seqlen = num_decode_tokens
@@ -523,7 +523,7 @@ class InputsMakerAsync:
 
         return output, valid_seqs, invalid_seqs
 
-    def update_running_seqs(self, running: 'SeqList', inputs: Optional[ModelInputs]):
+    def update_running_seqs(self, running: 'SeqList', inputs: ModelInputs | None):
         """Update running seqs."""
         if self.config.role == EngineRole.Prefill:
             # p node will not update running seqs

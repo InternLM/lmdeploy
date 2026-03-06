@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Callable, Dict, Optional
+from collections.abc import Callable
 
 import torch
 
@@ -41,7 +41,7 @@ class WeightQuantizer(GlobalAvailMixin):
         quantized_weights = quantizer.fake_quant(weights, qparams)
     """
 
-    CAL_FUNC_MAP: Dict[str, Dict[str, Callable]] = {
+    CAL_FUNC_MAP: dict[str, dict[str, Callable]] = {
         'per_group': {
             'absmax': cal_qparams_per_group_absmax,
             'minmax': cal_qparams_per_group_minmax,
@@ -56,7 +56,7 @@ class WeightQuantizer(GlobalAvailMixin):
         },
     }
 
-    def __init__(self, bits: int, symmetry: bool, granularity: str, group_size: Optional[int] = -1):
+    def __init__(self, bits: int, symmetry: bool, granularity: str, group_size: int | None = -1):
 
         assert bits in [4, 8], "The 'bits' argument must be either 4 or 8."
         self.bits = bits
@@ -95,7 +95,7 @@ class WeightQuantizer(GlobalAvailMixin):
         else:
             return cal_func(weight, self.bits)
 
-    def quant(self, weight: torch.Tensor, qparams: Optional[QParams] = None, real: bool = False) -> torch.Tensor:
+    def quant(self, weight: torch.Tensor, qparams: QParams | None = None, real: bool = False) -> torch.Tensor:
         """Perform fake quantization on the given weight tensor.
 
         Args:

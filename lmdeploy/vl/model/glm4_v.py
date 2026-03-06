@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict, List
 
 from transformers import AutoConfig
 
@@ -44,11 +43,11 @@ class GLM4VisionModel(VisionModel):
         else:
             raise NotImplementedError('turbomind has not supported glm4v yet')
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refers to the spec of `super.preprocess()"""
         outputs = []
         for message in messages:
-            if not isinstance(message['content'], List):
+            if not isinstance(message['content'], list):
                 continue
             images = [x['image'] for x in message['content'] if x['type'] == 'image']
             if len(images) > 1:

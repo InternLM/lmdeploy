@@ -1,7 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import math
-from typing import Any, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -96,9 +97,9 @@ class GemmaAttention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        rotary_pos_emb_local: Optional[Tuple[torch.FloatTensor, torch.FloatTensor]] = None,
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        rotary_pos_emb_local: tuple[torch.FloatTensor, torch.FloatTensor] | None = None,
+        past_key_value: tuple[torch.Tensor] | None = None,
         attn_metadata: Any = None,
         global_attn_masks: torch.Tensor = None,
         local_attn_masks: torch.Tensor = None,
@@ -290,10 +291,10 @@ class GemmaDecoderLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[List[torch.FloatTensor]],
-        rotary_pos_emb_local: Optional[Tuple[torch.FloatTensor, torch.FloatTensor]] = None,
-        residual: Optional[torch.Tensor] = None,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: list[torch.FloatTensor] | None,
+        rotary_pos_emb_local: tuple[torch.FloatTensor, torch.FloatTensor] | None = None,
+        residual: torch.Tensor | None = None,
         attn_metadata: Any = None,
         global_attn_masks: torch.Tensor = None,
         local_attn_masks: torch.Tensor = None,
@@ -340,7 +341,7 @@ class Gemma3TextScaledWordEmbedding(nn.Embedding):
                  embedding_dim: int,
                  padding_idx: int,
                  dtype=torch.dtype,
-                 embed_scale: Optional[float] = 1.0):
+                 embed_scale: float | None = 1.0):
         super().__init__(num_embeddings, embedding_dim, padding_idx, dtype=dtype)
         self.embed_scale = embed_scale
 
@@ -428,10 +429,10 @@ class GemmaModel(nn.Module):
     def forward(
         self,
         input_ids: torch.LongTensor = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,
         attn_metadata: Any = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
+        inputs_embeds: torch.FloatTensor | None = None,
         global_attn_masks: torch.Tensor = None,
         local_attn_masks: torch.Tensor = None,
     ):
@@ -517,7 +518,7 @@ class GemmaForCausalLM(nn.Module, CudaGraphMixin):
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
         global_attn_masks: torch.Tensor = None,
@@ -551,8 +552,8 @@ class GemmaForCausalLM(nn.Module, CudaGraphMixin):
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
-        inputs_embeds: Optional[torch.Tensor] = None,
+        past_key_values: list[list[torch.Tensor]],
+        inputs_embeds: torch.Tensor | None = None,
         context: StepContext = None,
     ):
         """Prepare input."""
@@ -582,7 +583,7 @@ class GemmaForCausalLM(nn.Module, CudaGraphMixin):
         """Update weights."""
         self.lm_head.weight = self.model.embed_tokens.weight
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
         # modify from vllm
         stacked_params_mapping = [

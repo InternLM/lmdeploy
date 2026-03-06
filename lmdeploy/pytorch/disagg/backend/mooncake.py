@@ -4,7 +4,6 @@ import json
 import os
 import socket
 import subprocess
-from typing import Dict
 
 from lmdeploy.pytorch.disagg.backend.backend import MIGRATION_BACKENDS
 from lmdeploy.pytorch.disagg.backend.base import MigrationBackendImpl
@@ -88,8 +87,8 @@ class MooncakeMigrationManagement:
         # Get all RDMA information once during initialization
         self.ibv_devices = get_rdma_nics()
 
-        self.local_kv_table: Dict[str, Dict] = {}
-        self.remote_kv_table: Dict[str, Dict] = {}
+        self.local_kv_table: dict[str, dict] = {}
+        self.remote_kv_table: dict[str, dict] = {}
         self.remote_url: str = ''  # Store remote URL for this connection
 
         # Initialize the p2p connection
@@ -142,7 +141,7 @@ class MooncakeMigrationManagement:
                     f'addr: {buffer_addr}, length: {buffer_length} for remote_engine_id {self.remote_engine_id}')
 
     @property
-    def endpoint_info(self) -> Dict:
+    def endpoint_info(self) -> dict:
         """Get endpoint information for this connection."""
 
         mr_info = {}
@@ -237,7 +236,7 @@ class MooncakeBackend(MigrationBackendImpl):
     """Mooncake backend that manages multiple migration connections."""
 
     def __init__(self):
-        self.links: Dict[int, MooncakeMigrationManagement] = {}
+        self.links: dict[int, MooncakeMigrationManagement] = {}
 
     def p2p_initialize(self, init_request: DistServeInitRequest):
         self.links[init_request.remote_engine_id] = MooncakeMigrationManagement(init_request)

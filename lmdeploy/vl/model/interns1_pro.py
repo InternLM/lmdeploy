@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 import torch
@@ -40,7 +40,7 @@ class InternS1ProVisionModel(VisionModel):
         self.ts_token = getattr(self.processor, 'ts_token', None)
         self.ts_token_id = getattr(self.processor, 'ts_token_id', None)
 
-    def get_processor_args(self, mm_processor_kwargs: Optional[Dict[str, Any]] = None):
+    def get_processor_args(self, mm_processor_kwargs: dict[str, Any] | None = None):
         min_pixels = self.processor.image_processor.size['shortest_edge']
         max_pixels = self.processor.image_processor.size['longest_edge']
 
@@ -112,7 +112,7 @@ class InternS1ProVisionModel(VisionModel):
 
         return dict(ts_values=[ts_input], ts_sr=[sr], ts_lens=[ts_len], num_ts_tokens=[num_ts_tokens])
 
-    def preprocess(self, messages: List[Dict], mm_processor_kwargs: Optional[Dict[str, Any]] = None) -> List[Dict]:
+    def preprocess(self, messages: list[dict], mm_processor_kwargs: dict[str, Any] | None = None) -> list[dict]:
         """Refer to `super().preprocess()` for spec."""
 
         self.check_time_series_input(messages)
@@ -153,7 +153,7 @@ class InternS1ProVisionModel(VisionModel):
                       messages,
                       chat_template,
                       sequence_start,
-                      tools: Optional[List[object]] = None,
+                      tools: list[object] | None = None,
                       chat_template_kwargs=None):
         """Apply chat template to get the prompt."""
         chat_template_kwargs = chat_template_kwargs or {}
@@ -231,8 +231,8 @@ class InternS1ProVisionModel(VisionModel):
                    chat_template,
                    tokenizer,
                    sequence_start,
-                   tools: Optional[List[object]] = None,
-                   chat_template_kwargs: Optional[Dict] = None,
+                   tools: list[object] | None = None,
+                   chat_template_kwargs: dict | None = None,
                    **kwargs):
         """Return to the information needed by pytorch engine."""
         if self.has_time_series_input:
@@ -257,7 +257,7 @@ class InternS1ProVisionModel(VisionModel):
         pass
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         # TODO: implement for turbomind
         pass
 
@@ -266,7 +266,7 @@ class InternS1ProVisionModel(VisionModel):
                      chat_template,
                      tokenizer,
                      sequence_start,
-                     chat_template_kwargs: Optional[Dict] = None,
+                     chat_template_kwargs: dict | None = None,
                      **kwargs):
         # TODO: implement for turbomind
         pass

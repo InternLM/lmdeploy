@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Callable, List, Optional
+from collections.abc import Callable
 
 import torch
 import torch.distributed as dist
@@ -30,12 +30,12 @@ class LinearForwardDPTP:
         self.tp_group = tp_group.gpu_group
         self.max_tokens_per_round = max_tokens_per_round * self.attn_tp // self.tp // 2
 
-    def all_gather(self, hidden_states: torch.Tensor, tp_sizes: List[int]):
+    def all_gather(self, hidden_states: torch.Tensor, tp_sizes: list[int]):
         """All gather."""
         hidden_states, handle = dist.gather_by_tp_sizes(hidden_states, tp_sizes, group=self.gather_group, async_op=True)
         return hidden_states, handle
 
-    def reduce_scatter(self, hidden_states: torch.Tensor, out_states: torch.Tensor, tp_sizes: List[int]):
+    def reduce_scatter(self, hidden_states: torch.Tensor, out_states: torch.Tensor, tp_sizes: list[int]):
         """Reduce scatter."""
         hidden_states_list = list(hidden_states.split(tp_sizes, -2))
         cur_out_states = hidden_states_list[self.gather_rank]
@@ -45,7 +45,7 @@ class LinearForwardDPTP:
         handle = dist.reduce_scatter(out_states, hidden_states_list, group=self.tp_group, async_op=True)
         return out_states, handle
 
-    def _gemm_and_reduce_scatter(self, hidden_states: torch.Tensor, output_states: torch.Tensor, tp_sizes: List[int],
+    def _gemm_and_reduce_scatter(self, hidden_states: torch.Tensor, output_states: torch.Tensor, tp_sizes: list[int],
                                  handle: dist.Work):
         """Gemm and reduce scatter."""
         handle.wait()
@@ -108,8 +108,8 @@ class LinearBase(nn.Module):
 
     def __init__(
         self,
-        dtype: Optional[torch.dtype] = None,
-        device: Optional[torch.device] = None,
+        dtype: torch.dtype | None = None,
+        device: torch.device | None = None,
         colwise: bool = True,
         is_tp: bool = False,
         all_reduce: bool = True,
@@ -177,11 +177,11 @@ class LinearBase(nn.Module):
         """Update weights."""
         raise NotImplementedError('This method should be implemented in subclasses.')
 
-    def _forward_default(self, x, all_reduce: bool, tp_sizes: List[int]):
+    def _forward_default(self, x, all_reduce: bool, tp_sizes: list[int]):
         """Default forward implement."""
         raise NotImplementedError('This method should be implemented in subclasses.')
 
-    def _forward_lora(self, x, tp_sizes: List[int] = None):
+    def _forward_lora(self, x, tp_sizes: list[int] = None):
         """Forward with LoRA."""
         out = self._forward_default(x, False, tp_sizes)
 

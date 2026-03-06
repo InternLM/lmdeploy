@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Optional
 
 import torch
 
@@ -62,9 +61,9 @@ class TritonLinearW8A8Impl(LinearW8A8Impl):
                 x,
                 weight: torch.Tensor,
                 scale: torch.Tensor,
-                bias: Optional[torch.Tensor] = None,
+                bias: torch.Tensor | None = None,
                 all_reduce: bool = False,
-                group: Optional[torch.distributed.ProcessGroup] = None):
+                group: torch.distributed.ProcessGroup | None = None):
         """forward."""
         if isinstance(x, torch.Tensor):
             input_quant, input_scale = per_token_quant_int8(x, 1e-7, quant_dtype=self.quant_dtype)

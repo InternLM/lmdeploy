@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
-from typing import List, Optional
 
 from pydantic import BaseModel
 
@@ -39,11 +38,11 @@ class DistServeInitRequest(BaseModel):
 
     protocol: MigrationProtocol
 
-    rank: Optional[int] = None
+    rank: int | None = None
 
-    tcp_config: Optional[DistServeTCPConfig] = None
-    rdma_config: Optional[DistServeRDMAConfig] = None
-    nvlink_config: Optional[DistServeNVLinkConfig] = None
+    tcp_config: DistServeTCPConfig | None = None
+    rdma_config: DistServeRDMAConfig | None = None
+    nvlink_config: DistServeNVLinkConfig | None = None
 
 
 class DistServeEngineEndpointInfo(BaseModel):
@@ -63,14 +62,14 @@ class DistServeInitResponse(BaseModel):
     # To ensure generality (where endpoint_info can be initialization information
     # for different media such as RDMA, NVLink, etc.), we use a string (str) to
     # store this information.
-    kvtransfer_endpoint_info: List[DistServeKVTransferEndpointInfo]
+    kvtransfer_endpoint_info: list[DistServeKVTransferEndpointInfo]
 
 
 class DistServeConnectionRequest(BaseModel):
     protocol: MigrationProtocol
     remote_engine_id: str
     remote_engine_endpoint_info: DistServeEngineEndpointInfo
-    remote_kvtransfer_endpoint_info: List[DistServeKVTransferEndpointInfo]
+    remote_kvtransfer_endpoint_info: list[DistServeKVTransferEndpointInfo]
 
 
 class DistServeConnectionResponse(BaseModel):
@@ -83,7 +82,7 @@ class MigrationRequest(BaseModel):
     remote_engine_id: str
     remote_session_id: int
     remote_token_id: int
-    remote_block_ids: List[int]
+    remote_block_ids: list[int]
 
     is_dummy_prefill: bool = False
 

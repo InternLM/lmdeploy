@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
-from typing import Callable
+from collections.abc import Callable
 
 import torch
 import triton
@@ -353,7 +353,7 @@ def get_start_end(exp_cum: torch.Tensor, exp_topk: torch.Tensor, topk: int):
     exp_start = start_end[0, :]
     exp_end = start_end[1, :]
 
-    out = exp_cum.new_empty((num_tokens * topk))
+    out = exp_cum.new_empty(num_tokens * topk)
 
     num_warps = 1
 

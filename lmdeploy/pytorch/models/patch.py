@@ -6,7 +6,7 @@ import inspect
 import os.path as osp
 import re
 import sys
-from typing import Any, Dict
+from typing import Any
 
 import torch
 from transformers.configuration_utils import PretrainedConfig
@@ -21,7 +21,7 @@ from .module_map import CUSTOM_MODULE_MAP, DEVICE_SPECIAL_MODULE_MAP, MODULE_MAP
 logger = get_logger('lmdeploy')
 
 
-def _get_rewrite_qualname(origin_qualname: str, module_map: Dict[str, str]) -> str:
+def _get_rewrite_qualname(origin_qualname: str, module_map: dict[str, str]) -> str:
     """Get rewrite module from origin module name.
 
     Args:
@@ -58,7 +58,7 @@ def _class_from_qualname(qualname: str) -> Any:
     return cls_type
 
 
-def _find_rewrite_module_qualname(model, module_map: Dict[str, str]):
+def _find_rewrite_module_qualname(model, module_map: dict[str, str]):
     """Find rewrite module."""
     module_name = inspect.getmodule(model).__name__
     class_name = model.__class__.__name__
@@ -93,7 +93,7 @@ def _find_rewrite_module_qualname(model, module_map: Dict[str, str]):
     return rewrite_qualname
 
 
-def get_rewrite_cls(model: torch.nn.Module, module_map: Dict[str, str] = None):
+def get_rewrite_cls(model: torch.nn.Module, module_map: dict[str, str] = None):
     """Get rewrite cls."""
     if module_map is None:
         module_map = _get_module_map()
@@ -133,13 +133,13 @@ def update_custom_module_map(module_map_path: str):
     if hasattr(custom_mod, 'MODULE_MAP'):
         has_map = True
         mod_map = custom_mod.MODULE_MAP
-        assert isinstance(mod_map, Dict)
+        assert isinstance(mod_map, dict)
         new_mod_map.update(mod_map)
 
     if hasattr(custom_mod, 'CUSTOM_MODULE_MAP'):
         has_map = True
         mod_map = custom_mod.CUSTOM_MODULE_MAP
-        assert isinstance(mod_map, Dict)
+        assert isinstance(mod_map, dict)
         new_mod_map.update(mod_map)
 
     if not has_map:
@@ -216,7 +216,7 @@ def build_patched_model(config: ModelConfig, device: torch.device = None, build_
 
 @torch.inference_mode()
 def add_adapters(model: torch.nn.Module,
-                 adapters: Dict[str, str],
+                 adapters: dict[str, str],
                  dtype: torch.dtype = torch.float16,
                  device: torch.device = None):
     """Add adapters."""

@@ -74,7 +74,7 @@ class NSAIndicesUpdater:
         return self._update_prefill_func(nsa_indices, q_seqlens, cu_seqlens_k)
 
     @staticmethod
-    @functools.lru_cache(maxsize=None)
+    @functools.cache
     def build():
         return NSAIndicesUpdater()
 

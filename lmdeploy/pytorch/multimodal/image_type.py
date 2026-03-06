@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass
-from typing import Any, ClassVar, Dict
+from typing import Any, ClassVar
 
 from PIL import Image
 
@@ -11,5 +11,5 @@ from .data_type import MultiModalData
 class ImageData(MultiModalData):
     data: Image
     loc: int
-    meta: Dict[str, Any] = None
+    meta: dict[str, Any] = None
     type: ClassVar[str] = 'image'

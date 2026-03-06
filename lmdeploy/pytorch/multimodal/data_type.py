@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass, fields
-from typing import Any, Dict, List, Union
+from typing import Any
 
 from torch import Tensor
 
@@ -9,9 +9,9 @@ class MultiModalData:
     pass
 
 
-MultiModalDataList = List[MultiModalData]
+MultiModalDataList = list[MultiModalData]
 
-NestedTensor = Union[Tensor, List[Tensor]]
+NestedTensor = Tensor | list[Tensor]
 
 
 @dataclass
@@ -20,7 +20,7 @@ class MultiModalTensor:
     start: int
     end: int = None
     encoder_len: int = None
-    meta: Dict[str, Any] = None
+    meta: dict[str, Any] = None
 
     def __post_init__(self):
         if self.end is None:
@@ -56,4 +56,4 @@ class MultiModalTensor:
         return MultiModalTensor(**out_dict)
 
 
-MultiModalInputs = Dict[str, List[MultiModalTensor]]
+MultiModalInputs = dict[str, list[MultiModalTensor]]

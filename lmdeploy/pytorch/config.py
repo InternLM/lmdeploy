@@ -1,7 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
+from typing import Any, Literal
 
 import torch
 
@@ -91,7 +92,7 @@ class CacheConfig:
     quant_policy: Literal[0, 4, 8] = 0
     device_type: str = 'cuda'
     num_state_caches: int = None
-    states_shapes: List[Tuple] = field(default_factory=list)
+    states_shapes: list[tuple] = field(default_factory=list)
 
     # reserved blocks for dummy inputs, init to 0 for unit test.
     num_reserved_gpu_blocks: int = 0
@@ -254,7 +255,7 @@ def _override_hf_config(hf_config: Any, key: str, hf_overrides):
         _overide_hf_config_cfg(hf_config, key, hf_overrides)
 
 
-def override_hf_config(hf_config: Any, hf_overrides: Dict[str, Any]):
+def override_hf_config(hf_config: Any, hf_overrides: dict[str, Any]):
     """Override HF config."""
     for k, v in hf_overrides.items():
         _override_hf_config(hf_config, k, v)
@@ -302,7 +303,7 @@ class ModelConfig:
     num_attention_heads: int
     num_key_value_heads: int
     bos_token_id: int
-    eos_token_id: List[int]
+    eos_token_id: list[int]
     head_dim: int
     k_head_dim: int = None
     v_head_dim: int = None
@@ -312,12 +313,12 @@ class ModelConfig:
     hf_config: Any = None
     llm_config: Any = None
     cogvlm_style: bool = False
-    custom_module_map: Dict[str, setattr] = None
+    custom_module_map: dict[str, setattr] = None
 
     # flash mla
     use_flash_mla: bool = False
     use_mla_fp8_cache: bool = False
-    mla_index_topk: Optional[int] = None
+    mla_index_topk: int | None = None
 
     # dllm
     model_paradigm: str = 'ar'
@@ -326,10 +327,10 @@ class ModelConfig:
 
     # Added for deepseekv3.2 nsa index
     # caches would be added after kv cache
-    cache_shapes: List[Tuple[List[int], torch.dtype]] = field(default_factory=list)
+    cache_shapes: list[tuple[list[int], torch.dtype]] = field(default_factory=list)
     # added for qwen3_next
     # could used for any SSM model.
-    states_shapes: List[Tuple[Tuple[int], torch.dtype]] = field(default_factory=list)
+    states_shapes: list[tuple[tuple[int], torch.dtype]] = field(default_factory=list)
 
     # check env for model-device combination
     check_env_func: Callable = _default_check_env
@@ -352,7 +353,7 @@ class ModelConfig:
         trust_remote_code: bool = True,
         dtype: str = 'auto',
         dist_config: DistConfig = None,
-        hf_overrides: Dict[str, Any] = None,
+        hf_overrides: dict[str, Any] = None,
         is_draft_model: bool = False,
         spec_method: str = None,
         model_format: str = None,
@@ -488,7 +489,7 @@ class MiscConfig:
     custom_module_map: str = None
     empty_init: bool = False
     model_format: str = None
-    hf_overrides: Dict[str, Any] = None
+    hf_overrides: dict[str, Any] = None
     disable_vision_encoder: bool = False
     logprobs_mode: str = None
     dllm_config: DLLMConfig = None
@@ -571,10 +572,10 @@ class QuantizationConfig:
     scale_fmt: str = None
     bits: int = None
     group_size: int = None
-    weight_block_size: Tuple[int] = None
+    weight_block_size: tuple[int] = None
     activation_scheme: str = None
-    ignored_layers: List[str] = field(default_factory=list)
-    hf_quant_config: Dict[str, Any] = field(default_factory=dict)
+    ignored_layers: list[str] = field(default_factory=list)
+    hf_quant_config: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_config(cls, hf_config: Any):

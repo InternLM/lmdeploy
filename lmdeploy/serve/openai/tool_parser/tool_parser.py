@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modified from https://github.com/vllm-project/vllm/tree/v0.7.3/vllm/entrypoints/openai/tool_parsers
+from collections.abc import Sequence
 from functools import cached_property
-from typing import Dict, List, Sequence, Union
 
 from mmengine import Registry
 
@@ -19,16 +19,16 @@ class ToolParser:
     """
 
     def __init__(self, tokenizer: object):
-        self.prev_tool_call_arr: List[Dict] = []
+        self.prev_tool_call_arr: list[dict] = []
         # the index of the tool call that is currently being parsed
         self.current_tool_id: int = -1
         self.current_tool_name_sent: bool = False
-        self.streamed_args_for_tool: List[str] = []
+        self.streamed_args_for_tool: list[str] = []
 
         self.model_tokenizer = tokenizer
 
     @cached_property
-    def vocab(self) -> Dict[str, int]:
+    def vocab(self) -> dict[str, int]:
         # NOTE: Only PreTrainedTokenizerFast is guaranteed to have .vocab
         # whereas all tokenizers have .get_vocab()
         return self.model_tokenizer.get_vocab()
@@ -55,7 +55,7 @@ class ToolParser:
         current_token_ids: Sequence[int],
         delta_token_ids: Sequence[int],
         request: ChatCompletionRequest,
-    ) -> Union[DeltaMessage, None]:
+    ) -> DeltaMessage | None:
         """Instance method that should be implemented for extracting tool calls
         from an incomplete response; for use when handling tool calls and
         streaming.

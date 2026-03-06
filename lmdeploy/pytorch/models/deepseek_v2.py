@@ -1,10 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import math
+from collections.abc import Iterable
 from copy import deepcopy
 from enum import Enum, auto
 from os import getenv
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -511,8 +512,8 @@ class DeepseekV2Attention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: tuple[torch.Tensor] | None = None,
         attn_metadata: Any = None,
     ):
         """Rewrite of LlamaAttention.forward."""
@@ -836,11 +837,11 @@ class DeepseekV2DecoderLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[List[torch.FloatTensor]],
-        residual: Optional[torch.Tensor] = None,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: list[torch.FloatTensor] | None,
+        residual: torch.Tensor | None = None,
         attn_metadata: Any = None,
-    ) -> Tuple[torch.FloatTensor, torch.FloatTensor]:
+    ) -> tuple[torch.FloatTensor, torch.FloatTensor]:
 
         if residual is None:
             residual = hidden_states
@@ -866,9 +867,9 @@ class DeepseekV2DecoderLayer(nn.Module):
     def forward_yield(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[List[torch.FloatTensor]],
-        residual: Optional[torch.Tensor] = None,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: list[torch.FloatTensor] | None,
+        residual: torch.Tensor | None = None,
         attn_metadata: Any = None,
         tag: Any = None,
     ):
@@ -987,10 +988,10 @@ class DeepseekV2Model(nn.Module):
     def forward(
         self,
         input_ids: torch.LongTensor = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,
         attn_metadata: Any = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
+        inputs_embeds: torch.FloatTensor | None = None,
     ):
         """forward."""
         if inputs_embeds is None:
@@ -1018,10 +1019,10 @@ class DeepseekV2Model(nn.Module):
     def forward_microbatch(
         self,
         input_ids: torch.LongTensor = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,
         attn_metadata: Any = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
+        inputs_embeds: torch.FloatTensor | None = None,
     ):
         """forward_microbatch."""
         assert self.config.moe_layer_freq == 1
@@ -1071,9 +1072,9 @@ class DeepseekV2Model(nn.Module):
 
     def forward_yieldlayers(self,
                             hidden_states: torch.Tensor,
-                            rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-                            past_key_values: Optional[List[torch.FloatTensor]] = None,
-                            residual: Optional[torch.Tensor] = None,
+                            rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+                            past_key_values: list[torch.FloatTensor] | None = None,
+                            residual: torch.Tensor | None = None,
                             attn_metadata: Any = None,
                             start_idx: int = -1,
                             end_idx: int = -1,
@@ -1120,7 +1121,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
         **kwargs,
@@ -1153,8 +1154,8 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
-        inputs_embeds: Optional[torch.Tensor] = None,
+        past_key_values: list[list[torch.Tensor]],
+        inputs_embeds: torch.Tensor | None = None,
         context: StepContext = None,
     ):
         """Prepare input."""
@@ -1170,8 +1171,8 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             inputs_embeds=inputs_embeds,
         )
 
-    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
-                             expert_params_mapping: List):
+    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
+                             expert_params_mapping: list):
         """Load weight experts."""
         for (param_name, weight_name, expert_id, shard_id) in expert_params_mapping:
             if weight_name not in name:
@@ -1184,8 +1185,8 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             param = params_dict[name]
             load_weight(param, loaded_weight)
 
-    def _load_weight_attention(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
-                               update_pe_mapping: List):
+    def _load_weight_attention(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
+                               update_pe_mapping: list):
         """Load weight attention."""
         device = next(iter(params_dict.values())).device
 
@@ -1277,7 +1278,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                 param = params_dict[name]
                 load_weight(param, loaded_weight)
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
 
         def __skip_nextn(name, nextn_keys):

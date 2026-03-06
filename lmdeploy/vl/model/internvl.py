@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict, List, Optional
 
 import torch
 from transformers import AutoConfig, AutoModel, AutoTokenizer, CLIPImageProcessor
@@ -34,8 +33,8 @@ def dynamic_preprocess(image, min_num=1, max_num=6, image_size=448, use_thumbnai
     aspect_ratio = orig_width / orig_height
 
     # calculate the existing image aspect ratio
-    target_ratios = set((i, j) for n in range(min_num, max_num + 1) for i in range(1, n + 1) for j in range(1, n + 1)
-                        if i * j <= max_num and i * j >= min_num)
+    target_ratios = {(i, j) for n in range(min_num, max_num + 1) for i in range(1, n + 1) for j in range(1, n + 1)
+                     if i * j <= max_num and i * j >= min_num}
     target_ratios = sorted(target_ratios, key=lambda x: x[0] * x[1])
 
     # find the closest aspect ratio to the target
@@ -72,7 +71,7 @@ class InternVLVisionModel(VisionModel):
     def __init__(self,
                  model_path: str,
                  with_llm: bool = False,
-                 max_memory: Dict[int, int] = None,
+                 max_memory: dict[int, int] = None,
                  hf_config: AutoConfig = None,
                  backend: str = ''):
         super().__init__(model_path, with_llm, max_memory, hf_config, backend)
@@ -190,7 +189,7 @@ class InternVLVisionModel(VisionModel):
             outputs.extend([x.squeeze() for x in feats])
         return outputs
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refers to `super.preprocess() for spec."""
         images = self.collect_images(messages)
         outputs = []
@@ -207,7 +206,7 @@ class InternVLVisionModel(VisionModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
@@ -229,8 +228,8 @@ class InternVLVisionModel(VisionModel):
         messages,
         chat_template,
         sequence_start,
-        tools: Optional[List[object]] = None,
-        chat_template_kwargs: Optional[Dict] = None,
+        tools: list[object] | None = None,
+        chat_template_kwargs: dict | None = None,
     ):
         chat_template_kwargs = chat_template_kwargs or {}
         """Apply chat template to get the prompt."""
@@ -272,8 +271,8 @@ class InternVLVisionModel(VisionModel):
                    chat_template,
                    tokenizer,
                    sequence_start,
-                   tools: Optional[List[object]] = None,
-                   chat_template_kwargs: Optional[Dict] = None,
+                   tools: list[object] | None = None,
+                   chat_template_kwargs: dict | None = None,
                    **kwargs):
         prompt, IMAGE_TOKEN = self.proc_messages(messages,
                                                  chat_template,
@@ -287,8 +286,8 @@ class InternVLVisionModel(VisionModel):
                      chat_template,
                      tokenizer,
                      sequence_start,
-                     tools: Optional[List[object]] = None,
-                     chat_template_kwargs: Optional[Dict] = None,
+                     tools: list[object] | None = None,
+                     chat_template_kwargs: dict | None = None,
                      **kwargs):
         prompt, IMAGE_TOKEN = self.proc_messages(messages,
                                                  chat_template,

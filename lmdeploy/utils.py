@@ -8,7 +8,6 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from logging import Logger, LogRecord
-from typing import List, Optional, Tuple, Union
 
 import torch
 from transformers import PretrainedConfig
@@ -26,7 +25,7 @@ class _ASNI_COLOR:
 
 # copy from: https://github.com/termcolor/termcolor
 @functools.cache
-def can_colorize(*, no_color: Optional[bool] = None, force_color: Optional[bool] = None) -> bool:
+def can_colorize(*, no_color: bool | None = None, force_color: bool | None = None) -> bool:
     """Check env vars and for tty/dumb terminal."""
     import io
     if no_color is not None and no_color:
@@ -110,8 +109,8 @@ _FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d' \
           ' - %(message)s'
 
 
-def get_logger(name: Optional[str] = None,
-               log_file: Optional[str] = None,
+def get_logger(name: str | None = None,
+               log_file: str | None = None,
                log_level: int = logging.INFO,
                file_mode: str = 'a',
                log_formatter: str = _FORMAT) -> Logger:
@@ -178,7 +177,7 @@ def get_logger(name: Optional[str] = None,
     return logger
 
 
-def filter_suffix(response: str, suffixes: Optional[List[str]] = None) -> str:
+def filter_suffix(response: str, suffixes: list[str] | None = None) -> str:
     """Filter response with suffixes.
 
     Args:
@@ -197,12 +196,12 @@ def filter_suffix(response: str, suffixes: Optional[List[str]] = None) -> str:
 
 
 # TODO remove stop_word_offsets stuff and make it clean
-def _stop_words(stop_words: List[Union[int, str]], tokenizer: object):
+def _stop_words(stop_words: list[int | str], tokenizer: object):
     """Return list of stop-words to numpy.ndarray."""
     import numpy as np
     if stop_words is None:
         return None
-    assert isinstance(stop_words, List) and \
+    assert isinstance(stop_words, list) and \
         all(isinstance(elem, (str, int)) for elem in stop_words), \
         f'stop_words must be a list but got {type(stop_words)}'
     stop_indexes = []
@@ -211,7 +210,7 @@ def _stop_words(stop_words: List[Union[int, str]], tokenizer: object):
             stop_indexes += tokenizer.indexes_containing_token(stop_word)
         elif isinstance(stop_word, int):
             stop_indexes.append(stop_word)
-    assert isinstance(stop_indexes, List) and all(isinstance(elem, int) for elem in stop_indexes), 'invalid stop_words'
+    assert isinstance(stop_indexes, list) and all(isinstance(elem, int) for elem in stop_indexes), 'invalid stop_words'
     # each id in stop_indexes represents a stop word
     # refer to https://github.com/fauxpilot/fauxpilot/discussions/165 for
     # detailed explanation about fastertransformer's stop_indexes
@@ -297,7 +296,7 @@ def logging_timer(op_name: str, logger: Logger, level: int = logging.DEBUG):
 # modified from https://github.com/vllm-project/vllm/blob/0650e5935b0f6af35fb2acf71769982c47b804d7/vllm/config.py#L1082-L1150  # noqa
 def _get_and_verify_max_len(
     hf_config: PretrainedConfig,
-    max_model_len: Optional[int],
+    max_model_len: int | None,
 ) -> int:
     """Get and verify the model's maximum length."""
 
@@ -503,9 +502,9 @@ class FlattenedTensorBucket:
 
     def __init__(
         self,
-        named_tensors: List[Tuple[str, torch.Tensor]] = None,
+        named_tensors: list[tuple[str, torch.Tensor]] = None,
         flattened_tensor: torch.Tensor = None,
-        metadata: List[FlattenedTensorMetadata] = None,
+        metadata: list[FlattenedTensorMetadata] = None,
     ):
         """Initialize a tensor bucket from a list of named tensors or from pre-
         flattened data.
@@ -548,11 +547,11 @@ class FlattenedTensorBucket:
         """Get the flattened tensor containing multiple tensors."""
         return self.flattened_tensor
 
-    def get_metadata(self) -> List[FlattenedTensorMetadata]:
+    def get_metadata(self) -> list[FlattenedTensorMetadata]:
         """Get all metadatas for all tensors in the bucket."""
         return self.metadata
 
-    def reconstruct_tensors(self) -> List[Tuple[str, torch.Tensor]]:
+    def reconstruct_tensors(self) -> list[tuple[str, torch.Tensor]]:
         """Reconstruct original tensors."""
         # preallocate the result list
         reconstructed = [None] * len(self.metadata)
