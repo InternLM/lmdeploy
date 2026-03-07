@@ -6,6 +6,7 @@
 #include "src/turbomind/kernels/attention/impl_m16n8.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/layout.h"
+#include "src/turbomind/kernels/core/mma.h"
 #include "src/turbomind/kernels/core/smem.h"
 #include "src/turbomind/kernels/core/thread_map.h"
 
