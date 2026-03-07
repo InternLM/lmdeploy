@@ -42,8 +42,7 @@ def get_output_file(model_path, backend, server_config):
     params = [
         ('bs', server_config['max_batch_size']),
         ('tp', server_config.get('tp', 1)),
-        ('dp', server_config.get('dp', '')),
-        ('ep', server_config.get('ep', '')),
+        ('cp', server_config.get('cp', 1)),
         ('cache', server_config.get('cache_max_entry_count', 0.8)),
         ('mptk', server_config.get('max_prefill_token_num', '')),
     ]
@@ -57,15 +56,8 @@ def get_output_file(model_path, backend, server_config):
 
 def get_server_ip_port(backend: str, server_config: Dict) -> Tuple[str, int]:
     if backend in ['turbomind', 'pytorch']:
-        if server_config.get('proxy_url'):
-            # If proxy_url is set, we use the proxy server's IP and port
-            parts = server_config['proxy_url'].split(':')
-            server_ip = parts[1].lstrip('//')
-            server_port = int(parts[2])
-        else:
-            # Default to the server IP and port specified in the config
-            server_ip = server_config.get('server_ip', '0.0.0.0')
-            server_port = server_config.get('server_port', 23333)
+        server_ip = server_config.get('server_ip', '0.0.0.0')
+        server_port = server_config.get('server_port', 23333)
     elif backend == 'sglang':
         return (server_config.get('server_ip', '0.0.0.0'), server_config.get('port', 30000))
     elif backend == 'vllm':
@@ -75,7 +67,7 @@ def get_server_ip_port(backend: str, server_config: Dict) -> Tuple[str, int]:
     return server_ip, server_port
 
 
-def wait_server_ready(server_ip: str, server_port: int) -> bool:
+def get_served_model_name(server_ip: str, server_port: int) -> bool:
     """Wait for the API server to become ready."""
     from openai import OpenAI
     while True:
@@ -84,7 +76,7 @@ def wait_server_ready(server_ip: str, server_port: int) -> bool:
             model_name = client.models.list().data[0].id
             if model_name:
                 print('Server is ready.')
-                return True
+                return model_name
         except Exception as e:
             print(f'connect to server http://{server_ip}:{server_port} failed {e}')
             time.sleep(5)
@@ -135,7 +127,7 @@ def benchmark(model_path: str, backend: str, server_config: Dict, data_config: D
         print(f"Starting api_server: {' '.join(server_cmd)}", flush=True)
         proc = subprocess.Popen(server_cmd)
         # Wait for the server to be ready
-        wait_server_ready(server_ip, server_port)
+        get_served_model_name(server_ip, server_port)
         # Run benchmarks
         output_file = get_output_file(model_path, backend, server_config)
         for data in data_config:
@@ -166,25 +158,29 @@ def benchmark(model_path: str, backend: str, server_config: Dict, data_config: D
                 proc.kill()
 
 
-def validate_config(config: Dict) -> None:
-    """Validate the configuration structure.
+def benchmark_proxy(backend: str, server_config: Dict, data_config: Dict | List[Dict]):
+    server_ip = server_config.get('server_ip', '0.0.0.0')
+    server_port = server_config.get('server_port', 8000)
 
-    Args:
-        config: Loaded configuration dictionary
+    if isinstance(data_config, Dict):
+        data_config = [data_config]
+    if not (isinstance(data_config, List) and all(isinstance(d, Dict) for d in data_config)):
+        raise ValueError('data_config must be a dict or list of dicts')
 
-    Raises:
-        BenchmarkConfigError: If configuration is invalid
-    """
-    required_sections = ['api_server', 'engine', 'data']
-    for section in required_sections:
-        if section not in config:
-            raise ValueError(f'Missing required config section: {section}')
-
-    if not isinstance(config['engine'], (Dict, List)):
-        raise ValueError('engine config must be a dict or list of dicts')
-
-    if not isinstance(config['data'], (Dict, List)):
-        raise ValueError('data config must be a dict or list of dicts')
+    try:
+        # Wait for the proxy_server to be ready
+        model_name = get_served_model_name(server_ip, server_port)
+        # Run benchmarks
+        output_file = f'benchmark_proxy_{backend}.csv'
+        for data in data_config:
+            data = data.copy()
+            data['output_file'] = output_file
+            client_cmd = get_client_cmd(backend, server_ip, server_port, data)
+            print(f"Running benchmark: {' '.join(client_cmd)}")
+            subprocess.run(client_cmd, check=True)
+    except Exception as e:
+        print(f'Unexpected error: {e}')
+        raise
 
 
 def main(backend: str, config_path: str, model_path: Optional[str] = None):
@@ -197,11 +193,16 @@ def main(backend: str, config_path: str, model_path: Optional[str] = None):
     Raises:
         BenchmarkConfigError: If required parameters are missing or config is invalid
     """
-    with open(config_path, 'r') as f:
+    with open(config_path, 'r', encoding='utf-8') as f:
         config = yaml.safe_load(f)
-        server_config = config['server']
-        engine_configs = config['engine']
         data_config = config['data']
+        server_config = config['server']
+        server_type = server_config.get('type', 'api_server')
+        if server_type == 'proxy':
+            benchmark_proxy(backend, server_config, data_config)
+            return
+        
+        engine_configs = config['engine']
         if isinstance(engine_configs, Dict):
             engine_configs = [engine_configs]
         assert isinstance(engine_configs, List) and all(isinstance(s, Dict) for s in engine_configs)
