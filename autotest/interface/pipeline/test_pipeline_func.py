@@ -353,7 +353,7 @@ def run_pipeline_testcase_ignore_eos(config, model, backend, file_name):
     pipe.close()
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3_5-30B-A3B', 'Qwen/Qwen3-30B-A3B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_return_with_prompt(config, model, backend, worker_id):
 
@@ -362,7 +362,7 @@ def test_return_with_prompt(config, model, backend, worker_id):
     assert_pipeline_common_log(config, file_name)
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3_5-30B-A3B', 'Qwen/Qwen3-30B-A3B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_return_with_prompt_stream(config, model, backend, worker_id):
 
@@ -371,7 +371,7 @@ def test_return_with_prompt_stream(config, model, backend, worker_id):
     assert_pipeline_common_log(config, file_name)
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3_5-30B-A3B', 'Qwen/Qwen3-30B-A3B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_return_with_multi_prompt(config, model, backend, worker_id):
 
@@ -380,7 +380,7 @@ def test_return_with_multi_prompt(config, model, backend, worker_id):
     assert_pipeline_common_log(config, file_name)
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3_5-30B-A3B', 'Qwen/Qwen3-30B-A3B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_return_with_multi_prompt_stream(config, model, backend, worker_id):
 
@@ -389,7 +389,7 @@ def test_return_with_multi_prompt_stream(config, model, backend, worker_id):
     assert_pipeline_common_log(config, file_name)
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3_5-30B-A3B', 'Qwen/Qwen3-30B-A3B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_return_with_message(config, model, backend, worker_id):
     file_name = f'pipeline_log_{worker_id}.txt'
@@ -397,7 +397,7 @@ def test_return_with_message(config, model, backend, worker_id):
     assert_pipeline_common_log(config, file_name)
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3_5-30B-A3B', 'Qwen/Qwen3-30B-A3B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_return_with_message_stream(config, model, backend, worker_id):
     file_name = f'pipeline_log_{worker_id}.txt'
@@ -405,7 +405,7 @@ def test_return_with_message_stream(config, model, backend, worker_id):
     assert_pipeline_common_log(config, file_name)
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3_5-30B-A3B', 'Qwen/Qwen3-30B-A3B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_return_with_message_batch(config, model, backend, worker_id):
     file_name = f'pipeline_log_{worker_id}.txt'
@@ -413,7 +413,7 @@ def test_return_with_message_batch(config, model, backend, worker_id):
     assert_pipeline_common_log(config, file_name)
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3_5-30B-A3B', 'Qwen/Qwen3-30B-A3B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_return_with_message_batch_stream(config, model, backend, worker_id):
     file_name = f'pipeline_log_{worker_id}.txt'
@@ -421,7 +421,7 @@ def test_return_with_message_batch_stream(config, model, backend, worker_id):
     assert_pipeline_common_log(config, file_name)
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3_5-30B-A3B', 'Qwen/Qwen3-30B-A3B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig])
 def test_return_check_logprobs(config, model, backend, worker_id):
     file_name = f'pipeline_log_{worker_id}.txt'
@@ -429,7 +429,7 @@ def test_return_check_logprobs(config, model, backend, worker_id):
     assert_pipeline_common_log(config, file_name)
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3_5-30B-A3B', 'Qwen/Qwen3-30B-A3B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig])
 def test_return_check_logprobs_stream(config, model, backend, worker_id):
     file_name = f'pipeline_log_{worker_id}.txt'
@@ -437,7 +437,7 @@ def test_return_check_logprobs_stream(config, model, backend, worker_id):
     assert_pipeline_common_log(config, file_name)
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3_5-30B-A3B', 'Qwen/Qwen3-30B-A3B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_backend_config_session_len(config, model, backend, worker_id):
     file_name = f'pipeline_log_{worker_id}.txt'
@@ -445,7 +445,7 @@ def test_backend_config_session_len(config, model, backend, worker_id):
     assert_pipeline_common_log(config, file_name)
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3_5-30B-A3B', 'Qwen/Qwen3-30B-A3B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_min_new_tokens(config, model, backend, worker_id):
     file_name = f'pipeline_log_min_new_tokens_{worker_id}.txt'
@@ -453,7 +453,7 @@ def test_gen_config_min_new_tokens(config, model, backend, worker_id):
     assert_pipeline_common_log(config, file_name)
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3_5-30B-A3B', 'Qwen/Qwen3-30B-A3B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_stop_words(config, model, backend, worker_id):
     file_name = f'pipeline_log_stop_words_{worker_id}.txt'
@@ -461,7 +461,7 @@ def test_gen_config_stop_words(config, model, backend, worker_id):
     assert_pipeline_common_log(config, file_name)
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3_5-30B-A3B', 'Qwen/Qwen3-30B-A3B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_bad_words(config, model, backend, worker_id):
     file_name = f'pipeline_log_bad_words_{worker_id}.txt'
@@ -469,7 +469,7 @@ def test_gen_config_bad_words(config, model, backend, worker_id):
     assert_pipeline_common_log(config, file_name)
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3_5-30B-A3B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_special_words_false(config, model, backend, worker_id):
     file_name = f'pipeline_log_special_words_{worker_id}.txt'
@@ -477,7 +477,7 @@ def test_gen_config_special_words_false(config, model, backend, worker_id):
     assert_pipeline_common_log(config, file_name)
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3_5-30B-A3B', 'Qwen/Qwen3-30B-A3B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_special_words_true(config, model, backend, worker_id):
     file_name = f'pipeline_log_special_words_{worker_id}.txt'
@@ -485,7 +485,7 @@ def test_gen_config_special_words_true(config, model, backend, worker_id):
     assert_pipeline_common_log(config, file_name)
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3_5-30B-A3B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_minimum_repetition_penalty(config, model, backend, worker_id):
     file_name = f'pipeline_log_repetition_penalty_{worker_id}.txt'
@@ -493,7 +493,7 @@ def test_gen_config_minimum_repetition_penalty(config, model, backend, worker_id
     assert_pipeline_common_log(config, file_name)
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3_5-30B-A3B', 'Qwen/Qwen3-30B-A3B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_repetition_penalty_bigger_than_1(config, model, backend, worker_id):
     file_name = f'pipeline_log_repetition_penalty_{worker_id}.txt'
@@ -501,7 +501,7 @@ def test_gen_config_repetition_penalty_bigger_than_1(config, model, backend, wor
     assert_pipeline_common_log(config, file_name)
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3_5-30B-A3B', 'Qwen/Qwen3-30B-A3B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_minimun_topp(config, model, backend, worker_id):
     file_name = f'pipeline_log_{worker_id}.txt'
@@ -509,7 +509,7 @@ def test_gen_config_minimun_topp(config, model, backend, worker_id):
     assert_pipeline_common_log(config, file_name)
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3_5-30B-A3B', 'Qwen/Qwen3-30B-A3B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_minimun_topk(config, model, backend, worker_id):
     file_name = f'pipeline_log_{worker_id}.txt'
@@ -517,7 +517,7 @@ def test_gen_config_minimun_topk(config, model, backend, worker_id):
     assert_pipeline_common_log(config, file_name)
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3_5-30B-A3B', 'Qwen/Qwen3-30B-A3B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_diff_random_seed(config, model, backend, worker_id):
     file_name = f'pipeline_log_{worker_id}.txt'
@@ -525,7 +525,7 @@ def test_gen_config_diff_random_seed(config, model, backend, worker_id):
     assert_pipeline_common_log(config, file_name)
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3_5-30B-A3B', 'Qwen/Qwen3-30B-A3B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_same_random_seed(config, model, backend, worker_id):
     file_name = f'pipeline_log_{worker_id}.txt'
@@ -533,7 +533,7 @@ def test_gen_config_same_random_seed(config, model, backend, worker_id):
     assert_pipeline_common_log(config, file_name)
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3_5-30B-A3B', 'Qwen/Qwen3-30B-A3B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_do_sample_batch(config, model, backend, worker_id):
     file_name = f'pipeline_log_{worker_id}.txt'
@@ -541,7 +541,7 @@ def test_gen_config_do_sample_batch(config, model, backend, worker_id):
     assert_pipeline_common_log(config, file_name)
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3_5-30B-A3B', 'Qwen/Qwen3-30B-A3B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_max_new_tokens(config, model, backend, worker_id):
     file_name = f'pipeline_log_max_new_tokens_{worker_id}.txt'
@@ -549,7 +549,7 @@ def test_gen_config_max_new_tokens(config, model, backend, worker_id):
     assert_pipeline_common_log(config, file_name)
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3_5-30B-A3B', 'Qwen/Qwen3-30B-A3B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_ignore_eos(config, model, backend, worker_id):
     file_name = f'pipeline_log_ignore_eos_{worker_id}.txt'
@@ -557,7 +557,7 @@ def test_gen_config_ignore_eos(config, model, backend, worker_id):
     assert_pipeline_common_log(config, file_name)
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3_5-30B-A3B', 'Qwen/Qwen3-30B-A3B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_backend_config_input_validation(config, model, backend, worker_id):
     if 'gw' in worker_id:
@@ -594,7 +594,7 @@ def test_backend_config_input_validation(config, model, backend, worker_id):
         unset_device_env_variable()
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3_5-30B-A3B', 'Qwen/Qwen3-30B-A3B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig])
 def test_backend_config_validate_turbomind(config, model, backend, worker_id):
     if 'gw' in worker_id:
@@ -632,7 +632,7 @@ def test_backend_config_validate_turbomind(config, model, backend, worker_id):
         unset_device_env_variable()
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3_5-30B-A3B', 'Qwen/Qwen3-30B-A3B'])
 @pytest.mark.parametrize('backend', [PytorchEngineConfig])
 def test_backend_config_validate_pytorch(config, model, backend, worker_id):
     if 'gw' in worker_id:
@@ -662,7 +662,7 @@ def test_backend_config_validate_pytorch(config, model, backend, worker_id):
         unset_device_env_variable()
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3_5-30B-A3B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig])
 def test_backend_config_tp(config, model, backend, worker_id):
     with pytest.raises(AssertionError):

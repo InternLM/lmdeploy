@@ -154,6 +154,7 @@ jobs:
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
       - name: Check env
         run: |
+          pip install transformers==4.57.6
           python3 -m pip list
           lmdeploy check_env
       - name: Setup paths for evaluation

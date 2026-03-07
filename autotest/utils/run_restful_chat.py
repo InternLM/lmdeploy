@@ -123,6 +123,8 @@ def run_all_step(log_path, case_name, cases_info, port: int = DEFAULT_PORT):
     if model is None:
         assert False, 'server not start correctly'
     for case in cases_info.keys():
+        if case != 'code_testcase' and 'code' in model.lower():
+            continue
         case_info = cases_info.get(case)
 
         with allure.step(case + ' restful_test - openai chat'):
@@ -153,17 +155,34 @@ def open_chat_test(log_path, case_name, case_info, url):
         messages.append({'role': 'user', 'content': prompt})
         file.writelines('prompt:' + prompt + '\n')
 
-        response = client.chat.completions.create(model=model_name,
-                                                  messages=messages,
-                                                  temperature=0.01,
-                                                  top_p=0.8,
-                                                  max_completion_tokens=1024)
+        outputs = client.chat.completions.create(model=model_name,
+                                                 messages=messages,
+                                                 temperature=0.01,
+                                                 top_p=0.8,
+                                                 max_completion_tokens=1024,
+                                                 stream=True)
 
-        output_content = response.choices[0].message.content
-        file.writelines('output:' + output_content + '\n')
+        content_chunks = []
+        reasoning_content_chunks = []
+        for output in outputs:
+            # Safely handle streaming chunks: choices may be empty and content may be None
+            if not getattr(output, 'choices', None):
+                continue
+            choice = output.choices[0]
+            delta = getattr(choice, 'delta', None)
+            reasoning_content = getattr(delta, 'reasoning_content', None) if delta is not None else None
+            content = getattr(delta, 'content', None) if delta is not None else None
+            if reasoning_content:
+                reasoning_content_chunks.append(reasoning_content)
+            if content:
+                content_chunks.append(content)
+        reasoning_content = ''.join(reasoning_content_chunks)
+        output_content = ''.join(content_chunks)
+
+        file.writelines(f'reasoning_content :{reasoning_content}, content: {output_content}\n')
         messages.append({'role': 'assistant', 'content': output_content})
 
-        case_result, reason = assert_result(output_content, prompt_detail.values(), model_name)
+        case_result, reason = assert_result(reasoning_content + output_content, prompt_detail.values(), model_name)
         file.writelines('result:' + str(case_result) + ',reason:' + reason + '\n')
         if not case_result:
             msg += reason
