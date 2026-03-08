@@ -3,7 +3,6 @@
 export PATH=/opt/py3/bin:$PATH
 
 pip install "cmake<4.0" wheel ninja setuptools packaging
-# pip install torch${TORCH_VERSION} --extra-index-url https://download.pytorch.org/whl/${CUDA_VERSION_SHORT}
 
 if [[ ${PYTHON_VERSION} = "3.13" ]]; then
     curl https://sh.rustup.rs -sSf | sh -s -- -y
