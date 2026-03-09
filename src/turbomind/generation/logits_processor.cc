@@ -199,7 +199,7 @@ void LogitsProcessor::Setup(int phase, TensorMap& env)
                     continue;
                 }
                 if (TM_UNLIKELY(eos_ids.size() > kMaxEndIdsSize)) {
-                    TM_LOG_WARN("[InitializeSampling] [{}] eos length ({}) exceeds {}, truncated to {}",
+                    TM_LOG_WARN("ID {}: eos length ({}) exceeds {}, truncated to {}",
                                 rs[i]->req->id,
                                 eos_ids.size(),
                                 kMaxEndIdsSize,

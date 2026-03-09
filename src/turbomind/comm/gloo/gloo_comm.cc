@@ -346,7 +346,7 @@ class GlooGroupId: public HostGroupId {
     void Initialize() override
     {
         info_ = GlobalStoreFactory::Instance().New();
-        TM_LOG_INFO("[TM][COMM] GlooGroupId={}", info_);
+        TM_LOG_INFO("GlooGroupId={}", info_);
     }
 
     void Export(std::ostream& os) override

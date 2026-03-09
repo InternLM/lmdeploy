@@ -138,7 +138,7 @@ struct AnomalyHandler::Impl {
                 g_level = static_cast<int>(*level);
             }
 
-            TM_LOG_WARN("[AnomalyHandler] level: {}", g_level);
+            TM_LOG_WARN("level: {}", g_level);
 
             if (!g_level) {
                 return {};
@@ -147,33 +147,33 @@ struct AnomalyHandler::Impl {
             const auto pos_inf = parse_float(str, "pinf=");
             if (pos_inf) {
                 g_pinf_val_ = *pos_inf;
-                TM_LOG_WARN("[AnomalyHandler] +INF -> {}", g_pinf_val_);
+                TM_LOG_WARN("+INF -> {}", g_pinf_val_);
             }
 
             const auto neg_inf = parse_float(str, "ninf=");
             if (neg_inf) {
                 g_ninf_val_ = *neg_inf;
-                TM_LOG_WARN("[AnomalyHandler] -INF -> {}", g_ninf_val_);
+                TM_LOG_WARN("-INF -> {}", g_ninf_val_);
             }
 
             if (!pos_inf && !neg_inf) {
                 if (const auto flush_inf = parse_float(str, "inf=")) {
                     g_pinf_val_ = *flush_inf;
                     g_ninf_val_ = -g_pinf_val_;
-                    TM_LOG_WARN("[AnomalyHandler] +INF -> {}", g_pinf_val_);
-                    TM_LOG_WARN("[AnomalyHandler] -INF -> {}", g_ninf_val_);
+                    TM_LOG_WARN("+INF -> {}", g_pinf_val_);
+                    TM_LOG_WARN("-INF -> {}", g_ninf_val_);
                 }
             }
 
             if (const auto nan = parse_float(str, "nan=")) {
                 g_nan_val_ = *nan;
-                TM_LOG_WARN("[AnomalyHandler] NaN -> {}", g_nan_val_);
+                TM_LOG_WARN("NaN -> {}", g_nan_val_);
             }
 
             const auto fallback = parse_float(str, "fallback=");
             if (fallback) {
                 g_fallback = *fallback;
-                TM_LOG_WARN("[AnomalyHandler] fallback -> {}", g_fallback);
+                TM_LOG_WARN("fallback -> {}", g_fallback);
             }
 
             return {};
@@ -197,14 +197,14 @@ struct AnomalyHandler::Impl {
             // When fallback is not set from env
             if (fallback_ == -1) {
                 fallback_ = fallback;
-                TM_LOG_WARN("[AnomalyHandler] fallback: {}", fallback_);
+                TM_LOG_WARN("fallback: {}", fallback_);
             }
 
             FT_CHECK(0 <= fallback_);
             FT_CHECK(fallback_ < vocab_size);
 
-            TM_LOG_WARN("[AnomalyHandler] max_batch_size: {}", max_batch_size);
-            TM_LOG_WARN("[AnomalyHandler] vocab_size: {}", vocab_size);
+            TM_LOG_WARN("max_batch_size: {}", max_batch_size);
+            TM_LOG_WARN("vocab_size: {}", vocab_size);
         }
     }
 
@@ -231,7 +231,7 @@ struct AnomalyHandler::Impl {
                 const auto& n_inf = h_count_[i * 2];
                 const auto& n_nan = h_count_[i * 2 + 1];
                 if (n_inf || n_nan) {
-                    TM_LOG_WARN("[AnomalyHandler][rank={}] ({}) INF: {}, NaN: {}",
+                    TM_LOG_WARN("rank {}: ({}) INF: {}, NaN: {}",
                                    rank_,
                                    info_[i],
                                    n_inf,

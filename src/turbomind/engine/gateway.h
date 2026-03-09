@@ -33,7 +33,7 @@ public:
         std::lock_guard lock{mutex_};
         for (const auto& x : seq_ids) {
             if (auto [it, success] = map_.emplace(x, rank); !success) {
-                TM_LOG_WARN("[TM][Gateway] Duplicated binding for {}, {} vs {}", x, rank, it->second);
+                TM_LOG_WARN("Duplicated binding for {}, {} vs {}", x, rank, it->second);
             }
         }
     }
@@ -44,10 +44,10 @@ public:
         for (const auto& x : seq_ids) {
             auto it = map_.find(x);
             if (it == map_.end()) {
-                TM_LOG_WARN("[TM][Gateway] No entry found for unbinding {}, {}", x, rank);
+                TM_LOG_WARN("No entry found for unbinding {}, {}", x, rank);
             }
             else if (it->second != rank) {
-                TM_LOG_WARN("[TM][Gateway] Mismatched entry for unbinding {}, {} vs {}", x, rank, it->second);
+                TM_LOG_WARN("Mismatched entry for unbinding {}, {} vs {}", x, rank, it->second);
             }
             else {
                 map_.erase(it);

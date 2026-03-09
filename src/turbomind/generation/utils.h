@@ -36,7 +36,7 @@ void init_stop_bad_words(G getter, const char* key, const Rs& rs, T* h_buf, T* d
                                  offsets.begin() + std::min(kMaxStopBadWordsLen, (int)offsets.size()),
                                  kMaxStopBadWordsLen)
                 - offsets.begin();
-            TM_LOG_WARN("[InitializeSampling] [{}] {} length ({}) exceeds {}, truncated to {}",
+            TM_LOG_WARN("ID {}: {} length ({}) exceeds {}, truncated to {}",
                         rs[i]->req->id,
                         key,
                         offsets.back(),

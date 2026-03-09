@@ -77,14 +77,14 @@ static NcclApis& nccl_apis()
         if (version >= NCCL_VERSION(2, 27, 0)) {
             if (version < NCCL_VERSION(2, 28, 0)) {
                 TM_LOG_WARN(
-                    "[NCCL] Window registration may cause memory leaks in NCCL 2.27, use NCCL 2.28+ or disable the feature by setting NCCL_WIN_ENABLE=0.");
+                    "Window registration may cause memory leaks in NCCL 2.27, use NCCL 2.28+ or disable the feature by setting NCCL_WIN_ENABLE=0.");
             }
             load_symbol(apis.ncclCommWindowRegister, "ncclCommWindowRegister");
             load_symbol(apis.ncclCommWindowDeregister, "ncclCommWindowDeregister");
         }
         else {
             TM_LOG_WARN(
-                "[NCCL] Window registration is not supported by NCCL {}, use NCCL 2.28+ for better performance.",
+                "Window registration is not supported by NCCL {}, use NCCL 2.28+ for better performance.",
                 version);
         }
         if (version >= NCCL_VERSION(2, 19, 0)) {
@@ -97,7 +97,7 @@ static NcclApis& nccl_apis()
             load_symbol(apis.ncclCommSplit, "ncclCommSplit");
         }
         else {
-            TM_LOG_WARN("[NCCL] Splitting communicators is not supported by NCCL {}, use NCCL 2.18+ if needed.",
+            TM_LOG_WARN("Splitting communicators is not supported by NCCL {}, use NCCL 2.18+ if needed.",
                         version);
         }
         return apis;
@@ -116,16 +116,16 @@ public:
     ~NcclCommImpl()
     {
         for (const auto& [ptr, _] : handles_.at(0)) {
-            TM_LOG_WARN("[NCCL][{}] Buffer {} is not deregistered", global_rank_, ptr);
+            TM_LOG_WARN("Rank {}: Buffer {} is not deregistered", global_rank_, ptr);
         }
 
         for (const auto& [ptr, size] : buffers_) {
-            TM_LOG_WARN("[NCCL][{}] Allocation ({}, {}) is not freed", global_rank_, ptr, size);
+            TM_LOG_WARN("Rank {}: Allocation ({}, {}) is not freed", global_rank_, ptr, size);
         }
 
         for (auto& c : groups_) {
             if (auto ec = ncclCommDestroy(c); ec != ncclSuccess) {
-                TM_LOG_ERROR("[NCCL][{}] Failed to destroy communicator: {}", global_rank_, ncclGetErrorString(ec));
+                TM_LOG_ERROR("Rank {}: Failed to destroy communicator: {}", global_rank_, ncclGetErrorString(ec));
             }
         }
     }
@@ -169,7 +169,7 @@ public:
             buffers_.erase(ptr);
         }
         else {
-            TM_LOG_WARN("[NCCL][{}] Freeing {} which is not allocated by NcclComm", global_rank_, ptr);
+            TM_LOG_WARN("Rank {}: Freeing {} which is not allocated by NcclComm", global_rank_, ptr);
         }
     }
 
@@ -181,7 +181,7 @@ public:
             }
         }
         else {
-            TM_LOG_WARN("[NCCL][{}] Duplicated registration on ({}, {})", global_rank_, ptr, size);
+            TM_LOG_WARN("Rank {}: Duplicated registration on ({}, {})", global_rank_, ptr, size);
         }
     }
 
@@ -193,7 +193,7 @@ public:
             }
         }
         else {
-            TM_LOG_WARN("[NCCL][{}] Deregistering non-registered address {}", global_rank_, ptr);
+            TM_LOG_WARN("Rank {}: Deregistering non-registered address {}", global_rank_, ptr);
         }
     }
 

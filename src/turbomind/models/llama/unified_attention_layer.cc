@@ -190,7 +190,7 @@ static void init_dynamic_ntk(RequestCache& cache, const RopeParam& rope)
             scaling_factor = scaling_factor * max_seq_len / max_pos_emb - (scaling_factor - 1);
             cache.rope_base *= powf(scaling_factor, rope.dim / (rope.dim - 2.f));
             // clang-format off
-            TM_LOG_INFO("[ProcessInferRequests] {} rope_scaling_factor: {}, rope_theta = {}",
+            TM_LOG_INFO("{} rope_scaling_factor: {}, rope_theta = {}",
                         cache.req->id, scaling_factor, cache.rope_base);
             // clang-format on
         }

@@ -413,7 +413,7 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
             }
             else if (s > ptr->tokens.size()) {
                 if (tp_rank_ == 0) {
-                    TM_LOG_WARN("[ProcessInferRequests] Skipping invalid step ({}) setting for ID {}", s, ptr->id);
+                    TM_LOG_WARN("Skipping invalid step ({}) setting for ID {}", s, ptr->id);
                 }
                 s = ptr->tokens.size();
             }
@@ -474,7 +474,7 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
             if (tp_rank_ == 0) {
                 const int trunc_output_len = max_seq_len - c->prompt_len;
                 // clang-format off
-                TM_LOG_WARN("[ProcessInferRequests] [{}] total sequence length ({} + {}) exceeds `session_len` ({}), `max_new_tokens` is truncated to {}",
+                TM_LOG_WARN("ID {}: total sequence length ({} + {}) exceeds `session_len` ({}), `max_new_tokens` is truncated to {}",
                     seq.id, c->prompt_len, c->gen_cfg.max_new_tokens, session_len_trunc_, trunc_output_len);
                 // clang-format on
             }
@@ -812,7 +812,7 @@ void Engine::Impl::InternalThreadEntry()
         }
 
         if (rs->abort) {
-            TM_LOG_INFO("[Engine] stop requested.");
+            TM_LOG_INFO("stop requested.");
             break;
         }
 

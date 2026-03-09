@@ -40,7 +40,7 @@ void Gateway::push(std::shared_ptr<Request> r)
         rank = next_.fetch_add(1, std::memory_order_relaxed) % size_;
     }
     else {
-        TM_LOG_ERROR("[Gateway] No queues available for submitting the request");
+        TM_LOG_ERROR("No queues available for submitting the request");
         notify({[r = std::move(r)] { UpdateState(*r, Request::kNoQueue, 0); }});
         return;
     }
@@ -49,7 +49,7 @@ void Gateway::push(std::shared_ptr<Request> r)
         queues_[rank]->push({std::move(r)});
     }
     else {
-        TM_LOG_ERROR("[Gateway] Failed to find a binded queue for {}", r->session.id);
+        TM_LOG_ERROR("Failed to find a binded queue for {}", r->session.id);
         notify({[r = std::move(r)] { UpdateState(*r, Request::kInvalid, 0); }});
     }
 }
@@ -134,7 +134,7 @@ void Gateway::kill(std::shared_ptr<Request> r)
         queues_[rank]->kill(std::move(r));
     }
     else {
-        TM_LOG_ERROR("[Gateway] Failed to find a binded queue for {}", r->session.id);
+        TM_LOG_ERROR("Failed to find a binded queue for {}", r->session.id);
         notify({[r = std::move(r)] {  //
             UpdateState(*r, Request::kInvalid, 0);
         }});

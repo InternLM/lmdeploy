@@ -85,7 +85,7 @@ std::tuple<BlockIds, UniqueIds> BlockTrie::Cache(const Sequence& seq, const std:
                 node->block_unique_id = block_unique_id;
             }
             else {
-                TM_LOG_WARN("[BlockTrie][cache] Hash collision detected");
+                TM_LOG_WARN("Hash collision detected");
                 break;
             }
         }
@@ -102,7 +102,7 @@ std::tuple<BlockIds, UniqueIds> BlockTrie::Cache(const Sequence& seq, const std:
         cache_block_unique_ids.emplace_back(block_unique_id);
     }
 
-    TM_LOG_INFO("[BlockTrie][cache] {} new tokens cached", new_cached);
+    TM_LOG_INFO("{} new tokens cached", new_cached);
 
     return std::make_tuple(cache_block_ids, cache_block_unique_ids);
 }

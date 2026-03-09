@@ -40,7 +40,7 @@ auto GetEnv()
         if (is_set) {
             std::stringstream ss;
             ss << x;
-            TM_LOG_INFO("[{}] {}={}", E::prefix, E::name, ss.str());
+            TM_LOG_INFO("{} {}={}", E::prefix, E::name, ss.str());
         }
         return x;
     }();
