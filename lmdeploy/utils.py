@@ -540,11 +540,27 @@ class FlattenedTensorBucket:
                 if flattened_tensor is None:
                     self.flattened_tensor = torch.cat(flattened_tensor_list, dim=0)
                 else:
-                    assert len(flattened_tensor.shape) == 1, 'flattened_tensor must be 1-D tensor'
-                    assert flattened_tensor.numel() >= current_idx, \
-                        'Provided flattened tensor numel is smaller than ' + \
-                        f'required numel: {flattened_tensor.numel()} < {current_idx}'
-                    assert sum([t.numel() for t in flattened_tensor_list]) == current_idx
+                    # Validate user-provided preallocated buffer
+                    if flattened_tensor.dim() != 1:
+                        raise ValueError(
+                            f'flattened_tensor must be a 1-D tensor, but got shape {tuple(flattened_tensor.shape)}')
+                    if flattened_tensor.numel() < current_idx:
+                        raise ValueError('Provided flattened tensor numel is smaller than required numel: '
+                                         f'{flattened_tensor.numel()} < {current_idx}')
+                    # Validate dtype and device compatibility with source tensors
+                    reference_tensor = named_tensors[0][1]
+                    if flattened_tensor.dtype != reference_tensor.dtype:
+                        raise ValueError(f'flattened_tensor dtype {flattened_tensor.dtype} does not match source '
+                                         f'tensors dtype {reference_tensor.dtype}')
+                    if flattened_tensor.device != reference_tensor.device:
+                        raise ValueError(f'flattened_tensor device {flattened_tensor.device} does not match source '
+                                         f'tensors device {reference_tensor.device}')
+                    if not flattened_tensor.is_contiguous():
+                        raise ValueError('flattened_tensor must be contiguous')
+                    total_numel = sum(t.numel() for t in flattened_tensor_list)
+                    if total_numel != current_idx:
+                        raise ValueError('Mismatch between computed and expected flattened size: '
+                                         f'{total_numel} != {current_idx}')
                     torch.cat(flattened_tensor_list, dim=0, out=flattened_tensor[:current_idx])
                     self.flattened_tensor = flattened_tensor
         else:
