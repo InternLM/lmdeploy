@@ -516,10 +516,14 @@ class RayExecutor(ExecutorBase):
 
     def _sort_workers(self, driver_ip: str, workers: List[RayWorkerWrapper]):
         """Sort workers."""
-        if not _envs.ray_external_pg_bundles:
+        # External bundle handling is only applicable when lmdeploy does NOT own
+        # the placement group. If lmdeploy owns the PG, we should continue to
+        # sort workers even if external bundle indices are specified.
+        if (not _envs.ray_external_pg_bundles) or self.ray_ctx.owned_pg:
             return self._sort_workers_by_driver_then_worker_ip(driver_ip, workers)
         else:
-            # do not sort when external bundle indices are specified
+            # do not sort when external bundle indices are specified and the
+            # placement group is externally managed
             return workers
 
     def _sort_workers_by_driver_then_worker_ip(self, driver_ip: str, workers: List[RayWorkerWrapper]):

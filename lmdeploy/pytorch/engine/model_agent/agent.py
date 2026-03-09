@@ -1187,6 +1187,10 @@ class BaseModelAgent:
                     if 'flattened_tensor' in weights:
                         self._update_params_ipc_tensor = _construct(weights['flattened_tensor'],
                                                                     require_clone=weights.get('require_clone', True))
+                    elif self._update_params_ipc_tensor is None:
+                        raise ValueError(
+                            'flattened_tensor is not provided in weights and no cached ipc tensor is available. '
+                            'Please provide flattened_tensor on the first update_params call.')
                     if 'event_ipc_handle' in weights and hasattr(torch.cuda.Event, 'from_ipc_handle'):
                         self._update_params_ipc_event = torch.cuda.Event.from_ipc_handle(
                             device=torch.cuda.current_device(),
