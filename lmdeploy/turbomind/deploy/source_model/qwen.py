@@ -1,10 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
 import os.path as osp
+import re
 
 import torch
 
 from ..config import RopeParam
+from ..loader import create_loader
 from .base import INPUT_MODELS
 from .llama import LlamaModel, LlamaReader
 
@@ -383,12 +385,57 @@ class Qwen3_5Model(Qwen3Model):
 
 
 class Qwen3_5MoeReader(Qwen3_5ReaderMixin, Qwen3MoeReader):
-    pass
+
+    def _unpacked_moe_expert(self, e: int, i: int, kind: str):
+        prefix = f'{self.attn_layer_prefix}.{i}.mlp.experts'
+        gate_up = self.params.get(f'{prefix}.gate_up_proj.{kind}')
+        down = self.params.get(f'{prefix}.down_proj.{kind}')
+        if gate_up is None or down is None:
+            return None
+
+        # Packed Qwen3.5 MoE checkpoints store all experts in the first
+        # dimension. Slice one expert before transform so quantized policies
+        # still see a 2D tensor.
+        gate_up = self.transform(gate_up[e], kind)
+        down = self.transform(down[e], kind)
+        gate, up = gate_up.chunk(2, dim=0)
+        return (gate, down, up)
+
+    def moe_ffn_expert(self, e=None, i=None, kind=None):
+        if not kind:
+            return self.filter(r'experts', i)
+        unpacked = self._unpacked_moe_expert(e, i, kind)
+        if unpacked is not None:
+            return unpacked
+
+        return super().moe_ffn_expert(e, i, kind)
 
 
 @INPUT_MODELS.register_module(name='qwen3_5-moe')
 class Qwen3_5MoeModel(Qwen3MoeModel):
     Reader = Qwen3_5MoeReader
+
+    @staticmethod
+    def map_packed_qwen35_experts(name: str):
+        """Map packed expert names to weight names, i.e.,
+        "mlp.experts.gate_up_proj" -> "mlp.experts.gate_up_proj.weight" so that
+        class Weight in parameter.py can classify them."""
+        s = re.sub(r'(mlp\.experts\.(?:gate_up|down)_proj)$', r'\1.weight', name)
+        return s
+
+    def readers(self):
+        pattern = getattr(self.Reader, 'attn_layer_pattern', self.Reader.attn_layer_patten)
+        loader = create_loader(self.model_path, pattern, [])
+
+        has_packed_gate_up = any('mlp.experts.gate_up_proj' in k for k in loader.index.keys())
+        has_packed_down = any('mlp.experts.down_proj' in k for k in loader.index.keys())
+        if has_packed_gate_up and has_packed_down:
+            loader.mappings = [self.map_packed_qwen35_experts]
+
+        for i, param in loader.items():
+            reader = self.Reader(param, {}, False, self.model_config, policy=self.policy, fp8_quant=self.fp8_quant)
+            yield i, reader
+        torch.cuda.empty_cache()
 
     def model_info(self):
         if 'text_config' in self.model_config:
