@@ -1192,8 +1192,13 @@ class BaseModelAgent:
                 metadata: list[FlattenedTensorMetadata] = weights['metadata']
                 if metadata:
                     if 'flattened_tensor' in weights:
+                        # Determine if clone is required
+                        require_clone = weights.get('require_clone', True)
+                        if 'event_ipc_handle' in weights and not hasattr(torch.cuda.Event, 'from_ipc_handle'):
+                            # Force clone when IPC event is provided but cannot be used
+                            require_clone = True
                         self._update_params_ipc_tensor = _construct(weights['flattened_tensor'],
-                                                                    require_clone=weights.get('require_clone', True))
+                                                                    require_clone=require_clone)
                     elif self._update_params_ipc_tensor is None:
                         raise ValueError(
                             'flattened_tensor is not provided in weights and no cached ipc tensor is available. '
