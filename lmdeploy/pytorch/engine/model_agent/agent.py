@@ -1178,11 +1178,11 @@ class BaseModelAgent:
             return ipc_tensor.clone() if require_clone else ipc_tensor
 
         with self.all_context():
-            # request.serialized_named_tensors is now a dict with following keys:
+            # After deserialization, weights is a dict with following keys:
             # - metadata: List[FlattenedTensorMetadata]
             # - flattened_tensor: the flattened tensor for weights, optional
             # - event_ipc_handle: the ipc handle of the event
-            # that used to sync stream across processes, optional
+            #   that used to sync stream across processes, optional
             serialized_data = request.serialized_named_tensors
             if isinstance(serialized_data, list):
                 serialized_data = serialized_data[self.dist_ctx.tp_group.rank]
