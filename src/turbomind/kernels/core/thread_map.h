@@ -52,11 +52,7 @@ struct ThreadMapQ {
     }
 };
 
-template<int DimC,
-         int DimS,
-         int AccessC,
-         int WarpCount,
-         int WarpThreadC = (lowbit(DimC) / AccessC <= WARP_SIZE ? lowbit(DimC) / AccessC : WARP_SIZE)>
+template<int DimC, int DimS, int AccessC, int WarpCount, int WarpThreadC = lowbit(DimC) / AccessC, int WarpC = 1>
 struct RakedThreadMap {
     static constexpr int kDimC = DimC;
     static constexpr int kDimS = DimS;
@@ -67,25 +63,24 @@ struct RakedThreadMap {
     static constexpr int kWarpThreadC = WarpThreadC;
     static constexpr int kWarpThreadS = WARP_SIZE / kWarpThreadC;
 
-    static_assert(kWarpThreadC <= WARP_SIZE);
+    static_assert(WARP_SIZE % kWarpThreadC == 0);
 
     static constexpr int kWarpAccessC = kWarpThreadC * kAccessC;
     static constexpr int kWarpAccessS = kWarpThreadS;
 
-    static constexpr int kWarpIterC = (kDimC + kWarpAccessC - 1) / kWarpAccessC;
-    static constexpr int kWarpIterS = kDimS / kWarpAccessS;
+    static constexpr int kWarpIterC = cdiv(kDimC, kWarpAccessC);
+    static constexpr int kWarpIterS = cdiv(kDimS, kWarpAccessS);
 
-    static constexpr int kWarpC = 1;
-    static constexpr int kWarpS = kWarpCount;
+    static constexpr int kWarpC = WarpC;
+    static constexpr int kWarpS = kWarpCount / kWarpC;
 
-    static constexpr int kIterC = kWarpIterC / kWarpC;
-    static constexpr int kIterS = std::max(kWarpIterS / kWarpS, 1);
+    static_assert(kWarpCount % kWarpC == 0);
+
+    static constexpr int kIterC = cdiv(kWarpIterC, kWarpC);
+    static constexpr int kIterS = cdiv(kWarpIterS, kWarpS);
 
     // Allow partial tile when there is ONLY 1 iteration
     static_assert(kDimC % kWarpAccessC == 0 || kIterC == 1);
-
-    static_assert(kIterC > 0);
-    static_assert(kIterS > 0);
 
     static constexpr bool kPartialC = kDimC % kWarpAccessC != 0;
 
