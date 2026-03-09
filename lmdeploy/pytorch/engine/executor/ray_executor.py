@@ -589,7 +589,22 @@ class RayExecutor(ExecutorBase):
         else:
             # use external specified bundle indices，keep the order as well
             bundle_indices = _envs.ray_external_pg_bundles.copy()
+            # validate external bundle indices
+            num_bundles = len(placement_group.bundle_specs)
+            for bundle_id in bundle_indices:
+                if bundle_id < 0 or bundle_id >= num_bundles:
+                    raise ValueError(f'External bundle index {bundle_id} is out of range. '
+                                     f'Placement group has {num_bundles} bundles (valid indices: 0-{num_bundles - 1}).')
+                bundle = placement_group.bundle_specs[bundle_id]
+                if not bundle.get(device_str, 0):
+                    raise ValueError(
+                        f'External bundle index {bundle_id} does not have required resource: {device_str}. '
+                        f'Available resources in this bundle: {dict(bundle)}')
         attn_tp = self.dist_config.attn_tp
+        if len(bundle_indices) < attn_tp:
+            raise ValueError(f'Not enough bundle indices for attention tensor parallelism. '
+                             f'Required: {attn_tp}, Provided: {len(bundle_indices)} '
+                             f'(bundle_indices: {bundle_indices}).')
         bundle_indices = bundle_indices[:attn_tp]
 
         workers = list()
