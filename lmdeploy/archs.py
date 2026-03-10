@@ -43,7 +43,7 @@ def autoget_backend(model_path: str) -> Literal['turbomind', 'pytorch']:
     if is_turbomind_installed:
         if not turbomind_has:
             logger.warning('Fallback to pytorch engine because '
-                           f'`{model_path}` not supported by turbomind'
+                           f'{model_path!r} not supported by turbomind'
                            ' engine.')
     else:
         logger.warning('Fallback to pytorch engine because turbomind engine is not '
@@ -121,6 +121,8 @@ def check_vl_llm(config: dict) -> bool:
         return True
     elif arch in ['ChatGLMModel', 'ChatGLMForConditionalGeneration'] and 'vision_config' in config:
         return True
+    elif arch in ['Qwen3_5ForConditionalGeneration', 'Qwen3_5MoeForConditionalGeneration']:
+        return False
     elif arch in supported_archs:
         return True
     return False

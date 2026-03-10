@@ -273,13 +273,21 @@ LlamaAttentionWeight::LlamaAttentionWeight(int      hidden_dim,
                                            DataType weight_type,
                                            int      group_size,
                                            int      window_size,
-                                           bool     sink)
+                                           bool     sink,
+                                           bool     attn_output_gate)
 {
     this->window_size = window_size;
 
+    // attn_output_gate doubles Q dimension (extra gate projection fused into Q)
+    const int q_factor = attn_output_gate ? 2 : 1;
+
     if (mla.kv_lora_rank == 0) {
-        qkv.emplace(
-            hidden_dim, (head_num + 2 * kv_head_num) * head_dim / tp_size, data_type, bias, weight_type, group_size);
+        qkv.emplace(hidden_dim,
+                    (head_num * q_factor + 2 * kv_head_num) * head_dim / tp_size,
+                    data_type,
+                    bias,
+                    weight_type,
+                    group_size);
         register_module("w_qkv", qkv, tp_rank);
         if (qk_norm) {
             q_a_layernorm  = Tensor{{head_dim}, data_type, kDEVICE};

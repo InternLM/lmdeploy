@@ -379,6 +379,35 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     for (auto it = inter_size.begin(); it != inter_size.end(); ++it) {
         model_param_.inter_size.push_back(it->as<int>());
     }
+
+    if (auto layer_types = model["layer_types"]) {
+        for (auto it = layer_types.begin(); it != layer_types.end(); ++it) {
+            auto type_str = it->as<std::string>("");
+            if (type_str == "linear_attention") {
+                model_param_.layer_types.push_back(1);
+            }
+            else if (type_str == "full_attention" || type_str.empty()) {
+                model_param_.layer_types.push_back(0);
+            }
+            else {
+                TM_LOG_WARNING("[TM] Unknown layer_type '%s', treating as full_attention.", type_str.c_str());
+                model_param_.layer_types.push_back(0);
+            }
+        }
+    }
+
+    // Qwen3.5 Gated DeltaNet linear attention parameters
+    model_param_.linear_key_head_dim    = model["linear_key_head_dim"].as<int>(0);
+    model_param_.linear_value_head_dim  = model["linear_value_head_dim"].as<int>(0);
+    model_param_.linear_conv_kernel_dim = model["linear_conv_kernel_dim"].as<int>(0);
+    model_param_.linear_num_key_heads   = model["linear_num_key_heads"].as<int>(0);
+    model_param_.linear_num_value_heads = model["linear_num_value_heads"].as<int>(0);
+    model_param_.attn_output_gate       = model["attn_output_gate"].as<bool>(false);
+    if (auto uqel = model["unquantized_expert_layers"]) {
+        for (auto it = uqel.begin(); it != uqel.end(); ++it) {
+            model_param_.unquantized_expert_layers.insert(it->as<int>());
+        }
+    }
     model_param_.attn_sink = model["attn_sink"].as<bool>();
     model_param_.mlp_bias  = model["mlp_bias"].as<bool>();
     if (model["activation_type"].as<std::string>("") == "gpt-oss") {
