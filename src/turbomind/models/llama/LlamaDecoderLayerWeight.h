@@ -39,7 +39,7 @@ public:
                             const MoeParam&    moe_param);
 
     ~LlamaDecoderLayerWeight();
-    LlamaDecoderLayerWeight(const LlamaDecoderLayerWeight&)            = delete;
+    LlamaDecoderLayerWeight(const LlamaDecoderLayerWeight&) = delete;
     LlamaDecoderLayerWeight& operator=(const LlamaDecoderLayerWeight&) = delete;
 
     void prepare(const cudaDeviceProp& prop, cudaStream_t st);

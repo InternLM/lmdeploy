@@ -78,7 +78,8 @@ struct ModelParam {
 
 /// TODO: rename all `gate` in the context of MoE router to `router`
 struct MoeParam {
-    enum Method {
+    enum Method
+    {
         kNaive,
         kFused
     } method;
