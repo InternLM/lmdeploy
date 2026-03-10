@@ -10,7 +10,7 @@ from lmdeploy.serve.openai.api_server import VariableInterface
 from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletionResponse, ChatCompletionResponseChoice,
                                             ChatCompletionResponseStreamChoice, ChatCompletionStreamResponse,
                                             ChatMessage, DeltaMessage, DeltaToolCall, UsageInfo)
-from lmdeploy.serve.openai.tool_parser.qwen3coder_parser import Qwen3CoderToolParser
+from lmdeploy.serve.openai.tool_parser.qwen3coder_tool_parser import Qwen3CoderToolParser
 
 TestExpects = collections.namedtuple('TestExpects', 'func_name kwargs')
 

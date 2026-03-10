@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# modified from https://github.com/vllm-project/vllm/tree/v0.7.3/vllm/entrypoints/openai/tool_parsers
 import json
 from typing import Dict, Sequence, Union
 

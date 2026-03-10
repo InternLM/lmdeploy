@@ -168,7 +168,7 @@ class Qwen3CoderToolParser(ToolParser):
                 if k not in parser_state.emitted_params:
                     prefix = ', ' if len(parser_state.emitted_params) > 0 else ''
                     serialized = json.dumps(v, ensure_ascii=False)
-                    json_fragments.append(f'{prefix}"{k}": {serialized}')
+                    json_fragments.append(f'{prefix}\"{k}\": {serialized}')
                     parser_state.emitted_params.add(k)
 
             if is_func_closed and not getattr(parser_state, 'json_closed', False):
