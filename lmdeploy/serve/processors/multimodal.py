@@ -95,8 +95,6 @@ class MultimodalProcessor:
         """Synchronous helper to parse a single multimodal message item."""
         role = in_messages[i]['role']
         content = in_messages[i]['content']
-        assert role in ['system', 'user', 'assistant'], \
-            f'unsupported role "{role}"'
 
         if role != 'user' or isinstance(content, str):
             out_messages[i] = in_messages[i]
