@@ -226,19 +226,20 @@ void invokeProcessKV_v2(char**                 blocks,
                         int                    quant_policy,
                         cudaStream_t           stream)
 {
-    constexpr int WARPS = 4;
-    constexpr int CTA_S = 64;
-
-    int  block = WARPS * WARP_SIZE;
-    dim3 grid((max_q_len + CTA_S - 1) / CTA_S, head_num, batch_size);
 
     auto invoke = [&](auto tkv, const auto dim) {
         using Tkv = decltype(tkv);
 
-        constexpr int kHeadDim = dim;
-        FT_CHECK(head_dim == kHeadDim);
-
+        constexpr int  kHeadDim = dim;
         constexpr bool kShareKV = kHeadDim == 576;
+
+        constexpr int WARPS = 4;
+        constexpr int CTA_S = kShareKV ? 32 : 64;
+
+        int  block = WARPS * WARP_SIZE;
+        dim3 grid(cdiv(max_q_len, CTA_S), head_num, batch_size);
+
+        TM_CHECK_EQ(head_dim, kHeadDim);
 
         block::Layout block_layout{block::Config<T, Tkv, kHeadDim, kShareKV>{head_num, block_seq_len}};
 
@@ -262,7 +263,8 @@ void invokeProcessKV_v2(char**                 blocks,
     };
 
     auto dispatch = [&](auto tkv) {
-        if (head_dim == 64) {
+        if (0) {}
+        else if (head_dim == 64) {
             return invoke(tkv, std::integral_constant<int, 64>{});
         }
         else if (head_dim == 128) {
@@ -270,6 +272,9 @@ void invokeProcessKV_v2(char**                 blocks,
         }
         else if (head_dim == 192) {
             return invoke(tkv, std::integral_constant<int, 192>{});
+        }
+        else if (head_dim == 256) {
+            return invoke(tkv, std::integral_constant<int, 256>{});
         }
         else if (head_dim == 576) {
             return invoke(tkv, std::integral_constant<int, 576>{});
@@ -470,19 +475,20 @@ void invokeFlattenKV_v2(T*                     k,
                         int                    quant_policy,
                         cudaStream_t           stream)
 {
-    constexpr int kWarpCnt = 4;
-    constexpr int CTA_S    = 64;
-
-    constexpr int block = kWarpCnt * WARP_SIZE;
-    const dim3    grid((max_seq_len + CTA_S - 1) / CTA_S, head_num, batch_size);
 
     auto invoke = [&](auto tkv, const auto dim) {
         using Tkv = decltype(tkv);
 
-        constexpr int kHeadDim = dim;
-        FT_CHECK(head_dim == kHeadDim);
-
+        constexpr int  kHeadDim = dim;
         constexpr bool kShareKV = kHeadDim == 576;
+
+        constexpr int kWarpCnt = 4;
+        constexpr int CTA_S    = kShareKV ? 32 : 64;
+
+        constexpr int block = kWarpCnt * WARP_SIZE;
+        const dim3    grid((max_seq_len + CTA_S - 1) / CTA_S, head_num, batch_size);
+
+        TM_CHECK_EQ(head_dim, kHeadDim);
 
         block::Layout block_layout{block::Config<T, Tkv, kHeadDim, kShareKV>{head_num, block_seq_len}};
 
@@ -503,7 +509,8 @@ void invokeFlattenKV_v2(T*                     k,
     };
 
     auto dispatch = [&](auto tkv) {
-        if (head_dim == 64) {
+        if (0) {}
+        else if (head_dim == 64) {
             return invoke(tkv, std::integral_constant<int, 64>{});
         }
         else if (head_dim == 128) {
@@ -511,6 +518,9 @@ void invokeFlattenKV_v2(T*                     k,
         }
         else if (head_dim == 192) {
             return invoke(tkv, std::integral_constant<int, 192>{});
+        }
+        else if (head_dim == 256) {
+            return invoke(tkv, std::integral_constant<int, 256>{});
         }
         else if (head_dim == 576) {
             return invoke(tkv, std::integral_constant<int, 576>{});

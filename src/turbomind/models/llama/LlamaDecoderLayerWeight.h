@@ -22,6 +22,7 @@
 
 #include "src/turbomind/core/core.h"
 
+#include "src/turbomind/models/llama/GatedDeltaNetWeight.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/llama_params.h"
 
@@ -47,6 +48,7 @@ public:
     Tensor ffn_norm;
 
     std::unique_ptr<LlamaAttentionWeight> self_attn_weights;
+    std::unique_ptr<GatedDeltaNetWeight>  linear_attn_weights;
 
     std::unique_ptr<LlamaFfnWeight> ffn_weights;
     std::unique_ptr<MoeFfnWeight>   moe_weights;

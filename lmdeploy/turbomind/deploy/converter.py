@@ -124,6 +124,17 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
             modules_to_not_convert = getattr(quant_config, 'modules_to_not_convert', None) or []
         if any('self_attn' in m for m in modules_to_not_convert):
             weight_type = dtype
+        if any('shared_expert' in m for m in modules_to_not_convert):
+            ffn_weight_type = dtype
+        # Detect per-layer exclusions like 'model.layers.0.' which mean
+        # ALL weights in that layer (including MoE experts) are fp16.
+        import re as _re
+        unquantized_expert_layers = []
+        for m in modules_to_not_convert:
+            _m = _re.match(r'model\.layers\.(\d+)\.?$', m)
+            if _m:
+                unquantized_expert_layers.append(int(_m.group(1)))
+        config.model_config.unquantized_expert_layers = unquantized_expert_layers
 
     config.model_config.model_arch = model_arch
     config.model_config.data_type = dtype
@@ -230,9 +241,12 @@ def get_tm_model(model_path,
     tm_cfg.model_config.chat_template = chat_template_name
     tm_cfg.model_config.model_name = model_name
 
-    tm_cfg.model_config.attn_tp_size = engine_config.attn_tp_size
-    tm_cfg.model_config.attn_cp_size = engine_config.attn_cp_size
-    tm_cfg.model_config.mlp_tp_size = engine_config.mlp_tp_size
+    if engine_config.attn_tp_size is not None:
+        tm_cfg.model_config.attn_tp_size = engine_config.attn_tp_size
+    if engine_config.attn_cp_size is not None:
+        tm_cfg.model_config.attn_cp_size = engine_config.attn_cp_size
+    if engine_config.mlp_tp_size is not None:
+        tm_cfg.model_config.mlp_tp_size = engine_config.mlp_tp_size
 
     output_model = OUTPUT_MODELS.get(output_model_name)(input_model=input_model,
                                                         cfg=tm_cfg,
