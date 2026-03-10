@@ -44,6 +44,14 @@ struct Sequence {
     mutable std::vector<Tensor> input_embeds;
     mutable std::vector<int>    input_embeds_offsets;
 
+    // Gated DeltaNet linear attention persistent states (e.g. Qwen3.5-MoE).
+    // Allocated on first request, preserved across requests for the same session,
+    // and freed automatically when the sequence is erased from the SequenceManager.
+    //   conv_states:      (num_linear_layers, conv_dim, d_conv) — per-channel rolling conv history
+    //   recurrent_states: (num_linear_layers, num_v_heads, key_head_dim, value_head_dim) — SSM state
+    mutable Tensor conv_states;
+    mutable Tensor recurrent_states;
+
     explicit Sequence(uint64_t _id): id(_id) {}
 
     friend std::ostream& operator<<(std::ostream& os, const Sequence& seq);

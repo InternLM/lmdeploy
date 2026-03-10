@@ -1,6 +1,8 @@
 #include "src/turbomind/models/llama/GatedDeltaNetLayer.h"
+#include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/data_type.h"
+#include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/llama/gated_delta_net_kernels.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
@@ -43,8 +45,17 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(const ModelParam&     model,
                 d_conv_,
                 num_linear_layers_);
 
+    if (num_linear_layers_ > 0) {
+        conv_state_ptrs_buf_      = {engine.max_batch_size, kCPUpinned};
+        recurrent_state_ptrs_buf_ = {engine.max_batch_size, kCPUpinned};
+    }
+
     for (int i = 0; i < phases; ++i) {
-        phase_data_.push_back(std::make_shared<PhaseData>());
+        data_.emplace_back();
+        if (num_linear_layers_ > 0) {
+            data_.at(i).conv_state_ptrs      = empty_like(conv_state_ptrs_buf_, kDEVICE);
+            data_.at(i).recurrent_state_ptrs = empty_like(recurrent_state_ptrs_buf_, kDEVICE);
+        }
     }
 }
 
@@ -55,38 +66,63 @@ void GatedDeltaNetLayer::Run(BatchOp op, int phase, TensorMap& env)
     if (op == BatchOp::kAdd) {
         Buffer_<RequestCache*> rc    = env.at("requests").buffer();
         const auto             dtype = dtype_;
-        for (int i = 0; i < rc.size(); ++i) {
-            auto& c = *rc[i];
-            if (num_linear_layers_ > 0) {
-                c.conv_states = Tensor{{num_linear_layers_, conv_dim_, d_conv_}, dtype, kDEVICE};
-                Clear(c.conv_states);
-                c.recurrent_states =
-                    Tensor{{num_linear_layers_, num_v_heads_, key_head_dim_, value_head_dim_}, dtype, kDEVICE};
-                Clear(c.recurrent_states);
-            }
-        }
+        for (int i = 0; i < rc.size(); ++i) {}
     }
     else if (op == BatchOp::kSetup) {
         Setup(phase, env);
     }
     else if (op == BatchOp::kPrepare) {
-        auto& d     = *phase_data_.at(phase);
+        auto& d     = data_.at(phase);
         d.q_offsets = env.at("q_offsets").buffer().borrow();
     }
 }
 
 void GatedDeltaNetLayer::Setup(int phase, TensorMap& env)
 {
-    auto&       d     = *phase_data_.at(phase);
-    const auto& batch = *env.at("batch").data<BatchData*>()[0];
+    auto&       d = data_.at(phase);
+    const auto& b = *env.at("batch").data<BatchData*>()[0];
 
-    d.batch_size = batch.rc.size();
+    d.batch_size = b.rc.size();
     d.rc.resize(d.batch_size);
     d.input_lens.resize(d.batch_size);
+
+    d.conv_states.resize(d.batch_size);
+    d.recurrent_states.resize(d.batch_size);
+
     for (int i = 0; i < d.batch_size; ++i) {
-        d.rc[i]         = batch.rc[i].get();
-        d.input_lens[i] = batch.rc[i]->input_len;
+        d.rc[i]         = b.rc[i].get();
+        d.input_lens[i] = b.rc[i]->input_len;
+
+        auto& s = *b.rc[i]->seq;
+
+        if (!s.recurrent_states) {
+            // Create new conv/recurrent states
+            s.conv_states = {{num_linear_layers_, conv_dim_, d_conv_}, dtype_, kDEVICE};
+            Clear(s.conv_states);
+            s.recurrent_states = {{num_linear_layers_, num_v_heads_, key_head_dim_, value_head_dim_}, dtype_, kDEVICE};
+            Clear(s.recurrent_states);
+        }
+
+        // if (!d.rc[i]->autoregres) {
+        if (b.rc[i]->req->session.end_flag) {  // non-stateful request
+            // Session is ending, moving past the last step is OK
+            d.conv_states[i]      = b.rc[i]->seq->conv_states;
+            d.recurrent_states[i] = b.rc[i]->seq->recurrent_states;
+        }
+        else if (data_.size() > 1) {  // stateful request && async mode
+            d.conv_states[i]      = empty_like(s.conv_states);
+            d.recurrent_states[i] = empty_like(s.recurrent_states);
+            Copy(s.conv_states, d.conv_states[i]);
+            Copy(s.recurrent_states, d.recurrent_states[i]);
+        }
+        // }
+
+        conv_state_ptrs_buf_[i]      = d.conv_states[i].raw_data();
+        recurrent_state_ptrs_buf_[i] = d.recurrent_states[i].raw_data();
     }
+
+    Copy(conv_state_ptrs_buf_, d.batch_size, d.conv_state_ptrs);
+    Copy(recurrent_state_ptrs_buf_, d.batch_size, d.recurrent_state_ptrs);
 }
 
 static int linear_layer_index(int layer_id, const std::vector<int>& layer_types)
@@ -112,7 +148,7 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
     const auto  stream  = core::Context::stream().handle();
     const auto& weights = *p.weights;
 
-    auto& pd = *phase_data_.at(p.phase);
+    auto& pd = data_.at(p.phase);
 
     auto dispatch = [&](auto t) {
         using T = decltype(t);
@@ -142,44 +178,17 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
         //    Stride between tokens is all_col elements.
         // =================================================================
         const int bg_total = token_num * num_v_heads_;
+
         const int b_offset = conv_dim_ + value_dim_;  // column offset to b logits
         const int a_offset = b_offset + v_heads_tp;   // column offset to a logits
-        Tensor    beta{{token_num, num_v_heads_}, dtype, device};
-        Tensor    g_tensor{{token_num, num_v_heads_}, dtype, device};
 
-        // Gather b and a columns into contiguous buffers for the kernel.
-        // Each has shape (token_num, v_heads_tp) but is strided inside all_proj.
-        // Use the existing invokeComputeBetaG which needs contiguous b/a input.
-        // We copy the b/a columns compactly first.
-        Tensor b_contig{{token_num, v_heads_tp}, dtype, device};
-        Tensor a_contig{{token_num, v_heads_tp}, dtype, device};
-        check_cuda_error(cudaMemcpy2DAsync(b_contig.data<T>(),
-                                           v_heads_tp * sizeof(T),
-                                           all_data + b_offset,
-                                           all_col * sizeof(T),
-                                           v_heads_tp * sizeof(T),
-                                           token_num,
-                                           cudaMemcpyDeviceToDevice,
-                                           stream));
-        check_cuda_error(cudaMemcpy2DAsync(a_contig.data<T>(),
-                                           v_heads_tp * sizeof(T),
-                                           all_data + a_offset,
-                                           all_col * sizeof(T),
-                                           v_heads_tp * sizeof(T),
-                                           token_num,
-                                           cudaMemcpyDeviceToDevice,
-                                           stream));
+        Tensor beta{{token_num, num_v_heads_}, dtype, device};
+        Tensor g{{token_num, num_v_heads_}, dtype, device};
 
-        invokeComputeBetaG(beta.data<T>(),
-                           g_tensor.data<T>(),
-                           b_contig.data<T>(),
-                           a_contig.data<T>(),
-                           weights.A_log.data<T>(),
-                           weights.dt_bias.data<T>(),
-                           bg_total,
-                           num_v_heads_,
-                           stream);
-        sync_check_cuda_error();
+        auto b = all_proj.slice({0, b_offset}, {-1, v_heads_tp});
+        auto a = all_proj.slice({0, a_offset}, {-1, v_heads_tp});
+
+        ComputeBetaG_v2(beta, g, b, a, weights.A_log, weights.dt_bias, stream);
 
         // =================================================================
         // 3. Process each request independently
@@ -200,19 +209,19 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
             T* qkv_row_ptr = all_data + token_offset * all_col;  // first token, col 0
             T* z_row_ptr   = all_data + token_offset * all_col + conv_dim_;
             T* beta_ptr    = beta.data<T>() + token_offset * num_v_heads_;
-            T* g_ptr       = g_tensor.data<T>() + token_offset * num_v_heads_;
+            T* g_ptr       = g.data<T>() + token_offset * num_v_heads_;
             T* out_ptr     = attn_out.data<T>() + token_offset * value_dim_;
 
             const int state_layer_idx = linear_layer_index(p.layer_id, layer_types_);
 
             T* conv_state_ptr      = nullptr;
             T* recurrent_state_ptr = nullptr;
-            if (rc.conv_states) {
-                conv_state_ptr = rc.conv_states.data<T>() + state_layer_idx * (conv_dim_ * d_conv_);
+            if (pd.conv_states[req]) {
+                conv_state_ptr = pd.conv_states[req].data<T>() + state_layer_idx * (conv_dim_ * d_conv_);
             }
-            if (rc.recurrent_states) {
-                recurrent_state_ptr =
-                    rc.recurrent_states.data<T>() + state_layer_idx * (num_v_heads_ * key_head_dim_ * value_head_dim_);
+            if (pd.recurrent_states[req]) {
+                recurrent_state_ptr = pd.recurrent_states[req].data<T>()
+                                      + state_layer_idx * (num_v_heads_ * key_head_dim_ * value_head_dim_);
             }
 
             // ----- 3a. Fused Causal Conv1d + SiLU -----

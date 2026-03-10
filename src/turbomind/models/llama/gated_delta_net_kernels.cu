@@ -1,7 +1,11 @@
+
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/models/llama/gated_delta_net_kernels.h"
-#include "src/turbomind/utils/cuda_utils.h"
+
 #include <algorithm>
 #include <cmath>
+
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
@@ -526,6 +530,72 @@ void invokeComputeBetaG(T*           beta_out,
         compute_beta_g_kernel<<<blocks, threads, 0, stream>>>(
             beta_out, g_out, b_in, a_in, A_log, dt_bias, total, num_v_heads);
     }
+}
+
+template<class T>
+__global__ void compute_beta_g_kernel_v2(T*       beta_out,
+                                         T*       g_out,
+                                         const T* b_in,
+                                         int      b_stride,
+                                         const T* a_in,
+                                         int      a_stride,
+                                         const T* A_log,
+                                         const T* dt_bias,
+                                         int      total,
+                                         int      num_v_heads)
+{
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (idx >= total)
+        return;
+
+    const int hi = idx % num_v_heads;
+    const int ti = idx / num_v_heads;
+
+    float b_val       = static_cast<float>(b_in[ti * b_stride + hi]);
+    float a_val       = static_cast<float>(a_in[ti * a_stride + hi]);
+    float A_log_val   = static_cast<float>(A_log[hi]);
+    float dt_bias_val = static_cast<float>(dt_bias[hi]);
+
+    float beta  = 1.0f / (1.0f + expf(-b_val));
+    float sum   = a_val + dt_bias_val;
+    float sp    = sum > 20.0f ? sum : logf(1.0f + expf(sum));
+    float g_val = -expf(A_log_val) * sp;
+
+    beta_out[idx] = static_cast<T>(beta);
+    g_out[idx]    = static_cast<T>(g_val);
+}
+
+void ComputeBetaG_v2(Ref<Tensor>   beta_out_,
+                     Ref<Tensor>   g_out_,
+                     const Tensor& b_in,
+                     const Tensor& a_in,
+                     const Tensor& A_log,
+                     const Tensor& dt_bias,
+                     cudaStream_t  stream)
+{
+
+    auto& beta_out = beta_out_.get();
+    auto& g_out    = g_out_.get();
+
+    const int threads = 256;
+    const int blocks  = cdiv<ssize_t>(beta_out.size(), threads);
+
+    auto invoke = [&](auto t) {
+        using T = decltype(t);
+        compute_beta_g_kernel_v2<<<blocks, threads, 0, stream>>>(beta_out.data<T>(),
+                                                                 g_out.data<T>(),
+                                                                 b_in.data<T>(),
+                                                                 b_in.stride(0),
+                                                                 a_in.data<T>(),
+                                                                 a_in.stride(0),
+                                                                 A_log.data<T>(),
+                                                                 dt_bias.data<T>(),
+                                                                 beta_out.size(),
+                                                                 A_log.size());
+    };
+
+    TM_DISPATCH_PRIMARY_DTYPES(beta_out.dtype(), invoke);
 }
 
 // =============================================================================

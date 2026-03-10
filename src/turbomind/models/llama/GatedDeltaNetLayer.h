@@ -54,13 +54,21 @@ private:
     LlamaLinear& linear_;
 
     // Per-phase batch data (mirrors UnifiedAttentionLayer pattern)
-    struct PhaseData {
+    struct Data {
         std::vector<RequestCache*> rc;          // borrowed batch RequestCache pointers
         std::vector<int>           input_lens;  // snapshot of input_len per request (captured at Setup time)
         int                        batch_size = 0;
         Buffer_<int>               q_offsets;  // cumulative token offsets, device buffer
+        std::vector<Tensor>        conv_states;
+        std::vector<Tensor>        recurrent_states;
+        Buffer_<void*>             conv_state_ptrs;
+        Buffer_<void*>             recurrent_state_ptrs;
     };
-    std::vector<std::shared_ptr<PhaseData>> phase_data_;
+    std::vector<Data> data_;
+
+    // staging buffers
+    Buffer_<void*> conv_state_ptrs_buf_;
+    Buffer_<void*> recurrent_state_ptrs_buf_;
 };
 
 }  // namespace turbomind

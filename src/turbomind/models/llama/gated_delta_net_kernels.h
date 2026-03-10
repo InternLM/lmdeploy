@@ -1,9 +1,10 @@
 #pragma once
 
-#include "src/turbomind/core/tensor.h"
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
+
+#include "src/turbomind/core/core.h"
 
 namespace turbomind {
 
@@ -108,6 +109,14 @@ void invokeComputeBetaG(T*           beta_out,
                         int          total,
                         int          num_v_heads,
                         cudaStream_t stream);
+
+void ComputeBetaG_v2(Ref<Tensor>   beta_out_,
+                     Ref<Tensor>   g_out_,
+                     const Tensor& b_in,
+                     const Tensor& a_in,
+                     const Tensor& A_log,
+                     const Tensor& dt_bias,
+                     cudaStream_t  stream);
 
 // RMSNorm * SiLU-gate (fused output normalization)
 template<typename T>

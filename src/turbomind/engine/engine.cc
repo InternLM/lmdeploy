@@ -432,6 +432,13 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
 
         auto& seq = *ptr;
 
+        if (seq.recurrent_states) {
+            if (step != seq.cache_len) {
+                signals.push_back([r] { UpdateState(*r, Request::kInvalid, 0); });
+                continue;
+            }
+        }
+
         auto c = std::make_unique<RequestCache>(r, seq);
 
         if (step < seq.tokens.size()) {
