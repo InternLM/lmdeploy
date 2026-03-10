@@ -1,8 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modified from https://github.com/vllm-project/vllm/tree/v0.7.3/vllm/entrypoints/openai/reasoning_parsers
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import cached_property
-from typing import Sequence
 
 from mmengine import Registry
 
@@ -20,18 +19,18 @@ class StreamingParserState:
     """
     previous_text: str = ''
     current_text: str = ''
-    previous_token_ids: list[int] = field(default_factory=list)
-    current_token_ids: list[int] = field(default_factory=list)
+    previous_token_ids: list[int] = []
+    current_token_ids: list[int] = []
 
-    def update(self, delta_text: str, delta_token_ids: Sequence[int]) -> None:
+    def update(self, delta_text: str, delta_token_ids: list[int]) -> None:
         """Accumulate new delta into current_text / current_token_ids."""
         self.current_text += delta_text
-        self.current_token_ids = self.current_token_ids + list(delta_token_ids)
+        self.current_token_ids.extend(delta_token_ids)
 
     def step(self) -> None:
         """Advance: copy current -> previous (call at end of each iteration)."""
         self.previous_text = self.current_text
-        self.previous_token_ids = list(self.current_token_ids)
+        self.previous_token_ids = self.current_token_ids
 
 
 def get_streaming_state(request: object) -> StreamingParserState:
@@ -58,7 +57,7 @@ class ReasoningParser:
     def extract_reasoning_content_streaming(
         self,
         delta_text: str,
-        delta_token_ids: Sequence[int],
+        delta_token_ids: list[int],
         request: object,
         **kwargs,
     ) -> DeltaMessage | None:
@@ -136,27 +135,25 @@ class ThinkingReasoningParser(ReasoningParser):
         self.start_token_id: int = self.vocab.get(self.start_token)
         self.end_token_id: int = self.vocab.get(self.end_token)
 
-    # ---- internal helpers for tag detection ----
-
-    def _has_start(self, token_ids: Sequence[int], text: str) -> bool:
+    def _has_start(self, token_ids: list[int], text: str) -> bool:
         """Check whether the start tag is present."""
         if self.start_token_id is not None:
             return self.start_token_id in token_ids
         return self.start_token in text
 
-    def _has_end(self, token_ids: Sequence[int], text: str) -> bool:
+    def _has_end(self, token_ids: list[int], text: str) -> bool:
         """Check whether the end tag is present."""
         if self.end_token_id is not None:
             return self.end_token_id in token_ids
         return self.end_token in text
 
-    def _is_single_start_token(self, delta_token_ids: Sequence[int], delta_text: str) -> bool:
+    def _is_single_start_token(self, delta_token_ids: list[int], delta_text: str) -> bool:
         """Check if the delta is exactly the start tag (single token)."""
         if self.start_token_id is not None:
             return len(delta_token_ids) == 1 and delta_token_ids[0] == self.start_token_id
         return delta_text == self.start_token
 
-    def _is_single_end_token(self, delta_token_ids: Sequence[int], delta_text: str) -> bool:
+    def _is_single_end_token(self, delta_token_ids: list[int], delta_text: str) -> bool:
         """Check if the delta is exactly the end tag (single token)."""
         if self.end_token_id is not None:
             return len(delta_token_ids) == 1 and delta_token_ids[0] == self.end_token_id
@@ -167,12 +164,10 @@ class ThinkingReasoningParser(ReasoningParser):
         idx = text.find(self.end_token)
         return text[:idx], text[idx + len(self.end_token):]
 
-    # ---- public API ----
-
     def extract_reasoning_content_streaming(
         self,
         delta_text: str,
-        delta_token_ids: Sequence[int],
+        delta_token_ids: list[int],
         request: object,
         **kwargs,
     ) -> DeltaMessage | None:

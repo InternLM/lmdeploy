@@ -509,8 +509,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         has_parser = VariableInterface.tool_parser is not None or VariableInterface.reasoning_parser is not None
         streaming_tools = False
         # Shared state for streaming parsers (previous/current text & token ids)
-        if has_parser:
-            parser_state = get_streaming_state(request)
+        parser_state = get_streaming_state(request) if has_parser else None
         async for res in result_generator:
             logprobs, usage = None, None
             if gen_logprobs and res.logprobs:
@@ -532,7 +531,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                     res.finish_reason = 'tool_calls'
             else:
                 delta_message = DeltaMessage(role='assistant', content=res.response)
-                if has_parser:
+                if parser_state is not None:
                     parser_state.update(res.response, delta_token_ids)
                 if request.tool_choice != 'none' and VariableInterface.tool_parser is not None:
                     if res.finish_reason == 'stop' and streaming_tools is True:
@@ -553,7 +552,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                     if reasoning_delta is not None:
                         delta_message.reasoning_content = reasoning_delta.reasoning_content
                         delta_message.content = reasoning_delta.content
-                if has_parser:
+                if parser_state is not None:
                     parser_state.step()
             if request.return_token_ids:
                 delta_message.gen_tokens = delta_token_ids
