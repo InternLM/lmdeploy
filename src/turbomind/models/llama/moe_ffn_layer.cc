@@ -92,8 +92,9 @@ void MoeFfnLayer::Forward(ForwardParam& p)
 
     // dump_logits(tokens, layer_id);
 
-    if (param_.topk_method == "noaux_tc") {
+    if (param_.topk_method == "noaux_tc" || param_.scoring_func == "sigmoid") {
         // invokeMoeGate_NoAuxTC clears accum and masks internally
+        // Also used for sigmoid scoring (e.g. Qwen3.5) which is not supported by V2 kernel
         TM_CHECK_EQ(param_.n_group, 1);
         TM_CHECK_EQ(param_.topk_group, 1);
         const float* correction_bias =

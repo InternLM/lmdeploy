@@ -9,6 +9,7 @@
 #include "src/turbomind/kernels/core/thread_map.h"
 
 #include <cmath>
+#include <type_traits>
 
 namespace turbomind::attention {
 
@@ -105,8 +106,13 @@ struct Impl<MMA_884, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, He
     static constexpr bool kUseSmemQ = false;
     static constexpr bool kUseSmemP = false;
 
-    using ThreadMapQ  = RakedThreadMap<HeadDim, CTA_Q, 4, kWarpCount>;
-    using ThreadMapKV = RakedThreadMap<HeadDim, CTA_S, 4, kWarpCount>;
+    // For HeadDim=256, WarpThreadC needs to be explicitly specified to avoid exceeding WARP_SIZE
+    using ThreadMapQ  = std::conditional_t<HeadDim == 256,
+                                          RakedThreadMap<HeadDim, CTA_Q, 4, kWarpCount, 8>,
+                                          RakedThreadMap<HeadDim, CTA_Q, 4, kWarpCount>>;
+    using ThreadMapKV = std::conditional_t<HeadDim == 256,
+                                           RakedThreadMap<HeadDim, CTA_S, 4, kWarpCount, 8>,
+                                           RakedThreadMap<HeadDim, CTA_S, 4, kWarpCount>>;
 
     using ThreadMapKVp = void;
 

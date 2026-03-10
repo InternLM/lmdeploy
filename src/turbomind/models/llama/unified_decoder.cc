@@ -25,6 +25,9 @@ namespace turbomind {
 void UnifiedDecoder::Run(BatchOp op, int phase, TensorMap& env)
 {
     attn_layer_->Run(op, phase, env);
+    if (linear_attn_layer_) {
+        linear_attn_layer_->Run(op, phase, env);
+    }
 }
 
 UnifiedDecoder::UnifiedDecoder(const ModelParam&     model,
@@ -51,6 +54,10 @@ UnifiedDecoder::UnifiedDecoder(const ModelParam&     model,
 
     attn_layer_ =
         std::make_unique<UnifiedAttentionLayer>(model, attn, engine, attn_tp_size_, ctx, phases, (bool)moe_ffn_layer_);
+
+    if (std::find(model.layer_types.begin(), model.layer_types.end(), 1) != model.layer_types.end()) {
+        linear_attn_layer_ = std::make_unique<GatedDeltaNetLayer>(model, attn, engine, attn_tp_size_, ctx, phases);
+    }
 
     if (std::accumulate(model.inter_size.begin(), model.inter_size.end(), 0LL)) {
         ffn_layer_ = std::make_unique<LlamaFfnLayer>(model, ctx);
@@ -193,15 +200,31 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
         }
 
         /////////////////////////////////////////////
-        /// self-attention
-        attn_layer_->Forward(
-            {phase, local_hidden_states, local_hidden_states, weights.at(layer)->self_attn_weights.get(), layer});
+        /// self-attention or linear-attention
+        if (weights.at(layer)->linear_attn_weights) {
+            linear_attn_layer_->Forward(
+                {phase, local_hidden_states, local_hidden_states, weights.at(layer)->linear_attn_weights.get(), layer});
+        }
+        else {
+            attn_layer_->Forward(
+                {phase, local_hidden_states, local_hidden_states, weights.at(layer)->self_attn_weights.get(), layer});
+        }
 
         TM_DEBUG_TENSOR(local_hidden_states, Concat("attn_block", layer), 2);
 
+        // For gated delta networks, we may need a different output.bias name or it doesn't have it.
+        // We will just use `output.bias` from either layer.
+        Tensor out_bias;
+        if (weights.at(layer)->linear_attn_weights) {
+            out_bias = weights.at(layer)->linear_attn_weights->out_proj.bias;
+        }
+        else {
+            out_bias = weights.at(layer)->self_attn_weights->output.bias;
+        }
+
         AllreduceResidualRMSnorm(global_hidden_states,
                                  local_residual,
-                                 weights.at(layer)->self_attn_weights->output.bias,
+                                 out_bias,
                                  weights.at(layer)->ffn_norm,
                                  local_token_num,
                                  attn_tp_group_,

@@ -294,12 +294,14 @@ void invokeReduceV3(T*           out,
 INSTANTIATE_invokeReduceV3(64, half);
 INSTANTIATE_invokeReduceV3(128, half);
 INSTANTIATE_invokeReduceV3(192, half);
+INSTANTIATE_invokeReduceV3(256, half);
 INSTANTIATE_invokeReduceV3(576, half);
 
 #if ENABLE_BF16
 INSTANTIATE_invokeReduceV3(64, nv_bfloat16);
 INSTANTIATE_invokeReduceV3(128, nv_bfloat16);
 INSTANTIATE_invokeReduceV3(192, nv_bfloat16);
+INSTANTIATE_invokeReduceV3(256, nv_bfloat16);
 INSTANTIATE_invokeReduceV3(576, nv_bfloat16);
 #endif
 
