@@ -236,7 +236,14 @@ void Engine::Impl::CreateSequenceManager()
         return AllReduce(tp_group_, free, comm::RedOp::kMin);
     };
 
-    seq_mgr_ = std::make_unique<SequenceManager>(model_param.layer_num,
+    int cache_layer_num = model_param.layer_num;
+    for (const auto& type : model_param.layer_types) {
+        if (type == 1) {
+            --cache_layer_num;
+        }
+    }
+
+    seq_mgr_ = std::make_unique<SequenceManager>(cache_layer_num,
                                                  block_config,
                                                  param_.cache_max_block_count,
                                                  param_.cache_chunk_size,

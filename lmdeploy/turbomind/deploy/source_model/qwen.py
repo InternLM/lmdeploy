@@ -367,7 +367,7 @@ class Qwen3_5Model(Qwen3Model):
             info['inter_size'] = shared_expert_size
         info['moe_shared_gate'] = True
         # Qwen3.5 uses sigmoid MoE routing (not softmax)
-        info['scoring_func'] = 'sigmoid'
+        info['scoring_func'] = 'softmax'
         info['norm_topk_prob'] = True
         # Fix RoPE dim for partial_rotary_factor
         rope_params = cfg.get('rope_parameters', {})
@@ -448,7 +448,7 @@ class Qwen3_5MoeModel(Qwen3MoeModel):
         info['inter_size'] = cfg.get('shared_expert_intermediate_size', 0)
         info['moe_shared_gate'] = True
         # Qwen3.5 uses sigmoid MoE routing (not softmax)
-        info['scoring_func'] = 'sigmoid'
+        info['scoring_func'] = 'softmax'
         info['norm_topk_prob'] = True
         # Fix RoPE dim for partial_rotary_factor
         rope_params = cfg.get('rope_parameters', {})
