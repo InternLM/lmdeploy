@@ -41,7 +41,8 @@ from lmdeploy.serve.openai.protocol import (AbortRequest, ChatCompletionRequest,
                                             GenerateReqInput, GenerateReqMetaOutput, GenerateReqOutput, LogProbs,
                                             ModelCard, ModelList, ModelPermission, PoolingRequest, PoolingResponse,
                                             TopLogprob, UpdateParamsRequest, UsageInfo)
-from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParser, ReasoningParserManager
+from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import (ReasoningParser, ReasoningParserManager,
+                                                                     get_streaming_state)
 from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParser, ToolParserManager
 from lmdeploy.serve.utils.server_utils import validate_json_request
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
@@ -505,13 +506,11 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         return response_json
 
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
-        previous_text = ''
-        current_text = ''
-        previous_token_ids = []
-        current_token_ids = []
-        delta_token_ids = []
         has_parser = VariableInterface.tool_parser is not None or VariableInterface.reasoning_parser is not None
         streaming_tools = False
+        # Shared state for streaming parsers (previous/current text & token ids)
+        if has_parser:
+            parser_state = get_streaming_state(request)
         async for res in result_generator:
             logprobs, usage = None, None
             if gen_logprobs and res.logprobs:
@@ -534,19 +533,12 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             else:
                 delta_message = DeltaMessage(role='assistant', content=res.response)
                 if has_parser:
-                    current_text = current_text + res.response
-                    current_token_ids = current_token_ids + delta_token_ids
+                    parser_state.update(res.response, delta_token_ids)
                 if request.tool_choice != 'none' and VariableInterface.tool_parser is not None:
                     if res.finish_reason == 'stop' and streaming_tools is True:
                         res.finish_reason = 'tool_calls'
                     tool_delta = VariableInterface.tool_parser.extract_tool_calls_streaming(
-                        previous_text=previous_text,
-                        current_text=current_text,
-                        delta_text=delta_message.content,
-                        previous_token_ids=previous_token_ids,
-                        current_token_ids=current_token_ids,
-                        delta_token_ids=delta_token_ids,
-                        request=request)
+                        delta_text=delta_message.content, delta_token_ids=delta_token_ids, request=request)
                     if tool_delta is not None:
                         delta_message.tool_calls = tool_delta.tool_calls
                         delta_message.content = tool_delta.content
@@ -557,18 +549,12 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                     logger.error('Please launch the api_server with --tool-call-parser if you want to use tool.')
                 if VariableInterface.reasoning_parser is not None and enable_thinking is not False:
                     reasoning_delta = VariableInterface.reasoning_parser.extract_reasoning_content_streaming(
-                        previous_text=previous_text,
-                        current_text=current_text,
-                        delta_text=delta_message.content or '',
-                        previous_token_ids=previous_token_ids,
-                        current_token_ids=current_token_ids,
-                        delta_token_ids=delta_token_ids)
+                        delta_text=delta_message.content or '', delta_token_ids=delta_token_ids, request=request)
                     if reasoning_delta is not None:
                         delta_message.reasoning_content = reasoning_delta.reasoning_content
                         delta_message.content = reasoning_delta.content
                 if has_parser:
-                    previous_text = current_text
-                    previous_token_ids = current_token_ids
+                    parser_state.step()
             if request.return_token_ids:
                 delta_message.gen_tokens = delta_token_ids
             response_json = create_stream_response_json(index=0,

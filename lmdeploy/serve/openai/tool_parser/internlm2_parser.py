@@ -9,6 +9,7 @@ from partial_json_parser.core.options import Allow
 
 from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, DeltaFunctionCall, DeltaMessage, DeltaToolCall,
                                             ExtractedToolCallInformation, FunctionCall, ToolCall)
+from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import get_streaming_state
 from lmdeploy.utils import get_logger
 
 from .tool_parser import ToolParser, ToolParserManager
@@ -41,14 +42,12 @@ class Internlm2ToolParser(ToolParser):
 
     def extract_tool_calls_streaming(
         self,
-        previous_text: str,
-        current_text: str,
         delta_text: str,
-        previous_token_ids: Sequence[int],
-        current_token_ids: Sequence[int],
         delta_token_ids: Sequence[int],
         request: ChatCompletionRequest,
     ) -> Union[DeltaMessage, None]:
+        state = get_streaming_state(request)
+        current_text = state.current_text
         if '<|action_start|>' not in current_text:
             self.position = len(current_text)
             return DeltaMessage(content=delta_text)

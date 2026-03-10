@@ -48,11 +48,7 @@ class ToolParser:
 
     def extract_tool_calls_streaming(
         self,
-        previous_text: str,
-        current_text: str,
         delta_text: str,
-        previous_token_ids: Sequence[int],
-        current_token_ids: Sequence[int],
         delta_token_ids: Sequence[int],
         request: ChatCompletionRequest,
     ) -> Union[DeltaMessage, None]:
@@ -60,8 +56,16 @@ class ToolParser:
         from an incomplete response; for use when handling tool calls and
         streaming.
 
-        Has to be an instance method because  it requires state - the current tokens/diffs, but also the information
-        about what has previously been parsed and extracted (see constructor)
+        Args:
+            delta_text: The new text chunk for this iteration.
+            delta_token_ids: The new token ids for this chunk.
+            request: The request object; a ``StreamingParserState`` is attached
+                to it via ``get_streaming_state(request)`` so that previous /
+                current text and token ids are available.
+
+        Has to be an instance method because it requires state - the current
+        tokens/diffs, but also the information about what has previously been
+        parsed and extracted (see constructor).
         """
         raise NotImplementedError('AbstractToolParser.extract_tool_calls_streaming has not been '
                                   'implemented!')
