@@ -12,7 +12,7 @@ on:
     - cron:  '00 8 * * 0-4'
 
 env:
-  TAG: "openmmlab/lmdeploy:nightly-cu12.8"
+  TAG: "zhulinjulia/lmdeploy_test:nightly-cu12.8"
 
 jobs:
   publish_docker_image:
