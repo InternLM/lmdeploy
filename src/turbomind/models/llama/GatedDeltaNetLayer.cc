@@ -191,114 +191,56 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
         ComputeBetaG_v2(beta, g, b, a, weights.A_log, weights.dt_bias, stream);
 
         // =================================================================
-        // 3. Process each request independently
+        // 3. Process all requests at once via batched kernel launches
         // =================================================================
         Tensor attn_out{{token_num, value_dim_}, dtype, device};
+        Tensor conv_out{{token_num, conv_dim_}, dtype, device};
 
-        int token_offset = 0;
-        for (int req = 0; req < pd.batch_size; ++req) {
-            auto&     rc      = *pd.rc[req];
-            const int seq_len = pd.input_lens[req];
-            if (seq_len == 0)
-                continue;
+        const int state_layer_idx = linear_layer_index(p.layer_id, layer_types_);
+        const int conv_state_layer_offset      = state_layer_idx * (conv_dim_ * d_conv_);
+        const int recurrent_state_layer_offset = state_layer_idx * (num_v_heads_ * key_head_dim_ * value_head_dim_);
 
-            // Slice per-request portions from the fused projection output.
-            // qkv lives in columns [0, conv_dim_) of all_proj with row-stride all_col.
-            // z   lives in columns [conv_dim_, conv_dim_+value_dim_).
-            // b/a are already extracted into contiguous beta/g_tensor above.
-            T* qkv_row_ptr = all_data + token_offset * all_col;  // first token, col 0
-            T* z_row_ptr   = all_data + token_offset * all_col + conv_dim_;
-            T* beta_ptr    = beta.data<T>() + token_offset * num_v_heads_;
-            T* g_ptr       = g.data<T>() + token_offset * num_v_heads_;
-            T* out_ptr     = attn_out.data<T>() + token_offset * value_dim_;
+        // ----- 3a. Fused Causal Conv1d + SiLU (all requests) -----
+        // all_proj carries the non-contiguous qkv slice (stride = all_col);
+        // in_stride is derived from all_proj.stride(0) inside the launcher.
+        invokeFusedConv1dSiLU(conv_out,
+                              all_proj,
+                              weights.conv1d,
+                              Tensor{},
+                              pd.conv_state_ptrs,
+                              pd.q_offsets,
+                              pd.batch_size,
+                              conv_state_layer_offset,
+                              stream);
+        sync_check_cuda_error();
 
-            const int state_layer_idx = linear_layer_index(p.layer_id, layer_types_);
+        // ----- 3b. Gated Delta Rule (all requests, decode + prefill unified) -----
+        invokeGatedDeltaRuleBatched(attn_out,
+                                    conv_out,
+                                    beta,
+                                    g,
+                                    pd.recurrent_state_ptrs,
+                                    pd.q_offsets,
+                                    pd.batch_size,
+                                    num_k_heads_,
+                                    key_head_dim_,
+                                    recurrent_state_layer_offset,
+                                    stream);
+        sync_check_cuda_error();
 
-            T* conv_state_ptr      = nullptr;
-            T* recurrent_state_ptr = nullptr;
-            if (pd.conv_states[req]) {
-                conv_state_ptr = pd.conv_states[req].data<T>() + state_layer_idx * (conv_dim_ * d_conv_);
-            }
-            if (pd.recurrent_states[req]) {
-                recurrent_state_ptr = pd.recurrent_states[req].data<T>()
-                                      + state_layer_idx * (num_v_heads_ * key_head_dim_ * value_head_dim_);
-            }
-
-            // ----- 3a. Fused Causal Conv1d + SiLU -----
-            // conv_out shape: (seq_len, conv_dim_) — packed [Q|K|V] per token.
-            // No transpose: the new delta-rule kernels read this row-major layout directly.
-            Tensor conv_out{{seq_len, conv_dim_}, dtype, device};
-            invokeFusedConv1dSiLU(conv_out.data<T>(),
-                                  qkv_row_ptr,
-                                  weights.conv1d.data<T>(),
-                                  (const T*)nullptr,
-                                  conv_state_ptr,
-                                  1,
-                                  conv_dim_,
-                                  seq_len,
-                                  d_conv_,
-                                  all_col,
-                                  stream);
-            sync_check_cuda_error();
-
-            // ----- 3b. Gated Delta Rule -----
-            // The kernels handle:
-            //   • Strided Q/K/V access directly from the packed conv_out buffer
-            //     (eliminates the three cudaMemcpy2DAsync strided-copy passes).
-            //   • In-kernel L2 normalization of Q and K
-            //     (eliminates two invokeL2Norm kernel launches).
-            //   • GQA: kh = h / (num_v_heads / num_k_heads) computed per-thread
-            //     (eliminates the invokeRepeatInterleave allocation).
-            const int k_dim_total = key_dim_;  // num_k_heads * key_head_dim (per TP)
-
-            if (seq_len == 1) {
-                // Decode: single-step recurrent update using persistent state.
-                invokeRecurrentGatedDeltaRule(out_ptr,
-                                              conv_out.data<T>(),
-                                              beta_ptr,
-                                              g_ptr,
-                                              recurrent_state_ptr,
-                                              1,  // batch_size = 1 per request
-                                              num_v_heads_,
-                                              num_k_heads_,
-                                              key_head_dim_,
-                                              value_head_dim_,
-                                              k_dim_total,
-                                              stream);
-            }
-            else {
-                // Prefill: process all timesteps in a SINGLE kernel launch.
-                // (Previously: O(seq_len) kernel launches via host-side for-loop.)
-                invokeGatedDeltaRulePrefill(out_ptr,
-                                            conv_out.data<T>(),
-                                            beta_ptr,
-                                            g_ptr,
-                                            recurrent_state_ptr,
-                                            seq_len,
-                                            num_v_heads_,
-                                            num_k_heads_,
-                                            key_head_dim_,
-                                            value_head_dim_,
-                                            k_dim_total,
-                                            stream);
-            }
-            sync_check_cuda_error();
-
-            // ----- 3c. RMSNormGated -----
-            const int N = seq_len * num_v_heads_;
-            invokeRMSNormGated(out_ptr,
-                               z_row_ptr,
-                               weights.norm.data<T>(),
-                               norm_eps_,
-                               N,
-                               value_head_dim_,
-                               all_col,
-                               num_v_heads_,
-                               stream);
-            sync_check_cuda_error();
-
-            token_offset += seq_len;
-        }
+        // ----- 3c. RMSNormGated (all tokens at once) -----
+        // Gate (z) lives at column conv_dim_ of all_proj with row-stride all_col;
+        // gate_stride passes that stride through to the kernel unchanged.
+        invokeRMSNormGated(attn_out.data<T>(),
+                           all_data + conv_dim_,
+                           weights.norm.data<T>(),
+                           norm_eps_,
+                           token_num * num_v_heads_,
+                           value_head_dim_,
+                           all_col,
+                           num_v_heads_,
+                           stream);
+        sync_check_cuda_error();
 
         // =================================================================
         // 4. Output projection (all tokens at once)

@@ -445,6 +445,158 @@ void invokeGatedDeltaRulePrefill(T*           v_out,
 }
 
 // =============================================================================
+// Gated Delta Rule — Unified batched kernel (decode + prefill)
+//
+// Grid = batch_size * num_v_heads blocks, one block per (b, h) pair.
+// Reads state via (T*)state_ptrs[b]; token range from q_offsets[b/b+1].
+// For decode (seq_len == 1) the time loop runs once; for prefill it runs
+// seq_len times — identical body either way.
+// =============================================================================
+template<typename T>
+__global__ void gated_delta_rule_batched_kernel(T*           v_out,
+                                                const T*     qkv_in,
+                                                const T*     beta_in,
+                                                const T*     g_in,
+                                                void* const* state_ptrs,
+                                                const int*   q_offsets,
+                                                int          num_v_heads,
+                                                int          num_k_heads,
+                                                int          key_head_dim,
+                                                int          value_head_dim,
+                                                int          k_dim_total,
+                                                int          state_layer_offset)
+{
+    const int bh    = blockIdx.x;
+    const int b     = bh / num_v_heads;
+    const int h     = bh % num_v_heads;
+    const int ratio = num_v_heads / num_k_heads;
+    const int kh    = h / ratio;
+
+    const int tok_off    = q_offsets[b];
+    const int seq_len    = q_offsets[b + 1] - tok_off;
+    const int state_size = key_head_dim * value_head_dim;
+    const int conv_dim   = 2 * k_dim_total + num_v_heads * value_head_dim;
+    const int v_dim      = num_v_heads * value_head_dim;
+
+    T*          s_ptr = (T*)state_ptrs[b] + state_layer_offset + h * state_size;
+    const float scale = rsqrtf((float)key_head_dim);
+
+    __shared__ float smem[32];
+
+    for (int t = 0; t < seq_len; ++t) {
+        const int global_t = tok_off + t;
+
+        const T* q_ptr = qkv_in + global_t * conv_dim + kh * key_head_dim;
+        const T* k_ptr = qkv_in + global_t * conv_dim + k_dim_total + kh * key_head_dim;
+        const T* v_ptr = qkv_in + global_t * conv_dim + 2 * k_dim_total + h * value_head_dim;
+        T*       o_ptr = v_out + global_t * v_dim + h * value_head_dim;
+
+        const float beta_val = (float)beta_in[global_t * num_v_heads + h];
+        const float decay    = expf((float)g_in[global_t * num_v_heads + h]);
+
+        // --- In-kernel L2-normalize Q (Vectorized) ---
+        float q_sq = 0.f;
+        if (key_head_dim % 2 == 0) {
+            using T2           = typename std::conditional<std::is_same<T, half>::value, half2, nv_bfloat162>::type;
+            const T2* q_ptr_v2 = reinterpret_cast<const T2*>(q_ptr);
+            for (int kd = threadIdx.x; kd < key_head_dim / 2; kd += blockDim.x)
+                q_sq += sq_acc(q_ptr_v2[kd]);
+        }
+        else {
+            for (int kd = threadIdx.x; kd < key_head_dim; kd += blockDim.x)
+                q_sq += sq_acc(q_ptr[kd]);
+        }
+        const float q_inv_norm = block_l2_inv_norm(q_sq, smem);
+
+        // --- In-kernel L2-normalize K (Vectorized) ---
+        float k_sq = 0.f;
+        if (key_head_dim % 2 == 0) {
+            using T2           = typename std::conditional<std::is_same<T, half>::value, half2, nv_bfloat162>::type;
+            const T2* k_ptr_v2 = reinterpret_cast<const T2*>(k_ptr);
+            for (int kd = threadIdx.x; kd < key_head_dim / 2; kd += blockDim.x)
+                k_sq += sq_acc(k_ptr_v2[kd]);
+        }
+        else {
+            for (int kd = threadIdx.x; kd < key_head_dim; kd += blockDim.x)
+                k_sq += sq_acc(k_ptr[kd]);
+        }
+        const float k_inv_norm = block_l2_inv_norm(k_sq, smem);
+
+        // --- Step 1: S *= decay ---
+        for (int idx = threadIdx.x; idx < state_size; idx += blockDim.x)
+            s_ptr[idx] = static_cast<T>((float)s_ptr[idx] * decay);
+        __syncthreads();
+
+        // --- Step 2: delta rule update ---
+        for (int vd = threadIdx.x; vd < value_head_dim; vd += blockDim.x) {
+            float kv_mem = 0.f;
+            for (int kd = 0; kd < key_head_dim; ++kd)
+                kv_mem += (float)s_ptr[kd * value_head_dim + vd] * ((float)k_ptr[kd] * k_inv_norm);
+
+            const float delta = ((float)v_ptr[vd] - kv_mem) * beta_val;
+
+            for (int kd = 0; kd < key_head_dim; ++kd)
+                s_ptr[kd * value_head_dim + vd] =
+                    static_cast<T>((float)s_ptr[kd * value_head_dim + vd] + (float)k_ptr[kd] * k_inv_norm * delta);
+        }
+        __syncthreads();
+
+        // --- Step 3: output = (S^T @ q) * scale ---
+        for (int vd = threadIdx.x; vd < value_head_dim; vd += blockDim.x) {
+            float o = 0.f;
+            for (int kd = 0; kd < key_head_dim; ++kd)
+                o += (float)s_ptr[kd * value_head_dim + vd] * ((float)q_ptr[kd] * q_inv_norm);
+            o_ptr[vd] = static_cast<T>(o * scale);
+        }
+        __syncthreads();
+    }
+}
+
+void invokeGatedDeltaRuleBatched(Ref<Tensor>           v_out_,
+                                 const Tensor&         qkv_in,
+                                 const Tensor&         beta,
+                                 const Tensor&         g,
+                                 const Buffer_<void*>& state_ptrs,
+                                 const Buffer_<int>&   q_offsets,
+                                 int                   batch_size,
+                                 int                   num_k_heads,
+                                 int                   key_head_dim,
+                                 int                   state_layer_offset,
+                                 cudaStream_t          stream)
+{
+    auto& v_out = v_out_.get();
+
+    const int num_v_heads    = beta.shape(1);
+    const int v_dim          = v_out.shape(1);
+    const int value_head_dim = v_dim / num_v_heads;
+    const int k_dim_total    = (qkv_in.shape(1) - v_dim) / 2;
+
+    if (batch_size == 0 || num_v_heads == 0)
+        return;
+
+    const int    num_blocks = batch_size * num_v_heads;
+    const int    threads    = std::min(256, value_head_dim);
+    const size_t smem_sz    = ((threads + 31) / 32) * sizeof(float);
+
+    auto invoke = [&](auto t) {
+        using T = decltype(t);
+        gated_delta_rule_batched_kernel<<<num_blocks, threads, smem_sz, stream>>>(v_out.data<T>(),
+                                                                                  qkv_in.data<T>(),
+                                                                                  beta.data<T>(),
+                                                                                  g.data<T>(),
+                                                                                  state_ptrs.data(),
+                                                                                  q_offsets.data(),
+                                                                                  num_v_heads,
+                                                                                  num_k_heads,
+                                                                                  key_head_dim,
+                                                                                  value_head_dim,
+                                                                                  k_dim_total,
+                                                                                  state_layer_offset);
+    };
+    TM_DISPATCH_PRIMARY_DTYPES(v_out.dtype(), invoke);
+}
+
+// =============================================================================
 // Compute beta = sigmoid(b) and g = -exp(A_log) * softplus(a + dt_bias)
 // =============================================================================
 template<typename T>
@@ -660,90 +812,114 @@ void invokeRMSNormGated(T*           hidden,
 }
 
 // =============================================================================
-// Fused Conv1d + SiLU for row-major layout
+// Fused Conv1d + SiLU — unified batched kernel (row-major layout)
+//
+// Handles both decode (seq_len == 1) and prefill (seq_len > 1) per request in
+// a single launch. q_offsets[b] / q_offsets[b+1] bound the token range for
+// request b. conv_state_ptrs[b] points to state [conv_dim, d_conv] per request.
 // =============================================================================
 template<typename T>
-__global__ void fused_conv1d_decode_kernel(
-    T* out, const T* in, const T* weight, const T* bias, T* state, int conv_dim, int d_conv, int in_stride)
-{
-    const int c = blockIdx.x * blockDim.x + threadIdx.x;
-    if (c >= conv_dim)
-        return;
-
-    T* s = state + c * d_conv;
-#pragma unroll
-    for (int d = 0; d < d_conv - 1; ++d)
-        s[d] = s[d + 1];
-    s[d_conv - 1] = in[c];
-
-    const T* w   = weight + c * d_conv;
-    float    acc = 0.0f;
-#pragma unroll
-    for (int d = 0; d < d_conv; ++d)
-        acc += static_cast<float>(s[d]) * static_cast<float>(w[d]);
-    if (bias)
-        acc += static_cast<float>(bias[c]);
-    out[c] = static_cast<T>(acc / (1.0f + expf(-acc)));
-}
-
-template<typename T>
-__global__ void fused_conv1d_prefill_kernel(
-    T* out, const T* in, const T* weight, const T* bias, T* state, int conv_dim, int seq_len, int d_conv, int in_stride)
+__global__ void fused_conv1d_batched_kernel(T*           out,
+                                            const T*     in,
+                                            const T*     weight,
+                                            const T*     bias,
+                                            void* const* conv_state_ptrs,
+                                            const int*   q_offsets,
+                                            int          batch_size,
+                                            int          conv_dim,
+                                            int          d_conv,
+                                            int          in_stride,
+                                            int          state_layer_offset)
 {
     const int tid   = blockIdx.x * blockDim.x + threadIdx.x;
-    const int total = seq_len * conv_dim;
+    const int total = q_offsets[batch_size] * conv_dim;
     if (tid >= total)
         return;
 
-    const int t = tid / conv_dim;
-    const int c = tid % conv_dim;
+    const int global_t = tid / conv_dim;
+    const int c        = tid % conv_dim;
 
+    // binary search: find request b such that q_offsets[b] <= global_t < q_offsets[b+1]
+    int lo = 0, hi = batch_size - 1;
+    while (lo < hi) {
+        int m = (lo + hi) / 2;
+        if (q_offsets[m + 1] <= global_t)
+            lo = m + 1;
+        else
+            hi = m;
+    }
+    const int b       = lo;
+    const int t_local = global_t - q_offsets[b];
+    const int seq_len = q_offsets[b + 1] - q_offsets[b];
+
+    T*       s   = (T*)conv_state_ptrs[b] + state_layer_offset + c * d_conv;
     const T* w   = weight + c * d_conv;
     float    acc = 0.0f;
+
+    if (seq_len == 1) {
+        // decode: shift state in-place, append new input, dot-product from state
 #pragma unroll
-    for (int d = 0; d < d_conv; ++d) {
-        int   src_t = t - (d_conv - 1 - d);
-        float val   = 0.0f;
-        if (src_t >= 0)
-            val = static_cast<float>(in[src_t * in_stride + c]);
-        acc += val * static_cast<float>(w[d]);
+        for (int d = 0; d < d_conv - 1; ++d)
+            s[d] = s[d + 1];
+        s[d_conv - 1] = in[global_t * in_stride + c];
+#pragma unroll
+        for (int d = 0; d < d_conv; ++d)
+            acc += static_cast<float>(s[d]) * static_cast<float>(w[d]);
+    }
+    else {
+        // prefill: causal conv with zero-padding before first token of request
+#pragma unroll
+        for (int d = 0; d < d_conv; ++d) {
+            int src = t_local - (d_conv - 1 - d);
+            if (src >= 0)
+                acc += static_cast<float>(in[(q_offsets[b] + src) * in_stride + c]) * static_cast<float>(w[d]);
+        }
+        // save trailing inputs into conv state for future decode steps
+        if (t_local >= seq_len - d_conv) {
+            int state_idx = d_conv - (seq_len - t_local);
+            s[state_idx]  = in[global_t * in_stride + c];
+        }
     }
     if (bias)
         acc += static_cast<float>(bias[c]);
-    out[t * conv_dim + c] = static_cast<T>(acc / (1.0f + expf(-acc)));
-
-    if (state && t >= seq_len - d_conv) {
-        int state_idx                 = d_conv - (seq_len - t);
-        state[c * d_conv + state_idx] = in[t * in_stride + c];
-    }
+    out[global_t * conv_dim + c] = static_cast<T>(acc / (1.0f + expf(-acc)));
 }
 
-template<typename T>
-void invokeFusedConv1dSiLU(T*           out,
-                           const T*     in,
-                           const T*     weight,
-                           const T*     bias,
-                           T*           conv_states,
-                           int          batch_size,
-                           int          conv_dim,
-                           int          seq_len,
-                           int          d_conv,
-                           int          in_stride,
-                           cudaStream_t stream)
+void invokeFusedConv1dSiLU(Ref<Tensor>           out_,
+                           const Tensor&         in,
+                           const Tensor&         weight,
+                           const Tensor&         bias,
+                           const Buffer_<void*>& conv_state_ptrs,
+                           const Buffer_<int>&   q_offsets,
+                           int                   batch_size,
+                           int                   state_layer_offset,
+                           cudaStream_t          stream)
 {
-    if (seq_len == 1) {
-        const int threads = 256;
-        const int blocks  = (conv_dim + threads - 1) / threads;
-        fused_conv1d_decode_kernel<<<blocks, threads, 0, stream>>>(
-            out, in, weight, bias, conv_states, conv_dim, d_conv, in_stride);
-    }
-    else {
-        const int total   = seq_len * conv_dim;
-        const int threads = 256;
-        const int blocks  = (total + threads - 1) / threads;
-        fused_conv1d_prefill_kernel<<<blocks, threads, 0, stream>>>(
-            out, in, weight, bias, conv_states, conv_dim, seq_len, d_conv, in_stride);
-    }
+    auto& out = out_.get();
+
+    const int total_tokens = in.shape(0);
+    const int conv_dim     = weight.shape(0);
+    const int d_conv       = weight.shape(1);
+    const int in_stride    = in.stride(0);
+
+    const int threads = 256;
+    const int blocks  = (total_tokens * conv_dim + threads - 1) / threads;
+
+    auto invoke = [&](auto t) {
+        using T = decltype(t);
+        fused_conv1d_batched_kernel<<<blocks, threads, 0, stream>>>(out.data<T>(),
+                                                                    in.data<T>(),
+                                                                    weight.data<T>(),
+                                                                    bias ? bias.data<T>() : (T*)nullptr,
+                                                                    conv_state_ptrs.data(),
+                                                                    q_offsets.data(),
+                                                                    batch_size,
+                                                                    conv_dim,
+                                                                    d_conv,
+                                                                    in_stride,
+                                                                    state_layer_offset);
+    };
+    TM_DISPATCH_PRIMARY_DTYPES(out.dtype(), invoke);
 }
 
 // =============================================================================
@@ -794,7 +970,6 @@ void invokeSiLU(T* data, int n, cudaStream_t stream)
 
 #define INSTANTIATE(T)                                                                                                 \
     template void invokeCausalConv1d(T*, const T*, const T*, const T*, T*, int, int, int, int, cudaStream_t);          \
-    template void invokeFusedConv1dSiLU(T*, const T*, const T*, const T*, T*, int, int, int, int, int, cudaStream_t);  \
     template void invokeRecurrentGatedDeltaRule(                                                                       \
         T*, const T*, const T*, const T*, T*, int, int, int, int, int, int, cudaStream_t);                             \
     template void invokeGatedDeltaRulePrefill(                                                                         \

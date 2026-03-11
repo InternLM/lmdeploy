@@ -23,23 +23,26 @@ void invokeCausalConv1d(T*           out,
                         int          d_conv,
                         cudaStream_t stream);
 
-// Fused Conv1d + SiLU for row-major (token_num, conv_dim) layout.
-// in:  (token_num, conv_dim)  — row-major
-// out: (token_num, conv_dim)  — row-major
-// weight: (conv_dim, d_conv)
-// conv_states: (conv_dim, d_conv) per-request rolling state, may be NULL
-template<typename T>
-void invokeFusedConv1dSiLU(T*           out,
-                           const T*     in,
-                           const T*     weight,
-                           const T*     bias,
-                           T*           conv_states,
-                           int          batch_size,
-                           int          conv_dim,
-                           int          seq_len,
-                           int          d_conv,
-                           int          in_stride,
-                           cudaStream_t stream);
+// Fused Conv1d + SiLU — unified batched launcher (row-major layout).
+//
+// Processes all requests in a single kernel launch.  Decode (seq_len == 1)
+// and prefill (seq_len > 1) requests may be mixed freely within the batch.
+//
+// out:             (total_tokens, conv_dim)       row-major output
+// in:              (total_tokens, in_stride)      non-contiguous slice of all_proj
+// weight:          (conv_dim, d_conv)
+// bias:            (conv_dim) or empty Tensor
+// conv_state_ptrs: device array[batch_size] of per-request state pointers
+// q_offsets:       device int[batch_size+1] cumulative token offsets
+void invokeFusedConv1dSiLU(Ref<Tensor>           out,
+                            const Tensor&         in,
+                            const Tensor&         weight,
+                            const Tensor&         bias,
+                            const Buffer_<void*>& conv_state_ptrs,
+                            const Buffer_<int>&   q_offsets,
+                            int                   batch_size,
+                            int                   state_layer_offset,
+                            cudaStream_t          stream);
 
 // =============================================================================
 // Gated Delta Rule — Recurrent decode (seq_len == 1)
@@ -93,6 +96,29 @@ void invokeGatedDeltaRulePrefill(T*           v_out,
                                  int          value_head_dim,
                                  int          k_dim_total,
                                  cudaStream_t stream);
+
+// =============================================================================
+// Gated Delta Rule — Unified batched launcher (decode + prefill)
+//
+// Replaces per-request invokeRecurrentGatedDeltaRule / invokeGatedDeltaRulePrefill
+// calls with a single launch across all requests in the batch.
+//
+// v_out:       (total_tokens, num_v_heads * value_head_dim)
+// qkv_in:      (total_tokens, conv_dim)  packed conv output
+// beta, g:     (total_tokens, num_v_heads)
+// state_ptrs:  device array[batch_size] of per-request recurrent state pointers
+// q_offsets:   device int[batch_size+1] cumulative token offsets
+void invokeGatedDeltaRuleBatched(Ref<Tensor>           v_out,
+                                  const Tensor&         qkv_in,
+                                  const Tensor&         beta,
+                                  const Tensor&         g,
+                                  const Buffer_<void*>& state_ptrs,
+                                  const Buffer_<int>&   q_offsets,
+                                  int                   batch_size,
+                                  int                   num_k_heads,
+                                  int                   key_head_dim,
+                                  int                   state_layer_offset,
+                                  cudaStream_t          stream);
 
 // =============================================================================
 // Helper kernels
