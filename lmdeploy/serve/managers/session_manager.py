@@ -88,7 +88,7 @@ class Session:
             await self._handle.async_cancel(self.session_id)
         except Exception as e:
             logger.exception(f'[request_handle] session {self.session_id} exception caught: {e}')
-            raise e
+            raise
         finally:
             logger.debug(f'[request_handle] session {self.session_id} releasing the instance')
             # Return inference instance if it was acquired
