@@ -73,7 +73,6 @@ pytorch_chat_model:
         - Qwen/Qwen3-30B-A3B-GPTQ-Int4
         - Qwen/Qwen3-VL-8B-Instruct
         - Qwen/Qwen3-VL-30B-A3B-Instruct
-        - THUDM/cogvlm-chat-hf
         - THUDM/cogvlm2-llama3-chinese-chat-19B
         - THUDM/glm-4v-9b
         - THUDM/glm-4-9b-chat
@@ -141,8 +140,10 @@ turbomind_quantization:
         - Qwen/Qwen1.5-MoE-A2.7B-Chat
         - Qwen/Qwen3-8B-Base
         - Qwen/Qwen3-30B-A3B-Base
+        - zai-org/GLM-4.7-Flash
     no_kvint8:
         - deepseek-ai/DeepSeek-V2-Chat
+        - zai-org/GLM-4.7-Flash
 
 pytorch_quantization:
     awq:
