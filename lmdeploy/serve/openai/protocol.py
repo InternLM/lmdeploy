@@ -226,7 +226,7 @@ class ChatCompletionResponseChoice(BaseModel):
     index: int
     message: ChatMessage
     logprobs: Optional[ChoiceLogprobs] = None
-    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None
+    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error', 'abort']] = None
 
 
 class ChatCompletionResponse(BaseModel):
@@ -453,6 +453,8 @@ class GenerateReqInput(BaseModel):
     spaces_between_special_tokens: Optional[bool] = True
     include_stop_str_in_output: Optional[bool] = False
     return_routed_experts: Optional[bool] = False
+    repetition_ngram_size: int = 0
+    repetition_ngram_threshold: int = 0
     # kwargs for hf processor
     mm_processor_kwargs: Optional[dict[str, Any]] = Field(
         default=None,
