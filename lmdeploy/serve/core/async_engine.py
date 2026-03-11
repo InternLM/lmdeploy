@@ -394,7 +394,7 @@ class AsyncEngine:
         metrics_processor.increase_total_requests()
         async with session.request_handle() as handle:
             if epoch != self.epoch:
-                logger.debug(f'[generate] session {session_id} got aborted before starting inference')
+                logger.info(f'[generate] session {session_id} got aborted before starting inference')
                 # TODO(lvhan): metrics_processor.increase_failed_requests('abort')
                 metrics_processor.increase_completed_requests()
                 yield GenOut(response='',
