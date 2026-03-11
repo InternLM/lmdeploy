@@ -84,10 +84,10 @@ class Session:
         except SafeRunException:
             pass
         except (asyncio.CancelledError, GeneratorExit) as e:
-            logger.error(f'[request_handle] session {self.session_id} exception caught: {e}')
+            logger.exception(f'[request_handle] session {self.session_id} exception caught: {e}')
             await self._handle.async_cancel(self.session_id)
         except Exception as e:
-            logger.error(f'Session {self.session_id} failed to acquire an inference instance: {e}')
+            logger.exception(f'[request_handle] session {self.session_id} exception caught: {e}')
             raise e
         finally:
             logger.debug(f'[request_handle] session {self.session_id} releasing the instance')
@@ -104,8 +104,6 @@ class Session:
         logger.info(f'[session] Aborting session {self.session_id}')
         if self._handle is not None:
             await self._handle.async_cancel(self.session_id)
-        # DO NOT reset the session here because it might be used by other components.
-        # Leave the cleanup to the caller.
 
     async def async_close(self):
         """End the session."""
@@ -117,8 +115,8 @@ class Session:
         async with self.request_handle() as handle:
             try:
                 await handle.async_end(self.session_id)
-            except (Exception, asyncio.CancelledError, GeneratorExit):
-                logger.exception('[async_end] exception caught')
+            except (Exception, asyncio.CancelledError, GeneratorExit) as e:
+                logger.exception(f'[async_close] exception caught: {e}')
         self.reset()
 
     def abort(self):
@@ -219,16 +217,14 @@ class SessionManager:
             tasks.append(session.async_abort())
         await asyncio.gather(*tasks, return_exceptions=True)
         # "abort all" is designed for async RL. The aborted sessions will be no longer used,
-        # so we reset and clear the sessions here.
-        for session in list(self.sessions.values()):
-            session.reset()
+        # so we clear the sessions here.
         self.sessions.clear()
 
     def has(self, session_id):
         return session_id in self.sessions
 
     def remove(self, session: Session):
-        self.sessions.pop(session.session_id)
+        self.sessions.pop(session.session_id, None)
 
     def clear(self):
         self.sessions.clear()
