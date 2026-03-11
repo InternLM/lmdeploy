@@ -65,15 +65,10 @@ void ComputeBetaG_v2(Ref<Tensor>   beta_out_,
                      cudaStream_t  stream);
 
 // RMSNorm * SiLU-gate (fused output normalization)
-template<typename T>
-void invokeRMSNormGated(T*           hidden,
-                        const T*     gate,
-                        const T*     weight,
-                        float        eps,
-                        int          N,
-                        int          head_dim,
-                        int          gate_stride,
-                        int          num_heads,
-                        cudaStream_t stream);
+void invokeRMSNormGated(Ref<Tensor>   hidden,
+                        const Tensor& gate,
+                        const Tensor& weight,
+                        float         eps,
+                        cudaStream_t  stream);
 
 }  // namespace turbomind

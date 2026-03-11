@@ -329,19 +329,37 @@ __global__ void rms_norm_gated_kernel(
     }
 }
 
-template<typename T>
-void invokeRMSNormGated(T*           hidden,
-                        const T*     gate,
-                        const T*     weight,
-                        float        eps,
-                        int          N,
-                        int          head_dim,
-                        int          gate_stride,
-                        int          num_heads,
-                        cudaStream_t stream)
+void invokeRMSNormGated(Ref<Tensor>   hidden_,
+                        const Tensor& gate,
+                        const Tensor& weight,
+                        float         eps,
+                        cudaStream_t  stream)
 {
+    auto& hidden = hidden_.get();
+
+    const int N           = hidden.shape(0);
+    const int head_dim    = hidden.shape(1);
+    const int token_num   = gate.shape(0);
+    const int gate_stride = gate.stride(0);
+    const int num_heads   = N / token_num;
+
+    if (N == 0)
+        return;
+
     const int threads = std::min(256, head_dim);
-    rms_norm_gated_kernel<<<N, threads, 0, stream>>>(hidden, gate, weight, eps, N, head_dim, gate_stride, num_heads);
+
+    auto invoke = [&](auto t) {
+        using T = decltype(t);
+        rms_norm_gated_kernel<<<N, threads, 0, stream>>>(hidden.data<T>(),
+                                                         gate.data<T>(),
+                                                         weight.data<T>(),
+                                                         eps,
+                                                         N,
+                                                         head_dim,
+                                                         gate_stride,
+                                                         num_heads);
+    };
+    TM_DISPATCH_PRIMARY_DTYPES(hidden.dtype(), invoke);
 }
 
 // =============================================================================
@@ -454,16 +472,5 @@ void invokeFusedConv1dSiLU(Ref<Tensor>           out_,
     };
     TM_DISPATCH_PRIMARY_DTYPES(out.dtype(), invoke);
 }
-
-// =============================================================================
-// Explicit instantiations
-// =============================================================================
-
-#define INSTANTIATE(T) template void invokeRMSNormGated(T*, const T*, const T*, float, int, int, int, int, cudaStream_t);
-
-INSTANTIATE(half)
-INSTANTIATE(nv_bfloat16)
-
-#undef INSTANTIATE
 
 }  // namespace turbomind

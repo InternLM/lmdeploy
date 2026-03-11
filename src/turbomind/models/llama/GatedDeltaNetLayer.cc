@@ -162,8 +162,6 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
         Tensor    all_proj   = linear_.Forward(p.input, weights.in_proj_all);
         sync_check_cuda_error();
 
-        // Pointer-arithmetic slices — no copies, no allocations.
-        auto all_data = all_proj.data<T>();
         // Column offsets per token (all_proj is token-major, row-major):
         //   [0, conv_dim_)           -> mixed_qkv
         //   [conv_dim_, +value_dim_) -> z
@@ -229,17 +227,10 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
         sync_check_cuda_error();
 
         // ----- 3c. RMSNormGated (all tokens at once) -----
-        // Gate (z) lives at column conv_dim_ of all_proj with row-stride all_col;
-        // gate_stride passes that stride through to the kernel unchanged.
-        invokeRMSNormGated(attn_out.data<T>(),
-                           all_data + conv_dim_,
-                           weights.norm.data<T>(),
-                           norm_eps_,
-                           token_num * num_v_heads_,
-                           value_head_dim_,
-                           all_col,
-                           num_v_heads_,
-                           stream);
+        // Gate (z) lives at column conv_dim_ of all_proj with row-stride all_col.
+        Tensor gate        = all_proj.slice({0, conv_dim_}, {-1, value_dim_});
+        Tensor hidden_view = attn_out.view({token_num * num_v_heads_, value_head_dim_});
+        invokeRMSNormGated(hidden_view, gate, weights.norm, norm_eps_, stream);
         sync_check_cuda_error();
 
         // =================================================================
