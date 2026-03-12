@@ -3,7 +3,6 @@
 
 def bootstrap():
     import os
-    import sys
 
     has_turbomind = False
     pwd = os.path.dirname(__file__)

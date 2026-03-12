@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import torch
 from torch import nn
