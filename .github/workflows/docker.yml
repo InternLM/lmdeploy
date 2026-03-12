@@ -191,6 +191,7 @@ jobs:
           docker push $TAG
 
   publish_inner_docker_image:
+    needs: publish_docker_image
     runs-on: image-sync-inner
     environment: 'prod'
     env:
