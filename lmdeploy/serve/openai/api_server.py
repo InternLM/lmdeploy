@@ -962,6 +962,8 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         spaces_between_special_tokens=request.spaces_between_special_tokens,
         include_stop_str_in_output=request.include_stop_str_in_output,
         return_routed_experts=request.return_routed_experts,
+        repetition_ngram_size=request.repetition_ngram_size,
+        repetition_ngram_threshold=request.repetition_ngram_threshold,
     )
 
     result_generator = VariableInterface.async_engine.generate(

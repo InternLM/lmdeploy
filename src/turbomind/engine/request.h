@@ -173,6 +173,15 @@ struct RequestCache {
 
     float rope_base = 0.f;
 
+    // Qwen 3.5 Gated DeltaNet linear attention persistent states.
+    // These are Tensor objects whose GPU memory is auto-managed by the RequestCache lifecycle.
+    // Allocated by GatedDeltaNetLayer::Run(kAdd), used/updated in Forward(), freed when
+    // RequestCache is destroyed (when the request completes or is canceled).
+    //   conv_states:      (num_linear_layers, conv_dim, d_conv) — per-channel rolling conv history
+    //   recurrent_states: (num_linear_layers, num_v_heads, key_head_dim, value_head_dim) — SSM state
+    Tensor conv_states;
+    Tensor recurrent_states;
+
     Interval output_hidden_states;
     Interval output_logits;
 };
