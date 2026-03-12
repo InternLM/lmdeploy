@@ -61,6 +61,6 @@ jobs:
       - name: Pull and push to inner
         run: |
           docker pull ${{ env.TAG }}
-          echo "${{ secrets.CLUSTER_DOCKERHUB_TOKEN }}" | docker login registry.h.pjlab.org.cn -u "${{ secrets.CLUSTER_DOCKERHUB_USERNAME }}" --password-stdin
+          docker login registry.h.pjlab.org.cn -p ${{ secrets.CLUSTER_DOCKERHUB_TOKEN }} -u ${{ secrets.CLUSTER_DOCKERHUB_USERNAME }}
           docker tag ${{ env.TAG }} ${{ env.INNER_TAG }}
           docker push ${{ env.INNER_TAG }}
