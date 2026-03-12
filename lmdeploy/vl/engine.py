@@ -3,7 +3,7 @@
 import asyncio
 import inspect
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import torch
 
@@ -37,7 +37,7 @@ class ImageEncoder:
         model_path: str,
         backend: str,
         vision_config: VisionConfig = None,
-        backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None,
+        backend_config: TurbomindEngineConfig | PytorchEngineConfig | None = None,
     ):
         self.model = load_vl_model(model_path, backend, backend_config=backend_config)
         if vision_config is None:
@@ -48,8 +48,8 @@ class ImageEncoder:
         torch.cuda.empty_cache()
 
     async def preprocess(self,
-                         messages: List[Dict],
-                         mm_processor_kwargs: Optional[Dict[str, Any]] = None) -> List[Dict]:
+                         messages: list[dict],
+                         mm_processor_kwargs: dict[str, Any] | None = None) -> list[dict]:
         """Preprocess multimodal data in the messages."""
         if _accepts_arg(self.model.preprocess, 'mm_processor_kwargs'):
             future = asyncio.get_event_loop().run_in_executor(self.executor, self.model.preprocess, messages,
@@ -60,7 +60,7 @@ class ImageEncoder:
         outputs = await future
         return outputs
 
-    async def async_infer(self, messages: List[Dict]) -> List[Dict]:
+    async def async_infer(self, messages: list[dict]) -> list[dict]:
         """Get multimodal embedding.
 
         Args:
@@ -75,13 +75,13 @@ class ImageEncoder:
 
     async def wrap_for_pytorch(
         self,
-        messages: List[Dict],
+        messages: list[dict],
         chat_template,
         tokenizer,
         sequence_start,
-        tools: Optional[List[object]] = None,
-        chat_template_kwargs: Optional[Dict] = None,
-    ) -> List[Dict]:
+        tools: list[object] | None = None,
+        chat_template_kwargs: dict | None = None,
+    ) -> list[dict]:
         """
         Args:
             messages (List[Dict]): a list of message, which is supposed to be
@@ -110,19 +110,19 @@ class ImageEncoder:
             result = self.model.to_pytorch_with_input_ids(messages)
         # clear data
         for i, message in enumerate(messages):
-            if isinstance(message['content'], List):
+            if isinstance(message['content'], list):
                 messages[i]['preprocess'] = None
         return result
 
     async def wrap_for_turbomind(
         self,
-        messages: List[Dict],
+        messages: list[dict],
         chat_template,
         tokenizer,
         sequence_start,
-        tools: Optional[List[object]] = None,
-        chat_template_kwargs: Optional[Dict] = None,
-    ) -> Dict:
+        tools: list[object] | None = None,
+        chat_template_kwargs: dict | None = None,
+    ) -> dict:
         """
         Args:
             messages (List[Dict]): a list of message, which is supposed to be
@@ -145,7 +145,7 @@ class ImageEncoder:
                                          chat_template_kwargs=chat_template_kwargs)
         # clear data
         for i, message in enumerate(messages):
-            if isinstance(message['content'], List):
+            if isinstance(message['content'], list):
                 messages[i]['preprocess'] = None
                 messages[i]['forward'] = None
         return result

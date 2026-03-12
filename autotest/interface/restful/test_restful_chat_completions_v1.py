@@ -3,8 +3,11 @@ from typing import Literal
 import pytest
 from openai import OpenAI
 from utils.constant import BACKEND_LIST, RESTFUL_MODEL_LIST
-from utils.restful_return_check import (assert_chat_completions_batch_return, assert_chat_completions_stream_return,
-                                        has_repeated_fragment)
+from utils.restful_return_check import (
+    assert_chat_completions_batch_return,
+    assert_chat_completions_stream_return,
+    has_repeated_fragment,
+)
 
 from lmdeploy.serve.openai.api_client import APIClient, get_model_list
 

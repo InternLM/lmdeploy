@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass, field, fields
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import torch
@@ -11,7 +11,7 @@ from torch.profiler import record_function
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.config import CacheConfig, DLLMConfig, ModelConfig, QuantizationConfig
-from lmdeploy.pytorch.multimodal.data_type import MultiModalData
+from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
 from lmdeploy.pytorch.utils import CtxMgrBase, singleton
 
 if TYPE_CHECKING:
@@ -20,11 +20,11 @@ if TYPE_CHECKING:
 
 @dataclass
 class DPMeta:
-    tp_sizes: List[int] = None
-    moe_tp_sizes: List[int] = None
+    tp_sizes: list[int] = None
+    moe_tp_sizes: list[int] = None
 
     @staticmethod
-    def _gather_tp_sizes(tp: int, seqlen: int, num_tokens: List[int], dist_ctx: dist.DistContext, layer_type: str):
+    def _gather_tp_sizes(tp: int, seqlen: int, num_tokens: list[int], dist_ctx: dist.DistContext, layer_type: str):
         """Gather tp size."""
         attn_tp = dist_ctx.dist_config.attn_tp
         if tp > 1 and tp != attn_tp:
@@ -38,7 +38,7 @@ class DPMeta:
         return tp_sizes
 
     @classmethod
-    def build(cls, seqlen: int, num_tokens: List[int]):
+    def build(cls, seqlen: int, num_tokens: list[int]):
         """Get dp meta."""
         dist_ctx = dist.get_dist_manager().current_context()
         dist_config = dist_ctx.dist_config
@@ -63,10 +63,10 @@ class DPMeta:
 class VisionModelInputs:
     """Vision model inputs."""
     history_lengths: torch.LongTensor = None
-    input_embeddings: List[List[torch.Tensor]] = None
-    input_embedding_ranges: List[torch.LongTensor] = None
+    input_embeddings: list[list[torch.Tensor]] = None
+    input_embedding_ranges: list[torch.LongTensor] = None
     input_embedding_indexing: torch.BoolTensor = None
-    input_multimodals: List[MultiModalData] = None
+    input_multimodals: list[MultiModalTensor] = None
 
     def to_device(self, device: str, non_blocking: bool = False):
         """To device."""
@@ -125,7 +125,7 @@ class VisionModelInputs:
 class ModelInputsDelta:
     """Delta of ModelInputs."""
     # valid indices
-    indices: Optional[torch.Tensor]
+    indices: torch.Tensor | None
     # new block offsets
     block_offsets: torch.Tensor
     # cpu copy of indices
@@ -135,7 +135,7 @@ class ModelInputsDelta:
     sum_kv_seqlen: int
     is_decoding: bool = True
     # sliding window
-    num_ignored_history: Optional[torch.Tensor] = None
+    num_ignored_history: torch.Tensor | None = None
 
     @property
     def seq_length(self):
@@ -184,7 +184,7 @@ class ModelInputs:
     sum_kv_seqlen: int
     local_adapter_ids: torch.Tensor = None
     vision_inputs: VisionModelInputs = None
-    model_metas: List[Dict[str, Any]] = None
+    model_metas: list[dict[str, Any]] = None
     dp_meta: 'DPMeta' = None
     enable_microbatch: bool = False
     is_dummy: bool = False
@@ -222,7 +222,7 @@ class ModelInputs:
 
         return ModelInputs(**out_dict)
 
-    def build_dp_meta(self, num_tokens: List[int]):
+    def build_dp_meta(self, num_tokens: list[int]):
         """Build dp meta."""
         self.dp_meta = DPMeta.build(self.input_ids.numel(), num_tokens)
 
@@ -248,28 +248,28 @@ class StepContext:
     q_seqlens: torch.LongTensor
     kv_seqlens: torch.IntTensor
     q_start_loc: torch.LongTensor
-    kv_caches: List
+    kv_caches: list
     is_decoding: bool
     sum_kv_seqlen: int
     max_kv_seqlen: int = None
     local_adapter_ids: torch.LongTensor = None
     input_embeddings: torch.Tensor = None
     input_embedding_indexing: torch.Tensor = None
-    input_multimodals: List[MultiModalData] = None
+    input_multimodals: list[MultiModalTensor] = None
     vision_inputs: VisionModelInputs = None
     attn_metadata: Any = None
     kv_quant_policy: Literal[0, 4, 8] = 0
-    model_metas: List[Dict[str, Any]] = None
+    model_metas: list[dict[str, Any]] = None
     dp_meta: DPMeta = None
     enable_microbatch: bool = False
     # for draft model
     target_hidden_states: torch.Tensor = None
 
     # states for ssm
-    state_caches: List = None
+    state_caches: list = None
     state_offsets: torch.LongTensor = None
 
-    _outputs: Dict = field(default_factory=dict)
+    _outputs: dict = field(default_factory=dict)
 
     @classmethod
     def new(
@@ -277,8 +277,8 @@ class StepContext:
         inputs: ModelInputs,
         model_config: ModelConfig,
         cache_config: CacheConfig,
-        kv_caches: List = None,
-        state_caches: List = None,
+        kv_caches: list = None,
+        state_caches: list = None,
         kv_quant_policy: Literal[0, 4, 8] = 0,
     ):
         """Build step context.
@@ -408,8 +408,8 @@ class StepContextManager(CtxMgrBase[StepContext]):
         inputs: ModelInputs,
         model_config: ModelConfig,
         cache_config: CacheConfig,
-        kv_caches: List = None,
-        state_caches: List = None,
+        kv_caches: list = None,
+        state_caches: list = None,
         kv_quant_policy: Literal[0, 4, 8] = 0,
     ):
         """Build context."""

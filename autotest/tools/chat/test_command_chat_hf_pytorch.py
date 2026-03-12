@@ -1,6 +1,11 @@
 import pytest
-from tools.common_case_config import (MODELSCOPE_CONFIG, PYTORCH_LORA_TEST_LLM_GPU1, PYTORCH_LORA_TEST_LLM_GPU2,
-                                      PYTORCH_PR_TEST_LLM_GPU1, PYTORCH_PR_TEST_LLM_GPU2)
+from tools.common_case_config import (
+    MODELSCOPE_CONFIG,
+    PYTORCH_LORA_TEST_LLM_GPU1,
+    PYTORCH_LORA_TEST_LLM_GPU2,
+    PYTORCH_PR_TEST_LLM_GPU1,
+    PYTORCH_PR_TEST_LLM_GPU2,
+)
 from utils.config_utils import get_func_config_list, get_workerid
 from utils.run_client_chat import run_tests
 

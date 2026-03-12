@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
 from itertools import groupby
-from typing import Dict, List, Union
 
 import numpy as np
 from mmengine import Registry
@@ -14,12 +13,12 @@ VISION_MODELS = Registry('vision_model')
 
 class VisionModel(ABC):
     """Visual model which extract image feature."""
-    _arch: Union[str, List[str]] = None
+    _arch: str | list[str] = None
 
     def __init__(self,
                  model_path: str,
                  with_llm: bool = False,
-                 max_memory: Dict[int, int] = None,
+                 max_memory: dict[int, int] = None,
                  hf_config: AutoConfig = None,
                  backend: str = ''):
         """init."""
@@ -62,7 +61,7 @@ class VisionModel(ABC):
             raise NotImplementedError()
 
     @abstractmethod
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Preprocess multimodal data in the messages.
 
         The derived class,
@@ -105,7 +104,7 @@ class VisionModel(ABC):
         """  # noqa
         raise NotImplementedError()
 
-    def has_input_ids(self, messages: List[Dict]) -> bool:
+    def has_input_ids(self, messages: list[dict]) -> bool:
         """Check whether the messages contain input_ids directly.
 
         Args:
@@ -115,9 +114,9 @@ class VisionModel(ABC):
             bool: whether the messages contain input_ids directly
         """
         users = [x['content'] for x in messages if x['role'] == 'user']
-        return len(users) == 1 and isinstance(users[0], List) and isinstance(users[0][0].get('text', ''), List)
+        return len(users) == 1 and isinstance(users[0], list) and isinstance(users[0][0].get('text', ''), list)
 
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
@@ -165,34 +164,45 @@ class VisionModel(ABC):
             raise NotImplementedError()
 
     @staticmethod
-    def collect_multimodal_items(messages):
-        """Gather all multimodal items along with their respective parameters
-        from the messages and compile them into a single list.
+    def collect_images(messages):
+        """Gather all images along with their respective parameters from the
+        messages and compile them into a single list. Each image is converted
+        to RGB color space.
 
         Args:
-            messages (List[Dict]): a list of message
-        Returns:
-            List[Tuple[Modality, Any, Dict]]: a list of (modality, data, params) for each multimodal item
-        """
-        multimodal_items = []
+            messages (List[Tuple[Image, Dict]]): a list of images with their
+                corresponding parameters
+        """  # noqa
+        images = []
         for message in messages:
             content = message['content']
             if not isinstance(content, list):
                 continue
+            images.extend([(x['image'], {
+                k: v
+                for k, v in x.items() if k not in {'type', 'image'}
+            }) for x in content if x['type'] == 'image'])
+        return images
 
-            for x in content:
-                if not isinstance(x, dict):
-                    continue
+    @staticmethod
+    def collect_time_series(messages):
+        """Gather all time series data along with their respective parameters
+        from the messages and compile them into a single list.
 
-                modality = x.get('type')
-                if modality is None or modality == 'text':
-                    continue
-
-                data = x.get('data')
-                params = {k: v for k, v in x.items() if k not in ['type', 'data']}
-                multimodal_items.append((modality, data, params))
-
-        return multimodal_items
+        Args:
+            messages (List[Tuple[np.ndarray, Dict]]): a list of time
+                series data with their corresponding parameters
+        """  # noqa
+        time_series = []
+        for message in messages:
+            content = message['content']
+            if not isinstance(content, list):
+                continue
+            time_series.extend([(x['time_series'], {
+                k: v
+                for k, v in x.items() if k not in {'type', 'time_series'}
+            }) for x in content if x['type'] == 'time_series'])
+        return time_series
 
     @staticmethod
     def IMAGE_TOKEN_included(messages):
@@ -209,7 +219,7 @@ class VisionModel(ABC):
                 continue
             if isinstance(content, str) and '<IMAGE_TOKEN>' in content:
                 return True
-            elif isinstance(content, List):
+            elif isinstance(content, list):
                 content = [x['text'] for x in content if x['type'] == 'text']
                 if any('<IMAGE_TOKEN>' in x for x in content):
                     return True

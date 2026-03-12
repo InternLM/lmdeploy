@@ -25,7 +25,7 @@ from lmdeploy.serve.openai.api_server import router  # noqa: E402
 from lmdeploy.serve.proxy.proxy import app as proxy_server  # noqa: E402
 
 version_file = '../../lmdeploy/version.py'
-with open(version_file, 'r') as f:
+with open(version_file) as f:
     exec(compile(f.read(), version_file, 'exec'))
 __version__ = locals()['__version__']
 

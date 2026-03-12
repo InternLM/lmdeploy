@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Dict, Iterable, List, Tuple
+from collections.abc import Iterable
 
 import torch
 import torch.distributed as dist
@@ -15,10 +15,18 @@ from lmdeploy.pytorch.nn.moe import build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .patch import add_prefix, get_build_model_context
-from .qwen3_5 import (Qwen3_5Attention, Qwen3_5DecoderLayer, Qwen3_5ForConditionalGeneration, Qwen3_5GatedDeltaNet,
-                      Qwen3_5MLP, Qwen3_5Model, Qwen3_5TextModel, Qwen3_5TextRotaryEmbedding)
+from .qwen2_5_vl import Qwen2_5_VLInputProcessor as Qwen3_5MoeInputProcessor
+from .qwen3_5 import (
+    Qwen3_5Attention,
+    Qwen3_5DecoderLayer,
+    Qwen3_5ForConditionalGeneration,
+    Qwen3_5GatedDeltaNet,
+    Qwen3_5MLP,
+    Qwen3_5Model,
+    Qwen3_5TextModel,
+    Qwen3_5TextRotaryEmbedding,
+)
 from .qwen3_5 import Qwen3_5VisionModel as Qwen3_5MoeVisionModel
-from .qwen3_vl import Qwen3VLInputProcessor as Qwen3_5MoeInputProcessor
 
 
 class Qwen3_5MoeTopKRouter(nn.Module):
@@ -51,6 +59,7 @@ class Qwen3_5MoeSparseMoeBlock(nn.Module):
                  device: torch.device | None = None,
                  prefix: str = ''):
         super().__init__()
+        # TODO: zhouxinyu, determine modules_to_not_convert from config file
         quantization_config = getattr(config, 'quantization_config', None)
         self.layer_idx = layer_idx
         self.hidden_dim = config.hidden_size
@@ -264,8 +273,8 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
         bm_ctx = get_build_model_context()
         self.enable_return_routed_experts = bm_ctx.enable_return_routed_experts
 
-    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
-                             expert_params_mapping: List):
+    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
+                             expert_params_mapping: list):
         """Load weight experts."""
         # this func is not used, but it has same layout with tranformers implementation
         # so I will keep it for now.
@@ -281,7 +290,7 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
             param = params_dict[name]
             load_weight(param, loaded_weight)
 
-    def _load_weight_fused_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter]):
+    def _load_weight_fused_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter]):
         """Load weight of fused expert weights."""
         num_experts = self.config.text_config.num_experts
         fused_gateup_name = 'gate_up_proj'
@@ -304,7 +313,7 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
                 w2 = loaded_weight[expert_id]
                 load_weight(param, w2, expert_id=expert_id, shard_id='down')
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
 
         def __skip_layers(name):

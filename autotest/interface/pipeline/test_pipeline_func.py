@@ -3,9 +3,14 @@ import multiprocessing as mp
 import pydantic
 import pytest
 from utils.config_utils import set_device_env_variable, unset_device_env_variable
-from utils.pipeline_chat import (assert_pipeline_batch_return, assert_pipeline_batch_stream_return,
-                                 assert_pipeline_common_log, assert_pipeline_single_return,
-                                 assert_pipeline_single_stream_return, save_pipeline_common_log)
+from utils.pipeline_chat import (
+    assert_pipeline_batch_return,
+    assert_pipeline_batch_stream_return,
+    assert_pipeline_common_log,
+    assert_pipeline_single_return,
+    assert_pipeline_single_stream_return,
+    save_pipeline_common_log,
+)
 from utils.restful_return_check import has_repeated_fragment
 
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline

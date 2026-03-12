@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Callable, List
+from collections.abc import Callable
 
 import torch
 import torch.distributed as dist
@@ -53,7 +53,7 @@ class TritonFusedMoEBlockedF8Impl(FusedMoEBlockedF8Impl):
                 down_scale: torch.Tensor,
                 gate_up_bias: torch.Tensor = None,
                 down_bias: torch.Tensor = None,
-                expert_list: List[int] = None,
+                expert_list: list[int] = None,
                 act_func: Callable = None):
         """forward."""
         input_size = hidden_states.shape
@@ -148,7 +148,7 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
                 down_scale: torch.Tensor,
                 gate_up_bias: torch.Tensor = None,
                 down_bias: torch.Tensor = None,
-                expert_list: List[int] = None,
+                expert_list: list[int] = None,
                 act_func: Callable = None,
                 **kwargs):
         """forward."""

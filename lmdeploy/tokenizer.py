@@ -2,9 +2,9 @@
 import json
 import os.path as osp
 from collections import deque
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial
-from typing import List, Optional, Sequence, Tuple, Union
 
 from lmdeploy.utils import get_logger
 
@@ -27,11 +27,11 @@ class DetokenizeState:
             string (prev token). Default to 0 for the first round.
     """
     ids_offset: int = 0
-    prev_tokens: Optional[List[str]] = None
+    prev_tokens: list[str] | None = None
     prefix_offset: int = 0
     read_offset: int = 0
 
-    def as_tuple(self) -> Tuple:
+    def as_tuple(self) -> tuple:
         """Return a tuple of states."""
         return (self.ids_offset, self.prev_tokens, self.prefix_offset, self.read_offset)
 
@@ -53,7 +53,7 @@ class HuggingFaceTokenizer:
         if self.model.eos_token_id is None:
             generation_config_file = osp.join(model_dir, 'generation_config.json')
             if osp.exists(generation_config_file):
-                with open(generation_config_file, 'r') as f:
+                with open(generation_config_file) as f:
                     cfg = json.load(f)
                     self.model.eos_token_id = cfg['eos_token_id']
             elif hasattr(self.model, 'eod_id'):  # Qwen remote
@@ -129,7 +129,7 @@ class HuggingFaceTokenizer:
             }
         return self._prefix_space_tokens
 
-    def _maybe_add_prefix_space(self, tokens: List[int], decoded: str):
+    def _maybe_add_prefix_space(self, tokens: list[int], decoded: str):
         """Maybe add prefix space for incremental decoding."""
         if len(tokens) and not decoded.startswith(' ') and\
                 tokens[0] in self.prefix_space_tokens:
@@ -208,7 +208,7 @@ class HuggingFaceTokenizer:
                 encoded = encoded[1:]
         return encoded
 
-    def decode(self, t: Sequence[int], offset: Optional[int] = None, skip_special_tokens: bool = True):
+    def decode(self, t: Sequence[int], offset: int | None = None, skip_special_tokens: bool = True):
         """De-tokenize.
 
         Args:
@@ -232,7 +232,7 @@ class HuggingFaceTokenizer:
     @staticmethod
     def _convert_tokens_to_string_with_added_encoders(
         tokenizer,
-        output_tokens: List[str],
+        output_tokens: list[str],
         skip_special_tokens: bool,
         spaces_between_special_tokens: bool,
     ) -> str:
@@ -335,7 +335,7 @@ class HuggingFaceTokenizer:
 
         return new_text, DetokenizeState(len(all_input_ids), prev_tokens, prefix_offset, read_offset)
 
-    def __call__(self, s: Union[str, Sequence[str]]):
+    def __call__(self, s: str | Sequence[str]):
         """Tokenize prompts.
 
         Args:
@@ -351,7 +351,7 @@ class ChatGLM4Tokenizer(HuggingFaceTokenizer):
     """Tokenizer of GLM4."""
 
     def __init__(self, model_path):
-        super(ChatGLM4Tokenizer, self).__init__(model_path)
+        super().__init__(model_path)
         original_pad = self.model._pad
 
         def __pad(*args, **kwargs):
@@ -366,14 +366,14 @@ class ChatGLM4Tokenizer(HuggingFaceTokenizer):
         """Tokenize a prompt."""
         # ChtGLM4Tokenizer hardcode `add_speical_tokens=False` when tokenizing
         # a prompt. Refer to https://huggingface.co/THUDM/glm-4-9b-chat/blob/main/tokenization_chatglm.py#L227 # noqa E501
-        return super(ChatGLM4Tokenizer, self).encode(s, add_bos, add_special_tokens=False, **kwargs)
+        return super().encode(s, add_bos, add_special_tokens=False, **kwargs)
 
 
 class ChatGLMTokenizer(HuggingFaceTokenizer):
     """Tokenizer of GLM2."""
 
     def __init__(self, model_path):
-        super(ChatGLMTokenizer, self).__init__(model_path)
+        super().__init__(model_path)
         original_pad = self.model._pad
 
         def __pad(*args, **kwargs):
@@ -389,7 +389,7 @@ class GptOssTokenizer(HuggingFaceTokenizer):
     """Tokenizer of GPT-OSS."""
 
     def __init__(self, model_dir: str):
-        super(GptOssTokenizer, self).__init__(model_dir)
+        super().__init__(model_dir)
         from openai_harmony import HarmonyEncodingName, Role, StreamableParser, load_harmony_encoding
         encoding = load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)
         self.role = Role.ASSISTANT
@@ -483,7 +483,7 @@ class Tokenizer:
     def decode(
         self,
         t: Sequence[int],
-        offset: Optional[int] = None,
+        offset: int | None = None,
         skip_special_tokens: bool = True,
     ):
         """De-tokenize.
@@ -525,7 +525,7 @@ class Tokenizer:
                                                    skip_special_tokens=skip_special_tokens,
                                                    spaces_between_special_tokens=spaces_between_special_tokens)
 
-    def __call__(self, s: Union[str, Sequence[str]]):
+    def __call__(self, s: str | Sequence[str]):
         """Tokenize prompts.
 
         Args:
