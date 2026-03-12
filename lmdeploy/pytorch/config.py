@@ -8,7 +8,7 @@ import torch
 from lmdeploy.messages import PytorchEngineConfig
 from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
 from lmdeploy.pytorch.utils import maybe_register_config_serialize_by_value
-from lmdeploy.utils import get_logger
+from lmdeploy.utils import get_logger, is_bf16_supported
 
 logger = get_logger('lmdeploy')
 
@@ -48,6 +48,8 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str):
         # update hf_config as well
         setattr(config.hf_config, 'torch_dtype', torch_dtype)
     else:
+        if torch_dtype == 'bfloat16' and not is_bf16_supported():
+            torch_dtype = 'float16'
         # change to user specified data type if it is not 'auto'
         if dtype == 'auto':
             torch_dtype = torch_dtype if torch_dtype in ['float16', 'bfloat16'] else 'float16'

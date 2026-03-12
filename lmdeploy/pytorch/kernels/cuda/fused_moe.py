@@ -27,6 +27,7 @@ def get_cuda_autotune_config():
         },
                       num_stages=4,
                       num_warps=4),
+        # SM8
         triton.Config({
             'BLOCK_SIZE_M': 128,
             'BLOCK_SIZE_N': 128,
@@ -51,6 +52,31 @@ def get_cuda_autotune_config():
         },
                       num_stages=4,
                       num_warps=4),
+        # SM7-
+        triton.Config({
+            'BLOCK_SIZE_M': 64,
+            'BLOCK_SIZE_N': 128,
+            'BLOCK_SIZE_K': 32,
+            'GROUP_SIZE_M': 1,
+        },
+                      num_stages=4,
+                      num_warps=4),
+        triton.Config({
+            'BLOCK_SIZE_M': 128,
+            'BLOCK_SIZE_N': 32,
+            'BLOCK_SIZE_K': 32,
+            'GROUP_SIZE_M': 1,
+        },
+                      num_stages=4,
+                      num_warps=4),
+        triton.Config({
+            'BLOCK_SIZE_M': 64,
+            'BLOCK_SIZE_N': 32,
+            'BLOCK_SIZE_K': 32,
+            'GROUP_SIZE_M': 1,
+        },
+                      num_stages=5,
+                      num_warps=2),
     ]
 
 
@@ -58,11 +84,14 @@ def _config_prune_func(config: dict, *args, **kwargs):
     """Fused moe config prune."""
     device_cap = torch.cuda.get_device_capability()
     num_sm9x = 2
+    cum_num_sm8x = 5
 
     if device_cap[0] >= 9:
         return config[:num_sm9x]
+    elif device_cap[0] >= 8:
+        return config[num_sm9x:cum_num_sm8x]
     else:
-        return config[num_sm9x:]
+        return config[cum_num_sm8x:]
 
 
 @triton.autotune(
