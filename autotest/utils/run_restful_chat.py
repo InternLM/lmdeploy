@@ -600,8 +600,6 @@ def _run_tools_case(log_path, port: int = DEFAULT_PORT):
 
     timestamp = time.strftime('%Y%m%d_%H%M%S')
     restful_log = os.path.join(log_path, f'restful_toolcall_{model}_{str(port)}_{timestamp}.log')
-    file = open(restful_log, 'w')
-
     client = OpenAI(api_key='YOUR_API_KEY', base_url=http_url + '/v1')
     model_name = client.models.list().data[0].id
 
