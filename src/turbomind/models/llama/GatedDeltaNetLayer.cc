@@ -194,7 +194,7 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
         Tensor attn_out{{token_num, value_dim_}, dtype, device};
         Tensor conv_out{{token_num, conv_dim_}, dtype, device};
 
-        const int state_layer_idx = linear_layer_index(p.layer_id, layer_types_);
+        const int state_layer_idx              = linear_layer_index(p.layer_id, layer_types_);
         const int conv_state_layer_offset      = state_layer_idx * (conv_dim_ * d_conv_);
         const int recurrent_state_layer_offset = state_layer_idx * (num_v_heads_ * key_head_dim_ * value_head_dim_);
 
@@ -213,17 +213,17 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
         sync_check_cuda_error();
 
         // ----- 3b. Gated Delta Rule (all requests, decode + prefill unified) -----
-        invokeGatedDeltaRuleBatched(attn_out,
-                                    conv_out,
-                                    beta,
-                                    g,
-                                    pd.recurrent_state_ptrs,
-                                    pd.q_offsets,
-                                    pd.batch_size,
-                                    num_k_heads_,
-                                    key_head_dim_,
-                                    recurrent_state_layer_offset,
-                                    stream);
+        invokeGatedDeltaRuleBatched_v2(attn_out,
+                                       conv_out,
+                                       beta,
+                                       g,
+                                       pd.recurrent_state_ptrs,
+                                       pd.q_offsets,
+                                       pd.batch_size,
+                                       num_k_heads_,
+                                       //    key_head_dim_,
+                                       recurrent_state_layer_offset,
+                                       stream);
         sync_check_cuda_error();
 
         // ----- 3c. RMSNormGated (all tokens at once) -----

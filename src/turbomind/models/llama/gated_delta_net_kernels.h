@@ -52,6 +52,17 @@ void invokeGatedDeltaRuleBatched(Ref<Tensor>           v_out,
                                   int                   state_layer_offset,
                                   cudaStream_t          stream);
 
+void invokeGatedDeltaRuleBatched_v2(Ref<Tensor>           v_out,
+                                    const Tensor&         qkv_in,
+                                    const Tensor&         beta,
+                                    const Tensor&         g,
+                                    const Buffer_<void*>& state_ptrs,
+                                    const Buffer_<int>&   q_offsets,
+                                    int                   batch_size,
+                                    int                   num_k_heads,
+                                    int                   state_layer_offset,
+                                    cudaStream_t          stream);
+
 // =============================================================================
 // Helper kernels
 // =============================================================================

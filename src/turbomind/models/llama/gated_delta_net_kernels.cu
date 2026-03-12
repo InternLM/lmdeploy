@@ -1,11 +1,16 @@
 
 #include "src/turbomind/core/data_type.h"
+#include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/models/llama/gated_delta_net_kernels.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cuda_bf16.h>
 
 #include "src/turbomind/utils/cuda_utils.h"
+
+#include "src/turbomind/kernels/core/array_ops.h"
+#include "src/turbomind/kernels/gemm/thread_map.h"
 
 namespace turbomind {
 
@@ -217,6 +222,258 @@ void invokeGatedDeltaRuleBatched(Ref<Tensor>           v_out_,
     TM_DISPATCH_PRIMARY_DTYPES(v_out.dtype(), invoke);
 }
 
+using namespace gemm;
+
+template<int k_head_dim, int v_head_dim, int block_dim, class T, class S>
+__global__ void recurrent_gated_delta_rule_kernel_v2(T*         v_out,
+                                                     const T*   qkv_in,
+                                                     const T*   beta_in,
+                                                     const T*   g_in,
+                                                     S* const*  state_ptrs,
+                                                     const int* q_offsets,
+                                                     int        num_v_heads,
+                                                     int        num_k_heads,
+                                                     int        k_dim_total,
+                                                     int        state_layer_offset)
+{
+    const int bh    = blockIdx.x;
+    const int b     = bh / num_v_heads;
+    const int h     = bh % num_v_heads;
+    const int ratio = num_v_heads / num_k_heads;
+    const int kh    = h / ratio;
+
+    const int tok_off    = q_offsets[b];
+    const int seq_len    = q_offsets[b + 1] - tok_off;
+    const int state_size = k_head_dim * v_head_dim;
+    const int conv_dim   = 2 * k_dim_total + num_v_heads * v_head_dim;
+    const int v_dim      = num_v_heads * v_head_dim;
+
+    S* s_ptr = state_ptrs[b] + state_layer_offset + h * state_size;
+
+    const float scale = rsqrtf((float)k_head_dim);
+
+    __shared__ S smem_S[k_head_dim][v_head_dim];
+
+    // DimC = v_head_dim (memory-contiguous), DimS = k_head_dim (strided)
+    using Map_S = ThreadMap_V2<v_head_dim, k_head_dim, sizeof(uint4) / sizeof(S), Raked, block_dim / WARP_SIZE>;
+
+    const int warp_id = threadIdx.x / WARP_SIZE;
+    const int lane_id = threadIdx.x % WARP_SIZE;
+
+    constexpr int tile_k = 8;
+    constexpr int tile_v = 8;
+
+    constexpr int k_tiles = k_head_dim / tile_k;  // 16
+    constexpr int v_tiles = v_head_dim / tile_v;  // 16
+
+    constexpr int k_threads = k_tiles;
+    constexpr int v_threads = block_dim / k_threads;
+
+    constexpr int v_iters = cdiv(v_tiles, v_threads);
+
+    Array<float, tile_v> vec_S[v_iters][tile_k];
+
+    const int offset_k = threadIdx.x % k_tiles;
+    const int offset_v = threadIdx.x / k_tiles;
+
+    PRAGMA_UNROLL
+    for (int s = 0; s < Map_S::kIterS; ++s) {
+        PRAGMA_UNROLL
+        for (int c = 0; c < Map_S::kIterC; ++c) {
+            const auto [vd, kd]                = Map_S::get_offset(warp_id, lane_id);
+            const int                 final_vd = vd + c * Map_S::kDeltaC;
+            const int                 final_kd = kd + s * Map_S::kDeltaS;
+            Array<S, Map_S::kAccessC> vec;
+            Load(vec, s_ptr + final_kd * v_head_dim + final_vd);
+            Store(&smem_S[final_kd][final_vd], vec);
+        }
+    }
+
+    __syncthreads();
+
+    PRAGMA_UNROLL
+    for (int v_iter = 0; v_iter < v_iters; ++v_iter) {
+        PRAGMA_UNROLL
+        for (int k = 0; k < tile_k; ++k) {
+            Array<S, tile_v> tmp;
+            Load(tmp, &smem_S[offset_k * tile_k + k][(offset_v + v_iter * v_threads) * tile_v]);
+            vec_S[v_iter][k] = cast<float>(tmp);
+        }
+    }
+
+    for (int t = 0; t < seq_len; ++t) {
+        const int global_t = tok_off + t;
+
+        const T* q_ptr = qkv_in + global_t * conv_dim + kh * k_head_dim;
+        const T* k_ptr = qkv_in + global_t * conv_dim + k_dim_total + kh * k_head_dim;
+        const T* v_ptr = qkv_in + global_t * conv_dim + 2 * k_dim_total + h * v_head_dim;
+        T*       o_ptr = v_out + global_t * v_dim + h * v_head_dim;
+
+        const float beta_val = (float)beta_in[global_t * num_v_heads + h];
+        const float decay    = expf((float)g_in[global_t * num_v_heads + h]);
+
+        Array<float, tile_v> vec_K;
+        Array<float, tile_v> vec_Q;
+
+        // --- In-kernel L2-normalize K/Q (Vectorized) ---
+        {
+            Array<T, tile_v> tmp_K;
+            Array<T, tile_v> tmp_Q;
+
+            Load(tmp_K, &k_ptr[offset_k * tile_k]);
+            Load(tmp_Q, &q_ptr[offset_k * tile_k]);
+
+            float k_sum = 0.f;
+            float q_sum = 0.f;
+
+            PRAGMA_UNROLL
+            for (int k = 0; k < tile_k; ++k) {
+                vec_K[k] = (float)tmp_K[k];
+                vec_Q[k] = (float)tmp_Q[k];
+                k_sum += vec_K[k] * vec_K[k];
+                q_sum += vec_Q[k] * vec_Q[k];
+            }
+
+            PRAGMA_UNROLL
+            for (int mask = k_threads / 2; mask > 0; mask /= 2) {
+                k_sum += __shfl_xor_sync(0xffffffff, k_sum, mask);
+                q_sum += __shfl_xor_sync(0xffffffff, q_sum, mask);
+            }
+
+            const float k_inv_norm = rsqrtf(k_sum + 1e-6f);
+            const float q_inv_norm = rsqrtf(q_sum + 1e-6f);
+
+            PRAGMA_UNROLL
+            for (int i = 0; i < tile_k; ++i) {
+                vec_K[i] = vec_K[i] * k_inv_norm;
+                vec_Q[i] = vec_Q[i] * q_inv_norm;
+            }
+        }
+
+        Array<T, tile_v> vec_V[v_iters];
+
+        PRAGMA_UNROLL
+        for (int v_iter = 0; v_iter < v_iters; ++v_iter) {
+            Load(vec_V[v_iter], &v_ptr[(offset_v + v_iter * v_threads) * tile_v]);
+        }
+
+        PRAGMA_UNROLL
+        for (int v_iter = 0; v_iter < v_iters; ++v_iter) {
+            Array<T, tile_v> vec_O;
+            PRAGMA_UNROLL
+            for (int v = 0; v < tile_v; ++v) {
+                // --- Step 1: S *= decay ---
+                PRAGMA_UNROLL
+                for (int k = 0; k < tile_k; ++k) {
+                    vec_S[v_iter][k][v] *= decay;
+                }
+
+                // --- Step 2: delta rule update ---
+                // [vdim,kdim] @ [kdim,khead] = [vdim,khead] -> use m16n8k16
+                float kv_mem = 0.f;
+                PRAGMA_UNROLL
+                for (int k = 0; k < tile_k; ++k) {  // *kdim
+                    kv_mem += vec_S[v_iter][k][v] * vec_K[k];
+                }
+
+                PRAGMA_UNROLL
+                for (int mask = k_threads / 2; mask > 0; mask /= 2) {
+                    kv_mem += __shfl_xor_sync(0xffffffff, kv_mem, mask);
+                }
+                const float delta = ((float)vec_V[v_iter][v] - kv_mem) * beta_val;
+                PRAGMA_UNROLL
+                for (int k = 0; k < tile_k; ++k) {
+                    vec_S[v_iter][k][v] = vec_S[v_iter][k][v] + vec_K[k] * delta;
+                }
+
+                // --- Step 3: output = (S^T @ q) * scale ---
+                // [vdim,kdim] @ [kdim,khead] = [vdim,khead]
+                float O = 0.f;
+                PRAGMA_UNROLL
+                for (int k = 0; k < tile_k; ++k) {
+                    O += vec_S[v_iter][k][v] * vec_Q[k];
+                }
+                PRAGMA_UNROLL
+                for (int mask = k_threads / 2; mask > 0; mask /= 2) {
+                    O += __shfl_xor_sync(0xffffffff, O, mask);
+                }
+                vec_O[v] = static_cast<T>(O * scale);
+            }
+            Store(&o_ptr[(offset_v + v_iter * v_threads) * tile_v], vec_O);
+        }
+    }
+
+    PRAGMA_UNROLL
+    for (int v_iter = 0; v_iter < v_iters; ++v_iter) {
+        PRAGMA_UNROLL
+        for (int k = 0; k < tile_k; ++k) {
+            Store(&smem_S[offset_k * tile_k + k][(offset_v + v_iter * v_threads) * tile_v], cast<S>(vec_S[v_iter][k]));
+        }
+    }
+
+    __syncthreads();
+
+    PRAGMA_UNROLL
+    for (int s = 0; s < Map_S::kIterS; ++s) {
+        PRAGMA_UNROLL
+        for (int c = 0; c < Map_S::kIterC; ++c) {
+            const auto [vd, kd]                = Map_S::get_offset(warp_id, lane_id);
+            const int                 final_vd = vd + c * Map_S::kDeltaC;
+            const int                 final_kd = kd + s * Map_S::kDeltaS;
+            Array<S, Map_S::kAccessC> vec;
+            Load(vec, &smem_S[final_kd][final_vd]);
+            Store(s_ptr + final_kd * v_head_dim + final_vd, vec);
+        }
+    }
+}
+
+void invokeGatedDeltaRuleBatched_v2(Ref<Tensor>           v_out_,
+                                    const Tensor&         qkv_in,
+                                    const Tensor&         beta,
+                                    const Tensor&         g,
+                                    const Buffer_<void*>& state_ptrs,
+                                    const Buffer_<int>&   q_offsets,
+                                    int                   batch_size,
+                                    int                   num_k_heads,
+                                    int                   state_layer_offset,
+                                    cudaStream_t          stream)
+{
+    auto& v_out = v_out_.get();
+
+    const int num_v_heads    = beta.shape(1);
+    const int v_dim          = v_out.shape(1);
+    const int value_head_dim = v_dim / num_v_heads;
+    const int k_dim_total    = (qkv_in.shape(1) - v_dim) / 2;
+
+    if (batch_size == 0 || num_v_heads == 0)
+        return;
+
+    constexpr int kHeadDim  = 128;
+    constexpr int kBlockDim = 256;
+
+    TM_CHECK_EQ(value_head_dim, kHeadDim);
+    TM_CHECK_EQ(k_dim_total / num_k_heads, kHeadDim);
+
+    const int num_blocks = batch_size * num_v_heads;
+
+    auto invoke = [&](auto t) {
+        using T = decltype(t);
+        using S = T;
+        recurrent_gated_delta_rule_kernel_v2<kHeadDim, kHeadDim, kBlockDim, T, S>
+            <<<num_blocks, kBlockDim, 0, stream>>>(v_out.data<T>(),
+                                                   qkv_in.data<T>(),
+                                                   beta.data<T>(),
+                                                   g.data<T>(),
+                                                   (S* const*)state_ptrs.data(),
+                                                   q_offsets.data(),
+                                                   num_v_heads,
+                                                   num_k_heads,
+                                                   k_dim_total,
+                                                   state_layer_offset);
+    };
+    TM_DISPATCH_PRIMARY_DTYPES(v_out.dtype(), invoke);
+}
+
 template<class T>
 __global__ void compute_beta_g_kernel_v2(T*       beta_out,
                                          T*       g_out,
@@ -329,11 +586,7 @@ __global__ void rms_norm_gated_kernel(
     }
 }
 
-void invokeRMSNormGated(Ref<Tensor>   hidden_,
-                        const Tensor& gate,
-                        const Tensor& weight,
-                        float         eps,
-                        cudaStream_t  stream)
+void invokeRMSNormGated(Ref<Tensor> hidden_, const Tensor& gate, const Tensor& weight, float eps, cudaStream_t stream)
 {
     auto& hidden = hidden_.get();
 
@@ -350,14 +603,8 @@ void invokeRMSNormGated(Ref<Tensor>   hidden_,
 
     auto invoke = [&](auto t) {
         using T = decltype(t);
-        rms_norm_gated_kernel<<<N, threads, 0, stream>>>(hidden.data<T>(),
-                                                         gate.data<T>(),
-                                                         weight.data<T>(),
-                                                         eps,
-                                                         N,
-                                                         head_dim,
-                                                         gate_stride,
-                                                         num_heads);
+        rms_norm_gated_kernel<<<N, threads, 0, stream>>>(
+            hidden.data<T>(), gate.data<T>(), weight.data<T>(), eps, N, head_dim, gate_stride, num_heads);
     };
     TM_DISPATCH_PRIMARY_DTYPES(hidden.dtype(), invoke);
 }
