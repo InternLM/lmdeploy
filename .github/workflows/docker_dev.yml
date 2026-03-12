@@ -14,7 +14,6 @@ jobs:
     runs-on: ubuntu-latest
     environment: 'prod'
     env:
-      TAG_PREFIX: "openmmlab/lmdeploy"
       TAG: "openmmlab/lmdeploy:dev-cu12.8"
     steps:
       - name: Checkout repository
@@ -23,7 +22,7 @@ jobs:
           ref: ${{ github.event.inputs.repo_ref }}
 
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
+        uses: jlumbroso/free-disk-space@v1.3.1
         with:
           # This might remove tools that are actually needed, if set to "true" but frees about 6 GB
           tool-cache: false
