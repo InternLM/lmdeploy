@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from collections.abc import Callable
-from typing import Dict, Optional
 
 import torch
 

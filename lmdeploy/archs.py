@@ -78,7 +78,7 @@ def autoget_backend_config(
     backend = autoget_backend(model_path)
     config = PytorchEngineConfig() if backend == 'pytorch' else TurbomindEngineConfig()
     if backend_config is not None:
-        if type(backend_config) == type(config):
+        if type(backend_config) is type(config):
             config = backend_config
         else:
             data = asdict(backend_config)

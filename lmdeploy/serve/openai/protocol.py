@@ -2,7 +2,7 @@
 # Modified from
 # https://github.com/lm-sys/FastChat/blob/168ccc29d3f7edc50823016105c024fe2282732a/fastchat/protocol/openai_api_protocol.py
 import time
-from typing import Any, Literal, Union
+from typing import Any, Literal
 
 import shortuuid
 from pydantic import BaseModel, ConfigDict, Field
@@ -428,8 +428,8 @@ class UpdateParamsRequest(BaseModel):
 
 
 # str for url/base64, base64 should be data:image/jpeg;base64, dict should be {'url': url/base64, 'options': ...}
-ImageDataInputItem = Union[str, dict]
-ImageDataFormat = Union[ImageDataInputItem, list[ImageDataInputItem]]
+ImageDataInputItem = str | dict
+ImageDataFormat = ImageDataInputItem | list[ImageDataInputItem]
 
 
 # /generate input

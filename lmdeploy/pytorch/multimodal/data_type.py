@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass, fields
-from typing import Any, Union
+from typing import Any
 
 from torch import Tensor
 
@@ -11,7 +11,7 @@ class MultiModalData:
 
 MultiModalDataList = list[MultiModalData]
 
-NestedTensor = Union[Tensor, list[Tensor]]
+NestedTensor = Tensor | list[Tensor]
 
 
 @dataclass

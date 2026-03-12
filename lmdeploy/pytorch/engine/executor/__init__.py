@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from logging import Logger
-from typing import Dict
 
 from lmdeploy.pytorch import envs
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
