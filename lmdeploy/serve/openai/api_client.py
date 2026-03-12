@@ -72,7 +72,7 @@ class APIClient:
         """Encode prompts.
 
         Args:
-            input: the prompt to be encoded. In str or List[str] format.
+            input: the prompt to be encoded. In str or list[str] format.
             do_preprocess: whether do preprocess or not. Default to False.
             add_bos: True when it is the beginning of a conversation. False
                 when it is not. Default to True.
@@ -130,7 +130,7 @@ class APIClient:
             max_completion_tokens (int | None): output token nums. Default to None.
             max_tokens (int | None): output token nums. Default to None.
                 Deprecated: Use max_completion_tokens instead.
-            stop (str | List[str] | None): To stop generating further
+            stop (str | list[str] | None): To stop generating further
               tokens. Only accept stop words that's encoded to one token idex.
             repetition_penalty (float): The parameter for repetition penalty.
                 1.0 means no penalty
@@ -148,7 +148,7 @@ class APIClient:
                 0 and 1. Typical values are in the 0.01-0.2 range, comparably
                 selective as setting `top_p` in the 0.99-0.8 range (use the
                 opposite of normal `top_p` values)
-            logit_bias (Dict): Bias to logits. Only supported in pytorch engine.
+            logit_bias (dict): Bias to logits. Only supported in pytorch engine.
             stream_options: Options for streaming response. Only set this when you
                 set stream: true.
 
@@ -213,7 +213,7 @@ class APIClient:
             n (int): How many chat completion choices to generate for each
                 input message. Only support one here.
             stream: whether to stream the results or not. Default to false.
-            stop (str | List[str] | None): To stop generating further
+            stop (str | list[str] | None): To stop generating further
               tokens. Only accept stop words that's encoded to one token idex.
             repetition_penalty (float): The parameter for repetition penalty.
                 1.0 means no penalty

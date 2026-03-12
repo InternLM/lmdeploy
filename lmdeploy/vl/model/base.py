@@ -70,7 +70,7 @@ class VisionModel(ABC):
         It can integrate the result into the messages list, or insert it to
         the individual image item.
         Args:
-            message(Dict): multimodal data in a dict, which is as follows:
+            message(dict): multimodal data in a dict, which is as follows:
             [
                 {'role': 'user', 'content': 'user prompt'},
                 {'role': 'assisant', 'content': 'AI reponse'},
@@ -108,7 +108,7 @@ class VisionModel(ABC):
         """Check whether the messages contain input_ids directly.
 
         Args:
-            messages (List[Dict]): a list of message, which is supposed to be
+            messages (list[dict]): a list of message, which is supposed to be
                 the output of `preprocess`
         Returns:
             bool: whether the messages contain input_ids directly
@@ -121,7 +121,7 @@ class VisionModel(ABC):
         turbomind engine.
 
         Args:
-            messages(List[Dict]): the outputs of `preprocess`
+            messages(list[dict]): the outputs of `preprocess`
             max_batch_size(int): the max batch size when forwarding vision
                 model
         Return:
@@ -137,7 +137,7 @@ class VisionModel(ABC):
         pytorch engine.
 
         Args:
-            messages(List[Dict]): the output of `preprocess`
+            messages(list[dict]): the output of `preprocess`
             chat_template: the chat template defined in `lmdeploy/model.py`
             tokenzer: the tokenizer model
             sequence_start: starting flag of a sequence
@@ -153,7 +153,7 @@ class VisionModel(ABC):
         turbomind engine.
 
         Args:
-            messages(List[Dict]): the output of `preprocess`
+            messages(list[dict]): the output of `preprocess`
             chat_template: the chat template defined in `lmdeploy/model.py`
             tokenzer: the tokenizer model
             sequence_start: starting flag of a sequence
@@ -169,9 +169,9 @@ class VisionModel(ABC):
         from the messages and compile them into a single list.
 
         Args:
-            messages (List[Dict]): a list of message
+            messages (list[dict]): a list of message
         Returns:
-            List[Tuple[Modality, Any, Dict]]: a list of (modality, data, params) for each multimodal item
+            list[tuple[Modality, Any, dict]]: a list of (modality, data, params) for each multimodal item
         """
         multimodal_items = []
         for message in messages:
@@ -198,7 +198,7 @@ class VisionModel(ABC):
         """Check whether the IMAGE_TOKEN is included in the messages.
 
         Args:
-            messages (List[Dict]): a list of message
+            messages (list[dict]): a list of message
         Returns:
             bool: whether the IMAGE_TOKEN is included in the messages
         """
@@ -219,7 +219,7 @@ class VisionModel(ABC):
         required by pytorch engine when input_ids are provided directly.
 
         Args:
-            messages(List[Dict]): the output of `preprocess`
+            messages(list[dict]): the output of `preprocess`
         """
         # collect all preprocessing result from messages
         preps = [x['content'] for x in messages if x['role'] == 'preprocess']
@@ -256,7 +256,7 @@ class VisionModel(ABC):
         compatible with what is required by pytorch engine.
 
         Args:
-            messages(List[Dict]): the output of `preprocess`
+            messages(list[dict]): the output of `preprocess`
             prompt(str): the prompt after applying chat template
             IMAGE_TOKEN(str): a placeholder where image tokens will be
                 inserted
@@ -291,7 +291,7 @@ class VisionModel(ABC):
         compatible with what is required by turbomind engine.
 
         Args:
-            messages(List[Dict]): the output of `preprocess`
+            messages(list[dict]): the output of `preprocess`
             prompt(str): the prompt after applying chat template
             IMAGE_TOKEN(str): a placeholder where image tokens will be
                 inserted

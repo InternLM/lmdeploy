@@ -36,19 +36,22 @@ class ChatTemplateConfig:
     """Parameters for chat template.
 
     Args:
-        model_name (str): the name of the deployed model. Determine which chat template will be applied.
-            All the chat template names: `lmdeploy list`
-        system (str | None): begin of the system prompt
-        meta_instruction (str | None): system prompt
-        eosys (str | None): end of the system prompt
-        user (str | None): begin of the user prompt
-        eoh (str | None): end of the user prompt
-        assistant (str | None): begin of the assistant prompt
-        eoa (str | None): end of the assistant prompt
-        tool (str | None): begin of the tool prompt
-        eotool (str | None): end of the tool prompt
-        capability: ('completion' | 'infilling' | 'chat' | 'python') = None
-    """  # noqa: E501
+        model_name: the name of the deployed model. Determine which chat template will be applied.
+            All the chat template names: ``lmdeploy list``
+        system: begin of the system prompt.
+        meta_instruction: system prompt.
+        eosys: end of the system prompt.
+        user: begin of the user prompt.
+        eoh: end of the user prompt.
+        assistant: begin of the assistant prompt.
+        eoa: end of the assistant prompt.
+        tool: begin of the tool prompt.
+        eotool: end of the tool prompt.
+        capability: the capability of the model, one of
+            ``'completion'``, ``'infilling'``, ``'chat'``, ``'python'``.
+            Default to None.
+        stop_words: list of stop words. Default to None.
+    """
 
     model_name: str
     model_path: str | None = None
@@ -169,7 +172,7 @@ class BaseChatTemplate:
         chat template.
 
         Args:
-            messages (str | List): user's input prompt
+            messages (str | list): user's input prompt
         Returns:
             str: the concatenated prompt
         """
@@ -800,7 +803,7 @@ def get_chat_template(model_path: str, config: ChatTemplateConfig | None = None)
 
     Args:
         model_path (str): the model path.
-        config (Optional[ChatTemplateConfig]): the chat template config.
+        config (ChatTemplateConfig | None): the chat template config.
     Returns:
         BaseChatTemplate: the chat template.
     """

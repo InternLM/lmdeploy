@@ -103,7 +103,7 @@ class LlavaNextVisionModel(LlavaHfVisionModel):
         turbomind engine.
 
         Args:
-            messages(List[Dict]): the outputs of `preprocess`
+            messages(list[dict]): the outputs of `preprocess`
             max_batch_size(int): the max batch size when forwarding vision
                 model
         Return:

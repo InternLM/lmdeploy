@@ -134,13 +134,13 @@ class EngineInstance(EngineInstanceBase):
 
         Args:
             session_id (int): The session id.
-            input_ids (List[int]): The input token ids.
+            input_ids (list[int]): The input token ids.
             gen_config (GenerationConfig): The sampling parameters.
             adapter_name (str): The lora adapter name.
 
         Yields:
             int: Error flags. 0 if success.
-            List[int]: The streaming output tokens.
+            list[int]: The streaming output tokens.
             int: The number of the output tokens.
         """
         if len(input_ids) > self.max_input_len:
@@ -218,12 +218,12 @@ class EngineInstance(EngineInstanceBase):
 
         Args:
             session_id (int): The session id.
-            input_ids (List[int]): The input token ids.
+            input_ids (list[int]): The input token ids.
             gen_config (GenerationConfig): The sampling parameters.
 
         Returns:
             int: Error flags. 0 if success.
-            List[int]: The streaming output tokens.
+            list[int]: The streaming output tokens.
             int: The number of the output tokens.
         """
         async for outputs in self.async_stream_infer(session_id,
@@ -248,13 +248,13 @@ class EngineInstance(EngineInstanceBase):
 
         Args:
             session_id (int): The session id.
-            input_ids (List[int]): The input token ids.
+            input_ids (list[int]): The input token ids.
             gen_config (GenerationConfig): The sampling parameters.
             adapter_name (str): The lora adapter name.
 
         Yields:
             int: Error flags. 0 if success.
-            List[int]: The streaming output tokens.
+            list[int]: The streaming output tokens.
             int: The number of the output tokens.
         """
 
@@ -284,12 +284,12 @@ class EngineInstance(EngineInstanceBase):
 
         Args:
             session_id (int): The session id.
-            input_ids (List[int]): The input token ids.
+            input_ids (list[int]): The input token ids.
             gen_config (GenerationConfig): The sampling parameters.
 
         Returns:
             int: Error flags. 0 if success.
-            List[int]: The streaming output tokens.
+            list[int]: The streaming output tokens.
             int: The number of the output tokens.
         """
         return self.req_sender.run_until_complete(

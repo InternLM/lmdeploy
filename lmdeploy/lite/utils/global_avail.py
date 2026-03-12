@@ -13,7 +13,7 @@ class GlobalAvailMixin:
         """Make the instance globally available.
 
         Args:
-            key (Union[str, nn.Module], optional): Key to save the instance.
+            key (str | nn.Module, optional): Key to save the instance.
                 Defaults to 'default'.
             group (str, optional): Group to save the instance.
                 Defaults to 'default'.
@@ -29,7 +29,7 @@ class GlobalAvailMixin:
 
         Args:
             instance (GlobalAvailMixin): Instance to save.
-            key (Union[str, nn.Module], optional): Key to save the instance.
+            key (str | nn.Module, optional): Key to save the instance.
                 Defaults to 'default'.
             group (str, optional): Group to save the instance.
                 Defaults to 'default'.
@@ -45,13 +45,13 @@ class GlobalAvailMixin:
         """Find an instance by its key and group.
 
         Args:
-            key (Union[str, nn.Module], optional): Key of the instance.
+            key (str | nn.Module, optional): Key of the instance.
                 Defaults to 'default'.
             group (str, optional): Group of the instance.
                 Defaults to 'default'.
 
         Returns:
-            Union[None, GlobalAvailMixin]: The found instance, or None if
+            None | GlobalAvailMixin: The found instance, or None if
                 it does not exist.
         """
         return cls._instances.get(group, {}).get(key)
@@ -64,7 +64,7 @@ class GlobalAvailMixin:
             group (str): Group of the instances.
 
         Returns:
-            Dict[Union[str, nn.Module], GlobalAvailMixin]: All instances in
+            dict[str | nn.Module, GlobalAvailMixin]: All instances in
                 the group.
         """
         return cls._instances.get(group, {})

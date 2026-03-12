@@ -129,7 +129,7 @@ def apply_rotary_pos_emb(q: Tensor,
         k_embed (Tensor): output k, can be same as k
 
     Returns:
-        Tuple[Tensor, Tensor]: Embedded query and key.
+        tuple[Tensor, Tensor]: Embedded query and key.
     """
     if cos.device != q.device:
         cos = cos.to(device=q.device)

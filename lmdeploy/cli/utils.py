@@ -43,10 +43,10 @@ def get_lora_adapters(adapters: list[str]):
     """Parse lora adapers from cli input.
 
     Args:
-        adapters (List[str]): CLI input string of lora adapter path(s).
+        adapters (list[str]): CLI input string of lora adapter path(s).
 
     Returns:
-        Dict[str,str] or None: Parsed lora adapter path(s).
+        dict[str, str] | None: Parsed lora adapter path(s).
     """
     if not adapters:
         return None

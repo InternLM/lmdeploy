@@ -31,7 +31,7 @@ class WeightQuantizer(GlobalAvailMixin):
             use min-max scaling.
         granularity (str): The granularity of quantization. Available options
             are 'per_channel', 'per_tensor', and 'per_group'.
-        group_size (Optional[int]): If using 'per_group' quantization, this is
+        group_size (int | None): If using 'per_group' quantization, this is
             the number of channels in each group.
 
     Example:
@@ -108,7 +108,7 @@ class WeightQuantizer(GlobalAvailMixin):
         Args:
             weight (torch.Tensor): The weight tensor with shape
                 (out_features, in_features).
-            qparams (Optional[QParams]): A namedtuple containing 'scales'
+            qparams (QParams | None): A namedtuple containing 'scales'
                 and 'zero_points'.
             real (bool): If True, return the tensor with quantized type.
 

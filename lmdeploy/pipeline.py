@@ -93,13 +93,16 @@ class Pipeline:
         """Inference prompts.
 
         Args:
-            prompts: Prompts to inference. It can be a single prompt, a list of prompts, a list of tuples, or a tuple.
-                Tuple can be (prompt, image or [images]) or (image or [images], prompt).
-            gen_config(GenerationConfig | List[GenerationConfig] | None): Generation configuration(s).
-            do_preprocess(bool): Whether to pre-process messages.
-            adapter_name(str | None): Adapter name.
-            use_tqdm(bool): Whether to use progress bar.
-            **kwargs(dict): Additional keyword arguments.
+            prompts: Prompts for inference. It can be a single prompt, a list of prompts, a list of tuples, or a tuple.
+                tuple can be (prompt, image or [images]) or (image or [images], prompt).
+            gen_config: Generation configuration(s).
+            do_preprocess: Whether to pre-process messages.
+            adapter_name: Adapter name.
+            use_tqdm: Whether to use progress bar.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            Response | list[Response]: A single response or a list of responses.
         """
         is_single = self._is_single(prompts)
         # format prompts to openai message format, which is a list of dicts
@@ -139,20 +142,19 @@ class Pipeline:
         """Stream inference.
 
         Args:
-            prompts(List[str] | str | List[Dict] | List[List[Dict]] | Tuple | List[Tuple]): Prompts to inference.
-                It can be a single prompt, a list of prompts, a list of tuples, or a tuple.
-                Tuple can be (prompt, image or [images]) or (image or [images], prompt).
-            sessions(Session | List[Session] | None): Sessions. Each of which corresponds to a prompt.
-            gen_config(GenerationConfig | List[GenerationConfig] | None): Generation configuration(s).
-            do_preprocess(bool): Whether to pre-process messages.
-            adapter_name(str | None): Adapter name.
-            stream_response(bool): Whether to stream the response. If True, the generator will stream the response.
+            prompts: Prompts to inference. It can be a single prompt, a list of prompts, a list of tuples, or a tuple.
+                tuple can be (prompt, image or [images]) or (image or [images], prompt).
+            sessions: Sessions. Each of which corresponds to a prompt.
+            gen_config: Generation configuration(s).
+            do_preprocess: Whether to pre-process messages.
+            adapter_name: Adapter name.
+            stream_response: Whether to stream the response. If True, the generator will stream the response.
                 Otherwise, the generator will run until finish and return the final response. This argument
                 is introduced to support the streaming and non-streaming modes of Pipeline.chat.
-            **kwargs(dict): Additional keyword arguments.
+            **kwargs: Additional keyword arguments.
 
         Returns:
-            Generator: A generator that yields the output (i.e. instance of class `Response`) of the inference.
+            Iterator: A generator that yields the output (i.e. instance of class ``Response``) of the inference.
         """
         prompts = MultimodalProcessor.format_prompts(prompts)
         requests = self._request_generator(prompts,
@@ -179,13 +181,15 @@ class Pipeline:
         """Chat.
 
         Args:
-            prompt (str): prompt
-            session (Session): the chat session
-            gen_config (GenerationConfig | None): a instance of
-                GenerationConfig. Default to None.
-            stream_response (bool): whether to stream the response.
-            adapter_name (str): adapter name.
-            **kwargs (dict): additional keyword arguments.
+            prompt: prompt string or a tuple of (prompt, image or [images]).
+            session: the chat session.
+            gen_config: an instance of GenerationConfig. Default to None.
+            stream_response: whether to stream the response.
+            adapter_name: adapter name.
+            **kwargs: additional keyword arguments.
+
+        Returns:
+            Session | Iterator: the updated session, or a streaming iterator if stream_response is True.
         """
         if session is None:
             session = self.session_mgr.get()
@@ -238,10 +242,11 @@ class Pipeline:
         """Get reward score.
 
         Args:
-            input_ids(List): a list of token_id or a list of token_id list or token_id tensor
-        Return:
-            reward score in a list. If the input_ids is a list of token_id, the return value
-            is still a list with length 1.
+            input_ids: a list of token_id or a list of token_id list or token_id tensor.
+
+        Returns:
+            list[float]: reward score in a list. If the input_ids is a list of token_id,
+                the return value is still a list with length 1.
         """
         supported_reward_models = ['InternLM2ForRewardModel', 'Qwen2ForRewardModel']
         arch = self.async_engine.arch
@@ -261,10 +266,10 @@ class Pipeline:
         of the same length.
 
         Args:
-            input_ids (List[int] | List[List[int]]): the batch of input token ids
+            input_ids: the batch of input token ids.
 
         Returns:
-            List[float]: A list of perplexity scores.
+            list[float]: A list of perplexity scores.
         """
         assert isinstance(input_ids, list)
         if isinstance(input_ids[0], int):

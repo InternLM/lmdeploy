@@ -182,7 +182,7 @@ class MultimodalProcessor:
             **kwargs: Additional keyword arguments.
 
         Returns:
-            Dict with 'prompt' (str) and 'input_ids' (List[int]) keys for text-only,
+            dict with 'prompt' (str) and 'input_ids' (list[int]) keys for text-only,
             or dict with multimodal data for multimodal prompts.
         """
         # Handle string input
