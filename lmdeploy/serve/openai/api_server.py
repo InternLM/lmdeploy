@@ -192,8 +192,8 @@ def _create_completion_logprobs(tokenizer: Tokenizer,
 
     Args:
         tokenizer (Tokenizer): tokenizer.
-        token_ids (List[int]): output token ids.
-        logprobs (List[Dict[int, float]]): the top logprobs for each output
+        token_ids (list[int]): output token ids.
+        logprobs (list[dict[int, float]]): the top logprobs for each output
             position.
         skip_special_tokens (bool): Whether or not to remove special tokens
             in the decoding. Default to be True.
@@ -246,8 +246,8 @@ def _create_chat_completion_logprobs(tokenizer: Tokenizer,
 
     Args:
         tokenizer (Tokenizer): tokenizer.
-        token_ids (List[int]): output token ids.
-        logprobs (List[Dict[int, float]]): the top logprobs for each output
+        token_ids (list[int]): output token ids.
+        logprobs (list[dict[int, float]]): the top logprobs for each output
             position.
     Returns:
         ChoiceLogprobs: logprob result.
@@ -351,7 +351,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
       Deprecated: Use max_completion_tokens instead.
     - **repetition_penalty** (float): The parameter for repetition penalty.
       1.0 means no penalty
-    - **stop** (str | List[str] | None): To stop generating further
+    - **stop** (str | list[str] | None): To stop generating further
       tokens. Only accept stop words that's encoded to one token idex.
     - **response_format** (dict | None): To generate response according to given
       schema. Examples:
@@ -1446,13 +1446,13 @@ def serve(model_path: str,
         server_name (str): host ip for serving
         server_port (int): server port
         tp (int): tensor parallel
-        allow_origins (List[str]): a list of allowed origins for CORS
+        allow_origins (list[str]): a list of allowed origins for CORS
         allow_credentials (bool): whether to allow credentials for CORS
-        allow_methods (List[str]): a list of allowed HTTP methods for CORS
-        allow_headers (List[str]): a list of allowed HTTP headers for CORS
+        allow_methods (list[str]): a list of allowed HTTP methods for CORS
+        allow_headers (list[str]): a list of allowed HTTP headers for CORS
         log_level(str): set log level whose value among [CRITICAL, ERROR,
             WARNING, INFO, DEBUG]
-        api_keys (List[str] | str | None): Optional list of API keys. Accepts
+        api_keys (list[str] | str | None): Optional list of API keys. Accepts
             string type as a single api_key. Default to None, which means no
             api key applied.
         ssl (bool): Enable SSL. Requires OS Environment variables

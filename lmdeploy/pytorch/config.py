@@ -367,7 +367,7 @@ class ModelConfig:
                 models defined on the Hub in their own modeling files.
             dtype (str): user specified data type for model weights and
                 activations. Refer to `PyTorchEngineConfig` for details
-            hf_overrides (Dict[str, Any]): overrides for the HF config.
+            hf_overrides (dict[str, Any]): overrides for the HF config.
         """
         from transformers import AutoConfig
 

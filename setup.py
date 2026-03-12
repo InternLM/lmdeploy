@@ -64,7 +64,7 @@ def parse_requirements(fname='requirements.txt', with_version=True):
         with_version (bool, default=False): if True include version specs
 
     Returns:
-        List[str]: list of requirements items
+        list[str]: list of requirements items
 
     CommandLine:
         python -c "import setup; print(setup.parse_requirements())"

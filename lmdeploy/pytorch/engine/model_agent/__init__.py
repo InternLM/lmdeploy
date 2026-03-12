@@ -25,7 +25,7 @@ def build_model_agent(
         cache_config (CacheConfig): config of kv cache
         backend_config (BackendConfig): config of backend devices
         trust_remote_code (bool): To use the remote modeling code or not
-        adapters (Dict): lora adapters
+        adapters (dict): lora adapters
         tp (int): the number of devices to be used in tensor parallelism
         dtype (str): the data type of model weights and activations
         custom_module_map (str): customized nn module map

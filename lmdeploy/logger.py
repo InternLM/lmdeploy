@@ -12,7 +12,7 @@ class RequestLogger:
     exceed a specified maximum length.
 
     Args:
-        max_log_len (Optional[int]): The maximum length of the log entries.
+        max_log_len (int | None): The maximum length of the log entries.
             If None, no maximum length is enforced.
     """
 

@@ -79,8 +79,8 @@ class DeepSeek2VisionModel(VisionModel):
             formatted_messages.append(dict(role=message['role'], content=text_content, images=image_content))
 
         # NOTE: DeepseekVLV2Processor inputs
-        # conversations (List[Dict]): conversations with a list of messages;
-        # images (List[ImageType]): the list of images;
+        # conversations (list[dict]): conversations with a list of messages;
+        # images (list[ImageType]): the list of images;
         # force_batchify (bool): force batchify the inputs;
         # inference_mode (bool): if True, then remove the last eos token;
         prepare = self.image_processor(conversations=formatted_messages,
@@ -107,7 +107,7 @@ class DeepSeek2VisionModel(VisionModel):
         turbomind engine.
 
         Args:
-            messages(List[Dict]): the outputs of `preprocess`
+            messages(list[dict]): the outputs of `preprocess`
             max_batch_size(int): the max batch size when forwarding vision
                 model
         Return:

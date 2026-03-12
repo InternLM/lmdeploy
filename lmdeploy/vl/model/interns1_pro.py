@@ -187,7 +187,7 @@ class InternS1ProVisionModel(VisionModel):
         compatible with what is required by pytorch engine.
 
         Args:
-            messages(List[Dict]): the output of `preprocess`
+            messages(list[dict]): the output of `preprocess`
             prompt(str): the prompt after applying chat template
             TS_TOKEN(str): a placeholder where time series tokens will be
                 inserted

@@ -1130,7 +1130,7 @@ class BaseModelAgent:
         """Model forward.
 
         Args:
-            inputs (Dict): The input data comes from _make_inputs.
+            inputs (dict): The input data comes from _make_inputs.
             swap_in_map (SwapMap): Cache maps to swap in.
             swap_out_map (SwapMap): Cache maps to swap out.
         """

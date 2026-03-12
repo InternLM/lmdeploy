@@ -14,16 +14,16 @@ from lmdeploy.utils import get_logger
 
 @dataclass
 class DetokenizeState:
-    """A state collection of incrementally detekenization.
+    """A state collection for incremental detokenization.
 
     Args:
-        ids_offset (int): offset to all input ids. In LMDeploy, the output
+        ids_offset: offset to all input ids. In LMDeploy, the output
             ids length is not one by one. It could be random by random.
-        prev_tokens (List[str] | None): for incrementally decoding.
+        prev_tokens: for incrementally decoding.
             Default to None, which means the first round.
-        prefix_offset (int): the start index of tokens to be converted to
+        prefix_offset: the start index of tokens to be converted to
             string (prev + new tokens). Default to 0 for the first round.
-        read_offset (int): the end index of tokens to be converted to
+        read_offset: the end index of tokens to be converted to
             string (prev token). Default to 0 for the first round.
     """
     ids_offset: int = 0
@@ -40,7 +40,7 @@ class HuggingFaceTokenizer:
     """A wrapper of transformers' AutoTokenizer.
 
     Args:
-        model_dir (str): the directory of the tokenizer model
+        model_dir: the directory of the tokenizer model.
     """
 
     def __init__(self, model_dir: str):
@@ -193,13 +193,13 @@ class HuggingFaceTokenizer:
         """Tokenize a prompt.
 
         Args:
-            s (str): a prompt
-            add_bos (bool): Whether to add `bos` token id when encoding
-                the prompt
-            add_special_tokens (bool): Whether or not to add special tokens
-                when encoding the prompt
+            s: a prompt.
+            add_bos: Whether to add ``bos`` token id when encoding the prompt.
+            add_special_tokens: Whether or not to add special tokens
+                when encoding the prompt.
+
         Returns:
-            list[int]: token ids
+            list[int]: token ids.
         """
         encoded = self.model.encode(s, add_special_tokens=add_special_tokens, **kwargs)
         if not add_bos:
@@ -212,13 +212,14 @@ class HuggingFaceTokenizer:
         """De-tokenize.
 
         Args:
-            t (List[int]): a list of token ids
-            offset (int): for incrementally decoding. Default to None, which
+            t: a list of token ids.
+            offset: for incrementally decoding. Default to None, which
                 means not applied.
-            skip_special_tokens (bool): Whether or not to remove special
+            skip_special_tokens: Whether or not to remove special
                 tokens in the decoding.
+
         Returns:
-            str: text of decoding tokens
+            str: text of decoding tokens.
         """
         t = t[offset:]
         out_string = self.model.decode(t, skip_special_tokens=skip_special_tokens)
@@ -272,18 +273,18 @@ class HuggingFaceTokenizer:
         """Incrementally detokenize the input indexes.
 
         Args:
-            all_input_ids (List[int]): a list of token ids. Expected to be
+            all_input_ids: a list of token ids. Expected to be
                 different sections of a long sequence.
-            state (DetokenizeState): an instance of DetokenizeState. Consists
+            state: an instance of DetokenizeState. Consists
                 of incrementally decoding states.
-            skip_special_tokens (bool): Whether or not to remove special tokens
+            skip_special_tokens: Whether or not to remove special tokens
                 in the decoding. Default to be True.
-            spaces_between_special_tokens (bool): Whether or not to add spaces
+            spaces_between_special_tokens: Whether or not to add spaces
                 between special tokens. Default to be True.
+
         Returns:
-            str: decoding output string of the current round.
-            state (DetokenizeState): an instance of DetokenizeState. Consists
-                of incrementally decoding states.
+            tuple[str, DetokenizeState]: decoding output string of the current
+                round and the updated DetokenizeState.
         """
         tokenizer = self.model
         ids_offset, prev_tokens, prefix_offset, read_offset = state.as_tuple()
@@ -339,9 +340,10 @@ class HuggingFaceTokenizer:
         """Tokenize prompts.
 
         Args:
-            s (str): prompts
+            s: prompts.
+
         Returns:
-            list[int]: token ids
+            list[int]: token ids.
         """
         add_special_tokens = False
         return self.model(s, add_special_tokens=add_special_tokens)
@@ -418,7 +420,7 @@ class Tokenizer:
     """Tokenize prompts or de-tokenize tokens into texts.
 
     Args:
-        model_path (str): the path of the tokenizer model
+        model_path: the path of the tokenizer model.
     """
 
     def __init__(self, model_path: str):
@@ -464,13 +466,13 @@ class Tokenizer:
         """Tokenize a prompt.
 
         Args:
-            s (str): a prompt
-            add_bos (bool): Whether to add `bos` token id when encoding
-                the prompt
-            add_special_tokens (bool): Whether or not to add special tokens
-                when encoding the prompt
+            s: a prompt.
+            add_bos: Whether to add ``bos`` token id when encoding the prompt.
+            add_special_tokens: Whether or not to add special tokens
+                when encoding the prompt.
+
         Returns:
-            list[int]: token ids
+            list[int]: token ids.
         """
         encoded = self.model.encode(s, add_bos, add_special_tokens, **kwargs)
         if encoded[:2] == [self.bos_token_id] * 2:
@@ -489,13 +491,14 @@ class Tokenizer:
         """De-tokenize.
 
         Args:
-            t (List[int]): a list of token ids
-            offset (int): for incrementally decoding. Default to None, which
+            t: a list of token ids.
+            offset: for incrementally decoding. Default to None, which
                 means not applied.
-            skip_special_tokens (bool): Whether or not to remove special
+            skip_special_tokens: Whether or not to remove special
                 tokens in the decoding.
+
         Returns:
-            str: text of decoding tokens
+            str: text of decoding tokens.
         """
         return self.model.decode(t, offset, skip_special_tokens)
 
@@ -507,18 +510,18 @@ class Tokenizer:
         """Incrementally detokenize the input indexes.
 
         Args:
-            all_input_ids (List[int]): a list of token ids. Expected to be
+            all_input_ids: a list of token ids. Expected to be
                 different sections of a long sequence.
-            state (DetokenizeState): an instance of DetokenizeState. Consists
+            state: an instance of DetokenizeState. Consists
                 of incrementally decoding states.
-            skip_special_tokens (bool): Whether or not to remove special tokens
+            skip_special_tokens: Whether or not to remove special tokens
                 in the decoding. Default to be True.
-            spaces_between_special_tokens (bool): Whether or not to add spaces
+            spaces_between_special_tokens: Whether or not to add spaces
                 between special tokens. Default to be True.
+
         Returns:
-            str: decoding output string of the current round.
-            state (DetokenizeState): an instance of DetokenizeState. Consists
-                of incrementally decoding states.
+            tuple[str, DetokenizeState]: decoding output string of the current
+                round and the updated DetokenizeState.
         """
         return self.model.detokenize_incrementally(all_input_ids,
                                                    state=state,
@@ -529,9 +532,10 @@ class Tokenizer:
         """Tokenize prompts.
 
         Args:
-            s (str): prompts
+            s: prompts.
+
         Returns:
-            list[int]: token ids
+            list[int]: token ids.
         """
         return self.model(s)
 
