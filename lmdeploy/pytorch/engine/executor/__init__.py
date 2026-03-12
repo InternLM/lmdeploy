@@ -59,7 +59,7 @@ def build_executor(
     backend_config: BackendConfig,
     dist_config: DistConfig,
     misc_config: MiscConfig,
-    adapters: Dict[str, str] = None,
+    adapters: dict[str, str] = None,
     device_type: str = 'cuda',
     distributed_executor_backend: str = None,
     dtype: str = 'auto',

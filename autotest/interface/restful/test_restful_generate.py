@@ -4,7 +4,7 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any
 
 import pytest
 import requests
@@ -115,8 +115,8 @@ class TestGenerateComprehensive:
             return resp
 
     def _validate_generation_response(self,
-                                      data: Dict[str, Any],
-                                      expected_fields: List[str] = None,
+                                      data: dict[str, Any],
+                                      expected_fields: list[str] = None,
                                       validate_tokens: bool = True,
                                       expect_logprobs: bool = False,
                                       validate_experts: bool = False) -> None:

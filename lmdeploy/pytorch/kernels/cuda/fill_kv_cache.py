@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Literal, Optional
+from typing import Literal
 
 import torch
 import triton
@@ -399,9 +399,9 @@ def _fill_kv_cache_quant_kernel(
 
 
 def fill_kv_cache(k_states: Tensor,
-                  v_states: Optional[Tensor],
+                  v_states: Tensor | None,
                   k_caches: Tensor,
-                  v_caches: Optional[Tensor],
+                  v_caches: Tensor | None,
                   q_start_loc: Tensor,
                   q_seq_length: Tensor,
                   kv_seq_length: Tensor,
@@ -690,18 +690,18 @@ def _fill_kv_cache_blocked_fp8_kernel(
 
 
 def fill_kv_cache_blocked_fp8(k_states: Tensor,
-                              v_states: Optional[Tensor],
+                              v_states: Tensor | None,
                               k_caches: Tensor,
-                              v_caches: Optional[Tensor],
+                              v_caches: Tensor | None,
                               ks_caches: Tensor,
-                              vs_caches: Optional[Tensor],
+                              vs_caches: Tensor | None,
                               cu_seqlen_q: Tensor,
                               kv_seqlens: Tensor,
                               max_q_seqlen: int,
                               block_offsets: Tensor,
                               group_size: int = 128,
                               kv_layout: str = 'bshd',
-                              scale_fmt: Optional[str] = None):
+                              scale_fmt: str | None = None):
     """Fill key/value state to cache for paged attention with fp8 quantization.
 
     Args:

@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import itertools
 import warnings
-from typing import Dict, List
 
 import torch
 from PIL.Image import Image
@@ -23,7 +22,7 @@ class MiniCPMVModel(VisionModel):
     def __init__(self,
                  model_path: str,
                  with_llm: bool = False,
-                 max_memory: Dict[int, int] = None,
+                 max_memory: dict[int, int] = None,
                  hf_config: AutoConfig = None,
                  backend: str = ''):
         super().__init__(model_path, with_llm, max_memory, hf_config, backend)
@@ -94,7 +93,7 @@ class MiniCPMVModel(VisionModel):
             tgt_sizes.append(torch.Tensor([H, W]).type(torch.int32))
         return patches, tgt_sizes
 
-    def _preprocess_v2_5(self, image: Image, params: Dict = None) -> Dict:
+    def _preprocess_v2_5(self, image: Image, params: dict = None) -> dict:
         """Image preprocessing for MiniCPM-Llama3-V-2_5."""
         slice_images, best_grid = self._get_slice_image(image)
         # pixel_values, tgt_sizes are list of torch tensors
@@ -108,7 +107,7 @@ class MiniCPMVModel(VisionModel):
             image_tokens=1,
             image_token_id=self.image_token_id)
 
-    def _preprocess_v2_6(self, image: Image, params: Dict = None) -> Dict:
+    def _preprocess_v2_6(self, image: Image, params: dict = None) -> dict:
         """Image preprocessing for MiniCPM-V-2_6."""
         max_slice_nums = self.image_processor.max_slice_nums
         use_image_id = self.image_processor.use_image_id
@@ -130,11 +129,11 @@ class MiniCPMVModel(VisionModel):
             image_token_id=self.image_token_id,
             use_image_id=use_image_id)
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refer to `super().preprocess() for spec."""
         outputs = []
         for i, message in enumerate(messages):
-            if message['role'] != 'user' or not isinstance(message['content'], List):
+            if message['role'] != 'user' or not isinstance(message['content'], list):
                 continue
             for item in message['content']:
                 if item['type'] == 'image':
@@ -146,7 +145,7 @@ class MiniCPMVModel(VisionModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 

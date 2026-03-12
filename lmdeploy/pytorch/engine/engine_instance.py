@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Dict, List
+from typing import Any
 
 from lmdeploy.messages import EngineOutput, GenerationConfig
 from lmdeploy.utils import get_logger
@@ -11,7 +11,7 @@ from .request import RequestSender, RequestType, Response, ResponseType
 
 logger = get_logger('lmdeploy')
 
-InputMultiModalType = List[Dict[str, Any]]
+InputMultiModalType = list[dict[str, Any]]
 
 
 def _check_resp(resp: Response, state: ResponseType, warning_msg: str = None):
@@ -125,7 +125,7 @@ class EngineInstance(EngineInstanceBase):
 
     async def async_stream_infer(self,
                                  session_id: int,
-                                 input_ids: List[int],
+                                 input_ids: list[int],
                                  gen_config: GenerationConfig = None,
                                  multimodal: InputMultiModalType = None,
                                  adapter_name: str = None,
@@ -210,7 +210,7 @@ class EngineInstance(EngineInstanceBase):
 
     async def async_infer(self,
                           session_id: int,
-                          input_ids: List[int] = None,
+                          input_ids: list[int] = None,
                           multimodal: InputMultiModalType = None,
                           gen_config: GenerationConfig = None,
                           **kwargs):
@@ -239,7 +239,7 @@ class EngineInstance(EngineInstanceBase):
 
     def stream_infer(self,
                      session_id: int,
-                     input_ids: List[int],
+                     input_ids: list[int],
                      multimodal: InputMultiModalType = None,
                      gen_config: GenerationConfig = None,
                      adapter_name: str = None,
@@ -276,7 +276,7 @@ class EngineInstance(EngineInstanceBase):
 
     def infer(self,
               session_id: int,
-              input_ids: List[int] = None,
+              input_ids: list[int] = None,
               multimodal: InputMultiModalType = None,
               gen_config: GenerationConfig = None,
               **kwargs):

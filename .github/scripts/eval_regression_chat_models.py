@@ -7,71 +7,104 @@ with read_base():
     from opencompass.configs.datasets.gpqa.gpqa_openai_simple_evals_gen_5aeece import gpqa_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.IFEval.IFEval_gen_353ae7 import ifeval_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.math.math_0shot_gen_11c4b5 import math_datasets  # noqa: F401, E501
+
     # read hf models - chat models
-    from opencompass.configs.models.chatglm.lmdeploy_glm4_9b_chat import \
-        models as lmdeploy_glm4_9b_chat_model  # noqa: F401, E501
-    from opencompass.configs.models.deepseek.lmdeploy_deepseek_r1_distill_qwen_32b import \
-        models as lmdeploy_deepseek_r1_distill_qwen_32b_model  # noqa: F401, E501
-    from opencompass.configs.models.deepseek.lmdeploy_deepseek_v2_5_1210 import \
-        models as lmdeploy_deepseek_v2_5_1210_model  # noqa: F401, E501
-    from opencompass.configs.models.deepseek.lmdeploy_deepseek_v2_lite import \
-        models as lmdeploy_deepseek_v2_lite_model  # noqa: F401, E501
-    from opencompass.configs.models.gemma.lmdeploy_gemma_9b_it import \
-        models as pytorch_gemma_9b_it_model  # noqa: F401, E501
-    from opencompass.configs.models.gemma.lmdeploy_gemma_27b_it import \
-        models as pytorch_gemma_27b_it_model  # noqa: F401, E501
-    from opencompass.configs.models.hf_internlm.lmdeploy_internlm2_5_7b_chat import \
-        models as lmdeploy_internlm2_5_7b_chat_model  # noqa: F401, E501
-    from opencompass.configs.models.hf_internlm.lmdeploy_internlm2_5_20b_chat import \
-        models as lmdeploy_internlm2_5_20b_chat_model  # noqa: F401, E501
-    from opencompass.configs.models.hf_internlm.lmdeploy_internlm2_chat_1_8b import \
-        models as lmdeploy_internlm2_chat_1_8b_model  # noqa: F401, E501
-    from opencompass.configs.models.hf_internlm.lmdeploy_internlm2_chat_1_8b_sft import \
-        models as lmdeploy_internlm2_chat_1_8b_sft_model  # noqa: F401, E501
-    from opencompass.configs.models.hf_internlm.lmdeploy_internlm2_chat_7b import \
-        models as lmdeploy_internlm2_chat_7b_model  # noqa: F401, E501
-    from opencompass.configs.models.hf_internlm.lmdeploy_internlm2_chat_7b_sft import \
-        models as lmdeploy_internlm2_chat_7b_sft_model  # noqa: F401, E501
-    from opencompass.configs.models.hf_internlm.lmdeploy_internlm3_8b_instruct import \
-        models as lmdeploy_internlm3_8b_instruct_model  # noqa: F401, E501
-    from opencompass.configs.models.hf_llama.lmdeploy_llama2_7b_chat import \
-        models as lmdeploy_llama2_7b_chat_model  # noqa: F401, E501
-    from opencompass.configs.models.hf_llama.lmdeploy_llama3_1_8b_instruct import \
-        models as lmdeploy_llama3_1_8b_instruct_model  # noqa: F401, E501
-    from opencompass.configs.models.hf_llama.lmdeploy_llama3_2_3b_instruct import \
-        models as lmdeploy_llama3_2_3b_instruct_model  # noqa: F401, E501
-    from opencompass.configs.models.hf_llama.lmdeploy_llama3_3_70b_instruct import \
-        models as lmdeploy_llama3_3_70b_instruct_model  # noqa: F401, E501
-    from opencompass.configs.models.hf_llama.lmdeploy_llama3_8b_instruct import \
-        models as lmdeploy_llama3_8b_instruct_model  # noqa: F401, E501
-    from opencompass.configs.models.mistral.lmdeploy_mistral_large_instruct_2411 import \
-        models as lmdeploy_mistral_large_instruct_2411_model  # noqa: F401, E501
-    from opencompass.configs.models.mistral.lmdeploy_mistral_nemo_instruct_2407 import \
-        models as lmdeploy_mistral_nemo_instruct_2407_model  # noqa: F401, E501
-    from opencompass.configs.models.mistral.lmdeploy_mistral_small_instruct_2409 import \
-        models as lmdeploy_mistral_small_instruct_2409_model  # noqa: F401, E501
-    from opencompass.configs.models.nvidia.lmdeploy_nemotron_70b_instruct_hf import \
-        models as lmdeploy_nemotron_70b_instruct_hf_model  # noqa: F401, E501
-    from opencompass.configs.models.qwen2_5.lmdeploy_qwen2_5_0_5b_instruct import \
-        models as lmdeploy_qwen2_5_0_5b_instruct_model  # noqa: F401, E501
-    from opencompass.configs.models.qwen2_5.lmdeploy_qwen2_5_3b_instruct import \
-        models as lmdeploy_qwen2_5_3b_instruct_model  # noqa: F401, E501
-    from opencompass.configs.models.qwen2_5.lmdeploy_qwen2_5_14b_instruct import \
-        models as lmdeploy_qwen2_5_14b_instruct_model  # noqa: F401, E501
-    from opencompass.configs.models.qwen2_5.lmdeploy_qwen2_5_32b_instruct import \
-        models as lmdeploy_qwen2_5_32b_instruct_model  # noqa: F401, E501
-    from opencompass.configs.models.qwen2_5.lmdeploy_qwen2_5_72b_instruct import \
-        models as lmdeploy_qwen2_5_72b_instruct_model  # noqa: F401, E501
-    from opencompass.configs.models.qwen.lmdeploy_qwen2_1_5b_instruct import \
-        models as lmdeploy_qwen2_1_5b_instruct_model  # noqa: F401, E501
-    from opencompass.configs.models.qwen.lmdeploy_qwen2_7b_instruct import \
-        models as lmdeploy_qwen2_7b_instruct_model  # noqa: F401, E501
-    from opencompass.configs.models.yi.lmdeploy_yi_1_5_6b_chat import \
-        models as lmdeploy_yi_1_5_6b_chat_model  # noqa: F401, E501
-    from opencompass.configs.models.yi.lmdeploy_yi_1_5_9b_chat import \
-        models as lmdeploy_yi_1_5_9b_chat_model  # noqa: F401, E501
-    from opencompass.configs.models.yi.lmdeploy_yi_1_5_34b_chat import \
-        models as lmdeploy_yi_1_5_34b_chat_model  # noqa: F401, E501
+    from opencompass.configs.models.chatglm.lmdeploy_glm4_9b_chat import (
+        models as lmdeploy_glm4_9b_chat_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.deepseek.lmdeploy_deepseek_r1_distill_qwen_32b import (
+        models as lmdeploy_deepseek_r1_distill_qwen_32b_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.deepseek.lmdeploy_deepseek_v2_5_1210 import (
+        models as lmdeploy_deepseek_v2_5_1210_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.deepseek.lmdeploy_deepseek_v2_lite import (
+        models as lmdeploy_deepseek_v2_lite_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.gemma.lmdeploy_gemma_9b_it import (
+        models as pytorch_gemma_9b_it_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.gemma.lmdeploy_gemma_27b_it import (
+        models as pytorch_gemma_27b_it_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.hf_internlm.lmdeploy_internlm2_5_7b_chat import (
+        models as lmdeploy_internlm2_5_7b_chat_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.hf_internlm.lmdeploy_internlm2_5_20b_chat import (
+        models as lmdeploy_internlm2_5_20b_chat_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.hf_internlm.lmdeploy_internlm2_chat_1_8b import (
+        models as lmdeploy_internlm2_chat_1_8b_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.hf_internlm.lmdeploy_internlm2_chat_1_8b_sft import (
+        models as lmdeploy_internlm2_chat_1_8b_sft_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.hf_internlm.lmdeploy_internlm2_chat_7b import (
+        models as lmdeploy_internlm2_chat_7b_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.hf_internlm.lmdeploy_internlm2_chat_7b_sft import (
+        models as lmdeploy_internlm2_chat_7b_sft_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.hf_internlm.lmdeploy_internlm3_8b_instruct import (
+        models as lmdeploy_internlm3_8b_instruct_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.hf_llama.lmdeploy_llama2_7b_chat import (
+        models as lmdeploy_llama2_7b_chat_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.hf_llama.lmdeploy_llama3_1_8b_instruct import (
+        models as lmdeploy_llama3_1_8b_instruct_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.hf_llama.lmdeploy_llama3_2_3b_instruct import (
+        models as lmdeploy_llama3_2_3b_instruct_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.hf_llama.lmdeploy_llama3_3_70b_instruct import (
+        models as lmdeploy_llama3_3_70b_instruct_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.hf_llama.lmdeploy_llama3_8b_instruct import (
+        models as lmdeploy_llama3_8b_instruct_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.mistral.lmdeploy_mistral_large_instruct_2411 import (
+        models as lmdeploy_mistral_large_instruct_2411_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.mistral.lmdeploy_mistral_nemo_instruct_2407 import (
+        models as lmdeploy_mistral_nemo_instruct_2407_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.mistral.lmdeploy_mistral_small_instruct_2409 import (
+        models as lmdeploy_mistral_small_instruct_2409_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.nvidia.lmdeploy_nemotron_70b_instruct_hf import (
+        models as lmdeploy_nemotron_70b_instruct_hf_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.qwen.lmdeploy_qwen2_1_5b_instruct import (
+        models as lmdeploy_qwen2_1_5b_instruct_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.qwen.lmdeploy_qwen2_7b_instruct import (
+        models as lmdeploy_qwen2_7b_instruct_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.qwen2_5.lmdeploy_qwen2_5_0_5b_instruct import (
+        models as lmdeploy_qwen2_5_0_5b_instruct_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.qwen2_5.lmdeploy_qwen2_5_3b_instruct import (
+        models as lmdeploy_qwen2_5_3b_instruct_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.qwen2_5.lmdeploy_qwen2_5_14b_instruct import (
+        models as lmdeploy_qwen2_5_14b_instruct_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.qwen2_5.lmdeploy_qwen2_5_32b_instruct import (
+        models as lmdeploy_qwen2_5_32b_instruct_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.qwen2_5.lmdeploy_qwen2_5_72b_instruct import (
+        models as lmdeploy_qwen2_5_72b_instruct_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.yi.lmdeploy_yi_1_5_6b_chat import (
+        models as lmdeploy_yi_1_5_6b_chat_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.yi.lmdeploy_yi_1_5_9b_chat import (
+        models as lmdeploy_yi_1_5_9b_chat_model,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.yi.lmdeploy_yi_1_5_34b_chat import (
+        models as lmdeploy_yi_1_5_34b_chat_model,  # noqa: F401, E501
+    )
 
     from .volc import infer as volc_infer  # noqa: F401, E501
 

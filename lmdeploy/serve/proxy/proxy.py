@@ -10,7 +10,7 @@ import threading
 import time
 from collections import deque
 from http import HTTPStatus
-from typing import Deque, Literal
+from typing import Literal
 
 import aiohttp
 import numpy as np
@@ -26,8 +26,13 @@ from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol, MigrationRe
 from lmdeploy.pytorch.disagg.conn.proxy_conn import PDConnectionPool
 from lmdeploy.pytorch.disagg.messages import PDConnectionMessage
 from lmdeploy.serve.openai.api_server import create_error_response
-from lmdeploy.serve.openai.protocol import ModelCard  # noqa: E501
-from lmdeploy.serve.openai.protocol import ChatCompletionRequest, CompletionRequest, ModelList, ModelPermission
+from lmdeploy.serve.openai.protocol import (
+    ChatCompletionRequest,
+    CompletionRequest,
+    ModelCard,  # noqa: E501
+    ModelList,
+    ModelPermission,
+)
 from lmdeploy.serve.proxy.utils import AIOHTTP_TIMEOUT, LATENCY_DEQUE_LEN, ErrorCodes, RoutingStrategy, err_msg
 from lmdeploy.serve.utils.server_utils import validate_json_request
 from lmdeploy.utils import get_logger
@@ -43,7 +48,7 @@ class Status(BaseModel):
     role: EngineRole = EngineRole.Hybrid
     models: list[str] = Field(default=[], examples=[[]])
     unfinished: int = 0
-    latency: Deque = Field(default=deque(maxlen=LATENCY_DEQUE_LEN), examples=[[]])
+    latency: deque = Field(default=deque(maxlen=LATENCY_DEQUE_LEN), examples=[[]])
     speed: int | None = Field(default=None, examples=[None])
 
 
@@ -96,7 +101,7 @@ class NodeManager:
         if config_path is not None:
             self.config_path = config_path
         if osp.exists(self.config_path) and self.cache_status:
-            with open(self.config_path, 'r') as config_file:
+            with open(self.config_path) as config_file:
                 if os.path.getsize(self.config_path) > 0:
                     logger.info(f'loading node configuration: {self.config_path}')
                     config = json.load(config_file)

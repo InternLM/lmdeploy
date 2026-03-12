@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Optional, Type, TypeVar
+from typing import TypeVar
 
 import torch
 from torch import nn
@@ -29,7 +29,7 @@ class WeightOnlyQLinear(nn.Module):
         self,
         in_features: int,
         out_features: int,
-        bias: Optional[torch.Tensor] = True,
+        bias: torch.Tensor | None = True,
         w_bit: int = 4,
         symmetry: bool = False,
         group_size: int = 128,
@@ -71,11 +71,11 @@ class WeightOnlyQLinear(nn.Module):
             self.qzeros = None
 
     @classmethod
-    def from_linear(cls: Type['WeightOnlyQLinear'],
+    def from_linear(cls: type['WeightOnlyQLinear'],
                     linear: nn.Linear,
                     quantizer: TypeVar('Quantizer'),
                     awq_layout: bool = True,
-                    qparams: Optional[QParams] = None) -> 'WeightOnlyQLinear':
+                    qparams: QParams | None = None) -> 'WeightOnlyQLinear':
         """Create a WeightOnlyQLinear object from a PyTorch Linear object.
 
         Args:

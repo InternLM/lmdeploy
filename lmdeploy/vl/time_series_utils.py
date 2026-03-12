@@ -136,7 +136,7 @@ def _load_csv(source: bytes | str) -> np.ndarray:
     if isinstance(source, bytes):
         text = source.decode('utf-8')
     else:
-        with open(source, 'r', newline='') as f:
+        with open(source, newline='') as f:
             text = f.read()
 
     # Parse CSV

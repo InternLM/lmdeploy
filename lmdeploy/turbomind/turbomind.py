@@ -13,7 +13,7 @@ from dataclasses import asdict
 from functools import partial
 from multiprocessing.reduction import ForkingPickler
 from queue import Queue
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import pybase64
 import torch
@@ -41,7 +41,7 @@ logger = get_logger('lmdeploy')
 MAX_LOGPROBS = 1024
 
 
-def _construct_stop_or_bad_words(words: List[int] = None):
+def _construct_stop_or_bad_words(words: list[int] = None):
     if words is None or len(words) == 0:
         return None
     offsets = list(range(1, len(words) + 1))
@@ -291,7 +291,7 @@ class TurboMind:
             for _ in e.map(self.model_comm.sleep, range(self.gpu_count), [level] * self.gpu_count):
                 pass
 
-    def wakeup(self, tags: Optional[list[str]] = None):
+    def wakeup(self, tags: list[str] | None = None):
         """Wakeup the model."""
         if tags is None:
             tags = ['weights', 'kv_cache']
@@ -424,7 +424,7 @@ def _get_last_hidden_state(outputs, offset: int):
 
 
 def _get_logprobs_impl(logprob_vals: torch.Tensor, logprob_idxs: torch.Tensor, logprob_nums: torch.Tensor,
-                       output_ids: List[int], logprobs: int, offset: int):
+                       output_ids: list[int], logprobs: int, offset: int):
     """Get logprob of each generated token.
 
     Args:
@@ -562,7 +562,7 @@ class TurboMindInstance:
         model_inst = self.tm_model.model_comm.create_request()
         return model_inst
 
-    def _get_extra_output_processors(self, outputs: Dict[str, torch.Tensor], gen_config: GenerationConfig,
+    def _get_extra_output_processors(self, outputs: dict[str, torch.Tensor], gen_config: GenerationConfig,
                                      input_len: int, metrics: '_tm.RequestMetrics'):
 
         def _get_offset(type):
@@ -586,8 +586,8 @@ class TurboMindInstance:
         if not input_embeddings:
             return None, None
 
-        assert isinstance(input_embeddings, List)
-        assert isinstance(input_embedding_ranges, List)
+        assert isinstance(input_embeddings, list)
+        assert isinstance(input_embedding_ranges, list)
         assert len(input_embeddings) == len(input_embedding_ranges)
 
         length = sum([x.shape[0] for x in input_embeddings])
@@ -605,7 +605,7 @@ class TurboMindInstance:
 
         return values, ranges
 
-    def prepare_mrope(self, input_meta: Dict[str, Any], input_len: int):
+    def prepare_mrope(self, input_meta: dict[str, Any], input_len: int):
         mrope_position_ids = input_meta['mrope_position_ids']
         mrope_position_delta = input_meta['mrope_position_delta']
         assert mrope_position_ids.size(-1) == input_len
@@ -617,7 +617,7 @@ class TurboMindInstance:
                        gen_config: GenerationConfig,
                        input_embeddings=None,
                        input_embedding_ranges=None,
-                       input_meta: Dict[str, Any] = None):
+                       input_meta: dict[str, Any] = None):
         """Convert inputs format."""
         assert isinstance(input_ids, Sequence)
 
@@ -661,7 +661,7 @@ class TurboMindInstance:
                                  input_ids,
                                  input_embeddings=None,
                                  input_embedding_ranges=None,
-                                 input_meta: Dict[str, Any] = None,
+                                 input_meta: dict[str, Any] = None,
                                  sequence_start: bool = True,
                                  sequence_end: bool = False,
                                  step=0,

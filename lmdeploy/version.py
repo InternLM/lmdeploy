@@ -1,11 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Tuple
 
 __version__ = '0.12.1'
 short_version = __version__
 
 
-def parse_version_info(version_str: str) -> Tuple:
+def parse_version_info(version_str: str) -> tuple:
     """Parse version from a string.
 
     Args:

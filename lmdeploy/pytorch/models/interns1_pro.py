@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
+from typing import Any
 
 import torch
 from torch import nn
@@ -80,7 +81,7 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGra
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
         pixel_values: torch.Tensor = None,
@@ -150,8 +151,8 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGra
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
-        inputs_embeds: Optional[torch.Tensor] = None,
+        past_key_values: list[list[torch.Tensor]],
+        inputs_embeds: torch.Tensor | None = None,
         context: StepContext = None,
     ):
         """Prepare input."""
@@ -239,8 +240,8 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGra
             return name[len('model.'):]
         return name
 
-    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
-                             expert_params_mapping: List):
+    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
+                             expert_params_mapping: list):
         """Load weight experts."""
 
         for (param_name, weight_name, expert_id, shard_id) in expert_params_mapping:
@@ -255,8 +256,8 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGra
             load_weight(param, loaded_weight)
 
     # modify from vllm qwen3vlmoe fused expert loading
-    def _load_weight_fused_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
-                                   fused_expert_params_mapping: List):
+    def _load_weight_fused_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
+                                   fused_expert_params_mapping: list):
         """Load weight of fused expert weights."""
         num_experts = self.config.text_config.num_experts
 
@@ -279,7 +280,7 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGra
                 for expert_id in range(num_experts):
                     load_weight(param, w2[expert_id], expert_id=expert_id, shard_id='down')
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
         # modify from vllm
         stacked_params_mapping = [
@@ -366,8 +367,8 @@ class InternS1ProInputProcessor(BaseModelInputProcessor):
         self.dtype = dtype
 
     def preprocess_input(self,
-                         input_ids: List[int],
-                         input_multimodals: List[Dict[str, Any]] = None,
+                         input_ids: list[int],
+                         input_multimodals: list[dict[str, Any]] = None,
                          **kwargs) -> PreprocessInputResult:
         """Prepare multimodal input."""
         if input_multimodals is None or len(input_multimodals) == 0:

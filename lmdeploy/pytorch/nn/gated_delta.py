@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Any, Sequence, Tuple
+from collections.abc import Sequence
+from typing import Any
 
 import torch
 from torch import nn
@@ -198,7 +199,7 @@ class CausalConv1d(nn.Module):
         self,
         in_channels: int,
         out_channels: int,
-        kernel_size: int | Tuple[int],
+        kernel_size: int | tuple[int],
         split: Sequence[int],
         groups: int = 1,
         bias: bool = True,
@@ -232,7 +233,7 @@ class CausalConv1d(nn.Module):
     def make_weight(
         in_channels: int,
         out_channels: int,
-        kernel_size: int | Tuple[int],
+        kernel_size: int | tuple[int],
         groups: int = 1,
         bias: bool = True,
         device: str | torch.device | None = None,
@@ -273,6 +274,6 @@ class CausalConv1d(nn.Module):
 
 
 @record_function('gated_delta_load_state')
-def load_state(past_key_value: Tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
+def load_state(past_key_value: tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
     """Load states from cache."""
     return past_key_value[:2]

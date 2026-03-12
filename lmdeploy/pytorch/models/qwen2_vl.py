@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from collections.abc import Callable, Iterable
+from typing import Any
 
 import torch
 from torch import nn
@@ -9,17 +10,28 @@ from transformers.configuration_utils import PretrainedConfig
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, FlashAttention, LayerNorm, RMSNorm, SiluAndMul,
-                                 build_rotary_embedding_from_config)
-from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_merged_colwise_linear, build_qkv_proj,
-                                        build_rowwise_linear)
+from lmdeploy.pytorch.nn import (
+    ApplyRotaryEmb,
+    Attention,
+    FlashAttention,
+    LayerNorm,
+    RMSNorm,
+    SiluAndMul,
+    build_rotary_embedding_from_config,
+)
+from lmdeploy.pytorch.nn.linear import (
+    build_colwise_linear,
+    build_merged_colwise_linear,
+    build_qkv_proj,
+    build_rowwise_linear,
+)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
 from .utils.model import DeployModelMixinV1, build_embedding, vlm_model
 
 
-def _apply_mrope_selection(hidden_states: torch.Tensor, mrope_position_ids: torch.Tensor, mrope_section: List[int],
+def _apply_mrope_selection(hidden_states: torch.Tensor, mrope_position_ids: torch.Tensor, mrope_section: list[int],
                            position_ids: torch.Tensor, rotary_emb_func: Callable):
     _mrope_position_ids = torch.zeros(3, position_ids.shape[-1], dtype=position_ids.dtype, device=position_ids.device)
     _mrope_position_ids[:, :mrope_position_ids.shape[-1]] = mrope_position_ids
@@ -87,8 +99,8 @@ class Qwen2Attention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: tuple[torch.Tensor] | None = None,
         attn_metadata: Any = None,
     ):
         """Rewrite of LlamaAttention.forward."""
@@ -198,9 +210,9 @@ class Qwen2DecoderLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[List[torch.FloatTensor]],
-        residual: Optional[torch.Tensor] = None,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: list[torch.FloatTensor] | None,
+        residual: torch.Tensor | None = None,
         attn_metadata: Any = None,
     ):
 
@@ -258,10 +270,10 @@ class Qwen2Model(nn.Module):
     def forward(
         self,
         input_ids: torch.LongTensor = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,
         attn_metadata: Any = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
+        inputs_embeds: torch.FloatTensor | None = None,
         mrope_position_ids: torch.LongTensor = None,
     ):
         """Rewrite of LlamaModel.forward."""
@@ -393,7 +405,7 @@ class VisionAttention(nn.Module):
                                          is_tp=True)
 
     def forward(self, hidden_states: torch.Tensor, cu_seqlens: torch.Tensor,
-                rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor]) -> torch.Tensor:
+                rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor]) -> torch.Tensor:
         seq_length = hidden_states.shape[0]
         # qkv proj
         qkv_states = self.qkv(hidden_states)
@@ -480,7 +492,7 @@ class Qwen2VLVisionBlock(nn.Module):
                 hidden_states,
                 cu_seqlens,
                 rotary_pos_emb,
-                residual: Optional[torch.Tensor] = None) -> torch.Tensor:
+                residual: torch.Tensor | None = None) -> torch.Tensor:
         if residual is None:
             residual = hidden_states
             hidden_states = self.norm1(hidden_states)
@@ -638,7 +650,7 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
         mrope_position_ids: torch.Tensor = None,
@@ -674,8 +686,8 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
-        inputs_embeds: Optional[torch.Tensor] = None,
+        past_key_values: list[list[torch.Tensor]],
+        inputs_embeds: torch.Tensor | None = None,
         context: StepContext = None,
     ):
         """Prepare input."""
@@ -729,7 +741,7 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
             image_mask=image_mask,
         )
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
         # modify from vllm
         stacked_params_mapping = [
@@ -876,8 +888,8 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         return new_model_metas
 
     def update_model_metas(self,
-                           past_key_values: List[List[torch.Tensor]],
-                           inputs_embeds: Optional[torch.Tensor] = None,
+                           past_key_values: list[list[torch.Tensor]],
+                           inputs_embeds: torch.Tensor | None = None,
                            context: StepContext = None):
         """Update model meta."""
         if context.is_decoding:
@@ -890,7 +902,7 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         return self.input_processor
 
 
-InputMultiModalType = List[Dict[str, Any]]
+InputMultiModalType = list[dict[str, Any]]
 
 
 class Qwen2VLInputProcessor(BaseModelInputProcessor):
@@ -900,8 +912,8 @@ class Qwen2VLInputProcessor(BaseModelInputProcessor):
         self.config = config
 
     def preprocess_input(self,
-                         input_ids: List[int],
-                         input_multimodals: List[Dict[str, Any]] = None,
+                         input_ids: list[int],
+                         input_multimodals: list[dict[str, Any]] = None,
                          **kwargs) -> PreprocessInputResult:
         """Prepare multimodal input."""
         if input_multimodals is None or len(input_multimodals) == 0:
