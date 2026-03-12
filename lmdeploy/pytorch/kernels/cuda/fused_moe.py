@@ -80,7 +80,7 @@ def get_cuda_autotune_config():
     ]
 
 
-def _config_prune_func(config: dict, *args, **kwargs):
+def _config_prune_func(config: list, *args, **kwargs):
     """Fused moe config prune."""
     device_cap = torch.cuda.get_device_capability()
     num_sm9x = 2

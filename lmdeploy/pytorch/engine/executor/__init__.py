@@ -79,6 +79,7 @@ def build_executor(
         is_draft_model=False,
         spec_method=None if specdecode_config is None else specdecode_config.method,
         model_format=misc_config.model_format,
+        device_type=device_type,
     )
 
     if distributed_executor_backend is None:
