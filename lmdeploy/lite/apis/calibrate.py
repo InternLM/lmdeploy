@@ -95,7 +95,7 @@ def _prepare_for_calibrate(model: nn.Module,
     ----------
     model : nn.Module
         The PyTorch model to prepare for calibration.
-    layer_type : Union[str, Type]
+    layer_type : str | type
         The type of the layer to be moved to CPU. Can be either a string of
         class name or the class type itself.
     head_name : str, optional

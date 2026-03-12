@@ -10,13 +10,13 @@ def split_decoder_layer_inputs(batch_size, *args: torch.Tensor | Any,
     elements.
 
     Args:
-        *args (Union[torch.Tensor, Any]): Positional arguments which could
+        *args (torch.Tensor | Any): Positional arguments which could
             be a mix of tensors and other types.
-        **kwargs (Union[torch.Tensor, Any]): Keyword arguments which could
+        **kwargs (torch.Tensor | Any): Keyword arguments which could
             be a mix of tensors and other types.
 
     Returns:
-        Tuple[List[List[Any]], List[Dict[str, Any]]]: A tuple containing two
+        tuple[list[list[Any]], list[dict[str, Any]]]: A tuple containing two
             lists, one for positional arguments, one for keyword arguments.
             Each list contains individual elements from the batch.
     """
@@ -63,7 +63,7 @@ def concat_decoder_layer_outputs(batch_outputs: list[Any]) -> Any:
     batched output.
 
     Args:
-        batch_outputs (List[Any]): A list, where each tuple
+        batch_outputs (list[Any]): A list, where each tuple
             represents the output from an individual element in the batch.
 
     Returns:

@@ -311,7 +311,7 @@ class TurboMind:
         def _construct(item):
             """ Deserialize torch.Tensor
             Args:
-                item (Tuple[Callable, Tuple]): the return of reduce_tensor
+                item (tuple[Callable, tuple]): the return of reduce_tensor
             """
             func, args = item
             args = list(args)
@@ -432,7 +432,7 @@ def _get_logprobs_impl(logprob_vals: torch.Tensor, logprob_idxs: torch.Tensor, l
             1024 is the max_logprobs that turbomind engine can output
         logprob_idxs (torch.Tensor): shape (max_new_tokens, 1024)
         logprob_nums (torch.Tensor): shape (max_new_tokens,)
-        output_ids (List[int]): new generated token ids
+        output_ids (list[int]): new generated token ids
         logprobs (int): top n logprobs to return
         offset (int): offset to index logprob_vals, logprob_idxs and logprob_nums.
             It indicates where to start getting logprobs for the current generated tokens `output_ids`
@@ -673,8 +673,8 @@ class TurboMindInstance:
         Args:
             session_id (int): the id of a session
             input_ids (numpy.ndarray): the token ids of a prompt
-            input_embeddings (List[numpy.ndarray]): embeddings features
-            input_embedding_ranges (List[Tuple[int,int]]): the begin/end
+            input_embeddings (list[numpy.ndarray]): embeddings features
+            input_embedding_ranges (list[tuple[int,int]]): the begin/end
               offsets of input_embeddings to input_ids
             sequence_start (bool): indicator for starting a sequence
             sequence_end (bool): indicator for ending a sequence

@@ -707,15 +707,15 @@ def fill_kv_cache_blocked_fp8(k_states: Tensor,
     Args:
         k_states (Tensor): Key states of shape
             (seq_length, num_heads, head_dim).
-        v_states (Optional[Tensor]): Value states of shape
+        v_states (Tensor | None): Value states of shape
             (seq_length, num_heads, head_dim_v). If None, no value states
             are processed.
         k_caches (Tensor): 4D k cache, shape depends on ``kv_layout``.
-        v_caches (Optional[Tensor]): 4D v cache, shape depends on
+        v_caches (Tensor | None): 4D v cache, shape depends on
             ``kv_layout``. If None, no value caches are processed.
         ks_caches (Tensor): 4D k scale cache, shape depends on
             ``kv_layout``.
-        vs_caches (Optional[Tensor]): 4D v scale cache, shape depends on
+        vs_caches (Tensor | None): 4D v scale cache, shape depends on
             ``kv_layout``. If None, no value scale caches are processed.
         cu_seqlen_q (Tensor): Cumulative sequence lengths of queries,
             shape (batch_size + 1, ).

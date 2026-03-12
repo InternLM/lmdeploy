@@ -344,9 +344,9 @@ class CacheEngine:
         """Move caches from src memory to dst memory.
 
         Args:
-            src (List[KVCache]): Source cache.
-            dst (List[KVCache]): Destination cache.
-            src_to_dst (Dict[int, int]): Map between src and dst.
+            src (list[KVCache]): Source cache.
+            dst (list[KVCache]): Destination cache.
+            src_to_dst (dict[int, int]): Map between src and dst.
         """
         BLOCKS_PER_COPY = 2
         num_copy = len(src_to_dst)
@@ -366,7 +366,7 @@ class CacheEngine:
         """Move cache from Host to Device.
 
         Args:
-            src_to_dst (Dict[int, int]): Map between src and dst.
+            src_to_dst (dict[int, int]): Map between src and dst.
         """
         self._swap([self.full_cpu_cache], [self.full_gpu_cache], src_to_dst)
 
@@ -374,7 +374,7 @@ class CacheEngine:
         """Move cache from Device to Host.
 
         Args:
-            src_to_dst (Dict[int, int]): Map between src and dst.
+            src_to_dst (dict[int, int]): Map between src and dst.
         """
         self._swap([self.full_gpu_cache], [self.full_cpu_cache], src_to_dst)
 
@@ -501,7 +501,7 @@ class StateCacheEngine:
         """Get the required cache size of the state cache.
 
         Args:
-            state_shapes (List[Tuple[Tuple[int], torch.dtype]]): The shapes and dtypes of the states.
+            state_shapes (list[tuple[tuple[int], torch.dtype]]): The shapes and dtypes of the states.
 
         Return:
             int: Required memory size in bytes.

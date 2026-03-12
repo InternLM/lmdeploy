@@ -88,7 +88,7 @@ class LLama4VisionModel(VisionModel):
         turbomind engine.
 
         Args:
-            messages(List[Dict]): the outputs of `preprocess`
+            messages(list[dict]): the outputs of `preprocess`
             max_batch_size(int): the max batch size when forwarding vision
                 model
         Return:
@@ -122,7 +122,7 @@ class LLama4VisionModel(VisionModel):
         compatible with what is required by pytorch engine.
 
         Args:
-            messages(List[Dict]): the output of `preprocess`
+            messages(list[dict]): the output of `preprocess`
             prompt(str): the prompt after applying chat template
             IMAGE_TOKEN(str): a placeholder where image tokens will be
                 inserted

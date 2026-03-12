@@ -43,8 +43,8 @@ class CalibrationContext:
         Args:
             model (nn.Module): Model to be calibrated.
             tokenizer (PreTrainedTokenizer): Tokenizer of the given model.
-            layer_type (Union[str, type]): Type of the layers to be observed.
-            norm_type (Union[str, type]): Norm type used in the model.
+            layer_type (str | type): Type of the layers to be observed.
+            norm_type (str | type): Norm type used in the model.
             batch_size (int): The batch size for running the calib samples.
                 Low GPU mem requires small batch_size. Large batch_size
                 reduces the calibration time while costs more VRAM.
@@ -204,7 +204,7 @@ class CalibrationContext:
         to specified directory.
 
         Args:
-            out_dir (Union[str, Path]): The directory path where the stats
+            out_dir (str | Path): The directory path where the stats
                 will be saved.
         """
 
@@ -377,7 +377,7 @@ class CalibrationContextV2(CalibrationContext):
         to specified directory.
 
         Args:
-            out_dir (Union[str, Path]): The directory path where the stats
+            out_dir (str | Path): The directory path where the stats
                 will be saved.
         """
         inputs_stats = {

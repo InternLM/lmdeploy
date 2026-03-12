@@ -51,10 +51,10 @@ class GenerationConfig:
         random_seed: Seed used when sampling a token
         stop_words: Words that stop generating further tokens
         bad_words: Words that the engine will never generate
-        stop_token_ids: List of tokens that stop the generation
+        stop_token_ids: list of tokens that stop the generation
             when they are generated. The returned output will not contain
             the stop tokens.
-        bad_token_ids: List of tokens that the engine will never
+        bad_token_ids: list of tokens that the engine will never
             generate.
         min_new_tokens: The minimum numbers of tokens to generate,
             ignoring the number of tokens in the prompt.
@@ -475,16 +475,13 @@ class Response:
         generate_token_len: the response token length.
         input_token_len: the input prompt token length. Note that it may
             contains chat template part.
-        session_id: the id for running the session.
         finish_reason: the reason the model stopped
             generating tokens. This will be 'stop' if the model hit a natural
             stop point or a provided stop sequence, 'length' if the maximum
             number of tokens specified in the request was reached.
-        token_ids:: the output token ids.
-        logprobs:: the top logprobs for each output
-            position.
-        index: it refers to the position index of the input request
-            batch
+        token_ids: the output token ids.
+        logprobs: the top logprobs for each output position.
+        index: it refers to the position index of the input request batch.
     """
     text: str
     generate_token_len: int
@@ -605,7 +602,7 @@ class RequestMetrics:
 
     Attributes:
         token_timestamp: A wall-clock time when a token is generated.
-        engine_events: List of engine events during inference.
+        engine_events: list of engine events during inference.
     """
     token_timestamp: float = 0.0
     engine_events: list[EngineEvent] = field(default_factory=list)

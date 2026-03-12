@@ -51,7 +51,7 @@ def get_func_config_list(backend: str,
         func_type: Test func type filter, default: func
         extra: extra config to update in each run config dict
     Returns:
-        List[Dict]: All valid run config dicts
+        list[dict]: All valid run config dicts
     """
     config = get_config()
     device = config.get('device', 'cuda')
@@ -228,7 +228,7 @@ def get_model_list(config: dict,
         model_type: Model type, default: chat_model
         func_type: Test func type filter, default: func
     Returns:
-        List[str]: Base models + quantization extended models
+        list[str]: Base models + quantization extended models
     """
     model_config_key = f'{backend}_{model_type}'
     all_models = []
