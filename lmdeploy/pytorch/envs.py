@@ -157,6 +157,9 @@ with set_envs():
     # model format
     scale_fmt = os.getenv('LMDEPLOY_SCALE_FMT', None)
 
+    # repetition check
+    repetition_window_size = env_to_int('LMDEPLOY_REPETITION_WINDOW_SIZE', 1024)
+
 
 def get_all_envs():
     """Get all environment variables."""

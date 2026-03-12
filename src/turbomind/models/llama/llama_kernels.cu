@@ -558,4 +558,33 @@ void AppendTokenIds(
     AppendTokenIdsKernel<<<grid, block, 0, stream>>>(token_ids_ptrs, output_ids, positions, batch_size);
 }
 
+template<typename T>
+__global__ void SigmoidGateMultiplyKernel(T* attn, const T* gate_base, int dim, int gate_stride, int num_tokens)
+{
+    const int ti = blockIdx.x;
+    const int di = threadIdx.x + blockIdx.y * blockDim.x;
+    if (ti >= num_tokens || di >= dim) {
+        return;
+    }
+    float g             = (float)gate_base[ti * gate_stride + di];
+    float s             = 1.0f / (1.0f + __expf(-g));
+    float a             = (float)attn[ti * dim + di];
+    attn[ti * dim + di] = (T)(a * s);
+}
+
+void invokeSigmoidGateMultiply(
+    void* attn, const void* gate_base, int dim, int gate_stride, int num_tokens, DataType dtype, cudaStream_t stream)
+{
+    constexpr int block = 256;
+    const dim3    grid(num_tokens, cdiv(dim, block));
+
+    auto invoke = [&](auto t) {
+        using T = decltype(t);
+        SigmoidGateMultiplyKernel<<<grid, block, 0, stream>>>(
+            (T*)attn, (const T*)gate_base, dim, gate_stride, num_tokens);
+    };
+
+    TM_DISPATCH_PRIMARY_DTYPES(dtype, invoke);
+}
+
 }  // namespace turbomind

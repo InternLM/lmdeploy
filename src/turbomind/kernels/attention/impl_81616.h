@@ -783,7 +783,10 @@ struct Impl<MMA_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
 
         __syncthreads();
 
-        using Map = RakedThreadMap<kHeadDim, CTA_H1, 4, kWarpCount>;
+        // For HeadDim=256, WarpThreadC needs to be explicitly specified to avoid exceeding WARP_SIZE
+        using Map = std::conditional_t<kHeadDim == 256,
+                                       RakedThreadMap<kHeadDim, CTA_H1, 4, kWarpCount, 8>,
+                                       RakedThreadMap<kHeadDim, CTA_H1, 4, kWarpCount>>;
         Array<float, 4> tmp_O[Map::kIterS][Map::kIterC];
 
         const int  warp_id = threadIdx.x / WARP_SIZE;

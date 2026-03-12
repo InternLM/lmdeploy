@@ -137,7 +137,10 @@ class LlamaModel(BaseInputModel):
             model_config = model_config.text_config
         elif hasattr(model_config, 'llm_config'):
             model_config = model_config.llm_config
-        self.model_config = model_config.to_dict()
+        if hasattr(model_config, 'to_dict'):
+            self.model_config = model_config.to_dict()
+        else:
+            self.model_config = model_config
         self.fp8_quant = kwargs.get('fp8_quant', False)
 
     def readers(self):
@@ -155,7 +158,7 @@ class LlamaModel(BaseInputModel):
         norm_eps = model_arg['rms_norm_eps']
         attn_head_num = model_arg['num_attention_heads']
         vocab_size = model_arg['vocab_size']
-        inter_size = model_arg['intermediate_size']
+        inter_size = model_arg.get('intermediate_size', 0)
         if 'num_key_value_heads' in model_arg:
             kv_head_num = model_arg['num_key_value_heads']
         else:
