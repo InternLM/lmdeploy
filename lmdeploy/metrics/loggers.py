@@ -112,7 +112,7 @@ class LoggingStatLogger(StatLoggerBase):
         # format and print
         log_msg = (f"[{datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')} DP{self.dp_rank}] "
                    f'Avg thr (in/out): {prompt_throughput:.1f} / {generation_throughput:.1f} tokens/s, '
-                   f'Server (succeed/failed/routed/waiting): '
+                   f'Server (succeeded/failed/routed/waiting): '
                    f'{scheduler_stats.num_succeeded_reqs} / {scheduler_stats.num_failed_reqs} / '
                    f'{scheduler_stats.num_api_routed_reqs} / {scheduler_stats.num_api_waiting_reqs}, '
                    f'Engine (running/waiting): '

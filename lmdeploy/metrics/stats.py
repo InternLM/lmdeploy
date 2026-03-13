@@ -24,7 +24,7 @@ class SchedulerStats:
 
         Engine core request states (axis view):
         |<────────────────── routed ──────────────────>|
-        |<───── running ──────>|<────── waiting ───────>|
+        |<───── running ──────>|<────── waiting ──────>|
 
     Attributes:
         # API server
