@@ -20,7 +20,7 @@ class SchedulerStats:
         |<──────────────────────────────── total ────────────────────────────────>|
         |<──────────── completed ─────────────>|<────── uncompleted ─────────────>|
         |<─ success ─>|<──────── fail ────────>|<─ routed ─>|<───── waiting ─────>|
-                      |<─ cancel ─>|<─ abort ─>|
+                      |<cancel>|<abort>|<error>|
 
         Engine core request states (axis view):
         |<────────────────── routed ──────────────────>|
@@ -32,6 +32,7 @@ class SchedulerStats:
         num_succeeded_reqs: the number of successfully completed requests since server start.
         num_cancelled_reqs: the number of cancelled requests since server start.
         num_aborted_reqs: the number of aborted requests since server start.
+        num_error_reqs: the number of requests that end with errors since server start.
         num_api_routed_reqs: the number of requests routed to request handles.
 
         # Engine core
@@ -46,6 +47,7 @@ class SchedulerStats:
     num_succeeded_reqs: int = 0
     num_cancelled_reqs: int = 0
     num_aborted_reqs: int = 0
+    num_error_reqs: int = 0
     num_api_routed_reqs: int = 0
 
     # engine core
@@ -56,7 +58,7 @@ class SchedulerStats:
 
     @property
     def num_failed_reqs(self) -> int:
-        return self.num_cancelled_reqs + self.num_aborted_reqs
+        return self.num_cancelled_reqs + self.num_aborted_reqs + self.num_error_reqs
 
     @property
     def num_completed_reqs(self) -> int:
