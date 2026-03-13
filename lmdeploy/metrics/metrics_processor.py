@@ -108,7 +108,7 @@ class MetricsProcessor():
         elif failure_type == 'abort':
             self.scheduler_stats.num_aborted_reqs += 1
         elif failure_type == 'error':
-            self.scheduler_stats.num_error_reqs += 1
+            self.scheduler_stats.num_errored_reqs += 1
 
     def increase_api_routed_requests(self):
         """Increase API routed requests."""
