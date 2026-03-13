@@ -3,7 +3,6 @@
 # https://github.com/vllm-project/vllm/blob/main/vllm/attention/backends/abstract.py
 from abc import ABC, abstractmethod
 from enum import Enum, auto
-from typing import Tuple
 
 import torch
 
@@ -70,7 +69,7 @@ class OpsBackend(ABC):
         num_heads: int,
         head_size: int,
         dtype: torch.dtype,
-    ) -> Tuple[int, ...]:
+    ) -> tuple[int, ...]:
         """Get block shape of k."""
         raise NotImplementedError
 
@@ -81,7 +80,7 @@ class OpsBackend(ABC):
         num_heads: int,
         head_size: int,
         dtype: torch.dtype,
-    ) -> Tuple[int, ...]:
+    ) -> tuple[int, ...]:
         """Get block shape of v."""
         raise NotImplementedError
 

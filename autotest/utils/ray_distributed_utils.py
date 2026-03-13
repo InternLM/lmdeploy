@@ -4,7 +4,7 @@ import socket
 import subprocess
 import time
 from time import time as time_time
-from typing import Any, Dict
+from typing import Any
 
 import requests
 from utils.config_utils import get_case_str_by_config, get_cli_common_param, resolve_extra_params
@@ -252,7 +252,7 @@ class RayLMDeployManager:
                 print(f'⚠️ Ray stop exception: {e}')
             self._cleaned = True  # Only mark as "fully cleaned" when force=True
 
-    def get_cluster_info(self) -> Dict[str, Any]:
+    def get_cluster_info(self) -> dict[str, Any]:
         return {
             'node_rank': self.node_rank,
             'node_count': self.node_count,

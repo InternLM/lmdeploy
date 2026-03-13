@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-from typing import Any, Dict, List, Literal, Tuple
+from typing import Any, Literal
 
 import PIL
 
@@ -34,7 +34,7 @@ class MultimodalProcessor:
         self.backend = backend
 
     @staticmethod
-    def merge_message_content(msg: Dict) -> Dict:
+    def merge_message_content(msg: dict) -> dict:
         """Merge multimodal content blocks and ensure content field exists.
 
         This function normalizes message content to match vLLM's behavior:
@@ -85,14 +85,14 @@ class MultimodalProcessor:
         return result
 
     @staticmethod
-    async def async_convert_multimodal_data(messages: List[Dict]) -> List[Dict]:
+    async def async_convert_multimodal_data(messages: list[dict]) -> list[dict]:
         """Convert user-input multimodal data into GPT4V message format."""
         from lmdeploy.vl.time_series_utils import load_time_series
         from lmdeploy.vl.utils import load_image
 
-        if isinstance(messages, Dict):
+        if isinstance(messages, dict):
             messages = [messages]
-        assert isinstance(messages, List)
+        assert isinstance(messages, list)
 
         out_messages = [None] * len(messages)
 
@@ -108,7 +108,7 @@ class MultimodalProcessor:
                 return
             # the role is a user and the content is a list, in which there
             # might be image_url or image_data
-            assert isinstance(content, List)
+            assert isinstance(content, list)
             message = dict(role=role, content=[])
             for item in content:
                 # image url or base64-encoded image data
@@ -205,14 +205,14 @@ class MultimodalProcessor:
         return out_messages
 
     async def get_prompt_input(self,
-                               prompt: str | List[Dict],
+                               prompt: str | list[dict],
                                do_preprocess: bool,
                                sequence_start: bool,
                                adapter_name: str,
-                               tools: List[object] | None = None,
+                               tools: list[object] | None = None,
                                reasoning_effort: Literal['low', 'medium', 'high'] | None = None,
-                               chat_template_kwargs: Dict | None = None,
-                               mm_processor_kwargs: Dict[str, Any] | None = None,
+                               chat_template_kwargs: dict | None = None,
+                               mm_processor_kwargs: dict[str, Any] | None = None,
                                **kwargs):
         """Process prompt and return prompt string and input_ids.
 
@@ -231,7 +231,7 @@ class MultimodalProcessor:
             **kwargs: Additional keyword arguments.
 
         Returns:
-            Dict with 'prompt' (str) and 'input_ids' (List[int]) keys for text-only,
+            dict with 'prompt' (str) and 'input_ids' (list[int]) keys for text-only,
             or dict with multimodal data for multimodal prompts.
         """
         # Handle string input
@@ -274,7 +274,7 @@ class MultimodalProcessor:
             raise RuntimeError(f'unsupported prompt type: {type(prompt)}')
 
     @staticmethod
-    def format_prompts(prompts: Any) -> List[Dict]:
+    def format_prompts(prompts: Any) -> list[dict]:
         """Format prompts."""
         if not isinstance(prompts, list):
             prompts = [prompts]
@@ -318,7 +318,7 @@ class MultimodalProcessor:
         return isinstance(obj, list) and all(MultimodalProcessor._is_image(img) for img in obj)
 
     @staticmethod
-    def _re_format_prompt_images_pair(prompt: Tuple) -> Dict:
+    def _re_format_prompt_images_pair(prompt: tuple) -> dict:
         """Reformat the prompt to openai message format."""
         from lmdeploy.vl.utils import load_image
 
@@ -350,7 +350,7 @@ class MultimodalProcessor:
             messages['content'].append({'type': 'text', 'text': prompt})
         return messages
 
-    def _has_multimodal_input(self, messages: List[Dict]) -> bool:
+    def _has_multimodal_input(self, messages: list[dict]) -> bool:
         """Check if messages contain multimodal input (images)."""
         multimodal_types = ['image_url', 'image_data', 'time_series_url']
         return any(
@@ -358,13 +358,13 @@ class MultimodalProcessor:
                 item.get('type') in multimodal_types for item in message['content']) for message in messages)
 
     async def _get_text_prompt_input(self,
-                                     prompt: str | List[Dict],
+                                     prompt: str | list[dict],
                                      do_preprocess: bool,
                                      sequence_start: bool,
                                      adapter_name: str,
-                                     tools: List[object] | None = None,
+                                     tools: list[object] | None = None,
                                      reasoning_effort: Literal['low', 'medium', 'high'] | None = None,
-                                     chat_template_kwargs: Dict | None = None,
+                                     chat_template_kwargs: dict | None = None,
                                      **kwargs):
         """Process text-only prompt and return prompt string and input_ids."""
         # Change multimodal data to openai text messages
@@ -391,13 +391,13 @@ class MultimodalProcessor:
         return {'prompt': prompt, 'input_ids': input_ids}
 
     async def _get_multimodal_prompt_input(self,
-                                           messages: List[Dict],
+                                           messages: list[dict],
                                            do_preprocess: bool,
                                            sequence_start: bool,
                                            adapter_name: str,
-                                           tools: List[object] | None = None,
-                                           chat_template_kwargs: Dict | None = None,
-                                           mm_processor_kwargs: Dict[str, Any] | None = None,
+                                           tools: list[object] | None = None,
+                                           chat_template_kwargs: dict | None = None,
+                                           mm_processor_kwargs: dict[str, Any] | None = None,
                                            **kwargs):
         """Process multimodal prompt and return processed data for inference
         engines."""

@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict, List, Optional
 
 import torch
 from transformers import AutoConfig, AutoProcessor
@@ -12,11 +11,11 @@ logger = get_logger('lmdeploy')
 
 
 class Gemma3ImagesKwargs(ImagesKwargs):
-    do_pan_and_scan: Optional[bool]
-    pan_and_scan_min_crop_size: Optional[int]
-    pan_and_scan_max_num_crops: Optional[int]
-    pan_and_scan_min_ratio_to_activate: Optional[float]
-    do_convert_rgb: Optional[bool]
+    do_pan_and_scan: bool | None
+    pan_and_scan_min_crop_size: int | None
+    pan_and_scan_max_num_crops: int | None
+    pan_and_scan_min_ratio_to_activate: float | None
+    do_convert_rgb: bool | None
 
 
 class Gemma3ProcessorKwargs(ProcessingKwargs, total=False):
@@ -43,7 +42,7 @@ class Gemma3VisionModel(VisionModel):
     def __init__(self,
                  model_path: str,
                  with_llm: bool = False,
-                 max_memory: Dict[int, int] = None,
+                 max_memory: dict[int, int] = None,
                  hf_config: AutoConfig = None,
                  backend: str = ''):
         super().__init__(model_path, with_llm, max_memory, hf_config, backend)
@@ -61,7 +60,7 @@ class Gemma3VisionModel(VisionModel):
         # TODO, implement for tubomind engine
         raise NotImplementedError()
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refers to `super.preprocess() for spec."""
         from transformers.image_utils import make_nested_list_of_images
         output_kwargs = self.processor._merge_kwargs(
@@ -91,12 +90,12 @@ class Gemma3VisionModel(VisionModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
-            messages(List[Dict]): the outputs of `preprocess`
+            messages(list[dict]): the outputs of `preprocess`
             max_batch_size(int): the max batch size when forwarding vision
                 model
         Return:

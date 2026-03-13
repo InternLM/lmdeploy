@@ -3,9 +3,14 @@ import multiprocessing as mp
 import pydantic
 import pytest
 from utils.config_utils import set_device_env_variable, unset_device_env_variable
-from utils.pipeline_chat import (assert_pipeline_batch_return, assert_pipeline_batch_stream_return,
-                                 assert_pipeline_common_log, assert_pipeline_single_return,
-                                 assert_pipeline_single_stream_return, save_pipeline_common_log)
+from utils.pipeline_chat import (
+    assert_pipeline_batch_return,
+    assert_pipeline_batch_stream_return,
+    assert_pipeline_common_log,
+    assert_pipeline_single_return,
+    assert_pipeline_single_stream_return,
+    save_pipeline_common_log,
+)
 from utils.restful_return_check import has_repeated_fragment
 
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
@@ -206,15 +211,15 @@ def run_pipeline_testcase_special_words_false(config, model, backend, file_name)
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
-    prompt = '<|im_start|>system\n当开启工具以及代码时，根据需求选择合适的工具进行调用\n' + \
-        '<|im_end|><|im_start|>system name=<|interpreter|>\n你现在已经' + \
-        '能够在一个有状态的 Jupyter 笔记本环境中运行 Python 代码。当你向 python ' + \
-        '发送含有 Python >代码的消息时，它将在该环境中执行。这个工具适用于多种场景，' + \
-        '如数据分析或处理（包括数据操作、统计分析、图表绘制），复杂的计算问题（解决数学和物理' + \
-        '难题），编程示例（理解编程概念或特性），文本处理和分析（比如文本解析和自然语言处理），机器学习和数据科学（用于' + \
-        '展示模型训练和数据可视化），以及文件操作和数据导入（处理CSV、JSON等格式的文件）。<|im_end|>\n' + \
-        '<|im_start|>user\n设 $L$ 为圆周$x^2+y^2=2x$，计算曲线积分：$I=\\int_L' + \
-        '{x\\mathrm{d}s}=$<|im_end|>\n<|im_start|>assistant'
+    prompt = '<|im_start|>system\n当开启工具以及代码时，根据需求选择合适的工具进行调用\n' \
+        '<|im_end|><|im_start|>system name=<|interpreter|>\n你现在已经' \
+        '能够在一个有状态的 Jupyter 笔记本环境中运行 Python 代码。当你向 python ' \
+        '发送含有 Python >代码的消息时，它将在该环境中执行。这个工具适用于多种场景，' \
+        '如数据分析或处理（包括数据操作、统计分析、图表绘制），复杂的计算问题（解决数学和物理' \
+        '难题），编程示例（理解编程概念或特性），文本处理和分析（比如文本解析和自然语言处理），' \
+        '机器学习和数据科学（用于展示模型训练和数据可视化），以及文件操作和数据导入（处理CSV、' \
+        'JSON等格式的文件）。<|im_end|>\n<|im_start|>user\n设 $L$ 为圆周$x^2+y^2=2x$，' \
+        '计算曲线积分：$I=\\int_L{x\\mathrm{d}s}=$<|im_end|>\n<|im_start|>assistant'
     gen_config = GenerationConfig(skip_special_tokens=False)
     response = pipe(prompt, gen_config=gen_config)
     result = '<|action_start|><|interpreter|>' in response.text
@@ -226,15 +231,15 @@ def run_pipeline_testcase_special_words_true(config, model, backend, file_name):
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
-    prompt = '<|im_start|>system\n当开启工具以及代码时，根据需求选择合适的工具进行调用\n' + \
-        '<|im_end|><|im_start|>system name=<|interpreter|>\n你现在已经' + \
-        '能够在一个有状态的 Jupyter 笔记本环境中运行 Python 代码。当你向 python ' + \
-        '发送含有 Python >代码的消息时，它将在该环境中执行。这个工具适用于多种场景，' + \
-        '如数据分析或处理（包括数据操作、统计分析、图表绘制），复杂的计算问题（解决数学和物理' + \
-        '难题），编程示例（理解编程概念或特性），文本处理和分析（比如文本解析和自然语言处理），机器学习和数据科学（用于' + \
-        '展示模型训练和数据可视化），以及文件操作和数据导入（处理CSV、JSON等格式的文件）。<|im_end|>\n' + \
-        '<|im_start|>user\n设 $L$ 为圆周$x^2+y^2=2x$，计算曲线积分：$I=\\int_L' + \
-        '{x\\mathrm{d}s}=$<|im_end|>\n<|im_start|>assistant'
+    prompt = '<|im_start|>system\n当开启工具以及代码时，根据需求选择合适的工具进行调用\n' \
+        '<|im_end|><|im_start|>system name=<|interpreter|>\n你现在已经' \
+        '能够在一个有状态的 Jupyter 笔记本环境中运行 Python 代码。当你向 python ' \
+        '发送含有 Python >代码的消息时，它将在该环境中执行。这个工具适用于多种场景，' \
+        '如数据分析或处理（包括数据操作、统计分析、图表绘制），复杂的计算问题（解决数学和物理' \
+        '难题），编程示例（理解编程概念或特性），文本处理和分析（比如文本解析和自然语言处理），' \
+        '机器学习和数据科学（用于展示模型训练和数据可视化），以及文件操作和数据导入（处理CSV、' \
+        'JSON等格式的文件）。<|im_end|>\n<|im_start|>user\n设 $L$ 为圆周$x^2+y^2=2x$，' \
+        '计算曲线积分：$I=\\int_L{x\\mathrm{d}s}=$<|im_end|>\n<|im_start|>assistant'
     gen_config = GenerationConfig(skip_special_tokens=True)
     response = pipe(prompt, gen_config=gen_config)
     result = '<|action_start|><|interpreter|>' not in response.text

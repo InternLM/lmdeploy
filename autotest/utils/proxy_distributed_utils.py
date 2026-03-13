@@ -3,7 +3,7 @@ import random
 import socket
 import subprocess
 import time
-from typing import Any, Dict, Tuple
+from typing import Any
 
 import requests
 from utils.config_utils import get_case_str_by_config, get_cli_common_param, resolve_extra_params
@@ -22,13 +22,13 @@ def is_port_open(host: str, port: int, timeout: float = 1.0) -> bool:
         try:
             s.connect((host, port))
             return True
-        except (socket.timeout, ConnectionRefusedError, OSError):
+        except (TimeoutError, ConnectionRefusedError, OSError):
             return False
 
 
 def check_nodes_status(host: str, proxy_port: int, model_name: str, expected_instances: int, check_count: int,
                        current_time: float, last_progress_print: float,
-                       progress_print_interval: int) -> Tuple[bool, int]:
+                       progress_print_interval: int) -> tuple[bool, int]:
     try:
         nodes_url = f'http://{host}:{proxy_port}/nodes/status'
         resp = requests.get(nodes_url, timeout=10)
@@ -215,7 +215,7 @@ class ProxyDistributedManager:
 
 class ApiServerPerTest:
 
-    def __init__(self, proxy_manager: ProxyDistributedManager, config: Dict[str, Any], run_config: Dict[str, Any]):
+    def __init__(self, proxy_manager: ProxyDistributedManager, config: dict[str, Any], run_config: dict[str, Any]):
         self.proxy_manager = proxy_manager
         self.config = config
         self.run_config = run_config

@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import re
-from typing import Dict, Iterable, List, Tuple
+from collections.abc import Iterable
 
 import torch
 from torch import nn
@@ -70,7 +70,7 @@ def _get_reverse_pack_map(model: nn.Module):
     return reverse_map
 
 
-def _get_key_map(reverse_map: Dict[str, str]):
+def _get_key_map(reverse_map: dict[str, str]):
     """Get key map."""
     key_map = dict()
     for name, pack_name in reverse_map.items():
@@ -81,7 +81,7 @@ def _get_key_map(reverse_map: Dict[str, str]):
     return key_map
 
 
-def load_lora_weights(model: nn.Module, weights: Iterable[Tuple[str, torch.Tensor]], adapter_id: int):
+def load_lora_weights(model: nn.Module, weights: Iterable[tuple[str, torch.Tensor]], adapter_id: int):
     """Load lora weights."""
     from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
     prefix_len = len('base_model.model.')
@@ -111,7 +111,7 @@ def load_lora_weights(model: nn.Module, weights: Iterable[Tuple[str, torch.Tenso
 class AdapterManager:
     """Adapter manager."""
 
-    def __init__(self, adapters: Dict[str, str]):
+    def __init__(self, adapters: dict[str, str]):
         if adapters is None:
             adapters = dict()
 
@@ -122,7 +122,7 @@ class AdapterManager:
         adapter_id_map = dict(zip(adapter_names, range(len(adapter_names))))
         self.adapter_id_map = adapter_id_map
 
-    def get_adapter_ids(self, names: List[str]):
+    def get_adapter_ids(self, names: list[str]):
         return [self.adapter_id_map[name] for name in names]
 
     def num_adapters(self):

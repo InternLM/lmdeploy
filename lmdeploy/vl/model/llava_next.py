@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import itertools
 import warnings
-from typing import Dict, List
 
 import torch
 
@@ -63,7 +62,7 @@ class LlavaNextVisionModel(LlavaHfVisionModel):
                                          dtype=torch.half)
         self.model.eval()
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refers to the spec of `super.preprocess()"""
         from transformers.models.llava_next.modeling_llava_next import image_size_to_num_patches
         images = self.collect_images(messages)
@@ -99,12 +98,12 @@ class LlavaNextVisionModel(LlavaHfVisionModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
-            messages(List[Dict]): the outputs of `preprocess`
+            messages(list[dict]): the outputs of `preprocess`
             max_batch_size(int): the max batch size when forwarding vision
                 model
         Return:

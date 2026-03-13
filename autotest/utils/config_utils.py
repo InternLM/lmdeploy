@@ -1,7 +1,7 @@
 import copy
 import os
 from collections import OrderedDict
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import yaml
 
@@ -12,7 +12,7 @@ SUFFIX_INNER_GPTQ = '-inner-gptq'
 SUFFIX_INNER_W8A8 = '-inner-w8a8'
 
 
-def resolve_extra_params(extra_params: Dict[str, Any], model_base_path: str) -> None:
+def resolve_extra_params(extra_params: dict[str, Any], model_base_path: str) -> None:
     """Resolve relative model paths in extra_params to absolute paths.
 
     Centralised helper so that every call-site does not need its own
@@ -37,10 +37,10 @@ def resolve_extra_params(extra_params: Dict[str, Any], model_base_path: str) -> 
 
 
 def get_func_config_list(backend: str,
-                         parallel_config: Dict[str, int],
+                         parallel_config: dict[str, int],
                          model_type: str = 'chat_model',
                          func_type: str = 'func',
-                         extra: Optional[Dict[str, Any]] = None) -> List[Dict]:
+                         extra: dict[str, Any] | None = None) -> list[dict]:
     """Generate all valid running config combinations (communicator + quant
     policy + model).
 
@@ -51,7 +51,7 @@ def get_func_config_list(backend: str,
         func_type: Test func type filter, default: func
         extra: extra config to update in each run config dict
     Returns:
-        List[Dict]: All valid run config dicts
+        list[dict]: All valid run config dicts
     """
     config = get_config()
     device = config.get('device', 'cuda')
@@ -127,7 +127,7 @@ def get_func_config_list(backend: str,
     return run_configs
 
 
-def get_cli_common_param(run_config: Dict[str, Any]) -> str:
+def get_cli_common_param(run_config: dict[str, Any]) -> str:
     """Generate cli common params string by run config dict."""
     backend = run_config.get('backend')
     model = run_config.get('model')
@@ -162,7 +162,7 @@ def get_cli_common_param(run_config: Dict[str, Any]) -> str:
     return ' '.join(cli_params).strip()
 
 
-def get_cli_str(config: Dict[str, Any]) -> str:
+def get_cli_str(config: dict[str, Any]) -> str:
     cli_str = []
     # Extra params
     for key, value in config.items():
@@ -181,7 +181,7 @@ def get_cli_str(config: Dict[str, Any]) -> str:
     return ' '.join(cli_str)
 
 
-def get_parallel_config(config: Dict, model_name: str) -> List[Dict[str, int]]:
+def get_parallel_config(config: dict, model_name: str) -> list[dict[str, int]]:
     """Get matched parallel config dict by model name, default tp:1 if no
     match."""
     result = []
@@ -201,23 +201,23 @@ def get_parallel_config(config: Dict, model_name: str) -> List[Dict[str, int]]:
     return result if result else [{'tp': 1}]
 
 
-def _extract_models_from_config(config_value: Any) -> List[str]:
+def _extract_models_from_config(config_value: Any) -> list[str]:
     """Extract flat model name list from config value (dict/list supported)"""
     models = []
-    if isinstance(config_value, Dict):
+    if isinstance(config_value, dict):
         for model_list in config_value.values():
-            if isinstance(model_list, List):
+            if isinstance(model_list, list):
                 models.extend([m for m in model_list if isinstance(m, str)])
-    elif isinstance(config_value, List):
+    elif isinstance(config_value, list):
         models.extend([m for m in config_value if isinstance(m, str)])
     return models
 
 
-def get_model_list(config: Dict,
+def get_model_list(config: dict,
                    backend: str,
-                   parallel_config: Dict[str, int] = None,
+                   parallel_config: dict[str, int] = None,
                    model_type: str = 'chat_model',
-                   func_type: str = 'func') -> List[str]:
+                   func_type: str = 'func') -> list[str]:
     """Get filtered model list with quantization extended models by
     backend/parallel config/model type/func type.
 
@@ -228,7 +228,7 @@ def get_model_list(config: Dict,
         model_type: Model type, default: chat_model
         func_type: Test func type filter, default: func
     Returns:
-        List[str]: Base models + quantization extended models
+        list[str]: Base models + quantization extended models
     """
     model_config_key = f'{backend}_{model_type}'
     all_models = []
@@ -252,7 +252,7 @@ def get_model_list(config: Dict,
     return extended_models
 
 
-def _filter_by_test_func_type(config: Dict, model_list: List[str], func_type: str) -> List[str]:
+def _filter_by_test_func_type(config: dict, model_list: list[str], func_type: str) -> list[str]:
     """Filter model list by test function type, return intersection of two
     model sets."""
     if func_type == 'func':
@@ -292,7 +292,7 @@ def _extend_pytorch_quant_models(quant_config: dict, base_models: list, target_l
             target_list.append(model_name + SUFFIX_INNER_W8A8)
 
 
-def _is_kvint_model(config: Dict, backend: str, model: str, quant_policy: int) -> bool:
+def _is_kvint_model(config: dict, backend: str, model: str, quant_policy: int) -> bool:
     """Check if model supports the kv quantization policy, quant_policy=0
     always return True."""
     if quant_policy == 0:
@@ -308,7 +308,7 @@ def _base_model_name(model: str) -> str:
     return model.replace('-inner-4bits', '').replace('-inner-w8a8', '').replace('-inner-gptq', '')
 
 
-def get_quantization_model_list(type: str) -> List[str]:
+def get_quantization_model_list(type: str) -> list[str]:
     """Get quantization model list by specified quant type(awq/gptq/w8a8)"""
     config = get_config()
     quant_model_list = []
@@ -340,7 +340,7 @@ def get_quantization_model_list(type: str) -> List[str]:
     return quant_model_list
 
 
-def get_config() -> Dict[str, Any]:
+def get_config() -> dict[str, Any]:
     """Load & get yaml config file, auto adapt device env & update log path."""
     # Get device env & match config file path
     env_tag = os.environ.get('TEST_ENV')
@@ -350,7 +350,7 @@ def get_config() -> Dict[str, Any]:
     if env_tag and not os.path.exists(config_path):
         config_path = 'autotest/config.yml'
     # Load yaml config file safely
-    with open(config_path, 'r', encoding='utf-8') as f:
+    with open(config_path, encoding='utf-8') as f:
         config = yaml.load(f.read(), Loader=yaml.SafeLoader)
 
     # Deep copy config to avoid modify raw data, update log path with github run id
@@ -370,7 +370,7 @@ def get_config() -> Dict[str, Any]:
     return config_copy
 
 
-def get_cuda_prefix_by_workerid(worker_id: Optional[str], parallel_config: Dict[str, int] = None) -> Optional[str]:
+def get_cuda_prefix_by_workerid(worker_id: str | None, parallel_config: dict[str, int] = None) -> str | None:
     """Get cuda/ascend visible devices env prefix by worker id & parallel
     config."""
     para_conf = parallel_config or {}
@@ -387,7 +387,7 @@ def get_cuda_prefix_by_workerid(worker_id: Optional[str], parallel_config: Dict[
     return f'ASCEND_RT_VISIBLE_DEVICES={cuda_id}' if device_type == 'ascend' else f'CUDA_VISIBLE_DEVICES={cuda_id}'
 
 
-def get_cuda_id_by_workerid(worker_id: Optional[str], tp_num: int = 1) -> Optional[str]:
+def get_cuda_id_by_workerid(worker_id: str | None, tp_num: int = 1) -> str | None:
     """Get cuda id str by worker id and tp num, return None if invalid worker
     id."""
     if worker_id is None or 'gw' not in worker_id:
@@ -398,7 +398,7 @@ def get_cuda_id_by_workerid(worker_id: Optional[str], tp_num: int = 1) -> Option
     return ','.join([str(cuda_num + i) for i in range(tp_num)])
 
 
-def get_workerid(worker_id: Optional[str]) -> int:
+def get_workerid(worker_id: str | None) -> int:
     """Parse numeric worker id from worker id str, return 0 if invalid worker
     id."""
     if worker_id is None or 'gw' not in worker_id:
@@ -413,7 +413,7 @@ def is_quantization_model(model: str) -> bool:
     return any(key in lower_name for key in ('awq', '4bits', 'w4', 'int4'))
 
 
-def _get_communicator_list(config: Dict, backend: str, parallel_config: Dict[str, int] = None) -> List[str]:
+def _get_communicator_list(config: dict, backend: str, parallel_config: dict[str, int] = None) -> list[str]:
     """Get available communicator list by device and parallel config."""
     device = config.get('device', None)
 
@@ -429,7 +429,7 @@ def _get_communicator_list(config: Dict, backend: str, parallel_config: Dict[str
     return ['nccl', 'cuda-ipc']
 
 
-def set_device_env_variable(worker_id, parallel_config: Dict[str, int] = None):
+def set_device_env_variable(worker_id, parallel_config: dict[str, int] = None):
     """Set device environment variable based on the device type."""
     device = os.environ.get('DEVICE', 'cuda')
 
@@ -460,13 +460,13 @@ def unset_device_env_variable():
             del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-def is_model_in_list(config: Dict, parallel_config: Dict[str, int], model: str) -> bool:
+def is_model_in_list(config: dict, parallel_config: dict[str, int], model: str) -> bool:
     """Check if model matches the target parallel config."""
     model_config = get_parallel_config(config, model)
     return parallel_config in model_config
 
 
-def get_case_str_by_config(run_config: Dict[str, Any], is_simple: bool = True) -> str:
+def get_case_str_by_config(run_config: dict[str, Any], is_simple: bool = True) -> str:
     """Generate case name string by run config dict."""
     model_name = run_config['model']
     backend_type = run_config['backend']
@@ -491,7 +491,7 @@ def get_case_str_by_config(run_config: Dict[str, Any], is_simple: bool = True) -
     return f'{backend_type}_{pure_model_name}_{communicator}_{parallel_str}_{quant_policy}{extra_params_case}'
 
 
-def parse_config_by_case(case_str: str) -> Dict[str, Any]:
+def parse_config_by_case(case_str: str) -> dict[str, Any]:
     """Parse run config dict from case name string (fix split & type convert
     bug)"""
     case_parts = case_str.split('_')

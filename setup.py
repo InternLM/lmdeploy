@@ -23,7 +23,7 @@ def readme():
 def get_version():
     file_path = os.path.join(pwd, version_file)
     pattern = re.compile(r"\s*__version__\s*=\s*'([0-9A-Za-z.-]+)'")
-    with open(file_path, 'r') as f:
+    with open(file_path) as f:
         for line in f:
             m = pattern.match(line)
             if m:
@@ -64,7 +64,7 @@ def parse_requirements(fname='requirements.txt', with_version=True):
         with_version (bool, default=False): if True include version specs
 
     Returns:
-        List[str]: list of requirements items
+        list[str]: list of requirements items
 
     CommandLine:
         python -c "import setup; print(setup.parse_requirements())"
@@ -104,12 +104,11 @@ def parse_requirements(fname='requirements.txt', with_version=True):
             yield info
 
     def parse_require_file(fpath):
-        with open(fpath, 'r') as f:
+        with open(fpath) as f:
             for line in f.readlines():
                 line = line.strip()
                 if line and not line.startswith('#'):
-                    for info in parse_line(line):
-                        yield info
+                    yield from parse_line(line)
 
     def gen_packages_items():
         if os.path.exists(require_fpath):
@@ -130,7 +129,7 @@ def parse_requirements(fname='requirements.txt', with_version=True):
     return packages
 
 
-if get_target_device() == 'cuda' and not os.getenv('DISABLE_TURBOMIND', '').lower() in ('yes', 'true', 'on', 't', '1'):
+if get_target_device() == 'cuda' and os.getenv('DISABLE_TURBOMIND', '').lower() not in ('yes', 'true', 'on', 't', '1'):
     import cmake_build_extension
 
     ext_modules = [

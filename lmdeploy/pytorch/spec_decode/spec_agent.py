@@ -131,7 +131,7 @@ class SpecModelAgent(BaseSpecModelAgent):
         """Model forward.
 
         Args:
-            inputs (Dict): The input data comes from _make_inputs.
+            inputs (dict): The input data comes from _make_inputs.
         """
         output = self._forward_impl(inputs)
         await asyncio.sleep(0)
@@ -142,7 +142,7 @@ class SpecModelAgent(BaseSpecModelAgent):
         """Model forward.
 
         Args:
-            inputs (Dict): The input data comes from _make_inputs.
+            inputs (dict): The input data comes from _make_inputs.
         """
         outputs = await self._async_forward(inputs)
         if inputs.is_chunk:

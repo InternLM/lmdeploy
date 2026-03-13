@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import warnings
-from typing import Dict, List
 
 import torch
 from transformers import AutoModelForCausalLM
@@ -86,7 +85,7 @@ class DeepSeekVisionModel(VisionModel):
         self.vision_model = model.vision_model.eval()
         self.aligner = model.aligner.eval()
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refers to the spec of `super.preprocess()"""
         images = self.collect_images(messages)
         outputs = []
@@ -105,12 +104,12 @@ class DeepSeekVisionModel(VisionModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
-            messages(List[Dict]): the outputs of `preprocess`
+            messages(list[dict]): the outputs of `preprocess`
             max_batch_size(int): the max batch size when forwarding vision
                 model
         Return:

@@ -1,7 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+from collections.abc import Iterable
 from functools import lru_cache
-from typing import Any, Iterable, List, Tuple
+from typing import Any
 
 import numpy as np
 import torch
@@ -16,8 +17,13 @@ from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, LayerNorm, RMSNorm, SiluAndMul
 from lmdeploy.pytorch.nn.gated_delta import CausalConv1d, GatedDelta, GatedDeltaMeta, build_rmsnorm_gated
-from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_merged_colwise_linear, build_o_proj, build_qkv_proj,
-                                        build_rowwise_linear)
+from lmdeploy.pytorch.nn.linear import (
+    build_colwise_linear,
+    build_merged_colwise_linear,
+    build_o_proj,
+    build_qkv_proj,
+    build_rowwise_linear,
+)
 from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader, load_weight
 
@@ -243,7 +249,7 @@ class Qwen3_5VisionModel(nn.Module):
         return rotary_pos_emb
 
     # copy from https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/models/qwen3_vl.py#L474
-    def fast_pos_embed_interpolate(self, grid_thw: List[List[int]]) -> torch.Tensor:
+    def fast_pos_embed_interpolate(self, grid_thw: list[list[int]]) -> torch.Tensor:
         num_grid_per_side = self.num_grid_per_side
         m_size = self.spatial_merge_size
         hidden_dim = self.pos_embed.embedding_dim
@@ -486,14 +492,14 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         z = z.unflatten(-1, (-1, self.head_v_dim))
         return z, b, a
 
-    def _load_state(self, past_key_value: Tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
+    def _load_state(self, past_key_value: tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
         """Load states from cache."""
         return gated_delta_util.load_state(past_key_value=past_key_value, gated_delta_meta=gated_delta_meta)
 
     def forward(
         self,
         hidden_states: torch.Tensor,
-        past_key_value: Tuple[torch.Tensor, torch.Tensor],
+        past_key_value: tuple[torch.Tensor, torch.Tensor],
         gated_delta_meta: GatedDeltaMeta,
     ):
         """forward."""
@@ -629,8 +635,8 @@ class Qwen3_5Attention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Tuple[torch.Tensor, torch.Tensor],
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: tuple[torch.Tensor, torch.Tensor],
         attn_metadata: Any,
     ):
         """Rewrite of LlamaAttention.forward."""
@@ -727,8 +733,8 @@ class Qwen3_5DecoderLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: List[torch.FloatTensor],
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: list[torch.FloatTensor],
         residual: torch.Tensor | None,
         attn_metadata: Any,
         gated_delta_meta: GatedDeltaMeta,
@@ -896,7 +902,7 @@ class Qwen3_5TextModel(nn.Module):
         self,
         input_ids: torch.LongTensor,
         position_ids: torch.LongTensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any,
         state_ids: torch.Tensor,
         inputs_embeds: torch.Tensor | None = None,
@@ -970,7 +976,7 @@ class Qwen3_5Model(nn.Module):
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any,
         state_ids: torch.Tensor,
         inputs_embeds: torch.Tensor | None = None,
@@ -1068,7 +1074,7 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any,
         state_ids: torch.Tensor,
         inputs_embeds: torch.Tensor | None = None,
@@ -1115,7 +1121,7 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         inputs_embeds: torch.Tensor | None = None,
         context: StepContext | None = None,
     ):
@@ -1188,7 +1194,7 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
             pos_embeds=pos_embeds,
         )
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
 
         def __skip_layers(name):
@@ -1374,7 +1380,7 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
 
         return new_model_metas
 
-    def update_model_metas(self, past_key_values: List[List[torch.Tensor]], inputs_embeds: torch.Tensor | None,
+    def update_model_metas(self, past_key_values: list[list[torch.Tensor]], inputs_embeds: torch.Tensor | None,
                            context: StepContext):
         """Update model meta."""
         if context.is_decoding:

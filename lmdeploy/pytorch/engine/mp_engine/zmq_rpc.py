@@ -2,7 +2,7 @@
 import asyncio
 import inspect
 import pickle
-from typing import Callable, Dict
+from collections.abc import Callable
 from uuid import uuid4
 
 import zmq
@@ -39,7 +39,7 @@ class AsyncRPCServer:
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.ROUTER)
         self.port = self.socket.bind_to_random_port(address)
-        self.methods: Dict[str, Callable] = {}
+        self.methods: dict[str, Callable] = {}
         self.running = False
 
         # streaming
@@ -74,7 +74,7 @@ class AsyncRPCServer:
         except zmq.ZMQError as e:
             logger.error(f'Failed to send message to client[{client_id}]: {e}')
 
-    def call_method_default(self, client_id, method: Callable, request: Dict):
+    def call_method_default(self, client_id, method: Callable, request: dict):
         request_id = request.get('request_id')
         args = request.get('args', [])
         kwargs = request.get('kwargs', {})
@@ -85,7 +85,7 @@ class AsyncRPCServer:
             response = dict(success=False, request_id=request_id, error=str(e))
         self.send_multipart(client_id, response)
 
-    async def _method_async_task(self, client_id, request_id, method: Callable, args: tuple, kwargs: Dict):
+    async def _method_async_task(self, client_id, request_id, method: Callable, args: tuple, kwargs: dict):
         """Call method in a task."""
         try:
             result = await method(*args, **kwargs)
@@ -95,7 +95,7 @@ class AsyncRPCServer:
         self.send_multipart(client_id, response)
 
     async def _method_async_streaming_task(self, stream_id: int, request_id: int, client_id: int, method: Callable,
-                                           args: tuple, kwargs: Dict):
+                                           args: tuple, kwargs: dict):
         """Call method in a task for streaming."""
 
         def __send_resp():
@@ -141,7 +141,7 @@ class AsyncRPCServer:
             raise stream_out['error']
         return result, stopped
 
-    async def call_method_async(self, client_id, method: Callable, request: Dict):
+    async def call_method_async(self, client_id, method: Callable, request: dict):
         """Call method async."""
         request_id = request.get('request_id')
         method_name = request.get('method')
@@ -237,7 +237,7 @@ class AsyncRPCClient:
         self._listen_task = None
         self.running = False
 
-    def _set_reply_default(self, request_id: int, reply: Dict):
+    def _set_reply_default(self, request_id: int, reply: dict):
         """Default reply handler for sync socket."""
         logger.debug(f'recv reply request_id: {request_id}')
         future: asyncio.Future = self.pending.pop(request_id)
@@ -249,7 +249,7 @@ class AsyncRPCClient:
         except Exception as e:
             logger.debug(f'Set future failed with exception: {e}')
 
-    def _set_reply(self, reply: Dict):
+    def _set_reply(self, reply: dict):
         request_id = reply['request_id']
         self._set_reply_default(request_id, reply)
 
