@@ -35,10 +35,10 @@ class GLM4_1_VisionModel(VisionModel):
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """Refer to `super().preprocess()` for spec."""
-        images = self.collect_images(messages)
+        images = self.collect_multimodal_items(messages)
         optional_keys = {'resized_height', 'resized_width', 'min_pixels', 'max_pixels'}
         outputs = []
-        for image, params in images:
+        for modality, image, params in images:
             image = image.convert('RGB')
 
             item = dict(type='image', image=image)

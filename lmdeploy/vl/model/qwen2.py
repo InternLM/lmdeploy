@@ -37,10 +37,10 @@ class Qwen2VLModel(VisionModel):
         """Refer to `super().preprocess()` for spec."""
         from qwen_vl_utils import process_vision_info
 
-        images = self.collect_images(messages)
+        images = self.collect_multimodal_items(messages)
         optional_keys = {'resized_height', 'resized_width', 'min_pixels', 'max_pixels'}
         outputs = []
-        for image, params in images:
+        for modality, image, params in images:
             image = image.convert('RGB')
 
             item = dict(type='image', image=image)
