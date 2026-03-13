@@ -97,9 +97,17 @@ class MetricsProcessor():
         """Increase total requests."""
         self.scheduler_stats.num_total_reqs += 1
 
-    def increase_completed_requests(self):
-        """Increase completed requests."""
-        self.scheduler_stats.num_completed_reqs += 1
+    def increase_succeeded_requests(self):
+        """Increase succeeded requests."""
+        self.scheduler_stats.num_succeeded_reqs += 1
+
+    def increase_cancelled_requests(self):
+        """Increase cancelled requests."""
+        self.scheduler_stats.num_cancelled_reqs += 1
+
+    def increase_aborted_requests(self):
+        """Increase aborted requests."""
+        self.scheduler_stats.num_aborted_reqs += 1
 
     def increase_api_routed_requests(self):
         """Increase API routed requests."""

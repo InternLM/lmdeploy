@@ -107,18 +107,17 @@ class LoggingStatLogger(StatLoggerBase):
         prompt_throughput = self.total_prompt_tokens / (now - self.last_log_time)
         generation_throughput = self.total_generation_tokens / (now - self.last_log_time)
         scheduler_stats = self.last_scheduler_stats
-        scheduler_stats.num_api_waiting_reqs = scheduler_stats.num_total_reqs - \
-            scheduler_stats.num_completed_reqs - scheduler_stats.num_api_routed_reqs
         spec_msg = self.get_spec_msg()
 
         # format and print
-        log_msg = (
-            f"[{datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')} DP{self.dp_rank}] "
-            f'Avg thr (in/out): {prompt_throughput:.1f} / {generation_throughput:.1f} tokens/s, '
-            f'API server (completed/routed/waiting): {scheduler_stats.num_completed_reqs} / '
-            f'{scheduler_stats.num_api_routed_reqs} / {scheduler_stats.num_api_waiting_reqs}, '
-            f'Engine (running/waiting): {scheduler_stats.num_running_reqs} / {scheduler_stats.num_waiting_reqs}, '
-            f'KV cache: {scheduler_stats.gpu_cache_usage * 100 :.1f}%, ')
+        log_msg = (f"[{datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')} DP{self.dp_rank}] "
+                   f'Avg thr (in/out): {prompt_throughput:.1f} / {generation_throughput:.1f} tokens/s, '
+                   f'Server (succeed/failed/routed/waiting): '
+                   f'{scheduler_stats.num_succeeded_reqs} / {scheduler_stats.num_failed_reqs} / '
+                   f'{scheduler_stats.num_api_routed_reqs} / {scheduler_stats.num_api_waiting_reqs}, '
+                   f'Engine (running/waiting): '
+                   f'{scheduler_stats.num_running_reqs} / {scheduler_stats.num_waiting_reqs}, '
+                   f'KV cache: {scheduler_stats.gpu_cache_usage * 100 :.1f}%, ')
 
         if scheduler_stats.prefix_cache_hit_rate != 0:
             log_msg += f'Prefix cache hit rate: {scheduler_stats.prefix_cache_hit_rate * 100 :.1f}%, '
@@ -157,9 +156,13 @@ class PrometheusStatLogger(StatLoggerBase):
         #
         # Scheduler stats
         #
-        self.gauge_scheduler_completed = prometheus_client.Gauge(name='lmdeploy:num_requests_completed',
-                                                                 documentation='Number of current completed requests.',
+        self.gauge_scheduler_succeeded = prometheus_client.Gauge(name='lmdeploy:num_requests_succeeded',
+                                                                 documentation='Number of current succeeded requests.',
                                                                  labelnames=labelnames).labels(*labelvalues)
+
+        self.gauge_scheduler_failed = prometheus_client.Gauge(name='lmdeploy:num_requests_failed',
+                                                              documentation='Number of current failed requests.',
+                                                              labelnames=labelnames).labels(*labelvalues)
 
         self.gauge_scheduler_api_routed = prometheus_client.Gauge(
             name='lmdeploy:num_api_requests_routed',
@@ -308,10 +311,10 @@ class PrometheusStatLogger(StatLoggerBase):
 
     def record_schedule(self, stats: SchedulerStats) -> None:
         """Report schedule metrics to prometheus."""
-        self.gauge_scheduler_completed.set(stats.num_completed_reqs)
+        self.gauge_scheduler_succeeded.set(stats.num_succeeded_reqs)
+        self.gauge_scheduler_failed.set(stats.num_failed_reqs)
         self.gauge_scheduler_api_routed.set(stats.num_api_routed_reqs)
-        self.gauge_scheduler_api_waiting.set(stats.num_total_reqs - stats.num_completed_reqs -
-                                             stats.num_api_routed_reqs)
+        self.gauge_scheduler_api_waiting.set(stats.num_api_waiting_reqs)
         self.gauge_scheduler_running.set(stats.num_running_reqs)
         self.gauge_scheduler_waiting.set(stats.num_waiting_reqs)
         self.gauge_gpu_cache_usage.set(stats.gpu_cache_usage)
