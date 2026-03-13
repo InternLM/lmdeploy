@@ -152,10 +152,29 @@ MLLM_EVAL_CONFIGS = {
 BACKEND_LIST = ['turbomind', 'pytorch']
 
 RESTFUL_MODEL_LIST = [
-    'Qwen/Qwen3-0.6B', 'Qwen/Qwen3-VL-2B-Instruct', 'Qwen/Qwen3-30B-A3B', 'internlm/Intern-S1',
-    'internlm/internlm2_5-20b-chat', 'internlm/internlm2_5-20b', 'Qwen/Qwen3-32B', 'OpenGVLab/InternVL3_5-30B-A3B',
-    'OpenGVLab/InternVL3-38B', 'Qwen/Qwen3-VL-8B-Instruct', 'internlm/internlm3-8b-instruct',
-    'meta-llama/Llama-3.2-3B-Instruct', 'Qwen/Qwen3-VL-30B-A3B-Instruct'
+    'Qwen/Qwen3-0.6B',
+    'Qwen/Qwen3-VL-2B-Instruct',
+    'Qwen/Qwen3-30B-A3B',
+    'internlm/Intern-S1',
+    'internlm/internlm2_5-20b-chat',
+    'internlm/internlm2_5-20b',
+    'Qwen/Qwen3-32B',
+    'OpenGVLab/InternVL3_5-30B-A3B',
+    'OpenGVLab/InternVL3-38B',
+    'Qwen/Qwen3-VL-8B-Instruct',
+    'internlm/internlm3-8b-instruct',
+    'meta-llama/Llama-3.2-3B-Instruct',
+    'Qwen/Qwen3-VL-30B-A3B-Instruct',
+]
+
+TOOL_REASONING_MODEL_LIST = [
+    'Qwen/Qwen3-8B-FP8',
+    'internlm/Intern-S1-Pro-FP8',
+    'internlm/internlm2_5-7b-chat',
+    'Qwen/Qwen2.5-7B-Instruct',
+    'meta-llama/Meta-Llama-3-1-70B-Instruct',
+    'deepseek/DeepSeek-R1-Distill-Llama-8B',
+    'deepseek/DeepSeek-R1-Distill-Qwen-32B',
 ]
 
 RESTFUL_BASE_MODEL_LIST = [
