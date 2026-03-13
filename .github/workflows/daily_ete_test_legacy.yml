@@ -1,4 +1,4 @@
-name: daily_ete_test
+name: daily_ete_test_legacy
 
 on:
   workflow_dispatch:
@@ -37,7 +37,7 @@ on:
         required: true
         description: 'regression functions'
         type: string
-        default: "['quant', 'tools','restful','pipeline','benchmark','evaluation']"
+        default: "['quant', 'tools','restful','pipeline','evaluation']"
   schedule:
     - cron:  '00 14 * * 0-4'
 
@@ -53,6 +53,7 @@ env:
   OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
   DEEPSEEK_VL: /nvme/qa_test_models/offline_pkg/DeepSeek-VL
   RUN_ID: ${{ inputs.repo_ref || 'main' }}_${{ github.run_id }}
+  TEST_ENV: legacy
 
 jobs:
   linux-build:
@@ -79,7 +80,7 @@ jobs:
           large-packages: true
           swap-storage: false
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v6
         with:
           repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
           ref: ${{github.event.inputs.repo_ref || 'main'}}
@@ -182,6 +183,7 @@ jobs:
           rm -rf ${{env.DEEPSEEK_VL}}/build
       - name: Check env
         run: |
+          pip install transformers==4.57.6
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -266,6 +268,7 @@ jobs:
           rm -rf ${{env.DEEPSEEK_VL}}/build
       - name: Check env
         run: |
+          pip install transformers==4.57.6
           python3 -m pip list
           lmdeploy check_env
           cp -r /nvme/qa_test_models/offline_pkg/lora .
@@ -333,81 +336,13 @@ jobs:
       fail-fast: false
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
-        model_path: ['Qwen/Qwen3-8B-Base', 'Qwen/Qwen3-30B-A3B', 'Qwen/Qwen3-32B', 'OpenGVLab/InternVL3_5-30B-A3B', 'OpenGVLab/InternVL3-38B', 'Qwen/Qwen3-VL-8B-Instruct', 'Qwen/Qwen3-VL-30B-A3B-Instruct']
+        model_path: ['internlm/Intern-S1']
         include:
-          - tp: 2
-            model: Qwen3-8B-Base
-            model_path: Qwen/Qwen3-8B-Base
-            case_info: ['completions_v1']
+          - tp: 8
+            model: Intern-S1
+            model_path: internlm/Intern-S1
+            case_info: ['chat_completions_v1', 'generate']
             generate_type: base
-          - tp: 2
-            model: Qwen3-30B-A3B
-            model_path: Qwen/Qwen3-30B-A3B
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: all
-            extra: '--logprobs-mode raw_logprobs --enable-return-routed-experts'
-            backend: pytorch
-          - tp: 2
-            model: Qwen3-30B-A3B
-            model_path: Qwen/Qwen3-30B-A3B
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs'
-            backend: turbomind
-          - tp: 2
-            model: InternVL3_5-30B-A3B
-            model_path: OpenGVLab/InternVL3_5-30B-A3B
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs --enable-return-routed-experts'
-            backend: pytorch
-          - tp: 2
-            model: InternVL3_5-30B-A3B
-            model_path: OpenGVLab/InternVL3_5-30B-A3B
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs'
-            backend: turbomind
-          - tp: 2
-            model: Qwen3-VL-30B-A3B-Instruct
-            model_path: Qwen/Qwen3-VL-30B-A3B-Instruct
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs --enable-return-routed-experts'
-            backend: pytorch
-          - tp: 2
-            model: Qwen3-VL-30B-A3B-Instruct
-            model_path: Qwen/Qwen3-VL-30B-A3B-Instruct
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs'
-            backend: turbomind
-          - tp: 2
-            model: Qwen3-32B
-            model_path: Qwen/Qwen3-32B
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs'
-          - tp: 1
-            model: Qwen3-VL-8B-Instruct
-            model_path: Qwen/Qwen3-VL-8B-Instruct
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs --enable-return-routed-experts'
-            backend: pytorch
-          - tp: 1
-            model: Qwen3-VL-8B-Instruct
-            model_path: Qwen/Qwen3-VL-8B-Instruct
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs'
-            backend: turbomind
-          - tp: 2
-            model: InternVL3-38B
-            model_path: OpenGVLab/InternVL3-38B
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs'
     timeout-minutes: 60
     container:
       image: openmmlab/lmdeploy:latest-cu12.8
@@ -436,6 +371,7 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
+          pip install transformers==4.57.6
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -556,6 +492,7 @@ jobs:
           rm -rf ${{env.DEEPSEEK_VL}}/build
       - name: Check env
         run: |
+          pip install transformers==4.57.6
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -585,67 +522,10 @@ jobs:
           mkdir $workdir
           chmod -R 777 $workdir
 
-
-  test_benchmark:
-    if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'benchmark'))}}
-    runs-on: [self-hosted, linux-a100]
-    needs: test_quantization
-    timeout-minutes: 120
-    container:
-      image: openmmlab/lmdeploy:latest-cu12.8
-      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
-      volumes:
-        - /nvme/github-actions/pip-cache:/root/.cache/pip
-        - /nvme/github-actions/packages:/root/packages
-        - /nvme/qa_test_models:/nvme/qa_test_models
-        - /nvme/huggingface_hub:/nvme/huggingface_hub
-        - /mnt/121:/mnt/121
-        - /mnt/104:/mnt/104
-        - /mnt/bigdisk:/mnt/bigdisk
-        - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
-    steps:
-      - name: Copy repository and Artifacts
-        run: |
-          cp -r ${{env.TEST_CODE_PATH}}/. .
-          mkdir ${{env.REPORT_DIR}} -p
-          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
-      - name: Install lmdeploy - dependency
-        run: |
-          python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
-      - name: Install lmdeploy
-        run: |
-          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
-          python3 -m pip install -r requirements/test.txt
-          pip install ${{env.DEEPSEEK_VL}} --no-deps
-          rm -rf ${{env.DEEPSEEK_VL}}/build
-      - name: Check env
-        run: |
-          python3 -m pip list
-          lmdeploy check_env
-          rm -rf allure-results
-          # remove tmp log in testcase
-          mkdir ${{env.REPORT_DIR}}/.pytest_cache -p && rm autotest/.pytest_cache -f
-          ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
-      - name: Test benchmark script
-        run: |
-          pytest autotest/benchmark -n 4 -m function --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Clear workfile
-        if: always()
-        run: |
-          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 $REPORT_DIR
-          export workdir=$(pwd)
-          cd ..
-          rm -rf $workdir
-          mkdir $workdir
-          chmod -R 777 $workdir
-
-
   get_coverage_report:
     if: ${{!cancelled()}}
     runs-on: [self-hosted, linux-a100]
-    needs: [test_tools, test_restful, test_pipeline, test_benchmark]
+    needs: [test_tools, test_restful, test_pipeline]
     timeout-minutes: 5
     container:
       image: openmmlab/lmdeploy:latest-cu12.8

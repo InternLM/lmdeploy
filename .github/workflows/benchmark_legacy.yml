@@ -1,11 +1,11 @@
-name: mllm_api_eval
+name: benchmark_test_legacy
 
 on:
   workflow_dispatch:
     inputs:
       repo_org:
         required: false
-        description: 'Tested repository organization name. Default is InternLM/lmdeploy'
+        description: 'Tested repository organization name. Default is InternLM'
         type: string
         default: 'InternLM/lmdeploy'
       repo_ref:
@@ -13,49 +13,37 @@ on:
         description: 'Set branch or tag or commit id. Default is "main"'
         type: string
         default: 'main'
+      benchmark_type:
+        required: true
+        description: 'Set benchmark type. Default is "["longtext", "throughput", "api_server", "prefixcache"]"'
+        type: string
+        default: "['apiserver', 'mllm_apiserver', 'throughput', 'longtext', 'prefixcache']"
       backend:
         required: true
         description: 'Set backend filter. Default is "["turbomind", "pytorch"]"'
         type: string
         default: "['turbomind', 'pytorch']"
-      execution_mode:
-        required: false
-        description: 'Select execution mode: infer, eval, or both. Default is "both"'
-        type: choice
-        options:
-          - both
-          - infer
-          - eval
-        default: 'both'
-      run_id:
-        required: false
-        description: 'Set custom run ID. If not provided, github.run_id will be used'
-        type: string
-        default: ''
-
+      offline_mode:
+        required: true
+        description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
+        type: boolean
+        default: false
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
-  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
-  REPORT_DIR: /nvme/qa_test_models/mllm_evaluation_report/allure_report/${{ inputs.repo_ref }}_${{ github.run_id }}
-  COV_PARAM: --cov /opt/py3/lib/python3.10/site-packages/lmdeploy
+  OUTPUT_FOLDER: cuda12.8_dist_${{ github.run_id }}
+  REPORT_DIR: /nvme/qa_test_models/benchmark_report/${{ inputs.repo_ref }}_${{ github.run_id }}
+  ALLURE_REPORT_DIR: /nvme/qa_test_models/benchmark_report/allure_report/${{ inputs.repo_ref }}_${{ github.run_id }}
   TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy/${{ inputs.repo_ref }}_${{ github.run_id }}
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
-  OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
-  DEEPSEEK_VL: /nvme/qa_test_models/offline_pkg/DeepSeek-VL
-  LMUData: /nvme/qa_test_models/LMUData
-  LOCAL_LLM: turbomind_Qwen2.5-32B-Instruct_nccl_tp2_0
-  OPENAI_API_KEY: sk-empty
-  HF_DATASETS_OFFLINE: 1
-  HF_DATASETS_CACHE: /nvme/qa_test_models/hf_datasets
-  HF_HUB_OFFLINE: 1
-  HF_EVALUATE_OFFLINE: 1
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
   RUN_ID: ${{ inputs.repo_ref }}_${{ github.run_id }}
+  TEST_ENV: legacy
 
 jobs:
   linux-build:
-    if: ${{ !cancelled() }}
+    if: ${{github.event_name == 'schedule' || (!cancelled() && !inputs.offline_mode)}}
     strategy:
       matrix:
         pyver: [py310]
@@ -64,7 +52,6 @@ jobs:
       PYTHON_VERSION: ${{ matrix.pyver }}
       PLAT_NAME: manylinux2014_x86_64
       DOCKER_TAG: cuda12.8
-      OUTPUT_FOLDER: cuda12.8_dist_${{ github.run_id }}
     steps:
       - name: Free disk space
         uses: jlumbroso/free-disk-space@main
@@ -79,7 +66,7 @@ jobs:
           large-packages: true
           swap-storage: false
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v6
         with:
           repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
           ref: ${{github.event.inputs.repo_ref || 'main'}}
@@ -144,23 +131,31 @@ jobs:
           mkdir ${{env.REPORT_DIR}} -p
           echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
 
-  test_evaluation:
+  benchmark:
     needs: download_pkgs
-    if: ${{ !cancelled() }}
+    if: ${{github.event_name == 'schedule' || !cancelled()}}
     runs-on: [self-hosted, linux-a100]
-    timeout-minutes: 2400
     strategy:
       fail-fast: false
       matrix:
-        backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
+        benchmark_type: ${{fromJSON(github.event.inputs.benchmark_type)}}
         gpu_num: ['gpu_num_1', 'gpu_num_2', 'gpu_num_4', 'gpu_num_8']
+        include:
+          - n: 8
+            gpu_num: gpu_num_1
+          - n: 4
+            gpu_num: gpu_num_2
+          - n: 2
+            gpu_num: gpu_num_4
+          - n: 1
+            gpu_num: gpu_num_8
+    timeout-minutes: 480
     container:
       image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
-        - /nvme/github-actions/resources:/root/resources
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /nvme/huggingface_hub:/nvme/huggingface_hub
         - /mnt/121:/mnt/121
@@ -180,35 +175,30 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-      - name: Install vlmeval
-        run: |
-          python3 -m pip install pandas datasets scikit-learn pylatexenc math_verify
-          apt update && apt install -y libgl1 libglib2.0-0
-          cp -r /nvme/qa_test_models/offline_pkg/VLMEvalKit .
-          cd VLMEvalKit && pip install .
       - name: Check env
         run: |
+          pip install transformers==4.57.6
           python3 -m pip list
           lmdeploy check_env
-          mkdir ${{env.REPORT_DIR}} -p
-          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
-      - name: Setup paths for evaluation
-        if: (matrix.backend == 'pytorch' || matrix.backend == 'turbomind')
+      - name: Run other benchmark - all
+        if: contains(fromJson(github.event.inputs.backend), 'turbomind') && contains(fromJson(github.event.inputs.backend), 'pytorch')
         run: |
-          unset HTTP_PROXY;unset HTTPS_PROXY;unset http_proxy;unset https_proxy;
-          cd VLMEvalKit && cp -r ../autotest .
-          execution_mode="${{ github.event.inputs.execution_mode || 'both' }}"
-          ulimit -n 65535
-          if [ "$execution_mode" = "both" ] || [ "$execution_mode" = "infer" ]; then
-            pytest autotest/evaluate/test_mllm_api_evaluate.py -m "${{matrix.gpu_num}} and ${{matrix.backend}} and infer" --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
-          fi
-          if [ "$execution_mode" = "both" ] || [ "$execution_mode" = "eval" ]; then
-            pytest autotest/evaluate/test_mllm_api_evaluate.py -m "${{matrix.gpu_num}} and ${{matrix.backend}} and eval" -n 4 --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
-          fi
-          exit $overall_exit
-      - name: Clear workspace
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n ${{matrix.n}} -m '${{matrix.gpu_num}} and not pr_test and not function' --alluredir=${{env.ALLURE_REPORT_DIR}}
+      - name: Run other benchmark - turbomind
+        if: contains(fromJson(github.event.inputs.backend), 'turbomind') && !contains(fromJson(github.event.inputs.backend), 'pytorch')
+        run: |
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n ${{matrix.n}} -m '${{matrix.gpu_num}} and not pr_test and not function and turbomind' --alluredir=${{env.ALLURE_REPORT_DIR}}
+      - name: Run other benchmark - pytorch
+        if: contains(fromJson(github.event.inputs.backend), 'pytorch') && !contains(fromJson(github.event.inputs.backend), 'turbomind')
+        run: |
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n ${{matrix.n}} -m '${{matrix.gpu_num}} and not pr_test and not function and pytorch' --alluredir=${{env.ALLURE_REPORT_DIR}}
+      - name: Clear workfile
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
+          chmod -R 777 $REPORT_DIR
           export workdir=$(pwd)
-          rm -rf $workdir/*
+          cd ..
+          rm -rf $workdir
+          mkdir $workdir
+          chmod -R 777 $workdir

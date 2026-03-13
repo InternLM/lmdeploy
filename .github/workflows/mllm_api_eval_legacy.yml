@@ -1,4 +1,4 @@
-name: api_eval_h800
+name: mllm_api_eval_legacy
 
 on:
   workflow_dispatch:
@@ -37,22 +37,22 @@ on:
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
-  OUTPUT_FOLDER: cuda12.8_dist_${{ github.run_id }}
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
-  REPORT_DIR: /nvme/qa_test_models/evaluation_report/allure_report/${{ inputs.repo_ref }}_${{ github.run_id }}
+  REPORT_DIR: /nvme/qa_test_models/mllm_evaluation_report/allure_report/${{ inputs.repo_ref }}_${{ github.run_id }}
   COV_PARAM: --cov /opt/py3/lib/python3.10/site-packages/lmdeploy
-  FAIL_CONFIG: '--lf'
   TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy/${{ inputs.repo_ref }}_${{ github.run_id }}
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
   OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
   DEEPSEEK_VL: /nvme/qa_test_models/offline_pkg/DeepSeek-VL
-  COMPASS_DATA_CACHE: /nvme/qa_test_models/compass_data_cache
+  LMUData: /nvme/qa_test_models/LMUData
+  LOCAL_LLM: turbomind_Qwen2.5-32B-Instruct_nccl_tp2_0
+  OPENAI_API_KEY: sk-empty
   HF_DATASETS_OFFLINE: 1
   HF_DATASETS_CACHE: /nvme/qa_test_models/hf_datasets
   HF_HUB_OFFLINE: 1
   HF_EVALUATE_OFFLINE: 1
   RUN_ID: ${{ inputs.repo_ref }}_${{ github.run_id }}
-  TEST_ENV: h800
+  TEST_ENV: legacy
 
 jobs:
   linux-build:
@@ -67,6 +67,18 @@ jobs:
       DOCKER_TAG: cuda12.8
       OUTPUT_FOLDER: cuda12.8_dist_${{ github.run_id }}
     steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # This might remove tools that are actually needed, if set to "true" but frees about 6 GB
+          tool-cache: false
+          docker-images: false
+          # All of these default to true, but feel free to set to "false" if necessary for your workflow
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: false
       - name: Checkout repository
         uses: actions/checkout@v3
         with:
@@ -90,56 +102,94 @@ jobs:
           retention-days: 1
           name: my-artifact-${{ github.run_id }}-${{ matrix.pyver }}
 
-  test_evaluation:
+  download_pkgs:
     needs: linux-build
+    if: ${{!cancelled()}}
+    runs-on: [self-hosted, linux-a100]
+    timeout-minutes: 50
+    container:
+      image: openmmlab/lmdeploy:latest-cu12.8
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
+      volumes:
+        - /nvme/qa_test_models:/nvme/qa_test_models
+        - /mnt/121:/mnt/121
+        - /mnt/104:/mnt/104
+        - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v2
+        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
+        with:
+          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
+          ref: ${{github.event.inputs.repo_ref || 'main'}}
+      - name: Copy repository
+        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
+        run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && chmod 777 ${{env.TEST_CODE_PATH}} && cp -r . ${{env.TEST_CODE_PATH}}
+      - name: Copy repository - offline
+        if: ${{inputs.offline_mode}}
+        run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && chmod 777 ${{env.TEST_CODE_PATH}} && cp -r ${{env.OFFLINE_CODE_PATH}}/. ${{env.TEST_CODE_PATH}}
+      - name: Download Artifacts
+        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
+        uses: actions/download-artifact@v4
+        with:
+          name: my-artifact-${{ github.run_id }}-py310
+      - name: Copy Artifacts
+        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
+        run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl -f && cp lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
+      - name: Copy Artifacts - offline
+        if: ${{inputs.offline_mode}}
+        run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl -f && cp ${{env.OFFLINE_CODE_PATH}}/lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
+      - name: Mark as start
+        run: |
+          chmod -R 777 ${{env.TEST_CODE_PATH}}
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
+
+  test_evaluation:
+    needs: download_pkgs
     if: ${{ !cancelled() }}
-    runs-on: [self-hosted, h800-r1]
+    runs-on: [self-hosted, linux-a100]
     timeout-minutes: 2400
     strategy:
       fail-fast: false
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
+        gpu_num: ['gpu_num_1', 'gpu_num_2', 'gpu_num_4', 'gpu_num_8']
     container:
-      image: m.daocloud.io/docker.io/openmmlab/lmdeploy:latest-cu12.8
+      image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/github-actions/resources:/root/resources
-        - /nvme/github-actions/opencompass-data:/root/opencompass-data
         - /nvme/qa_test_models:/nvme/qa_test_models
-        - /nvme1/qa_test_models:/nvme1/qa_test_models
-        - /nvme2/share:/nvme2/share
-        - /mnt/158_nvme2:/mnt/158_nvme2
-        - /mnt/158_nvme3:/mnt/158_nvme3
-        - /mnt/158_nvme4:/mnt/158_nvme4
+        - /nvme/huggingface_hub:/nvme/huggingface_hub
+        - /mnt/121:/mnt/121
+        - /mnt/104:/mnt/104
+        - /mnt/bigdisk:/mnt/bigdisk
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
-      - name: Create and change to _wk directory
+      - name: Copy repository and Artifacts
         run: |
-          echo "Working directory set to: $(pwd)"
-      - name: Clone repository
-        uses: actions/checkout@v2
-        with:
-          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
-          ref: ${{github.event.inputs.repo_ref || 'main'}}
-      - name: Download Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: my-artifact-${{ github.run_id }}-py310
+          cp -r ${{env.TEST_CODE_PATH}}/. .
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
+          python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
       - name: Install lmdeploy
         run: |
-          python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-      - name: Install opencompass
+      - name: Install vlmeval
         run: |
-          python3 -m pip install opencompass
-          python3 -m pip install langdetect
+          python3 -m pip install pandas datasets scikit-learn pylatexenc math_verify
+          apt update && apt install -y libgl1 libglib2.0-0
+          cp -r /nvme/qa_test_models/offline_pkg/VLMEvalKit .
+          cd VLMEvalKit && pip install .
       - name: Check env
         run: |
+          pip install transformers==4.57.6
           python3 -m pip list
           lmdeploy check_env
           mkdir ${{env.REPORT_DIR}} -p
@@ -147,18 +197,15 @@ jobs:
       - name: Setup paths for evaluation
         if: (matrix.backend == 'pytorch' || matrix.backend == 'turbomind')
         run: |
-          overall_exit=0
-          ln -s /nvme/qa_test_models/resource/opencompass-data/data ./data
-          ln -s /nvme/qa_test_models/resource/nltk_data /usr/share/nltk_data
+          unset HTTP_PROXY;unset HTTPS_PROXY;unset http_proxy;unset https_proxy;
+          cd VLMEvalKit && cp -r ../autotest .
           execution_mode="${{ github.event.inputs.execution_mode || 'both' }}"
+          ulimit -n 65535
           if [ "$execution_mode" = "both" ] || [ "$execution_mode" = "infer" ]; then
-            pytest autotest/evaluate/test_api_evaluate.py -m "gpu_num_1 and ${{matrix.backend}} and infer" -n 8 --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
-            pytest autotest/evaluate/test_api_evaluate.py -m "gpu_num_2 and ${{matrix.backend}} and infer" -n 4 --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
-            pytest autotest/evaluate/test_api_evaluate.py -m "gpu_num_4 and ${{matrix.backend}} and infer" -n 2 --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
-            pytest autotest/evaluate/test_api_evaluate.py -m "gpu_num_8 and ${{matrix.backend}} and infer" -n 1 --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
+            pytest autotest/evaluate/test_mllm_api_evaluate.py -m "${{matrix.gpu_num}} and ${{matrix.backend}} and infer" --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
           fi
           if [ "$execution_mode" = "both" ] || [ "$execution_mode" = "eval" ]; then
-            pytest autotest/evaluate/test_api_evaluate.py -m "${{matrix.backend}} and eval" -n 4 --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
+            pytest autotest/evaluate/test_mllm_api_evaluate.py -m "${{matrix.gpu_num}} and ${{matrix.backend}} and eval" -n 4 --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
           fi
           exit $overall_exit
       - name: Clear workspace
