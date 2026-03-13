@@ -11,7 +11,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
+from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .deepseek_v2 import DeepseekV2ForCausalLM
@@ -440,13 +440,13 @@ class DeepSeekVLV2InputProcessor(BaseModelInputProcessor):
             if isinstance(num_pad, torch.Tensor):
                 num_pad = num_pad.item()
 
-            mm_data = MultiModalTensor(data=pixel_values,
-                                       start=offset,
-                                       end=offset + num_pad,
-                                       meta=dict(
-                                           image_token_id=image_token_id,
-                                           images_spatial_crop=images_spatial_crop,
-                                       ))
+            mm_data = MultiModalData(data=pixel_values,
+                                     start=offset,
+                                     end=offset + num_pad,
+                                     meta=dict(
+                                         image_token_id=image_token_id,
+                                         images_spatial_crop=images_spatial_crop,
+                                     ))
 
             input_imgs.append(mm_data)
 
