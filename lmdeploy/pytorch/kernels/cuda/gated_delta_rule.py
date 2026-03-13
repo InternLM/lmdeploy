@@ -30,7 +30,7 @@ def fused_recurrent_gated_delta_rule_fwd(H,
                                          num_warps: int = 1):
 
     num_threads = num_warps * 32
-    num_bits = T.DataType(dtype).bits
+    num_bits = T.DataType(state_dtype).bits
     num_elems = 128 // num_bits
     warp_size = 32
     k_per_thr = T.ceildiv(K, warp_size)
@@ -74,7 +74,7 @@ def fused_recurrent_gated_delta_rule_fwd(H,
                 state_id = b_id
 
             # load states
-            h_smem = T.alloc_shared([K, v_per_cta], dtype)
+            h_smem = T.alloc_shared([K, v_per_cta], state_dtype)
             T.annotate_layout({h_smem: tilelang.layout.make_swizzled_layout(h_smem)})
             for i, j in T.Parallel(K, v_per_cta):
                 v_idx = v_start * v_per_cta + j
