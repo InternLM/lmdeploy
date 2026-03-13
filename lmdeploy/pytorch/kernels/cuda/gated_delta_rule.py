@@ -19,6 +19,7 @@ def fused_recurrent_gated_delta_rule_fwd(H,
                                          state_stride: Sequence[int],
                                          scale,
                                          dtype,
+                                         state_dtype,
                                          g_dtype=None,
                                          beta_dtype=None,
                                          use_g: bool = False,
@@ -29,7 +30,7 @@ def fused_recurrent_gated_delta_rule_fwd(H,
                                          num_warps: int = 1):
 
     num_threads = num_warps * 32
-    num_bits = T.DataType(dtype).bits
+    num_bits = T.DataType(state_dtype).bits
     num_elems = 128 // num_bits
     warp_size = 32
     k_per_thr = T.ceildiv(K, warp_size)
@@ -54,7 +55,7 @@ def fused_recurrent_gated_delta_rule_fwd(H,
         Out: T.Tensor([B, HV, V], dtype=dtype),
         G: T.Tensor([B, HV], dtype=g_dtype),
         Beta: T.Tensor([B, HV], dtype=beta_dtype),
-        State: T.StridedTensor([N, HV, K, V], dtype=dtype, strides=state_stride),
+        State: T.StridedTensor([N, HV, K, V], dtype=state_dtype, strides=state_stride),
         StateIndices: T.Tensor([B], dtype=torch.int64) = None,
     ):
         with T.Kernel(T.ceildiv(V, v_per_cta), B * HV, threads=num_threads) as (v_start, bhv_idx):
@@ -73,7 +74,7 @@ def fused_recurrent_gated_delta_rule_fwd(H,
                 state_id = b_id
 
             # load states
-            h_smem = T.alloc_shared([K, v_per_cta], dtype)
+            h_smem = T.alloc_shared([K, v_per_cta], state_dtype)
             T.annotate_layout({h_smem: tilelang.layout.make_swizzled_layout(h_smem)})
             for i, j in T.Parallel(K, v_per_cta):
                 v_idx = v_start * v_per_cta + j
@@ -229,8 +230,10 @@ def fused_recurrent_gated_delta_rule(
 
     o = torch.empty_like(v)
     final_state = initial_state
+    state_dtype = q.dtype
     if final_state is not None:
         state_stride = final_state.stride()
+        state_dtype = final_state.dtype
     else:
         state_stride = (0, 0, 0, 0)
 
@@ -249,6 +252,7 @@ def fused_recurrent_gated_delta_rule(
                                                   state_stride=state_stride,
                                                   scale=scale,
                                                   dtype=q.dtype,
+                                                  state_dtype=state_dtype,
                                                   g_dtype=g_dtype,
                                                   beta_dtype=beta_dtype,
                                                   use_g=g is not None,
