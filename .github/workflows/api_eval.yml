@@ -58,7 +58,7 @@ env:
 
 jobs:
   linux-build:
-    if: ${{ !cancelled() }}
+    if: ${{github.event_name == 'schedule' || (!cancelled() && !inputs.offline_mode)}}
     strategy:
       matrix:
         pyver: [py310]

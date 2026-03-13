@@ -60,7 +60,7 @@ env:
 
 jobs:
   linux-build:
-    if: ${{ !cancelled() }}
+    if: ${{github.event_name == 'schedule' || (!cancelled() && !inputs.offline_mode)}}
     strategy:
       matrix:
         pyver: [py310]
@@ -84,7 +84,7 @@ jobs:
           large-packages: true
           swap-storage: false
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v6
         with:
           repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
           ref: ${{github.event.inputs.repo_ref || 'main'}}

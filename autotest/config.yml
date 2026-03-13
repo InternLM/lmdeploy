@@ -70,12 +70,13 @@ pytorch_chat_model:
         - Qwen/Qwen3-32B
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-235B-A22B
-        - Qwen/Qwen3-30B-A3B-GPTQ-Int4
         - Qwen/Qwen3-VL-8B-Instruct
         - Qwen/Qwen3-VL-30B-A3B-Instruct
         - THUDM/cogvlm2-llama3-chinese-chat-19B
         - THUDM/glm-4v-9b
         - THUDM/glm-4-9b-chat
+        - google/gemma-2-9b-it
+        - google/gemma-2-27b-it
         - zai-org/GLM-4.7-Flash
         - microsoft/Phi-3.5-vision-instruct
         - microsoft/Phi-3-vision-128k-instruct
@@ -174,7 +175,6 @@ pytorch_quantization:
         - Qwen/Qwen3-32B
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-235B-A22B
-        - Qwen/Qwen3-30B-A3B-GPTQ-Int4
         - Qwen/Qwen3-VL-8B-Instruct
         - Qwen/Qwen3-VL-30B-A3B-Instruct
         - microsoft/Phi-3-vision-128k-instruct
@@ -188,6 +188,8 @@ longtext_benchmark_model:
     - Qwen/Qwen3-30B-A3B
 
 evaluate_model:
+  - google/gemma-2-9b-it
+  - google/gemma-2-27b-it
   - meta-llama/Meta-Llama-3-1-8B-Instruct
   - Qwen/Qwen1.5-MoE-A2.7B-Chat
   - Qwen/Qwen3-30B-A3B

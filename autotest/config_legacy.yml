@@ -155,8 +155,6 @@ benchmark_model:
     - unsloth/gpt-oss-20b-BF16
 
 evaluate_model:
-  - google/gemma-2-9b-it
-  - google/gemma-2-27b-it
   - Qwen/Qwen2.5-7B-Instruct
 
 mllm_evaluate_model:
