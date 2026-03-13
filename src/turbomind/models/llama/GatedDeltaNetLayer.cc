@@ -26,6 +26,7 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(const ModelParam&     model,
     conv_dim_(key_dim_ * 2 + value_dim_),
     norm_eps_(model.norm_eps),
     dtype_(model.data_type),
+    state_dtype_(model.linear_state_dtype),
     linear_(*ctx.linear)
 {
     layer_types_       = model.layer_types;
@@ -99,7 +100,7 @@ void GatedDeltaNetLayer::Setup(int phase, TensorMap& env)
             // Create new conv/recurrent states
             s.conv_states = {{num_linear_layers_, conv_dim_, d_conv_}, dtype_, kDEVICE};
             Clear(s.conv_states);
-            s.recurrent_states = {{num_linear_layers_, num_v_heads_, key_head_dim_, value_head_dim_}, dtype_, kDEVICE};
+            s.recurrent_states = {{num_linear_layers_, num_v_heads_, key_head_dim_, value_head_dim_}, state_dtype_, kDEVICE};
             Clear(s.recurrent_states);
         }
 
@@ -223,6 +224,7 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
                                        num_k_heads_,
                                        //    key_head_dim_,
                                        recurrent_state_layer_offset,
+                                       state_dtype_,
                                        stream);
         sync_check_cuda_error();
 

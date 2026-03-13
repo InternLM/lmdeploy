@@ -98,6 +98,7 @@ class ModelConfig:
     linear_conv_kernel_dim: int = 0
     linear_num_key_heads: int = 0
     linear_num_value_heads: int = 0
+    # linear_state_dtype: str = None
     attn_output_gate: bool = False
     # Per-layer expert weight type override: layer indices whose
     # MoE experts are unquantized (fp16) despite expert_weight_type=int4.

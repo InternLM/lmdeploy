@@ -50,6 +50,7 @@ private:
 
     float    norm_eps_;
     DataType dtype_;
+    DataType state_dtype_;  // recurrent state dtype (may differ from dtype_ for float32 state)
 
     LlamaLinear& linear_;
 

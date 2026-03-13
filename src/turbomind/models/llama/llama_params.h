@@ -68,6 +68,8 @@ struct ModelParam {
     int linear_num_key_heads   = 0;
     int linear_num_value_heads = 0;
 
+    DataType linear_state_dtype = {};
+
     bool attn_output_gate = false;  // Qwen3.5: doubles Q projection in full-attention layers
 
     // Layer indices whose MoE experts use data_type (fp16) instead of

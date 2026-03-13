@@ -10,6 +10,7 @@
 #include "src/turbomind/utils/cuda_utils.h"
 
 #include "src/turbomind/kernels/core/array_ops.h"
+#include "src/turbomind/kernels/core/layout.h"
 #include "src/turbomind/kernels/gemm/thread_map.h"
 
 namespace turbomind {
@@ -252,10 +253,16 @@ __global__ void recurrent_gated_delta_rule_kernel_v2(T*         v_out,
 
     const float scale = rsqrtf((float)k_head_dim);
 
-    __shared__ S smem_S[k_head_dim][v_head_dim];
-
     // DimC = v_head_dim (memory-contiguous), DimS = k_head_dim (strided)
     using Map_S = ThreadMap_V2<v_head_dim, k_head_dim, sizeof(uint4) / sizeof(S), Raked, block_dim / WARP_SIZE>;
+
+    extern __shared__ __align__(16) char smem_buf[];
+
+    // XOR swizzle: bits [10,13] (offset_k) XOR into column access-group index
+    constexpr int kBase  = (sizeof(S) == 4) ? 2 : 3;  // log2(kAccessC)
+    constexpr int kShift = 10 - kBase;
+    using Layout = SmemLayoutV2<k_head_dim, v_head_dim, -1, -1, Swizzle<4, kBase, kShift>>;
+    SmemAccessor<S, Layout> smem_S{(S*)smem_buf};
 
     const int warp_id = threadIdx.x / WARP_SIZE;
     const int lane_id = threadIdx.x % WARP_SIZE;
@@ -276,16 +283,18 @@ __global__ void recurrent_gated_delta_rule_kernel_v2(T*         v_out,
     const int offset_k = threadIdx.x % k_tiles;
     const int offset_v = threadIdx.x / k_tiles;
 
+    constexpr int kAccessC = Map_S::kAccessC;
+
     PRAGMA_UNROLL
     for (int s = 0; s < Map_S::kIterS; ++s) {
+        Array<S, kAccessC> vec;
         PRAGMA_UNROLL
         for (int c = 0; c < Map_S::kIterC; ++c) {
-            const auto [vd, kd]                = Map_S::get_offset(warp_id, lane_id);
-            const int                 final_vd = vd + c * Map_S::kDeltaC;
-            const int                 final_kd = kd + s * Map_S::kDeltaS;
-            Array<S, Map_S::kAccessC> vec;
+            const auto [vd, kd] = Map_S::get_offset(warp_id, lane_id);
+            const int final_vd  = vd + c * Map_S::kDeltaC;
+            const int final_kd  = kd + s * Map_S::kDeltaS;
             Load(vec, s_ptr + final_kd * v_head_dim + final_vd);
-            Store(&smem_S[final_kd][final_vd], vec);
+            Store(&smem_S(final_kd, final_vd), vec);
         }
     }
 
@@ -295,9 +304,13 @@ __global__ void recurrent_gated_delta_rule_kernel_v2(T*         v_out,
     for (int v_iter = 0; v_iter < v_iters; ++v_iter) {
         PRAGMA_UNROLL
         for (int k = 0; k < tile_k; ++k) {
-            Array<S, tile_v> tmp;
-            Load(tmp, &smem_S[offset_k * tile_k + k][(offset_v + v_iter * v_threads) * tile_v]);
-            vec_S[v_iter][k] = cast<float>(tmp);
+            static_assert(tile_v % kAccessC == 0);
+            PRAGMA_UNROLL
+            for (int c = 0; c < tile_v / kAccessC; ++c) {
+                Array<S, kAccessC> tmp;
+                Load(tmp, &smem_S(offset_k * tile_k + k, (offset_v + v_iter * v_threads) * tile_v + c * kAccessC));
+                (Array<float, kAccessC>&)vec_S[v_iter][k][c * kAccessC] = cast<float>(tmp);
+            }
         }
     }
 
@@ -317,19 +330,20 @@ __global__ void recurrent_gated_delta_rule_kernel_v2(T*         v_out,
 
         // --- In-kernel L2-normalize K/Q (Vectorized) ---
         {
-            Array<T, tile_v> tmp_K;
-            Array<T, tile_v> tmp_Q;
-
-            Load(tmp_K, &k_ptr[offset_k * tile_k]);
-            Load(tmp_Q, &q_ptr[offset_k * tile_k]);
+            {
+                Array<T, tile_v> tmp_K;
+                Array<T, tile_v> tmp_Q;
+                Load(tmp_K, &k_ptr[offset_k * tile_k]);
+                Load(tmp_Q, &q_ptr[offset_k * tile_k]);
+                vec_K = cast<float>(tmp_K);
+                vec_Q = cast<float>(tmp_Q);
+            }
 
             float k_sum = 0.f;
             float q_sum = 0.f;
 
             PRAGMA_UNROLL
             for (int k = 0; k < tile_k; ++k) {
-                vec_K[k] = (float)tmp_K[k];
-                vec_Q[k] = (float)tmp_Q[k];
                 k_sum += vec_K[k] * vec_K[k];
                 q_sum += vec_Q[k] * vec_Q[k];
             }
@@ -403,11 +417,17 @@ __global__ void recurrent_gated_delta_rule_kernel_v2(T*         v_out,
         }
     }
 
+    __syncthreads();
+
     PRAGMA_UNROLL
     for (int v_iter = 0; v_iter < v_iters; ++v_iter) {
         PRAGMA_UNROLL
         for (int k = 0; k < tile_k; ++k) {
-            Store(&smem_S[offset_k * tile_k + k][(offset_v + v_iter * v_threads) * tile_v], cast<S>(vec_S[v_iter][k]));
+            PRAGMA_UNROLL
+            for (int c = 0; c < tile_v / kAccessC; ++c) {
+                auto tmp = cast<S>((Array<float, kAccessC>&)vec_S[v_iter][k][c * kAccessC]);
+                Store(&smem_S(offset_k * tile_k + k, (offset_v + v_iter * v_threads) * tile_v + c * kAccessC), tmp);
+            }
         }
     }
 
@@ -415,13 +435,13 @@ __global__ void recurrent_gated_delta_rule_kernel_v2(T*         v_out,
 
     PRAGMA_UNROLL
     for (int s = 0; s < Map_S::kIterS; ++s) {
+        Array<S, Map_S::kAccessC> vec;
         PRAGMA_UNROLL
         for (int c = 0; c < Map_S::kIterC; ++c) {
-            const auto [vd, kd]                = Map_S::get_offset(warp_id, lane_id);
-            const int                 final_vd = vd + c * Map_S::kDeltaC;
-            const int                 final_kd = kd + s * Map_S::kDeltaS;
-            Array<S, Map_S::kAccessC> vec;
-            Load(vec, &smem_S[final_kd][final_vd]);
+            const auto [vd, kd] = Map_S::get_offset(warp_id, lane_id);
+            const int final_vd  = vd + c * Map_S::kDeltaC;
+            const int final_kd  = kd + s * Map_S::kDeltaS;
+            Load(vec, &smem_S(final_kd, final_vd));
             Store(s_ptr + final_kd * v_head_dim + final_vd, vec);
         }
     }
@@ -436,6 +456,7 @@ void invokeGatedDeltaRuleBatched_v2(Ref<Tensor>           v_out_,
                                     int                   batch_size,
                                     int                   num_k_heads,
                                     int                   state_layer_offset,
+                                    DataType              state_dtype,
                                     cudaStream_t          stream)
 {
     auto& v_out = v_out_.get();
@@ -457,19 +478,34 @@ void invokeGatedDeltaRuleBatched_v2(Ref<Tensor>           v_out_,
     const int num_blocks = batch_size * num_v_heads;
 
     auto invoke = [&](auto t) {
-        using T = decltype(t);
-        using S = T;
-        recurrent_gated_delta_rule_kernel_v2<kHeadDim, kHeadDim, kBlockDim, T, S>
-            <<<num_blocks, kBlockDim, 0, stream>>>(v_out.data<T>(),
-                                                   qkv_in.data<T>(),
-                                                   beta.data<T>(),
-                                                   g.data<T>(),
-                                                   (S* const*)state_ptrs.data(),
-                                                   q_offsets.data(),
-                                                   num_v_heads,
-                                                   num_k_heads,
-                                                   k_dim_total,
-                                                   state_layer_offset);
+        using T     = decltype(t);
+        auto launch = [&](auto s) {
+            using S = decltype(s);
+
+            auto kernel = recurrent_gated_delta_rule_kernel_v2<kHeadDim, kHeadDim, kBlockDim, T, S>;
+
+            constexpr size_t smem_sz = kHeadDim * kHeadDim * sizeof(S);
+            if (smem_sz > 48 << 10) {
+                cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_sz);
+            }
+
+            kernel<<<num_blocks, kBlockDim, smem_sz, stream>>>(v_out.data<T>(),
+                                                               qkv_in.data<T>(),
+                                                               beta.data<T>(),
+                                                               g.data<T>(),
+                                                               (S* const*)state_ptrs.data(),
+                                                               q_offsets.data(),
+                                                               num_v_heads,
+                                                               num_k_heads,
+                                                               k_dim_total,
+                                                               state_layer_offset);
+        };
+        if (state_dtype == kFloat32) {
+            launch(float{});
+        }
+        else {
+            launch(T{});
+        }
     };
     TM_DISPATCH_PRIMARY_DTYPES(v_out.dtype(), invoke);
 }
