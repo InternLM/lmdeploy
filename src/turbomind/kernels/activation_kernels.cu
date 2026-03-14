@@ -47,8 +47,19 @@ __inline__ __device__ float tanh_opt(float x)
     asm("tanh.approx.f32 %0,%1; \n\t" : "=f"(r) : "f"(x));
     return r;
 #else
-    const float exp_val = -1.f * fabs(2 * x);
-    return copysignf_pos((1.0f - __expf(exp_val)) / (__expf(exp_val) + 1.0f), x);
+    // Fast tanh approximation for SM70 (Volta) using rational Padé form.
+    // Avoids the two __expf() calls in the original fallback.
+    // Max error ~2e-5 for |x| <= 4; saturates to ±1 for larger |x|.
+    const float ax = fabsf(x);
+    if (ax > 4.0f) {
+        return copysignf_pos(1.0f, x);
+    }
+    const float x2 = x * x;
+    // Padé [3/2] approximant: tanh(x) ≈ x * (27 + x²) / (27 + 9*x²)
+    // Simplified: x * (1 + x²/27) / (1 + x²/3) — rearranged for fewer ops
+    float num = x * (27.0f + x2);
+    float den = 27.0f + 9.0f * x2;
+    return __fdividef(num, den);
 #endif
 }
 

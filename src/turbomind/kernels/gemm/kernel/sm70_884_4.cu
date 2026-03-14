@@ -31,6 +31,14 @@ void Registry::sm70_884_4()
         Add<C::Type<  8, 128, 64, 1, 4, 1, D, S, 2, true, 1, 128>>();
         Add<C::Type<  8, 128, 32, 1, 4, 1, D, S, 2, true, 1, 128>>();
         Add<C::Type<  8, 256, 64, 1, 4, 1, D, S, 2, true, 1, 128>>();
+        // SM70-optimized decode-phase tiles (small M, large N for projection layers)
+        Add<C::Type< 48, 128, 32, 1, 4, 1, D, S, 2, true, 1, 128>>();
+        Add<C::Type< 48, 256, 16, 1, 4, 1, D, S, 2, true, 1, 128>>();
+        Add<C::Type< 16, 256, 64, 1, 4, 1, D, S, 2, true, 1, 128>>();
+        Add<C::Type< 16, 128, 64, 1, 4, 1, D, S, 2, true, 1, 128>>();
+        Add<C::Type<  8, 256, 32, 1, 4, 1, D, S, 2, true, 1, 128>>();
+        Add<C::Type< 32, 128, 64, 1, 4, 1, D, S, 2, true, 1, 128>>();
+        Add<C::Type< 64, 256, 32, 1, 4, 1, D, S, 2, true, 1, 128, 64, 128>>();
         // clang-format on
     }
 
@@ -46,8 +54,16 @@ void Registry::sm70_884_4()
         Add<C::Type< 16, 256,  64, 1, 4, 1, D, S, 2, true, 1, 128>>();
         Add<C::Type< 16, 256,  32, 1, 4, 1, D, S, 2, true, 1, 128>>();
         Add<C::Type< 16, 128,  32, 1, 4, 1, D, S, 2, true, 1, 128>>();
-        Add<C::Type< 16, 256,  32, 1, 4, 1, D, S, 2, true, 1, 128>>();
         Add<C::Type<  8, 128,  64, 1, 4, 1, D, S, 2, true, 1, 128>>();
+        Add<C::Type<  8, 128,  32, 1, 4, 1, D, S, 2, true, 1, 128>>();
+        Add<C::Type<  8, 128, 128, 1, 4, 1, D, S, 2, true, 1, 128>>();
+        // SM70-optimized decode-phase grouped quantization tiles
+        Add<C::Type< 48, 128,  32, 1, 4, 1, D, S, 2, true, 1, 128>>();
+        Add<C::Type< 16, 128,  64, 1, 4, 1, D, S, 2, true, 1, 128>>();
+        Add<C::Type<  8, 256,  64, 1, 4, 1, D, S, 2, true, 1, 128>>();
+        Add<C::Type<  8, 256,  32, 1, 4, 1, D, S, 2, true, 1, 128>>();
+        Add<C::Type< 32, 256,  64, 1, 4, 1, D, S, 2, true, 1, 128>>();
+        Add<C::Type< 64, 256,  32, 1, 4, 1, D, S, 2, true, 1, 128,  64, 128>>();
         // clang-format on
     }
 

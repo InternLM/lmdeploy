@@ -35,7 +35,7 @@ struct LlamaLinear::Impl {
 
         check_cuda_error(cudaMallocAsync(&workspace_.barriers, workspace_.barriers_size, st));
         check_cuda_error(cudaMallocAsync(&workspace_.partials, workspace_.partials_size, st));
-        check_cuda_error(cudaMallocAsync(&workspace_.tensormaps, workspace_.partials_size, st));
+        check_cuda_error(cudaMallocAsync(&workspace_.tensormaps, workspace_.tensormaps_size, st));
         check_cuda_error(cudaMemsetAsync(workspace_.barriers, 0, workspace_.barriers_size, st));
         check_cuda_error(cudaMallocAsync(&workspace_.flags, sizeof(int), st));
 

@@ -12,32 +12,40 @@
 namespace turbomind::attention {
 
 constexpr int kHeadDim = 256;
-constexpr int kCTA_S   = 64;
-constexpr int kWARP_S  = 16;
-constexpr int kStages  = 3;
 
-// kH = Qh%3==0 ? 3 : (Qh%2==0 ? 2 : 1)
-// kH=1 covers Qh ∈ {1,5,7}, kH=2 covers {2,4,8}, kH=3 covers {3,6,9}
-template<class T, class Tkv, int kH>
+// V100 (SM70) has 96 KB shared memory per SM.
+// fp16 KV:          CTA_S=64, 2 stages (64KB smem).
+// Quantized KV:     CTA_S=64, 3 stages (smaller element size fits 3 stages).
+
+// ── fp16 KV: CTA_S=64, 2 stages ──────────────────────────────
+template<class T, int kH>
 using KT =
     AttentionUniversal<arch::Sm70,
-                       Mainloop<arch::Sm70, Impl<MMA_SIMT, T, Tkv, kH, 1, kCTA_S, kH, 1, kWARP_S, kHeadDim, kStages>>,
-                       GetBlockIterFactory<T, Tkv, kCTA_S, kHeadDim>,
+                       Mainloop<arch::Sm70, Impl<MMA_SIMT, T, T, kH, 1, 64, kH, 1, 16, kHeadDim, 2>>,
+                       GetBlockIterFactory<T, T, 64, kHeadDim>,
+                       DecodingCtaMap>;
+
+// ── Quantized KV: CTA_S=64, 3 stages ─────────────────────────
+template<class T, class Tkv, int kH>
+using KT_quant =
+    AttentionUniversal<arch::Sm70,
+                       Mainloop<arch::Sm70, Impl<MMA_SIMT, T, Tkv, kH, 1, 64, kH, 1, 16, kHeadDim, 3>>,
+                       GetBlockIterFactory<T, Tkv, 64, kHeadDim>,
                        DecodingCtaMap>;
 
 namespace {
 Registrar reg([](Collector& c) {
-    c.add<KT<half, half, 1>>();
-    c.add<KT<half, half, 2>>();
-    c.add<KT<half, half, 3>>();
+    c.add<KT<half, 1>>();
+    c.add<KT<half, 2>>();
+    c.add<KT<half, 3>>();
 
-    c.add<KT<half, uint8_t, 1>>();
-    c.add<KT<half, uint8_t, 2>>();
-    c.add<KT<half, uint8_t, 3>>();
+    c.add<KT_quant<half, uint8_t, 1>>();
+    c.add<KT_quant<half, uint8_t, 2>>();
+    c.add<KT_quant<half, uint8_t, 3>>();
 
-    c.add<KT<half, uint4_t, 1>>();
-    c.add<KT<half, uint4_t, 2>>();
-    c.add<KT<half, uint4_t, 3>>();
+    c.add<KT_quant<half, uint4_t, 1>>();
+    c.add<KT_quant<half, uint4_t, 2>>();
+    c.add<KT_quant<half, uint4_t, 3>>();
 });
 }
 

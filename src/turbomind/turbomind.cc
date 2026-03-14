@@ -596,6 +596,10 @@ void TurboMind::Impl::CreateEngine(int index)
 
     auto& ctx = *TM_CHECK_NOTNULL(contexts_[index]);
 
+    // Release any freed-but-cached memory from the context allocator pool
+    // before KV cache sizing measures free memory via cudaMemGetInfo.
+    ctx.allocator->trim(0);
+
     core::ContextGuard guard{ctx.core_stream, ctx.allocator, Allocator{kCPUpinned}};
 
     const auto& param = engine_params_.at(index);
