@@ -197,6 +197,14 @@ inline __device__ void Store(T* dst, const Array<T, N>& src)
             *((uint4*)dst + i) = *((uint4*)&src + i);
         }
     }
+    else if constexpr (sizeof(Array<T, N>) % sizeof(uint) == 0) {  // e.g. 12 bytes = 3 x uint
+        static_assert(bitsof<T> % 8 == 0, "raw pointer arithmetic of sub-byte types");
+        constexpr int M = sizeof(Array<T, N>) / sizeof(uint);
+        PRAGMA_UNROLL
+        for (int i = 0; i < M; ++i) {
+            *((uint*)dst + i) = *((const uint*)&src + i);
+        }
+    }
     else {
         static_assert(!std::is_same_v<T, T>);
     }
@@ -255,8 +263,6 @@ inline __device__ void Stcg(T* __restrict__ dst, const Array<T, N>& src)
 template<typename T, int N>
 inline __device__ void Ldg(Array<T, N>& dst, const T* src)
 {
-    static_assert(sizeof(Array<T, N>) <= sizeof(uint4));
-
     if constexpr (sizeof(Array<T, N>) == sizeof(uint4)) {
         (uint4&)dst = __ldg((const uint4*)src);
     }
@@ -271,6 +277,13 @@ inline __device__ void Ldg(Array<T, N>& dst, const T* src)
     }
     else if constexpr (sizeof(Array<T, N>) == sizeof(uint8_t)) {
         (uint8_t&)dst = __ldg((const uint8_t*)src);
+    }
+    else if constexpr (sizeof(Array<T, N>) % sizeof(uint) == 0) {  // e.g. 12 bytes = 3 x uint
+        constexpr int M = sizeof(Array<T, N>) / sizeof(uint);
+        PRAGMA_UNROLL
+        for (int i = 0; i < M; ++i) {
+            *((uint*)&dst + i) = __ldg((const uint*)src + i);
+        }
     }
     else {
         static_assert(!std::is_same_v<T, T>);

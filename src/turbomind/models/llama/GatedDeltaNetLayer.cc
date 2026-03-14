@@ -137,49 +137,58 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
         // const T* sub-pointers are derived per-request below; stride = all_col.
 
         // =================================================================
-        // 2. Compute beta and g for all tokens
-        //    b_raw and a_raw are sliced from the fused projection output.
-        //    Stride between tokens is all_col elements.
+        // 2. Compute beta and g from b/a logits (only needed for prefill tokens).
+        //    Decode tokens (seq_len==1) use the fused kernel that computes
+        //    beta/g inline from strided b/a.
         // =================================================================
-        const int bg_total = token_num * num_v_heads_;
         const int b_offset = conv_dim_ + value_dim_;  // column offset to b logits
         const int a_offset = b_offset + v_heads_tp;   // column offset to a logits
-        Tensor    beta{{token_num, num_v_heads_}, dtype, device};
-        Tensor    g_tensor{{token_num, num_v_heads_}, dtype, device};
 
-        // Gather b and a columns into contiguous buffers for the kernel.
-        // Each has shape (token_num, v_heads_tp) but is strided inside all_proj.
-        // Use the existing invokeComputeBetaG which needs contiguous b/a input.
-        // We copy the b/a columns compactly first.
-        Tensor b_contig{{token_num, v_heads_tp}, dtype, device};
-        Tensor a_contig{{token_num, v_heads_tp}, dtype, device};
-        check_cuda_error(cudaMemcpy2DAsync(b_contig.data<T>(),
-                                           v_heads_tp * sizeof(T),
-                                           all_data + b_offset,
-                                           all_col * sizeof(T),
-                                           v_heads_tp * sizeof(T),
-                                           token_num,
-                                           cudaMemcpyDeviceToDevice,
-                                           stream));
-        check_cuda_error(cudaMemcpy2DAsync(a_contig.data<T>(),
-                                           v_heads_tp * sizeof(T),
-                                           all_data + a_offset,
-                                           all_col * sizeof(T),
-                                           v_heads_tp * sizeof(T),
-                                           token_num,
-                                           cudaMemcpyDeviceToDevice,
-                                           stream));
+        bool has_prefill = false;
+        for (int req = 0; req < pd.batch_size; ++req) {
+            if (pd.input_lens[req] > 1) {
+                has_prefill = true;
+                break;
+            }
+        }
 
-        invokeComputeBetaG(beta.data<T>(),
-                           g_tensor.data<T>(),
-                           b_contig.data<T>(),
-                           a_contig.data<T>(),
-                           weights.A_log.data<T>(),
-                           weights.dt_bias.data<T>(),
-                           bg_total,
-                           num_v_heads_,
-                           stream);
-        sync_check_cuda_error();
+        Tensor beta{};
+        Tensor g_tensor{};
+        if (has_prefill) {
+            const int bg_total = token_num * num_v_heads_;
+            beta     = Tensor{{token_num, num_v_heads_}, dtype, device};
+            g_tensor = Tensor{{token_num, num_v_heads_}, dtype, device};
+
+            Tensor b_contig{{token_num, v_heads_tp}, dtype, device};
+            Tensor a_contig{{token_num, v_heads_tp}, dtype, device};
+            check_cuda_error(cudaMemcpy2DAsync(b_contig.data<T>(),
+                                               v_heads_tp * sizeof(T),
+                                               all_data + b_offset,
+                                               all_col * sizeof(T),
+                                               v_heads_tp * sizeof(T),
+                                               token_num,
+                                               cudaMemcpyDeviceToDevice,
+                                               stream));
+            check_cuda_error(cudaMemcpy2DAsync(a_contig.data<T>(),
+                                               v_heads_tp * sizeof(T),
+                                               all_data + a_offset,
+                                               all_col * sizeof(T),
+                                               v_heads_tp * sizeof(T),
+                                               token_num,
+                                               cudaMemcpyDeviceToDevice,
+                                               stream));
+
+            invokeComputeBetaG(beta.data<T>(),
+                               g_tensor.data<T>(),
+                               b_contig.data<T>(),
+                               a_contig.data<T>(),
+                               weights.A_log.data<T>(),
+                               weights.dt_bias.data<T>(),
+                               bg_total,
+                               num_v_heads_,
+                               stream);
+            sync_check_cuda_error();
+        }
 
         // =================================================================
         // 3. Process each request independently
@@ -196,11 +205,8 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
             // Slice per-request portions from the fused projection output.
             // qkv lives in columns [0, conv_dim_) of all_proj with row-stride all_col.
             // z   lives in columns [conv_dim_, conv_dim_+value_dim_).
-            // b/a are already extracted into contiguous beta/g_tensor above.
             T* qkv_row_ptr = all_data + token_offset * all_col;  // first token, col 0
             T* z_row_ptr   = all_data + token_offset * all_col + conv_dim_;
-            T* beta_ptr    = beta.data<T>() + token_offset * num_v_heads_;
-            T* g_ptr       = g_tensor.data<T>() + token_offset * num_v_heads_;
             T* out_ptr     = attn_out.data<T>() + token_offset * value_dim_;
 
             const int state_layer_idx = linear_layer_index(p.layer_id, layer_types_);
@@ -243,23 +249,30 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
             const int k_dim_total = key_dim_;  // num_k_heads * key_head_dim (per TP)
 
             if (seq_len == 1) {
-                // Decode: single-step recurrent update using persistent state.
-                invokeRecurrentGatedDeltaRule(out_ptr,
-                                              conv_out.data<T>(),
-                                              beta_ptr,
-                                              g_ptr,
-                                              recurrent_state_ptr,
-                                              1,  // batch_size = 1 per request
-                                              num_v_heads_,
-                                              num_k_heads_,
-                                              key_head_dim_,
-                                              value_head_dim_,
-                                              k_dim_total,
-                                              stream);
+                // Decode: fused single-step recurrent update with inline beta/g.
+                T* b_row_ptr = all_data + token_offset * all_col + b_offset;
+                T* a_row_ptr = all_data + token_offset * all_col + a_offset;
+                invokeRecurrentGatedDeltaRuleFused(out_ptr,
+                                                   conv_out.data<T>(),
+                                                   b_row_ptr,
+                                                   a_row_ptr,
+                                                   weights.A_log.data<T>(),
+                                                   weights.dt_bias.data<T>(),
+                                                   recurrent_state_ptr,
+                                                   1,
+                                                   num_v_heads_,
+                                                   num_k_heads_,
+                                                   key_head_dim_,
+                                                   value_head_dim_,
+                                                   k_dim_total,
+                                                   all_col,
+                                                   stream);
             }
             else {
                 // Prefill: process all timesteps in a SINGLE kernel launch.
                 // (Previously: O(seq_len) kernel launches via host-side for-loop.)
+                T* beta_ptr = beta.data<T>() + token_offset * num_v_heads_;
+                T* g_ptr    = g_tensor.data<T>() + token_offset * num_v_heads_;
                 invokeGatedDeltaRulePrefill(out_ptr,
                                             conv_out.data<T>(),
                                             beta_ptr,

@@ -182,6 +182,13 @@ void LlamaWeight::prepare(const cudaDeviceProp& prop)
 
     // Block until processing is done
     check_cuda_error(cudaStreamSynchronize(stream));
+
+    // Release temporary buffers accumulated in the CUDA memory pool during
+    // weight conversion (MMA-layout repacking, transpose, uint16 expansion).
+    // The pool's release threshold is UINT64_MAX so these buffers persist
+    // until explicitly trimmed, inflating GPU memory usage and reducing
+    // the free memory visible to cudaMemGetInfo when KV cache is sized.
+    alloca_->trim(0);
 }
 
 }  // namespace turbomind

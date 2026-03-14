@@ -237,6 +237,20 @@ def get_tm_model(model_path,
         # but expert weights remain as int4 AWQ for efficient inference.
         tm_cfg.model_config.weight_type = tm_cfg.model_config.data_type
         # expert_weight_type stays as 'int4' (set by get_output_model_registered_name_and_config)
+        # Warmup must cover at least one int4 layer so the GEMM tuner
+        # measures W4A16 kernels (layer 0 may be unquantized).
+        uql = tm_cfg.model_config.unquantized_expert_layers
+        # Must also cover both linear-attention and full-attention layer types
+        # so the GEMM tuner measures kernels for both fp16 and int4 weights.
+        # Qwen3.5 pattern is [1,1,1,0,...] → layer 3 is first full-attention.
+        layer_types = getattr(tm_cfg.model_config, 'layer_types', [])
+        first_full_attn = next((i for i, t in enumerate(layer_types) if t == 0), 0)
+        first_linear_attn = next((i for i, t in enumerate(layer_types) if t == 1), 0)
+        type_coverage = max(first_full_attn, first_linear_attn) + 2
+        tm_cfg.model_config.tune_layer_num = max(
+            tm_cfg.model_config.tune_layer_num,
+            type_coverage,
+            min(uql) + 2 if uql else 2)
 
     tm_cfg.model_config.chat_template = chat_template_name
     tm_cfg.model_config.model_name = model_name

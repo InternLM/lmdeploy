@@ -221,31 +221,39 @@ __global__ void recurrent_delta_rule_kernel(T*       v_out,
     // Shared memory for block reductions (one slot per warp)
     __shared__ float smem[32];
 
-    // --- In-kernel L2-normalize Q (Vectorized) ---
+    // --- In-kernel L2-normalize Q (Vectorized with __ldg for read-only cache) ---
     float q_sq = 0.f;
     if (key_head_dim % 2 == 0) {
         using T2           = typename std::conditional<std::is_same<T, half>::value, half2, nv_bfloat162>::type;
         const T2* q_ptr_v2 = reinterpret_cast<const T2*>(q_ptr);
-        for (int kd = threadIdx.x; kd < key_head_dim / 2; kd += blockDim.x)
-            q_sq += sq_acc(q_ptr_v2[kd]);
+        for (int kd = threadIdx.x; kd < key_head_dim / 2; kd += blockDim.x) {
+            T2 qval = __ldg(&q_ptr_v2[kd]);
+            q_sq += sq_acc(qval);
+        }
     }
     else {
-        for (int kd = threadIdx.x; kd < key_head_dim; kd += blockDim.x)
-            q_sq += sq_acc(q_ptr[kd]);
+        for (int kd = threadIdx.x; kd < key_head_dim; kd += blockDim.x) {
+            T qval = __ldg(&q_ptr[kd]);
+            q_sq += sq_acc(qval);
+        }
     }
     const float q_inv_norm = block_l2_inv_norm(q_sq, smem);
 
-    // --- In-kernel L2-normalize K (Vectorized) ---
+    // --- In-kernel L2-normalize K (Vectorized with __ldg) ---
     float k_sq = 0.f;
     if (key_head_dim % 2 == 0) {
         using T2           = typename std::conditional<std::is_same<T, half>::value, half2, nv_bfloat162>::type;
         const T2* k_ptr_v2 = reinterpret_cast<const T2*>(k_ptr);
-        for (int kd = threadIdx.x; kd < key_head_dim / 2; kd += blockDim.x)
-            k_sq += sq_acc(k_ptr_v2[kd]);
+        for (int kd = threadIdx.x; kd < key_head_dim / 2; kd += blockDim.x) {
+            T2 kval = __ldg(&k_ptr_v2[kd]);
+            k_sq += sq_acc(kval);
+        }
     }
     else {
-        for (int kd = threadIdx.x; kd < key_head_dim; kd += blockDim.x)
-            k_sq += sq_acc(k_ptr[kd]);
+        for (int kd = threadIdx.x; kd < key_head_dim; kd += blockDim.x) {
+            T kval = __ldg(&k_ptr[kd]);
+            k_sq += sq_acc(kval);
+        }
     }
     const float k_inv_norm = block_l2_inv_norm(k_sq, smem);
 
@@ -255,16 +263,18 @@ __global__ void recurrent_delta_rule_kernel(T*       v_out,
     __syncthreads();
 
     // --- Step 2: delta rule update (each thread owns a slice of vd) ---
+    // Pre-load k values into registers to avoid repeated global reads
+    // key_head_dim is typically 128 for Qwen3.5 linear attention
     for (int vd = threadIdx.x; vd < value_head_dim; vd += blockDim.x) {
         float kv_mem = 0.f;
         for (int kd = 0; kd < key_head_dim; ++kd)
-            kv_mem += (float)s_ptr[kd * value_head_dim + vd] * ((float)k_ptr[kd] * k_inv_norm);
+            kv_mem += (float)s_ptr[kd * value_head_dim + vd] * ((float)__ldg(&k_ptr[kd]) * k_inv_norm);
 
-        const float delta = ((float)v_ptr[vd] - kv_mem) * beta_val;
+        const float delta = ((float)__ldg(&v_ptr[vd]) - kv_mem) * beta_val;
 
         for (int kd = 0; kd < key_head_dim; ++kd)
             s_ptr[kd * value_head_dim + vd] =
-                static_cast<T>((float)s_ptr[kd * value_head_dim + vd] + (float)k_ptr[kd] * k_inv_norm * delta);
+                static_cast<T>((float)s_ptr[kd * value_head_dim + vd] + (float)__ldg(&k_ptr[kd]) * k_inv_norm * delta);
     }
     __syncthreads();
 
@@ -273,7 +283,7 @@ __global__ void recurrent_delta_rule_kernel(T*       v_out,
     for (int vd = threadIdx.x; vd < value_head_dim; vd += blockDim.x) {
         float o = 0.f;
         for (int kd = 0; kd < key_head_dim; ++kd)
-            o += (float)s_ptr[kd * value_head_dim + vd] * ((float)q_ptr[kd] * q_inv_norm);
+            o += (float)s_ptr[kd * value_head_dim + vd] * ((float)__ldg(&q_ptr[kd]) * q_inv_norm);
         o_ptr[vd] = static_cast<T>(o * scale);
     }
 }
@@ -295,10 +305,163 @@ void invokeRecurrentGatedDeltaRule(T*           v_out,
     const int num_blocks = batch_size * num_v_heads;
     if (num_blocks == 0)
         return;
-    const int    threads = std::min(256, value_head_dim);
+    // Use at least 128 threads to better saturate SM70's 4 warp schedulers per SM
+    // but cap at value_head_dim to avoid wasted threads
+    const int    threads = std::max(128, std::min(256, value_head_dim));
     const size_t smem_sz = ((threads + 31) / 32) * sizeof(float);
     recurrent_delta_rule_kernel<<<num_blocks, threads, smem_sz, stream>>>(
         v_out, qkv_in, beta, g, recurrent_state, num_v_heads, num_k_heads, key_head_dim, value_head_dim, k_dim_total);
+}
+
+// =============================================================================
+// Fused Recurrent Gated Delta Rule (decode, seq_len == 1)
+//
+// Identical to recurrent_delta_rule_kernel but computes beta/g inline from
+// raw b/a logits + A_log/dt_bias, eliminating the separate invokeComputeBetaG
+// kernel and two cudaMemcpy2DAsync calls.
+// =============================================================================
+template<typename T>
+__global__ void recurrent_delta_rule_fused_kernel(T*       v_out,
+                                                   const T* qkv_in,
+                                                   const T* b_raw,      // strided b logits
+                                                   const T* a_raw,      // strided a logits
+                                                   const T* A_log,      // per-head (num_v_heads)
+                                                   const T* dt_bias,    // per-head (num_v_heads)
+                                                   T*       state,
+                                                   int      num_v_heads,
+                                                   int      num_k_heads,
+                                                   int      key_head_dim,
+                                                   int      value_head_dim,
+                                                   int      k_dim_total,
+                                                   int      ba_stride)   // stride between tokens in b/a
+{
+    const int bh    = blockIdx.x;
+    const int b     = bh / num_v_heads;
+    const int h     = bh % num_v_heads;
+    const int ratio = num_v_heads / num_k_heads;
+    const int kh    = h / ratio;
+
+    const int state_size = key_head_dim * value_head_dim;
+    const int conv_dim   = 2 * k_dim_total + num_v_heads * value_head_dim;
+
+    const T* q_ptr = qkv_in + b * conv_dim + kh * key_head_dim;
+    const T* k_ptr = qkv_in + b * conv_dim + k_dim_total + kh * key_head_dim;
+    const T* v_ptr = qkv_in + b * conv_dim + 2 * k_dim_total + h * value_head_dim;
+    T*       s_ptr = state + (b * num_v_heads + h) * state_size;
+    T*       o_ptr = v_out + (b * num_v_heads + h) * value_head_dim;
+
+    // --- Fused beta/g computation from raw logits ---
+    // Matches invokeComputeBetaG exactly (with fp16 roundtrip to match precision)
+    float beta_val, decay;
+    {
+        float b_val     = static_cast<float>(b_raw[b * ba_stride + h]);
+        float a_val     = static_cast<float>(a_raw[b * ba_stride + h]);
+        float A_log_val = static_cast<float>(A_log[h]);
+        float dt_val    = static_cast<float>(dt_bias[h]);
+
+        float beta_f = 1.0f / (1.0f + expf(-b_val));
+        float sum    = a_val + dt_val;
+        float sp     = sum > 20.0f ? sum : logf(1.0f + expf(sum));
+        float g_val  = -expf(A_log_val) * sp;
+
+        // Round through fp16 to match the precision of the non-fused path
+        beta_val = static_cast<float>(static_cast<T>(beta_f));
+        decay    = expf(static_cast<float>(static_cast<T>(g_val)));
+    }
+
+    // Shared memory for block reductions (one slot per warp)
+    __shared__ float smem[32];
+
+    // --- In-kernel L2-normalize Q (Vectorized with __ldg for read-only cache) ---
+    float q_sq = 0.f;
+    if (key_head_dim % 2 == 0) {
+        using T2           = typename std::conditional<std::is_same<T, half>::value, half2, nv_bfloat162>::type;
+        const T2* q_ptr_v2 = reinterpret_cast<const T2*>(q_ptr);
+        for (int kd = threadIdx.x; kd < key_head_dim / 2; kd += blockDim.x) {
+            T2 qval = __ldg(&q_ptr_v2[kd]);
+            q_sq += sq_acc(qval);
+        }
+    }
+    else {
+        for (int kd = threadIdx.x; kd < key_head_dim; kd += blockDim.x) {
+            T qval = __ldg(&q_ptr[kd]);
+            q_sq += sq_acc(qval);
+        }
+    }
+    const float q_inv_norm = block_l2_inv_norm(q_sq, smem);
+
+    // --- In-kernel L2-normalize K (Vectorized with __ldg) ---
+    float k_sq = 0.f;
+    if (key_head_dim % 2 == 0) {
+        using T2           = typename std::conditional<std::is_same<T, half>::value, half2, nv_bfloat162>::type;
+        const T2* k_ptr_v2 = reinterpret_cast<const T2*>(k_ptr);
+        for (int kd = threadIdx.x; kd < key_head_dim / 2; kd += blockDim.x) {
+            T2 kval = __ldg(&k_ptr_v2[kd]);
+            k_sq += sq_acc(kval);
+        }
+    }
+    else {
+        for (int kd = threadIdx.x; kd < key_head_dim; kd += blockDim.x) {
+            T kval = __ldg(&k_ptr[kd]);
+            k_sq += sq_acc(kval);
+        }
+    }
+    const float k_inv_norm = block_l2_inv_norm(k_sq, smem);
+
+    // --- Step 1: S *= decay ---
+    for (int idx = threadIdx.x; idx < state_size; idx += blockDim.x)
+        s_ptr[idx] = static_cast<T>((float)s_ptr[idx] * decay);
+    __syncthreads();
+
+    // --- Step 2: delta rule update ---
+    for (int vd = threadIdx.x; vd < value_head_dim; vd += blockDim.x) {
+        float kv_mem = 0.f;
+        for (int kd = 0; kd < key_head_dim; ++kd)
+            kv_mem += (float)s_ptr[kd * value_head_dim + vd] * ((float)__ldg(&k_ptr[kd]) * k_inv_norm);
+
+        const float delta = ((float)__ldg(&v_ptr[vd]) - kv_mem) * beta_val;
+
+        for (int kd = 0; kd < key_head_dim; ++kd)
+            s_ptr[kd * value_head_dim + vd] =
+                static_cast<T>((float)s_ptr[kd * value_head_dim + vd] + (float)__ldg(&k_ptr[kd]) * k_inv_norm * delta);
+    }
+    __syncthreads();
+
+    // --- Step 3: output = (S^T @ q) * scale ---
+    const float scale = rsqrtf((float)key_head_dim);
+    for (int vd = threadIdx.x; vd < value_head_dim; vd += blockDim.x) {
+        float o = 0.f;
+        for (int kd = 0; kd < key_head_dim; ++kd)
+            o += (float)s_ptr[kd * value_head_dim + vd] * ((float)__ldg(&q_ptr[kd]) * q_inv_norm);
+        o_ptr[vd] = static_cast<T>(o * scale);
+    }
+}
+
+template<typename T>
+void invokeRecurrentGatedDeltaRuleFused(T*           v_out,
+                                         const T*     qkv_in,
+                                         const T*     b_raw,
+                                         const T*     a_raw,
+                                         const T*     A_log,
+                                         const T*     dt_bias,
+                                         T*           recurrent_state,
+                                         int          batch_size,
+                                         int          num_v_heads,
+                                         int          num_k_heads,
+                                         int          key_head_dim,
+                                         int          value_head_dim,
+                                         int          k_dim_total,
+                                         int          ba_stride,
+                                         cudaStream_t stream)
+{
+    const int num_blocks = batch_size * num_v_heads;
+    if (num_blocks == 0)
+        return;
+    const int    threads = std::max(128, std::min(256, value_head_dim));
+    const size_t smem_sz = ((threads + 31) / 32) * sizeof(float);
+    recurrent_delta_rule_fused_kernel<<<num_blocks, threads, smem_sz, stream>>>(
+        v_out, qkv_in, b_raw, a_raw, A_log, dt_bias, recurrent_state,
+        num_v_heads, num_k_heads, key_head_dim, value_head_dim, k_dim_total, ba_stride);
 }
 
 // =============================================================================
@@ -569,7 +732,8 @@ __global__ void rms_norm_gated_kernel(
     for (int d = threadIdx.x; d < head_dim; d += blockDim.x) {
         float h_val  = static_cast<float>(h[d]) * inv_rms * static_cast<float>(weight[d]);
         float g_val  = static_cast<float>(g[d]);
-        float silu_g = g_val / (1.0f + expf(-g_val));
+        // SiLU: x * sigmoid(x) — use __fdividef for SM70 fast-math path
+        float silu_g = g_val * __fdividef(1.0f, 1.0f + expf(-g_val));
         h[d]         = static_cast<T>(h_val * silu_g);
     }
 }
@@ -727,6 +891,8 @@ void invokeSiLU(T* data, int n, cudaStream_t stream)
     template void invokeFusedConv1dSiLU(T*, const T*, const T*, const T*, T*, int, int, int, int, int, cudaStream_t);  \
     template void invokeRecurrentGatedDeltaRule(                                                                       \
         T*, const T*, const T*, const T*, T*, int, int, int, int, int, int, cudaStream_t);                             \
+    template void invokeRecurrentGatedDeltaRuleFused(                                                                  \
+        T*, const T*, const T*, const T*, const T*, const T*, T*, int, int, int, int, int, int, int, cudaStream_t);    \
     template void invokeGatedDeltaRulePrefill(                                                                         \
         T*, const T*, const T*, const T*, T*, int, int, int, int, int, int, cudaStream_t);                             \
     template void invokeComputeBetaG(T*, T*, const T*, const T*, const T*, const T*, int, int, cudaStream_t);          \

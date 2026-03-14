@@ -112,7 +112,15 @@ std::array<const LayoutConverter*, 2> GetConverters(DataType data_type,
             // clang-format on
         }
         else {
-            return {};  //  trivial case: dense floating point
+            // Non-grouped fp16: still needs MMA-layout packing for custom GEMM kernels.
+            // Without this, k_desc.pack stays 0 and custom sm70/sm75/sm80 kernels
+            // are rejected by is_feasible() → falls back to cuBLAS.
+            // clang-format off
+            if (sm >= 80) return {W(sm8_, kRow, s16816h | B | _1), {}};
+            if (sm == 75) return {W(sm75, kRow, s16816h | B | _1), {}};
+            if (sm >= 70) return {W(sm70, kRow,   s884h | B | _1), {}};
+            // clang-format on
+            return {};  // sm < 70: no custom kernels
         }
     }
 

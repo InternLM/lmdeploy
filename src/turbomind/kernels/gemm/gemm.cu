@@ -58,6 +58,10 @@ struct Gemm::Impl {
         if (std::getenv("TM_GEMM_WARN_CACHE_MISS")) {
             warn_cache_miss_ = true;
         }
+        // SM70/SM75 benefit from higher split-K (more SMs, fewer KV heads per group)
+        if (arch_ < 800) {
+            tuning_.max_splits = std::max(tuning_.max_splits, 24);
+        }
         measurer_.emplace(CreateStoppingCriterion(tuning_.min_iter, tuning_.max_iter, tuning_.max_time));
     }
 
@@ -139,22 +143,18 @@ struct Gemm::Impl {
         std::vector<float> mio_ratio;
         std::vector<float> mma_ratio;
         std::vector<float> avg_ratio;
+        // GEMV (M<=8) is bandwidth-bound on all architectures;
+        // weight MIO higher in dispatch ranking to prefer bandwidth-efficient kernels.
+        const float mio_w = (ctx.desc().m <= 8) ? 0.85f : 0.5f;
         for (const auto& [_, s] : specs) {
             auto& [mio, mma] = s.estimated;
             mio_ratio.push_back((float)mio / mio_max);
             mma_ratio.push_back((float)mma / mma_max);
-            avg_ratio.push_back(.5 * (mio_ratio.back() + mma_ratio.back()));
+            avg_ratio.push_back(mio_w * mio_ratio.back() + (1.f - mio_w) * mma_ratio.back());
         }
         auto idxs = ArgSort(specs.size(), [&](int i, int j) {  //
             return avg_ratio[i] < avg_ratio[j];
         });
-
-        // for (const auto& i : idxs) {
-        //     auto [cid, s, m] = metrics[i];
-        //     std::cout << clusters[cid].front().kernel->name() << " s" << s << " " << avg_ratio[i] << " " <<
-        //     mio_ratio[i]
-        //               << " " << mma_ratio[i] << " " << m.mio_cost << " " << m.mma_cost << "\n";
-        // }
 
         top_k = top_k > 0 ? std::min<int>(idxs.size(), top_k) : (int)idxs.size();
         std::vector<LaunchSpec> ret;
@@ -192,14 +192,6 @@ struct Gemm::Impl {
         }
 
         specs = Sampler{*measurer_, tuning_.clusters}.Run(specs, launch_func, st);
-
-        // for (const auto& s : specs) {
-        //     std::cout << s.kernel->name()          //
-        //               << " swizzle=" << s.swizzle  //
-        //               << ", splits=" << s.splits   //
-        //               << ", measured=" << s.measured << "ms\n";
-        //     break;
-        // }
 
         if (!specs.empty()) {
             cache_.Insert(ctx.desc(), specs.front());

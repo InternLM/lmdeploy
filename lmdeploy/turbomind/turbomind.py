@@ -2,6 +2,7 @@
 
 import asyncio
 import copy
+import gc
 import json
 import math
 import os
@@ -170,6 +171,10 @@ class TurboMind:
         if not _engine_config.empty_init:
             self._load_weights()
             self._process_weights()
+            # Release PyTorch cached GPU memory so cudaMemGetInfo sees
+            # accurate free memory when sizing the KV cache.
+            gc.collect()
+            torch.cuda.empty_cache()
             self._create_engine()
 
         self.session_len = self.config.session_len
