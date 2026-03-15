@@ -266,7 +266,8 @@ class SubCliServe:
                                                    async_=args.async_,
                                                    communicator=args.communicator,
                                                    enable_metrics=not args.disable_metrics,
-                                                   hf_overrides=args.hf_overrides)
+                                                   hf_overrides=args.hf_overrides,
+                                                   disable_vision_encoder=args.disable_vision_encoder)
         chat_template_config = get_chat_template(args.chat_template, args.model_path)
         speculative_config = get_speculative_config(args)
 

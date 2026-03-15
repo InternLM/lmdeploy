@@ -247,6 +247,8 @@ class TurbomindEngineConfig:
             it to True if you want to update weights after create the pipeline
         hf_overrides: Huggingface overrides for the model.
             It can be used to override the default config of the model
+        disable_vision_encoder: Whether to disable loading vision
+            encoder. Default to False.
         enable_metrics: enable metrics system
     """
 
@@ -285,6 +287,7 @@ class TurbomindEngineConfig:
     empty_init: bool = False
     communicator: str = 'nccl'
     hf_overrides: Optional[Dict[str, Any]] = None
+    disable_vision_encoder: bool = False
     enable_metrics: bool = True
 
     def __post_init__(self):

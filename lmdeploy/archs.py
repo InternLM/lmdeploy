@@ -129,7 +129,7 @@ def check_vl_llm(config: dict) -> bool:
     return False
 
 
-def get_task(model_path: str):
+def get_task(model_path: str, backend_config: PytorchEngineConfig | TurbomindEngineConfig | None = None):
     """Get pipeline type and pipeline class from model config."""
     from lmdeploy.serve.core import AsyncEngine
 
@@ -138,6 +138,8 @@ def get_task(model_path: str):
         return 'llm', AsyncEngine
     _, config = get_model_arch(model_path)
     if check_vl_llm(config.to_dict()):
+        if backend_config and backend_config.disable_vision_encoder:
+            return 'llm', AsyncEngine
         from lmdeploy.serve.core import VLAsyncEngine
         return 'vlm', VLAsyncEngine
 

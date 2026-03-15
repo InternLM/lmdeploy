@@ -24,9 +24,13 @@ class VLAsyncEngine(AsyncEngine):
 
         if backend == 'pytorch':
             try_import_deeplink(backend_config.device_type)
-        if backend_config and backend_config.enable_prefix_caching:
-            backend_config.enable_prefix_caching = False
-            logger.warning('Prefix caching is disabled since LMDeploy hasn\'t support in on VL models yet')
+        if backend_config and backend_config.enable_prefix_caching and not backend_config.disable_vision_encoder:
+            from lmdeploy.archs import get_model_arch
+            arch, _ = get_model_arch(model_path)
+            _prefix_cache_archs = {'Qwen3_5ForConditionalGeneration', 'Qwen3_5MoeForConditionalGeneration'}
+            if arch not in _prefix_cache_archs:
+                backend_config.enable_prefix_caching = False
+                logger.warning('Prefix caching is disabled for VL models (not yet verified for this architecture)')
         self.vl_encoder = ImageEncoder(model_path, backend, vision_config, backend_config=backend_config)
         super().__init__(model_path, backend=backend, backend_config=backend_config, **kwargs)
         # Update prompt_processor to support multimodal processing
