@@ -214,9 +214,9 @@ def get_tm_model(model_path,
         # Compatible to awq models that are quantized by lmdeploy (<=v0.3.0)
         if not group_size:
             group_size = 128
-        assert group_size == 128, (f'model format is "{engine_config.model_format}" '
-                                   f'but group_size is {group_size}. Currently, only 128 '
-                                   'is supported')
+        # assert group_size == 128, (f'model format is "{engine_config.model_format}" '
+        #                            f'but group_size is {group_size}. Currently, only 128 '
+        #                            'is supported')
 
     input_model_name = get_input_model_registered_name(model_path, engine_config.model_format)
 
@@ -247,10 +247,8 @@ def get_tm_model(model_path,
         first_full_attn = next((i for i, t in enumerate(layer_types) if t == 0), 0)
         first_linear_attn = next((i for i, t in enumerate(layer_types) if t == 1), 0)
         type_coverage = max(first_full_attn, first_linear_attn) + 2
-        tm_cfg.model_config.tune_layer_num = max(
-            tm_cfg.model_config.tune_layer_num,
-            type_coverage,
-            min(uql) + 2 if uql else 2)
+        tm_cfg.model_config.tune_layer_num = max(tm_cfg.model_config.tune_layer_num, type_coverage,
+                                                 min(uql) + 2 if uql else 2)
 
     tm_cfg.model_config.chat_template = chat_template_name
     tm_cfg.model_config.model_name = model_name

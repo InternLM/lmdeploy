@@ -305,8 +305,8 @@ void invokeRecurrentGatedDeltaRule(T*           v_out,
     const int num_blocks = batch_size * num_v_heads;
     if (num_blocks == 0)
         return;
-    // Use at least 128 threads to better saturate SM70's 4 warp schedulers per SM
-    // but cap at value_head_dim to avoid wasted threads
+    // Use at least 128 threads to better saturate SM70's 4 warp schedulers per SM,
+    // clamped to a maximum of 256 threads; this may exceed value_head_dim when it is < 128.
     const int    threads = std::max(128, std::min(256, value_head_dim));
     const size_t smem_sz = ((threads + 31) / 32) * sizeof(float);
     recurrent_delta_rule_kernel<<<num_blocks, threads, smem_sz, stream>>>(
@@ -322,18 +322,18 @@ void invokeRecurrentGatedDeltaRule(T*           v_out,
 // =============================================================================
 template<typename T>
 __global__ void recurrent_delta_rule_fused_kernel(T*       v_out,
-                                                   const T* qkv_in,
-                                                   const T* b_raw,      // strided b logits
-                                                   const T* a_raw,      // strided a logits
-                                                   const T* A_log,      // per-head (num_v_heads)
-                                                   const T* dt_bias,    // per-head (num_v_heads)
-                                                   T*       state,
-                                                   int      num_v_heads,
-                                                   int      num_k_heads,
-                                                   int      key_head_dim,
-                                                   int      value_head_dim,
-                                                   int      k_dim_total,
-                                                   int      ba_stride)   // stride between tokens in b/a
+                                                  const T* qkv_in,
+                                                  const T* b_raw,    // strided b logits
+                                                  const T* a_raw,    // strided a logits
+                                                  const T* A_log,    // per-head (num_v_heads)
+                                                  const T* dt_bias,  // per-head (num_v_heads)
+                                                  T*       state,
+                                                  int      num_v_heads,
+                                                  int      num_k_heads,
+                                                  int      key_head_dim,
+                                                  int      value_head_dim,
+                                                  int      k_dim_total,
+                                                  int      ba_stride)  // stride between tokens in b/a
 {
     const int bh    = blockIdx.x;
     const int b     = bh / num_v_heads;
@@ -439,29 +439,39 @@ __global__ void recurrent_delta_rule_fused_kernel(T*       v_out,
 
 template<typename T>
 void invokeRecurrentGatedDeltaRuleFused(T*           v_out,
-                                         const T*     qkv_in,
-                                         const T*     b_raw,
-                                         const T*     a_raw,
-                                         const T*     A_log,
-                                         const T*     dt_bias,
-                                         T*           recurrent_state,
-                                         int          batch_size,
-                                         int          num_v_heads,
-                                         int          num_k_heads,
-                                         int          key_head_dim,
-                                         int          value_head_dim,
-                                         int          k_dim_total,
-                                         int          ba_stride,
-                                         cudaStream_t stream)
+                                        const T*     qkv_in,
+                                        const T*     b_raw,
+                                        const T*     a_raw,
+                                        const T*     A_log,
+                                        const T*     dt_bias,
+                                        T*           recurrent_state,
+                                        int          batch_size,
+                                        int          num_v_heads,
+                                        int          num_k_heads,
+                                        int          key_head_dim,
+                                        int          value_head_dim,
+                                        int          k_dim_total,
+                                        int          ba_stride,
+                                        cudaStream_t stream)
 {
     const int num_blocks = batch_size * num_v_heads;
     if (num_blocks == 0)
         return;
     const int    threads = std::max(128, std::min(256, value_head_dim));
     const size_t smem_sz = ((threads + 31) / 32) * sizeof(float);
-    recurrent_delta_rule_fused_kernel<<<num_blocks, threads, smem_sz, stream>>>(
-        v_out, qkv_in, b_raw, a_raw, A_log, dt_bias, recurrent_state,
-        num_v_heads, num_k_heads, key_head_dim, value_head_dim, k_dim_total, ba_stride);
+    recurrent_delta_rule_fused_kernel<<<num_blocks, threads, smem_sz, stream>>>(v_out,
+                                                                                qkv_in,
+                                                                                b_raw,
+                                                                                a_raw,
+                                                                                A_log,
+                                                                                dt_bias,
+                                                                                recurrent_state,
+                                                                                num_v_heads,
+                                                                                num_k_heads,
+                                                                                key_head_dim,
+                                                                                value_head_dim,
+                                                                                k_dim_total,
+                                                                                ba_stride);
 }
 
 // =============================================================================
@@ -730,8 +740,8 @@ __global__ void rms_norm_gated_kernel(
 
     float inv_rms = rsqrtf(sum_sq / (float)head_dim + eps);
     for (int d = threadIdx.x; d < head_dim; d += blockDim.x) {
-        float h_val  = static_cast<float>(h[d]) * inv_rms * static_cast<float>(weight[d]);
-        float g_val  = static_cast<float>(g[d]);
+        float h_val = static_cast<float>(h[d]) * inv_rms * static_cast<float>(weight[d]);
+        float g_val = static_cast<float>(g[d]);
         // SiLU: x * sigmoid(x) — use __fdividef for SM70 fast-math path
         float silu_g = g_val * __fdividef(1.0f, 1.0f + expf(-g_val));
         h[d]         = static_cast<T>(h_val * silu_g);

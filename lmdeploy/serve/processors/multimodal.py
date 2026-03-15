@@ -89,9 +89,8 @@ class MultimodalProcessor:
     def _parse_tool_calls_arguments(msg: Dict) -> Dict:
         """Parse tool_calls function arguments from JSON string to dict.
 
-        The OpenAI API spec sends function.arguments as a JSON string,
-        but some chat templates (e.g. Qwen3.5) use Jinja2's ``|items``
-        filter which requires a dict.
+        The OpenAI API spec sends function.arguments as a JSON string, but some chat templates (e.g. Qwen3.5) use
+        Jinja2's ``|items`` filter which requires a dict.
         """
         tool_calls = msg.get('tool_calls')
         if not isinstance(tool_calls, list):
@@ -105,9 +104,11 @@ class MultimodalProcessor:
                 args = func.get('arguments')
                 if isinstance(args, str):
                     try:
-                        func = dict(func)
-                        func['arguments'] = json.loads(args)
-                        tc['function'] = func
+                        parsed_args = json.loads(args)
+                        if isinstance(parsed_args, dict):
+                            func = dict(func)
+                            func['arguments'] = parsed_args
+                            tc['function'] = func
                     except (json.JSONDecodeError, TypeError):
                         pass
             parsed.append(tc)

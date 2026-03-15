@@ -59,7 +59,10 @@ __inline__ __device__ float tanh_opt(float x)
     // Simplified: x * (1 + x²/27) / (1 + x²/3) — rearranged for fewer ops
     float num = x * (27.0f + x2);
     float den = 27.0f + 9.0f * x2;
-    return __fdividef(num, den);
+    float r   = __fdividef(num, den);
+    // Clamp to the valid tanh range to avoid slight Padé overshoot.
+    r = fminf(1.0f, fmaxf(-1.0f, r));
+    return r;
 #endif
 }
 
