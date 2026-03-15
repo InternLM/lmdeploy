@@ -156,8 +156,8 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
         Tensor g_tensor{};
         if (has_prefill) {
             const int bg_total = token_num * num_v_heads_;
-            beta     = Tensor{{token_num, num_v_heads_}, dtype, device};
-            g_tensor = Tensor{{token_num, num_v_heads_}, dtype, device};
+            beta               = Tensor{{token_num, num_v_heads_}, dtype, device};
+            g_tensor           = Tensor{{token_num, num_v_heads_}, dtype, device};
 
             Tensor b_contig{{token_num, v_heads_tp}, dtype, device};
             Tensor a_contig{{token_num, v_heads_tp}, dtype, device};

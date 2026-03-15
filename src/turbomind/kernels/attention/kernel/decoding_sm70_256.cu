@@ -19,19 +19,17 @@ constexpr int kHeadDim = 256;
 
 // ── fp16 KV: CTA_S=64, 2 stages ──────────────────────────────
 template<class T, int kH>
-using KT =
-    AttentionUniversal<arch::Sm70,
-                       Mainloop<arch::Sm70, Impl<MMA_SIMT, T, T, kH, 1, 64, kH, 1, 16, kHeadDim, 2>>,
-                       GetBlockIterFactory<T, T, 64, kHeadDim>,
-                       DecodingCtaMap>;
+using KT = AttentionUniversal<arch::Sm70,
+                              Mainloop<arch::Sm70, Impl<MMA_SIMT, T, T, kH, 1, 64, kH, 1, 16, kHeadDim, 2>>,
+                              GetBlockIterFactory<T, T, 64, kHeadDim>,
+                              DecodingCtaMap>;
 
 // ── Quantized KV: CTA_S=64, 3 stages ─────────────────────────
 template<class T, class Tkv, int kH>
-using KT_quant =
-    AttentionUniversal<arch::Sm70,
-                       Mainloop<arch::Sm70, Impl<MMA_SIMT, T, Tkv, kH, 1, 64, kH, 1, 16, kHeadDim, 3>>,
-                       GetBlockIterFactory<T, Tkv, 64, kHeadDim>,
-                       DecodingCtaMap>;
+using KT_quant = AttentionUniversal<arch::Sm70,
+                                    Mainloop<arch::Sm70, Impl<MMA_SIMT, T, Tkv, kH, 1, 64, kH, 1, 16, kHeadDim, 3>>,
+                                    GetBlockIterFactory<T, Tkv, 64, kHeadDim>,
+                                    DecodingCtaMap>;
 
 namespace {
 Registrar reg([](Collector& c) {

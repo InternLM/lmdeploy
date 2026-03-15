@@ -13,10 +13,10 @@ namespace turbomind::attention {
 constexpr int kHeadDim = 256;
 
 // Default config: CTA_Q=64 for throughput
-constexpr int kCTA_Q   = 64;
-constexpr int kCTA_S   = 64;
-constexpr int kWARP_Q  = 16;
-constexpr int kStages  = 2;
+constexpr int kCTA_Q  = 64;
+constexpr int kCTA_S  = 64;
+constexpr int kWARP_Q = 16;
+constexpr int kStages = 2;
 
 template<class T>
 using KT = AttentionUniversal<
@@ -27,8 +27,8 @@ using KT = AttentionUniversal<
 
 // Higher-occupancy config: CTA_Q=32 halves Q shared memory, allowing more CTAs/SM
 // Better for latency-sensitive prefill with HeadDim=256 on V100 (96KB smem)
-constexpr int kCTA_Q2   = 32;
-constexpr int kWARP_Q2  = 16;
+constexpr int kCTA_Q2  = 32;
+constexpr int kWARP_Q2 = 16;
 
 template<class T>
 using KT2 = AttentionUniversal<

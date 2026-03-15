@@ -50,7 +50,7 @@ bool invokeDecoding(const typename Kernel::ParamType& params, int sm_count, int 
     // SM70 SIMT kernels have higher per-wave overhead (CTA scheduling + reduction)
     // compared to SM80+ tensor-core kernels. Use a larger beta to penalize over-splitting.
     const float split_beta = (params.arch < 800) ? 0.05f : 1e-3f;
-    const int split_cnt = GetSplitCount(max_split_count, grid_size, max_active_ctas, sm_count, 4, 1.f, split_beta);
+    const int   split_cnt  = GetSplitCount(max_split_count, grid_size, max_active_ctas, sm_count, 4, 1.f, split_beta);
 
     grid = CtaMap::get_grid_shape(params.num_kv_heads, params.batch_size, split_cnt, cta_per_q_group);
 

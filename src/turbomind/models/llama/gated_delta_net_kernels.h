@@ -71,20 +71,20 @@ void invokeRecurrentGatedDeltaRule(T*           v_out,
 // b_raw/a_raw are strided with ba_stride columns between tokens.
 template<typename T>
 void invokeRecurrentGatedDeltaRuleFused(T*           v_out,
-                                         const T*     qkv_in,
-                                         const T*     b_raw,
-                                         const T*     a_raw,
-                                         const T*     A_log,
-                                         const T*     dt_bias,
-                                         T*           recurrent_state,
-                                         int          batch_size,
-                                         int          num_v_heads,
-                                         int          num_k_heads,
-                                         int          key_head_dim,
-                                         int          value_head_dim,
-                                         int          k_dim_total,
-                                         int          ba_stride,
-                                         cudaStream_t stream);
+                                        const T*     qkv_in,
+                                        const T*     b_raw,
+                                        const T*     a_raw,
+                                        const T*     A_log,
+                                        const T*     dt_bias,
+                                        T*           recurrent_state,
+                                        int          batch_size,
+                                        int          num_v_heads,
+                                        int          num_k_heads,
+                                        int          key_head_dim,
+                                        int          value_head_dim,
+                                        int          k_dim_total,
+                                        int          ba_stride,
+                                        cudaStream_t stream);
 
 // =============================================================================
 // Gated Delta Rule — Single-launch Prefill (seq_len > 1)
