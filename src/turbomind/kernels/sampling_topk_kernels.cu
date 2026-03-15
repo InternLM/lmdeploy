@@ -30,6 +30,7 @@
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
 
 #include "src/turbomind/utils/constant.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
@@ -236,7 +237,8 @@ void invokeTopKSortFilter(TopKSortFilterParams& params, cudaStream_t stream)
 {
     const int max_top_k             = params.max_top_k;
     const int batch_size            = params.batch_size;
-    const int max_block_per_beam    = 8;
+    const int sm_version            = getSMVersion();
+    const int max_block_per_beam    = (sm_version == 70) ? 16 : 8;
     int       topk_tmp_ids_buf_size = batch_size * max_top_k * max_block_per_beam;  // type int
     int       topk_tmp_val_buf_size = batch_size * max_top_k * max_block_per_beam;  // type T
 
@@ -248,20 +250,39 @@ void invokeTopKSortFilter(TopKSortFilterParams& params, cudaStream_t stream)
     auto topk_tmp_ids_buf = topk_tmp_ids.data();
     auto topk_tmp_val_buf = topk_tmp_val.data();
 
-    if (max_top_k <= 16) {
-        CASE_K(16, 128, 128, 8);
-    }
-    else if (max_top_k <= 32) {
-        CASE_K(32, 256, 128, 8);
-    }
-    else if (max_top_k <= 64) {
-        CASE_K(64, 256, 256, 8);
-    }
-    else if (max_top_k <= 1024) {
-        CASE_K(1024, 256, 256, 8);
+    if (sm_version == 70) {
+        if (max_top_k <= 16) {
+            CASE_K(16, 128, 128, 16);
+        }
+        else if (max_top_k <= 32) {
+            CASE_K(32, 256, 128, 16);
+        }
+        else if (max_top_k <= 64) {
+            CASE_K(64, 256, 256, 16);
+        }
+        else if (max_top_k <= 1024) {
+            CASE_K(1024, 256, 256, 16);
+        }
+        else {
+            throw std::domain_error(fmtstr("top-k kernel supports 1<=k<=1024 but got k=%d", max_top_k));
+        }
     }
     else {
-        throw std::domain_error(fmtstr("top-k kernel supports 1<=k<=1024 but got k=%d", max_top_k));
+        if (max_top_k <= 16) {
+            CASE_K(16, 128, 128, 8);
+        }
+        else if (max_top_k <= 32) {
+            CASE_K(32, 256, 128, 8);
+        }
+        else if (max_top_k <= 64) {
+            CASE_K(64, 256, 256, 8);
+        }
+        else if (max_top_k <= 1024) {
+            CASE_K(1024, 256, 256, 8);
+        }
+        else {
+            throw std::domain_error(fmtstr("top-k kernel supports 1<=k<=1024 but got k=%d", max_top_k));
+        }
     }
 }
 
