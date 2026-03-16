@@ -182,6 +182,7 @@ jobs:
           rm -rf ${{env.DEEPSEEK_VL}}/build
       - name: Check env
         run: |
+          pip install transformers==4.57.6
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
