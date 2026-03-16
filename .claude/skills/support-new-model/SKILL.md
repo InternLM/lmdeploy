@@ -270,17 +270,6 @@ supported_archs = set([
 
 ______________________________________________________________________
 
-## Reference Implementations
-
-| Type                   | Model      | Key Files                                                                                                      |
-| ---------------------- | ---------- | -------------------------------------------------------------------------------------------------------------- |
-| LLM (dense)            | Qwen3      | `pytorch/models/qwen3.py`                                                                                      |
-| LLM (MoE)              | Qwen3-MoE  | `pytorch/models/qwen3_moe.py`                                                                                  |
-| VLM                    | Qwen3-VL   | `pytorch/models/qwen3.py` + `vl/model/qwen3.py`                                                                |
-| VLM (composite config) | Qwen3-Omni | `pytorch/models/qwen3_omni_moe_thinker.py` + `pytorch/configurations/qwen3_omni.py` + `vl/model/qwen3_omni.py` |
-
-______________________________________________________________________
-
 ## Checklist
 
 **LLM (PyTorch backend):**

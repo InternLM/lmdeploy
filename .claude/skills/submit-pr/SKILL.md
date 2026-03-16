@@ -7,6 +7,8 @@ description: Submit a GitHub pull request for LMDeploy.
 
 ## 1. Create branch (off main)
 
+Skip this step if already on a feature branch.
+
 ```bash
 git checkout main && git pull
 git checkout -b <type>/<short-description>   # e.g. feat/qwen3-omni
