@@ -1,11 +1,3 @@
-"""Shared definitions for tool-call and reasoning tests.
-
-This module centralises tool schemas, message templates, connection settings,
-assertion helpers and stream-consumption helpers so they can be imported by
-both ``test_restful_tool_calls.py`` and ``test_restful_reasoning.py`` (and
-future test modules) without duplication.
-"""
-
 import json
 import os
 import re
@@ -13,8 +5,9 @@ import re
 from openai import OpenAI
 from utils.constant import DEFAULT_PORT
 
-BASE_HTTP_URL = os.environ.get('LMDEPLOY_BASE_URL', 'http://localhost')
-BASE_URL = os.environ.get('LMDEPLOY_API_URL', ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)]))
+BASE_HTTP_URL = f"http://{os.getenv('MASTER_ADDR', 'localhost')}"
+PORT = os.getenv('LMDEPLOY_PORT', str(DEFAULT_PORT))
+BASE_URL = f'{BASE_HTTP_URL}:{PORT}'
 
 #: Supported reasoning parser names (from lmdeploy ReasoningParserManager)
 REASONING_PARSER_NAMES = ['deepseek-r1', 'qwen-qwq', 'intern-s1']
@@ -294,7 +287,11 @@ def make_logged_client(log_file):
     _original_create = client.chat.completions.create
 
     def _logged_create(*args, **kwargs):
-        kwargs.setdefault('extra_body', dict(spaces_between_special_tokens=False))
+        extra_body = kwargs.get('extra_body')
+        if extra_body is None:
+            kwargs['extra_body'] = {'spaces_between_special_tokens': False}
+        elif isinstance(extra_body, dict) and 'spaces_between_special_tokens' not in extra_body:
+            extra_body['spaces_between_special_tokens'] = False
         is_stream = kwargs.get('stream', False)
         result = _original_create(*args, **kwargs)
         if is_stream:
@@ -353,6 +350,8 @@ def collect_stream_tool_call(stream):
     }
 
     for chunk in stream:
+        if not chunk.choices:
+            continue
         choice = chunk.choices[0]
 
         if choice.finish_reason:
@@ -385,6 +384,8 @@ def collect_stream_parallel_tool_calls(stream):
     finish_reason_count = 0
 
     for chunk in stream:
+        if not chunk.choices:
+            continue
         if chunk.choices[0].finish_reason:
             finish_reason_count += 1
 
