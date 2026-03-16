@@ -29,7 +29,13 @@ NO_TOOLS = (
 SINGLE_TOOL = (
     '<tool_call>{"name": "get_weather", "arguments": {"city": "Dallas", "state": "TX"}}</tool_call>',
     True,
-    [{'name': 'get_weather', 'arguments': {'city': 'Dallas', 'state': 'TX'}}],
+    [{
+        'name': 'get_weather',
+        'arguments': {
+            'city': 'Dallas',
+            'state': 'TX'
+        }
+    }],
     None,  # starts with <tool_call> and ends with </tool_call> → content=None
 )
 
@@ -37,7 +43,12 @@ TOOL_WITH_CONTENT_PREFIX = (
     'Let me check the weather.'
     '<tool_call>{"name": "get_weather", "arguments": {"city": "Dallas"}}</tool_call>',
     True,
-    [{'name': 'get_weather', 'arguments': {'city': 'Dallas'}}],
+    [{
+        'name': 'get_weather',
+        'arguments': {
+            'city': 'Dallas'
+        }
+    }],
     'Let me check the weather.',
 )
 
@@ -45,7 +56,12 @@ TOOL_WITH_CONTENT_SUFFIX = (
     '<tool_call>{"name": "get_weather", "arguments": {"city": "Dallas"}}</tool_call>'
     'Here is the result.',
     True,
-    [{'name': 'get_weather', 'arguments': {'city': 'Dallas'}}],
+    [{
+        'name': 'get_weather',
+        'arguments': {
+            'city': 'Dallas'
+        }
+    }],
     'Here is the result.',
 )
 
@@ -54,8 +70,18 @@ MULTIPLE_TOOLS = (
     '<tool_call>{"name": "get_weather", "arguments": {"city": "SF"}}</tool_call>',
     True,
     [
-        {'name': 'get_weather', 'arguments': {'city': 'Dallas'}},
-        {'name': 'get_weather', 'arguments': {'city': 'SF'}},
+        {
+            'name': 'get_weather',
+            'arguments': {
+                'city': 'Dallas'
+            }
+        },
+        {
+            'name': 'get_weather',
+            'arguments': {
+                'city': 'SF'
+            }
+        },
     ],
     None,
 )
@@ -64,18 +90,21 @@ NESTED_ARGS = (
     '<tool_call>{"name": "create_event", "arguments": '
     '{"title": "Meeting", "location": {"city": "NYC"}}}</tool_call>',
     True,
-    [{'name': 'create_event', 'arguments': {
-        'title': 'Meeting', 'location': {'city': 'NYC'},
-    }}],
+    [{
+        'name': 'create_event',
+        'arguments': {
+            'title': 'Meeting',
+            'location': {
+                'city': 'NYC'
+            },
+        }
+    }],
     None,
 )
 
 # --- Truncated JSON (e.g. max_tokens cut mid-string) ---
 
-TRUNCATED_JSON_IN_TAGS = (
-    '<tool_call>{"name": "get_weather", "arguments": {"city": "Dallas</tool_call>',
-)
-
+TRUNCATED_JSON_IN_TAGS = ('<tool_call>{"name": "get_weather", "arguments": {"city": "Dallas</tool_call>', )
 
 # ===================================================================
 # Non-streaming tests
@@ -101,8 +130,7 @@ class TestQwen2d5ToolParserNonStreaming:
             pytest.param(*NESTED_ARGS, id='nested_args'),
         ],
     )
-    def test_extract_tool_calls(self, model_output, expected_tools_called,
-                                expected_tools, expected_content):
+    def test_extract_tool_calls(self, model_output, expected_tools_called, expected_tools, expected_content):
         parser = self._make_parser()
         req = _make_tool_mock_request()
 
@@ -138,12 +166,10 @@ class TestQwen2d5ToolParserNonStreaming:
             # If the parser handles it gracefully, it should fallback
             assert not result.tools_called or result.content is not None
         except json.JSONDecodeError as e:
-            pytest.fail(
-                f'Truncated JSON crashed extract_tool_calls with '
-                f'JSONDecodeError: {e}'
-                '\n\nRoot cause: json.loads(match_result) in '
-                'extract_tool_calls has no try/except.'
-            )
+            pytest.fail(f'Truncated JSON crashed extract_tool_calls with '
+                        f'JSONDecodeError: {e}'
+                        '\n\nRoot cause: json.loads(match_result) in '
+                        'extract_tool_calls has no try/except.')
 
 
 # ===================================================================
@@ -212,10 +238,8 @@ class TestQwen2d5ToolParserStreaming:
             results = _run_tool_streaming(parser, deltas, req)
             _collect_tool_streaming(results)
         except Exception as e:
-            pytest.fail(
-                f'Streaming truncated JSON crashed with {type(e).__name__}: '
-                f'{e}\n\nThe parser should handle truncated JSON gracefully.'
-            )
+            pytest.fail(f'Streaming truncated JSON crashed with {type(e).__name__}: '
+                        f'{e}\n\nThe parser should handle truncated JSON gracefully.')
 
     def test_parallel_tools_streaming_should_not_crash(self):
         """Parallel tool calls in streaming must not raise ValueError.
@@ -245,9 +269,7 @@ class TestQwen2d5ToolParserStreaming:
             results = _run_tool_streaming(parser, deltas, req)
             content, tools = _collect_tool_streaming(results)
         except ValueError as e:
-            pytest.fail(
-                f'Streaming parallel tool calls crashed with ValueError: {e}'
-                '\n\nRoot cause: position not advanced past first tool call, '
-                'causing split() on line with multiple <tool_call> to return '
-                '>2 items.'
-            )
+            pytest.fail(f'Streaming parallel tool calls crashed with ValueError: {e}'
+                        '\n\nRoot cause: position not advanced past first tool call, '
+                        'causing split() on line with multiple <tool_call> to return '
+                        '>2 items.')

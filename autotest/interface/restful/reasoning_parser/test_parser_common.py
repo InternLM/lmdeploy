@@ -1,9 +1,5 @@
 import pytest
-from utils.tool_reasoning_definitions import (
-    REASONING_PARSER_NAMES,
-    THINK_END_TOKEN,
-    THINK_START_TOKEN,
-)
+from utils.tool_reasoning_definitions import REASONING_PARSER_NAMES, THINK_END_TOKEN, THINK_START_TOKEN
 
 from .conftest import (
     _BOTH_PARSERS,
@@ -170,7 +166,6 @@ NEW_LINE_STREAMING = {
     'content': '\nThis is the rest',
 }
 
-
 # ===================================================================
 # Parametrized TEST_CASES — (streaming, param_dict)
 # ===================================================================
@@ -212,7 +207,6 @@ TEST_CASES = [
     pytest.param(True, NEW_LINE_STREAMING, id='new_line_streaming'),
 ]
 
-
 # ===================================================================
 # Multi-token delta test cases (streaming only, common to both parsers)
 # ===================================================================
@@ -244,7 +238,6 @@ MULTI_TOKEN_DELTA_CASES = [
     ),
 ]
 
-
 # ===================================================================
 # Core data-driven extraction tests
 # ===================================================================
@@ -261,7 +254,9 @@ class TestReasoningExtraction:
         tok = _make_mock_tokenizer()
         parser = parser_factory()(tok)
         reasoning, content = _run_extraction(
-            parser, param_dict['output'], streaming=streaming,
+            parser,
+            param_dict['output'],
+            streaming=streaming,
         )
         assert reasoning == param_dict['reasoning']
         assert content == param_dict['content']
@@ -276,12 +271,13 @@ class TestMultiTokenDeltas:
         'deltas, expected_reasoning, expected_content',
         MULTI_TOKEN_DELTA_CASES,
     )
-    def test_multi_token_deltas(self, parser_factory, deltas,
-                                expected_reasoning, expected_content):
+    def test_multi_token_deltas(self, parser_factory, deltas, expected_reasoning, expected_content):
         tok = _make_mock_tokenizer()
         parser = parser_factory()(tok)
         reasoning, content = _run_streaming_extraction(
-            parser, deltas, _DEFAULT_VOCAB,
+            parser,
+            deltas,
+            _DEFAULT_VOCAB,
         )
         assert reasoning == expected_reasoning
         assert (content or None) == expected_content
@@ -549,9 +545,9 @@ class TestReasoningParserDetectionMechanism:
             previous_text='<think>Step 1',
             current_text='<think>Step 1. Done</think>Answer',
             delta_text='. Done</think>Answer',
-            previous_token_ids=[300, 301],           # No 100 (think_start)
+            previous_token_ids=[300, 301],  # No 100 (think_start)
             current_token_ids=[300, 301, 302, 303, 304],
-            delta_token_ids=[302, 303, 304],          # No 101 (think_end)
+            delta_token_ids=[302, 303, 304],  # No 101 (think_end)
         )
 
         assert result is not None

@@ -31,7 +31,13 @@ SINGLE_TOOL = (
     '{"name": "get_weather", "parameters": {"city": "Dallas", "state": "TX"}}\n'
     '<|action_end|>',
     True,
-    [{'name': 'get_weather', 'arguments': {'city': 'Dallas', 'state': 'TX'}}],
+    [{
+        'name': 'get_weather',
+        'arguments': {
+            'city': 'Dallas',
+            'state': 'TX'
+        }
+    }],
     None,
 )
 
@@ -40,7 +46,12 @@ TOOL_WITH_CONTENT = (
     '{"name": "get_weather", "parameters": {"city": "Dallas"}}\n'
     '<|action_end|>',
     True,
-    [{'name': 'get_weather', 'arguments': {'city': 'Dallas'}}],
+    [{
+        'name': 'get_weather',
+        'arguments': {
+            'city': 'Dallas'
+        }
+    }],
     'Let me check the weather.',
 )
 
@@ -49,10 +60,14 @@ TOOL_WITH_ARGUMENTS_KEY = (
     '{"name": "search", "arguments": {"query": "AI news"}}\n'
     '<|action_end|>',
     True,
-    [{'name': 'search', 'arguments': {'query': 'AI news'}}],
+    [{
+        'name': 'search',
+        'arguments': {
+            'query': 'AI news'
+        }
+    }],
     None,
 )
-
 
 # ===================================================================
 # Non-streaming tests
@@ -76,8 +91,7 @@ class TestInternlm2ToolParserNonStreaming:
             pytest.param(*TOOL_WITH_ARGUMENTS_KEY, id='arguments_key'),
         ],
     )
-    def test_extract_tool_calls(self, model_output, expected_tools_called,
-                                expected_tools, expected_content):
+    def test_extract_tool_calls(self, model_output, expected_tools_called, expected_tools, expected_content):
         parser = self._make_parser()
         req = _make_tool_mock_request()
 
@@ -103,22 +117,18 @@ class TestInternlm2ToolParserNonStreaming:
         parser = self._make_parser()
         req = _make_tool_mock_request()
 
-        model_output = (
-            '<|action_start|><|plugin|>\n'
-            '{"name": "get_weather", "parameters": {"city": "Dallas'
-            '\n<|action_end|>'
-        )
+        model_output = ('<|action_start|><|plugin|>\n'
+                        '{"name": "get_weather", "parameters": {"city": "Dallas'
+                        '\n<|action_end|>')
 
         try:
             result = parser.extract_tool_calls(model_output, req)
             assert not result.tools_called or result.content is not None
         except json.JSONDecodeError as e:
-            pytest.fail(
-                f'Truncated JSON crashed extract_tool_calls with '
-                f'JSONDecodeError: {e}'
-                '\n\nRoot cause: json.loads(action) in '
-                'extract_tool_calls has no try/except.'
-            )
+            pytest.fail(f'Truncated JSON crashed extract_tool_calls with '
+                        f'JSONDecodeError: {e}'
+                        '\n\nRoot cause: json.loads(action) in '
+                        'extract_tool_calls has no try/except.')
 
 
 # ===================================================================
@@ -180,10 +190,8 @@ class TestInternlm2ToolParserStreaming:
             results = _run_tool_streaming(parser, deltas, req)
             _collect_tool_streaming(results)
         except Exception as e:
-            pytest.fail(
-                f'Streaming truncated JSON crashed with {type(e).__name__}: '
-                f'{e}\n\nThe parser should handle truncated JSON gracefully.'
-            )
+            pytest.fail(f'Streaming truncated JSON crashed with {type(e).__name__}: '
+                        f'{e}\n\nThe parser should handle truncated JSON gracefully.')
 
     def test_parallel_tools_streaming_should_not_crash(self):
         """Parallel tool calls in streaming must not raise ValueError.
@@ -210,9 +218,7 @@ class TestInternlm2ToolParserStreaming:
             results = _run_tool_streaming(parser, deltas, req)
             content, tools = _collect_tool_streaming(results)
         except ValueError as e:
-            pytest.fail(
-                f'Streaming parallel tool calls crashed with ValueError: {e}'
-                '\n\nRoot cause: position not advanced past first tool call, '
-                'causing split() on line with multiple '
-                '<|action_start|><|plugin|> to return >2 items.'
-            )
+            pytest.fail(f'Streaming parallel tool calls crashed with ValueError: {e}'
+                        '\n\nRoot cause: position not advanced past first tool call, '
+                        'causing split() on line with multiple '
+                        '<|action_start|><|plugin|> to return >2 items.')

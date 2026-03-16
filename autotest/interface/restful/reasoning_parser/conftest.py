@@ -7,8 +7,8 @@ import pytest
 from utils.constant import BACKEND_LIST, TOOL_REASONING_MODEL_LIST
 
 from utils.tool_reasoning_definitions import (  # isort: skip
-    THINK_END_TOKEN, THINK_START_TOKEN, collect_stream_reasoning,
-    get_reasoning_content, make_logged_client, setup_log_file)
+    THINK_END_TOKEN, THINK_START_TOKEN, collect_stream_reasoning, get_reasoning_content, make_logged_client,
+    setup_log_file)
 
 # ---------------------------------------------------------------------------
 # sys.path manipulation (needed for lmdeploy imports in parser unit tests)

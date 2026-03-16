@@ -25,14 +25,25 @@ NO_TOOLS = (
 
 SINGLE_TOOL = (
     '<tool_call>\n{"name": "get_weather", "arguments": {"city": "Dallas", "state": "TX"}}\n</tool_call>',
-    [{'name': 'get_weather', 'arguments': {'city': 'Dallas', 'state': 'TX'}}],
+    [{
+        'name': 'get_weather',
+        'arguments': {
+            'city': 'Dallas',
+            'state': 'TX'
+        }
+    }],
     '',
 )
 
 TOOL_WITH_CONTENT = (
     'Let me check the weather.'
     '<tool_call>\n{"name": "get_weather", "arguments": {"city": "Dallas"}}\n</tool_call>',
-    [{'name': 'get_weather', 'arguments': {'city': 'Dallas'}}],
+    [{
+        'name': 'get_weather',
+        'arguments': {
+            'city': 'Dallas'
+        }
+    }],
     'Let me check the weather.',
 )
 
@@ -40,8 +51,18 @@ PARALLEL_TOOLS = (
     '<tool_call>\n{"name": "get_weather", "arguments": {"city": "Dallas"}}\n</tool_call>'
     '\n<tool_call>\n{"name": "get_weather", "arguments": {"city": "SF"}}\n</tool_call>',
     [
-        {'name': 'get_weather', 'arguments': {'city': 'Dallas'}},
-        {'name': 'get_weather', 'arguments': {'city': 'SF'}},
+        {
+            'name': 'get_weather',
+            'arguments': {
+                'city': 'Dallas'
+            }
+        },
+        {
+            'name': 'get_weather',
+            'arguments': {
+                'city': 'SF'
+            }
+        },
     ],
     '',
 )
@@ -49,12 +70,18 @@ PARALLEL_TOOLS = (
 NESTED_ARGS = (
     '<tool_call>\n{"name": "calculate_area", "arguments": '
     '{"shape": "rectangle", "dimensions": {"width": 10, "height": 20}}}\n</tool_call>',
-    [{'name': 'calculate_area', 'arguments': {
-        'shape': 'rectangle', 'dimensions': {'width': 10, 'height': 20},
-    }}],
+    [{
+        'name': 'calculate_area',
+        'arguments': {
+            'shape': 'rectangle',
+            'dimensions': {
+                'width': 10,
+                'height': 20
+            },
+        }
+    }],
     '',
 )
-
 
 # ===================================================================
 # Non-streaming tests
@@ -79,8 +106,7 @@ class TestQwen3ToolParserNonStreaming:
             pytest.param(*NESTED_ARGS, id='nested_args'),
         ],
     )
-    def test_extract_tool_calls(self, model_output, expected_tools,
-                                expected_content):
+    def test_extract_tool_calls(self, model_output, expected_tools, expected_content):
         parser = self._make_parser()
         req = _make_tool_mock_request()
 
@@ -107,8 +133,7 @@ class TestQwen3ToolParserNonStreaming:
 
         assert result.tools_called
         assert result.tool_calls[0].function.name == 'func'
-        assert json.loads(
-            result.tool_calls[0].function.arguments) == {'key': 'value'}
+        assert json.loads(result.tool_calls[0].function.arguments) == {'key': 'value'}
 
 
 # ===================================================================

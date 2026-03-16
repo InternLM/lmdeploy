@@ -87,7 +87,6 @@ class TestDeepSeekR1ParserStreaming:
 # strip the tag.  This contrasts with Qwen.
 # ===================================================================
 
-
 DEEPSEEK_MULTI_TOKEN_DELTA_CASES = [
     pytest.param(
         ['<think>This is a reasoning section', '</think>', 'This is the rest'],
@@ -107,12 +106,13 @@ class TestDeepSeekR1MultiTokenDeltas:
         'deltas, expected_reasoning, expected_content',
         DEEPSEEK_MULTI_TOKEN_DELTA_CASES,
     )
-    def test_multi_token_deltas(self, deltas, expected_reasoning,
-                                expected_content):
+    def test_multi_token_deltas(self, deltas, expected_reasoning, expected_content):
         tok = _make_mock_tokenizer(_DEFAULT_VOCAB)
         parser = _get_deepseek_parser_cls()(tok)
         reasoning, content = _run_streaming_extraction(
-            parser, deltas, _DEFAULT_VOCAB,
+            parser,
+            deltas,
+            _DEFAULT_VOCAB,
         )
         assert reasoning == expected_reasoning
         assert (content or None) == expected_content

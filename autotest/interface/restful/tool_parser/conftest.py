@@ -4,10 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from utils.constant import BACKEND_LIST, TOOL_REASONING_MODEL_LIST
-from utils.tool_reasoning_definitions import (
-    make_logged_client,
-    setup_log_file,
-)
+from utils.tool_reasoning_definitions import make_logged_client, setup_log_file
 
 # ---------------------------------------------------------------------------
 # sys.path manipulation (needed for lmdeploy imports in parser unit tests)
@@ -151,7 +148,6 @@ MESSAGES_PARALLEL_MIXED = [
         'Also calculate 1234 * 5678.',
     },
 ]
-
 
 # ===========================================================================
 # Parser unit test infrastructure

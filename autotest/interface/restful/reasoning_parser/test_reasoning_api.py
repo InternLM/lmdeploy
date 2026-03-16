@@ -144,11 +144,9 @@ class TestReasoningWithTools(_ReasoningTestBase):
         r = self._call_api(stream, MESSAGES_REASONING_WEATHER_TOOL, tools=[WEATHER_TOOL], tool_choice='none')
         assert len(r['tool_calls']) == 0
         assert r['finish_reason'] in ('stop', 'length')
-        assert len(r['reasoning'].strip()) > 0, (
-            f'Expected non-empty reasoning_content for reasoning model, '
-            f'got reasoning={r["reasoning"]!r}, content={r["content"][:200]!r}')
-        assert len(r['content'].strip()) > 0, (
-            f'Expected non-empty content, got content={r["content"]!r}')
+        assert len(r['reasoning'].strip()) > 0, (f'Expected non-empty reasoning_content for reasoning model, '
+                                                 f'got reasoning={r["reasoning"]!r}, content={r["content"][:200]!r}')
+        assert len(r['content'].strip()) > 0, (f'Expected non-empty content, got content={r["content"]!r}')
         _assert_no_tag_leakage(r['reasoning'], r['content'])
 
     def test_tool_choice_specific(self, backend, model_case, stream):
@@ -206,12 +204,10 @@ class TestReasoningToolRoundTrip(_ReasoningTestBase):
         r = self._call_api(stream, build_reasoning_tool_roundtrip_messages(), tools=[WEATHER_TOOL])
         assert r['finish_reason'] in ('stop', 'length')
         assert len(r['tool_calls']) == 0
-        assert len(r['reasoning'].strip()) > 0, (
-            f'Expected non-empty reasoning_content for reasoning model, '
-            f'got reasoning={r["reasoning"]!r}, content={r["content"][:200]!r}')
-        assert len(r['content'].strip()) > 0, (
-            f'Expected non-empty content after tool result, '
-            f'got content={r["content"]!r}')
+        assert len(r['reasoning'].strip()) > 0, (f'Expected non-empty reasoning_content for reasoning model, '
+                                                 f'got reasoning={r["reasoning"]!r}, content={r["content"][:200]!r}')
+        assert len(r['content'].strip()) > 0, (f'Expected non-empty content after tool result, '
+                                               f'got content={r["content"]!r}')
         has_ref = any(kw in r['content'].lower()
                       for kw in ('sunny', 'umbrella', 'dallas', 'clear', 'rain', 'weather', 'no'))
         assert has_ref, f'Content should reference weather: {r["content"][:200]}'
@@ -429,12 +425,10 @@ class TestReasoningWebSearchTool(_ReasoningTestBase):
         r = self._call_api(stream, _build_search_roundtrip_messages(), tools=[SEARCH_TOOL])
         assert r['finish_reason'] in ('stop', 'length')
         assert len(r['tool_calls']) == 0
-        assert len(r['reasoning'].strip()) > 0, (
-            f'Expected non-empty reasoning_content for reasoning model, '
-            f'got reasoning={r["reasoning"]!r}, content={r["content"][:200]!r}')
-        assert len(r['content'].strip()) > 0, (
-            f'Expected non-empty content after search result, '
-            f'got content={r["content"]!r}')
+        assert len(r['reasoning'].strip()) > 0, (f'Expected non-empty reasoning_content for reasoning model, '
+                                                 f'got reasoning={r["reasoning"]!r}, content={r["content"][:200]!r}')
+        assert len(r['content'].strip()) > 0, (f'Expected non-empty content after search result, '
+                                               f'got content={r["content"]!r}')
         has_ref = any(kw in r['content'].lower()
                       for kw in ('hopfield', 'hinton', 'nobel', 'physics', 'machine learning', 'neural network'))
         assert has_ref, f'Content should reference Nobel Prize: {r["content"][:200]}'
@@ -655,11 +649,9 @@ class TestReasoningEdgeCases(_ReasoningTestBase):
         """'What is 2+2?' should produce answer '4'."""
         r = self._call_api(stream, MESSAGES_REASONING_SIMPLE, max_completion_tokens=512)
         assert r['finish_reason'] in ('stop', 'length')
-        assert len(r['reasoning'].strip()) > 0, (
-            f'Expected non-empty reasoning_content for reasoning model, '
-            f'got reasoning={r["reasoning"]!r}, content={r["content"][:200]!r}')
-        assert len(r['content'].strip()) > 0, (
-            f'Expected non-empty content, got content={r["content"]!r}')
+        assert len(r['reasoning'].strip()) > 0, (f'Expected non-empty reasoning_content for reasoning model, '
+                                                 f'got reasoning={r["reasoning"]!r}, content={r["content"][:200]!r}')
+        assert len(r['content'].strip()) > 0, (f'Expected non-empty content, got content={r["content"]!r}')
         assert '4' in r['reasoning'] + r['content']
         _assert_no_tag_leakage(r['reasoning'], r['content'])
 
@@ -668,11 +660,9 @@ class TestReasoningEdgeCases(_ReasoningTestBase):
         r = self._call_api(stream, MESSAGES_REASONING_WEATHER_TOOL)
         assert r['finish_reason'] in ('stop', 'length')
         assert len(r['tool_calls']) == 0
-        assert len(r['reasoning'].strip()) > 0, (
-            f'Expected non-empty reasoning_content for reasoning model, '
-            f'got reasoning={r["reasoning"]!r}, content={r["content"][:200]!r}')
-        assert len(r['content'].strip()) > 0, (
-            f'Expected non-empty content, got content={r["content"]!r}')
+        assert len(r['reasoning'].strip()) > 0, (f'Expected non-empty reasoning_content for reasoning model, '
+                                                 f'got reasoning={r["reasoning"]!r}, content={r["content"][:200]!r}')
+        assert len(r['content'].strip()) > 0, (f'Expected non-empty content, got content={r["content"]!r}')
         _assert_no_tag_leakage(r['reasoning'], r['content'])
 
     def test_empty_tools(self, backend, model_case, stream):
@@ -683,19 +673,16 @@ class TestReasoningEdgeCases(_ReasoningTestBase):
         except BadRequestError:
             pytest.skip('Backend rejects empty tools list')
         assert len(r['tool_calls']) == 0
-        assert len(r['reasoning'].strip()) > 0, (
-            f'Expected non-empty reasoning_content for reasoning model, '
-            f'got reasoning={r["reasoning"]!r}, content={r["content"][:200]!r}')
-        assert len(r['content'].strip()) > 0, (
-            f'Expected non-empty content, got content={r["content"]!r}')
+        assert len(r['reasoning'].strip()) > 0, (f'Expected non-empty reasoning_content for reasoning model, '
+                                                 f'got reasoning={r["reasoning"]!r}, content={r["content"][:200]!r}')
+        assert len(r['content'].strip()) > 0, (f'Expected non-empty content, got content={r["content"]!r}')
 
     def test_low_max_tokens(self, backend, model_case, stream):
         """Very low max_tokens: truncated but valid output."""
         r = self._call_api(stream, MESSAGES_REASONING_COMPLEX, max_completion_tokens=50)
         assert r['finish_reason'] in ('stop', 'length')
-        assert len(r['reasoning'].strip()) > 0, (
-            f'Expected non-empty reasoning_content for reasoning model, '
-            f'got reasoning={r["reasoning"]!r}, content={r["content"][:200]!r}')
+        assert len(r['reasoning'].strip()) > 0, (f'Expected non-empty reasoning_content for reasoning model, '
+                                                 f'got reasoning={r["reasoning"]!r}, content={r["content"][:200]!r}')
         _assert_no_tag_leakage(r['reasoning'], r['content'])
 
     def test_reasoning_not_parsed_as_tool_call(self, backend, model_case, stream):
@@ -710,11 +697,9 @@ class TestReasoningEdgeCases(_ReasoningTestBase):
         r = self._call_api(stream, messages, tools=[CALCULATOR_TOOL, WEATHER_TOOL], tool_choice='auto')
         assert r['finish_reason'] in ('stop', 'length')
         assert len(r['tool_calls']) == 0
-        assert len(r['reasoning'].strip()) > 0, (
-            f'Expected non-empty reasoning_content for reasoning model, '
-            f'got reasoning={r["reasoning"]!r}, content={r["content"][:200]!r}')
-        assert len(r['content'].strip()) > 0, (
-            f'Expected non-empty content, got content={r["content"]!r}')
+        assert len(r['reasoning'].strip()) > 0, (f'Expected non-empty reasoning_content for reasoning model, '
+                                                 f'got reasoning={r["reasoning"]!r}, content={r["content"][:200]!r}')
+        assert len(r['content'].strip()) > 0, (f'Expected non-empty content, got content={r["content"]!r}')
         _assert_no_tag_leakage(r['reasoning'], r['content'])
 
 
