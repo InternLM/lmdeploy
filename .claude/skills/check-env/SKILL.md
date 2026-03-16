@@ -3,27 +3,39 @@ name: check-env
 description: Check if the LMDeploy dev environment is properly set up.
 ---
 
-# LMDeploy Environment Setup
+# Check LMDeploy Dev Environment
 
-## Quick Start
+## 1. Find and activate the conda env
 
 ```bash
-conda env list                    # Find env name (usually 'dev')
-conda activate dev                # Replace 'dev' with actual name
-python -c "import lmdeploy; print(lmdeploy.__file__)"  # Should point into repo dir
-which python                      # Confirm conda env path
+conda env list                        # starred = currently active
+conda activate <env-name>             # pick the right env for this project
 ```
 
-## Verify
+## 2. Verify editable install
 
-- `conda activate` succeeds without error
-- `python -c "import lmdeploy; print(lmdeploy.__file__)"` points into the repo dir (editable install)
-- `which python` shows conda env path (not `/usr/bin/python`)
+```bash
+python -c "import lmdeploy; print(lmdeploy.__file__)"
+# Must point into the repo dir, e.g. /path/to/lmdeploy_vl/lmdeploy/__init__.py
+```
+
+If it doesn't:
+
+```bash
+pip install -e .                      # run from repo root
+```
+
+## 3. Confirm python and CUDA
+
+```bash
+which python                          # must show conda env path, not /usr/bin/python
+python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.device_count())"
+```
 
 ## Troubleshooting
 
-| Problem              | Solution                                     |
-| -------------------- | -------------------------------------------- |
-| `conda: not found`   | `source ~/miniconda3/etc/profile.d/conda.sh` |
-| `lmdeploy` not found | `pip install -e .` from repo root            |
-| Wrong Python         | `conda deactivate && conda activate dev`     |
+| Problem              | Fix                                             |
+| -------------------- | ----------------------------------------------- |
+| `conda: not found`   | `source ~/miniconda3/etc/profile.d/conda.sh`    |
+| Wrong Python         | `conda deactivate && conda activate <env-name>` |
+| `lmdeploy` not found | `pip install -e .` from repo root               |
