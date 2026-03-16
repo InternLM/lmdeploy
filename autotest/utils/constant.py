@@ -54,8 +54,9 @@ MLLM_EVAL_CONFIGS = {
 BACKEND_LIST = ['turbomind', 'pytorch']
 
 RESTFUL_MODEL_LIST_LATEST = [
-    'Qwen/Qwen3-32B', 'OpenGVLab/InternVL3_5-30B-A3B', 'OpenGVLab/InternVL3-38B', 'Qwen/Qwen3-VL-8B-Instruct',
-    'internlm/internlm3-8b-instruct', 'meta-llama/Llama-3.2-3B-Instruct', 'Qwen/Qwen3-VL-30B-A3B-Instruct'
+    'Qwen/Qwen3-32B', 'Qwen/Qwen3-30B-A3B', 'OpenGVLab/InternVL3_5-30B-A3B', 'OpenGVLab/InternVL3-38B',
+    'Qwen/Qwen3-VL-8B-Instruct', 'internlm/internlm3-8b-instruct', 'meta-llama/Llama-3.2-3B-Instruct',
+    'Qwen/Qwen3-VL-30B-A3B-Instruct'
 ]
 
 RESTFUL_MODEL_LIST_LEGACY = ['internlm/internlm2_5-20b']
