@@ -53,7 +53,6 @@ env:
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
   OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
   RUN_ID: ${{ inputs.repo_ref || 'main' }}_${{ github.run_id }}
-  TEST_ENV: 5080
 
 jobs:
   linux-build:
@@ -153,6 +152,7 @@ jobs:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
+      TEST_ENV: 5080_legacy
     container:
       image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -177,6 +177,7 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
+          pip install transformers==4.57.6
           for i in $(seq 1 10); do
             output=$(lmdeploy check_env 2>&1)
             if echo "$output" | grep -q "CUDA available: False"; then
@@ -225,6 +226,7 @@ jobs:
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
         model: ${{ fromJSON(inputs.model || '["llm", "mllm"]')}}
+        transformers: ["5080", "5080_legacy"]
         function: ${{ fromJSON(inputs.function || '["pipeline","restful","chat"]')}}
         exclude:
           - backend: turbomind
@@ -237,6 +239,7 @@ jobs:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
+      TEST_ENV: ${{ matrix.transformers }}
     container:
       image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -258,6 +261,10 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
+      - name: Downgrade transformers
+        if: ${{matrix.transformers == '5080_legacy'}}
+        run: |
+          pip install transformers==4.57.6
       - name: Check env
         run: |
           for i in $(seq 1 10); do
@@ -313,6 +320,7 @@ jobs:
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
         model_path: ['meta-llama/Llama-3.2-3B-Instruct', 'Qwen/Qwen3-4B']
+        transformers: ["5080", "5080_legacy"]
         include:
           - tp: 1
             model: Llama-3.2-3B-Instruct
@@ -334,6 +342,8 @@ jobs:
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /mnt/3090:/mnt/3090
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
+    env:
+      TEST_ENV: ${{ matrix.transformers }}
     steps:
       - name: Copy repository and Artifacts
         run: |
@@ -347,6 +357,10 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
+      - name: Downgrade transformers
+        if: ${{matrix.transformers == '5080_legacy'}}
+        run: |
+          pip install transformers==4.57.6
       - name: Check env
         run: |
           for i in $(seq 1 10); do
