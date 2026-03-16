@@ -4,13 +4,7 @@ import pytest
 from utils.tool_reasoning_definitions import (SEARCH_TOOL, WEATHER_TOOL, assert_arguments_parseable,
                                               assert_tool_call_fields, collect_stream_tool_call)
 
-from .conftest import (
-    MESSAGES_ASKING_FOR_SEARCH,
-    MESSAGES_ASKING_FOR_WEATHER,
-    _apply_marks,
-    _ToolCallTestBase,
-)
-
+from .conftest import MESSAGES_ASKING_FOR_SEARCH, MESSAGES_ASKING_FOR_WEATHER, _apply_marks, _ToolCallTestBase
 
 # ===========================================================================
 # Basic tool call: response structure, finish_reason, field validation

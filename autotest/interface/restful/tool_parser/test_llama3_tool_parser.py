@@ -2,15 +2,8 @@ import json
 
 import pytest
 
-from .conftest import (
-    _apply_parser_unit_marks,
-    _collect_tool_streaming,
-    _get_llama3_tool_parser_cls,
-    _make_tool_mock_request,
-    _make_tool_mock_tokenizer,
-    _run_tool_streaming,
-)
-
+from .conftest import (_apply_parser_unit_marks, _collect_tool_streaming, _get_llama3_tool_parser_cls,
+                       _make_tool_mock_request, _make_tool_mock_tokenizer, _run_tool_streaming)
 
 # ===================================================================
 # Test data — (model_output, expected_name, expected_args_dict)
@@ -21,16 +14,24 @@ from .conftest import (
 SINGLE_TOOL = (
     '<function=get_weather>{"city": "Dallas", "state": "TX"}</function>',
     'get_weather',
-    {'city': 'Dallas', 'state': 'TX'},
+    {
+        'city': 'Dallas',
+        'state': 'TX'
+    },
 )
 
 SINGLE_TOOL_NESTED = (
     '<function=create_event>{"title": "Meeting", '
     '"location": {"city": "NYC", "room": "A1"}}</function>',
     'create_event',
-    {'title': 'Meeting', 'location': {'city': 'NYC', 'room': 'A1'}},
+    {
+        'title': 'Meeting',
+        'location': {
+            'city': 'NYC',
+            'room': 'A1'
+        }
+    },
 )
-
 
 # ===================================================================
 # Non-streaming tests
@@ -43,9 +44,7 @@ class TestLlama3ToolParserNonStreaming:
 
     @staticmethod
     def _make_parser():
-        tok = _make_tool_mock_tokenizer(
-            encode_map={'<|python_tag|>': [3]},
-        )
+        tok = _make_tool_mock_tokenizer(encode_map={'<|python_tag|>': [3]}, )
         return _get_llama3_tool_parser_cls()(tok)
 
     @pytest.mark.parametrize(
@@ -55,8 +54,7 @@ class TestLlama3ToolParserNonStreaming:
             pytest.param(*SINGLE_TOOL_NESTED, id='nested_args'),
         ],
     )
-    def test_extract_tool_calls(self, model_output, expected_name,
-                                expected_args):
+    def test_extract_tool_calls(self, model_output, expected_name, expected_args):
         parser = self._make_parser()
         req = _make_tool_mock_request()
 
@@ -109,9 +107,7 @@ class TestLlama3ToolParserStreaming:
 
     @staticmethod
     def _make_parser():
-        tok = _make_tool_mock_tokenizer(
-            encode_map={'<|python_tag|>': [3]},
-        )
+        tok = _make_tool_mock_tokenizer(encode_map={'<|python_tag|>': [3]}, )
         return _get_llama3_tool_parser_cls()(tok)
 
     def test_no_tool_streaming(self):
@@ -127,8 +123,8 @@ class TestLlama3ToolParserStreaming:
         assert len(tools) == 0
 
     def test_text_not_starting_with_tag(self):
-        """Text that does not start with <|python_tag|> or { is
-        always content, even if it contains JSON-like strings."""
+        """Text that does not start with <|python_tag|> or { is always content,
+        even if it contains JSON-like strings."""
         parser = self._make_parser()
         req = _make_tool_mock_request()
 

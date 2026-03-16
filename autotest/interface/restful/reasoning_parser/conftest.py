@@ -7,10 +7,8 @@ import pytest
 from utils.constant import BACKEND_LIST, TOOL_REASONING_MODEL_LIST
 
 from utils.tool_reasoning_definitions import (  # isort: skip
-    CALCULATOR_TOOL, REASONING_PARSER_NAMES, SEARCH_TOOL, THINK_END_TOKEN, THINK_START_TOKEN, WEATHER_TOOL,
-    WEATHER_TOOL_CN, assert_arguments_parseable, assert_tool_call_fields, build_messages_with_tool_response,
-    build_reasoning_tool_roundtrip_messages, collect_stream_reasoning, get_reasoning_content, get_reasoning_tokens,
-    make_logged_client, setup_log_file)
+    THINK_END_TOKEN, THINK_START_TOKEN, collect_stream_reasoning, get_reasoning_content, make_logged_client,
+    setup_log_file)
 
 # ---------------------------------------------------------------------------
 # sys.path manipulation (needed for lmdeploy imports in parser unit tests)
@@ -86,8 +84,8 @@ def _make_mock_request():
 def _simple_tokenize(text, vocab):
     """Tokenise *text* into a list of integer token IDs.
 
-    Known special tokens are mapped via *vocab*; every other character gets a
-    deterministic ID > 200 so it never collides with specials.
+    Known special tokens are mapped via *vocab*; every other character gets a deterministic ID > 200 so it never
+    collides with specials.
     """
     ids = []
     i = 0
@@ -149,9 +147,8 @@ def _run_streaming_extraction(parser, deltas, vocab):
 def _output_to_deltas(output, vocab):
     """Split *output* into deltas at special-token boundaries.
 
-    Special tokens (keys of *vocab*) become individual deltas; all other
-    text between them is collected into a single delta.  Empty outputs
-    produce an empty list.
+    Special tokens (keys of *vocab*) become individual deltas; all other text between them is collected into a single
+    delta.  Empty outputs produce an empty list.
     """
     deltas = []
     i = 0

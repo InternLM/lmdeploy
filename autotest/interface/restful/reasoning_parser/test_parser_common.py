@@ -1,23 +1,9 @@
 import pytest
-from utils.tool_reasoning_definitions import (
-    REASONING_PARSER_NAMES,
-    THINK_END_TOKEN,
-    THINK_START_TOKEN,
-)
+from utils.tool_reasoning_definitions import REASONING_PARSER_NAMES, THINK_END_TOKEN, THINK_START_TOKEN
 
-from .conftest import (
-    _apply_parser_marks,
-    _BOTH_PARSERS,
-    _DEFAULT_VOCAB,
-    _get_deepseek_parser_cls,
-    _get_parser_manager,
-    _get_qwen_parser_cls,
-    _make_mock_request,
-    _make_mock_tokenizer,
-    _run_extraction,
-    _run_streaming_extraction,
-)
-
+from .conftest import (_BOTH_PARSERS, _DEFAULT_VOCAB, _apply_parser_marks, _get_deepseek_parser_cls,
+                       _get_parser_manager, _get_qwen_parser_cls, _make_mock_request, _make_mock_tokenizer,
+                       _run_extraction, _run_streaming_extraction)
 
 # ===================================================================
 # Test case data — each dict has {output, reasoning, content}
@@ -171,7 +157,6 @@ NEW_LINE_STREAMING = {
     'content': '\nThis is the rest',
 }
 
-
 # ===================================================================
 # Parametrized TEST_CASES — (streaming, param_dict)
 # ===================================================================
@@ -213,7 +198,6 @@ TEST_CASES = [
     pytest.param(True, NEW_LINE_STREAMING, id='new_line_streaming'),
 ]
 
-
 # ===================================================================
 # Multi-token delta test cases (streaming only, common to both parsers)
 # ===================================================================
@@ -245,7 +229,6 @@ MULTI_TOKEN_DELTA_CASES = [
     ),
 ]
 
-
 # ===================================================================
 # Core data-driven extraction tests
 # ===================================================================
@@ -253,8 +236,8 @@ MULTI_TOKEN_DELTA_CASES = [
 
 @_apply_parser_marks
 class TestReasoningExtraction:
-    """Core extraction tests — data-driven, parametrized over both parsers
-    and streaming/non-streaming modes."""
+    """Core extraction tests — data-driven, parametrized over both parsers and
+    streaming/non-streaming modes."""
 
     @_BOTH_PARSERS
     @pytest.mark.parametrize('streaming, param_dict', TEST_CASES)
@@ -262,7 +245,9 @@ class TestReasoningExtraction:
         tok = _make_mock_tokenizer()
         parser = parser_factory()(tok)
         reasoning, content = _run_extraction(
-            parser, param_dict['output'], streaming=streaming,
+            parser,
+            param_dict['output'],
+            streaming=streaming,
         )
         assert reasoning == param_dict['reasoning']
         assert content == param_dict['content']
@@ -277,12 +262,13 @@ class TestMultiTokenDeltas:
         'deltas, expected_reasoning, expected_content',
         MULTI_TOKEN_DELTA_CASES,
     )
-    def test_multi_token_deltas(self, parser_factory, deltas,
-                                expected_reasoning, expected_content):
+    def test_multi_token_deltas(self, parser_factory, deltas, expected_reasoning, expected_content):
         tok = _make_mock_tokenizer()
         parser = parser_factory()(tok)
         reasoning, content = _run_streaming_extraction(
-            parser, deltas, _DEFAULT_VOCAB,
+            parser,
+            deltas,
+            _DEFAULT_VOCAB,
         )
         assert reasoning == expected_reasoning
         assert (content or None) == expected_content
@@ -360,8 +346,8 @@ class TestReasoningParserInitErrors:
 
 @_apply_parser_marks
 class TestReasoningParserComplexEdgeCases:
-    """Edge cases requiring relaxed assertions or parser-specific
-    behaviour that cannot be expressed as simple data dicts."""
+    """Edge cases requiring relaxed assertions or parser-specific behaviour
+    that cannot be expressed as simple data dicts."""
 
     @_BOTH_PARSERS
     def test_multiple_end_tokens(self, parser_factory):
@@ -388,7 +374,8 @@ class TestReasoningParserComplexEdgeCases:
 
     @_BOTH_PARSERS
     def test_multiple_think_blocks(self, parser_factory):
-        """Multiple ``<think>…</think>`` blocks — stops at first ``</think>``."""
+        """Multiple ``<think>…</think>`` blocks — stops at first
+        ``</think>``."""
         tok = _make_mock_tokenizer()
         parser = parser_factory()(tok)
         req = _make_mock_request()
@@ -538,8 +525,8 @@ class TestReasoningParserDetectionMechanism:
 
     @_BOTH_PARSERS
     def test_missing_token_ids_fallback_to_reasoning(self, parser_factory):
-        """Token IDs lack special-token IDs → all text treated as
-        reasoning regardless of parser."""
+        """Token IDs lack special-token IDs → all text treated as reasoning
+        regardless of parser."""
         tok = _make_mock_tokenizer(_DEFAULT_VOCAB)
         parser = parser_factory()(tok)
 
@@ -549,9 +536,9 @@ class TestReasoningParserDetectionMechanism:
             previous_text='<think>Step 1',
             current_text='<think>Step 1. Done</think>Answer',
             delta_text='. Done</think>Answer',
-            previous_token_ids=[300, 301],           # No 100 (think_start)
+            previous_token_ids=[300, 301],  # No 100 (think_start)
             current_token_ids=[300, 301, 302, 303, 304],
-            delta_token_ids=[302, 303, 304],          # No 101 (think_end)
+            delta_token_ids=[302, 303, 304],  # No 101 (think_end)
         )
 
         assert result is not None

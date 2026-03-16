@@ -7,17 +7,9 @@ from utils.tool_reasoning_definitions import (ALL_OPTIONAL_TOOL, CALCULATOR_TOOL
                                               build_messages_with_tool_response, collect_stream_parallel_tool_calls,
                                               collect_stream_tool_call)
 
-from .conftest import (
-    MESSAGES_ASKING_FOR_CALCULATION,
-    MESSAGES_ASKING_FOR_WEATHER,
-    MESSAGES_ASKING_FOR_WEATHER_CN,
-    MESSAGES_NO_TOOL_NEEDED,
-    MESSAGES_PARALLEL_MIXED,
-    MESSAGES_PARALLEL_WEATHER,
-    _apply_marks,
-    _ToolCallTestBase,
-)
-
+from .conftest import (MESSAGES_ASKING_FOR_CALCULATION, MESSAGES_ASKING_FOR_WEATHER, MESSAGES_ASKING_FOR_WEATHER_CN,
+                       MESSAGES_NO_TOOL_NEEDED, MESSAGES_PARALLEL_MIXED, MESSAGES_PARALLEL_WEATHER, _apply_marks,
+                       _ToolCallTestBase)
 
 # ===========================================================================
 # Model should pick the right tool from a multi-tool list

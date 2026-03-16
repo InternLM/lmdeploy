@@ -1,14 +1,8 @@
 import pytest
 from utils.tool_reasoning_definitions import THINK_START_TOKEN
 
-from .conftest import (
-    _apply_parser_marks,
-    _DEFAULT_VOCAB,
-    _get_qwen_parser_cls,
-    _make_mock_tokenizer,
-    _run_streaming_extraction,
-)
-
+from .conftest import (_DEFAULT_VOCAB, _apply_parser_marks, _get_qwen_parser_cls, _make_mock_tokenizer,
+                       _run_streaming_extraction)
 
 # ===================================================================
 # Qwen-specific init tests
@@ -68,8 +62,8 @@ class TestQwenQwQParserStreaming:
         assert 'The answer.' in content
 
     def test_embedded_think_no_end_stripped(self):
-        """``<think>`` in delta, output truncated (no ``</think>``) —
-        Qwen strips the tag from reasoning."""
+        """``<think>`` in delta, output truncated (no ``</think>``) — Qwen
+        strips the tag from reasoning."""
         deltas = ['<think>I am reasoning about', ' a complex problem...']
         reasoning, content = _run_streaming_extraction(self.parser, deltas, _DEFAULT_VOCAB)
         assert reasoning is not None
@@ -84,7 +78,6 @@ class TestQwenQwQParserStreaming:
 # When <think> is grouped with text in one delta, Qwen strips the
 # tag.  DeepSeek does not — so this case is Qwen-specific.
 # ===================================================================
-
 
 QWEN_MULTI_TOKEN_DELTA_CASES = [
     pytest.param(
@@ -105,12 +98,13 @@ class TestQwenQwQMultiTokenDeltas:
         'deltas, expected_reasoning, expected_content',
         QWEN_MULTI_TOKEN_DELTA_CASES,
     )
-    def test_multi_token_deltas(self, deltas, expected_reasoning,
-                                expected_content):
+    def test_multi_token_deltas(self, deltas, expected_reasoning, expected_content):
         tok = _make_mock_tokenizer(_DEFAULT_VOCAB)
         parser = _get_qwen_parser_cls()(tok)
         reasoning, content = _run_streaming_extraction(
-            parser, deltas, _DEFAULT_VOCAB,
+            parser,
+            deltas,
+            _DEFAULT_VOCAB,
         )
         assert reasoning == expected_reasoning
         assert (content or None) == expected_content
