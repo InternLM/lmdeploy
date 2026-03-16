@@ -42,3 +42,12 @@ target_link_libraries(models PUBLIC
         cuda_utils
         logger
         anomaly_handler)
+target_compile_options(models PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-v --generate-line-info --threads 8>)
+
+add_executable(bench_gated_delta_net
+        llama/bench_gated_delta_net.cu)
+target_link_libraries(bench_gated_delta_net PRIVATE
+        models
+        CUDA::cudart)
+target_compile_options(bench_gated_delta_net PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:--generate-line-info>)

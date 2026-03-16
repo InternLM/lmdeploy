@@ -70,6 +70,11 @@ private:
     // staging buffers
     Buffer_<void*> conv_state_ptrs_buf_;
     Buffer_<void*> recurrent_state_ptrs_buf_;
+
+    // Dual-stream dispatch: prefill on high-priority aux stream, decode on main
+    cudaStream_t aux_stream_{};
+    cudaEvent_t  ev_before_{};  // main→aux: prior work done
+    cudaEvent_t  ev_after_{};   // aux→main: prefill done
 };
 
 }  // namespace turbomind
