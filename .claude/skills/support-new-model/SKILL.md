@@ -238,33 +238,8 @@ class MyModelVLModel(VisionModel):
         self.image_token = '<image>'  # model-specific placeholder token
         self.image_token_id = tokenizer.convert_tokens_to_ids(self.image_token)
 
-    def preprocess(self, messages, mm_processor_kwargs=None):
-        """Extract and preprocess all images/videos from messages.
-
-        Must append a dict with role='preprocess' to messages.
-        Each item in content must include image_tokens and image_token_id.
-        """
-        images = self.collect_images(messages)
-        outputs = []
-        for image, params in images:
-            result = self.processor.image_processor(
-                images=image,
-                return_tensors='pt',
-                # pass any model-specific size params from mm_processor_kwargs
-            )
-            result.update(dict(
-                image_size=image.size,
-                image_tokens=...,          # int: how many tokens this image occupies
-                image_token_id=self.image_token_id,
-            ))
-            outputs.append(result)
-        messages.append(dict(role='preprocess', content=outputs))
-        return messages
-
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
-        """Convert preprocessed messages to tokenized input for the PyTorch engine."""
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
-        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
+    # preprocess and to_pytorch: copy from vl/model/qwen3.py and adapt
+    # image token handling (image_token, image_token_id, image_tokens count).
 ```
 
 Key points:

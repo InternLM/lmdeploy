@@ -49,17 +49,12 @@ LMDEPLOY_LOG_LEVEL=DEBUG python ...
 - `lmdeploy/pytorch/kernels/` — Triton/CUDA kernels (e.g., `w8a8_triton_kernels.py`).
 - `lmdeploy/pytorch/backends/` — kernel/operator dispatchers per quantization type (FP8, AWQ, CUDA).
 
-**Engine execution flow:**
+**Engine execution flow (key files):**
 
-1. `engine.py` owns the main PyTorch engine.
-2. `engine/executor/` — pluggable executors: `uni_executor.py` (single process), `mp_executor.py` (multiprocess), `ray_executor.py`.
-3. `paging/scheduler.py` — schedules sequences into batches; manages prefill/decode phases, block eviction, prefix caching (`BlockTrie`).
-4. `paging/block_manager/` — GPU/CPU KV-cache block allocation (physical ↔ logical mapping).
-5. `engine/cache_engine.py` — KV cache lifecycle; supports 0/4/8-bit quantization policies.
-6. `engine/engine_loop.py` — async inference loop.
-7. `engine/input_process.py` / `inputs_maker.py` — tokenized inputs → model tensors.
-8. `engine/logits_process.py` — sampling, temperature, stop-word filtering.
-9. `model_inputs.py` — `StepContext` / `StepContextManager` passed to model on each forward step.
+- `engine.py` — main PyTorch engine.
+- `paging/scheduler.py` — sequences → batches; prefill/decode, block eviction, prefix caching (`BlockTrie`).
+- `engine/engine_loop.py` — async inference loop.
+- (See `pytorch/engine/` and `pytorch/paging/` for full execution detail.)
 
 **Configuration dataclasses** (`lmdeploy/pytorch/config.py`): `ModelConfig`, `CacheConfig`, `SchedulerConfig`, `BackendConfig`, `DistConfig`, `MiscConfig`.
 
@@ -101,8 +96,4 @@ Layer/norm/head mappings per model family are defined directly in `calibrate.py`
 
 ## Adding a New PyTorch Model
 
-1. Create `lmdeploy/pytorch/models/<model>.py` implementing the patched attention/MLP layers.
-2. Register the HF class names in `lmdeploy/pytorch/models/module_map.py`.
-3. If quantization support is needed, add layer/norm/head mappings in `lmdeploy/lite/apis/calibrate.py` and `lmdeploy/lite/quantization/awq.py`.
-4. For VLM support, add preprocessing in `lmdeploy/vl/model/<model>.py`.
-5. Reference model: `lmdeploy/pytorch/models/qwen3.py`.
+Use the `/support-new-model` skill for a complete step-by-step guide.

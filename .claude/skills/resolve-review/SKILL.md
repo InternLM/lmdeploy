@@ -40,12 +40,3 @@ git commit -m "fix: address PR review comments"
 ```bash
 git push
 ```
-
-## Checklist
-
-| Step                 | Done? |
-| -------------------- | ----- |
-| All comments read    | \[ \] |
-| Files fixed          | \[ \] |
-| `pre-commit` passes  | \[ \] |
-| Committed and pushed | \[ \] |
