@@ -18,8 +18,6 @@ git checkout -b <type>/<short-description>   # e.g. feat/qwen3-omni
 pre-commit run --all-files
 ```
 
-Fix any reported issues before staging.
-
 ## 3. Stage
 
 ```bash
@@ -57,14 +55,3 @@ gh pr create --title "<type>: <short description>" --body "$(cat <<'EOF'
 EOF
 )"
 ```
-
-## Checklist
-
-| Check                            | Command                               |
-| -------------------------------- | ------------------------------------- |
-| Lint clean                       | `pre-commit run --all-files`          |
-| Unit tests pass                  | `pytest tests/test_lmdeploy/`         |
-| VL tests pass (if VLM change)    | `pytest tests/test_lmdeploy/test_vl/` |
-| Branch off `main`                | `git log --oneline main..HEAD`        |
-| No secrets or debug files staged | `git diff --cached --name-only`       |
-| PR targets `main`                | `gh pr view --json baseRefName`       |

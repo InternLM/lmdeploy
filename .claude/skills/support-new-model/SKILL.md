@@ -150,26 +150,8 @@ class MyModelForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
     def get_logits(self, hidden_states):
         return self.lm_head(hidden_states)
 
-    def prepare_inputs_for_generation(self, past_key_values, inputs_embeds=None,
-                                       context=None, **kwargs):
-        return dict(past_key_values=past_key_values,
-                    inputs_embeds=inputs_embeds,
-                    attn_metadata=context.attn_metadata)
-
-    def load_weights(self, weights):
-        stacked_params_mapping = [
-            # (packed_name_suffix, original_name_suffix, shard_index)
-            ('.qkv_proj', '.q_proj', 0),
-            ('.qkv_proj', '.k_proj', 1),
-            ('.qkv_proj', '.v_proj', 2),
-            ('.gate_up_proj', '.gate_proj', 0),
-            ('.gate_up_proj', '.up_proj', 1),
-        ]
-        params_dict = dict(self.named_parameters())
-        for name, loaded_weight in weights:
-            # handle stacked params, then load remaining
-            ...
-            load_weight(params_dict[name], loaded_weight)
+    # prepare_inputs_for_generation and load_weights: copy from qwen3.py,
+    # update stacked_params_mapping to match this model's HF weight names.
 ```
 
 ______________________________________________________________________
@@ -341,6 +323,7 @@ ______________________________________________________________________
 - [ ] `_arch` matches `config.json` `architectures[0]` exactly
 - [ ] `image_token_id` correctly resolved from the tokenizer
 - [ ] `image_tokens` count is correct for the image resolution/encoding scheme
+- [ ] `vl/model/builder.py` — explicit import added for new model
 - [ ] `archs.py` entry added
 
 **Quantization (optional):**

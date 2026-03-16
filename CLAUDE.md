@@ -105,4 +105,4 @@ Layer/norm/head mappings per model family are defined directly in `calibrate.py`
 2. Register the HF class names in `lmdeploy/pytorch/models/module_map.py`.
 3. If quantization support is needed, add layer/norm/head mappings in `lmdeploy/lite/apis/calibrate.py` and `lmdeploy/lite/quantization/awq.py`.
 4. For VLM support, add preprocessing in `lmdeploy/vl/model/<model>.py`.
-5. Reference model: `lmdeploy/pytorch/models/qwen.py`.
+5. Reference model: `lmdeploy/pytorch/models/qwen3.py`.
