@@ -308,6 +308,7 @@ class SubCliServe:
                 args.nnodes,
                 args.node_rank,
                 args.model_path,
+                base_port=args.server_port,
                 model_name=args.model_name,
                 backend=backend,
                 backend_config=backend_config,
