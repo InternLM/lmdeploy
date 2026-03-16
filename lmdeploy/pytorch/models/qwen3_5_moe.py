@@ -49,7 +49,8 @@ class Qwen3_5MoeSparseMoeBlock(nn.Module):
                  layer_idx: int,
                  dtype: torch.dtype | None = None,
                  device: torch.device | None = None,
-                 prefix: str = ''):
+                 prefix: str = '',
+                 is_tp: bool = True):
         super().__init__()
         # TODO: zhouxinyu, determine modules_to_not_convert from config file
         quantization_config = getattr(config, 'quantization_config', None)
@@ -80,7 +81,7 @@ class Qwen3_5MoeSparseMoeBlock(nn.Module):
             intermediate_size=config.shared_expert_intermediate_size,
             dtype=dtype,
             device=device,
-            is_tp=True,
+            is_tp=is_tp,
             all_reduce=False,
             prefix=add_prefix('shared_expert', prefix),
         )

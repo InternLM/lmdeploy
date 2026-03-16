@@ -559,7 +559,8 @@ class Qwen3_5Attention(nn.Module):
                  layer_idx: int,
                  dtype: torch.dtype | None = None,
                  device: torch.device | None = None,
-                 prefix: str = ''):
+                 prefix: str = '',
+                 is_tp: bool = True):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         num_heads = config.num_attention_heads
@@ -583,6 +584,7 @@ class Qwen3_5Attention(nn.Module):
             dtype=dtype,
             device=device,
             prefix=add_prefix('qkv_proj', prefix),
+            is_tp=is_tp,
         )
 
         # rotary embedding
@@ -597,16 +599,14 @@ class Qwen3_5Attention(nn.Module):
         )
 
         # o_proj
-        self.o_proj = build_o_proj(
-            num_heads * head_dim,
-            hidden_size,
-            bias=config.attention_bias,
-            quant_config=quantization_config,
-            dtype=dtype,
-            device=device,
-            is_tp=True,
-            prefix=add_prefix('o_proj', prefix),
-        )
+        self.o_proj = build_o_proj(num_heads * head_dim,
+                                   hidden_size,
+                                   bias=config.attention_bias,
+                                   quant_config=quantization_config,
+                                   dtype=dtype,
+                                   device=device,
+                                   prefix=add_prefix('o_proj', prefix),
+                                   is_tp=is_tp)
 
         # q, k norm
         self.q_norm = RMSNorm(

@@ -14,7 +14,13 @@ class Qwen3_5ModelConfigBuilder(AutoModelConfigBuilder):
         return hf_config.model_type in ['qwen3_5', 'qwen3_5_moe']
 
     @classmethod
-    def build(cls, hf_config, model_path: str = None, tp: int = 1, **kwargs):
+    def build(cls,
+              hf_config,
+              model_path: str = None,
+              tp: int = 1,
+              is_draft_model: bool = False,
+              spec_method: str = None,
+              **kwargs):
         """build."""
         text_config = hf_config.text_config
         # propagate quantization_config from top-level hf_config into text_config
@@ -45,4 +51,21 @@ class Qwen3_5ModelConfigBuilder(AutoModelConfigBuilder):
         dtype = torch.bfloat16
         cfg.states_shapes = [(conv_state_shape, dtype), (recurrent_state_shape, dtype)]
         cfg.check_env_func = _check_env_qwen3_next
+
+        # for spec
+        if spec_method is not None:
+            assert spec_method == 'deepseek_mtp'
+            cfg.model_paradigm = 'ar_spec'
+
+        # draft model cfg
+        if is_draft_model:
+            hf_config.architectures[0] = 'Qwen3_5MTPModel'
+            # remove for correct mapping when building the patched model
+            if hasattr(hf_config, 'auto_map'):
+                del hf_config.auto_map
+
+            cfg.model_paradigm = 'ar_spec'
+            cfg.num_layers = text_config.mtp_num_hidden_layers
+            cfg.states_shapes = []
+
         return cfg
