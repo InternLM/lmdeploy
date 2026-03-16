@@ -1,5 +1,5 @@
 ---
-name: lmdeploy-prepare-env
+name: check-env
 description: Check if the LMDeploy dev environment is properly set up.
 ---
 
@@ -10,14 +10,14 @@ description: Check if the LMDeploy dev environment is properly set up.
 ```bash
 conda env list                    # Find env name (usually 'dev')
 conda activate dev                # Replace 'dev' with actual name
-pip show lmdeploy | grep Location # Verify editable install
+python -c "import lmdeploy; print(lmdeploy.__file__)"  # Should point into repo dir
 which python                      # Confirm conda env path
 ```
 
 ## Verify
 
 - `conda activate` succeeds without error
-- `pip show` Location contains `src/lmdeploy` (editable install)
+- `python -c "import lmdeploy; print(lmdeploy.__file__)"` points into the repo dir (editable install)
 - `which python` shows conda env path (not `/usr/bin/python`)
 
 ## Troubleshooting

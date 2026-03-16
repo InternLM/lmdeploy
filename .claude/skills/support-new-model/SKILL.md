@@ -5,7 +5,7 @@ description: Add a new LLM or VLM to LMDeploy's PyTorch backend.
 
 # Tutorial: Adding a New Model to LMDeploy (PyTorch Backend)
 
-This guide walks through adding a new LLM or VLM to LMDeploy's PyTorch backend. Chat prompting is handled automatically by HuggingFace's `tokenizer.apply_chat_template()` — no custom chat template code is needed.
+This guide walks through adding a new LLM or VLM to LMDeploy's PyTorch backend.
 
 ______________________________________________________________________
 
@@ -289,7 +289,11 @@ Key points:
 
 - `collect_images()`, `proc_messages()`, `to_pytorch_aux()` are all provided by `VisionModel` — do not re-implement them.
 - `image_tokens` tells the engine how many token slots to reserve for each image.
-- Auto-registered via `@VISION_MODELS.register_module()` — the builder discovers it automatically; no import needed in `builder.py`.
+- Auto-registered via `@VISION_MODELS.register_module()` when the module is imported. **Add an explicit import** in `lmdeploy/vl/model/builder.py` alongside the existing imports so the decorator runs at startup:
+
+```python
+from .my_model import MyModelVLModel  # noqa F401
+```
 
 ______________________________________________________________________
 
@@ -297,13 +301,14 @@ ______________________________________________________________________
 
 **File:** `lmdeploy/archs.py`
 
-Add the architecture name so the engine routes the model through the VLM code path:
+Add the architecture name to the `supported_archs` set inside `check_vl_llm()` so the engine routes the model through the VLM code path:
 
 ```python
-VLM_ARCH_MAP = {
+# lmdeploy/archs.py — inside check_vl_llm()
+supported_archs = set([
     ...
-    'MyModelForConditionalGeneration': 'vlm',
-}
+    'MyModelForConditionalGeneration',  # add this line
+])
 ```
 
 ______________________________________________________________________
