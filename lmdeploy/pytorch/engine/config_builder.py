@@ -56,6 +56,7 @@ class ConfigBuilder:
         cache_config = CacheConfig(
             max_batches=engine_config.max_batch_size,
             block_size=engine_config.block_size,
+            kernel_block_size=engine_config.kernel_block_size,
             num_cpu_blocks=engine_config.num_cpu_blocks,
             num_gpu_blocks=engine_config.num_gpu_blocks,
             cache_max_entry_count=engine_config.cache_max_entry_count,

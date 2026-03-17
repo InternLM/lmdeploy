@@ -386,6 +386,7 @@ class PytorchEngineConfig:
     cache_max_entry_count: float = 0.8
     prefill_interval: int = 16
     block_size: int = 64
+    kernel_block_size: int = 64
     num_cpu_blocks: int = 0
     num_gpu_blocks: int = 0
     adapters: Dict[str, str] = None
@@ -436,8 +437,14 @@ class PytorchEngineConfig:
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
         assert self.quant_policy in (0, 4, 8), 'invalid quant_policy'
         assert self.device_type in ['cuda', 'ascend', 'maca', 'camb'], (f'invalid device_type: {self.device_type}')
-        assert self.block_size >= 16 and (self.block_size & (self.block_size - 1)) == 0, \
-            f'block_size must be >= 16 and a power of 2, but got {self.block_size}'
+        assert self.kernel_block_size >= 16 and \
+               (self.kernel_block_size & (self.kernel_block_size - 1)) == 0, \
+               f'kernel_block_size must be >= 16 and a power of 2, but got {self.kernel_block_size}'
+        assert self.block_size >= self.kernel_block_size and \
+               self.block_size % self.kernel_block_size == 0, \
+               (f'block_size must be >= kernel_block_size and an integer multiple '
+                f'of kernel_block_size, but got block_size {self.block_size} '
+                f'and kernel_block_size {self.kernel_block_size}')
         if self.quant_policy > 0 and self.device_type not in ['cuda', 'ascend']:
             assert False, \
                    'kv cache quantization only works for CUDA and ASCEND.'

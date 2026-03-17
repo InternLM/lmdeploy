@@ -82,6 +82,7 @@ class CacheConfig:
 
     max_batches: int
     block_size: int
+    kernel_block_size: int
     num_cpu_blocks: int
     num_gpu_blocks: int
     window_size: int = -1
