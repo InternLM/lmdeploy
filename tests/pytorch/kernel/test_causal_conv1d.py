@@ -22,7 +22,7 @@ class TestCausalConv1dUpdate:
 
     @pytest.fixture
     def batch(self):
-        yield 512
+        yield 128
 
     @pytest.fixture
     def hidden_size(self):
@@ -32,34 +32,51 @@ class TestCausalConv1dUpdate:
     def width(self):
         yield 4
 
+    @pytest.fixture(params=[1, 4])
+    def seqlen(self, request):
+        yield request.param
+
     @pytest.fixture
-    def x(self, batch, hidden_size, device):
-        yield torch.randn(batch, hidden_size, 1, device=device)
+    def x(self, batch, hidden_size, seqlen, device):
+        yield torch.randn(batch, hidden_size, seqlen, device=device)
 
     @pytest.fixture
     def weight(self, hidden_size, width, device):
         yield torch.randn(hidden_size, width, device=device)
 
     @pytest.fixture
-    def conv_state(self, batch, hidden_size, width, device):
-        conv_state = torch.randn(batch * 4, hidden_size, width, device=device)
-        conv_state = conv_state[::2]
-        yield conv_state
-
-    @pytest.fixture
     def bias(self, hidden_size, device):
         yield torch.randn(hidden_size, device=device)
 
+    @pytest.fixture(params=[True, False])
+    def cache_seqlens(self, request, batch, device):
+        if request.param:
+            yield torch.randint(0, 4096, (batch, ), dtype=torch.int32, device=device)
+        else:
+            yield None
+
+    @pytest.fixture(params=[True, False])
+    def conv_state_indices(self, request, batch, device):
+        if request.param:
+            conv_state_indices = batch * 2 - 1 - torch.arange(0, batch * 2, 2, device=device)
+            yield conv_state_indices.to(torch.int32)
+        else:
+            yield None
+
     @pytest.fixture
-    def conv_state_indices(self, batch, device):
-        conv_state_indices = batch * 2 - 1 - torch.arange(0, batch * 2, 2, device=device)
-        yield conv_state_indices.to(torch.int32)
+    def conv_state(self, batch, hidden_size, width, device, conv_state_indices):
+        if conv_state_indices is not None:
+            conv_state = torch.randn(batch * 4, hidden_size, width, device=device)
+            conv_state = conv_state[::2]
+        else:
+            conv_state = torch.randn(batch, hidden_size, width, device=device)
+        yield conv_state
 
     @pytest.fixture(params=[None, 'silu'])
     def activation(self, request):
         yield request.param
 
-    def test_causal_conv1d_update(self, x, conv_state, weight, bias, activation, conv_state_indices):
+    def test_causal_conv1d_update(self, x, conv_state, weight, bias, activation, cache_seqlens, conv_state_indices):
         from causal_conv1d import causal_conv1d_update as causal_conv1d_update_gt
 
         from lmdeploy.pytorch.kernels.cuda.causal_conv1d import causal_conv1d_update
@@ -70,13 +87,16 @@ class TestCausalConv1dUpdate:
                                    weight=weight,
                                    bias=bias,
                                    activation=activation,
+                                   cache_seqlens=cache_seqlens,
                                    conv_state_indices=conv_state_indices)
         out_gt = causal_conv1d_update_gt(x=x,
                                          conv_state=conv_state,
                                          weight=weight,
                                          bias=bias,
                                          activation=activation,
+                                         cache_seqlens=cache_seqlens,
                                          conv_state_indices=conv_state_indices)
+        print(out[..., 0], out.shape)
         torch.testing.assert_close(out, out_gt, rtol=1e-3, atol=1e-3)
         torch.testing.assert_close(conv_state_clone, conv_state, rtol=1e-3, atol=1e-3)
 
