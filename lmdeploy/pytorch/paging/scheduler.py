@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Dict, List
 
+import numpy as np
 from torch.profiler import record_function
 
 from lmdeploy.messages import EventType, ScheduleMetrics
@@ -50,6 +51,8 @@ class Scheduler:
     ) -> None:
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
+        self.num_kernel_block_per_kv_block = self.cache_config.block_size // self.cache_config.kernel_block_size
+        self.kernel_block_arange = np.arange(self.num_kernel_block_per_kv_block)
         self.sessions: Dict[int, SchedulerSession] = OrderedDict()
 
         # For Disaggregation
@@ -357,7 +360,18 @@ class Scheduler:
 
     def get_block_tables(self, seqs: SeqList):
         """Get block table of the sequences."""
-        return [self.block_manager.get_block_table(seq) for seq in seqs]
+        if self.num_kernel_block_per_kv_block == 1:
+            return [self.block_manager.get_block_table(seq) for seq in seqs]
+
+        block_offsets = []
+        for seq in seqs:
+            block_offset = self.block_manager.get_block_table(seq)
+            block_offset = block_offset.repeat(
+                self.num_kernel_block_per_kv_block) * self.num_kernel_block_per_kv_block + np.tile(
+                    self.kernel_block_arange, len(block_offset))
+            block_offsets.append(block_offset)
+
+        return block_offsets
 
     def evict_seqs(self, running: SeqList):
         """Evict running sequences."""

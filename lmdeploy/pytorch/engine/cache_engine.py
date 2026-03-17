@@ -193,7 +193,7 @@ class CacheEngine:
             head_size = model_config.head_dim
         shape = cls._get_key_block_shape_impl(
             model_config,
-            block_size=cache_config.block_size,
+            block_size=cache_config.kernel_block_size,
             head_size=head_size,
             world_size=world_size,
             quant_policy=cache_config.quant_policy,
@@ -212,7 +212,7 @@ class CacheEngine:
             head_size = model_config.head_dim
         shape = cls._get_value_block_shape_impl(
             model_config,
-            block_size=cache_config.block_size,
+            block_size=cache_config.kernel_block_size,
             head_size=head_size,
             world_size=world_size,
             quant_policy=cache_config.quant_policy,
@@ -243,7 +243,7 @@ class CacheEngine:
         if len(model_config.cache_shapes) == 0:
             return []
 
-        block_size = cache_config.block_size
+        block_size = cache_config.kernel_block_size
 
         descs = []
         for shape, dtype in model_config.cache_shapes:
@@ -258,6 +258,8 @@ class CacheEngine:
         """Allocate caches."""
 
         num_layers = model_config.num_layers
+        num_kernel_block_per_kv_block = cache_config.block_size // cache_config.kernel_block_size
+        num_blocks *= num_kernel_block_per_kv_block
 
         # get all descs
         k_cache_desc = cls.get_k_cache_desc(model_config, cache_config, world_size)
@@ -272,14 +274,15 @@ class CacheEngine:
             mem_pool_size += desc.aligned_size
 
         # create pool
-        mem_pool = torch.zeros((num_layers, num_blocks, mem_pool_size), dtype=torch.uint8, device=device)
+        mem_pool = torch.zeros((num_layers, num_blocks, mem_pool_size), dtype=torch.uint8, device=device).view(-1)
 
         # slice caches
         caches = []
         remain_pool = mem_pool
         for desc in cache_descs:
-            cache = remain_pool[:, :, :desc.size].view(desc.dtype).view((num_layers, num_blocks, *desc.shape))
-            remain_pool = remain_pool[:, :, desc.aligned_size:]
+            cache = remain_pool[:desc.size * num_layers * num_blocks].view(desc.dtype).view(
+                (num_layers, num_blocks, *desc.shape))
+            remain_pool = remain_pool[desc.size * num_layers * num_blocks:]
             caches.append(cache)
         return mem_pool, caches
 

@@ -31,6 +31,7 @@ logger = get_logger('lmdeploy')
 def _tensorlize_block_offsets(block_offsets, dtype=torch.int32):
     """Tensorlize block_offsets."""
     # copy on numpy is faster than torch.nn.utils.rnn.pad_sequence
+
     batch_size = len(block_offsets)
     max_len = max([len(off) for off in block_offsets])
     out = np.zeros((batch_size, max_len), dtype=block_offsets[0].dtype)
