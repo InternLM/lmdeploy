@@ -261,17 +261,17 @@ __global__ void recurrent_gated_delta_rule_kernel_v2(T*         v_out,
     // XOR swizzle: bits [10,13] (offset_k) XOR into column access-group index
     constexpr int kBase  = (sizeof(S) == 4) ? 2 : 3;  // log2(kAccessC)
     constexpr int kShift = 10 - kBase;
-    using Layout = SmemLayoutV2<k_head_dim, v_head_dim, -1, -1, Swizzle<4, kBase, kShift>>;
+    using Layout         = SmemLayoutV2<k_head_dim, v_head_dim, -1, -1, Swizzle<4, kBase, kShift>>;
     SmemAccessor<S, Layout> smem_S{(S*)smem_buf};
 
     const int warp_id = threadIdx.x / WARP_SIZE;
     const int lane_id = threadIdx.x % WARP_SIZE;
 
-    constexpr int tile_k = 8;
-    constexpr int tile_v = 8;
+    constexpr int tile_k = 16;
+    constexpr int tile_v = 4;
 
-    constexpr int k_tiles = k_head_dim / tile_k;  // 16
-    constexpr int v_tiles = v_head_dim / tile_v;  // 16
+    constexpr int k_tiles = k_head_dim / tile_k;  // 8
+    constexpr int v_tiles = v_head_dim / tile_v;  // 32
 
     constexpr int k_threads = k_tiles;
     constexpr int v_threads = block_dim / k_threads;
@@ -304,12 +304,13 @@ __global__ void recurrent_gated_delta_rule_kernel_v2(T*         v_out,
     for (int v_iter = 0; v_iter < v_iters; ++v_iter) {
         PRAGMA_UNROLL
         for (int k = 0; k < tile_k; ++k) {
-            static_assert(tile_v % kAccessC == 0);
+            constexpr int kTileAccessC = (tile_v >= kAccessC) ? kAccessC : tile_v;
+            static_assert(tile_v % kTileAccessC == 0);
             PRAGMA_UNROLL
-            for (int c = 0; c < tile_v / kAccessC; ++c) {
-                Array<S, kAccessC> tmp;
-                Load(tmp, &smem_S(offset_k * tile_k + k, (offset_v + v_iter * v_threads) * tile_v + c * kAccessC));
-                (Array<float, kAccessC>&)vec_S[v_iter][k][c * kAccessC] = cast<float>(tmp);
+            for (int c = 0; c < tile_v / kTileAccessC; ++c) {
+                Array<S, kTileAccessC> tmp;
+                Load(tmp, &smem_S(offset_k * tile_k + k, (offset_v + v_iter * v_threads) * tile_v + c * kTileAccessC));
+                (Array<float, kTileAccessC>&)vec_S[v_iter][k][c * kTileAccessC] = cast<float>(tmp);
             }
         }
     }
@@ -325,14 +326,14 @@ __global__ void recurrent_gated_delta_rule_kernel_v2(T*         v_out,
         const float beta_val = (float)beta_in[global_t * num_v_heads + h];
         const float decay    = expf((float)g_in[global_t * num_v_heads + h]);
 
-        Array<float, tile_v> vec_K;
-        Array<float, tile_v> vec_Q;
+        Array<float, tile_k> vec_K;
+        Array<float, tile_k> vec_Q;
 
         // --- In-kernel L2-normalize K/Q (Vectorized) ---
         {
             {
-                Array<T, tile_v> tmp_K;
-                Array<T, tile_v> tmp_Q;
+                Array<T, tile_k> tmp_K;
+                Array<T, tile_k> tmp_Q;
                 Load(tmp_K, &k_ptr[offset_k * tile_k]);
                 Load(tmp_Q, &q_ptr[offset_k * tile_k]);
                 vec_K = cast<float>(tmp_K);
@@ -364,6 +365,15 @@ __global__ void recurrent_gated_delta_rule_kernel_v2(T*         v_out,
             }
         }
 
+        // Precompute KQ = dot(K, Q) — invariant across all v elements
+        float KQ = 0.f;
+        PRAGMA_UNROLL
+        for (int k = 0; k < tile_k; ++k)
+            KQ += vec_K[k] * vec_Q[k];
+        PRAGMA_UNROLL
+        for (int mask = k_threads / 2; mask > 0; mask /= 2)
+            KQ += __shfl_xor_sync(0xffffffff, KQ, mask);
+
         Array<T, tile_v> vec_V[v_iters];
 
         PRAGMA_UNROLL
@@ -376,44 +386,36 @@ __global__ void recurrent_gated_delta_rule_kernel_v2(T*         v_out,
             Array<T, tile_v> vec_O;
             PRAGMA_UNROLL
             for (int v = 0; v < tile_v; ++v) {
-                // --- Step 1: S *= decay ---
+                // Fused: decay + dual dot product (kv_mem and SQ simultaneously)
+                float kv_mem = 0.f, SQ = 0.f;
                 PRAGMA_UNROLL
                 for (int k = 0; k < tile_k; ++k) {
-                    vec_S[v_iter][k][v] *= decay;
+                    float s_decayed     = vec_S[v_iter][k][v] * decay;
+                    vec_S[v_iter][k][v] = s_decayed;
+                    kv_mem += s_decayed * vec_K[k];
+                    SQ += s_decayed * vec_Q[k];
                 }
 
-                // --- Step 2: delta rule update ---
-                // [vdim,kdim] @ [kdim,khead] = [vdim,khead] -> use m16n8k16
-                float kv_mem = 0.f;
-                PRAGMA_UNROLL
-                for (int k = 0; k < tile_k; ++k) {  // *kdim
-                    kv_mem += vec_S[v_iter][k][v] * vec_K[k];
-                }
-
+                // Single interleaved reduction (2 independent values -> good ILP)
                 PRAGMA_UNROLL
                 for (int mask = k_threads / 2; mask > 0; mask /= 2) {
                     kv_mem += __shfl_xor_sync(0xffffffff, kv_mem, mask);
-                }
-                const float delta = ((float)vec_V[v_iter][v] - kv_mem) * beta_val;
-                PRAGMA_UNROLL
-                for (int k = 0; k < tile_k; ++k) {
-                    vec_S[v_iter][k][v] = vec_S[v_iter][k][v] + vec_K[k] * delta;
+                    SQ += __shfl_xor_sync(0xffffffff, SQ, mask);
                 }
 
-                // --- Step 3: output = (S^T @ q) * scale ---
-                // [vdim,kdim] @ [kdim,khead] = [vdim,khead]
-                float O = 0.f;
+                const float delta = ((float)vec_V[v_iter][v] - kv_mem) * beta_val;
+
+                // State update
                 PRAGMA_UNROLL
                 for (int k = 0; k < tile_k; ++k) {
-                    O += vec_S[v_iter][k][v] * vec_Q[k];
+                    vec_S[v_iter][k][v] += vec_K[k] * delta;
                 }
-                PRAGMA_UNROLL
-                for (int mask = k_threads / 2; mask > 0; mask /= 2) {
-                    O += __shfl_xor_sync(0xffffffff, O, mask);
-                }
-                vec_O[v] = static_cast<T>(O * scale);
+
+                // Output: algebraic computation, NO reduction needed
+                vec_O[v] = static_cast<T>((SQ + delta * KQ) * scale);
             }
-            Store(&o_ptr[(offset_v + v_iter * v_threads) * tile_v], vec_O);
+            if (offset_k == 0)
+                Store(&o_ptr[(offset_v + v_iter * v_threads) * tile_v], vec_O);
         }
     }
 
@@ -423,10 +425,11 @@ __global__ void recurrent_gated_delta_rule_kernel_v2(T*         v_out,
     for (int v_iter = 0; v_iter < v_iters; ++v_iter) {
         PRAGMA_UNROLL
         for (int k = 0; k < tile_k; ++k) {
+            constexpr int kTileAccessC = (tile_v >= kAccessC) ? kAccessC : tile_v;
             PRAGMA_UNROLL
-            for (int c = 0; c < tile_v / kAccessC; ++c) {
-                auto tmp = cast<S>((Array<float, kAccessC>&)vec_S[v_iter][k][c * kAccessC]);
-                Store(&smem_S(offset_k * tile_k + k, (offset_v + v_iter * v_threads) * tile_v + c * kAccessC), tmp);
+            for (int c = 0; c < tile_v / kTileAccessC; ++c) {
+                auto tmp = cast<S>((Array<float, kTileAccessC>&)vec_S[v_iter][k][c * kTileAccessC]);
+                Store(&smem_S(offset_k * tile_k + k, (offset_v + v_iter * v_threads) * tile_v + c * kTileAccessC), tmp);
             }
         }
     }
@@ -514,21 +517,21 @@ void invokeGatedDeltaRuleBatched_v2(Ref<Tensor>           v_out_,
 // Chunked Gated Delta Rule kernel — register-centric, small chunk size.
 //
 // Grid = batch_size * num_v_heads blocks, one block per (b, h) pair.
-// All inner loops use compile-time C for full unrolling.
-// Shared memory: resolvent[C*C] + scalars[5*C] (~384B for C=8).
+// Cooperative QKV load to smem per chunk, then sequential per-token
+// processing (same recurrence as v2) reading from smem.
 // State load/store uses the full swizzled smem buffer (same as v2).
 // =============================================================================
 template<int kHeadDim, int kChunkSize, int kBlockDim, class T, class S>
 __global__ void chunked_gated_delta_rule_kernel(T*         v_out,
-                                                 const T*   qkv_in,
-                                                 const T*   beta_in,
-                                                 const T*   g_in,
-                                                 S* const*  state_ptrs,
-                                                 const int* q_offsets,
-                                                 int        num_v_heads,
-                                                 int        num_k_heads,
-                                                 int        k_dim_total,
-                                                 int        state_layer_offset)
+                                                const T*   qkv_in,
+                                                const T*   beta_in,
+                                                const T*   g_in,
+                                                S* const*  state_ptrs,
+                                                const int* q_offsets,
+                                                int        num_v_heads,
+                                                int        num_k_heads,
+                                                int        k_dim_total,
+                                                int        state_layer_offset)
 {
     constexpr int C = kChunkSize;
     constexpr int D = kHeadDim;
@@ -554,10 +557,10 @@ __global__ void chunked_gated_delta_rule_kernel(T*         v_out,
     // ── State tiling (same as v2) ──
     constexpr int tile_k    = 8;
     constexpr int tile_v    = 8;
-    constexpr int k_tiles   = D / tile_k;   // 16
-    constexpr int k_threads = k_tiles;       // 16
-    constexpr int v_threads = kBlockDim / k_threads;  // 16
-    constexpr int v_tiles   = D / tile_v;    // 16
+    constexpr int k_tiles   = D / tile_k;                // 16
+    constexpr int k_threads = k_tiles;                   // 16
+    constexpr int v_threads = kBlockDim / k_threads;     // 16
+    constexpr int v_tiles   = D / tile_v;                // 16
     constexpr int v_iters   = cdiv(v_tiles, v_threads);  // 1
 
     const int offset_k = threadIdx.x % k_threads;
@@ -571,14 +574,14 @@ __global__ void chunked_gated_delta_rule_kernel(T*         v_out,
     //  LOAD STATE  global → smem (swizzled) → registers   (same as v2)
     // ================================================================
     {
-        using Map_S = ThreadMap_V2<D, D, sizeof(uint4) / sizeof(S), Raked, kBlockDim / WARP_SIZE>;
+        using Map_S          = ThreadMap_V2<D, D, sizeof(uint4) / sizeof(S), Raked, kBlockDim / WARP_SIZE>;
         constexpr int kBase  = (sizeof(S) == 4) ? 2 : 3;
         constexpr int kShift = 10 - kBase;
-        using Layout = SmemLayoutV2<D, D, -1, -1, Swizzle<4, kBase, kShift>>;
+        using Layout         = SmemLayoutV2<D, D, -1, -1, Swizzle<4, kBase, kShift>>;
         SmemAccessor<S, Layout> smem_S{(S*)smem_buf};
 
-        const int warp_id = threadIdx.x / WARP_SIZE;
-        const int lane_id = threadIdx.x % WARP_SIZE;
+        const int     warp_id  = threadIdx.x / WARP_SIZE;
+        const int     lane_id  = threadIdx.x % WARP_SIZE;
         constexpr int kAccessC = Map_S::kAccessC;
 
         PRAGMA_UNROLL
@@ -604,8 +607,7 @@ __global__ void chunked_gated_delta_rule_kernel(T*         v_out,
                 for (int c = 0; c < tile_v / Map_S::kAccessC; ++c) {
                     Array<S, Map_S::kAccessC> tmp;
                     Load(tmp,
-                         &smem_S(offset_k * tile_k + k,
-                                 (offset_v + vi * v_threads) * tile_v + c * Map_S::kAccessC));
+                         &smem_S(offset_k * tile_k + k, (offset_v + vi * v_threads) * tile_v + c * Map_S::kAccessC));
                     (Array<float, Map_S::kAccessC>&)vec_S[vi][k][c * Map_S::kAccessC] = cast<float>(tmp);
                 }
             }
@@ -614,21 +616,27 @@ __global__ void chunked_gated_delta_rule_kernel(T*         v_out,
     __syncthreads();
 
     // ================================================================
-    //  CHUNK PROCESSING  (all inner loops use compile-time C)
+    //  CHUNK PROCESSING  — sequential per-token (same as v2) with
+    //  smem-cached QKV.  Eliminates resolvent/intra-attention overhead.
     // ================================================================
     // Shared memory layout for chunk processing (overlaps state staging buffer):
-    //   resolvent[C*C]    — resolvent matrix, reused for scratch
-    //   beta_vals[C]      — per-token beta
-    //   g_cumsum[C]       — cumulative gate
-    //   q_inv_norms[C]    — 1/||q||
-    //   k_inv_norms[C]    — 1/||k||
-    //   scratch[C]        — temp for forward substitution
-    float* resolvent   = (float*)smem_buf;
-    float* beta_vals   = resolvent + C * C;
-    float* g_cumsum    = beta_vals + C;
-    float* q_inv_norms = g_cumsum + C;
-    float* k_inv_norms = q_inv_norms + C;
-    float* scratch     = k_inv_norms + C;  // [C] floats
+    //   k_norm_smem[C][kSmemStride]  — pre-normalized K
+    //   q_norm_smem[C][kSmemStride]  — pre-normalized Q
+    //   v_smem[C][kSmemStride]       — raw V (as float)
+    //   scalars[3*C]                 — beta[C], g[C], scratch[C]
+    constexpr int kSmemStride = D + 4;  // pad rows by 4 to avoid 4-way bank conflicts
+
+    float* k_norm_smem = (float*)smem_buf;
+    float* q_norm_smem = k_norm_smem + C * kSmemStride;
+    float* v_smem      = q_norm_smem + C * kSmemStride;
+    float* beta_vals   = v_smem + C * kSmemStride;
+    float* g_vals      = beta_vals + C;
+
+    // Thread-to-token mapping for cooperative loads: 1 warp per token
+    constexpr int kThreadsPerTok = kBlockDim / C;                 // 256/8 = 32
+    constexpr int kElemsPerThr   = D / kThreadsPerTok;            // 128/32 = 4
+    const int     load_tok       = threadIdx.x / kThreadsPerTok;  // which token (0..C-1)
+    const int     load_lane      = threadIdx.x % kThreadsPerTok;  // lane within token's warp
 
     const int num_chunks = (seq_len + C - 1) / C;
 
@@ -636,327 +644,138 @@ __global__ void chunked_gated_delta_rule_kernel(T*         v_out,
         const int chunk_start = tok_off + ci * C;
         const int valid_len   = min(C, seq_len - ci * C);
 
-        // Helper: base pointer for k of token t (in this thread's k-tile)
-        // Caller must check t < valid_len or use zero.
-        const int k_off_base = k_dim_total + kh * D + offset_k * tile_k;
-        const int q_off_base = kh * D + offset_k * tile_k;
-
         // ────────────────────────────────────────────────────
-        //  Phase 1: Load scalars, prefix sum g_cumsum
+        //  Phase 0: Cooperative load K, Q, V → smem (pre-normalized)
+        //  32 threads (1 warp) per token, 4 elements per thread.
+        //  Norms computed via warp shuffle, K/Q normalized in registers
+        //  before writing to smem → eliminates one __syncthreads.
         // ────────────────────────────────────────────────────
-        if (threadIdx.x < C) {
-            int t = threadIdx.x;
-            if (t < valid_len) {
-                int gt       = chunk_start + t;
-                beta_vals[t] = (float)beta_in[gt * num_v_heads + h];
-                g_cumsum[t]  = (float)g_in[gt * num_v_heads + h];
-            }
-            else {
-                beta_vals[t] = 0.f;
-                g_cumsum[t]  = 0.f;
-            }
-        }
-        __syncthreads();
-
-        if (threadIdx.x == 0) {
-            PRAGMA_UNROLL
-            for (int t = 1; t < C; ++t)
-                g_cumsum[t] += g_cumsum[t - 1];
-        }
-        __syncthreads();
-
-        // ────────────────────────────────────────────────────
-        //  Phase 2: K and Q L2 norms (load from global, don't keep k in regs)
-        // ────────────────────────────────────────────────────
-        PRAGMA_UNROLL
-        for (int t = 0; t < C; ++t) {
+        {
+            float K_reg[kElemsPerThr], Q_reg[kElemsPerThr];
             float k_sq = 0.f, q_sq = 0.f;
-            if (t < valid_len) {
-                int gt = chunk_start + t;
-                const T* k_ptr = qkv_in + gt * conv_dim + k_off_base;
-                const T* q_ptr = qkv_in + gt * conv_dim + q_off_base;
+            if (load_tok < valid_len) {
+                const int gt    = chunk_start + load_tok;
+                const T*  k_ptr = qkv_in + gt * conv_dim + k_dim_total + kh * D;
+                const T*  q_ptr = qkv_in + gt * conv_dim + kh * D;
+                const T*  v_ptr = qkv_in + gt * conv_dim + 2 * k_dim_total + h * D;
                 PRAGMA_UNROLL
-                for (int k = 0; k < tile_k; ++k) {
-                    float kv = (float)k_ptr[k];
-                    float qv = (float)q_ptr[k];
-                    k_sq += kv * kv;
-                    q_sq += qv * qv;
+                for (int e = 0; e < kElemsPerThr; ++e) {
+                    const int d = load_lane * kElemsPerThr + e;
+                    K_reg[e]    = (float)k_ptr[d];
+                    Q_reg[e]    = (float)q_ptr[d];
+                    k_sq += K_reg[e] * K_reg[e];
+                    q_sq += Q_reg[e] * Q_reg[e];
+                    v_smem[load_tok * kSmemStride + d] = (float)v_ptr[d];
+                }
+                if (load_lane == 0) {
+                    beta_vals[load_tok] = (float)beta_in[gt * num_v_heads + h];
+                    g_vals[load_tok]    = (float)g_in[gt * num_v_heads + h];
                 }
             }
+            else {
+                PRAGMA_UNROLL
+                for (int e = 0; e < kElemsPerThr; ++e) {
+                    K_reg[e]                                                      = 0.f;
+                    Q_reg[e]                                                      = 0.f;
+                    v_smem[load_tok * kSmemStride + load_lane * kElemsPerThr + e] = 0.f;
+                }
+            }
+            // Warp-reduce norms (32-thread warp per token)
             PRAGMA_UNROLL
-            for (int mask = k_threads / 2; mask > 0; mask /= 2) {
+            for (int mask = kThreadsPerTok / 2; mask > 0; mask >>= 1) {
                 k_sq += __shfl_xor_sync(0xffffffff, k_sq, mask);
                 q_sq += __shfl_xor_sync(0xffffffff, q_sq, mask);
             }
-            if (offset_k == 0) {
-                k_inv_norms[t] = (t < valid_len) ? rsqrtf(k_sq + 1e-6f) : 0.f;
-                q_inv_norms[t] = (t < valid_len) ? rsqrtf(q_sq + 1e-6f) : 0.f;
+            const float k_inv = (load_tok < valid_len) ? rsqrtf(k_sq + 1e-6f) : 0.f;
+            const float q_inv = (load_tok < valid_len) ? rsqrtf(q_sq + 1e-6f) : 0.f;
+            // Write normalized K, Q to smem
+            PRAGMA_UNROLL
+            for (int e = 0; e < kElemsPerThr; ++e) {
+                const int d                             = load_lane * kElemsPerThr + e;
+                k_norm_smem[load_tok * kSmemStride + d] = K_reg[e] * k_inv;
+                q_norm_smem[load_tok * kSmemStride + d] = Q_reg[e] * q_inv;
             }
         }
-        __syncthreads();
+        __syncthreads();  // [sync 1] all smem data ready
 
         // ────────────────────────────────────────────────────
-        //  Phase 3: Resolvent [C,C]
-        //  resolvent[i][j] = -(k_beta[i] · k[j]) * exp(g[i]-g[j])  for j < i
-        //  k is loaded from global (stays in L1 cache)
-        // ────────────────────────────────────────────────────
-        PRAGMA_UNROLL
-        for (int i = 1; i < C; ++i) {
-            PRAGMA_UNROLL
-            for (int j = 0; j < i; ++j) {
-                float dot = 0.f;
-                if (i < valid_len) {
-                    int gi = chunk_start + i;
-                    int gj = chunk_start + j;
-                    const T* ki_ptr = qkv_in + gi * conv_dim + k_off_base;
-                    const T* kj_ptr = qkv_in + gj * conv_dim + k_off_base;
-                    PRAGMA_UNROLL
-                    for (int k = 0; k < tile_k; ++k)
-                        dot += ((float)ki_ptr[k] * k_inv_norms[i] * beta_vals[i])
-                             * ((float)kj_ptr[k] * k_inv_norms[j]);
-                }
-                PRAGMA_UNROLL
-                for (int mask = k_threads / 2; mask > 0; mask /= 2)
-                    dot += __shfl_xor_sync(0xffffffff, dot, mask);
-                if (offset_k == 0 && offset_v == 0)
-                    resolvent[i * C + j] = -dot * expf(g_cumsum[i] - g_cumsum[j]);
-            }
-        }
-        if (threadIdx.x == 0) {
-            PRAGMA_UNROLL
-            for (int i = 0; i < C; ++i)
-                PRAGMA_UNROLL
-                for (int j = i; j < C; ++j)
-                    resolvent[i * C + j] = 0.f;
-        }
-        __syncthreads();
-
-        // Forward substitution
-        PRAGMA_UNROLL
-        for (int i = 1; i < C; ++i) {
-            if (threadIdx.x < C)
-                scratch[threadIdx.x] = resolvent[i * C + threadIdx.x];
-            __syncthreads();
-
-            if (threadIdx.x < i) {
-                int j = threadIdx.x;
-                float acc = 0.f;
-                PRAGMA_UNROLL
-                for (int m = 0; m < C; ++m)
-                    acc += scratch[m] * resolvent[m * C + j];
-                resolvent[i * C + j] = scratch[j] + acc;
-            }
-            __syncthreads();
-        }
-
-        if (threadIdx.x < C)
-            resolvent[threadIdx.x * C + threadIdx.x] += 1.0f;
-        __syncthreads();
-
-        // ────────────────────────────────────────────────────
-        //  Phase 4: value_new → v_new[C][tile_v] in registers
-        //  v_new[i][v] = Σ_j resolvent[i][j] * value[j][v] * beta[j]
-        // ────────────────────────────────────────────────────
-        float v_new[C][tile_v];
-        PRAGMA_UNROLL
-        for (int i = 0; i < C; ++i)
-            PRAGMA_UNROLL
-            for (int v = 0; v < tile_v; ++v)
-                v_new[i][v] = 0.f;
-
-        PRAGMA_UNROLL
-        for (int j = 0; j < C; ++j) {
-            float vb[tile_v];
-            if (j < valid_len) {
-                int gj = chunk_start + j;
-                const T* v_ptr = qkv_in + gj * conv_dim + 2 * k_dim_total + h * D;
-                PRAGMA_UNROLL
-                for (int v = 0; v < tile_v; ++v)
-                    vb[v] = (float)v_ptr[(offset_v + 0 * v_threads) * tile_v + v] * beta_vals[j];
-            }
-            else {
-                PRAGMA_UNROLL
-                for (int v = 0; v < tile_v; ++v)
-                    vb[v] = 0.f;
-            }
-            PRAGMA_UNROLL
-            for (int i = 0; i < C; ++i) {
-                float r = resolvent[i * C + j];
-                PRAGMA_UNROLL
-                for (int v = 0; v < tile_v; ++v)
-                    v_new[i][v] += r * vb[v];
-            }
-        }
-
-        // ────────────────────────────────────────────────────
-        //  Phase 5: v_prime = k_cumdecay @ state, v_new -= v_prime
-        //  k_cumdecay[t][k] = Σ_j resolvent[t][j] * k_norm[j][k] * beta[j] * exp(g[j])
-        //  k loaded from global per j (L1 cached)
-        // ────────────────────────────────────────────────────
-        PRAGMA_UNROLL
-        for (int t = 0; t < C; ++t) {
-            float kcd[tile_k];
-            PRAGMA_UNROLL
-            for (int k = 0; k < tile_k; ++k)
-                kcd[k] = 0.f;
-
-            PRAGMA_UNROLL
-            for (int j = 0; j < C; ++j) {
-                float w = resolvent[t * C + j] * beta_vals[j] * expf(g_cumsum[j]);
-                if (j < valid_len) {
-                    int gj = chunk_start + j;
-                    const T* kj_ptr = qkv_in + gj * conv_dim + k_off_base;
-                    PRAGMA_UNROLL
-                    for (int k = 0; k < tile_k; ++k)
-                        kcd[k] += w * ((float)kj_ptr[k] * k_inv_norms[j]);
-                }
-            }
-
-            PRAGMA_UNROLL
-            for (int vi = 0; vi < v_iters; ++vi) {
-                PRAGMA_UNROLL
-                for (int v = 0; v < tile_v; ++v) {
-                    float vp = 0.f;
-                    PRAGMA_UNROLL
-                    for (int k = 0; k < tile_k; ++k)
-                        vp += kcd[k] * vec_S[vi][k][v];
-                    PRAGMA_UNROLL
-                    for (int mask = k_threads / 2; mask > 0; mask /= 2)
-                        vp += __shfl_xor_sync(0xffffffff, vp, mask);
-                    if (offset_k == 0)
-                        v_new[t][v] -= vp;
-                }
-            }
-        }
-
-        // ────────────────────────────────────────────────────
-        //  Phase 6: Output = q_decay @ state + intra_attn @ v_new
-        //  intra_attn computed on-the-fly per output token
-        //  q and k loaded from global (L1 cached)
+        //  Sequential per-token loop (same computation as v2)
+        //  Reads K, Q, V from smem instead of global memory.
         // ────────────────────────────────────────────────────
         PRAGMA_UNROLL
         for (int t = 0; t < C; ++t) {
             if (t >= valid_len)
                 break;
 
-            int gt = chunk_start + t;
+            const int   gt       = chunk_start + t;
+            const float beta_val = beta_vals[t];
+            const float decay    = expf(g_vals[t]);
 
-            // Load q[t][tile_k] and apply L2 norm
-            float q_t[tile_k];
-            {
-                const T* q_ptr = qkv_in + gt * conv_dim + q_off_base;
-                float inv_norm = q_inv_norms[t];
-                PRAGMA_UNROLL
-                for (int k = 0; k < tile_k; ++k)
-                    q_t[k] = (float)q_ptr[k] * inv_norm;
+            float vec_K[tile_k];
+            float vec_Q[tile_k];
+            PRAGMA_UNROLL
+            for (int k = 0; k < tile_k; ++k) {
+                vec_K[k] = k_norm_smem[t * kSmemStride + offset_k * tile_k + k];
+                vec_Q[k] = q_norm_smem[t * kSmemStride + offset_k * tile_k + k];
             }
-
-            float g_exp = expf(g_cumsum[t]);
 
             PRAGMA_UNROLL
             for (int vi = 0; vi < v_iters; ++vi) {
-                // output_inter = q_decay @ state
-                float inter[tile_v];
+                const int v_base = (offset_v + vi * v_threads) * tile_v;
+
+                float vec_V[tile_v];
+                PRAGMA_UNROLL
+                for (int v = 0; v < tile_v; ++v)
+                    vec_V[v] = v_smem[t * kSmemStride + v_base + v];
+
+                Array<T, tile_v> vec_O;
                 PRAGMA_UNROLL
                 for (int v = 0; v < tile_v; ++v) {
-                    float val = 0.f;
+                    // Step 1: state *= decay
                     PRAGMA_UNROLL
                     for (int k = 0; k < tile_k; ++k)
-                        val += q_t[k] * g_exp * vec_S[vi][k][v];
+                        vec_S[vi][k][v] *= decay;
+
+                    // Step 2: delta rule update
+                    float kv_mem = 0.f;
+                    PRAGMA_UNROLL
+                    for (int k = 0; k < tile_k; ++k)
+                        kv_mem += vec_S[vi][k][v] * vec_K[k];
                     PRAGMA_UNROLL
                     for (int mask = k_threads / 2; mask > 0; mask /= 2)
-                        val += __shfl_xor_sync(0xffffffff, val, mask);
-                    inter[v] = val;
-                }
-
-                // intra_attn[t][j] * v_new[j] on-the-fly
-                float intra[tile_v] = {};
-                PRAGMA_UNROLL
-                for (int j = 0; j <= t; ++j) {
-                    // Partial dot q_norm[t] · k_norm[j]
-                    float dot = 0.f;
-                    int gj = chunk_start + j;
-                    const T* kj_ptr = qkv_in + gj * conv_dim + k_off_base;
+                        kv_mem += __shfl_xor_sync(0xffffffff, kv_mem, mask);
+                    const float delta = (vec_V[v] - kv_mem) * beta_val;
                     PRAGMA_UNROLL
                     for (int k = 0; k < tile_k; ++k)
-                        dot += q_t[k] * ((float)kj_ptr[k] * k_inv_norms[j]);
+                        vec_S[vi][k][v] += vec_K[k] * delta;
+
+                    // Step 3: output = (S^T @ q) * scale
+                    float O = 0.f;
+                    PRAGMA_UNROLL
+                    for (int k = 0; k < tile_k; ++k)
+                        O += vec_S[vi][k][v] * vec_Q[k];
                     PRAGMA_UNROLL
                     for (int mask = k_threads / 2; mask > 0; mask /= 2)
-                        dot += __shfl_xor_sync(0xffffffff, dot, mask);
-                    float attn_val = dot * expf(g_cumsum[t] - g_cumsum[j]);
-                    PRAGMA_UNROLL
-                    for (int v = 0; v < tile_v; ++v)
-                        intra[v] += attn_val * v_new[j][v];
+                        O += __shfl_xor_sync(0xffffffff, O, mask);
+                    vec_O[v] = static_cast<T>(O * scale);
                 }
-
-                if (offset_k == 0) {
-                    int base_v = (offset_v + vi * v_threads) * tile_v;
-                    T*  optr   = v_out + gt * v_dim + h * D;
-                    PRAGMA_UNROLL
-                    for (int v = 0; v < tile_v; ++v)
-                        optr[base_v + v] = static_cast<T>((inter[v] + intra[v]) * scale);
-                }
+                if (offset_k == 0)
+                    Store(&v_out[gt * v_dim + h * D + v_base], vec_O);
             }
         }
-
-        // ────────────────────────────────────────────────────
-        //  Phase 7: State update
-        //  state *= exp(g_cumsum[C-1])
-        //  state += Σ_t k_decay[t] ⊗ v_new[t]
-        //  k loaded from global per token
-        // ────────────────────────────────────────────────────
-        {
-            float g_last    = g_cumsum[C - 1];
-            float decay_all = expf(g_last);
-
-            PRAGMA_UNROLL
-            for (int vi = 0; vi < v_iters; ++vi)
-                PRAGMA_UNROLL
-                for (int k = 0; k < tile_k; ++k)
-                    PRAGMA_UNROLL
-                    for (int v = 0; v < tile_v; ++v)
-                        vec_S[vi][k][v] *= decay_all;
-
-            PRAGMA_UNROLL
-            for (int t = 0; t < C; ++t) {
-                float kd_exp = expf(g_last - g_cumsum[t]);
-                float kd[tile_k];
-                if (t < valid_len) {
-                    int gt = chunk_start + t;
-                    const T* kt_ptr = qkv_in + gt * conv_dim + k_off_base;
-                    PRAGMA_UNROLL
-                    for (int k = 0; k < tile_k; ++k)
-                        kd[k] = (float)kt_ptr[k] * k_inv_norms[t] * kd_exp;
-                }
-                else {
-                    PRAGMA_UNROLL
-                    for (int k = 0; k < tile_k; ++k)
-                        kd[k] = 0.f;
-                }
-
-                PRAGMA_UNROLL
-                for (int vi = 0; vi < v_iters; ++vi) {
-                    PRAGMA_UNROLL
-                    for (int k = 0; k < tile_k; ++k)
-                        PRAGMA_UNROLL
-                        for (int v = 0; v < tile_v; ++v)
-                            vec_S[vi][k][v] += kd[k] * v_new[t][v];
-                }
-            }
-        }
-        __syncthreads();
+        __syncthreads();  // [sync 2] ensure all reads done before next chunk overwrites smem
     }  // chunk loop
 
     // ================================================================
     //  STORE STATE  registers → smem (swizzled) → global   (same as v2)
     // ================================================================
     {
-        using Map_S = ThreadMap_V2<D, D, sizeof(uint4) / sizeof(S), Raked, kBlockDim / WARP_SIZE>;
+        using Map_S          = ThreadMap_V2<D, D, sizeof(uint4) / sizeof(S), Raked, kBlockDim / WARP_SIZE>;
         constexpr int kBase  = (sizeof(S) == 4) ? 2 : 3;
         constexpr int kShift = 10 - kBase;
-        using Layout = SmemLayoutV2<D, D, -1, -1, Swizzle<4, kBase, kShift>>;
+        using Layout         = SmemLayoutV2<D, D, -1, -1, Swizzle<4, kBase, kShift>>;
         SmemAccessor<S, Layout> smem_S{(S*)smem_buf};
-        constexpr int kAccessC = Map_S::kAccessC;
+        constexpr int           kAccessC = Map_S::kAccessC;
 
         PRAGMA_UNROLL
         for (int vi = 0; vi < v_iters; ++vi) {
@@ -965,9 +784,7 @@ __global__ void chunked_gated_delta_rule_kernel(T*         v_out,
                 PRAGMA_UNROLL
                 for (int c = 0; c < tile_v / kAccessC; ++c) {
                     auto tmp = cast<S>((Array<float, kAccessC>&)vec_S[vi][k][c * kAccessC]);
-                    Store(&smem_S(offset_k * tile_k + k,
-                                  (offset_v + vi * v_threads) * tile_v + c * kAccessC),
-                          tmp);
+                    Store(&smem_S(offset_k * tile_k + k, (offset_v + vi * v_threads) * tile_v + c * kAccessC), tmp);
                 }
             }
         }
@@ -993,16 +810,16 @@ __global__ void chunked_gated_delta_rule_kernel(T*         v_out,
 
 // Host-side launcher
 void invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out_,
-                                         const Tensor&         qkv_in,
-                                         const Tensor&         beta,
-                                         const Tensor&         g,
-                                         const Buffer_<void*>& state_ptrs,
-                                         const Buffer_<int>&   q_offsets,
-                                         int                   batch_size,
-                                         int                   num_k_heads,
-                                         int                   state_layer_offset,
-                                         DataType              state_dtype,
-                                         cudaStream_t          stream)
+                                        const Tensor&         qkv_in,
+                                        const Tensor&         beta,
+                                        const Tensor&         g,
+                                        const Buffer_<void*>& state_ptrs,
+                                        const Buffer_<int>&   q_offsets,
+                                        int                   batch_size,
+                                        int                   num_k_heads,
+                                        int                   state_layer_offset,
+                                        DataType              state_dtype,
+                                        cudaStream_t          stream)
 {
     auto& v_out = v_out_.get();
 
@@ -1015,7 +832,7 @@ void invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out_,
         return;
 
     constexpr int kHeadDim   = 128;
-    constexpr int kChunkSize = 8;
+    constexpr int kChunkSize = 16;
     constexpr int kBlockDim  = 256;
 
     TM_CHECK_EQ(value_head_dim, kHeadDim);
@@ -1032,10 +849,11 @@ void invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out_,
 
             // smem = max(state staging, chunk working buffers)
             // State staging: D*D*sizeof(S) (64KB for fp32)
-            // Chunk buffers: resolvent[C*C] + scalars[5*C] + scratch[C] ≈ tiny
-            constexpr size_t state_smem = kHeadDim * kHeadDim * sizeof(S);
-            constexpr size_t chunk_smem =
-                (kChunkSize * kChunkSize + 6 * kChunkSize) * sizeof(float);
+            // Chunk buffers: QKV cache [3*C*(D+4)] + scalars[2*C]
+            constexpr size_t state_smem  = kHeadDim * kHeadDim * sizeof(S);
+            constexpr int    kSmemStride = kHeadDim + 4;
+            constexpr size_t chunk_smem  = 3 * kChunkSize * kSmemStride * sizeof(float)  // k_norm, q_norm, v
+                                          + 2 * kChunkSize * sizeof(float);              // beta, g
             constexpr size_t smem_sz = state_smem > chunk_smem ? state_smem : chunk_smem;
 
             if (smem_sz > 48 << 10) {
@@ -1043,15 +861,15 @@ void invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out_,
             }
 
             kernel<<<num_blocks, kBlockDim, smem_sz, stream>>>(v_out.data<T>(),
-                                                                qkv_in.data<T>(),
-                                                                beta.data<T>(),
-                                                                g.data<T>(),
-                                                                (S* const*)state_ptrs.data(),
-                                                                q_offsets.data(),
-                                                                num_v_heads,
-                                                                num_k_heads,
-                                                                k_dim_total,
-                                                                state_layer_offset);
+                                                               qkv_in.data<T>(),
+                                                               beta.data<T>(),
+                                                               g.data<T>(),
+                                                               (S* const*)state_ptrs.data(),
+                                                               q_offsets.data(),
+                                                               num_v_heads,
+                                                               num_k_heads,
+                                                               k_dim_total,
+                                                               state_layer_offset);
         };
         if (state_dtype == kFloat32) {
             launch(float{});

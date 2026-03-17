@@ -64,6 +64,20 @@ void invokeGatedDeltaRuleBatched_v2(Ref<Tensor>           v_out,
                                     DataType              state_dtype,
                                     cudaStream_t          stream);
 
+// Recurrent kernel v3 — uses cp.async for state loads to reduce scoreboard stalls.
+// Same interface as v2 (one block per (batch, head) pair).
+void invokeGatedDeltaRuleBatched_v3(Ref<Tensor>           v_out,
+                                    const Tensor&         qkv_in,
+                                    const Tensor&         beta,
+                                    const Tensor&         g,
+                                    const Buffer_<void*>& state_ptrs,
+                                    const Buffer_<int>&   q_offsets,
+                                    int                   batch_size,
+                                    int                   num_k_heads,
+                                    int                   state_layer_offset,
+                                    DataType              state_dtype,
+                                    cudaStream_t          stream);
+
 // =============================================================================
 // Chunked Gated Delta Rule — for accelerating prefill
 //
