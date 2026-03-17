@@ -355,6 +355,7 @@ class ModelConfig:
         hf_overrides: Dict[str, Any] = None,
         is_draft_model: bool = False,
         spec_method: str = None,
+        num_spec_tokens: int = 0,
         model_format: str = None,
     ):
         """Instantiate one of the configuration classes of the library from a
@@ -386,6 +387,7 @@ class ModelConfig:
             dist_config=dist_config,
             is_draft_model=is_draft_model,
             spec_method=spec_method,
+            num_spec_tokens=num_spec_tokens,
         )
         fp32_lm_head = False
         if hf_overrides is not None:
@@ -413,6 +415,7 @@ class ModelConfig:
         dist_config: DistConfig = None,
         is_draft_model: bool = False,
         spec_method: str = None,
+        num_spec_tokens: int = 0,
     ):
         """From huggingface config."""
         from lmdeploy.pytorch.configurations import AutoModelConfigBuilder
@@ -420,11 +423,14 @@ class ModelConfig:
             dist_config = DistConfig()
         tp = dist_config.attn_tp
 
-        model_config = AutoModelConfigBuilder.build(hf_config,
-                                                    model_path,
-                                                    tp=tp,
-                                                    is_draft_model=is_draft_model,
-                                                    spec_method=spec_method)
+        model_config = AutoModelConfigBuilder.build(
+            hf_config,
+            model_path,
+            tp=tp,
+            is_draft_model=is_draft_model,
+            spec_method=spec_method,
+            num_spec_tokens=num_spec_tokens,
+        )
 
         if model_config.k_head_dim is None:
             assert model_config.head_dim is not None

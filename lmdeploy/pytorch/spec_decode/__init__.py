@@ -17,7 +17,7 @@ def build_spec_agent(specdecode_config: SpecDecodeConfig,
         return SpecModelAgent(specdecode_config, backend_config, inputs_strategy, agent_strategy, device=device)
     else:
         from .base import BaseSpecModelAgent
-        return BaseSpecModelAgent()
+        return BaseSpecModelAgent(specdecode_config)
 
 
 __all__ = ['build_spec_agent']

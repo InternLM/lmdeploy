@@ -25,13 +25,19 @@ class ARSpecModelInputsStrategy(ModelInputsStrategy):
         target_dtype: torch.dtype = torch.bfloat16,
     ) -> ModelInputs:
         """Create dummy model inputs."""
+        is_draft_model = target_hidden_size is not None
+
+        # warmup decoding for main model
+        if not is_draft_model and is_decoding and max_q_seqlen == 1:
+            max_q_seqlen = self.num_spec_tokens + 1
+
         inputs = make_dummy_inputs(batch_size,
                                    max_q_seqlen=max_q_seqlen,
                                    is_decoding=is_decoding,
                                    device=device,
                                    dummy_block_id=dummy_block_id,
                                    vocab_size=vocab_size)
-        if target_hidden_size is not None:
+        if is_draft_model:
             inputs.target_hidden_states = torch.randn((1, batch_size * max_q_seqlen, target_hidden_size),
                                                       dtype=target_dtype,
                                                       device=device)

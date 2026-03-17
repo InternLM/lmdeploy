@@ -21,7 +21,7 @@ from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_merged_colwi
 from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader, load_weight
 
-from .patch import add_prefix
+from .patch import add_prefix, get_build_model_context
 from .qwen2_5_vl import Qwen2_5_VisionRotaryEmbedding as Qwen3_5VisionRotaryEmbedding
 from .qwen2_5_vl import Qwen2_5_VLInputProcessor as Qwen3_5InputProcessor
 from .qwen2_5_vl import Qwen2_5_VLVisionAttention as Qwen3_5VisionAttention
@@ -729,9 +729,9 @@ class Qwen3_5DecoderLayer(nn.Module):
         hidden_states: torch.Tensor,
         rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
         past_key_value: List[torch.FloatTensor],
-        residual: torch.Tensor | None,
-        attn_metadata: Any,
-        gated_delta_meta: GatedDeltaMeta,
+        residual: torch.Tensor | None = None,
+        attn_metadata: Any | None = None,
+        gated_delta_meta: GatedDeltaMeta | None = None,
         all_routed_experts: torch.Tensor | None = None,
     ):
 
@@ -891,6 +891,8 @@ class Qwen3_5TextModel(nn.Module):
 
         # build rotary embedding
         self.rotary_emb = Qwen3_5TextRotaryEmbedding(config, device=device)
+
+        self.num_spec_tokens = get_build_model_context().num_spec_tokens
 
     def forward(
         self,
@@ -1307,13 +1309,15 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         model_metas = self._get_model_metas(context)
         position_ids = context.position_ids
 
-        mrope_deltas = [meta['mrope_delta'] for meta in model_metas]
-        mrope_deltas_cpu = torch.tensor(mrope_deltas, device='cpu')
-        if (mrope_deltas_cpu == mrope_deltas_cpu[0]).all():
-            mrope_deltas = position_ids.new_full((len(mrope_deltas), ), mrope_deltas[0])
-        else:
-            mrope_deltas = position_ids.new_tensor(mrope_deltas)
-        mrope_position_ids = position_ids + mrope_deltas[None]
+        # TODO: apply mrope update PR later
+        # mrope_deltas = [meta['mrope_delta'] for meta in model_metas]
+        # mrope_deltas_cpu = torch.tensor(mrope_deltas, device='cpu')
+        # if (mrope_deltas_cpu == mrope_deltas_cpu[0]).all():
+        #     mrope_deltas = position_ids.new_full((len(mrope_deltas), ), mrope_deltas[0])
+        # else:
+        #     mrope_deltas = position_ids.new_tensor(mrope_deltas)
+        # mrope_position_ids = position_ids + mrope_deltas[None]
+        mrope_position_ids = position_ids
         mrope_position_ids = mrope_position_ids.expand(3, -1)
 
         context.mrope_position_ids = mrope_position_ids

@@ -422,11 +422,8 @@ class DeepSeekMultiTokenPredictorLayer(nn.Module):
             inputs_embeds = self.embed_tokens(input_ids)
         assert inputs_embeds is not None
 
-        # masking inputs at position 0, as not needed by MTP
-        inputs_embeds[position_ids == 0] = 0
         inputs_embeds = self.enorm(inputs_embeds)
         previous_hidden_states = self.hnorm(previous_hidden_states)
-
         hidden_states = self.eh_proj(torch.cat([inputs_embeds, previous_hidden_states], dim=-1))
 
         # rotary emb

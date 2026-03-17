@@ -31,7 +31,7 @@ class SpecModelAgent(BaseSpecModelAgent):
         agent_strategy,
         device: str = 'cuda',
     ):
-        super().__init__(enable=True)
+        super().__init__(specdecode_config, enable=True)
 
         self.backend_config = backend_config
         self.device = device
@@ -43,7 +43,6 @@ class SpecModelAgent(BaseSpecModelAgent):
         self.method = specdecode_config.method
         self.model_config = specdecode_config.model_config
         self.cache_config = specdecode_config.cache_config
-        self.num_spec_tokens = specdecode_config.num_speculative_tokens
 
     def set_cache_config(self, cache_config: CacheConfig):
         """Set all cache config."""

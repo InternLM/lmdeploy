@@ -29,20 +29,26 @@ class CausalConv1dTilelangImpl(CausalConv1dImpl):
                                      return_final_states=return_final_states,
                                      activation=activation)
 
-    def update_fn(self,
-                  x: torch.Tensor,
-                  conv_state: torch.Tensor,
-                  weight: torch.Tensor,
-                  bias: torch.Tensor | None = None,
-                  activation: str | None = None,
-                  conv_state_indices: torch.Tensor | None = None):
+    def update_fn(
+        self,
+        x: torch.Tensor,
+        conv_state: torch.Tensor,
+        weight: torch.Tensor,
+        bias: torch.Tensor | None = None,
+        activation: str | None = None,
+        conv_state_indices: torch.Tensor | None = None,
+        cache_seqlens: torch.Tensor | None = None,
+    ):
         """Update conv state."""
-        return self.causal_conv1d_update(x,
-                                         conv_state,
-                                         weight,
-                                         bias=bias,
-                                         activation=activation,
-                                         conv_state_indices=conv_state_indices)
+        return self.causal_conv1d_update(
+            x,
+            conv_state,
+            weight,
+            bias=bias,
+            activation=activation,
+            conv_state_indices=conv_state_indices,
+            cache_seqlens=cache_seqlens,
+        )
 
 
 class CausalConv1dDaoImpl(CausalConv1dTilelangImpl):

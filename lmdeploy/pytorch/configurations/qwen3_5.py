@@ -20,6 +20,7 @@ class Qwen3_5ModelConfigBuilder(AutoModelConfigBuilder):
               tp: int = 1,
               is_draft_model: bool = False,
               spec_method: str = None,
+              num_spec_tokens: int = 0,
               **kwargs):
         """build."""
         text_config = hf_config.text_config
@@ -44,10 +45,15 @@ class Qwen3_5ModelConfigBuilder(AutoModelConfigBuilder):
         key_dim = head_k_dim * num_k_heads
         value_dim = head_v_dim * num_v_heads
         conv_dim = key_dim * 2 + value_dim
-        conv_kernel_size = text_config.linear_conv_kernel_dim
+        conv_kernel_size = text_config.linear_conv_kernel_dim + num_spec_tokens
 
         conv_state_shape = (num_delta_layers, conv_dim, conv_kernel_size)
-        recurrent_state_shape = (num_delta_layers, num_v_heads, head_k_dim, head_v_dim)
+        # for spec decoding
+        if num_spec_tokens > 0:
+            recurrent_state_shape = (num_delta_layers, 1 + num_spec_tokens, num_v_heads, head_k_dim, head_v_dim)
+        else:
+            recurrent_state_shape = (num_delta_layers, num_v_heads, head_k_dim, head_v_dim)
+
         dtype = torch.bfloat16
         cfg.states_shapes = [(conv_state_shape, dtype), (recurrent_state_shape, dtype)]
         cfg.check_env_func = _check_env_qwen3_next

@@ -393,6 +393,7 @@ class BuildModelContext:
     quant_config: QuantizationConfig = field(default_factory=QuantizationConfig)
     fp32_lm_head: bool = False
     tie_word_embeddings: bool = False
+    num_spec_tokens: int = 0
 
 
 class StepContextManager(CtxMgrBase[StepContext]):

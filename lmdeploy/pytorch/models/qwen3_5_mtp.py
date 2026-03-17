@@ -34,6 +34,7 @@ class Qwen3_5MoeMtpDecoderLayer(Qwen3_5MoeDecoderLayer):
         # build MLP
         if 'moe' in config.model_type.lower():
             self.mlp = Qwen3_5MoeSparseMoeBlock(config, layer_idx, dtype=dtype, device=device, is_tp=False)
+            self.mlp._all_reduce = False
         else:
             self.mlp = Qwen3_5MLP(config, dtype=dtype, device=device, is_tp=False, all_reduce=False)
 
@@ -150,7 +151,10 @@ class Qwen3_5MTPModel(DeepseekMTPModel):
                 down_param = ('.experts.down', f'.experts.{exp_id}.down_proj', exp_id, 'down')
                 expert_params_mapping += [gate_param, up_param, down_param]
 
-        rms_norm_keys = ['model.norm', '.input_layernorm', '.post_attention_layernorm', '.q_norm', '.k_norm']
+        rms_norm_keys = [
+            'model.norm', '.input_layernorm', '.post_attention_layernorm', '.q_norm', '.k_norm', '.norm', '.enorm',
+            '.hnorm'
+        ]
 
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:

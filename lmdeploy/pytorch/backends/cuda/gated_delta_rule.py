@@ -27,22 +27,32 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
         self.chunk_func = chunk_gated_delta_rule
         self.recurrent_func = fused_recurrent_gated_delta_rule
 
-    def chunk_gated_delta_rule(self,
-                               q: torch.Tensor,
-                               k: torch.Tensor,
-                               v: torch.Tensor,
-                               g: torch.Tensor | None = None,
-                               beta: torch.Tensor | None = None,
-                               initial_state: torch.Tensor | None = None,
-                               state_indices: torch.Tensor | None = None,
-                               scale: float | None = None,
-                               use_qk_l2norm_in_kernel: bool = False,
-                               cu_seqlens: torch.Tensor | None = None,
-                               output_final_state: bool = False):
+    def chunk_gated_delta_rule(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        g: torch.Tensor | None = None,
+        beta: torch.Tensor | None = None,
+        initial_state: torch.Tensor | None = None,
+        state_indices: torch.Tensor | None = None,
+        scale: float | None = None,
+        use_qk_l2norm_in_kernel: bool = False,
+        cu_seqlens: torch.Tensor | None = None,
+        output_final_state: bool = False,
+        spec_state_offsets: torch.Tensor | None = None,
+    ):
 
         assert initial_state is not None
         recurrent_state = initial_state
-        init_state = recurrent_state.index_select(0, state_indices)
+        batch_state = recurrent_state.index_select(0, state_indices)
+
+        if spec_state_offsets is not None:
+            batch_idx = torch.arange(batch_state.size(0), device=batch_state.device)
+            init_state = batch_state[batch_idx, spec_state_offsets]
+        else:
+            init_state = batch_state
+
         if use_qk_l2norm_in_kernel:
             # l2norm in fla would recompile when seqlen changed.
             q = torch.nn.functional.normalize(q, p=2, dim=-1)
@@ -59,23 +69,29 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
             use_qk_l2norm_in_kernel=False,
             cu_seqlens=cu_seqlens,
         )
-
-        last_state = recurrent_state.index_copy_(0, state_indices, last_state.to(recurrent_state.dtype))
+        if spec_state_offsets is not None:
+            batch_state[batch_idx, spec_state_offsets] = last_state.to(recurrent_state.dtype)
+            recurrent_state.index_copy_(0, state_indices, batch_state)
+        else:
+            last_state = recurrent_state.index_copy_(0, state_indices, last_state.to(recurrent_state.dtype))
         if not output_final_state:
             last_state = None
         return core_attn_out, last_state
 
-    def fused_recurrent_gated_delta_rule(self,
-                                         q: torch.Tensor,
-                                         k: torch.Tensor,
-                                         v: torch.Tensor,
-                                         g: torch.Tensor | None = None,
-                                         beta: torch.Tensor | None = None,
-                                         initial_state: torch.Tensor | None = None,
-                                         state_indices: torch.Tensor | None = None,
-                                         scale: float | None = None,
-                                         use_qk_l2norm_in_kernel: bool = False,
-                                         output_final_state: bool = False):
+    def fused_recurrent_gated_delta_rule(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        g: torch.Tensor | None = None,
+        beta: torch.Tensor | None = None,
+        initial_state: torch.Tensor | None = None,
+        state_indices: torch.Tensor | None = None,
+        scale: float | None = None,
+        use_qk_l2norm_in_kernel: bool = False,
+        output_final_state: bool = False,
+        cache_seqlens: torch.Tensor | None = None,
+    ):
         return self.recurrent_func(
             q,
             k,
@@ -87,6 +103,7 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
             state_indices=state_indices,
             use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel,
             output_final_state=output_final_state,
+            cache_seqlens=cache_seqlens,
         )
 
 

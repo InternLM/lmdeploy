@@ -1061,15 +1061,14 @@ class BaseModelAgent:
         # for router replay
         enable_return_routed_experts = self.misc_config.enable_return_routed_experts and self.need_output
 
-        build_model_ctx = BuildModelContext(
-            disable_vision_encoder=self.misc_config.disable_vision_encoder,
-            dllm_config=self.misc_config.dllm_config,
-            strategy_factory=self.strategy_factory,
-            enable_return_routed_experts=enable_return_routed_experts,
-            quant_config=self.model_config.quant_config,
-            fp32_lm_head=self.model_config.fp32_lm_head,
-            tie_word_embeddings=self.model_config.tie_word_embeddings,
-        )
+        build_model_ctx = BuildModelContext(disable_vision_encoder=self.misc_config.disable_vision_encoder,
+                                            dllm_config=self.misc_config.dllm_config,
+                                            strategy_factory=self.strategy_factory,
+                                            enable_return_routed_experts=enable_return_routed_experts,
+                                            quant_config=self.model_config.quant_config,
+                                            fp32_lm_head=self.model_config.fp32_lm_head,
+                                            tie_word_embeddings=self.model_config.tie_word_embeddings,
+                                            num_spec_tokens=self.spec_agent.num_spec_tokens)
         patched_model = build_patched_model(self.model_config, device=device, build_model_ctx=build_model_ctx)
         logger.debug(msg_with_rank(rank, 'loading weights.'))
         if not self.misc_config.empty_init:
