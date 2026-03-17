@@ -64,8 +64,13 @@ void invokeGatedDeltaRuleBatched_v2(Ref<Tensor>           v_out,
                                     DataType              state_dtype,
                                     cudaStream_t          stream);
 
-// Recurrent kernel v3 — uses cp.async for state loads to reduce scoreboard stalls.
-// Same interface as v2 (one block per (batch, head) pair).
+// Recurrent kernel v3 — persistent decode kernel, seq_len == 1 only.
+//
+// Launches min(total_work, blocks_per_sm * sm_count) blocks (occupancy-capped),
+// each iterating over multiple (batch, head) work-items. Eliminates the ~150
+// serial wave overhead of v2 at large batch sizes (e.g., bs=1024, 64 v-heads).
+//
+// state_dtype is ignored — v3 always uses S = T (16-bit state).
 void invokeGatedDeltaRuleBatched_v3(Ref<Tensor>           v_out,
                                     const Tensor&         qkv_in,
                                     const Tensor&         beta,

@@ -138,22 +138,28 @@ int main(int argc, char** argv)
     ContextGuard ctx{stream, Allocator{kCPU}, Allocator{kCPUpinned}, Allocator{stream, false}};
     cudaStream_t cu_stream = stream.handle();
 
+    const bool is_decode = (seq_len == 1);
+
     // --- Allocate tensors ---
     Tensor qkv_in{Layout{{total_tok, conv_dim}}, dtype, kDEVICE};
     Tensor v_out_v2{Layout{{total_tok, v_dim}}, dtype, kDEVICE};
     Tensor v_out_chunked{Layout{{total_tok, v_dim}}, dtype, kDEVICE};
+    Tensor v_out_v3{Layout{{total_tok, v_dim}}, dtype, kDEVICE};
     Tensor beta{Layout{{total_tok, num_v_heads}}, dtype, kDEVICE};
     Tensor g{Layout{{total_tok, num_v_heads}}, dtype, kDEVICE};
 
-    // State buffers: two copies (one for v2 kernel, one for chunked) so we can compare
+    // State buffers — v2/chunked use state_dtype, v3 always uses 16-bit (dtype)
     Tensor state_v2{Layout{{batch_size, state_size}}, state_dtype, kDEVICE};
     Tensor state_chunked{Layout{{batch_size, state_size}}, state_dtype, kDEVICE};
+    Tensor state_v3{Layout{{batch_size, state_size}}, dtype, kDEVICE};  // S = T
 
     // State pointer arrays: host pinned + device
     Buffer_<void*> state_ptrs_v2_host{batch_size, kCPUpinned};
     Buffer_<void*> state_ptrs_v2_dev{batch_size, kDEVICE};
     Buffer_<void*> state_ptrs_chunked_host{batch_size, kCPUpinned};
     Buffer_<void*> state_ptrs_chunked_dev{batch_size, kDEVICE};
+    Buffer_<void*> state_ptrs_v3_host{batch_size, kCPUpinned};
+    Buffer_<void*> state_ptrs_v3_dev{batch_size, kDEVICE};
 
     // q_offsets: host + device
     Buffer_<int> q_offsets_host{batch_size + 1, kCPUpinned};
@@ -166,6 +172,7 @@ int main(int argc, char** argv)
     rng.UniformFloat(g, 0.02f, -0.01f);  // small values around 0
     Clear(state_v2);
     Clear(state_chunked);
+    Clear(state_v3);
 
     // --- Build q_offsets ---
     for (int i = 0; i <= batch_size; ++i)
@@ -173,13 +180,16 @@ int main(int argc, char** argv)
     Copy(q_offsets_host, batch_size + 1, q_offsets_dev);
 
     // --- Build state_ptrs ---
-    const auto state_elem_bytes = byte_size(state_dtype);
+    const auto state_elem_bytes    = byte_size(state_dtype);
+    const auto state_elem_bytes_v3 = byte_size(dtype);
     for (int i = 0; i < batch_size; ++i) {
         state_ptrs_v2_host.data()[i]      = (char*)state_v2.raw_data() + i * state_size * state_elem_bytes;
         state_ptrs_chunked_host.data()[i] = (char*)state_chunked.raw_data() + i * state_size * state_elem_bytes;
+        state_ptrs_v3_host.data()[i]      = (char*)state_v3.raw_data() + i * state_size * state_elem_bytes_v3;
     }
     Copy(state_ptrs_v2_host, batch_size, state_ptrs_v2_dev);
     Copy(state_ptrs_chunked_host, batch_size, state_ptrs_chunked_dev);
+    Copy(state_ptrs_v3_host, batch_size, state_ptrs_v3_dev);
     stream.Sync();
 
     // --- Benchmark recurrent (v2) kernel ---
@@ -207,14 +217,32 @@ int main(int argc, char** argv)
     float chunked_ms =
         benchmark_kernel("invokeChunkedGatedDeltaRuleBatched", launch_chunked, cu_stream, args.warmup, args.iters);
 
-    printf("\n  Speedup (v2 / chunked): %.2fx\n", v2_ms / chunked_ms);
+    // --- Benchmark v3 persistent decode kernel (seq_len == 1 only) ---
+    float v3_ms = -1.f;
+    auto  launch_v3 = [&] {
+        invokeGatedDeltaRuleBatched_v3(
+            v_out_v3, qkv_in, beta, g, state_ptrs_v3_dev, q_offsets_dev, batch_size, num_k_heads, 0, dtype, cu_stream);
+    };
+    if (is_decode) {
+        v3_ms = benchmark_kernel("invokeGatedDeltaRuleBatched_v3 (persistent)", launch_v3, cu_stream, args.warmup, args.iters);
+    }
+    else {
+        printf("  %-45s  (skipped — seq_len > 1)\n", "invokeGatedDeltaRuleBatched_v3 (persistent)");
+    }
+
+    printf("\n  Speedup v2 / chunked:  %.2fx\n", v2_ms / chunked_ms);
+    if (is_decode)
+        printf("  Speedup v2 / v3:       %.2fx\n", v2_ms / v3_ms);
 
     // --- Bandwidth stats ---
     {
-        double state_bytes = (double)batch_size * state_size * state_elem_bytes * 2.0;  // read + write
+        double state_bytes    = (double)batch_size * state_size * state_elem_bytes * 2.0;
+        double state_bytes_v3 = (double)batch_size * state_size * state_elem_bytes_v3 * 2.0;
         printf("\n=== Bandwidth ===\n");
         printf("  v2:      state BW = %.1f GB/s\n", state_bytes / (v2_ms * 1e6));
         printf("  chunked: state BW = %.1f GB/s\n", state_bytes / (chunked_ms * 1e6));
+        if (is_decode)
+            printf("  v3:      state BW = %.1f GB/s\n", state_bytes_v3 / (v3_ms * 1e6));
         printf("  total_tokens = %d\n", total_tok);
     }
 
@@ -244,6 +272,29 @@ int main(int argc, char** argv)
     FC_Header();
     auto state_stats = FastCompare(state_v2, state_chunked, cu_stream);
     FC_Print(state_stats);
+
+    // === Cross-comparison: v2 vs v3 (decode only) ===
+    if (is_decode) {
+        printf("\n=== Cross-comparison (v2 vs v3, state_dtype=%s) ===\n", to_string(state_dtype));
+
+        Clear(state_v2);
+        Clear(state_v3);
+        Clear(v_out_v2);
+        Clear(v_out_v3);
+        stream.Sync();
+
+        launch_v2();
+        launch_v3();
+        stream.Sync();
+
+        printf("  v_out comparison:\n");
+        FC_Header();
+        FC_Print(FastCompare(v_out_v2, v_out_v3, cu_stream));
+
+        printf("  state comparison:\n");
+        FC_Header();
+        FC_Print(FastCompare(state_v2, state_v3, cu_stream));
+    }
 
     printf("\nDone.\n");
     return 0;
