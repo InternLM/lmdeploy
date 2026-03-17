@@ -46,6 +46,7 @@ env:
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
   OUTPUT_FOLDER: cuda12.8_dist_${{ github.run_id }}
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+  ROOT_DIR: /nvme/qa_test_models
   REPORT_DIR: /nvme/qa_test_models/test-reports/${{ inputs.repo_ref || 'main' }}_${{ github.run_id }}
   COV_PARAM: --cov /opt/py3/lib/python3.10/site-packages/lmdeploy
   TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy/${{ inputs.repo_ref || 'main' }}_${{ github.run_id }}
@@ -209,7 +210,7 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 $REPORT_DIR
+          chmod -R 777 ${{env.ROOT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -329,7 +330,7 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 $REPORT_DIR
+          chmod -R 777 ${{env.ROOT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -526,7 +527,7 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 $REPORT_DIR
+          chmod -R 777 ${{env.ROOT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -589,7 +590,7 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 $REPORT_DIR
+          chmod -R 777 ${{env.ROOT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -645,7 +646,7 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 $REPORT_DIR
+          chmod -R 777 ${{env.ROOT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -776,7 +777,7 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 $REPORT_DIR
+          chmod -R 777 ${{env.ROOT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -840,7 +841,7 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 $REPORT_DIR
+          chmod -R 777 ${{env.ROOT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -878,7 +879,7 @@ jobs:
       - name: Clear workfile
         if: always()
         run: |
-          chmod -R 777 $REPORT_DIR
+          chmod -R 777 ${{env.ROOT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir

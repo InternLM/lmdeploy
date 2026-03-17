@@ -219,5 +219,6 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
+          chmod -R 777 ${{env.REPORT_DIR}}
           export workdir=$(pwd)
           rm -rf $workdir/*

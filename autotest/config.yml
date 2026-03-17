@@ -115,6 +115,7 @@ turbomind_quantization:
     no_awq:
         - meta-llama/Meta-Llama-3-1-70B-Instruct
         - internlm/internlm3-8b-instruct # ImportError: cannot import name 'LossKwargs' from 'transformers.utils' (/opt/py3/lib/python3.10/site-packages/transformers/utils/__init__.py)
+        - OpenGVLab/InternVL3-8B
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-235B-A22B
         - Qwen/Qwen3-30B-A3B-Base
