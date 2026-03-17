@@ -71,8 +71,9 @@ private:
     Buffer_<void*> conv_state_ptrs_buf_;
     Buffer_<void*> recurrent_state_ptrs_buf_;
 
-    // SM count queried once at construction, passed to the v3 persistent kernel.
-    int sm_count_{1};
+    // Queried once at construction; passed to all three kernel launchers.
+    int          sm_count_{1};
+    Buffer_<int> work_counter_;  // 1-element device int for v3 atomic claiming
 
     // Dual-stream dispatch: prefill on high-priority aux stream, decode on main
     cudaStream_t aux_stream_{};

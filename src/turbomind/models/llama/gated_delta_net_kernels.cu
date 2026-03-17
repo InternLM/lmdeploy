@@ -460,6 +460,8 @@ void invokeGatedDeltaRuleBatched_v2(Ref<Tensor>           v_out_,
                                     int                   num_k_heads,
                                     int                   state_layer_offset,
                                     DataType              state_dtype,
+                                    int /*sm_count*/,
+                                    int* /*work_counter*/,
                                     cudaStream_t          stream)
 {
     auto& v_out = v_out_.get();
@@ -534,6 +536,7 @@ void recurrent_gated_delta_rule_kernel_v3(T*         v_out,
                                            const T*   g_in,
                                            S* const*  state_ptrs,
                                            const int* q_offsets,
+                                           int*       work_counter,
                                            int        total_work,
                                            int        num_v_heads,
                                            int        num_k_heads,
@@ -557,8 +560,16 @@ void recurrent_gated_delta_rule_kernel_v3(T*         v_out,
     const int offset_k = threadIdx.x % k_tiles;
     const int offset_v = threadIdx.x / k_tiles;
 
-    // Persistent loop: one block handles many (b, h) work-items
-    for (int work_idx = blockIdx.x; work_idx < total_work; work_idx += gridDim.x) {
+    // Persistent loop: each block atomically claims the next (b, h) work-item.
+    // Thread 0 issues the atomic; result is broadcast to all threads via smem.
+    __shared__ int s_work_idx;
+    while (true) {
+        if (threadIdx.x == 0)
+            s_work_idx = atomicAdd(work_counter, 1);
+        __syncthreads();
+        const int work_idx = s_work_idx;
+        if (work_idx >= total_work)
+            break;
         const int b     = work_idx / num_v_heads;
         const int h     = work_idx % num_v_heads;
         const int ratio = num_v_heads / num_k_heads;
@@ -690,6 +701,7 @@ void invokeGatedDeltaRuleBatched_v3(Ref<Tensor>           v_out_,
                                     int                   state_layer_offset,
                                     DataType              /*state_dtype*/,  // v3 always uses S = T
                                     int                   sm_count,
+                                    int*                  work_counter,
                                     cudaStream_t          stream)
 {
     auto& v_out = v_out_.get();
@@ -714,22 +726,24 @@ void invokeGatedDeltaRuleBatched_v3(Ref<Tensor>           v_out_,
         using S = T;  // 16-bit state: S == T
 
         auto             kernel        = recurrent_gated_delta_rule_kernel_v3<kHeadDim, kHeadDim, kBlockDim, T, S>;
-        constexpr size_t smem_sz      = 0;  // no smem: state is loaded/stored directly to registers
+        constexpr size_t smem_sz      = sizeof(int);  // s_work_idx
         int              blocks_per_sm = 1;
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocks_per_sm, kernel, kBlockDim, smem_sz);
         const int grid_blocks = min(total_work, blocks_per_sm * sm_count);
 
+        cudaMemsetAsync(work_counter, 0, sizeof(int), stream);
         kernel<<<grid_blocks, kBlockDim, smem_sz, stream>>>(v_out.data<T>(),
                                                             qkv_in.data<T>(),
                                                             beta.data<T>(),
                                                             g.data<T>(),
                                                             (S* const*)state_ptrs.data(),
                                                             q_offsets.data(),
+                                                            work_counter,
                                                             total_work,
                                                             num_v_heads,
                                                             num_k_heads,
-                                                           k_dim_total,
-                                                           state_layer_offset);
+                                                            k_dim_total,
+                                                            state_layer_offset);
     };
     TM_DISPATCH_PRIMARY_DTYPES(v_out.dtype(), invoke);
 }
@@ -1040,6 +1054,8 @@ void invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out_,
                                         int                   num_k_heads,
                                         int                   state_layer_offset,
                                         DataType              state_dtype,
+                                        int /*sm_count*/,
+                                        int* /*work_counter*/,
                                         cudaStream_t          stream)
 {
     auto& v_out = v_out_.get();

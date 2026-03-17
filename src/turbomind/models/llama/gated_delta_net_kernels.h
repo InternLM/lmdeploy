@@ -52,6 +52,14 @@ void invokeGatedDeltaRuleBatched(Ref<Tensor>           v_out,
                                   int                   state_layer_offset,
                                   cudaStream_t          stream);
 
+// All three recurrent-rule launchers share the same trailing parameters for
+// interface consistency:
+//   sm_count      — multiprocessor count, queried once by the caller at init
+//   work_counter  — device int* (1 element), owned by caller; v3 uses it for
+//                   atomic workload claiming, v2/chunked ignore it
+//   stream        — CUDA stream
+//
+// v2: standard one-block-per-(b,h) grid launch; sm_count and work_counter ignored.
 void invokeGatedDeltaRuleBatched_v2(Ref<Tensor>           v_out,
                                     const Tensor&         qkv_in,
                                     const Tensor&         beta,
@@ -62,14 +70,13 @@ void invokeGatedDeltaRuleBatched_v2(Ref<Tensor>           v_out,
                                     int                   num_k_heads,
                                     int                   state_layer_offset,
                                     DataType              state_dtype,
+                                    int                   sm_count,
+                                    int*                  work_counter,
                                     cudaStream_t          stream);
 
-// Recurrent kernel v3 — persistent decode kernel, seq_len == 1 only.
-//
-// Launches min(total_work, blocks_per_sm * sm_count) blocks (occupancy-capped),
-// each iterating over multiple (batch, head) work-items. Eliminates the ~150
-// serial wave overhead of v2 at large batch sizes (e.g., bs=1024, 64 v-heads).
-//
+// v3: persistent decode kernel, seq_len == 1 only.
+// Launches min(total_work, blocks_per_sm * sm_count) blocks; each block claims
+// work items atomically via work_counter (zeroed via cudaMemsetAsync per launch).
 // state_dtype is ignored — v3 always uses S = T (16-bit state).
 void invokeGatedDeltaRuleBatched_v3(Ref<Tensor>           v_out,
                                     const Tensor&         qkv_in,
@@ -82,6 +89,7 @@ void invokeGatedDeltaRuleBatched_v3(Ref<Tensor>           v_out,
                                     int                   state_layer_offset,
                                     DataType              state_dtype,
                                     int                   sm_count,
+                                    int*                  work_counter,
                                     cudaStream_t          stream);
 
 // =============================================================================
@@ -92,17 +100,20 @@ void invokeGatedDeltaRuleBatched_v3(Ref<Tensor>           v_out,
 // updates. Reduces sequential depth from L to L/C.
 //
 // Same tensor layouts as invokeGatedDeltaRuleBatched_v2.
+// sm_count and work_counter accepted for interface parity; ignored internally.
 void invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out,
-                                         const Tensor&         qkv_in,
-                                         const Tensor&         beta,
-                                         const Tensor&         g,
-                                         const Buffer_<void*>& state_ptrs,
-                                         const Buffer_<int>&   q_offsets,
-                                         int                   batch_size,
-                                         int                   num_k_heads,
-                                         int                   state_layer_offset,
-                                         DataType              state_dtype,
-                                         cudaStream_t          stream);
+                                        const Tensor&         qkv_in,
+                                        const Tensor&         beta,
+                                        const Tensor&         g,
+                                        const Buffer_<void*>& state_ptrs,
+                                        const Buffer_<int>&   q_offsets,
+                                        int                   batch_size,
+                                        int                   num_k_heads,
+                                        int                   state_layer_offset,
+                                        DataType              state_dtype,
+                                        int                   sm_count,
+                                        int*                  work_counter,
+                                        cudaStream_t          stream);
 
 // =============================================================================
 // Helper kernels

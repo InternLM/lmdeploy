@@ -192,11 +192,32 @@ int main(int argc, char** argv)
     Copy(state_ptrs_v3_host, batch_size, state_ptrs_v3_dev);
     stream.Sync();
 
+    // Shared resources for all three kernel launchers
+    int sm_count = 1;
+    {
+        int device = 0;
+        cudaGetDevice(&device);
+        cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device);
+    }
+    Buffer_<int> work_counter_buf{1, kDEVICE};
+    int*         work_counter = work_counter_buf.data();
+
     // --- Benchmark recurrent (v2) kernel ---
     printf("\n=== Benchmarks ===\n");
     auto launch_v2 = [&] {
-        invokeGatedDeltaRuleBatched_v2(
-            v_out_v2, qkv_in, beta, g, state_ptrs_v2_dev, q_offsets_dev, batch_size, num_k_heads, 0, state_dtype, cu_stream);
+        invokeGatedDeltaRuleBatched_v2(v_out_v2,
+                                       qkv_in,
+                                       beta,
+                                       g,
+                                       state_ptrs_v2_dev,
+                                       q_offsets_dev,
+                                       batch_size,
+                                       num_k_heads,
+                                       0,
+                                       state_dtype,
+                                       sm_count,
+                                       work_counter,
+                                       cu_stream);
     };
     float v2_ms = benchmark_kernel("invokeGatedDeltaRuleBatched_v2", launch_v2, cu_stream, args.warmup, args.iters);
 
@@ -212,22 +233,29 @@ int main(int argc, char** argv)
                                            num_k_heads,
                                            0,
                                            state_dtype,
+                                           sm_count,
+                                           work_counter,
                                            cu_stream);
     };
     float chunked_ms =
         benchmark_kernel("invokeChunkedGatedDeltaRuleBatched", launch_chunked, cu_stream, args.warmup, args.iters);
 
     // --- Benchmark v3 persistent decode kernel (seq_len == 1 only) ---
-    int sm_count = 1;
-    {
-        int device = 0;
-        cudaGetDevice(&device);
-        cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device);
-    }
     float v3_ms     = -1.f;
     auto  launch_v3 = [&] {
-        invokeGatedDeltaRuleBatched_v3(
-            v_out_v3, qkv_in, beta, g, state_ptrs_v3_dev, q_offsets_dev, batch_size, num_k_heads, 0, dtype, sm_count, cu_stream);
+        invokeGatedDeltaRuleBatched_v3(v_out_v3,
+                                       qkv_in,
+                                       beta,
+                                       g,
+                                       state_ptrs_v3_dev,
+                                       q_offsets_dev,
+                                       batch_size,
+                                       num_k_heads,
+                                       0,
+                                       dtype,
+                                       sm_count,
+                                       work_counter,
+                                       cu_stream);
     };
     if (is_decode) {
         v3_ms = benchmark_kernel("invokeGatedDeltaRuleBatched_v3 (persistent)", launch_v3, cu_stream, args.warmup, args.iters);
