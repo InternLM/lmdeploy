@@ -218,10 +218,16 @@ int main(int argc, char** argv)
         benchmark_kernel("invokeChunkedGatedDeltaRuleBatched", launch_chunked, cu_stream, args.warmup, args.iters);
 
     // --- Benchmark v3 persistent decode kernel (seq_len == 1 only) ---
-    float v3_ms = -1.f;
+    int sm_count = 1;
+    {
+        int device = 0;
+        cudaGetDevice(&device);
+        cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device);
+    }
+    float v3_ms     = -1.f;
     auto  launch_v3 = [&] {
         invokeGatedDeltaRuleBatched_v3(
-            v_out_v3, qkv_in, beta, g, state_ptrs_v3_dev, q_offsets_dev, batch_size, num_k_heads, 0, dtype, cu_stream);
+            v_out_v3, qkv_in, beta, g, state_ptrs_v3_dev, q_offsets_dev, batch_size, num_k_heads, 0, dtype, sm_count, cu_stream);
     };
     if (is_decode) {
         v3_ms = benchmark_kernel("invokeGatedDeltaRuleBatched_v3 (persistent)", launch_v3, cu_stream, args.warmup, args.iters);

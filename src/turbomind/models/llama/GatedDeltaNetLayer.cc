@@ -59,6 +59,10 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(const ModelParam&     model,
         }
     }
 
+    int device = 0;
+    cudaGetDevice(&device);
+    cudaDeviceGetAttribute(&sm_count_, cudaDevAttrMultiProcessorCount, device);
+
     check_cuda_error(cudaStreamCreateWithPriority(&aux_stream_, cudaStreamNonBlocking, -1));
     check_cuda_error(cudaEventCreateWithFlags(&ev_before_, cudaEventDisableTiming));
     check_cuda_error(cudaEventCreateWithFlags(&ev_after_, cudaEventDisableTiming));
@@ -244,10 +248,10 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
                 // Decode on main stream
                 auto dc_state = pd.recurrent_state_ptrs.slice(0, decode_count);
                 auto dc_q     = pd.q_offsets.slice(0, decode_count + 1);
-                invokeGatedDeltaRuleBatched_v2(attn_out, conv_out, beta, g,
+                invokeGatedDeltaRuleBatched_v3(attn_out, conv_out, beta, g,
                                                dc_state, dc_q, decode_count,
                                                num_k_heads_, recurrent_state_layer_offset,
-                                               state_dtype_, stream);
+                                               state_dtype_, sm_count_, stream);
 
                 // Prefill on aux stream (higher priority)
                 auto pf_state = pd.recurrent_state_ptrs.slice(decode_count, prefill_count);
@@ -264,10 +268,10 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
             else if (decode_count > 0) {
                 auto state_slice = pd.recurrent_state_ptrs.slice(0, decode_count);
                 auto q_slice     = pd.q_offsets.slice(0, decode_count + 1);
-                invokeGatedDeltaRuleBatched_v2(attn_out, conv_out, beta, g,
+                invokeGatedDeltaRuleBatched_v3(attn_out, conv_out, beta, g,
                                                state_slice, q_slice, decode_count,
                                                num_k_heads_, recurrent_state_layer_offset,
-                                               state_dtype_, stream);
+                                               state_dtype_, sm_count_, stream);
             }
             else if (prefill_count > 0) {
                 auto state_slice = pd.recurrent_state_ptrs.slice(decode_count, prefill_count);

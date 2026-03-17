@@ -81,6 +81,7 @@ void invokeGatedDeltaRuleBatched_v3(Ref<Tensor>           v_out,
                                     int                   num_k_heads,
                                     int                   state_layer_offset,
                                     DataType              state_dtype,
+                                    int                   sm_count,
                                     cudaStream_t          stream);
 
 // =============================================================================
