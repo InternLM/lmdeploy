@@ -150,7 +150,7 @@ class TestRecurrentGatedDeltaRule:
 
         # Build circular buffer state: [NUM_STATE, B, HV, K, V]
         num_states = seqlen + 2
-        circular_state = torch.rand(num_states, batch, num_heads, head_dim, head_dim) - 0.5
+        circular_state = torch.rand(batch, num_states, num_heads, head_dim, head_dim) - 0.5
         cache_seqlens = torch.randint(0, num_states * 3, (batch, ), dtype=torch.int32, device='cuda')
 
         # --- vectorized naive reference ---
@@ -164,7 +164,7 @@ class TestRecurrentGatedDeltaRule:
         # read initial state per batch: slot = cache_seqlens[b] % num_states
         read_slots = (cache_seqlens % num_states).long()  # [B]
         ref_state = circular_state.clone().float()
-        h = ref_state[read_slots, torch.arange(batch, device='cuda')]  # [B, HV, K, V]
+        h = ref_state[torch.arange(batch, device='cuda'), read_slots]  # [B, HV, K, V]
 
         ref_out = torch.zeros_like(rv)
         expected_state = ref_state.clone()
@@ -184,7 +184,7 @@ class TestRecurrentGatedDeltaRule:
             ref_out[:, t] = torch.einsum('bhd,bhdm->bhm', b_q, h)
 
             # scatter write state into circular buffer
-            expected_state[write_slots, torch.arange(batch, device='cuda')] = h
+            expected_state[torch.arange(batch, device='cuda'), write_slots] = h
 
         ref_out = ref_out.to(q.dtype)
 
@@ -206,7 +206,7 @@ class TestRecurrentGatedDeltaRule:
         batch_idx = torch.arange(batch, device='cuda')
         for t in range(seqlen):
             write_slots = (read_slots + 1 + t) % num_states
-            torch.testing.assert_close(out_state[write_slots, batch_idx].float(),
-                                       expected_state[write_slots, batch_idx].to(out_state.dtype).float(),
+            torch.testing.assert_close(out_state[batch_idx, write_slots].float(),
+                                       expected_state[batch_idx, write_slots].to(out_state.dtype).float(),
                                        atol=1e-2,
                                        rtol=1e-3)

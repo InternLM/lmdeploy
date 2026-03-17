@@ -79,7 +79,7 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
         Out: T.Tensor([B, SEQLEN, HV, V], dtype=dtype),
         G: T.Tensor([B, SEQLEN, HV], dtype=g_dtype),
         Beta: T.Tensor([B, SEQLEN, HV], dtype=beta_dtype),
-        State: T.StridedTensor([NUM_STATE, N, HV, K, V], dtype=state_dtype, strides=state_stride),
+        State: T.StridedTensor([N, NUM_STATE, HV, K, V], dtype=state_dtype, strides=state_stride),
         StateIndices: T.Tensor([B], dtype=torch.int64) = None,
         CacheSeqlens: T.Tensor([B], dtype=torch.int32) = None,
     ):
@@ -112,7 +112,7 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
             for i, j in T.Parallel(K, v_per_cta):
                 v_idx = v_start * v_per_cta + j
                 if v_idx < V:
-                    h_smem[i, j] = State[state_seq_id, state_id, hv_id, i, v_idx]
+                    h_smem[i, j] = State[state_id, state_seq_id, hv_id, i, v_idx]
                 else:
                     h_smem[i, j] = 0.0
 
@@ -184,7 +184,7 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
                                 if (k_off + j) < K:
                                     for i in T.Vectorized(v_per_warp):
                                         if v_off + i < V:
-                                            State[state_update_id, state_id, hv_id, k_off + j, v_off + i] = h_local[j,
+                                            State[state_id, state_update_id, hv_id, k_off + j, v_off + i] = h_local[j,
                                                                                                                     i]
                         if is_circular_buffer:
                             state_update_id = (state_update_id + 1) % NUM_STATE
@@ -264,12 +264,12 @@ def fused_recurrent_gated_delta_rule(
         state_dim = final_state.dim()
         # expand dim
         if state_dim == 4:
-            final_state = final_state.unsqueeze(0)
+            final_state = final_state.unsqueeze(1)
         state_stride = final_state.stride()
         state_dtype = final_state.dtype
 
         # set and check num states
-        num_states = final_state.shape[0]
+        num_states = final_state.shape[1]
     else:
         state_dim = 4
         state_stride = (0, 0, 0, 0, 0)
@@ -304,5 +304,5 @@ def fused_recurrent_gated_delta_rule(
     if not output_final_state:
         final_state = None
     elif final_state is not None and state_dim == 4:
-        final_state = final_state.squeeze(0)
+        final_state = final_state.squeeze(1)
     return o, final_state
