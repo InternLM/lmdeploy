@@ -386,7 +386,7 @@ class PytorchEngineConfig:
     cache_max_entry_count: float = 0.8
     prefill_interval: int = 16
     block_size: int = 64
-    kernel_block_size: int = 64
+    kernel_block_size: int = -1
     num_cpu_blocks: int = 0
     num_gpu_blocks: int = 0
     adapters: Dict[str, str] = None
@@ -425,6 +425,8 @@ class PytorchEngineConfig:
 
     def __post_init__(self):
         """Check input validation."""
+        if self.kernel_block_size == -1:
+            self.kernel_block_size = self.block_size
         assert self.dtype in ['auto', 'float16', 'bfloat16']
         assert self.tp >= 1, 'invalid tp'
         assert self.dp >= 1, 'invalid dp'

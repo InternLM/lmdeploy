@@ -550,13 +550,12 @@ class ArgumentHelper:
 
         return parser.add_argument('--kernel-block-size',
                                    type=int,
-                                   default=64,
-                                   help='The length of the token sequence in a k/v block. '
-                                   'For Turbomind Engine, if the GPU compute capability '
-                                   'is >= 8.0, it should be a multiple of 32, otherwise '
-                                   'it should be a multiple of 64. For Pytorch Engine, '
-                                   'if Lora Adapter is specified, this parameter will '
-                                   'be ignored')
+                                   default=-1,
+                                   help='This parameter is only supported by Pytorch Engine. '
+                                   'If it differs from --cache-block-seq-len, block_size '
+                                   'is --cache-block-seq-len from the perspective of the '
+                                   'allocator and prefix cache, while block_size is '
+                                   '--kernel-block-size from the perspective of cuda kernels.')
 
     @staticmethod
     def enable_prefix_caching(parser):

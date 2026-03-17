@@ -258,8 +258,8 @@ class CacheEngine:
         """Allocate caches."""
 
         num_layers = model_config.num_layers
-        num_kernel_block_per_kv_block = cache_config.block_size // cache_config.kernel_block_size
-        num_blocks *= num_kernel_block_per_kv_block
+        kernel_blocks_per_kv = cache_config.block_size // cache_config.kernel_block_size
+        num_blocks *= kernel_blocks_per_kv
 
         # get all descs
         k_cache_desc = cls.get_k_cache_desc(model_config, cache_config, world_size)
