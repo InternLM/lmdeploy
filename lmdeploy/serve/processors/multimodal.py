@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import json
 from typing import Any, Dict, List, Literal, Tuple
 
 import PIL
@@ -70,11 +71,11 @@ class MultimodalProcessor:
         if 'content' not in msg or msg['content'] is None:
             result = dict(msg)
             result['content'] = ''
-            return result
+            return MultimodalProcessor._parse_tool_calls_arguments(result)
 
         # If content is already a string, return as-is
         if isinstance(msg['content'], str):
-            return msg
+            return MultimodalProcessor._parse_tool_calls_arguments(msg)
 
         # If content is a list, merge all text blocks into a single string
         # This matches vLLM's behavior: text_prompt = "\n".join(texts)
@@ -87,6 +88,36 @@ class MultimodalProcessor:
         # Preserve all other fields in the message (e.g., tool_calls)
         result = dict(msg)
         result['content'] = merged_content
+        return MultimodalProcessor._parse_tool_calls_arguments(result)
+
+    @staticmethod
+    def _parse_tool_calls_arguments(msg: Dict) -> Dict:
+        """Parse tool_calls function arguments from JSON string to dict.
+
+        The OpenAI API spec sends function.arguments as a JSON string, but some chat templates (e.g. Qwen3.5) use
+        Jinja2's ``|items`` filter which requires a dict.
+        """
+        tool_calls = msg.get('tool_calls')
+        if not isinstance(tool_calls, list):
+            return msg
+        result = dict(msg)
+        parsed = []
+        for tc in tool_calls:
+            tc = dict(tc)
+            func = tc.get('function')
+            if isinstance(func, dict):
+                args = func.get('arguments')
+                if isinstance(args, str):
+                    try:
+                        parsed_args = json.loads(args)
+                        if isinstance(parsed_args, dict):
+                            func = dict(func)
+                            func['arguments'] = parsed_args
+                            tc['function'] = func
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+            parsed.append(tc)
+        result['tool_calls'] = parsed
         return result
 
     @staticmethod
