@@ -513,7 +513,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             choices=[choice_data],
             usage=usage,
         )
-        response_json = response.model_dump_json()
+        response_json = response.model_dump()
 
         return response_json
 
@@ -595,7 +595,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 if res.cache_block_ids is not None:
                     response_json['cache_block_ids'] = res.cache_block_ids
                     response_json['remote_token_ids'] = res.token_ids
-                yield f'data: {response_json}\n\n'
+                yield f'data: {json.dumps(response_json)}\n\n'
         yield 'data: [DONE]\n\n'
 
     # Streaming response
@@ -631,7 +631,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             remote_token_ids_i.append(res.token_ids)
 
         if gpt_oss_parser:
-            message_i = gpt_oss_parser.parse_full(final_token_ids_i)
+            _parser_i = GptOssChatParser()
+            message_i = _parser_i.parse_full(final_token_ids_i)
             if final_res_i.finish_reason == 'stop' and len(message_i.tool_calls) > 0:
                 final_res_i.finish_reason = 'tool_calls'
         else:
@@ -646,7 +647,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                             final_res_i.finish_reason = 'tool_calls'
                 except Exception as e:
                     logger.error(f'Failed to parse {text_i}. Exception: {e}.')
-                    return False
+                    raise
             elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
                 logger.error('Please launch the api_server with --tool-call-parser if you want to use tool.')
 
@@ -680,7 +681,10 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         _completion_tokens += final_res_i.generate_token_len
         return True
 
-    results = await asyncio.gather(*[_collect_chat_response(_i, generators[_i], sessions[_i]) for _i in range(_n)])
+    try:
+        results = await asyncio.gather(*[_collect_chat_response(_i, generators[_i], sessions[_i]) for _i in range(_n)])
+    except Exception as e:
+        return create_error_response(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
     if not all(results):
         return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
 
