@@ -46,8 +46,59 @@ void Registry::sm70_884_4()
         Add<C::Type< 16, 256,  64, 1, 4, 1, D, S, 2, true, 1, 128>>();
         Add<C::Type< 16, 256,  32, 1, 4, 1, D, S, 2, true, 1, 128>>();
         Add<C::Type< 16, 128,  32, 1, 4, 1, D, S, 2, true, 1, 128>>();
-        Add<C::Type< 16, 256,  32, 1, 4, 1, D, S, 2, true, 1, 128>>();
         Add<C::Type<  8, 128,  64, 1, 4, 1, D, S, 2, true, 1, 128>>();
+        Add<C::Type< 16, 256,  32, 1, 4, 1, D, S, 2, true, 1, 128>>();
+        // clang-format on
+    }
+
+    if constexpr (1) {
+        // clang-format off
+        using C = Config_U4_d<kColMajor>;
+        Add<C::Type<128, 256, 16, 2, 4, 1, D, D, 2, true, 1, 32, 128, 128>>();
+        Add<C::Type<128, 128, 16, 2, 2, 1, D, D, 2, true, 1, 32, 64, 128>>();
+        Add<C::Type<128, 128, 16, 2, 2, 1, D, S, 2, true, 1, 32, 64, 128>>();
+        Add<C::Type< 96, 128, 32, 2, 2, 1, D, S, 2, true, 1, 32, 48, 128>>();
+        Add<C::Type< 64, 128, 32, 2, 2, 1, D, D, 2, true, 1, 32, 32, 128>>();
+        Add<C::Type< 64, 128, 32, 2, 2, 1, D, S, 2, true, 1, 32, 32, 128>>();
+        Add<C::Type< 64, 128, 16, 1, 4, 1, D, S, 2, true, 1, 32, 32, 128>>();
+        Add<C::Type< 64, 256, 16, 1, 4, 1, D, S, 2, true, 1, 32, 64, 128>>();
+        Add<C::Type< 32, 128, 32, 1, 4, 1, D, S, 2, true, 1, 32>>();
+        Add<C::Type< 32, 256, 32, 1, 4, 1, D, S, 2, true, 1, 32, 32, 128>>();
+        Add<C::Type< 16, 128, 32, 1, 4, 1, D, S, 2, true, 1, 32>>();
+        Add<C::Type< 16, 256, 32, 1, 4, 1, D, S, 2, true, 1, 32>>();
+        Add<C::Type<  8, 128, 64, 1, 4, 1, D, S, 2, true, 1, 32>>();
+        Add<C::Type<  8, 128, 32, 1, 4, 1, D, S, 2, true, 1, 32>>();
+        Add<C::Type<  8, 256, 64, 1, 4, 1, D, S, 2, true, 1, 32>>();
+        Add<C::Type< 48, 128, 32, 1, 4, 1, D, S, 2, true, 1, 32>>();
+        Add<C::Type< 16, 256, 64, 1, 4, 1, D, S, 2, true, 1, 32>>();
+        Add<C::Type< 16, 128, 64, 1, 4, 1, D, S, 2, true, 1, 32>>();
+        Add<C::Type<  8, 256, 32, 1, 4, 1, D, S, 2, true, 1, 32>>();
+        Add<C::Type< 32, 128, 64, 1, 4, 1, D, S, 2, true, 1, 32>>();
+        Add<C::Type< 64, 256, 32, 1, 4, 1, D, S, 2, true, 1, 32, 64, 128>>();
+        // clang-format on
+    }
+
+    if constexpr (1) {
+        // clang-format off
+        using C = Config_U4_g<kColMajor>;
+        Add<C::Type<128, 256,  16, 2, 4, 1, D, D, 2,   0 , 1, 32, 128, 128>>();
+        Add<C::Type<128, 128,  16, 2, 2, 1, D, D, 2, true, 1, 32,  64, 128>>();
+        Add<C::Type< 64, 128,  32, 1, 4, 1, D, S, 2, true, 1, 32,  32, 128>>();
+        Add<C::Type< 64, 256,  16, 1, 4, 1, D, S, 2, true, 1, 32,  64, 128>>();
+        Add<C::Type< 32, 128,  32, 1, 4, 1, D, S, 2, true, 1, 32>>();
+        Add<C::Type< 32, 256,  32, 1, 4, 1, D, S, 2, true, 1, 32>>();
+        Add<C::Type< 16, 256,  64, 1, 4, 1, D, S, 2, true, 1, 32>>();
+        Add<C::Type< 16, 256,  32, 1, 4, 1, D, S, 2, true, 1, 32>>();
+        Add<C::Type< 16, 128,  32, 1, 4, 1, D, S, 2, true, 1, 32>>();
+        Add<C::Type<  8, 128,  64, 1, 4, 1, D, S, 2, true, 1, 32>>();
+        Add<C::Type<  8, 128,  32, 1, 4, 1, D, S, 2, true, 1, 32>>();
+        Add<C::Type<  8, 128, 128, 1, 4, 1, D, S, 2, true, 1, 32>>();
+        Add<C::Type< 48, 128,  32, 1, 4, 1, D, S, 2, true, 1, 32>>();
+        Add<C::Type< 16, 128,  64, 1, 4, 1, D, S, 2, true, 1, 32>>();
+        Add<C::Type<  8, 256,  64, 1, 4, 1, D, S, 2, true, 1, 32>>();
+        Add<C::Type<  8, 256,  32, 1, 4, 1, D, S, 2, true, 1, 32>>();
+        Add<C::Type< 32, 256,  64, 1, 4, 1, D, S, 2, true, 1, 32>>();
+        Add<C::Type< 64, 256,  32, 1, 4, 1, D, S, 2, true, 1, 32,  64, 128>>();
         // clang-format on
     }
 
