@@ -1362,12 +1362,12 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
 
         Array<T, CHANNELS_PER_THREAD> out_vals;
 
+        float acc[CHANNELS_PER_THREAD] = {};
         PRAGMA_UNROLL
-        for (int ch = 0; ch < CHANNELS_PER_THREAD; ++ch) {
-            float acc = 0.0f;
+        for (int d = 0; d < D_CONV; ++d) {
+            int src = t_local - (D_CONV - 1 - d);
             PRAGMA_UNROLL
-            for (int d = 0; d < D_CONV; ++d) {
-                int   src = t_local - (D_CONV - 1 - d);
+            for (int ch = 0; ch < CHANNELS_PER_THREAD; ++ch) {
                 float val;
                 if (src >= 0) {
                     val = static_cast<float>(in_taps[d][ch]);
@@ -1380,17 +1380,23 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
                             tmp = sv_tap[dd][ch];
                     val = static_cast<float>(tmp);
                 }
-                acc += val * static_cast<float>(w_tap[d][ch]);
+                acc[ch] += val * static_cast<float>(w_tap[d][ch]);
             }
+        }
+
+        PRAGMA_UNROLL
+        for (int ch = 0; ch < CHANNELS_PER_THREAD; ++ch) {
             if (bias)
-                acc += static_cast<float>(bias_vals[ch]);
+                acc[ch] += static_cast<float>(bias_vals[ch]);
+            out_vals[ch] = static_cast<T>(acc[ch] / (1.0f + expf(-acc[ch])));
+        }
 
-            out_vals[ch] = static_cast<T>(acc / (1.0f + expf(-acc)));
-
-            if (t_local == seq_len - 1) {
+        if (t_local == seq_len - 1) {
+            PRAGMA_UNROLL
+            for (int d = 0; d < D_CONV; ++d) {
+                int src_t = seq_len - D_CONV + d;
                 PRAGMA_UNROLL
-                for (int d = 0; d < D_CONV; ++d) {
-                    int src_t = seq_len - D_CONV + d;
+                for (int ch = 0; ch < CHANNELS_PER_THREAD; ++ch) {
                     if (src_t >= 0) {
                         sv_tap[d][ch] = in_taps[d][ch];
                     }
@@ -1404,9 +1410,6 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
                     }
                 }
             }
-        }
-
-        if (t_local == seq_len - 1) {
             PRAGMA_UNROLL
             for (int d = 0; d < D_CONV; ++d)
                 Store(state_base + d * conv_dim + c_base, sv_tap[d]);
@@ -1441,9 +1444,9 @@ void invokeFusedConv1dSiLU(Ref<Tensor>           out_,
         using T = decltype(t);
         if (d_conv == 4) {
             constexpr int kDConv  = 4;
-            constexpr int kChPerT = 4;
+            constexpr int kChPerT = 8;
             const int     ch_per_blk   = threads * kChPerT;
-            assert(conv_dim % ch_per_blk == 0);
+            TM_CHECK(conv_dim % ch_per_blk == 0);
             const int     num_ch_tiles = conv_dim / ch_per_blk;
             const int     total_work   = total_tokens * num_ch_tiles;
 
@@ -1471,7 +1474,7 @@ void invokeFusedConv1dSiLU(Ref<Tensor>           out_,
                 num_ch_tiles);
         }
         else {
-            assert(false && "Only d_conv == 4 is supported by fused_conv1d_batched_kernel_v2");
+            TM_CHECK(0) << "Only d_conv == 4 is supported by fused_conv1d_batched_kernel_v2";
         }
     };
     TM_DISPATCH_PRIMARY_DTYPES(out.dtype(), invoke);

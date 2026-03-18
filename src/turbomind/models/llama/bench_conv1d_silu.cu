@@ -113,60 +113,51 @@ static float benchmark_kernel(const char*           name,
     return avg_ms;
 }
 
-// CPU reference: conv1d + SiLU with transposed weight/state layout [d_conv, conv_dim]
+// CPU reference for depthwise causal conv1d + SiLU.
+//
+//   y(t, c) = SiLU( sum_{d=0}^{D-1} w(d, c) * x(t - D + 1 + d, c) )
+//
+// where x(i, c) falls back to the conv state for i < 0 (history from the
+// previous inference step).  After the sequence, the state is updated to the
+// last D-1 inputs.
+//
+// Weight layout: [d_conv, conv_dim].  State layout: [d_conv, conv_dim] per batch.
 template<typename T>
-static void cpu_conv1d_silu(T*        h_out,
-                            const T*  h_in,
-                            const T*  h_weight,
-                            T*        h_state,
+static void cpu_conv1d_silu(T*         h_out,
+                            const T*   h_in,
+                            const T*   h_weight,
+                            T*         h_state,
                             const int* h_q_offsets,
-                            int       batch_size,
-                            int       conv_dim,
-                            int       d_conv,
-                            int       in_stride,
-                            int       total_tokens)
+                            int        batch_size,
+                            int        conv_dim,
+                            int        d_conv,
+                            int        in_stride)
 {
-    const int state_stride = d_conv * conv_dim;
+    for (int b = 0; b < batch_size; ++b) {
+        const int seq_off = h_q_offsets[b];
+        const int seq_len = h_q_offsets[b + 1] - seq_off;
+        T*        state   = h_state + b * d_conv * conv_dim;
 
-    for (int t = 0; t < total_tokens; ++t) {
-        int b = 0;
-        for (int bb = 0; bb < batch_size; ++bb) {
-            if (t < h_q_offsets[bb + 1]) {
-                b = bb;
-                break;
+        auto x = [&](int i, int c) -> float {
+            if (i >= 0)
+                return static_cast<float>(h_in[(seq_off + i) * in_stride + c]);
+            return static_cast<float>(state[(d_conv + i) * conv_dim + c]);
+        };
+
+        for (int t = 0; t < seq_len; ++t) {
+            for (int c = 0; c < conv_dim; ++c) {
+                float acc = 0.f;
+                for (int d = 0; d < d_conv; ++d)
+                    acc += static_cast<float>(h_weight[d * conv_dim + c]) * x(t - d_conv + 1 + d, c);
+                h_out[(seq_off + t) * conv_dim + c] = static_cast<T>(acc / (1.f + std::exp(-acc)));
             }
         }
-        const int t_local = t - h_q_offsets[b];
-        const int seq_len = h_q_offsets[b + 1] - h_q_offsets[b];
 
-        for (int c = 0; c < conv_dim; ++c) {
-            float acc = 0.0f;
-            for (int d = 0; d < d_conv; ++d) {
-                int   src = t_local - (d_conv - 1 - d);
-                float val;
-                if (src >= 0) {
-                    val = static_cast<float>(h_in[(h_q_offsets[b] + src) * in_stride + c]);
-                }
-                else {
-                    val = static_cast<float>(h_state[b * state_stride + (d_conv + src) * conv_dim + c]);
-                }
-                float w = static_cast<float>(h_weight[d * conv_dim + c]);
-                acc += val * w;
-            }
-            h_out[t * conv_dim + c] = static_cast<T>(acc / (1.0f + std::exp(-acc)));
-
-            if (t_local == seq_len - 1) {
-                T* sb = h_state + b * state_stride;
-                for (int d = 0; d < d_conv; ++d) {
-                    int src_t = seq_len - d_conv + d;
-                    if (src_t >= 0) {
-                        sb[d * conv_dim + c] = h_in[(h_q_offsets[b] + src_t) * in_stride + c];
-                    }
-                    else {
-                        sb[d * conv_dim + c] = sb[(d + seq_len) * conv_dim + c];
-                    }
-                }
-            }
+        for (int d = 0; d < d_conv; ++d) {
+            int src = seq_len - d_conv + d;
+            for (int c = 0; c < conv_dim; ++c)
+                state[d * conv_dim + c] = (src >= 0) ? h_in[(seq_off + src) * in_stride + c]
+                                                     : state[(d + seq_len) * conv_dim + c];
         }
     }
 }
@@ -309,8 +300,7 @@ int main(int argc, char** argv)
                             batch_size,
                             conv_dim,
                             d_conv,
-                            in_stride,
-                            total_tok);
+                            in_stride);
         };
 
         if (dtype == kFloat16)
