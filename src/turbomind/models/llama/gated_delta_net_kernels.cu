@@ -1349,22 +1349,25 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
         const int  t_local     = t - bi.y;
         const int  seq_len     = bi.z;
         const int  history_len = bi.w;
-        const bool needs_state = (t_local < D_CONV - 1);
-        T*         state_base  = (T*)conv_state_ptrs[b] + state_layer_offset;
+        // ring_start: the ring-buffer slot for tap d=0 (oldest tap needed)
+        const int ring_start = (history_len + t_local + 1) % D_CONV;
+        T*        state_base = (T*)conv_state_ptrs[b] + state_layer_offset;
 
-        Array<T, CHANNELS_PER_THREAD> in_taps[D_CONV];
+        // source[d] holds the input value for tap d in convolution order.
+        // For taps covered by the current input window: load from global `in`.
+        // For taps that fall into history: load from the ring-buffer state at
+        // address ring_start+d (mod D_CONV), avoiding dynamic register indexing.
+        Array<T, CHANNELS_PER_THREAD> source[D_CONV];
         PRAGMA_UNROLL
         for (int d = 0; d < D_CONV; ++d) {
             int src = t_local - (D_CONV - 1 - d);
-            if (src >= 0)
-                Load(in_taps[d], in + (bi.y + src) * in_stride + c_base);
-        }
-
-        Array<T, CHANNELS_PER_THREAD> sv_tap[D_CONV];
-        if (needs_state) {
-            PRAGMA_UNROLL
-            for (int d = 0; d < D_CONV; ++d)
-                Load(sv_tap[d], state_base + d * conv_dim + c_base);
+            if (src >= 0) {
+                Load(source[d], in + (bi.y + src) * in_stride + c_base);
+            }
+            else {
+                int ring_d = (ring_start + d) % D_CONV;
+                Load(source[d], state_base + ring_d * conv_dim + c_base);
+            }
         }
 
         Array<T, CHANNELS_PER_THREAD> out_vals;
@@ -1372,23 +1375,9 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
         float acc[CHANNELS_PER_THREAD] = {};
         PRAGMA_UNROLL
         for (int d = 0; d < D_CONV; ++d) {
-            int src = t_local - (D_CONV - 1 - d);
             PRAGMA_UNROLL
             for (int ch = 0; ch < CHANNELS_PER_THREAD; ++ch) {
-                float val;
-                if (src >= 0) {
-                    val = static_cast<float>(in_taps[d][ch]);
-                }
-                else {
-                    int ring_idx = (history_len + src + D_CONV) % D_CONV;
-                    T   tmp{};
-                    PRAGMA_UNROLL
-                    for (int dd = 0; dd < D_CONV; ++dd)
-                        if (dd == ring_idx)
-                            tmp = sv_tap[dd][ch];
-                    val = static_cast<float>(tmp);
-                }
-                acc[ch] += val * static_cast<float>(w_tap[d][ch]);
+                acc[ch] += static_cast<float>(source[d][ch]) * static_cast<float>(w_tap[d][ch]);
             }
         }
 
@@ -1404,8 +1393,8 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
             for (int d = 0; d < D_CONV; ++d) {
                 int src_t = seq_len - D_CONV + d;
                 if (src_t >= 0) {
-                    int ring_d = (history_len + src_t) % D_CONV;
-                    Store(state_base + ring_d * conv_dim + c_base, in_taps[d]);
+                    int ring_d = (ring_start + d) % D_CONV;
+                    Store(state_base + ring_d * conv_dim + c_base, source[d]);
                 }
             }
         }
