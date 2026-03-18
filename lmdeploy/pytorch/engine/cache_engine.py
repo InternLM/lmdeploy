@@ -274,15 +274,14 @@ class CacheEngine:
             mem_pool_size += desc.aligned_size
 
         # create pool
-        mem_pool = torch.zeros((num_layers, num_blocks, mem_pool_size), dtype=torch.uint8, device=device).view(-1)
+        mem_pool = torch.zeros((num_layers, num_blocks, mem_pool_size), dtype=torch.uint8, device=device)
 
         # slice caches
         caches = []
         remain_pool = mem_pool
         for desc in cache_descs:
-            cache = remain_pool[:desc.size * num_layers * num_blocks].view(desc.dtype).view(
-                (num_layers, num_blocks, *desc.shape))
-            remain_pool = remain_pool[desc.size * num_layers * num_blocks:]
+            cache = remain_pool[:, :, :desc.size].view(desc.dtype).view((num_layers, num_blocks, *desc.shape))
+            remain_pool = remain_pool[:, :, desc.aligned_size:]
             caches.append(cache)
         return mem_pool, caches
 
