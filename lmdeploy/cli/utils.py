@@ -551,11 +551,11 @@ class ArgumentHelper:
         return parser.add_argument('--kernel-block-size',
                                    type=int,
                                    default=-1,
-                                   help='This parameter is only supported by Pytorch Engine. '
-                                   'If it differs from --cache-block-seq-len, block_size '
-                                   'is --cache-block-seq-len from the perspective of the '
-                                   'allocator and prefix cache, while block_size is '
-                                   '--kernel-block-size from the perspective of cuda kernels.')
+                                   help='The length of the token sequence in a k/v block for kernels. '
+                                   'Only supported by Pytorch Engine. '
+                                   'When set to a different value than --cache-block-seq-len, '
+                                   'memory allocators and prefix cache use --cache-block-seq-len '
+                                   'as the block size, while kernels use --kernel-block-size.')
 
     @staticmethod
     def enable_prefix_caching(parser):

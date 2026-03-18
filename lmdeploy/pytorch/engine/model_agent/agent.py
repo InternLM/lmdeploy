@@ -1117,8 +1117,6 @@ class BaseModelAgent:
             self.spec_agent.build_cache_engine(self.cache_stream)
 
     def _forward_impl(self, inputs: ModelInputs):
-        # num_kernel_block_per_kv_block = self.cache_config.block_size // self.cache_config.kernel_block_size
-
         output = model_forward(
             self.patched_model,
             inputs,
