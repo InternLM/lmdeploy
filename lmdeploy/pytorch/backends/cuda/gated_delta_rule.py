@@ -49,7 +49,8 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
 
         if spec_state_offsets is not None:
             batch_idx = torch.arange(batch_state.size(0), device=batch_state.device)
-            init_state = batch_state[batch_idx, spec_state_offsets]
+            spec_read_offsets = spec_state_offsets[0]
+            init_state = batch_state[batch_idx, spec_read_offsets]
         else:
             init_state = batch_state
 
@@ -70,7 +71,9 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
             cu_seqlens=cu_seqlens,
         )
         if spec_state_offsets is not None:
-            batch_state[batch_idx, spec_state_offsets] = last_state.to(recurrent_state.dtype)
+            # write to next slots
+            spec_write_offsets = spec_state_offsets[1]
+            batch_state[batch_idx, spec_write_offsets] = last_state.to(recurrent_state.dtype)
             recurrent_state.index_copy_(0, state_indices, batch_state)
         else:
             last_state = recurrent_state.index_copy_(0, state_indices, last_state.to(recurrent_state.dtype))

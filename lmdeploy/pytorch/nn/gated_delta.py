@@ -55,12 +55,13 @@ class GatedDeltaMeta:
 
         # for spec decoding
         if self.num_spec_tokens > 0:
-            if self.is_decoding:
-                self.cache_seqlens = (attn_metadata.kv_seqlens - attn_metadata.q_seqlens).to(torch.int32)
-            else:
+            self.cache_seqlens = (attn_metadata.kv_seqlens - attn_metadata.q_seqlens).to(torch.int32)
+            if not self.is_decoding:
                 spec_conv_offsets = attn_metadata.kv_seqlens[:, None] + range_idx[None]
                 self.spec_conv_offsets = torch.remainder(spec_conv_offsets, conv_kernel_size + self.num_spec_tokens)
-                self.spec_state_offsets = torch.remainder(attn_metadata.kv_seqlens, 1 + self.num_spec_tokens)
+                read_state_offsets = torch.remainder(self.cache_seqlens, 1 + self.num_spec_tokens)
+                write_state_offsets = torch.remainder(attn_metadata.kv_seqlens, 1 + self.num_spec_tokens)
+                self.spec_state_offsets = (read_state_offsets, write_state_offsets)
 
         self.conv_state_indices = state_ids.to(torch.int32)
         # we assume 0 is dummy state, shared by all invalid states.
