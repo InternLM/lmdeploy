@@ -5,14 +5,25 @@ server_log_path: /mnt/shared-storage-user/llmrazor-share/qa-llm-cicd/cicd-autote
 eval_path: /mnt/shared-storage-user/llmrazor-share/qa-llm-cicd/cicd-autotest/eval_resource/evaluation_report
 mllm_eval_path: /mnt/shared-storage-user/llmrazor-share/qa-llm-cicd/cicd-autotest/eval_resource/mllm_evaluation_report
 benchmark_path: /mnt/shared-storage-user/llmrazor-share/qa-llm-cicd/cicd-autotest/eval_resource/benchmark_report
-dataset_path: /mnt/shared-storage-user/auto-eval-pipeline/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
-prefix_dataset_path: /mnt/shared-storage-user/auto-eval-pipeline/datasets/prefix_cache_test.json
+dataset_path: /mnt/shared-storage-user/llmrazor-share/qa-llm-cicd/cicd-autotest/eval_resource/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
+prefix_dataset_path: /mnt/shared-storage-user/llmrazor-share/qa-llm-cicd/cicd-autotest/eval_resource/datasets/prefix_cache_test.json
 env_tag: h
 device: cuda
 
 config:
     tp:
         internlm/Intern-S1: 4
+        internlm/Intern-S1-Pro-FP8: 16
+        JetLM/SDAR-30B-A3B-Sci: 2
+        moonshotai/Kimi-K2-Instruct-0905: 16
+
+    dp_ep:
+        internlm/Intern-S1-Pro-FP8:
+            dp: 16
+            ep: 16
+        moonshotai/Kimi-K2-Instruct-0905:
+            dp: 16
+            ep: 16
 
 turbomind_chat_model:
     tp:
@@ -23,6 +34,11 @@ pytorch_chat_model:
     tp:
         - internlm/Intern-S1
         - internlm/Intern-S1-mini
+        - JetLM/SDAR-30B-A3B-Sci
+        - moonshotai/Kimi-K2-Instruct-0905
+
+    dp_ep:
+        - moonshotai/Kimi-K2-Instruct-0905
 
 turbomind_vl_model:
     tp:
@@ -60,12 +76,18 @@ pytorch_quantization:
     no_kvint4:
         - internlm/Intern-S1
         - internlm/Intern-S1-mini
+        - JetLM/SDAR-30B-A3B-Sci
     no_kvint8:
         - empty
 
 benchmark_model:
     - internlm/Intern-S1
     - internlm/Intern-S1-mini
+
+evaluate_model:
+    - internlm/Intern-S1-Pro-FP8
+    - JetLM/SDAR-30B-A3B-Sci
+    - moonshotai/Kimi-K2-Instruct-0905
 
 mllm_evaluate_model:
     - internlm/Intern-S1

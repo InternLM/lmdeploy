@@ -136,7 +136,37 @@ EVAL_CONFIGS = {
             'top_k': 50,
             'min_p': 0.0,
         }
-    }
+    },
+    'qwen3.5': {
+        'query_per_second': 4,
+        'max_out_len': 128000,
+        'max_seq_len': 128000,
+        'batch_size': 500,
+        'temperature': 1.0,
+        'openai_extra_kwargs': {
+            'top_p': 0.95,
+            'presence_penalty': 1.5,
+        },
+        'extra_body': {
+            'top_k': 20,
+            'min_p': 0.0,
+        }
+    },
+    'qwen3.5-2batch': {
+        'query_per_second': 4,
+        'max_out_len': 128000,
+        'max_seq_len': 128000,
+        'batch_size': 2,
+        'temperature': 1.0,
+        'openai_extra_kwargs': {
+            'top_p': 0.95,
+            'presence_penalty': 1.5,
+        },
+        'extra_body': {
+            'top_k': 20,
+            'min_p': 0.0,
+        }
+    },
 }
 
 MLLM_EVAL_CONFIGS = {
