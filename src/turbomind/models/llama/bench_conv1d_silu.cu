@@ -121,6 +121,9 @@ static float benchmark_kernel(const char*           name,
 // previous inference step).  After the sequence, the state is updated to the
 // last D-1 inputs.
 //
+// State is a ring buffer: slot j holds the input written at absolute time t
+// where t % d_conv == j.  history_len = k_offsets[b+1] - k_offsets[b] - seq_len.
+//
 // Weight layout: [d_conv, conv_dim].  State layout: [d_conv, conv_dim] per batch.
 template<typename T>
 static void cpu_conv1d_silu(T*         h_out,
@@ -128,20 +131,23 @@ static void cpu_conv1d_silu(T*         h_out,
                             const T*   h_weight,
                             T*         h_state,
                             const int* h_q_offsets,
+                            const int* h_k_offsets,
                             int        batch_size,
                             int        conv_dim,
                             int        d_conv,
                             int        in_stride)
 {
     for (int b = 0; b < batch_size; ++b) {
-        const int seq_off = h_q_offsets[b];
-        const int seq_len = h_q_offsets[b + 1] - seq_off;
-        T*        state   = h_state + b * d_conv * conv_dim;
+        const int seq_off     = h_q_offsets[b];
+        const int seq_len     = h_q_offsets[b + 1] - seq_off;
+        const int history_len = (h_k_offsets[b + 1] - h_k_offsets[b]) - seq_len;
+        T*        state       = h_state + b * d_conv * conv_dim;
 
         auto x = [&](int i, int c) -> float {
             if (i >= 0)
                 return static_cast<float>(h_in[(seq_off + i) * in_stride + c]);
-            return static_cast<float>(state[(d_conv + i) * conv_dim + c]);
+            int ring_idx = ((history_len + i) % d_conv + d_conv) % d_conv;
+            return static_cast<float>(state[ring_idx * conv_dim + c]);
         };
 
         for (int t = 0; t < seq_len; ++t) {
@@ -155,9 +161,11 @@ static void cpu_conv1d_silu(T*         h_out,
 
         for (int d = 0; d < d_conv; ++d) {
             int src = seq_len - d_conv + d;
-            for (int c = 0; c < conv_dim; ++c)
-                state[d * conv_dim + c] = (src >= 0) ? h_in[(seq_off + src) * in_stride + c]
-                                                     : state[(d + seq_len) * conv_dim + c];
+            if (src >= 0) {
+                int ring_d = (history_len + src) % d_conv;
+                for (int c = 0; c < conv_dim; ++c)
+                    state[ring_d * conv_dim + c] = h_in[(seq_off + src) * in_stride + c];
+            }
         }
     }
 }
@@ -213,6 +221,7 @@ int main(int argc, char** argv)
 
     Buffer_<int> q_offsets_host{batch_size + 1, kCPUpinned};
     Buffer_<int> q_offsets_dev{batch_size + 1, kDEVICE};
+    Buffer_<int> k_offsets_dev{batch_size + 1, kDEVICE};
 
     RNG rng;
     rng.UniformFloat(all_proj, 0.1f);
@@ -221,6 +230,7 @@ int main(int argc, char** argv)
     for (int i = 0; i <= batch_size; ++i)
         q_offsets_host.data()[i] = i * seq_len;
     Copy(q_offsets_host, batch_size + 1, q_offsets_dev);
+    Copy(q_offsets_host, batch_size + 1, k_offsets_dev);  // no history in bench
 
     for (int i = 0; i < batch_size; ++i) {
         state_ptrs_v2_host.data()[i] = (char*)state_v2.raw_data() + i * conv_state_size * elem_bytes;
@@ -235,6 +245,7 @@ int main(int argc, char** argv)
                               Tensor{},
                               state_ptrs_v2_dev,
                               q_offsets_dev,
+                              k_offsets_dev,
                               batch_size,
                               0,
                               sm_count,
@@ -251,14 +262,17 @@ int main(int argc, char** argv)
         double in_bytes    = (double)total_tok * conv_dim * elem_bytes;
         double out_bytes   = (double)total_tok * conv_dim * elem_bytes;
         double wt_bytes    = (double)conv_dim * d_conv * elem_bytes;
-        double state_bytes = (double)batch_size * conv_state_size * elem_bytes * 2.0;
-        double total_bytes = in_bytes + out_bytes + wt_bytes + state_bytes;
+        int    state_write_rows = std::min(seq_len, d_conv);
+        double state_rd_bytes  = (double)batch_size * d_conv * conv_dim * elem_bytes;
+        double state_wr_bytes  = (double)batch_size * state_write_rows * conv_dim * elem_bytes;
+        double state_bytes     = state_rd_bytes + state_wr_bytes;
+        double total_bytes     = in_bytes + out_bytes + wt_bytes + state_bytes;
 
         printf("\n=== Bandwidth ===\n");
         printf("  in:     %.1f MB\n", in_bytes / 1e6);
         printf("  out:    %.1f MB\n", out_bytes / 1e6);
         printf("  weight: %.3f MB\n", wt_bytes / 1e6);
-        printf("  state:  %.1f MB  (R+W)\n", state_bytes / 1e6);
+        printf("  state:  %.1f MB  (R %.1f + W %.1f)\n", state_bytes / 1e6, state_rd_bytes / 1e6, state_wr_bytes / 1e6);
         printf("  total:  %.1f MB\n", total_bytes / 1e6);
         printf("  v2  BW: %.1f GB/s\n", total_bytes / (v2_ms * 1e6));
     }
@@ -297,6 +311,7 @@ int main(int argc, char** argv)
                             (const T*)h_wt.data(),
                             (T*)h_state.data(),
                             q_offsets_host.data(),
+                            q_offsets_host.data(),  // k_offsets == q_offsets (no history in bench)
                             batch_size,
                             conv_dim,
                             d_conv,

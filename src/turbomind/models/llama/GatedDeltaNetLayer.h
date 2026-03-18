@@ -59,7 +59,8 @@ private:
         std::vector<RequestCache*> rc;          // borrowed batch RequestCache pointers
         std::vector<int>           input_lens;  // snapshot of input_len per request (captured at Setup time)
         int                        batch_size = 0;
-        Buffer_<int>               q_offsets;  // cumulative token offsets, device buffer
+        Buffer_<int>               q_offsets;  // cumulative input-token offsets, device buffer
+        Buffer_<int>               k_offsets;  // cumulative key (history+input) offsets, device buffer
         std::vector<Tensor>        conv_states;
         std::vector<Tensor>        recurrent_states;
         Buffer_<void*>             conv_state_ptrs;

@@ -89,6 +89,7 @@ void GatedDeltaNetLayer::Run(BatchOp op, int phase, TensorMap& env)
     else if (op == BatchOp::kPrepare) {
         auto& d     = data_.at(phase);
         d.q_offsets = env.at("q_offsets").buffer().borrow();
+        d.k_offsets = env.at("k_offsets").buffer().borrow();
     }
 }
 
@@ -222,6 +223,7 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
                               Tensor{},
                               pd.conv_state_ptrs,
                               pd.q_offsets,
+                              pd.k_offsets,
                               pd.batch_size,
                               conv_state_layer_offset,
                               sm_count_,

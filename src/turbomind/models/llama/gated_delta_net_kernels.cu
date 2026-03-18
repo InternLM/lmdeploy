@@ -1283,6 +1283,7 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
                                                const T*     bias,
                                                void* const* conv_state_ptrs,
                                                const int*   q_offsets,
+                                               const int*   k_offsets,
                                                int*         work_counter,
                                                int          batch_size,
                                                int          conv_dim,
@@ -1333,8 +1334,11 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
             if (lo > t)
                 break;
             int hi = __ldg(&q_offsets[b + 1]);
-            if (t < hi)
-                s_batch_info = make_int4(b, lo, hi - lo, 0);
+            if (t < hi) {
+                int seq  = hi - lo;
+                int hist = (__ldg(&k_offsets[b + 1]) - __ldg(&k_offsets[b])) - seq;
+                s_batch_info = make_int4(b, lo, seq, hist);
+            }
         }
         __syncthreads();
 
@@ -1344,7 +1348,8 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
         const int  b           = bi.x;
         const int  t_local     = t - bi.y;
         const int  seq_len     = bi.z;
-        const bool needs_state = (t_local < D_CONV - 1) || (t_local == seq_len - 1);
+        const int  history_len = bi.w;
+        const bool needs_state = (t_local < D_CONV - 1);
         T*         state_base  = (T*)conv_state_ptrs[b] + state_layer_offset;
 
         Array<T, CHANNELS_PER_THREAD> in_taps[D_CONV];
@@ -1375,10 +1380,11 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
                     val = static_cast<float>(in_taps[d][ch]);
                 }
                 else {
-                    T tmp{};
+                    int ring_idx = (history_len + src + D_CONV) % D_CONV;
+                    T   tmp{};
                     PRAGMA_UNROLL
                     for (int dd = 0; dd < D_CONV; ++dd)
-                        if (dd == D_CONV + src)
+                        if (dd == ring_idx)
                             tmp = sv_tap[dd][ch];
                     val = static_cast<float>(tmp);
                 }
@@ -1397,24 +1403,11 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
             PRAGMA_UNROLL
             for (int d = 0; d < D_CONV; ++d) {
                 int src_t = seq_len - D_CONV + d;
-                PRAGMA_UNROLL
-                for (int ch = 0; ch < CHANNELS_PER_THREAD; ++ch) {
-                    if (src_t >= 0) {
-                        sv_tap[d][ch] = in_taps[d][ch];
-                    }
-                    else {
-                        T tmp{};
-                        PRAGMA_UNROLL
-                        for (int dd = 0; dd < D_CONV; ++dd)
-                            if (dd == d + seq_len)
-                                tmp = sv_tap[dd][ch];
-                        sv_tap[d][ch] = tmp;
-                    }
+                if (src_t >= 0) {
+                    int ring_d = (history_len + src_t) % D_CONV;
+                    Store(state_base + ring_d * conv_dim + c_base, in_taps[d]);
                 }
             }
-            PRAGMA_UNROLL
-            for (int d = 0; d < D_CONV; ++d)
-                Store(state_base + d * conv_dim + c_base, sv_tap[d]);
         }
 
         Store(out + t * conv_dim + c_base, out_vals);
@@ -1427,6 +1420,7 @@ void invokeFusedConv1dSiLU(Ref<Tensor>           out_,
                            const Tensor&         bias,
                            const Buffer_<void*>& conv_state_ptrs,
                            const Buffer_<int>&   q_offsets,
+                           const Buffer_<int>&   k_offsets,
                            int                   batch_size,
                            int                   state_layer_offset,
                            int                   sm_count,
@@ -1465,6 +1459,7 @@ void invokeFusedConv1dSiLU(Ref<Tensor>           out_,
                 bias ? bias.data<T>() : (T*)nullptr,
                 conv_state_ptrs.data(),
                 q_offsets.data(),
+                k_offsets.data(),
                 work_counter,
                 batch_size,
                 conv_dim,
