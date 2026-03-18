@@ -1,14 +1,13 @@
 import os
 import subprocess
 import sys
-from typing import Tuple
 
 
 def execute_command_with_logging(cmd,
                                  log_file_path: str,
                                  timeout: int = 3600,
                                  env=None,
-                                 should_print=True) -> Tuple[bool, str]:
+                                 should_print=True) -> tuple[bool, str]:
     if env is None:
         env = os.environ.copy()
 

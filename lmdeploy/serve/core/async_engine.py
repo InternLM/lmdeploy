@@ -268,7 +268,7 @@ class AsyncEngine:
             metrics_processor.increase_api_routed_requests()
             yield generator
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
-            logger.error(f'[safe_run] session {session.session_id} exception caught: {type(e).__name__} {e}')
+            logger.exception(f'[safe_run] session {session.session_id} exception caught: {e}')
             await session.async_abort()
             if self.backend == 'pytorch':
                 await handle.async_end(session.session_id)
@@ -396,7 +396,7 @@ class AsyncEngine:
         metrics_processor.increase_total_requests()
         async with session.request_handle() as handle:
             if epoch != self.epoch:
-                logger.debug(f'[generate] session {session_id} got aborted before starting inference')
+                logger.info(f'[generate] session {session_id} got aborted before starting inference')
                 # TODO(lvhan): metrics_processor.increase_failed_requests('abort')
                 metrics_processor.increase_completed_requests()
                 yield GenOut(response='',

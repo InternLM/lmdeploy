@@ -95,6 +95,8 @@ class GenerationConfig:
                 }
 
         logits_processors: Custom logit processors.
+        repetition_ngram_size: The size of n-grams to consider for repetition early stop.
+        repetition_ngram_threshold: The number of times an n-gram must be repeated to trigger early stop.
     """
 
     n: int = 1
@@ -128,6 +130,10 @@ class GenerationConfig:
 
     # router replay
     return_routed_experts: bool = False
+
+    # ngram, generation would stop if latest [size] tokens are repeated for [threshold] times
+    repetition_ngram_size: int = 0
+    repetition_ngram_threshold: int = 0
 
     def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
         """Convert stop_words/bad_sords to ids and append the ids to

@@ -12,6 +12,7 @@ device: cuda
 
 config:
     tp:
+        Qwen/Qwen3-235B-A22B-FP8: 4
         internlm/Intern-S1: 4
         Qwen/Qwen3-235B-A22B-Thinking-2507-FP8: 4
         Qwen/Qwen3-30B-A3B: 2
@@ -24,6 +25,8 @@ config:
         JetLM/SDAR-30B-A3B-Sci: 2
         moonshotai/Kimi-K2-Instruct-0905: 16
         Qwen/Qwen3-235B-A22B-Thinking-2507: 8
+        OpenGVLab/InternVL3_5-38B: 2
+        Qwen/Qwen3-VL-30B-A3B-Instruct: 2
         internlm/Intern-S1-Pro-FP8: 16
 
     dp_ep:
@@ -45,8 +48,6 @@ config:
 
 turbomind_chat_model:
     tp:
-        - internlm/Intern-S1
-        - internlm/Intern-S1-mini
         - Qwen/Qwen3-0.6B-FP8
         - Qwen/Qwen3-1.7B-FP8
         - Qwen/Qwen3-4B-FP8
@@ -58,6 +59,7 @@ turbomind_chat_model:
         - Qwen/Qwen3-30B-A3B-FP8
         - Qwen/Qwen3-32B
         - Qwen/Qwen3-32B-FP8
+        - OpenGVLab/InternVL3_5-38B
         - openai/gpt-oss-120b
         - openai/gpt-oss-20b
 
@@ -66,8 +68,6 @@ turbomind_chat_model:
 
 pytorch_chat_model:
     tp:
-        - internlm/Intern-S1
-        - internlm/Intern-S1-mini
         - Qwen/Qwen3-0.6B-FP8
         - Qwen/Qwen3-1.7B-FP8
         - Qwen/Qwen3-4B-FP8
@@ -79,6 +79,8 @@ pytorch_chat_model:
         - Qwen/Qwen3-30B-A3B-FP8
         - Qwen/Qwen3-32B
         - Qwen/Qwen3-32B-FP8
+        - Qwen/Qwen3-VL-30B-A3B-Instruct
+        - OpenGVLab/InternVL3_5-38B
         - unsloth/gpt-oss-120b-BF16
         - unsloth/gpt-oss-20b-BF16
         - deepseek/DeepSeek-V3.1
@@ -92,17 +94,16 @@ pytorch_chat_model:
 
 turbomind_vl_model:
     tp:
-        - internlm/Intern-S1
-        - internlm/Intern-S1-mini
+        - OpenGVLab/InternVL3_5-38B
+
 
 pytorch_vl_model:
     tp:
-        - internlm/Intern-S1
-        - internlm/Intern-S1-mini
+        - OpenGVLab/InternVL3_5-38B
+        - Qwen/Qwen3-VL-30B-A3B-Instruct
 
 turbomind_base_model:
     tp:
-        - internlm/Intern-S1-mini
         - Qwen/Qwen3-4B-FP8
         - openai/gpt-oss-20b
 
@@ -113,8 +114,6 @@ pytorch_base_model:
 
 turbomind_quantization:
     no_awq:
-        - internlm/Intern-S1
-        - internlm/Intern-S1-mini
         - Qwen/Qwen3-0.6B-FP8
         - Qwen/Qwen3-1.7B-FP8
         - Qwen/Qwen3-4B-FP8
@@ -131,8 +130,6 @@ turbomind_quantization:
     gptq:
         - empty
     no_kvint4:
-        - internlm/Intern-S1
-        - internlm/Intern-S1-mini
         - Qwen/Qwen3-0.6B-FP8
         - Qwen/Qwen3-1.7B-FP8
         - Qwen/Qwen3-4B-FP8
@@ -155,8 +152,6 @@ pytorch_quantization:
     w8a8:
         - empty
     no_kvint4:
-        - internlm/Intern-S1
-        - internlm/Intern-S1-mini
         - Qwen/Qwen3-8B-Base
         - Qwen/Qwen3-0.6B-FP8
         - Qwen/Qwen3-1.7B-FP8
@@ -183,8 +178,6 @@ longtext_model:
     - Qwen/Qwen3-235B-A22B-Thinking-2507
 
 benchmark_model:
-    - internlm/Intern-S1
-    - internlm/Intern-S1-mini
     - meta-llama/Meta-Llama-3-1-8B-Instruct
     - meta-llama/Meta-Llama-3-1-70B-Instruct
     - Qwen/Qwen3-32B
@@ -211,5 +204,5 @@ evaluate_model:
     - JetLM/SDAR-30B-A3B-Sci
 
 mllm_evaluate_model:
-    - internlm/Intern-S1
-    - internlm/Intern-S1-mini
+    - OpenGVLab/InternVL3_5-38B
+    - Qwen/Qwen3-VL-30B-A3B-Instruct

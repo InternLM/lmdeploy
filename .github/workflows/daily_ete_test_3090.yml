@@ -53,7 +53,6 @@ env:
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
   OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
   RUN_ID: ${{ inputs.repo_ref || 'main' }}_${{ github.run_id }}
-  TEST_ENV: 3090
 
 jobs:
   linux-build:
@@ -153,6 +152,7 @@ jobs:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
+      TEST_ENV: 3090_legacy
     container:
       image: openmmlab/lmdeploy:latest-cu12
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -178,6 +178,7 @@ jobs:
       - name: Check env
         run: |
           python3 -m pip list
+          pip install transformers==4.57.6
           lmdeploy check_env
           rm -rf allure-results
           # remove tmp log in testcase
@@ -215,6 +216,7 @@ jobs:
       fail-fast: false
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
+        transformers: ["3090", "3090_legacy"]
         model: ${{ fromJSON(inputs.model || '["llm", "mllm"]')}}
         function: ${{ fromJSON(inputs.function || '["pipeline","restful","chat"]')}}
         exclude:
@@ -228,6 +230,7 @@ jobs:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
+      TEST_ENV: ${{matrix.transformers}}
     container:
       image: openmmlab/lmdeploy:latest-cu12
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -249,6 +252,10 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
+      - name: Downgrade transformers
+        if: ${{matrix.transformers == '3090_legacy'}}
+        run: |
+          pip install transformers==4.57.6
       - name: Check env
         run: |
           python3 -m pip list
@@ -294,6 +301,7 @@ jobs:
       fail-fast: false
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
+        transformers: ["3090", "3090_legacy"]
         model_path: ['internlm/internlm3-8b-instruct', 'Qwen/Qwen3-8B']
         include:
           - tp: 1
@@ -315,6 +323,8 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
+    env:
+      TEST_ENV: ${{matrix.transformers}}
     steps:
       - name: Copy repository and Artifacts
         run: |
@@ -328,6 +338,10 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
+      - name: Downgrade transformers
+        if: ${{matrix.transformers == '3090_legacy'}}
+        run: |
+          pip install transformers==4.57.6
       - name: Check env
         run: |
           python3 -m pip list
