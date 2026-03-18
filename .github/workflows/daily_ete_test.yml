@@ -46,9 +46,9 @@ env:
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
   OUTPUT_FOLDER: cuda12.8_dist_${{ github.run_id }}
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+  ROOT_DIR: /nvme/qa_test_models
   REPORT_DIR: /nvme/qa_test_models/test-reports/${{ inputs.repo_ref || 'main' }}_${{ github.run_id }}
   COV_PARAM: --cov /opt/py3/lib/python3.10/site-packages/lmdeploy
-  FAIL_CONFIG: ${{ github.event_name == 'schedule' && github.run_attempt != 1 && '--lf --lfnf none' || '--lf'}}
   TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy/${{ inputs.repo_ref || 'main' }}_${{ github.run_id }}
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
   OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
@@ -149,10 +149,14 @@ jobs:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'quant') )}}
     runs-on: [self-hosted, linux-a100]
     timeout-minutes: 150
+    strategy:
+      matrix:
+        transformers: ["", "legacy"]
     env:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
+      TEST_ENV: ${{ matrix.transformers }}
     container:
       image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -183,6 +187,7 @@ jobs:
           rm -rf ${{env.DEEPSEEK_VL}}/build
       - name: Check env
         run: |
+          pip install transformers==4.57.6
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -205,7 +210,7 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 $REPORT_DIR
+          chmod -R 777 ${{env.ROOT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -222,6 +227,7 @@ jobs:
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
         model: ${{ fromJSON(inputs.model || '["llm", "mllm"]')}}
+        transformers: ["", "legacy"]
         function: ${{ fromJSON(inputs.function || '["pipeline","restful","chat"]')}}
         exclude:
           - backend: turbomind
@@ -238,6 +244,7 @@ jobs:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
+      TEST_ENV: ${{ matrix.transformers }}
     container:
       image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -265,6 +272,10 @@ jobs:
           python3 -m pip install -r requirements/test.txt
           pip install ${{env.DEEPSEEK_VL}} --no-deps
           rm -rf ${{env.DEEPSEEK_VL}}/build
+      - name: Downgrade transformers
+        if: ${{matrix.transformers == 'legacy'}}
+        run: |
+          pip install transformers==4.57.6
       - name: Check env
         run: |
           python3 -m pip list
@@ -319,7 +330,7 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 $REPORT_DIR
+          chmod -R 777 ${{env.ROOT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -334,27 +345,12 @@ jobs:
       fail-fast: false
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
-        model_path: ['internlm/Intern-S1', 'internlm/internlm2_5-20b-chat', 'internlm/internlm2_5-20b', 'Qwen/Qwen3-8B-Base', 'Qwen/Qwen3-30B-A3B', 'Qwen/Qwen3-32B', 'OpenGVLab/InternVL3_5-30B-A3B', 'OpenGVLab/InternVL3-38B', 'Qwen/Qwen3-VL-8B-Instruct', 'Qwen/Qwen3-VL-30B-A3B-Instruct']
+        model_path: ['Qwen/Qwen3-8B-Base', 'Qwen/Qwen3-30B-A3B', 'Qwen/Qwen3-32B', 'OpenGVLab/InternVL3_5-30B-A3B', 'OpenGVLab/InternVL3-38B', 'Qwen/Qwen3-VL-8B-Instruct', 'Qwen/Qwen3-VL-30B-A3B-Instruct']
         include:
-          - tp: 2
-            model: internlm2_5-20b-chat
-            model_path: internlm/internlm2_5-20b-chat
-            case_info: ['chat_completions_v1', 'generate']
-            generate_type: base
-          - tp: 2
-            model: internlm2_5-20b
-            model_path: internlm/internlm2_5-20b
-            case_info: ['completions_v1']
-            generate_type: base
           - tp: 2
             model: Qwen3-8B-Base
             model_path: Qwen/Qwen3-8B-Base
             case_info: ['completions_v1']
-            generate_type: base
-          - tp: 8
-            model: Intern-S1
-            model_path: internlm/Intern-S1
-            case_info: ['chat_completions_v1', 'generate']
             generate_type: base
           - tp: 2
             model: Qwen3-30B-A3B
@@ -531,7 +527,7 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 $REPORT_DIR
+          chmod -R 777 ${{env.ROOT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -594,7 +590,7 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 $REPORT_DIR
+          chmod -R 777 ${{env.ROOT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -644,19 +640,213 @@ jobs:
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Test benchmark script
         run: |
-          pytest autotest/benchmark -n 4 -m function ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/benchmark -n 4 -m function --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Clear workfile
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 $REPORT_DIR
+          chmod -R 777 ${{env.ROOT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
           mkdir $workdir
           chmod -R 777 $workdir
 
+
+  test_restful_legacy:
+    if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'restful'))}}
+    runs-on: [self-hosted, linux-a100]
+    needs: test_quantization
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
+        model_path: ['internlm/Intern-S1']
+        include:
+          - tp: 8
+            model: Intern-S1
+            model_path: internlm/Intern-S1
+            case_info: ['chat_completions_v1', 'generate']
+            generate_type: base
+    timeout-minutes: 60
+    container:
+      image: openmmlab/lmdeploy:latest-cu12.8
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
+      volumes:
+        - /nvme/github-actions/pip-cache:/root/.cache/pip
+        - /nvme/github-actions/packages:/root/packages
+        - /nvme/qa_test_models:/nvme/qa_test_models
+        - /nvme/huggingface_hub:/nvme/huggingface_hub
+        - /mnt/121:/mnt/121
+        - /mnt/104:/mnt/104
+        - /mnt/bigdisk:/mnt/bigdisk
+        - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
+    steps:
+      - name: Copy repository and Artifacts
+        run: |
+          cp -r ${{env.TEST_CODE_PATH}}/. .
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
+      - name: Install lmdeploy - dependency
+        run: |
+          python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
+      - name: Install lmdeploy
+        run: |
+          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip install -r requirements/test.txt
+      - name: Check env
+        run: |
+          pip install transformers==4.57.6
+          python3 -m pip list
+          lmdeploy check_env
+          rm -rf allure-results
+          # remove tmp log in testcase
+          mkdir ${{env.REPORT_DIR}}/.pytest_cache -p && rm autotest/.pytest_cache -f
+          ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
+      - name: Start restful api
+        run: |
+          lmdeploy serve api_server /nvme/qa_test_models/${{matrix.model_path}} --tp ${{matrix.tp}} --backend ${{matrix.backend}} ${{matrix.extra}} --allow-terminate-by-client > ${{env.REPORT_DIR}}/${{matrix.backend}}_${{matrix.model}}_${{matrix.generate_type}}_start_restful.log 2>&1 &
+          echo "restful_pid=$!"
+          for i in $(seq 1 240)
+          do
+            sleep 5
+            echo "health check try $i"
+            if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
+              echo "health check success"
+              exit 0
+            fi
+          done
+
+          echo "health check fail"
+          curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
+          exit 1
+      - name: Test lmdeploy - chat_completions_v1
+        if:  matrix.model != 'internlm2_5-20b-chat' && matrix.model != 'Intern-S1' && contains(matrix.case_info, 'chat_completions_v1')
+        timeout-minutes: 60
+        run: |
+          pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'not not_${{matrix.backend}} and not internlm2_5 and not interns1' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+      - name: Test lmdeploy - chat_completions_v1
+        if: matrix.model == 'Intern-S1' && contains(matrix.case_info, 'chat_completions_v1')
+        timeout-minutes: 60
+        run: |
+          pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'not not_${{matrix.backend}} and not internlm2_5' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+      - name: Test lmdeploy - chat_completions_v1 - internlm2_5-20b-chat
+        if:  matrix.model == 'internlm2_5-20b-chat' && contains(matrix.case_info, 'chat_completions_v1')
+        timeout-minutes: 60
+        run: |
+          pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'not not_${{matrix.backend}} and not interns1' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+      - name: Test lmdeploy - completions_v1 - internlm2_5-20b
+        if: matrix.model == 'internlm2_5-20b' && contains(matrix.case_info, 'completions_v1')
+        timeout-minutes: 60
+        run: |
+          pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+      - name: Test lmdeploy - completions_v1 - other
+        if: matrix.model != 'internlm2_5-20b' && contains(matrix.case_info, 'completions_v1')
+        timeout-minutes: 60
+        run: |
+          pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}} and not internlm2_5' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+      - name: Test generate - base
+        if:  matrix.generate_type == 'base' && contains(matrix.case_info, 'generate')
+        timeout-minutes: 60
+        run: |
+          pytest autotest/interface/restful/test_restful_generate.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'not not_${{matrix.backend}} and not logprob and not experts' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+      - name: Test generate - logprob
+        if:  matrix.generate_type == 'logprob' && contains(matrix.case_info, 'generate')
+        timeout-minutes: 60
+        run: |
+          pytest autotest/interface/restful/test_restful_generate.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'not not_${{matrix.backend}} and not experts' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+      - name: Test generate - all
+        if:  matrix.generate_type == 'all' && contains(matrix.case_info, 'generate')
+        timeout-minutes: 60
+        run: |
+          pytest autotest/interface/restful/test_restful_generate.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'not not_${{matrix.backend}}' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+      - name: Kill api server
+        if: always()
+        run: |
+          curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
+      - name: Clear workfile
+        if: always()
+        run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
+          chmod -R 777 ${{env.ROOT_DIR}}
+          export workdir=$(pwd)
+          cd ..
+          rm -rf $workdir
+          mkdir $workdir
+          chmod -R 777 $workdir
+
+  test_pipeline_legacy:
+    if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'pipeline'))}}
+    runs-on: [self-hosted, linux-a100]
+    needs: test_quantization
+    timeout-minutes: 240
+    container:
+      image: openmmlab/lmdeploy:latest-cu12.8
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
+      volumes:
+        - /nvme/github-actions/pip-cache:/root/.cache/pip
+        - /nvme/github-actions/packages:/root/packages
+        - /nvme/qa_test_models:/nvme/qa_test_models
+        - /nvme/huggingface_hub:/nvme/huggingface_hub
+        - /mnt/121:/mnt/121
+        - /mnt/104:/mnt/104
+        - /mnt/bigdisk:/mnt/bigdisk
+        - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
+    steps:
+      - name: Copy repository and Artifacts
+        run: |
+          cp -r ${{env.TEST_CODE_PATH}}/. .
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
+      - name: Install lmdeploy - dependency
+        run: |
+          python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
+      - name: Install lmdeploy
+        run: |
+          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip install -r requirements/test.txt
+          pip install ${{env.DEEPSEEK_VL}} --no-deps
+          rm -rf ${{env.DEEPSEEK_VL}}/build
+      - name: Check env
+        run: |
+          pip install transformers==4.57.6
+          python3 -m pip list
+          lmdeploy check_env
+          rm -rf allure-results
+          # remove tmp log in testcase
+          mkdir ${{env.REPORT_DIR}}/.pytest_cache -p && rm autotest/.pytest_cache -f
+          ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
+      - name: Test lmdeploy - interface pipeline case
+        run: |
+          pytest autotest/interface/pipeline/test_pipeline_func.py -m 'not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
+          pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
+          pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
+          pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_4 and not pr_test' -n 2 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+          pytest autotest/interface/pipeline/test_pipeline_longtext_func.py -m 'gpu_num_8 and not pr_test' -n 1 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+      - name: Clear workfile
+        if: always()
+        run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
+          chmod -R 777 ${{env.ROOT_DIR}}
+          export workdir=$(pwd)
+          cd ..
+          rm -rf $workdir
+          mkdir $workdir
+          chmod -R 777 $workdir
 
   get_coverage_report:
     if: ${{!cancelled()}}
@@ -689,7 +879,7 @@ jobs:
       - name: Clear workfile
         if: always()
         run: |
-          chmod -R 777 $REPORT_DIR
+          chmod -R 777 ${{env.ROOT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir

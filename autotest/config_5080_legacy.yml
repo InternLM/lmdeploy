@@ -42,6 +42,7 @@ pytorch_vl_model:
         - OpenGVLab/InternVL3-2B-Instruct
         - OpenGVLab/InternVL3-1B-Instruct
         - OpenGVLab/InternVL2_5-1B
+        - Qwen/Qwen2.5-VL-3B-Instruct
 
 turbomind_base_model:
     tp:
@@ -85,5 +86,6 @@ pytorch_quantization:
         - Qwen/Qwen3-4B
         - Qwen/Qwen3-1.7B
         - Qwen/Qwen3-0.6B
+        - Qwen/Qwen2.5-VL-3B-Instruct
     no_kvint8:
         - deepseek-ai/DeepSeek-V2-Lite-Chat
