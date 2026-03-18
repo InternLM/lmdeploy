@@ -92,6 +92,11 @@ class TestNParameterValidation:
         req = ChatCompletionRequest(model='m', messages='hi', n=-1)
         assert chat_check_request(req, ctx) != ''
 
+    def test_completion_n_negative_rejected(self):
+        ctx = self._make_server_context()
+        req = CompletionRequest(model='m', prompt='hi', n=-1)
+        assert completion_check_request(req, ctx) != ''
+
 
 # ---------------------------------------------------------------------------
 # API handler tests (mocking VariableInterface and raw_request)
