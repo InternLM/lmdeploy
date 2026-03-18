@@ -24,6 +24,7 @@ def _load_http_url(url_spec: ParseResult, media_io: MediaIO[_M]) -> _M:
     if url_spec.scheme not in ('http', 'https'):
         raise ValueError(f'Unsupported URL scheme: {url_spec.scheme}')
 
+    fetch_timeout = 10
     if isinstance(media_io, ImageMediaIO):
         fetch_timeout = int(os.environ.get('LMDEPLOY_IMAGE_FETCH_TIMEOUT', 10))
     elif isinstance(media_io, VideoMediaIO):
