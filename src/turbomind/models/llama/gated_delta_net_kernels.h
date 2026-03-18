@@ -15,7 +15,7 @@ namespace turbomind {
 //
 // out:             (total_tokens, conv_dim)       row-major output
 // in:              (total_tokens, in_stride)      non-contiguous slice of all_proj
-// weight:          (conv_dim, d_conv)
+// weight:          (d_conv, conv_dim)
 // bias:            (conv_dim) or empty Tensor
 // conv_state_ptrs: device array[batch_size] of per-request state pointers
 // q_offsets:       device int[batch_size+1] cumulative token offsets
@@ -27,6 +27,8 @@ void invokeFusedConv1dSiLU(Ref<Tensor>           out,
                             const Buffer_<int>&   q_offsets,
                             int                   batch_size,
                             int                   state_layer_offset,
+                            int                   sm_count,
+                            int*                  work_counter,
                             cudaStream_t          stream);
 
 // =============================================================================

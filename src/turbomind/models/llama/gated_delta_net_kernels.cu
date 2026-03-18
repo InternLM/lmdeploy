@@ -1253,78 +1253,167 @@ void invokeRMSNormGated(Ref<Tensor> hidden_, const Tensor& gate, const Tensor& w
     TM_DISPATCH_PRIMARY_DTYPES(hidden.dtype(), invoke);
 }
 
-// =============================================================================
-// Fused Conv1d + SiLU — unified batched kernel (row-major layout)
-//
-// Handles both decode (seq_len == 1) and prefill (seq_len > 1) per request in
-// a single launch. q_offsets[b] / q_offsets[b+1] bound the token range for
-// request b. conv_state_ptrs[b] points to state [conv_dim, d_conv] per request.
-// =============================================================================
-template<typename T>
-__global__ void fused_conv1d_batched_kernel(T*           out,
-                                            const T*     in,
-                                            const T*     weight,
-                                            const T*     bias,
-                                            void* const* conv_state_ptrs,
-                                            const int*   q_offsets,
-                                            int          batch_size,
-                                            int          conv_dim,
-                                            int          d_conv,
-                                            int          in_stride,
-                                            int          state_layer_offset)
+template<typename T, int N>
+__device__ __forceinline__ T array_get(const Array<T, N>& arr, int idx)
 {
-    const int tid   = blockIdx.x * blockDim.x + threadIdx.x;
-    const int total = q_offsets[batch_size] * conv_dim;
-    if (tid >= total)
-        return;
-
-    const int global_t = tid / conv_dim;
-    const int c        = tid % conv_dim;
-
-    // binary search: find request b such that q_offsets[b] <= global_t < q_offsets[b+1]
-    int lo = 0, hi = batch_size - 1;
-    while (lo < hi) {
-        int m = (lo + hi) / 2;
-        if (q_offsets[m + 1] <= global_t)
-            lo = m + 1;
-        else
-            hi = m;
+    T result{};
+    PRAGMA_UNROLL
+    for (int i = 0; i < N; ++i) {
+        if (i == idx)
+            result = arr[i];
     }
-    const int b       = lo;
-    const int t_local = global_t - q_offsets[b];
-    const int seq_len = q_offsets[b + 1] - q_offsets[b];
+    return result;
+}
 
-    T*       s   = (T*)conv_state_ptrs[b] + state_layer_offset + c * d_conv;
-    const T* w   = weight + c * d_conv;
-    float    acc = 0.0f;
+// =============================================================================
+// Fused Conv1d + SiLU — persistent batched kernel
+//
+// Weight layout: [d_conv, conv_dim], State layout: [d_conv, conv_dim] per batch.
+//
+// Persistent 1D grid. Each block has a fixed channel tile
+// (blockIdx.x % num_ch_tiles) and atomically claims single-token work items
+// via a global counter. Token-major work ordering with grid size a multiple of
+// num_ch_tiles guarantees monotonically increasing tokens and a fixed channel
+// tile per block.
+// =============================================================================
+template<int D_CONV, int CHANNELS_PER_THREAD, int BLOCK_DIM, typename T>
+__global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*           out,
+                                               const T*     in,
+                                               const T*     weight,
+                                               const T*     bias,
+                                               void* const* conv_state_ptrs,
+                                               const int*   q_offsets,
+                                               int*         work_counter,
+                                               int          batch_size,
+                                               int          conv_dim,
+                                               int          in_stride,
+                                               int          total_tokens,
+                                               int          state_layer_offset,
+                                               int          total_work,
+                                               int          num_ch_tiles)
+{
+    static_assert(BLOCK_DIM * CHANNELS_PER_THREAD > 0);
 
-    if (seq_len == 1) {
-        // decode: shift state in-place, append new input, dot-product from state
-#pragma unroll
-        for (int d = 0; d < d_conv - 1; ++d)
-            s[d] = s[d + 1];
-        s[d_conv - 1] = in[global_t * in_stride + c];
-#pragma unroll
-        for (int d = 0; d < d_conv; ++d)
-            acc += static_cast<float>(s[d]) * static_cast<float>(w[d]);
-    }
-    else {
-        // prefill: causal conv with zero-padding before first token of request
-#pragma unroll
-        for (int d = 0; d < d_conv; ++d) {
-            int src = t_local - (d_conv - 1 - d);
+    int prev_ch_tile = -1;
+    int c_base       = 0;
+
+    Array<T, CHANNELS_PER_THREAD> w_tap[D_CONV];
+    Array<T, CHANNELS_PER_THREAD> bias_vals;
+
+    __shared__ int  s_work_id;
+    __shared__ int4 s_batch_info;
+    int b_start = 0;
+
+    while (true) {
+        if (threadIdx.x == 0)
+            s_work_id = atomicAdd(work_counter, 1);
+        __syncthreads();
+
+        if (s_work_id >= total_work)
+            break;
+
+        const int ch_tile = s_work_id % num_ch_tiles;
+        const int t       = s_work_id / num_ch_tiles;
+
+        if (ch_tile != prev_ch_tile) {
+            c_base = (ch_tile * BLOCK_DIM + threadIdx.x) * CHANNELS_PER_THREAD;
+            PRAGMA_UNROLL
+            for (int d = 0; d < D_CONV; ++d) {
+                Load(w_tap[d], weight + d * conv_dim + c_base);
+            }
+            if (bias)
+                Load(bias_vals, bias + c_base);
+            prev_ch_tile = ch_tile;
+        }
+
+        for (int b = b_start + threadIdx.x; b < batch_size; b += BLOCK_DIM) {
+            int lo = __ldg(&q_offsets[b]);
+            if (lo > t)
+                break;
+            int hi = __ldg(&q_offsets[b + 1]);
+            if (t < hi)
+                s_batch_info = make_int4(b, lo, hi - lo, 0);
+        }
+        __syncthreads();
+
+        b_start = s_batch_info.x;
+
+        const int4 bi          = s_batch_info;
+        const int  b           = bi.x;
+        const int  t_local     = t - bi.y;
+        const int  seq_len     = bi.z;
+        const bool needs_state = (t_local < D_CONV - 1) || (t_local == seq_len - 1);
+        T*         state_base  = (T*)conv_state_ptrs[b] + state_layer_offset;
+
+        Array<T, CHANNELS_PER_THREAD> in_taps[D_CONV];
+        PRAGMA_UNROLL
+        for (int d = 0; d < D_CONV; ++d) {
+            int src = t_local - (D_CONV - 1 - d);
             if (src >= 0)
-                acc += static_cast<float>(in[(q_offsets[b] + src) * in_stride + c]) * static_cast<float>(w[d]);
+                Load(in_taps[d], in + (bi.y + src) * in_stride + c_base);
         }
-        // save trailing inputs into conv state for future decode steps
-        if (t_local >= seq_len - d_conv) {
-            int state_idx = d_conv - (seq_len - t_local);
-            s[state_idx]  = in[global_t * in_stride + c];
+
+        Array<T, CHANNELS_PER_THREAD> sv_tap[D_CONV];
+        if (needs_state) {
+            PRAGMA_UNROLL
+            for (int d = 0; d < D_CONV; ++d)
+                Load(sv_tap[d], state_base + d * conv_dim + c_base);
         }
+
+        Array<T, CHANNELS_PER_THREAD> out_vals;
+
+        PRAGMA_UNROLL
+        for (int ch = 0; ch < CHANNELS_PER_THREAD; ++ch) {
+            float acc = 0.0f;
+            PRAGMA_UNROLL
+            for (int d = 0; d < D_CONV; ++d) {
+                int   src = t_local - (D_CONV - 1 - d);
+                float val;
+                if (src >= 0) {
+                    val = static_cast<float>(in_taps[d][ch]);
+                }
+                else {
+                    T tmp{};
+                    PRAGMA_UNROLL
+                    for (int dd = 0; dd < D_CONV; ++dd)
+                        if (dd == D_CONV + src)
+                            tmp = sv_tap[dd][ch];
+                    val = static_cast<float>(tmp);
+                }
+                acc += val * static_cast<float>(w_tap[d][ch]);
+            }
+            if (bias)
+                acc += static_cast<float>(bias_vals[ch]);
+
+            out_vals[ch] = static_cast<T>(acc / (1.0f + expf(-acc)));
+
+            if (t_local == seq_len - 1) {
+                PRAGMA_UNROLL
+                for (int d = 0; d < D_CONV; ++d) {
+                    int src_t = seq_len - D_CONV + d;
+                    if (src_t >= 0) {
+                        sv_tap[d][ch] = in_taps[d][ch];
+                    }
+                    else {
+                        T tmp{};
+                        PRAGMA_UNROLL
+                        for (int dd = 0; dd < D_CONV; ++dd)
+                            if (dd == d + seq_len)
+                                tmp = sv_tap[dd][ch];
+                        sv_tap[d][ch] = tmp;
+                    }
+                }
+            }
+        }
+
+        if (t_local == seq_len - 1) {
+            PRAGMA_UNROLL
+            for (int d = 0; d < D_CONV; ++d)
+                Store(state_base + d * conv_dim + c_base, sv_tap[d]);
+        }
+
+        Store(out + t * conv_dim + c_base, out_vals);
     }
-    if (bias)
-        acc += static_cast<float>(bias[c]);
-    out[global_t * conv_dim + c] = static_cast<T>(acc / (1.0f + expf(-acc)));
 }
 
 void invokeFusedConv1dSiLU(Ref<Tensor>           out_,
@@ -1335,31 +1424,55 @@ void invokeFusedConv1dSiLU(Ref<Tensor>           out_,
                            const Buffer_<int>&   q_offsets,
                            int                   batch_size,
                            int                   state_layer_offset,
+                           int                   sm_count,
+                           int*                  work_counter,
                            cudaStream_t          stream)
 {
     auto& out = out_.get();
 
     const int total_tokens = in.shape(0);
-    const int conv_dim     = weight.shape(0);
-    const int d_conv       = weight.shape(1);
+    const int d_conv       = weight.shape(0);
+    const int conv_dim     = weight.shape(1);
     const int in_stride    = in.stride(0);
 
-    const int threads = 256;
-    const int blocks  = (total_tokens * conv_dim + threads - 1) / threads;
+    constexpr int threads = 256;
 
     auto invoke = [&](auto t) {
         using T = decltype(t);
-        fused_conv1d_batched_kernel<<<blocks, threads, 0, stream>>>(out.data<T>(),
-                                                                    in.data<T>(),
-                                                                    weight.data<T>(),
-                                                                    bias ? bias.data<T>() : (T*)nullptr,
-                                                                    conv_state_ptrs.data(),
-                                                                    q_offsets.data(),
-                                                                    batch_size,
-                                                                    conv_dim,
-                                                                    d_conv,
-                                                                    in_stride,
-                                                                    state_layer_offset);
+        if (d_conv == 4) {
+            constexpr int kDConv  = 4;
+            constexpr int kChPerT = 4;
+            const int     ch_per_blk   = threads * kChPerT;
+            assert(conv_dim % ch_per_blk == 0);
+            const int     num_ch_tiles = conv_dim / ch_per_blk;
+            const int     total_work   = total_tokens * num_ch_tiles;
+
+            auto kernel = fused_conv1d_batched_kernel_v2<kDConv, kChPerT, threads, T>;
+            int  blocks_per_sm = 1;
+            cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocks_per_sm, kernel, threads, 0);
+            int grid = min(total_work, blocks_per_sm * sm_count);
+            grid     = max(num_ch_tiles, (grid / num_ch_tiles) * num_ch_tiles);
+
+            cudaMemsetAsync(work_counter, 0, sizeof(int), stream);
+            kernel<<<grid, threads, 0, stream>>>(
+                out.data<T>(),
+                in.data<T>(),
+                weight.data<T>(),
+                bias ? bias.data<T>() : (T*)nullptr,
+                conv_state_ptrs.data(),
+                q_offsets.data(),
+                work_counter,
+                batch_size,
+                conv_dim,
+                in_stride,
+                total_tokens,
+                state_layer_offset,
+                total_work,
+                num_ch_tiles);
+        }
+        else {
+            assert(false && "Only d_conv == 4 is supported by fused_conv1d_batched_kernel_v2");
+        }
     };
     TM_DISPATCH_PRIMARY_DTYPES(out.dtype(), invoke);
 }

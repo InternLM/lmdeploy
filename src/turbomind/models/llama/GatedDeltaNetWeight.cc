@@ -1,4 +1,5 @@
 #include "src/turbomind/models/llama/GatedDeltaNetWeight.h"
+#include "src/turbomind/kernels/gpt_kernels.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
@@ -159,6 +160,17 @@ void GatedDeltaNetWeight::prepare()
     in_proj_z   = {};
     in_proj_b   = {};
     in_proj_a   = {};
+
+    // Transpose conv1d from checkpoint layout [conv_dim, d_conv] to kernel layout [d_conv, conv_dim]
+    {
+        const int rows = conv1d.shape(0);  // conv_dim
+        const int cols = conv1d.shape(1);  // d_conv
+
+        Tensor conv1d_t{{cols, rows}, conv1d.dtype(), kDEVICE};
+        invokeTransposeAxis01((uint16_t*)conv1d_t.raw_data(), (uint16_t*)conv1d.raw_data(), rows, cols, 1, stream);
+        sync_check_cuda_error();
+        conv1d = std::move(conv1d_t);
+    }
 }
 
 }  // namespace turbomind

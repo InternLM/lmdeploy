@@ -51,3 +51,11 @@ target_link_libraries(bench_gated_delta_net PRIVATE
         CUDA::cudart)
 target_compile_options(bench_gated_delta_net PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:--generate-line-info>)
+
+add_executable(bench_conv1d_silu
+        llama/bench_conv1d_silu.cu)
+target_link_libraries(bench_conv1d_silu PRIVATE
+        models
+        CUDA::cudart)
+target_compile_options(bench_conv1d_silu PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:--generate-line-info>)
