@@ -1312,19 +1312,21 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
         if (s_work_id >= total_work)
             break;
 
-        const int ch_tile = s_work_id % num_ch_tiles;
-        const int t       = s_work_id / num_ch_tiles;
+        const int t       = s_work_id % total_tokens;
+        const int ch_tile = s_work_id / total_tokens;
 
         if (ch_tile != prev_ch_tile) {
-            c_base = (ch_tile * BLOCK_DIM + threadIdx.x) * CHANNELS_PER_THREAD;
-            PRAGMA_UNROLL
-            for (int d = 0; d < D_CONV; ++d) {
-                Load(w_tap[d], weight + d * conv_dim + c_base);
-            }
-            if (bias)
-                Load(bias_vals, bias + c_base);
             prev_ch_tile = ch_tile;
+            b_start     = 0;
         }
+
+        c_base = (ch_tile * BLOCK_DIM + threadIdx.x) * CHANNELS_PER_THREAD;
+        PRAGMA_UNROLL
+        for (int d = 0; d < D_CONV; ++d) {
+            Load(w_tap[d], weight + d * conv_dim + c_base);
+        }
+        if (bias)
+            Load(bias_vals, bias + c_base);
 
         for (int b = b_start + threadIdx.x; b < batch_size; b += BLOCK_DIM) {
             int lo = __ldg(&q_offsets[b]);
@@ -1454,7 +1456,6 @@ void invokeFusedConv1dSiLU(Ref<Tensor>           out_,
             int  blocks_per_sm = 1;
             cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocks_per_sm, kernel, threads, 0);
             int grid = min(total_work, blocks_per_sm * sm_count);
-            grid     = max(num_ch_tiles, (grid / num_ch_tiles) * num_ch_tiles);
 
             cudaMemsetAsync(work_counter, 0, sizeof(int), stream);
             kernel<<<grid, threads, 0, stream>>>(
