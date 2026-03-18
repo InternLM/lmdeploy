@@ -8,7 +8,7 @@ from utils.common_utils import execute_command_with_logging
 from utils.config_utils import get_case_str_by_config, get_cli_common_param, get_cuda_prefix_by_workerid, get_workerid
 from utils.run_restful_chat import health_check, start_openai_service, terminate_restful_api
 
-SERVE_ONLY_PARAMS = {'max-batch-size', 'max-prefill-token-num', 'server-name', 'enable-prefix-caching'}
+SERVE_ONLY_PARAMS = {'max-batch-size', 'max-prefill-token-num', 'server-name', 'enable-prefix-caching', 'session-len'}  # yapf: disable
 
 
 def throughput_test(config, run_config, worker_id: str = '', is_smoke: bool = False):
