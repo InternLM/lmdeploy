@@ -4,10 +4,10 @@ from contextlib import redirect_stdout
 from typing import Dict, List
 
 import torch
-from transformers import AutoConfig
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
+from transformers import AutoConfig
 
 logger = get_logger('lmdeploy')
 
@@ -25,8 +25,9 @@ def check_deepseek_vl2_install():
 def check_trans_version():
     """Check if the installed version of the 'transformers' library is smaller
     than the specified version."""
-    import transformers
     from packaging import version
+
+    import transformers
 
     max_version = '4.48.0'
     installed_version = transformers.__version__
@@ -72,7 +73,7 @@ class DeepSeek2VisionModel(VisionModel):
         images = self.collect_multimodal_items(messages)
 
         # convert to upstream api formats
-        images = [img_parameter[0] for img_parameter in images]
+        images = [item[1] for item in images]
         formatted_messages = []
         for message in messages:
             text_content = DeepSeek2VisionModel.proc_single_message(message)

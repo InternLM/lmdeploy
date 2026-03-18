@@ -8,10 +8,11 @@ from urllib.request import url2pathname
 import requests
 
 from .base import MediaIO
+from .image import ImageMediaIO
+from .video import VideoMediaIO
 
 _M = TypeVar('_M')
 
-FETCH_TIMEOUT = int(os.environ.get('LMDEPLOY_FETCH_TIMEOUT', 10))
 headers = {
     'User-Agent':
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
@@ -23,9 +24,13 @@ def _load_http_url(url_spec: ParseResult, media_io: MediaIO[_M]) -> _M:
     if url_spec.scheme not in ('http', 'https'):
         raise ValueError(f'Unsupported URL scheme: {url_spec.scheme}')
 
+    if isinstance(media_io, ImageMediaIO):
+        fetch_timeout = int(os.environ.get('LMDEPLOY_IMAGE_FETCH_TIMEOUT', 10))
+    elif isinstance(media_io, VideoMediaIO):
+        fetch_timeout = int(os.environ.get('LMDEPLOY_VIDEO_FETCH_TIMEOUT', 30))
+
     client = requests.Session()
-    # TODO: zhouxinyu, timeout for video should be longer
-    response = client.get(url_spec.geturl(), headers=headers, timeout=FETCH_TIMEOUT)
+    response = client.get(url_spec.geturl(), headers=headers, timeout=fetch_timeout)
     response.raise_for_status()
 
     return media_io.load_bytes(response.content)
