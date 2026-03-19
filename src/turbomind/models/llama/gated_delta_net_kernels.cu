@@ -282,7 +282,7 @@ void invokeGatedDeltaRuleBatched_v2(Ref<Tensor>           v_out_,
 
             auto kernel = recurrent_gated_delta_rule_kernel_v2<kHeadDim, kHeadDim, kBlockDim, T, S>;
 
-            constexpr size_t smem_sz = kHeadDim * kHeadDim * sizeof(S);
+            const size_t smem_sz = kHeadDim * kHeadDim * sizeof(S);
             if (smem_sz > 48 << 10) {
                 cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_sz);
             }
@@ -517,9 +517,9 @@ void invokeGatedDeltaRuleBatched_v3(Ref<Tensor>           v_out_,
         using T = decltype(t);
         using S = T;  // 16-bit state: S == T
 
-        auto             kernel        = recurrent_gated_delta_rule_kernel_v3<kHeadDim, kHeadDim, kBlockDim, T, S>;
-        constexpr size_t smem_sz       = sizeof(int);  // s_work_idx
-        int              blocks_per_sm = 1;
+        auto         kernel        = recurrent_gated_delta_rule_kernel_v3<kHeadDim, kHeadDim, kBlockDim, T, S>;
+        const size_t smem_sz       = sizeof(int);  // s_work_idx
+        int          blocks_per_sm = 1;
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocks_per_sm, kernel, kBlockDim, smem_sz);
         const int grid_blocks = min(total_work, blocks_per_sm * sm_count);
 
@@ -879,11 +879,11 @@ void invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out_,
             // smem = max(state staging, chunk working buffers)
             // State staging: D*D*sizeof(S) (64KB for fp32)
             // Chunk buffers: QKV cache [3*C*(D+4)] + scalars[2*C]
-            constexpr size_t state_smem  = kHeadDim * kHeadDim * sizeof(S);
-            constexpr int    kSmemStride = kHeadDim + 4;
-            constexpr size_t chunk_smem  = 3 * kChunkSize * kSmemStride * sizeof(float)  // k_norm, q_norm, v
-                                          + 2 * kChunkSize * sizeof(float);              // beta, g
-            constexpr size_t smem_sz = state_smem > chunk_smem ? state_smem : chunk_smem;
+            const size_t state_smem  = kHeadDim * kHeadDim * sizeof(S);
+            const int    kSmemStride = kHeadDim + 4;
+            const size_t chunk_smem  = 3 * kChunkSize * kSmemStride * sizeof(float)  // k_norm, q_norm, v
+                                      + 2 * kChunkSize * sizeof(float);              // beta, g
+            const size_t smem_sz = state_smem > chunk_smem ? state_smem : chunk_smem;
 
             if (smem_sz > 48 << 10) {
                 cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_sz);
