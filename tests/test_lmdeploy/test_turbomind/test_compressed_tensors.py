@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import importlib
+import math
 import pathlib
 import sys
 import types
@@ -12,6 +13,51 @@ import torch
 # extension during test collection.
 _TM_PKG = types.ModuleType('lmdeploy.turbomind')
 _TM_PKG.__path__ = [str(pathlib.Path(__file__).resolve().parents[3] / 'lmdeploy' / 'turbomind')]
+
+
+def _complete_parallel_config(cfg):
+    if any((cfg.attn_dp_size, cfg.attn_tp_size, cfg.mlp_dp_size, cfg.mlp_tp_size, cfg.outer_dp_size)):
+        cfg.attn_dp_size = cfg.attn_dp_size or 1
+        cfg.attn_tp_size = cfg.attn_tp_size or 1
+        cfg.mlp_dp_size = cfg.mlp_dp_size or 1
+        cfg.mlp_tp_size = cfg.mlp_tp_size or 1
+        cfg.outer_dp_size = cfg.outer_dp_size or 1
+        gcd = math.gcd(cfg.mlp_dp_size, cfg.attn_dp_size)
+        cfg.outer_dp_size *= gcd
+        cfg.mlp_dp_size //= gcd
+        cfg.attn_dp_size //= gcd
+        return True
+    return False
+
+
+def _update_parallel_config(cfg):
+    cfg.device_num = len(cfg.devices) * cfg.nnodes if cfg.devices else cfg.device_num
+    if not _complete_parallel_config(cfg):
+        total = cfg.dp * cfg.tp
+        if not cfg.device_num:
+            count = torch.cuda.device_count() * cfg.nnodes
+            if total < count:
+                count = total
+            cfg.device_num = count
+        assert total % cfg.device_num == 0
+        overlap = total // cfg.device_num
+        attn_dp_size = overlap
+        mlp_tp_size = overlap
+        inner_tp_size = cfg.tp // mlp_tp_size
+        cfg.outer_dp_size = cfg.dp // attn_dp_size
+        cfg.attn_dp_size = attn_dp_size
+        cfg.attn_tp_size = inner_tp_size // cfg.cp
+        cfg.attn_cp_size = cfg.cp
+        cfg.mlp_dp_size = 1
+        cfg.mlp_tp_size = mlp_tp_size * inner_tp_size
+    assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size == cfg.mlp_dp_size * cfg.mlp_tp_size
+    assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size * cfg.outer_dp_size == cfg.device_num
+    cfg.devices = cfg.devices or list(range(cfg.device_num // cfg.nnodes))
+    cfg.devices = cfg.devices[:cfg.device_num // cfg.nnodes]
+    assert len(cfg.devices) == cfg.device_num // cfg.nnodes
+
+
+_TM_PKG.update_parallel_config = _update_parallel_config
 sys.modules.setdefault('lmdeploy.turbomind', _TM_PKG)
 
 converter = importlib.import_module('lmdeploy.turbomind.deploy.converter')
