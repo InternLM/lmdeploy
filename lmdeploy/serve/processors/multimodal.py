@@ -109,6 +109,9 @@ class MultimodalProcessor:
         parsed_tool_calls = []
         attached = False
         for tc in tool_calls:
+            if not isinstance(tc, dict):
+                parsed_tool_calls.append(tc)
+                continue
             func = tc.get('function')
             if isinstance(func, dict):
                 args = func.get('arguments')
