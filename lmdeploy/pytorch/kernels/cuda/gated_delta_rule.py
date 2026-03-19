@@ -7,6 +7,31 @@ import torch
 
 
 @T.macro
+def vec_store_state(State: T.Buffer, h_local: T.Buffer, state_id, state_update_id, hv_id, k_off, v_off, K: int, V: int,
+                    k_per_thr: int, v_per_warp: int, state_vw: int) -> None:
+    """Vectorized per-lane store: h_local -> State (for circular buffer)."""
+    for j in T.Unroll(k_per_thr):
+        if (k_off + j) < K:
+            for vg in T.Unroll(v_per_warp // state_vw):
+                for i in T.Vectorized(state_vw):
+                    idx = vg * state_vw + i
+                    if v_off + idx < V:
+                        State[state_id, state_update_id, hv_id, k_off + j, v_off + idx] = h_local[j, idx]
+
+
+@T.macro
+def vec_store_output(Out: T.Buffer, o_local: T.Buffer, b_id, seq_id, hv_id, v_off, V: int, v_per_warp: int,
+                     data_vw: int) -> None:
+    """Vectorized lane-0 store: o_local -> Out."""
+    for vg in T.Unroll(v_per_warp // data_vw):
+        for i in T.Vectorized(data_vw):
+            idx = vg * data_vw + i
+            v_idx = v_off + idx
+            if v_idx < V:
+                Out[b_id, seq_id, hv_id, v_idx] = o_local[idx]
+
+
+@T.macro
 def normalize_qk(k_local: T.Buffer, q_local: T.Buffer, k_per_thr: int) -> None:
     k_sum = T.alloc_var(T.float32)
     q_sum = T.alloc_var(T.float32)
@@ -58,6 +83,9 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
     warp_size = 32
     k_per_thr = T.ceildiv(K, warp_size)
     v_per_warp = max(state_vec_width, data_vec_width, 8)
+    # Vectorized width for each access type
+    state_vw = min(state_vec_width, v_per_warp)
+    data_vw = min(data_vec_width, v_per_warp)
     # Target v_per_cta >= V to minimize grid_V blocks.
     # More waves means fewer blocks but more sequential wave iterations.
     target_v_per_cta = max(V, v_per_warp * num_warps * 2)
@@ -129,10 +157,11 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
                     state_update_id = (state_seq_id + 1) % NUM_STATE
                 for j in T.Unroll(k_per_thr):
                     k_idx = k_off + j
-                    for vg in T.Unroll(v_per_warp // state_vec_width):
-                        for i in T.Vectorized(state_vec_width):
-                            idx = vg * state_vec_width + i
-                            h_local[j, idx] = h_smem[k_idx, v_warp_off + idx]
+                    if k_idx < K:
+                        for vg in T.Unroll(v_per_warp // state_vw):
+                            for i in T.Vectorized(state_vw):
+                                idx = vg * state_vw + i
+                                h_local[j, idx] = h_smem[k_idx, v_warp_off + idx]
 
                 for seq_id in range(SEQLEN):
                     # load q, k, g, beta
@@ -165,9 +194,9 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
 
                     # load v
                     v_local = T.alloc_local([v_per_warp], dtype)
-                    for vg in T.Unroll(v_per_warp // data_vec_width):
-                        for i in T.Vectorized(data_vec_width):
-                            idx = vg * data_vec_width + i
+                    for vg in T.Unroll(v_per_warp // data_vw):
+                        for i in T.Vectorized(data_vw):
+                            idx = vg * data_vw + i
                             v_idx = (v_off + idx) % V
                             v_local[idx] = Value[b_id, seq_id, hv_id, v_idx]
 
@@ -183,17 +212,11 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
                         for j in T.Unroll(k_per_thr):
                             h_local[j, i] = h_local[j, i] + k_local[j] * v
 
-                    # store states
+                    # store states (circular buffer)
                     if output_final_state and state_id >= 0:
                         if is_circular_buffer:
-                            for j in T.Unroll(k_per_thr):
-                                if (k_off + j) < K:
-                                    for vg in T.Unroll(v_per_warp // state_vec_width):
-                                        for i in T.Vectorized(state_vec_width):
-                                            idx = vg * state_vec_width + i
-                                            if v_off + idx < V:
-                                                State[state_id, state_update_id, hv_id, k_off + j,
-                                                      v_off + idx] = h_local[j, idx]
+                            vec_store_state(State, h_local, state_id, state_update_id, hv_id, k_off, v_off, K, V,
+                                            k_per_thr, v_per_warp, state_vw)
                             state_update_id = (state_update_id + 1) % NUM_STATE
 
                     # compute output
@@ -208,21 +231,17 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
                         o_local[i] = o
 
                     if lane_id == 0 and state_id >= 0:
-                        for vg in T.Unroll(v_per_warp // data_vec_width):
-                            for i in T.Vectorized(data_vec_width):
-                                idx = vg * data_vec_width + i
-                                v_idx = (v_off + idx)
-                                if v_idx < V:
-                                    Out[b_id, seq_id, hv_id, v_idx] = o_local[idx]
+                        vec_store_output(Out, o_local, b_id, seq_id, hv_id, v_off, V, v_per_warp, data_vw)
 
                 # write h_local back to h_smem for coalesced global store
                 if output_final_state and state_id >= 0 and not is_circular_buffer:
                     for j in T.Unroll(k_per_thr):
                         k_idx = k_off + j
-                        for vg in T.Unroll(v_per_warp // state_vec_width):
-                            for i in T.Vectorized(state_vec_width):
-                                idx = vg * state_vec_width + i
-                                h_smem[k_idx, v_warp_off + idx] = h_local[j, idx]
+                        if k_idx < K:
+                            for vg in T.Unroll(v_per_warp // state_vw):
+                                for i in T.Vectorized(state_vw):
+                                    idx = vg * state_vw + i
+                                    h_smem[k_idx, v_warp_off + idx] = h_local[j, idx]
 
             # coalesced state writeback via shared memory
             if output_final_state and state_id >= 0 and not is_circular_buffer:
@@ -261,9 +280,12 @@ def fused_recurrent_gated_delta_rule(
             is not provided, N = B. When using circular buffers
             (i.e. ``cache_seqlens`` is not None), ``NUM_STATE`` specifies
             the number of state slots per sequence (e.g. buffer size).
-        use_qk_l2norm_in_kernel: whether to apply l2 normalization on q and k in the kernel
-        state_indices: [B], optional, the indices to update in the recurrent state, required
-        cache_seqlens: [B], optional, the cached sequence lengths for each batch element
+        use_qk_l2norm_in_kernel: whether to apply l2 normalization on q and k
+            in the kernel
+        state_indices: [B], optional, the indices to update in the recurrent
+            state, required
+        cache_seqlens: [B], optional, the cached sequence lengths for each
+            batch element
     Returns:
         o: [B, T, HV, V]
         final_state: Recurrent state if ``output_final_state`` is True,
@@ -274,6 +296,7 @@ def fused_recurrent_gated_delta_rule(
     # T is imported as tilelang.language, use seqlen instead
     _, seqlen, H, K, V = *k.shape, v.shape[-1]
     HV = v.shape[2]
+    assert K % 32 == 0, f'K ({K}) must be a multiple of 32 (warp size)'
     if scale is None:
         scale = 1 / (q.shape[-1]**0.5)
     g_dtype = torch.float32
@@ -286,13 +309,18 @@ def fused_recurrent_gated_delta_rule(
         beta_dtype = beta.dtype
     if state_indices is not None:
         assert state_indices.is_contiguous()
-        assert initial_state is not None, 'initial_state is required when state_indices is provided'
+        assert initial_state is not None, \
+            'initial_state is required when state_indices is provided'
         assert state_indices.shape == (q.shape[0], )
     if cache_seqlens is not None:
-        assert cache_seqlens.is_contiguous(), 'cache_seqlens must be contiguous'
-        assert cache_seqlens.shape == (q.shape[0], ), 'cache_seqlens must have shape (B,) where B is the batch size'
-        assert cache_seqlens.dtype == torch.int32, 'cache_seqlens must have dtype torch.int32'
-        assert cache_seqlens.device == q.device, 'cache_seqlens must be on the same device as q'
+        assert cache_seqlens.is_contiguous(), \
+            'cache_seqlens must be contiguous'
+        assert cache_seqlens.shape == (q.shape[0], ), \
+            'cache_seqlens must have shape (B,)'
+        assert cache_seqlens.dtype == torch.int32, \
+            'cache_seqlens must have dtype torch.int32'
+        assert cache_seqlens.device == q.device, \
+            'cache_seqlens must be on the same device as q'
 
     o = torch.empty_like(v)
     final_state = initial_state
@@ -313,28 +341,30 @@ def fused_recurrent_gated_delta_rule(
         num_states = 1
 
     num_warps = 4
-    kernel = fused_recurrent_gated_delta_rule_fwd(seqlen,
-                                                  H,
-                                                  K,
-                                                  HV,
-                                                  V,
-                                                  NUM_STATE=num_states,
-                                                  q_stride=q.stride(),
-                                                  k_stride=k.stride(),
-                                                  v_stride=v.stride(),
-                                                  state_stride=state_stride,
-                                                  scale=scale,
-                                                  dtype=q.dtype,
-                                                  state_dtype=state_dtype,
-                                                  g_dtype=g_dtype,
-                                                  beta_dtype=beta_dtype,
-                                                  use_g=g is not None,
-                                                  use_beta=beta is not None,
-                                                  use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel,
-                                                  output_final_state=output_final_state,
-                                                  use_state_indices=state_indices is not None,
-                                                  is_circular_buffer=cache_seqlens is not None,
-                                                  num_warps=num_warps)
+    kernel = fused_recurrent_gated_delta_rule_fwd(
+        seqlen,
+        H,
+        K,
+        HV,
+        V,
+        NUM_STATE=num_states,
+        q_stride=q.stride(),
+        k_stride=k.stride(),
+        v_stride=v.stride(),
+        state_stride=state_stride,
+        scale=scale,
+        dtype=q.dtype,
+        state_dtype=state_dtype,
+        g_dtype=g_dtype,
+        beta_dtype=beta_dtype,
+        use_g=g is not None,
+        use_beta=beta is not None,
+        use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel,
+        output_final_state=output_final_state,
+        use_state_indices=state_indices is not None,
+        is_circular_buffer=cache_seqlens is not None,
+        num_warps=num_warps,
+    )
 
     kernel(q, k, v, o, g, beta, final_state, state_indices, cache_seqlens)
 
