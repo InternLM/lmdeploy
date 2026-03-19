@@ -31,6 +31,74 @@ def get_text(content: str | list[dict]):
     return content[0]['text']
 
 
+def _parse_tool_call_arguments_dict(function: dict):
+    """Return dict-like tool arguments for template rendering when possible."""
+    parsed_arguments = function.get('parsed_arguments')
+    if isinstance(parsed_arguments, dict):
+        return parsed_arguments
+
+    arguments = function.get('arguments')
+    if isinstance(arguments, dict):
+        return arguments
+    if not isinstance(arguments, str):
+        return None
+
+    try:
+        parsed_arguments = json.loads(arguments)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if isinstance(parsed_arguments, dict):
+        return parsed_arguments
+    return None
+
+
+def _prepare_messages_for_hf_template(messages: list[dict]) -> list[dict]:
+    """Build a render-only copy with dict-like assistant tool arguments.
+
+    Some Hugging Face chat templates (for example Qwen's) iterate over
+    ``tool_call.arguments|items`` and therefore require a mapping. We adapt
+    only the temporary render copy so the canonical OpenAI-style message
+    payload still preserves ``function.arguments`` as a JSON string.
+    """
+    render_messages = None
+
+    for msg_idx, message in enumerate(messages):
+        if message.get('role') != 'assistant':
+            continue
+        tool_calls = message.get('tool_calls')
+        if not isinstance(tool_calls, list):
+            continue
+
+        render_tool_calls = None
+        for tool_idx, tool_call in enumerate(tool_calls):
+            if not isinstance(tool_call, dict):
+                continue
+            function = tool_call.get('function')
+            if not isinstance(function, dict) or isinstance(function.get('arguments'), dict):
+                continue
+
+            render_arguments = _parse_tool_call_arguments_dict(function)
+            if not isinstance(render_arguments, dict):
+                continue
+
+            if render_messages is None:
+                render_messages = list(messages)
+            if render_tool_calls is None:
+                render_tool_calls = list(tool_calls)
+                render_message = dict(message)
+                render_message['tool_calls'] = render_tool_calls
+                render_messages[msg_idx] = render_message
+
+            render_function = dict(function)
+            render_function['arguments'] = render_arguments
+
+            render_tool_call = dict(tool_call)
+            render_tool_call['function'] = render_function
+            render_tool_calls[tool_idx] = render_tool_call
+
+    return render_messages or messages
+
+
 @dataclasses.dataclass
 class ChatTemplateConfig:
     """Parameters for chat template.
@@ -715,6 +783,7 @@ class HFChatTemplate(BaseChatTemplate):
             messages = [{'role': 'user', 'content': messages}]
         assert all(isinstance(m, dict) and 'role' in m and 'content' in m for m in messages), \
             'Each message should be a dict with "role" and "content" keys.'
+        messages = _prepare_messages_for_hf_template(messages)
 
         if 'enable_thinking' in kwargs and kwargs['enable_thinking'] is None:
             # Workaround for internlm/Intern-S1: when enable_thinking=None passed apply_chat_template,
