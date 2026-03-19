@@ -4,10 +4,10 @@ from contextlib import redirect_stdout
 from typing import Dict, List
 
 import torch
+from transformers import AutoConfig
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
-from transformers import AutoConfig
 
 logger = get_logger('lmdeploy')
 
@@ -25,9 +25,8 @@ def check_deepseek_vl2_install():
 def check_trans_version():
     """Check if the installed version of the 'transformers' library is smaller
     than the specified version."""
-    from packaging import version
-
     import transformers
+    from packaging import version
 
     max_version = '4.48.0'
     installed_version = transformers.__version__
