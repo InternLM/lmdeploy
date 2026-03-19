@@ -1423,7 +1423,7 @@ void invokeFusedConv1dSiLU(Ref<Tensor>           out_,
     const int conv_dim     = weight.shape(1);
     const int in_stride    = in.stride(0);
 
-    constexpr int threads = 256;
+    constexpr int threads = 128;
 
     auto invoke = [&](auto t) {
         using T = decltype(t);
