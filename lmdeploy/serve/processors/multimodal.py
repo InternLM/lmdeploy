@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import json
 from typing import Any, Dict, List, Literal, Tuple
 
 import PIL
@@ -70,11 +71,11 @@ class MultimodalProcessor:
         if 'content' not in msg or msg['content'] is None:
             result = dict(msg)
             result['content'] = ''
-            return result
+            return MultimodalProcessor._attach_parsed_tool_call_arguments(result)
 
         # If content is already a string, return as-is
         if isinstance(msg['content'], str):
-            return msg
+            return MultimodalProcessor._attach_parsed_tool_call_arguments(msg)
 
         # If content is a list, merge all text blocks into a single string
         # This matches vLLM's behavior: text_prompt = "\n".join(texts)
@@ -87,6 +88,51 @@ class MultimodalProcessor:
         # Preserve all other fields in the message (e.g., tool_calls)
         result = dict(msg)
         result['content'] = merged_content
+        return MultimodalProcessor._attach_parsed_tool_call_arguments(result)
+
+    @staticmethod
+    def _attach_parsed_tool_call_arguments(msg: Dict) -> Dict:
+        """Attach parsed assistant tool-call arguments without rewriting them.
+
+        This shared preprocessing layer sees the canonical message list before
+        both text-only and multimodal prompt rendering. Attaching a companion
+        parsed field here keeps OpenAI-compatible ``function.arguments`` as the
+        original JSON string for downstream consumers, while giving template
+        renderers a dict-like view they can opt into.
+        """
+        if msg.get('role') != 'assistant':
+            return msg
+        tool_calls = msg.get('tool_calls')
+        if not isinstance(tool_calls, list):
+            return msg
+
+        parsed_tool_calls = []
+        attached = False
+        for tc in tool_calls:
+            if not isinstance(tc, dict):
+                parsed_tool_calls.append(tc)
+                continue
+            func = tc.get('function')
+            if isinstance(func, dict):
+                args = func.get('arguments')
+                if isinstance(args, str) and 'parsed_arguments' not in func:
+                    try:
+                        parsed_args = json.loads(args)
+                        if isinstance(parsed_args, dict):
+                            tc = dict(tc)
+                            func = dict(func)
+                            func['parsed_arguments'] = parsed_args
+                            tc['function'] = func
+                            attached = True
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+            parsed_tool_calls.append(tc)
+
+        if not attached:
+            return msg
+
+        result = dict(msg)
+        result['tool_calls'] = parsed_tool_calls
         return result
 
     @staticmethod
@@ -97,7 +143,7 @@ class MultimodalProcessor:
         content = in_messages[i]['content']
 
         if role != 'user' or isinstance(content, str):
-            out_messages[i] = in_messages[i]
+            out_messages[i] = MultimodalProcessor._attach_parsed_tool_call_arguments(in_messages[i])
             return
 
         assert isinstance(content, list)
@@ -133,7 +179,7 @@ class MultimodalProcessor:
 
             out_message['content'].append({'type': modality, 'data': data, **item_params})
 
-        out_messages[i] = out_message
+        out_messages[i] = MultimodalProcessor._attach_parsed_tool_call_arguments(out_message)
 
     @staticmethod
     async def async_parse_multimodal_item(messages: List[Dict],

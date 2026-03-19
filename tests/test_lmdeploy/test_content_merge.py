@@ -28,7 +28,9 @@ class TestMergeMessageContent:
         assert 'content' in result
         assert result['content'] == ''
         assert 'tool_calls' in result
-        assert result['tool_calls'] == msg['tool_calls']
+        assert result['tool_calls'][0]['function']['name'] == 'get_weather'
+        assert result['tool_calls'][0]['function']['arguments'] == '{"city": "Paris"}'
+        assert result['tool_calls'][0]['function']['parsed_arguments'] == {'city': 'Paris'}
 
     def test_explicit_none_content(self):
         """Test that explicit None content is converted to empty string.
@@ -306,3 +308,178 @@ def test_batch_message_processing():
 
     # Should pass model.py assertion
     assert all(isinstance(m, dict) and 'role' in m and 'content' in m for m in processed)
+
+
+class TestAttachParsedToolCallsArguments:
+    """Test suite for parsed tool-call companion data behavior in
+    merge_message_content."""
+
+    def test_openai_round_trip_arguments_remain_strings(self):
+        """OpenAI-style JSON-string arguments stay strings for consumers."""
+        msg = {
+            'role':
+            'assistant',
+            'content':
+            '',
+            'tool_calls': [{
+                'id': '1',
+                'type': 'function',
+                'function': {
+                    'name': 'get_weather',
+                    'arguments': '{"city": "Paris", "units": "metric"}'
+                }
+            }]
+        }
+        result = MultimodalProcessor.merge_message_content(msg)
+        func = result['tool_calls'][0]['function']
+        assert isinstance(func['arguments'], str)
+        assert func['arguments'] == '{"city": "Paris", "units": "metric"}'
+        assert func['parsed_arguments'] == {'city': 'Paris', 'units': 'metric'}
+
+    def test_non_dict_json_arguments_left_as_string(self):
+        """String arguments that decode to a non-dict (list, number, etc.)
+        should be left as-is."""
+        msg = {
+            'role': 'assistant',
+            'content': '',
+            'tool_calls': [{
+                'id': '1',
+                'type': 'function',
+                'function': {
+                    'name': 'fn',
+                    'arguments': '[1, 2, 3]'
+                }
+            }]
+        }
+        result = MultimodalProcessor.merge_message_content(msg)
+        func = result['tool_calls'][0]['function']
+        assert isinstance(func['arguments'], str)
+        assert func['arguments'] == '[1, 2, 3]'
+        assert 'parsed_arguments' not in func
+
+    def test_invalid_json_arguments_left_as_string(self):
+        """Invalid JSON arguments should be left unchanged."""
+        msg = {
+            'role': 'assistant',
+            'content': '',
+            'tool_calls': [{
+                'id': '1',
+                'type': 'function',
+                'function': {
+                    'name': 'fn',
+                    'arguments': '{not valid json}'
+                }
+            }]
+        }
+        result = MultimodalProcessor.merge_message_content(msg)
+        func = result['tool_calls'][0]['function']
+        assert isinstance(func['arguments'], str)
+        assert func['arguments'] == '{not valid json}'
+        assert 'parsed_arguments' not in func
+
+    def test_dict_arguments_not_double_parsed(self):
+        """Arguments that are already a dict should remain unchanged."""
+        msg = {
+            'role': 'assistant',
+            'content': '',
+            'tool_calls': [{
+                'id': '1',
+                'type': 'function',
+                'function': {
+                    'name': 'fn',
+                    'arguments': {
+                        'key': 'value'
+                    }
+                }
+            }]
+        }
+        result = MultimodalProcessor.merge_message_content(msg)
+        func = result['tool_calls'][0]['function']
+        assert isinstance(func['arguments'], dict)
+        assert func['arguments'] == {'key': 'value'}
+        assert 'parsed_arguments' not in func
+
+    def test_no_tool_calls_unchanged(self):
+        """Messages without tool_calls should pass through unchanged."""
+        msg = {'role': 'user', 'content': 'Hello'}
+        result = MultimodalProcessor.merge_message_content(msg)
+        assert 'tool_calls' not in result
+
+    def test_multiple_tool_calls_keep_arguments_strings_and_attach_parsed_field(self):
+        """All assistant tool_calls in the list should be processed."""
+        msg = {
+            'role':
+            'assistant',
+            'content':
+            '',
+            'tool_calls': [
+                {
+                    'id': '1',
+                    'type': 'function',
+                    'function': {
+                        'name': 'fn1',
+                        'arguments': '{"a": 1}'
+                    }
+                },
+                {
+                    'id': '2',
+                    'type': 'function',
+                    'function': {
+                        'name': 'fn2',
+                        'arguments': '{"b": 2}'
+                    }
+                },
+            ]
+        }
+        result = MultimodalProcessor.merge_message_content(msg)
+        assert result['tool_calls'][0]['function']['arguments'] == '{"a": 1}'
+        assert result['tool_calls'][0]['function']['parsed_arguments'] == {'a': 1}
+        assert result['tool_calls'][1]['function']['arguments'] == '{"b": 2}'
+        assert result['tool_calls'][1]['function']['parsed_arguments'] == {'b': 2}
+
+    def test_tool_call_without_function_key(self):
+        """tool_call entries without 'function' key should pass through."""
+        msg = {'role': 'assistant', 'content': '', 'tool_calls': [{'id': '1', 'type': 'function'}]}
+        result = MultimodalProcessor.merge_message_content(msg)
+        assert result['tool_calls'][0] == {'id': '1', 'type': 'function'}
+
+    def test_non_assistant_tool_calls_are_not_annotated(self):
+        """Only assistant tool_calls should get parsed companion fields."""
+        msg = {
+            'role': 'tool',
+            'content': '',
+            'tool_calls': [{
+                'id': '1',
+                'type': 'function',
+                'function': {
+                    'name': 'fn',
+                    'arguments': '{"x": 1}'
+                }
+            }]
+        }
+        result = MultimodalProcessor.merge_message_content(msg)
+        func = result['tool_calls'][0]['function']
+        assert func['arguments'] == '{"x": 1}'
+        assert 'parsed_arguments' not in func
+
+    def test_original_msg_not_mutated(self):
+        """The original message dict should not be mutated."""
+        msg = {
+            'role': 'assistant',
+            'content': '',
+            'tool_calls': [{
+                'id': '1',
+                'type': 'function',
+                'function': {
+                    'name': 'fn',
+                    'arguments': '{"x": 1}'
+                }
+            }]
+        }
+        result = MultimodalProcessor.merge_message_content(msg)
+        # Original should still have string arguments
+        assert isinstance(msg['tool_calls'][0]['function']['arguments'], str)
+        assert 'parsed_arguments' not in msg['tool_calls'][0]['function']
+        # Result should expose parsed companion data without rewriting arguments
+        assert isinstance(result['tool_calls'][0]['function']['arguments'], str)
+        assert result['tool_calls'][0]['function']['parsed_arguments'] == {'x': 1}
