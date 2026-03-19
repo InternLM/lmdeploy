@@ -1,6 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
+from lmdeploy.utils import is_bf16_supported
+
 from .builder import AutoModelConfigBuilder
 from .default import DefaultModelConfigBuilder
 from .qwen3_next import _check_env_qwen3_next
@@ -42,7 +44,10 @@ class Qwen3_5ModelConfigBuilder(AutoModelConfigBuilder):
 
         conv_state_shape = (num_delta_layers, conv_dim, conv_kernel_size)
         recurrent_state_shape = (num_delta_layers, num_v_heads, head_k_dim, head_v_dim)
-        dtype = torch.bfloat16
+        if is_bf16_supported():
+            dtype = torch.bfloat16
+        else:
+            dtype = torch.float16
         cfg.states_shapes = [(conv_state_shape, dtype), (recurrent_state_shape, dtype)]
         cfg.check_env_func = _check_env_qwen3_next
 

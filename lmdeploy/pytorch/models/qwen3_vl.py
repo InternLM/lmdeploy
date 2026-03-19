@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 from functools import lru_cache
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Tuple
 
 import numpy as np
 import torch
@@ -9,16 +9,17 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS, dynamic_rope_update
 
-from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor
+from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
+from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.nn import LayerNorm
 from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_rowwise_linear
 from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
+from lmdeploy.vl.constants import Modality
 
 from .patch import add_prefix
 from .qwen2_5_vl import Qwen2_5_VisionRotaryEmbedding as Qwen3VLVisionRotaryEmbedding
-from .qwen2_5_vl import Qwen2_5_VLInputProcessor as Qwen3VLInputProcessor
 from .qwen2_5_vl import Qwen2_5_VLVisionAttention as Qwen3VLVisionAttention
 from .qwen3 import Qwen3model
 from .utils.cudagraph import CudaGraphMixin
@@ -116,23 +117,16 @@ class Qwen3VLTextModel(Qwen3model):
     def forward(
         self,
         input_ids: torch.LongTensor = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: List[torch.FloatTensor] | None = None,
         attn_metadata: Any = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
+        inputs_embeds: torch.FloatTensor | None = None,
         mrope_position_ids: torch.LongTensor = None,
         # args for deepstack
-        visual_pos_masks: Optional[torch.Tensor] = None,
-        deepstack_visual_embeds: Optional[list[torch.Tensor]] = None,
+        visual_pos_masks: torch.Tensor | None = None,
+        deepstack_visual_embeds: List[torch.Tensor] | None = None,
     ):
-        """visual_pos_masks (`torch.Tensor` of shape `(batch_size, seqlen)`,
-        *optional*):
-
-        The mask of the visual positions. deepstack_visual_embeds (`list[torch.Tensor]`, *optional*):     The deepstack
-        visual embeddings. The shape is (num_layers, visual_seqlen, embed_dim).     The feature is extracted from the
-        different visual encoder layers, and fed to the decoder     hidden states. It's from the paper DeepStack (
-        https://arxiv.org/abs/2406.04)
-        """
+        """Rewrite of LlamaModel.forward."""
 
         # token embedding
         if inputs_embeds is None:
@@ -279,7 +273,7 @@ class Qwen3VLVisionBlock(nn.Module):
     def forward(self,
                 hidden_states: torch.Tensor,
                 cu_seqlens: torch.Tensor,
-                rotary_pos_emb: Optional[torch.Tensor] = None) -> torch.Tensor:
+                rotary_pos_emb: torch.Tensor | None = None) -> torch.Tensor:
         hidden_states = hidden_states + self.attn(
             self.norm1(hidden_states),
             cu_seqlens=cu_seqlens,
@@ -610,7 +604,7 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
     def prepare_inputs_for_generation(
         self,
         past_key_values: List[List[torch.Tensor]],
-        inputs_embeds: Optional[torch.Tensor] = None,
+        inputs_embeds: torch.Tensor | None = None,
         context: StepContext = None,
     ):
         """Prepare input."""
@@ -627,14 +621,20 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         grid_thw = None
         pos_embeds = None
         if context.input_multimodals is not None:
-            image_data = [input_mm.get('image', []) for input_mm in context.input_multimodals]
-            if len(image_data) > 0:
-                # flatten batch
-                image_data = [data for im_data in image_data for data in im_data]
-                pixel_values = torch.cat([data.data for data in image_data])
-                image_token_id = image_data[0].meta['image_token_id']
-                image_mask = input_ids == image_token_id
-                grid_thw = torch.cat([data.meta['grid_thw'] for data in image_data]).cpu()
+            mm_inputs = [input_mm.get('mm_data', []) for input_mm in context.input_multimodals]
+            # flatten batch
+            mm_inputs = [item for sublist in mm_inputs for item in sublist]
+
+            if len(mm_inputs) > 0:
+                modality = mm_inputs[0].modality
+                pixel_values = torch.cat([inp.data for inp in mm_inputs])
+
+                image_token_id = mm_inputs[0].meta.get('image_token_id')
+                video_token_id = mm_inputs[0].meta.get('video_token_id')
+                mm_token_id = image_token_id if modality == Modality.IMAGE else video_token_id
+                image_mask = (input_ids == mm_token_id)
+
+                grid_thw = torch.cat([data.meta['grid_thw'] for data in mm_inputs]).cpu()
                 vis_pos_emb = self.visual.rot_pos_emb(grid_thw)
                 pos_embeds = self.visual.fast_pos_embed_interpolate(grid_thw)
                 vis_cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2],
@@ -723,4 +723,68 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         return self.input_processor
 
 
-InputMultiModalType = List[Dict[str, Any]]
+class Qwen3VLInputProcessor(BaseModelInputProcessor):
+    """Qwen3 input processor."""
+
+    def __init__(self, config: PretrainedConfig) -> None:
+        self.config = config
+
+    def _make_image_mm_data(self, input_mm: Dict[str, Any]) -> MultiModalData:
+        """Make image MultiModalData."""
+        pixel_values = input_mm['pixel_values']
+        image_grid_thw = input_mm['image_grid_thw']
+        offset = input_mm['offset']
+        start = offset
+        image_token_id = input_mm['image_token_id']
+        num_pad = input_mm['image_tokens']
+        if isinstance(num_pad, torch.Tensor):
+            num_pad = num_pad.item()
+
+        mm_data = MultiModalData(modality=Modality.IMAGE,
+                                 data=pixel_values,
+                                 start=start,
+                                 end=start + num_pad,
+                                 meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
+        return mm_data
+
+    def _make_video_mm_data(self, input_mm: Dict[str, Any]) -> MultiModalData:
+        """Make video MultiModalData."""
+        pixel_values_videos = input_mm['pixel_values_videos']
+        video_grid_thw = input_mm['video_grid_thw']
+        offset = input_mm['offset']
+        start = offset
+        video_token_id = input_mm['video_token_id']
+        num_pad = input_mm['video_tokens']
+        if isinstance(num_pad, torch.Tensor):
+            num_pad = num_pad.item()
+
+        mm_data = MultiModalData(modality=Modality.VIDEO,
+                                 data=pixel_values_videos,
+                                 start=start,
+                                 end=start + num_pad,
+                                 meta=dict(
+                                     grid_thw=video_grid_thw,
+                                     video_token_id=video_token_id,
+                                 ))
+        return mm_data
+
+    def preprocess_input(self,
+                         input_ids: List[int],
+                         input_multimodals: List[Dict[str, Any]] = None,
+                         **kwargs) -> PreprocessInputResult:
+        """Prepare multimodal input."""
+        if input_multimodals is None or len(input_multimodals) == 0:
+            return input_ids, input_multimodals
+
+        input_mm_data = []
+        for input_mm in input_multimodals:
+            modality = input_mm.get('modality')
+            if modality == Modality.IMAGE:
+                mm_data = self._make_image_mm_data(input_mm)
+            elif modality == Modality.VIDEO:
+                mm_data = self._make_video_mm_data(input_mm)
+            input_mm_data.append(mm_data)
+
+        result = PreprocessInputResult(input_ids=input_ids, input_multimodals=dict(mm_data=input_mm_data))
+
+        return result

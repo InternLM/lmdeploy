@@ -9,6 +9,7 @@ from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, Prepr
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
+from lmdeploy.vl.constants import Modality
 
 from .interns1_pro_ts import InternS1ProTimeSeriesModel
 from .patch import add_prefix, get_build_model_context
@@ -173,25 +174,28 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGra
         ts_sr = None
         ts_mask = None
         if context.input_multimodals is not None:
-            mm_data = [input_mm.get('image', []) for input_mm in context.input_multimodals]
+            mm_inputs = [input_mm.get('mm_data', []) for input_mm in context.input_multimodals]
             # flatten batch
-            mm_data = [data for im_data in mm_data for data in im_data]
+            mm_inputs = [item for sublist in mm_inputs for item in sublist]
 
-            if len(mm_data) > 0:
-                is_time_series = mm_data[0].meta.get('ts_token_id', False)
+            if len(mm_inputs) > 0:
+                modality = mm_inputs[0].modality
+                image_token_id = mm_inputs[0].meta.get('image_token_id')
+                video_token_id = mm_inputs[0].meta.get('video_token_id')
+                ts_token_id = mm_inputs[0].meta.get('ts_token_id')
 
-                if is_time_series:
-                    ts_values = mm_data
-                    ts_token_id = ts_values[0].meta['ts_token_id']
-                    ts_lens = ts_values[0].meta['ts_lens']
-                    ts_sr = ts_values[0].meta['ts_sr']
+                if modality == Modality.TIME_SERIES:
+                    ts_values = torch.cat([inp.data for inp in mm_inputs])
                     ts_mask = input_ids == ts_token_id
-                    ts_values = torch.cat([data.data for data in ts_values])
+
+                    ts_lens = mm_inputs[0].meta['ts_lens']
+                    ts_sr = mm_inputs[0].meta['ts_sr']
                 else:
-                    pixel_values = torch.cat([data.data for data in mm_data])
-                    image_token_id = mm_data[0].meta['image_token_id']
-                    image_mask = input_ids == image_token_id
-                    grid_thw = torch.cat([data.meta['grid_thw'] for data in mm_data]).cpu()
+                    pixel_values = torch.cat([inp.data for inp in mm_inputs])
+                    mm_token_id = image_token_id if modality == Modality.IMAGE else video_token_id
+                    image_mask = (input_ids == mm_token_id)
+
+                    grid_thw = torch.cat([data.meta['grid_thw'] for data in mm_inputs]).cpu()
                     vis_pos_emb = self.visual.rot_pos_emb(grid_thw)
                     pos_embeds = self.visual.fast_pos_embed_interpolate(grid_thw)
                     vis_cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2],
@@ -365,6 +369,63 @@ class InternS1ProInputProcessor(BaseModelInputProcessor):
         self.config = config
         self.dtype = dtype
 
+    def _make_image_mm_data(self, input_mm: Dict[str, Any]) -> MultiModalData:
+        """Make image MultiModalData."""
+        pixel_values = input_mm['pixel_values'].to(self.dtype)
+        image_grid_thw = input_mm['image_grid_thw']
+        offset = input_mm['offset']
+        start = offset
+        image_token_id = input_mm['image_token_id']
+        num_pad = input_mm['image_tokens']
+        if isinstance(num_pad, torch.Tensor):
+            num_pad = num_pad.item()
+
+        mm_data = MultiModalData(modality=Modality.IMAGE,
+                                 data=pixel_values,
+                                 start=start,
+                                 end=start + num_pad,
+                                 meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
+        return mm_data
+
+    def _make_video_mm_data(self, input_mm: Dict[str, Any]) -> MultiModalData:
+        """Make video MultiModalData."""
+        pixel_values_videos = input_mm['pixel_values_videos'].to(self.dtype)
+        video_grid_thw = input_mm['video_grid_thw']
+        offset = input_mm['offset']
+        start = offset
+        video_token_id = input_mm['video_token_id']
+        num_pad = input_mm['video_tokens']
+        if isinstance(num_pad, torch.Tensor):
+            num_pad = num_pad.item()
+
+        mm_data = MultiModalData(modality=Modality.VIDEO,
+                                 data=pixel_values_videos,
+                                 start=start,
+                                 end=start + num_pad,
+                                 meta=dict(
+                                     grid_thw=video_grid_thw,
+                                     video_token_id=video_token_id,
+                                 ))
+        return mm_data
+
+    def _make_time_series_mm_data(self, input_mm: Dict[str, Any]) -> MultiModalData:
+        """Make time series MultiModalData."""
+        ts_values = input_mm['ts_values'].to(self.dtype)
+        offset = input_mm['offset']
+        ts_token_id = input_mm['ts_token_id']
+        ts_lens = input_mm['ts_lens']
+        ts_sr = input_mm['ts_sr']
+        num_pad = input_mm['ts_tokens']
+        if isinstance(num_pad, torch.Tensor):
+            num_pad = num_pad.item()
+
+        mm_data = MultiModalData(modality=Modality.TIME_SERIES,
+                                 data=ts_values,
+                                 start=offset,
+                                 end=offset + num_pad,
+                                 meta=dict(ts_lens=ts_lens, ts_sr=ts_sr, ts_token_id=ts_token_id))
+        return mm_data
+
     def preprocess_input(self,
                          input_ids: List[int],
                          input_multimodals: List[Dict[str, Any]] = None,
@@ -373,38 +434,17 @@ class InternS1ProInputProcessor(BaseModelInputProcessor):
         if input_multimodals is None or len(input_multimodals) == 0:
             return input_ids, input_multimodals
 
-        input_imgs = []
+        input_mm_data = []
         for input_mm in input_multimodals:
-            if 'ts_values' in input_mm:
-                ts_values = input_mm['ts_values'].to(self.dtype)
-                offset = input_mm['offset']
-                ts_token_id = input_mm['ts_token_id']
-                ts_lens = input_mm['ts_lens']
-                ts_sr = input_mm['ts_sr']
-                num_pad = input_mm['num_ts_tokens']
+            modality = input_mm.get('modality')
+            if modality == Modality.IMAGE:
+                mm_data = self._make_image_mm_data(input_mm)
+            elif modality == Modality.VIDEO:
+                mm_data = self._make_video_mm_data(input_mm)
+            elif modality == Modality.TIME_SERIES:
+                mm_data = self._make_time_series_mm_data(input_mm)
+            input_mm_data.append(mm_data)
 
-                mm_data = MultiModalData(data=ts_values,
-                                         start=offset,
-                                         end=offset + num_pad,
-                                         meta=dict(ts_token_id=ts_token_id, ts_lens=ts_lens, ts_sr=ts_sr))
-            else:
-                pixel_values = input_mm['pixel_values'].to(self.dtype)
-                image_grid_thw = input_mm['image_grid_thw']
-                offset = input_mm['offset']
-                start = offset
-                image_token_id = input_mm['image_token_id']
-                num_pad = input_mm['image_tokens']
-                if isinstance(num_pad, torch.Tensor):
-                    num_pad = num_pad.item()
+        result = PreprocessInputResult(input_ids=input_ids, input_multimodals=dict(mm_data=input_mm_data))
 
-                mm_data = MultiModalData(data=pixel_values,
-                                         start=start,
-                                         end=start + num_pad,
-                                         meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
-            input_imgs.append(mm_data)
-
-        result = PreprocessInputResult(
-            input_ids=input_ids,
-            input_multimodals=dict(image=input_imgs),
-        )
         return result

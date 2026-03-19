@@ -154,7 +154,7 @@ class InternS1ProTimeSeriesFixPositionalEncoding(nn.Module):
         div_term = torch.exp(torch.arange(0, d_model, 2, dtype=torch.float) * (-math.log(10000.0) / d_model))
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        # TODO: zhouxinyu, hf forces float32 during init, but becomes bf16 during forward
+        # hf forces float32 during init, but becomes bf16 during forward
         pe = pe.unsqueeze(0).transpose(0, 1).to(dtype=dtype, device=device)  # (max_len, 1, d_model)
         self.register_buffer('pe', pe, persistent=True)
 

@@ -777,9 +777,6 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         return self.input_processor
 
 
-InputMultiModalType = List[Dict[str, Any]]
-
-
 class Qwen2VLInputProcessor(BaseModelInputProcessor):
     """Qwen2 input processor."""
 

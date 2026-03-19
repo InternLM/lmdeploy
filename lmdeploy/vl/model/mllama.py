@@ -26,9 +26,9 @@ class MllamaVLModel(VisionModel):
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """Refer to the spec of `super().preprocess`"""
-        images = self.collect_images(messages)
+        images = self.collect_multimodal_items(messages)
         outputs = []
-        for image, params in images:
+        for modality, image, params in images:
             image = image.convert('RGB')
             results = self.processor.image_processor(images=image, return_tensors='pt')
             results.update(image_size=image.size, image_tokens=1, image_token_id=self.image_token_id)

@@ -5,6 +5,8 @@ from typing import Any
 import numpy as np
 from torch import Tensor
 
+from lmdeploy.vl.constants import Modality
+
 NestedTensor = Tensor | list[Tensor]
 
 
@@ -13,11 +15,12 @@ class MultiModalData:
     data: NestedTensor
     start: int
     end: int | None = None
-    encoder_len: int | None = None
     meta: dict[str, Any] | None = None
 
     # for qwen-vl
     mrope_pos_ids: np.ndarray | None = None
+
+    modality: Modality = Modality.IMAGE
 
     def __post_init__(self):
         if self.end is None:

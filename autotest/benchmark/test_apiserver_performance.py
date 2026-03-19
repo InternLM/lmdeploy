@@ -119,7 +119,7 @@ def test_pytorch_apiserver_tp16(config, run_config, worker_id):
     },
     'extra_params': {}
 }, {
-    'model': 'Qwen/Qwen3-VL-32B-Instruct',
+    'model': 'Qwen/Qwen3-VL-30B-A3B-Instruct',
     'backend': 'pytorch',
     'communicator': 'nccl',
     'quant_policy': 8,
