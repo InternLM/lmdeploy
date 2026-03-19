@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cuda_bf16.h>
+#include <type_traits>
 
 #include "src/turbomind/utils/cuda_utils.h"
 
@@ -1276,7 +1277,7 @@ __device__ __forceinline__ T array_get(const Array<T, N>& arr, int idx)
 // num_ch_tiles guarantees monotonically increasing tokens and a fixed channel
 // tile per block.
 // =============================================================================
-template<int D_CONV, int CHANNELS_PER_THREAD, int BLOCK_DIM, typename T>
+template<int D_CONV, int CHANNELS_PER_THREAD, int BLOCK_DIM, int NUM_TOKENS, typename T>
 __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*           out,
                                                const T*     in,
                                                const T*     weight,
@@ -1288,7 +1289,7 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
                                                int          batch_size,
                                                int          conv_dim,
                                                int          in_stride,
-                                               int          total_tokens,
+                                               int          num_token_tiles,
                                                int          state_layer_offset,
                                                int          total_work,
                                                int          num_ch_tiles)
@@ -1313,8 +1314,8 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
         if (s_work_id >= total_work)
             break;
 
-        const int t       = s_work_id % total_tokens;
-        const int ch_tile = s_work_id / total_tokens;
+        const int t_tile  = s_work_id % num_token_tiles;
+        const int ch_tile = s_work_id / num_token_tiles;
 
         if (ch_tile != prev_ch_tile) {
             prev_ch_tile = ch_tile;
@@ -1329,15 +1330,31 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
         if (bias)
             Load(bias_vals, bias + c_base);
 
-        for (int b = b_start + threadIdx.x; b < batch_size; b += BLOCK_DIM) {
-            int lo = __ldg(&q_offsets[b]);
-            if (lo > t)
-                break;
-            int hi = __ldg(&q_offsets[b + 1]);
-            if (t < hi) {
-                int seq  = hi - lo;
-                int hist = (__ldg(&k_offsets[b + 1]) - __ldg(&k_offsets[b])) - seq;
-                s_batch_info = make_int4(b, lo, seq, hist);
+        if constexpr (NUM_TOKENS == 1) {
+            for (int b = b_start + threadIdx.x; b < batch_size; b += BLOCK_DIM) {
+                int lo = __ldg(&q_offsets[b]);
+                if (lo > t_tile)
+                    break;
+                int hi = __ldg(&q_offsets[b + 1]);
+                if (t_tile < hi) {
+                    int seq  = hi - lo;
+                    int hist = (__ldg(&k_offsets[b + 1]) - __ldg(&k_offsets[b])) - seq;
+                    s_batch_info = make_int4(b, lo, seq, hist);
+                }
+            }
+        }
+        else {
+            for (int b = b_start + threadIdx.x; b < batch_size; b += BLOCK_DIM) {
+                int tile_off = __ldg(&q_offsets[b]) / NUM_TOKENS + b;
+                if (tile_off > t_tile)
+                    break;
+                int tile_off_next = __ldg(&q_offsets[b + 1]) / NUM_TOKENS + b + 1;
+                if (t_tile < tile_off_next) {
+                    int lo   = __ldg(&q_offsets[b]);
+                    int seq  = __ldg(&q_offsets[b + 1]) - lo;
+                    int hist = (__ldg(&k_offsets[b + 1]) - __ldg(&k_offsets[b])) - seq;
+                    s_batch_info = make_int4(b, lo, seq, hist);
+                }
             }
         }
         __syncthreads();
@@ -1346,60 +1363,80 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
 
         const int4 bi          = s_batch_info;
         const int  b           = bi.x;
-        const int  t_local     = t - bi.y;
+        const int  seq_off     = bi.y;
         const int  seq_len     = bi.z;
         const int  history_len = bi.w;
-        // ring_start: the ring-buffer slot for tap d=0 (oldest tap needed)
-        const int ring_start = (history_len + t_local + 1) % D_CONV;
+
+        int t_local_start;
+        int n_tokens;
+        if constexpr (NUM_TOKENS == 1) {
+            t_local_start = t_tile - seq_off;
+            n_tokens      = 1;
+        }
+        else {
+            const int tile_off_b = seq_off / NUM_TOKENS + b;
+            t_local_start        = (t_tile - tile_off_b) * NUM_TOKENS;
+            if (t_local_start >= seq_len)
+                continue;
+            n_tokens = min(NUM_TOKENS, seq_len - t_local_start);
+        }
+
+        const int ring_start = (history_len + t_local_start + 1) % D_CONV;
         T*        state_base = (T*)conv_state_ptrs[b] + state_layer_offset;
 
-        // source[d] holds the input value for tap d in convolution order.
-        // For taps covered by the current input window: load from global `in`.
-        // For taps that fall into history: load from the ring-buffer state at
-        // address ring_start+d (mod D_CONV), avoiding dynamic register indexing.
-        Array<T, CHANNELS_PER_THREAD> source[D_CONV];
-        PRAGMA_UNROLL
-        for (int d = 0; d < D_CONV; ++d) {
-            int src = t_local - (D_CONV - 1 - d);
-            if (src >= 0) {
-                Load(source[d], in + (bi.y + src) * in_stride + c_base);
-            }
-            else {
-                int ring_d = (ring_start + d) % D_CONV;
-                Load(source[d], state_base + ring_d * conv_dim + c_base);
-            }
-        }
-
-        Array<T, CHANNELS_PER_THREAD> out_vals;
-
-        float acc[CHANNELS_PER_THREAD] = {};
-        PRAGMA_UNROLL
-        for (int d = 0; d < D_CONV; ++d) {
-            PRAGMA_UNROLL
-            for (int ch = 0; ch < CHANNELS_PER_THREAD; ++ch) {
-                acc[ch] += static_cast<float>(source[d][ch]) * static_cast<float>(w_tap[d][ch]);
-            }
-        }
+        constexpr int                     VALS_SIZE = NUM_TOKENS + D_CONV - 1;
+        Array<T, CHANNELS_PER_THREAD> vals[VALS_SIZE];
+        const int                         n_vals = n_tokens + D_CONV - 1;
 
         PRAGMA_UNROLL
-        for (int ch = 0; ch < CHANNELS_PER_THREAD; ++ch) {
-            if (bias)
-                acc[ch] += static_cast<float>(bias_vals[ch]);
-            out_vals[ch] = static_cast<T>(acc[ch] / (1.0f + expf(-acc[ch])));
-        }
-
-        if (t_local == seq_len - 1) {
-            PRAGMA_UNROLL
-            for (int d = 0; d < D_CONV; ++d) {
-                int src_t = seq_len - D_CONV + d;
-                if (src_t >= 0) {
-                    int ring_d = (ring_start + d) % D_CONV;
-                    Store(state_base + ring_d * conv_dim + c_base, source[d]);
+        for (int i = 0; i < VALS_SIZE; ++i) {
+            if (i < n_vals) {
+                int pos = t_local_start - (D_CONV - 1) + i;
+                if (pos >= 0) {
+                    Load(vals[i], in + (seq_off + pos) * in_stride + c_base);
+                }
+                else {
+                    int ring_d = (ring_start + i) % D_CONV;
+                    Load(vals[i], state_base + ring_d * conv_dim + c_base);
                 }
             }
         }
 
-        Store(out + t * conv_dim + c_base, out_vals);
+        PRAGMA_UNROLL
+        for (int tok = 0; tok < NUM_TOKENS; ++tok) {
+            if (tok < n_tokens) {
+                float acc[CHANNELS_PER_THREAD] = {};
+                PRAGMA_UNROLL
+                for (int d = 0; d < D_CONV; ++d) {
+                    PRAGMA_UNROLL
+                    for (int ch = 0; ch < CHANNELS_PER_THREAD; ++ch) {
+                        acc[ch] += static_cast<float>(vals[tok + d][ch])
+                                 * static_cast<float>(w_tap[d][ch]);
+                    }
+                }
+
+                Array<T, CHANNELS_PER_THREAD> out_vals;
+                PRAGMA_UNROLL
+                for (int ch = 0; ch < CHANNELS_PER_THREAD; ++ch) {
+                    if (bias)
+                        acc[ch] += static_cast<float>(bias_vals[ch]);
+                    out_vals[ch] = static_cast<T>(acc[ch] / (1.0f + expf(-acc[ch])));
+                }
+
+                Store(out + (seq_off + t_local_start + tok) * conv_dim + c_base, out_vals);
+            }
+        }
+
+        if (t_local_start + n_tokens >= seq_len) {
+            PRAGMA_UNROLL
+            for (int i = 0; i < VALS_SIZE; ++i) {
+                int pos = t_local_start - (D_CONV - 1) + i;
+                if (pos >= 0 && pos >= seq_len - D_CONV && pos < seq_len) {
+                    int ring_d = (ring_start + i) % D_CONV;
+                    Store(state_base + ring_d * conv_dim + c_base, vals[i]);
+                }
+            }
+        }
     }
 }
 
@@ -1433,30 +1470,42 @@ void invokeFusedConv1dSiLU(Ref<Tensor>           out_,
             const int     ch_per_blk   = threads * kChPerT;
             TM_CHECK(conv_dim % ch_per_blk == 0);
             const int     num_ch_tiles = conv_dim / ch_per_blk;
-            const int     total_work   = total_tokens * num_ch_tiles;
 
-            auto kernel = fused_conv1d_batched_kernel_v2<kDConv, kChPerT, threads, T>;
-            int  blocks_per_sm = 1;
-            cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocks_per_sm, kernel, threads, 0);
-            int grid = min(total_work, blocks_per_sm * sm_count);
+            auto launch = [&](auto num_tok_tag) {
+                constexpr int kNumTok         = decltype(num_tok_tag)::value;
+                const int     num_token_tiles = (kNumTok == 1) ? total_tokens
+                                                               : total_tokens / kNumTok + batch_size;
+                const int     total_work      = num_token_tiles * num_ch_tiles;
 
-            cudaMemsetAsync(work_counter, 0, sizeof(int), stream);
-            kernel<<<grid, threads, 0, stream>>>(
-                out.data<T>(),
-                in.data<T>(),
-                weight.data<T>(),
-                bias ? bias.data<T>() : (T*)nullptr,
-                conv_state_ptrs.data(),
-                q_offsets.data(),
-                k_offsets.data(),
-                work_counter,
-                batch_size,
-                conv_dim,
-                in_stride,
-                total_tokens,
-                state_layer_offset,
-                total_work,
-                num_ch_tiles);
+                auto kernel = fused_conv1d_batched_kernel_v2<kDConv, kChPerT, threads, kNumTok, T>;
+                int  blocks_per_sm = 1;
+                cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocks_per_sm, kernel, threads, 0);
+                int grid = min(total_work, blocks_per_sm * sm_count);
+
+                cudaMemsetAsync(work_counter, 0, sizeof(int), stream);
+                kernel<<<grid, threads, 0, stream>>>(
+                    out.data<T>(),
+                    in.data<T>(),
+                    weight.data<T>(),
+                    bias ? bias.data<T>() : (T*)nullptr,
+                    conv_state_ptrs.data(),
+                    q_offsets.data(),
+                    k_offsets.data(),
+                    work_counter,
+                    batch_size,
+                    conv_dim,
+                    in_stride,
+                    num_token_tiles,
+                    state_layer_offset,
+                    total_work,
+                    num_ch_tiles);
+            };
+
+            int avg_seq = total_tokens / batch_size;
+            if (avg_seq >= 4)
+                launch(std::integral_constant<int, 5>{});
+            else
+                launch(std::integral_constant<int, 1>{});
         }
         else {
             TM_CHECK(0) << "Only d_conv == 4 is supported by fused_conv1d_batched_kernel_v2";
