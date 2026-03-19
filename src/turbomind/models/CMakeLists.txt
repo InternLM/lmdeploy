@@ -44,18 +44,16 @@ target_link_libraries(models PUBLIC
         anomaly_handler)
 target_compile_options(models PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-v --generate-line-info --threads 8>)
 
-add_executable(bench_gated_delta_net
-        llama/bench_gated_delta_net.cu)
-target_link_libraries(bench_gated_delta_net PRIVATE
-        models
-        CUDA::cudart)
-target_compile_options(bench_gated_delta_net PRIVATE
-        $<$<COMPILE_LANGUAGE:CUDA>:--generate-line-info>)
+if(BUILD_TEST)
+    add_executable(bench_gated_delta_net
+            llama/bench_gated_delta_net.cc)
+    target_link_libraries(bench_gated_delta_net PRIVATE
+            models
+            CUDA::cudart)
 
-add_executable(bench_conv1d_silu
-        llama/bench_conv1d_silu.cu)
-target_link_libraries(bench_conv1d_silu PRIVATE
-        models
-        CUDA::cudart)
-target_compile_options(bench_conv1d_silu PRIVATE
-        $<$<COMPILE_LANGUAGE:CUDA>:--generate-line-info>)
+    add_executable(bench_conv1d_silu
+            llama/bench_conv1d_silu.cc)
+    target_link_libraries(bench_conv1d_silu PRIVATE
+            models
+            CUDA::cudart)
+endif()
