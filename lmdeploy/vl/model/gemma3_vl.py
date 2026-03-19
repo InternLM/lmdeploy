@@ -72,8 +72,8 @@ class Gemma3VisionModel(VisionModel):
                 'add_special_tokens': False
             },
         )
-        images = self.collect_images(messages)
-        images = [image.convert('RGB') for image, _ in images]
+        images = self.collect_multimodal_items(messages)
+        images = [image.convert('RGB') for modality, image, _ in images]
         num_image = len(images)
         images = make_nested_list_of_images(images)
         image_inputs = self.processor.image_processor(images, **output_kwargs['images_kwargs'])

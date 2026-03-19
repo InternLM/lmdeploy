@@ -176,7 +176,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>Qwen2-VL (2B, 7B, 72B)</li>
   <li>Qwen2.5-VL (3B, 7B, 72B)</li>
   <li>Qwen3-VL (2B - 235B)</li>
-  <li>Qwen3.5</li>
+  <li>Qwen3.5 (0.8B - 397B)</li>
   <li>DeepSeek-VL (7B)</li>
   <li>DeepSeek-VL2 (3B, 16B, 27B)</li>
   <li>InternVL-Chat (v1.1-v1.5)</li>
@@ -228,7 +228,7 @@ The default prebuilt package is compiled on **CUDA 12** since v0.3.0.
 For the GeForce RTX 50 series, please install the LMDeploy prebuilt package complied with **CUDA 12.8**
 
 ```shell
-export LMDEPLOY_VERSION=0.12.1
+export LMDEPLOY_VERSION=0.12.2
 export PYTHON_VERSION=310
 pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu128-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu128
 ```

@@ -119,9 +119,9 @@ class YiVisionModel(LlavaVisionModel):
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """Refer to `super().preprocess() for spec."""
-        images = self.collect_images(messages)
+        images = self.collect_multimodal_items(messages)
         outputs = []
-        for image, params in images:
+        for modality, image, params in images:
             image = image.convert('RGB')
             pixel_values = process_images([image], self.image_processor, self.config)
             outputs.append(

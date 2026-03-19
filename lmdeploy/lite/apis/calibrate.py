@@ -241,7 +241,7 @@ def calibrate(model: str,
         'Support only `wikitext2`, `c4`, `pileval`, `gsm8k`, ' \
         '`neuralmagic_calibration`, `open-platypus`, `openwebtext`.'
 
-    model_type, _ = get_task(model)
+    model_type, _ = get_task(backend='turbomind', model_path=model)
     make_compatible_internvl_config(model)
 
     # Load tokenizer and configuration

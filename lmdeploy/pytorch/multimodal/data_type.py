@@ -4,23 +4,19 @@ from typing import Any, Dict, List, Union
 
 from torch import Tensor
 
-
-class MultiModalData:
-    pass
-
-
-MultiModalDataList = List[MultiModalData]
+from lmdeploy.vl.constants import Modality
 
 NestedTensor = Union[Tensor, List[Tensor]]
 
 
 @dataclass
-class MultiModalTensor:
+class MultiModalData:
     data: NestedTensor
     start: int
     end: int = None
-    encoder_len: int = None
     meta: Dict[str, Any] = None
+
+    modality: Modality = Modality.IMAGE
 
     def __post_init__(self):
         if self.end is None:
@@ -53,7 +49,7 @@ class MultiModalTensor:
                 new_meta[k] = v
 
         out_dict['meta'] = new_meta
-        return MultiModalTensor(**out_dict)
+        return MultiModalData(**out_dict)
 
 
-MultiModalInputs = Dict[str, List[MultiModalTensor]]
+MultiModalInputs = Dict[str, List[MultiModalData]]
