@@ -110,14 +110,14 @@ void GatedDeltaNetLayer::Setup(int phase, TensorMap& env)
         d.input_lens[i] = b.rc[i]->input_len;
 
         auto& s = *b.rc[i]->seq;
-
-        if (!s.recurrent_states) {
-            // Create new conv/recurrent states
-            s.conv_states = {{num_linear_layers_, d_conv_, conv_dim_}, dtype_, kDEVICE};
+        TM_CHECK(s.conv_states && s.recurrent_states)
+            << "Linear-attention state slot is not bound for sequence " << s.id;
+        if (s.linear_states_need_reset) {
+            // Reset newly assigned pooled slot state on first use. Keep GPU-side
+            // state initialization out of SequenceManager.
             Clear(s.conv_states);
-            s.recurrent_states = {
-                {num_linear_layers_, num_v_heads_, key_head_dim_, value_head_dim_}, state_dtype_, kDEVICE};
             Clear(s.recurrent_states);
+            s.linear_states_need_reset = false;
         }
 
         // Linear-attention requests are restricted to stateless execution, so

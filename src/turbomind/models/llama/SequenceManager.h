@@ -3,12 +3,14 @@
 #pragma once
 
 #include <functional>
+#include <unordered_map>
 
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/core.h"
 
 #include "src/turbomind/models/llama/BlockManager.h"
 #include "src/turbomind/models/llama/BlockTrie.h"
+#include "src/turbomind/models/llama/llama_params.h"
 
 namespace turbomind {
 
@@ -51,6 +53,7 @@ struct Sequence {
     //   recurrent_states: (num_linear_layers, num_v_heads, key_head_dim, value_head_dim) — SSM state
     mutable Tensor conv_states;
     mutable Tensor recurrent_states;
+    mutable bool   linear_states_need_reset = false;
 
     explicit Sequence(uint64_t _id): id(_id) {}
 
@@ -86,15 +89,18 @@ public:
     };
     // clang-format on
 
-    explicit SequenceManager(size_t             layer_num,
-                             const BlockConfig& block_config,
-                             double             block_count,
-                             int                chunk_size,
-                             bool               enable_prefix_caching,
-                             int                rank,
-                             int                attn_cp_size,
-                             core::Allocator    allocator,
-                             GetFreeMemSize     get_free_size);
+    explicit SequenceManager(const ModelParam& model_param,
+                             DataType          runtime_dtype,
+                             int               cache_block_seq_len,
+                             int               attn_tp_size,
+                             int               max_batch_size,
+                             double            block_count,
+                             int               chunk_size,
+                             bool              enable_prefix_caching,
+                             int               rank,
+                             int               attn_cp_size,
+                             core::Allocator   allocator,
+                             GetFreeMemSize    get_free_size);
 
     SequenceManager(const SequenceManager&)     = delete;
     SequenceManager(SequenceManager&&) noexcept = default;
@@ -106,6 +112,10 @@ public:
     [[nodiscard]] bool Contains(uint64_t id);
 
     [[nodiscard]] bool Erase(uint64_t id);
+
+    void AcquireLinearStateSlot(const Sequence& seq);
+
+    void ReleaseLinearStateSlot(const Sequence& seq);
 
     void InvalidateStatesAndCache(const Sequence& seq);
 
@@ -213,6 +223,11 @@ private:
 
     std::shared_ptr<BlockManager> block_manager_;
     std::shared_ptr<BlockTrie>    block_trie_;
+
+    Tensor                            pooled_conv_states_;
+    Tensor                            pooled_recurrent_states_;
+    std::vector<int>                  free_linear_state_slots_;
+    std::unordered_map<uint64_t, int> seq_to_linear_state_slot_;
 
     BlockIds unlocked_;
     BlockIds freed_;

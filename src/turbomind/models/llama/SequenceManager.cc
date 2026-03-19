@@ -31,23 +31,77 @@ std::string vector2string(const std::vector<T>& data)
     return ss.str();
 }
 
-SequenceManager::SequenceManager(size_t             layer_num,
-                                 const BlockConfig& block_config,
-                                 double             block_count,
-                                 int                chunk_size,
-                                 bool               enable_prefix_caching,
-                                 int                rank,
-                                 int                attn_cp_size,
-                                 core::Allocator    allocator,
-                                 GetFreeMemSize     get_free_size):
-    block_seq_len_(block_config.block_len_), rank_(rank), attn_cp_size_(attn_cp_size)
+SequenceManager::SequenceManager(const ModelParam& model_param,
+                                 DataType          runtime_dtype,
+                                 int               cache_block_seq_len,
+                                 int               attn_tp_size,
+                                 int               max_batch_size,
+                                 double            block_count,
+                                 int               chunk_size,
+                                 bool              enable_prefix_caching,
+                                 int               rank,
+                                 int               attn_cp_size,
+                                 core::Allocator   allocator,
+                                 GetFreeMemSize    get_free_size):
+    block_seq_len_(cache_block_seq_len), rank_(rank), attn_cp_size_(attn_cp_size)
 {
+    TM_CHECK_GT(attn_tp_size, 0);
+    TM_CHECK_GT(cache_block_seq_len, 0);
+
+    int cache_layer_num   = model_param.layer_num;
+    int num_linear_layers = 0;
+    for (const auto& type : model_param.layer_types) {
+        if (type == 1) {
+            --cache_layer_num;
+            ++num_linear_layers;
+        }
+    }
+
+    if (num_linear_layers > 0) {
+        const int key_head_dim =
+            model_param.linear_key_head_dim > 0 ? model_param.linear_key_head_dim : model_param.head_dim;
+        const int value_head_dim =
+            model_param.linear_value_head_dim > 0 ? model_param.linear_value_head_dim : model_param.head_dim;
+        const int d_conv      = model_param.linear_conv_kernel_dim > 0 ? model_param.linear_conv_kernel_dim : 4;
+        const int num_k_heads = model_param.linear_num_key_heads / attn_tp_size;
+        const int num_v_heads = model_param.linear_num_value_heads / attn_tp_size;
+        const int key_dim     = num_k_heads * key_head_dim;
+        const int value_dim   = num_v_heads * value_head_dim;
+        const int conv_dim    = key_dim * 2 + value_dim;
+
+        TM_CHECK_GT(max_batch_size, 0);
+        pooled_conv_states_ = {{max_batch_size, num_linear_layers, d_conv, conv_dim}, model_param.data_type, kDEVICE};
+        pooled_recurrent_states_ = {{max_batch_size, num_linear_layers, num_v_heads, key_head_dim, value_head_dim},
+                                    model_param.linear_state_dtype,
+                                    kDEVICE};
+
+        free_linear_state_slots_.reserve(max_batch_size);
+        for (int slot = max_batch_size - 1; slot >= 0; --slot) {
+            free_linear_state_slots_.push_back(slot);
+        }
+        TM_LOG_INFO("[SeqMgr] linear-state slot pool initialized: %d slots", max_batch_size);
+    }
+
+    const int  dbits        = byte_size(runtime_dtype, 8);
+    const auto quant_policy = model_param.quant_policy;
+    const int  elem_bits    = quant_policy ? quant_policy : dbits;
+
+    BlockConfig block_config{
+        (int)model_param.head_dim,
+        (int)model_param.kv_head_num / attn_tp_size,
+        cache_block_seq_len,
+        elem_bits == dbits ? 0 : dbits,
+        elem_bits,
+        model_param.head_dim == 576,  // share kv
+    };
+
     block::Layout layout{block_config};
     // dump(layout);
 
-    size_t block_size = layout.block_size(layer_num);
+    size_t block_size = layout.block_size(cache_layer_num);
 
     block_manager_ = std::make_shared<BlockManager>(block_size, block_count, chunk_size, allocator, get_free_size);
+
     if (enable_prefix_caching) {
         block_trie_ = std::make_shared<BlockTrie>(block_config.block_len_, block_manager_);
     }
@@ -98,6 +152,7 @@ void SequenceManager::Erase(std::map<uint64_t, Sequence>::iterator& it)
     if (!block_trie_) {
         freed_.insert(freed_.end(), seq.blocks.begin(), seq.blocks.end());
     }
+    ReleaseLinearStateSlot(seq);
     it = sequences_.erase(it);
 }
 
@@ -108,6 +163,51 @@ bool SequenceManager::Erase(uint64_t id)
         return true;
     }
     return false;
+}
+
+void SequenceManager::AcquireLinearStateSlot(const Sequence& sequence)
+{
+    if (!pooled_recurrent_states_) {
+        return;
+    }
+
+    auto& seq = const_cast<Sequence&>(sequence);
+
+    auto slot_it = seq_to_linear_state_slot_.find(seq.id);
+    if (slot_it != seq_to_linear_state_slot_.end()) {
+        const int slot       = slot_it->second;
+        seq.conv_states      = pooled_conv_states_.slice(slot).squeeze(0);
+        seq.recurrent_states = pooled_recurrent_states_.slice(slot).squeeze(0);
+        return;
+    }
+
+    TM_CHECK(!free_linear_state_slots_.empty()) << "No free linear-state slot for sequence " << seq.id
+                                                << ", max_batch_size=" << pooled_recurrent_states_.shape(0);
+
+    const int slot = free_linear_state_slots_.back();
+    free_linear_state_slots_.pop_back();
+    seq_to_linear_state_slot_.emplace(seq.id, slot);
+
+    seq.conv_states              = pooled_conv_states_.slice(slot).squeeze(0);
+    seq.recurrent_states         = pooled_recurrent_states_.slice(slot).squeeze(0);
+    seq.linear_states_need_reset = true;
+}
+
+void SequenceManager::ReleaseLinearStateSlot(const Sequence& sequence)
+{
+    if (!pooled_recurrent_states_) {
+        return;
+    }
+
+    auto& seq = const_cast<Sequence&>(sequence);
+
+    if (auto slot_it = seq_to_linear_state_slot_.find(seq.id); slot_it != seq_to_linear_state_slot_.end()) {
+        free_linear_state_slots_.push_back(slot_it->second);
+        seq_to_linear_state_slot_.erase(slot_it);
+    }
+    seq.conv_states              = {};
+    seq.recurrent_states         = {};
+    seq.linear_states_need_reset = false;
 }
 
 void SequenceManager::InvalidateStatesAndCache(const Sequence& sequence)
@@ -125,10 +225,9 @@ void SequenceManager::InvalidateStatesAndCache(const Sequence& sequence, BlockId
 
     seq.blocks.clear();
     seq.block_unique_ids.clear();
-    seq.input_length     = 0;
-    seq.cache_len        = 0;
-    seq.conv_states      = {};
-    seq.recurrent_states = {};
+    seq.input_length = 0;
+    seq.cache_len    = 0;
+    ReleaseLinearStateSlot(seq);
 }
 
 void SequenceManager::CachePrompt(const Sequences& sequences, int active_size)
@@ -189,8 +288,13 @@ void SequenceManager::VerifyAndLockCached(const Sequences& sequences)
         seq.blocks.resize(count);
         seq.block_unique_ids.resize(count);
 
-        if (seq.recurrent_states && count < original_count) {
+        const bool has_linear_states = static_cast<bool>(seq.recurrent_states);
+        if (has_linear_states && count < original_count) {
             InvalidateStatesAndCache(seq, freed_blocks);
+            // This request can still continue in the current scheduling round.
+            // Rebind a slot immediately so GatedDeltaNetLayer::Setup always sees
+            // valid linear-state views.
+            AcquireLinearStateSlot(seq);
             continue;
         }
 

@@ -214,21 +214,7 @@ void Engine::Impl::CreateSequenceManager()
 {
     const auto cache_block_seq_len = model_.attn_param().cache_block_seq_len;
 
-    const int dbits = byte_size(dtype_, 8);
-
     const auto& model_param = model_.model_param();
-
-    const auto quant_policy = model_param.quant_policy;
-    const int  elem_bits    = quant_policy ? quant_policy : dbits;
-
-    SequenceManager::BlockConfig block_config{
-        (int)model_param.head_dim,
-        (int)model_param.kv_head_num / param_.attn_tp_size,
-        cache_block_seq_len,
-        elem_bits == dbits ? 0 : dbits,
-        elem_bits,
-        model_param.head_dim == 576,  // share kv
-    };
 
     const auto get_free_size = [&] {  //
         size_t free{}, total{};
@@ -236,15 +222,11 @@ void Engine::Impl::CreateSequenceManager()
         return AllReduce(tp_group_, free, comm::RedOp::kMin);
     };
 
-    int cache_layer_num = model_param.layer_num;
-    for (const auto& type : model_param.layer_types) {
-        if (type == 1) {
-            --cache_layer_num;
-        }
-    }
-
-    seq_mgr_ = std::make_unique<SequenceManager>(cache_layer_num,
-                                                 block_config,
+    seq_mgr_ = std::make_unique<SequenceManager>(model_param,
+                                                 dtype_,
+                                                 cache_block_seq_len,
+                                                 param_.attn_tp_size,
+                                                 param_.max_batch_size,
                                                  param_.cache_max_block_count,
                                                  param_.cache_chunk_size,
                                                  param_.enable_prefix_caching,
@@ -450,6 +432,7 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
         }
 
         auto& seq = *ptr;
+        seq_mgr_->AcquireLinearStateSlot(seq);
 
         if (seq.recurrent_states) {
             if (step != seq.cache_len) {
