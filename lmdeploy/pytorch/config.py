@@ -8,18 +8,19 @@ import torch
 from lmdeploy.messages import PytorchEngineConfig
 from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
 from lmdeploy.pytorch.utils import maybe_register_config_serialize_by_value
-from lmdeploy.utils import get_logger
+from lmdeploy.utils import get_logger, is_bf16_supported
 
 logger = get_logger('lmdeploy')
 
 
-def _update_torch_dtype(config: 'ModelConfig', dtype: str):
+def _update_torch_dtype(config: 'ModelConfig', dtype: str, device_type: str = 'auto'):
     """Update the torch dtype from the model config.
 
     Args:
         config (ModelConfig): The input model config.
         dtype (str): user specified data type. Refer to
             `PyTorchEngineConfig.dtype` for detailed info
+        device_type (str): The device type. Refer to `PyTorchEngineConfig.device_type` for detailed info
     """
     quantization_config = getattr(config.hf_config, 'quantization_config', dict())
     quant_method = quantization_config.get('quant_method', None)
@@ -48,6 +49,8 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str):
         # update hf_config as well
         setattr(config.hf_config, 'torch_dtype', torch_dtype)
     else:
+        if torch_dtype == 'bfloat16' and not is_bf16_supported(device_type):
+            torch_dtype = 'float16'
         # change to user specified data type if it is not 'auto'
         if dtype == 'auto':
             torch_dtype = torch_dtype if torch_dtype in ['float16', 'bfloat16'] else 'float16'
@@ -356,6 +359,7 @@ class ModelConfig:
         is_draft_model: bool = False,
         spec_method: str = None,
         model_format: str = None,
+        device_type: str = 'auto',
     ):
         """Instantiate one of the configuration classes of the library from a
         pretrained model configuration.
@@ -386,6 +390,7 @@ class ModelConfig:
             dist_config=dist_config,
             is_draft_model=is_draft_model,
             spec_method=spec_method,
+            device_type=device_type,
         )
         fp32_lm_head = False
         if hf_overrides is not None:
@@ -413,6 +418,7 @@ class ModelConfig:
         dist_config: DistConfig = None,
         is_draft_model: bool = False,
         spec_method: str = None,
+        device_type: str = 'auto',
     ):
         """From huggingface config."""
         from lmdeploy.pytorch.configurations import AutoModelConfigBuilder
@@ -441,7 +447,7 @@ class ModelConfig:
             assert tp % model_config.num_key_value_heads == 0
 
         # should after setting `hf_config` and `model_arch` attributes
-        model_config = _update_torch_dtype(model_config, dtype)
+        model_config = _update_torch_dtype(model_config, dtype, device_type=device_type)
 
         # update eos_token_id to list
         if isinstance(model_config.eos_token_id, int):
