@@ -268,7 +268,7 @@ class AsyncEngine:
             metrics_processor.increase_api_routed_requests()
             yield generator
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
-            logger.error(f'[safe_run] session {session.session_id} exception caught: {type(e).__name__} {e}')
+            logger.exception(f'[safe_run] session {session.session_id} exception caught: {e}')
             await session.async_abort()
             if self.backend == 'pytorch':
                 await handle.async_end(session.session_id)
@@ -294,6 +294,7 @@ class AsyncEngine:
             input_ids: List | None = None,
             enable_thinking: bool | None = None,
             chat_template_kwargs: Dict | None = None,
+            media_io_kwargs: Dict[str, Any] | None = None,
             mm_processor_kwargs: Dict[str, Any] | None = None,
             **kwargs):
         """Generate responses.
@@ -338,6 +339,7 @@ class AsyncEngine:
                                                                         tools=tools,
                                                                         reasoning_effort=reasoning_effort,
                                                                         chat_template_kwargs=chat_template_kwargs,
+                                                                        media_io_kwargs=media_io_kwargs,
                                                                         mm_processor_kwargs=mm_processor_kwargs,
                                                                         **kwargs)
             prompt = prompt_input['prompt']

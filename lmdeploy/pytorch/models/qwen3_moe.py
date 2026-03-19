@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Tuple
 
 import torch
 from torch import nn
@@ -95,7 +95,7 @@ class Qwen3MoeAttention(nn.Module):
         self,
         hidden_states: torch.Tensor,
         rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        past_key_value: Tuple[torch.Tensor] | None = None,
         attn_metadata: Any = None,
     ):
         """Rewrite of LlamaAttention.forward."""
@@ -198,7 +198,6 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
                  device: torch.device = None,
                  prefix: str = ''):
         super().__init__()
-        # TODO: zhouxinyu, determine modules_to_not_convert from config file
         quantization_config = getattr(config, 'quantization_config', None)
         self.layer_idx = layer_idx
         self.hidden_dim = config.hidden_size
@@ -318,8 +317,8 @@ class Qwen3MoeDecoderLayer(nn.Module):
         self,
         hidden_states: torch.Tensor,
         rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[List[torch.FloatTensor]],
-        residual: Optional[torch.Tensor] = None,
+        past_key_value: List[torch.FloatTensor] | None,
+        residual: torch.Tensor | None = None,
         attn_metadata: Any = None,
         all_routed_experts: torch.Tensor = None,
     ):
@@ -396,10 +395,10 @@ class Qwen3MoeModel(nn.Module):
     def forward(
         self,
         input_ids: torch.LongTensor = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: List[torch.FloatTensor] | None = None,
         attn_metadata: Any = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
+        inputs_embeds: torch.FloatTensor | None = None,
         all_routed_experts: torch.Tensor = None,
     ):
         """Rewrite of LlamaModel.forward."""
@@ -519,7 +518,7 @@ class Qwen3MoeForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
     def prepare_inputs_for_generation(
         self,
         past_key_values: List[List[torch.Tensor]],
-        inputs_embeds: Optional[torch.Tensor] = None,
+        inputs_embeds: torch.Tensor | None = None,
         context: StepContext = None,
     ):
         """Prepare input."""

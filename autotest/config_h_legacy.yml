@@ -1,0 +1,72 @@
+model_path: /mnt/shared-storage-user/llmrazor-share/qa-llm-cicd/cicd-autotest/eval_resource/model
+resource_path: /mnt/shared-storage-user/llmrazor-share/qa-llm-cicd/cicd-autotest/eval_resource/resource
+log_path: /mnt/shared-storage-user/llmrazor-share/qa-llm-cicd/cicd-autotest/eval_resource/log
+server_log_path: /mnt/shared-storage-user/llmrazor-share/qa-llm-cicd/cicd-autotest/eval_resource/server_log
+eval_path: /mnt/shared-storage-user/llmrazor-share/qa-llm-cicd/cicd-autotest/eval_resource/evaluation_report
+mllm_eval_path: /mnt/shared-storage-user/llmrazor-share/qa-llm-cicd/cicd-autotest/eval_resource/mllm_evaluation_report
+benchmark_path: /mnt/shared-storage-user/llmrazor-share/qa-llm-cicd/cicd-autotest/eval_resource/benchmark_report
+dataset_path: /mnt/shared-storage-user/auto-eval-pipeline/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
+prefix_dataset_path: /mnt/shared-storage-user/auto-eval-pipeline/datasets/prefix_cache_test.json
+env_tag: h
+device: cuda
+
+config:
+    tp:
+        internlm/Intern-S1: 4
+
+turbomind_chat_model:
+    tp:
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
+
+pytorch_chat_model:
+    tp:
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
+
+turbomind_vl_model:
+    tp:
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
+
+pytorch_vl_model:
+    tp:
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
+
+turbomind_base_model:
+    tp:
+
+pytorch_base_model:
+    tp:
+
+turbomind_quantization:
+    no_awq:
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
+    gptq:
+        - empty
+    no_kvint4:
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
+    no_kvint8:
+        - empty
+
+pytorch_quantization:
+    awq:
+        - empty
+    w8a8:
+        - empty
+    no_kvint4:
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
+    no_kvint8:
+        - empty
+
+benchmark_model:
+    - internlm/Intern-S1
+    - internlm/Intern-S1-mini
+
+mllm_evaluate_model:
+    - internlm/Intern-S1
+    - internlm/Intern-S1-mini

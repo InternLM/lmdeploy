@@ -32,7 +32,11 @@ on:
         description: 'Set custom run ID. If not provided, github.run_id will be used'
         type: string
         default: ''
-
+      offline_mode:
+        required: true
+        description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
+        type: boolean
+        default: false
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
@@ -40,11 +44,8 @@ env:
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
   REPORT_DIR: /nvme/qa_test_models/evaluation_report/allure_report/${{ inputs.repo_ref }}_${{ github.run_id }}
   COV_PARAM: --cov /opt/py3/lib/python3.10/site-packages/lmdeploy
-  FAIL_CONFIG: '--lf'
   TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy/${{ inputs.repo_ref }}_${{ github.run_id }}
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
-  OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
-  DEEPSEEK_VL: /nvme/qa_test_models/offline_pkg/DeepSeek-VL
   COMPASS_DATA_CACHE: /nvme/qa_test_models/compass_data_cache
   HF_DATASETS_OFFLINE: 1
   HF_DATASETS_CACHE: /nvme/qa_test_models/hf_datasets
@@ -54,7 +55,7 @@ env:
 
 jobs:
   linux-build:
-    if: ${{ !cancelled() }}
+    if: ${{github.event_name == 'schedule' || (!cancelled() && !inputs.offline_mode)}}
     strategy:
       matrix:
         pyver: [py310]
@@ -154,6 +155,9 @@ jobs:
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
         gpu_num: ['gpu_num_1', 'gpu_num_2', 'gpu_num_4', 'gpu_num_8']
+        transformers: ["", "legacy"]
+    env:
+      TEST_ENV: ${{ matrix.transformers }}
     container:
       image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -186,6 +190,10 @@ jobs:
           cd opencompass
           python3 -m pip install .
           python3 -m pip install langdetect
+      - name: Downgrade transformers
+        if: ${{matrix.transformers == 'legacy'}}
+        run: |
+          pip install transformers==4.57.6
       - name: Check env
         run: |
           python3 -m pip list
@@ -211,5 +219,6 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
+          chmod -R 777 ${{env.REPORT_DIR}}
           export workdir=$(pwd)
           rm -rf $workdir/*
