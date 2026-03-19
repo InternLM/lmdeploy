@@ -354,7 +354,7 @@ class Qwen3MoeModel(nn.Module):
                  device: torch.device = None,
                  prefix: str = ''):
         super().__init__()
-        self.padding_idx = config.pad_token_id
+        self.padding_idx = getattr(config, 'pad_token_id', None)
         self.vocab_size = config.vocab_size
         self.embed_tokens = build_embedding(
             config.vocab_size,
