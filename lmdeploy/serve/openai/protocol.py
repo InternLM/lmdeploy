@@ -461,6 +461,11 @@ class GenerateReqInput(BaseModel):
     return_routed_experts: Optional[bool] = False
     repetition_ngram_size: int = 0
     repetition_ngram_threshold: int = 0
+    # kwargs for media IO
+    media_io_kwargs: Optional[dict[str, Any]] = Field(
+        default=None,
+        description=('Additional kwargs to pass to the media IO processing, keyed by modality.'),
+    )
     # kwargs for hf processor
     mm_processor_kwargs: Optional[dict[str, Any]] = Field(
         default=None,
