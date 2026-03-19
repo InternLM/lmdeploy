@@ -135,6 +135,10 @@ def get_func_config_list(backend: str,
                 run_config['extra_params']['max-prefill-token-num'] = 1024
                 run_config['extra_params']['max-batch-size'] = 128
 
+        if ('openai/gpt-oss' in run_config['model'] and backend == 'turbomind'
+                and func_type in ('benchmark', 'longtext_benchmark')):
+            run_config['extra_params']['model-format'] = 'mxfp4'
+
     return run_configs
 
 
