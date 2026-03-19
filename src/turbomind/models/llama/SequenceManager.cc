@@ -110,6 +110,27 @@ bool SequenceManager::Erase(uint64_t id)
     return false;
 }
 
+void SequenceManager::InvalidateStatesAndCache(const Sequence& sequence)
+{
+    InvalidateStatesAndCache(sequence, freed_);
+}
+
+void SequenceManager::InvalidateStatesAndCache(const Sequence& sequence, BlockIds& freed_blocks)
+{
+    auto& seq = const_cast<Sequence&>(sequence);
+    if (seq.status != Sequence::kCached) {
+        UpdateAndSetUnlock(seq);
+    }
+    freed_blocks.insert(freed_blocks.end(), seq.blocks.begin(), seq.blocks.end());
+
+    seq.blocks.clear();
+    seq.block_unique_ids.clear();
+    seq.input_length     = 0;
+    seq.cache_len        = 0;
+    seq.conv_states      = {};
+    seq.recurrent_states = {};
+}
+
 void SequenceManager::CachePrompt(const Sequences& sequences, int active_size)
 {
     if (!block_trie_) {
@@ -154,7 +175,8 @@ void SequenceManager::CacheGeneration(const Sequence& seq)
 
 void SequenceManager::VerifyAndLockCached(const Sequences& sequences)
 {
-    BlockIds blocks;
+    BlockIds valid_blocks;
+    BlockIds freed_blocks;
     for (const auto& p : sequences) {
         auto& seq = const_cast<Sequence&>(*p);
         if (seq.status != Sequence::kCached) {
@@ -162,15 +184,24 @@ void SequenceManager::VerifyAndLockCached(const Sequences& sequences)
         }
         TM_CHECK_EQ(seq.blocks.size(), seq.block_unique_ids.size());
         // Verify cache blocks that may be invalidated
-        const int count = block_manager_->Verify(seq.blocks, seq.block_unique_ids);
+        const int original_count = seq.blocks.size();
+        const int count          = block_manager_->Verify(seq.blocks, seq.block_unique_ids);
         seq.blocks.resize(count);
         seq.block_unique_ids.resize(count);
 
-        blocks.insert(blocks.end(), seq.blocks.begin(), seq.blocks.end());
+        if (seq.recurrent_states && count < original_count) {
+            InvalidateStatesAndCache(seq, freed_blocks);
+            continue;
+        }
+
+        valid_blocks.insert(valid_blocks.end(), seq.blocks.begin(), seq.blocks.end());
         seq.cache_len = std::min<int>(seq.cache_len, seq.blocks.size() * block_seq_len_);
         seq.status    = Sequence::kLocked;
     }
-    block_manager_->Lock(blocks);
+    if (!freed_blocks.empty()) {
+        block_manager_->Free(freed_blocks);
+    }
+    block_manager_->Lock(valid_blocks);
 }
 
 void SequenceManager::CommitUnlockAndFree()

@@ -444,7 +444,7 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     engine_param_.cache_chunk_size      = engine["cache_chunk_size"].as<int>(0);
     engine_param_.enable_prefix_caching = engine["enable_prefix_caching"].as<bool>(false);
     engine_param_.enable_metrics        = engine["enable_metrics"].as<bool>(false);
-    
+
     if (engine_param_.enable_prefix_caching && HasLinearAttention(model_param_)) {
         TM_CHECK(0) << "Prefix caching is unsupported when linear attention is present";
     }

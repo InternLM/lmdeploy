@@ -107,6 +107,8 @@ public:
 
     [[nodiscard]] bool Erase(uint64_t id);
 
+    void InvalidateStatesAndCache(const Sequence& seq);
+
     void UpdateAndSetUnlock(const Sequence& seq);
 
     struct Outcome {
@@ -186,6 +188,8 @@ private:
     void Erase(std::map<uint64_t, Sequence>::iterator& it);
 
     void CommitUnlockAndFree();
+
+    void InvalidateStatesAndCache(const Sequence& seq, BlockIds& freed_blocks);
 
     void VerifyAndLockCached(const Sequences& sequences);
 

@@ -367,7 +367,17 @@ void Engine::Impl::Interrupt(RequestCache& c)
         TM_CHECK(seq_mgr_->Erase(c.req->id));
     }
     else {
-        seq_mgr_->UpdateAndSetUnlock(s);
+        if (s.recurrent_states && c.seq_len != s.cache_len) {
+            TM_LOG_WARNING(
+                "[Engine][Interrupt] Invalidating cache for ID %llu due to linear-state/cache mismatch (%d vs %d)",
+                s.id,
+                c.seq_len,
+                s.cache_len);
+            seq_mgr_->InvalidateStatesAndCache(s);
+        }
+        else {
+            seq_mgr_->UpdateAndSetUnlock(s);
+        }
     }
     c.seq = nullptr;
 }
