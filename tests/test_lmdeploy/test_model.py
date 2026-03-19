@@ -1,6 +1,7 @@
 import pytest
 
 from lmdeploy.model import MODELS
+from lmdeploy.serve.processors import MultimodalProcessor
 
 HF_MODELS_WITH_CHAT_TEMPLATES = [
     'Qwen/Qwen1.5-7B-Chat',
@@ -277,6 +278,33 @@ def test_qwen3(model_path, enable_thinking):
                                             enable_thinking=enable_thinking)
     lm_res = chat_template.messages2prompt(messages, enable_thinking=enable_thinking)
     assert ref == lm_res
+
+
+@pytest.mark.parametrize('model_path', ['Qwen/Qwen3.5-35B-A3B'])
+def test_qwen_template_renders_tool_call_arguments_from_string_payload(model_path):
+    chat_template = MODELS.get('hf')(model_path)
+
+    assistant_message = MultimodalProcessor.merge_message_content({
+        'role':
+        'assistant',
+        'tool_calls': [{
+            'id': 'call_1',
+            'type': 'function',
+            'function': {
+                'name': 'get_weather',
+                'arguments': '{"city":"Paris","units":"metric"}'
+            }
+        }]
+    })
+    messages = [{'role': 'user', 'content': 'What is the weather in Paris?'}, assistant_message]
+
+    prompt = chat_template.messages2prompt(messages)
+
+    assert assistant_message['tool_calls'][0]['function']['arguments'] == '{"city":"Paris","units":"metric"}'
+    assert assistant_message['tool_calls'][0]['function']['parsed_arguments'] == {'city': 'Paris', 'units': 'metric'}
+    assert '<function=get_weather>' in prompt
+    assert '<parameter=city>\nParis\n</parameter>' in prompt
+    assert '<parameter=units>\nmetric\n</parameter>' in prompt
 
 
 @pytest.mark.parametrize('model_path', ['internlm/Intern-S1'])
