@@ -8,6 +8,7 @@ from lmdeploy.model import MODELS, BaseChatTemplate
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.constants import Modality
+from lmdeploy.vl.media.audio import AudioMediaIO
 from lmdeploy.vl.media.connection import load_from_url
 from lmdeploy.vl.media.image import ImageMediaIO
 from lmdeploy.vl.media.time_series import TimeSeriesMediaIO
@@ -124,6 +125,10 @@ class MultimodalProcessor:
                 vid_io = VideoMediaIO(image_io=ImageMediaIO(), **media_io_kwargs.get('video', {}))
                 data, metadata = load_from_url(data_src, vid_io)
                 item_params['video_metadata'] = metadata
+            elif item_type == 'audio_url':
+                modality = Modality.AUDIO
+                audio_io = AudioMediaIO(**media_io_kwargs.get('audio', {}))
+                data = load_from_url(data_src, audio_io)
             elif item_type == 'time_series_url':
                 modality = Modality.TIME_SERIES
                 ts_io = TimeSeriesMediaIO(**media_io_kwargs.get('time_series', {}))
@@ -304,7 +309,7 @@ class MultimodalProcessor:
 
     def _has_multimodal_input(self, messages: List[Dict]) -> bool:
         """Check if messages contain multimodal input (images)."""
-        multimodal_types = ['image_url', 'image_data', 'video_url', 'time_series_url']
+        multimodal_types = ['image_url', 'image_data', 'video_url', 'audio_url', 'time_series_url']
         return any(
             isinstance(message.get('content'), list) and any(
                 item.get('type') in multimodal_types for item in message['content']) for message in messages)
