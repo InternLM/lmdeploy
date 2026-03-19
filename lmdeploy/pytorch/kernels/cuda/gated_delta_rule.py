@@ -4,9 +4,6 @@ from typing import Sequence
 import tilelang
 import tilelang.language as T
 import torch
-from tvm import tir
-
-BufferLikeType = tir.Buffer | tir.BufferRegion | tir.BufferLoad
 
 
 @T.macro
@@ -259,13 +256,20 @@ def fused_recurrent_gated_delta_rule(
         g: [B, T, HV], optional
         beta: [B, T, HV], optional
         scale: float, optional
-        initial_state: [N, HV, K, V], optional, if state_indices is not proviced, N=B
+        initial_state: Tensor, optional. Recurrent state with shape
+            [N, HV, K, V] or [N, NUM_STATE, HV, K, V]. If ``state_indices``
+            is not provided, N = B. When using circular buffers
+            (i.e. ``cache_seqlens`` is not None), ``NUM_STATE`` specifies
+            the number of state slots per sequence (e.g. buffer size).
         use_qk_l2norm_in_kernel: whether to apply l2 normalization on q and k in the kernel
         state_indices: [B], optional, the indices to update in the recurrent state, required
         cache_seqlens: [B], optional, the cached sequence lengths for each batch element
     Returns:
         o: [B, T, HV, V]
-        final_state: [N, HV, K, V] if output_final_state else None
+        final_state: Recurrent state if ``output_final_state`` is True,
+            otherwise None. The returned state has shape [N, HV, K, V] if
+            the input ``initial_state`` was 4D, or [N, NUM_STATE, HV, K, V]
+            if a 5D state was provided (e.g. when using circular buffers).
     """
     # T is imported as tilelang.language, use seqlen instead
     _, seqlen, H, K, V = *k.shape, v.shape[-1]
@@ -284,6 +288,11 @@ def fused_recurrent_gated_delta_rule(
         assert state_indices.is_contiguous()
         assert initial_state is not None, 'initial_state is required when state_indices is provided'
         assert state_indices.shape == (q.shape[0], )
+    if cache_seqlens is not None:
+        assert cache_seqlens.is_contiguous(), 'cache_seqlens must be contiguous'
+        assert cache_seqlens.shape == (q.shape[0], ), 'cache_seqlens must have shape (B,) where B is the batch size'
+        assert cache_seqlens.dtype == torch.int32, 'cache_seqlens must have dtype torch.int32'
+        assert cache_seqlens.device == q.device, 'cache_seqlens must be on the same device as q'
 
     o = torch.empty_like(v)
     final_state = initial_state

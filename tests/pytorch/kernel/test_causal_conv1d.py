@@ -96,7 +96,6 @@ class TestCausalConv1dUpdate:
                                          activation=activation,
                                          cache_seqlens=cache_seqlens,
                                          conv_state_indices=conv_state_indices)
-        print(out[..., 0], out.shape)
         torch.testing.assert_close(out, out_gt, rtol=1e-3, atol=1e-3)
         torch.testing.assert_close(conv_state_clone, conv_state, rtol=1e-3, atol=1e-3)
 
