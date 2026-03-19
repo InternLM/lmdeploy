@@ -305,9 +305,7 @@ class Scheduler:
             if not seq.status == MessageStatus.RUNNING:
                 valid_mask[idx] = False
                 continue
-
-            num_required_blocks = self.block_manager.num_required_blocks(seq, num_decode_tokens)
-
+            num_required_blocks = self.block_manager.num_required_blocks(seq, num_decode_tokens + prealloc_size)
             if num_required_blocks == 0:
                 continue
 

@@ -114,6 +114,7 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
                          model_meta: Dict[str, Any] = None,
                          draft_token_ids: Tensor = None,
                          mode: UpdateTokenMode = UpdateTokenMode.INPUTS,
+                         routed_experts: np.ndarray = None,
                          **kwargs):
         """Update token ids, old token ids will be added to history."""
         # update history image nums
@@ -125,6 +126,13 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
         self.arrive_time = time.perf_counter()
 
         token_ids: np.ndarray = _to_ndarray(token_ids)
+
+        # record cached expert ids
+        if routed_experts is not None:
+            num_reject_tokens = (token_ids == -1).sum().item()
+            routed_experts = routed_experts[:routed_experts.shape[0] - num_reject_tokens]
+            self.append_routed_experts(routed_experts)
+
         if draft_token_ids is not None:
             draft_token_ids = _to_ndarray(draft_token_ids)
         if mode == UpdateTokenMode.INPUTS:
@@ -170,8 +178,15 @@ class ARSpecSequenceStrategy(ARSequenceStrategy):
 
         if model_inputs is None:
             is_decoding = delta.is_decoding
+            num_tokens = delta.seq_length.tolist()
         else:
             is_decoding = model_inputs.is_decoding
+            num_tokens = model_inputs.seq_length.tolist()
+
+        all_routed_experts = [None] * len(num_tokens)
+        if batched_outputs.all_routed_experts is not None:
+            all_routed_experts = batched_outputs.all_routed_experts.split(num_tokens, dim=0)
+            all_routed_experts = [experts.numpy() for experts in all_routed_experts]
 
         batch_size = len(running)
         next_token_ids = next_token_ids.view(batch_size, -1).numpy()
@@ -183,6 +198,7 @@ class ARSpecSequenceStrategy(ARSequenceStrategy):
         update_mode = UpdateTokenMode.DECODE if is_decoding else UpdateTokenMode.PREFILL
 
         for idx, token in enumerate(next_token_ids):
+            routed_experts = all_routed_experts[idx]
             msg = running[idx]
             stop = stopped[idx]
             model_meta = model_metas[idx]
@@ -190,7 +206,11 @@ class ARSpecSequenceStrategy(ARSequenceStrategy):
                 continue
             cur_draft_tokens = draft_token_ids[idx]
             # fill token
-            msg.update_token_ids(token, draft_token_ids=cur_draft_tokens, model_meta=model_meta, mode=update_mode)
+            msg.update_token_ids(token,
+                                 draft_token_ids=cur_draft_tokens,
+                                 model_meta=model_meta,
+                                 mode=update_mode,
+                                 routed_experts=routed_experts)
             if stop:
                 msg.set_stop_pos(stop_pos[idx])
                 msg.state.finish()
