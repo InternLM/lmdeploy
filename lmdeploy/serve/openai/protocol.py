@@ -152,10 +152,16 @@ class ChatCompletionRequest(BaseModel):
     enable_thinking: Optional[bool] = None  # will be deprecated in the future
     return_token_ids: Optional[bool] = False
     include_stop_str_in_output: Optional[bool] = False
+    # kwargs for chat template renderer
     chat_template_kwargs: dict[str, Any] | None = Field(
         default=None,
         description=('Additional keyword args to pass to the template renderer. '
                      'Will be accessible by the chat template.'),
+    )
+    # kwargs for media IO
+    media_io_kwargs: Optional[dict[str, Any]] = Field(
+        default=None,
+        description=('Additional kwargs to pass to the media IO processing, keyed by modality.'),
     )
     # kwargs for hf processor
     mm_processor_kwargs: Optional[dict[str, Any]] = Field(

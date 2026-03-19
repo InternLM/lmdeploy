@@ -11,7 +11,7 @@ from torch.profiler import record_function
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.config import CacheConfig, DLLMConfig, ModelConfig, QuantizationConfig
-from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
+from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.utils import CtxMgrBase, singleton
 
 if TYPE_CHECKING:
@@ -66,7 +66,7 @@ class VisionModelInputs:
     input_embeddings: List[List[torch.Tensor]] = None
     input_embedding_ranges: List[torch.LongTensor] = None
     input_embedding_indexing: torch.BoolTensor = None
-    input_multimodals: List[MultiModalTensor] = None
+    input_multimodals: List[MultiModalData] = None
 
     def to_device(self, device: str, non_blocking: bool = False):
         """To device."""
@@ -255,7 +255,7 @@ class StepContext:
     local_adapter_ids: torch.LongTensor = None
     input_embeddings: torch.Tensor = None
     input_embedding_indexing: torch.Tensor = None
-    input_multimodals: List[MultiModalTensor] = None
+    input_multimodals: List[MultiModalData] = None
     vision_inputs: VisionModelInputs = None
     attn_metadata: Any = None
     kv_quant_policy: Literal[0, 4, 8] = 0
