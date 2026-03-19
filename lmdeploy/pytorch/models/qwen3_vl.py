@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 from functools import lru_cache
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -729,6 +729,23 @@ class Qwen3VLInputProcessor(BaseModelInputProcessor):
     def __init__(self, config: PretrainedConfig) -> None:
         self.config = config
 
+    @classmethod
+    def _get_multimodal_pos_ids(cls, grid_thw: Sequence[int]) -> np.ndarray:
+        """Get mrope ids."""
+        t, h, w = grid_thw
+        h = h // 2
+        w = w // 2
+        stride = np.array([h * w, w, 1])[None]
+        size = np.array([t, h, w])[None]
+        pos_ids = np.arange(t * h * w)[:, None].repeat(3, axis=1)
+        pos_ids = pos_ids // stride % size
+        return pos_ids
+
+    @classmethod
+    def make_mrope(cls, grid_thw: torch.Tensor):
+        img_pos_ids = cls._get_multimodal_pos_ids(grid_thw[0].tolist())
+        return img_pos_ids
+
     def _make_image_mm_data(self, input_mm: Dict[str, Any]) -> MultiModalData:
         """Make image MultiModalData."""
         pixel_values = input_mm['pixel_values']
@@ -740,10 +757,13 @@ class Qwen3VLInputProcessor(BaseModelInputProcessor):
         if isinstance(num_pad, torch.Tensor):
             num_pad = num_pad.item()
 
+        mrope_pos_ids = self.make_mrope(image_grid_thw)
+
         mm_data = MultiModalData(modality=Modality.IMAGE,
                                  data=pixel_values,
                                  start=start,
                                  end=start + num_pad,
+                                 mrope_pos_ids=mrope_pos_ids,
                                  meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
         return mm_data
 
@@ -758,10 +778,13 @@ class Qwen3VLInputProcessor(BaseModelInputProcessor):
         if isinstance(num_pad, torch.Tensor):
             num_pad = num_pad.item()
 
+        mrope_pos_ids = self.make_mrope(video_grid_thw)
+
         mm_data = MultiModalData(modality=Modality.VIDEO,
                                  data=pixel_values_videos,
                                  start=start,
                                  end=start + num_pad,
+                                 mrope_pos_ids=mrope_pos_ids,
                                  meta=dict(
                                      grid_thw=video_grid_thw,
                                      video_token_id=video_token_id,
