@@ -450,8 +450,8 @@ class AscendOpsBackend(DlinferOpsBackend):
     def init():
         """Initialize Ascend backend."""
         try:
+            from dlinfer.vendor.ascend.triton_ops.triton_utils import init_device_properties_triton
             from torch_npu.contrib import transfer_to_npu  # noqa: F401
-            from dlinfer.vendor.ascend.triton_ops.fla.triton_utils import init_device_properties_triton
             init_device_properties_triton()
         except ImportError:
             logger.warning('Failed to import torch_npu. Please make sure torch_npu is installed correctly. '
