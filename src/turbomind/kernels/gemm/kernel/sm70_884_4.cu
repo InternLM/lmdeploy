@@ -47,7 +47,6 @@ void Registry::sm70_884_4()
         Add<C::Type< 16, 256,  32, 1, 4, 1, D, S, 2, true, 1, 128>>();
         Add<C::Type< 16, 128,  32, 1, 4, 1, D, S, 2, true, 1, 128>>();
         Add<C::Type<  8, 128,  64, 1, 4, 1, D, S, 2, true, 1, 128>>();
-        Add<C::Type< 16, 256,  32, 1, 4, 1, D, S, 2, true, 1, 128>>();
         // clang-format on
     }
 

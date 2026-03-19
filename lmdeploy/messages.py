@@ -196,14 +196,15 @@ class TurbomindEngineConfig:
             The `auto` option will use FP16 precision for FP32 and FP16
             models, and BF16 precision for BF16 models.
         model_format: the layout of the deployed model. It can be one
-            of the following values [hf, awq, gptq, fp8, mxfp4]. `hf`
-            means a Hugging Face model (.bin, .safetensors), `awq` and
-            `gptq` mean grouped 4-bit weight-only checkpoints, `fp8`
-            means blocked fp8 checkpoints, and `mxfp4` means MXFP4 expert
-            weights. Pack-quantized compressed-tensors checkpoints are
-            auto-detected from the input model config and do not need to be
-            specified explicitly. If it is not specified, i.e. None, it will
-            be extracted from the input model
+            of the following values [hf, awq, gptq, compressed-tensors,
+            fp8, mxfp4]. `hf` means a Hugging Face model (.bin,
+            .safetensors), `awq` and `gptq` mean grouped 4-bit
+            weight-only checkpoints, `compressed-tensors` means
+            pack-quantized grouped int4 checkpoints and is usually
+            auto-detected from the input model config, `fp8` means
+            blocked fp8 checkpoints, and `mxfp4` means MXFP4 expert
+            weights. If it is not specified, i.e. None, it will be
+            extracted from the input model
         tp: the number of GPU cards used in tensor parallelism,
             default to 1
         session_len: the max session length of a sequence, default to

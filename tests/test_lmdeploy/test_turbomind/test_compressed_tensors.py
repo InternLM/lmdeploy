@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+import importlib
 import pathlib
 import sys
 import types
@@ -7,13 +8,18 @@ import types
 import pytest
 import torch
 
-from lmdeploy.turbomind.deploy import converter
-from lmdeploy.turbomind.deploy.parameter import QuantWeightOnly, pack_u4_row
-from lmdeploy.turbomind.deploy.source_model.qwen import Qwen3_5ReaderMixin
-
+# Allow importing deployment helpers without the native _turbomind
+# extension during test collection.
 _TM_PKG = types.ModuleType('lmdeploy.turbomind')
 _TM_PKG.__path__ = [str(pathlib.Path(__file__).resolve().parents[3] / 'lmdeploy' / 'turbomind')]
 sys.modules.setdefault('lmdeploy.turbomind', _TM_PKG)
+
+converter = importlib.import_module('lmdeploy.turbomind.deploy.converter')
+_parameter = importlib.import_module('lmdeploy.turbomind.deploy.parameter')
+_qwen = importlib.import_module('lmdeploy.turbomind.deploy.source_model.qwen')
+QuantWeightOnly = _parameter.QuantWeightOnly
+pack_u4_row = _parameter.pack_u4_row
+Qwen3_5ReaderMixin = _qwen.Qwen3_5ReaderMixin
 
 
 class _FakeModelConfig:
