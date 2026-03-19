@@ -60,13 +60,13 @@ class LLama4VisionModel(VisionModel):
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """Refers to `super.preprocess() for spec."""
-        images = self.collect_images(messages)
+        images = self.collect_multimodal_items(messages)
         outputs = []
         processor = self.processor
         patch_size = processor.patch_size
         downsample_ratio = processor.downsample_ratio
         images_kwargs = self.images_kwargs
-        for image, params in images:
+        for modality, image, params in images:
             image_inputs = processor.image_processor(images=[image], **images_kwargs)
             pixel_values = image_inputs['pixel_values']
             image_height, image_width = image_inputs['pixel_values'][0].shape[-2:]

@@ -165,45 +165,34 @@ class VisionModel(ABC):
             raise NotImplementedError()
 
     @staticmethod
-    def collect_images(messages):
-        """Gather all images along with their respective parameters from the
-        messages and compile them into a single list. Each image is converted
-        to RGB color space.
-
-        Args:
-            messages (List[Tuple[Image, Dict]]): a list of images with their
-                corresponding parameters
-        """  # noqa
-        images = []
-        for message in messages:
-            content = message['content']
-            if not isinstance(content, List):
-                continue
-            images.extend([(x['image'], {
-                k: v
-                for k, v in x.items() if k not in {'type', 'image'}
-            }) for x in content if x['type'] == 'image'])
-        return images
-
-    @staticmethod
-    def collect_time_series(messages):
-        """Gather all time series data along with their respective parameters
+    def collect_multimodal_items(messages):
+        """Gather all multimodal items along with their respective parameters
         from the messages and compile them into a single list.
 
         Args:
-            messages (List[Tuple[np.ndarray, Dict]]): a list of time
-                series data with their corresponding parameters
-        """  # noqa
-        time_series = []
+            messages (List[Dict]): a list of message
+        Returns:
+            List[Tuple[Modality, Any, Dict]]: a list of (modality, data, params) for each multimodal item
+        """
+        multimodal_items = []
         for message in messages:
             content = message['content']
-            if not isinstance(content, List):
+            if not isinstance(content, list):
                 continue
-            time_series.extend([(x['time_series'], {
-                k: v
-                for k, v in x.items() if k not in {'type', 'time_series'}
-            }) for x in content if x['type'] == 'time_series'])
-        return time_series
+
+            for x in content:
+                if not isinstance(x, dict):
+                    continue
+
+                modality = x.get('type')
+                if modality is None or modality == 'text':
+                    continue
+
+                data = x.get('data')
+                params = {k: v for k, v in x.items() if k not in ['type', 'data']}
+                multimodal_items.append((modality, data, params))
+
+        return multimodal_items
 
     @staticmethod
     def IMAGE_TOKEN_included(messages):
