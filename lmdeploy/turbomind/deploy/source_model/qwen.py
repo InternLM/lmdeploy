@@ -243,6 +243,7 @@ class Qwen3_5ReaderMixin:
         tie_word_embeddings = self.model_cfg.get('tie_word_embeddings', False)
         if tie_word_embeddings:
             self.output_weight_key = self.tok_embeddings_key
+
     # ---- zero-centered RMSNorm: add 1 to weights during export ----
 
     def attn_norm(self, i: int):

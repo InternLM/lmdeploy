@@ -33,29 +33,6 @@ void invokeFusedConv1dSiLU(Ref<Tensor>           out,
                            int*                  work_counter,
                            cudaStream_t          stream);
 
-// =============================================================================
-// Gated Delta Rule — Unified batched launcher (decode + prefill)
-//
-// Replaces per-request invokeRecurrentGatedDeltaRule / invokeGatedDeltaRulePrefill
-// calls with a single launch across all requests in the batch.
-//
-// v_out:       (total_tokens, num_v_heads * value_head_dim)
-// qkv_in:      (total_tokens, conv_dim)  packed conv output
-// beta, g:     (total_tokens, num_v_heads)
-// state_ptrs:  device array[batch_size] of per-request recurrent state pointers
-// q_offsets:   device int[batch_size+1] cumulative token offsets
-void invokeGatedDeltaRuleBatched(Ref<Tensor>           v_out,
-                                 const Tensor&         qkv_in,
-                                 const Tensor&         beta,
-                                 const Tensor&         g,
-                                 const Buffer_<void*>& state_ptrs,
-                                 const Buffer_<int>&   q_offsets,
-                                 int                   batch_size,
-                                 int                   num_k_heads,
-                                 int                   key_head_dim,
-                                 int                   state_layer_offset,
-                                 cudaStream_t          stream);
-
 // All three recurrent-rule launchers share the same trailing parameters for
 // interface consistency:
 //   sm_count      — multiprocessor count, queried once by the caller at init
