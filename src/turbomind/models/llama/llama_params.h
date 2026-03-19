@@ -78,6 +78,16 @@ struct ModelParam {
     std::set<int> unquantized_expert_layers;
 };
 
+inline bool HasLinearAttention(const ModelParam& model_param)
+{
+    for (int type : model_param.layer_types) {
+        if (type == 1) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /// TODO: rename all `gate` in the context of MoE router to `router`
 struct MoeParam {
     enum Method

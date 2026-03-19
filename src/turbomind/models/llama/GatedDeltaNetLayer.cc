@@ -120,19 +120,10 @@ void GatedDeltaNetLayer::Setup(int phase, TensorMap& env)
             Clear(s.recurrent_states);
         }
 
-        // if (!d.rc[i]->autoregres) {
-        if (b.rc[i]->req->session.end_flag) {  // non-stateful request
-            // Session is ending, moving past the last step is OK
-            d.conv_states[i]      = b.rc[i]->seq->conv_states;
-            d.recurrent_states[i] = b.rc[i]->seq->recurrent_states;
-        }
-        else if (data_.size() > 1) {  // stateful request && async mode
-            d.conv_states[i]      = empty_like(s.conv_states);
-            d.recurrent_states[i] = empty_like(s.recurrent_states);
-            Copy(s.conv_states, d.conv_states[i]);
-            Copy(s.recurrent_states, d.recurrent_states[i]);
-        }
-        // }
+        // Linear-attention requests are restricted to stateless execution, so
+        // the sequence-owned states can be passed directly here.
+        d.conv_states[i]      = s.conv_states;
+        d.recurrent_states[i] = s.recurrent_states;
 
         conv_state_ptrs_buf_[i]      = d.conv_states[i].raw_data();
         recurrent_state_ptrs_buf_[i] = d.recurrent_states[i].raw_data();

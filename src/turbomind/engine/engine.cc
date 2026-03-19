@@ -266,17 +266,26 @@ void Engine::Impl::Validate(Requests& infer_reqs, Requests& kill_reqs)
     std::pmr::monotonic_buffer_resource    mbr;
     std::pmr::unordered_map<uint64_t, int> occur(&mbr);
 
+    const bool has_linear_attention = HasLinearAttention(model_.model_param());
+
     auto count = [&occur](const auto& reqs) {
         for (const auto& r : reqs) {
             ++occur[r->id];
         }
     };
 
-    auto validate = [&](auto& reqs, const char* type) {
+    auto validate = [&](auto& reqs, const char* type, bool is_infer) {
         for (const auto& r : reqs) {
             if (occur[r->id] > 1) {
                 TM_LOG_ERROR("Skip conflicting %s request for ID %lu", type, r->id);
                 r->ec = Request::kConflict;
+            }
+            if (!r->ec && is_infer && has_linear_attention && !r->session.end_flag) {
+                TM_LOG_ERROR("Skip inconsistent %s request for ID %lu. Linear attention only supports stateless "
+                             "requests",
+                             type,
+                             r->id);
+                r->ec = Request::kInconsistency;
             }
             if (param_.enable_prefix_caching) {
                 if (r->session.step != 0) {
@@ -308,8 +317,8 @@ void Engine::Impl::Validate(Requests& infer_reqs, Requests& kill_reqs)
     count(kill_reqs);
     count(infer_reqs);
 
-    validate(kill_reqs, "kill");
-    validate(infer_reqs, "infer");
+    validate(kill_reqs, "kill", false);
+    validate(infer_reqs, "infer", true);
 
     // New requests that never get a chance to start
     for (auto& r : infer_reqs) {
