@@ -245,7 +245,6 @@ class Qwen3_5ReaderMixin:
             self.output_weight_key = self.tok_embeddings_key
 
     # ---- zero-centered RMSNorm: add 1 to weights during export ----
-
     def attn_norm(self, i: int):
         w = super().attn_norm(i)
         if w is not None:

@@ -3,7 +3,7 @@ name: unit-test
 on:
   pull_request:
     paths:
-      - ".github/workflows/unit-test.yml"
+      - ".github/workflows/unit_test.yml"
       - "cmake/**"
       - "src/**"
       - "tests/**"
@@ -17,7 +17,7 @@ on:
     branches:
       - main
     paths:
-      - ".github/workflows/unit-test.yml"
+      - ".github/workflows/unit_test.yml"
       - "cmake/**"
       - "src/**"
       - "tests/**"
