@@ -13,14 +13,14 @@ using namespace turbomind;
 using namespace turbomind::core;
 
 struct Args {
-    int         batch_size  = 32;
-    int         seq_len     = 64;
-    int         num_v_heads = 16;
-    int         num_k_heads = 4;
-    int         warmup      = 10;
-    int         iters       = 100;
-    DataType    dtype       = kFloat16;
-    DataType    state_dtype = kFloat32;
+    int      batch_size  = 32;
+    int      seq_len     = 64;
+    int      num_v_heads = 16;
+    int      num_k_heads = 4;
+    int      warmup      = 10;
+    int      iters       = 100;
+    DataType dtype       = kFloat16;
+    DataType state_dtype = kFloat32;
 
     static DataType ParseDtype(const char* s)
     {
@@ -68,23 +68,21 @@ struct Args {
 
     void Print() const
     {
-        printf("batch_size=%d  seq_len=%d  num_v_heads=%d  num_k_heads=%d  warmup=%d  iters=%d  dtype=%s  state_dtype=%s\n",
-               batch_size,
-               seq_len,
-               num_v_heads,
-               num_k_heads,
-               warmup,
-               iters,
-               to_string(dtype),
-               to_string(state_dtype));
+        printf(
+            "batch_size=%d  seq_len=%d  num_v_heads=%d  num_k_heads=%d  warmup=%d  iters=%d  dtype=%s  state_dtype=%s\n",
+            batch_size,
+            seq_len,
+            num_v_heads,
+            num_k_heads,
+            warmup,
+            iters,
+            to_string(dtype),
+            to_string(state_dtype));
     }
 };
 
-static float benchmark_kernel(const char*         name,
-                              std::function<void()> launch,
-                              cudaStream_t        stream,
-                              int                 warmup,
-                              int                 iters)
+static float
+benchmark_kernel(const char* name, std::function<void()> launch, cudaStream_t stream, int warmup, int iters)
 {
     for (int i = 0; i < warmup; ++i)
         launch();
@@ -134,7 +132,7 @@ int main(int argc, char** argv)
     const DataType state_dtype = args.state_dtype;
 
     // --- Context setup ---
-    auto stream = Stream::create();
+    auto         stream = Stream::create();
     ContextGuard ctx{stream, Allocator{kCPU}, Allocator{kCPUpinned}, Allocator{stream, false}};
     cudaStream_t cu_stream = stream.handle();
 
@@ -168,7 +166,7 @@ int main(int argc, char** argv)
     // --- Fill random data ---
     RNG rng;
     rng.UniformFloat(qkv_in, 0.1f);
-    rng.UniformFloat(beta, 1.0f);    // will be passed through sigmoid inside kernel
+    rng.UniformFloat(beta, 1.0f);        // will be passed through sigmoid inside kernel
     rng.UniformFloat(g, 0.02f, -0.01f);  // small values around 0
     Clear(state_v2);
     Clear(state_chunked);
@@ -258,7 +256,8 @@ int main(int argc, char** argv)
                                        cu_stream);
     };
     if (is_decode) {
-        v3_ms = benchmark_kernel("invokeGatedDeltaRuleBatched_v3 (persistent)", launch_v3, cu_stream, args.warmup, args.iters);
+        v3_ms = benchmark_kernel(
+            "invokeGatedDeltaRuleBatched_v3 (persistent)", launch_v3, cu_stream, args.warmup, args.iters);
     }
     else {
         printf("  %-45s  (skipped — seq_len > 1)\n", "invokeGatedDeltaRuleBatched_v3 (persistent)");

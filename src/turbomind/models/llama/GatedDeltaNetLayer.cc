@@ -115,7 +115,8 @@ void GatedDeltaNetLayer::Setup(int phase, TensorMap& env)
             // Create new conv/recurrent states
             s.conv_states = {{num_linear_layers_, d_conv_, conv_dim_}, dtype_, kDEVICE};
             Clear(s.conv_states);
-            s.recurrent_states = {{num_linear_layers_, num_v_heads_, key_head_dim_, value_head_dim_}, state_dtype_, kDEVICE};
+            s.recurrent_states = {
+                {num_linear_layers_, num_v_heads_, key_head_dim_, value_head_dim_}, state_dtype_, kDEVICE};
             Clear(s.recurrent_states);
         }
 
@@ -253,18 +254,36 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
                 // Decode on main stream
                 auto dc_state = pd.recurrent_state_ptrs.slice(0, decode_count);
                 auto dc_q     = pd.q_offsets.slice(0, decode_count + 1);
-                invokeGatedDeltaRuleBatched_v3(attn_out, conv_out, beta, g,
-                                               dc_state, dc_q, decode_count,
-                                               num_k_heads_, recurrent_state_layer_offset,
-                                               state_dtype_, sm_count_, work_counter_.data(), stream);
+                invokeGatedDeltaRuleBatched_v3(attn_out,
+                                               conv_out,
+                                               beta,
+                                               g,
+                                               dc_state,
+                                               dc_q,
+                                               decode_count,
+                                               num_k_heads_,
+                                               recurrent_state_layer_offset,
+                                               state_dtype_,
+                                               sm_count_,
+                                               work_counter_.data(),
+                                               stream);
 
                 // Prefill on aux stream (higher priority)
                 auto pf_state = pd.recurrent_state_ptrs.slice(decode_count, prefill_count);
                 auto pf_q     = pd.q_offsets.slice(decode_count, prefill_count + 1);
-                invokeChunkedGatedDeltaRuleBatched(attn_out, conv_out, beta, g,
-                                                    pf_state, pf_q, prefill_count,
-                                                    num_k_heads_, recurrent_state_layer_offset,
-                                                    state_dtype_, sm_count_, work_counter_.data(), aux_stream_);
+                invokeChunkedGatedDeltaRuleBatched(attn_out,
+                                                   conv_out,
+                                                   beta,
+                                                   g,
+                                                   pf_state,
+                                                   pf_q,
+                                                   prefill_count,
+                                                   num_k_heads_,
+                                                   recurrent_state_layer_offset,
+                                                   state_dtype_,
+                                                   sm_count_,
+                                                   work_counter_.data(),
+                                                   aux_stream_);
 
                 // Join: main stream waits for prefill to finish
                 check_cuda_error(cudaEventRecord(ev_after_, aux_stream_));
@@ -273,18 +292,36 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
             else if (decode_count > 0) {
                 auto state_slice = pd.recurrent_state_ptrs.slice(0, decode_count);
                 auto q_slice     = pd.q_offsets.slice(0, decode_count + 1);
-                invokeGatedDeltaRuleBatched_v3(attn_out, conv_out, beta, g,
-                                               state_slice, q_slice, decode_count,
-                                               num_k_heads_, recurrent_state_layer_offset,
-                                               state_dtype_, sm_count_, work_counter_.data(), stream);
+                invokeGatedDeltaRuleBatched_v3(attn_out,
+                                               conv_out,
+                                               beta,
+                                               g,
+                                               state_slice,
+                                               q_slice,
+                                               decode_count,
+                                               num_k_heads_,
+                                               recurrent_state_layer_offset,
+                                               state_dtype_,
+                                               sm_count_,
+                                               work_counter_.data(),
+                                               stream);
             }
             else if (prefill_count > 0) {
                 auto state_slice = pd.recurrent_state_ptrs.slice(decode_count, prefill_count);
                 auto q_slice     = pd.q_offsets.slice(decode_count, prefill_count + 1);
-                invokeChunkedGatedDeltaRuleBatched(attn_out, conv_out, beta, g,
-                                                    state_slice, q_slice, prefill_count,
-                                                    num_k_heads_, recurrent_state_layer_offset,
-                                                    state_dtype_, sm_count_, work_counter_.data(), stream);
+                invokeChunkedGatedDeltaRuleBatched(attn_out,
+                                                   conv_out,
+                                                   beta,
+                                                   g,
+                                                   state_slice,
+                                                   q_slice,
+                                                   prefill_count,
+                                                   num_k_heads_,
+                                                   recurrent_state_layer_offset,
+                                                   state_dtype_,
+                                                   sm_count_,
+                                                   work_counter_.data(),
+                                                   stream);
                 // invokeChunkedGatedDeltaRuleBatched
             }
         }

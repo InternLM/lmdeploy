@@ -463,7 +463,7 @@ void invokeGatedDeltaRuleBatched_v2(Ref<Tensor>           v_out_,
                                     DataType              state_dtype,
                                     int /*sm_count*/,
                                     int* /*work_counter*/,
-                                    cudaStream_t          stream)
+                                    cudaStream_t stream)
 {
     auto& v_out = v_out_.get();
 
@@ -530,19 +530,18 @@ void invokeGatedDeltaRuleBatched_v2(Ref<Tensor>           v_out_,
 // directly from global memory. smem_sz = 0 in the host launcher.
 // =============================================================================
 template<int k_head_dim, int v_head_dim, int block_dim, class T, class S>
-__global__ __launch_bounds__(block_dim, 2)
-void recurrent_gated_delta_rule_kernel_v3(T*         v_out,
-                                           const T*   qkv_in,
-                                           const T*   beta_in,
-                                           const T*   g_in,
-                                           S* const*  state_ptrs,
-                                           const int* q_offsets,
-                                           int*       work_counter,
-                                           int        total_work,
-                                           int        num_v_heads,
-                                           int        num_k_heads,
-                                           int        k_dim_total,
-                                           int        state_layer_offset)
+__global__ __launch_bounds__(block_dim, 2) void recurrent_gated_delta_rule_kernel_v3(T*         v_out,
+                                                                                     const T*   qkv_in,
+                                                                                     const T*   beta_in,
+                                                                                     const T*   g_in,
+                                                                                     S* const*  state_ptrs,
+                                                                                     const int* q_offsets,
+                                                                                     int*       work_counter,
+                                                                                     int        total_work,
+                                                                                     int        num_v_heads,
+                                                                                     int        num_k_heads,
+                                                                                     int        k_dim_total,
+                                                                                     int        state_layer_offset)
 {
     constexpr int state_size = k_head_dim * v_head_dim;
     const int     conv_dim   = 2 * k_dim_total + num_v_heads * v_head_dim;
@@ -700,10 +699,10 @@ void invokeGatedDeltaRuleBatched_v3(Ref<Tensor>           v_out_,
                                     int                   batch_size,
                                     int                   num_k_heads,
                                     int                   state_layer_offset,
-                                    DataType              /*state_dtype*/,  // v3 always uses S = T
-                                    int                   sm_count,
-                                    int*                  work_counter,
-                                    cudaStream_t          stream)
+                                    DataType /*state_dtype*/,  // v3 always uses S = T
+                                    int          sm_count,
+                                    int*         work_counter,
+                                    cudaStream_t stream)
 {
     auto& v_out = v_out_.get();
 
@@ -727,7 +726,7 @@ void invokeGatedDeltaRuleBatched_v3(Ref<Tensor>           v_out_,
         using S = T;  // 16-bit state: S == T
 
         auto             kernel        = recurrent_gated_delta_rule_kernel_v3<kHeadDim, kHeadDim, kBlockDim, T, S>;
-        constexpr size_t smem_sz      = sizeof(int);  // s_work_idx
+        constexpr size_t smem_sz       = sizeof(int);  // s_work_idx
         int              blocks_per_sm = 1;
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocks_per_sm, kernel, kBlockDim, smem_sz);
         const int grid_blocks = min(total_work, blocks_per_sm * sm_count);
@@ -1000,7 +999,7 @@ __global__ void chunked_gated_delta_rule_kernel(T*         v_out,
             }
         }
         __syncthreads();  // [sync 2] ensure all reads done before next chunk overwrites smem
-    }  // chunk loop
+    }                     // chunk loop
 
     // ================================================================
     //  STORE STATE  registers → smem (swizzled) → global   (same as v2)
@@ -1057,7 +1056,7 @@ void invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out_,
                                         DataType              state_dtype,
                                         int /*sm_count*/,
                                         int* /*work_counter*/,
-                                        cudaStream_t          stream)
+                                        cudaStream_t stream)
 {
     auto& v_out = v_out_.get();
 
@@ -1279,20 +1278,20 @@ __device__ __forceinline__ T array_get(const Array<T, N>& arr, int idx)
 // =============================================================================
 template<int D_CONV, int CHANNELS_PER_THREAD, int BLOCK_DIM, int NUM_TOKENS, typename T>
 __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*           out,
-                                               const T*     in,
-                                               const T*     weight,
-                                               const T*     bias,
-                                               void* const* conv_state_ptrs,
-                                               const int*   q_offsets,
-                                               const int*   k_offsets,
-                                               int*         work_counter,
-                                               int          batch_size,
-                                               int          conv_dim,
-                                               int          in_stride,
-                                               int          num_token_tiles,
-                                               int          state_layer_offset,
-                                               int          total_work,
-                                               int          num_ch_tiles)
+                                                                            const T*     in,
+                                                                            const T*     weight,
+                                                                            const T*     bias,
+                                                                            void* const* conv_state_ptrs,
+                                                                            const int*   q_offsets,
+                                                                            const int*   k_offsets,
+                                                                            int*         work_counter,
+                                                                            int          batch_size,
+                                                                            int          conv_dim,
+                                                                            int          in_stride,
+                                                                            int          num_token_tiles,
+                                                                            int          state_layer_offset,
+                                                                            int          total_work,
+                                                                            int          num_ch_tiles)
 {
     static_assert(BLOCK_DIM * CHANNELS_PER_THREAD > 0);
 
@@ -1304,7 +1303,7 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
 
     __shared__ int  s_work_id;
     __shared__ int4 s_batch_info;
-    int b_start = 0;
+    int             b_start = 0;
 
     while (true) {
         if (threadIdx.x == 0)
@@ -1319,7 +1318,7 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
 
         if (ch_tile != prev_ch_tile) {
             prev_ch_tile = ch_tile;
-            b_start     = 0;
+            b_start      = 0;
         }
 
         c_base = (ch_tile * BLOCK_DIM + threadIdx.x) * CHANNELS_PER_THREAD;
@@ -1337,8 +1336,8 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
                     break;
                 int hi = __ldg(&q_offsets[b + 1]);
                 if (t_tile < hi) {
-                    int seq  = hi - lo;
-                    int hist = (__ldg(&k_offsets[b + 1]) - __ldg(&k_offsets[b])) - seq;
+                    int seq      = hi - lo;
+                    int hist     = (__ldg(&k_offsets[b + 1]) - __ldg(&k_offsets[b])) - seq;
                     s_batch_info = make_int4(b, lo, seq, hist);
                 }
             }
@@ -1350,9 +1349,9 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
                     break;
                 int tile_off_next = __ldg(&q_offsets[b + 1]) / NUM_TOKENS + b + 1;
                 if (t_tile < tile_off_next) {
-                    int lo   = __ldg(&q_offsets[b]);
-                    int seq  = __ldg(&q_offsets[b + 1]) - lo;
-                    int hist = (__ldg(&k_offsets[b + 1]) - __ldg(&k_offsets[b])) - seq;
+                    int lo       = __ldg(&q_offsets[b]);
+                    int seq      = __ldg(&q_offsets[b + 1]) - lo;
+                    int hist     = (__ldg(&k_offsets[b + 1]) - __ldg(&k_offsets[b])) - seq;
                     s_batch_info = make_int4(b, lo, seq, hist);
                 }
             }
@@ -1384,9 +1383,9 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
         const int ring_start = (history_len + t_local_start + 1) % D_CONV;
         T*        state_base = (T*)conv_state_ptrs[b] + state_layer_offset;
 
-        constexpr int                     VALS_SIZE = NUM_TOKENS + D_CONV - 1;
+        constexpr int                 VALS_SIZE = NUM_TOKENS + D_CONV - 1;
         Array<T, CHANNELS_PER_THREAD> vals[VALS_SIZE];
-        const int                         n_vals = n_tokens + D_CONV - 1;
+        const int                     n_vals = n_tokens + D_CONV - 1;
 
         PRAGMA_UNROLL
         for (int i = 0; i < VALS_SIZE; ++i) {
@@ -1410,8 +1409,7 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
                 for (int d = 0; d < D_CONV; ++d) {
                     PRAGMA_UNROLL
                     for (int ch = 0; ch < CHANNELS_PER_THREAD; ++ch) {
-                        acc[ch] += static_cast<float>(vals[tok + d][ch])
-                                 * static_cast<float>(w_tap[d][ch]);
+                        acc[ch] += static_cast<float>(vals[tok + d][ch]) * static_cast<float>(w_tap[d][ch]);
                     }
                 }
 
@@ -1465,40 +1463,38 @@ void invokeFusedConv1dSiLU(Ref<Tensor>           out_,
     auto invoke = [&](auto t) {
         using T = decltype(t);
         if (d_conv == 4) {
-            constexpr int kDConv  = 4;
-            constexpr int kChPerT = 8;
-            const int     ch_per_blk   = threads * kChPerT;
+            constexpr int kDConv     = 4;
+            constexpr int kChPerT    = 8;
+            const int     ch_per_blk = threads * kChPerT;
             TM_CHECK(conv_dim % ch_per_blk == 0);
-            const int     num_ch_tiles = conv_dim / ch_per_blk;
+            const int num_ch_tiles = conv_dim / ch_per_blk;
 
             auto launch = [&](auto num_tok_tag) {
                 constexpr int kNumTok         = decltype(num_tok_tag)::value;
-                const int     num_token_tiles = (kNumTok == 1) ? total_tokens
-                                                               : total_tokens / kNumTok + batch_size;
+                const int     num_token_tiles = (kNumTok == 1) ? total_tokens : total_tokens / kNumTok + batch_size;
                 const int     total_work      = num_token_tiles * num_ch_tiles;
 
-                auto kernel = fused_conv1d_batched_kernel_v2<kDConv, kChPerT, threads, kNumTok, T>;
+                auto kernel        = fused_conv1d_batched_kernel_v2<kDConv, kChPerT, threads, kNumTok, T>;
                 int  blocks_per_sm = 1;
                 cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocks_per_sm, kernel, threads, 0);
                 int grid = min(total_work, blocks_per_sm * sm_count);
 
                 cudaMemsetAsync(work_counter, 0, sizeof(int), stream);
-                kernel<<<grid, threads, 0, stream>>>(
-                    out.data<T>(),
-                    in.data<T>(),
-                    weight.data<T>(),
-                    bias ? bias.data<T>() : (T*)nullptr,
-                    conv_state_ptrs.data(),
-                    q_offsets.data(),
-                    k_offsets.data(),
-                    work_counter,
-                    batch_size,
-                    conv_dim,
-                    in_stride,
-                    num_token_tiles,
-                    state_layer_offset,
-                    total_work,
-                    num_ch_tiles);
+                kernel<<<grid, threads, 0, stream>>>(out.data<T>(),
+                                                     in.data<T>(),
+                                                     weight.data<T>(),
+                                                     bias ? bias.data<T>() : (T*)nullptr,
+                                                     conv_state_ptrs.data(),
+                                                     q_offsets.data(),
+                                                     k_offsets.data(),
+                                                     work_counter,
+                                                     batch_size,
+                                                     conv_dim,
+                                                     in_stride,
+                                                     num_token_tiles,
+                                                     state_layer_offset,
+                                                     total_work,
+                                                     num_ch_tiles);
             };
 
             int avg_seq = total_tokens / batch_size;

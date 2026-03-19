@@ -21,17 +21,17 @@ namespace turbomind {
 // q_offsets:       device int[batch_size+1] cumulative token offsets
 // k_offsets:       device int[batch_size+1] cumulative key (history+input) offsets
 void invokeFusedConv1dSiLU(Ref<Tensor>           out,
-                            const Tensor&         in,
-                            const Tensor&         weight,
-                            const Tensor&         bias,
-                            const Buffer_<void*>& conv_state_ptrs,
-                            const Buffer_<int>&   q_offsets,
-                            const Buffer_<int>&   k_offsets,
-                            int                   batch_size,
-                            int                   state_layer_offset,
-                            int                   sm_count,
-                            int*                  work_counter,
-                            cudaStream_t          stream);
+                           const Tensor&         in,
+                           const Tensor&         weight,
+                           const Tensor&         bias,
+                           const Buffer_<void*>& conv_state_ptrs,
+                           const Buffer_<int>&   q_offsets,
+                           const Buffer_<int>&   k_offsets,
+                           int                   batch_size,
+                           int                   state_layer_offset,
+                           int                   sm_count,
+                           int*                  work_counter,
+                           cudaStream_t          stream);
 
 // =============================================================================
 // Gated Delta Rule — Unified batched launcher (decode + prefill)
@@ -45,16 +45,16 @@ void invokeFusedConv1dSiLU(Ref<Tensor>           out,
 // state_ptrs:  device array[batch_size] of per-request recurrent state pointers
 // q_offsets:   device int[batch_size+1] cumulative token offsets
 void invokeGatedDeltaRuleBatched(Ref<Tensor>           v_out,
-                                  const Tensor&         qkv_in,
-                                  const Tensor&         beta,
-                                  const Tensor&         g,
-                                  const Buffer_<void*>& state_ptrs,
-                                  const Buffer_<int>&   q_offsets,
-                                  int                   batch_size,
-                                  int                   num_k_heads,
-                                  int                   key_head_dim,
-                                  int                   state_layer_offset,
-                                  cudaStream_t          stream);
+                                 const Tensor&         qkv_in,
+                                 const Tensor&         beta,
+                                 const Tensor&         g,
+                                 const Buffer_<void*>& state_ptrs,
+                                 const Buffer_<int>&   q_offsets,
+                                 int                   batch_size,
+                                 int                   num_k_heads,
+                                 int                   key_head_dim,
+                                 int                   state_layer_offset,
+                                 cudaStream_t          stream);
 
 // All three recurrent-rule launchers share the same trailing parameters for
 // interface consistency:
@@ -132,10 +132,6 @@ void ComputeBetaG_v2(Ref<Tensor>   beta_out_,
                      cudaStream_t  stream);
 
 // RMSNorm * SiLU-gate (fused output normalization)
-void invokeRMSNormGated(Ref<Tensor>   hidden,
-                        const Tensor& gate,
-                        const Tensor& weight,
-                        float         eps,
-                        cudaStream_t  stream);
+void invokeRMSNormGated(Ref<Tensor> hidden, const Tensor& gate, const Tensor& weight, float eps, cudaStream_t stream);
 
 }  // namespace turbomind

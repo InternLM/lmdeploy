@@ -82,11 +82,8 @@ struct Args {
     }
 };
 
-static float benchmark_kernel(const char*           name,
-                              std::function<void()> launch,
-                              cudaStream_t          stream,
-                              int                   warmup,
-                              int                   iters)
+static float
+benchmark_kernel(const char* name, std::function<void()> launch, cudaStream_t stream, int warmup, int iters)
 {
     for (int i = 0; i < warmup; ++i)
         launch();
@@ -193,7 +190,7 @@ int main(int argc, char** argv)
     const DataType dtype           = args.dtype;
     const auto     elem_bytes      = byte_size(dtype);
 
-    auto         stream    = Stream::create();
+    auto         stream = Stream::create();
     ContextGuard ctx{stream, Allocator{kCPU}, Allocator{kCPUpinned}, Allocator{stream, false}};
     cudaStream_t cu_stream = stream.handle();
 
@@ -259,14 +256,14 @@ int main(int argc, char** argv)
 
     // === Bandwidth ===
     {
-        double in_bytes    = (double)total_tok * conv_dim * elem_bytes;
-        double out_bytes   = (double)total_tok * conv_dim * elem_bytes;
-        double wt_bytes    = (double)conv_dim * d_conv * elem_bytes;
+        double in_bytes         = (double)total_tok * conv_dim * elem_bytes;
+        double out_bytes        = (double)total_tok * conv_dim * elem_bytes;
+        double wt_bytes         = (double)conv_dim * d_conv * elem_bytes;
         int    state_write_rows = std::min(seq_len, d_conv);
-        double state_rd_bytes  = (double)batch_size * d_conv * conv_dim * elem_bytes;
-        double state_wr_bytes  = (double)batch_size * state_write_rows * conv_dim * elem_bytes;
-        double state_bytes     = state_rd_bytes + state_wr_bytes;
-        double total_bytes     = in_bytes + out_bytes + wt_bytes + state_bytes;
+        double state_rd_bytes   = (double)batch_size * d_conv * conv_dim * elem_bytes;
+        double state_wr_bytes   = (double)batch_size * state_write_rows * conv_dim * elem_bytes;
+        double state_bytes      = state_rd_bytes + state_wr_bytes;
+        double total_bytes      = in_bytes + out_bytes + wt_bytes + state_bytes;
 
         printf("\n=== Bandwidth ===\n");
         printf("  in:     %.1f MB\n", in_bytes / 1e6);
@@ -292,10 +289,10 @@ int main(int argc, char** argv)
 
     // Run CPU reference
     {
-        const size_t in_bytes     = (size_t)total_tok * in_stride * elem_bytes;
-        const size_t wt_bytes     = (size_t)d_conv * conv_dim * elem_bytes;
-        const size_t state_bytes  = (size_t)batch_size * conv_state_size * elem_bytes;
-        const size_t out_bytes    = (size_t)total_tok * conv_dim * elem_bytes;
+        const size_t in_bytes    = (size_t)total_tok * in_stride * elem_bytes;
+        const size_t wt_bytes    = (size_t)d_conv * conv_dim * elem_bytes;
+        const size_t state_bytes = (size_t)batch_size * conv_state_size * elem_bytes;
+        const size_t out_bytes   = (size_t)total_tok * conv_dim * elem_bytes;
 
         std::vector<char> h_in(in_bytes), h_wt(wt_bytes), h_state(state_bytes), h_out(out_bytes);
 

@@ -404,7 +404,7 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     model_param_.linear_num_key_heads   = model["linear_num_key_heads"].as<int>(0);
     model_param_.linear_num_value_heads = model["linear_num_value_heads"].as<int>(0);
     model_param_.attn_output_gate       = model["attn_output_gate"].as<bool>(false);
-    model_param_.linear_state_dtype     =  data_type_;
+    model_param_.linear_state_dtype     = data_type_;
     // data_type_from_string(model["linear_state_dtype"].as<std::string>(model["data_type"].as<std::string>()));
     if (auto uqel = model["unquantized_expert_layers"]) {
         for (auto it = uqel.begin(); it != uqel.end(); ++it) {
