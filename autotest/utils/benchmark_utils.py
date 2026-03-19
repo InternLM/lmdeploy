@@ -8,7 +8,10 @@ from utils.common_utils import execute_command_with_logging
 from utils.config_utils import get_case_str_by_config, get_cli_common_param, get_cuda_prefix_by_workerid, get_workerid
 from utils.run_restful_chat import health_check, start_openai_service, terminate_restful_api
 
-SERVE_ONLY_PARAMS = {'max-batch-size', 'max-prefill-token-num', 'server-name', 'enable-prefix-caching', 'session-len'}  # yapf: disable
+SERVE_ONLY_PARAMS = {  # yapf: disable
+    'max-batch-size', 'max-prefill-token-num', 'server-name',
+    'enable-prefix-caching', 'session-len',
+}
 
 
 def throughput_test(config, run_config, worker_id: str = '', is_smoke: bool = False):
@@ -34,6 +37,8 @@ def throughput_test(config, run_config, worker_id: str = '', is_smoke: bool = Fa
         k: v
         for k, v in bench_config.get('extra_params', {}).items() if k not in SERVE_ONLY_PARAMS
     }
+    if 'openai/gpt-oss' in run_config.get('model', ''):
+        bench_config['extra_params']['model-format'] = 'mxfp4'
     command = f'{cuda_prefix} python3 benchmark/profile_throughput.py {dataset_path} {model_path} {get_cli_common_param(bench_config)}'  # noqa
 
     if is_smoke:
