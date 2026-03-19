@@ -37,7 +37,7 @@ def throughput_test(config, run_config, worker_id: str = '', is_smoke: bool = Fa
         k: v
         for k, v in bench_config.get('extra_params', {}).items() if k not in SERVE_ONLY_PARAMS
     }
-    if 'openai/gpt-oss' in run_config.get('model', ''):
+    if 'openai/gpt-oss' in run_config.get('model', '') and run_config.get('backend') == 'turbomind':
         bench_config['extra_params']['model-format'] = 'mxfp4'
     command = f'{cuda_prefix} python3 benchmark/profile_throughput.py {dataset_path} {model_path} {get_cli_common_param(bench_config)}'  # noqa
 
@@ -90,6 +90,8 @@ def longtext_throughput_test(config, run_config, worker_id: str = ''):
         k: v
         for k, v in bench_config.get('extra_params', {}).items() if k not in SERVE_ONLY_PARAMS
     }
+    if 'openai/gpt-oss' in run_config.get('model', '') and run_config.get('backend') == 'turbomind':
+        bench_config['extra_params']['model-format'] = 'mxfp4'
     command = f'{cuda_prefix} python3 benchmark/profile_pipeline_api.py {dataset_path} {model_path} {get_cli_common_param(bench_config)}'  # noqa
 
     env = os.environ.copy()
@@ -234,6 +236,8 @@ def prefixcache_throughput_test(config, run_config, worker_id: str = '', is_smok
         for k, v in run_config_new.get('extra_params', {}).items() if k not in SERVE_ONLY_PARAMS
     }
     run_config_new['extra_params']['session-len'] = 32768
+    if 'openai/gpt-oss' in run_config.get('model', '') and run_config.get('backend') == 'turbomind':
+        run_config_new['extra_params']['model-format'] = 'mxfp4'
     command = f'{cuda_prefix} python3 benchmark/profile_pipeline_api.py {dataset_path} {model_path} {get_cli_common_param(run_config_new)}'  # noqa
 
     env = os.environ.copy()
