@@ -54,12 +54,17 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
                                          num_warps: int = 1):
 
     num_threads = num_warps * 32
-    num_bits = T.DataType(state_dtype).bits
-    num_elems = 128 // num_bits
+    state_num_bits = T.DataType(state_dtype).bits
+    data_num_bits = T.DataType(dtype).bits
+    state_vec_width = 128 // state_num_bits
+    data_vec_width = 128 // data_num_bits
     warp_size = 32
     k_per_thr = T.ceildiv(K, warp_size)
-    v_per_warp = num_elems
-    num_waves = 2
+    v_per_warp = max(state_vec_width, data_vec_width, 8)
+    # Target v_per_cta >= V to minimize grid_V blocks.
+    # More waves means fewer blocks but more sequential wave iterations.
+    target_v_per_cta = max(V, v_per_warp * num_warps * 2)
+    num_waves = T.ceildiv(target_v_per_cta, v_per_warp * num_warps)
     v_per_cta = v_per_warp * num_warps * num_waves
 
     B = T.dynamic('B')
@@ -127,8 +132,10 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
                     state_update_id = (state_seq_id + 1) % NUM_STATE
                 for j in T.Unroll(k_per_thr):
                     k_idx = k_off + j
-                    for i in T.Vectorized(v_per_warp):
-                        h_local[j, i] = h_smem[k_idx, v_warp_off + i]
+                    for vg in T.Unroll(v_per_warp // state_vec_width):
+                        for i in T.Vectorized(state_vec_width):
+                            idx = vg * state_vec_width + i
+                            h_local[j, idx] = h_smem[k_idx, v_warp_off + idx]
 
                 for seq_id in range(SEQLEN):
                     # load q, k, g, beta
@@ -161,9 +168,11 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
 
                     # load v
                     v_local = T.alloc_local([v_per_warp], dtype)
-                    for i in T.Vectorized(v_per_warp):
-                        v_idx = (v_off + i) % V
-                        v_local[i] = Value[b_id, seq_id, hv_id, v_idx]
+                    for vg in T.Unroll(v_per_warp // data_vec_width):
+                        for i in T.Vectorized(data_vec_width):
+                            idx = vg * data_vec_width + i
+                            v_idx = (v_off + idx) % V
+                            v_local[idx] = Value[b_id, seq_id, hv_id, v_idx]
 
                     # update states
                     for i in T.Unroll(v_per_warp):
@@ -179,14 +188,15 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
 
                     # store states
                     if output_final_state and state_id >= 0:
-                        if is_circular_buffer or seq_id == SEQLEN - 1:
+                        if is_circular_buffer:
                             for j in T.Unroll(k_per_thr):
                                 if (k_off + j) < K:
-                                    for i in T.Vectorized(v_per_warp):
-                                        if v_off + i < V:
-                                            State[state_id, state_update_id, hv_id, k_off + j, v_off + i] = h_local[j,
-                                                                                                                    i]
-                        if is_circular_buffer:
+                                    for vg in T.Unroll(v_per_warp // state_vec_width):
+                                        for i in T.Vectorized(state_vec_width):
+                                            idx = vg * state_vec_width + i
+                                            if v_off + idx < V:
+                                                State[state_id, state_update_id, hv_id, k_off + j,
+                                                      v_off + idx] = h_local[j, idx]
                             state_update_id = (state_update_id + 1) % NUM_STATE
 
                     # compute output
@@ -201,10 +211,28 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
                         o_local[i] = o
 
                     if lane_id == 0 and state_id >= 0:
-                        for i in T.Vectorized(v_per_warp):
-                            v_idx = (v_off + i)
-                            if v_idx < V:
-                                Out[b_id, seq_id, hv_id, v_idx] = o_local[i]
+                        for vg in T.Unroll(v_per_warp // data_vec_width):
+                            for i in T.Vectorized(data_vec_width):
+                                idx = vg * data_vec_width + i
+                                v_idx = (v_off + idx)
+                                if v_idx < V:
+                                    Out[b_id, seq_id, hv_id, v_idx] = o_local[idx]
+
+                # write h_local back to h_smem for coalesced global store
+                if output_final_state and state_id >= 0 and not is_circular_buffer:
+                    for j in T.Unroll(k_per_thr):
+                        k_idx = k_off + j
+                        for vg in T.Unroll(v_per_warp // state_vec_width):
+                            for i in T.Vectorized(state_vec_width):
+                                idx = vg * state_vec_width + i
+                                h_smem[k_idx, v_warp_off + idx] = h_local[j, idx]
+
+            # coalesced state writeback via shared memory
+            if output_final_state and state_id >= 0 and not is_circular_buffer:
+                for i, j in T.Parallel(K, v_per_cta):
+                    v_idx = v_start * v_per_cta + j
+                    if v_idx < V:
+                        State[state_id, state_update_id, hv_id, i, v_idx] = h_smem[i, j]
 
     return fused_recurrent_gated_delta_rule_main
 
