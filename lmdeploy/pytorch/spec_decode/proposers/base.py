@@ -118,7 +118,16 @@ class BaseSpecProposer:
         model_inputs.target_position_ids = model_inputs.history_lengths.unsqueeze(0).clone()
         model_inputs.model_metas = model_metas
         model_inputs.target_hidden_states = target_hidden_states
+        model_inputs.target_inputs_embeds = None
         return model_inputs
+
+    def embed_input_ids(self, input_ids: torch.Tensor):
+        """embed_input_ids."""
+        if hasattr(self.model, 'get_input_embeddings'):
+            input_embeds = self.model.get_input_embeddings()(input_ids)
+        else:
+            input_embeds = self.target_model.get_input_embeddings()(input_ids)
+        return input_embeds
 
     @record_function('draft_get_logits')
     def get_logits(self, hidden_states: torch.Tensor):

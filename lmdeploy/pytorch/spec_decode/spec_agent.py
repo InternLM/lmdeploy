@@ -92,6 +92,7 @@ class SpecModelAgent(BaseSpecModelAgent):
             # update last token indices
             last_token_indices = last_token_indices - num_rejected_tokens
 
+        # TODO: fix chunked long input case
         # create new inputs
         input_ids = model_inputs.input_ids.clone()
         seq_length = model_inputs.seq_length
@@ -99,6 +100,18 @@ class SpecModelAgent(BaseSpecModelAgent):
         input_ids[:, :-1] = model_inputs.input_ids[:, 1:]
         # # update next tokens
         input_ids[:, last_token_indices] = next_token_ids
+
+        # reuse vlm input embeds
+        target_inputs_embeds = extra_inputs.target_inputs_embeds
+        if target_inputs_embeds is not None:
+            input_embeds = target_inputs_embeds.clone()
+            # offset by 1 token
+            input_embeds[:, :-1, :] = extra_inputs.target_inputs_embeds[:, 1:, :]
+            # update next token embeds
+            next_token_embeds = self.proposer.embed_input_ids(next_token_ids)
+            input_embeds[:, last_token_indices, :] = next_token_embeds
+            target_inputs_embeds = input_embeds
+
         # use new inputs
         new_model_inputs = ModelInputs(
             input_ids=input_ids,
@@ -112,7 +125,9 @@ class SpecModelAgent(BaseSpecModelAgent):
             is_decoding=model_inputs.is_decoding,
             target_hidden_states=extra_inputs.target_hidden_states,
             target_position_ids=extra_inputs.target_position_ids,
+            target_inputs_embeds=target_inputs_embeds,
         )
+
         new_extra_inputs = ARSpecExtraInputs(
             next_token_ids=next_token_ids,
             last_token_indices=last_token_indices,

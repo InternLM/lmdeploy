@@ -892,8 +892,6 @@ class Qwen3_5TextModel(nn.Module):
         # build rotary embedding
         self.rotary_emb = Qwen3_5TextRotaryEmbedding(config, device=device)
 
-        self.num_spec_tokens = get_build_model_context().num_spec_tokens
-
     def forward(
         self,
         input_ids: torch.LongTensor,
@@ -968,6 +966,8 @@ class Qwen3_5Model(nn.Module):
                                                device=device,
                                                prefix=add_prefix('language_model', prefix))
 
+        self.is_spec_decoding = get_build_model_context().num_spec_tokens > 0
+
     def forward(
         self,
         input_ids: torch.Tensor,
@@ -987,6 +987,7 @@ class Qwen3_5Model(nn.Module):
     ):
         """Model forward, return logits."""
 
+        output_inputs_embeds = None
         if inputs_embeds is None:
             inputs_embeds = self.get_input_embeddings()(input_ids)
 
@@ -1010,6 +1011,9 @@ class Qwen3_5Model(nn.Module):
                 expanded_image_mask = image_mask.unsqueeze(-1).expand_as(inputs_embeds)
                 inputs_embeds = inputs_embeds.masked_scatter(expanded_image_mask, image_embeds)
 
+                if self.is_spec_decoding:
+                    output_inputs_embeds = inputs_embeds
+
         hidden_states = self.language_model(
             input_ids=input_ids,
             position_ids=position_ids,
@@ -1020,7 +1024,7 @@ class Qwen3_5Model(nn.Module):
             mrope_position_ids=mrope_position_ids,
             all_routed_experts=all_routed_experts,
         )
-        return hidden_states
+        return hidden_states, output_inputs_embeds
 
     def get_input_embeddings(self):
         """Get input embeddings."""
@@ -1091,7 +1095,7 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
             all_routed_experts = position_ids.new_empty(
                 (num_tokens, config.num_hidden_layers, config.num_experts_per_tok), dtype=torch.uint16)
 
-        hidden_states = self.model(
+        hidden_states, target_inputs_embeds = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
             past_key_values=past_key_values,
@@ -1107,9 +1111,9 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
             grid_thw=grid_thw,
             all_routed_experts=all_routed_experts,
         )
-        if all_routed_experts is None:
-            return hidden_states
-        return dict(hidden_states=hidden_states, all_routed_experts=all_routed_experts)
+        return dict(hidden_states=hidden_states,
+                    all_routed_experts=all_routed_experts,
+                    target_inputs_embeds=target_inputs_embeds)
 
     def get_input_embeddings(self):
         """Get input embeddings."""

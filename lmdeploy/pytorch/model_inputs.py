@@ -191,6 +191,7 @@ class ModelInputs:
     state_offsets: torch.Tensor = None
     target_hidden_states: torch.Tensor = None
     target_position_ids: torch.Tensor = None
+    target_inputs_embeds: torch.Tensor = None
     is_chunk: bool = False
     is_first_chunk: bool = True
 
@@ -264,6 +265,7 @@ class StepContext:
     enable_microbatch: bool = False
     # for draft model
     target_hidden_states: torch.Tensor = None
+    target_inputs_embeds: torch.Tensor = None
 
     # states for ssm
     state_caches: List = None
@@ -334,6 +336,7 @@ class StepContext:
             state_caches=state_caches,
             state_offsets=inputs.state_offsets,
             target_hidden_states=inputs.target_hidden_states,
+            target_inputs_embeds=inputs.target_inputs_embeds,
         )
 
         ret = get_backend().update_step_context(ret)

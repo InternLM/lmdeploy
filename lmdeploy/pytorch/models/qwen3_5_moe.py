@@ -206,6 +206,8 @@ class Qwen3_5MoeTextModel(Qwen3_5TextModel):
         # build rotary embedding
         self.rotary_emb = Qwen3_5TextRotaryEmbedding(config, device=device)
 
+        self.is_spec_decoding = get_build_model_context().num_spec_tokens > 0
+
 
 class Qwen3_5MoeModel(Qwen3_5Model):
 

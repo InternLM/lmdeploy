@@ -60,7 +60,7 @@ class Qwen3_5ModelConfigBuilder(AutoModelConfigBuilder):
 
         # for spec
         if spec_method is not None:
-            assert spec_method == 'deepseek_mtp'
+            assert spec_method == 'qwen3_5_mtp'
             cfg.model_paradigm = 'ar_spec'
 
         # draft model cfg
