@@ -3,10 +3,10 @@ import random
 import socket
 import subprocess
 import time
-from typing import Any, Dict, Tuple
+from typing import Any
 
 import requests
-from utils.config_utils import get_cli_common_param
+from utils.config_utils import get_case_str_by_config, get_cli_common_param, resolve_extra_params
 from utils.ray_distributed_utils import verify_service_functionality
 
 time_time = time.time
@@ -28,7 +28,7 @@ def is_port_open(host: str, port: int, timeout: float = 1.0) -> bool:
 
 def check_nodes_status(host: str, proxy_port: int, model_name: str, expected_instances: int, check_count: int,
                        current_time: float, last_progress_print: float,
-                       progress_print_interval: int) -> Tuple[bool, int]:
+                       progress_print_interval: int) -> tuple[bool, int]:
     try:
         nodes_url = f'http://{host}:{proxy_port}/nodes/status'
         resp = requests.get(nodes_url, timeout=10)
@@ -215,10 +215,13 @@ class ProxyDistributedManager:
 
 class ApiServerPerTest:
 
-    def __init__(self, proxy_manager: ProxyDistributedManager, model_path: str, run_config: Dict[str, Any]):
+    def __init__(self, proxy_manager: ProxyDistributedManager, config: dict[str, Any], run_config: dict[str, Any]):
         self.proxy_manager = proxy_manager
-        self.model_path = model_path
+        self.config = config
         self.run_config = run_config
+
+        model_name = run_config['model']
+        self.model_path = os.path.join(config['model_path'], model_name)
 
         self.master_addr = proxy_manager.master_addr
         self.proxy_port = proxy_manager.proxy_port
@@ -232,12 +235,22 @@ class ApiServerPerTest:
 
     def start(self):
         proxy_url = f'http://{self.master_addr}:{self.proxy_port}'
+
+        extra_params = self.run_config.get('extra_params', {})
+        resolve_extra_params(extra_params, self.config['model_path'])
+
+        # Get model-name: use extra_params['model-name'] if specified, otherwise use case_name
+        case_name = get_case_str_by_config(self.run_config)
+        self.model_name = case_name if extra_params.get('model-name', None) is None else extra_params.get('model-name')
+
         cmd = [
             'lmdeploy',
             'serve',
             'api_server',
             self.model_path,
-            get_cli_common_param(self.run_config),
+            '--model-name',
+            self.model_name,
+        ] + get_cli_common_param(self.run_config).split() + [
             '--proxy-url',
             proxy_url,
         ]
@@ -245,18 +258,24 @@ class ApiServerPerTest:
             cmd += ['--nnodes', str(self.node_count), '--node-rank', str(self.node_rank)]
 
         print(f"[API Server] Starting: {' '.join(cmd)}")
-        self.api_process = subprocess.Popen(cmd)
+        timestamp = time.strftime('%Y%m%d_%H%M%S')
+        log_dir = self.config.get('server_log_path', '/tmp/lmdeploy_test')
+        os.makedirs(log_dir, exist_ok=True)
+        log_path = os.path.join(log_dir, f'log_{case_name}_{timestamp}.log')
+        self._log_file = open(log_path, 'w')
+        self.api_process = subprocess.Popen(cmd, stdout=self._log_file, stderr=self._log_file)
+        print(f'📝 API Server log: {log_path}')
 
     def wait_until_ready(self):
         if not self.is_master:
             return
         success = wait_for_model_service_ready(host=self.master_addr,
                                                proxy_port=self.proxy_port,
-                                               model_name=self.model_path,
+                                               model_name=self.model_name,
                                                timeout_seconds=2000,
                                                expected_instances=self.expected_instances)
         if not success:
-            raise RuntimeError(f'API Server failed to register model: {self.model_path}')
+            raise RuntimeError(f'API Server failed to register model: {self.model_name}')
 
     def cleanup(self):
         if self.api_process and self.api_process.poll() is None:
@@ -266,3 +285,5 @@ class ApiServerPerTest:
                 self.api_process.wait(timeout=15)
             except subprocess.TimeoutExpired:
                 self.api_process.kill()
+        if hasattr(self, '_log_file') and self._log_file and not self._log_file.closed:
+            self._log_file.close()

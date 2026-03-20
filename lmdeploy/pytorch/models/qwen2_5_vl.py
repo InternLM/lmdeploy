@@ -12,13 +12,14 @@ from transformers.configuration_utils import PretrainedConfig
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.models.qwen2_vl import Qwen2Model
-from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
+from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, FlashAttention, RMSNorm, SiluAndMul
 from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .patch import add_prefix
 from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
-from .utils.model import DeployModelMixin, vlm_model
+from .utils.model import DeployModelMixinV1, vlm_model
 
 
 class Qwen2_5_PatchEmbed(nn.Module):
@@ -71,7 +72,11 @@ class Qwen2_5_VisionRotaryEmbedding(nn.Module):
 class Qwen2_5_VLVisionAttention(nn.Module):
     """Vision attention."""
 
-    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 prefix: str = ''):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         dim = config.hidden_size
@@ -80,16 +85,15 @@ class Qwen2_5_VLVisionAttention(nn.Module):
         self.head_dim = head_dim
 
         # packed qkv
-        self.qkv = build_qkv_proj(
-            dim,
-            num_q_heads=num_heads,
-            num_kv_heads=num_heads,
-            head_size=head_dim,
-            bias=True,
-            quant_config=quantization_config,
-            dtype=dtype,
-            device=device,
-        )
+        self.qkv = build_qkv_proj(dim,
+                                  num_q_heads=num_heads,
+                                  num_kv_heads=num_heads,
+                                  head_size=head_dim,
+                                  bias=True,
+                                  quant_config=quantization_config,
+                                  dtype=dtype,
+                                  device=device,
+                                  prefix=add_prefix('qkv', prefix))
 
         # rotary embedding
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
@@ -102,13 +106,16 @@ class Qwen2_5_VLVisionAttention(nn.Module):
         )
 
         # o_proj
-        self.proj = build_rowwise_linear(dim,
-                                         dim,
-                                         bias=True,
-                                         quant_config=quantization_config,
-                                         dtype=dtype,
-                                         device=device,
-                                         is_tp=True)
+        self.proj = build_rowwise_linear(
+            dim,
+            dim,
+            bias=True,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device,
+            is_tp=True,
+            prefix=add_prefix('proj', prefix),
+        )
 
     def forward(self, hidden_states: torch.Tensor, cu_seqlens: torch.Tensor,
                 rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor]) -> torch.Tensor:
@@ -366,7 +373,7 @@ class Qwen2_5_VisionTransformerPretrainedModel(nn.Module):
         return hidden_states
 
 
-class Qwen2_5_VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixin):
+class Qwen2_5_VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMixin):
     """ModelForCausalLM."""
 
     packed_modules_mapping = {
@@ -399,14 +406,12 @@ class Qwen2_5_VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphM
             dtype=dtype,
             device=device,
         )
+        # get text_config
+        text_config = getattr(config, 'text_config', config)
         # build model
-        self.model = Qwen2Model(config, dtype=dtype, device=device)
+        self.model = Qwen2Model(text_config, dtype=dtype, device=device)
         # build lm_head
-        self.lm_head = build_rowwise_linear(config.hidden_size,
-                                            config.vocab_size,
-                                            bias=False,
-                                            dtype=dtype,
-                                            device=device)
+        self.lm_head = self.build_lm_head(config.hidden_size, config.vocab_size, bias=False, dtype=dtype, device=device)
 
     def forward(
         self,
@@ -446,15 +451,6 @@ class Qwen2_5_VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphM
             mrope_position_ids=mrope_position_ids,
         )
         return hidden_states
-
-    def get_logits(self, hidden_states: torch.Tensor):
-        """Compute logits of the model output."""
-        return self.lm_head(hidden_states)
-
-    def update_weights(self):
-        """Update weights."""
-        if self.config.tie_word_embeddings:
-            self.lm_head.weight = self.model.embed_tokens.weight
 
     def get_input_embeddings(self):
         """Get input embeddings."""
@@ -691,9 +687,6 @@ class Qwen2_5_VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphM
         return self.input_processor
 
 
-InputMultiModalType = List[Dict[str, Any]]
-
-
 class Qwen2_5_VLInputProcessor(BaseModelInputProcessor):
     """Qwen2 input processor."""
 
@@ -719,10 +712,10 @@ class Qwen2_5_VLInputProcessor(BaseModelInputProcessor):
             if isinstance(num_pad, torch.Tensor):
                 num_pad = num_pad.item()
 
-            mm_data = MultiModalTensor(data=pixel_values,
-                                       start=start,
-                                       end=start + num_pad,
-                                       meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
+            mm_data = MultiModalData(data=pixel_values,
+                                     start=start,
+                                     end=start + num_pad,
+                                     meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(

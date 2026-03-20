@@ -4,7 +4,8 @@ FROM nvidia/cuda:12.8.1-devel-ubuntu22.04 AS cu12.8
 ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Etc/UTC \
     PATH=/opt/py3/bin:/root/.local/bin:${PATH} \
-    TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
+    TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas \
+    CUDA_VERSION_SHORT=cu128
 
 # Install dependencies and create python virtual environment
 RUN --mount=type=cache,target=/var/cache/apt \
@@ -26,7 +27,6 @@ RUN --mount=type=cache,target=/var/cache/apt \
 
 # Should be in the lmdeploy root directory when building docker image
 COPY . /opt/lmdeploy
-
 WORKDIR /opt/lmdeploy
 
 # install lmdeploy and its dependencies
@@ -34,8 +34,15 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install -r requirements_cuda.txt --extra-index-url https://download.pytorch.org/whl/cu128 && \
     uv pip install -e .
 
-# install flash_attn
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.8cxx11abiTRUE-cp312-cp312-linux_x86_64.whl
+    docker/prepare_wheel.sh
 
-RUN uv cache clean
+RUN --mount=type=cache,target=/root/.cache/uv \
+    cp -r requirements /tmp/requirements && \
+    docker/install.sh
+
+# Clean up to reduce image size
+RUN uv cache clean && \
+    rm -rf /wheels /tmp/* /var/tmp/* /root/.cache/uv/* && \
+    find /opt/lmdeploy -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true && \
+    find /opt/lmdeploy -type f -name "*.pyc" -delete 2>/dev/null || true

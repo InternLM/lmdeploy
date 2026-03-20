@@ -12,8 +12,8 @@ import torch
 
 from lmdeploy.archs import get_model_arch
 from lmdeploy.logger import RequestLogger
-from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig, Response, ResponseType, SpeculativeConfig,
-                               TurbomindEngineConfig)
+from lmdeploy.messages import (EngineOutput, GenerationConfig, PytorchEngineConfig, Response, ResponseType,
+                               SpeculativeConfig, TurbomindEngineConfig)
 from lmdeploy.metrics.metrics_processor import metrics_processor
 from lmdeploy.metrics.stats import IterationStats, RequestStats, SpeculativeDecodingStats
 from lmdeploy.model import ChatTemplateConfig, get_chat_template
@@ -268,7 +268,7 @@ class AsyncEngine:
             metrics_processor.increase_api_routed_requests()
             yield generator
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
-            logger.error(f'[safe_run] session {session.session_id} exception caught: {type(e).__name__} {e}')
+            logger.exception(f'[safe_run] session {session.session_id} exception caught: {e}')
             await session.async_abort()
             if self.backend == 'pytorch':
                 await handle.async_end(session.session_id)
@@ -294,6 +294,7 @@ class AsyncEngine:
             input_ids: List | None = None,
             enable_thinking: bool | None = None,
             chat_template_kwargs: Dict | None = None,
+            media_io_kwargs: Dict[str, Any] | None = None,
             mm_processor_kwargs: Dict[str, Any] | None = None,
             **kwargs):
         """Generate responses.
@@ -338,6 +339,7 @@ class AsyncEngine:
                                                                         tools=tools,
                                                                         reasoning_effort=reasoning_effort,
                                                                         chat_template_kwargs=chat_template_kwargs,
+                                                                        media_io_kwargs=media_io_kwargs,
                                                                         mm_processor_kwargs=mm_processor_kwargs,
                                                                         **kwargs)
             prompt = prompt_input['prompt']
@@ -351,19 +353,21 @@ class AsyncEngine:
             # TODO(lvhan) VLM doesn't support input_ids as an argument.
             # Figure out a graceful way to handle the invalid input
             prompt_input = dict(input_ids=input_ids)
-        if gen_config.max_new_tokens is None:
-            max_new_tokens = max(0, self.session_len - session.step - len(input_ids))
-            if max_new_tokens == 0:
-                logger.error(f'run out of tokens. session={session_id}.')
-                yield GenOut(response='',
-                             history_token_len=session.step,
-                             input_token_len=len(input_ids),
-                             generate_token_len=0,
-                             finish_reason='length',
-                             token_ids=[])
-                if sequence_end is True and sequence_start is False:
-                    await session.async_close()
-                return
+
+        gen_config = self._determine_gen_config(session, input_ids, gen_config=gen_config)
+
+        if gen_config.max_new_tokens == 0:
+            logger.info(f'run out of tokens. session={session_id}.')
+            yield GenOut(response='',
+                         history_token_len=session.step,
+                         input_token_len=len(input_ids),
+                         generate_token_len=0,
+                         finish_reason='length',
+                         token_ids=[])
+            if sequence_end is True and sequence_start is False:
+                await session.async_close()
+            return
+
         if self.backend_config.enable_prefix_caching and (gen_config.output_last_hidden_state == 'all'
                                                           or gen_config.output_logits == 'all'):
             errmsg = ('lmdeploy does not support outputting all token\'s logits or last_hidden_state '
@@ -385,8 +389,6 @@ class AsyncEngine:
         def is_error(status):
             return status not in [ResponseType.SUCCESS, ResponseType.FINISH, ResponseType.CANCEL]
 
-        gen_config = self._determine_gen_config(session, input_ids, gen_config=gen_config)
-
         stop_ids = []
         if not gen_config.ignore_eos:
             stop_ids = gen_config.stop_token_ids or []
@@ -394,7 +396,7 @@ class AsyncEngine:
         metrics_processor.increase_total_requests()
         async with session.request_handle() as handle:
             if epoch != self.epoch:
-                logger.debug(f'[generate] session {session_id} got aborted before starting inference')
+                logger.info(f'[generate] session {session_id} got aborted before starting inference')
                 # TODO(lvhan): metrics_processor.increase_failed_requests('abort')
                 metrics_processor.increase_completed_requests()
                 yield GenOut(response='',
@@ -423,6 +425,10 @@ class AsyncEngine:
                 logger.debug(f'[generate] session {session_id} started')
                 hit_stop_token = 0
                 req_stats = RequestStats(prompt_tokens=input_len)  # per-request stats
+
+                # We use this as default outputs in case the async_stream_infer of the Engine yields empty generator.
+                outputs = EngineOutput(ResponseType.INTERNAL_ENGINE_ERROR, [])
+
                 async for outputs in gen:
                     iteration_stats = IterationStats()  # per-iteration stats
                     specdecode_stats = SpeculativeDecodingStats(

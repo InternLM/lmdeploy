@@ -34,6 +34,13 @@ class OpType(Enum):
     NSAIndexFP8 = auto()
     Embedding = auto()
 
+    # MoE router
+    RouterNoauxTC = auto()
+
+    # Gated Delta
+    CausalConv1d = auto()
+    GatedDeltaRule = auto()
+
 
 class OpsBackend(ABC):
     """Layer backend abstract."""

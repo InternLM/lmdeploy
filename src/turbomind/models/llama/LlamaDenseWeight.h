@@ -99,7 +99,8 @@ struct LlamaAttentionWeight: public core::Module {
                          DataType weight_type,
                          int      group_size,
                          int      window_size,
-                         bool     sink);
+                         bool     sink,
+                         bool     attn_output_gate = false);
 
     void prepare();
 
@@ -112,7 +113,7 @@ struct LlamaAttentionWeight: public core::Module {
     LlamaDenseWeight q_a_proj;
     LlamaDenseWeight q_b_proj;
     LlamaDenseWeight kv_a_proj;
-    LlamaDenseWeight kv_b_proj;
+    // LlamaDenseWeight kv_b_proj;
 
     Tensor q_a_layernorm;
     Tensor kv_a_layernorm;
@@ -172,6 +173,9 @@ struct MoeFfnWeight: core::Module {
 
     LlamaDenseWeight gate;
     LlamaDenseWeight shared_gate;
+
+    /// Per-expert score correction bias for noaux_tc routing (optional; used when topk_method == "noaux_tc")
+    Tensor score_correction_bias;
 
     std::vector<std::unique_ptr<LlamaFfnWeight>> experts;
 

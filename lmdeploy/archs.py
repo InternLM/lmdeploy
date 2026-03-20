@@ -43,7 +43,7 @@ def autoget_backend(model_path: str) -> Literal['turbomind', 'pytorch']:
     if is_turbomind_installed:
         if not turbomind_has:
             logger.warning('Fallback to pytorch engine because '
-                           f'`{model_path}` not supported by turbomind'
+                           f'{model_path!r} not supported by turbomind'
                            ' engine.')
     else:
         logger.warning('Fallback to pytorch engine because turbomind engine is not '
@@ -93,7 +93,7 @@ def autoget_backend_config(
     return backend, config
 
 
-def check_vl_llm(config: dict) -> bool:
+def check_vl_llm(backend: str, config: dict) -> bool:
     """Check if the model is a vl model from model config."""
     if 'auto_map' in config:
         for _, v in config['auto_map'].items():
@@ -109,9 +109,10 @@ def check_vl_llm(config: dict) -> bool:
         'LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM', 'CogVLMForCausalLM', 'InternLMXComposer2ForCausalLM',
         'InternVLChatModel', 'MiniCPMV', 'LlavaForConditionalGeneration', 'LlavaNextForConditionalGeneration',
         'Phi3VForCausalLM', 'Qwen2VLForConditionalGeneration', 'Qwen2_5_VLForConditionalGeneration',
-        'Qwen3VLForConditionalGeneration', 'Qwen3VLMoeForConditionalGeneration', 'MllamaForConditionalGeneration',
-        'MolmoForCausalLM', 'Gemma3ForConditionalGeneration', 'Llama4ForConditionalGeneration',
-        'InternVLForConditionalGeneration', 'InternS1ForConditionalGeneration', 'InternS1ProForConditionalGeneration',
+        'Qwen3VLForConditionalGeneration', 'Qwen3VLMoeForConditionalGeneration', 'Qwen3_5ForConditionalGeneration',
+        'Qwen3_5MoeForConditionalGeneration', 'MllamaForConditionalGeneration', 'MolmoForCausalLM',
+        'Gemma3ForConditionalGeneration', 'Llama4ForConditionalGeneration', 'InternVLForConditionalGeneration',
+        'InternS1ForConditionalGeneration', 'InternS1ProForConditionalGeneration',
         'InternS1_1_ForConditionalGeneration', 'Glm4vForConditionalGeneration'
     ])
     if arch == 'QWenLMHeadModel' and 'visual' in config:
@@ -120,12 +121,14 @@ def check_vl_llm(config: dict) -> bool:
         return True
     elif arch in ['ChatGLMModel', 'ChatGLMForConditionalGeneration'] and 'vision_config' in config:
         return True
+    elif arch in ['Qwen3_5ForConditionalGeneration', 'Qwen3_5MoeForConditionalGeneration'] and backend == 'turbomind':
+        return False
     elif arch in supported_archs:
         return True
     return False
 
 
-def get_task(model_path: str):
+def get_task(backend: str, model_path: str):
     """Get pipeline type and pipeline class from model config."""
     from lmdeploy.serve.core import AsyncEngine
 
@@ -133,7 +136,7 @@ def get_task(model_path: str):
         # workspace model
         return 'llm', AsyncEngine
     _, config = get_model_arch(model_path)
-    if check_vl_llm(config.to_dict()):
+    if check_vl_llm(backend, config.to_dict()):
         from lmdeploy.serve.core import VLAsyncEngine
         return 'vlm', VLAsyncEngine
 

@@ -1,3 +1,6 @@
+// Copyright (c) OpenMMLab. All rights reserved.
+#ifndef TURBOMIND_CORE_MODULE_H
+#define TURBOMIND_CORE_MODULE_H
 
 #include "src/turbomind/core/tensor.h"
 
@@ -34,3 +37,5 @@ protected:
 };
 
 }  // namespace turbomind::core
+
+#endif  // TURBOMIND_CORE_MODULE_H

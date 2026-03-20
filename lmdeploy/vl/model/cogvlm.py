@@ -41,9 +41,9 @@ class CogVLMVisionModel(VisionModel):
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """Refer to the spec of `super().preprocess`"""
-        images = self.collect_images(messages)
+        images = self.collect_multimodal_items(messages)
         outputs = []
-        for image, _ in images:
+        for modality, image, _ in images:
             image = image.convert('RGB')
             pixel_values = self.image_transform(image)
             outputs.append(
@@ -70,7 +70,7 @@ class CogVLMVisionModel(VisionModel):
             prompt_messages.append(dict(role='user', content=content[0], num_images=n_images))
 
         from lmdeploy.model import Vicuna
-        llm_chat_template = Vicuna(eoa=chat_template.eoa, stop_words=chat_template.stop_words)
+        llm_chat_template = Vicuna(eoa='</s>', stop_words=chat_template.stop_words)
         prompt = ''
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         for i, msg in enumerate(prompt_messages):

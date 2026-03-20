@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import abstractmethod
-from typing import List
 
 import torch
 
@@ -23,7 +22,7 @@ def to_fp8(x: torch.Tensor):
 
 
 def pack_u4_row(x: torch.Tensor) -> torch.Tensor:
-    assert x.dtype == torch.uint8
+    assert x.dtype == torch.uint8, f'x.dtype: {x.dtype}'
     xs = x.view(*x.shape[:-1], -1, 8).split(1, dim=-1)
     a = torch.zeros(xs[0].shape, dtype=torch.int32, device=x.device)
     for t in reversed(xs):
@@ -45,7 +44,7 @@ class Parameter:
     KEY = ()
 
     @classmethod
-    def take(cls, keys: List[str]):
+    def take(cls, keys: list[str]):
         if not any(k.endswith(cls.KEYS[0]) for k in keys):
             return False
         xs = []
@@ -126,7 +125,7 @@ class PLora(Parameter):
         f(i, g('Plora_B.weight'), 'lora_b.weight', identity)
 
 
-def get_params(keys: List[str], bias=0):
+def get_params(keys: list[str], bias=0):
     ps = []
     if PLora.take(keys):
         ps.append(PLora())

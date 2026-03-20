@@ -139,6 +139,7 @@ jobs:
       matrix:
         benchmark_type: ${{fromJSON(github.event.inputs.benchmark_type)}}
         gpu_num: ['gpu_num_1', 'gpu_num_2', 'gpu_num_4', 'gpu_num_8']
+        transformers: ["", "legacy"]
         include:
           - n: 8
             gpu_num: gpu_num_1
@@ -148,6 +149,8 @@ jobs:
             gpu_num: gpu_num_4
           - n: 1
             gpu_num: gpu_num_8
+    env:
+      TEST_ENV: ${{ matrix.transformers }}
     timeout-minutes: 480
     container:
       image: openmmlab/lmdeploy:latest-cu12.8
@@ -174,6 +177,10 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
+      - name: Downgrade transformers
+        if: ${{matrix.transformers == 'legacy'}}
+        run: |
+          pip install transformers==4.57.6
       - name: Check env
         run: |
           python3 -m pip list

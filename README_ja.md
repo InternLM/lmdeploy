@@ -143,6 +143,7 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>SDAR (1.7B-30B)</li>
   <li>gpt-oss (20B, 120B)</li>
   <li>GLM-4.7-Flash (30B)</li>
+  <li>GLM-5 (754B)</li>
 </ul>
 </td>
 <td>
@@ -154,6 +155,7 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>Qwen2-VL (2B, 7B, 72B)</li>
   <li>Qwen2.5-VL (3B, 7B, 72B)</li>
   <li>Qwen3-VL (2B - 235B)</li>
+  <li>Qwen3.5 (0.8B - 397B)</li>
   <li>DeepSeek-VL (7B)</li>
   <li>DeepSeek-VL2 (3B, 16B, 27B)</li>
   <li>InternVL-Chat (v1.1-v1.5)</li>

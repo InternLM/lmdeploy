@@ -1,51 +1,19 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+add_subdirectory(kernel)
+
 add_library(attention STATIC
             attention.cu
             decoding.cu
-            reduce.cu
             kv_cache_utils_v2.cu
-            utils.cc
             cp_utils.cu
-            codegen/attention_sm70_128_f16.cu
-            codegen/attention_sm75_128_f16.cu
-            codegen/attention_sm80_128_bf16.cu
-            codegen/attention_sm80_128_f16.cu
-            codegen/decoding_sm70_128_f16_f16.cu
-            codegen/decoding_sm70_128_f16_u4.cu
-            codegen/decoding_sm70_128_f16_u8.cu
-            codegen/decoding_sm75_128_f16_f16.cu
-            codegen/decoding_sm75_128_f16_u4.cu
-            codegen/decoding_sm75_128_f16_u8.cu
-            codegen/decoding_sm80_128_bf16_bf16.cu
-            codegen/decoding_sm80_128_bf16_u4.cu
-            codegen/decoding_sm80_128_bf16_u8.cu
-            codegen/decoding_sm80_128_f16_f16.cu
-            codegen/decoding_sm80_128_f16_u4.cu
-            codegen/decoding_sm80_128_f16_u8.cu
-            codegen/attention_sm70_64_f16.cu
-            codegen/attention_sm75_64_f16.cu
-            codegen/attention_sm80_64_bf16.cu
-            codegen/attention_sm80_64_f16.cu
-            codegen/decoding_sm70_64_f16_f16.cu
-            codegen/decoding_sm70_64_f16_u4.cu
-            codegen/decoding_sm70_64_f16_u8.cu
-            codegen/decoding_sm75_64_f16_f16.cu
-            codegen/decoding_sm75_64_f16_u4.cu
-            codegen/decoding_sm75_64_f16_u8.cu
-            codegen/decoding_sm80_64_bf16_bf16.cu
-            codegen/decoding_sm80_64_bf16_u4.cu
-            codegen/decoding_sm80_64_bf16_u8.cu
-            codegen/decoding_sm80_64_f16_f16.cu
-            codegen/decoding_sm80_64_f16_u4.cu
-            codegen/decoding_sm80_64_f16_u8.cu
-            codegen/attention_sm80_192.cu
-            codegen/decoding_sm80_192.cu
+            registry.cu
             )
 set_property(TARGET attention PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET attention PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 target_compile_options(attention PRIVATE -O3
-    $<$<COMPILE_LANGUAGE:CUDA>:-use_fast_math --expt-relaxed-constexpr>)
+    $<$<COMPILE_LANGUAGE:CUDA>:-use_fast_math --expt-relaxed-constexpr -Xptxas=-v --threads 16>)
+target_link_libraries(attention PUBLIC $<LINK_LIBRARY:WHOLE_ARCHIVE,attention_kernels>)
 target_link_libraries(attention PRIVATE nvidia::cutlass::cutlass)
 
 if (BUILD_TEST)

@@ -9,6 +9,7 @@ from transformers.configuration_utils import PretrainedConfig
 from lmdeploy.pytorch.model_inputs import StepContextManager
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .patch import add_prefix
 from .qwen3_moe import Qwen3MoeModel
 from .qwen3_vl import Qwen3VLForConditionalGeneration
 from .qwen3_vl import Qwen3VLTextRotaryEmbedding as Qwen3VLMoeTextRotaryEmbedding
@@ -20,8 +21,12 @@ class Qwen3VLMoeTextModel(Qwen3MoeModel):
     not a pure text-only model, as DeepStack integrates visual features into the early hidden states.
     """
 
-    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
-        super().__init__(config=config, dtype=dtype, device=device)
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 prefix: str = ''):
+        super().__init__(config=config, dtype=dtype, device=device, prefix=prefix)
 
         # build rotary embedding
         # TODO: zhouxinyu, add triton kernel for interleaved mrope
@@ -37,14 +42,7 @@ class Qwen3VLMoeTextModel(Qwen3MoeModel):
         visual_pos_masks: Optional[torch.Tensor] = None,
         deepstack_visual_embeds: Optional[list[torch.Tensor]] = None,
     ):
-        """visual_pos_masks (`torch.Tensor` of shape `(batch_size, seqlen)`,
-        *optional*):
-
-        The mask of the visual positions. deepstack_visual_embeds (`list[torch.Tensor]`, *optional*):     The deepstack
-        visual embeddings. The shape is (num_layers, visual_seqlen, embed_dim).     The feature is extracted from the
-        different visual encoder layers, and fed to the decoder     hidden states. It's from the paper DeepStack (
-        https://arxiv.org/abs/2406.04)
-        """
+        """Rewrite of LlamaModel.forward."""
 
         # token embedding
         if inputs_embeds is None:
@@ -111,14 +109,20 @@ class Qwen3VLMoeForConditionalGeneration(Qwen3VLForConditionalGeneration):
         ],
     }
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 ctx_mgr: StepContextManager,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
-        super().__init__(config=config, ctx_mgr=ctx_mgr, dtype=dtype, device=device)
+    def __init__(
+        self,
+        config: PretrainedConfig,
+        ctx_mgr: StepContextManager,
+        dtype: torch.dtype = None,
+        device: torch.device = None,
+        prefix: str = '',
+    ):
+        super().__init__(config=config, ctx_mgr=ctx_mgr, dtype=dtype, device=device, prefix=prefix)
 
-        self.language_model = Qwen3VLMoeTextModel(config.text_config, dtype=dtype, device=device)
+        self.language_model = Qwen3VLMoeTextModel(config.text_config,
+                                                  dtype=dtype,
+                                                  device=device,
+                                                  prefix=add_prefix('language_model', prefix))
 
     def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
                              expert_params_mapping: List):

@@ -88,14 +88,14 @@ void invokeFlattenKV_v2_(const AttentionParams<T>& params, int sum_k_len)
 {
     // blocks -> [H, 2, sum_k_len, D]
     invokeFlattenKV_v2((T*)params.linear_iter_params.kv_cache,
-                       (T*)params.linear_iter_params.kv_cache + sum_k_len * params.size_per_head,
+                       (T*)params.linear_iter_params.kv_cache + params.linear_iter_params.key_to_val,
                        (char**)params.block_iter_params.block_ptrs,
                        params.cu_k_len,
                        params.block_iter_params.cu_block_nums,
                        RopeKernelParam{},
                        0,
                        1,
-                       2 * sum_k_len,
+                       params.linear_iter_params.stride_h / params.size_per_head,
                        1,
                        params.block_iter_params.block_len,
                        params.block_iter_params.layer_id,

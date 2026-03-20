@@ -84,11 +84,11 @@ class Session:
         except SafeRunException:
             pass
         except (asyncio.CancelledError, GeneratorExit) as e:
-            logger.error(f'[request_handle] session {self.session_id} exception caught: {e}')
+            logger.exception(f'[request_handle] session {self.session_id} exception caught: {e}')
             await self._handle.async_cancel(self.session_id)
         except Exception as e:
-            logger.error(f'Session {self.session_id} failed to acquire an inference instance: {e}')
-            raise e
+            logger.exception(f'[request_handle] session {self.session_id} exception caught: {e}')
+            raise
         finally:
             logger.debug(f'[request_handle] session {self.session_id} releasing the instance')
             # Return inference instance if it was acquired
@@ -104,30 +104,33 @@ class Session:
         logger.info(f'[session] Aborting session {self.session_id}')
         if self._handle is not None:
             await self._handle.async_cancel(self.session_id)
-        # DO NOT reset the session here because it might be used by other components.
-        # Leave the cleanup to the caller.
 
     async def async_close(self):
         """End the session."""
         logger.info(f'[session] Ending session {self.session_id}')
+        if self._handle is None and self.step == 0:
+            return
         if self._handle is not None:
             await self._active.wait()
         async with self.request_handle() as handle:
             try:
                 await handle.async_end(self.session_id)
             except (Exception, asyncio.CancelledError, GeneratorExit) as e:
-                logger.error(f'[async_end] exception caught: {e}')
+                logger.exception(f'[async_close] exception caught: {e}')
         self.reset()
 
     def abort(self):
         """Abort the session in sync mode."""
-        self._run(self.async_abort())
+        if self._session_mgr is not None:
+            self._run(self.async_abort()).result()
 
     def close(self):
         """End the session in sync mode."""
-        self._run(self.async_close())
+        if self._session_mgr is not None:
+            self._run(self.async_close()).result()
 
     def _run(self, coro):
+        assert self._session_mgr is not None, 'Session manager is not initialized'
         return asyncio.run_coroutine_threadsafe(coro, self._session_mgr().loop)
 
 
@@ -214,16 +217,14 @@ class SessionManager:
             tasks.append(session.async_abort())
         await asyncio.gather(*tasks, return_exceptions=True)
         # "abort all" is designed for async RL. The aborted sessions will be no longer used,
-        # so we reset and clear the sessions here.
-        for session in list(self.sessions.values()):
-            session.reset()
+        # so we clear the sessions here.
         self.sessions.clear()
 
     def has(self, session_id):
         return session_id in self.sessions
 
     def remove(self, session: Session):
-        self.sessions.pop(session.session_id)
+        self.sessions.pop(session.session_id, None)
 
     def clear(self):
         self.sessions.clear()

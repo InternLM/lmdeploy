@@ -23,7 +23,10 @@ class LlamaReader(BaseReader):
     attn_pattern = r'self_attn'
     ffn_pattern = r'mlp'
 
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool, model_cfg: dict, policy):
+    proj_pattern = 'proj'
+    scale_inv_suffix = '_scale_inv'
+
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool, model_cfg: dict, policy, fp8_quant=False):
         super().__init__()
         self.params = unused_params
         self.params.update(new_params)
@@ -33,8 +36,33 @@ class LlamaReader(BaseReader):
         if tie_word_embeddings:
             self.output_weight_key = self.tok_embeddings_key
         self.processor = policy
+        self.fp8_quant = fp8_quant
+        if self.fp8_quant:
+            quant_params = self.quant_weight_fp8()
+            self.params.update(quant_params)
 
-    def filter(self, pattern: str):
+    def quant_weight_fp8(self):
+        from lmdeploy.lite.quantization.weight.quant_utils import quant_blocked_fp8
+        pattern_str = fr'({self.attn_pattern}|{self.ffn_pattern}).*{self.proj_pattern}.*\.weight'
+        target_pattern = re.compile(pattern_str)
+
+        if self.__class__.__name__ == 'InternLM2Reader':
+            skip_pattern = re.compile(r'wqkv.*\.weight')
+        else:
+            skip_pattern = None
+
+        quant_params = {}
+        for name, weight in self.params.items():
+            if target_pattern.search(name) and name.endswith('.weight'):
+                if skip_pattern and skip_pattern.search(name):
+                    continue
+                q_weight, scale = quant_blocked_fp8(weight, torch.float8_e4m3fn, block_size=128)
+                quant_params[name] = q_weight
+                quant_params[f'{name}{self.scale_inv_suffix}'] = scale.to(weight.dtype)
+
+        return quant_params
+
+    def filter(self, pattern: str, i: int | None):
         params = []
         for k in self.params.keys():
             if re.search(pattern, k):
@@ -67,7 +95,7 @@ class LlamaReader(BaseReader):
 
     def attn(self, i: int, kind: str):
         if not kind:
-            return self.filter(self.attn_pattern)
+            return self.filter(self.attn_pattern, i)
         return self._attn(i, kind)
 
     def attn_norm(self, i: int):
@@ -77,7 +105,7 @@ class LlamaReader(BaseReader):
     def _ffn(self, i: int, kind: str):
         """Get ffn kind for layer i."""
         if not kind:
-            return self.filter(self.ffn_pattern)
+            return self.filter(self.ffn_pattern, i)
         result = []
         for key in ['gate', 'down', 'up']:
             tensor = self.params[f'{self.attn_layer_prefix}.{i}.mlp.{key}_proj.{kind}']
@@ -87,7 +115,7 @@ class LlamaReader(BaseReader):
 
     def ffn(self, i: int, kind: str):
         if not kind:
-            return self.filter(self.ffn_pattern)
+            return self.filter(self.ffn_pattern, i)
         return self._ffn(i, kind)
 
     def ffn_norm(self, i: int):
@@ -104,14 +132,22 @@ class LlamaModel(BaseInputModel):
     def __init__(self, model_path: str, tokenizer_path: str, **kwargs: dict):
         super().__init__(model_path, tokenizer_path)
         self.policy = kwargs.get('input_policy')
-        _, self.model_config = get_model_arch(model_path)
-        self.model_config = self.model_config.to_dict()
+        _, model_config = get_model_arch(model_path)
+        if hasattr(model_config, 'text_config'):
+            model_config = model_config.text_config
+        elif hasattr(model_config, 'llm_config'):
+            model_config = model_config.llm_config
+        if hasattr(model_config, 'to_dict'):
+            self.model_config = model_config.to_dict()
+        else:
+            self.model_config = model_config
+        self.fp8_quant = kwargs.get('fp8_quant', False)
 
     def readers(self):
         mappings = getattr(self.Reader, 'mappings', [])
         loader = create_loader(self.model_path, self.Reader.attn_layer_patten, mappings)
         for i, param in loader.items():
-            reader = self.Reader(param, {}, False, self.model_config, policy=self.policy)
+            reader = self.Reader(param, {}, False, self.model_config, policy=self.policy, fp8_quant=self.fp8_quant)
             yield i, reader
         torch.cuda.empty_cache()
 
@@ -122,7 +158,7 @@ class LlamaModel(BaseInputModel):
         norm_eps = model_arg['rms_norm_eps']
         attn_head_num = model_arg['num_attention_heads']
         vocab_size = model_arg['vocab_size']
-        inter_size = model_arg['intermediate_size']
+        inter_size = model_arg.get('intermediate_size', 0)
         if 'num_key_value_heads' in model_arg:
             kv_head_num = model_arg['num_key_value_heads']
         else:
@@ -132,41 +168,40 @@ class LlamaModel(BaseInputModel):
         head_dim = model_arg.get('head_dim', None)
         head_dim = head_dim or hidden_units // attn_head_num
         # compute rope param
-        rope_theta = float(model_arg.get('rope_theta', 10000.0))
+        if 'rope_parameters' in model_arg:
+            # transformers v5.0.0 aggregates rope settings into rope_parameters
+            rope_scaling = model_arg['rope_parameters']
+            rope_theta = float(rope_scaling.get('rope_theta', 10000.0))
+        else:
+            rope_theta = float(model_arg.get('rope_theta', 10000.0))
+            rope_scaling = model_arg.get('rope_scaling', None)
         max_position_embeddings = int(model_arg.get('max_position_embeddings', 0))
         rope_param = RopeParam(type='default', base=rope_theta, dim=head_dim)
-        rope_scaling = model_arg.get('rope_scaling', None)
         if isinstance(rope_scaling, dict):
-            llama2_scaling_type = rope_scaling.get('type', '')
-            llama3_scaling_type = rope_scaling.get('rope_type', '')
-            if llama2_scaling_type and llama3_scaling_type \
-                    and llama2_scaling_type != llama3_scaling_type:
-                raise ValueError(f'Ambiguous rope_scaling in config: {model_arg}')
-            scaling_type = llama2_scaling_type if llama2_scaling_type \
-                else llama3_scaling_type
+            rope_type = rope_scaling.get('rope_type', '') or rope_scaling.get('type', '')
             if rope_scaling.get('mrope_section') is not None:
                 # TODO: treat mrope as an option to the common rope functions
-                scaling_type = 'mrope'
+                rope_type = 'mrope'
             scaling_factor = rope_scaling.get('factor', 0.0)
-            if scaling_type == 'default':
+            if rope_type == 'default':
                 pass
-            elif scaling_type == 'dynamic':
+            elif rope_type == 'dynamic':
                 rope_param.type = 'dynamic'
                 rope_param.factor = scaling_factor
                 rope_param.max_position_embeddings = max_position_embeddings
-            elif scaling_type == 'linear':
+            elif rope_type == 'linear':
                 rope_param.type = 'linear'
                 rope_param.factor = scaling_factor
-            elif scaling_type == 'llama3':
+            elif rope_type == 'llama3':
                 low_freq_factor = rope_scaling.get('low_freq_factor', 1.0)
                 high_freq_factor = rope_scaling.get('high_freq_factor', 1.0)
-                original_max_position_embeddings = model_arg['rope_scaling'].get('original_max_position_embeddings', 0)
+                original_max_position_embeddings = rope_scaling.get('original_max_position_embeddings', 0)
                 rope_param.type = 'llama3'
                 rope_param.factor = scaling_factor
                 rope_param.low_freq_factor = low_freq_factor
                 rope_param.high_freq_factor = high_freq_factor
                 rope_param.original_max_position_embeddings = original_max_position_embeddings
-            elif scaling_type == 'yarn':
+            elif rope_type == 'yarn':
                 attention_factor = rope_scaling.get('attention_factor', None)
                 if attention_factor is None:
                     attention_factor = 0.1 * math.log(scaling_factor) + 1.0
@@ -183,12 +218,12 @@ class LlamaModel(BaseInputModel):
                 rope_param.attention_factor = attention_factor
                 rope_param.beta_fast = beta_fast
                 rope_param.beta_slow = beta_slow
-            elif scaling_type == 'mrope':
+            elif rope_type == 'mrope':
                 mrope_section = rope_scaling.get('mrope_section')
                 rope_param.type = 'mrope'
                 rope_param.mrope_section = mrope_section
             else:
-                raise RuntimeError(f'Unsupported rope type: {scaling_type}')
+                raise RuntimeError(f'Unsupported rope type: {rope_type}')
 
         return dict(size_per_head=head_dim,
                     num_layer=num_layer,

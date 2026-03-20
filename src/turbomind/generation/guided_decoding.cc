@@ -17,7 +17,8 @@ struct GuidedDecoding::Data {
 };
 
 GuidedDecoding::GuidedDecoding(const BaseGenerationParam& base, const comm::HostComm& tp_group, int phases):
-    BaseGenerationParam{base}, tp_group_{tp_group}
+    BaseGenerationParam{base},        //
+    tp_group_{tp_group->Split(0, 0)}  // duplicate to avoid data race
 {
     const auto bitmask_size = xgrammar::GetBitmaskSize(vocab_size_padded_);
 
@@ -61,7 +62,9 @@ void GuidedDecoding::FillMask(int phase, TensorMap& env)
                     matcher->FillNextTokenBitmask(&dlbitmask, i);
                 }
                 else {
-                    std::fill_n(bitmask_buf_.data() + i * bitmask_buf_.stride(0), bitmask_buf_.stride(0), 0);
+                    std::fill_n(bitmask_buf_.data() + i * bitmask_buf_.stride(0),
+                                bitmask_buf_.stride(0),
+                                static_cast<int32_t>(-1));
                 }
             }
         }

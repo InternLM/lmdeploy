@@ -13,14 +13,14 @@ from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.models.utils.micro_batch import enable_micro_batch, split_batch
-from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
+from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.nn import LayerNorm, RMSNorm
 from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_o_proj, build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .patch import build_model_from_hf_config
 from .utils.cudagraph import CudaGraphMixin
-from .utils.model import DeployModelMixin, vlm_model
+from .utils.model import DeployModelMixinV1, vlm_model
 
 
 @torch.compile(dynamic=True)
@@ -439,7 +439,7 @@ class InternVLMultiModalProjector(nn.Module):
         return hidden_states
 
 
-class InternVLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixin):
+class InternVLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMixin):
 
     def __init__(self,
                  config: PretrainedConfig,
@@ -453,6 +453,7 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMix
         self.vision_tower = InternVLVisionModel(config.vision_config, dtype=dtype, device=device)
         self.multi_modal_projector = InternVLMultiModalProjector(config, dtype=dtype, device=device)
         self.language_model = build_model_from_hf_config(config.text_config, dtype=dtype, device=device)
+        self.lm_head = self.language_model.lm_head
         self.vision_feature_layer = config.vision_feature_layer
         self.vision_feature_select_strategy = config.vision_feature_select_strategy
 
@@ -484,10 +485,6 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMix
 
         torch._dynamo.mark_dynamic(pixel_values, dims)
         self.has_compiled_vit = True
-
-    def get_logits(self, hidden_states: torch.Tensor):
-        """Compute logits of the model output."""
-        return self.language_model.get_logits(hidden_states)
 
     def get_input_embeddings(self):
         """Get input embeddings."""
@@ -666,7 +663,8 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMix
 
             return load_lora_weights(weights, adapter_id)
 
-    def rename_weight(self, name: str) -> str:
+    @classmethod
+    def rename_weight(cls, name: str) -> str:
         """Rename weight."""
         if name == 'lm_head.weight':
             return 'language_model.lm_head.weight'
@@ -738,10 +736,10 @@ class InternVLProcessor(BaseModelInputProcessor):
             if isinstance(num_pad, torch.Tensor):
                 num_pad = num_pad.item()
 
-            mm_data = MultiModalTensor(data=pixel_values,
-                                       start=offset,
-                                       end=offset + num_pad,
-                                       meta=dict(image_token_id=image_token_id))
+            mm_data = MultiModalData(data=pixel_values,
+                                     start=offset,
+                                     end=offset + num_pad,
+                                     meta=dict(image_token_id=image_token_id))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(

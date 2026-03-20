@@ -67,6 +67,7 @@ class ModelConfig:
     data_type: str = None
     weight_type: str = None
     expert_weight_type: str = None
+    ffn_weight_type: str = None
     session_len: int = None
     attn_tp_size: int = 1
     attn_cp_size: int = 1
@@ -83,11 +84,25 @@ class ModelConfig:
     topk_group: int = 1
     topk_method: str = 'greedy'
     moe_group_num: int = 1
+    scoring_func: str = 'softmax'
+    router_n_groups: int = -1
     # MLA
     q_lora_rank: int = 0
     kv_lora_rank: int = 0
     qk_rope_dim: int = 0
     v_head_dim: int = 0
+    # Qwen 3.5
+    layer_types: List[str] = field(default_factory=list)
+    linear_key_head_dim: int = 0
+    linear_value_head_dim: int = 0
+    linear_conv_kernel_dim: int = 0
+    linear_num_key_heads: int = 0
+    linear_num_value_heads: int = 0
+    attn_output_gate: bool = False
+    # Per-layer expert weight type override: layer indices whose
+    # MoE experts are unquantized (fp16) despite expert_weight_type=int4.
+    # Populated from modules_to_not_convert patterns like 'model.layers.0.'.
+    unquantized_expert_layers: List[int] = field(default_factory=list)
     # tuning
     tune_layer_num: int = 1
 

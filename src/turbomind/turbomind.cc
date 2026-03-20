@@ -379,6 +379,35 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     for (auto it = inter_size.begin(); it != inter_size.end(); ++it) {
         model_param_.inter_size.push_back(it->as<int>());
     }
+
+    if (auto layer_types = model["layer_types"]) {
+        for (auto it = layer_types.begin(); it != layer_types.end(); ++it) {
+            auto type_str = it->as<std::string>("");
+            if (type_str == "linear_attention") {
+                model_param_.layer_types.push_back(1);
+            }
+            else if (type_str == "full_attention" || type_str.empty()) {
+                model_param_.layer_types.push_back(0);
+            }
+            else {
+                TM_LOG_WARNING("[TM] Unknown layer_type '%s', treating as full_attention.", type_str.c_str());
+                model_param_.layer_types.push_back(0);
+            }
+        }
+    }
+
+    // Qwen3.5 Gated DeltaNet linear attention parameters
+    model_param_.linear_key_head_dim    = model["linear_key_head_dim"].as<int>(0);
+    model_param_.linear_value_head_dim  = model["linear_value_head_dim"].as<int>(0);
+    model_param_.linear_conv_kernel_dim = model["linear_conv_kernel_dim"].as<int>(0);
+    model_param_.linear_num_key_heads   = model["linear_num_key_heads"].as<int>(0);
+    model_param_.linear_num_value_heads = model["linear_num_value_heads"].as<int>(0);
+    model_param_.attn_output_gate       = model["attn_output_gate"].as<bool>(false);
+    if (auto uqel = model["unquantized_expert_layers"]) {
+        for (auto it = uqel.begin(); it != uqel.end(); ++it) {
+            model_param_.unquantized_expert_layers.insert(it->as<int>());
+        }
+    }
     model_param_.attn_sink = model["attn_sink"].as<bool>();
     model_param_.mlp_bias  = model["mlp_bias"].as<bool>();
     if (model["activation_type"].as<std::string>("") == "gpt-oss") {
@@ -450,6 +479,8 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     moe_param_.topk_group        = model["topk_group"].as<int>(1);
     moe_param_.topk_method       = model["topk_method"].as<std::string>("greedy");
     moe_param_.n_group           = model["moe_group_num"].as<int>(1);
+    moe_param_.scoring_func      = model["scoring_func"].as<std::string>("softmax");
+    moe_param_.router_n_groups   = model["router_n_groups"].as<int>(-1);
     moe_param_.router_bias       = model["expert_router_bias"].as<bool>();
     YAML::Node expert_num        = model["expert_num"];
     for (auto it = expert_num.begin(); it != expert_num.end(); ++it) {
@@ -464,6 +495,8 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
 
     model_param_.weight_type        = data_type_from_string(model["weight_type"].as<std::string>());
     model_param_.expert_weight_type = data_type_from_string(model["expert_weight_type"].as<std::string>());
+    model_param_.ffn_weight_type =
+        data_type_from_string(model["ffn_weight_type"].as<std::string>(model["weight_type"].as<std::string>()));
 
     if (auto method = get_moe_method()) {
         moe_param_.method = *method;

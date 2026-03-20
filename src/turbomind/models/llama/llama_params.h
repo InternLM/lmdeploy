@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <map>
 #include <regex>
+#include <set>
 #include <string>
 
 #include "src/turbomind/core/data_type.h"
@@ -34,8 +35,21 @@ struct ModelParam {
     bool     attn_sink;
     bool     mlp_bias;
     DataType data_type;
-    DataType weight_type;
-    DataType expert_weight_type;
+
+    // Weight types for mixed quantization support.
+    // Models like mixed AWQ (e.g. QuantTrio GLM-4.7-Flash) quantize FFN/expert
+    // weights to int4 but keep attention weights as fp16. GptOss mxfp4 quantizes
+    // only MoE experts to e2m1 while keeping attention and shared experts as fp16.
+    //
+    //                  weight_type   ffn_weight_type   expert_weight_type
+    //  Pure fp16       float16       float16           float16
+    //  Full AWQ        int4          int4              int4
+    //  Mixed AWQ       float16       int4              int4
+    //  GptOss mxfp4    bfloat16      bfloat16          e2m1
+    DataType weight_type;         // attention weights
+    DataType expert_weight_type;  // MoE routed expert weights
+    DataType ffn_weight_type;     // dense FFN / shared expert weights
+
     int      group_size;
     MLAParam mla;
     bool     qk_norm;
@@ -45,6 +59,21 @@ struct ModelParam {
 
     std::vector<int> window_size;
     std::vector<int> inter_size;
+    std::vector<int> layer_types;
+
+    // Qwen3.5 Gated DeltaNet linear attention params
+    int linear_key_head_dim    = 0;
+    int linear_value_head_dim  = 0;
+    int linear_conv_kernel_dim = 0;
+    int linear_num_key_heads   = 0;
+    int linear_num_value_heads = 0;
+
+    bool attn_output_gate = false;  // Qwen3.5: doubles Q projection in full-attention layers
+
+    // Layer indices whose MoE experts use data_type (fp16) instead of
+    // expert_weight_type (e.g. int4).  Populated from modules_to_not_convert
+    // patterns like 'model.layers.0.'.
+    std::set<int> unquantized_expert_layers;
 };
 
 /// TODO: rename all `gate` in the context of MoE router to `router`
@@ -66,6 +95,8 @@ struct MoeParam {
     int         topk_group;
     std::string topk_method;
     int         n_group;
+    std::string scoring_func;
+    int         router_n_groups;
 
     std::vector<int> expert_num;
 };

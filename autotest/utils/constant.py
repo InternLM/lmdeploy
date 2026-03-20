@@ -19,6 +19,13 @@ EVAL_CONFIGS = {
         'batch_size': 500,
         'temperature': 0.6,
     },
+    'default-2batch': {
+        'query_per_second': 4,
+        'max_out_len': 64000,
+        'max_seq_len': 65536,
+        'batch_size': 2,
+        'temperature': 0.6,
+    },
     'gpt': {
         'query_per_second': 4,
         'max_out_len': 64000,
@@ -38,6 +45,97 @@ EVAL_CONFIGS = {
         'openai_extra_kwargs': {
             'reasoning_effort': 'high',
         }
+    },
+    'gpt-2batch': {
+        'query_per_second': 4,
+        'max_out_len': 64000,
+        'max_seq_len': 65536,
+        'batch_size': 2,
+        'temperature': 0.6,
+        'openai_extra_kwargs': {
+            'reasoning_effort': 'high',
+        }
+    },
+    'sdar': {
+        'query_per_second': 4,
+        'max_out_len': 64000,
+        'max_seq_len': 65536,
+        'batch_size': 500,
+        'temperature': 1.0,
+        'openai_extra_kwargs': {
+            'top_p': 1.0,
+        },
+        'extra_body': {
+            'top_k': 0,
+        }
+    },
+    'sdar-32k': {
+        'query_per_second': 4,
+        'max_out_len': 32768,
+        'max_seq_len': 65536,
+        'batch_size': 500,
+        'temperature': 1.0,
+        'openai_extra_kwargs': {
+            'top_p': 1.0,
+        },
+        'extra_body': {
+            'top_k': 0,
+        }
+    },
+    'sdar-2batch': {
+        'query_per_second': 4,
+        'max_out_len': 64000,
+        'max_seq_len': 65536,
+        'batch_size': 2,
+        'temperature': 1.0,
+        'openai_extra_kwargs': {
+            'top_p': 1.0,
+        },
+        'extra_body': {
+            'top_k': 0,
+        }
+    },
+    'intern-s1-pro': {
+        'query_per_second': 4,
+        'max_out_len': 64000,
+        'max_seq_len': 65536,
+        'batch_size': 500,
+        'temperature': 0.8,
+        'openai_extra_kwargs': {
+            'top_p': 0.95,
+        },
+        'extra_body': {
+            'top_k': 50,
+            'min_p': 0.0,
+        }
+    },
+    'intern-s1-pro-32k': {
+        'query_per_second': 4,
+        'max_out_len': 32768,
+        'max_seq_len': 65536,
+        'batch_size': 500,
+        'temperature': 0.8,
+        'openai_extra_kwargs': {
+            'top_p': 0.95,
+        },
+        'extra_body': {
+            'top_k': 50,
+            'min_p': 0.0,
+        }
+    },
+    'intern-s1-pro-2batch': {
+        'query_per_second': 4,
+        'max_out_len': 64000,
+        'max_seq_len': 65536,
+        'batch_size': 2,
+        'temperature': 0.8,
+        'openai_extra_kwargs': {
+            'top_p': 0.95,
+        },
+        'extra_body': {
+            'top_k': 50,
+            'min_p': 0.0,
+        }
     }
 }
 
@@ -55,9 +153,9 @@ BACKEND_LIST = ['turbomind', 'pytorch']
 
 RESTFUL_MODEL_LIST = [
     'Qwen/Qwen3-0.6B', 'Qwen/Qwen3-VL-2B-Instruct', 'Qwen/Qwen3-30B-A3B', 'internlm/Intern-S1',
-    'internlm/internlm2_5-20b-chat', 'internlm/internlm2_5-20b', 'Qwen/Qwen3-32B', 'OpenGVLab/InternVL3_5-30B-A3B',
-    'OpenGVLab/InternVL3-38B', 'Qwen/Qwen3-VL-8B-Instruct', 'internlm/internlm3-8b-instruct',
-    'meta-llama/Llama-3.2-3B-Instruct', 'Qwen/Qwen3-VL-30B-A3B-Instruct'
+    'internlm/internlm2_5-20b', 'Qwen/Qwen3-32B', 'OpenGVLab/InternVL3_5-30B-A3B', 'OpenGVLab/InternVL3-38B',
+    'Qwen/Qwen3-VL-8B-Instruct', 'internlm/internlm3-8b-instruct', 'meta-llama/Llama-3.2-3B-Instruct',
+    'Qwen/Qwen3-VL-30B-A3B-Instruct'
 ]
 
 RESTFUL_BASE_MODEL_LIST = [

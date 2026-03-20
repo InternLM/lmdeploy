@@ -19,7 +19,11 @@ from .utils.cudagraph import CudaGraphMixin
 class Glm4MoeAttention(nn.Module):
     """Rewrite module of Qwen3MoeAttention."""
 
-    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 is_tp: bool = True):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         num_heads = config.num_attention_heads
@@ -40,6 +44,7 @@ class Glm4MoeAttention(nn.Module):
             num_replicate_kv_heads=num_replicate_kv_heads,
             dtype=dtype,
             device=device,
+            is_tp=is_tp,
         )
 
         # rotary embedding
@@ -55,7 +60,7 @@ class Glm4MoeAttention(nn.Module):
                                            quant_config=quantization_config,
                                            dtype=dtype,
                                            device=device,
-                                           is_tp=True)
+                                           is_tp=is_tp)
 
         # q, k norm
         if self.use_qk_norm:
@@ -171,7 +176,8 @@ class Glm4MoE(nn.Module):
                  config: PretrainedConfig,
                  layer_idx: int,
                  dtype: torch.dtype = None,
-                 device: torch.device = None):
+                 device: torch.device = None,
+                 is_tp: bool = True):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         self.hidden_dim = config.hidden_size
@@ -221,7 +227,7 @@ class Glm4MoE(nn.Module):
             intermediate_size=intermediate_size,
             dtype=dtype,
             device=device,
-            is_tp=True,
+            is_tp=is_tp,
             all_reduce=False,
         )
 
@@ -539,8 +545,11 @@ class Glm4MoeForCausalLM(nn.Module, CudaGraphMixin):
             ('.gate_up_proj', '.up_proj', 1),
         ]
 
-        # TODO, zhouxinyu, skip MTP related weights now
-        mtp_param_list = ['enorm', 'hnorm', 'eh_proj', 'shared_head', 'mtp_block', 'model.layers.46']
+        mtp_param_list = []
+        if hasattr(self.config, 'num_nextn_predict_layers'):
+            num_hidden_layers = self.config.num_hidden_layers
+            num_nextn_predict_layers = self.config.num_nextn_predict_layers
+            mtp_param_list = [f'.layers.{num_hidden_layers+i}' for i in range(num_nextn_predict_layers)]
 
         # expert map
         num_experts = self.config.n_routed_experts

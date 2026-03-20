@@ -105,7 +105,7 @@ def test_modelscope_restful_chat_tp1(config, run_config, common_case_config, wor
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize(
     'run_config',
-    [item for item in REASONING_TEST_LLM if item['backend'] == BACKEND and item['parallel_config']['tp'] == 1])
+    [item for item in REASONING_TEST_LLM if item['backend'] == BACKEND and item['parallel_config'].get('tp') == 1])
 def test_restful_chat_reasoning_tp1(config, run_config, worker_id):
     run_reasoning_case(config, run_config, worker_id)
 
@@ -115,7 +115,7 @@ def test_restful_chat_reasoning_tp1(config, run_config, worker_id):
 @pytest.mark.gpu_num_2
 @pytest.mark.parametrize(
     'run_config',
-    [item for item in REASONING_TEST_LLM if item['backend'] == BACKEND and item['parallel_config']['tp'] == 2])
+    [item for item in REASONING_TEST_LLM if item['backend'] == BACKEND and item['parallel_config'].get('tp') == 2])
 def test_restful_chat_reasoning_tp2(config, run_config, worker_id):
     run_reasoning_case(config, run_config, worker_id)
 
@@ -125,7 +125,7 @@ def test_restful_chat_reasoning_tp2(config, run_config, worker_id):
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize(
     'run_config',
-    [item for item in TOOLCALL_TEST_LLM if item['backend'] == BACKEND and item['parallel_config']['tp'] == 1])
+    [item for item in TOOLCALL_TEST_LLM if item['backend'] == BACKEND and item['parallel_config'].get('tp') == 1])
 def test_restful_chat_tools_tp1(config, run_config, worker_id):
     run_tools_case(config, run_config, worker_id)
 
@@ -135,7 +135,7 @@ def test_restful_chat_tools_tp1(config, run_config, worker_id):
 @pytest.mark.gpu_num_2
 @pytest.mark.parametrize(
     'run_config',
-    [item for item in TOOLCALL_TEST_LLM if item['backend'] == BACKEND and item['parallel_config']['tp'] == 2])
+    [item for item in TOOLCALL_TEST_LLM if item['backend'] == BACKEND and item['parallel_config'].get('tp') == 2])
 def test_restful_chat_tools_tp2(config, run_config, worker_id):
     run_tools_case(config, run_config, worker_id)
 
@@ -145,6 +145,6 @@ def test_restful_chat_tools_tp2(config, run_config, worker_id):
 @pytest.mark.gpu_num_4
 @pytest.mark.parametrize(
     'run_config',
-    [item for item in TOOLCALL_TEST_LLM if item['backend'] == BACKEND and item['parallel_config']['tp'] == 4])
+    [item for item in TOOLCALL_TEST_LLM if item['backend'] == BACKEND and item['parallel_config'].get('tp') == 4])
 def test_restful_chat_tools_tp4(config, run_config, worker_id):
     run_tools_case(config, run_config, worker_id)

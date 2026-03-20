@@ -1,0 +1,68 @@
+name: unit-test
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/unit_test.yml"
+      - "cmake/**"
+      - "src/**"
+      - "tests/**"
+      - "3rdparty/**"
+      - "lmdeploy/**"
+      - "requirements/**"
+      - "requirements_cuda.txt"
+      - "CMakeLists.txt"
+      - "setup.py"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/unit_test.yml"
+      - "cmake/**"
+      - "src/**"
+      - "tests/**"
+      - "3rdparty/**"
+      - "lmdeploy/**"
+      - "requirements/**"
+      - "requirements_cuda.txt"
+      - "CMakeLists.txt"
+      - "setup.py"
+    tags:
+      - "v*.*.*"
+
+jobs:
+  unit_test:
+    runs-on: [self-hosted, linux-a100-s2]
+    timeout-minutes: 4320 # 72hours
+    container:
+      image: openmmlab/lmdeploy:dev-cu12.8
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e CUDA_VISIBLE_DEVICES=2,3 -e HF_HOME=/root/.cache/huggingface --pull never"
+      volumes:
+        - /nvme/share_data/github-actions/pip-cache:/root/.cache/pip
+        - /nvme/share_data/github-actions/hf_home:/root/.cache/huggingface
+        - /nvme/share_data/github-actions/packages:/root/packages
+        - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v5
+      - name: Install lmdeploy
+        run: |
+          python3 -m pip install -r requirements/test.txt
+          python3 -m pip install -e .
+      - name: Check env
+        run: |
+          python3 -m pip list
+          lmdeploy check_env
+      - name: Test lmdeploy python UT
+        run: |
+          coverage run --branch --source lmdeploy -m pytest -rsE tests
+          coverage xml
+          coverage report -m
+      - name: Clear workfile
+        if: always()
+        run: |
+          export workdir=$(pwd)
+          cd ..
+          rm -rf $workdir
+          mkdir $workdir
+          chmod -R 777 $workdir

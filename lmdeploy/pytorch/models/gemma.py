@@ -219,7 +219,7 @@ class GemmaMLP(nn.Module):
             is_tp=True,
         )
 
-        hidden_activation = config.hidden_activation
+        hidden_activation = getattr(config, 'hidden_activation', None)
         if hidden_activation is None:
             hidden_activation = 'gelu_pytorch_tanh'
             assert hidden_activation == 'gelu_pytorch_tanh'
@@ -381,16 +381,47 @@ class GemmaModel(nn.Module):
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
 
         # build rotary embedding
-        self.rotary_emb = build_rotary_embedding_from_config(config)
+        self.build_rope_emb(config)
 
-        if self.model_type == 'gemma3_text':
-            rope_dim = config.head_dim
-            rope_max_pos_emb = config.max_position_embeddings
+    def build_rope_emb(self, config: PretrainedConfig):
+        rope_dim = config.head_dim
+        rope_max_pos_emb = config.max_position_embeddings
+
+        if self.model_type != 'gemma3_text':
+            self.rotary_emb = build_rotary_embedding_from_config(config)
+            return
+
+        # for gemma3
+        if hasattr(config, 'rope_local_base_freq'):
             rope_base = config.rope_local_base_freq
+            self.rotary_emb = build_rotary_embedding_from_config(config)
+
+            if self.model_type == 'gemma3_text':
+                self.rotary_emb_local = build_rotary_embedding(
+                    rope_dim,
+                    rope_max_pos_emb,
+                    rope_base,
+                    emb_type=RopeType.Default,
+                )
+        else:
+            # for transformers>=5
+            rope_dim = config.head_dim
+            from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters
+            rope_parameters = get_rope_parameters(config)
+            full_attention = rope_parameters['full_attention']
+            sliding_attention = rope_parameters['sliding_attention']
+            # note that emb type has been fixed.
+            self.rotary_emb = build_rotary_embedding(
+                rope_dim,
+                rope_max_pos_emb,
+                base=full_attention['rope_theta'],
+                scaling_factor=full_attention['factor'],
+                emb_type=RopeType.LinearScaling,
+            )
             self.rotary_emb_local = build_rotary_embedding(
                 rope_dim,
                 rope_max_pos_emb,
-                rope_base,
+                base=sliding_attention['rope_theta'],
                 emb_type=RopeType.Default,
             )
 

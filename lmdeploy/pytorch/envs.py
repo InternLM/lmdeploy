@@ -161,6 +161,9 @@ with set_envs():
     force_torch_compile = env_to_bool('LMDEPLOY_FORCE_TORCH_COMPILE', False)
     disable_graph_buffer_reuse = env_to_bool('LMDEPLOY_DISABLE_GRAPH_BUFFER_REUSE', False)
 
+    # repetition check
+    repetition_window_size = env_to_int('LMDEPLOY_REPETITION_WINDOW_SIZE', 1024)
+
 
 def get_all_envs():
     """Get all environment variables."""

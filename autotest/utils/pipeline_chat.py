@@ -6,7 +6,7 @@ import time
 import allure
 from pytest_assume.plugin import assume
 from utils.common_utils import execute_command_with_logging
-from utils.config_utils import get_case_str_by_config, get_cuda_prefix_by_workerid, get_workerid
+from utils.config_utils import get_case_str_by_config, get_cuda_prefix_by_workerid, get_workerid, resolve_extra_params
 from utils.rule_condition_assert import assert_result
 
 
@@ -29,6 +29,9 @@ def run_pipeline_llm_test(config, run_config, common_case_config, worker_id: str
     run_config_bk = run_config.copy()
     run_config_bk.pop('env', None)
     run_config_bk.pop('model', None)
+
+    resolve_extra_params(run_config_bk.get('extra_params', {}), config.get('model_path'))
+
     run_config_string = json.dumps(run_config_bk, ensure_ascii=False, indent=None)
     run_config_string = run_config_string.replace(' ', '').replace('"', '\\"').replace(',', '\\,')
 
@@ -47,7 +50,7 @@ def run_pipeline_llm_test(config, run_config, common_case_config, worker_id: str
         for case in common_case_config.keys():
             if is_smoke and case != 'memory_test':
                 continue
-            if case != 'code_testcases' and 'code' in model_path.lower():
+            if case != 'code_testcase' and 'code' in model_path.lower():
                 continue
 
             with allure.step(case):

@@ -14,8 +14,8 @@ HF_MODELS_WITH_CHAT_TEMPLATES = [
     'internlm/internlm2-chat-7b',
     'internlm/internlm2_5-7b-chat',
     'internlm/internlm3-8b-instruct',
-    'internlm/Intern-S1',
-    'internlm/Intern-S1-mini',
+    # 'internlm/Intern-S1',
+    # 'internlm/Intern-S1-mini',
     'OpenGVLab/InternVL-Chat-V1-2',
     'OpenGVLab/InternVL-Chat-V1-5',
     'OpenGVLab/Mini-InternVL-Chat-2B-V1-5',
@@ -32,7 +32,6 @@ HF_MODELS_WITH_CHAT_TEMPLATES = [
     'OpenGVLab/InternVL3_5-4B',
     'OpenGVLab/InternVL3_5-8B',
     'OpenGVLab/InternVL3_5-GPT-OSS-20B-A4B-Preview',
-    'AI4Chem/ChemVLM-8B',
     'deepseek-ai/DeepSeek-V2-Lite',
     'deepseek-ai/DeepSeek-V3',
     'deepseek-ai/DeepSeek-R1',
@@ -247,7 +246,7 @@ def test_deepseek_vl2(model_path_or_name):
     assert ref == lm_res
 
 
-@pytest.mark.parametrize('model_path', ['Qwen/Qwen3-30B-A3B', 'Qwen/Qwen2.5-7B-Instruct'])
+@pytest.mark.parametrize('model_path', ['Qwen/Qwen3-30B-A3B', 'Qwen/Qwen2.5-7B-Instruct', 'Qwen/Qwen3.5-35B-A3B'])
 @pytest.mark.parametrize('enable_thinking', [True, False, None])
 def test_qwen3(model_path, enable_thinking):
     from transformers import AutoTokenizer
@@ -279,43 +278,44 @@ def test_qwen3(model_path, enable_thinking):
     assert ref == lm_res
 
 
-@pytest.mark.parametrize('model_path', ['internlm/Intern-S1'])
-@pytest.mark.parametrize('enable_thinking', [None, True, False])
-@pytest.mark.parametrize('has_user_sys', [True, False])
-def test_interns1(model_path, enable_thinking, has_user_sys):
-    from transformers import AutoTokenizer
-    try:
-        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-    except OSError:
-        pytest.skip(reason=f'{model_path} not exists')
+# TODO(lvhan): bring this case back when internlm/Intern-S1 fix tokenizer
+# @pytest.mark.parametrize('model_path', ['internlm/Intern-S1'])
+# @pytest.mark.parametrize('enable_thinking', [None, True, False])
+# @pytest.mark.parametrize('has_user_sys', [True, False])
+# def test_interns1(model_path, enable_thinking, has_user_sys):
+#     from transformers import AutoTokenizer
+#     try:
+#         tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+#     except OSError:
+#         pytest.skip(reason=f'{model_path} not exists')
 
-    chat_template = MODELS.get('hf')(model_path)
+#     chat_template = MODELS.get('hf')(model_path)
 
-    messages = [{
-        'role': 'system',
-        'content': 'you are a helpful assistant'
-    }, {
-        'role': 'user',
-        'content': 'who are you'
-    }, {
-        'role': 'assistant',
-        'content': 'I am an AI'
-    }, {
-        'role': 'user',
-        'content': 'AGI is?'
-    }]
-    if not has_user_sys:
-        messages = messages[1:]
+#     messages = [{
+#         'role': 'system',
+#         'content': 'you are a helpful assistant'
+#     }, {
+#         'role': 'user',
+#         'content': 'who are you'
+#     }, {
+#         'role': 'assistant',
+#         'content': 'I am an AI'
+#     }, {
+#         'role': 'user',
+#         'content': 'AGI is?'
+#     }]
+#     if not has_user_sys:
+#         messages = messages[1:]
 
-    if enable_thinking is None:
-        ref = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    else:
-        ref = tokenizer.apply_chat_template(messages,
-                                            tokenize=False,
-                                            add_generation_prompt=True,
-                                            enable_thinking=enable_thinking)
-    lm_res = chat_template.messages2prompt(messages, enable_thinking=enable_thinking)
-    assert ref == lm_res
+#     if enable_thinking is None:
+#         ref = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+#     else:
+#         ref = tokenizer.apply_chat_template(messages,
+#                                             tokenize=False,
+#                                             add_generation_prompt=True,
+#                                             enable_thinking=enable_thinking)
+#     lm_res = chat_template.messages2prompt(messages, enable_thinking=enable_thinking)
+#     assert ref == lm_res
 
 
 @pytest.mark.parametrize('model_path', ['Qwen/Qwen1.5-7B-Chat', 'Qwen/Qwen2.5-7B-Instruct', 'Qwen/Qwen3-8B'])
@@ -328,20 +328,14 @@ def test_HFChatTemplate_get_prompt_sequence_start_False_Qwen(model_path):
                             sequence_start=False) == f'<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n'
 
 
-@pytest.mark.parametrize('model_path', ['internlm/Intern-S1', 'internlm/Intern-S1-mini'])
-def test_InternS1_thinking(model_path):
-    pass
+@pytest.mark.parametrize('model_path', ['Qwen/Qwen3.5-35B-A3B'])
+def test_HFChatTemplate_get_prompt_sequence_start_False_Qwen3_5(model_path):
+    model = MODELS.get('hf')(model_path=model_path)
+    assert model.stop_words == ['<|im_end|>']
 
-
-@pytest.mark.parametrize('model_path', [''])
-def test_InternVL(model_path):
-    pass
-
-
-@pytest.mark.parametrize('model_path', [''])
-def test_HFChatTemplate_llama(model_path):
-    # TODO: add a huggingface token to github
-    pass
+    prompt = 'How to apply chat template using transformers?'
+    assert model.get_prompt(
+        prompt, sequence_start=False) == f'<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n<think>\n'
 
 
 @pytest.mark.parametrize('model_path', ['deepseek-ai/DeepSeek-V3'])
@@ -362,7 +356,7 @@ def test_HFChatTemplate_DeepSeek_thinking(model_path):
     assert model.get_prompt(prompt, sequence_start=False) == f'<｜User｜>{prompt}<｜Assistant｜><think>\n'
 
 
-@pytest.mark.parametrize('model_path', ['Qwen/Qwen3-VL-8B-Instruct'])
+@pytest.mark.parametrize('model_path', ['Qwen/Qwen3-VL-8B-Instruct', 'Qwen/Qwen3.5-35B-A3B'])
 def test_HFChatTemplate_Qwen3_VL_with_vision_id(model_path):
     model = MODELS.get('hf')(model_path=model_path)
 

@@ -9,6 +9,7 @@
 #include "src/turbomind/kernels/core/thread_map.h"
 
 #include <cmath>
+#include <type_traits>
 
 namespace turbomind::attention {
 
@@ -16,6 +17,8 @@ template<class T_, int CTA_H_, int CTA_Q_, int CTA_S_, int WARP_H_, int WARP_Q, 
 struct Impl<MMA_884, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, HeadDim> {
     using T   = T_;
     using Tkv = T_;
+
+    static constexpr bool MLA = false;
 
     static constexpr int CTA_H    = CTA_H_;
     static constexpr int CTA_Q    = CTA_Q_;
@@ -103,8 +106,13 @@ struct Impl<MMA_884, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, He
     static constexpr bool kUseSmemQ = false;
     static constexpr bool kUseSmemP = false;
 
-    using ThreadMapQ  = RakedThreadMap<HeadDim, CTA_Q, 4, kWarpCount>;
-    using ThreadMapKV = RakedThreadMap<HeadDim, CTA_S, 4, kWarpCount>;
+    // For HeadDim=256, WarpThreadC needs to be explicitly specified to avoid exceeding WARP_SIZE
+    using ThreadMapQ  = std::conditional_t<HeadDim == 256,
+                                          RakedThreadMap<HeadDim, CTA_Q, 4, kWarpCount, 8>,
+                                          RakedThreadMap<HeadDim, CTA_Q, 4, kWarpCount>>;
+    using ThreadMapKV = std::conditional_t<HeadDim == 256,
+                                           RakedThreadMap<HeadDim, CTA_S, 4, kWarpCount, 8>,
+                                           RakedThreadMap<HeadDim, CTA_S, 4, kWarpCount>>;
 
     using ThreadMapKVp = void;
 
@@ -233,7 +241,7 @@ struct Impl<MMA_884, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, He
             assert(offset);
             const int lane_id = threadIdx.x % WARP_SIZE;
             PRAGMA_UNROLL
-            for (int n = 0; n < 8; n += 2) {
+            for (int n = 0; n < V_N; n += 2) {
                 const int s  = 0 * 4 + lane_id % 4;
                 const int c  = n * 16 + lane_id / 16 * 4 + (lane_id & 4) * 2;
                 idxs_[n / 2] = SmemLayoutV::apply(s, c);

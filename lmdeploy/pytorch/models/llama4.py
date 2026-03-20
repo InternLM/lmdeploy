@@ -8,7 +8,7 @@ from transformers.models.llama4 import Llama4Config, Llama4TextConfig, Llama4Vis
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
+from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_merged_colwise_linear, build_qkv_proj,
                                         build_rowwise_linear)
@@ -811,7 +811,6 @@ class Llama4ForConditionalGeneration(nn.Module, CudaGraphMixin):
         self._update_quant_config(config)
         self.language_model = Llama4ForCausalLM(config.text_config, ctx_mgr, dtype=dtype, device=device)
         self.vocab_size = config.text_config.vocab_size
-        self.pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else -1
 
         self.input_processor = Llama4InputProcessor(config, dtype)
 
@@ -1034,10 +1033,10 @@ class Llama4InputProcessor(BaseModelInputProcessor):
             if isinstance(num_pad, torch.Tensor):
                 num_pad = num_pad.item()
 
-            mm_data = MultiModalTensor(data=pixel_values,
-                                       start=offset,
-                                       end=offset + num_pad,
-                                       meta=dict(image_token_id=image_token_id))
+            mm_data = MultiModalData(data=pixel_values,
+                                     start=offset,
+                                     end=offset + num_pad,
+                                     meta=dict(image_token_id=image_token_id))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(

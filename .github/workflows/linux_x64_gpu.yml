@@ -1,0 +1,61 @@
+name: linux-x64-gpu
+on:
+  push:
+    paths:
+      - '.github/workflows/linux_x64_gpu.yml'
+      - 'src/**'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'examples/**'
+      - '3rdparty/**'
+      - 'tests/csrc/**'
+  pull_request:
+    paths:
+      - '.github/workflows/linux_x64_gpu.yml'
+      - 'src/**'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'examples/**'
+      - '3rdparty/**'
+      - 'tests/csrc/**'
+concurrency:
+  group: linux-x64-gpu-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        cudaver: [12.4, 12.8]
+    name: cuda-${{ matrix.cudaver }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # This might remove tools that are actually needed, if set to "true" but frees about 6 GB
+          tool-cache: false
+          docker-images: false
+          # All of these default to true, but feel free to set to "false" if necessary for your workflow
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: false
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      - name: Build
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/work \
+            -w /work \
+            openmmlab/lmdeploy-builder:cuda${{ matrix.cudaver }} \
+            bash -c "
+              source /opt/conda/bin/activate && \
+              conda activate py310 && \
+              pip install build && \
+              python -m build --wheel
+            "
