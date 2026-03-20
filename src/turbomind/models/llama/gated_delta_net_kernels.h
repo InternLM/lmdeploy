@@ -58,7 +58,7 @@ void invokeGatedDeltaRuleBatched_v2(Ref<Tensor>           v_out,
 // v3: persistent decode kernel, seq_len == 1 only.
 // Launches min(total_work, blocks_per_sm * sm_count) blocks; each block claims
 // work items atomically via work_counter (zeroed via cudaMemsetAsync per launch).
-// state_dtype is ignored — v3 always uses S = T (16-bit state).
+// state_dtype controls state precision: kFloat32 → S=float, otherwise S=T.
 void invokeGatedDeltaRuleBatched_v3(Ref<Tensor>           v_out,
                                     const Tensor&         qkv_in,
                                     const Tensor&         beta,

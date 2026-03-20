@@ -146,10 +146,10 @@ int main(int argc, char** argv)
     Tensor beta{Layout{{total_tok, num_v_heads}}, dtype, kDEVICE};
     Tensor g{Layout{{total_tok, num_v_heads}}, dtype, kDEVICE};
 
-    // State buffers — v2/chunked use state_dtype, v3 always uses 16-bit (dtype)
+    // State buffers — all three kernels use state_dtype
     Tensor state_v2{Layout{{batch_size, state_size}}, state_dtype, kDEVICE};
     Tensor state_chunked{Layout{{batch_size, state_size}}, state_dtype, kDEVICE};
-    Tensor state_v3{Layout{{batch_size, state_size}}, dtype, kDEVICE};  // S = T
+    Tensor state_v3{Layout{{batch_size, state_size}}, state_dtype, kDEVICE};
 
     // State pointer arrays: host pinned + device
     Buffer_<void*> state_ptrs_v2_host{batch_size, kCPUpinned};
@@ -179,7 +179,7 @@ int main(int argc, char** argv)
 
     // --- Build state_ptrs ---
     const auto state_elem_bytes    = byte_size(state_dtype);
-    const auto state_elem_bytes_v3 = byte_size(dtype);
+    const auto state_elem_bytes_v3 = byte_size(state_dtype);
     for (int i = 0; i < batch_size; ++i) {
         state_ptrs_v2_host.data()[i]      = (char*)state_v2.raw_data() + i * state_size * state_elem_bytes;
         state_ptrs_chunked_host.data()[i] = (char*)state_chunked.raw_data() + i * state_size * state_elem_bytes;
@@ -250,7 +250,7 @@ int main(int argc, char** argv)
                                        batch_size,
                                        num_k_heads,
                                        0,
-                                       dtype,
+                                       state_dtype,
                                        sm_count,
                                        work_counter,
                                        cu_stream);
