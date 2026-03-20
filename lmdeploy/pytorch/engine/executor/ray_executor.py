@@ -211,6 +211,10 @@ class RayWorkerWrapper(WorkerWrapperBase):
             tmp = torch.empty((1, ), device='cuda')
             all_reduce(tmp, group=group)
 
+    def pack_output(self, output: Dict):
+        """Pack output."""
+        return output.to_numpy()
+
     def remote_log_start(self, msg: str):
         """Remote log start."""
         return self._remote_logger.start(msg)
@@ -496,6 +500,7 @@ class RayExecutor(ExecutorBase):
     async def get_output_async(self):
         """Get output async."""
         ret = await self.workers[0].get_outputs.remote()
+        ret = ret.to_tensor()
         return ret
 
     @contextlib.contextmanager
