@@ -109,8 +109,8 @@ class MultimodalProcessor:
                 out_message['content'].append(item)
                 continue
 
-            item_params = item.get(item_type, {})
-            data_src = item_params.get('url', None) or item_params.get('data', None)
+            item_params = item.get(item_type, {}).copy()
+            data_src = item_params.pop('url', None) or item_params.pop('data', None)
 
             if item_type == 'image_data':
                 modality = Modality.IMAGE
