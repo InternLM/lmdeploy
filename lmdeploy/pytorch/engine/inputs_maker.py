@@ -445,10 +445,11 @@ class InputsMakerAsync:
         batch_size = len(self.running_seqs)
         assert batch_size > 0
         num_decode_tokens = self.engine_strategy.get_num_decode_tokens()
+        num_required_tokens = self.engine_strategy.get_num_required_tokens()
         max_q_seqlen = num_decode_tokens
         prealloc_size = self.engine_strategy.get_prealloc_size(True)
         valid_mask = self.scheduler.schedule_running(self.running_seqs,
-                                                     num_decode_tokens=num_decode_tokens,
+                                                     num_required_tokens=num_required_tokens,
                                                      prealloc_size=prealloc_size)
 
         valid_mask = np.array(valid_mask)

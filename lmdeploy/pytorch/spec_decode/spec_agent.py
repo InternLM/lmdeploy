@@ -175,8 +175,11 @@ class SpecModelAgent(BaseSpecModelAgent):
                 draft_token_ids, model_metas, target_hidden_states = self.proposer.get_outputs(outputs, inputs)
                 draft_tokens_li.append(draft_token_ids)
                 if loop_idx < loop_count - 1:
+                    # inputs = inputs.clone(target_hidden_states=target_hidden_states, model_metas=model_metas)
+                    # if inputs.target_position_ids is not None:
+                    #     inputs.target_position_ids += 1
                     step_seqlens = inputs.seq_length.new_ones(inputs.seq_length.size(0))
-                    inputs.step(draft_token_ids.transpose(0, 1), step_seqlens)
+                    inputs = inputs.step(draft_token_ids.transpose(0, 1), step_seqlens)
                     inputs.model_metas = model_metas
                     inputs.target_hidden_states = target_hidden_states
                     if inputs.target_position_ids is not None:

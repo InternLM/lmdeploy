@@ -200,12 +200,20 @@ class ModelInputs:
         assert self.is_decoding
         if step_seqlens is None:
             step_seqlens = self.seq_length
-        self.history_lengths += step_seqlens
-        self.max_kv_seqlen += self.max_q_seqlen
-        self.sum_kv_seqlen += self.max_q_seqlen * self.seq_length.numel()
+
+        # self.history_lengths += step_seqlens
+        # self.max_kv_seqlen += self.max_q_seqlen
+        # self.sum_kv_seqlen += self.max_q_seqlen * self.seq_length.numel()
         if input_ids.dim() == 1:
             input_ids = input_ids[None, :]
-        self.input_ids = input_ids
+        # self.input_ids = input_ids
+        return self.clone(
+            input_ids=input_ids,
+            history_lengths=self.history_lengths + step_seqlens,
+            max_kv_seqlen=self.max_kv_seqlen + self.max_q_seqlen,
+            sum_kv_seqlen=self.sum_kv_seqlen + self.max_q_seqlen * self.seq_length.numel(),
+        )
+
         return self
 
     @torch.inference_mode()
@@ -232,6 +240,12 @@ class ModelInputs:
         ret = (f'num_tokens={self.input_ids.numel()}, batch_size={self.seq_length.numel()}'
                f', is_decoding={self.is_decoding}, has_vision={self.vision_inputs is not None}')
         return ret
+
+    def clone(self, **kwargs):
+        """Get new ModelInputs with updated fields."""
+        out_dict = {f.name: getattr(self, f.name) for f in fields(self)}
+        out_dict.update(kwargs)
+        return ModelInputs(**out_dict)
 
 
 @dataclass

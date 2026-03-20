@@ -209,7 +209,7 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
         input_ids[:, 0] = next_token_ids
         input_ids[:, 1:] = extra_inputs.output_draft_token_ids
         input_ids = input_ids.flatten()[None, :]
-        model_inputs.step(input_ids, step_seqlens)
+        model_inputs = model_inputs.step(input_ids, step_seqlens)
         return model_inputs, extra_inputs
 
     def post_sampling(self, inputs: 'ModelInputs', logits: torch.Tensor, next_token_ids: torch.LongTensor,
