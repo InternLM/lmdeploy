@@ -121,6 +121,7 @@ class BaseSpecProposer:
             sum_kv_seqlen=model_inputs.sum_kv_seqlen + model_inputs.seq_length.numel(),
             target_position_ids=model_inputs.history_lengths.unsqueeze(0).clone(),
             target_inputs_embeds=None,
+            mrope_pos_ids=None,
             target_hidden_states=target_hidden_states,
             model_metas=model_metas,
         )

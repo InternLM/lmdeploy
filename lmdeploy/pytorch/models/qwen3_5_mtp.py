@@ -270,6 +270,7 @@ class Qwen3_5MTPModel(nn.Module, CudaGraphMixin):
         position_ids = context.position_ids
         attn_metadata = context.attn_metadata
         target_hidden_states = context.target_hidden_states
+        mrope_position_ids = getattr(context, 'mrope_position_ids', None)
         if context.target_inputs_embeds is not None:
             inputs_embeds = context.target_inputs_embeds
 
@@ -280,6 +281,7 @@ class Qwen3_5MTPModel(nn.Module, CudaGraphMixin):
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
             target_hidden_states=target_hidden_states,
+            mrope_position_ids=mrope_position_ids,
         )
 
     def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],

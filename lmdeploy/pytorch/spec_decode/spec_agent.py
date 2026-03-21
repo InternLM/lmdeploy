@@ -132,6 +132,7 @@ class SpecModelAgent(BaseSpecModelAgent):
             target_hidden_states=extra_inputs.target_hidden_states,
             target_position_ids=extra_inputs.target_position_ids,
             target_inputs_embeds=target_inputs_embeds,
+            mrope_pos_ids=model_inputs.mrope_pos_ids,
         )
 
         new_extra_inputs = ARSpecExtraInputs(
