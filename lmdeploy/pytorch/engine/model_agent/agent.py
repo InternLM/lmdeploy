@@ -415,6 +415,9 @@ class BaseModelAgent:
         # long context
         self._prev_chunk_output: Dict = None
 
+        # make dummy meta
+        self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(model_config)
+
     @contextmanager
     def all_context(self):
         device_mgr = get_device_manager()
@@ -427,10 +430,11 @@ class BaseModelAgent:
         self.cache_config = cache_config
         self.spec_agent.set_cache_config(spec_cache_config)
 
-    def set_model_config(self, model_config: ModelConfig, spec_model_config: ModelConfig = None):
+    def set_model_config(self, model_config: ModelConfig, spec_model_config: ModelConfig | None = None):
         """Set model config."""
         self.model_config = model_config
         self.spec_agent.set_model_config(spec_model_config)
+        self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(model_config)
 
     def get_free_mem(self):
         """Gather available memory."""
@@ -461,7 +465,8 @@ class BaseModelAgent:
             inputs = self.inputs_strategy.make_dummy(max_batches,
                                                      is_decoding=False,
                                                      device='cuda',
-                                                     vocab_size=self.model_config.vocab_size)
+                                                     vocab_size=self.model_config.vocab_size,
+                                                     meta=self.make_dummy_meta)
             if dp > 1:
                 num_tokens = inputs.input_ids.numel()
                 inputs.build_dp_meta([num_tokens] * world_size)
@@ -480,7 +485,8 @@ class BaseModelAgent:
                 inputs = self.inputs_strategy.make_dummy(num_tokens,
                                                          is_decoding=True,
                                                          device='cuda',
-                                                         vocab_size=self.model_config.vocab_size)
+                                                         vocab_size=self.model_config.vocab_size,
+                                                         meta=self.make_dummy_meta)
                 if dp > 1:
                     num_tokens = inputs.input_ids.numel()
                     inputs.build_dp_meta([num_tokens] * world_size)

@@ -80,6 +80,7 @@ def build_executor(
         spec_method=None if specdecode_config is None else specdecode_config.method,
         num_spec_tokens=0 if specdecode_config is None else specdecode_config.num_speculative_tokens,
         model_format=misc_config.model_format,
+        device_type=device_type,
     )
 
     if distributed_executor_backend is None:

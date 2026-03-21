@@ -44,14 +44,7 @@ class Qwen3VLMoeTextModel(Qwen3MoeModel):
         visual_pos_masks: Optional[torch.Tensor] = None,
         deepstack_visual_embeds: Optional[list[torch.Tensor]] = None,
     ):
-        """visual_pos_masks (`torch.Tensor` of shape `(batch_size, seqlen)`,
-        *optional*):
-
-        The mask of the visual positions. deepstack_visual_embeds (`list[torch.Tensor]`, *optional*):     The deepstack
-        visual embeddings. The shape is (num_layers, visual_seqlen, embed_dim).     The feature is extracted from the
-        different visual encoder layers, and fed to the decoder     hidden states. It's from the paper DeepStack (
-        https://arxiv.org/abs/2406.04)
-        """
+        """Rewrite of LlamaModel.forward."""
 
         # token embedding
         if inputs_embeds is None:

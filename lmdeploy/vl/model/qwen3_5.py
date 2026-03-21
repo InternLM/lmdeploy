@@ -25,8 +25,17 @@ class Qwen3_5Model(Qwen3VLModel):
 
     def build_preprocessor(self):
         check_transformers()
+
         self.processor = AutoProcessor.from_pretrained(self.model_path)
-        tokenizer = self.processor.tokenizer
+
+        # image tokens
         self.image_token = self.processor.image_token
-        self.image_token_id = tokenizer.encode(self.image_token)[-1]
-        self.mm_processor_kwargs = None
+        self.image_token_id = self.processor.image_token_id
+
+        # video tokens
+        self.video_token = self.processor.video_token
+        self.video_token_id = self.processor.video_token_id
+
+        # vision start and end tokens
+        self.vision_start_token = self.processor.vision_start_token
+        self.vision_end_token = self.processor.vision_end_token

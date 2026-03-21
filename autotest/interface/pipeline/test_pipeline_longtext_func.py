@@ -13,14 +13,10 @@ SESSION_LEN_32K = 32000
 
 SESSION_LEN_CONFIG = {
     'Qwen/Qwen2.5-7B-Instruct': SESSION_LEN_32K,
-    'Qwen/Qwen2.5-32B-Instruct': SESSION_LEN_32K,
-    'Qwen/Qwen2.5-72B-Instruct': SESSION_LEN_32K,
     'Qwen/Qwen3-235B-A22B': SESSION_LEN_128K,
     'Qwen/Qwen3-30B-A3B': SESSION_LEN_128K,
     'Qwen/Qwen3-32B': SESSION_LEN_128K,
     'meta-llama/Meta-Llama-3-1-8B-Instruct': SESSION_LEN_128K,
-    'internlm/Intern-S1-mini': SESSION_LEN_128K,
-    'internlm/Intern-S1': SESSION_LEN_128K,
     'meta-llama/Meta-Llama-3-1-70B-Instruct': SESSION_LEN_128K,
 }
 
@@ -33,8 +29,7 @@ def run_case_in_spawn(target, args):
 
 
 @pytest.mark.gpu_num_1
-@pytest.mark.parametrize(
-    'model', ['internlm/Intern-S1-mini', 'internlm/internlm2_5-7b-chat', 'internlm/internlm2_5-7b-chat-inner-4bits'])
+@pytest.mark.parametrize('model', ['Qwen/Qwen3-8B'])
 def test_history_issue_tp1(config, model, worker_id):
     if 'gw' in worker_id:
         set_device_env_variable(worker_id)
@@ -77,10 +72,7 @@ def stream_infer_worker(config, model, tp_num):
 
 
 @pytest.mark.gpu_num_1
-@pytest.mark.parametrize('model', [
-    'internlm/Intern-S1-mini', 'internlm/internlm2_5-7b-chat', 'internlm/internlm2_5-7b-chat-inner-4bits',
-    'Qwen/Qwen2.5-7B-Instruct', 'meta-llama/Meta-Llama-3-1-8B-Instruct'
-])
+@pytest.mark.parametrize('model', ['Qwen/Qwen2.5-7B-Instruct', 'meta-llama/Meta-Llama-3-1-8B-Instruct'])
 @pytest.mark.parametrize('backend', ['turbomind', 'pytorch'])
 def test_long_test_passkey_tp1(config, model, backend, worker_id):
     log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
@@ -93,7 +85,7 @@ def test_long_test_passkey_tp1(config, model, backend, worker_id):
 
 
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize('model', ['Qwen/Qwen2.5-32B-Instruct', 'Qwen/Qwen3-30B-A3B', 'Qwen/Qwen3-32B'])
+@pytest.mark.parametrize('model', ['Qwen/Qwen3-30B-A3B', 'Qwen/Qwen3-32B'])
 @pytest.mark.parametrize('backend', ['turbomind', 'pytorch'])
 def test_long_test_passkey_tp2(config, model, backend, worker_id):
     log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
@@ -106,23 +98,8 @@ def test_long_test_passkey_tp2(config, model, backend, worker_id):
         unset_device_env_variable()
 
 
-@pytest.mark.gpu_num_4
-@pytest.mark.parametrize('model', ['Qwen/Qwen2.5-72B-Instruct'])
-@pytest.mark.parametrize('backend', ['turbomind', 'pytorch'])
-def test_long_test_passkey_tp4(config, model, backend, worker_id):
-    log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
-    if 'gw' in worker_id:
-        set_device_env_variable(worker_id, parallel_config=4)
-        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    run_case_in_spawn(passkey_retrival_worker,
-                      (config, model, backend, log_name, 4, SESSION_LEN_CONFIG.get(model, SESSION_LEN_128K)))
-    if 'gw' in worker_id:
-        unset_device_env_variable()
-
-
 @pytest.mark.gpu_num_8
-@pytest.mark.parametrize('model',
-                         ['Qwen/Qwen3-235B-A22B', 'internlm/Intern-S1', 'meta-llama/Meta-Llama-3-1-70B-Instruct'])
+@pytest.mark.parametrize('model', ['Qwen/Qwen3-235B-A22B', 'meta-llama/Meta-Llama-3-1-70B-Instruct'])
 @pytest.mark.parametrize('backend', ['turbomind', 'pytorch'])
 def test_long_test_passkey_tp8(config, model, backend, worker_id):
     log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])

@@ -12,9 +12,9 @@
 namespace turbomind::attention {
 
 constexpr int kHeadDim = 256;
-constexpr int kCTA_S   = 64;
+constexpr int kCTA_S   = 32;
 constexpr int kWARP_S  = 16;
-constexpr int kStages  = 3;
+constexpr int kStages  = 2;
 
 // kH = Qh%3==0 ? 3 : (Qh%2==0 ? 2 : 1)
 // kH=1 covers Qh ∈ {1,5,7}, kH=2 covers {2,4,8}, kH=3 covers {3,6,9}
