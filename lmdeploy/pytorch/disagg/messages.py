@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import List, Optional, Tuple
 
 from pydantic import BaseModel
 
@@ -11,7 +10,7 @@ class MigrationExecutionBatch(BaseModel):
     """Input of the Migration."""
 
     protocol: MigrationProtocol
-    requests: List[Tuple[str, List[Tuple[int, int]]]] = []
+    requests: list[tuple[str, list[tuple[int, int]]]] = []
 
 
 class AssignmentInstruct(BaseModel):
@@ -26,16 +25,16 @@ class MigrationAssignment(BaseModel):
     """Migration Assignment."""
     protocol: MigrationProtocol
     remote_engine_id: str
-    batch: List[AssignmentInstruct]
+    batch: list[AssignmentInstruct]
 
 
 class PDConnectionMessage(BaseModel):
     p_url: str
     d_url: str
     protocol: MigrationProtocol = MigrationProtocol.RDMA
-    tcp_config: Optional[DistServeTCPConfig] = None
-    rdma_config: Optional[DistServeRDMAConfig] = None
-    nvlink_config: Optional[DistServeNVLinkConfig] = None
+    tcp_config: DistServeTCPConfig | None = None
+    rdma_config: DistServeRDMAConfig | None = None
+    nvlink_config: DistServeNVLinkConfig | None = None
 
 
 class DistServeRegisterMRMessage(BaseModel):

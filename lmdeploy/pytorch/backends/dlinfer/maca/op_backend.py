@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Tuple
 
 import torch
 
@@ -26,7 +25,7 @@ class MacaOpsBackend(DlinferOpsBackend):
         num_heads: int,
         head_size: int,
         dtype: torch.dtype,
-    ) -> Tuple[int, ...]:
+    ) -> tuple[int, ...]:
         return (block_size, num_heads, head_size)
 
     @staticmethod
@@ -35,7 +34,7 @@ class MacaOpsBackend(DlinferOpsBackend):
         num_heads: int,
         head_size: int,
         dtype: torch.dtype,
-    ) -> Tuple[int, ...]:
+    ) -> tuple[int, ...]:
         return (block_size, num_heads, head_size)
 
     @classmethod

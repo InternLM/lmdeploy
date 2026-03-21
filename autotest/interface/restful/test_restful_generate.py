@@ -116,7 +116,7 @@ class TestGenerateComprehensive:
 
     def _validate_generation_response(self,
                                       data: dict[str, Any],
-                                      expected_fields: list[str] | None = None,
+                                      expected_fields: list[str] = None,
                                       validate_tokens: bool = True,
                                       expect_logprobs: bool = False,
                                       validate_experts: bool = False) -> None:

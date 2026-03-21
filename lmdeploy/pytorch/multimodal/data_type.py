@@ -1,22 +1,26 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass, fields
-from typing import Any, Dict, List, Union
+from typing import Any
 
 from torch import Tensor
 
-from lmdeploy.vl.constants import Modality
 
-NestedTensor = Union[Tensor, List[Tensor]]
+class MultiModalData:
+    pass
+
+
+MultiModalDataList = list[MultiModalData]
+
+NestedTensor = Tensor | list[Tensor]
 
 
 @dataclass
-class MultiModalData:
+class MultiModalTensor:
     data: NestedTensor
     start: int
     end: int = None
-    meta: Dict[str, Any] = None
-
-    modality: Modality = Modality.IMAGE
+    encoder_len: int = None
+    meta: dict[str, Any] = None
 
     def __post_init__(self):
         if self.end is None:
@@ -49,7 +53,7 @@ class MultiModalData:
                 new_meta[k] = v
 
         out_dict['meta'] = new_meta
-        return MultiModalData(**out_dict)
+        return MultiModalTensor(**out_dict)
 
 
-MultiModalInputs = Dict[str, List[MultiModalData]]
+MultiModalInputs = dict[str, list[MultiModalTensor]]

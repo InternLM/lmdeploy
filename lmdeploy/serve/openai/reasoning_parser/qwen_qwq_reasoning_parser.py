@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import re
-from typing import Optional, Sequence, Tuple, Union
+from collections.abc import Sequence
 
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaMessage
 
@@ -35,7 +35,7 @@ class QwenQwQReasoningParser(ReasoningParser):
         current_token_ids: Sequence[int],
         delta_token_ids: Sequence[int],
         **kwargs,
-    ) -> Union[DeltaMessage, None]:
+    ) -> DeltaMessage | None:
         """Instance method that should be implemented for extracting reasoning
         from an incomplete response; for use when handling reasoning calls and
         streaming.
@@ -95,7 +95,7 @@ class QwenQwQReasoningParser(ReasoningParser):
                 return DeltaMessage(reasoning_content=delta_text)
 
     def extract_reasoning_content(self, model_output: str, request: ChatCompletionRequest,
-                                  **kwargs) -> Tuple[Optional[str], Optional[str]]:
+                                  **kwargs) -> tuple[str | None, str | None]:
         """Extract reasoning content from a complete model-generated string.
 
         Used for non-streaming responses where we have the entire model response

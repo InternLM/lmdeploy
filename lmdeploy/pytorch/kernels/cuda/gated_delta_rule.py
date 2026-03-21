@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Sequence
+from collections.abc import Sequence
 
 import tilelang
 import tilelang.language as T

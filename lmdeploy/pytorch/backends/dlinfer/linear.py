@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
-from typing import List, Optional
 
 import torch
 import torch.distributed as dist
@@ -13,7 +12,7 @@ from ..linear import LinearBuilder, LinearImpl
 class DlinferLinearImpl(LinearImpl):
     """Dlinfer linear implementation api."""
 
-    def update_weights(self, weight: torch.Tensor, bias: Optional[torch.Tensor] = None):
+    def update_weights(self, weight: torch.Tensor, bias: torch.Tensor | None = None):
         """Update weights."""
         if os.getenv('DLINFER_LINEAR_USE_NN_LAYOUT', '0') == '1':
             weight = weight.data.t().contiguous()
@@ -22,11 +21,11 @@ class DlinferLinearImpl(LinearImpl):
     def forward(self,
                 x,
                 weight: torch.Tensor,
-                bias: Optional[torch.Tensor] = None,
+                bias: torch.Tensor | None = None,
                 all_reduce: bool = False,
                 group: dist.ProcessGroup = None,
                 rank: int = 0,
-                scatter_size: List[int] = None):
+                scatter_size: list[int] = None):
         """forward."""
         out = linear(x, weight, bias, False)
         if all_reduce:

@@ -1,7 +1,11 @@
 import pytest
-from tools.common_case_config import (MODELSCOPE_CONFIG, TURBOMIND_FALLBACK_TEST_LLM_GPU1,
-                                      TURBOMIND_FALLBACK_TEST_LLM_GPU2, TURBOMIND_PR_TEST_LLM_GPU1,
-                                      TURBOMIND_PR_TEST_LLM_GPU2)
+from tools.common_case_config import (
+    MODELSCOPE_CONFIG,
+    TURBOMIND_FALLBACK_TEST_LLM_GPU1,
+    TURBOMIND_FALLBACK_TEST_LLM_GPU2,
+    TURBOMIND_PR_TEST_LLM_GPU1,
+    TURBOMIND_PR_TEST_LLM_GPU2,
+)
 from utils.config_utils import get_func_config_list, get_workerid
 from utils.pipeline_chat import run_pipeline_llm_test
 

@@ -1,14 +1,21 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modified from https://github.com/vllm-project/vllm/tree/v0.7.3/vllm/entrypoints/openai/tool_parsers
 import json
-from typing import Dict, Sequence, Union
+from collections.abc import Sequence
 
 import partial_json_parser
 import shortuuid
 from partial_json_parser.core.options import Allow
 
-from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, DeltaFunctionCall, DeltaMessage, DeltaToolCall,
-                                            ExtractedToolCallInformation, FunctionCall, ToolCall)
+from lmdeploy.serve.openai.protocol import (
+    ChatCompletionRequest,
+    DeltaFunctionCall,
+    DeltaMessage,
+    DeltaToolCall,
+    ExtractedToolCallInformation,
+    FunctionCall,
+    ToolCall,
+)
 from lmdeploy.utils import get_logger
 
 from .tool_parser import ToolParser, ToolParserManager
@@ -48,7 +55,7 @@ class Internlm2ToolParser(ToolParser):
         current_token_ids: Sequence[int],
         delta_token_ids: Sequence[int],
         request: ChatCompletionRequest,
-    ) -> Union[DeltaMessage, None]:
+    ) -> DeltaMessage | None:
         if '<|action_start|>' not in current_text:
             self.position = len(current_text)
             return DeltaMessage(content=delta_text)
@@ -84,7 +91,7 @@ class Internlm2ToolParser(ToolParser):
             # tool calls are generated in an object in inernlm2
             # it's not support parallel tool calls
             try:
-                tool_call_arr: Dict = partial_json_parser.loads(parsable_arr, flags)
+                tool_call_arr: dict = partial_json_parser.loads(parsable_arr, flags)
             except partial_json_parser.core.exceptions.MalformedJSON:
                 logger.debug('not enough tokens to parse into JSON yet')
                 return None

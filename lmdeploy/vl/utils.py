@@ -1,54 +1,82 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Dict, Tuple
+import os
+from io import BytesIO
 
-import numpy.typing as npt
-from PIL import Image
+import pybase64
+import requests
+from PIL import Image, ImageFile
 
-from .media.connection import load_from_url
-from .media.image import ImageMediaIO
-from .media.time_series import TimeSeriesMediaIO
-from .media.video import VideoMediaIO
+from lmdeploy.utils import get_logger
 
-
-def load_image(image_url: str, **kwargs) -> Image.Image:
-    """Fetch and decode an image from a URL, path, or base64 string."""
-    image_io = ImageMediaIO(**kwargs)
-    return load_from_url(image_url, image_io)
+logger = get_logger('lmdeploy')
 
 
-def load_video(video_url: str, **kwargs) -> Tuple[npt.NDArray, Dict[str, Any]]:
-    """Fetch and decode video frames from a URL, path, or base64 string."""
-    image_io = ImageMediaIO()
-    video_io = VideoMediaIO(image_io=image_io, **kwargs)
-    return load_from_url(video_url, video_io)
+def encode_image_base64(image: str | Image.Image) -> str:
+    """Encode raw data to base64 format."""
+    buffered = BytesIO()
+    FETCH_TIMEOUT = int(os.environ.get('LMDEPLOY_FETCH_TIMEOUT', 10))
+    headers = {
+        'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+        '(KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
+    }
+    try:
+        if isinstance(image, str):
+            url_or_path = image
+            if url_or_path.startswith('http'):
+                response = requests.get(url_or_path, headers=headers, timeout=FETCH_TIMEOUT)
+                response.raise_for_status()
+                buffered.write(response.content)
+            elif os.path.exists(url_or_path):
+                with open(url_or_path, 'rb') as image_file:
+                    buffered.write(image_file.read())
+        elif isinstance(image, Image.Image):
+            image.save(buffered, format='PNG')
+    except Exception as error:
+        if isinstance(image, str) and len(image) > 100:
+            image = image[:100] + ' ...'
+        logger.error(f'{error}, image={image}')
+        # use dummy image
+        image = Image.new('RGB', (32, 32))
+        image.save(buffered, format='PNG')
+    res = pybase64.b64encode(buffered.getvalue()).decode('utf-8')
+    return res
 
 
-def load_time_series(ts_url: str, **kwargs) -> npt.NDArray:
-    """Fetch and decode time-series from a URL or path or base64 string.."""
-    ts_io = TimeSeriesMediaIO(**kwargs)
-    return load_from_url(ts_url, ts_io)
+def load_image_from_base64(image: bytes | str) -> Image.Image:
+    """Load image from base64 format."""
+    return Image.open(BytesIO(pybase64.b64decode(image)))
 
 
-def encode_image_base64(image: str | Image.Image, format: str = 'PNG', **kwargs) -> str:
-    """Encode image (path or PIL image) to a base64 string."""
-    if isinstance(image, str):
-        image = load_image(image, **kwargs)
-    image_io = ImageMediaIO(**kwargs)
-    return image_io.encode_base64(image, image_format=format)
+def load_image(image_url: str | Image.Image) -> Image.Image:
+    """Load image from url, local path or openai GPT4V."""
+    FETCH_TIMEOUT = int(os.environ.get('LMDEPLOY_FETCH_TIMEOUT', 10))
+    headers = {
+        'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+        '(KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
+    }
+    try:
+        ImageFile.LOAD_TRUNCATED_IMAGES = True
+        if isinstance(image_url, Image.Image):
+            img = image_url
+        elif image_url.startswith('http'):
+            response = requests.get(image_url, headers=headers, timeout=FETCH_TIMEOUT)
+            response.raise_for_status()
+            img = Image.open(BytesIO(response.content))
+        elif image_url.startswith('data:image'):
+            img = load_image_from_base64(image_url.split(',')[1])
+        else:
+            # Load image from local path
+            img = Image.open(image_url)
 
+        # check image valid
+        img = img.convert('RGB')
+    except Exception as error:
+        if isinstance(image_url, str) and len(image_url) > 100:
+            image_url = image_url[:100] + ' ...'
+        logger.error(f'{error}, image_url={image_url}')
+        # use dummy image
+        img = Image.new('RGB', (32, 32))
 
-def encode_video_base64(video: str | npt.NDArray, format: str = 'JPEG', **kwargs) -> str:
-    """Encode video (path or frames) to a base64 string."""
-    if isinstance(video, str):
-        video, _ = load_video(video, **kwargs)
-    image_io = ImageMediaIO()
-    video_io = VideoMediaIO(image_io=image_io, **kwargs)
-    return video_io.encode_base64(video, video_format=format)
-
-
-def encode_time_series_base64(data: str | npt.NDArray, **kwargs) -> str:
-    """Encode time-series (path or numpy array) to a base64 string."""
-    if isinstance(data, str):
-        data = load_time_series(data, **kwargs)
-    ts_io = TimeSeriesMediaIO(**kwargs)
-    return ts_io.encode_base64(data)
+    return img

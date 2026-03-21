@@ -2,7 +2,8 @@
 # adapted from:
 # https://github.com/huggingface/transformers/blob/main/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py
 
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -12,7 +13,7 @@ from transformers.configuration_utils import PretrainedConfig
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.models.qwen2_vl import Qwen2Model
-from lmdeploy.pytorch.multimodal.data_type import MultiModalData
+from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, FlashAttention, RMSNorm, SiluAndMul
 from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
@@ -118,7 +119,7 @@ class Qwen2_5_VLVisionAttention(nn.Module):
         )
 
     def forward(self, hidden_states: torch.Tensor, cu_seqlens: torch.Tensor,
-                rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor]) -> torch.Tensor:
+                rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor]) -> torch.Tensor:
         seq_length = hidden_states.shape[0]
         # qkv proj
         qkv_states = self.qkv(hidden_states)
@@ -198,7 +199,7 @@ class Qwen2_5_VLVisionBlock(nn.Module):
     def forward(self,
                 hidden_states: torch.Tensor,
                 cu_seqlens: torch.Tensor,
-                rotary_pos_emb: Optional[torch.Tensor] = None) -> torch.Tensor:
+                rotary_pos_emb: torch.Tensor | None = None) -> torch.Tensor:
         hidden_states = hidden_states + self.attn(
             self.norm1(hidden_states),
             cu_seqlens=cu_seqlens,
@@ -341,7 +342,7 @@ class Qwen2_5_VisionTransformerPretrainedModel(nn.Module):
                 cu_seqlens: torch.Tensor,
                 rotary_pos_emb: torch.Tensor,
                 window_index: torch.Tensor = None,
-                cu_window_seqlens: List = None) -> torch.Tensor:
+                cu_window_seqlens: list = None) -> torch.Tensor:
         """forward."""
         hidden_states = self.patch_embed(hidden_states)
 
@@ -417,7 +418,7 @@ class Qwen2_5_VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGrap
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
         mrope_position_ids: torch.Tensor = None,
@@ -425,7 +426,7 @@ class Qwen2_5_VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGrap
         vis_cu_seqlens: torch.Tensor = None,
         vis_pos_emb: torch.Tensor = None,
         window_index: torch.Tensor = None,
-        cu_window_seqlens: List = None,
+        cu_window_seqlens: list = None,
         image_mask: torch.Tensor = None,
         **kwargs,
     ):
@@ -458,8 +459,8 @@ class Qwen2_5_VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGrap
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
-        inputs_embeds: Optional[torch.Tensor] = None,
+        past_key_values: list[list[torch.Tensor]],
+        inputs_embeds: torch.Tensor | None = None,
         context: StepContext = None,
     ):
         """Prepare input."""
@@ -526,7 +527,7 @@ class Qwen2_5_VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGrap
             image_mask=image_mask,
         )
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
         # modify from vllm
         stacked_params_mapping = [
@@ -673,8 +674,8 @@ class Qwen2_5_VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGrap
         return new_model_metas
 
     def update_model_metas(self,
-                           past_key_values: List[List[torch.Tensor]],
-                           inputs_embeds: Optional[torch.Tensor] = None,
+                           past_key_values: list[list[torch.Tensor]],
+                           inputs_embeds: torch.Tensor | None = None,
                            context: StepContext = None):
         """Update model meta."""
         if context.is_decoding:
@@ -687,6 +688,9 @@ class Qwen2_5_VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGrap
         return self.input_processor
 
 
+InputMultiModalType = list[dict[str, Any]]
+
+
 class Qwen2_5_VLInputProcessor(BaseModelInputProcessor):
     """Qwen2 input processor."""
 
@@ -694,8 +698,8 @@ class Qwen2_5_VLInputProcessor(BaseModelInputProcessor):
         self.config = config
 
     def preprocess_input(self,
-                         input_ids: List[int],
-                         input_multimodals: List[Dict[str, Any]] = None,
+                         input_ids: list[int],
+                         input_multimodals: list[dict[str, Any]] = None,
                          **kwargs) -> PreprocessInputResult:
         """Prepare multimodal input."""
         if input_multimodals is None or len(input_multimodals) == 0:
@@ -712,10 +716,10 @@ class Qwen2_5_VLInputProcessor(BaseModelInputProcessor):
             if isinstance(num_pad, torch.Tensor):
                 num_pad = num_pad.item()
 
-            mm_data = MultiModalData(data=pixel_values,
-                                     start=start,
-                                     end=start + num_pad,
-                                     meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
+            mm_data = MultiModalTensor(data=pixel_values,
+                                       start=start,
+                                       end=start + num_pad,
+                                       meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(
