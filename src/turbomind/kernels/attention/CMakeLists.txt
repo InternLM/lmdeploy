@@ -30,7 +30,7 @@ if (BUILD_TEST)
         attention
         # flash_attention
         nvidia::cutlass::cutlass
-        Llama
+        models
         unfused_attention_kernels
         logger
         cublas)

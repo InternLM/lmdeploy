@@ -68,6 +68,8 @@ struct ModelParam {
     int linear_num_key_heads   = 0;
     int linear_num_value_heads = 0;
 
+    DataType linear_state_dtype = {};
+
     bool attn_output_gate = false;  // Qwen3.5: doubles Q projection in full-attention layers
 
     // Layer indices whose MoE experts use data_type (fp16) instead of
@@ -75,6 +77,16 @@ struct ModelParam {
     // patterns like 'model.layers.0.'.
     std::set<int> unquantized_expert_layers;
 };
+
+inline bool HasLinearAttention(const ModelParam& model_param)
+{
+    for (int type : model_param.layer_types) {
+        if (type == 1) {
+            return true;
+        }
+    }
+    return false;
+}
 
 /// TODO: rename all `gate` in the context of MoE router to `router`
 struct MoeParam {
