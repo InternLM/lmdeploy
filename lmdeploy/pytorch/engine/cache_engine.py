@@ -193,7 +193,7 @@ class CacheEngine:
             head_size = model_config.head_dim
         shape = cls._get_key_block_shape_impl(
             model_config,
-            block_size=cache_config.block_size,
+            block_size=cache_config.kernel_block_size,
             head_size=head_size,
             world_size=world_size,
             quant_policy=cache_config.quant_policy,
@@ -212,7 +212,7 @@ class CacheEngine:
             head_size = model_config.head_dim
         shape = cls._get_value_block_shape_impl(
             model_config,
-            block_size=cache_config.block_size,
+            block_size=cache_config.kernel_block_size,
             head_size=head_size,
             world_size=world_size,
             quant_policy=cache_config.quant_policy,
@@ -243,7 +243,7 @@ class CacheEngine:
         if len(model_config.cache_shapes) == 0:
             return []
 
-        block_size = cache_config.block_size
+        block_size = cache_config.kernel_block_size
 
         descs = []
         for shape, dtype in model_config.cache_shapes:
@@ -258,6 +258,8 @@ class CacheEngine:
         """Allocate caches."""
 
         num_layers = model_config.num_layers
+        kernel_blocks_per_kv = cache_config.block_size // cache_config.kernel_block_size
+        num_blocks *= kernel_blocks_per_kv
 
         # get all descs
         k_cache_desc = cls.get_k_cache_desc(model_config, cache_config, world_size)

@@ -87,6 +87,7 @@ class CacheConfig:
     block_size: int
     num_cpu_blocks: int
     num_gpu_blocks: int
+    kernel_block_size: int = -1
     window_size: int = -1
     cache_max_entry_count: float = 0.8
     max_prefill_token_num: int = 4096
@@ -108,6 +109,8 @@ class CacheConfig:
         if self.window_size > 1 and self.enable_prefix_caching:
             logger.warning('Prefix caching is not available for window attention.')
             self.enable_prefix_caching = False
+        if self.kernel_block_size == -1:
+            self.kernel_block_size = self.block_size
 
 
 class TPMode(enum.Enum):
