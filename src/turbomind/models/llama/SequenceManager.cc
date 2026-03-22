@@ -204,7 +204,7 @@ SequenceManager::SequenceManager(const ModelParam& model_param,
         block_trie_ = std::make_shared<BlockTrie>(
             block_config.block_len_, block_manager_, snapshot_publisher, snapshot_validator, snapshot_releaser);
     }
-    TM_LOG_WARNING("[SegMgr] prefix caching is %s", enable_prefix_caching ? "enabled" : "disabled");
+    TM_LOG_WARNING("[SeqMgr] prefix caching is %s", enable_prefix_caching ? "enabled" : "disabled");
     if (enable_prefix_caching && num_linear_layers_ > 0) {
         TM_LOG_INFO(
             "[SeqMgr] linear prefix caching enabled: active pool %.2f MB, snapshot/block %.2f MB, max blocks %d",
@@ -282,6 +282,7 @@ void SequenceManager::PrepareLinearCheckpointStaging(RequestCache& cache)
         auto& s                     = const_cast<Sequence&>(seq);
         s.staged_linear_block_begin = 0;
         s.staged_linear_block_count = 0;
+        s.staged_linear_block_valid.clear();
         return;
     }
 
@@ -299,13 +300,16 @@ void SequenceManager::PrepareLinearCheckpointStaging(RequestCache& cache)
     s.staged_linear_block_count = block_count;
 
     if (block_count == 0) {
+        if (!s.staged_linear_block_valid.empty()) {
+            std::fill(s.staged_linear_block_valid.begin(), s.staged_linear_block_valid.end(), 0);
+        }
         return;
     }
 
     if ((int)s.staged_linear_block_valid.size() < last_block) {
         s.staged_linear_block_valid.resize(last_block, 0);
     }
-    std::fill(s.staged_linear_block_valid.begin() + first_block, s.staged_linear_block_valid.begin() + last_block, 0);
+    std::fill(s.staged_linear_block_valid.begin(), s.staged_linear_block_valid.end(), 0);
 
     const std::vector<ssize_t> conv_shape{block_count, num_linear_layers_, d_conv_, conv_dim_};
     const std::vector<ssize_t> recurrent_shape{
@@ -419,7 +423,10 @@ std::pair<int, uint64_t> SequenceManager::PublishLinearSnapshot(const Sequence& 
     }
 
     const auto& seq       = sequence;
-    const bool  staged_ok = block_idx >= 0 && block_idx < (int)seq.staged_linear_block_valid.size()
+    const int   begin     = seq.staged_linear_block_begin;
+    const int   count     = seq.staged_linear_block_count;
+    const bool  in_window = count > 0 && block_idx >= begin && block_idx < begin + count;
+    const bool  staged_ok = in_window && block_idx >= 0 && block_idx < (int)seq.staged_linear_block_valid.size()
                            && seq.staged_linear_block_valid[block_idx];
 
     if (!staged_ok) {

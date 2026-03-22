@@ -449,6 +449,10 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
                 if (pd.staged_block_count[i] <= 0) {
                     continue;
                 }
+                // Decode rows use v3 without recurrent snapshot export; only prefill fills both conv + recurrent.
+                if (pd.input_lens[i] <= 1) {
+                    continue;
+                }
                 auto& seq = *pd.rc[i]->seq;
                 for (int s = 0; s < pd.staged_block_count[i]; ++s) {
                     const int block_idx = pd.staged_block_begin[i] + s;
