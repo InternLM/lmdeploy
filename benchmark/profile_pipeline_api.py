@@ -10,7 +10,8 @@ from tqdm import tqdm
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
-from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter
+from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter, get_speculative_config
+from lmdeploy.messages import SpeculativeConfig
 from lmdeploy.profiler import Profiler, Session
 from lmdeploy.utils import get_logger
 
@@ -131,8 +132,11 @@ def sample_random_requests(
 
 class Engine:
 
-    def __init__(self, model_path: str, engine_config, csv: str):
-        self.pipe = pipeline(model_path, backend_config=engine_config, log_level='ERROR')
+    def __init__(self, model_path: str, engine_config, csv: str, speculative_config: SpeculativeConfig | None = None):
+        self.pipe = pipeline(model_path,
+                             backend_config=engine_config,
+                             log_level='ERROR',
+                             speculative_config=speculative_config)
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
         self.return_routed_experts = getattr(self.pipe.backend_config, 'enable_return_routed_experts', False)
         self.csv = csv
@@ -263,6 +267,9 @@ def parse_args():
     cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
     prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
 
+    # spec decode
+    ArgumentHelper.add_spec_group(parser)
+
     # turbomind engine args
     tb_group = parser.add_argument_group('TurboMind engine argument')
     tb_group._group_actions.append(tp_act)
@@ -312,7 +319,8 @@ def main():
             enable_return_routed_experts=args.enable_return_routed_experts,
         )
 
-    engine = Engine(args.model_path, engine_config, csv=args.csv)
+    speculative_config = get_speculative_config(args)
+    engine = Engine(args.model_path, engine_config, csv=args.csv, speculative_config=speculative_config)
 
     profiler = Profiler(args.stream_output, [50, 75, 95, 99])
 
