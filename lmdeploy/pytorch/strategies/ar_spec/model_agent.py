@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
@@ -45,6 +45,12 @@ class ARSpecExtraInputs(ExtraInputs):
         dist.broadcast(self.output_draft_token_ids, src=src, group=group, async_op=async_op)
         handle = dist.broadcast(self.num_rejected_tokens, src=src, group=group, async_op=async_op)
         return handle
+
+    def clone(self, **kwargs):
+        """Get new ARSpecExtraInputs with updated fields."""
+        out_dict = {f.name: getattr(self, f.name) for f in fields(self)}
+        out_dict.update(kwargs)
+        return ARSpecExtraInputs(**out_dict)
 
     def merge(self, other: 'ARSpecExtraInputs'):
         """Merge extra inputs."""
@@ -131,15 +137,17 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
     def slice_extra_inputs(self, extra_inputs: ARSpecExtraInputs, model_inputs: ModelInputs,
                            model_outputs: Dict[str, torch.Tensor], **kwargs) -> ARSpecExtraInputs:
         """Slice outputs."""
-        extra_inputs = ARSpecExtraInputs()
-        extra_inputs.target_hidden_states = model_outputs.get('hidden_states')
-        extra_inputs.target_position_ids = model_outputs.get('position_ids', None)
-        extra_inputs.target_inputs_embeds = model_outputs.get('target_inputs_embeds', None)
+        target_logits = None
         if model_inputs.is_decoding:
             batch_size = model_inputs.seq_length.size(0)
             logits = model_outputs['logits'][0]
-            extra_inputs.target_logits = logits.unflatten(0, (batch_size, -1))[:, :-1]
-        return extra_inputs
+            target_logits = logits.unflatten(0, (batch_size, -1))[:, :-1]
+        return extra_inputs.clone(
+            target_hidden_states=model_outputs.get('hidden_states'),
+            target_position_ids=model_outputs.get('position_ids', None),
+            target_inputs_embeds=model_outputs.get('target_inputs_embeds', None),
+            target_logits=target_logits,
+        )
 
     def step_sampling_inputs(self, sampling_inputs: SamplingInputs, next_token_ids: torch.Tensor, **kwargs):
         """step."""
