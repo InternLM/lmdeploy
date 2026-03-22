@@ -15,6 +15,7 @@ class MultiModalData:
     start: int
     end: int = None
     meta: Dict[str, Any] = None
+    modality: Modality = Modality.IMAGE
 
     modality: Modality = Modality.IMAGE
 

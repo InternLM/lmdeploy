@@ -899,7 +899,7 @@ class Qwen3VLInputProcessor(BaseModelInputProcessor):
         offset = input_mm['offset']
         start = offset
         image_token_id = input_mm['image_token_id']
-        num_pad = input_mm['image_tokens']
+        num_pad = input_mm['mm_token_num']
         if isinstance(num_pad, torch.Tensor):
             num_pad = num_pad.item()
 
@@ -917,7 +917,7 @@ class Qwen3VLInputProcessor(BaseModelInputProcessor):
         offset = input_mm['offset']
         start = offset
         video_token_id = input_mm['video_token_id']
-        num_pad = input_mm['video_tokens']
+        num_pad = input_mm['mm_token_num']
         if isinstance(num_pad, torch.Tensor):
             num_pad = num_pad.item()
 

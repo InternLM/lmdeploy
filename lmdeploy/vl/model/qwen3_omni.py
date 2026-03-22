@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import torch
 from transformers import AutoProcessor
@@ -13,35 +13,36 @@ logger = get_logger('lmdeploy')
 
 def check_transformers():
     try:
-        from transformers import Qwen3VLForConditionalGeneration, Qwen3VLMoeForConditionalGeneration  # noqa: F401
+        from transformers import Qwen3OmniMoeForConditionalGeneration  # noqa: F401
     except ImportError:
         raise ImportError('please install latest transformers by '
                           'pip install git+https://github.com/huggingface/transformers.git')
 
 
 @VISION_MODELS.register_module()
-class Qwen3VLModel(VisionModel):
-    """Qwen3VL model."""
+class Qwen3OmniModel(VisionModel):
+    """Qwen3Omni model."""
 
-    _arch = ['Qwen3VLForConditionalGeneration', 'Qwen3VLMoeForConditionalGeneration']
+    _arch = ['Qwen3OmniMoeForConditionalGeneration']
 
     def build_preprocessor(self):
         check_transformers()
         self.processor = AutoProcessor.from_pretrained(self.model_path)
+        tokenizer = self.processor.tokenizer
 
         # image tokens
         self.image_token = self.processor.image_token
-        self.image_token_id = self.processor.image_token_id
+        self.image_token_id = tokenizer.encode(self.image_token)[-1]
 
         # video tokens
         self.video_token = self.processor.video_token
-        self.video_token_id = self.processor.video_token_id
+        self.video_token_id = tokenizer.encode(self.video_token)[-1]
 
-        # vision start and end tokens
-        self.vision_start_token = self.processor.vision_start_token
-        self.vision_end_token = self.processor.vision_end_token
+        # audio tokens
+        self.audio_token = self.processor.audio_token
+        self.audio_token_id = tokenizer.encode(self.audio_token)[-1]
 
-    def get_processor_args(self, mm_processor_kwargs: Dict[str, Any] | None = None):
+    def get_processor_args(self, mm_processor_kwargs: Optional[Dict[str, Any]] = None):
         min_pixels = self.processor.image_processor.size['shortest_edge']
         max_pixels = self.processor.image_processor.size['longest_edge']
 
@@ -108,6 +109,12 @@ class Qwen3VLModel(VisionModel):
                             do_sample_frames=False,
                             video_metadata=metadata,
                             return_tensors='pt')
+
+        # TODO: update from mm_processor_kwargs when needed
+        video_kwargs.update(size={
+            'shortest_edge': 128 * 32 * 32,
+            'longest_edge': 768 * 32 * 32,
+        })
         result = self.processor.video_processor(videos=data, **video_kwargs)
         video_grid_thw = result['video_grid_thw']
 
@@ -116,21 +123,58 @@ class Qwen3VLModel(VisionModel):
             logger.warning_once('Qwen3VL: fps not found, defaulting to 24.')
             metadata['fps'] = metadata['fps'] or 24
 
-        # if timestamps are not provided, calculate them
-        curr_timestamp = self.processor._calculate_timestamps(
-            metadata['frames_indices'],
-            metadata['fps'],
-            self.processor.video_processor.merge_size,
-        )
+        # TODO: update fps from video kwargs, refer to transformers/models/qwen3_omni_moe/processing_qwen3_omni_moe.py
+        second_per_grid = self.processor.video_processor.temporal_patch_size / video_kwargs.get('fps', 1.0)
 
         frame_seqlen = video_grid_thw[0][1:].prod() // merge_length
-        result.update(curr_timestamp=curr_timestamp, frame_seqlen=frame_seqlen, video_token_id=self.video_token_id)
+        video_tokens = video_grid_thw[0].prod() // merge_length  # T*H*W / merge^2
+        result.update(frame_seqlen=frame_seqlen,
+                      mm_token_num=video_tokens,
+                      second_per_grid=second_per_grid,
+                      video_token_id=self.video_token_id)
+        return result
+
+    def _get_feat_extract_output_lengths(self, input_lengths):
+        """Computes the output length of the convolutional layers and the
+        output length of the audio encoder."""
+
+        input_lengths_leave = input_lengths % 100
+        feat_lengths = (input_lengths_leave - 1) // 2 + 1
+        output_lengths = ((feat_lengths - 1) // 2 + 1 - 1) // 2 + 1 + (input_lengths // 100) * 13
+        return output_lengths
+
+    def _preprocess_audio(self,
+                          data: List[Any],
+                          params: Dict[str, Any],
+                          mm_processor_kwargs: Dict[str, Any] | None = None) -> List[Dict]:
+        audio, original_sr = data
+        # NOTE: WhisperFeatureExtractor was trained using a fixed sampling rate of 16000
+        # TODO: zhouxinyu, get truncation from mm_processor_kwargs when needed
+        sr = self.processor.feature_extractor.sampling_rate
+        audio_kwargs = {
+            'sampling_rate': sr,
+            'padding': True,
+            'truncation': False,
+            'return_attention_mask': True,
+            'return_tensors': 'pt'
+        }
+        result = self.processor.feature_extractor(audio, **audio_kwargs)
+        feature_attention_mask = result.get('attention_mask')
+        audio_feature_lengths = torch.sum(feature_attention_mask, dim=1)
+        audio_output_length = self._get_feat_extract_output_lengths(audio_feature_lengths)
+        audio_tokens = audio_output_length
+
+        result.update(
+            dict(mm_token_num=audio_tokens,
+                 audio_feature_lengths=audio_feature_lengths,
+                 audio_token_id=self.audio_token_id))
         return result
 
     def preprocess(self, messages: List[Dict], mm_processor_kwargs: Dict[str, Any] | None = None) -> List[Dict]:
         """Refer to `super().preprocess()` for spec."""
         outputs = []
         self.contains_video_input = False
+        self.contains_audio_input = False
 
         mm_items = self.collect_multimodal_items(messages)
         for modality, data, params in mm_items:
@@ -140,6 +184,9 @@ class Qwen3VLModel(VisionModel):
             elif modality == Modality.VIDEO:
                 self.contains_video_input = True
                 result = self._preprocess_video(data, params, mm_processor_kwargs)
+            elif modality == Modality.AUDIO:
+                self.contains_audio_input = True
+                result = self._preprocess_audio(data, params, mm_processor_kwargs)
 
             result.update(modality=modality)
             outputs.append(result)
@@ -150,68 +197,16 @@ class Qwen3VLModel(VisionModel):
     def proc_messages(self, messages, chat_template, sequence_start, chat_template_kwargs=None):
         """Apply chat template to get the prompt."""
         chat_template_kwargs = chat_template_kwargs or {}
-        prompt_messages = []
-        IMAGE_TOKEN = '<IMAGE_TOKEN>'
         messages = [x for x in messages if x['role'] not in ['preprocess', 'forward']]
-        if VisionModel.IMAGE_TOKEN_included(messages):
-            # backward compatibility
-            for message in messages:
-                role, content = message['role'], message['content']
-                if role != 'user' or isinstance(content, str):
-                    prompt_messages.append(message)
-                    continue
-                content = [x['text'] for x in content if x['type'] == 'text']
-                prompt = ''.join(content)
-                prompt = prompt.replace(IMAGE_TOKEN, f'<|vision_start|>{self.image_token}<|vision_end|>')
-                prompt_messages.append(dict(role='user', content=prompt))
-        else:
-            prompt_messages = messages
-        prompt = chat_template.messages2prompt(prompt_messages, sequence_start, **chat_template_kwargs)
-        return prompt, None
+        prompt = chat_template.messages2prompt(messages, sequence_start, **chat_template_kwargs)
 
-    def to_pytorch_aux_video(self, messages, prompt, VIDEO_TOKEN, tokenizer, sequence_start):
-        """Pack the video input to the compatible format with pytorch
-        engine."""
+        mm_placeholder = self.image_token
+        if self.contains_video_input:
+            mm_placeholder = self.video_token
+        elif self.contains_audio_input:
+            mm_placeholder = self.audio_token
 
-        # collect all preprocessing result from messages
-        preps = [x['content'] for x in messages if x['role'] == 'preprocess']
-        assert len(preps) == 1
-        preps = preps[0]
-
-        # split prompt into segments and validate data
-        segs = prompt.split(self.vision_start_token + self.video_token + self.vision_end_token)
-        assert len(segs) == len(preps) + 1, (f'the number of {self.video_token} is not equal '
-                                             f'to input videos, {len(segs) - 1} vs {len(preps)}')
-
-        # calculate the video token offset for each video
-        input_ids = []
-        for i, seg in enumerate(segs):
-            if i > 0 and i <= len(preps):
-                preps[i - 1].update(offset=len(input_ids))
-                frame_seqlen = preps[i - 1]['frame_seqlen']
-                assert self.video_token_id == preps[i - 1]['video_token_id']
-
-                video_grid_thw = preps[i - 1]['video_grid_thw']
-                curr_timestamp = preps[i - 1]['curr_timestamp']
-
-                # update prompt with timestamp index tokens and video pad tokens
-                video_placeholder = ''
-                for frame_idx in range(video_grid_thw[0][0]):
-                    curr_time = curr_timestamp[frame_idx]
-                    video_placeholder += f'<{curr_time:.1f} seconds>'
-                    video_placeholder += (self.vision_start_token + '<|placeholder|>' * frame_seqlen +
-                                          self.vision_end_token)
-
-                video_placeholder = video_placeholder.replace('<|placeholder|>', self.video_token)
-                video_token_ids = tokenizer.encode(video_placeholder)
-                input_ids.extend(video_token_ids)
-
-                preps[i - 1].update(mm_token_num=len(video_token_ids))
-
-            token_ids = tokenizer.encode(seg, add_bos=((i == 0) and sequence_start))
-            input_ids.extend(token_ids)
-
-        return dict(prompt=prompt, input_ids=input_ids, multimodal=preps)
+        return prompt, mm_placeholder
 
     def to_pytorch(self,
                    messages,
@@ -221,28 +216,5 @@ class Qwen3VLModel(VisionModel):
                    chat_template_kwargs: Dict | None = None,
                    **kwargs):
         """Return to the information needed by pytorch engine."""
-        prompt, _ = self.proc_messages(messages, chat_template, sequence_start, chat_template_kwargs)
-
-        if self.contains_video_input:
-            return self.to_pytorch_aux_video(messages, prompt, self.video_token, tokenizer, sequence_start)
-        else:
-            return self.to_pytorch_aux(messages, prompt, self.image_token, tokenizer, sequence_start)
-
-    def build_model(self):
-        # TODO: implement for turbomind
-        pass
-
-    @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
-        # TODO: implement for turbomind
-        pass
-
-    def to_turbomind(self,
-                     messages,
-                     chat_template,
-                     tokenizer,
-                     sequence_start,
-                     chat_template_kwargs: Dict | None = None,
-                     **kwargs):
-        # TODO: implement for turbomind
-        pass
+        prompt, mm_placeholder = self.proc_messages(messages, chat_template, sequence_start, chat_template_kwargs)
+        return self.to_pytorch_aux(messages, prompt, mm_placeholder, tokenizer, sequence_start)
