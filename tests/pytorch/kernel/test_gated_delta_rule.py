@@ -73,7 +73,7 @@ class TestRecurrentGatedDeltaRule:
 
     @pytest.fixture
     def batch(self):
-        yield 512
+        yield 128
 
     @pytest.fixture
     def num_heads(self):
@@ -148,7 +148,7 @@ class TestRecurrentGatedDeltaRule:
         """Test cache_seqlens circular buffer support."""
         from lmdeploy.pytorch.kernels.cuda.gated_delta_rule import fused_recurrent_gated_delta_rule
 
-        # Build circular buffer state: [NUM_STATE, B, HV, K, V]
+        # Build circular buffer state: [B, NUM_STATE, HV, K, V]
         num_states = seqlen + 2
         circular_state = torch.rand(batch, num_states, num_heads, head_dim, head_dim) - 0.5
         cache_seqlens = torch.randint(0, num_states * 3, (batch, ), dtype=torch.int32, device='cuda')

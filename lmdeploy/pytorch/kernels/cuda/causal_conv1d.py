@@ -298,9 +298,6 @@ def causal_conv1d_update(x,
     assert conv_state.dim() == 3
     assert weight.dim() == 2
     assert activation in ['silu', 'swish', None]
-    if conv_state_indices is not None:
-        assert conv_state_indices.dim() == 1 and conv_state_indices.is_contiguous()
-        assert conv_state_indices.dtype == torch.int32
 
     unsqueeze = x.dim() == 2
     if unsqueeze:
@@ -309,7 +306,19 @@ def causal_conv1d_update(x,
     has_bias = bias is not None
     width = weight.size(-1)
     _, hidden_size, seqlen = x.shape
+    batch = x.size(0)
     state_len = conv_state.size(-1)
+
+    if conv_state_indices is not None:
+        assert conv_state_indices.dim() == 1 and conv_state_indices.is_contiguous()
+        assert conv_state_indices.dtype == torch.int32
+        assert conv_state_indices.device == x.device
+        assert conv_state_indices.numel() == batch
+    if cache_seqlens is not None:
+        assert cache_seqlens.dim() == 1 and cache_seqlens.is_contiguous()
+        assert cache_seqlens.dtype == torch.int32
+        assert cache_seqlens.device == x.device
+        assert cache_seqlens.numel() == batch
 
     out = x.new_empty(x.shape)
 
