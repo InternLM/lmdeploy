@@ -174,7 +174,14 @@ html_theme_options = {
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ['_static']
-html_css_files = ['css/readthedocs.css']
+html_css_files = ['css/readthedocs.css', 'css/config_generator.css']
+html_js_files = [
+    'js/models/qwen3.js',
+    'js/models/deepseek.js',
+    'js/models/glm4.js',
+    'js/models/internlm.js',
+    'js/config_generator.js',
+]
 
 # Enable ::: for my_st
 myst_enable_extensions = [
