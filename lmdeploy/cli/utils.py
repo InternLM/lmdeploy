@@ -726,7 +726,7 @@ class ArgumentHelper:
         spec_group.add_argument('--speculative-algorithm',
                                 type=str,
                                 default=None,
-                                choices=['eagle', 'eagle3', 'deepseek_mtp'],
+                                choices=['eagle', 'eagle3', 'deepseek_mtp', 'qwen3_5_mtp'],
                                 help='The speculative algorithm to use. `None` means speculative decoding is disabled')
 
         spec_group.add_argument('--speculative-draft-model',

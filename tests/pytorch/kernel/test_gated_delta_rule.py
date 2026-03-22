@@ -73,15 +73,15 @@ class TestRecurrentGatedDeltaRule:
 
     @pytest.fixture
     def batch(self):
-        yield 512
+        yield 128
 
     @pytest.fixture
     def num_heads(self):
         yield 16
 
-    @pytest.fixture
-    def seqlen(self):
-        yield 1
+    @pytest.fixture(params=[1, 4])
+    def seqlen(self, request):
+        yield request.param
 
     @pytest.fixture
     def head_dim(self):
@@ -143,3 +143,70 @@ class TestRecurrentGatedDeltaRule:
         gt_o, gt_h = gt
         torch.testing.assert_close(out, gt_o, atol=1e-3, rtol=1e-4)
         torch.testing.assert_close(out_h, gt_h, atol=1e-2, rtol=1e-3)
+
+    def test_circular_buffer(self, q, k, v, g, beta, seqlen, batch, num_heads, head_dim):
+        """Test cache_seqlens circular buffer support."""
+        from lmdeploy.pytorch.kernels.cuda.gated_delta_rule import fused_recurrent_gated_delta_rule
+
+        # Build circular buffer state: [B, NUM_STATE, HV, K, V]
+        num_states = seqlen + 2
+        circular_state = torch.rand(batch, num_states, num_heads, head_dim, head_dim) - 0.5
+        cache_seqlens = torch.randint(0, num_states * 3, (batch, ), dtype=torch.int32, device='cuda')
+
+        # --- vectorized naive reference ---
+        scale = 1 / (head_dim**0.5)
+        rq = q.float() * scale
+        rk = k.float()
+        rv = v.float()
+        rg = g.float()
+        rb = beta.float()
+
+        # read initial state per batch: slot = cache_seqlens[b] % num_states
+        read_slots = (cache_seqlens % num_states).long()  # [B]
+        ref_state = circular_state.clone().float()
+        h = ref_state[torch.arange(batch, device='cuda'), read_slots]  # [B, HV, K, V]
+
+        ref_out = torch.zeros_like(rv)
+        expected_state = ref_state.clone()
+
+        for t in range(seqlen):
+            write_slots = (read_slots + 1 + t) % num_states  # [B]
+            b_q = rq[:, t]  # [B, H, K]
+            b_k = rk[:, t]  # [B, H, K]
+            b_v = rv[:, t]  # [B, HV, V]
+            b_g = rg[:, t]  # [B, HV]
+            b_beta = rb[:, t]  # [B, HV]
+
+            h = h * b_g.exp().unsqueeze(-1).unsqueeze(-1)
+            hk = (h * b_k.unsqueeze(-1)).sum(-2)  # [B, HV, V]
+            delta_v = (b_v - hk) * b_beta.unsqueeze(-1)
+            h = h + b_k.unsqueeze(-1) * delta_v.unsqueeze(-2)
+            ref_out[:, t] = torch.einsum('bhd,bhdm->bhm', b_q, h)
+
+            # scatter write state into circular buffer
+            expected_state[torch.arange(batch, device='cuda'), write_slots] = h
+
+        ref_out = ref_out.to(q.dtype)
+
+        # --- kernel under test ---
+        state_copy = circular_state.clone()
+        out, out_state = fused_recurrent_gated_delta_rule(
+            q=q,
+            k=k,
+            v=v,
+            g=g,
+            beta=beta,
+            initial_state=state_copy,
+            output_final_state=True,
+            cache_seqlens=cache_seqlens,
+        )
+
+        torch.testing.assert_close(out, ref_out, atol=1e-3, rtol=1e-4)
+        # Only compare slots the kernel actually wrote to
+        batch_idx = torch.arange(batch, device='cuda')
+        for t in range(seqlen):
+            write_slots = (read_slots + 1 + t) % num_states
+            torch.testing.assert_close(out_state[batch_idx, write_slots].float(),
+                                       expected_state[batch_idx, write_slots].to(out_state.dtype).float(),
+                                       atol=1e-2,
+                                       rtol=1e-3)

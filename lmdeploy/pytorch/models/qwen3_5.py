@@ -22,11 +22,11 @@ from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader, load_weight
 from lmdeploy.vl.constants import Modality
 
-from .patch import add_prefix
+from .patch import add_prefix, get_build_model_context
 from .qwen2_5_vl import Qwen2_5_VisionRotaryEmbedding as Qwen3_5VisionRotaryEmbedding
 from .qwen2_5_vl import Qwen2_5_VLVisionAttention as Qwen3_5VisionAttention
 from .qwen3_vl import Qwen3VLInputProcessor as Qwen3_5InputProcessor
-from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
+from .utils.cudagraph import CudaGraphMixin
 from .utils.model import DeployModelMixinV1, vlm_model
 
 
@@ -560,7 +560,8 @@ class Qwen3_5Attention(nn.Module):
                  layer_idx: int,
                  dtype: torch.dtype | None = None,
                  device: torch.device | None = None,
-                 prefix: str = ''):
+                 prefix: str = '',
+                 is_tp: bool = True):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         num_heads = config.num_attention_heads
@@ -584,6 +585,7 @@ class Qwen3_5Attention(nn.Module):
             dtype=dtype,
             device=device,
             prefix=add_prefix('qkv_proj', prefix),
+            is_tp=is_tp,
         )
 
         # rotary embedding
@@ -598,16 +600,14 @@ class Qwen3_5Attention(nn.Module):
         )
 
         # o_proj
-        self.o_proj = build_o_proj(
-            num_heads * head_dim,
-            hidden_size,
-            bias=config.attention_bias,
-            quant_config=quantization_config,
-            dtype=dtype,
-            device=device,
-            is_tp=True,
-            prefix=add_prefix('o_proj', prefix),
-        )
+        self.o_proj = build_o_proj(num_heads * head_dim,
+                                   hidden_size,
+                                   bias=config.attention_bias,
+                                   quant_config=quantization_config,
+                                   dtype=dtype,
+                                   device=device,
+                                   prefix=add_prefix('o_proj', prefix),
+                                   is_tp=is_tp)
 
         # q, k norm
         self.q_norm = RMSNorm(
@@ -730,9 +730,9 @@ class Qwen3_5DecoderLayer(nn.Module):
         hidden_states: torch.Tensor,
         rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
         past_key_value: List[torch.FloatTensor],
-        residual: torch.Tensor | None,
-        attn_metadata: Any,
-        gated_delta_meta: GatedDeltaMeta,
+        residual: torch.Tensor | None = None,
+        attn_metadata: Any | None = None,
+        gated_delta_meta: GatedDeltaMeta | None = None,
         all_routed_experts: torch.Tensor | None = None,
     ):
 
@@ -967,6 +967,8 @@ class Qwen3_5Model(nn.Module):
                                                device=device,
                                                prefix=add_prefix('language_model', prefix))
 
+        self.is_spec_decoding = get_build_model_context().num_spec_tokens > 0
+
     def forward(
         self,
         input_ids: torch.Tensor,
@@ -986,6 +988,7 @@ class Qwen3_5Model(nn.Module):
     ):
         """Model forward, return logits."""
 
+        output_inputs_embeds = None
         if inputs_embeds is None:
             inputs_embeds = self.get_input_embeddings()(input_ids)
 
@@ -1009,6 +1012,9 @@ class Qwen3_5Model(nn.Module):
                 expanded_image_mask = image_mask.unsqueeze(-1).expand_as(inputs_embeds)
                 inputs_embeds = inputs_embeds.masked_scatter(expanded_image_mask, image_embeds)
 
+                if self.is_spec_decoding:
+                    output_inputs_embeds = inputs_embeds
+
         hidden_states = self.language_model(
             input_ids=input_ids,
             position_ids=position_ids,
@@ -1019,7 +1025,7 @@ class Qwen3_5Model(nn.Module):
             mrope_position_ids=mrope_position_ids,
             all_routed_experts=all_routed_experts,
         )
-        return hidden_states
+        return hidden_states, output_inputs_embeds
 
     def get_input_embeddings(self):
         """Get input embeddings."""
@@ -1090,7 +1096,7 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
             all_routed_experts = position_ids.new_empty(
                 (num_tokens, config.num_hidden_layers, config.num_experts_per_tok), dtype=torch.uint16)
 
-        hidden_states = self.model(
+        hidden_states, target_inputs_embeds = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
             past_key_values=past_key_values,
@@ -1106,9 +1112,9 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
             grid_thw=grid_thw,
             all_routed_experts=all_routed_experts,
         )
-        if all_routed_experts is None:
-            return hidden_states
-        return dict(hidden_states=hidden_states, all_routed_experts=all_routed_experts)
+        return dict(hidden_states=hidden_states,
+                    all_routed_experts=all_routed_experts,
+                    target_inputs_embeds=target_inputs_embeds)
 
     def get_input_embeddings(self):
         """Get input embeddings."""
@@ -1260,179 +1266,6 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
                             break
                     param = params_dict[name]
                     load_weight(param, loaded_weight)
-
-    def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, **kwargs):
-        """Make cudagraph buffers from forward inputs."""
-
-        max_batchs = graph_meta.max_batchs
-        device = graph_meta.device
-        max_tokens = graph_meta.max_tokens
-
-        input_buffers = super().make_buffers_cudagraph(graph_meta=graph_meta, **kwargs)
-        mrope_position_ids = kwargs.get('mrope_position_ids', None)
-        if mrope_position_ids is not None:
-            input_buffers['mrope_position_ids'] = mrope_position_ids.new_zeros(3, max_tokens)
-
-        state_ids = torch.full((max_batchs, ), -1, dtype=torch.long, device=device)
-        input_buffers['state_ids'] = state_ids
-        return input_buffers
-
-    def fill_buffers_cudagraph(self, graph_meta: CudaGraphMeta, *args, **kwargs):
-        """Fill cudagraph buffers from forward inputs."""
-        input_buffers = graph_meta.input_buffers
-        new_inputs = super().fill_buffers_cudagraph(graph_meta, *args, **kwargs)
-        state_ids = kwargs['state_ids']
-        input_buffers['state_ids'].fill_(-1)
-        input_buffers['state_ids'][:state_ids.size(0)].copy_(state_ids)
-        new_inputs['state_ids'] = input_buffers['state_ids']
-
-        input_ids = kwargs.get('input_ids')
-        num_tokens = input_ids.size(-1)
-        new_batch_size = graph_meta.max_batchs
-
-        is_decoding = graph_meta.is_decoding
-        mrope_position_ids = kwargs.get('mrope_position_ids', None)
-        if mrope_position_ids is not None:
-            input_buffers['mrope_position_ids'][:, :num_tokens] = mrope_position_ids
-            if is_decoding:
-                new_inputs['mrope_position_ids'] = input_buffers['mrope_position_ids'][:, :new_batch_size]
-            else:
-                new_inputs['mrope_position_ids'] = input_buffers['mrope_position_ids']
-
-        return new_inputs
-
-    def _get_model_metas(self, context: StepContext):
-        """Get model metas."""
-        model_metas = context.model_metas
-        if model_metas is None:
-            batch_size = context.q_seqlens.numel()
-            return [dict(mrope_delta=0)] * batch_size
-        return [dict(mrope_delta=0) if meta is None else meta for meta in model_metas]
-
-    def _update_model_meta_decoding(self, context: StepContext):
-        """Update model meta for decoding."""
-        model_metas = self._get_model_metas(context)
-        position_ids = context.position_ids
-
-        mrope_deltas = [meta['mrope_delta'] for meta in model_metas]
-        mrope_deltas_cpu = torch.tensor(mrope_deltas, device='cpu')
-        if (mrope_deltas_cpu == mrope_deltas_cpu[0]).all():
-            mrope_deltas = position_ids.new_full((len(mrope_deltas), ), mrope_deltas[0])
-        else:
-            mrope_deltas = position_ids.new_tensor(mrope_deltas)
-        mrope_position_ids = position_ids + mrope_deltas[None]
-        mrope_position_ids = mrope_position_ids.expand(3, -1)
-
-        context.mrope_position_ids = mrope_position_ids
-        return model_metas
-
-    def _get_multimodal_pos_ids(self, grid_thw: list, device: torch.device):
-        """Get mrope ids."""
-        t, h, w = grid_thw
-        h //= 2
-        w //= 2
-        stride = torch.tensor([h * w, w, 1], device=device)[:, None]
-        size = torch.tensor([t, h, w], device=device)[:, None]
-        pos_ids = torch.arange(t * h * w, device=device)[None].expand(3, -1)
-        pos_ids = pos_ids // stride % size
-        return pos_ids
-
-    def _update_model_meta_prefilling(self, context: StepContext):
-        """Update model meta for prefilling."""
-        model_metas = self._get_model_metas(context)
-        input_multimodals = context.input_multimodals
-        if input_multimodals is None:
-            input_multimodals = [None] * len(model_metas)
-        position_ids = context.position_ids
-        batched_pos_ids = position_ids[0].split(context.q_seqlens.tolist())
-        mrope_position_ids = []
-        new_model_metas = []
-        for pos_ids, model_meta, input_mm in zip(batched_pos_ids, model_metas, input_multimodals):
-            mm_data_list = []
-            if input_mm is not None:
-                mm_data_list.extend(input_mm.get('mm_data', []))
-
-            if model_meta is None or 'mrope_delta' not in model_meta:
-                mrope_delta = 0
-            else:
-                mrope_delta = model_meta['mrope_delta']
-
-            pos_start = pos_ids[0].item()
-            mrope_pos_ids = pos_ids + mrope_delta
-            mrope_pos_ids = mrope_pos_ids[None].expand(3, -1).clone()
-
-            for mm_data in mm_data_list:
-                if mm_data.modality == Modality.IMAGE:
-                    grid_thw = mm_data.meta['grid_thw'][0].tolist()
-                    _, h, w = grid_thw
-                    h //= 2
-                    w //= 2
-                    num_pad = mm_data.end - mm_data.start - max(h, w)
-                    mrope_delta -= num_pad
-                    fill_start = mm_data.start - pos_start
-                    fill_end = mm_data.end - pos_start
-                    img_pos_ids = self._get_multimodal_pos_ids(grid_thw, pos_ids.device)
-                    img_pos_ids += mrope_pos_ids[:, fill_start:fill_start + 1]
-                    mrope_pos_ids[:, fill_end:] -= num_pad
-                    mrope_pos_ids[:, fill_start:fill_end] = img_pos_ids
-                elif mm_data.modality == Modality.VIDEO:
-                    video_token_id = self.config.video_token_id
-                    grid_thw = mm_data.meta['grid_thw']
-
-                    grid_thw = torch.repeat_interleave(grid_thw, grid_thw[:, 0], dim=0)
-                    grid_thw[:, 0] = 1
-
-                    position_ids_list = []
-                    input_tokens = context.input_ids.tolist()[0]
-
-                    st = 0
-                    # treat each frame separately as a single image
-                    for video_idx in range(grid_thw.shape[0]):
-                        # text before video. e.g. <0.3 seconds><|vision_start|> ...
-                        ed_video = input_tokens.index(video_token_id, st)
-                        ed = ed_video
-                        text_len = ed - st
-                        st_idx = position_ids_list[-1].max() + 1 if len(position_ids_list) > 0 else 0
-                        text_pos_ids = torch.arange(text_len, device=pos_ids.device).view(1, -1).expand(3, -1) + st_idx
-                        position_ids_list.append(text_pos_ids)
-
-                        # video frame. <video_pad> ... <|video_end|>
-                        t, h, w = (
-                            grid_thw[video_idx][0],
-                            grid_thw[video_idx][1] // 2,
-                            grid_thw[video_idx][2] // 2,
-                        )
-                        video_pos_ids = self._get_multimodal_pos_ids(grid_thw[video_idx], pos_ids.device)
-                        position_ids_list.append(video_pos_ids + text_len + st_idx)
-
-                        st = ed + t * h * w
-
-                    # text after video, <|vision_end|> ...
-                    if st < len(input_tokens):
-                        st_idx = position_ids_list[-1].max() + 1 if len(position_ids_list) > 0 else 0
-                        text_len = len(input_tokens) - st
-                        text_pos_ids = torch.arange(text_len, device=pos_ids.device).view(1, -1).expand(3, -1) + st_idx
-                        position_ids_list.append(text_pos_ids)
-
-                    mrope_pos_ids = torch.cat(position_ids_list, dim=1).reshape(3, -1)
-                    mrope_delta = mrope_pos_ids.max() + 1 - pos_ids.size(0)
-                    mrope_pos_ids += pos_start  # add back the original position offset
-
-            mrope_position_ids.append(mrope_pos_ids)
-            new_model_metas.append(dict(mrope_delta=mrope_delta))
-
-        mrope_position_ids = torch.cat(mrope_position_ids, dim=1)
-        context.mrope_position_ids = mrope_position_ids
-
-        return new_model_metas
-
-    def update_model_metas(self, past_key_values: List[List[torch.Tensor]], inputs_embeds: torch.Tensor | None,
-                           context: StepContext):
-        """Update model meta."""
-        if context.is_decoding:
-            return self._update_model_meta_decoding(context)
-        else:
-            return self._update_model_meta_prefilling(context)
 
     def get_input_processor(self) -> BaseModelInputProcessor:
         """Get input processor."""

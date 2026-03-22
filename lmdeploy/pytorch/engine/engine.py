@@ -3,7 +3,7 @@ import asyncio
 import gc
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import numpy as np
 import torch
@@ -28,7 +28,7 @@ from .request import Request, RequestManager, RequestType, Response
 
 logger = get_logger('lmdeploy')
 
-SeqList = List[SchedulerSequence]
+SeqList = list[SchedulerSequence]
 
 
 @dataclass
@@ -37,7 +37,7 @@ class InferOutput:
 
     session_id: int
     resp: Response
-    token_ids: Union[np.ndarray, List[int]]
+    token_ids: np.ndarray | list[int]
     meta: Any = None
     finish: bool = False
     logits: torch.Tensor = None
@@ -45,7 +45,7 @@ class InferOutput:
 
     # send cache blocks back for migration in Disaggregated LLM Serving
     # when Prefill Engine is Done.
-    cache_block_ids: List[int] = None
+    cache_block_ids: list[int] = None
 
     # for logging
     req_metrics: RequestMetrics = None
@@ -54,10 +54,13 @@ class InferOutput:
     routed_experts: torch.Tensor = None
 
 
-def _build_seq_meta(cache_config: CacheConfig, seq_strategy: Any, sampling_strategy: Any):
+def _build_seq_meta(model_config: ModelConfig, cache_config: CacheConfig, seq_strategy: Any, sampling_strategy: Any):
     from lmdeploy.pytorch.messages import SequenceMeta
 
-    seq_meta = SequenceMeta(cache_config.block_size, strategy=seq_strategy, sampling_strategy=sampling_strategy)
+    seq_meta = SequenceMeta(cache_config.block_size,
+                            strategy=seq_strategy,
+                            sampling_strategy=sampling_strategy,
+                            use_mrope=model_config.use_mrope)
     return seq_meta
 
 
@@ -156,7 +159,8 @@ class Engine(EngineBase):
         self.input_processor = self.executor.get_input_processor()
         cache_config = self.executor.cache_config
         self.adapter_manager = self._build_adapter_manager(adapters)
-        self.seq_meta = _build_seq_meta(cache_config,
+        self.seq_meta = _build_seq_meta(model_config=self.model_config,
+                                        cache_config=cache_config,
                                         seq_strategy=self.seq_strategy,
                                         sampling_strategy=self.sampling_strategy)
         self.scheduler = Scheduler(scheduler_config, cache_config, seq_meta=self.seq_meta)
@@ -229,7 +233,7 @@ class Engine(EngineBase):
             speculative_config=speculative_config,
         )
 
-    def _download_adapters(self, adapters: Dict[str, str], engine_config: PytorchEngineConfig):
+    def _download_adapters(self, adapters: dict[str, str], engine_config: PytorchEngineConfig):
         """Download adapters."""
         download_dir = engine_config.download_dir
         revision = engine_config.revision
@@ -274,7 +278,7 @@ class Engine(EngineBase):
             session_len = min(max_tokens, session_len)
         return session_len
 
-    def _on_add_session(self, reqs: List[Request], **kwargs):
+    def _on_add_session(self, reqs: list[Request], **kwargs):
         """On add session callback."""
         for req in reqs:
             session_id = req.data['session_id']
@@ -286,7 +290,7 @@ class Engine(EngineBase):
             if resp:
                 self._response(req.resp, resp_type)
 
-    def _on_stop_session(self, reqs: List[Request], **kwargs):
+    def _on_stop_session(self, reqs: list[Request], **kwargs):
         """On stop session callback."""
         for req in reqs:
             session_id = req.data['session_id']
@@ -305,7 +309,7 @@ class Engine(EngineBase):
             if resp:
                 self._response(req.resp, resp_type)
 
-    def _on_end_session(self, reqs: List[Request], **kwargs):
+    def _on_end_session(self, reqs: list[Request], **kwargs):
         """On end session callback."""
         for req in reqs:
             session_id = req.data['session_id']
@@ -321,7 +325,7 @@ class Engine(EngineBase):
             if resp:
                 self._response(req.resp, resp_type)
 
-    def _on_add_message(self, reqs: List[Request], **kwargs):
+    def _on_add_message(self, reqs: list[Request], **kwargs):
         """On add message callback."""
         valid_reqs = []
         for req in reqs:
@@ -359,7 +363,7 @@ class Engine(EngineBase):
         if len(valid_reqs) > 0:
             self._add_message(valid_reqs)
 
-    def _add_message(self, reqs: List[Request]):
+    def _add_message(self, reqs: list[Request]):
 
         def __update_max_new_tokens(msg):
             """Update max new tokens."""
@@ -440,7 +444,7 @@ class Engine(EngineBase):
         """Sleep."""
         self.executor.sleep(level)
 
-    def wakeup(self, tags: Optional[List[str]] = None):
+    def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
         self.executor.wakeup(tags)
 

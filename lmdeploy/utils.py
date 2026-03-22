@@ -396,7 +396,7 @@ def is_bf16_supported(device_type: str = 'cuda'):
         device_type (str): the type of device
     """
 
-    if device_type == 'cuda':
+    if device_type in ['cuda', 'auto']:
         import torch
         device = torch.cuda.current_device()
 

@@ -49,7 +49,8 @@ class Qwen3_5MoeSparseMoeBlock(nn.Module):
                  layer_idx: int,
                  dtype: torch.dtype | None = None,
                  device: torch.device | None = None,
-                 prefix: str = ''):
+                 prefix: str = '',
+                 is_tp: bool = True):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         self.layer_idx = layer_idx
@@ -79,7 +80,7 @@ class Qwen3_5MoeSparseMoeBlock(nn.Module):
             intermediate_size=config.shared_expert_intermediate_size,
             dtype=dtype,
             device=device,
-            is_tp=True,
+            is_tp=is_tp,
             all_reduce=False,
             prefix=add_prefix('shared_expert', prefix),
         )
@@ -204,6 +205,8 @@ class Qwen3_5MoeTextModel(Qwen3_5TextModel):
         # build rotary embedding
         self.rotary_emb = Qwen3_5TextRotaryEmbedding(config, device=device)
 
+        self.is_spec_decoding = get_build_model_context().num_spec_tokens > 0
+
 
 class Qwen3_5MoeModel(Qwen3_5Model):
 
@@ -222,6 +225,8 @@ class Qwen3_5MoeModel(Qwen3_5Model):
                                                   dtype=dtype,
                                                   device=device,
                                                   prefix=add_prefix('language_model', prefix))
+
+        self.is_spec_decoding = get_build_model_context().num_spec_tokens > 0
 
 
 class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):

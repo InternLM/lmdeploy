@@ -25,6 +25,7 @@ class ARSpecExtraInputs(ExtraInputs):
     target_logits: torch.Tensor = None
     target_hidden_states: torch.Tensor = None
     target_position_ids: torch.Tensor = None
+    target_inputs_embeds: torch.Tensor = None
     next_token_ids: torch.LongTensor = None
     last_token_indices: torch.LongTensor = None
 
@@ -133,6 +134,7 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
         extra_inputs = ARSpecExtraInputs()
         extra_inputs.target_hidden_states = model_outputs.get('hidden_states')
         extra_inputs.target_position_ids = model_outputs.get('position_ids', None)
+        extra_inputs.target_inputs_embeds = model_outputs.get('target_inputs_embeds', None)
         if model_inputs.is_decoding:
             batch_size = model_inputs.seq_length.size(0)
             logits = model_outputs['logits'][0]
@@ -207,7 +209,7 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
         input_ids[:, 0] = next_token_ids
         input_ids[:, 1:] = extra_inputs.output_draft_token_ids
         input_ids = input_ids.flatten()[None, :]
-        model_inputs.step(input_ids, step_seqlens)
+        model_inputs = model_inputs.step(input_ids, step_seqlens)
         return model_inputs, extra_inputs
 
     def post_sampling(self, inputs: 'ModelInputs', logits: torch.Tensor, next_token_ids: torch.LongTensor,

@@ -31,7 +31,7 @@ class SpecModelAgent(BaseSpecModelAgent):
         agent_strategy,
         device: str = 'cuda',
     ):
-        super().__init__(enable=True)
+        super().__init__(specdecode_config, enable=True)
 
         self.backend_config = backend_config
         self.device = device
@@ -43,7 +43,9 @@ class SpecModelAgent(BaseSpecModelAgent):
         self.method = specdecode_config.method
         self.model_config = specdecode_config.model_config
         self.cache_config = specdecode_config.cache_config
-        self.num_spec_tokens = specdecode_config.num_speculative_tokens
+
+        # make dummy meta
+        self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(self.model_config)
 
     def set_cache_config(self, cache_config: CacheConfig):
         """Set all cache config."""
@@ -52,6 +54,9 @@ class SpecModelAgent(BaseSpecModelAgent):
     def set_model_config(self, model_config: ModelConfig):
         """Set model config."""
         self.model_config = model_config
+        if model_config is not None:
+            # make dummy meta
+            self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(self.model_config)
 
     def build_model(self, empty_init: bool, target_model=None, build_model_ctx=None):
         """Build draft model."""
@@ -93,6 +98,7 @@ class SpecModelAgent(BaseSpecModelAgent):
             # update last token indices
             last_token_indices = last_token_indices - num_rejected_tokens
 
+        # TODO: fix chunked long input case
         # create new inputs
         input_ids = model_inputs.input_ids.clone()
         seq_length = model_inputs.seq_length
@@ -100,6 +106,18 @@ class SpecModelAgent(BaseSpecModelAgent):
         input_ids[:, :-1] = model_inputs.input_ids[:, 1:]
         # # update next tokens
         input_ids[:, last_token_indices] = next_token_ids
+
+        # reuse vlm input embeds
+        target_inputs_embeds = extra_inputs.target_inputs_embeds
+        if target_inputs_embeds is not None:
+            input_embeds = target_inputs_embeds.clone()
+            # offset by 1 token
+            input_embeds[:, :-1, :] = extra_inputs.target_inputs_embeds[:, 1:, :]
+            # update next token embeds
+            next_token_embeds = self.proposer.embed_input_ids(next_token_ids)
+            input_embeds[:, last_token_indices, :] = next_token_embeds
+            target_inputs_embeds = input_embeds
+
         # use new inputs
         new_model_inputs = ModelInputs(
             input_ids=input_ids,
@@ -113,7 +131,10 @@ class SpecModelAgent(BaseSpecModelAgent):
             is_decoding=model_inputs.is_decoding,
             target_hidden_states=extra_inputs.target_hidden_states,
             target_position_ids=extra_inputs.target_position_ids,
+            target_inputs_embeds=target_inputs_embeds,
+            mrope_pos_ids=model_inputs.mrope_pos_ids,
         )
+
         new_extra_inputs = ARSpecExtraInputs(
             next_token_ids=next_token_ids,
             last_token_indices=last_token_indices,
@@ -127,16 +148,6 @@ class SpecModelAgent(BaseSpecModelAgent):
         output = self.proposer._forward(inputs, cache_engine=self.cache_engine)
         return output
 
-    async def _async_forward(self, inputs: ModelInputs):
-        """Model forward.
-
-        Args:
-            inputs (Dict): The input data comes from _make_inputs.
-        """
-        output = self._forward_impl(inputs)
-        await asyncio.sleep(0)
-        return output
-
     async def _async_model_forward(self, inputs: ModelInputs, extra_inputs: ARSpecExtraInputs,
                                    sampling_inputs: SamplingInputs):
         """Model forward.
@@ -144,8 +155,9 @@ class SpecModelAgent(BaseSpecModelAgent):
         Args:
             inputs (Dict): The input data comes from _make_inputs.
         """
-        outputs = await self._async_forward(inputs)
+        outputs = self._forward_impl(inputs)
         if inputs.is_chunk:
+            await asyncio.sleep(0)
             return torch.zeros_like(inputs.input_ids)
 
         loop_count = self.num_spec_tokens - 1
@@ -157,18 +169,19 @@ class SpecModelAgent(BaseSpecModelAgent):
             inputs = self.proposer.update_inputs_decoding(inputs, extra_inputs, draft_token_ids.transpose(0, 1),
                                                           target_hidden_states, model_metas)
             for loop_idx in range(loop_count):
-                outputs = await self._async_forward(inputs)
+                outputs = self._forward_impl(inputs)
                 draft_token_ids, model_metas, target_hidden_states = self.proposer.get_outputs(outputs, inputs)
                 draft_tokens_li.append(draft_token_ids)
                 if loop_idx < loop_count - 1:
                     step_seqlens = inputs.seq_length.new_ones(inputs.seq_length.size(0))
-                    inputs.step(draft_token_ids.transpose(0, 1), step_seqlens)
+                    inputs = inputs.step(draft_token_ids.transpose(0, 1), step_seqlens)
                     inputs.model_metas = model_metas
                     inputs.target_hidden_states = target_hidden_states
                     if inputs.target_position_ids is not None:
                         inputs.target_position_ids += 1
 
         output_draft_ids = torch.cat(draft_tokens_li, dim=-1)
+        await asyncio.sleep(0)
         return output_draft_ids
 
     async def async_model_forward(
@@ -194,7 +207,8 @@ class SpecModelAgent(BaseSpecModelAgent):
                                                  device='cuda',
                                                  vocab_size=self.model_config.vocab_size,
                                                  target_hidden_size=target_hidden_size,
-                                                 target_dtype=self.model_config.dtype)
+                                                 target_dtype=self.model_config.dtype,
+                                                 meta=self.make_dummy_meta)
 
         self._forward_impl(inputs)
 
@@ -203,26 +217,24 @@ class SpecModelAgent(BaseSpecModelAgent):
 
         for batch_size in capture_batch_sizes:
             # decode with num_spec_tokens + 1 per seq
-            inputs = self.inputs_strategy.make_dummy(
-                batch_size,
-                is_decoding=True,
-                device='cuda',
-                vocab_size=self.model_config.vocab_size,
-                max_q_seqlen=self.num_spec_tokens + 1,
-                target_hidden_size=target_hidden_size,
-                target_dtype=self.model_config.dtype,
-            )
+            inputs = self.inputs_strategy.make_dummy(batch_size,
+                                                     is_decoding=True,
+                                                     device='cuda',
+                                                     vocab_size=self.model_config.vocab_size,
+                                                     max_q_seqlen=self.num_spec_tokens + 1,
+                                                     target_hidden_size=target_hidden_size,
+                                                     target_dtype=self.model_config.dtype,
+                                                     meta=self.make_dummy_meta)
             self._forward_impl(inputs)
             # decode 1 tokens per sequence
-            inputs = self.inputs_strategy.make_dummy(
-                batch_size,
-                is_decoding=True,
-                device='cuda',
-                vocab_size=self.model_config.vocab_size,
-                max_q_seqlen=1,
-                target_hidden_size=self.model_config.hidden_size,
-                target_dtype=self.model_config.dtype,
-            )
+            inputs = self.inputs_strategy.make_dummy(batch_size,
+                                                     is_decoding=True,
+                                                     device='cuda',
+                                                     vocab_size=self.model_config.vocab_size,
+                                                     max_q_seqlen=1,
+                                                     target_hidden_size=self.model_config.hidden_size,
+                                                     target_dtype=self.model_config.dtype,
+                                                     meta=self.make_dummy_meta)
             self._forward_impl(inputs)
 
     def reset_graph_runner(self):

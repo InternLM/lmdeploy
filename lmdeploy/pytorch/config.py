@@ -344,6 +344,9 @@ class ModelConfig:
     # quant config
     quant_config: 'QuantizationConfig' = None
 
+    # flags mark if this model use mrope
+    use_mrope: bool = False
+
     def get_head_size(self):
         """Get head size."""
         return self.head_dim
@@ -358,6 +361,7 @@ class ModelConfig:
         hf_overrides: Dict[str, Any] = None,
         is_draft_model: bool = False,
         spec_method: str = None,
+        num_spec_tokens: int = 0,
         model_format: str = None,
         device_type: str = 'auto',
     ):
@@ -390,6 +394,7 @@ class ModelConfig:
             dist_config=dist_config,
             is_draft_model=is_draft_model,
             spec_method=spec_method,
+            num_spec_tokens=num_spec_tokens,
             device_type=device_type,
         )
         fp32_lm_head = False
@@ -419,6 +424,7 @@ class ModelConfig:
         is_draft_model: bool = False,
         spec_method: str = None,
         device_type: str = 'auto',
+        num_spec_tokens: int = 0,
     ):
         """From huggingface config."""
         from lmdeploy.pytorch.configurations import AutoModelConfigBuilder
@@ -426,11 +432,14 @@ class ModelConfig:
             dist_config = DistConfig()
         tp = dist_config.attn_tp
 
-        model_config = AutoModelConfigBuilder.build(hf_config,
-                                                    model_path,
-                                                    tp=tp,
-                                                    is_draft_model=is_draft_model,
-                                                    spec_method=spec_method)
+        model_config = AutoModelConfigBuilder.build(
+            hf_config,
+            model_path,
+            tp=tp,
+            is_draft_model=is_draft_model,
+            spec_method=spec_method,
+            num_spec_tokens=num_spec_tokens,
+        )
 
         if model_config.k_head_dim is None:
             assert model_config.head_dim is not None
