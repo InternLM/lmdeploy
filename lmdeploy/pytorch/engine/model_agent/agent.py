@@ -52,7 +52,7 @@ class BatchedLogProbs:
 
     def to_cpu(self):
         """To cpu."""
-        return BatchedLogProbs(vals=self.vals.cpu(), indices=self.indices.cpu())
+        return BatchedLogProbs(vals=self.vals.cpu().detach(), indices=self.indices.cpu().detach())
 
     def to_numpy(self):
         """To numpy."""
@@ -90,7 +90,7 @@ class BatchedOutputs:
             k = f.name
             v = getattr(self, k)
             if isinstance(v, torch.Tensor):
-                v = v.cpu()
+                v = v.cpu().detach()
             elif hasattr(v, 'to_cpu'):
                 v = v.to_cpu()
             out[k] = v
