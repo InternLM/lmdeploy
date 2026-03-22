@@ -678,6 +678,17 @@ __global__ void chunked_gated_delta_rule_kernel(T*         v_out,
 
     const int num_chunks = (seq_len + C - 1) / C;
 
+    __shared__ int s_snap_si_cursor;
+    if (export_snapshots) {
+        if (threadIdx.x == 0) {
+            s_snap_si_cursor = (snap_batch_offsets != nullptr && snap_local_end_tokens != nullptr
+                                && staged_recurrent_ptrs != nullptr) ?
+                                   snap_batch_offsets[b] :
+                                   0;
+        }
+        __syncthreads();
+    }
+
     for (int ci = 0; ci < num_chunks; ++ci) {
         const int chunk_start = tok_off + ci * C;
         const int valid_len   = min(C, seq_len - ci * C);
@@ -811,11 +822,16 @@ __global__ void chunked_gated_delta_rule_kernel(T*         v_out,
                         && staged_recurrent_ptrs != nullptr) {
                         const int lo = snap_batch_offsets[b];
                         const int hi = snap_batch_offsets[b + 1];
-                        for (int si = lo; si < hi; ++si) {
-                            if (snap_local_end_tokens[si] == local_idx) {
-                                s_snap_si = si;
-                                break;
-                            }
+                        int       si = s_snap_si_cursor;
+                        while (si < hi && snap_local_end_tokens[si] < local_idx) {
+                            ++si;
+                        }
+                        if (si < hi && snap_local_end_tokens[si] == local_idx) {
+                            s_snap_si        = si;
+                            s_snap_si_cursor = si + 1;
+                        }
+                        else {
+                            s_snap_si_cursor = si;
                         }
                     }
                 }
@@ -1258,6 +1274,14 @@ __global__ void __launch_bounds__(BLOCK_DIM)
         T*        state_base = (T*)conv_state_ptrs[b] + state_layer_offset;
 
         if (ch_active) {
+            int snap_si_cursor = 0;
+            int snap_lo        = 0;
+            int snap_hi        = 0;
+            if (export_snapshots) {
+                snap_lo        = snap_batch_offsets[b];
+                snap_hi        = snap_batch_offsets[b + 1];
+                snap_si_cursor = snap_lo;
+            }
             constexpr int                 VALS_SIZE = NUM_TOKENS + D_CONV - 1;
             Array<T, CHANNELS_PER_THREAD> vals[VALS_SIZE];
             const int                     n_vals = n_tokens + D_CONV - 1;
@@ -1300,15 +1324,16 @@ __global__ void __launch_bounds__(BLOCK_DIM)
 
                     if (export_snapshots) {
                         const int local_pos = t_local_start + tok;
-                        int       si_snap   = -1;
-                        const int lo        = snap_batch_offsets[b];
-                        const int hi        = snap_batch_offsets[b + 1];
-                        for (int si = lo; si < hi; ++si) {
-                            if (snap_local_end_tokens[si] == local_pos) {
-                                si_snap = si;
-                                break;
-                            }
+                        int       si        = snap_si_cursor;
+                        while (si < snap_hi && snap_local_end_tokens[si] < local_pos) {
+                            ++si;
                         }
+                        int si_snap = -1;
+                        if (si < snap_hi && snap_local_end_tokens[si] == local_pos) {
+                            si_snap = si;
+                            si      = si + 1;
+                        }
+                        snap_si_cursor = si;
                         if (si_snap >= 0) {
                             T* const  snap_dst = (T*)staged_conv_ptrs[si_snap];
                             const int L        = local_pos;
