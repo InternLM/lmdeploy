@@ -148,16 +148,6 @@ class SpecModelAgent(BaseSpecModelAgent):
         output = self.proposer._forward(inputs, cache_engine=self.cache_engine)
         return output
 
-    async def _async_forward(self, inputs: ModelInputs):
-        """Model forward.
-
-        Args:
-            inputs (Dict): The input data comes from _make_inputs.
-        """
-        output = self._forward_impl(inputs)
-        await asyncio.sleep(0)
-        return output
-
     async def _async_model_forward(self, inputs: ModelInputs, extra_inputs: ARSpecExtraInputs,
                                    sampling_inputs: SamplingInputs):
         """Model forward.
@@ -165,8 +155,9 @@ class SpecModelAgent(BaseSpecModelAgent):
         Args:
             inputs (Dict): The input data comes from _make_inputs.
         """
-        outputs = await self._async_forward(inputs)
+        outputs = self._forward_impl(inputs)
         if inputs.is_chunk:
+            await asyncio.sleep(0)
             return torch.zeros_like(inputs.input_ids)
 
         loop_count = self.num_spec_tokens - 1
@@ -178,13 +169,10 @@ class SpecModelAgent(BaseSpecModelAgent):
             inputs = self.proposer.update_inputs_decoding(inputs, extra_inputs, draft_token_ids.transpose(0, 1),
                                                           target_hidden_states, model_metas)
             for loop_idx in range(loop_count):
-                outputs = await self._async_forward(inputs)
+                outputs = self._forward_impl(inputs)
                 draft_token_ids, model_metas, target_hidden_states = self.proposer.get_outputs(outputs, inputs)
                 draft_tokens_li.append(draft_token_ids)
                 if loop_idx < loop_count - 1:
-                    # inputs = inputs.clone(target_hidden_states=target_hidden_states, model_metas=model_metas)
-                    # if inputs.target_position_ids is not None:
-                    #     inputs.target_position_ids += 1
                     step_seqlens = inputs.seq_length.new_ones(inputs.seq_length.size(0))
                     inputs = inputs.step(draft_token_ids.transpose(0, 1), step_seqlens)
                     inputs.model_metas = model_metas
@@ -193,6 +181,7 @@ class SpecModelAgent(BaseSpecModelAgent):
                         inputs.target_position_ids += 1
 
         output_draft_ids = torch.cat(draft_tokens_li, dim=-1)
+        await asyncio.sleep(0)
         return output_draft_ids
 
     async def async_model_forward(
