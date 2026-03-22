@@ -338,10 +338,10 @@ int main(int argc, char** argv)
 
         Tensor snap_staged{Layout{{batch_size, state_size}}, state_dtype, kDEVICE};
 
-        Buffer_<int> snap_batch_off_host{batch_size + 1, kCPUpinned};
-        Buffer_<int> snap_batch_off_dev{batch_size + 1, kDEVICE};
-        Buffer_<int> snap_local_end_host{batch_size, kCPUpinned};
-        Buffer_<int> snap_local_end_dev{batch_size, kDEVICE};
+        Buffer_<int>   snap_batch_off_host{batch_size + 1, kCPUpinned};
+        Buffer_<int>   snap_batch_off_dev{batch_size + 1, kDEVICE};
+        Buffer_<int>   snap_local_end_host{batch_size, kCPUpinned};
+        Buffer_<int>   snap_local_end_dev{batch_size, kDEVICE};
         Buffer_<void*> snap_ptr_host{batch_size, kCPUpinned};
         Buffer_<void*> snap_ptr_dev{batch_size, kDEVICE};
 
@@ -349,7 +349,7 @@ int main(int argc, char** argv)
             snap_batch_off_host.data()[b] = b;
         }
         for (int b = 0; b < batch_size; ++b) {
-            snap_local_end_host.data()[b]     = seq_len - 1;
+            snap_local_end_host.data()[b] = seq_len - 1;
             snap_ptr_host.data()[b] =
                 (char*)snap_staged.raw_data() + (ssize_t)b * state_size * (ssize_t)state_elem_bytes;
         }
@@ -388,7 +388,7 @@ int main(int argc, char** argv)
         // Interior boundary: snapshot at mid sequence must match state after running v2 only on [0, mid] tokens
         if (seq_len >= 8) {
             const int mid = seq_len / 2 - 1;  // local index of last token in first half
-            Tensor snap_mid{Layout{{batch_size, state_size}}, state_dtype, kDEVICE};
+            Tensor    snap_mid{Layout{{batch_size, state_size}}, state_dtype, kDEVICE};
             for (int b = 0; b < batch_size; ++b) {
                 snap_local_end_host.data()[b] = mid;
                 snap_ptr_host.data()[b] =
@@ -397,7 +397,7 @@ int main(int argc, char** argv)
             Copy(snap_local_end_host, batch_size, snap_local_end_dev);
             Copy(snap_ptr_host, batch_size, snap_ptr_dev);
 
-            Tensor state_partial{Layout{{batch_size, state_size}}, state_dtype, kDEVICE};
+            Tensor       state_partial{Layout{{batch_size, state_size}}, state_dtype, kDEVICE};
             Buffer_<int> q_part_host{batch_size + 1, kCPUpinned};
             Buffer_<int> q_part_dev{batch_size + 1, kDEVICE};
             for (int b = 0; b <= batch_size; ++b) {
@@ -415,9 +415,9 @@ int main(int argc, char** argv)
             // Pack each batch's tokens [0..mid] from full layout (stride seq_len) into a contiguous
             // prefix buffer so q_offsets[b]=b*(mid+1) matches the same tokens as the full run.
             const int prefix_tok = batch_size * (mid + 1);
-            Tensor qkv_prefix{Layout{{prefix_tok, conv_dim}}, dtype, kDEVICE};
-            Tensor beta_prefix{Layout{{prefix_tok, num_v_heads}}, dtype, kDEVICE};
-            Tensor g_prefix{Layout{{prefix_tok, num_v_heads}}, dtype, kDEVICE};
+            Tensor    qkv_prefix{Layout{{prefix_tok, conv_dim}}, dtype, kDEVICE};
+            Tensor    beta_prefix{Layout{{prefix_tok, num_v_heads}}, dtype, kDEVICE};
+            Tensor    g_prefix{Layout{{prefix_tok, num_v_heads}}, dtype, kDEVICE};
             for (int b = 0; b < batch_size; ++b) {
                 Copy(qkv_in.slice({b * seq_len, 0}, {mid + 1, conv_dim}),
                      qkv_prefix.slice({b * (mid + 1), 0}, {mid + 1, conv_dim}),
@@ -437,7 +437,7 @@ int main(int argc, char** argv)
             Clear(v_partial);
             stream.Sync();
 
-            Tensor state_trunc{Layout{{batch_size, state_size}}, state_dtype, kDEVICE};
+            Tensor         state_trunc{Layout{{batch_size, state_size}}, state_dtype, kDEVICE};
             Buffer_<void*> sp_trunc_host{batch_size, kCPUpinned};
             Buffer_<void*> sp_trunc_dev{batch_size, kDEVICE};
             for (int b = 0; b < batch_size; ++b) {

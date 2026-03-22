@@ -69,14 +69,15 @@ SequenceManager::SequenceManager(const ModelParam& model_param,
         }
     }
 
-    const bool need_free_mem_probe = num_linear_layers_ > 0 && (block_count < 1. || enable_prefix_caching);
-    const size_t free_before       = need_free_mem_probe ? get_free_size() : 0;
+    const bool   need_free_mem_probe = num_linear_layers_ > 0 && (block_count < 1. || enable_prefix_caching);
+    const size_t free_before         = need_free_mem_probe ? get_free_size() : 0;
 
     if (num_linear_layers_ > 0) {
 
-        key_head_dim_   = model_param.linear_key_head_dim > 0 ? model_param.linear_key_head_dim : model_param.head_dim;
-        value_head_dim_ = model_param.linear_value_head_dim > 0 ? model_param.linear_value_head_dim : model_param.head_dim;
-        d_conv_         = model_param.linear_conv_kernel_dim > 0 ? model_param.linear_conv_kernel_dim : 4;
+        key_head_dim_ = model_param.linear_key_head_dim > 0 ? model_param.linear_key_head_dim : model_param.head_dim;
+        value_head_dim_ =
+            model_param.linear_value_head_dim > 0 ? model_param.linear_value_head_dim : model_param.head_dim;
+        d_conv_               = model_param.linear_conv_kernel_dim > 0 ? model_param.linear_conv_kernel_dim : 4;
         const int num_k_heads = model_param.linear_num_key_heads / attn_tp_size;
         num_v_heads_          = model_param.linear_num_value_heads / attn_tp_size;
         const int key_dim     = num_k_heads * key_head_dim_;
@@ -87,12 +88,12 @@ SequenceManager::SequenceManager(const ModelParam& model_param,
 
         TM_CHECK_GT(max_batch_size, 0);
         pooled_conv_states_ = {{max_batch_size, num_linear_layers_, d_conv_, conv_dim_}, linear_conv_dtype_, kDEVICE};
-        pooled_recurrent_states_ = {{max_batch_size, num_linear_layers_, num_v_heads_, key_head_dim_, value_head_dim_},
+        pooled_recurrent_states_  = {{max_batch_size, num_linear_layers_, num_v_heads_, key_head_dim_, value_head_dim_},
                                     linear_state_dtype_,
                                     kDEVICE};
         linear_active_pool_bytes_ = pooled_conv_states_.byte_size() + pooled_recurrent_states_.byte_size();
-        linear_snapshot_bytes_per_block_ =
-            pooled_conv_states_.slice(0, 1).squeeze(0).byte_size() + pooled_recurrent_states_.slice(0, 1).squeeze(0).byte_size();
+        linear_snapshot_bytes_per_block_ = pooled_conv_states_.slice(0, 1).squeeze(0).byte_size()
+                                           + pooled_recurrent_states_.slice(0, 1).squeeze(0).byte_size();
 
         free_linear_state_slots_.reserve(max_batch_size);
         for (int slot = max_batch_size - 1; slot >= 0; --slot) {
@@ -106,8 +107,7 @@ SequenceManager::SequenceManager(const ModelParam& model_param,
                     conv_one.byte_size() * mb,
                     recurrent_one.byte_size() * mb,
                     (conv_one.byte_size() + recurrent_one.byte_size()) * mb);
-        TM_LOG_INFO("[SeqMgr] linear-state combined total: %.2f MB",
-                    linear_active_pool_bytes_ * mb);
+        TM_LOG_INFO("[SeqMgr] linear-state combined total: %.2f MB", linear_active_pool_bytes_ * mb);
         if (enable_prefix_caching) {
             TM_LOG_INFO("[SeqMgr] linear prefix snapshot per reusable block: %.2f MB",
                         linear_snapshot_bytes_per_block_ * mb);
@@ -146,10 +146,9 @@ SequenceManager::SequenceManager(const ModelParam& model_param,
             TM_CHECK(0)
                 << "Please decrease max_batch_size to reduce total linear state size or increase cache_max_entry_count.";
         }
-        const size_t cache_bytes = target_bytes - linear_active_pool_bytes_;
+        const size_t cache_bytes          = target_bytes - linear_active_pool_bytes_;
         const size_t reusable_block_count = cache_bytes / std::max<size_t>(effective_block_size, 1);
-        TM_CHECK_GT(reusable_block_count, 0)
-            << "Insufficient GPU memory for reusable linear-attention cache blocks";
+        TM_CHECK_GT(reusable_block_count, 0) << "Insufficient GPU memory for reusable linear-attention cache blocks";
         block_count = static_cast<double>(reusable_block_count);
         TM_LOG_INFO("[SeqMgr] Adjusted reusable block_count to %.0f (effective block %.3f MB)",
                     block_count,
@@ -163,8 +162,7 @@ SequenceManager::SequenceManager(const ModelParam& model_param,
         const size_t requested_blocks  = static_cast<size_t>(block_count);
         const size_t clamped_blocks    = std::min(requested_blocks, max_blocks_by_mem);
         block_count                    = static_cast<double>(clamped_blocks);
-        TM_CHECK_GT(block_count, 0)
-            << "Insufficient GPU memory for reusable linear-attention prefix cache blocks";
+        TM_CHECK_GT(block_count, 0) << "Insufficient GPU memory for reusable linear-attention prefix cache blocks";
         if (clamped_blocks < requested_blocks) {
             TM_LOG_WARNING("[SeqMgr] Reducing reusable block_count from %zu to %zu for linear prefix snapshots",
                            requested_blocks,
@@ -179,13 +177,13 @@ SequenceManager::SequenceManager(const ModelParam& model_param,
         BlockTrie::SnapshotValidator snapshot_validator;
         BlockTrie::SnapshotReleaser  snapshot_releaser;
         if (num_linear_layers_ > 0) {
-            const int snapshot_slots = block_manager_->max_block_count();
-            pooled_prefix_conv_snapshots_ =
-                {{snapshot_slots, num_linear_layers_, d_conv_, conv_dim_}, linear_conv_dtype_, kDEVICE};
-            pooled_prefix_recurrent_snapshots_ =
-                {{snapshot_slots, num_linear_layers_, num_v_heads_, key_head_dim_, value_head_dim_},
-                 linear_state_dtype_,
-                 kDEVICE};
+            const int snapshot_slots      = block_manager_->max_block_count();
+            pooled_prefix_conv_snapshots_ = {
+                {snapshot_slots, num_linear_layers_, d_conv_, conv_dim_}, linear_conv_dtype_, kDEVICE};
+            pooled_prefix_recurrent_snapshots_ = {
+                {snapshot_slots, num_linear_layers_, num_v_heads_, key_head_dim_, value_head_dim_},
+                linear_state_dtype_,
+                kDEVICE};
             free_linear_snapshot_slots_.reserve(snapshot_slots);
             linear_snapshot_unique_ids_.assign(snapshot_slots, 0);
             for (int slot = snapshot_slots - 1; slot >= 0; --slot) {
@@ -198,18 +196,21 @@ SequenceManager::SequenceManager(const ModelParam& model_param,
             snapshot_publisher = [this](const Sequence& seq, int block_idx, int slot_hint) {
                 return PublishLinearSnapshot(seq, block_idx, slot_hint);
             };
-            snapshot_validator = [this](int slot, uint64_t unique_id) { return IsLinearSnapshotValid(slot, unique_id); };
-            snapshot_releaser  = [this](int slot, uint64_t unique_id) { ReleaseLinearSnapshot(slot, unique_id); };
+            snapshot_validator = [this](int slot, uint64_t unique_id) {
+                return IsLinearSnapshotValid(slot, unique_id);
+            };
+            snapshot_releaser = [this](int slot, uint64_t unique_id) { ReleaseLinearSnapshot(slot, unique_id); };
         }
         block_trie_ = std::make_shared<BlockTrie>(
             block_config.block_len_, block_manager_, snapshot_publisher, snapshot_validator, snapshot_releaser);
     }
     TM_LOG_WARNING("[SegMgr] prefix caching is %s", enable_prefix_caching ? "enabled" : "disabled");
     if (enable_prefix_caching && num_linear_layers_ > 0) {
-        TM_LOG_INFO("[SeqMgr] linear prefix caching enabled: active pool %.2f MB, snapshot/block %.2f MB, max blocks %d",
-                    linear_active_pool_bytes_ / (1024.0 * 1024.0),
-                    linear_snapshot_bytes_per_block_ / (1024.0 * 1024.0),
-                    block_manager_->max_block_count());
+        TM_LOG_INFO(
+            "[SeqMgr] linear prefix caching enabled: active pool %.2f MB, snapshot/block %.2f MB, max blocks %d",
+            linear_active_pool_bytes_ / (1024.0 * 1024.0),
+            linear_snapshot_bytes_per_block_ / (1024.0 * 1024.0),
+            block_manager_->max_block_count());
     }
 }
 
@@ -278,7 +279,7 @@ void SequenceManager::PrepareLinearCheckpointStaging(RequestCache& cache)
     // If linear prefix staging is inactive, clear bookkeeping so GatedDeltaNetLayer never
     // combines a stale staged_linear_block_count with missing or empty snapshot tensors.
     if (!block_trie_ || num_linear_layers_ == 0) {
-        auto& s = const_cast<Sequence&>(seq);
+        auto& s                     = const_cast<Sequence&>(seq);
         s.staged_linear_block_begin = 0;
         s.staged_linear_block_count = 0;
         return;
@@ -287,13 +288,12 @@ void SequenceManager::PrepareLinearCheckpointStaging(RequestCache& cache)
     const int effective_history = cache.history_len + cache.alpha;
     const int first_block       = effective_history / block_seq_len_;
     const int last_block        = (effective_history + cache.input_len) / block_seq_len_;
-    const int block_count = std::max(0, last_block - first_block);
+    const int block_count       = std::max(0, last_block - first_block);
 
     auto& s = const_cast<Sequence&>(seq);
     // Previous compact staging window [prev_begin, prev_begin + prev_count) — capture before mutating.
     const int prev_begin = s.staged_linear_block_begin;
-    const int prev_count =
-        s.staged_conv_snapshots ? static_cast<int>(s.staged_conv_snapshots.shape(0)) : 0;
+    const int prev_count = s.staged_conv_snapshots ? static_cast<int>(s.staged_conv_snapshots.shape(0)) : 0;
 
     s.staged_linear_block_begin = first_block;
     s.staged_linear_block_count = block_count;
@@ -311,11 +311,10 @@ void SequenceManager::PrepareLinearCheckpointStaging(RequestCache& cache)
     const std::vector<ssize_t> recurrent_shape{
         block_count, num_linear_layers_, num_v_heads_, key_head_dim_, value_head_dim_};
 
-    const bool need_conv_resize = !s.staged_conv_snapshots || first_block != prev_begin
-                               || s.staged_conv_snapshots.shape(0) != block_count
-                               || s.staged_conv_snapshots.shape(1) != num_linear_layers_
-                               || s.staged_conv_snapshots.shape(2) != d_conv_
-                               || s.staged_conv_snapshots.shape(3) != conv_dim_;
+    const bool need_conv_resize =
+        !s.staged_conv_snapshots || first_block != prev_begin || s.staged_conv_snapshots.shape(0) != block_count
+        || s.staged_conv_snapshots.shape(1) != num_linear_layers_ || s.staged_conv_snapshots.shape(2) != d_conv_
+        || s.staged_conv_snapshots.shape(3) != conv_dim_;
     if (need_conv_resize) {
         Tensor new_conv{conv_shape, linear_conv_dtype_, kDEVICE};
         if (s.staged_conv_snapshots && prev_count > 0) {
@@ -330,11 +329,11 @@ void SequenceManager::PrepareLinearCheckpointStaging(RequestCache& cache)
         s.staged_conv_snapshots = std::move(new_conv);
     }
     const bool need_recurrent_resize = !s.staged_recurrent_snapshots || first_block != prev_begin
-                                    || s.staged_recurrent_snapshots.shape(0) != block_count
-                                    || s.staged_recurrent_snapshots.shape(1) != num_linear_layers_
-                                    || s.staged_recurrent_snapshots.shape(2) != num_v_heads_
-                                    || s.staged_recurrent_snapshots.shape(3) != key_head_dim_
-                                    || s.staged_recurrent_snapshots.shape(4) != value_head_dim_;
+                                       || s.staged_recurrent_snapshots.shape(0) != block_count
+                                       || s.staged_recurrent_snapshots.shape(1) != num_linear_layers_
+                                       || s.staged_recurrent_snapshots.shape(2) != num_v_heads_
+                                       || s.staged_recurrent_snapshots.shape(3) != key_head_dim_
+                                       || s.staged_recurrent_snapshots.shape(4) != value_head_dim_;
     if (need_recurrent_resize) {
         Tensor new_recurrent{recurrent_shape, linear_state_dtype_, kDEVICE};
         if (s.staged_recurrent_snapshots && prev_count > 0) {
@@ -343,7 +342,8 @@ void SequenceManager::PrepareLinearCheckpointStaging(RequestCache& cache)
             for (int b = overlap_lo; b < overlap_hi; ++b) {
                 const int old_row = b - prev_begin;
                 const int new_row = b - first_block;
-                Copy(s.staged_recurrent_snapshots.slice(old_row, 1).squeeze(0), new_recurrent.slice(new_row, 1).squeeze(0));
+                Copy(s.staged_recurrent_snapshots.slice(old_row, 1).squeeze(0),
+                     new_recurrent.slice(new_row, 1).squeeze(0));
             }
         }
         s.staged_recurrent_snapshots = std::move(new_recurrent);
@@ -390,16 +390,16 @@ void SequenceManager::ReleaseLinearStateSlot(const Sequence& sequence)
         free_linear_state_slots_.push_back(slot_it->second);
         seq_to_linear_state_slot_.erase(slot_it);
     }
-    seq.conv_states              = {};
-    seq.recurrent_states         = {};
-    seq.linear_states_need_reset = false;
+    seq.conv_states                       = {};
+    seq.recurrent_states                  = {};
+    seq.linear_states_need_reset          = false;
     seq.linear_restore_snapshot_slot      = -1;
     seq.linear_restore_snapshot_unique_id = 0;
 }
 
 void SequenceManager::ClearLinearSnapshotStaging(const Sequence& sequence)
 {
-    auto& seq = const_cast<Sequence&>(sequence);
+    auto& seq                     = const_cast<Sequence&>(sequence);
     seq.staged_linear_block_begin = 0;
     seq.staged_linear_block_count = 0;
 }
@@ -418,8 +418,8 @@ std::pair<int, uint64_t> SequenceManager::PublishLinearSnapshot(const Sequence& 
         return {slot_hint, 0};
     }
 
-    const auto& seq = sequence;
-    const bool staged_ok = block_idx >= 0 && block_idx < (int)seq.staged_linear_block_valid.size()
+    const auto& seq       = sequence;
+    const bool  staged_ok = block_idx >= 0 && block_idx < (int)seq.staged_linear_block_valid.size()
                            && seq.staged_linear_block_valid[block_idx];
 
     if (!staged_ok) {
@@ -462,11 +462,12 @@ std::pair<int, uint64_t> SequenceManager::PublishLinearSnapshot(const Sequence& 
     TM_CHECK_GE(stage_row, 0);
     TM_CHECK_LT(stage_row, seq.staged_linear_block_count);
 
-    Copy(seq.staged_conv_snapshots.slice(stage_row, 1).squeeze(0), pooled_prefix_conv_snapshots_.slice(slot, 1).squeeze(0));
+    Copy(seq.staged_conv_snapshots.slice(stage_row, 1).squeeze(0),
+         pooled_prefix_conv_snapshots_.slice(slot, 1).squeeze(0));
     Copy(seq.staged_recurrent_snapshots.slice(stage_row, 1).squeeze(0),
          pooled_prefix_recurrent_snapshots_.slice(slot, 1).squeeze(0));
 
-    const uint64_t unique_id       = next_linear_snapshot_unique_id_++;
+    const uint64_t unique_id          = next_linear_snapshot_unique_id_++;
     linear_snapshot_unique_ids_[slot] = unique_id;
     g_linear_snapshot_publish_ok.fetch_add(1, std::memory_order_relaxed);
     return {slot, unique_id};
@@ -538,7 +539,7 @@ void SequenceManager::CachePrompt(const Sequences& sequences, int active_size)
 
     for (int i = 0; i < active_size; ++i) {
         if (auto& seq = *sequences[i]; !seq.prompt.empty()) {
-            const auto result = block_trie_->Cache(seq, seq.prompt);
+            const auto  result     = block_trie_->Cache(seq, seq.prompt);
             const auto& block_ids  = result.block_ids;
             const auto& unique_ids = result.unique_ids;
             if (rank_ == 0) {
@@ -563,9 +564,9 @@ void SequenceManager::CacheGeneration(const Sequence& seq)
         return;
     }
 
-    const auto result       = block_trie_->Cache(seq, seq.tokens);
-    const auto& block_ids   = result.block_ids;
-    const auto& unique_ids  = result.unique_ids;
+    const auto  result     = block_trie_->Cache(seq, seq.tokens);
+    const auto& block_ids  = result.block_ids;
+    const auto& unique_ids = result.unique_ids;
 
     if (rank_ == 0) {
         // clang-format off
@@ -867,9 +868,10 @@ void SequenceManager::PrefixMatch(Sequences& sequences, const std::vector<int>& 
         if (alpha[i] != 0) {
             g_prefix_match_skipped_alpha.fetch_add(1, std::memory_order_relaxed);
             if (rank_ == 0) {
-                TM_LOG_DEBUG("[SeqMgr][match] ID %llu skip prefix match: alpha=%d (linear prefix cache requires alpha=0)",
-                             seq.id,
-                             alpha[i]);
+                TM_LOG_DEBUG(
+                    "[SeqMgr][match] ID %llu skip prefix match: alpha=%d (linear prefix cache requires alpha=0)",
+                    seq.id,
+                    alpha[i]);
             }
             continue;
         }
@@ -877,7 +879,7 @@ void SequenceManager::PrefixMatch(Sequences& sequences, const std::vector<int>& 
             continue;
         }
 
-        const auto match = block_trie_->Match(seq);
+        const auto  match      = block_trie_->Match(seq);
         const auto& block_ids  = match.block_ids;
         const auto& unique_ids = match.unique_ids;
 
@@ -908,9 +910,8 @@ void SequenceManager::PrefixMatch(Sequences& sequences, const std::vector<int>& 
         if (match.snapshot_slot >= 0 && seq.recurrent_states) {
             if (RestoreLinearSnapshot(seq, match.snapshot_slot, match.snapshot_unique_id)) {
                 if (rank_ == 0) {
-                    TM_LOG_DEBUG("[SeqMgr][match] ID %llu restored linear snapshot from slot %d",
-                                 seq.id,
-                                 match.snapshot_slot);
+                    TM_LOG_DEBUG(
+                        "[SeqMgr][match] ID %llu restored linear snapshot from slot %d", seq.id, match.snapshot_slot);
                 }
             }
             else {

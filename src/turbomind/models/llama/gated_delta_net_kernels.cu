@@ -661,9 +661,8 @@ __global__ void chunked_gated_delta_rule_kernel(T*         v_out,
     // export recurrent snapshots mid-prefill without clobbering chunk buffers.
     constexpr int kSmemStride = D + 4;  // pad rows by 4 to avoid 4-way bank conflicts
 
-    const size_t state_smem_bytes =
-        (size_t)D * (size_t)D * sizeof(S);  // must match launcher smem split
-    char* const  chunk_smem_base = smem_buf + state_smem_bytes;
+    const size_t state_smem_bytes = (size_t)D * (size_t)D * sizeof(S);  // must match launcher smem split
+    char* const  chunk_smem_base  = smem_buf + state_smem_bytes;
 
     float* k_norm_smem = (float*)chunk_smem_base;
     float* q_norm_smem = k_norm_smem + C * kSmemStride;
@@ -823,7 +822,7 @@ __global__ void chunked_gated_delta_rule_kernel(T*         v_out,
                 __syncthreads();
                 const int si_snap = s_snap_si;
                 if (si_snap >= 0) {
-                    S* const snap_dst = (S*)staged_recurrent_ptrs[si_snap] + h * state_size;
+                    S* const snap_dst    = (S*)staged_recurrent_ptrs[si_snap] + h * state_size;
                     using Map_S          = ThreadMap_V2<D, D, sizeof(uint4) / sizeof(S), Raked, kBlockDim / WARP_SIZE>;
                     constexpr int kBase  = (sizeof(S) == 4) ? 2 : 3;
                     constexpr int kShift = 10 - kBase;
@@ -838,7 +837,8 @@ __global__ void chunked_gated_delta_rule_kernel(T*         v_out,
                             PRAGMA_UNROLL
                             for (int c = 0; c < tile_v / kAccessC; ++c) {
                                 auto tmp = cast<S>((Array<float, kAccessC>&)vec_S[vi][k][c * kAccessC]);
-                                Store(&smem_S_snap(offset_k * tile_k + k, (offset_v + vi * v_threads) * tile_v + c * kAccessC),
+                                Store(&smem_S_snap(offset_k * tile_k + k,
+                                                   (offset_v + vi * v_threads) * tile_v + c * kAccessC),
                                       tmp);
                             }
                         }
@@ -853,8 +853,8 @@ __global__ void chunked_gated_delta_rule_kernel(T*         v_out,
                         PRAGMA_UNROLL
                         for (int c = 0; c < Map_S::kIterC; ++c) {
                             const auto [vd, kd] = Map_S::get_offset(warp_id_sp, lane_id_sp);
-                            const int fvd     = vd + c * Map_S::kDeltaC;
-                            const int fkd     = kd + s * Map_S::kDeltaS;
+                            const int fvd       = vd + c * Map_S::kDeltaC;
+                            const int fkd       = kd + s * Map_S::kDeltaS;
                             Load(vec, &smem_S_snap(fkd, fvd));
                             Store(snap_dst + fkd * D + fvd, vec);
                         }
@@ -962,7 +962,7 @@ void invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out_,
             const int    kSmemStride = kHeadDim + 4;
             const size_t chunk_smem  = 3 * kChunkSize * kSmemStride * sizeof(float)  // k_norm, q_norm, v
                                       + 2 * kChunkSize * sizeof(float);              // beta, g
-            const size_t smem_sz     = state_smem + chunk_smem;
+            const size_t smem_sz = state_smem + chunk_smem;
 
             if (smem_sz > 48 << 10) {
                 cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_sz);
@@ -1139,29 +1139,30 @@ void invokeRMSNormGated(Ref<Tensor> hidden_, const Tensor& gate, const Tensor& w
 // tile per block.
 // =============================================================================
 template<int D_CONV, int CHANNELS_PER_THREAD, int BLOCK_DIM, int NUM_TOKENS, typename T>
-__global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*           out,
-                                                                            const T*     in,
-                                                                            const T*     weight,
-                                                                            const T*     bias,
-                                                                            void* const* conv_state_ptrs,
-                                                                            const int*   q_offsets,
-                                                                            const int*   k_offsets,
-                                                                            int*         work_counter,
-                                                                            int          batch_size,
-                                                                            int          conv_dim,
-                                                                            int          in_stride,
-                                                                            int          num_token_tiles,
-                                                                            int          state_layer_offset,
-                                                                            int          total_work,
-                                                                            int          num_ch_tiles,
-                                                                            const int* __restrict__ snap_batch_offsets,
-                                                                            const int* __restrict__ snap_local_end_tokens,
-                                                                            void* const* __restrict__ staged_conv_ptrs)
+__global__ void __launch_bounds__(BLOCK_DIM)
+    fused_conv1d_batched_kernel_v2(T*           out,
+                                   const T*     in,
+                                   const T*     weight,
+                                   const T*     bias,
+                                   void* const* conv_state_ptrs,
+                                   const int*   q_offsets,
+                                   const int*   k_offsets,
+                                   int*         work_counter,
+                                   int          batch_size,
+                                   int          conv_dim,
+                                   int          in_stride,
+                                   int          num_token_tiles,
+                                   int          state_layer_offset,
+                                   int          total_work,
+                                   int          num_ch_tiles,
+                                   const int* __restrict__ snap_batch_offsets,
+                                   const int* __restrict__ snap_local_end_tokens,
+                                   void* const* __restrict__ staged_conv_ptrs)
 {
     static_assert(BLOCK_DIM * CHANNELS_PER_THREAD > 0);
 
-    const bool export_snapshots = snap_batch_offsets != nullptr && snap_local_end_tokens != nullptr
-                                  && staged_conv_ptrs != nullptr;
+    const bool export_snapshots =
+        snap_batch_offsets != nullptr && snap_local_end_tokens != nullptr && staged_conv_ptrs != nullptr;
 
     int prev_ch_tile = -1;
     int c_base       = 0;
@@ -1309,8 +1310,8 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
                             }
                         }
                         if (si_snap >= 0) {
-                            T* const snap_dst = (T*)staged_conv_ptrs[si_snap];
-                            const int L       = local_pos;
+                            T* const  snap_dst = (T*)staged_conv_ptrs[si_snap];
+                            const int L        = local_pos;
                             PRAGMA_UNROLL
                             for (int i = 0; i < VALS_SIZE; ++i) {
                                 int pos = t_local_start - (D_CONV - 1) + i;
@@ -1350,8 +1351,8 @@ void invokeFusedConv1dSiLU(Ref<Tensor>           out_,
                            int                   sm_count,
                            int*                  work_counter,
                            cudaStream_t          stream,
-                           const Buffer_<int>*    snap_batch_offsets,
-                           const Buffer_<int>*    snap_local_end_tokens,
+                           const Buffer_<int>*   snap_batch_offsets,
+                           const Buffer_<int>*   snap_local_end_tokens,
                            const Buffer_<void*>* staged_conv_ptrs)
 {
     auto& out = out_.get();

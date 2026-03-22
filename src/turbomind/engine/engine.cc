@@ -926,8 +926,8 @@ shared_ptr<ScheduleMetrics> Engine::GetScheduleMetrics()
 
 shared_ptr<LinearPrefixCacheStats> Engine::GetLinearPrefixCacheStats()
 {
-    auto s = std::make_shared<LinearPrefixCacheStats>();
-    const auto t = SequenceManager::LinearPrefixCacheStats();
+    auto       s                  = std::make_shared<LinearPrefixCacheStats>();
+    const auto t                  = SequenceManager::LinearPrefixCacheStats();
     s->publish_ok                 = std::get<0>(t);
     s->publish_miss               = std::get<1>(t);
     s->publish_pool_exhausted     = std::get<2>(t);

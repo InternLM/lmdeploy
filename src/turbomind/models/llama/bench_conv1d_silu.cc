@@ -334,20 +334,19 @@ int main(int argc, char** argv)
 
     if (seq_len > 1 && d_conv == 4) {
         printf("\n=== Fused conv snapshot export vs final state (prefix-cache) ===\n");
-        Tensor snap_staged{Layout{{batch_size, conv_state_size}}, dtype, kDEVICE};
-        Buffer_<int> snap_bo_h{batch_size + 1, kCPUpinned};
-        Buffer_<int> snap_bo_d{batch_size + 1, kDEVICE};
-        Buffer_<int> snap_le_h{batch_size, kCPUpinned};
-        Buffer_<int> snap_le_d{batch_size, kDEVICE};
+        Tensor         snap_staged{Layout{{batch_size, conv_state_size}}, dtype, kDEVICE};
+        Buffer_<int>   snap_bo_h{batch_size + 1, kCPUpinned};
+        Buffer_<int>   snap_bo_d{batch_size + 1, kDEVICE};
+        Buffer_<int>   snap_le_h{batch_size, kCPUpinned};
+        Buffer_<int>   snap_le_d{batch_size, kDEVICE};
         Buffer_<void*> snap_ptr_h{batch_size, kCPUpinned};
         Buffer_<void*> snap_ptr_d{batch_size, kDEVICE};
         for (int b = 0; b <= batch_size; ++b) {
             snap_bo_h.data()[b] = b;
         }
         for (int b = 0; b < batch_size; ++b) {
-            snap_le_h.data()[b]     = seq_len - 1;
-            snap_ptr_h.data()[b] =
-                (char*)snap_staged.raw_data() + (ssize_t)b * conv_state_size * (ssize_t)elem_bytes;
+            snap_le_h.data()[b]  = seq_len - 1;
+            snap_ptr_h.data()[b] = (char*)snap_staged.raw_data() + (ssize_t)b * conv_state_size * (ssize_t)elem_bytes;
         }
         Copy(snap_bo_h, batch_size + 1, snap_bo_d);
         Copy(snap_le_h, batch_size, snap_le_d);

@@ -600,7 +600,8 @@ class ScheduleMetrics:
 
 @dataclass
 class LinearPrefixCacheStats:
-    """TurboMind linear-attention (Gated Delta Net) prefix-cache counters (cumulative, process-wide)."""
+    """TurboMind linear-attention (Gated Delta Net) prefix-cache counters
+    (cumulative, process-wide)."""
 
     publish_ok: int = 0
     publish_miss: int = 0

@@ -406,7 +406,8 @@ class TurboMind:
                                free_blocks=tm_metrics.free_blocks)
 
     def get_linear_prefix_cache_stats(self) -> LinearPrefixCacheStats:
-        """Cumulative TurboMind linear prefix-cache counters (Gated Delta Net)."""
+        """Cumulative TurboMind linear prefix-cache counters (Gated Delta
+        Net)."""
         # TODO: support dp
         s = self.model_comm.get_linear_prefix_cache_stats(0)
         return LinearPrefixCacheStats(publish_ok=s.publish_ok,

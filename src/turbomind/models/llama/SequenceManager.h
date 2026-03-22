@@ -55,10 +55,10 @@ struct Sequence {
     // and freed automatically when the sequence is erased from the SequenceManager.
     //   conv_states:      (num_linear_layers, conv_dim, d_conv) — per-channel rolling conv history
     //   recurrent_states: (num_linear_layers, num_v_heads, key_head_dim, value_head_dim) — SSM state
-    mutable Tensor conv_states;
-    mutable Tensor recurrent_states;
-    mutable bool   linear_states_need_reset = false;
-    mutable int    linear_restore_snapshot_slot = -1;
+    mutable Tensor   conv_states;
+    mutable Tensor   recurrent_states;
+    mutable bool     linear_states_need_reset          = false;
+    mutable int      linear_restore_snapshot_slot      = -1;
     mutable uint64_t linear_restore_snapshot_unique_id = 0;
 
     // Per-forward staged snapshots for newly completed reusable cache blocks.
@@ -66,11 +66,11 @@ struct Sequence {
     // Layouts:
     //   staged_conv_snapshots:      (block_count, num_linear_layers, d_conv, conv_dim)
     //   staged_recurrent_snapshots: (block_count, num_linear_layers, num_v_heads, key_head_dim, value_head_dim)
-    mutable Tensor staged_conv_snapshots;
-    mutable Tensor staged_recurrent_snapshots;
+    mutable Tensor               staged_conv_snapshots;
+    mutable Tensor               staged_recurrent_snapshots;
     mutable std::vector<uint8_t> staged_linear_block_valid;
-    mutable int    staged_linear_block_begin = 0;
-    mutable int    staged_linear_block_count = 0;
+    mutable int                  staged_linear_block_begin = 0;
+    mutable int                  staged_linear_block_count = 0;
 
     explicit Sequence(uint64_t _id): id(_id) {}
 
@@ -132,7 +132,8 @@ public:
 
     void PrepareLinearCheckpointStaging(RequestCache& cache);
 
-    /** @brief Best-effort prefix-cache counters: publish_ok, publish_miss, publish_pool_exhausted, alpha_skip, linear_restore. */
+    /** @brief Best-effort prefix-cache counters: publish_ok, publish_miss, publish_pool_exhausted, alpha_skip,
+     * linear_restore. */
     [[nodiscard]] static std::tuple<uint64_t, uint64_t, uint64_t, uint64_t, uint64_t> LinearPrefixCacheStats() noexcept;
 
     void AcquireLinearStateSlot(const Sequence& seq);
@@ -269,21 +270,21 @@ private:
     std::unordered_map<uint64_t, int> seq_to_linear_state_slot_;
 
     // Cached prefix-state snapshot pool: one slot per reusable cache block/trie node.
-    Tensor               pooled_prefix_conv_snapshots_;
-    Tensor               pooled_prefix_recurrent_snapshots_;
-    std::vector<int>     free_linear_snapshot_slots_;
+    Tensor                pooled_prefix_conv_snapshots_;
+    Tensor                pooled_prefix_recurrent_snapshots_;
+    std::vector<int>      free_linear_snapshot_slots_;
     std::vector<uint64_t> linear_snapshot_unique_ids_;
-    uint64_t             next_linear_snapshot_unique_id_ = 1;
+    uint64_t              next_linear_snapshot_unique_id_ = 1;
 
-    int      num_linear_layers_ = 0;
-    int      d_conv_            = 0;
-    int      conv_dim_          = 0;
-    int      num_v_heads_       = 0;
-    int      key_head_dim_      = 0;
-    int      value_head_dim_    = 0;
-    DataType linear_conv_dtype_ = {};
-    DataType linear_state_dtype_ = {};
-    size_t   linear_active_pool_bytes_ = 0;
+    int      num_linear_layers_               = 0;
+    int      d_conv_                          = 0;
+    int      conv_dim_                        = 0;
+    int      num_v_heads_                     = 0;
+    int      key_head_dim_                    = 0;
+    int      value_head_dim_                  = 0;
+    DataType linear_conv_dtype_               = {};
+    DataType linear_state_dtype_              = {};
+    size_t   linear_active_pool_bytes_        = 0;
     size_t   linear_snapshot_bytes_per_block_ = 0;
 
     BlockIds unlocked_;

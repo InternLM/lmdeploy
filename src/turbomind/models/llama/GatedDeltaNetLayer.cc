@@ -3,12 +3,12 @@
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/data_type.h"
 
-#include <algorithm>
-#include <vector>
 #include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/llama/gated_delta_net_kernels.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
+#include <algorithm>
+#include <vector>
 
 namespace turbomind {
 
@@ -52,13 +52,12 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(const ModelParam&     model,
                 num_linear_layers_);
 
     if (num_linear_layers_ > 0) {
-        max_replay_segments_ = std::max(
-            1,
-            (engine.max_forward_token_num + cache_block_seq_len_ - 1) / cache_block_seq_len_ + 2);
+        max_replay_segments_ =
+            std::max(1, (engine.max_forward_token_num + cache_block_seq_len_ - 1) / cache_block_seq_len_ + 2);
         conv_state_ptrs_buf_      = {engine.max_batch_size, kCPUpinned};
         recurrent_state_ptrs_buf_ = {engine.max_batch_size, kCPUpinned};
 
-        const int max_snap_flat = max_replay_segments_ * engine.max_batch_size;
+        const int max_snap_flat          = max_replay_segments_ * engine.max_batch_size;
         conv_snap_batch_offsets_host_    = {engine.max_batch_size + 1, kCPUpinned};
         conv_snap_batch_offsets_dev_     = {engine.max_batch_size + 1, kDEVICE};
         snap_batch_offsets_host_         = {engine.max_batch_size + 1, kCPUpinned};
@@ -132,10 +131,10 @@ void GatedDeltaNetLayer::Setup(int phase, TensorMap& env)
 
     int token_offset = 0;
     for (int i = 0; i < d.batch_size; ++i) {
-        d.rc[i]         = b.rc[i].get();
-        d.input_lens[i] = b.rc[i]->input_len;
-        d.history_lens[i] = b.rc[i]->history_len;
-        d.alphas[i] = b.rc[i]->alpha;
+        d.rc[i]            = b.rc[i].get();
+        d.input_lens[i]    = b.rc[i]->input_len;
+        d.history_lens[i]  = b.rc[i]->history_len;
+        d.alphas[i]        = b.rc[i]->alpha;
         d.token_offsets[i] = token_offset;
         token_offset += d.input_lens[i];
 
@@ -152,8 +151,8 @@ void GatedDeltaNetLayer::Setup(int phase, TensorMap& env)
 
         // Linear-attention requests are restricted to stateless execution, so
         // the sequence-owned states can be passed directly here.
-        d.conv_states[i]      = s.conv_states;
-        d.recurrent_states[i] = s.recurrent_states;
+        d.conv_states[i]        = s.conv_states;
+        d.recurrent_states[i]   = s.recurrent_states;
         d.staged_block_begin[i] = s.staged_linear_block_begin;
         d.staged_block_count[i] = s.staged_linear_block_count;
 
@@ -234,14 +233,14 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
         Tensor attn_out{{token_num, value_dim_}, dtype, device};
         Tensor conv_out{{token_num, conv_dim_}, dtype, device};
 
-        const int state_layer_idx              = linear_layer_index(p.layer_id, layer_types_);
+        const int state_layer_idx = linear_layer_index(p.layer_id, layer_types_);
         TM_CHECK_LT(state_layer_idx, num_linear_layers_);
         const int conv_state_layer_offset      = state_layer_idx * (conv_dim_ * d_conv_);
         const int recurrent_state_layer_offset = state_layer_idx * (num_v_heads_ * key_head_dim_ * value_head_dim_);
 
-        bool        need_prefix_snapshots = false;
-        int         total_prefix_snaps    = 0;
-        const auto  fill_prefix_snapshots = [&] {
+        bool       need_prefix_snapshots = false;
+        int        total_prefix_snaps    = 0;
+        const auto fill_prefix_snapshots = [&] {
             int cum = 0;
             for (int b = 0; b < pd.batch_size; ++b) {
                 conv_snap_batch_offsets_host_[b] = cum;
@@ -261,7 +260,7 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
                 cum += pd.staged_block_count[b];
             }
             conv_snap_batch_offsets_host_[pd.batch_size] = cum;
-            total_prefix_snaps                             = cum;
+            total_prefix_snaps                           = cum;
             if (cum <= 0) {
                 return;
             }
@@ -286,19 +285,17 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
                     const int local_end = (block_idx + 1) * cache_block_seq_len_ - 1 - eff;
                     TM_CHECK_GE(local_end, 0);
                     TM_CHECK_LT(local_end, pd.input_lens[b]);
-                    snap_local_ends_host_[cum] = local_end;
-                    staged_conv_snap_ptrs_host_[cum] =
-                        seq.staged_conv_snapshots.slice(s, 1)
-                            .squeeze(0)
-                            .slice(state_layer_idx, 1)
-                            .squeeze(0)
-                            .raw_data();
-                    staged_recurrent_snap_ptrs_host_[cum] =
-                        seq.staged_recurrent_snapshots.slice(s, 1)
-                            .squeeze(0)
-                            .slice(state_layer_idx, 1)
-                            .squeeze(0)
-                            .raw_data();
+                    snap_local_ends_host_[cum]       = local_end;
+                    staged_conv_snap_ptrs_host_[cum] = seq.staged_conv_snapshots.slice(s, 1)
+                                                           .squeeze(0)
+                                                           .slice(state_layer_idx, 1)
+                                                           .squeeze(0)
+                                                           .raw_data();
+                    staged_recurrent_snap_ptrs_host_[cum] = seq.staged_recurrent_snapshots.slice(s, 1)
+                                                                .squeeze(0)
+                                                                .slice(state_layer_idx, 1)
+                                                                .squeeze(0)
+                                                                .raw_data();
                     ++cum;
                 }
             }
@@ -350,7 +347,7 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
 
             const Buffer_<int>* pf_snap_bo = nullptr;
             const Buffer_<int>* pf_snap_le = nullptr;
-            Buffer_<void*>*      pf_snap_rp = nullptr;
+            Buffer_<void*>*     pf_snap_rp = nullptr;
             if (need_prefix_snapshots && prefill_count > 0 && total_prefix_snaps > 0) {
                 for (int pb = 0; pb <= prefill_count; ++pb) {
                     snap_batch_offsets_host_[pb] = conv_snap_batch_offsets_host_[decode_count + pb];

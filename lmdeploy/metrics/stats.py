@@ -7,7 +7,7 @@ from typing import List, Optional
 
 import numpy as np
 
-from lmdeploy.messages import (EngineEvent, EngineOutput, LinearPrefixCacheStats, ResponseType, ScheduleMetrics)
+from lmdeploy.messages import EngineEvent, EngineOutput, LinearPrefixCacheStats, ResponseType, ScheduleMetrics
 
 
 @dataclass
@@ -73,7 +73,8 @@ class SchedulerStats:
         self.prefix_cache_hit_rate = scheduled_metrics.prefix_cache_hit_rate
 
     def update_linear_prefix_cache_stats(self, stats: LinearPrefixCacheStats) -> None:
-        """Snapshot cumulative TurboMind linear prefix-cache counters (process-wide)."""
+        """Snapshot cumulative TurboMind linear prefix-cache counters (process-
+        wide)."""
         self.linear_prefix_publish_ok = stats.publish_ok
         self.linear_prefix_publish_miss = stats.publish_miss
         self.linear_prefix_publish_pool_exhausted = stats.publish_pool_exhausted

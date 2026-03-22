@@ -37,9 +37,9 @@ void invokeFusedConv1dSiLU(Ref<Tensor>           out,
                            int                   sm_count,
                            int*                  work_counter,
                            cudaStream_t          stream,
-                           const Buffer_<int>*    snap_batch_offsets          = nullptr,
-                           const Buffer_<int>*    snap_local_end_tokens      = nullptr,
-                           const Buffer_<void*>* staged_conv_ptrs            = nullptr);
+                           const Buffer_<int>*   snap_batch_offsets    = nullptr,
+                           const Buffer_<int>*   snap_local_end_tokens = nullptr,
+                           const Buffer_<void*>* staged_conv_ptrs      = nullptr);
 
 // All three recurrent-rule launchers share the same trailing parameters for
 // interface consistency:

@@ -85,10 +85,10 @@ private:
     Buffer_<int> conv_snap_batch_offsets_dev_;
 
     // Prefix-cache: fused recurrent snapshot metadata for invokeChunkedGatedDeltaRuleBatched (prefill only).
-    Buffer_<int>    snap_batch_offsets_host_;
-    Buffer_<int>    snap_batch_offsets_dev_;
-    Buffer_<int>    snap_local_ends_host_;
-    Buffer_<int>    snap_local_ends_dev_;
+    Buffer_<int>   snap_batch_offsets_host_;
+    Buffer_<int>   snap_batch_offsets_dev_;
+    Buffer_<int>   snap_local_ends_host_;
+    Buffer_<int>   snap_local_ends_dev_;
     Buffer_<void*> staged_conv_snap_ptrs_host_;
     Buffer_<void*> staged_conv_snap_ptrs_dev_;
     Buffer_<void*> staged_recurrent_snap_ptrs_host_;

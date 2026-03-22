@@ -16,9 +16,9 @@ struct TrieNode {
     std::unordered_map<size_t, std::shared_ptr<TrieNode>> children;
     size_t                                                hash_key;
     std::vector<int>                                      tokens;
-    int                                                   block_id        = -1;
-    uint64_t                                              block_unique_id = 0;
-    int                                                   snapshot_slot   = -1;
+    int                                                   block_id           = -1;
+    uint64_t                                              block_unique_id    = 0;
+    int                                                   snapshot_slot      = -1;
     uint64_t                                              snapshot_unique_id = 0;
     int                                                   num_matched;
 };
@@ -42,11 +42,11 @@ public:
         UniqueIds unique_ids;
     };
 
-    explicit BlockTrie(size_t             block_len,
+    explicit BlockTrie(size_t                        block_len,
                        std::shared_ptr<BlockManager> block_manager,
-                       SnapshotPublisher  snapshot_publisher = {},
-                       SnapshotValidator  snapshot_validator = {},
-                       SnapshotReleaser   snapshot_releaser  = {});
+                       SnapshotPublisher             snapshot_publisher = {},
+                       SnapshotValidator             snapshot_validator = {},
+                       SnapshotReleaser              snapshot_releaser  = {});
 
     /**
      * @brief Attempt to match cached key-value (KV) blocks for a given sequence.

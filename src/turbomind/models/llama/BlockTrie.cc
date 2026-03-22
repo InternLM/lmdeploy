@@ -20,11 +20,11 @@ size_t HashSegmentTokens(const std::vector<int>& vec, size_t block_len)
 
 }  // namespace
 
-BlockTrie::BlockTrie(size_t                     block_len,
+BlockTrie::BlockTrie(size_t                        block_len,
                      std::shared_ptr<BlockManager> block_manager,
-                     SnapshotPublisher          snapshot_publisher,
-                     SnapshotValidator          snapshot_validator,
-                     SnapshotReleaser           snapshot_releaser):
+                     SnapshotPublisher             snapshot_publisher,
+                     SnapshotValidator             snapshot_validator,
+                     SnapshotReleaser              snapshot_releaser):
     block_seq_len_(block_len),
     block_manager_(block_manager),
     snapshot_publisher_(std::move(snapshot_publisher)),
@@ -50,7 +50,8 @@ BlockTrie::MatchResult BlockTrie::Match(const Sequence& seq)
             if (segment == it->second->tokens) {
                 const auto& child = *it->second;
                 if (snapshot_validator_) {
-                    if (child.snapshot_slot < 0 || !snapshot_validator_(child.snapshot_slot, child.snapshot_unique_id)) {
+                    if (child.snapshot_slot < 0
+                        || !snapshot_validator_(child.snapshot_slot, child.snapshot_unique_id)) {
                         break;
                     }
                     result.snapshot_slot      = child.snapshot_slot;
@@ -157,8 +158,9 @@ void BlockTrie::DFS(std::shared_ptr<TrieNode>& node)
     for (auto it = node->children.begin(); it != node->children.end();) {
         const bool block_valid = block_manager_->unique_id(it->second->block_id) == it->second->block_unique_id;
         const bool snapshot_valid =
-            !snapshot_validator_ || (it->second->snapshot_slot >= 0
-                                     && snapshot_validator_(it->second->snapshot_slot, it->second->snapshot_unique_id));
+            !snapshot_validator_
+            || (it->second->snapshot_slot >= 0
+                && snapshot_validator_(it->second->snapshot_slot, it->second->snapshot_unique_id));
         if (!block_valid || !snapshot_valid) {
             // Drop the full invalid subtree so descendant snapshot slots do not leak.
             ReleaseSnapshots(it->second);
