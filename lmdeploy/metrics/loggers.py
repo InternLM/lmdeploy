@@ -117,20 +117,18 @@ class LoggingStatLogger(StatLoggerBase):
             f'API server (completed/routed/waiting): {scheduler_stats.num_completed_reqs} / '
             f'{scheduler_stats.num_api_routed_reqs} / {scheduler_stats.num_api_waiting_reqs}, '
             f'Engine (running/waiting): {scheduler_stats.num_running_reqs} / {scheduler_stats.num_waiting_reqs}, '
-            f'KV cache: {scheduler_stats.gpu_cache_usage * 100 :.1f}%, ')
+            f'KV cache: {scheduler_stats.gpu_cache_usage * 100:.1f}%, ')
 
         if scheduler_stats.prefix_cache_hit_rate != 0:
-            log_msg += f'Prefix cache hit rate: {scheduler_stats.prefix_cache_hit_rate * 100 :.1f}%, '
+            log_msg += f'Prefix cache hit rate: {scheduler_stats.prefix_cache_hit_rate * 100:.1f}%, '
 
         lp = scheduler_stats
-        if (lp.linear_prefix_publish_ok or lp.linear_prefix_publish_miss
-                or lp.linear_prefix_publish_pool_exhausted or lp.linear_prefix_match_skipped_alpha
-                or lp.linear_prefix_match_restored):
-            log_msg += (
-                f'Linear prefix cache (ok/miss/pool_exhausted/alpha_skip/restored): '
-                f'{lp.linear_prefix_publish_ok} / {lp.linear_prefix_publish_miss} / '
-                f'{lp.linear_prefix_publish_pool_exhausted} / {lp.linear_prefix_match_skipped_alpha} / '
-                f'{lp.linear_prefix_match_restored}, ')
+        if (lp.linear_prefix_publish_ok or lp.linear_prefix_publish_miss or lp.linear_prefix_publish_pool_exhausted
+                or lp.linear_prefix_match_skipped_alpha or lp.linear_prefix_match_restored):
+            log_msg += (f'Linear prefix cache (ok/miss/pool_exhausted/alpha_skip/restored): '
+                        f'{lp.linear_prefix_publish_ok} / {lp.linear_prefix_publish_miss} / '
+                        f'{lp.linear_prefix_publish_pool_exhausted} / {lp.linear_prefix_match_skipped_alpha} / '
+                        f'{lp.linear_prefix_match_restored}, ')
 
         if spec_msg is not None:
             log_msg += spec_msg
