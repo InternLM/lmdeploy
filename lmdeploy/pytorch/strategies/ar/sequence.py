@@ -57,6 +57,8 @@ class SchedulerSequenceDefault(SchedulerSequence):
         if model_meta is not None:
             self.model_meta = model_meta
 
+        self._update_mrope_pos_ids()
+
     def set_step(self, step: int):
         """Set step."""
         num_all_ids = self.num_all_ids

@@ -76,19 +76,16 @@ class CausalConv1dFunc:
         state_ids = gated_delta_meta.state_ids
 
         assert x.dim() == 3
-        x = x.transpose(-2, -1)
         if weight.dim() == 3:
             assert weight.size(1) == 1
             weight = weight[:, 0]
 
         # fill conv state
-        # TODO: find efficient way to fill conv state without gather + scatter
-        final_state = conv_state.index_select(0, state_ids)
-        batch_size = conv_state.size(0)
-        conv_idx = conv_idx[:, None].expand(-1, x.size(1), -1)
-        torch.gather(x.expand(batch_size, -1, -1), -1, conv_idx, out=final_state)
+        final_state = x[0, conv_idx].transpose(-2, -1)
         conv_state = conv_state.index_copy_(0, state_ids, final_state)
 
+        # note that we have not set init states
+        x = x.transpose(-2, -1)
         out = self.causal_conv1d_fn(
             x,
             weight,
