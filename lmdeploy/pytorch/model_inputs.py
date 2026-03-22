@@ -58,6 +58,11 @@ class DPMeta:
         self.tp_sizes = [tp_size] * len(self.tp_sizes)
         self.moe_tp_sizes = [tp_size] * len(self.moe_tp_sizes)
 
+    def set_tp_sizes(self, tp_sizes: List[int], moe_tp_sizes: List[int]):
+        """Set tp sizes."""
+        self.tp_sizes = tp_sizes
+        self.moe_tp_sizes = moe_tp_sizes
+
 
 @dataclass
 class VisionModelInputs:
