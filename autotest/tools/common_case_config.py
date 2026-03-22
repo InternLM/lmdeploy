@@ -349,6 +349,20 @@ BASE_SPECULATIVE_DECODING_PIPELINE_TEST_LLM = [{
             'model': 'yuhuili/EAGLE3-LLaMA3.1-Instruct-8B'
         }
     }
+}, {
+    'model': 'zai-org/GLM-4.7-Flash',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 2
+    },
+    'extra_params': {
+        'max_batch_size': 128,
+        'speculative_config': {
+            'method': 'deepseek_mtp',
+            'num_speculative_tokens': 3
+        }
+    }
 }]
 
 SPECULATIVE_DECODING_PIPELINE_TEST_LLM = [{
@@ -374,6 +388,18 @@ BASE_SPECULATIVE_DECODING_RESTFUL_TEST_LLM = [{
     'quant_policy': 0,
     'parallel_config': {
         'tp': 16
+    },
+    'extra_params': {
+        'speculative-algorithm': 'deepseek_mtp',
+        'speculative-num-draft-tokens': 3,
+        'max-batch-size': 128
+    }
+}, {
+    'model': 'zai-org/GLM-4.7-Flash',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 2
     },
     'extra_params': {
         'speculative-algorithm': 'deepseek_mtp',

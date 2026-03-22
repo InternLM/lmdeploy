@@ -105,3 +105,13 @@ def test_pytorch_chat_with_lora_tp2(config, run_config, common_case_config, work
 def test_pipeline_chat_speculative_decoding_tp1(config, run_config, common_case_config, worker_id):
     case_config = {k: v for k, v in common_case_config.items() if k == 'memory_test'}
     run_pipeline_llm_test(config, run_config, case_config, worker_id)
+
+
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.gpu_num_2
+@pytest.mark.parametrize(
+    'run_config', [item for item in SPECULATIVE_DECODING_PIPELINE_TEST_LLM if item['parallel_config'].get('tp') == 2])
+def test_pipeline_chat_speculative_decoding_tp2(config, run_config, common_case_config, worker_id):
+    case_config = {k: v for k, v in common_case_config.items() if k == 'memory_test'}
+    run_pipeline_llm_test(config, run_config, case_config, worker_id)

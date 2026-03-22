@@ -82,7 +82,7 @@ pytorch_quantization:
         - Qwen/Qwen3-VL-8B-Instruct
         - Qwen/Qwen3-VL-32B-Instruct
 
-longtext_model:
+longtext_benchmark_model:
     - Qwen/Qwen3-30B-A3B
 
 benchmark_model:
