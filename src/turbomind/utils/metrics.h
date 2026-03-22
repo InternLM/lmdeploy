@@ -20,6 +20,15 @@ struct ScheduleMetrics {
     int free_blocks;    // the number of free kv blocks
 };
 
+// Counters for Gated Delta Net / linear-attention prefix caching (process-wide atomics in SequenceManager).
+struct LinearPrefixCacheStats {
+    uint64_t publish_ok{};
+    uint64_t publish_miss{};
+    uint64_t publish_pool_exhausted{};
+    uint64_t prefix_match_skipped_alpha{};
+    uint64_t linear_restore{};
+};
+
 struct RequestMetrics {
     std::atomic<int64_t> enqueue_time{};    // when a request is enqued
     std::atomic<int64_t> scheduled_time{};  // when a request is scheduled for inference
@@ -43,6 +52,18 @@ inline std::ostream& operator<<(std::ostream& os, const ScheduleMetrics& m)
     os << ", total_blocks=" << m.total_blocks;
     os << ", cached_blocks=" << m.cached_blocks;
     os << ", free_blocks=" << m.free_blocks;
+    os << " }";
+    return os;
+}
+
+inline std::ostream& operator<<(std::ostream& os, const LinearPrefixCacheStats& s)
+{
+    os << "LinearPrefixCacheStats { ";
+    os << "publish_ok=" << s.publish_ok;
+    os << ", publish_miss=" << s.publish_miss;
+    os << ", publish_pool_exhausted=" << s.publish_pool_exhausted;
+    os << ", prefix_match_skipped_alpha=" << s.prefix_match_skipped_alpha;
+    os << ", linear_restore=" << s.linear_restore;
     os << " }";
     return os;
 }

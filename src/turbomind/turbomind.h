@@ -36,6 +36,8 @@ public:
 
     std::shared_ptr<ScheduleMetrics> GetScheduleMetrics(int index);
 
+    std::shared_ptr<LinearPrefixCacheStats> GetLinearPrefixCacheStats(int index);
+
     std::unique_ptr<ModelRequest> CreateRequest();
 
 private:

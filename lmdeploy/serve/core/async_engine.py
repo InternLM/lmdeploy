@@ -15,6 +15,7 @@ from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import (
     EngineOutput,
     GenerationConfig,
+    LinearPrefixCacheStats,
     PytorchEngineConfig,
     Response,
     ResponseType,
@@ -203,6 +204,12 @@ class AsyncEngine:
 
     def get_schedule_metrics(self):
         return self.engine.get_schedule_metrics()
+
+    def get_linear_prefix_cache_stats(self) -> LinearPrefixCacheStats:
+        """TurboMind-only: cumulative linear prefix-cache counters; zeros on PyTorch backend."""
+        if hasattr(self.engine, 'get_linear_prefix_cache_stats'):
+            return self.engine.get_linear_prefix_cache_stats()
+        return LinearPrefixCacheStats()
 
     async def do_log_stats(self):
         """Loop through CLI logger and Prometheus logger and output the

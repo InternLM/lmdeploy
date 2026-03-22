@@ -45,11 +45,25 @@ target_link_libraries(models PUBLIC
 target_compile_options(models PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-v --generate-line-info --threads 8>)
 
 if(BUILD_TEST)
+    add_executable(test_cache_manager
+            llama/test_cache_manager.cc)
+    target_link_libraries(test_cache_manager PRIVATE
+            models
+            Catch2::Catch2WithMain)
+    add_test(NAME test_cache_manager COMMAND $<TARGET_FILE:test_cache_manager>)
+    set_tests_properties(test_cache_manager PROPERTIES
+            LABELS "cuda;turbomind"
+            TIMEOUT 300)
+
     add_executable(bench_gated_delta_net
             llama/bench_gated_delta_net.cc)
     target_link_libraries(bench_gated_delta_net PRIVATE
             models
             CUDA::cudart)
+    add_test(NAME bench_gated_delta_net COMMAND $<TARGET_FILE:bench_gated_delta_net>)
+    set_tests_properties(bench_gated_delta_net PROPERTIES
+            LABELS "cuda;turbomind"
+            TIMEOUT 300)
 
     add_executable(bench_conv1d_silu
             llama/bench_conv1d_silu.cc)

@@ -107,6 +107,8 @@ cache_block_seq_len * num_layer * kv_head_num * size_per_head * 2 * sizeof(kv_da
 
 由于前缀缓存对 k/v 重复利用的最小粒度是block，如果相同prompt前缀不足一个block（前缀长度\<`cache_block_seq_len`），则推理性能不会有提升。
 
+**线性注意力（如 Gated Delta Net）模型：** TurboMind 还会为可复用的前缀块保存额外的线性状态；显存预算同时包含 k/v block 与快照池（见引擎启动日志）。在缓存压力极大时，线性快照槽可能用尽，此时会对部分 trie 节点省略线性快照，前缀匹配深度会安全回退（不会输出错误结果）。**当调度器对该序列上报非零 `alpha`（未提交的前缀重叠）时，线性状态的 prefix match 会跳过**；需要 `[SeqMgr][match]` 细节时可设置 `TM_LOG_LEVEL=DEBUG`。累计计数可通过 TurboMind 引擎的 `get_linear_prefix_cache_stats()`（Python）读取；在开启 `enable_metrics` 时，还会写入周期性日志与 Prometheus 指标 `lmdeploy:linear_prefix_cache_*_total`。**快照路径说明：** 循环（delta-rule）在单次 prefill 的 chunked CUDA 核内按块边界写出张量，无需对这部分再跑一遍；深度可分离因果卷积的环形状态在 fused causal conv 核中于每个块的 `local_end` 处在同一次全前向里写出，无需按段重放 conv。
+
 ### kv 量化推理开关
 
 `quant_policy`是 kv 量化和推理开关。

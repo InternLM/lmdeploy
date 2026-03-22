@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 
-from lmdeploy.messages import ResponseType, ScheduleMetrics
+from lmdeploy.messages import LinearPrefixCacheStats, ResponseType, ScheduleMetrics
 from lmdeploy.pytorch.utils import singleton
 from lmdeploy.utils import get_logger
 
@@ -80,9 +80,13 @@ class MetricsProcessor:
             except Exception as e:
                 logger.exception(f'Metrics handler background task failed: {e}')
 
-    async def update_schedule_stats(self, schedule_metrics: ScheduleMetrics):
+    async def update_schedule_stats(self,
+                                    schedule_metrics: ScheduleMetrics,
+                                    linear_prefix_stats: LinearPrefixCacheStats | None = None):
         """Update schedule stats."""
         self.scheduler_stats.update_from_schedule_metrics(schedule_metrics)
+        if linear_prefix_stats is not None:
+            self.scheduler_stats.update_linear_prefix_cache_stats(linear_prefix_stats)
         # record schedule stats
         for stat_logger in self.stat_loggers:
             stat_logger.record_schedule(self.scheduler_stats)

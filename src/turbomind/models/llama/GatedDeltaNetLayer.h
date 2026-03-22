@@ -47,6 +47,9 @@ private:
     int              conv_dim_;           // key_dim * 2 + value_dim
     int              num_linear_layers_;  // count of linear attention layers for state sizing
     std::vector<int> layer_types_;        // model layer types for index mapping
+    int              cache_block_seq_len_;
+    int              max_replay_segments_{1};  // upper bound on prefix-cache replay segments per forward
+    bool             enable_prefix_caching_;
 
     float    norm_eps_;
     DataType dtype_;
@@ -58,6 +61,11 @@ private:
     struct Data {
         std::vector<RequestCache*> rc;          // borrowed batch RequestCache pointers
         std::vector<int>           input_lens;  // snapshot of input_len per request (captured at Setup time)
+        std::vector<int>           history_lens;
+        std::vector<int>           alphas;
+        std::vector<int>           token_offsets;
+        std::vector<int>           staged_block_begin;
+        std::vector<int>           staged_block_count;
         int                        batch_size = 0;
         Buffer_<int>               q_offsets;  // cumulative input-token offsets, device buffer
         Buffer_<int>               k_offsets;  // cumulative key (history+input) offsets, device buffer
@@ -71,6 +79,20 @@ private:
     // staging buffers
     Buffer_<void*> conv_state_ptrs_buf_;
     Buffer_<void*> recurrent_state_ptrs_buf_;
+
+    // Prefix-cache: full-batch snapshot offsets for invokeFusedConv1dSiLU (cumulative over batch rows).
+    Buffer_<int> conv_snap_batch_offsets_host_;
+    Buffer_<int> conv_snap_batch_offsets_dev_;
+
+    // Prefix-cache: fused recurrent snapshot metadata for invokeChunkedGatedDeltaRuleBatched (prefill only).
+    Buffer_<int>   snap_batch_offsets_host_;
+    Buffer_<int>   snap_batch_offsets_dev_;
+    Buffer_<int>   snap_local_ends_host_;
+    Buffer_<int>   snap_local_ends_dev_;
+    Buffer_<void*> staged_conv_snap_ptrs_host_;
+    Buffer_<void*> staged_conv_snap_ptrs_dev_;
+    Buffer_<void*> staged_recurrent_snap_ptrs_host_;
+    Buffer_<void*> staged_recurrent_snap_ptrs_dev_;
 
     // Queried once at construction; passed to all three kernel launchers.
     int          sm_count_{1};

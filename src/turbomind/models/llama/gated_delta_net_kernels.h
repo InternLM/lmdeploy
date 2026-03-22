@@ -20,6 +20,11 @@ namespace turbomind {
 // conv_state_ptrs: device array[batch_size] of per-request state pointers
 // q_offsets:       device int[batch_size+1] cumulative token offsets
 // k_offsets:       device int[batch_size+1] cumulative key (history+input) offsets
+//
+// Optional prefix-cache (pass nullptr for all three to disable): when capturing linear-attention
+// prefix blocks, pass the same flat snapshot metadata as recurrent (local_end per si, batch
+// offsets over full batch_size+1); ring state is written to staged_conv_ptrs[si] during the main
+// forward (no segment replay).
 void invokeFusedConv1dSiLU(Ref<Tensor>           out,
                            const Tensor&         in,
                            const Tensor&         weight,
@@ -31,7 +36,10 @@ void invokeFusedConv1dSiLU(Ref<Tensor>           out,
                            int                   state_layer_offset,
                            int                   sm_count,
                            int*                  work_counter,
-                           cudaStream_t          stream);
+                           cudaStream_t          stream,
+                           const Buffer_<int>*   snap_batch_offsets    = nullptr,
+                           const Buffer_<int>*   snap_local_end_tokens = nullptr,
+                           const Buffer_<void*>* staged_conv_ptrs      = nullptr);
 
 // All three recurrent-rule launchers share the same trailing parameters for
 // interface consistency:
@@ -82,6 +90,12 @@ void invokeGatedDeltaRuleBatched_v3(Ref<Tensor>           v_out,
 //
 // Same tensor layouts as invokeGatedDeltaRuleBatched_v2.
 // sm_count and work_counter accepted for interface parity; ignored internally.
+//
+// Optional prefix-cache export (Gated Delta Net linear snapshots): when the three
+// optional buffers are non-null, after each token whose local index within this prefill
+// matches `snap_local_end_tokens[si]`, the recurrent state for this head is written to
+// `staged_recurrent_ptrs[si] + h*D*D` (same swizzled layout as `state_ptrs`).
+// `snap_batch_offsets` has length batch_size+1 and indexes the flat arrays.
 void invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out,
                                         const Tensor&         qkv_in,
                                         const Tensor&         beta,
@@ -94,7 +108,10 @@ void invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out,
                                         DataType              state_dtype,
                                         int                   sm_count,
                                         int*                  work_counter,
-                                        cudaStream_t          stream);
+                                        cudaStream_t          stream,
+                                        const Buffer_<int>*   snap_batch_offsets    = nullptr,
+                                        const Buffer_<int>*   snap_local_end_tokens = nullptr,
+                                        const Buffer_<void*>* staged_recurrent_ptrs = nullptr);
 
 // =============================================================================
 // Helper kernels

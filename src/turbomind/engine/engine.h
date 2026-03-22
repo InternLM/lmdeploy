@@ -12,6 +12,7 @@
 namespace turbomind {
 
 struct ScheduleMetrics;
+struct LinearPrefixCacheStats;
 
 class Engine {
 public:
@@ -38,6 +39,8 @@ public:
     void Start();
 
     std::shared_ptr<ScheduleMetrics> GetScheduleMetrics();
+
+    std::shared_ptr<LinearPrefixCacheStats> GetLinearPrefixCacheStats();
 
 private:
     struct Impl;

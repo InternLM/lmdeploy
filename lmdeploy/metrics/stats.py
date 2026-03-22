@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from lmdeploy.messages import EngineEvent, EngineOutput, ResponseType, ScheduleMetrics
+from lmdeploy.messages import EngineEvent, EngineOutput, LinearPrefixCacheStats, ResponseType, ScheduleMetrics
 
 
 @dataclass
@@ -26,6 +26,7 @@ class SchedulerStats:
         num_waiting_reqs: Engine core, requests queued waiting for execution.
         gpu_cache_usage: Fraction of GPU KV blocks utilized (0.0 to 1.0).
         prefix_cache_hit_rate: Prefix caching hit rate.
+        linear_prefix_*: TurboMind Gated Delta Net linear prefix-cache cumulative counters (0 if unavailable).
     """
 
     # api server
@@ -40,6 +41,12 @@ class SchedulerStats:
     gpu_cache_usage: float = 0.0
     prefix_cache_hit_rate: float = 0.0
 
+    linear_prefix_publish_ok: int = 0
+    linear_prefix_publish_miss: int = 0
+    linear_prefix_publish_pool_exhausted: int = 0
+    linear_prefix_match_skipped_alpha: int = 0
+    linear_prefix_match_restored: int = 0
+
     def __repr__(self):
         return ('SchedulerStats(\n'
                 f'  num_total_reqs={self.num_total_reqs},\n'
@@ -50,13 +57,28 @@ class SchedulerStats:
                 f'  num_waiting_reqs={self.num_waiting_reqs},\n'
                 f'  gpu_cache_usage={self.gpu_cache_usage:.6f},\n'
                 f'  prefix_cache_hit_rate={self.prefix_cache_hit_rate:.6f},\n'
+                f'  linear_prefix_publish_ok={self.linear_prefix_publish_ok},\n'
+                f'  linear_prefix_publish_miss={self.linear_prefix_publish_miss},\n'
+                f'  linear_prefix_publish_pool_exhausted={self.linear_prefix_publish_pool_exhausted},\n'
+                f'  linear_prefix_match_skipped_alpha={self.linear_prefix_match_skipped_alpha},\n'
+                f'  linear_prefix_match_restored={self.linear_prefix_match_restored},\n'
                 ')')
 
     def update_from_schedule_metrics(self, scheduled_metrics: ScheduleMetrics):
         self.num_running_reqs = scheduled_metrics.active_seqs
         self.num_waiting_reqs = scheduled_metrics.waiting_seqs
-        self.gpu_cache_usage = 1.0 - (scheduled_metrics.free_blocks / scheduled_metrics.total_blocks)
+        tb = scheduled_metrics.total_blocks
+        self.gpu_cache_usage = 0.0 if tb <= 0 else 1.0 - (scheduled_metrics.free_blocks / tb)
         self.prefix_cache_hit_rate = scheduled_metrics.prefix_cache_hit_rate
+
+    def update_linear_prefix_cache_stats(self, stats: LinearPrefixCacheStats) -> None:
+        """Snapshot cumulative TurboMind linear prefix-cache counters (process-
+        wide)."""
+        self.linear_prefix_publish_ok = stats.publish_ok
+        self.linear_prefix_publish_miss = stats.publish_miss
+        self.linear_prefix_publish_pool_exhausted = stats.publish_pool_exhausted
+        self.linear_prefix_match_skipped_alpha = stats.prefix_match_skipped_alpha
+        self.linear_prefix_match_restored = stats.linear_restore
 
 
 class RequestStats:
