@@ -2,7 +2,9 @@
 
 #pragma once
 
+#include <cstdint>
 #include <functional>
+#include <tuple>
 #include <unordered_map>
 
 #include "src/turbomind/core/allocator.h"
@@ -13,6 +15,8 @@
 #include "src/turbomind/models/llama/llama_params.h"
 
 namespace turbomind {
+
+struct RequestCache;
 
 struct Sequence {
 
@@ -54,6 +58,19 @@ struct Sequence {
     mutable Tensor conv_states;
     mutable Tensor recurrent_states;
     mutable bool   linear_states_need_reset = false;
+    mutable int    linear_restore_snapshot_slot = -1;
+    mutable uint64_t linear_restore_snapshot_unique_id = 0;
+
+    // Per-forward staged snapshots for newly completed reusable cache blocks.
+    // Leading dim is this pass's block_count; row r holds absolute block (staged_linear_block_begin + r).
+    // Layouts:
+    //   staged_conv_snapshots:      (block_count, num_linear_layers, d_conv, conv_dim)
+    //   staged_recurrent_snapshots: (block_count, num_linear_layers, num_v_heads, key_head_dim, value_head_dim)
+    mutable Tensor staged_conv_snapshots;
+    mutable Tensor staged_recurrent_snapshots;
+    mutable std::vector<uint8_t> staged_linear_block_valid;
+    mutable int    staged_linear_block_begin = 0;
+    mutable int    staged_linear_block_count = 0;
 
     explicit Sequence(uint64_t _id): id(_id) {}
 
@@ -112,6 +129,11 @@ public:
     [[nodiscard]] bool Contains(uint64_t id);
 
     [[nodiscard]] bool Erase(uint64_t id);
+
+    void PrepareLinearCheckpointStaging(RequestCache& cache);
+
+    /** @brief Best-effort prefix-cache counters: publish_ok, publish_miss, publish_pool_exhausted, alpha_skip, linear_restore. */
+    [[nodiscard]] static std::tuple<uint64_t, uint64_t, uint64_t, uint64_t, uint64_t> LinearPrefixCacheStats() noexcept;
 
     void AcquireLinearStateSlot(const Sequence& seq);
 
@@ -191,6 +213,11 @@ public:
         return block_manager_->cached_count();
     }
 
+    int block_seq_len() const noexcept
+    {
+        return block_seq_len_;
+    }
+
     // return #total_seq, #active_seq, #cached_seq
     std::tuple<int, int, int> seq_stats() const noexcept;
 
@@ -200,6 +227,17 @@ private:
     void CommitUnlockAndFree();
 
     void InvalidateStatesAndCache(const Sequence& seq, BlockIds& freed_blocks);
+
+    void ClearLinearSnapshotStaging(const Sequence& seq);
+
+    [[nodiscard]] bool IsLinearSnapshotValid(int slot, uint64_t unique_id) const;
+
+    [[nodiscard]] std::pair<int, uint64_t> PublishLinearSnapshot(const Sequence& seq, int block_idx, int slot_hint);
+
+    void ReleaseLinearSnapshot(int slot, uint64_t unique_id);
+
+    /// Copy trie-referenced linear snapshot into the sequence. Returns false if the slot is stale or tensors missing.
+    bool RestoreLinearSnapshot(const Sequence& seq, int slot, uint64_t unique_id);
 
     void VerifyAndLockCached(const Sequences& sequences);
 
@@ -224,10 +262,29 @@ private:
     std::shared_ptr<BlockManager> block_manager_;
     std::shared_ptr<BlockTrie>    block_trie_;
 
+    // Runtime working-state pool: one slot per active sequence.
     Tensor                            pooled_conv_states_;
     Tensor                            pooled_recurrent_states_;
     std::vector<int>                  free_linear_state_slots_;
     std::unordered_map<uint64_t, int> seq_to_linear_state_slot_;
+
+    // Cached prefix-state snapshot pool: one slot per reusable cache block/trie node.
+    Tensor               pooled_prefix_conv_snapshots_;
+    Tensor               pooled_prefix_recurrent_snapshots_;
+    std::vector<int>     free_linear_snapshot_slots_;
+    std::vector<uint64_t> linear_snapshot_unique_ids_;
+    uint64_t             next_linear_snapshot_unique_id_ = 1;
+
+    int      num_linear_layers_ = 0;
+    int      d_conv_            = 0;
+    int      conv_dim_          = 0;
+    int      num_v_heads_       = 0;
+    int      key_head_dim_      = 0;
+    int      value_head_dim_    = 0;
+    DataType linear_conv_dtype_ = {};
+    DataType linear_state_dtype_ = {};
+    size_t   linear_active_pool_bytes_ = 0;
+    size_t   linear_snapshot_bytes_per_block_ = 0;
 
     BlockIds unlocked_;
     BlockIds freed_;

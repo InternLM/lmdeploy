@@ -311,6 +311,14 @@ PYBIND11_MODULE(_turbomind, m)
         .def_readonly("cached_blocks", &ft::ScheduleMetrics::cached_blocks)
         .def_readonly("free_blocks", &ft::ScheduleMetrics::free_blocks);
 
+    py::class_<ft::LinearPrefixCacheStats, std::shared_ptr<ft::LinearPrefixCacheStats>>(m, "LinearPrefixCacheStats")
+        .def(py::init())
+        .def_readonly("publish_ok", &ft::LinearPrefixCacheStats::publish_ok)
+        .def_readonly("publish_miss", &ft::LinearPrefixCacheStats::publish_miss)
+        .def_readonly("publish_pool_exhausted", &ft::LinearPrefixCacheStats::publish_pool_exhausted)
+        .def_readonly("prefix_match_skipped_alpha", &ft::LinearPrefixCacheStats::prefix_match_skipped_alpha)
+        .def_readonly("linear_restore", &ft::LinearPrefixCacheStats::linear_restore);
+
     py::class_<ft::SessionParam>(m, "SessionParam")
         .def(py::init([](uint64_t id, int step, bool start, bool end) {
                  if (!start && end) {
@@ -546,6 +554,11 @@ PYBIND11_MODULE(_turbomind, m)
         .def(
             "get_schedule_metrics",
             [](TurboMind* model, int index) { return model->GetScheduleMetrics(index); },
+            py::call_guard<py::gil_scoped_release>(),
+            "index"_a)
+        .def(
+            "get_linear_prefix_cache_stats",
+            [](TurboMind* model, int index) { return model->GetLinearPrefixCacheStats(index); },
             py::call_guard<py::gil_scoped_release>(),
             "index"_a)
         .def(

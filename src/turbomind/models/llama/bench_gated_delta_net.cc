@@ -233,7 +233,10 @@ int main(int argc, char** argv)
                                            state_dtype,
                                            sm_count,
                                            work_counter,
-                                           cu_stream);
+                                           cu_stream,
+                                           nullptr,
+                                           nullptr,
+                                           nullptr);
     };
     float chunked_ms =
         benchmark_kernel("invokeChunkedGatedDeltaRuleBatched", launch_chunked, cu_stream, args.warmup, args.iters);
@@ -327,6 +330,191 @@ int main(int argc, char** argv)
         printf("  state comparison:\n");
         FC_Header();
         FC_Print(FastCompare(state_v2, state_v3, cu_stream));
+    }
+
+    // === Optional: chunked prefix-cache snapshot export matches final recurrent state ===
+    if (!is_decode && seq_len > 0) {
+        printf("\n=== Chunked snapshot export vs final state (prefix-cache fusion check) ===\n");
+
+        Tensor snap_staged{Layout{{batch_size, state_size}}, state_dtype, kDEVICE};
+
+        Buffer_<int> snap_batch_off_host{batch_size + 1, kCPUpinned};
+        Buffer_<int> snap_batch_off_dev{batch_size + 1, kDEVICE};
+        Buffer_<int> snap_local_end_host{batch_size, kCPUpinned};
+        Buffer_<int> snap_local_end_dev{batch_size, kDEVICE};
+        Buffer_<void*> snap_ptr_host{batch_size, kCPUpinned};
+        Buffer_<void*> snap_ptr_dev{batch_size, kDEVICE};
+
+        for (int b = 0; b <= batch_size; ++b) {
+            snap_batch_off_host.data()[b] = b;
+        }
+        for (int b = 0; b < batch_size; ++b) {
+            snap_local_end_host.data()[b]     = seq_len - 1;
+            snap_ptr_host.data()[b] =
+                (char*)snap_staged.raw_data() + (ssize_t)b * state_size * (ssize_t)state_elem_bytes;
+        }
+
+        Copy(snap_batch_off_host, batch_size + 1, snap_batch_off_dev);
+        Copy(snap_local_end_host, batch_size, snap_local_end_dev);
+        Copy(snap_ptr_host, batch_size, snap_ptr_dev);
+
+        Clear(state_chunked);
+        Clear(snap_staged);
+        Clear(v_out_chunked);
+        stream.Sync();
+
+        invokeChunkedGatedDeltaRuleBatched(v_out_chunked,
+                                           qkv_in,
+                                           beta,
+                                           g,
+                                           state_ptrs_chunked_dev,
+                                           q_offsets_dev,
+                                           batch_size,
+                                           num_k_heads,
+                                           0,
+                                           state_dtype,
+                                           sm_count,
+                                           work_counter,
+                                           cu_stream,
+                                           &snap_batch_off_dev,
+                                           &snap_local_end_dev,
+                                           &snap_ptr_dev);
+        stream.Sync();
+
+        printf("  snapshot[last token] vs final state (identical by construction):\n");
+        FC_Header();
+        FC_Print(FastCompare(snap_staged, state_chunked, cu_stream));
+
+        // Interior boundary: snapshot at mid sequence must match state after running v2 only on [0, mid] tokens
+        if (seq_len >= 8) {
+            const int mid = seq_len / 2 - 1;  // local index of last token in first half
+            Tensor snap_mid{Layout{{batch_size, state_size}}, state_dtype, kDEVICE};
+            for (int b = 0; b < batch_size; ++b) {
+                snap_local_end_host.data()[b] = mid;
+                snap_ptr_host.data()[b] =
+                    (char*)snap_mid.raw_data() + (ssize_t)b * state_size * (ssize_t)state_elem_bytes;
+            }
+            Copy(snap_local_end_host, batch_size, snap_local_end_dev);
+            Copy(snap_ptr_host, batch_size, snap_ptr_dev);
+
+            Tensor state_partial{Layout{{batch_size, state_size}}, state_dtype, kDEVICE};
+            Buffer_<int> q_part_host{batch_size + 1, kCPUpinned};
+            Buffer_<int> q_part_dev{batch_size + 1, kDEVICE};
+            for (int b = 0; b <= batch_size; ++b) {
+                q_part_host.data()[b] = b * (mid + 1);
+            }
+            Copy(q_part_host, batch_size + 1, q_part_dev);
+            Buffer_<void*> sp_partial_host{batch_size, kCPUpinned};
+            Buffer_<void*> sp_partial_dev{batch_size, kDEVICE};
+            for (int b = 0; b < batch_size; ++b) {
+                sp_partial_host.data()[b] =
+                    (char*)state_partial.raw_data() + (ssize_t)b * state_size * (ssize_t)state_elem_bytes;
+            }
+            Copy(sp_partial_host, batch_size, sp_partial_dev);
+
+            // Pack each batch's tokens [0..mid] from full layout (stride seq_len) into a contiguous
+            // prefix buffer so q_offsets[b]=b*(mid+1) matches the same tokens as the full run.
+            const int prefix_tok = batch_size * (mid + 1);
+            Tensor qkv_prefix{Layout{{prefix_tok, conv_dim}}, dtype, kDEVICE};
+            Tensor beta_prefix{Layout{{prefix_tok, num_v_heads}}, dtype, kDEVICE};
+            Tensor g_prefix{Layout{{prefix_tok, num_v_heads}}, dtype, kDEVICE};
+            for (int b = 0; b < batch_size; ++b) {
+                Copy(qkv_in.slice({b * seq_len, 0}, {mid + 1, conv_dim}),
+                     qkv_prefix.slice({b * (mid + 1), 0}, {mid + 1, conv_dim}),
+                     stream);
+                Copy(beta.slice({b * seq_len, 0}, {mid + 1, num_v_heads}),
+                     beta_prefix.slice({b * (mid + 1), 0}, {mid + 1, num_v_heads}),
+                     stream);
+                Copy(g.slice({b * seq_len, 0}, {mid + 1, num_v_heads}),
+                     g_prefix.slice({b * (mid + 1), 0}, {mid + 1, num_v_heads}),
+                     stream);
+            }
+
+            Tensor v_partial{Layout{{prefix_tok, v_dim}}, dtype, kDEVICE};
+
+            Clear(state_partial);
+            Clear(snap_mid);
+            Clear(v_partial);
+            stream.Sync();
+
+            Tensor state_trunc{Layout{{batch_size, state_size}}, state_dtype, kDEVICE};
+            Buffer_<void*> sp_trunc_host{batch_size, kCPUpinned};
+            Buffer_<void*> sp_trunc_dev{batch_size, kDEVICE};
+            for (int b = 0; b < batch_size; ++b) {
+                sp_trunc_host.data()[b] =
+                    (char*)state_trunc.raw_data() + (ssize_t)b * state_size * (ssize_t)state_elem_bytes;
+            }
+            Copy(sp_trunc_host, batch_size, sp_trunc_dev);
+
+            Clear(state_trunc);
+            stream.Sync();
+
+            invokeGatedDeltaRuleBatched_v2(v_partial,
+                                           qkv_prefix,
+                                           beta_prefix,
+                                           g_prefix,
+                                           sp_partial_dev,
+                                           q_part_dev,
+                                           batch_size,
+                                           num_k_heads,
+                                           0,
+                                           state_dtype,
+                                           sm_count,
+                                           work_counter,
+                                           cu_stream);
+            stream.Sync();
+
+            Clear(v_partial);
+            stream.Sync();
+
+            invokeChunkedGatedDeltaRuleBatched(v_partial,
+                                               qkv_prefix,
+                                               beta_prefix,
+                                               g_prefix,
+                                               sp_trunc_dev,
+                                               q_part_dev,
+                                               batch_size,
+                                               num_k_heads,
+                                               0,
+                                               state_dtype,
+                                               sm_count,
+                                               work_counter,
+                                               cu_stream,
+                                               nullptr,
+                                               nullptr,
+                                               nullptr);
+            stream.Sync();
+
+            printf("  chunked vs v2 on prefix [0..mid] (packed layout sanity):\n");
+            FC_Header();
+            FC_Print(FastCompare(state_trunc, state_partial, cu_stream));
+
+            Clear(state_chunked);
+            Clear(v_out_chunked);
+            stream.Sync();
+
+            invokeChunkedGatedDeltaRuleBatched(v_out_chunked,
+                                               qkv_in,
+                                               beta,
+                                               g,
+                                               state_ptrs_chunked_dev,
+                                               q_offsets_dev,
+                                               batch_size,
+                                               num_k_heads,
+                                               0,
+                                               state_dtype,
+                                               sm_count,
+                                               work_counter,
+                                               cu_stream,
+                                               &snap_batch_off_dev,
+                                               &snap_local_end_dev,
+                                               &snap_ptr_dev);
+            stream.Sync();
+
+            printf("  snapshot[mid token] vs chunked state on prefix-only run:\n");
+            FC_Header();
+            FC_Print(FastCompare(snap_mid, state_trunc, cu_stream));
+        }
     }
 
     printf("\nDone.\n");

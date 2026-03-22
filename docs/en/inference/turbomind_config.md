@@ -105,6 +105,8 @@ Prefix caching feature is mainly applicable to scenarios where multiple requests
 
 Since k/v block is the smallest granularity for reuse in prefix caching, if the identical prompt prefix is less than one block (prefix length \< cache_block_seq_len), there will be no improvement in inference performance.
 
+**Linear-attention (e.g. Gated Delta Net) models:** TurboMind also stores extra per-reusable-block linear state for prefix hits. The effective GPU budget accounts for both k/v blocks and this snapshot pool (see engine logs at startup). Under extreme cache pressure, linear snapshot slots may be exhausted; the engine then omits linear snapshots for some trie nodes so prefix depth falls back safely (no corrupted output). **Prefix matching for linear state is skipped when the scheduler reports non-zero `alpha` for that sequence** (uncommitted prefix overlap); use `TM_LOG_LEVEL=DEBUG` to see `[SeqMgr][match]` details. Cumulative counters are exposed on the TurboMind engine as `get_linear_prefix_cache_stats()` (Python) and, when `enable_metrics` is on, to periodic logging and Prometheus gauges named `lmdeploy:linear_prefix_cache_*_total`. **Capture path:** recurrent (delta-rule) block-end tensors are exported from the chunked CUDA kernel during the main prefill (no second pass over those tokens). Depthwise conv ring state per block is exported from the fused causal conv kernel at each block’s `local_end` token in the same full forward pass (no per-segment conv replay).
+
 ### kv quantization and inference switch
 
 - `quant_policy=4` means 4bit k/v quantization and inference
