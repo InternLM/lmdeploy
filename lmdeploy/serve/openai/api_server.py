@@ -1347,7 +1347,10 @@ def create_lifespan_handler(backend_config: PytorchEngineConfig | TurbomindEngin
 
                         # periodically update schedule metrics, as they change less frequently than iteration stats
                         schedule_metrics = async_engine.get_schedule_metrics()
-                        await metrics_processor.update_schedule_stats(schedule_metrics)
+                        linear_prefix = None
+                        if async_engine.backend == 'turbomind':
+                            linear_prefix = async_engine.get_linear_prefix_cache_stats()
+                        await metrics_processor.update_schedule_stats(schedule_metrics, linear_prefix)
 
                         await async_engine.do_log_stats()
 

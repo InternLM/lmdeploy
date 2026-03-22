@@ -332,6 +332,50 @@ int main(int argc, char** argv)
     FC_Header();
     FC_Print(FastCompare(state_ref, state_v2, cu_stream));
 
+    if (seq_len > 1 && d_conv == 4) {
+        printf("\n=== Fused conv snapshot export vs final state (prefix-cache) ===\n");
+        Tensor         snap_staged{Layout{{batch_size, conv_state_size}}, dtype, kDEVICE};
+        Buffer_<int>   snap_bo_h{batch_size + 1, kCPUpinned};
+        Buffer_<int>   snap_bo_d{batch_size + 1, kDEVICE};
+        Buffer_<int>   snap_le_h{batch_size, kCPUpinned};
+        Buffer_<int>   snap_le_d{batch_size, kDEVICE};
+        Buffer_<void*> snap_ptr_h{batch_size, kCPUpinned};
+        Buffer_<void*> snap_ptr_d{batch_size, kDEVICE};
+        for (int b = 0; b <= batch_size; ++b) {
+            snap_bo_h.data()[b] = b;
+        }
+        for (int b = 0; b < batch_size; ++b) {
+            snap_le_h.data()[b]  = seq_len - 1;
+            snap_ptr_h.data()[b] = (char*)snap_staged.raw_data() + (ssize_t)b * conv_state_size * (ssize_t)elem_bytes;
+        }
+        Copy(snap_bo_h, batch_size + 1, snap_bo_d);
+        Copy(snap_le_h, batch_size, snap_le_d);
+        Copy(snap_ptr_h, batch_size, snap_ptr_d);
+        Clear(state_v2);
+        Clear(snap_staged);
+        Clear(out_v2);
+        stream.Sync();
+        invokeFusedConv1dSiLU(out_v2,
+                              all_proj,
+                              weight,
+                              Tensor{},
+                              state_ptrs_v2_dev,
+                              q_offsets_dev,
+                              k_offsets_dev,
+                              batch_size,
+                              0,
+                              sm_count,
+                              work_counter.data(),
+                              cu_stream,
+                              &snap_bo_d,
+                              &snap_le_d,
+                              &snap_ptr_d);
+        stream.Sync();
+        printf("  snapshot[last token] vs final conv state:\n");
+        FC_Header();
+        FC_Print(FastCompare(snap_staged, state_v2, cu_stream));
+    }
+
     printf("\nDone.\n");
     return 0;
 }

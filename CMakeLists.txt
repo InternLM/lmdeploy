@@ -50,6 +50,7 @@ if (BUILD_TEST)
     EXCLUDE_FROM_ALL
   )
   FetchContent_MakeAvailable(Catch2)
+  enable_testing()
 endif()
 
 

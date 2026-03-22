@@ -166,6 +166,10 @@ class Pipeline:
         self.internal_thread.close()
         self.async_engine.close()
 
+    def get_linear_prefix_cache_stats(self):
+        """TurboMind-only: cumulative Gated Delta Net linear prefix-cache counters; zeros on PyTorch backend."""
+        return self.async_engine.get_linear_prefix_cache_stats()
+
     def chat(self,
              prompt: str | Tuple[str, 'Image' | List['Image']],
              session=None,

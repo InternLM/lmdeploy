@@ -436,6 +436,7 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
 
         if (seq.recurrent_states) {
             if (step != seq.cache_len) {
+                seq_mgr_->ReleaseLinearStateSlot(seq);
                 signals.push_back([r] { UpdateState(*r, Request::kInvalid, 0); });
                 continue;
             }
@@ -640,6 +641,10 @@ void Engine::Impl::Setup(BatchData& d)
 
     d.rc.resize(st.active);
     std::copy_n(st.rc.begin(), st.active, d.rc.begin());
+
+    for (int i = 0; i < st.active; ++i) {
+        seq_mgr_->PrepareLinearCheckpointStaging(*d.rc[i]);
+    }
 
     block_ptrs_offsets_buf_[0] = 0;
     auto block_ptrs            = block_ptrs_buf_.data();
@@ -917,6 +922,18 @@ shared_ptr<ScheduleMetrics> Engine::GetScheduleMetrics()
         return std::atomic_load_explicit(&impl_->metrics_, std::memory_order_acquire);
     }
     return {};
+}
+
+shared_ptr<LinearPrefixCacheStats> Engine::GetLinearPrefixCacheStats()
+{
+    auto       s                  = std::make_shared<LinearPrefixCacheStats>();
+    const auto t                  = SequenceManager::LinearPrefixCacheStats();
+    s->publish_ok                 = std::get<0>(t);
+    s->publish_miss               = std::get<1>(t);
+    s->publish_pool_exhausted     = std::get<2>(t);
+    s->prefix_match_skipped_alpha = std::get<3>(t);
+    s->linear_restore             = std::get<4>(t);
+    return s;
 }
 
 }  // namespace turbomind

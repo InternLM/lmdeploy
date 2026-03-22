@@ -20,7 +20,8 @@ import torch
 import yaml
 
 import lmdeploy
-from lmdeploy.messages import EngineOutput, GenerationConfig, ResponseType, ScheduleMetrics, TurbomindEngineConfig
+from lmdeploy.messages import (EngineOutput, GenerationConfig, LinearPrefixCacheStats, ResponseType, ScheduleMetrics,
+                               TurbomindEngineConfig)
 from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
@@ -403,6 +404,17 @@ class TurboMind:
                                total_blocks=tm_metrics.total_blocks,
                                active_blocks=tm_metrics.active_blocks,
                                free_blocks=tm_metrics.free_blocks)
+
+    def get_linear_prefix_cache_stats(self) -> LinearPrefixCacheStats:
+        """Cumulative TurboMind linear prefix-cache counters (Gated Delta
+        Net)."""
+        # TODO: support dp
+        s = self.model_comm.get_linear_prefix_cache_stats(0)
+        return LinearPrefixCacheStats(publish_ok=s.publish_ok,
+                                      publish_miss=s.publish_miss,
+                                      publish_pool_exhausted=s.publish_pool_exhausted,
+                                      prefix_match_skipped_alpha=s.prefix_match_skipped_alpha,
+                                      linear_restore=s.linear_restore)
 
 
 def _get_logits(outputs, offset: int):

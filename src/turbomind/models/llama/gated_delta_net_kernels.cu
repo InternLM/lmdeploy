@@ -564,7 +564,10 @@ __global__ void chunked_gated_delta_rule_kernel(T*         v_out,
                                                 int        num_v_heads,
                                                 int        num_k_heads,
                                                 int        k_dim_total,
-                                                int        state_layer_offset)
+                                                int        state_layer_offset,
+                                                const int* __restrict__ snap_batch_offsets,
+                                                const int* __restrict__ snap_local_end_tokens,
+                                                void* const* __restrict__ staged_recurrent_ptrs)
 {
     constexpr int C = kChunkSize;
     constexpr int D = kHeadDim;
@@ -586,6 +589,8 @@ __global__ void chunked_gated_delta_rule_kernel(T*         v_out,
 
     S*          s_ptr = state_ptrs[b] + state_layer_offset + h * state_size;
     const float scale = rsqrtf((float)D);
+
+    const bool export_snapshots = staged_recurrent_ptrs != nullptr;
 
     // ── State tiling (same as v2) ──
     constexpr int tile_k    = 8;
@@ -652,14 +657,14 @@ __global__ void chunked_gated_delta_rule_kernel(T*         v_out,
     //  CHUNK PROCESSING  — sequential per-token (same as v2) with
     //  smem-cached QKV.  Eliminates resolvent/intra-attention overhead.
     // ================================================================
-    // Shared memory layout for chunk processing (overlaps state staging buffer):
-    //   k_norm_smem[C][kSmemStride]  — pre-normalized K
-    //   q_norm_smem[C][kSmemStride]  — pre-normalized Q
-    //   v_smem[C][kSmemStride]       — raw V (as float)
-    //   scalars[3*C]                 — beta[C], g[C], scratch[C]
+    // Split shared memory: [state swizzle staging][chunk K/Q/V + scalars] so we can
+    // export recurrent snapshots mid-prefill without clobbering chunk buffers.
     constexpr int kSmemStride = D + 4;  // pad rows by 4 to avoid 4-way bank conflicts
 
-    float* k_norm_smem = (float*)smem_buf;
+    const size_t state_smem_bytes = (size_t)D * (size_t)D * sizeof(S);  // must match launcher smem split
+    char* const  chunk_smem_base  = smem_buf + state_smem_bytes;
+
+    float* k_norm_smem = (float*)chunk_smem_base;
     float* q_norm_smem = k_norm_smem + C * kSmemStride;
     float* v_smem      = q_norm_smem + C * kSmemStride;
     float* beta_vals   = v_smem + C * kSmemStride;
@@ -672,6 +677,17 @@ __global__ void chunked_gated_delta_rule_kernel(T*         v_out,
     const int     load_lane      = threadIdx.x % kThreadsPerTok;  // lane within token's warp
 
     const int num_chunks = (seq_len + C - 1) / C;
+
+    __shared__ int s_snap_si_cursor;
+    if (export_snapshots) {
+        if (threadIdx.x == 0) {
+            s_snap_si_cursor = (snap_batch_offsets != nullptr && snap_local_end_tokens != nullptr
+                                && staged_recurrent_ptrs != nullptr) ?
+                                   snap_batch_offsets[b] :
+                                   0;
+        }
+        __syncthreads();
+    }
 
     for (int ci = 0; ci < num_chunks; ++ci) {
         const int chunk_start = tok_off + ci * C;
@@ -734,8 +750,8 @@ __global__ void chunked_gated_delta_rule_kernel(T*         v_out,
         // ────────────────────────────────────────────────────
         //  Sequential per-token loop (same computation as v2)
         //  Reads K, Q, V from smem instead of global memory.
+        //  (No PRAGMA_UNROLL: optional prefix-cache snapshot inserts __syncthreads.)
         // ────────────────────────────────────────────────────
-        PRAGMA_UNROLL
         for (int t = 0; t < C; ++t) {
             if (t >= valid_len)
                 break;
@@ -794,6 +810,73 @@ __global__ void chunked_gated_delta_rule_kernel(T*         v_out,
                 }
                 if (offset_k == 0)
                     Store(&v_out[gt * v_dim + h * D + v_base], vec_O);
+            }
+
+            if (export_snapshots) {
+                __syncthreads();
+                const int      local_idx = ci * C + t;
+                __shared__ int s_snap_si;
+                if (threadIdx.x == 0) {
+                    s_snap_si = -1;
+                    if (snap_batch_offsets != nullptr && snap_local_end_tokens != nullptr
+                        && staged_recurrent_ptrs != nullptr) {
+                        const int lo = snap_batch_offsets[b];
+                        const int hi = snap_batch_offsets[b + 1];
+                        int       si = s_snap_si_cursor;
+                        while (si < hi && snap_local_end_tokens[si] < local_idx) {
+                            ++si;
+                        }
+                        if (si < hi && snap_local_end_tokens[si] == local_idx) {
+                            s_snap_si        = si;
+                            s_snap_si_cursor = si + 1;
+                        }
+                        else {
+                            s_snap_si_cursor = si;
+                        }
+                    }
+                }
+                __syncthreads();
+                const int si_snap = s_snap_si;
+                if (si_snap >= 0) {
+                    S* const snap_dst    = (S*)staged_recurrent_ptrs[si_snap] + h * state_size;
+                    using Map_S          = ThreadMap_V2<D, D, sizeof(uint4) / sizeof(S), Raked, kBlockDim / WARP_SIZE>;
+                    constexpr int kBase  = (sizeof(S) == 4) ? 2 : 3;
+                    constexpr int kShift = 10 - kBase;
+                    using Layout         = SmemLayoutV2<D, D, -1, -1, Swizzle<4, kBase, kShift>>;
+                    SmemAccessor<S, Layout> smem_S_snap{(S*)smem_buf};
+                    constexpr int           kAccessC = Map_S::kAccessC;
+
+                    PRAGMA_UNROLL
+                    for (int vi = 0; vi < v_iters; ++vi) {
+                        PRAGMA_UNROLL
+                        for (int k = 0; k < tile_k; ++k) {
+                            PRAGMA_UNROLL
+                            for (int c = 0; c < tile_v / kAccessC; ++c) {
+                                auto tmp = cast<S>((Array<float, kAccessC>&)vec_S[vi][k][c * kAccessC]);
+                                Store(&smem_S_snap(offset_k * tile_k + k,
+                                                   (offset_v + vi * v_threads) * tile_v + c * kAccessC),
+                                      tmp);
+                            }
+                        }
+                    }
+                    __syncthreads();
+
+                    const int warp_id_sp = threadIdx.x / WARP_SIZE;
+                    const int lane_id_sp = threadIdx.x % WARP_SIZE;
+                    PRAGMA_UNROLL
+                    for (int s = 0; s < Map_S::kIterS; ++s) {
+                        Array<S, kAccessC> vec;
+                        PRAGMA_UNROLL
+                        for (int c = 0; c < Map_S::kIterC; ++c) {
+                            const auto [vd, kd] = Map_S::get_offset(warp_id_sp, lane_id_sp);
+                            const int fvd       = vd + c * Map_S::kDeltaC;
+                            const int fkd       = kd + s * Map_S::kDeltaS;
+                            Load(vec, &smem_S_snap(fkd, fvd));
+                            Store(snap_dst + fkd * D + fvd, vec);
+                        }
+                    }
+                }
+                __syncthreads();
             }
         }
         __syncthreads();  // [sync 2] ensure all reads done before next chunk overwrites smem
@@ -854,7 +937,10 @@ void invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out_,
                                         DataType              state_dtype,
                                         int /*sm_count*/,
                                         int* /*work_counter*/,
-                                        cudaStream_t stream)
+                                        cudaStream_t          stream,
+                                        const Buffer_<int>*   snap_batch_offsets,
+                                        const Buffer_<int>*   snap_local_end_tokens,
+                                        const Buffer_<void*>* staged_recurrent_ptrs)
 {
     auto& v_out = v_out_.get();
 
@@ -875,6 +961,11 @@ void invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out_,
 
     const int num_blocks = batch_size * num_v_heads;
 
+    const int*   d_snap_off = snap_batch_offsets ? snap_batch_offsets->data() : nullptr;
+    const int*   d_snap_tok = snap_local_end_tokens ? snap_local_end_tokens->data() : nullptr;
+    void* const* d_stg_rec =
+        staged_recurrent_ptrs ? reinterpret_cast<void* const*>(staged_recurrent_ptrs->data()) : nullptr;
+
     auto invoke = [&](auto t) {
         using T     = decltype(t);
         auto launch = [&](auto s) {
@@ -882,14 +973,12 @@ void invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out_,
 
             auto kernel = chunked_gated_delta_rule_kernel<kHeadDim, kChunkSize, kBlockDim, T, S>;
 
-            // smem = max(state staging, chunk working buffers)
-            // State staging: D*D*sizeof(S) (64KB for fp32)
-            // Chunk buffers: QKV cache [3*C*(D+4)] + scalars[2*C]
+            // Non-overlapping: [state swizzle staging][chunk K/Q/V + scalars]
             const size_t state_smem  = kHeadDim * kHeadDim * sizeof(S);
             const int    kSmemStride = kHeadDim + 4;
             const size_t chunk_smem  = 3 * kChunkSize * kSmemStride * sizeof(float)  // k_norm, q_norm, v
                                       + 2 * kChunkSize * sizeof(float);              // beta, g
-            const size_t smem_sz = state_smem > chunk_smem ? state_smem : chunk_smem;
+            const size_t smem_sz = state_smem + chunk_smem;
 
             if (smem_sz > 48 << 10) {
                 cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_sz);
@@ -904,7 +993,10 @@ void invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out_,
                                                                num_v_heads,
                                                                num_k_heads,
                                                                k_dim_total,
-                                                               state_layer_offset);
+                                                               state_layer_offset,
+                                                               d_snap_off,
+                                                               d_snap_tok,
+                                                               d_stg_rec);
         };
         if (state_dtype == kFloat32) {
             launch(float{});
@@ -1063,23 +1155,30 @@ void invokeRMSNormGated(Ref<Tensor> hidden_, const Tensor& gate, const Tensor& w
 // tile per block.
 // =============================================================================
 template<int D_CONV, int CHANNELS_PER_THREAD, int BLOCK_DIM, int NUM_TOKENS, typename T>
-__global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*           out,
-                                                                            const T*     in,
-                                                                            const T*     weight,
-                                                                            const T*     bias,
-                                                                            void* const* conv_state_ptrs,
-                                                                            const int*   q_offsets,
-                                                                            const int*   k_offsets,
-                                                                            int*         work_counter,
-                                                                            int          batch_size,
-                                                                            int          conv_dim,
-                                                                            int          in_stride,
-                                                                            int          num_token_tiles,
-                                                                            int          state_layer_offset,
-                                                                            int          total_work,
-                                                                            int          num_ch_tiles)
+__global__ void __launch_bounds__(BLOCK_DIM)
+    fused_conv1d_batched_kernel_v2(T*           out,
+                                   const T*     in,
+                                   const T*     weight,
+                                   const T*     bias,
+                                   void* const* conv_state_ptrs,
+                                   const int*   q_offsets,
+                                   const int*   k_offsets,
+                                   int*         work_counter,
+                                   int          batch_size,
+                                   int          conv_dim,
+                                   int          in_stride,
+                                   int          num_token_tiles,
+                                   int          state_layer_offset,
+                                   int          total_work,
+                                   int          num_ch_tiles,
+                                   const int* __restrict__ snap_batch_offsets,
+                                   const int* __restrict__ snap_local_end_tokens,
+                                   void* const* __restrict__ staged_conv_ptrs)
 {
     static_assert(BLOCK_DIM * CHANNELS_PER_THREAD > 0);
+
+    const bool export_snapshots =
+        snap_batch_offsets != nullptr && snap_local_end_tokens != nullptr && staged_conv_ptrs != nullptr;
 
     int prev_ch_tile = -1;
     int c_base       = 0;
@@ -1175,6 +1274,14 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
         T*        state_base = (T*)conv_state_ptrs[b] + state_layer_offset;
 
         if (ch_active) {
+            int snap_si_cursor = 0;
+            int snap_lo        = 0;
+            int snap_hi        = 0;
+            if (export_snapshots) {
+                snap_lo        = snap_batch_offsets[b];
+                snap_hi        = snap_batch_offsets[b + 1];
+                snap_si_cursor = snap_lo;
+            }
             constexpr int                 VALS_SIZE = NUM_TOKENS + D_CONV - 1;
             Array<T, CHANNELS_PER_THREAD> vals[VALS_SIZE];
             const int                     n_vals = n_tokens + D_CONV - 1;
@@ -1214,6 +1321,32 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
                     }
 
                     Store(out + (seq_off + t_local_start + tok) * conv_dim + c_base, out_vals);
+
+                    if (export_snapshots) {
+                        const int local_pos = t_local_start + tok;
+                        int       si        = snap_si_cursor;
+                        while (si < snap_hi && snap_local_end_tokens[si] < local_pos) {
+                            ++si;
+                        }
+                        int si_snap = -1;
+                        if (si < snap_hi && snap_local_end_tokens[si] == local_pos) {
+                            si_snap = si;
+                            si      = si + 1;
+                        }
+                        snap_si_cursor = si;
+                        if (si_snap >= 0) {
+                            T* const  snap_dst = (T*)staged_conv_ptrs[si_snap];
+                            const int L        = local_pos;
+                            PRAGMA_UNROLL
+                            for (int i = 0; i < VALS_SIZE; ++i) {
+                                int pos = t_local_start - (D_CONV - 1) + i;
+                                if (pos >= 0 && pos >= L - (D_CONV - 1) && pos <= L) {
+                                    int ring_d = (ring_start + i) % D_CONV;
+                                    Store(snap_dst + ring_d * conv_dim + c_base, vals[i]);
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -1242,7 +1375,10 @@ void invokeFusedConv1dSiLU(Ref<Tensor>           out_,
                            int                   state_layer_offset,
                            int                   sm_count,
                            int*                  work_counter,
-                           cudaStream_t          stream)
+                           cudaStream_t          stream,
+                           const Buffer_<int>*   snap_batch_offsets,
+                           const Buffer_<int>*   snap_local_end_tokens,
+                           const Buffer_<void*>* staged_conv_ptrs)
 {
     auto& out = out_.get();
 
@@ -1272,6 +1408,11 @@ void invokeFusedConv1dSiLU(Ref<Tensor>           out_,
                 cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocks_per_sm, kernel, threads, 0);
                 int grid = min(total_work, blocks_per_sm * sm_count);
 
+                const int*   d_snap_bo = snap_batch_offsets ? snap_batch_offsets->data() : nullptr;
+                const int*   d_snap_le = snap_local_end_tokens ? snap_local_end_tokens->data() : nullptr;
+                void* const* d_stg_conv =
+                    staged_conv_ptrs ? reinterpret_cast<void* const*>(staged_conv_ptrs->data()) : nullptr;
+
                 cudaMemsetAsync(work_counter, 0, sizeof(int), stream);
                 kernel<<<grid, threads, 0, stream>>>(out.data<T>(),
                                                      in.data<T>(),
@@ -1287,7 +1428,10 @@ void invokeFusedConv1dSiLU(Ref<Tensor>           out_,
                                                      num_token_tiles,
                                                      state_layer_offset,
                                                      total_work,
-                                                     num_ch_tiles);
+                                                     num_ch_tiles,
+                                                     d_snap_bo,
+                                                     d_snap_le,
+                                                     d_stg_conv);
             };
 
             int avg_seq = total_tokens / batch_size;

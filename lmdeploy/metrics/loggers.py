@@ -118,10 +118,18 @@ class LoggingStatLogger(StatLoggerBase):
             f'API server (completed/routed/waiting): {scheduler_stats.num_completed_reqs} / '
             f'{scheduler_stats.num_api_routed_reqs} / {scheduler_stats.num_api_waiting_reqs}, '
             f'Engine (running/waiting): {scheduler_stats.num_running_reqs} / {scheduler_stats.num_waiting_reqs}, '
-            f'KV cache: {scheduler_stats.gpu_cache_usage * 100 :.1f}%, ')
+            f'KV cache: {scheduler_stats.gpu_cache_usage * 100:.1f}%, ')
 
         if scheduler_stats.prefix_cache_hit_rate != 0:
-            log_msg += f'Prefix cache hit rate: {scheduler_stats.prefix_cache_hit_rate * 100 :.1f}%, '
+            log_msg += f'Prefix cache hit rate: {scheduler_stats.prefix_cache_hit_rate * 100:.1f}%, '
+
+        lp = scheduler_stats
+        if (lp.linear_prefix_publish_ok or lp.linear_prefix_publish_miss or lp.linear_prefix_publish_pool_exhausted
+                or lp.linear_prefix_match_skipped_alpha or lp.linear_prefix_match_restored):
+            log_msg += (f'Linear prefix cache (ok/miss/pool_exhausted/alpha_skip/restored): '
+                        f'{lp.linear_prefix_publish_ok} / {lp.linear_prefix_publish_miss} / '
+                        f'{lp.linear_prefix_publish_pool_exhausted} / {lp.linear_prefix_match_skipped_alpha} / '
+                        f'{lp.linear_prefix_match_restored}, ')
 
         if spec_msg is not None:
             log_msg += spec_msg
@@ -188,6 +196,31 @@ class PrometheusStatLogger(StatLoggerBase):
             name='lmdeploy:gpu_cache_usage_perc',
             documentation='GPU KV-cache usage. 1 means 100 percent usage.',
             labelnames=labelnames).labels(*labelvalues)
+
+        #
+        # TurboMind linear-attention prefix cache (cumulative since process start; TurboMind backend only)
+        #
+        self.counter_linear_prefix_publish_ok = prometheus_client.Counter(
+            name='lmdeploy:linear_prefix_cache_publish_ok_total',
+            documentation='Cumulative successful linear prefix snapshot publishes (Gated Delta Net).',
+            labelnames=labelnames).labels(*labelvalues)
+        self.counter_linear_prefix_publish_miss = prometheus_client.Counter(
+            name='lmdeploy:linear_prefix_cache_publish_miss_total',
+            documentation='Cumulative publish misses (missing staged snapshot).',
+            labelnames=labelnames).labels(*labelvalues)
+        self.counter_linear_prefix_pool_exhausted = prometheus_client.Counter(
+            name='lmdeploy:linear_prefix_cache_publish_pool_exhausted_total',
+            documentation='Cumulative publish attempts when the linear snapshot pool was exhausted.',
+            labelnames=labelnames).labels(*labelvalues)
+        self.counter_linear_prefix_skipped_alpha = prometheus_client.Counter(
+            name='lmdeploy:linear_prefix_cache_prefix_match_skipped_alpha_total',
+            documentation='Cumulative prefix matches skipped due to non-zero alpha.',
+            labelnames=labelnames).labels(*labelvalues)
+        self.counter_linear_prefix_restored = prometheus_client.Counter(
+            name='lmdeploy:linear_prefix_cache_match_restored_total',
+            documentation='Cumulative successful linear state restores on prefix hit.',
+            labelnames=labelnames).labels(*labelvalues)
+        self._linear_prefix_totals_prev = (0, 0, 0, 0, 0)
 
         #
         # Counters
@@ -315,6 +348,25 @@ class PrometheusStatLogger(StatLoggerBase):
         self.gauge_scheduler_running.set(stats.num_running_reqs)
         self.gauge_scheduler_waiting.set(stats.num_waiting_reqs)
         self.gauge_gpu_cache_usage.set(stats.gpu_cache_usage)
+        new_lp = (
+            stats.linear_prefix_publish_ok,
+            stats.linear_prefix_publish_miss,
+            stats.linear_prefix_publish_pool_exhausted,
+            stats.linear_prefix_match_skipped_alpha,
+            stats.linear_prefix_match_restored,
+        )
+        lp_counters = (
+            self.counter_linear_prefix_publish_ok,
+            self.counter_linear_prefix_publish_miss,
+            self.counter_linear_prefix_pool_exhausted,
+            self.counter_linear_prefix_skipped_alpha,
+            self.counter_linear_prefix_restored,
+        )
+        for ctr, old_v, new_v in zip(lp_counters, self._linear_prefix_totals_prev, new_lp):
+            delta = new_v - old_v
+            if delta > 0:
+                ctr.inc(delta)
+        self._linear_prefix_totals_prev = new_lp
 
     def record_iteration(self, stats: IterationStats) -> None:
         """Report token-related metrics to prometheus."""
