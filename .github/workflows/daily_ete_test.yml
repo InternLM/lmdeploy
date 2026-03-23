@@ -872,7 +872,6 @@ jobs:
       - name: Clear workfile
         if: always()
         run: |
-
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
