@@ -152,6 +152,7 @@ def _fwd_grouped_split_kernel(
     for start_n in range(loop_start, loop_end, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
         b_offset = tl.load(block_offset_ptrs)
+        b_offset = b_offset.to(tl.int64)
         block_offset_ptrs += 1
 
         # -- compute qk ----
@@ -368,6 +369,7 @@ def _fwd_grouped_split_quant_kernel(
     for start_n in range(loop_start, loop_end, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
         b_offset = tl.load(block_offset_ptrs + start_n // BLOCK_N)
+        b_offset = b_offset.to(tl.int64)
 
         # -- compute qk ----
         # k = tl.load(k_ptrs + b_offset * stride_kp)
