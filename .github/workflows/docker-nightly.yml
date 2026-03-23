@@ -22,7 +22,7 @@ jobs:
       OFFLINE_REQUIREMENTS: ${{ vars.OFFLINE_REQUIREMENTS }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.repo_ref || 'main' }}
       - name: Free disk space
