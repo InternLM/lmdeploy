@@ -152,10 +152,12 @@ class ArgumentHelper:
         return parser.add_argument('--model-format',
                                    type=str,
                                    default=default,
-                                   choices=['hf', 'awq', 'gptq', 'fp8', 'mxfp4'],
+                                   choices=['hf', 'awq', 'gptq', 'compressed-tensors', 'fp8', 'mxfp4'],
                                    help='The format of input model. `hf` means `hf_llama`, '
-                                   '`awq` represents the quantized model by AWQ,'
-                                   ' and `gptq` refers to the quantized model by GPTQ')
+                                   '`awq` and `gptq` refer to 4-bit grouped quantization, '
+                                   '`compressed-tensors` refers to pack-quantized grouped int4 checkpoints and is '
+                                   'usually auto-detected from the model config, `fp8` refers to blocked fp8 '
+                                   'checkpoints, and `mxfp4` refers to MXFP4 expert weights.')
 
     @staticmethod
     def revision(parser, default: str = None):
