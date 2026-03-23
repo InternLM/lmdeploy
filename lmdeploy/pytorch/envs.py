@@ -127,6 +127,9 @@ with set_envs():
     # only used when lmdeploy is initialized inside a Ray Actor with pg allocated
     ray_external_pg_bundles = env_to_list_int('LMDEPLOY_RAY_EXTERNAL_PG_BUNDLES', [])
 
+    # enable ray zero-copy tensors
+    os.getenv('RAY_ENABLE_ZERO_COPY_TORCH_TENSORS', '1')
+
     # dist
     dist_master_addr = os.getenv('LMDEPLOY_DIST_MASTER_ADDR', None)
     dist_master_port = os.getenv('LMDEPLOY_DIST_MASTER_PORT', None)

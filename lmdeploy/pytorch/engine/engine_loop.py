@@ -326,6 +326,8 @@ class EngineLoop:
         if out is not None:
             step_outputs = self._make_infer_outputs(out, running=running, model_inputs=model_inputs, delta=delta)
             self.resp_queue.put_nowait(step_outputs)
+            # out might come from shared memory, need to explicitly delete to release memory in time
+            del out
 
         return forward_inputs, next_running
 
