@@ -182,9 +182,9 @@ class HuggingFaceTokenizer:
         # there might be token id that exceeds self.vocab_size
         if len(indexes) == 0:
             indexes = self.encode(token, False)
-            if len(indexes) != 1:
-                self.logger.warning(f'The token {token}, its length of indexes {indexes} is '
-                                    'not 1. Currently, it can not be used as stop words')
+            if len(indexes) > 1:
+                # Multi-token encoding: return empty so callers can handle
+                # the multi-token case via encode() directly.
                 indexes = []
         self._indexes_tokens_deque.append((token, indexes))
         return indexes
@@ -540,7 +540,7 @@ class Tokenizer:
         the input token."""
         encoded = self.encode(token, add_bos=False)
         if len(encoded) > 1:
-            self.logger.warning(f'The token {token}, its length of indexes {encoded} is over '
-                                'than 1. Currently, it can not be used as stop words')
+            # Multi-token encoding: return empty so callers can handle
+            # the multi-token case via encode() directly.
             return []
         return self.model.indexes_containing_token(token)

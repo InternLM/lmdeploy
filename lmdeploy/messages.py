@@ -2,7 +2,7 @@
 import enum
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Literal, Optional
+from typing import Any, Callable, Literal
 
 import torch
 from pydantic.dataclasses import dataclass as pydantic_dataclass
@@ -109,16 +109,16 @@ class GenerationConfig:
     repetition_penalty: float = 1.0
     ignore_eos: bool = False
     random_seed: int = None
-    stop_words: List[str] = None
-    bad_words: List[str] = None
-    stop_token_ids: List[int] = None
-    bad_token_ids: List[int] = None
+    stop_words: list[str] = None
+    bad_words: list[str] = None
+    stop_token_ids: list[int] | list[list[int]] = None
+    bad_token_ids: list[int] = None
     min_new_tokens: int = None
     skip_special_tokens: bool = True
     spaces_between_special_tokens: bool = True
     logprobs: int = None
-    response_format: Optional[Dict] = None
-    logits_processors: Optional[List[LogitsProcessor]] = None
+    response_format: dict | None = None
+    logits_processors: list[LogitsProcessor] | None = None
     output_logits: Literal['all', 'generation'] = None
     output_last_hidden_state: Literal['all', 'generation'] = None
     include_stop_str_in_output: bool = False
@@ -126,7 +126,7 @@ class GenerationConfig:
     # for disaggregation
     with_cache: bool = False
     preserve_cache: bool = False
-    migration_request: Optional[MigrationRequest] = None
+    migration_request: MigrationRequest | None = None
 
     # router replay
     return_routed_experts: bool = False
@@ -135,46 +135,99 @@ class GenerationConfig:
     repetition_ngram_size: int = 0
     repetition_ngram_threshold: int = 0
 
+    @staticmethod
+    def _normalize_stop_token_ids(ids: list[int] | list[list[int]] | None) -> list[list[int]]:
+        """Normalize stop_token_ids to list[list[int]]."""
+        if ids is None:
+            return []
+        out: list[list[int]] = []
+        for item in ids:
+            if isinstance(item, int):
+                out.append([item])
+            else:
+                out.append(list(item))
+        return out
+
     def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
-        """Convert stop_words/bad_sords to ids and append the ids to
+        """Convert stop_words/bad_words to ids and append the ids to
         stop_token_ids/bad_token_ids."""
 
-        def special_word_token_ids(words):
-            if words is not None:
-                assert isinstance(words, List) and \
-                    all(isinstance(elem, str) for elem in words), \
-                    f'stop_words must be a list of str but got {type(words)}'
-                indexes = []
-                for word in words:
-                    indexes += tokenizer.indexes_containing_token(word)
-                return indexes
-            return None
+        def words_to_token_seqs(words: list[str], prefer_exact: bool = False) -> list[list[int]]:
+            assert isinstance(words, list) and \
+                all(isinstance(elem, str) for elem in words), \
+                f'stop_words must be a list of str but got {type(words)}'
+            seqs: list[list[int]] = []
+            for word in words:
+                # For stop_words, prefer exact tokenization so multi-word phrases
+                # are represented as an exact token-id sequence.
+                if prefer_exact:
+                    encoded = tokenizer.encode(word, add_bos=False)
+                    if encoded:
+                        seqs.append(encoded)
+                        continue
 
-        stop_token_ids = special_word_token_ids(self.stop_words) or []
-        bad_token_ids = special_word_token_ids(self.bad_words) or []
-        stop_token_ids.extend(self.stop_token_ids or [])
-        bad_token_ids.extend(self.bad_token_ids or [])
-        self.stop_token_ids = list(set(stop_token_ids)) or None
-        self.bad_token_ids = list(set(bad_token_ids)) or None
+                single_matches = tokenizer.indexes_containing_token(word)
+                if single_matches:
+                    for idx in single_matches:
+                        seqs.append([idx])
+                else:
+                    encoded = tokenizer.encode(word, add_bos=False)
+                    if encoded:
+                        seqs.append(encoded)
+            return seqs
+
+        stop_seqs = words_to_token_seqs(self.stop_words, prefer_exact=True) if self.stop_words else []
+        bad_seqs = words_to_token_seqs(self.bad_words) if self.bad_words else []
+
+        stop_seqs.extend(self._normalize_stop_token_ids(self.stop_token_ids))
+        bad_seqs.extend([[i] for i in (self.bad_token_ids or [])])
+
+        # deduplicate stop_token_ids and bad_token_ids
+        seen = set()
+        deduped: list[list[int]] = []
+        for seq in stop_seqs:
+            key = tuple(seq)
+            if key not in seen:
+                seen.add(key)
+                deduped.append(seq)
+        self.stop_token_ids = deduped or None
+
+        seen_bad = set()
+        deduped_bad: list[int] = []
+        for seq in bad_seqs:
+            if len(seq) > 1:
+                logger.warning(f'Multi-token bad word {seq} is not supported and '
+                               'will be ignored. Only single-token bad words can be '
+                               'masked in logits processing.')
+                continue
+            if seq[0] not in seen_bad:
+                seen_bad.add(seq[0])
+                deduped_bad.append(seq[0])
+        self.bad_token_ids = deduped_bad or None
 
     def update_from_hf_gen_cfg(self, generation_config, tokenizer_eos_token_id):
         """Update the stop_token_ids."""
-        stop_token_ids = set(self.stop_token_ids or [])
+        stop_seqs = self._normalize_stop_token_ids(self.stop_token_ids)
+        existing = {tuple(s) for s in stop_seqs}
 
-        # add tokenizer's eos_token_id
+        def _add_single(tok_id: int):
+            key = (tok_id, )
+            if key not in existing:
+                existing.add(key)
+                stop_seqs.append([tok_id])
+
         if tokenizer_eos_token_id is not None:
-            stop_token_ids.add(tokenizer_eos_token_id)
+            _add_single(tokenizer_eos_token_id)
 
-        # add eos_token_id from model's generation_config.json file if there
-        # is any.
         eos_token_id = generation_config.get('eos_token_id')
         if eos_token_id is not None:
             if isinstance(eos_token_id, int):
-                stop_token_ids.add(eos_token_id)
+                _add_single(eos_token_id)
             else:
-                stop_token_ids.update(eos_token_id)
+                for eid in eos_token_id:
+                    _add_single(eid)
 
-        self.stop_token_ids = list(stop_token_ids)
+        self.stop_token_ids = stop_seqs
 
     def __post_init__(self):
         """Check input validation."""
@@ -184,6 +237,8 @@ class GenerationConfig:
         assert self.temperature >= 0 and self.temperature <= 2  # [0,2]
         assert 0 <= self.min_p <= 1, \
             f'min_p should be in range [0, 1], but found {self.min_p}'
+        if self.stop_token_ids is not None:
+            self.stop_token_ids = self._normalize_stop_token_ids(self.stop_token_ids)
 
 
 @pydantic_dataclass
@@ -251,7 +306,7 @@ class TurbomindEngineConfig:
     """
 
     dtype: str = 'auto'
-    model_format: Optional[str] = None
+    model_format: str | None = None
     tp: int = 1
     dp: int = 1
     cp: int = 1
@@ -264,9 +319,9 @@ class TurbomindEngineConfig:
     outer_dp_size: int = None
     nnodes: int = 1
     node_rank: int = 0
-    dist_init_addr: Optional[str] = None
-    devices: List[int] = None
-    session_len: Optional[int] = None
+    dist_init_addr: str | None = None
+    devices: list[int] = None
+    session_len: int | None = None
     max_batch_size: int = None
     cache_max_entry_count: float = 0.8
     cache_chunk_size: int = -1
@@ -275,16 +330,16 @@ class TurbomindEngineConfig:
     quant_policy: int = 0
     rope_scaling_factor: float = 0.0
     use_logn_attn: bool = False
-    download_dir: Optional[str] = None
-    revision: Optional[str] = None
+    download_dir: str | None = None
+    revision: str | None = None
     max_prefill_token_num: int = 8192
     num_tokens_per_iter: int = 0
     max_prefill_iters: int = 1
     async_: int = 1
-    devices: Optional[List[int]] = None
+    devices: list[int] | None = None
     empty_init: bool = False
     communicator: str = 'nccl'
-    hf_overrides: Optional[Dict[str, Any]] = None
+    hf_overrides: dict[str, Any] | None = None
     enable_metrics: bool = True
 
     def __post_init__(self):
@@ -388,13 +443,13 @@ class PytorchEngineConfig:
     block_size: int = 64
     num_cpu_blocks: int = 0
     num_gpu_blocks: int = 0
-    adapters: Dict[str, str] = None
+    adapters: dict[str, str] = None
     max_prefill_token_num: int = 4096
     thread_safe: bool = False
     enable_prefix_caching: bool = False
     device_type: str = 'cuda'
     eager_mode: bool = False
-    custom_module_map: Dict[str, str] = None
+    custom_module_map: dict[str, str] = None
     download_dir: str = None
     revision: str = None
     quant_policy: Literal[0, 4, 8] = 0
@@ -406,7 +461,7 @@ class PytorchEngineConfig:
     mp_engine_backend: str = 'mp'
     model_format: str = None
     enable_metrics: bool = True
-    hf_overrides: Optional[Dict[str, Any]] = None
+    hf_overrides: dict[str, Any] | None = None
     disable_vision_encoder: bool = False
     logprobs_mode: str = None
     # router replay
@@ -488,9 +543,9 @@ class Response:
     text: str
     generate_token_len: int
     input_token_len: int
-    finish_reason: Optional[Literal['stop', 'length']] = None
-    token_ids: List[int] = field(default_factory=list)
-    logprobs: List[Dict[int, float]] = None
+    finish_reason: Literal['stop', 'length'] | None = None
+    token_ids: list[int] = field(default_factory=list)
+    logprobs: list[dict[int, float]] = None
     logits: torch.Tensor = None
     last_hidden_state: torch.Tensor = None
     index: int = 0
@@ -511,7 +566,7 @@ class Response:
         fields.append(f'logprobs={self.logprobs}')
 
         # Helper function to format tensor information
-        def _format_tensor(name: str, tensor: Optional[torch.Tensor]) -> List[str]:
+        def _format_tensor(name: str, tensor: torch.Tensor | None) -> list[str]:
             if tensor is None:
                 return [f'{name}=None']
             try:
@@ -580,7 +635,7 @@ class EngineEvent:
     timestamp: float
 
     @classmethod
-    def new_event(cls, event_type: EventType, timestamp: Optional[float] = None) -> 'EngineEvent':
+    def new_event(cls, event_type: EventType, timestamp: float | None = None) -> 'EngineEvent':
         # Timestamps MUST use wall-clock time (time.time()) to maintain consistency
         # between csrc(std::chrono::system_clock) and python
         timestamp = time.time() if timestamp is None else timestamp
@@ -604,11 +659,11 @@ class RequestMetrics:
 
     Attributes:
         token_timestamp: A wall-clock time when a token is generated.
-        engine_events: List of engine events during inference.
+        engine_events: list of engine events during inference.
     """
     token_timestamp: float = 0.0
-    engine_events: List[EngineEvent] = field(default_factory=list)
-    spec_info: Optional[Dict[str, Any]] = None
+    engine_events: list[EngineEvent] = field(default_factory=list)
+    spec_info: dict[str, Any] | None = None
 
 
 @dataclass
@@ -625,12 +680,12 @@ class EngineOutput:
         req_metrics: request metrics information
     """
     status: ResponseType
-    token_ids: List[int]
-    logprobs: List[Dict[int, float]] = None
+    token_ids: list[int]
+    logprobs: list[dict[int, float]] = None
     logits: torch.Tensor = None
     last_hidden_state: torch.Tensor = None
-    cache_block_ids: Optional[List[int]] = None
-    req_metrics: Optional[RequestMetrics] = None
+    cache_block_ids: list[int] | None = None
+    req_metrics: RequestMetrics | None = None
     routed_experts: torch.Tensor = None
 
 

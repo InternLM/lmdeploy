@@ -134,8 +134,6 @@ class AsyncEngine:
 
         # parameters for member functions
         self.stop_words = _stop_words(self.chat_template.stop_words, self.tokenizer)
-        if self.stop_words is not None:
-            self.stop_words = self.stop_words[0][0].tolist()
         self.backend = backend
         self.request_logger = RequestLogger(max_log_len)
 
@@ -389,9 +387,14 @@ class AsyncEngine:
         def is_error(status):
             return status not in [ResponseType.SUCCESS, ResponseType.FINISH, ResponseType.CANCEL]
 
-        stop_ids = []
+        single_stop_ids: set = set()
+        multi_stop_seqs: list = []
         if not gen_config.ignore_eos:
-            stop_ids = gen_config.stop_token_ids or []
+            for seq in (gen_config.stop_token_ids or []):
+                if len(seq) == 1:
+                    single_stop_ids.add(seq[0])
+                else:
+                    multi_stop_seqs.append(seq)
 
         metrics_processor.increase_total_requests()
         async with session.request_handle() as handle:
@@ -441,12 +444,22 @@ class AsyncEngine:
                     output_len = len(outputs.token_ids)
                     if hit_stop_token or output_len == 0:
                         continue
-
-                    # This assumes the engine will stop when stop token is hit
-                    if output_len and outputs.token_ids[-1] in stop_ids:
+                    print(f'outputs.token_ids: {outputs.token_ids}')
+                    # Check single-token stop
+                    if output_len and outputs.token_ids[-1] in single_stop_ids:
                         hit_stop_token = 1
 
                     token_ids += outputs.token_ids[:output_len - hit_stop_token]
+
+                    # Check multi-token stop sequences
+                    if not hit_stop_token and multi_stop_seqs:
+                        gen_ids = token_ids[input_len:]
+                        for mseq in multi_stop_seqs:
+                            slen = len(mseq)
+                            if len(gen_ids) >= slen and gen_ids[-slen:] == mseq:
+                                hit_stop_token = slen
+                                token_ids = token_ids[:-slen]
+                                break
                     gen_len = len(token_ids) - input_len
 
                     ids_offset = state.ids_offset
@@ -480,7 +493,8 @@ class AsyncEngine:
                     if outputs.status == ResponseType.CANCEL:
                         finish_reason = 'abort'
                     else:
-                        finish_reason = 'stop' if outputs.token_ids[-1] in stop_ids else 'length'
+                        is_stop = (outputs.token_ids[-1] in single_stop_ids) or hit_stop_token > 0
+                        finish_reason = 'stop' if is_stop else 'length'
 
                     # utf-8 char at the end means it's a potential unfinished byte sequence
                     if not response.endswith('�'):
@@ -488,13 +502,14 @@ class AsyncEngine:
                         response = ''
                     token_ids, logits, last_hidden_state, logprobs = [], None, None, None
                     if gen_config.include_stop_str_in_output and finish_reason == 'stop':
-                        # return the eos token id (MUST be in a list), eos string, eos token's logits and so on
-                        token_ids = outputs.token_ids[-1:]
+                        stop_len = max(hit_stop_token, 1)
+                        token_ids = outputs.token_ids[-stop_len:]
                         response = self.tokenizer.decode(token_ids, skip_special_tokens=False)
-                        logits = outputs.logits[-1:] if outputs.logits is not None else None
-                        last_hidden_state = outputs.last_hidden_state[-1:] if outputs.last_hidden_state else None
-                        logprobs = outputs.logprobs[-1:] if outputs.logprobs else None
-                        gen_len += 1
+                        logits = outputs.logits[-stop_len:] if outputs.logits is not None else None
+                        last_hidden_state = (outputs.last_hidden_state[-stop_len:]
+                                             if outputs.last_hidden_state else None)
+                        logprobs = outputs.logprobs[-stop_len:] if outputs.logprobs else None
+                        gen_len += stop_len
 
                     # router replay
                     routed_experts = outputs.routed_experts
