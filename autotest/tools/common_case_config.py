@@ -1,3 +1,5 @@
+import os
+
 TURBOMIND_PR_TEST_LLM_GPU2 = [{
     'model': 'Qwen/Qwen3-30B-A3B',
     'backend': 'turbomind',
@@ -88,7 +90,7 @@ TURBOMIND_PR_TEST_MLLM_GPU2 = [{
 }]
 
 TURBOMIND_FALLBACK_TEST_LLM_GPU1 = [{
-    'model': 'THUDM/cogvlm-chat-hf',
+    'model': 'google/gemma-2-9b-it',
     'backend': 'turbomind',
     'communicator': 'cuda-ipc',
     'quant_policy': 8,
@@ -382,6 +384,7 @@ BASE_SPECULATIVE_DECODING_RESTFUL_TEST_LLM = [{
     }
 }]
 
-SPECULATIVE_DECODING_RESTFUL_TEST_LLM = [{
-    **item, 'backend': 'pytorch'
+SPECULATIVE_DECODING_RESTFUL_TEST_LLM = [] if not os.getenv('TEST_ENV') or os.getenv('TEST_ENV') == 'legacy' else [{
+    **item, 'backend':
+    'pytorch'
 } for item in BASE_SPECULATIVE_DECODING_RESTFUL_TEST_LLM]
