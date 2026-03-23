@@ -344,6 +344,9 @@ class ModelConfig:
     # quant config
     quant_config: 'QuantizationConfig' = None
 
+    # flags mark if this model use mrope
+    use_mrope: bool = False
+
     def get_head_size(self):
         """Get head size."""
         return self.head_dim

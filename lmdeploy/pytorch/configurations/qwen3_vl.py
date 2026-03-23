@@ -22,4 +22,5 @@ class Qwen3VLModelConfigBuilder(AutoModelConfigBuilder):
         cfg = DefaultModelConfigBuilder.build(hf_config.text_config, model_path, **kwargs)
         setattr(hf_config, 'dtype', hf_config.text_config.dtype)
         cfg.hf_config = hf_config
+        cfg.use_mrope = True
         return cfg
