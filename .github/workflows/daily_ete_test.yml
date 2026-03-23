@@ -210,7 +210,6 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 ${{env.ROOT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -330,7 +329,6 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 ${{env.ROOT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -527,7 +525,6 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 ${{env.ROOT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -590,7 +587,6 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 ${{env.ROOT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -646,7 +642,6 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 ${{env.ROOT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -777,7 +772,6 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 ${{env.ROOT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -841,7 +835,6 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 ${{env.ROOT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -879,7 +872,7 @@ jobs:
       - name: Clear workfile
         if: always()
         run: |
-          chmod -R 777 ${{env.ROOT_DIR}}
+
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir

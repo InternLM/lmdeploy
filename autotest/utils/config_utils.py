@@ -318,17 +318,21 @@ def get_quantization_model_list(type: str) -> list[str]:
     config = get_config()
     quant_model_list = []
 
-    if type == 'awq':
-        # Get all turbomind chat/base models & deduplicate
-        turbo_chat = _extract_models_from_config(
-            config['turbomind_chat_model']) if 'turbomind_chat_model' in config else []
-        turbo_base = _extract_models_from_config(
-            config['turbomind_base_model']) if 'turbomind_base_model' in config else []
-        all_turbo_models = list(OrderedDict.fromkeys(turbo_chat + turbo_base))
+    # Get all chat/base models & deduplicate
+    turbomind_chat = _extract_models_from_config(
+        config['turbomind_chat_model']) if 'turbomind_chat_model' in config else []
+    turbomind_base = _extract_models_from_config(
+        config['turbomind_base_model']) if 'turbomind_base_model' in config else []
+    all_turbomind_models = list(OrderedDict.fromkeys(turbomind_chat + turbomind_base))
 
+    pytorch_chat = _extract_models_from_config(config['pytorch_chat_model']) if 'pytorch_chat_model' in config else []
+    pytorch_base = _extract_models_from_config(config['pytorch_base_model']) if 'pytorch_base_model' in config else []
+    all_pytorch_models = list(OrderedDict.fromkeys(pytorch_chat + pytorch_base))
+
+    if type == 'awq':
         # Filter turbomind valid awq models
         no_awq = config.get('turbomind_quantization', {}).get('no_awq', [])
-        quant_model_list = [m for m in all_turbo_models if m not in no_awq and not is_quantization_model(m)]
+        quant_model_list = [m for m in all_turbomind_models if m not in no_awq and not is_quantization_model(m)]
 
         # Append pytorch awq models
         torch_awq = config.get('pytorch_quantization', {}).get('awq', [])
@@ -337,10 +341,15 @@ def get_quantization_model_list(type: str) -> list[str]:
                 quant_model_list.append(model)
 
     elif type == 'gptq':
-        quant_model_list = config.get('turbomind_quantization', {}).get(type, [])
-
+        gptq_model_list = config.get('turbomind_quantization', {}).get(type, [])
+        for model in gptq_model_list:
+            if model in all_turbomind_models:
+                quant_model_list.append(model)
     elif type == 'w8a8':
-        quant_model_list = config.get('pytorch_quantization', {}).get(type, [])
+        w8a8_model_list = config.get('pytorch_quantization', {}).get(type, [])
+        for model in w8a8_model_list:
+            if model in all_pytorch_models:
+                quant_model_list.append(model)
 
     return quant_model_list
 
