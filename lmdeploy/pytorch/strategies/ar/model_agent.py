@@ -101,83 +101,20 @@ class ARStoppingCriteria(StoppingCriteria):
              stop_words: torch.Tensor,
              inputs: Optional[ModelInputs] = None,
              extra_inputs: Optional[ARExtraInputs] = None,
-             stop_word_lens: Optional[torch.Tensor] = None,
-             generated_ids: Optional[torch.Tensor] = None):
+             stop_word_lens: Optional[torch.Tensor] = None):
         """Check whether to stop generation."""
         num_appendable_ids = self.num_appendable_ids - 1
         stopped = num_appendable_ids <= 0
         stop_pos = torch.zeros_like(num_appendable_ids)
 
-        if stop_words is not None and stop_word_lens is not None:
-            max_slen = int(stop_word_lens.max().item())
-            tail_len = max(0, max_slen - 1)
-            batch_size = stop_words.size(0)
-            num_seqs = stop_words.size(1)
-            sw_stopped = torch.zeros(batch_size, dtype=torch.bool, device=stop_words.device)
-
-            # Normalise to [batch, step_len] as a view so in-place masking propagates.
+        if stop_words is None or stop_word_lens is None:
+            new_tail = None
+        else:
             token_ids_was_1d = (token_ids.ndim == 1)
             if token_ids_was_1d:
                 token_ids = token_ids.unsqueeze(1)
 
-            new_tail = torch.zeros(
-                (batch_size, tail_len), dtype=torch.long, device=token_ids.device) if tail_len > 0 else None
-
-            for bidx in range(batch_size):
-                step_tokens = token_ids[bidx]
-                valid_tokens = step_tokens[step_tokens >= 0]
-
-                # Retrieve the tail from the previous step for this batch item.
-                if self.stop_tail is not None and tail_len > 0:
-                    prev_tail = self.stop_tail[bidx].to(token_ids.device)
-                    # Trim or pad to the current tail_len.
-                    if prev_tail.size(0) >= tail_len:
-                        prev_tail = prev_tail[-tail_len:]
-                    else:
-                        prev_tail = torch.nn.functional.pad(prev_tail, (tail_len - prev_tail.size(0), 0))
-                else:
-                    prev_tail = token_ids.new_zeros(tail_len)
-
-                if valid_tokens.numel() == 0:
-                    # No new tokens this step; carry the tail forward unchanged.
-                    if new_tail is not None:
-                        new_tail[bidx] = prev_tail
-                    continue
-
-                # History = tail of previous steps + tokens from this step.
-                history = torch.cat([prev_tail, valid_tokens]) if tail_len > 0 else valid_tokens
-                hist_len = history.size(0)
-                stop_pos_bidx = valid_tokens.numel() - 1  # default: last valid token
-
-                for si in range(num_seqs):
-                    slen = int(stop_word_lens[bidx, si].item())
-                    if slen <= 0 or hist_len < slen:
-                        continue
-                    target = stop_words[bidx, si, :slen]
-                    # Scan positions whose end falls within the current step tokens
-                    # (end_pos >= tail_len ensures at least one new token is included).
-                    for end_pos in range(max(slen - 1, tail_len), hist_len):
-                        if (history[end_pos - slen + 1:end_pos + 1] == target).all():
-                            sw_stopped[bidx] = True
-                            step_end_pos = end_pos - tail_len  # 0-indexed within valid_tokens
-                            stop_pos_bidx = min(stop_pos_bidx, step_end_pos)
-                            break
-                    if sw_stopped[bidx]:
-                        break
-
-                if sw_stopped[bidx]:
-                    stop_pos[bidx] = stop_pos_bidx
-                    # Mask tokens generated after the stop position in the same step.
-                    if token_ids.size(1) > (stop_pos_bidx + 1):
-                        token_ids[bidx, stop_pos_bidx + 1:] = -1
-                    effective_tokens = valid_tokens[:stop_pos_bidx + 1]
-                else:
-                    effective_tokens = valid_tokens
-
-                # Update tail: last tail_len tokens of [prev_tail, effective_tokens].
-                if new_tail is not None:
-                    combined = torch.cat([prev_tail, effective_tokens])
-                    new_tail[bidx] = combined[-tail_len:]
+            sw_stopped, stop_pos, new_tail = self._check_stop_words(token_ids, stop_words, stop_word_lens)
 
             if token_ids_was_1d and token_ids.size(1) == 1:
                 token_ids = token_ids.squeeze(1)
@@ -186,11 +123,108 @@ class ARStoppingCriteria(StoppingCriteria):
             one_ids = torch.clamp_max(num_appendable_ids, 0)
             num_appendable_ids = torch.where(sw_stopped, one_ids, num_appendable_ids)
 
-        else:
-            new_tail = None
+        return (stopped, stop_pos, ARStoppingCriteria(num_appendable_ids=num_appendable_ids, stop_tail=new_tail))
 
-        new_stopping = ARStoppingCriteria(num_appendable_ids=num_appendable_ids, stop_tail=new_tail)
-        return stopped, stop_pos, new_stopping
+    def _check_stop_words(self, token_ids: torch.Tensor, stop_words: torch.Tensor, stop_word_lens: torch.Tensor):
+        """Vectorized multi-token stop word detection.
+
+        Uses ``unfold`` for sliding-window matching so that no Python loops
+        over batch items, stop-word entries, or window positions are needed.
+
+        Args:
+            token_ids: [batch, step_len], -1 for invalid positions.
+                       Modified **in-place** (tokens after stop are set to -1).
+            stop_words: [batch, num_seqs, max_slen]
+            stop_word_lens: [batch, num_seqs]
+
+        Returns:
+            sw_stopped: [batch] bool
+            stop_pos:   [batch] long – step-relative index of the stop token
+            new_tail:   [batch, tail_len] or None
+        """
+        max_slen = int(stop_word_lens.max().item())
+        tail_len = max(0, max_slen - 1)
+        batch_size = token_ids.size(0)
+        step_len = token_ids.size(1)
+        device = token_ids.device
+
+        # -- 1. build history = [prev_tail | token_ids] --
+        prev_tail = self._get_prev_tail(batch_size, tail_len, device)
+        if prev_tail is not None:
+            history = torch.cat([prev_tail, token_ids], dim=1)
+        else:
+            history = token_ids
+        hist_len = history.size(1)
+
+        # -- 2. sliding-window matching via unfold --
+        NO_MATCH = hist_len
+        best_end = history.new_full((batch_size, ), NO_MATCH)
+        for slen in stop_word_lens.unique().tolist():
+            slen = int(slen)
+            if slen <= 0 or hist_len < slen:
+                continue
+            windows = history.unfold(1, slen, 1)  # [B, W, slen]
+            targets = stop_words[:, :, :slen]  # [B, S, slen]
+            len_mask = (stop_word_lens == slen)  # [B, S]
+
+            match = (windows.unsqueeze(2) == targets.unsqueeze(1)).all(-1)
+            match = match & len_mask.unsqueeze(1)
+            match_any = match.any(2)  # [B, W]
+
+            # discard windows that don't include any new token from this step
+            min_win = max(0, tail_len - slen + 1)
+            if min_win > 0:
+                match_any[:, :min_win] = False
+
+            has_match = match_any.any(1)
+            first_win = match_any.int().argmax(1)
+            end_pos = first_win + slen - 1
+            better = has_match & (end_pos < best_end)
+            best_end = torch.where(better, end_pos, best_end)
+
+        sw_stopped = best_end < NO_MATCH
+
+        # -- 3. compute stop_pos and mask trailing tokens --
+        step_stop_pos = best_end - tail_len
+        stop_pos = torch.where(sw_stopped, step_stop_pos, sw_stopped.new_zeros(batch_size, dtype=torch.long))
+
+        col_idx = torch.arange(step_len, device=device)
+        after_stop = (col_idx > step_stop_pos.unsqueeze(1)) & sw_stopped.unsqueeze(1)
+        token_ids[after_stop] = -1
+
+        # -- 4. update tail --
+        new_tail = self._build_new_tail(history, tail_len, sw_stopped, best_end, token_ids)
+
+        return sw_stopped, stop_pos, new_tail
+
+    def _get_prev_tail(self, batch_size: int, tail_len: int, device: torch.device) -> Optional[torch.Tensor]:
+        """Return the previous tail padded/trimmed to ``tail_len``."""
+        if tail_len <= 0:
+            return None
+        if self.stop_tail is None:
+            return torch.zeros(batch_size, tail_len, dtype=torch.long, device=device)
+        prev = self.stop_tail.to(device)
+        pt_len = prev.size(1)
+        if pt_len < tail_len:
+            prev = torch.nn.functional.pad(prev, (tail_len - pt_len, 0))
+        elif pt_len > tail_len:
+            prev = prev[:, -tail_len:]
+        return prev
+
+    @staticmethod
+    def _build_new_tail(history: torch.Tensor, tail_len: int, sw_stopped: torch.Tensor, best_end: torch.Tensor,
+                        token_ids: torch.Tensor) -> Optional[torch.Tensor]:
+        """Gather the last ``tail_len`` valid tokens from *history*."""
+        if tail_len <= 0:
+            return None
+        valid_counts = (token_ids >= 0).sum(1)
+        effective_end = torch.where(sw_stopped, best_end, tail_len + valid_counts - 1)
+        effective_end = effective_end.clamp(min=tail_len - 1)
+
+        offsets = torch.arange(tail_len, device=history.device)
+        indices = (effective_end - tail_len + 1).unsqueeze(1) + offsets.unsqueeze(0)
+        indices = indices.clamp(min=0, max=history.size(1) - 1)
+        return history.gather(1, indices)
 
 
 class ARModelAgentStrategy(ModelAgentStrategy):

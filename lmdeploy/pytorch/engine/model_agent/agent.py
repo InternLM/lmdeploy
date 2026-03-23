@@ -699,12 +699,11 @@ class BaseModelAgent:
             # stop sequences whose last token is not the final spec-decoded token are
             # detected correctly. For non-spec AR, output_token_ids == next_token_ids.
             stopped, stop_pos, stopping_criteria = stopping_criteria.step(
-                next_token_ids,
+                output_token_ids,
                 sampling_inputs.stop_words,
                 inputs=inputs,
                 extra_inputs=extra_inputs,
                 stop_word_lens=sampling_inputs.stop_word_lens,
-                generated_ids=sampling_inputs.generated_ids,
             )
 
             # send output
