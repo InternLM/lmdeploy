@@ -143,6 +143,7 @@ jobs:
           chmod -R 777 ${{env.TEST_CODE_PATH}}
           mkdir ${{env.REPORT_DIR}} -p
           echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
+          chmod -R 777 ${{env.REPORT_DIR}}/status.txt
 
   test_quantization:
     needs: download_pkgs
@@ -175,6 +176,7 @@ jobs:
           cp -r ${{env.TEST_CODE_PATH}}/. .
           mkdir ${{env.REPORT_DIR}} -p
           echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
+          chmod -R 777 ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install auto_gptq matplotlib attrdict
@@ -210,6 +212,7 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
+          chmod -R 777 ${{env.REPORT_DIR}}/status.txt
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -262,6 +265,7 @@ jobs:
           cp -r ${{env.TEST_CODE_PATH}}/. .
           mkdir ${{env.REPORT_DIR}} -p
           echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
+          chmod -R 777 ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
@@ -329,6 +333,7 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
+          chmod -R 777 ${{env.REPORT_DIR}}/status.txt
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -437,6 +442,7 @@ jobs:
           cp -r ${{env.TEST_CODE_PATH}}/. .
           mkdir ${{env.REPORT_DIR}} -p
           echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
+          chmod -R 777 ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
@@ -525,6 +531,7 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
+          chmod -R 777 ${{env.REPORT_DIR}}/status.txt
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -554,6 +561,7 @@ jobs:
           cp -r ${{env.TEST_CODE_PATH}}/. .
           mkdir ${{env.REPORT_DIR}} -p
           echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
+          chmod -R 777 ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
@@ -587,6 +595,7 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
+          chmod -R 777 ${{env.REPORT_DIR}}/status.txt
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -617,6 +626,7 @@ jobs:
           cp -r ${{env.TEST_CODE_PATH}}/. .
           mkdir ${{env.REPORT_DIR}} -p
           echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
+          chmod -R 777 ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
@@ -642,6 +652,7 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
+          chmod -R 777 ${{env.REPORT_DIR}}/status.txt
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -683,6 +694,7 @@ jobs:
           cp -r ${{env.TEST_CODE_PATH}}/. .
           mkdir ${{env.REPORT_DIR}} -p
           echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
+          chmod -R 777 ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
@@ -772,6 +784,7 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
+          chmod -R 777 ${{env.REPORT_DIR}}/status.txt
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -801,6 +814,7 @@ jobs:
           cp -r ${{env.TEST_CODE_PATH}}/. .
           mkdir ${{env.REPORT_DIR}} -p
           echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
+          chmod -R 777 ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
@@ -835,6 +849,7 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
+          chmod -R 777 ${{env.REPORT_DIR}}/status.txt
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -860,6 +875,7 @@ jobs:
       - name: Install lmdeploy
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
+          chmod -R 777 ${{env.REPORT_DIR}}/status.txt
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
       - name: Get coverage report
@@ -872,6 +888,7 @@ jobs:
       - name: Clear workfile
         if: always()
         run: |
+          chmod -R 777 ${{env.REPORT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir

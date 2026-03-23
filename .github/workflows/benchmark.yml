@@ -175,6 +175,7 @@ jobs:
           cp -r ${{env.TEST_CODE_PATH}}/. .
           mkdir ${{env.REPORT_DIR}} -p
           echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
+          chmod -R 777 ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
@@ -208,7 +209,7 @@ jobs:
           FEISHU_APP_ID: ${{secrets.FEISHU_APP_ID}}
           FEISHU_APP_SECRET: ${{secrets.FEISHU_APP_SECRET}}
           FEISHU_TABLE_TOKEN: ${{secrets.FEISHU_TABLE_TOKEN}}
-          FEISHU_TABLE_ID: ${{secrets.BENCHMARK_FEISHU_APP_ID}}
+          FEISHU_TABLE_ID: ${{secrets.BENCHMARK_FEISHU_TABLE_ID}}
         run: |
             cd /nvme/qa_test_models/feishu_upload
             python3 test_benchmark.py --root ${{env.REPORT_DIR}} --output ${{inputs.result_tag}}.txt --hardware A100 --infer-version ${{inputs.result_tag}}
@@ -217,7 +218,7 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 $REPORT_DIR
+          chmod -R 777 ${{env.REPORT_DIR}}/status.txt
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
