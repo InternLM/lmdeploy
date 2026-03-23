@@ -1077,3 +1077,6 @@ std::tuple<uint64_t, uint64_t, uint64_t, uint64_t, uint64_t> SequenceManager::Li
 }
 
 }  // namespace turbomind
+
+// BlockTrie.cc is compiled here (not as a separate TU) so MSVC links BlockTrie symbols reliably.
+#include "src/turbomind/models/llama/BlockTrie.cc"

@@ -6,7 +6,6 @@ add_library(models STATIC
         output_processor.cc
         llama/LlamaLinear.cu
         llama/BlockManager.cc
-        llama/BlockTrie.cc
         llama/SequenceManager.cc
         llama/LlamaWeight.cc
         llama/LlamaDenseWeight.cc
