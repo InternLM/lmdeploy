@@ -215,9 +215,12 @@ class AscendOpsBackend(DlinferOpsBackend):
             return max_q_seq_len, max_kv_seq_len
 
         def update_q_seqlens(is_decoding, is_prefill_no_cache, q_seqlens_cpu=None):
-            if is_decoding or is_prefill_no_cache:
+            if is_decoding:
+                batch_size = step_context.q_seqlens.size(0)
+                return torch.arange(1, batch_size + 1, dtype=torch.int32)
+            elif is_prefill_no_cache:
                 return q_seqlens_cpu
-            return torch.cumsum(step_context.q_seqlens, dim=0).cpu()
+            return q_seqlens_cpu.cumsum(dim=0)
 
         def get_kv_start_indices_and_attention_mask(is_decoding, is_prefill_no_cache, q_seqlens_list, kv_seqlens_list,
                                                     max_q_seq_len, max_kv_seq_len):
