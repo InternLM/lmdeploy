@@ -97,7 +97,8 @@ class ARSamplingStrategy(SamplingStrategy):
                 bw = param.bad_words
                 sw = param.stop_words
                 if (not param.ignore_eos and seq.num_new_tokens < param.min_new_tokens):
-                    bw = bw + sw
+                    # During min_new_tokens period suppress single-token stops as bad words.
+                    bw = bw + [s[0] for s in sw if len(s) == 1]
                 bad_words[idx] = bw
                 stop_words[idx] = sw
                 logits_processors[idx] = param.logits_processors
@@ -143,6 +144,24 @@ class ARSamplingStrategy(SamplingStrategy):
             mask = ret >= 0
             return ret, mask
 
+        def __get_stop_words(stop_words_list):
+            """Build stop_words [batch, num_seqs, max_len] and stop_word_lens
+            [batch, num_seqs]."""
+            max_num_seqs = max(len(sw) for sw in stop_words_list)
+            if max_num_seqs == 0:
+                return None, None
+            max_len = max((len(s) for sw in stop_words_list for s in sw), default=0)
+            if max_len == 0:
+                return None, None
+            seqs = torch.zeros((batch_size, max_num_seqs, max_len), dtype=torch.long)
+            lens = torch.zeros((batch_size, max_num_seqs), dtype=torch.long)
+            for i, sw in enumerate(stop_words_list):
+                for j, seq in enumerate(sw):
+                    slen = len(seq)
+                    seqs[i, j, :slen] = torch.tensor(seq, dtype=torch.long)
+                    lens[i, j] = slen
+            return seqs, lens
+
         __gather_params()
 
         if all(rp == 1.0 for rp in repetition_penalty):
@@ -156,7 +175,7 @@ class ARSamplingStrategy(SamplingStrategy):
             temperature = None
 
         bad_words, bad_mask = __get_bad_words(bad_words)
-        stop_words, stop_mask = __get_bad_words(stop_words)
+        stop_words, stop_word_lens = __get_stop_words(stop_words)
 
         max_top_k = max(top_k)
         if min(top_k) <= 0:
@@ -201,7 +220,7 @@ class ARSamplingStrategy(SamplingStrategy):
             bad_words=bad_words,
             bad_mask=bad_mask,
             stop_words=stop_words,
-            stop_mask=stop_mask,
+            stop_word_lens=stop_word_lens,
             repetition_penalty=repetition_penalty,
             top_k=top_k,
             top_p=top_p,

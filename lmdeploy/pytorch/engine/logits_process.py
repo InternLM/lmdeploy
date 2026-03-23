@@ -210,7 +210,7 @@ def _filter_repetition_ngram_(
         return scores
     # use first stop words
     _, found = ngram(generated_ids, n, threshold, max_n, max_ngram_window_size)
-    stop_words = stop_words[:, 0]
+    stop_words = stop_words[:, 0, 0]
     # fill all scores -inf
     scores.masked_fill_(found[:, None], -float('inf'))
     # set stop words to 0
@@ -245,7 +245,7 @@ class SamplingInputs:
     bad_words: torch.LongTensor = None
     bad_mask: torch.BoolTensor = None
     stop_words: torch.LongTensor = None
-    stop_mask: torch.BoolTensor = None
+    stop_word_lens: torch.LongTensor = None
     repetition_penalty: torch.Tensor = None
     top_k: torch.LongTensor = None
     top_p: torch.Tensor = None
@@ -428,11 +428,13 @@ class FusedLogitsProcessor:
             scores = _process_bad_words_(scores, bad_words, bad_mask)
 
         stop_words = sampling_inputs.stop_words
-        if stop_words is not None:
+        stop_word_lens = sampling_inputs.stop_word_lens
+        if stop_words is not None and stop_word_lens is not None:
             ignore_eos = sampling_inputs.num_ignore_eos > 0
-            stop_mask = sampling_inputs.stop_mask
-            stop_mask = torch.where(ignore_eos[:, None], stop_mask, False)
-            scores = _process_bad_words_(scores, stop_words, stop_mask)
+            single_mask = (stop_word_lens == 1) & ignore_eos[:, None]
+            if single_mask.any():
+                single_tokens = stop_words[:, :, 0]
+                scores = _process_bad_words_(scores, single_tokens, single_mask)
 
         return scores, logprobs
 
