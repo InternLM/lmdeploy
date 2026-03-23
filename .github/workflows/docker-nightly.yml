@@ -13,12 +13,13 @@ on:
 
 env:
   TAG: "openmmlab/lmdeploy:nightly-cu12.8"
+  DEV_TAG: "openmmlab/lmdeploy:nightly-dev-cu12.8"
 
 jobs:
   publish_docker_image:
     runs-on: ubuntu-latest
     env:
-      CUDA_VERSION: "cu12.8"
+      OFFLINE_REQUIREMENTS: ${{ vars.OFFLINE_REQUIREMENTS }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -49,18 +50,34 @@ jobs:
       - name: Build and push Docker image
         run: |
           echo ${{ env.TAG }}
-          docker build . -f docker/Dockerfile -t ${{ env.TAG }} --build-arg CUDA_VERSION=${{ env.CUDA_VERSION }}
+          docker build . -f docker/Dockerfile -t ${{ env.TAG }} --build-arg CUDA_VERSION=cu12.8
           docker push ${{ env.TAG }}
+
+          mkdir -p docker
+          cat > docker/Dockerfile.nightly-extended << 'EOF'
+          ARG BASE_IMAGE=${{ env.TAG }}
+          FROM ${BASE_IMAGE}
+          COPY requirements /tmp/requirements
+          RUN python3 -m pip install --no-cache-dir auto_gptq matplotlib attrdict && \
+              python3 -m pip install --no-cache-dir -r /tmp/requirements/lite.txt && \
+              python3 -m pip install --no-cache-dir -r /tmp/requirements/test.txt && \
+              pip install --no-cache-dir ${{ env.OFFLINE_REQUIREMENTS }}
+          EOF
+          docker build . -f docker/Dockerfile.nightly-extended \
+            --build-arg BASE_IMAGE=${{ env.TAG }} \
+            -t ${{ env.DEV_TAG }}
+          docker push ${{ env.DEV_TAG }}
 
   publish_inner_docker_image:
     runs-on: image-sync-inner
     needs: publish_docker_image
     env:
-      INNER_TAG: "registry.h.pjlab.org.cn/ailab-puyu-puyu_gpu/lmdeploy:nightly-cu12.8"
+      INNER_REGISTRY: ${{ secrets.INNER_DOCKER_REGISTRY }}
+      INNER_TAG: "${{ secrets.INNER_DOCKER_REGISTRY }}/ailab-puyu-puyu_gpu/lmdeploy:nightly-cu12.8"
     steps:
       - name: Pull and push to inner
         run: |
-          docker pull ${{ env.TAG }}
-          docker login registry.h.pjlab.org.cn -p ${{ secrets.CLUSTER_DOCKERHUB_TOKEN }} -u ${{ secrets.CLUSTER_DOCKERHUB_USERNAME }}
-          docker tag ${{ env.TAG }} ${{ env.INNER_TAG }}
+          docker pull ${{ env.DEV_TAG }}
+          docker login ${{ env.INNER_REGISTRY }} -p ${{ secrets.CLUSTER_DOCKERHUB_TOKEN }} -u ${{ secrets.CLUSTER_DOCKERHUB_USERNAME }}
+          docker tag ${{ env.DEV_TAG }} ${{ env.INNER_TAG }}
           docker push ${{ env.INNER_TAG }}
