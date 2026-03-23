@@ -526,7 +526,7 @@ class InternVLChatModel(nn.Module, DeployModelMixinV1, CudaGraphMixin):
                                                                 'inputs_embeds',
                                                                 index=0)
 
-        self.extract_feature = torch.compile(self.extract_feature, mode='max-autotune-no-cudagraphs')
+        self._extract_feature_compiled = torch.compile(self.extract_feature, mode='max-autotune-no-cudagraphs')  # pylint: disable=method-hidden
         self.compile_vit = True
         self.has_compiled_vit = False
 
@@ -781,7 +781,10 @@ class InternVLChatModel(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             else:
                 # extract feature
                 self._mark_dynamic_once(pixel_values, [0])
-                vit_embeds = self.extract_feature(pixel_values)
+                if self.compile_vit:
+                    vit_embeds = self._extract_feature_compiled(pixel_values)
+                else:
+                    vit_embeds = self.extract_feature(pixel_values)
                 lang_embeds = self.language_model.get_input_embeddings()(input_ids)
 
             lang_embeds.masked_scatter_(image_mask[..., None], vit_embeds)
@@ -930,7 +933,7 @@ class InternVLChatModel(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         else:
             from lmdeploy.pytorch.adapter.adapter import load_lora_weights
 
-            return load_lora_weights(weights, adapter_id)
+            return load_lora_weights(self.language_model, weights, adapter_id)
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""

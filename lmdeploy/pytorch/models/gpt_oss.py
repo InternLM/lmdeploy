@@ -506,6 +506,7 @@ class GptOssForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         num_experts = self.config.num_local_experts
 
         loaded_weight = loaded_weight.cuda()
+        param_name = None  # pylint: disable=possibly-used-before-assignment
         if 'gate_up_proj_bias' in name:
             param_name = name.replace('experts.gate_up_proj_bias', 'experts.experts.gate_up.bias')
         elif 'gate_up_proj' in name:
@@ -523,6 +524,7 @@ class GptOssForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         num_experts = self.config.num_local_experts
 
         loaded_weight = loaded_weight.cuda()
+        param_name = None  # pylint: disable=possibly-used-before-assignment
         if 'down_proj_bias' in name:
             param_name = name.replace('experts.down_proj_bias', 'experts.experts.down.bias')
         elif 'down_proj' in name:

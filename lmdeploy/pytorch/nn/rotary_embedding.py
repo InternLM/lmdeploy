@@ -232,6 +232,8 @@ class ApplyRotaryEmb(nn.Module):
         assert cos.dim() <= 3 and sin.dim() <= 3
 
         need_reshape = False
+        query_shape = None  # pylint: disable=possibly-used-before-assignment
+        key_shape = None  # pylint: disable=possibly-used-before-assignment
         if cos.dim() == 3:
             # for fope
             assert query.dim() == key.dim() == 3, 'Expected query key (seq_len, heads, head_dim)'

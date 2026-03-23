@@ -518,6 +518,7 @@ def bench_rms_and_linear(M: int, provider: str, dtype: torch.dtype = torch.float
         def y_fwd():
             linear_torch(rms_out_torch, linear_weight)
     else:
+        quant_dtype = None  # pylint: disable=possibly-used-before-assignment
         if provider == 'triton_int8':
             quant_dtype = torch.int8
         elif provider == 'triton_fp8_e4m3':

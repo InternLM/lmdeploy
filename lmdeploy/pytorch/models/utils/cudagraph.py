@@ -121,6 +121,7 @@ class CudaGraphMixin:
         num_key_value_heads = model_config.num_key_value_heads
         headdim = model_config.head_dim
         torch_dtype = model_config.dtype
+        window_size = (-1, -1)  # pylint: disable=possibly-used-before-assignment
         if sliding_window is None:
             window_size = (-1, -1)
         elif isinstance(sliding_window, int):

@@ -51,7 +51,7 @@ class Parameter:
         return xs
 
     @abstractmethod
-    def __call__(cls, f, g, i):
+    def __call__(self, f, g, i):
         pass
 
 

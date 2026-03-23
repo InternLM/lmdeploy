@@ -78,7 +78,7 @@ def _rotary_embedding_fwd(position_ids: torch.Tensor,
     return cos.to(dtype=dtype), sin.to(dtype=dtype)
 
 
-class RotaryEmbeddingImpl(RotaryEmbeddingImpl, nn.Module):
+class DefaultRotaryEmbeddingImpl(RotaryEmbeddingImpl, nn.Module):
     """Base rotary embedding."""
 
     def __init__(self, dim: int, base: int = 10000, scaling_factor: float = 1.0):
@@ -86,6 +86,7 @@ class RotaryEmbeddingImpl(RotaryEmbeddingImpl, nn.Module):
         self.scaling_factor = scaling_factor
         self.dim = dim
         self.base = base
+        self.inv_freq = None  # pylint: disable=access-member-before-definition
         inv_freq = 1.0 / (self.base**(torch.arange(0, self.dim, 2, dtype=torch.int64).float() / self.dim))
         self.register_buffer('inv_freq', inv_freq, persistent=False)
 
@@ -111,6 +112,7 @@ class LlamaDynamicNTKScalingRotaryEmbedding(RotaryEmbeddingImpl):
     def __init__(self, dim: int, base: int = 10000, scaling_factor: float = 1.0, max_position_embeddings: int = 2048):
         super().__init__(dim, base, scaling_factor)
         self.max_position_embeddings = max_position_embeddings
+        self.inv_freq = None  # pylint: disable=access-member-before-definition
 
     def _ntk_inv_freq(self, seq_len: torch.Tensor):
         """ntk_inv_freq."""
@@ -151,6 +153,8 @@ class Llama3RotaryEmbeddingImpl(RotaryEmbeddingImpl):
         original_max_position_embeddings: int = 8194,
     ):
         super().__init__(dim, base, scaling_factor)
+        self.inv_freq = None  # pylint: disable=access-member-before-definition
+        self.scaling_factor = scaling_factor
         old_context_len = original_max_position_embeddings
         low_freq_wavelen = old_context_len / low_freq_factor
         high_freq_wavelen = old_context_len / high_freq_factor
@@ -169,6 +173,18 @@ class Llama3RotaryEmbeddingImpl(RotaryEmbeddingImpl):
         inv_freq_llama = torch.where(is_medium_freq, smoothed_inv_freq, inv_freq_llama)
         self.scaling_factor = 1.0
         self.register_buffer('inv_freq', inv_freq_llama)
+
+    def forward(self, x: torch.Tensor, position_ids: torch.Tensor):
+        """forward."""
+        device_type = x.device.type
+        dtype = x.dtype
+        if self.inv_freq.device != x.device:
+            self.inv_freq = self.inv_freq.to(x.device)
+        return _rotary_embedding_fwd(position_ids,
+                                     self.inv_freq,
+                                     scaling_factor=self.scaling_factor,
+                                     dtype=dtype,
+                                     device_type=device_type)
 
 
 def yarn_find_correction_dim(num_rotations, dim, base=10000, max_position_embeddings=2048):
@@ -222,6 +238,7 @@ class YarnRotaryEmbeddingImpl(RotaryEmbeddingImpl):
         self.mscale = yarn_params.mscale
         self.mscale_all_dim = yarn_params.mscale_all_dim
         self.truncate = yarn_params.truncate
+        self.inv_freq = None  # pylint: disable=access-member-before-definition
 
         # get inv_freq
         freq_extra = 1.0 / (self.base**(torch.arange(0, dim, 2, dtype=torch.float32) / dim))
@@ -393,7 +410,7 @@ class DefaultRotaryEmbeddingBuilder(RotaryEmbeddingBuilder):
     ):
         """build."""
         if emb_type in (RopeType.Default, RopeType.LinearScaling):
-            return RotaryEmbeddingImpl(dim, base, scaling_factor)
+            return DefaultRotaryEmbeddingImpl(dim, base, scaling_factor)
         elif emb_type == RopeType.DynamicNTKScaling:
             return LlamaDynamicNTKScalingRotaryEmbedding(dim, base, scaling_factor, max_position_embeddings)
         elif emb_type == RopeType.Llama3:

@@ -251,6 +251,7 @@ class TokenizerInfo(_xgr.TokenizerInfo):
         elif TokenizerInfo._is_sentencepiece_tokenizer(tokenizer):
             # sentencepiece tokenizer
             # e.g. Chatglm3-6b
+            sp_model = None  # pylint: disable=possibly-used-before-assignment
             if hasattr(tokenizer, 'sp_model'):
                 sp_model = tokenizer.sp_model
             elif hasattr(tokenizer, 'tokenizer') and hasattr(tokenizer.tokenizer, 'sp_model'):

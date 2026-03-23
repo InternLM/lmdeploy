@@ -65,7 +65,7 @@ class DeepseekV2BMM(nn.Module):
         torch.bmm(x.transpose(0, 1), self.weight, out=output.transpose(0, 1))
 
 
-class DeepseekV2Attention(DeepseekV2Attention):
+class DeepseekV2AttentionMtp(DeepseekV2Attention):
     """Deepseekv2 attention."""
 
     def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None):
@@ -323,7 +323,7 @@ class DeepseekV2MLP(nn.Module):
         return self.down_proj(act)
 
 
-class DeepseekV2DecoderLayer(DeepseekV2DecoderLayer):
+class DeepseekV2DecoderLayerMtp(DeepseekV2DecoderLayer):
     """Deepseekv2 decoder layer."""
 
     def __init__(self, config: Any, layer_idx: int, dtype: torch.dtype = None, device: torch.device = None):
@@ -332,7 +332,7 @@ class DeepseekV2DecoderLayer(DeepseekV2DecoderLayer):
         quantization_config = None
 
         # build attention layer
-        self.self_attn = DeepseekV2Attention(config, dtype=dtype, device=device)
+        self.self_attn = DeepseekV2AttentionMtp(config, dtype=dtype, device=device)
 
         # mlp
         self.mlp = (DeepseekV2MoE(config, layer_idx, dtype=dtype, device=device) if
@@ -388,7 +388,7 @@ class DeepSeekMultiTokenPredictorLayer(nn.Module):
         layer_idx: int,
         dtype: torch.dtype = None,
         device: torch.device = None,
-        decoder_layer_cls=DeepseekV2DecoderLayer,
+        decoder_layer_cls=DeepseekV2DecoderLayerMtp,
         build_rotary_embedding_func=build_deepseek_rotary_embedding,
     ) -> None:
         super().__init__()
@@ -464,7 +464,7 @@ class DeepSeekMultiTokenPredictor(nn.Module):
         config: PretrainedConfig,
         dtype: torch.dtype = None,
         device: torch.device = None,
-        decoder_layer_cls=DeepseekV2DecoderLayer,
+        decoder_layer_cls=DeepseekV2DecoderLayerMtp,
         build_rotary_embedding_func=build_deepseek_rotary_embedding,
     ):
         super().__init__()
@@ -529,7 +529,7 @@ class DeepseekMTPModel(nn.Module, CudaGraphMixin):
         ctx_mgr: StepContextManager,
         dtype: torch.dtype = None,
         device: torch.device = None,
-        decoder_layer_cls=DeepseekV2DecoderLayer,
+        decoder_layer_cls=DeepseekV2DecoderLayerMtp,
         build_rotary_embedding_func=build_deepseek_rotary_embedding,
     ):
         super().__init__()
@@ -677,6 +677,8 @@ class DeepseekMTPModel(nn.Module, CudaGraphMixin):
 
         def __load_kcvc_blocked_fp8(name: str, loaded_weight: torch.Tensor):
             """Dequant weight."""
+            weight_name = None  # pylint: disable=possibly-used-before-assignment
+            scale_name = None  # pylint: disable=possibly-used-before-assignment
             if name.endswith('.weight'):
                 weight_name = name
                 scale_name = name.replace('.weight', '.scale')

@@ -570,7 +570,7 @@ class AsyncEngine:
                 fut = concurrent.futures.Future()
 
                 def _start_loop(fut):
-                    res = self.engine.start_loop()
+                    res = self.engine.start_loop()  # pylint: disable=assignment-from-no-return
                     fut.set_result(res)
 
                 loop.call_soon_threadsafe(_start_loop, fut)

@@ -438,6 +438,7 @@ class InternS1ProInputProcessor(BaseModelInputProcessor):
         input_mm_data = []
         for input_mm in input_multimodals:
             modality = input_mm.get('modality')
+            mm_data = None  # pylint: disable=possibly-used-before-assignment
             if modality == Modality.IMAGE:
                 mm_data = self._make_image_mm_data(input_mm)
             elif modality == Modality.VIDEO:

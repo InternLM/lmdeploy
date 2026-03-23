@@ -21,6 +21,6 @@ class TritonMultinomialSamplingImpl(MultinomialSamplingImpl):
 class TritonMultinomialSamplingBuilder(MultinomialSamplingBuilder):
     """Triton multinomial sampling builder."""
 
-    def build():
+    def build(self):
         """build."""
         return TritonMultinomialSamplingImpl()

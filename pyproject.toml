@@ -20,3 +20,104 @@ select = [
 ignore = [
   "E231", "E741"
 ]
+
+[tool.pylint.master]
+ignore = "CVS,configs"
+jobs = 1
+limit-inference-results = 100
+persistent = true
+unsafe-load-any-extension = false
+fail-under = 8.5
+# Note: pylint doesn't have target-version like ruff. Python 3.10 compatibility
+# is achieved by not using Python 2 specific features (already ensured by
+# removing deprecated Python 2 checkers from disable list).
+
+[tool.pylint.messages_control]
+confidence = ""
+disable = [
+  "raw-checker-failed",
+  "bad-inline-option",
+  "locally-disabled",
+  "file-ignored",
+  "suppressed-message",
+  "useless-suppression",
+  "deprecated-pragma",
+  "use-symbolic-message-instead",
+  "no-member",
+  "invalid-name",
+  "too-many-branches",
+  "wrong-import-order",
+  "too-many-arguments",
+  "missing-function-docstring",
+  "missing-module-docstring",
+  "too-many-locals",
+  "too-few-public-methods",
+  "abstract-method",
+  "broad-except",
+  "too-many-nested-blocks",
+  "too-many-instance-attributes",
+  "missing-class-docstring",
+  "duplicate-code",
+  "not-callable",
+  "protected-access",
+  "dangerous-default-value",
+  "no-name-in-module",
+  "logging-fstring-interpolation",
+  "super-init-not-called",
+  "redefined-builtin",
+  "attribute-defined-outside-init",
+  "arguments-differ",
+  "cyclic-import",
+  "bad-super-call",
+  "too-many-statements",
+  "unused-argument",
+  "import-outside-toplevel",
+  "import-error",
+  "super-with-arguments",
+]
+
+[tool.pylint.reports]
+output-format = "text"
+reports = true
+score = true
+
+[tool.pylint.refactoring]
+max-nested-blocks = 5
+never-returning-functions = "sys.exit"
+
+[tool.pylint.format]
+max-line-length = 120
+max-module-lines = 1000
+indent-string = "    "
+indent-after-paren = 4
+single-line-class-stmt = false
+single-line-if-stmt = false
+
+[tool.pylint.basic]
+good-names = "i,j,k,ex,Run,_,x,y,w,h,a,b"
+bad-names = "foo,bar,baz,toto,tutu,tata"
+argument-naming-style = "snake_case"
+attr-naming-style = "snake_case"
+class-naming-style = "PascalCase"
+const-naming-style = "UPPER_CASE"
+function-naming-style = "snake_case"
+method-naming-style = "snake_case"
+module-naming-style = "snake_case"
+class-attribute-naming-style = "any"
+inlinevar-naming-style = "any"
+variable-naming-style = "snake_case"
+
+[tool.pylint.design]
+max-args = 5
+max-attributes = 7
+max-bool-expr = 5
+max-branches = 12
+max-locals = 15
+max-parents = 7
+max-public-methods = 20
+max-returns = 6
+max-statements = 50
+min-public-methods = 2
+
+[tool.pylint.exceptions]
+overgeneral-exceptions = "builtins.BaseException,builtins.Exception"

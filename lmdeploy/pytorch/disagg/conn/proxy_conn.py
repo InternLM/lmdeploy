@@ -63,7 +63,7 @@ class PDConnectionPool:
         correctly connected.
     """
 
-    # Maximum concurrent connections​​
+    # Maximum concurrent connections
     CONN_SEMAPHORE_SIZE = 2048
 
     def __init__(self):

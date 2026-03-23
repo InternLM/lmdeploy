@@ -475,7 +475,7 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphM
                                                                 'inputs_embeds',
                                                                 index=0)
 
-        self.get_image_features = torch.compile(self.get_image_features, mode='max-autotune-no-cudagraphs')
+        self._get_image_features_compiled = torch.compile(self.get_image_features, mode='max-autotune-no-cudagraphs')  # pylint: disable=method-hidden
         self.compile_vit = True
         self.has_compiled_vit = False
 
@@ -585,11 +585,18 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphM
         if inputs_embeds is None and pixel_values is not None:
             # extract feature
             self._mark_dynamic_once(pixel_values, [0])
-            vit_embeds = self.get_image_features(
-                pixel_values,
-                self.vision_feature_layer,
-                self.vision_feature_select_strategy,
-            )
+            if self.compile_vit:
+                vit_embeds = self._get_image_features_compiled(
+                    pixel_values,
+                    self.vision_feature_layer,
+                    self.vision_feature_select_strategy,
+                )
+            else:
+                vit_embeds = self.get_image_features(
+                    pixel_values,
+                    self.vision_feature_layer,
+                    self.vision_feature_select_strategy,
+                )
             lang_embeds = self.get_input_embeddings()(input_ids)
             lang_embeds.masked_scatter_(image_mask[..., None], vit_embeds)
 
@@ -662,7 +669,7 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphM
         else:
             from lmdeploy.pytorch.adapter.adapter import load_lora_weights
 
-            return load_lora_weights(weights, adapter_id)
+            return load_lora_weights(self.model.language_model, weights, adapter_id)
 
     @classmethod
     def rename_weight(cls, name: str) -> str:

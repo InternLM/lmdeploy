@@ -591,6 +591,7 @@ class CogVLMModel(nn.Module):
 
         # token embedding
         if inputs_embeds is None:
+            images_features = None  # pylint: disable=possibly-used-before-assignment
             if images is not None:
                 images_features = self.vision(images)
 

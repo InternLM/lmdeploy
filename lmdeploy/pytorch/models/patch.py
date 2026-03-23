@@ -125,7 +125,7 @@ def update_custom_module_map(module_map_path: str):
     module_map_path = osp.abspath(module_map_path)
     folder = osp.split(module_map_path)[0]
     sys.path.append(folder)
-    custom_mod = SourceFileLoader('map_mod', module_map_path).load_module()
+    custom_mod = SourceFileLoader('map_mod', module_map_path).load_module('map_mod')  # pylint: disable=no-value-for-parameter
     sys.modules[f'{LMDEPLOY_PYTORCH_MODEL_PATH}._custom_mod'] = custom_mod
 
     new_mod_map = dict()

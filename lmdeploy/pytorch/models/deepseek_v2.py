@@ -1248,6 +1248,8 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
 
         def __load_kcvc_blocked_fp8(name: str, loaded_weight: torch.Tensor):
             """Dequant weight."""
+            weight_name = None  # pylint: disable=possibly-used-before-assignment
+            scale_name = None  # pylint: disable=possibly-used-before-assignment
             if name.endswith('.weight'):
                 weight_name = name
                 scale_name = name.replace('.weight', '.scale')

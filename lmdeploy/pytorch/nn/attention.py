@@ -6,6 +6,7 @@ from lmdeploy.pytorch.distributed import get_tp_world_rank
 
 from ..backends import OpType, get_backend
 from ..backends.attention import AttentionMetadata
+from ..engine.ctx_manager import get_step_ctx_manager
 from .utils import get_distribute_size
 
 
@@ -121,7 +122,10 @@ class Attention(nn.Module):
 
     @staticmethod
     def update_meta_flashmla(attn_metadata: AttentionMetadata, num_attention_heads):
-        get_backend().update_meta_flashmla(attn_metadata, num_attention_heads)
+        ctx_mgr = get_step_ctx_manager()
+        step_ctx = ctx_mgr.current_context()
+        model_config = step_ctx.model_config
+        get_backend().update_meta_flashmla(attn_metadata, model_config, model_config.max_num_seqs)
 
 
 class FlashAttention(nn.Module):

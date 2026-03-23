@@ -686,6 +686,8 @@ class LlavaNextForConditionalGeneration(LlavaForConditionalGeneration):
                     expected_num_patches = height * width
                 elif vision_feature_select_strategy == 'full':
                     expected_num_patches = height * width + 1
+                else:
+                    expected_num_patches = None  # pylint: disable=possibly-used-before-assignment
                 if expected_num_patches != base_image_feature.shape[0]:
                     raise ValueError('The number of patches is '
                                      'not consistent with the image size.')

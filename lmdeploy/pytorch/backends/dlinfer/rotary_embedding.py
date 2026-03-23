@@ -56,6 +56,7 @@ class DlinferRotaryEmbeddingImpl(RotaryEmbeddingImpl, nn.Module):
         self.scaling_factor = scaling_factor
         self.dim = dim
         self.base = base
+        self.inv_freq = None  # pylint: disable=access-member-before-definition
         # yapf: disable
         inv_freq = 1.0 / (self.base**(torch.arange(0, self.dim, 2, dtype=torch.float, device='cuda') / self.dim))
         # yapf: enable

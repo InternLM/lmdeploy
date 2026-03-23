@@ -634,6 +634,8 @@ class InputsMakerAsync:
 
         inputs = None
         delta = None
+        running = None  # pylint: disable=possibly-used-before-assignment
+        extra_inputs = None
         swap_in_map = {}
         swap_out_map = {}
 

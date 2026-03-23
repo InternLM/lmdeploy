@@ -87,6 +87,7 @@ class Internlm2ToolParser(ToolParser):
 
         try:
             parsable_arr = action
+            delta = None  # pylint: disable=possibly-used-before-assignment
 
             # tool calls are generated in an object in inernlm2
             # it's not support parallel tool calls

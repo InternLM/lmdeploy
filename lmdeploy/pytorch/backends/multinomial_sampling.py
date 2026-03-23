@@ -8,7 +8,8 @@ class MultinomialSamplingImpl(ABC):
     """Multinomial sampling implementation api."""
 
     @abstractmethod
-    def forward(scores: torch.Tensor, seeds: torch.LongTensor, offsets: torch.LongTensor, indices: torch.Tensor = None):
+    def forward(self, scores: torch.Tensor, seeds: torch.LongTensor, offsets: torch.LongTensor,
+                indices: torch.Tensor = None):
         """forward."""
         raise NotImplementedError
 
