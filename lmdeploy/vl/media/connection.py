@@ -1,7 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import ipaddress
 import os
+import socket
 from pathlib import Path
-from typing import TypeVar
+from typing import Tuple, TypeVar
 from urllib.parse import ParseResult, urlparse
 from urllib.request import url2pathname
 
@@ -20,9 +22,38 @@ headers = {
 }
 
 
+def _is_safe_url(url: str) -> Tuple[bool, str]:
+    """Check if the URL is safe to fetch (not internal/private)."""
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ('http', 'https'):
+            return False, f'Unsupported scheme: {parsed.scheme}'
+
+        hostname = parsed.hostname
+        if not hostname:
+            return False, 'Could not parse hostname from URL'
+
+        # check all IPs (IPv4 + IPv6) using getaddrinfo
+        try:
+            infos = socket.getaddrinfo(hostname, None)
+        except socket.gaierror:
+            return False, 'Hostname resolution failed'
+
+        for info in infos:
+            ip = ipaddress.ip_address(info[4][0])
+            if ip.is_loopback or ip.is_private or ip.is_link_local:
+                return False, f'Blocked IP detected: {ip}'
+
+        return True, 'URL is safe'
+    except Exception as e:
+        return False, f'URL validation failed: {str(e)}'
+
+
 def _load_http_url(url_spec: ParseResult, media_io: MediaIO[_M]) -> _M:
-    if url_spec.scheme not in ('http', 'https'):
-        raise ValueError(f'Unsupported URL scheme: {url_spec.scheme}')
+    url = url_spec.geturl()
+    is_safe, reason = _is_safe_url(url)
+    if not is_safe:
+        raise ValueError(f'URL is blocked for security reasons: {reason}')
 
     fetch_timeout = 10
     if isinstance(media_io, ImageMediaIO):
@@ -31,7 +62,12 @@ def _load_http_url(url_spec: ParseResult, media_io: MediaIO[_M]) -> _M:
         fetch_timeout = int(os.environ.get('LMDEPLOY_VIDEO_FETCH_TIMEOUT', 30))
 
     client = requests.Session()
-    response = client.get(url_spec.geturl(), headers=headers, timeout=fetch_timeout)
+    # do not follow redirects automatically
+    response = client.get(url_spec.geturl(), headers=headers, timeout=fetch_timeout, allow_redirects=False)
+    # block if server attempts to redirect to internal IP
+    if response.is_redirect:
+        raise ValueError('Redirects are not allowed for security reasons')
+
     response.raise_for_status()
 
     return media_io.load_bytes(response.content)

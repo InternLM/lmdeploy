@@ -56,7 +56,7 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str, device_type: str = 'a
             torch_dtype = torch_dtype if torch_dtype in ['float16', 'bfloat16'] else 'float16'
         else:
             torch_dtype = dtype
-    config.dtype = eval(f'torch.{torch_dtype}')
+    config.dtype = getattr(torch, torch_dtype)
     return config
 
 
@@ -623,7 +623,7 @@ class QuantizationConfig:
             raise TypeError(f'Unsupported quant method: {quant_method}')
 
         if quant_dtype is not None:
-            quant_dtype = eval(f'torch.{quant_dtype}')
+            quant_dtype = getattr(torch, quant_dtype)
 
         ignored_layers = quant_config.get('ignored_layers', [])
         if not ignored_layers:
