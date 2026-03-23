@@ -6,7 +6,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Dict, List
 
-import numpy as np
 from torch.profiler import record_function
 
 from lmdeploy.messages import EventType, ScheduleMetrics
@@ -51,8 +50,6 @@ class Scheduler:
     ) -> None:
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
-        self.kernel_blocks_per_kv = self.cache_config.block_size // self.cache_config.kernel_block_size
-        self.kernel_block_arange = np.arange(self.kernel_blocks_per_kv)
         self.sessions: Dict[int, SchedulerSession] = OrderedDict()
 
         # For Disaggregation
@@ -359,32 +356,8 @@ class Scheduler:
         return self.has_ready() or self.has_waiting() or self.has_migration_done()
 
     def get_block_tables(self, seqs: SeqList):
-        """Get block tables for the sequences. When kernel_blocks_per_kv > 1,
-        converts block_manager block table to kernel block table.
-
-        Example:
-            # block_manager block size: 32 tokens,
-            # Kernel block size: 16 tokens
-            # kernel_blocks_per_kv = 2
-            >>> block_manager block offsets = [0, 1, 3]
-            >>> kernel block offsets = [0, 1, 2, 3, 6, 7]
-
-            # Each block_manager block id maps to 2 kernel block id:
-            # block_manager block id 0 → kernel block id [0, 1]
-            # block_manager block id 1 → kernel block id [2, 3]
-            # block_manager block id 3 → kernel block id [6, 7]
-        """
-        if self.kernel_blocks_per_kv == 1:
-            return [self.block_manager.get_block_table(seq) for seq in seqs]
-
-        block_offsets = []
-        for seq in seqs:
-            block_offset = self.block_manager.get_block_table(seq)
-            block_offset = block_offset.repeat(self.kernel_blocks_per_kv) * self.kernel_blocks_per_kv + np.tile(
-                self.kernel_block_arange, len(block_offset))
-            block_offsets.append(block_offset)
-
-        return block_offsets
+        """Get block tables for the sequences."""
+        return [self.block_manager.get_block_table(seq) for seq in seqs]
 
     def evict_seqs(self, running: SeqList):
         """Evict running sequences."""
