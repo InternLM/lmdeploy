@@ -940,7 +940,13 @@ class TestGenerateComprehensive:
 
     def test_stop_token_ids(self):
         print(f'\n[Model: {self.model_name}] Running stop_token_ids test')
-        payload = {'prompt': 'Once upon a time', 'max_tokens': 500, 'stop_token_ids': [11, 281], 'stream': False}
+        # 27974 for internlm3,
+        payload = {
+            'prompt': 'Once upon a time',
+            'max_tokens': 500,
+            'stop_token_ids': [11, 281, 128131],
+            'stream': False
+        }
 
         resp = self._post(payload)
         assert resp.status_code == 200, \
