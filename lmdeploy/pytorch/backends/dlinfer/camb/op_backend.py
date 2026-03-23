@@ -61,7 +61,7 @@ class CambOpsBackend(DlinferOpsBackend):
         kv_start_indices = []
         block_num, _, block_size, _ = step_context.kv_caches[0][0].shape
 
-        is_unpaged_prefill = False
+        is_prefill_no_cache = False
         q_start_loc = step_context.q_start_loc
         q_seqlens = step_context.q_seqlens
         kv_seqlens = step_context.kv_seqlens.to(torch.int32)
@@ -75,7 +75,7 @@ class CambOpsBackend(DlinferOpsBackend):
         q_seqlens_list = step_context.q_seqlens.tolist()
         kv_seqlens_list = step_context.kv_seqlens.tolist()
         if not step_context.is_decoding:
-            is_unpaged_prefill = q_seqlens_list == kv_seqlens_list
+            is_prefill_no_cache = q_seqlens_list == kv_seqlens_list
             # get kv_indices
             for i in range(q_start_loc.size(0)):
                 q_seq_len = q_seqlens_list[i]
@@ -87,7 +87,7 @@ class CambOpsBackend(DlinferOpsBackend):
                 slots = slot_tables[history_length:kv_seq_len]
                 kv_start_indices.append(slots)
             kv_start_indices = torch.cat(kv_start_indices)
-            if not is_unpaged_prefill:
+            if not is_prefill_no_cache:
                 cu_seq_lens_kv = torch.cat((torch.tensor([0], device=kv_seqlens.device), kv_seqlens.cumsum(0))).int()
         else:
             # collect kv_start_indices without using a for-loop,
@@ -109,7 +109,7 @@ class CambOpsBackend(DlinferOpsBackend):
             kv_start_indices=kv_start_indices,
             block_size=block_size,
             attention_mask=None,
-            is_unpaged_prefill=is_unpaged_prefill,
+            is_prefill_no_cache=is_prefill_no_cache,
             max_q_seq_len=max_q_seq_len,
             max_kv_seq_len=max_kv_seq_len,
         )
