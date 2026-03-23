@@ -193,7 +193,8 @@ class ModelInputs:
     target_position_ids: torch.Tensor | None = None
     target_inputs_embeds: torch.Tensor | None = None
     is_chunk: bool = False
-    is_first_chunk: bool = True
+    is_first_chunk: bool = False
+    is_last_chunk: bool = False
 
     # mrope, shape(3, sum_seqlens)
     mrope_pos_ids: torch.Tensor | None = None

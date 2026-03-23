@@ -601,6 +601,8 @@ class InputsMakerAsync:
             running = [seq]
             if self.long_context_chunker.is_last_chunk():
                 inputs, delta, extra_inputs = __create_model_inputs(running)
+                inputs.is_chunk = True
+                inputs.is_last_chunk = True
                 self.long_context_chunker.clear()
             else:
                 inputs, extra_inputs = __create_inputs_chunk(running)
@@ -625,6 +627,7 @@ class InputsMakerAsync:
                 # set long context chunker
                 self.long_context_chunker.set_seq(running[0])
                 inputs, extra_inputs = __create_inputs_chunk(running)
+                inputs.is_first_chunk = True
             elif len(running) > 0:
                 # create inputs
                 inputs, delta, extra_inputs = __create_model_inputs(running)

@@ -231,7 +231,7 @@ class EngineLoop:
         logits = batched_outputs.logits
         all_routed_experts = batched_outputs.all_routed_experts
 
-        if model_inputs is not None and model_inputs.is_chunk:
+        if model_inputs is not None and (model_inputs.is_chunk and not model_inputs.is_last_chunk):
             # chunk long context does not need to update seqs and outputs
             seq = running[0]
             seq.append_routed_experts(all_routed_experts)

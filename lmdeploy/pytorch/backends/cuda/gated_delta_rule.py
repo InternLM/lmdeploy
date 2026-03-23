@@ -45,13 +45,12 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
 
         assert initial_state is not None
         recurrent_state = initial_state
-        batch_state = recurrent_state.index_select(0, state_indices)
 
         if spec_state_offsets is not None:
-            batch_idx = torch.arange(batch_state.size(0), device=batch_state.device)
             spec_read_offsets = spec_state_offsets[0]
-            init_state = batch_state[batch_idx, spec_read_offsets]
+            init_state = recurrent_state[state_indices, spec_read_offsets]
         else:
+            batch_state = recurrent_state.index_select(0, state_indices)
             init_state = batch_state
 
         if use_qk_l2norm_in_kernel:
@@ -73,8 +72,7 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
         if spec_state_offsets is not None:
             # write to next slots
             spec_write_offsets = spec_state_offsets[1]
-            batch_state[batch_idx, spec_write_offsets] = last_state.to(recurrent_state.dtype)
-            recurrent_state.index_copy_(0, state_indices, batch_state)
+            recurrent_state[state_indices, spec_write_offsets] = last_state.to(recurrent_state.dtype)
         else:
             last_state = recurrent_state.index_copy_(0, state_indices, last_state.to(recurrent_state.dtype))
         if not output_final_state:

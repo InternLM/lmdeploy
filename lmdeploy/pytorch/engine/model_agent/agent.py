@@ -661,7 +661,7 @@ class BaseModelAgent:
             model_metas = self._prev_chunk_output.get('model_metas')
             inputs.model_metas = model_metas
 
-            if not inputs.is_chunk:
+            if inputs.is_last_chunk:
                 # remove _prev_chunk_output
                 self._prev_chunk_output = None
 
@@ -904,7 +904,7 @@ class BaseModelAgent:
                             extra_outputs,
                             stopping_criteria,
                             sampling_delta=sampling_delta)
-        elif inputs.is_chunk:
+        elif inputs.is_chunk and not inputs.is_last_chunk:
             # _prev_chunk_output is used to update model metas
             self._prev_chunk_output = output
         elif self.cache_config.role != EngineRole.Prefill:
