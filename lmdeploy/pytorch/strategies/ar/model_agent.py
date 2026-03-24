@@ -128,9 +128,6 @@ class ARStoppingCriteria(StoppingCriteria):
     def _check_stop_words(self, token_ids: torch.Tensor, stop_words: torch.Tensor, stop_word_lens: torch.Tensor):
         """Vectorized multi-token stop word detection.
 
-        Uses ``unfold`` for sliding-window matching so that no Python loops
-        over batch items, stop-word entries, or window positions are needed.
-
         Args:
             token_ids: [batch, step_len], -1 for invalid positions.
                        Modified **in-place** (tokens after stop are set to -1).
@@ -143,7 +140,46 @@ class ARStoppingCriteria(StoppingCriteria):
             new_tail:   [batch, tail_len] or None
         """
         max_slen = int(stop_word_lens.max().item())
-        tail_len = max(0, max_slen - 1)
+
+        if max_slen <= 1:
+            return self._check_stop_words_single(token_ids, stop_words, stop_word_lens)
+
+        return self._check_stop_words_multi(token_ids, stop_words, stop_word_lens, max_slen)
+
+    def _check_stop_words_single(self, token_ids: torch.Tensor, stop_words: torch.Tensor, stop_word_lens: torch.Tensor):
+        """Fast path when every stop word is a single token.
+
+        No tail, no unfold, no sliding window — just a broadcast compare.
+        """
+        step_len = token_ids.size(1)
+        device = token_ids.device
+
+        targets = stop_words[:, :, 0]  # [B, S]
+        valid = (stop_word_lens == 1)  # [B, S]
+
+        # [B, L, 1] == [B, 1, S] -> [B, L, S]; mask invalid targets
+        match = (token_ids.unsqueeze(2) == targets.unsqueeze(1)) & valid.unsqueeze(1)
+        match_any = match.any(2)  # [B, L]
+
+        sw_stopped = match_any.any(1)  # [B]
+        first_match = match_any.int().argmax(1)  # [B]
+        stop_pos = torch.where(sw_stopped, first_match, torch.zeros_like(first_match))
+
+        col_idx = torch.arange(step_len, device=device)
+        after_stop = (col_idx > stop_pos.unsqueeze(1)) & sw_stopped.unsqueeze(1)
+        token_ids[after_stop] = -1
+
+        return sw_stopped, stop_pos, None
+
+    def _check_stop_words_multi(self, token_ids: torch.Tensor, stop_words: torch.Tensor, stop_word_lens: torch.Tensor,
+                                max_slen: int):
+        """General path for multi-token stop words.
+
+        Per-length unfold loop (each length needs its own window count), but
+        iterates ``range(1, max_slen+1)`` instead of calling the GPU-syncing
+        ``stop_word_lens.unique().tolist()``.
+        """
+        tail_len = max_slen - 1
         batch_size = token_ids.size(0)
         step_len = token_ids.size(1)
         device = token_ids.device
@@ -156,12 +192,11 @@ class ARStoppingCriteria(StoppingCriteria):
             history = token_ids
         hist_len = history.size(1)
 
-        # -- 2. sliding-window matching via unfold --
+        # -- 2. sliding-window matching per length --
         NO_MATCH = hist_len
         best_end = history.new_full((batch_size, ), NO_MATCH)
-        for slen in stop_word_lens.unique().tolist():
-            slen = int(slen)
-            if slen <= 0 or hist_len < slen:
+        for slen in range(1, max_slen + 1):
+            if hist_len < slen:
                 continue
             windows = history.unfold(1, slen, 1)  # [B, W, slen]
             targets = stop_words[:, :, :slen]  # [B, S, slen]
@@ -171,7 +206,6 @@ class ARStoppingCriteria(StoppingCriteria):
             match = match & len_mask.unsqueeze(1)
             match_any = match.any(2)  # [B, W]
 
-            # discard windows that don't include any new token from this step
             min_win = max(0, tail_len - slen + 1)
             if min_win > 0:
                 match_any[:, :min_win] = False
@@ -206,7 +240,7 @@ class ARStoppingCriteria(StoppingCriteria):
         prev = self.stop_tail.to(device)
         pt_len = prev.size(1)
         if pt_len < tail_len:
-            prev = torch.nn.functional.pad(prev, (tail_len - pt_len, 0))
+            prev = torch.nn.functional.pad(prev, (tail_len - pt_len, 0), value=-1)
         elif pt_len > tail_len:
             prev = prev[:, -tail_len:]
         return prev
