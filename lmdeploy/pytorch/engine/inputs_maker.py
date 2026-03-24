@@ -28,35 +28,16 @@ if TYPE_CHECKING:
 logger = get_logger('lmdeploy')
 
 
-def _tensorlize_block_offsets(block_offsets, dtype=torch.int32, kernel_blocks_per_kv=None, kernel_block_arange=None):
-    """Tensorlize block_offsets. When kernel_blocks_per_kv > 1, converts
-    manager block_offsets to kernel block_offsets.
-
-    Example:
-
-        # block_manager block size: 32 tokens,
-        # Kernel block size: 16 tokens
-        # kernel_blocks_per_kv = 2
-        >>> block_manager block offsets = [0, 1, 3]
-        >>> kernel block offsets = [0, 1, 2, 3, 6, 7]
-
-        # Each block_manager block id maps to 2 kernel block id:
-        # block_manager block id 0 -> kernel block id [0, 1]
-        # block_manager block id 1 -> kernel block id [2, 3]
-        # block_manager block id 3 -> kernel block id [6, 7]
-    """
+def _tensorlize_block_offsets(block_offsets, dtype=torch.int32):
+    """Tensorlize block_offsets."""
     # copy on numpy is faster than torch.nn.utils.rnn.pad_sequence
     batch_size = len(block_offsets)
     max_len = max([len(off) for off in block_offsets])
-    if kernel_blocks_per_kv is None or kernel_block_arange is None:
-        kernel_blocks_per_kv = 1
-        kernel_block_arange = np.arange(1)
-
-    out = np.zeros((batch_size, max_len * kernel_blocks_per_kv), dtype=block_offsets[0].dtype)
+    out = np.zeros((batch_size, max_len), dtype=block_offsets[0].dtype)
 
     for idx, off in enumerate(block_offsets):
-        off_len = len(off) * kernel_blocks_per_kv
-        out[idx, :off_len] = (off[:, None] * kernel_blocks_per_kv + kernel_block_arange).reshape(-1)
+        off_len = len(off)
+        out[idx, :off_len] = off
     return torch.as_tensor(out, dtype=dtype)
 
 
@@ -226,7 +207,7 @@ class InputsMakerAsync:
         self.spec_decoding = config.spec_decoding
         self.cache_config = scheduler.cache_config
         self.kernel_blocks_per_kv = self.cache_config.block_size // self.cache_config.kernel_block_size
-        self.kernel_block_arange = np.arange(self.kernel_blocks_per_kv)
+        self.kernel_block_arange = torch.arange(self.kernel_blocks_per_kv, dtype=self.torch_int_dtype)
 
         # strategies
         self.engine_strategy = engine_strategy
@@ -335,6 +316,29 @@ class InputsMakerAsync:
         local_adapter_ids = model_inputs.seq_length.new_tensor(local_adapter_ids)
         model_inputs.local_adapter_ids = local_adapter_ids
 
+    def _map_to_kernel_block_offsets(self, block_offsets: torch.Tensor):
+        """Converts manager block_offsets to kernel block_offsets.
+
+        Example:
+
+            # block_manager block size: 32 tokens,
+            # Kernel block size: 16 tokens
+            # kernel_blocks_per_kv = 2
+            >>> block_manager block offsets = [0, 1, 3]
+            >>> Result kernel block offsets = [0, 1, 2, 3, 6, 7]
+
+            # Each block_manager block id maps to 2 kernel block id:
+            # block_manager block id 0 -> kernel block id [0, 1]
+            # block_manager block id 1 -> kernel block id [2, 3]
+            # block_manager block id 3 -> kernel block id [6, 7]
+        """
+        if self.kernel_blocks_per_kv == 1:
+            return block_offsets
+        batch_size = block_offsets.shape[0]
+        block_offsets = (block_offsets[:, :, None] * self.kernel_blocks_per_kv +
+                         self.kernel_block_arange[None, None, :]).reshape(batch_size, -1)
+        return block_offsets
+
     @torch.inference_mode()
     @record_function('create_model_inputs')
     def create_model_inputs(self, messages: 'SeqList', is_prefill: bool):
@@ -367,10 +371,8 @@ class InputsMakerAsync:
 
         # block offsets
         block_offsets = self.scheduler.get_block_tables(messages)
-        block_offsets = _tensorlize_block_offsets(block_offsets,
-                                                  dtype=self.torch_int_dtype,
-                                                  kernel_blocks_per_kv=self.kernel_blocks_per_kv,
-                                                  kernel_block_arange=self.kernel_block_arange)
+        block_offsets = _tensorlize_block_offsets(block_offsets, dtype=self.torch_int_dtype)
+        block_offsets = self._map_to_kernel_block_offsets(block_offsets)
 
         # num_ignored_history
         num_ignored_history = torch.tensor([msg.num_ignored_history for msg in messages])
@@ -420,10 +422,8 @@ class InputsMakerAsync:
 
         # block offsets
         block_offsets = self.scheduler.get_block_tables([seq])
-        block_offsets = _tensorlize_block_offsets(block_offsets,
-                                                  dtype=self.torch_int_dtype,
-                                                  kernel_blocks_per_kv=self.kernel_blocks_per_kv,
-                                                  kernel_block_arange=self.kernel_block_arange)
+        block_offsets = torch.as_tensor(block_offsets[0], dtype=self.torch_int_dtype)[None]
+        block_offsets = self._map_to_kernel_block_offsets(block_offsets)
 
         # num_ignored_history
         num_ignored_history = torch.tensor([seq.num_ignored_history])
@@ -488,10 +488,8 @@ class InputsMakerAsync:
 
         # block offsets
         block_offsets = self.scheduler.get_block_tables(valid_seqs)
-        block_offsets = _tensorlize_block_offsets(block_offsets,
-                                                  dtype=self.torch_int_dtype,
-                                                  kernel_blocks_per_kv=self.kernel_blocks_per_kv,
-                                                  kernel_block_arange=self.kernel_block_arange)
+        block_offsets = _tensorlize_block_offsets(block_offsets, dtype=self.torch_int_dtype)
+        block_offsets = self._map_to_kernel_block_offsets(block_offsets)
 
         # sliding window
         if self.scheduler.cache_config.window_size > 0:

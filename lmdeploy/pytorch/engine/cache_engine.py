@@ -79,7 +79,7 @@ class CacheEngine:
         self.cache_config = cache_config
         self.model_config = model_config
 
-        self.block_size = cache_config.block_size
+        self.block_size = cache_config.kernel_block_size
         self.num_layers = model_config.num_layers
         self.kv_cache_dtype = _get_kv_cache_dtype(self.model_config)
 
