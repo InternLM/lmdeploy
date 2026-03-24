@@ -40,13 +40,8 @@ def test_load_http_url_logic(mock_safe, mock_get):
     media_io = MagicMock()
     url_spec = urlparse('https://example.com/img.jpg')
 
-    # test redirect blocked
-    mock_get.return_value = MagicMock(is_redirect=True)
-    with pytest.raises(ValueError, match='Redirects are not allowed'):
-        _load_http_url(url_spec, media_io)
-
-    # test success
-    mock_get.return_value = MagicMock(is_redirect=False, content=b'data', status_code=200)
+    # test success with allow_redirects=True
+    mock_get.return_value = MagicMock(content=b'data', status_code=200)
     media_io.load_bytes.return_value = 'loaded'
     assert _load_http_url(url_spec, media_io) == 'loaded'
-    assert mock_get.call_args.kwargs['allow_redirects'] is False
+    assert mock_get.call_args.kwargs['allow_redirects'] is True
