@@ -199,6 +199,20 @@ class CudaOpsBackend(DefaultOpsBackend):
             elif use_flash_attn3_decoding:
                 attn_metadata = cls.update_meta_flashattn(attn_metadata, step_context)
 
+        # update chunk gated delta indices
+        # TODO: we better add a flag to mark the model instead of checking states_shapes here
+        states_shapes = step_context.model_config.states_shapes
+        is_gateddelta = states_shapes is not None and len(states_shapes) > 0
+        if is_gateddelta and not step_context.is_decoding:
+            try:
+                from fla.ops.utils import prepare_chunk_indices
+                # prepare_chunk_indice would force sync the stream
+                # we better maintain a cpu cu_seqlens_q cache in the future to avoid this
+                prepare_chunk_indices(attn_metadata.cu_seqlens_q, 64)
+            except Exception:
+                logger.exception('Failed to prepare chunk indices for gated delta rule. '
+                               'Please make sure the version of fla is up to date and compatible with lmdeploy.')
+
         step_context.attn_metadata = attn_metadata
         return step_context
 
