@@ -134,7 +134,7 @@ class LongContextChunker:
 
         start = seq.num_history_ids
         end = start + llm_chunk_size
-        out_multimodals: 'MultiModalInputs' = defaultdict(list)
+        out_multimodals: MultiModalInputs = defaultdict(list)
         for modal_type, mm in self.multimodal_iter():
             assert mm.start >= start, 'multimodal data should be sorted by start'
             if mm.start >= end:
@@ -161,7 +161,7 @@ class LongContextChunker:
 
     def clear(self):
         """Clear."""
-        self.seq: 'SchedulerSequence' = None
+        self.seq: SchedulerSequence = None
         self.multimodals: MultiModalInputs = defaultdict(list)
         self.next_step: int = 0
         self.max_prefill_num: int = self.max_prefill_token_num
@@ -222,8 +222,8 @@ class InputsMakerAsync:
 
         # running seqs
         # mark the seqs that have been sent to executor
-        self.running_seqs: list['SchedulerSequence'] = []
-        self.to_evict_seqs: list['SchedulerSequence'] = []
+        self.running_seqs: list[SchedulerSequence] = []
+        self.to_evict_seqs: list[SchedulerSequence] = []
 
         # long context chunker
         self.long_context_chunker = LongContextChunker(config.max_prefill_token_num)
@@ -467,8 +467,8 @@ class InputsMakerAsync:
 
         valid_mask = np.array(valid_mask)
         indices_cpu = np.arange(0, batch_size)[valid_mask]
-        valid_seqs: list['SchedulerSequence'] = [self.running_seqs[i] for i in indices_cpu]
-        invalid_seqs: list['SchedulerSequence'] = [self.running_seqs[i] for i in range(batch_size) if not valid_mask[i]]
+        valid_seqs: list[SchedulerSequence] = [self.running_seqs[i] for i in indices_cpu]
+        invalid_seqs: list[SchedulerSequence] = [self.running_seqs[i] for i in range(batch_size) if not valid_mask[i]]
         if len(valid_seqs) == 0:
             return None, valid_seqs, invalid_seqs
 
@@ -512,8 +512,8 @@ class InputsMakerAsync:
 
         valid_mask = np.array(valid_mask, dtype=bool)
         indices_cpu = np.arange(0, batch_size)[valid_mask]
-        valid_seqs: list['SchedulerSequence'] = [self.running_seqs[i] for i in indices_cpu]
-        invalid_seqs: list['SchedulerSequence'] = [self.running_seqs[i] for i in range(batch_size) if not valid_mask[i]]
+        valid_seqs: list[SchedulerSequence] = [self.running_seqs[i] for i in indices_cpu]
+        invalid_seqs: list[SchedulerSequence] = [self.running_seqs[i] for i in range(batch_size) if not valid_mask[i]]
 
         num_decode_tokens = self.engine_strategy.get_num_decode_tokens()
         max_q_seqlen = num_decode_tokens

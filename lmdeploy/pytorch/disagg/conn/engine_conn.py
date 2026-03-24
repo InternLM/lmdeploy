@@ -1,18 +1,24 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import os
-from typing import TYPE_CHECKING, Dict, List
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 import zmq
 import zmq.asyncio
 
 from lmdeploy.logger import get_logger
-from lmdeploy.pytorch.disagg.conn.protocol import (DistServeCacheFreeRequest, DistServeConnectionRequest,
-                                                   DistServeConnectionResponse, DistServeConnectionStatus,
-                                                   DistServeDropConnectionRequest, DistServeEngineEndpointInfo,
-                                                   DistServeInitRequest, DistServeInitResponse,
-                                                   DistServeKVTransferEndpointInfo)
+from lmdeploy.pytorch.disagg.conn.protocol import (
+    DistServeCacheFreeRequest,
+    DistServeConnectionRequest,
+    DistServeConnectionResponse,
+    DistServeConnectionStatus,
+    DistServeDropConnectionRequest,
+    DistServeEngineEndpointInfo,
+    DistServeInitRequest,
+    DistServeInitResponse,
+    DistServeKVTransferEndpointInfo,
+)
 from lmdeploy.pytorch.engine.executor.dist_utils import find_available_port
 
 if TYPE_CHECKING:
@@ -25,9 +31,9 @@ class EngineP2PConnection:
 
     def __init__(self, engine: 'Engine'):
         self.engine: Engine = engine
-        self.p2p_conn_ctx: Dict[str, zmq.asyncio.Context] = {}
-        self.p2p_sender: Dict[str, zmq.asyncio.Socket] = {}
-        self.p2p_receiver: Dict[str, zmq.asyncio.Socket] = {}
+        self.p2p_conn_ctx: dict[str, zmq.asyncio.Context] = {}
+        self.p2p_sender: dict[str, zmq.asyncio.Socket] = {}
+        self.p2p_receiver: dict[str, zmq.asyncio.Socket] = {}
 
         self.use_unique_kvtransfer_engine = os.environ.get('LMDEPLOY_USE_UNIQUE_KVTRANSFER_ENGINE', False)
 
@@ -44,7 +50,7 @@ class EngineP2PConnection:
         self.p2p_sender[init_request.remote_engine_id] = sender
         self.p2p_receiver[init_request.remote_engine_id] = receiver
 
-        kvtransfer_endpoint_info: List[DistServeKVTransferEndpointInfo] = self.engine.executor.p2p_initialize(
+        kvtransfer_endpoint_info: list[DistServeKVTransferEndpointInfo] = self.engine.executor.p2p_initialize(
             init_request)
 
         return DistServeInitResponse(engine_endpoint_info=DistServeEngineEndpointInfo(zmq_address=zmq_address),

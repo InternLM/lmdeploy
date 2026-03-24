@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Dict, List
 
 import torch
 from transformers import AutoModelForCausalLM, AutoProcessor
@@ -50,10 +49,10 @@ class MolmoVisionModel(VisionModel):
         # avoid randomness in inference.
         self.model = model.eval()
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refer to the `super.preprocess() for spec."""
         for i, message in enumerate(messages):
-            if not isinstance(message['content'], List):
+            if not isinstance(message['content'], list):
                 continue
             images = [x['image'] for x in message['content'] if x['type'] == 'image']
             content = [x.get('text', '') for x in message['content'] if x['type'] == 'text']
@@ -75,7 +74,7 @@ class MolmoVisionModel(VisionModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
@@ -131,7 +130,7 @@ class MolmoVisionModel(VisionModel):
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         for message in messages:
             role, content = message['role'], message['content']
-            if isinstance(content, List):
+            if isinstance(content, list):
                 n_images = len([1 for x in content if x['type'] == 'image'])
                 content = [x['text'] for x in content if x['type'] == 'text']
                 prompt.append(' User: ' + (IMAGE_TOKEN + '\n') * n_images + content[0])
@@ -160,7 +159,7 @@ class MolmoVisionModel(VisionModel):
         for i, message in enumerate(messages):
             prompt = ''
             role, content = message['role'], message['content']
-            if isinstance(content, List):
+            if isinstance(content, list):
                 forward_result = message.pop('forward')
                 input_ids = forward_result['input_ids']
                 embeddings = forward_result['embeddings']

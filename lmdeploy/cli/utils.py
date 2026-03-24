@@ -5,7 +5,7 @@ import json
 import re
 import sys
 from collections import defaultdict
-from typing import Any, List
+from typing import Any
 
 from lmdeploy.utils import get_logger
 
@@ -39,7 +39,7 @@ def convert_args(args):
     return kwargs
 
 
-def get_lora_adapters(adapters: List[str]):
+def get_lora_adapters(adapters: list[str]):
     """Parse lora adapers from cli input.
 
     Args:
@@ -437,7 +437,7 @@ class ArgumentHelper:
         )
 
     @staticmethod
-    def device(parser, default: str = 'cuda', choices: List[str] = ['cuda', 'ascend', 'maca', 'camb']):
+    def device(parser, default: str = 'cuda', choices: list[str] = ['cuda', 'ascend', 'maca', 'camb']):
         """Add argument device to parser."""
 
         return parser.add_argument('--device',

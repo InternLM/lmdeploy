@@ -355,7 +355,7 @@ def get_config() -> dict[str, Any]:
     if env_tag and not os.path.exists(config_path):
         config_path = 'autotest/config.yml'
     # Load yaml config file safely
-    with open(config_path, 'r', encoding='utf-8') as f:
+    with open(config_path, encoding='utf-8') as f:
         config = yaml.load(f.read(), Loader=yaml.SafeLoader)
 
     # Deep copy config to avoid modify raw data, update log path with github run id

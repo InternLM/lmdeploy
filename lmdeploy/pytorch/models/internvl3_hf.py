@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
+from collections.abc import Iterable
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -218,7 +219,7 @@ class InternVLVisionAttention(nn.Module):
         eps = self.config.layer_norm_eps
         return post_rms_norm(q, k, self.q_norm.weight, self.k_norm.weight, variance, eps, self.embed_dim, dtype)
 
-    def qkv_norm(self, q: torch.Tensor, k: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def qkv_norm(self, q: torch.Tensor, k: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         import lmdeploy.pytorch.distributed as dist
         q_shape = q.shape
         k_shape = k.shape
@@ -387,7 +388,7 @@ class InternVLVisionModel(nn.Module):
 
     def forward(
         self,
-        pixel_values: Optional[torch.FloatTensor] = None,
+        pixel_values: torch.FloatTensor | None = None,
     ):
         """forward."""
         assert pixel_values.dim() == 4
@@ -493,7 +494,7 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphM
     def get_image_features(
         self,
         pixel_values: torch.FloatTensor,
-        vision_feature_layer: Union[int, List[int]],
+        vision_feature_layer: int | list[int],
         vision_feature_select_strategy: str,
         **kwargs,
     ):
@@ -574,7 +575,7 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphM
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         pixel_values: torch.Tensor = None,
         image_mask: torch.Tensor = None,
@@ -610,7 +611,7 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphM
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         inputs_embeds: torch.Tensor = None,
         context: StepContext = None,
     ):
@@ -653,7 +654,7 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphM
             inputs_embeds=inputs_embeds,
         )
 
-    def load_lora_weights(self, weights: Iterable[Tuple[str, torch.Tensor]], adapter_id: int):
+    def load_lora_weights(self, weights: Iterable[tuple[str, torch.Tensor]], adapter_id: int):
         """Load lora weights."""
 
         if hasattr(self.model.language_model, 'load_lora_weights'):
@@ -674,7 +675,7 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphM
             return name[len('model.'):]
         return name
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
 
         lang_prefix = 'language_model.'
@@ -720,8 +721,8 @@ class InternVLProcessor(BaseModelInputProcessor):
         self.dtype = dtype
 
     def preprocess_input(self,
-                         input_ids: List[int],
-                         input_multimodals: List[Dict[str, Any]] = None,
+                         input_ids: list[int],
+                         input_multimodals: list[dict[str, Any]] = None,
                          **kwargs) -> PreprocessInputResult:
         """Prepare multimodal input."""
         if input_multimodals is None or len(input_multimodals) == 0:

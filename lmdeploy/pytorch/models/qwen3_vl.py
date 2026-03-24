@@ -1,7 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+from collections.abc import Iterable, Sequence
 from functools import lru_cache
-from typing import Any, Dict, Iterable, List, Sequence, Tuple
+from typing import Any
 
 import numpy as np
 import torch
@@ -118,13 +119,13 @@ class Qwen3VLTextModel(Qwen3model):
         self,
         input_ids: torch.LongTensor = None,
         position_ids: torch.LongTensor | None = None,
-        past_key_values: List[torch.FloatTensor] | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,
         attn_metadata: Any = None,
         inputs_embeds: torch.FloatTensor | None = None,
         mrope_position_ids: torch.LongTensor = None,
         # args for deepstack
         visual_pos_masks: torch.Tensor | None = None,
-        deepstack_visual_embeds: List[torch.Tensor] | None = None,
+        deepstack_visual_embeds: list[torch.Tensor] | None = None,
     ):
         """Rewrite of LlamaModel.forward."""
 
@@ -413,7 +414,7 @@ class Qwen3VLVisionModel(nn.Module):
         return rotary_pos_emb
 
     # copy from https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/models/qwen3_vl.py#L474
-    def fast_pos_embed_interpolate(self, grid_thw: List[List[int]]) -> torch.Tensor:
+    def fast_pos_embed_interpolate(self, grid_thw: list[list[int]]) -> torch.Tensor:
         num_grid_per_side = self.num_grid_per_side
         m_size = self.spatial_merge_size
         hidden_dim = self.pos_embed.embedding_dim
@@ -543,7 +544,7 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
         mrope_position_ids: torch.Tensor = None,
@@ -603,7 +604,7 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         inputs_embeds: torch.Tensor | None = None,
         context: StepContext = None,
     ):
@@ -680,7 +681,7 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
             return name[len('model.'):]
         return name
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
         # modify from vllm
         stacked_params_mapping = [
@@ -746,7 +747,7 @@ class Qwen3VLInputProcessor(BaseModelInputProcessor):
         img_pos_ids = cls._get_multimodal_pos_ids(grid_thw[0].tolist())
         return img_pos_ids
 
-    def _make_image_mm_data(self, input_mm: Dict[str, Any]) -> MultiModalData:
+    def _make_image_mm_data(self, input_mm: dict[str, Any]) -> MultiModalData:
         """Make image MultiModalData."""
         pixel_values = input_mm['pixel_values']
         image_grid_thw = input_mm['image_grid_thw']
@@ -767,7 +768,7 @@ class Qwen3VLInputProcessor(BaseModelInputProcessor):
                                  meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
         return mm_data
 
-    def _make_video_mm_data(self, input_mm: Dict[str, Any]) -> MultiModalData:
+    def _make_video_mm_data(self, input_mm: dict[str, Any]) -> MultiModalData:
         """Make video MultiModalData."""
         pixel_values_videos = input_mm['pixel_values_videos']
         video_grid_thw = input_mm['video_grid_thw']
@@ -792,8 +793,8 @@ class Qwen3VLInputProcessor(BaseModelInputProcessor):
         return mm_data
 
     def preprocess_input(self,
-                         input_ids: List[int],
-                         input_multimodals: List[Dict[str, Any]] = None,
+                         input_ids: list[int],
+                         input_multimodals: list[dict[str, Any]] = None,
                          **kwargs) -> PreprocessInputResult:
         """Prepare multimodal input."""
         if input_multimodals is None or len(input_multimodals) == 0:

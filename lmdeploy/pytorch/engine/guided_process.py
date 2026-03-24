@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import torch
 import xgrammar as xgr
@@ -13,7 +13,7 @@ logger = logging.getLogger('lmdeploy')
 class GuidedDecodingManager:
     processors = {}
 
-    def __init__(self, tokenizer: PreTrainedTokenizerBase, vocab_size: Optional[int]):
+    def __init__(self, tokenizer: PreTrainedTokenizerBase, vocab_size: int | None):
         if vocab_size is None:
             vocab_size = tokenizer.vocab_size
 
@@ -21,15 +21,15 @@ class GuidedDecodingManager:
         self.compiler = xgr.GrammarCompiler(tokenizer_info)
         self.vocab_size = vocab_size
 
-    def get_processors(self, session_ctx: List[Dict[str, Any]],
-                       response_formats: Tuple[Dict]) -> Dict[int, xgr.GrammarMatcher]:
+    def get_processors(self, session_ctx: list[dict[str, Any]],
+                       response_formats: tuple[dict]) -> dict[int, xgr.GrammarMatcher]:
         processors = {}
         for i, _format in enumerate(response_formats):
-            if isinstance(_format, Dict) and _format.get('type', 'text') != 'text':
+            if isinstance(_format, dict) and _format.get('type', 'text') != 'text':
                 schema_type = _format['type']
                 if schema_type == 'json_schema':
                     schema = _format['json_schema']
-                    if isinstance(schema, Dict):
+                    if isinstance(schema, dict):
                         for key in ['json_schema', 'schema']:
                             if key in schema:
                                 schema = json.dumps(schema[key], ensure_ascii=False)

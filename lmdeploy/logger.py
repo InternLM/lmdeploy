@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from https://github.com/vllm-project/vllm/blob/main/vllm/entrypoints/logger.py  # noqa
-from typing import List, Optional
 
 from .messages import GenerationConfig
 from .utils import get_logger
@@ -17,7 +16,7 @@ class RequestLogger:
             If None, no maximum length is enforced.
     """
 
-    def __init__(self, max_log_len: Optional[int]) -> None:
+    def __init__(self, max_log_len: int | None) -> None:
         self.max_log_len = max_log_len
 
     def log_prompt(self, session_id: int, prompt: str) -> None:
@@ -31,7 +30,7 @@ class RequestLogger:
         logger.info(f'session={session_id}, '
                     f'prompt={prompt!r}')
 
-    def log_inputs(self, session_id: int, prompt: Optional[str], prompt_token_ids: Optional[List[int]],
+    def log_inputs(self, session_id: int, prompt: str | None, prompt_token_ids: list[int] | None,
                    gen_config: GenerationConfig, adapter_name: str) -> None:
         max_log_len = self.max_log_len
         input_tokens = len(prompt_token_ids)

@@ -16,7 +16,7 @@ def build_model_agent(
     misc_config: MiscConfig,
     dist_ctx: DistContext = None,
     device_ctx: DeviceContext = None,
-    adapters: Dict[str, str] = None,
+    adapters: dict[str, str] = None,
     specdecode_config: SpecDecodeConfig = None,
 ):
     """Create model agent.

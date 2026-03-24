@@ -6,7 +6,6 @@ information."""
 import json
 import logging
 from enum import Enum
-from typing import List, Optional, Union
 
 import _xgrammar as _xgr  # noqa: E402
 
@@ -71,11 +70,11 @@ class TokenizerInfo(_xgr.TokenizerInfo):
 
     def __init__(
         self,
-        encoded_vocab: Union[List[bytes], List[str]],
+        encoded_vocab: list[bytes] | list[str],
         vocab_type: VocabType = VocabType.RAW,
         *,
-        vocab_size: Optional[int] = None,
-        stop_token_ids: Optional[Union[List[int], int]] = None,
+        vocab_size: int | None = None,
+        stop_token_ids: list[int] | int | None = None,
         add_prefix_space: bool = False,
     ) -> None:
         """Construct the tokenizer info.
@@ -134,8 +133,8 @@ class TokenizerInfo(_xgr.TokenizerInfo):
     def from_huggingface(
         tokenizer: PreTrainedTokenizerBase,
         *,
-        vocab_size: Optional[int] = None,
-        stop_token_ids: Optional[Union[List[int], int]] = None,
+        vocab_size: int | None = None,
+        stop_token_ids: list[int] | int | None = None,
     ) -> 'TokenizerInfo':
         """Construct the tokenizer info from the huggingface tokenizer. This
         constructor supports various tokenizer backends, including the

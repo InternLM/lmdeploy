@@ -2,7 +2,7 @@
 import dataclasses
 import json
 import uuid
-from typing import List, Literal, Optional, Union
+from typing import Literal
 
 from mmengine import Registry
 
@@ -18,7 +18,7 @@ def random_uuid() -> str:
     return str(uuid.uuid4().hex)
 
 
-def get_text(content: Union[str, List[dict]]):
+def get_text(content: str | list[dict]):
     """Within the OpenAI API, the content field may be specified as either a
     string or a list of ChatCompletionContentPartTextParam (defined in openai).
 
@@ -51,19 +51,19 @@ class ChatTemplateConfig:
     """  # noqa: E501
 
     model_name: str
-    model_path: Optional[str] = None
-    system: Optional[str] = None
-    meta_instruction: Optional[str] = None
-    eosys: Optional[str] = None
-    user: Optional[str] = None
-    eoh: Optional[str] = None
-    assistant: Optional[str] = None
-    eoa: Optional[str] = None
-    tool: Optional[str] = None
-    eotool: Optional[str] = None
-    separator: Optional[str] = None
-    capability: Optional[Literal['completion', 'infilling', 'chat', 'python']] = None
-    stop_words: Optional[List[str]] = None
+    model_path: str | None = None
+    system: str | None = None
+    meta_instruction: str | None = None
+    eosys: str | None = None
+    user: str | None = None
+    eoh: str | None = None
+    assistant: str | None = None
+    eoa: str | None = None
+    tool: str | None = None
+    eotool: str | None = None
+    separator: str | None = None
+    capability: Literal['completion', 'infilling', 'chat', 'python'] | None = None
+    stop_words: list[str] | None = None
 
     @property
     def chat_template(self):
@@ -91,12 +91,12 @@ class ChatTemplateConfig:
         """Construct a dataclass instance from a JSON file or JSON string."""
         try:
             # Try to open the input_data as a file path
-            with open(file_or_string, 'r', encoding='utf-8') as file:
+            with open(file_or_string, encoding='utf-8') as file:
                 json_data = file.read()
         except FileNotFoundError:
             # If it's not a file path, assume it's a JSON string
             json_data = file_or_string
-        except IOError:
+        except OSError:
             # If it's not a file path and not a valid JSON string, raise error
             raise ValueError('Invalid input. Must be a file path or a valid JSON string.')
         json_data = json.loads(json_data)
@@ -191,7 +191,7 @@ class BaseChatTemplate:
         return ret
 
     @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
+    def match(cls, model_path: str) -> str | None:
         """Return the model_name that was registered to MODELS.
 
         Args:
@@ -225,7 +225,7 @@ class CogVLM(BaseChatTemplate):
                          **kwargs)
 
     @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
+    def match(cls, model_path: str) -> str | None:
         """Return the model_name that was registered to MODELS.
 
         Args:
@@ -270,7 +270,7 @@ class Vicuna(BaseChatTemplate):
         return super().messages2prompt(messages, sequence_start, **kwargs)[:-1]
 
     @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
+    def match(cls, model_path: str) -> str | None:
         """Return the model_name that was registered to MODELS.
 
         Args:
@@ -294,7 +294,7 @@ class Llavav1(Vicuna):
         super().__init__(meta_instruction=meta_instruction, **kwargs)
 
     @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
+    def match(cls, model_path: str) -> str | None:
         """Return the model_name that was registered to MODELS.
 
         Args:
@@ -339,7 +339,7 @@ class InternLMChat7B(BaseChatTemplate):
                          **kwargs)
 
     @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
+    def match(cls, model_path: str) -> str | None:
         """Return the model_name that was registered to MODELS.
 
         Args:
@@ -360,7 +360,7 @@ class Baichuan2(BaseChatTemplate):
         super().__init__(user=user, assistant=assistant, **kwargs)
 
     @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
+    def match(cls, model_path: str) -> str | None:
         """Return the model_name that was registered to MODELS.
 
         Args:
@@ -398,7 +398,7 @@ If a question does not make any sense, or is not factually coherent, explain why
                          **kwargs)
 
     @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
+    def match(cls, model_path: str) -> str | None:
         """Return the model_name that was registered to MODELS.
 
         Args:
@@ -443,7 +443,7 @@ class CodeLlama(Llama2):
         return prompt
 
     @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
+    def match(cls, model_path: str) -> str | None:
         """Return the model_name that was registered to MODELS.
 
         Args:
@@ -494,7 +494,7 @@ class ChatGLM2(BaseChatTemplate):
         return ret
 
     @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
+    def match(cls, model_path: str) -> str | None:
         """Return the model_name that was registered to MODELS.
 
         Args:
@@ -517,7 +517,7 @@ class MistralChat(BaseChatTemplate):
         super().__init__(user=user, eoh=eoh, eoa=eoa, **kwargs)
 
     @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
+    def match(cls, model_path: str) -> str | None:
         """Return the model_name that was registered to MODELS.
 
         Args:
@@ -548,7 +548,7 @@ class InternVLZH(BaseChatTemplate):
         return super().messages2prompt(messages, sequence_start, **kwargs)[:-1]
 
     @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
+    def match(cls, model_path: str) -> str | None:
         """Return the model_name that was registered to MODELS.
 
         Args:
@@ -590,7 +590,7 @@ class DeepseekVL(BaseChatTemplate):
         return super().messages2prompt(messages, sequence_start, **kwargs)[:-1]
 
     @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
+    def match(cls, model_path: str) -> str | None:
         """Return the model_name that was registered to MODELS.
 
         Args:
@@ -629,7 +629,7 @@ class DeepseekVL2(BaseChatTemplate):
         return super().messages2prompt(messages, sequence_start, **kwargs)[:-1]
 
     @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
+    def match(cls, model_path: str) -> str | None:
         """Return the model_name that was registered to MODELS.
 
         Args:
@@ -664,7 +664,7 @@ class ChatmlDirect(BaseChatTemplate):
                          **kwargs)
 
     @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
+    def match(cls, model_path: str) -> str | None:
         """Return the model_name that was registered to MODELS.
 
         Args:
@@ -787,7 +787,7 @@ class HFChatTemplate(BaseChatTemplate):
             return None, None, [], self.tokenizer.bos_token or ''
 
     @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
+    def match(cls, model_path: str) -> str | None:
         try:
             cls(model_path)
         except Exception:
@@ -795,7 +795,7 @@ class HFChatTemplate(BaseChatTemplate):
         return True
 
 
-def get_chat_template(model_path: str, config: Optional[ChatTemplateConfig] = None) -> BaseChatTemplate:
+def get_chat_template(model_path: str, config: ChatTemplateConfig | None = None) -> BaseChatTemplate:
     """Get the chat template for the model.
 
     Args:

@@ -2,7 +2,6 @@
 
 import warnings
 from contextlib import contextmanager
-from typing import Dict, List
 
 import torch
 from transformers import AutoConfig, AutoModelForCausalLM
@@ -125,12 +124,12 @@ class InternVLLlavaVisionModel(LlavaVisionModel):
         self.vision_tower = model.model.vision_tower.eval()
         self.mm_projector = model.model.mm_projector.eval()
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refer to `super().preprocess() for spec."""
         return super().preprocess(messages)
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 

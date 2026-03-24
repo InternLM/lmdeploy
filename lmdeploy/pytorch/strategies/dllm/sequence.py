@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 from torch import Tensor
@@ -9,14 +9,22 @@ from torch import Tensor
 from lmdeploy.pytorch import consts
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.pytorch.engine.model_agent import BatchedOutputs
-from lmdeploy.pytorch.messages import (HistoryTokenIds, InputEmbeddings, MessageStatus, MultiModalInputs, SamplingParam,
-                                       SchedulerSession, UpdateTokenMode, _to_ndarray)
+from lmdeploy.pytorch.messages import (
+    HistoryTokenIds,
+    InputEmbeddings,
+    MessageStatus,
+    MultiModalInputs,
+    SamplingParam,
+    SchedulerSession,
+    UpdateTokenMode,
+    _to_ndarray,
+)
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 
 from ..ar.sequence import SchedulerSequenceDefault
 from ..base.sequence import SequenceStrategy
 
-SeqList = List['SchedulerSequenceDLLM']
+SeqList = list['SchedulerSequenceDLLM']
 
 DLLM_MASKED = consts.DLLM_MASKED
 DLLM_UNMASKED = consts.DLLM_UNMASKED
@@ -165,8 +173,8 @@ class SchedulerSequenceDLLM(SchedulerSequenceDefault):
     def update_token_ids(self,
                          token_ids: Tensor,
                          multimodals: MultiModalInputs = None,
-                         embeddings: List[InputEmbeddings] = None,
-                         model_meta: Dict[str, Any] = None,
+                         embeddings: list[InputEmbeddings] = None,
+                         model_meta: dict[str, Any] = None,
                          dllm_mask: Tensor = None,
                          mode: UpdateTokenMode = UpdateTokenMode.INPUTS,
                          **kwargs):
@@ -216,7 +224,7 @@ class DLLMSequenceStrategy(SequenceStrategy):
                       session: 'SchedulerSession',
                       sampling_param: 'SamplingParam' = None,
                       adapter_name: str = None,
-                      migration_request: Optional[MigrationRequest] = None,
+                      migration_request: MigrationRequest | None = None,
                       resp_cache: bool = False,
                       preserve_cache: bool = False) -> 'SchedulerSequenceDLLM':
         """Make sequence."""
