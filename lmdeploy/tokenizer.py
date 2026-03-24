@@ -2,9 +2,9 @@
 import json
 import os.path as osp
 from collections import deque
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial
-from typing import List, Optional, Sequence, Tuple, Union
 
 from lmdeploy.utils import get_logger
 
@@ -14,24 +14,24 @@ from lmdeploy.utils import get_logger
 
 @dataclass
 class DetokenizeState:
-    """A state collection of incrementally detekenization.
+    """A state collection for incremental detokenization.
 
     Args:
-        ids_offset (int): offset to all input ids. In LMDeploy, the output
+        ids_offset: offset to all input ids. In LMDeploy, the output
             ids length is not one by one. It could be random by random.
-        prev_tokens (List[str] | None): for incrementally decoding.
+        prev_tokens: for incrementally decoding.
             Default to None, which means the first round.
-        prefix_offset (int): the start index of tokens to be converted to
+        prefix_offset: the start index of tokens to be converted to
             string (prev + new tokens). Default to 0 for the first round.
-        read_offset (int): the end index of tokens to be converted to
+        read_offset: the end index of tokens to be converted to
             string (prev token). Default to 0 for the first round.
     """
     ids_offset: int = 0
-    prev_tokens: Optional[List[str]] = None
+    prev_tokens: list[str] | None = None
     prefix_offset: int = 0
     read_offset: int = 0
 
-    def as_tuple(self) -> Tuple:
+    def as_tuple(self) -> tuple:
         """Return a tuple of states."""
         return (self.ids_offset, self.prev_tokens, self.prefix_offset, self.read_offset)
 
@@ -40,7 +40,7 @@ class HuggingFaceTokenizer:
     """A wrapper of transformers' AutoTokenizer.
 
     Args:
-        model_dir (str): the directory of the tokenizer model
+        model_dir: the directory of the tokenizer model.
     """
 
     def __init__(self, model_dir: str):
@@ -53,7 +53,7 @@ class HuggingFaceTokenizer:
         if self.model.eos_token_id is None:
             generation_config_file = osp.join(model_dir, 'generation_config.json')
             if osp.exists(generation_config_file):
-                with open(generation_config_file, 'r') as f:
+                with open(generation_config_file) as f:
                     cfg = json.load(f)
                     self.model.eos_token_id = cfg['eos_token_id']
             elif hasattr(self.model, 'eod_id'):  # Qwen remote
@@ -129,7 +129,7 @@ class HuggingFaceTokenizer:
             }
         return self._prefix_space_tokens
 
-    def _maybe_add_prefix_space(self, tokens: List[int], decoded: str):
+    def _maybe_add_prefix_space(self, tokens: list[int], decoded: str):
         """Maybe add prefix space for incremental decoding."""
         if len(tokens) and not decoded.startswith(' ') and\
                 tokens[0] in self.prefix_space_tokens:
@@ -193,13 +193,13 @@ class HuggingFaceTokenizer:
         """Tokenize a prompt.
 
         Args:
-            s (str): a prompt
-            add_bos (bool): Whether to add `bos` token id when encoding
-                the prompt
-            add_special_tokens (bool): Whether or not to add special tokens
-                when encoding the prompt
+            s: a prompt.
+            add_bos: Whether to add ``bos`` token id when encoding the prompt.
+            add_special_tokens: Whether or not to add special tokens
+                when encoding the prompt.
+
         Returns:
-            list[int]: token ids
+            list[int]: token ids.
         """
         encoded = self.model.encode(s, add_special_tokens=add_special_tokens, **kwargs)
         if not add_bos:
@@ -208,17 +208,18 @@ class HuggingFaceTokenizer:
                 encoded = encoded[1:]
         return encoded
 
-    def decode(self, t: Sequence[int], offset: Optional[int] = None, skip_special_tokens: bool = True):
+    def decode(self, t: Sequence[int], offset: int | None = None, skip_special_tokens: bool = True):
         """De-tokenize.
 
         Args:
-            t (List[int]): a list of token ids
-            offset (int): for incrementally decoding. Default to None, which
+            t: a list of token ids.
+            offset: for incrementally decoding. Default to None, which
                 means not applied.
-            skip_special_tokens (bool): Whether or not to remove special
+            skip_special_tokens: Whether or not to remove special
                 tokens in the decoding.
+
         Returns:
-            str: text of decoding tokens
+            str: text of decoding tokens.
         """
         t = t[offset:]
         out_string = self.model.decode(t, skip_special_tokens=skip_special_tokens)
@@ -232,7 +233,7 @@ class HuggingFaceTokenizer:
     @staticmethod
     def _convert_tokens_to_string_with_added_encoders(
         tokenizer,
-        output_tokens: List[str],
+        output_tokens: list[str],
         skip_special_tokens: bool,
         spaces_between_special_tokens: bool,
     ) -> str:
@@ -272,18 +273,18 @@ class HuggingFaceTokenizer:
         """Incrementally detokenize the input indexes.
 
         Args:
-            all_input_ids (List[int]): a list of token ids. Expected to be
+            all_input_ids: a list of token ids. Expected to be
                 different sections of a long sequence.
-            state (DetokenizeState): an instance of DetokenizeState. Consists
+            state: an instance of DetokenizeState. Consists
                 of incrementally decoding states.
-            skip_special_tokens (bool): Whether or not to remove special tokens
+            skip_special_tokens: Whether or not to remove special tokens
                 in the decoding. Default to be True.
-            spaces_between_special_tokens (bool): Whether or not to add spaces
+            spaces_between_special_tokens: Whether or not to add spaces
                 between special tokens. Default to be True.
+
         Returns:
-            str: decoding output string of the current round.
-            state (DetokenizeState): an instance of DetokenizeState. Consists
-                of incrementally decoding states.
+            tuple[str, DetokenizeState]: decoding output string of the current
+                round and the updated DetokenizeState.
         """
         tokenizer = self.model
         ids_offset, prev_tokens, prefix_offset, read_offset = state.as_tuple()
@@ -335,13 +336,14 @@ class HuggingFaceTokenizer:
 
         return new_text, DetokenizeState(len(all_input_ids), prev_tokens, prefix_offset, read_offset)
 
-    def __call__(self, s: Union[str, Sequence[str]]):
+    def __call__(self, s: str | Sequence[str]):
         """Tokenize prompts.
 
         Args:
-            s (str): prompts
+            s: prompts.
+
         Returns:
-            list[int]: token ids
+            list[int]: token ids.
         """
         add_special_tokens = False
         return self.model(s, add_special_tokens=add_special_tokens)
@@ -351,7 +353,7 @@ class ChatGLM4Tokenizer(HuggingFaceTokenizer):
     """Tokenizer of GLM4."""
 
     def __init__(self, model_path):
-        super(ChatGLM4Tokenizer, self).__init__(model_path)
+        super().__init__(model_path)
         original_pad = self.model._pad
 
         def __pad(*args, **kwargs):
@@ -366,14 +368,14 @@ class ChatGLM4Tokenizer(HuggingFaceTokenizer):
         """Tokenize a prompt."""
         # ChtGLM4Tokenizer hardcode `add_speical_tokens=False` when tokenizing
         # a prompt. Refer to https://huggingface.co/THUDM/glm-4-9b-chat/blob/main/tokenization_chatglm.py#L227 # noqa E501
-        return super(ChatGLM4Tokenizer, self).encode(s, add_bos, add_special_tokens=False, **kwargs)
+        return super().encode(s, add_bos, add_special_tokens=False, **kwargs)
 
 
 class ChatGLMTokenizer(HuggingFaceTokenizer):
     """Tokenizer of GLM2."""
 
     def __init__(self, model_path):
-        super(ChatGLMTokenizer, self).__init__(model_path)
+        super().__init__(model_path)
         original_pad = self.model._pad
 
         def __pad(*args, **kwargs):
@@ -389,7 +391,7 @@ class GptOssTokenizer(HuggingFaceTokenizer):
     """Tokenizer of GPT-OSS."""
 
     def __init__(self, model_dir: str):
-        super(GptOssTokenizer, self).__init__(model_dir)
+        super().__init__(model_dir)
         from openai_harmony import HarmonyEncodingName, Role, StreamableParser, load_harmony_encoding
         encoding = load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)
         self.role = Role.ASSISTANT
@@ -418,7 +420,7 @@ class Tokenizer:
     """Tokenize prompts or de-tokenize tokens into texts.
 
     Args:
-        model_path (str): the path of the tokenizer model
+        model_path: the path of the tokenizer model.
     """
 
     def __init__(self, model_path: str):
@@ -464,13 +466,13 @@ class Tokenizer:
         """Tokenize a prompt.
 
         Args:
-            s (str): a prompt
-            add_bos (bool): Whether to add `bos` token id when encoding
-                the prompt
-            add_special_tokens (bool): Whether or not to add special tokens
-                when encoding the prompt
+            s: a prompt.
+            add_bos: Whether to add ``bos`` token id when encoding the prompt.
+            add_special_tokens: Whether or not to add special tokens
+                when encoding the prompt.
+
         Returns:
-            list[int]: token ids
+            list[int]: token ids.
         """
         encoded = self.model.encode(s, add_bos, add_special_tokens, **kwargs)
         if encoded[:2] == [self.bos_token_id] * 2:
@@ -483,19 +485,20 @@ class Tokenizer:
     def decode(
         self,
         t: Sequence[int],
-        offset: Optional[int] = None,
+        offset: int | None = None,
         skip_special_tokens: bool = True,
     ):
         """De-tokenize.
 
         Args:
-            t (List[int]): a list of token ids
-            offset (int): for incrementally decoding. Default to None, which
+            t: a list of token ids.
+            offset: for incrementally decoding. Default to None, which
                 means not applied.
-            skip_special_tokens (bool): Whether or not to remove special
+            skip_special_tokens: Whether or not to remove special
                 tokens in the decoding.
+
         Returns:
-            str: text of decoding tokens
+            str: text of decoding tokens.
         """
         return self.model.decode(t, offset, skip_special_tokens)
 
@@ -507,31 +510,32 @@ class Tokenizer:
         """Incrementally detokenize the input indexes.
 
         Args:
-            all_input_ids (List[int]): a list of token ids. Expected to be
+            all_input_ids: a list of token ids. Expected to be
                 different sections of a long sequence.
-            state (DetokenizeState): an instance of DetokenizeState. Consists
+            state: an instance of DetokenizeState. Consists
                 of incrementally decoding states.
-            skip_special_tokens (bool): Whether or not to remove special tokens
+            skip_special_tokens: Whether or not to remove special tokens
                 in the decoding. Default to be True.
-            spaces_between_special_tokens (bool): Whether or not to add spaces
+            spaces_between_special_tokens: Whether or not to add spaces
                 between special tokens. Default to be True.
+
         Returns:
-            str: decoding output string of the current round.
-            state (DetokenizeState): an instance of DetokenizeState. Consists
-                of incrementally decoding states.
+            tuple[str, DetokenizeState]: decoding output string of the current
+                round and the updated DetokenizeState.
         """
         return self.model.detokenize_incrementally(all_input_ids,
                                                    state=state,
                                                    skip_special_tokens=skip_special_tokens,
                                                    spaces_between_special_tokens=spaces_between_special_tokens)
 
-    def __call__(self, s: Union[str, Sequence[str]]):
+    def __call__(self, s: str | Sequence[str]):
         """Tokenize prompts.
 
         Args:
-            s (str): prompts
+            s: prompts.
+
         Returns:
-            list[int]: token ids
+            list[int]: token ids.
         """
         return self.model(s)
 

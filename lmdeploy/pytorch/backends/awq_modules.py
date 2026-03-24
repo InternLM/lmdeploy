@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
-from typing import Optional
 
 import torch
 
@@ -12,7 +11,7 @@ class LinearW4A16Impl(ABC):
                        qweight: torch.Tensor,
                        scales: torch.Tensor,
                        qzeros: torch.Tensor,
-                       bias: Optional[torch.Tensor] = None):
+                       bias: torch.Tensor | None = None):
         """Update weights."""
         return qweight, scales, qzeros, bias
 
@@ -20,9 +19,9 @@ class LinearW4A16Impl(ABC):
     def forward(self,
                 x,
                 weight: torch.Tensor,
-                bias: Optional[torch.Tensor] = None,
+                bias: torch.Tensor | None = None,
                 all_reduce: bool = False,
-                group: Optional[torch.distributed.ProcessGroup] = None):
+                group: torch.distributed.ProcessGroup | None = None):
         """forward."""
         raise NotImplementedError
 

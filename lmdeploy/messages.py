@@ -1,8 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 import torch
 from pydantic.dataclasses import dataclass as pydantic_dataclass
@@ -50,10 +51,10 @@ class GenerationConfig:
         random_seed: Seed used when sampling a token
         stop_words: Words that stop generating further tokens
         bad_words: Words that the engine will never generate
-        stop_token_ids: List of tokens that stop the generation
+        stop_token_ids: list of tokens that stop the generation
             when they are generated. The returned output will not contain
             the stop tokens.
-        bad_token_ids: List of tokens that the engine will never
+        bad_token_ids: list of tokens that the engine will never
             generate.
         min_new_tokens: The minimum numbers of tokens to generate,
             ignoring the number of tokens in the prompt.
@@ -223,7 +224,7 @@ class GenerationConfig:
 
     def __post_init__(self):
         """Check input validation."""
-        assert type(self.n) == int and self.n > 0, 'n is not a positive integer'
+        assert type(self.n) is int and self.n > 0, 'n is not a positive integer'
         assert self.top_p >= 0 and self.top_p <= 1  # [0, 1]
         assert self.top_k >= 0, 'top_k can not be a negative integer'
         assert self.temperature >= 0 and self.temperature <= 2  # [0,2]
@@ -243,10 +244,15 @@ class TurbomindEngineConfig:
             The `auto` option will use FP16 precision for FP32 and FP16
             models, and BF16 precision for BF16 models.
         model_format: the layout of the deployed model. It can be one
-            of the following values [hf, awq, gptq],`hf` meaning
-            huggingface model(.bin, .safetensors), `awq` and `gptq` meaning
-            the quantized model by AWQ and GPTQ, respectively. If it is not
-            specified, i.e. None, it will be extracted from the input model
+            of the following values [hf, awq, gptq, compressed-tensors,
+            fp8, mxfp4]. `hf` means a Hugging Face model (.bin,
+            .safetensors), `awq` and `gptq` mean grouped 4-bit
+            weight-only checkpoints, `compressed-tensors` means
+            pack-quantized grouped int4 checkpoints and is usually
+            auto-detected from the input model config, `fp8` means
+            blocked fp8 checkpoints, and `mxfp4` means MXFP4 expert
+            weights. If it is not specified, i.e. None, it will be
+            extracted from the input model
         tp: the number of GPU cards used in tensor parallelism,
             default to 1
         session_len: the max session length of a sequence, default to
@@ -521,16 +527,13 @@ class Response:
         generate_token_len: the response token length.
         input_token_len: the input prompt token length. Note that it may
             contains chat template part.
-        session_id: the id for running the session.
         finish_reason: the reason the model stopped
             generating tokens. This will be 'stop' if the model hit a natural
             stop point or a provided stop sequence, 'length' if the maximum
             number of tokens specified in the request was reached.
-        token_ids:: the output token ids.
-        logprobs:: the top logprobs for each output
-            position.
-        index: it refers to the position index of the input request
-            batch
+        token_ids: the output token ids.
+        logprobs: the top logprobs for each output position.
+        index: it refers to the position index of the input request batch.
     """
     text: str
     generate_token_len: int

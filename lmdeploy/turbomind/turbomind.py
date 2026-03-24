@@ -13,7 +13,7 @@ from dataclasses import asdict
 from functools import partial
 from multiprocessing.reduction import ForkingPickler
 from queue import Queue
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import pybase64
 import torch
@@ -41,7 +41,7 @@ logger = get_logger('lmdeploy')
 MAX_LOGPROBS = 1024
 
 
-def _construct_stop_or_bad_words(seqs: List[List[int]] = None):
+def _construct_stop_or_bad_words(seqs: list[list[int]] = None):
     """Build packed (token_ids, offsets) for TurboMind stop/bad words.
 
     Each inner list is a token ID sequence. The offset array stores cumulative lengths so the C++ kernel knows where
@@ -49,8 +49,8 @@ def _construct_stop_or_bad_words(seqs: List[List[int]] = None):
     """
     if not seqs:
         return None
-    tokens: List[int] = []
-    offsets: List[int] = []
+    tokens: list[int] = []
+    offsets: list[int] = []
     for seq in seqs:
         tokens.extend(seq)
         offsets.append(len(tokens))
@@ -299,7 +299,7 @@ class TurboMind:
             for _ in e.map(self.model_comm.sleep, range(self.gpu_count), [level] * self.gpu_count):
                 pass
 
-    def wakeup(self, tags: Optional[list[str]] = None):
+    def wakeup(self, tags: list[str] | None = None):
         """Wakeup the model."""
         if tags is None:
             tags = ['weights', 'kv_cache']
@@ -319,7 +319,7 @@ class TurboMind:
         def _construct(item):
             """ Deserialize torch.Tensor
             Args:
-                item (Tuple[Callable, Tuple]): the return of reduce_tensor
+                item (tuple[Callable, tuple]): the return of reduce_tensor
             """
             func, args = item
             args = list(args)
@@ -432,7 +432,7 @@ def _get_last_hidden_state(outputs, offset: int):
 
 
 def _get_logprobs_impl(logprob_vals: torch.Tensor, logprob_idxs: torch.Tensor, logprob_nums: torch.Tensor,
-                       output_ids: List[int], logprobs: int, offset: int):
+                       output_ids: list[int], logprobs: int, offset: int):
     """Get logprob of each generated token.
 
     Args:
@@ -440,7 +440,7 @@ def _get_logprobs_impl(logprob_vals: torch.Tensor, logprob_idxs: torch.Tensor, l
             1024 is the max_logprobs that turbomind engine can output
         logprob_idxs (torch.Tensor): shape (max_new_tokens, 1024)
         logprob_nums (torch.Tensor): shape (max_new_tokens,)
-        output_ids (List[int]): new generated token ids
+        output_ids (list[int]): new generated token ids
         logprobs (int): top n logprobs to return
         offset (int): offset to index logprob_vals, logprob_idxs and logprob_nums.
             It indicates where to start getting logprobs for the current generated tokens `output_ids`
@@ -570,7 +570,7 @@ class TurboMindInstance:
         model_inst = self.tm_model.model_comm.create_request()
         return model_inst
 
-    def _get_extra_output_processors(self, outputs: Dict[str, torch.Tensor], gen_config: GenerationConfig,
+    def _get_extra_output_processors(self, outputs: dict[str, torch.Tensor], gen_config: GenerationConfig,
                                      input_len: int, metrics: '_tm.RequestMetrics'):
 
         def _get_offset(type):
@@ -594,8 +594,8 @@ class TurboMindInstance:
         if not input_embeddings:
             return None, None
 
-        assert isinstance(input_embeddings, List)
-        assert isinstance(input_embedding_ranges, List)
+        assert isinstance(input_embeddings, list)
+        assert isinstance(input_embedding_ranges, list)
         assert len(input_embeddings) == len(input_embedding_ranges)
 
         length = sum([x.shape[0] for x in input_embeddings])
@@ -613,7 +613,7 @@ class TurboMindInstance:
 
         return values, ranges
 
-    def prepare_mrope(self, input_meta: Dict[str, Any], input_len: int):
+    def prepare_mrope(self, input_meta: dict[str, Any], input_len: int):
         mrope_position_ids = input_meta['mrope_position_ids']
         mrope_position_delta = input_meta['mrope_position_delta']
         assert mrope_position_ids.size(-1) == input_len
@@ -625,7 +625,7 @@ class TurboMindInstance:
                        gen_config: GenerationConfig,
                        input_embeddings=None,
                        input_embedding_ranges=None,
-                       input_meta: Dict[str, Any] = None):
+                       input_meta: dict[str, Any] = None):
         """Convert inputs format."""
         assert isinstance(input_ids, Sequence)
 
@@ -669,7 +669,7 @@ class TurboMindInstance:
                                  input_ids,
                                  input_embeddings=None,
                                  input_embedding_ranges=None,
-                                 input_meta: Dict[str, Any] = None,
+                                 input_meta: dict[str, Any] = None,
                                  sequence_start: bool = True,
                                  sequence_end: bool = False,
                                  step=0,
@@ -681,8 +681,8 @@ class TurboMindInstance:
         Args:
             session_id (int): the id of a session
             input_ids (numpy.ndarray): the token ids of a prompt
-            input_embeddings (List[numpy.ndarray]): embeddings features
-            input_embedding_ranges (List[Tuple[int,int]]): the begin/end
+            input_embeddings (list[numpy.ndarray]): embeddings features
+            input_embedding_ranges (list[tuple[int,int]]): the begin/end
               offsets of input_embeddings to input_ids
             sequence_start (bool): indicator for starting a sequence
             sequence_end (bool): indicator for ending a sequence

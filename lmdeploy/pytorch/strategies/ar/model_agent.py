@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import torch
 import torch.distributed as dist
@@ -14,7 +14,7 @@ from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 
 from ..base.model_agent import ExtraInputs, ExtraOutputs, ModelAgentStrategy, StoppingCriteria
 
-SeqList = List[SchedulerSequence]
+SeqList = list[SchedulerSequence]
 
 
 def get_model_inputs_next_decoding(inputs: ModelInputs, input_ids: torch.Tensor, max_q_seqlen: int,
@@ -25,6 +25,12 @@ def get_model_inputs_next_decoding(inputs: ModelInputs, input_ids: torch.Tensor,
     state_offsets = inputs.state_offsets
     if state_offsets is not None:
         state_offsets = state_offsets.clone()
+
+    # mrope
+    mrope_pos_ids = inputs.mrope_pos_ids
+    if mrope_pos_ids is not None:
+        index = inputs.seq_length.cumsum(0) - 1
+        mrope_pos_ids = mrope_pos_ids[:, index] + 1
     return ModelInputs(
         input_ids=input_ids,
         seq_length=torch.full_like(inputs.seq_length, max_q_seqlen),
@@ -38,6 +44,7 @@ def get_model_inputs_next_decoding(inputs: ModelInputs, input_ids: torch.Tensor,
         local_adapter_ids=inputs.local_adapter_ids,
         model_metas=model_metas,
         state_offsets=state_offsets,
+        mrope_pos_ids=mrope_pos_ids,
     )
 
 
@@ -58,7 +65,7 @@ class ARStoppingCriteria(StoppingCriteria):
     # Maintained across steps so that multi-token stop sequences spanning two
     # decode steps are detected without relying on the (pipelined) generated_ids
     # from SamplingInputs, which lags one step behind.
-    stop_tail: Optional[torch.Tensor] = None
+    stop_tail: torch.Tensor | None = None
 
     def clone(self):
         """clone."""
@@ -99,9 +106,9 @@ class ARStoppingCriteria(StoppingCriteria):
     def step(self,
              token_ids: torch.Tensor,
              stop_words: torch.Tensor,
-             inputs: Optional[ModelInputs] = None,
-             extra_inputs: Optional[ARExtraInputs] = None,
-             stop_word_lens: Optional[torch.Tensor] = None):
+             inputs: ModelInputs | None = None,
+             extra_inputs: ARExtraInputs | None = None,
+             stop_word_lens: torch.Tensor | None = None):
         """Check whether to stop generation."""
         num_appendable_ids = self.num_appendable_ids - 1
         stopped = num_appendable_ids <= 0
@@ -215,7 +222,7 @@ class ARStoppingCriteria(StoppingCriteria):
 
         return sw_stopped, stop_pos, new_tail
 
-    def _get_prev_tail(self, batch_size: int, tail_len: int, device: torch.device) -> Optional[torch.Tensor]:
+    def _get_prev_tail(self, batch_size: int, tail_len: int, device: torch.device) -> torch.Tensor | None:
         """Return the previous tail padded/trimmed to ``tail_len``."""
         if tail_len <= 0:
             return None
@@ -231,7 +238,7 @@ class ARStoppingCriteria(StoppingCriteria):
 
     @staticmethod
     def _build_new_tail(history: torch.Tensor, tail_len: int, sw_stopped: torch.Tensor, best_end: torch.Tensor,
-                        token_ids: torch.Tensor) -> Optional[torch.Tensor]:
+                        token_ids: torch.Tensor) -> torch.Tensor | None:
         """Gather the last ``tail_len`` valid tokens from *history*."""
         if tail_len <= 0:
             return None
@@ -259,7 +266,7 @@ class ARModelAgentStrategy(ModelAgentStrategy):
         return inputs[last_idx]
 
     def slice_extra_inputs(self, extra_inputs: ARExtraInputs, model_inputs: ModelInputs,
-                           model_outputs: Dict[str, torch.Tensor], **kwargs) -> ARExtraInputs:
+                           model_outputs: dict[str, torch.Tensor], **kwargs) -> ARExtraInputs:
         """Slice outputs."""
         return extra_inputs
 
@@ -299,7 +306,7 @@ class ARModelAgentStrategy(ModelAgentStrategy):
         next_token_ids: torch.Tensor,
         model_metas: Any,
         extra_outputs: ARExtraOutputs,
-    ) -> Tuple['ModelInputs', ARExtraInputs]:
+    ) -> tuple['ModelInputs', ARExtraInputs]:
         """Step next decoding."""
         inputs = get_model_inputs_next_decoding(model_inputs, next_token_ids, max_q_seqlen=1, model_metas=model_metas)
         return inputs, extra_inputs

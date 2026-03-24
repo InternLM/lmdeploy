@@ -2,7 +2,7 @@
 import enum
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
@@ -24,8 +24,8 @@ if TYPE_CHECKING:
 logger = get_logger('lmdeploy')
 
 # vlm input type from pipeline
-InputEmbeddingType = List[np.ndarray]
-InputEmbeddingRangeType = List[List[int]]
+InputEmbeddingType = list[np.ndarray]
+InputEmbeddingRangeType = list[list[int]]
 
 
 @dataclass
@@ -52,12 +52,12 @@ class SamplingParam:
     repetition_penalty: float = 1.0
     ignore_eos: bool = False
     random_seed: int = None
-    stop_words: List[List[int]] = field(default_factory=list)
-    bad_words: List[int] = field(default_factory=list)
+    stop_words: list[list[int]] = field(default_factory=list)
+    bad_words: list[int] = field(default_factory=list)
     max_new_tokens: int = 512
     min_new_tokens: int = 0
     response_format: None | str = None
-    logits_processors: None | List[LogitsProcessor] = None
+    logits_processors: None | list[LogitsProcessor] = None
     out_logits: bool = False
     out_last_hidden_states: bool = False
     num_logprobs: int = -1
@@ -177,7 +177,7 @@ class MessageStatus(enum.Enum):
     MIGRATION_DONE = enum.auto()
 
 
-SeqMap = Dict[int, 'SchedulerSequence']
+SeqMap = dict[int, 'SchedulerSequence']
 
 
 @dataclass
@@ -186,6 +186,7 @@ class SequenceMeta:
     block_size: int
     strategy: 'SequenceStrategy' = None
     sampling_strategy: 'SamplingStrategy' = None
+    use_mrope: bool = False
 
 
 class SequenceManager:
@@ -193,7 +194,7 @@ class SequenceManager:
 
     def __init__(self, seq_meta: SequenceMeta) -> None:
         self._seq_map: SeqMap = dict()
-        self._status_seq_map: Dict[MessageStatus, SeqMap] = defaultdict(dict)
+        self._status_seq_map: dict[MessageStatus, SeqMap] = defaultdict(dict)
 
         self.seq_meta = seq_meta
         self._seq_count = 0
@@ -271,7 +272,7 @@ class SchedulerSession:
                      sampling_param: SamplingParam = None,
                      adapter_name: str = None,
                      multimodals: MultiModalInputs = None,
-                     input_embeddings: List[InputEmbeddings] = None,
+                     input_embeddings: list[InputEmbeddings] = None,
                      migration_request: None | MigrationRequest = None,
                      resp_cache: bool = False,
                      preserve_cache: bool = False) -> 'SchedulerSequence':
@@ -329,12 +330,12 @@ def _round_up(x, n):
 class HistoryEmbeddings:
     """History embeddings."""
 
-    def __init__(self, embeddings: List[InputEmbeddings] = None):
-        self._embeddings: List[InputEmbeddings] = []
+    def __init__(self, embeddings: list[InputEmbeddings] = None):
+        self._embeddings: list[InputEmbeddings] = []
         if embeddings is not None:
             self._embeddings.extend(embeddings)
 
-    def append(self, embeddings: List[InputEmbeddings]):
+    def append(self, embeddings: list[InputEmbeddings]):
         self._embeddings.extend(embeddings)
 
     def clone(self):
@@ -542,6 +543,25 @@ class HistoryLogits(_HistoryDataBase):
         return ret
 
 
+class HistoryMropePosIds(_HistoryDataBase):
+    """History mrope position ids."""
+    ALLOC_SIZE = 64
+
+    def __init__(self, pos_ids: np.ndarray | None = None, dtype: np.dtype = np.int64):
+        super().__init__(pos_ids, dtype)
+
+    def _create_empty_array(self, dtype):
+        """Create empty array.
+
+        Override in subclass for different shapes.
+        """
+        return np.empty((self.ALLOC_SIZE, 3), dtype=dtype)
+
+    def _get_pad_width(self, reserve_size: int):
+        """Get pad width for multi-dimensional array."""
+        return ((0, reserve_size), (0, 0))
+
+
 class HistoryMultiModals:
 
     def __init__(self, multimodals: MultiModalInputs = None):
@@ -611,7 +631,7 @@ class SchedulerSequence:
     output_start_pos: int = 0
     meta: Any = None
     num_ignored_history: int = 0
-    model_meta: Dict[str, Any] = None
+    model_meta: dict[str, Any] = None
 
     # For Disaggregation
     migration_request: None | MigrationRequest = None
@@ -619,13 +639,16 @@ class SchedulerSequence:
     preserve_cache: bool = False
 
     # For logging
-    engine_events: List[EngineEvent] = field(default_factory=list)
+    engine_events: list[EngineEvent] = field(default_factory=list)
 
     # for router replay
     all_routed_experts: HistoryRouterExperts = field(default_factory=HistoryRouterExperts)
 
     # logits
     all_logits: HistoryLogits = field(default_factory=HistoryLogits)
+
+    # mrope
+    history_mrope_pos_ids: HistoryMropePosIds = field(default_factory=HistoryMropePosIds)
 
     def __post_init__(self):
         """Post init."""
@@ -666,7 +689,7 @@ class SchedulerSequence:
         return self.history_cache[start:end]
 
     @property
-    def input_embeddings(self) -> List[InputEmbeddings]:
+    def input_embeddings(self) -> list[InputEmbeddings]:
         """Get current embeddings."""
         start = self.history_image_num
         end = start + self._num_images
@@ -766,6 +789,13 @@ class SchedulerSequence:
         """Get logits."""
         return self.all_logits.get_logits()
 
+    @property
+    def mrope_pos_ids(self):
+        """Get mrope pos ids."""
+        start = self.num_history_ids
+        end = start + self._num_token_ids
+        return self.history_mrope_pos_ids[start:end]
+
     def append_logits(self, logits: Tensor | np.ndarray):
         """Append logits."""
         if not self.return_logits:
@@ -790,7 +820,7 @@ class SchedulerSequence:
     ) -> None:
         self.engine_events.append(EngineEvent.new_event(event_type, timestamp))
 
-    def _update_embeddings(self, embeddings: List[InputEmbeddings]):
+    def _update_embeddings(self, embeddings: list[InputEmbeddings]):
         """Update input embeddings."""
         self._num_history_images += self._num_images
         if embeddings is None:
@@ -807,11 +837,63 @@ class SchedulerSequence:
         multimodals = HistoryMultiModals.update_multimodals(multimodals, self.num_valid_ids)
         self.history_multimodals.add_inputs(multimodals)
 
+    def _update_mrope_pos_ids(self):
+        """Update mrope pos ids."""
+        if not self._seq_meta.use_mrope:
+            return
+
+        num_rope_pos = len(self.history_mrope_pos_ids)
+        num_appends = self.num_all_ids - num_rope_pos
+
+        if num_appends == 0:
+            return
+
+        if num_rope_pos == 0:
+            next_pos = 0
+        else:
+            next_pos = self.history_mrope_pos_ids[-1].max() + 1
+
+        multimodals = self.history_multimodals.get_datas(num_rope_pos, self.num_all_ids)
+        if multimodals is None or len(multimodals) == 0:
+            if num_appends == 1:
+                pos_ids = np.array([[next_pos] * 3], dtype=np.int64)
+            else:
+                pos_ids = np.arange(next_pos, next_pos + num_appends, dtype=np.int64)
+                pos_ids = pos_ids[:, None].repeat(3, axis=1)
+        else:
+            pos_ids = []
+            assert len(multimodals) == 1
+            modal_datas = list(multimodals.values())[0]
+            mm_offset = next_pos
+            for modal_data in modal_datas:
+                mm_start = modal_data.start + mm_offset
+
+                # tokens
+                if next_pos < mm_start:
+                    text_pos_ids = np.arange(next_pos, mm_start, dtype=np.int64)
+                    pos_ids.append(text_pos_ids[:, None].repeat(3, axis=1))
+
+                # imgs
+                mm_pos_ids = modal_data.mrope_pos_ids
+                assert mm_pos_ids is not None, (
+                    'MROPE position ids is required for multimodal inputs when use_mrope is True.')
+                new_pos = mm_pos_ids[-1].max() + 1
+                next_pos = mm_start + new_pos
+                mm_offset = mm_offset + new_pos - mm_pos_ids.shape[0]
+                pos_ids.append(mm_pos_ids + mm_start)
+
+            # add final text part
+            text_pos_ids = np.arange(next_pos, num_appends + mm_offset, dtype=np.int64)
+            pos_ids.append(text_pos_ids[:, None].repeat(3, axis=1))
+            pos_ids = np.concatenate(pos_ids, axis=0)
+
+        self.history_mrope_pos_ids.append(pos_ids)
+
     def update_token_ids(self,
                          token_ids: Tensor,
                          multimodals: MultiModalInputs = None,
-                         embeddings: List[InputEmbeddings] = None,
-                         model_meta: Dict[str, Any] = None,
+                         embeddings: list[InputEmbeddings] = None,
+                         model_meta: dict[str, Any] = None,
                          mode: UpdateTokenMode = UpdateTokenMode.INPUTS,
                          **kwargs):
         """Update token ids, old token ids will be added to history."""

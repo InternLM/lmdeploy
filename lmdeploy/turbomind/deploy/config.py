@@ -2,7 +2,6 @@
 import inspect
 import json
 from dataclasses import asdict, field, fields
-from typing import List
 
 # use pydantic.dataclasses.dataclass to check data type
 from pydantic.dataclasses import dataclass
@@ -55,11 +54,11 @@ class ModelConfig:
     # of token_embedding
     embedding_size: int = 0
     num_layer: int = None
-    inter_size: List[int] = None
+    inter_size: list[int] = None
     norm_eps: float = None
     attn_bias: int = 0
     mlp_bias: bool = False
-    window_size: List[int] = field(default_factory=list)
+    window_size: list[int] = field(default_factory=list)
     attn_sink: bool = False
     qk_norm: bool = False
     size_per_head: int = 128
@@ -73,7 +72,7 @@ class ModelConfig:
     attn_cp_size: int = 1
     mlp_tp_size: int = 1
     model_format: str = 'hf'
-    expert_num: List[int] = ()
+    expert_num: list[int] = field(default_factory=list)
     expert_router_bias: bool = False
     expert_inter_size: int = 0
     experts_per_token: int = 0
@@ -92,7 +91,7 @@ class ModelConfig:
     qk_rope_dim: int = 0
     v_head_dim: int = 0
     # Qwen 3.5
-    layer_types: List[str] = field(default_factory=list)
+    layer_types: list[str] = field(default_factory=list)
     linear_key_head_dim: int = 0
     linear_value_head_dim: int = 0
     linear_conv_kernel_dim: int = 0
@@ -102,7 +101,7 @@ class ModelConfig:
     # Per-layer expert weight type override: layer indices whose
     # MoE experts are unquantized (fp16) despite expert_weight_type=int4.
     # Populated from modules_to_not_convert patterns like 'model.layers.0.'.
-    unquantized_expert_layers: List[int] = field(default_factory=list)
+    unquantized_expert_layers: list[int] = field(default_factory=list)
     # tuning
     tune_layer_num: int = 1
 
@@ -127,7 +126,7 @@ class RopeParam:
     low_freq_factor: float = None
     high_freq_factor: float = None
     original_max_position_embeddings: int = None
-    mrope_section: List[int] = None
+    mrope_section: list[int] = None
 
 
 @dataclass

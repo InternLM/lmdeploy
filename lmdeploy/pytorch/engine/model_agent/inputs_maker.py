@@ -43,6 +43,9 @@ class DPForwardInputsMaker:
         self._ready_event = torch.cuda.Event()
         self._ready_event.record()
 
+        # other
+        self.make_dummy_meta = model_agent.make_dummy_meta
+
     def _make_dummy_forward_inputs(self):
         """Make dummy forward inputs."""
         is_decoding = self.cache_config.role != EngineRole.Prefill
@@ -52,7 +55,8 @@ class DPForwardInputsMaker:
         model_inputs = self.inputs_strategy.make_dummy(batch_size,
                                                        is_decoding,
                                                        device=self.device,
-                                                       vocab_size=self.model_config.vocab_size)
+                                                       vocab_size=self.model_config.vocab_size,
+                                                       meta=self.make_dummy_meta)
         forward_inputs = dict(inputs=model_inputs, )
         return forward_inputs
 

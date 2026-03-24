@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from pathlib import Path
-from typing import Literal, Union
+from typing import Literal
 
 import torch
 from torch import nn
@@ -76,7 +76,7 @@ HEAD_NAME_MAP = {
 
 
 def _prepare_for_calibrate(model: nn.Module,
-                           layer_type: Union[str, type],
+                           layer_type: str | type,
                            head_name: str = 'lm_head',
                            device: str = 'cuda',
                            prefix: str = '') -> None:
@@ -95,7 +95,7 @@ def _prepare_for_calibrate(model: nn.Module,
     ----------
     model : nn.Module
         The PyTorch model to prepare for calibration.
-    layer_type : Union[str, Type]
+    layer_type : str | type
         The type of the layer to be moved to CPU. Can be either a string of
         class name or the class type itself.
     head_name : str, optional

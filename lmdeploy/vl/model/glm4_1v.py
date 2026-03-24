@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict, List
 
 from transformers import AutoConfig
 
@@ -33,7 +32,7 @@ class GLM4_1_VisionModel(VisionModel):
     def build_model(self):
         raise NotImplementedError('turbomind has not supported glm4v yet')
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refer to `super().preprocess()` for spec."""
         images = self.collect_multimodal_items(messages)
         optional_keys = {'resized_height', 'resized_width', 'min_pixels', 'max_pixels'}

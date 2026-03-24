@@ -2,7 +2,6 @@
 import csv
 import os
 import time
-from typing import List
 
 import numpy as np
 
@@ -30,8 +29,8 @@ class Session:
 
 class Profiler:
 
-    def __init__(self, stream_output: bool, percentages: List[int]):
-        self.sessions: List[Session] = []
+    def __init__(self, stream_output: bool, percentages: list[int]):
+        self.sessions: list[Session] = []
         self.stream_output = stream_output
         self.percentages = percentages
 
@@ -47,11 +46,11 @@ class Profiler:
         self.elapsed_time = time.perf_counter() - self.t_start
 
     def compute_metrics(self):
-        self.ttfts: List[float] = []
-        self.tpots: List[float] = []
-        self.e2es: List[float] = []
-        self.itls: List[float] = []
-        self.tpts: List[int] = []
+        self.ttfts: list[float] = []
+        self.tpots: list[float] = []
+        self.e2es: list[float] = []
+        self.itls: list[float] = []
+        self.tpts: list[int] = []
         self.total_output = 0
         self.total_input = 0
         self.success = 0
@@ -103,7 +102,7 @@ class Profiler:
 
         self.rps = self.success / self.elapsed_time
 
-    def summarize(self, title: str, hyperparams: List = None, header=40, digits=10):
+    def summarize(self, title: str, hyperparams: list = None, header=40, digits=10):
 
         width = header + digits * (1 + len(self.percentages))
 
