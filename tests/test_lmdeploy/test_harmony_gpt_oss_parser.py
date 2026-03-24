@@ -4,7 +4,7 @@ import os
 import sys
 import time
 import types
-from typing import Generator, List
+from collections.abc import Generator
 
 import pytest
 import shortuuid
@@ -114,11 +114,15 @@ class DummyParser:
         self.last_content_delta = chr(token)
 
 
-def _chat_completion_v1(request, token_chunks: List[List[int]]):
+def _chat_completion_v1(request, token_chunks: list[list[int]]):
     from lmdeploy.serve.openai.harmony_utils import GptOssChatParser
-    from lmdeploy.serve.openai.protocol import (ChatCompletionResponse, ChatCompletionResponseChoice,
-                                                ChatCompletionResponseStreamChoice, ChatCompletionStreamResponse,
-                                                UsageInfo)
+    from lmdeploy.serve.openai.protocol import (
+        ChatCompletionResponse,
+        ChatCompletionResponseChoice,
+        ChatCompletionResponseStreamChoice,
+        ChatCompletionStreamResponse,
+        UsageInfo,
+    )
 
     request_id = f'chat-{shortuuid.random()}'
     created_time = int(time.time())
@@ -147,7 +151,7 @@ def _chat_completion_v1(request, token_chunks: List[List[int]]):
         return completion_stream_generator()
 
     # Non-stream path: parse all tokens at once using parse_full
-    tokens: List[int] = []
+    tokens: list[int] = []
     for c in token_chunks:
         tokens.extend(c)
     message = parser.parse_full(tokens)
@@ -160,7 +164,7 @@ def _chat_completion_v1(request, token_chunks: List[List[int]]):
                                   usage=UsageInfo())
 
 
-def _stream_parse(request, token_chunks: List[List[int]]):
+def _stream_parse(request, token_chunks: list[list[int]]):
     from lmdeploy.serve.openai.protocol import DeltaMessage
 
     content = ''
@@ -190,7 +194,7 @@ def _stream_parse(request, token_chunks: List[List[int]]):
     return content, reasoning_content, tool_calls
 
 
-def _t(s: str) -> List[int]:
+def _t(s: str) -> list[int]:
     return [ord(c) for c in s]
 
 
@@ -223,7 +227,7 @@ TOKENS_TWO_CALLS_SAME_FUNC = [
 @pytest.mark.parametrize(('token_chunks', 'expects'), [
     (TOKENS_SINGLE_CALL_TWO_CHUNKS, [TestExpects('get_weather', 'Paris, France')]),
 ])
-def test_parser_stream_basic(token_chunks: List[List[int]], expects: List[TestExpects]):
+def test_parser_stream_basic(token_chunks: list[list[int]], expects: list[TestExpects]):
     from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 
     _install_openai_harmony_stub()
@@ -274,7 +278,7 @@ def test_parser_stream_interleaved_channels():
     (TOKENS_TWO_CALLS_SAME_FUNC, [TestExpects('get_weather', 'Tokyo'),
                                   TestExpects('get_weather', 'Kyoto')]),
 ])
-def test_parser_stream_two_calls_same_func(token_chunks: List[List[int]], expects: List[TestExpects]):
+def test_parser_stream_two_calls_same_func(token_chunks: list[list[int]], expects: list[TestExpects]):
     from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 
     _install_openai_harmony_stub()
@@ -307,7 +311,7 @@ def test_open_tool_call_no_args():
     (TOKENS_TWO_CALLS_SAME_FUNC, [TestExpects('get_weather', 'Tokyo'),
                                   TestExpects('get_weather', 'Kyoto')]),
 ])
-def test_parser_nonstream(token_chunks: List[List[int]], expects: List[TestExpects]):
+def test_parser_nonstream(token_chunks: list[list[int]], expects: list[TestExpects]):
     from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 
     _install_openai_harmony_stub()

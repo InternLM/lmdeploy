@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Dict
 
 import torch
 
@@ -52,7 +51,7 @@ class BaseSpecModelAgent:
         'reset graph runner'
         pass
 
-    def update_main_model_outputs(self, output: Dict[str, torch.Tensor], model_inputs: ModelInputs):
+    def update_main_model_outputs(self, output: dict[str, torch.Tensor], model_inputs: ModelInputs):
         """Update outputs of main model."""
         if not self.is_enabled():
             hidden_states = output.pop('hidden_states')

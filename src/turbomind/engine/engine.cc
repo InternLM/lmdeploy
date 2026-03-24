@@ -214,21 +214,7 @@ void Engine::Impl::CreateSequenceManager()
 {
     const auto cache_block_seq_len = model_.attn_param().cache_block_seq_len;
 
-    const int dbits = byte_size(dtype_, 8);
-
     const auto& model_param = model_.model_param();
-
-    const auto quant_policy = model_param.quant_policy;
-    const int  elem_bits    = quant_policy ? quant_policy : dbits;
-
-    SequenceManager::BlockConfig block_config{
-        (int)model_param.head_dim,
-        (int)model_param.kv_head_num / param_.attn_tp_size,
-        cache_block_seq_len,
-        elem_bits == dbits ? 0 : dbits,
-        elem_bits,
-        model_param.head_dim == 576,  // share kv
-    };
 
     const auto get_free_size = [&] {  //
         size_t free{}, total{};
@@ -236,8 +222,11 @@ void Engine::Impl::CreateSequenceManager()
         return AllReduce(tp_group_, free, comm::RedOp::kMin);
     };
 
-    seq_mgr_ = std::make_unique<SequenceManager>(model_param.layer_num,
-                                                 block_config,
+    seq_mgr_ = std::make_unique<SequenceManager>(model_param,
+                                                 dtype_,
+                                                 cache_block_seq_len,
+                                                 param_.attn_tp_size,
+                                                 param_.max_batch_size,
                                                  param_.cache_max_block_count,
                                                  param_.cache_chunk_size,
                                                  param_.enable_prefix_caching,
@@ -259,17 +248,26 @@ void Engine::Impl::Validate(Requests& infer_reqs, Requests& kill_reqs)
     std::pmr::monotonic_buffer_resource    mbr;
     std::pmr::unordered_map<uint64_t, int> occur(&mbr);
 
+    const bool has_linear_attention = HasLinearAttention(model_.model_param());
+
     auto count = [&occur](const auto& reqs) {
         for (const auto& r : reqs) {
             ++occur[r->id];
         }
     };
 
-    auto validate = [&](auto& reqs, const char* type) {
+    auto validate = [&](auto& reqs, const char* type, bool is_infer) {
         for (const auto& r : reqs) {
             if (occur[r->id] > 1) {
                 TM_LOG_ERROR("Skip conflicting %s request for ID %lu", type, r->id);
                 r->ec = Request::kConflict;
+            }
+            if (!r->ec && is_infer && has_linear_attention && !r->session.end_flag) {
+                TM_LOG_ERROR("Skip inconsistent %s request for ID %lu. Linear attention only supports stateless "
+                             "requests",
+                             type,
+                             r->id);
+                r->ec = Request::kInconsistency;
             }
             if (param_.enable_prefix_caching) {
                 if (r->session.step != 0) {
@@ -301,8 +299,8 @@ void Engine::Impl::Validate(Requests& infer_reqs, Requests& kill_reqs)
     count(kill_reqs);
     count(infer_reqs);
 
-    validate(kill_reqs, "kill");
-    validate(infer_reqs, "infer");
+    validate(kill_reqs, "kill", false);
+    validate(infer_reqs, "infer", true);
 
     // New requests that never get a chance to start
     for (auto& r : infer_reqs) {
@@ -351,7 +349,17 @@ void Engine::Impl::Interrupt(RequestCache& c)
         TM_CHECK(seq_mgr_->Erase(c.req->id));
     }
     else {
-        seq_mgr_->UpdateAndSetUnlock(s);
+        if (s.recurrent_states && c.seq_len != s.cache_len) {
+            TM_LOG_WARNING(
+                "[Engine][Interrupt] Invalidating cache for ID %llu due to linear-state/cache mismatch (%d vs %d)",
+                s.id,
+                c.seq_len,
+                s.cache_len);
+            seq_mgr_->InvalidateStatesAndCache(s);
+        }
+        else {
+            seq_mgr_->UpdateAndSetUnlock(s);
+        }
     }
     c.seq = nullptr;
 }
@@ -424,6 +432,14 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
         }
 
         auto& seq = *ptr;
+        seq_mgr_->AcquireLinearStateSlot(seq);
+
+        if (seq.recurrent_states) {
+            if (step != seq.cache_len) {
+                signals.push_back([r] { UpdateState(*r, Request::kInvalid, 0); });
+                continue;
+            }
+        }
 
         auto c = std::make_unique<RequestCache>(r, seq);
 

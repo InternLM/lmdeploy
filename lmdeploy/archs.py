@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
-from typing import Dict, List, Literal, Tuple
+from typing import Literal
 
 from transformers import AutoConfig
 
@@ -58,7 +58,7 @@ def autoget_backend(model_path: str) -> Literal['turbomind', 'pytorch']:
 def autoget_backend_config(
     model_path: str,
     backend_config: PytorchEngineConfig | TurbomindEngineConfig | None = None
-) -> Tuple[Literal['turbomind', 'pytorch'], PytorchEngineConfig | TurbomindEngineConfig]:
+) -> tuple[Literal['turbomind', 'pytorch'], PytorchEngineConfig | TurbomindEngineConfig]:
     """Get backend config automatically.
 
     Args:
@@ -78,7 +78,7 @@ def autoget_backend_config(
     backend = autoget_backend(model_path)
     config = PytorchEngineConfig() if backend == 'pytorch' else TurbomindEngineConfig()
     if backend_config is not None:
-        if type(backend_config) == type(config):
+        if type(backend_config) is type(config):
             config = backend_config
         else:
             data = asdict(backend_config)
@@ -93,7 +93,7 @@ def autoget_backend_config(
     return backend, config
 
 
-def check_vl_llm(config: dict) -> bool:
+def check_vl_llm(backend: str, config: dict) -> bool:
     """Check if the model is a vl model from model config."""
     if 'auto_map' in config:
         for _, v in config['auto_map'].items():
@@ -121,14 +121,14 @@ def check_vl_llm(config: dict) -> bool:
         return True
     elif arch in ['ChatGLMModel', 'ChatGLMForConditionalGeneration'] and 'vision_config' in config:
         return True
-    elif arch in ['Qwen3_5ForConditionalGeneration', 'Qwen3_5MoeForConditionalGeneration']:
+    elif arch in ['Qwen3_5ForConditionalGeneration', 'Qwen3_5MoeForConditionalGeneration'] and backend == 'turbomind':
         return False
     elif arch in supported_archs:
         return True
     return False
 
 
-def get_task(model_path: str):
+def get_task(backend: str, model_path: str):
     """Get pipeline type and pipeline class from model config."""
     from lmdeploy.serve.core import AsyncEngine
 
@@ -136,7 +136,7 @@ def get_task(model_path: str):
         # workspace model
         return 'llm', AsyncEngine
     _, config = get_model_arch(model_path)
-    if check_vl_llm(config.to_dict()):
+    if check_vl_llm(backend, config.to_dict()):
         from lmdeploy.serve.core import VLAsyncEngine
         return 'vlm', VLAsyncEngine
 
@@ -176,15 +176,15 @@ def get_model_arch(model_path: str):
 def search_nested_config(config, key):
     """Recursively searches for the value associated with the given key in a
     nested configuration of a model."""
-    if isinstance(config, Dict):
+    if isinstance(config, dict):
         for k, v in config.items():
             if k == key:
                 return v
-            if isinstance(v, (Dict, List)):
+            if isinstance(v, (dict, list)):
                 result = search_nested_config(v, key)
                 if result is not None:
                     return result
-    elif isinstance(config, List):
+    elif isinstance(config, list):
         for item in config:
             result = search_nested_config(item, key)
             if result is not None:

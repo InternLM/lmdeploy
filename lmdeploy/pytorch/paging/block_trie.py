@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import heapq
 from dataclasses import dataclass
-from typing import Dict, Set
 
 import numpy as np
 
@@ -33,8 +32,8 @@ class Node:
         self.block = block
         self.tokens = tokens
         self.num_matched = num_matched
-        self.children: Dict[int, 'Node'] = dict()
-        self._parent: 'Node' = None
+        self.children: dict[int, Node] = dict()
+        self._parent: Node = None
 
     @property
     def parent(self):
@@ -67,8 +66,8 @@ class BlockTrie:
         self.enable = self.cache_config.enable_prefix_caching
 
         # caches with different adapter should not be shared.
-        self._roots: Dict[str, Node] = dict()
-        self.leaves: Set[Node] = set()
+        self._roots: dict[str, Node] = dict()
+        self.leaves: set[Node] = set()
         self.stats = PrefixCacheStats()
 
     def hit_rate(self):

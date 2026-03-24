@@ -1,13 +1,20 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Dict, Optional, Sequence, Union
 
 import shortuuid
 
-from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, DeltaFunctionCall, DeltaMessage, DeltaToolCall,
-                                            ExtractedToolCallInformation, FunctionCall, ToolCall)
+from lmdeploy.serve.openai.protocol import (
+    ChatCompletionRequest,
+    DeltaFunctionCall,
+    DeltaMessage,
+    DeltaToolCall,
+    ExtractedToolCallInformation,
+    FunctionCall,
+    ToolCall,
+)
 from lmdeploy.utils import get_logger
 
 from .tool_parser import ToolParser, ToolParserManager
@@ -16,7 +23,7 @@ logger = get_logger('lmdeploy')
 
 
 @dataclass
-class ParserState(object):
+class ParserState:
     """Maintains the state of parsing during tool call extraction."""
     position: int = 0  # Current position in the text being parsed
     current_index: int = -1  # Index of the current tool call
@@ -77,14 +84,14 @@ class Qwen3ToolParser(ToolParser):
         parser_state.position += (end_idx - start_idx) + len(self.tool_end_token)
         return parsing_content[:start_idx], parsing_content[start_idx + len(self.tool_start_token):end_idx], True
 
-    def _parse_delta_tool_call(self, parser_state: ParserState, tool_content: str) -> Optional[DeltaToolCall]:
+    def _parse_delta_tool_call(self, parser_state: ParserState, tool_content: str) -> DeltaToolCall | None:
         """Parse tool content into a DeltaToolCall object.
 
         This method handles parsing tool calls only when it's a valid tool
         """
         parsable_arr = tool_content.strip()
         try:
-            tool_call_arr: Dict = json.loads(parsable_arr)
+            tool_call_arr: dict = json.loads(parsable_arr)
         except json.JSONDecodeError:
             logger.debug('cannot parse into JSON yet')
             return
@@ -119,7 +126,7 @@ class Qwen3ToolParser(ToolParser):
         current_token_ids: Sequence[int],
         delta_token_ids: Sequence[int],
         request: ChatCompletionRequest,
-    ) -> Union[DeltaMessage, None]:
+    ) -> DeltaMessage | None:
         """Extract tool calls from streaming model output.
 
         This method processes incremental model output to extract tool calls, reasoning content, and regular text
