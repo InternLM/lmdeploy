@@ -1,7 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-import asyncio
-
 import torch
 
 from lmdeploy.utils import get_logger
@@ -237,6 +235,7 @@ class SpecModelAgent(BaseSpecModelAgent):
             last_token_indices=last_token_indices,
             num_rejected_tokens=num_rejected_tokens,
             output_token_ids=output_token_ids,
+            target_logits=None,  # clear for next step
         )
         return new_extra_inputs
 
@@ -254,32 +253,40 @@ class SpecModelAgent(BaseSpecModelAgent):
         """
         outputs = self._forward_impl(inputs)
         if inputs.is_chunk and not inputs.is_last_chunk:
-            await asyncio.sleep(0)
-            return torch.zeros_like(inputs.input_ids)
+            # create dummy draft tokens
+            output_draft_ids = inputs.input_ids.new_zeros(1, self.num_spec_tokens)
+        else:
+            loop_count = self.num_spec_tokens - 1
+            draft_token_ids, model_metas, target_hidden_states = self.proposer.get_outputs(
+                outputs, inputs, extra_inputs)
+            draft_tokens_li = [draft_token_ids]
+            if loop_count > 0:
+                # set last_token_indices to None for decoding
+                extra_inputs.last_token_indices = None
+                inputs = self.proposer.update_inputs_decoding(inputs, extra_inputs, draft_token_ids.transpose(0, 1),
+                                                              target_hidden_states, model_metas)
+                for loop_idx in range(loop_count):
+                    outputs = self._forward_impl(inputs)
+                    draft_token_ids, model_metas, target_hidden_states = self.proposer.get_outputs(outputs, inputs)
+                    draft_tokens_li.append(draft_token_ids)
+                    if loop_idx < loop_count - 1:
+                        step_seqlens = inputs.seq_length.new_ones(inputs.seq_length.size(0))
+                        inputs = inputs.step(draft_token_ids.transpose(0, 1), step_seqlens)
+                        inputs.model_metas = model_metas
+                        inputs.target_hidden_states = target_hidden_states
+                        if inputs.target_position_ids is not None:
+                            inputs.target_position_ids += 1
 
-        loop_count = self.num_spec_tokens - 1
-        draft_token_ids, model_metas, target_hidden_states = self.proposer.get_outputs(outputs, inputs, extra_inputs)
-        draft_tokens_li = [draft_token_ids]
-        if loop_count > 0:
-            # set last_token_indices to None for decoding
-            extra_inputs.last_token_indices = None
-            inputs = self.proposer.update_inputs_decoding(inputs, extra_inputs, draft_token_ids.transpose(0, 1),
-                                                          target_hidden_states, model_metas)
-            for loop_idx in range(loop_count):
-                outputs = self._forward_impl(inputs)
-                draft_token_ids, model_metas, target_hidden_states = self.proposer.get_outputs(outputs, inputs)
-                draft_tokens_li.append(draft_token_ids)
-                if loop_idx < loop_count - 1:
-                    step_seqlens = inputs.seq_length.new_ones(inputs.seq_length.size(0))
-                    inputs = inputs.step(draft_token_ids.transpose(0, 1), step_seqlens)
-                    inputs.model_metas = model_metas
-                    inputs.target_hidden_states = target_hidden_states
-                    if inputs.target_position_ids is not None:
-                        inputs.target_position_ids += 1
+            output_draft_ids = torch.cat(draft_tokens_li, dim=-1)
 
-        output_draft_ids = torch.cat(draft_tokens_li, dim=-1)
-        await asyncio.sleep(0)
-        return output_draft_ids
+        # create new extra inputs
+        extra_inputs = ARSpecExtraInputs(
+            output_draft_token_ids=output_draft_ids,
+            next_token_ids=extra_inputs.next_token_ids,
+            num_rejected_tokens=extra_inputs.num_rejected_tokens,
+            output_token_ids=extra_inputs.output_token_ids,
+        )
+        return extra_inputs
 
     async def async_model_forward(
         self,
@@ -291,9 +298,7 @@ class SpecModelAgent(BaseSpecModelAgent):
         """Draft model forward."""
         draft_extra_inputs = self._rejection_sampling(next_token_ids, model_inputs, extra_inputs)
         draft_model_inputs, draft_extra_inputs = self._prepare_inputs_from_main(model_inputs, draft_extra_inputs)
-        next_draft_ids = await self._async_model_forward(draft_model_inputs, draft_extra_inputs, sampling_inputs)
-        draft_extra_inputs.output_draft_token_ids = next_draft_ids
-        return draft_extra_inputs
+        return await self._async_model_forward(draft_model_inputs, draft_extra_inputs, sampling_inputs)
 
     def warmup(self, max_batches: int, target_model_config: ModelConfig):
         """warmup."""

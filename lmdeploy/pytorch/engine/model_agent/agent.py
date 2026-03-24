@@ -870,30 +870,32 @@ class BaseModelAgent:
                 stopping_criteria,
                 extra_outputs,
                 next_token_ids,
-            ) = await self._step_postprocess_with_output(
-                last_logits,
-                logits,
-                inputs,
-                sampling_inputs,
-                stopping_criteria,
-                model_metas,
-                need_broadcast_next,
-                return_logits=return_logits,
-                all_routed_experts=all_routed_experts,
-                extra_inputs=extra_inputs,
-            )
+            ) = await asyncio.shield(
+                self._step_postprocess_with_output(
+                    last_logits,
+                    logits,
+                    inputs,
+                    sampling_inputs,
+                    stopping_criteria,
+                    model_metas,
+                    need_broadcast_next,
+                    return_logits=return_logits,
+                    all_routed_experts=all_routed_experts,
+                    extra_inputs=extra_inputs,
+                ))
         else:
             (
                 inputs,
                 next_token_ids,
                 extra_inputs,
                 extra_outputs,
-            ) = await self._step_postprocess_without_output(
-                inputs,
-                last_logits,
-                extra_inputs,
-                need_broadcast_next,
-            )
+            ) = await asyncio.shield(
+                self._step_postprocess_without_output(
+                    inputs,
+                    last_logits,
+                    extra_inputs,
+                    need_broadcast_next,
+                ))
 
         sampling_delta = sampling_inputs.get_delta()
         if need_update_inputs:

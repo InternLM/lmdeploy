@@ -26,6 +26,7 @@ class ARSpecExtraInputs(ExtraInputs):
     target_hidden_states: torch.Tensor = None
     target_position_ids: torch.Tensor = None
     target_inputs_embeds: torch.Tensor = None
+    # used in draft inputs and draft outputs
     next_token_ids: torch.LongTensor = None
     last_token_indices: torch.LongTensor = None
 
@@ -228,9 +229,10 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
     def make_dummy_next_token(self, inputs: 'ModelInputs', logits: torch.Tensor, extra_inputs: ExtraInputs):
         """Make dummy next token for broadcast."""
         with torch.inference_mode():
-            next_token_ids = inputs.input_ids.new_zeros(logits.size(0))
-            extra_inputs.output_draft_token_ids = inputs.input_ids.new_zeros((logits.size(0), self.num_spec_tokens))
-            extra_inputs.num_rejected_tokens = inputs.input_ids.new_zeros(logits.size(0))
+            batch_size = inputs.seq_length.size(0)
+            next_token_ids = inputs.input_ids.new_zeros(batch_size)
+            extra_inputs.output_draft_token_ids = inputs.input_ids.new_zeros((batch_size, self.num_spec_tokens))
+            extra_inputs.num_rejected_tokens = inputs.input_ids.new_zeros(batch_size)
         return next_token_ids, extra_inputs
 
     @contextmanager
