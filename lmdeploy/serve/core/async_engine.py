@@ -279,9 +279,26 @@ class AsyncEngine:
             yield generator
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
             logger.exception(f'[safe_run] session {session.session_id} exception caught: {e}')
-            await session.async_abort()
+            # Use asyncio.shield to protect cleanup coroutines from being cancelled.
+            # When a task is in cancelling state, bare `await` raises CancelledError
+            # immediately. shield ensures the inner coroutine runs to completion.
+            # The outer `except (asyncio.CancelledError, Exception)` catches the
+            # CancelledError that shield itself re-raises at the await point.
+            try:
+                await asyncio.shield(handle.async_cancel(session.session_id))
+            except (asyncio.CancelledError, Exception) as cancel_e:
+                logger.debug(f'[safe_run] session {session.session_id} async_cancel exception caught: {cancel_e}')
             if self.backend == 'pytorch':
-                await handle.async_end(session.session_id)
+                logger.info(f'[safe_run] session {session.session_id} ending session')
+                try:
+                    await asyncio.shield(handle.async_end(session.session_id))
+                except (asyncio.CancelledError, Exception) as end_e:
+                    logger.debug(f'[safe_run] session {session.session_id} async_end exception caught: {end_e}')
+            # Wrap as SafeRunException so that the outer `request_handle` context
+            # manager in `session_manager.py` can distinguish a handled cancellation (caught by
+            # `except SafeRunException: pass`) from an unexpected CancelledError.
+            # Without this, the suppressed exception leaves the task in cancelling
+            # state, causing a second CancelledError at the next await point.
             raise SafeRunException(f'Safe run exception for session {session.session_id}') from e
         finally:
             await generator.aclose()
