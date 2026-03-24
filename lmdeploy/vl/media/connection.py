@@ -62,12 +62,8 @@ def _load_http_url(url_spec: ParseResult, media_io: MediaIO[_M]) -> _M:
         fetch_timeout = int(os.environ.get('LMDEPLOY_VIDEO_FETCH_TIMEOUT', 30))
 
     client = requests.Session()
-    # do not follow redirects automatically
-    response = client.get(url_spec.geturl(), headers=headers, timeout=fetch_timeout, allow_redirects=False)
-    # block if server attempts to redirect to internal IP
-    if response.is_redirect:
-        raise ValueError('Redirects are not allowed for security reasons')
-
+    client.max_redirects = 3
+    response = client.get(url_spec.geturl(), headers=headers, timeout=fetch_timeout, allow_redirects=True)
     response.raise_for_status()
 
     return media_io.load_bytes(response.content)
