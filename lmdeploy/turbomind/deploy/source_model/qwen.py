@@ -312,6 +312,35 @@ class Qwen3_5ReaderMixin:
         w = dequantize_gemm(qweight, qzeros, scales, 4, group_size)
         return w.t()  # [in, out] → [out, in] (PyTorch convention)
 
+    @staticmethod
+    def _compressed_tensors_dequant(weight_packed, weight_scale):
+        """Dequantize a compressed-tensors (pack-quantized, symmetric int4)
+        weight to fp16.
+
+        Args:
+            weight_packed: int32 tensor of shape (out_features, in_features//8).
+            weight_scale:  bf16/fp16 tensor of shape (out_features, in_features//group_size).
+        Returns:
+            fp16 tensor of shape (out_features, in_features).
+        """
+        out_features = weight_packed.shape[0]
+        num_groups = weight_scale.shape[1]
+        in_features = weight_packed.shape[1] * 8
+        group_size = in_features // num_groups
+
+        # Reinterpret the packed int32 buffer as bytes and unpack two nibbles
+        # per byte directly into the final fp16 tensor. This avoids creating
+        # eight temporary fp16 tensors before applying scales.
+        packed_bytes = weight_packed.contiguous().view(torch.uint8).reshape(out_features, -1)
+        weight = torch.empty((out_features, in_features), device=weight_packed.device, dtype=torch.float16)
+        weight[:, 0::2] = (packed_bytes & 0xF).to(torch.float16)
+        weight[:, 1::2] = (packed_bytes >> 4).to(torch.float16)
+
+        scales = weight_scale.to(torch.float16).unsqueeze(-1)
+        weight = weight.view(out_features, num_groups, group_size)
+        weight.sub_(8.0).mul_(scales)
+        return weight.reshape(out_features, in_features)
+
     def linear_attn(self, i: int, kind: str):
         if not kind:
             return self.filter(r'linear_attn\.', i)
@@ -329,6 +358,9 @@ class Qwen3_5ReaderMixin:
             if tensor is None and kind == 'weight':
                 if f'{prefix}.qweight' in self.params:
                     tensor = self._awq_dequant(prefix)
+                elif f'{prefix}.weight_packed' in self.params:
+                    tensor = self._compressed_tensors_dequant(self.params[f'{prefix}.weight_packed'],
+                                                              self.params[f'{prefix}.weight_scale'])
             if tensor is not None:
                 tensor = self.transform(tensor, kind)
             result.append(tensor)  # keep None to preserve alignment

@@ -6,7 +6,6 @@ import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, Tuple
 
 import torch
 import torch.distributed as dist
@@ -72,11 +71,11 @@ class DistMeta:
 
 class AscendKVQuantMeta:
     has_set_value: bool = False
-    quant_meta: Dict = {}
+    quant_meta: dict = {}
 
     @classmethod
     def set_value(cls, device: str, dtype: torch.dtype, record_file: str, total_layers: int):
-        with open(record_file, 'r') as file:
+        with open(record_file) as file:
             data = file.read()
         scale_offset_pairs = re.findall(r'scale:\s*([\d\.\-]+)\s*offset:\s*(-?\d+)', data)
         scale_offset_pairs = [(float(scale), float(offset)) for scale, offset in scale_offset_pairs]
@@ -133,7 +132,7 @@ class AscendOpsBackend(DlinferOpsBackend):
         num_heads: int,
         head_size: int,
         dtype: torch.dtype,
-    ) -> Tuple[int, ...]:
+    ) -> tuple[int, ...]:
         if SocVersion.is_Ascend910():
             return (block_size, num_heads, head_size)
         else:
@@ -145,7 +144,7 @@ class AscendOpsBackend(DlinferOpsBackend):
         num_heads: int,
         head_size: int,
         dtype: torch.dtype,
-    ) -> Tuple[int, ...]:
+    ) -> tuple[int, ...]:
         if SocVersion.is_Ascend910():
             return (block_size, num_heads, head_size)
         else:

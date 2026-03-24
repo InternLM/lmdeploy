@@ -11,7 +11,7 @@ logger = get_logger('lmdeploy')
 
 
 @singleton
-class MetricsProcessor():
+class MetricsProcessor:
     """Metrics processor."""
 
     def __init__(self):

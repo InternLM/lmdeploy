@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import List
 
 import torch
 from torch import distributed as dist
@@ -34,7 +33,7 @@ def split_inputs_by_attn_tp(
     return hidden_states, topk_weights, topk_ids, split_size
 
 
-def gather_outputs_by_attn_tp(out_states: torch.Tensor, split_size: List[int]):
+def gather_outputs_by_attn_tp(out_states: torch.Tensor, split_size: list[int]):
     """Gather output by attn tp."""
     if split_size is None:
         return out_states

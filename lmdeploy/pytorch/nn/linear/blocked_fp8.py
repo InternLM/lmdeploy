@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, List, Optional
+from typing import Any
 
 import torch
 
@@ -21,10 +21,10 @@ class BlockedF8Linear(LinearBase):
         in_features: int,
         out_features: int,
         bias: bool,
-        dtype: Optional[torch.dtype] = None,
-        device: Optional[torch.device] = None,
+        dtype: torch.dtype | None = None,
+        device: torch.device | None = None,
         fp8_dtype: torch.dtype = torch.float8_e4m3fn,
-        scale_fmt: Optional[str] = None,
+        scale_fmt: str | None = None,
         colwise: bool = True,
         is_tp: bool = False,
         all_reduce: bool = True,
@@ -66,7 +66,7 @@ class BlockedF8Linear(LinearBase):
     def register_all_parameters(self,
                                 weight: torch.Tensor,
                                 weight_scale_inv: torch.Tensor,
-                                bias: Optional[torch.Tensor] = None):
+                                bias: torch.Tensor | None = None):
         """Register all parameters."""
         weight = torch.nn.Parameter(weight, requires_grad=False)
         weight_scale_inv = torch.nn.Parameter(weight_scale_inv, requires_grad=False)
@@ -167,15 +167,15 @@ class MergedBlockedF8Linear(BlockedF8Linear):
 
     def __init__(self,
                  in_features: int,
-                 all_out_features: List[int],
+                 all_out_features: list[int],
                  bias: bool,
                  fp8_dtype: torch.dtype = torch.float8_e4m3fn,
-                 scale_fmt: Optional[str] = None,
-                 replicate: Optional[List[bool]] = None,
-                 dtype: Optional[torch.dtype] = None,
-                 device: Optional[torch.device] = None,
+                 scale_fmt: str | None = None,
+                 replicate: list[bool] | None = None,
+                 dtype: torch.dtype | None = None,
+                 device: torch.device | None = None,
                  is_tp: bool = True,
-                 out_names: Optional[List[int]] = None,
+                 out_names: list[int] | None = None,
                  dp_gather: bool = False,
                  layer_type: str = 'attn'):
         self.init_tp_args(is_tp, all_reduce=False, colwise=True, layer_type=layer_type)
@@ -222,7 +222,7 @@ class MergedBlockedF8Linear(BlockedF8Linear):
         """Get io features."""
         return in_features, out_features
 
-    def _update_all_out_features(self, all_out_features: List[int], replicate: Optional[List[bool]]):
+    def _update_all_out_features(self, all_out_features: list[int], replicate: list[bool] | None):
         """Update all out features."""
         world_size, rank = self.get_tp_world_rank()
         new_all_out_features = []
@@ -281,9 +281,9 @@ class QKVBlockedF8Linear(MergedBlockedF8Linear, QKVMixin):
                  head_size_v: int,
                  bias: bool = False,
                  fp8_dtype: torch.dtype = torch.float8_e4m3fn,
-                 scale_fmt: Optional[str] = None,
-                 dtype: Optional[torch.dtype] = None,
-                 device: Optional[torch.device] = None,
+                 scale_fmt: str | None = None,
+                 dtype: torch.dtype | None = None,
+                 device: torch.device | None = None,
                  is_tp: bool = True,
                  dp_gather: bool = False,
                  num_replicate_kv_heads: int = 1):
@@ -313,7 +313,7 @@ class QKVBlockedF8Linear(MergedBlockedF8Linear, QKVMixin):
                          dp_gather=dp_gather,
                          layer_type='attn')
 
-    def _update_all_out_features(self, all_out_features: List[int], replicate: Optional[List[bool]]):
+    def _update_all_out_features(self, all_out_features: list[int], replicate: list[bool] | None):
         """Update all out features."""
         return all_out_features
 

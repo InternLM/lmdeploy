@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -13,12 +14,17 @@ from lmdeploy.pytorch.distributed import get_dist_manager, get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
 from lmdeploy.pytorch.nn.gated_delta import CausalConv1d, GatedDelta, GatedDeltaMeta, build_rmsnorm_gated
-from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_merged_colwise_linear, build_o_proj, build_qkv_proj,
-                                        build_rowwise_linear)
+from lmdeploy.pytorch.nn.linear import (
+    build_colwise_linear,
+    build_merged_colwise_linear,
+    build_o_proj,
+    build_qkv_proj,
+    build_rowwise_linear,
+)
 from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader, load_weight
 
-from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
+from .utils.cudagraph import CudaGraphMixin
 from .utils.model import DeployModelMixinV1, build_embedding
 
 
@@ -142,14 +148,14 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         a = a.float().flatten(-2, -1)
         return mixed_qkv, z, b, a
 
-    def _load_state(self, past_key_value: Tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
+    def _load_state(self, past_key_value: tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
         """Load states from cache."""
         return gated_delta_util.load_state(past_key_value=past_key_value, gated_delta_meta=gated_delta_meta)
 
     def forward(
         self,
         hidden_states: torch.Tensor,
-        past_key_value: Tuple[torch.Tensor, torch.Tensor],
+        past_key_value: tuple[torch.Tensor, torch.Tensor],
         gated_delta_meta: GatedDeltaMeta,
     ):
         """forward."""
@@ -268,8 +274,8 @@ class Qwen3NextAttention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: tuple[torch.Tensor] | None = None,
         attn_metadata: Any = None,
     ):
         """Rewrite of LlamaAttention.forward."""
@@ -486,9 +492,9 @@ class Qwen3NextDecoderLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[List[torch.FloatTensor]],
-        residual: Optional[torch.Tensor],
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: list[torch.FloatTensor] | None,
+        residual: torch.Tensor | None,
         attn_metadata: Any,
         gated_delta_meta: GatedDeltaMeta,
     ):
@@ -555,10 +561,10 @@ class Qwen3NextModel(nn.Module):
         self,
         input_ids: torch.LongTensor,
         position_ids: torch.LongTensor,
-        past_key_values: List[torch.FloatTensor],
+        past_key_values: list[torch.FloatTensor],
         attn_metadata: Any,
         state_ids: torch.Tensor,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
+        inputs_embeds: torch.FloatTensor | None = None,
     ):
         """Rewrite of LlamaModel.forward."""
 
@@ -631,7 +637,7 @@ class Qwen3NextForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
         state_ids: torch.Tensor = None,
@@ -654,8 +660,8 @@ class Qwen3NextForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
-        inputs_embeds: Optional[torch.Tensor] = None,
+        past_key_values: list[list[torch.Tensor]],
+        inputs_embeds: torch.Tensor | None = None,
         context: StepContext = None,
     ):
         """Prepare input."""
@@ -693,31 +699,8 @@ class Qwen3NextForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             state_ids=context.state_offsets,
         )
 
-    def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, **kwargs):
-        """Make cudagraph buffers from forward inputs."""
-        max_batchs = graph_meta.max_batchs
-        device = graph_meta.device
-
-        input_buffers = super().make_buffers_cudagraph(graph_meta=graph_meta, **kwargs)
-        state_ids = torch.full((max_batchs, ), -1, dtype=torch.long, device=device)
-        input_buffers['state_ids'] = state_ids
-
-        return input_buffers
-
-    def fill_buffers_cudagraph(self, graph_meta: CudaGraphMeta, **kwargs):
-        """Fill cudagraph buffers from forward inputs."""
-        input_buffers = graph_meta.input_buffers
-
-        new_inputs = super().fill_buffers_cudagraph(graph_meta=graph_meta, **kwargs)
-        state_ids = kwargs['state_ids']
-        input_buffers['state_ids'].fill_(-1)
-        input_buffers['state_ids'][:state_ids.size(0)].copy_(state_ids)
-        new_inputs['state_ids'] = input_buffers['state_ids']
-
-        return new_inputs
-
-    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
-                             expert_params_mapping: List):
+    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
+                             expert_params_mapping: list):
         """Load weight experts."""
         # load fused weights
         for (param_name, weight_name, expert_id, shard_id) in expert_params_mapping:
@@ -731,7 +714,7 @@ class Qwen3NextForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             param = params_dict[name]
             load_weight(param, loaded_weight)
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
 
         def __skip_layers(name):

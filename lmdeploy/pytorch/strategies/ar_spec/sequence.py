@@ -1,20 +1,27 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 from torch import Tensor
 
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.pytorch.engine.model_agent import BatchedOutputs
-from lmdeploy.pytorch.messages import (InputEmbeddings, MessageStatus, MultiModalInputs, SamplingParam,
-                                       SchedulerSession, UpdateTokenMode, _to_ndarray)
+from lmdeploy.pytorch.messages import (
+    InputEmbeddings,
+    MessageStatus,
+    MultiModalInputs,
+    SamplingParam,
+    SchedulerSession,
+    UpdateTokenMode,
+    _to_ndarray,
+)
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 
 from ..ar.sequence import ARSequenceStrategy, SchedulerSequenceDefault
 
-SeqList = List['SchedulerSequenceARSpec']
+SeqList = list['SchedulerSequenceARSpec']
 
 
 @dataclass
@@ -110,8 +117,8 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
     def update_token_ids(self,
                          token_ids: Tensor,
                          multimodals: MultiModalInputs = None,
-                         embeddings: List[InputEmbeddings] = None,
-                         model_meta: Dict[str, Any] = None,
+                         embeddings: list[InputEmbeddings] = None,
+                         model_meta: dict[str, Any] = None,
                          draft_token_ids: Tensor = None,
                          mode: UpdateTokenMode = UpdateTokenMode.INPUTS,
                          **kwargs):
@@ -136,6 +143,8 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
         if model_meta is not None:
             self.model_meta = model_meta
 
+        self._update_mrope_pos_ids()
+
 
 class ARSpecSequenceStrategy(ARSequenceStrategy):
 
@@ -144,7 +153,7 @@ class ARSpecSequenceStrategy(ARSequenceStrategy):
                       session: 'SchedulerSession',
                       sampling_param: 'SamplingParam' = None,
                       adapter_name: str = None,
-                      migration_request: Optional[MigrationRequest] = None,
+                      migration_request: MigrationRequest | None = None,
                       resp_cache: bool = False,
                       preserve_cache: bool = False) -> 'SchedulerSequenceARSpec':
         """Make sequence."""

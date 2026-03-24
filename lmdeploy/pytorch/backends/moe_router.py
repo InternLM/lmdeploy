@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
-from typing import Tuple
 
 import torch
 
@@ -9,7 +8,7 @@ class RouterNoauxTCImpl(ABC):
     """Noaux tc implementation api."""
 
     @abstractmethod
-    def forward(self, logits: torch.Tensor, bias: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, logits: torch.Tensor, bias: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """forward."""
         raise NotImplementedError
 

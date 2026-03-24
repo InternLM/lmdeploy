@@ -7,8 +7,15 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from ..rotary_embedding import (FopeParameters, Llama3Parameters, LongRoPEScalingParameters, RopeType,
-                                RotaryEmbeddingBuilder, RotaryEmbeddingImpl, YarnParameters)
+from ..rotary_embedding import (
+    FopeParameters,
+    Llama3Parameters,
+    LongRoPEScalingParameters,
+    RopeType,
+    RotaryEmbeddingBuilder,
+    RotaryEmbeddingImpl,
+    YarnParameters,
+)
 
 
 def safe_torch_compile(**compile_kwargs):
