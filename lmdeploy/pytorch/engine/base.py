@@ -14,7 +14,7 @@ class EngineBase:
 
     def start_loop(self) -> bool:
         """Start mp engine loop."""
-        return False
+        raise NotImplementedError('This method is not implemented.')
 
     def end_session(self, session_id: int):
         """End session."""
