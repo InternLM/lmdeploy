@@ -48,7 +48,7 @@ def _tensorlize_block_offsets(block_offsets, dtype=torch.int32, kernel_blocks_pe
     # copy on numpy is faster than torch.nn.utils.rnn.pad_sequence
     batch_size = len(block_offsets)
     max_len = max([len(off) for off in block_offsets])
-    if kernel_block_arange is None or kernel_block_arange is None:
+    if kernel_blocks_per_kv is None or kernel_block_arange is None:
         kernel_blocks_per_kv = 1
         kernel_block_arange = np.arange(1)
 
