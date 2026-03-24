@@ -1160,12 +1160,6 @@ class BaseModelAgent:
 
         self.spec_agent.reset_graph_runner()
 
-    def _get_spec_model(self):
-        """Return the spec-decode draft model, or None if not enabled."""
-        if self.spec_agent.is_enabled() and self.spec_agent.proposer.model is not None:
-            return self.spec_agent.proposer.model.get_model()
-        return None
-
     @torch.inference_mode()
     def update_params(self, request: UpdateParamsRequest):
         """Update params."""
@@ -1190,7 +1184,7 @@ class BaseModelAgent:
             return [(k, _construct(v)) for k, v in raw]
 
         def _split_main_and_draft(weights):
-            if not self.spec_agent.is_enabled():
+            if not self.spec_agent.is_enabled() or self.spec_agent.method != 'qwen3_5_mtp':
                 return weights, []
             main = [(name, weight) for name, weight in weights if not name.startswith('mtp.')]
             draft = [(name, weight) for name, weight in weights if name.startswith('mtp.')]
@@ -1202,7 +1196,7 @@ class BaseModelAgent:
                 serialized_data = serialized_data[self.dist_ctx.tp_group.rank]
 
             model = self.patched_model.get_model()
-            spec_model = self._get_spec_model()
+            spec_model = self.spec_agent.get_model()
 
             weights = _deserialize_weights(serialized_data)
             main_weights, draft_weights = _split_main_and_draft(weights)
@@ -1234,7 +1228,7 @@ class BaseModelAgent:
         self.reset_graph_runner()
         self.patched_model.get_model().to(device=device, non_blocking=True)
 
-        spec_model = self._get_spec_model()
+        spec_model = self.spec_agent.get_model()
         if spec_model is not None:
             self.spec_agent.cache_engine = None
             spec_model.to(device=device, non_blocking=True)
@@ -1263,7 +1257,7 @@ class BaseModelAgent:
                 self.build_graph_runner()
                 self.misc_config.empty_init = old_empty_init
 
-            spec_model = self._get_spec_model()
+            spec_model = self.spec_agent.get_model()
             if spec_model is not None:
                 spec_device = next(spec_model.parameters()).device
                 assert spec_device.type in ['cpu', 'meta']
