@@ -3,11 +3,16 @@
 import os
 
 from ..version import __version__
-from .utils import (ArgumentHelper, DefaultsAndTypesHelpFormatter, FlexibleArgumentParser, convert_args,
-                    get_speculative_config)
+from .utils import (
+    ArgumentHelper,
+    DefaultsAndTypesHelpFormatter,
+    FlexibleArgumentParser,
+    convert_args,
+    get_speculative_config,
+)
 
 
-class CLI(object):
+class CLI:
     _desc = 'The CLI provides a unified API for converting, ' \
             'compressing and deploying large language models.'
     parser = FlexibleArgumentParser(prog='lmdeploy', description=_desc, add_help=True)
@@ -124,8 +129,7 @@ class CLI(object):
             if sys.platform.startswith('linux'):
                 try:
                     res = subprocess.run(['nvidia-smi', 'topo', '-m'],
-                                         stdout=subprocess.PIPE,
-                                         stderr=subprocess.PIPE,
+                                         capture_output=True,
                                          text=True,
                                          check=True)
                     if res.returncode == 0:

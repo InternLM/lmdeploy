@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Callable, Dict, List, Optional
 
 import torch
 import torch.nn as nn
@@ -51,7 +51,7 @@ def split_size(size: int, world_size: int, align: int):
     return split_size
 
 
-def moe_gather_inputs(hidden_states, topk_weights, topk_ids, group: Optional[dist.ProcessGroup] = None):
+def moe_gather_inputs(hidden_states, topk_weights, topk_ids, group: dist.ProcessGroup | None = None):
     dist_config = get_dist_manager().current_config()
     tp = dist_config.moe_tp
     if tp == 1:
@@ -73,7 +73,7 @@ def moe_gather_inputs(hidden_states, topk_weights, topk_ids, group: Optional[dis
     return hidden_states, topk_weights, topk_ids
 
 
-def moe_reduce(ret, rank: int, tp_mode: TPMode, group: Optional[dist.ProcessGroup] = None):
+def moe_reduce(ret, rank: int, tp_mode: TPMode, group: dist.ProcessGroup | None = None):
     dist_config = get_dist_manager().current_config()
     if dist_config.moe_tp == 1:
         return ret
@@ -109,14 +109,14 @@ class MoEForwardDPTP:
         self.max_tokens_per_round = max_tokens_per_round * self.attn_tp // self.tp
 
     def all_gather(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.Tensor,
-                   tp_sizes: List[int]):
+                   tp_sizes: list[int]):
         """All gather."""
         hidden_states, h0 = dist.gather_by_tp_sizes(hidden_states, tp_sizes, group=self.gather_group, async_op=True)
         topk_weights, h1 = dist.gather_by_tp_sizes(topk_weights, tp_sizes, group=self.gather_group, async_op=True)
         topk_ids, h2 = dist.gather_by_tp_sizes(topk_ids, tp_sizes, group=self.gather_group, async_op=True)
         return hidden_states, topk_weights, topk_ids, (h0, h1, h2)
 
-    def reduce_scatter(self, hidden_states: torch.Tensor, out_states: torch.Tensor, tp_sizes: List[int]):
+    def reduce_scatter(self, hidden_states: torch.Tensor, out_states: torch.Tensor, tp_sizes: list[int]):
         """Reduce scatter."""
         hidden_states_list = list(hidden_states.split(tp_sizes, -2))
         cur_out_states = hidden_states_list[self.gather_rank]
@@ -127,7 +127,7 @@ class MoEForwardDPTP:
         return out_states, handle
 
     def _gemm_and_reduce_scatter(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.Tensor,
-                                 output_states: torch.Tensor, tp_sizes: List[int], handles: List[dist.Work]):
+                                 output_states: torch.Tensor, tp_sizes: list[int], handles: list[dist.Work]):
         """Gemm and reduce scatter."""
         for handle in handles:
             handle.wait()
@@ -210,7 +210,7 @@ class DispatchInputs:
     moe_type: MoeType = MoeType.Default
 
     @classmethod
-    def from_dict(cls, input: Dict):
+    def from_dict(cls, input: dict):
         """From dict."""
         assert ['hidden_states', 'topk_weights', 'topk_idx'] in input
         moe_type = input.get('moe_type', MoeType.Default)
@@ -221,7 +221,7 @@ class DispatchInputs:
             moe_type=moe_type,
         )
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """To dict."""
         return {
             'hidden_states': self.hidden_states,
@@ -275,19 +275,19 @@ class FusedMoEBase(nn.Module):
         """Before dispatch."""
         raise NotImplementedError
 
-    def dispatch(self, state: Dict):
+    def dispatch(self, state: dict):
         """dispatch."""
         raise NotImplementedError
 
-    def gemm(self, state: Dict):
+    def gemm(self, state: dict):
         """gemm."""
         raise NotImplementedError
 
-    def combine(self, state: Dict):
+    def combine(self, state: dict):
         """combine."""
         raise NotImplementedError
 
-    def wait(self, state: Dict):
+    def wait(self, state: dict):
         """wait."""
         raise NotImplementedError
 

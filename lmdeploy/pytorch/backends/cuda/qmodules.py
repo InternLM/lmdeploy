@@ -1,11 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Optional
 
 import torch
 
 import lmdeploy.pytorch.distributed as dist
-from lmdeploy.pytorch.kernels.cuda.w8a8_triton_kernels import (matmul_kernel_dynamic_quant, per_token_quant_int8,
-                                                               rms_norm_dynamic_quant)
+from lmdeploy.pytorch.kernels.cuda.w8a8_triton_kernels import (
+    matmul_kernel_dynamic_quant,
+    per_token_quant_int8,
+    rms_norm_dynamic_quant,
+)
 from lmdeploy.pytorch.models.q_modules import QTensor
 
 from ..qmodules import LinearW8A8Builder, LinearW8A8Impl, RMSNormW8A8Builder, RMSNormW8A8Impl
@@ -62,9 +64,9 @@ class TritonLinearW8A8Impl(LinearW8A8Impl):
                 x,
                 weight: torch.Tensor,
                 scale: torch.Tensor,
-                bias: Optional[torch.Tensor] = None,
+                bias: torch.Tensor | None = None,
                 all_reduce: bool = False,
-                group: Optional[torch.distributed.ProcessGroup] = None):
+                group: torch.distributed.ProcessGroup | None = None):
         """forward."""
         if isinstance(x, torch.Tensor):
             input_quant, input_scale = per_token_quant_int8(x, 1e-7, quant_dtype=self.quant_dtype)

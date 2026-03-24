@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict, List, Optional
 
 import torch
 
@@ -19,7 +18,7 @@ class LinearWeightsW8A8(LinearWeights):
                  out_features: int,
                  weight_type: str,
                  device: torch.device,
-                 expert_list: List[int] = None,
+                 expert_list: list[int] = None,
                  quant_dtype: torch.dtype = torch.int8):
         super().__init__(
             num_experts=num_experts,
@@ -75,9 +74,9 @@ class FusedMoEW8A8(FusedMoEBase):
                  num_experts: int,
                  top_k: int,
                  renormalize: bool = False,
-                 dtype: Optional[torch.dtype] = None,
-                 quant_dtype: Optional[torch.dtype] = torch.int8,
-                 device: Optional[torch.device] = None,
+                 dtype: torch.dtype | None = None,
+                 quant_dtype: torch.dtype | None = torch.int8,
+                 device: torch.device | None = None,
                  all_reduce: bool = True):
 
         device = device or torch.device('cpu')
@@ -133,7 +132,7 @@ class FusedMoEW8A8(FusedMoEBase):
         self.gate_up.update_weight(gate_up_weights, gate_up_scale)
         self.down.update_weight(down_weights, down_scale)
 
-    def dispatch(self, state: Dict):
+    def dispatch(self, state: dict):
         """dispatch."""
         moe_type = state['moe_type']
         if moe_type == MoeType.Default:
@@ -151,7 +150,7 @@ class FusedMoEW8A8(FusedMoEBase):
             raise NotImplementedError(f'Not supported moe type: {moe_type}')
         return recv_state
 
-    def gemm(self, state: Dict):
+    def gemm(self, state: dict):
         """gemm."""
         hidden_states = state['hidden_states']
         topk_weights = state['topk_weights']
@@ -161,7 +160,7 @@ class FusedMoEW8A8(FusedMoEBase):
                                 self.down.weight, self.down.scale, self.expert_list)
         return dict(hidden_states=ret, moe_type=state['moe_type'])
 
-    def combine(self, state: Dict):
+    def combine(self, state: dict):
         """combine."""
         moe_type = state['moe_type']
         if moe_type == MoeType.Default:
@@ -175,6 +174,6 @@ class FusedMoEW8A8(FusedMoEBase):
             raise NotImplementedError(f'Not supported moe type: {moe_type}')
         return out_state
 
-    def wait(self, state: Dict):
+    def wait(self, state: dict):
         """wait."""
         raise NotImplementedError

@@ -3,8 +3,14 @@ import copy
 import os
 
 from lmdeploy.messages import PytorchEngineConfig, SpeculativeConfig
-from lmdeploy.pytorch.config import (BackendConfig, CacheConfig, DistConfig, MiscConfig, SchedulerConfig,
-                                     SpecDecodeConfig)
+from lmdeploy.pytorch.config import (
+    BackendConfig,
+    CacheConfig,
+    DistConfig,
+    MiscConfig,
+    SchedulerConfig,
+    SpecDecodeConfig,
+)
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
 
 

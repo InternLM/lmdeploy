@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Optional
 
 import numpy as np
 import torch
@@ -102,10 +101,10 @@ class ARModelInputsStrategy(ModelInputsStrategy):
                      indices: torch.Tensor,
                      indice_cpu: np.ndarray = None,
                      block_offsets: torch.Tensor = None,
-                     max_q_seqlen: Optional[int] = None,
-                     max_kv_seqlen: Optional[int] = None,
-                     sum_kv_seqlen: Optional[int] = None,
-                     num_ignored_history: Optional[torch.Tensor] = None):
+                     max_q_seqlen: int | None = None,
+                     max_kv_seqlen: int | None = None,
+                     sum_kv_seqlen: int | None = None,
+                     num_ignored_history: torch.Tensor | None = None):
         """Index select."""
         assert inputs.is_decoding, 'Only support index_select in decoding.'
 

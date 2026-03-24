@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Dict, List
+from typing import Any
 
 import torch
 from transformers import AutoProcessor
@@ -41,7 +41,7 @@ class Qwen3VLModel(VisionModel):
         self.vision_start_token = self.processor.vision_start_token
         self.vision_end_token = self.processor.vision_end_token
 
-    def get_processor_args(self, mm_processor_kwargs: Dict[str, Any] | None = None):
+    def get_processor_args(self, mm_processor_kwargs: dict[str, Any] | None = None):
         min_pixels = self.processor.image_processor.size['shortest_edge']
         max_pixels = self.processor.image_processor.size['longest_edge']
 
@@ -78,9 +78,9 @@ class Qwen3VLModel(VisionModel):
         return min_pixels, max_pixels
 
     def _preprocess_image(self,
-                          data: List[Any],
-                          params: Dict[str, Any],
-                          mm_processor_kwargs: Dict[str, Any] | None = None) -> List[Dict]:
+                          data: list[Any],
+                          params: dict[str, Any],
+                          mm_processor_kwargs: dict[str, Any] | None = None) -> list[dict]:
 
         image = data.convert('RGB')
         min_pixels, max_pixels = self.get_processor_args(mm_processor_kwargs)
@@ -97,9 +97,9 @@ class Qwen3VLModel(VisionModel):
         return result
 
     def _preprocess_video(self,
-                          data: List[Any],
-                          params: Dict[str, Any],
-                          mm_processor_kwargs: Dict[str, Any] | None = None) -> List[Dict]:
+                          data: list[Any],
+                          params: dict[str, Any],
+                          mm_processor_kwargs: dict[str, Any] | None = None) -> list[dict]:
 
         # TODO: zhouxinyu, apply transformers smart_resize using per-request kwargs
         metadata = params['video_metadata']
@@ -127,7 +127,7 @@ class Qwen3VLModel(VisionModel):
         result.update(curr_timestamp=curr_timestamp, frame_seqlen=frame_seqlen, video_token_id=self.video_token_id)
         return result
 
-    def preprocess(self, messages: List[Dict], mm_processor_kwargs: Dict[str, Any] | None = None) -> List[Dict]:
+    def preprocess(self, messages: list[dict], mm_processor_kwargs: dict[str, Any] | None = None) -> list[dict]:
         """Refer to `super().preprocess()` for spec."""
         outputs = []
         self.contains_video_input = False
@@ -218,7 +218,7 @@ class Qwen3VLModel(VisionModel):
                    chat_template,
                    tokenizer,
                    sequence_start,
-                   chat_template_kwargs: Dict | None = None,
+                   chat_template_kwargs: dict | None = None,
                    **kwargs):
         """Return to the information needed by pytorch engine."""
         prompt, _ = self.proc_messages(messages, chat_template, sequence_start, chat_template_kwargs)
@@ -233,7 +233,7 @@ class Qwen3VLModel(VisionModel):
         pass
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         # TODO: implement for turbomind
         pass
 
@@ -242,7 +242,7 @@ class Qwen3VLModel(VisionModel):
                      chat_template,
                      tokenizer,
                      sequence_start,
-                     chat_template_kwargs: Dict | None = None,
+                     chat_template_kwargs: dict | None = None,
                      **kwargs):
         # TODO: implement for turbomind
         pass
