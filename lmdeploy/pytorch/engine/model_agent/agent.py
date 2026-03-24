@@ -1160,6 +1160,12 @@ class BaseModelAgent:
 
         self.spec_agent.reset_graph_runner()
 
+    def _get_spec_model(self):
+        """Return the spec-decode draft model, or None if not enabled."""
+        if self.spec_agent.is_enabled() and self.spec_agent.proposer.model is not None:
+            return self.spec_agent.proposer.model.get_model()
+        return None
+
     @torch.inference_mode()
     def update_params(self, request: UpdateParamsRequest):
         """Update params."""
@@ -1172,32 +1178,48 @@ class BaseModelAgent:
             # clone() seems necessary otherwise the producer can not release the memory
             return func(*args).clone()
 
+        def _deserialize_weights(serialized_data):
+            raw = ForkingPickler.loads(pybase64.b64decode(serialized_data))
+            if request.load_format == 'flattened_bucket':
+                metadata: list[FlattenedTensorMetadata] = raw['metadata']
+                if not metadata:
+                    return []
+                flattened_tensor: torch.Tensor = _construct(raw['flattened_tensor'])
+                bucket = FlattenedTensorBucket(flattened_tensor=flattened_tensor, metadata=metadata)
+                return list(bucket.reconstruct_tensors())
+            return [(k, _construct(v)) for k, v in raw]
+
+        def _split_main_and_draft(weights):
+            if not self.spec_agent.is_enabled():
+                return weights, []
+            main = [(name, weight) for name, weight in weights if not name.startswith('mtp.')]
+            draft = [(name, weight) for name, weight in weights if name.startswith('mtp.')]
+            return main, draft
+
         with self.all_context():
             serialized_data = request.serialized_named_tensors
             if isinstance(serialized_data, list):
                 serialized_data = serialized_data[self.dist_ctx.tp_group.rank]
-            model = self.patched_model.get_model()
-            weights = ForkingPickler.loads(pybase64.b64decode(serialized_data))
-            if request.load_format == 'flattened_bucket':
-                metadata: list[FlattenedTensorMetadata] = weights['metadata']
-                if metadata:
-                    flattened_tensor: torch.Tensor = _construct(weights['flattened_tensor'])
-                    bucket = FlattenedTensorBucket(flattened_tensor=flattened_tensor, metadata=metadata)
-                    weights = bucket.reconstruct_tensors()
-                else:
-                    # empty data
-                    weights = []
-            else:
-                weights = [(k, _construct(v)) for k, v in weights]
 
-            weights = ModelWeightLoader._rename_weights_iterator(weights, model)
-            model.load_weights(weights)
+            model = self.patched_model.get_model()
+            spec_model = self._get_spec_model()
+
+            weights = _deserialize_weights(serialized_data)
+            main_weights, draft_weights = _split_main_and_draft(weights)
+
+            for m, w, tag in [(model, main_weights, 'main'), (spec_model, draft_weights, 'draft')]:
+                if m is None or not w:
+                    continue
+
+                w = list(ModelWeightLoader._rename_weights_iterator(w, m))
+                logger.info(f'Update_params: {tag}_num_tensors={len(w)}')
+                m.load_weights(iter(w))
 
             if request.finished:
-                for _, mod in model.named_modules():
-                    if not hasattr(mod, 'update_weights'):
-                        continue
-                    mod.update_weights()
+                for m in filter(None, [model, spec_model]):
+                    for _, mod in m.named_modules():
+                        if hasattr(mod, 'update_weights'):
+                            mod.update_weights()
 
             torch.cuda.empty_cache()
 
@@ -1207,10 +1229,16 @@ class BaseModelAgent:
         self.state.is_sleeping = True
         if self.dist_config.dp > 1:
             await self.state.to_sleep.wait()
+        device = 'cpu' if level == 1 else 'meta'
         self.cache_engine = None
         self.reset_graph_runner()
-        device = 'cpu' if level == 1 else 'meta'
         self.patched_model.get_model().to(device=device, non_blocking=True)
+
+        spec_model = self._get_spec_model()
+        if spec_model is not None:
+            self.spec_agent.cache_engine = None
+            spec_model.to(device=device, non_blocking=True)
+
         torch.cuda.synchronize()
         torch.cuda.empty_cache()
         self.state.to_sleep.clear()
@@ -1220,9 +1248,11 @@ class BaseModelAgent:
         """Wakeup."""
         if tags is None:
             tags = ['weights', 'kv_cache']
+
         if 'weights' in tags:
             device = next(self.patched_model.get_model().parameters()).device
             assert device.type in ['cpu', 'meta']
+
             if device.type == 'cpu':
                 self.patched_model.get_model().to(torch.cuda.current_device())
             else:
@@ -1232,6 +1262,13 @@ class BaseModelAgent:
                 self.build_model()
                 self.build_graph_runner()
                 self.misc_config.empty_init = old_empty_init
+
+            spec_model = self._get_spec_model()
+            if spec_model is not None:
+                spec_device = next(spec_model.parameters()).device
+                assert spec_device.type in ['cpu', 'meta']
+                if spec_device.type == 'cpu':
+                    spec_model.to(torch.cuda.current_device())
 
         if 'kv_cache' in tags:
             self.build_cache_engine()
