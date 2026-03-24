@@ -201,8 +201,11 @@ class AsyncEngine:
             # set stats loggers of metrics processor
             metrics_processor.stat_loggers = self.stat_loggers
 
-    def get_schedule_metrics(self):
-        return self.engine.get_schedule_metrics()
+    async def get_schedule_metrics(self):
+        result = self.engine.get_schedule_metrics()
+        if asyncio.iscoroutine(result):
+            return await result
+        return result
 
     async def do_log_stats(self):
         """Loop through CLI logger and Prometheus logger and output the
