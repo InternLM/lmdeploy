@@ -153,6 +153,17 @@ class Qwen2MoeReader(LlamaReader):
         return self.params.get(f'{self.attn_layer_prefix}.{i}.mlp.shared_expert_gate.weight')
 
 
+def _configure_nested_language_model_prefix(reader):
+    """Handle VL checkpoints whose text weights live under
+    ``model.language_model``."""
+    if any(k.startswith('model.language_model.') for k in reader.params.keys()):
+        reader.attn_layer_prefix = 'model.language_model.layers'
+        reader.tok_embeddings_key = 'model.language_model.embed_tokens.weight'
+        reader.norm_weight_key = 'model.language_model.norm.weight'
+        if reader.model_cfg.get('tie_word_embeddings', False):
+            reader.output_weight_key = reader.tok_embeddings_key
+
+
 @INPUT_MODELS.register_module(name='qwen2-moe')
 class Qwen2MoeModel(LlamaModel):
 
@@ -172,6 +183,11 @@ class Qwen2MoeModel(LlamaModel):
 
 
 class Qwen3Reader(LlamaReader):
+    attn_layer_patten = r'(?:model\.language_model\.|model\.)layers\.([0-9]+)\.'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _configure_nested_language_model_prefix(self)
 
     def qk_norm(self, i: int):
         result = []
@@ -193,6 +209,11 @@ class Qwen3Model(LlamaModel):
 
 
 class Qwen3MoeReader(Qwen2MoeReader):
+    attn_layer_patten = r'(?:model\.language_model\.|model\.)layers\.([0-9]+)\.'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _configure_nested_language_model_prefix(self)
 
     def qk_norm(self, i: int):
         result = []
@@ -236,13 +257,7 @@ class Qwen3_5ReaderMixin:
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        if any(k.startswith('model.language_model.') for k in self.params.keys()):
-            self.attn_layer_prefix = 'model.language_model.layers'
-            self.tok_embeddings_key = 'model.language_model.embed_tokens.weight'
-            self.norm_weight_key = 'model.language_model.norm.weight'
-        tie_word_embeddings = self.model_cfg.get('tie_word_embeddings', False)
-        if tie_word_embeddings:
-            self.output_weight_key = self.tok_embeddings_key
+        _configure_nested_language_model_prefix(self)
 
     # ---- zero-centered RMSNorm: add 1 to weights during export ----
     def attn_norm(self, i: int):

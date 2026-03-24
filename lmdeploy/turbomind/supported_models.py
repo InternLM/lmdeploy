@@ -32,6 +32,8 @@ SUPPORTED_ARCHS = dict(
     # Qwen3
     Qwen3ForCausalLM='qwen3',
     Qwen3MoeForCausalLM='qwen3-moe',
+    Qwen3VLForConditionalGeneration='qwen3',
+    Qwen3VLMoeForConditionalGeneration='qwen3-moe',
     # Qwen 3.5
     Qwen3_5ForConditionalGeneration='qwen3_5',
     Qwen3_5MoeForConditionalGeneration='qwen3_5-moe',
