@@ -100,7 +100,7 @@ class GenerationConfig:
     """
 
     n: int = 1
-    max_new_tokens: int = 512
+    max_new_tokens: int = None
     do_sample: bool = False
     top_p: float = 1.0
     top_k: int = 50
@@ -152,20 +152,12 @@ class GenerationConfig:
         """Convert stop_words/bad_words to ids and append the ids to
         stop_token_ids/bad_token_ids."""
 
-        def words_to_token_seqs(words: list[str], prefer_exact: bool = False) -> list[list[int]]:
+        def words_to_token_seqs(words: list[str]) -> list[list[int]]:
             assert isinstance(words, list) and \
                 all(isinstance(elem, str) for elem in words), \
                 f'stop_words must be a list of str but got {type(words)}'
             seqs: list[list[int]] = []
             for word in words:
-                # For stop_words, prefer exact tokenization so multi-word phrases
-                # are represented as an exact token-id sequence.
-                if prefer_exact:
-                    encoded = tokenizer.encode(word, add_bos=False)
-                    if encoded:
-                        seqs.append(encoded)
-                        continue
-
                 single_matches = tokenizer.indexes_containing_token(word)
                 if single_matches:
                     for idx in single_matches:
@@ -176,7 +168,7 @@ class GenerationConfig:
                         seqs.append(encoded)
             return seqs
 
-        stop_seqs = words_to_token_seqs(self.stop_words, prefer_exact=True) if self.stop_words else []
+        stop_seqs = words_to_token_seqs(self.stop_words) if self.stop_words else []
         bad_seqs = words_to_token_seqs(self.bad_words) if self.bad_words else []
 
         stop_seqs.extend(self._normalize_stop_token_ids(self.stop_token_ids))

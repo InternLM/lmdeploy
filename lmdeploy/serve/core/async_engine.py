@@ -374,6 +374,8 @@ class AsyncEngine:
             else:
                 logger.warning('chat_template_kwargs["enable_thinking"] is already set, '
                                'the value will not be overwritten by enable_thinking')
+
+        gen_config = self._determine_gen_config(session, input_ids, gen_config=gen_config)
         if messages:
             prompt = messages
             self.request_logger.log_prompt(session, prompt=prompt)
@@ -398,8 +400,6 @@ class AsyncEngine:
             # TODO(lvhan) VLM doesn't support input_ids as an argument.
             # Figure out a graceful way to handle the invalid input
             prompt_input = dict(input_ids=input_ids)
-
-        gen_config = self._determine_gen_config(session, input_ids, gen_config=gen_config)
 
         if gen_config.max_new_tokens == 0:
             logger.info(f'run out of tokens. session={session_id}.')

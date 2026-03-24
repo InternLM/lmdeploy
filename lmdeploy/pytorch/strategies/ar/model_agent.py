@@ -110,14 +110,10 @@ class ARStoppingCriteria(StoppingCriteria):
         if stop_words is None or stop_word_lens is None:
             new_tail = None
         else:
-            token_ids_was_1d = (token_ids.ndim == 1)
-            if token_ids_was_1d:
-                token_ids = token_ids.unsqueeze(1)
+            # Set a uniform shape for token_ids for both single and multi-token stop words
+            token_ids = token_ids.unsqueeze(1) if token_ids.ndim == 1 else token_ids
 
             sw_stopped, stop_pos, new_tail = self._check_stop_words(token_ids, stop_words, stop_word_lens)
-
-            if token_ids_was_1d and token_ids.size(1) == 1:
-                token_ids = token_ids.squeeze(1)
 
             stopped = stopped | sw_stopped
             one_ids = torch.clamp_max(num_appendable_ids, 0)
@@ -142,36 +138,24 @@ class ARStoppingCriteria(StoppingCriteria):
         max_slen = int(stop_word_lens.max().item())
 
         if max_slen <= 1:
-            return self._check_stop_words_single(token_ids, stop_words, stop_word_lens)
+            # Fast path when every stop word is a single token
+            return self._check_single_stop_words(token_ids, stop_words, stop_word_lens)
 
-        return self._check_stop_words_multi(token_ids, stop_words, stop_word_lens, max_slen)
+        # General path for multi-token stop words
+        return self._check_multi_stop_words(token_ids, stop_words, stop_word_lens, max_slen)
 
-    def _check_stop_words_single(self, token_ids: torch.Tensor, stop_words: torch.Tensor, stop_word_lens: torch.Tensor):
-        """Fast path when every stop word is a single token.
-
-        No tail, no unfold, no sliding window — just a broadcast compare.
-        """
-        step_len = token_ids.size(1)
+    def _check_single_stop_words(self, token_ids: torch.Tensor, stop_words: torch.Tensor, stop_word_lens: torch.Tensor):
+        """Fast path: every stop word is a single token, AR always has L==1."""
+        batch_size = token_ids.size(0)
         device = token_ids.device
-
         targets = stop_words[:, :, 0]  # [B, S]
         valid = (stop_word_lens == 1)  # [B, S]
-
-        # [B, L, 1] == [B, 1, S] -> [B, L, S]; mask invalid targets
-        match = (token_ids.unsqueeze(2) == targets.unsqueeze(1)) & valid.unsqueeze(1)
-        match_any = match.any(2)  # [B, L]
-
-        sw_stopped = match_any.any(1)  # [B]
-        first_match = match_any.int().argmax(1)  # [B]
-        stop_pos = torch.where(sw_stopped, first_match, torch.zeros_like(first_match))
-
-        col_idx = torch.arange(step_len, device=device)
-        after_stop = (col_idx > stop_pos.unsqueeze(1)) & sw_stopped.unsqueeze(1)
-        token_ids[after_stop] = -1
-
+        # token_ids [B, 1] broadcasts against targets [B, S]
+        sw_stopped = ((token_ids == targets) & valid).any(1)  # [B]
+        stop_pos = torch.zeros(batch_size, dtype=torch.long, device=device)
         return sw_stopped, stop_pos, None
 
-    def _check_stop_words_multi(self, token_ids: torch.Tensor, stop_words: torch.Tensor, stop_word_lens: torch.Tensor,
+    def _check_multi_stop_words(self, token_ids: torch.Tensor, stop_words: torch.Tensor, stop_word_lens: torch.Tensor,
                                 max_slen: int):
         """General path for multi-token stop words.
 
