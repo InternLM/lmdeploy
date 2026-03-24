@@ -443,7 +443,8 @@ class ModelConfig:
                                                     model_path,
                                                     tp=tp,
                                                     is_draft_model=is_draft_model,
-                                                    spec_method=spec_method)
+                                                    spec_method=spec_method,
+                                                    device_type=device_type)
 
         if model_config.k_head_dim is None:
             assert model_config.head_dim is not None
