@@ -735,8 +735,26 @@ class TurboMindInstance:
         sem = StreamingSemaphore()
         signal_cb = partial(self.async_signal_cb, sem)
 
+        logits_cb = None
+        ppl_state = None
+        if gen_config.output_ppl:
+            ppl_state = [0.0, 0]  # [accumulated_loss, accumulated_count]
+
+            def logits_cb(logits_chunk, vocab_size, begin, count):
+                targets = torch.tensor(
+                    input_ids[begin + 1:begin + count + 1],
+                    device=logits_chunk.device)
+                valid = min(count, len(targets))
+                if valid > 0:
+                    loss = torch.nn.functional.cross_entropy(
+                        logits_chunk[:valid].float(), targets[:valid],
+                        reduction='sum')
+                    ppl_state[0] += loss.item()
+                    ppl_state[1] += valid
+
         outputs, shared_state, metrics = self.model_inst.forward(inputs, session, gen_cfg, stream_output,
-                                                                 self.tm_model.engine_config.enable_metrics, signal_cb)
+                                                                 self.tm_model.engine_config.enable_metrics, signal_cb,
+                                                                 logits_cb=logits_cb)
 
         outputs = _tm_dict_to_torch_dict(outputs)
 
@@ -773,6 +791,10 @@ class TurboMindInstance:
 
                 for f in extra_fs:
                     f(output, seq_len)
+
+                if finish and ppl_state is not None:
+                    output.ppl_loss = ppl_state[0]
+                    output.ppl_count = ppl_state[1]
 
                 prev_len = seq_len
 
@@ -828,5 +850,7 @@ class TurboMindInstance:
             c.output_logprobs = cfg.logprobs
         if cfg.random_seed is not None:
             c.random_seed = cfg.random_seed
-        # print (c)
+        if cfg.output_ppl:
+            c.compute_ppl = True
+            c.output_logits = 1  # kAll
         return c

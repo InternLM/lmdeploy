@@ -1,6 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 
@@ -348,6 +349,7 @@ PYBIND11_MODULE(_turbomind, m)
         .def_readwrite("output_logprobs", &ft::GenerationConfig::output_logprobs)
         .def_readwrite("output_last_hidden_state", &ft::GenerationConfig::output_last_hidden_state)
         .def_readwrite("output_logits", &ft::GenerationConfig::output_logits)
+        .def_readwrite("compute_ppl", &ft::GenerationConfig::compute_ppl)
         .def("__repr__", [](const ft::GenerationConfig& c) {
             std::ostringstream oss;
             oss << c;
@@ -448,19 +450,67 @@ PYBIND11_MODULE(_turbomind, m)
     py::class_<ModelRequest>(m, "ModelRequest")
         .def(
             "forward",
-            [](ModelRequest*               model_request,
-               std::shared_ptr<TensorMap>  input_tensors,
-               const ft::SessionParam&     session,
-               const ft::GenerationConfig& gen_cfg,
-               bool                        stream_output,
-               bool                        enable_metrics,
-               std::function<void()>       cb) {
+            [](ModelRequest*                                                 model_request,
+               std::shared_ptr<TensorMap>                                    input_tensors,
+               const ft::SessionParam&                                       session,
+               const ft::GenerationConfig&                                   gen_cfg,
+               bool                                                          stream_output,
+               bool                                                          enable_metrics,
+               std::function<void()>                                         cb,
+               std::optional<std::function<void(py::object, int, int, int)>> logits_cb) {
                 ModelRequest::InputParam param{};
                 param.tensors        = std::move(input_tensors);
                 param.session        = session;
                 param.gen_cfg        = gen_cfg;
                 param.stream_output  = stream_output;
                 param.enable_metrics = enable_metrics;
+
+                if (logits_cb) {
+                    auto py_cb      = std::move(*logits_cb);
+                    param.logits_cb = [py_cb = std::move(py_cb)](
+                                          void* data, int vocab_size, int begin, int count, ft::DataType dtype) {
+                        py::gil_scoped_acquire gil;
+                        int64_t                shape[2] = {count, vocab_size};
+                        DLManagedTensor*       dlmt     = new DLManagedTensor{};
+                        dlmt->dl_tensor.data            = data;
+                        dlmt->dl_tensor.ndim            = 2;
+                        dlmt->dl_tensor.shape           = shape;
+                        dlmt->dl_tensor.strides         = nullptr;
+                        dlmt->dl_tensor.byte_offset     = 0;
+
+                        dlmt->dl_tensor.device.device_type = kDLCUDA;
+                        int device_id                      = 0;
+                        cudaGetDevice(&device_id);
+                        dlmt->dl_tensor.device.device_id = device_id;
+
+                        if (dtype == ft::DataType::kFloat16) {
+                            dlmt->dl_tensor.dtype = {kDLFloat, 16, 1};
+                        }
+                        else if (dtype == ft::DataType::kBfloat16) {
+                            dlmt->dl_tensor.dtype = {kDLBfloat, 16, 1};
+                        }
+                        else {
+                            dlmt->dl_tensor.dtype = {kDLFloat, 32, 1};
+                        }
+
+                        dlmt->manager_ctx = nullptr;
+                        dlmt->deleter     = [](DLManagedTensor* self) { delete self; };
+
+                        py::capsule cap(dlmt, kDlTensorCapsuleName, [](PyObject* obj) {
+                            DLManagedTensor* p =
+                                static_cast<DLManagedTensor*>(PyCapsule_GetPointer(obj, kDlTensorCapsuleName));
+                            if (p->deleter) {
+                                p->deleter(p);
+                            }
+                        });
+
+                        py::object torch       = py::module_::import("torch");
+                        py::object from_dlpack = torch.attr("from_dlpack");
+                        py::object tensor      = from_dlpack(cap);
+
+                        py_cb(tensor, vocab_size, begin, count);
+                    };
+                }
 
                 auto ret = model_request->Forward(std::move(param), [cb = std::move(cb)]() {
                     try {
@@ -478,7 +528,8 @@ PYBIND11_MODULE(_turbomind, m)
             "gen_cfg"_a,
             "stream_output"_a,
             "enable_metrics"_a,
-            "cb"_a)
+            "cb"_a,
+            "logits_cb"_a = py::none())
         .def(
             "cancel",
             [](ModelRequest* model_request) {

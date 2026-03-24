@@ -190,14 +190,20 @@ class EngineInstance(EngineInstanceBase):
                     # request might be cancelled before any output
                     token_ids = []
                     logits = None
+                    ppl_loss = None
+                    ppl_count = None
                 else:
                     token_ids = resp_data['token_ids'][output_offset:].tolist()
                     logits = resp_data.get('logits', None)
+                    ppl_loss = resp_data.get('ppl_loss', None)
+                    ppl_count = resp_data.get('ppl_count', None)
                 num_ids = len(token_ids) - output_offset
                 logger.debug(f'session[{session_id}] finish: num_out_ids={num_ids}.')
                 yield EngineOutput(resp.type,
                                    token_ids,
                                    logits=logits,
+                                   ppl_loss=ppl_loss,
+                                   ppl_count=ppl_count,
                                    cache_block_ids=cache_block_ids,
                                    req_metrics=req_metrics,
                                    routed_experts=routed_experts,

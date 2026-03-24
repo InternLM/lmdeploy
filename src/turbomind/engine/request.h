@@ -48,6 +48,8 @@ struct GenerationConfig {
     };
     int output_last_hidden_state = 0;
     int output_logits            = 0;
+
+    bool compute_ppl = false;
 };
 
 std::ostream& operator<<(std::ostream& os, const GenerationConfig& c);
@@ -129,6 +131,9 @@ struct Request {
 
     std::shared_ptr<xgrammar::CompiledGrammar> grammar;
     std::shared_ptr<xgrammar::GrammarMatcher>  matcher;
+
+    // PPL callback: invoked with (logits_data_ptr, vocab_size, begin_offset, count, dtype)
+    std::function<void(void*, int, int, int, DataType)> logits_cb;
 };
 
 void UpdateState(Request& r, int status, int seq_len);
@@ -197,6 +202,7 @@ void serdes(Archive& ar, GenerationConfig& g)
     ar & g.output_logprobs;
     ar & g.output_last_hidden_state;
     ar & g.output_logits;
+    ar & g.compute_ppl;
     // clang-format on
 }
 

@@ -74,8 +74,9 @@ struct OutputProcessor::Impl {
             auto& c = *rc[i];
             auto& r = *c.req;
             auto& g = r.gen_cfg;
-            if (g.output_logits) {
-                c.output_logits = g.output_logits == kAll ? Interval{c.step0} : Interval{c.prompt_len - 1};
+            if (g.output_logits || g.compute_ppl) {
+                c.output_logits =
+                    (g.output_logits == kAll || g.compute_ppl) ? Interval{c.step0} : Interval{c.prompt_len - 1};
                 c.logits_offset = c.output_logits.begin();
             }
             if (g.output_last_hidden_state) {
@@ -182,28 +183,49 @@ struct OutputProcessor::Impl {
     {
         const int step_size = max_logits_len_;
 
-        // Coroutine frame
-        int  p      = 0;
-        auto ranges = data.output_logits;
+        // Split ranges into PPL callback requests and normal copy requests
+        decltype(data.output_logits) ppl_ranges;
+        decltype(data.output_logits) copy_ranges;
+        for (auto& entry : data.output_logits) {
+            auto& [i, t, src, dst] = entry;
+            if (rs[i]->req->logits_cb) {
+                ppl_ranges.push_back(entry);
+            }
+            else {
+                copy_ranges.push_back(entry);
+            }
+        }
+
+        // Coroutine frame for normal copy
+        int p = 0;
 
         using Size = Interval::Size;
 
-        bool success = false;
+        bool copy_success = copy_ranges.empty();
         // Erode the range iteratively until empty
         for (auto r = data.full_logits; r; r = -step_size | r) {
-            // dbg(&r);
             if (auto chunk = r & Interval{r.begin(), Size{step_size}}) {
-                // dbg(&chunk);
-                // Compute & output full logits by chunks
                 auto logits = lm_head_(h.slice(chunk.begin(), (int)chunk.size()));
-                success     = OutputLogitsImpl(ranges, p, logits, chunk.begin(), 2, rs);
-                if (success) {  // all requests satisfied, exit early
-                    break;
+
+                // Invoke PPL callbacks
+                if (tp_rank_ == 0) {
+                    const auto stream = core::Context::stream().handle();
+                    cudaStreamSynchronize(stream);
+                    for (auto& [i, t, src, dst] : ppl_ranges) {
+                        if (t == 2) {
+                            auto& cb = rs[i]->req->logits_cb;
+                            cb(logits.raw_data(), vocab_size_, chunk.begin(), (int)chunk.size(), logits.dtype());
+                        }
+                    }
+                }
+
+                if (!copy_success) {
+                    copy_success = OutputLogitsImpl(copy_ranges, p, logits, chunk.begin(), 2, rs);
                 }
             }
         }
 
-        TM_CHECK(success);  // all requests must be satisfied at the end
+        TM_CHECK(copy_ranges.empty() || copy_success);
     }
 
     template<class Ranges>

@@ -122,6 +122,7 @@ class GenerationConfig:
     logits_processors: list[LogitsProcessor] | None = None
     output_logits: Literal['all', 'generation'] = None
     output_last_hidden_state: Literal['all', 'generation'] = None
+    output_ppl: bool = False
     include_stop_str_in_output: bool = False
 
     # for disaggregation
@@ -496,6 +497,8 @@ class Response:
     logprobs: list[dict[int, float]] = None
     logits: torch.Tensor = None
     last_hidden_state: torch.Tensor = None
+    ppl_loss: float = None
+    ppl_count: int = None
     index: int = 0
     routed_experts: Any = None
 
@@ -632,6 +635,8 @@ class EngineOutput:
     logprobs: list[dict[int, float]] = None
     logits: torch.Tensor = None
     last_hidden_state: torch.Tensor = None
+    ppl_loss: float = None
+    ppl_count: int = None
     cache_block_ids: list[int] | None = None
     req_metrics: RequestMetrics | None = None
     routed_experts: torch.Tensor = None
