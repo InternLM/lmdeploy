@@ -33,6 +33,22 @@ void invokeFusedConv1dSiLU(Ref<Tensor>           out,
                            int*                  work_counter,
                            cudaStream_t          stream);
 
+void invokeFusedConv1dSiLU(Ref<Tensor>           out,
+                           const Tensor&         in,
+                           const Tensor&         weight,
+                           const Tensor&         bias,
+                           const Buffer_<void*>& conv_state_ptrs,
+                           const Buffer_<int>&   q_offsets,
+                           const Buffer_<int>&   k_offsets,
+                           int                   batch_size,
+                           int                   state_layer_offset,
+                           int                   sm_count,
+                           int*                  work_counter,
+                           cudaStream_t          stream,
+                           const Buffer_<void*>& capture_state_ptrs,
+                           int                   capture_stride,
+                           int                   checkpoint_interval_tokens);
+
 // All three recurrent-rule launchers share the same trailing parameters for
 // interface consistency:
 //   sm_count      — multiprocessor count, queried once by the caller at init
@@ -95,6 +111,24 @@ void invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out,
                                         int                   sm_count,
                                         int*                  work_counter,
                                         cudaStream_t          stream);
+
+void invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out,
+                                        const Tensor&         qkv_in,
+                                        const Tensor&         beta,
+                                        const Tensor&         g,
+                                        const Buffer_<void*>& state_ptrs,
+                                        const Buffer_<int>&   q_offsets,
+                                        const Buffer_<int>&   k_offsets,
+                                        int                   batch_size,
+                                        int                   num_k_heads,
+                                        int                   state_layer_offset,
+                                        DataType              state_dtype,
+                                        int                   sm_count,
+                                        int*                  work_counter,
+                                        cudaStream_t          stream,
+                                        const Buffer_<void*>& capture_state_ptrs,
+                                        int                   capture_stride,
+                                        int                   checkpoint_interval_tokens);
 
 // =============================================================================
 // Helper kernels
