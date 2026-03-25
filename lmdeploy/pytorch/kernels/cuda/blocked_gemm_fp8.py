@@ -155,12 +155,13 @@ def _quant_fp8_launcher(A: Tensor, group_size: int, out: Tensor, scales: Tensor,
     return out, scales
 
 
-def quant_fp8(A: Tensor,
-              group_size: int,
-              dtype: torch.dtype = torch.float8_e4m3fn,
-              trans_scale: bool = False,
-              scale_fmt: str | None = None) -> list[Tensor]:
-    """Quant fp8."""
+def _get_quant_fp8_empty_out(
+    A: Tensor,
+    group_size: int,
+    dtype: torch.dtype = torch.float8_e4m3fn,
+    trans_scale: bool = False,
+):
+    """Get quant empty out."""
     assert A.dim() == 2
     M, K = A.shape
     assert K % group_size == 0
@@ -170,7 +171,30 @@ def quant_fp8(A: Tensor,
         scales = A.new_empty(num_groups, M, dtype=torch.float32).T
     else:
         scales = A.new_empty(M, num_groups, dtype=torch.float32)
+    return out, scales
+
+
+@torch.library.custom_op('lmdeploy::quant_fp8', mutates_args=[])
+def quant_fp8(A: Tensor,
+              group_size: int,
+              dtype: torch.dtype = torch.float8_e4m3fn,
+              trans_scale: bool = False,
+              scale_fmt: str | None = None) -> list[Tensor]:
+    """Quant fp8."""
+    out, scales = _get_quant_fp8_empty_out(A, group_size, dtype=dtype, trans_scale=trans_scale)
     return _quant_fp8_launcher(A, group_size, out, scales, scale_fmt=scale_fmt)
+
+
+@quant_fp8.register_fake
+def _(
+    A: Tensor,
+    group_size: int,
+    dtype: torch.dtype = torch.float8_e4m3fn,
+    trans_scale: bool = False,
+    scale_fmt: str | None = None) -> list[Tensor]:
+    """Fake quant fp8."""
+    out, scales = _get_quant_fp8_empty_out(A, group_size, dtype=dtype, trans_scale=trans_scale)
+    return out, scales
 
 
 def _get_quant_fp8_tma_empty_out(

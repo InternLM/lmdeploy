@@ -630,6 +630,11 @@ def flash_mla_attention_forward(
     """Flash MLA attention forward op."""
     instance: FlashMLAImpl = get_custom_op_manager().get_mod_instance(mod_key)
     attn_metadata = get_step_ctx_manager().current_context().attn_metadata
+    # Reconstruct v_cache from k_cache. For MLA, v_cache is a view of k_cache
+    # (k_cache[..., :_MLA_NOPE_SIZE]). The compiler passes them as separate
+    # tensors, breaking the aliasing. After fill_kv_cache mutates k_cache,
+    # the stale v_cache won't reflect updates, so we must re-derive it here.
+    v_cache = k_cache[..., :instance._MLA_NOPE_SIZE]
     return instance.forward(
         query, key, value, k_cache, v_cache,
         attn_metadata=attn_metadata,
