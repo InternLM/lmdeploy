@@ -334,6 +334,9 @@ class ModelConfig:
     # added for qwen3_next
     # could used for any SSM model.
     states_shapes: list[tuple[tuple[int], torch.dtype]] = field(default_factory=list)
+    # flag to indicate that the model uses gated delta rule layers
+    # and requires prepare_chunk_indices during prefill
+    is_gated_delta: bool = False
 
     # check env for model-device combination
     check_env_func: Callable = _default_check_env
