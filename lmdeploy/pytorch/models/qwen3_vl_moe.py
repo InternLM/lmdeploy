@@ -36,8 +36,10 @@ class Qwen3VLMoeTextModel(Qwen3MoeModel):
     def forward(
         self,
         input_ids: torch.LongTensor = None,
-        position_ids: torch.LongTensor|None = None,
-        inputs_embeds: torch.FloatTensor|None = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,
+        attn_metadata: Any = None,
+        inputs_embeds: torch.FloatTensor | None = None,
         mrope_position_ids: torch.LongTensor = None,
         # args for deepstack
         visual_pos_masks: torch.Tensor | None = None,
@@ -65,10 +67,14 @@ class Qwen3VLMoeTextModel(Qwen3MoeModel):
         # decoding
         residual = None
         for idx, decoder_layer in enumerate(self.layers):
+            past_key_value = past_key_values[idx]
             hidden_states, residual = decoder_layer(
                 hidden_states,
                 rotary_pos_emb=rotary_pos_emb,
+                past_key_value=past_key_value,
                 residual=residual,
+                attn_metadata=attn_metadata,
+                all_routed_experts=all_routed_experts,
             )
 
             # add visual features to the hidden states of first several layers
