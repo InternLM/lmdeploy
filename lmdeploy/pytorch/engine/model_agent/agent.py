@@ -168,6 +168,12 @@ def model_forward(
         )
 
         with ctx_mgr.context(context):
+            # initialize cache for ssm
+            # chunk_indices in gated delta kernel requires cuda synchronize
+            # so we have to init cache after build_context
+            if not inputs.is_decoding and not inputs.is_dummy and inputs.state_offsets is not None:
+                state_cache_engine.init_caches(inputs.state_offsets, inputs.history_lengths == 0)
+
             model_metas = model.update_model_metas(
                 past_key_values=cache_engine.gpu_cache,
                 context=context,
@@ -843,11 +849,6 @@ class BaseModelAgent:
                 logger.debug(f'<ForwardTask> rank[{rank}]: all inputs are dummy, skip forward.')
                 await asyncio.sleep(0.01)
                 return
-
-        if not is_decoding:
-            # init state cache for first time prefill
-            # I don't know if this is necessary...
-            self.state_cache_engine.init_caches(inputs.state_offsets, inputs.history_lengths == 0)
 
         # swap caches
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
