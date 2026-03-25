@@ -1,13 +1,21 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Sequence, Tuple, Union
+from typing import Any
 
 import shortuuid
 
-from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, DeltaFunctionCall, DeltaMessage, DeltaToolCall,
-                                            ExtractedToolCallInformation, FunctionCall, ToolCall)
+from lmdeploy.serve.openai.protocol import (
+    ChatCompletionRequest,
+    DeltaFunctionCall,
+    DeltaMessage,
+    DeltaToolCall,
+    ExtractedToolCallInformation,
+    FunctionCall,
+    ToolCall,
+)
 from lmdeploy.utils import get_logger
 
 from .tool_parser import ToolParser, ToolParserManager
@@ -16,7 +24,7 @@ logger = get_logger('lmdeploy')
 
 
 @dataclass
-class ParserState(object):
+class ParserState:
     """Maintains the state of parsing during tool call extraction."""
     position: int = 0  # Current position in the text being parsed
     current_index: int = -1  # Index of the current tool call
@@ -48,7 +56,7 @@ class Qwen3CoderToolParser(ToolParser):
 
         self.tool_call_pat = re.compile(r'\n*<tool_call>(.*?)</tool_call>', re.DOTALL)
 
-    def _split(self, parser_state: ParserState, parsing_content: str) -> Tuple[str, str, bool]:
+    def _split(self, parser_state: ParserState, parsing_content: str) -> tuple[str, str, bool]:
         """Split content into tuple: (text_content, tool_content, has_tool_end)"""
         try:
             start_idx = parsing_content.index(self.tool_start_token)
@@ -66,7 +74,7 @@ class Qwen3CoderToolParser(ToolParser):
         parser_state.position += rem + len(self.tool_end_token)
         return parsing_content[:start_idx], parsing_content[start_idx:end_idx + len(self.tool_end_token)], True
 
-    def _extract_params(self, content: str) -> Tuple[Optional[str], Dict[str, Any], bool]:
+    def _extract_params(self, content: str) -> tuple[str | None, dict[str, Any], bool]:
         """Parse XML tool content into components."""
         content = content.replace(self.tool_start_token, '').replace(self.tool_end_token, '').strip()
 
@@ -126,7 +134,7 @@ class Qwen3CoderToolParser(ToolParser):
         current_token_ids: Sequence[int],
         delta_token_ids: Sequence[int],
         request: ChatCompletionRequest,
-    ) -> Union[DeltaMessage, None]:
+    ) -> DeltaMessage | None:
 
         parser_state = getattr(request, '_tool_parser_state', None)
         if parser_state is None:

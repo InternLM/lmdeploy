@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import List
 
 import torch
 
@@ -13,7 +12,7 @@ from .default import TritonAttentionImpl, TritonAttentionMetadata, _fill_kv_cach
 logger = get_logger('lmdeploy')
 
 
-def _normalize_sliding_window(sliding_window: List[int] | int | None):
+def _normalize_sliding_window(sliding_window: list[int] | int | None):
     """Normalize sliding window to tuple format.
 
     Args:
@@ -37,7 +36,7 @@ def _forward_prefill(
     max_q_seqlen: int,
     k_scales_zeros: torch.Tensor | None = None,
     v_scales_zeros: torch.Tensor | None = None,
-    sliding_window: List[int] | int | None = None,
+    sliding_window: list[int] | int | None = None,
     softmax_scale: float | None = None,
     causal: bool = True,
     logit_softcapping: float = 0.0,
@@ -117,7 +116,7 @@ def _decoding_speculative(
     v_cache: torch.Tensor,
     attn_metadata: TritonAttentionMetadata,
     max_q_seqlen: int,
-    sliding_window: List[int] | int | None = None,
+    sliding_window: list[int] | int | None = None,
     softmax_scale: float | None = None,
     causal: bool = True,
     logit_softcapping: float = 0.0,
@@ -169,7 +168,7 @@ def _decoding_standard(
     max_q_seqlen: int,
     k_scales_zeros: torch.Tensor | None = None,
     v_scales_zeros: torch.Tensor | None = None,
-    sliding_window: List[int] | int | None = None,
+    sliding_window: list[int] | int | None = None,
     softmax_scale: float | None = None,
     causal: bool = True,
     logit_softcapping: float = 0.0,
@@ -224,7 +223,7 @@ def _forward_decoding(
     max_q_seqlen: int,
     k_scales_zeros: torch.Tensor | None = None,
     v_scales_zeros: torch.Tensor | None = None,
-    sliding_window: List[int] | int | None = None,
+    sliding_window: list[int] | int | None = None,
     softmax_scale: float | None = None,
     causal: bool = True,
     logit_softcapping: float = 0.0,
@@ -506,7 +505,7 @@ def fa3_attention_op_impl(
     attn_metadata: TritonAttentionMetadata,
     k_scales_zeros: torch.Tensor | None = None,
     v_scales_zeros: torch.Tensor | None = None,
-    sliding_window: List[int] | None = None,
+    sliding_window: list[int] | None = None,
     softmax_scale: float | None = None,
     causal: bool = True,
     logit_softcapping: float = 0.0,
@@ -569,7 +568,7 @@ def fa3_attention_op(
     v_cache: torch.Tensor,
     k_scales_zeros: torch.Tensor | None = None,
     v_scales_zeros: torch.Tensor | None = None,
-    sliding_window: List[int] | None = None,
+    sliding_window: list[int] | None = None,
     softmax_scale: float | None = None,
     causal: bool = True,
     logit_softcapping: float = 0.0,

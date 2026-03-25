@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
-from typing import Callable
+from collections.abc import Callable
 
 import torch
 import triton

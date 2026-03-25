@@ -5,7 +5,8 @@ In piecewise mode, certain operations (like attention) require eager execution. 
 mode to execute eager versions of functions.
 """
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import torch.nn as nn
 from torch.profiler import record_function

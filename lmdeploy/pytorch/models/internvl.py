@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -277,7 +278,7 @@ class InternAttention(nn.Module):
         eps = self.config.layer_norm_eps
         return post_rms_norm(q, k, self.q_norm.weight, self.k_norm.weight, variance, eps, self.embed_dim, dtype)
 
-    def qkv_norm(self, q: torch.Tensor, k: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def qkv_norm(self, q: torch.Tensor, k: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         import lmdeploy.pytorch.distributed as dist
         q_shape = q.shape
         k_shape = k.shape
@@ -432,7 +433,7 @@ class InternVisionModel(nn.Module):
 
     def forward(
         self,
-        pixel_values: Optional[torch.FloatTensor] = None,
+        pixel_values: torch.FloatTensor | None = None,
     ):
         """forward."""
         assert pixel_values.dim() == 4
@@ -713,7 +714,7 @@ class InternVLChatModel(nn.Module, DeployModelMixinV1, CudaGraphMixin):
 
         return vit_embeds, new_lang_embeds, new_input_ids, new_image_mask, new_seq_lengths
 
-    def update_forward_inputs(self, input_ids: torch.Tensor, new_seqlens: List[int],
+    def update_forward_inputs(self, input_ids: torch.Tensor, new_seqlens: list[int],
                               context: StepContext) -> StepContext:
         """Update the forward inputs, position_ids and attention metadata."""
         from lmdeploy.pytorch.model_inputs import ModelInputs
@@ -758,7 +759,7 @@ class InternVLChatModel(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         pixel_values: torch.Tensor = None,
         image_mask: torch.Tensor = None,
@@ -808,7 +809,7 @@ class InternVLChatModel(nn.Module, DeployModelMixinV1, CudaGraphMixin):
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         inputs_embeds: torch.Tensor = None,
         context: StepContext = None,
     ):
@@ -921,7 +922,7 @@ class InternVLChatModel(nn.Module, DeployModelMixinV1, CudaGraphMixin):
                         image_token_id=image_token_id,
                         context=context)
 
-    def load_lora_weights(self, weights: Iterable[Tuple[str, torch.Tensor]], adapter_id: int):
+    def load_lora_weights(self, weights: Iterable[tuple[str, torch.Tensor]], adapter_id: int):
         """Load lora weights."""
 
         if hasattr(self.language_model, 'load_lora_weights'):
@@ -931,7 +932,7 @@ class InternVLChatModel(nn.Module, DeployModelMixinV1, CudaGraphMixin):
 
             return load_lora_weights(weights, adapter_id)
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
 
         lang_prefix = 'language_model.'
@@ -976,8 +977,8 @@ class InternVLInputProcessor(BaseModelInputProcessor):
         self.vision_token_num = self.num_patches // 4
 
     def preprocess_input(self,
-                         input_ids: List[int],
-                         input_multimodals: List[Dict[str, Any]] = None,
+                         input_ids: list[int],
+                         input_multimodals: list[dict[str, Any]] = None,
                          **kwargs) -> PreprocessInputResult:
         """Prepare multimodal input."""
         if input_multimodals is None or len(input_multimodals) == 0:

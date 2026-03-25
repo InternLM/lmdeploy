@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Callable, Iterable, Literal, Sequence, overload
+from collections.abc import Callable, Iterable, Sequence
+from typing import Any, Literal, overload
 
 import torch
 from torch._library.custom_ops import CustomOpDef, device_types_t

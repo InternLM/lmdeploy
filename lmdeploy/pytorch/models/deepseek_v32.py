@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Sequence, Tuple
+from collections.abc import Sequence
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -7,15 +8,29 @@ from torch import nn
 
 from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank
 from lmdeploy.pytorch.model_inputs import StepContextManager
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType, build_rotary_embedding,
-                                 build_rotary_params)
+from lmdeploy.pytorch.nn import (
+    ApplyRotaryEmb,
+    Attention,
+    RMSNorm,
+    RopeType,
+    build_rotary_embedding,
+    build_rotary_params,
+)
 from lmdeploy.pytorch.nn.eplb import EPLBManager
 from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_o_proj, build_rowwise_linear
 from lmdeploy.pytorch.nn.nsa import IndexerTopKFP8
 from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters, get_rope_theta
 
-from .deepseek_v2 import (DeepseekV2Attention, DeepseekV2BMM, DeepseekV2DecoderLayer, DeepseekV2ForCausalLM,
-                          DeepseekV2MLP, DeepseekV2Model, DeepseekV2MoE, yarn_get_mscale)
+from .deepseek_v2 import (
+    DeepseekV2Attention,
+    DeepseekV2BMM,
+    DeepseekV2DecoderLayer,
+    DeepseekV2ForCausalLM,
+    DeepseekV2MLP,
+    DeepseekV2Model,
+    DeepseekV2MoE,
+    yarn_get_mscale,
+)
 
 
 def rotate_activation(x: torch.Tensor) -> torch.Tensor:
@@ -88,7 +103,7 @@ class Indexer(nn.Module):
                 x: torch.Tensor,
                 qr: torch.Tensor,
                 freqs_cis: torch.Tensor,
-                index_cache: Tuple[torch.Tensor, torch.Tensor],
+                index_cache: tuple[torch.Tensor, torch.Tensor],
                 attn_metadata: Any = None):
         q = self.wq_b(qr)
         q = q.unflatten(-1, (-1, self.head_dim))
@@ -270,7 +285,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
         past_key_value: Sequence[torch.Tensor] = None,
         attn_metadata: Any = None,
     ):

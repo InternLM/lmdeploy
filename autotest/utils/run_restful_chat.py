@@ -8,8 +8,13 @@ import psutil
 import requests
 from openai import OpenAI
 from pytest_assume.plugin import assume
-from utils.config_utils import (get_case_str_by_config, get_cli_common_param, get_cuda_prefix_by_workerid, get_workerid,
-                                resolve_extra_params)
+from utils.config_utils import (
+    get_case_str_by_config,
+    get_cli_common_param,
+    get_cuda_prefix_by_workerid,
+    get_workerid,
+    resolve_extra_params,
+)
 from utils.constant import DEFAULT_PORT, DEFAULT_SERVER
 from utils.restful_return_check import assert_chat_completions_batch_return
 from utils.rule_condition_assert import assert_result
@@ -82,7 +87,7 @@ def start_openai_service(config, run_config, worker_id, timeout: int = 1200):
             # Check if process is still running
             return_code = startRes.wait(timeout=1)  # Small timeout to check status
             if return_code != 0:
-                with open(server_log, 'r') as f:
+                with open(server_log) as f:
                     content = f.read()
                     print(content)
                 return 0, content
@@ -595,8 +600,6 @@ def _run_tools_case(log_path, port: int = DEFAULT_PORT):
 
     timestamp = time.strftime('%Y%m%d_%H%M%S')
     restful_log = os.path.join(log_path, f'restful_toolcall_{model}_{str(port)}_{timestamp}.log')
-    file = open(restful_log, 'w')
-
     client = OpenAI(api_key='YOUR_API_KEY', base_url=http_url + '/v1')
     model_name = client.models.list().data[0].id
 
@@ -748,7 +751,7 @@ def start_proxy_server(log_path, port, case_name: str = 'default'):
             # Check if process is still running
             return_code = proxy_process.wait(timeout=1)  # Small timeout to check status
             if return_code != 0:
-                with open(proxy_log, 'r') as f:
+                with open(proxy_log) as f:
                     content = f.read()
                     print(content)
                 return 0, proxy_process

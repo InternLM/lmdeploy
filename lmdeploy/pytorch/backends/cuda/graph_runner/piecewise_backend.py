@@ -6,7 +6,8 @@ Strategy: Separate attention operations (executed eagerly) from compute operatio
 """
 
 from collections import defaultdict
-from typing import Any, Callable, Tuple
+from collections.abc import Callable
+from typing import Any
 
 import torch
 import torch.fx as fx
@@ -70,7 +71,7 @@ class LMDeployPiecewiseBackend:
     def __call__(
         self,
         gm: fx.GraphModule,
-        example_inputs: Tuple[Any, ...],
+        example_inputs: tuple[Any, ...],
         fullgraph: bool = True,
         mode: str = 'reduce-overhead',
         dynamic: bool | None = None,

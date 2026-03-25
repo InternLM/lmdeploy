@@ -22,7 +22,7 @@ def write_log(config, result, msg, is_new: bool = True, case_path_tag: str = 'de
 def assert_log(config, case_path_tag: str = 'default'):
     log_path = os.path.join(config.get('log_path'), case_path_tag)
 
-    with open(log_path, 'r') as f:
+    with open(log_path) as f:
         lines = f.readlines()
 
         for line in lines:

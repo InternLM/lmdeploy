@@ -2,7 +2,7 @@
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 
 from ..ar.model_inputs import merge_model_inputs
-from ..base.model_inputs import ModelInputsStrategy, make_dummy_inputs
+from ..base.model_inputs import MakeDummyMeta, ModelInputsStrategy, make_dummy_inputs
 
 
 class DLLMModelInputsStrategy(ModelInputsStrategy):
@@ -17,7 +17,8 @@ class DLLMModelInputsStrategy(ModelInputsStrategy):
                    dummy_block_id: int = 0,
                    vocab_size: int = 1,
                    max_q_seqlen: int | None = None,
-                   num_blocks: int = 1) -> ModelInputs:
+                   num_blocks: int = 1,
+                   meta: MakeDummyMeta | None = None) -> ModelInputs:
         """Create dummy model inputs."""
         if max_q_seqlen is None:
             max_q_seqlen = self.block_size
@@ -27,7 +28,8 @@ class DLLMModelInputsStrategy(ModelInputsStrategy):
                                  device=device,
                                  dummy_block_id=dummy_block_id,
                                  vocab_size=vocab_size,
-                                 num_blocks=num_blocks)
+                                 num_blocks=num_blocks,
+                                 meta=meta)
 
     def merge(self, inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
         """Merge model inputs."""

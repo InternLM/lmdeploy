@@ -6,19 +6,25 @@ from opencompass.tasks.subjective_eval import SubjectiveEvalTask
 
 with read_base():
     # choose a list of datasets
-    from opencompass.configs.datasets.subjective.alignbench.alignbench_judgeby_critiquellm import \
-        alignbench_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.subjective.alpaca_eval.alpacav2_judgeby_gpt4 import \
-        alpacav2_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.subjective.arena_hard.arena_hard_compare import \
-        arenahard_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.subjective.compassarena.compassarena_compare import \
-        compassarena_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.subjective.alignbench.alignbench_judgeby_critiquellm import (
+        alignbench_datasets,  # noqa: F401, E501
+    )
+    from opencompass.configs.datasets.subjective.alpaca_eval.alpacav2_judgeby_gpt4 import (
+        alpacav2_datasets,  # noqa: F401, E501
+    )
+    from opencompass.configs.datasets.subjective.arena_hard.arena_hard_compare import (
+        arenahard_datasets,  # noqa: F401, E501
+    )
+    from opencompass.configs.datasets.subjective.compassarena.compassarena_compare import (
+        compassarena_datasets,  # noqa: F401, E501
+    )
     from opencompass.configs.datasets.subjective.fofo.fofo_bilingual_judge import fofo_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.subjective.multiround.mtbench101_judge import \
-        mtbench101_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.subjective.wildbench.wildbench_pair_judge import \
-        wildbench_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.subjective.multiround.mtbench101_judge import (
+        mtbench101_datasets,  # noqa: F401, E501
+    )
+    from opencompass.configs.datasets.subjective.wildbench.wildbench_pair_judge import (
+        wildbench_datasets,  # noqa: F401, E501
+    )
 
 datasets = sum((v for k, v in locals().items() if k.endswith('_datasets') and 'wildbench' not in k), [])
 datasets += wildbench_datasets

@@ -1,15 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import contextlib
 import os
-from typing import Union
 
 
 def env_to_bool(
     env_var: str,
     default: bool = False,
     *,
-    true_values: Union[set, list] = {'true', '1', 'yes', 'on'},
-    false_values: Union[set, list] = {'false', '0', 'no', 'off'},
+    true_values: set | list = {'true', '1', 'yes', 'on'},
+    false_values: set | list = {'false', '0', 'no', 'off'},
 ):
     """Env to bool."""
     value = os.getenv(env_var)
@@ -80,7 +79,7 @@ def set_envs():
 
     def _patched_get_env(
         env_var: str,
-        default: Union[str, None] = None,
+        default: str | None = None,
     ):
         """Patched get_env."""
         if env_var in os.environ:
@@ -126,6 +125,9 @@ with set_envs():
     # ray external placement group bundles
     # only used when lmdeploy is initialized inside a Ray Actor with pg allocated
     ray_external_pg_bundles = env_to_list_int('LMDEPLOY_RAY_EXTERNAL_PG_BUNDLES', [])
+
+    # enable ray zero-copy tensors
+    os.getenv('RAY_ENABLE_ZERO_COPY_TORCH_TENSORS', '1')
 
     # dist
     dist_master_addr = os.getenv('LMDEPLOY_DIST_MASTER_ADDR', None)

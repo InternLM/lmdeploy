@@ -76,7 +76,7 @@ class NSAIndicesUpdater:
         return self._update_prefill_func(nsa_indices, q_seqlens, cu_seqlens_k)
 
     @staticmethod
-    @functools.lru_cache(maxsize=None)
+    @functools.cache
     def build():
         return NSAIndicesUpdater()
 
@@ -656,7 +656,7 @@ def flash_mla_attention_forward(
     nsa_indices: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Flash MLA attention forward op."""
-    instance: 'FlashMLAImpl' = get_custom_op_manager().get_mod_instance(mod_key)
+    instance: FlashMLAImpl = get_custom_op_manager().get_mod_instance(mod_key)
     assert isinstance(instance, FlashMLAImpl)
     step_ctx = get_step_ctx_manager().current_context()
     attn_metadata: TritonAttentionMetadata = step_ctx.attn_metadata

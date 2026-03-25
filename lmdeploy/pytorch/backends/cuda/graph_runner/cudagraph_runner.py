@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import functools
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import torch
 from torch.profiler import record_function
@@ -56,7 +56,7 @@ def _false(*args, **kwargs):
     return False
 
 
-def get_attn_metadata(kwargs: Dict[str, Any], context: StepContext) -> TritonAttentionMetadata:
+def get_attn_metadata(kwargs: dict[str, Any], context: StepContext) -> TritonAttentionMetadata:
     """Get attention metadata from kwargs or context."""
     if 'attn_metadata' in kwargs:
         attn_metadata: TritonAttentionMetadata = kwargs['attn_metadata']
@@ -76,7 +76,7 @@ class CUDASingleGraphRunner:
         num_blocks: int,
         block_size: int,
         is_decoding: bool,
-        pool: Tuple[int, int],
+        pool: tuple[int, int],
         model_config: ModelConfig,
         device: torch.device,
         decode_query_len: int = 1,
@@ -100,6 +100,8 @@ class CUDASingleGraphRunner:
             mla_index_topk=getattr(self.model_config, 'mla_index_topk', None),
             decode_query_len=decode_query_len,
             use_fa3_decoding=model_config.model_paradigm == 'ar_spec',
+            is_ssm=len(model_config.states_shapes) > 0,
+            use_mrope=model_config.use_mrope,
         )
         self.device = device
         self.max_batches = max_batches
@@ -164,7 +166,7 @@ class CUDAGraphRunner(GraphRunner):
         self.enable_graph = self.check_enable_graph()
 
         self.graph_pool_handle = torch.cuda.graph_pool_handle()
-        self._runner_map: Dict[Any, CUDASingleGraphRunner] = dict()
+        self._runner_map: dict[Any, CUDASingleGraphRunner] = dict()
         self.has_try_compile_model: bool = False
 
         # strategy factory
@@ -275,7 +277,7 @@ class CUDAGraphRunner(GraphRunner):
     @record_function('prepare_inputs_for_generation')
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         inputs_embeds: torch.Tensor = None,
         context: StepContext = None,
     ):
@@ -317,9 +319,9 @@ class CUDAGraphRunner(GraphRunner):
             dp_meta.sync_tp_size(tp_size)
         return inputs
 
-    def get_capture_batch_sizes(self) -> List[int]:
+    def get_capture_batch_sizes(self) -> list[int]:
         """Capture batch sizes."""
         return _get_capture_batch_size_impl(self.cache_config.max_batches)
 
-    def get_capture_prefill_num_tokens(self) -> List[int]:
+    def get_capture_prefill_num_tokens(self) -> list[int]:
         return [self.cache_config.max_prefill_token_num]

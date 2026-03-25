@@ -2,9 +2,10 @@
 # modify from: https://github.com/vllm-project/vllm
 import asyncio
 import inspect
+from collections.abc import Sequence
 from contextlib import contextmanager
 from inspect import Parameter, Signature
-from typing import Dict, Generic, Optional, Sequence, TypeVar
+from typing import Generic, TypeVar
 
 import psutil
 import torch
@@ -27,7 +28,7 @@ def get_cpu_memory() -> int:
     return psutil.virtual_memory().total
 
 
-def bind_sigature(input_names: str, args: Sequence, kwargs: Dict):
+def bind_sigature(input_names: str, args: Sequence, kwargs: dict):
     """Bind args and kwargs to given input names."""
     kind = inspect._ParameterKind.POSITIONAL_OR_KEYWORD
 
@@ -61,14 +62,14 @@ T = TypeVar('T')
 class CtxMgrBase(Generic[T]):
     """Context manager base class."""
 
-    def __init__(self, default: Optional[T] = None):
+    def __init__(self, default: T | None = None):
         self._context = default
 
-    def current_context(self) -> Optional[T]:
+    def current_context(self) -> T | None:
         """Get current context."""
         return self._context
 
-    def set_context(self, context: Optional[T]):
+    def set_context(self, context: T | None):
         """Set current context."""
         self._context = context
 

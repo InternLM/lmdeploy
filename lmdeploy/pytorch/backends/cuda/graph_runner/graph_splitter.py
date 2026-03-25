@@ -5,7 +5,6 @@ Based on vLLM split_graph implementation.
 """
 
 from dataclasses import dataclass
-from typing import List
 
 import torch
 import torch.fx as fx
@@ -25,7 +24,7 @@ class SplitItem:
     graph: fx.GraphModule
 
 
-def split_graph(graph: fx.GraphModule, ops: List[str]) -> tuple[fx.GraphModule, List[SplitItem]]:
+def split_graph(graph: fx.GraphModule, ops: list[str]) -> tuple[fx.GraphModule, list[SplitItem]]:
     """Split graph by splitting operations.
 
     Args:

@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import functools
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import List, Sequence
 
 import torch
 
@@ -55,7 +55,7 @@ class GraphRunner:
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         inputs_embeds: torch.Tensor = None,
         context: StepContext = None,
     ):
@@ -68,7 +68,7 @@ class GraphRunner:
 
     def update_model_metas(
         self,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         inputs_embeds: torch.Tensor = None,
         context: StepContext = None,
     ):
@@ -100,11 +100,11 @@ class GraphRunner:
     def update_inputs(self, inputs):
         return inputs
 
-    def get_capture_batch_sizes(self) -> List[int]:
+    def get_capture_batch_sizes(self) -> list[int]:
         """Capture batch sizes."""
         return _get_capture_batch_size_impl(self.cache_config.max_batches)
 
-    def get_capture_prefill_num_tokens(self) -> List[int]:
+    def get_capture_prefill_num_tokens(self) -> list[int]:
         """Capture prefill num tokens."""
         steps = 1024
         max_prefill_token_num = self.cache_config.max_prefill_token_num

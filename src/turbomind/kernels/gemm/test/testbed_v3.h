@@ -79,7 +79,7 @@ static Tensor CopyTransposed(const Tensor& src, Tensor out = {})
 
 struct Testbed_v3: Parameter {
 
-    Testbed_v3(const Parameter& param): Parameter{param}, stream_{core::Context::stream().handle()}, linear_{stream_}
+    Testbed_v3(const Parameter& param): Parameter{param}, stream_{core::Context::stream().handle()}, linear_{}
     {
         rng_.set_stream(stream_);
         ref_.set_stream(stream_);

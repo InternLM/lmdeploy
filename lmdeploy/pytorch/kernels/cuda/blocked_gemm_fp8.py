@@ -178,6 +178,7 @@ def _get_quant_fp8_tma_empty_out(
     group_size: int,
     dtype: torch.dtype = torch.float8_e4m3fn,
 ):
+    """Quant fp8 tma."""
     from lmdeploy.pytorch.third_party.deep_gemm import ceil_div, get_m_alignment_for_contiguous_layout
     assert A.dim() == 2
     M, K = A.shape

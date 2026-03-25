@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Callable, List, Optional
+from collections.abc import Callable
 
 import torch
 
@@ -48,7 +48,7 @@ class TritonFusedMoEImpl(FusedMoEImpl):
                 down_weights: torch.Tensor,
                 gate_up_bias: torch.Tensor = None,
                 down_bias: torch.Tensor = None,
-                expert_list: List[int] = None,
+                expert_list: list[int] = None,
                 act_func: Callable = None):
         """forward."""
         expert_offset = 0
@@ -104,7 +104,7 @@ class FusedMoENormal:
         topk_ids: torch.LongTensor,
         up_weights: torch.Tensor,
         down_weights: torch.Tensor,
-        expert_list: List[int] = None,
+        expert_list: list[int] = None,
     ):
         """forward."""
         from lmdeploy.pytorch.kernels.cuda.fused_moe_ep import fused_moe_v3
@@ -130,7 +130,7 @@ class FusedMoENormal:
                        x: torch.Tensor,
                        topk_idx: torch.Tensor,
                        topk_weights: torch.Tensor,
-                       num_experts: Optional[int] = None,
+                       num_experts: int | None = None,
                        previous_event=None,
                        async_finish=True):
         return self.token_dispatcher.dispatch_normal_async(x, topk_idx, topk_weights, num_experts, previous_event,
@@ -202,7 +202,7 @@ def dispatch_async_ll(
     self,
     hidden_states: torch.Tensor,
     topk_idx: torch.Tensor,
-    num_experts: Optional[int] = None,
+    num_experts: int | None = None,
     use_fp8: bool = True,
     async_finish: bool = True,
 ):
@@ -283,7 +283,7 @@ class FusedMoELowLatency:
                 topk_ids: torch.LongTensor,
                 up_weights: torch.Tensor,
                 down_weights: torch.Tensor,
-                expert_list: List[int] = None):
+                expert_list: list[int] = None):
         """forward."""
         recv_hidden_states, topk_idx, topk_weights, masked_m, expected_m = dispatch_ll(
             self.token_dispatcher,
@@ -305,7 +305,7 @@ class FusedMoELowLatency:
         self,
         hidden_states: torch.Tensor,
         topk_idx: torch.Tensor,
-        num_experts: Optional[int] = None,
+        num_experts: int | None = None,
         use_fp8: bool = False,
         async_finish: bool = True,
     ):
@@ -455,7 +455,7 @@ class FusedMoEEPImpl(TritonFusedMoEImpl):
                 down_weights: torch.Tensor,
                 gate_up_bias: torch.Tensor = None,
                 down_bias: torch.Tensor = None,
-                expert_list: List[int] = None,
+                expert_list: list[int] = None,
                 act_func: Callable = None):
         """forward."""
         assert act_func is None, 'Activation function is not supported in DeepEP MoE.'

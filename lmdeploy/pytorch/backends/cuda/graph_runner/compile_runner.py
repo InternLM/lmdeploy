@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import functools
-from typing import Any, Callable, Dict, List
+from collections.abc import Callable
+from typing import Any
 
 import torch
 from torch.profiler import record_function
@@ -22,7 +23,7 @@ PREFILL_FULLGRAPH = True
 DECODING_FULLGRAPH = True
 
 
-def get_attn_metadata(kwargs: Dict[str, Any], context: StepContext) -> TritonAttentionMetadata:
+def get_attn_metadata(kwargs: dict[str, Any], context: StepContext) -> TritonAttentionMetadata:
     """Get attention metadata from kwargs or context."""
     if 'attn_metadata' in kwargs:
         attn_metadata: TritonAttentionMetadata = kwargs['attn_metadata']
@@ -50,7 +51,7 @@ def _get_capture_batch_size_impl(max_batches: int):
     return ret
 
 
-def mark_static_kv_cache(kv_caches: List[List[torch.Tensor]]):
+def mark_static_kv_cache(kv_caches: list[list[torch.Tensor]]):
     for kv_cache in kv_caches:
         for cache in kv_cache:
             torch._dynamo.mark_static_address(cache)
@@ -131,7 +132,7 @@ class TorchCompilePrefillRunner:
         self.backend_config = backend_config
         self.graph_pool_handle = graph_pool_handle
 
-        self._runner_map: Dict[Any, TorchCompileSinglePrefillRunner] = dict()
+        self._runner_map: dict[Any, TorchCompileSinglePrefillRunner] = dict()
         self._compile_backend = create_backend(self.graph_pool_handle, is_decoding=False)
 
         self.graph = torch.compile(
@@ -263,7 +264,7 @@ class TorchCompileDecodingRunner:
         self.backend_config = backend_config
         self.graph_pool_handle = graph_pool_handle
 
-        self._runner_map: Dict[Any, TorchCompileSingleDecodingRunner] = dict()
+        self._runner_map: dict[Any, TorchCompileSingleDecodingRunner] = dict()
 
         self._compile_backend = create_backend(self.graph_pool_handle, is_decoding=True)
         self.graph = torch.compile(
@@ -411,7 +412,7 @@ class TorchCompileRunner(GraphRunner):
     @record_function('prepare_inputs_for_generation')
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         inputs_embeds: torch.Tensor = None,
         context: StepContext = None,
     ):
@@ -455,7 +456,7 @@ class TorchCompileRunner(GraphRunner):
                 dp_meta.set_tp_sizes(tp_sizes, moe_tp_sizes)
         return inputs
 
-    def get_capture_batch_sizes(self) -> List[int]:
+    def get_capture_batch_sizes(self) -> list[int]:
         """Capture batch sizes."""
         output = _get_capture_batch_size_impl(self.cache_config.max_batches)
 

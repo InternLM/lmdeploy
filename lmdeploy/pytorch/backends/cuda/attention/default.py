@@ -1,13 +1,17 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass
-from typing import List, Literal
+from typing import Literal
 
 import torch
 
 from lmdeploy.pytorch.backends.attention import AttentionImpl, AttentionMetadata
 from lmdeploy.pytorch.compile_util import custom_op
-from lmdeploy.pytorch.kernels.cuda import (fill_kv_cache, flash_attn_varlen_func, flash_attn_with_kvcache,
-                                           flatten_kv_cache)
+from lmdeploy.pytorch.kernels.cuda import (
+    fill_kv_cache,
+    flash_attn_varlen_func,
+    flash_attn_with_kvcache,
+    flatten_kv_cache,
+)
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 from lmdeploy.utils import get_logger
 
@@ -174,7 +178,7 @@ def _forward_decoding(
     k_scales_zeros: torch.Tensor = None,
     v_scales_zeros: torch.Tensor = None,
     learnable_sink: torch.Tensor = None,
-    sliding_window: List[int] | int | None = None,
+    sliding_window: list[int] | int | None = None,
     softmax_scale: float | None = None,
     logit_softcapping: float = 0.0,
     alibi_slopes: torch.Tensor | None = None,
@@ -227,7 +231,7 @@ def _forward_prefill(
     k_scales_zeros: torch.Tensor = None,
     v_scales_zeros: torch.Tensor = None,
     learnable_sink: torch.Tensor = None,
-    sliding_window: List[int] | int | None = None,
+    sliding_window: list[int] | int | None = None,
     softmax_scale: float | None = None,
     logit_softcapping: float = 0.0,
     causal: bool = True,
@@ -328,8 +332,12 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         self.logit_softcapping = -1 if self.logit_softcapping <= 0.0 else self.logit_softcapping
         assert not (alibi and not causal)
 
-        from lmdeploy.pytorch.kernels.cuda import (fill_kv_cache, flash_attn_varlen_func, flash_attn_with_kvcache,
-                                                   flatten_kv_cache)
+        from lmdeploy.pytorch.kernels.cuda import (
+            fill_kv_cache,
+            flash_attn_varlen_func,
+            flash_attn_with_kvcache,
+            flatten_kv_cache,
+        )
 
         self.fill_kv_cache = fill_kv_cache
         self.paged_attention_fwd = flash_attn_with_kvcache
@@ -421,7 +429,7 @@ def triton_attention_op_impl(
     k_scales_zeros: torch.Tensor | None = None,
     v_scales_zeros: torch.Tensor | None = None,
     learnable_sink: torch.Tensor | None = None,
-    sliding_window: List[int] | None = None,
+    sliding_window: list[int] | None = None,
     softmax_scale: float | None = None,
     logit_softcapping: float = 0.0,
     causal: bool = True,
@@ -497,7 +505,7 @@ def triton_attention_op(
     k_scales_zeros: torch.Tensor | None = None,
     v_scales_zeros: torch.Tensor | None = None,
     learnable_sink: torch.Tensor | None = None,
-    sliding_window: List[int] | None = None,
+    sliding_window: list[int] | None = None,
     softmax_scale: float | None = None,
     logit_softcapping: float = 0.0,
     causal: bool = True,

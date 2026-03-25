@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Callable, List
+from collections.abc import Callable
 
 import torch
 import torch.distributed as dist
@@ -54,7 +54,7 @@ class TritonFusedMoEBlockedF8Impl(FusedMoEBlockedF8Impl):
                 down_scale: torch.Tensor,
                 gate_up_bias: torch.Tensor = None,
                 down_bias: torch.Tensor = None,
-                expert_list: List[int] = None,
+                expert_list: list[int] = None,
                 act_func: Callable = None):
         """forward."""
         input_size = hidden_states.shape
@@ -98,7 +98,7 @@ def ep_moe_blocked_fp8_forward(
     gate_up_scale: torch.Tensor,
     down_weights: torch.Tensor,
     down_scale: torch.Tensor,
-    expert_list: List[int] | None = None,
+    expert_list: list[int] | None = None,
 ) -> torch.Tensor:
     """Ep moe blocked fp8 forward op."""
     mod = get_custom_op_manager().get_mod_instance(mod_key)  # ensure mod instance is alive
@@ -181,7 +181,7 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
         gate_up_scale: torch.Tensor,
         down_weights: torch.Tensor,
         down_scale: torch.Tensor,
-        expert_list: List[int] = None,
+        expert_list: list[int] = None,
     ):
         """forward."""
         hidden_states, topk_weights, topk_ids, split_size = split_inputs_by_attn_tp(hidden_states, topk_weights,
@@ -207,7 +207,7 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
                 down_scale: torch.Tensor,
                 gate_up_bias: torch.Tensor = None,
                 down_bias: torch.Tensor = None,
-                expert_list: List[int] = None,
+                expert_list: list[int] = None,
                 act_func: Callable = None,
                 **kwargs):
         """forward."""

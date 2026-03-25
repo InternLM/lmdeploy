@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Dict, Iterable, List, Tuple
+from collections.abc import Iterable
 
 import torch
 from torch import nn
@@ -97,7 +97,7 @@ class Qwen3MoeAttention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
     ):
         """Rewrite of LlamaAttention.forward."""
         # qkv proj
@@ -315,7 +315,7 @@ class Qwen3MoeDecoderLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
         residual: torch.Tensor | None = None,
         all_routed_experts: torch.Tensor = None,
     ):
@@ -503,7 +503,7 @@ class Qwen3MoeForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         inputs_embeds: torch.Tensor | None = None,
         context: StepContext = None,
     ):
@@ -527,8 +527,8 @@ class Qwen3MoeForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             inputs_embeds=inputs_embeds,
         )
 
-    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
-                             expert_params_mapping: List):
+    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
+                             expert_params_mapping: list):
         """Load weight experts."""
         # load fused weights
         if any([k in name for k in ['fused_w1w3', 'fused_w2']]):
@@ -545,7 +545,7 @@ class Qwen3MoeForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             param = params_dict[name]
             load_weight(param, loaded_weight)
 
-    def _load_weight_fused_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter]):
+    def _load_weight_fused_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter]):
         """Load weight of fused expert weights."""
         num_experts = self.config.num_experts
         fused_gateup_name = 'fused_w1w3'
@@ -570,7 +570,7 @@ class Qwen3MoeForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
                 w2 = loaded_weight.narrow(dim=0, start=chunk_size * expert_id, length=chunk_size)
                 load_weight(param, w2, expert_id=expert_id, shard_id='down')
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
         # modify from vllm
         stacked_params_mapping = [

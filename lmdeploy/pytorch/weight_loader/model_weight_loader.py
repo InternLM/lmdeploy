@@ -68,7 +68,7 @@ def _get_weight_map(model_path: str, weight_type: str):
     else:
         raise RuntimeError(f'Unsupported weight type: {weight_type}.')
 
-    with open(load_index, mode='r', encoding='utf-8') as f:
+    with open(load_index, encoding='utf-8') as f:
         index = json.load(f)
 
     weight_map = index['weight_map']

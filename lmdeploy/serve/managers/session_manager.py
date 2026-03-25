@@ -5,7 +5,7 @@ import asyncio
 import itertools
 import weakref
 from contextlib import asynccontextmanager
-from typing import Any, List, Tuple
+from typing import Any
 
 from lmdeploy.messages import GenerationConfig, Response
 from lmdeploy.serve.core.exceptions import SafeRunException
@@ -21,7 +21,7 @@ class Session:
         self.session_id = session_id
         self.prompt: Any = None
         self.response: Response | None = None
-        self.history: List[Tuple[Any, str]] = []
+        self.history: list[tuple[Any, str]] = []
         self.gen_config: GenerationConfig | None = None
         self.step: int = 0
         # event to wait for the session to be active

@@ -7,8 +7,13 @@ from torch import Tensor, nn
 from transformers import PretrainedConfig
 
 from ..backends import OpType, get_backend
-from ..backends.rotary_embedding import (FopeParameters, Llama3Parameters, LongRoPEScalingParameters, RopeType,
-                                         YarnParameters)
+from ..backends.rotary_embedding import (
+    FopeParameters,
+    Llama3Parameters,
+    LongRoPEScalingParameters,
+    RopeType,
+    YarnParameters,
+)
 
 
 def get_rope_parameters(config: PretrainedConfig):

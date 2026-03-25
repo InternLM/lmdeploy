@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Callable, Dict, List, Tuple
+from collections.abc import Callable
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -10,7 +11,7 @@ from lmdeploy.utils import get_logger
 logger = get_logger('lmdeploy')
 
 
-def try_reuse_input_buffers(args: Tuple[List], kwargs: Dict[str, Any], input_buffers: List[torch.Tensor]) -> Any:
+def try_reuse_input_buffers(args: tuple[list], kwargs: dict[str, Any], input_buffers: list[torch.Tensor]) -> Any:
     """Try reuse input buffers for cudagraph capture.
 
     Note that this might not safe if there are overlaps between tensors.
@@ -104,11 +105,11 @@ def _mark_is_cudagraph_output(tensor: torch.Tensor):
 def _mark_outputs_cudagraph(outputs: Any):
     if isinstance(outputs, torch.Tensor):
         _mark_is_cudagraph_output(outputs)
-    elif isinstance(outputs, (List, Tuple)):
+    elif isinstance(outputs, (list, tuple)):
         for out in outputs:
             if isinstance(out, torch.Tensor):
                 _mark_is_cudagraph_output(out)
-    elif isinstance(outputs, Dict):
+    elif isinstance(outputs, dict):
         for out in outputs.values():
             if isinstance(out, torch.Tensor):
                 _mark_is_cudagraph_output(out)
@@ -122,8 +123,8 @@ class CudagraphPiecewiseWrapperImpl:
     - Temporarily disables graph mode internally even when outer enable_graph_mode=True
     """
 
-    def __init__(self, runnable: Callable, is_first_graph: bool, is_last_graph: bool, pool: Tuple[int, int],
-                 input_buffers: List[torch.Tensor]):
+    def __init__(self, runnable: Callable, is_first_graph: bool, is_last_graph: bool, pool: tuple[int, int],
+                 input_buffers: list[torch.Tensor]):
         super().__init__()
         self.runnable = runnable
         self.is_first_graph = is_first_graph
@@ -199,8 +200,8 @@ class CudagraphPiecewiseWrapper(nn.Module):
     - Temporarily disables graph mode internally even when outer enable_graph_mode=True
     """
 
-    def __init__(self, runnable: Callable, is_first_graph: bool, is_last_graph: bool, pool: Tuple[int, int],
-                 input_buffers: Dict[Any, List[torch.Tensor]], backend: Any):
+    def __init__(self, runnable: Callable, is_first_graph: bool, is_last_graph: bool, pool: tuple[int, int],
+                 input_buffers: dict[Any, list[torch.Tensor]], backend: Any):
         super().__init__()
         self.runnable = runnable
         self.is_first_graph = is_first_graph
@@ -214,7 +215,7 @@ class CudagraphPiecewiseWrapper(nn.Module):
 
         self._pool = pool
 
-        self.impl_map: Dict[Any, CudagraphPiecewiseWrapperImpl] = dict()
+        self.impl_map: dict[Any, CudagraphPiecewiseWrapperImpl] = dict()
 
     def forward(self, *args, **kwargs) -> Any:
         key = self.backend.get_key()

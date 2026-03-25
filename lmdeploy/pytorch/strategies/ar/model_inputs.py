@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Optional
 
 import numpy as np
 import torch
@@ -7,7 +6,7 @@ from torch.profiler import record_function
 
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 
-from ..base.model_inputs import ModelInputsStrategy, make_dummy_inputs
+from ..base.model_inputs import MakeDummyMeta, ModelInputsStrategy, make_dummy_inputs
 
 
 def merge_model_inputs(inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
@@ -51,6 +50,12 @@ def merge_model_inputs(inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
     if inputs.state_offsets is not None:
         state_offsets = torch.cat([inputs.state_offsets, other.state_offsets], dim=0)
 
+    # mrope
+    mrope_pos_ids = None
+    if inputs.mrope_pos_ids is not None:
+        assert other.mrope_pos_ids is not None
+        mrope_pos_ids = torch.cat([inputs.mrope_pos_ids, other.mrope_pos_ids], dim=1)
+
     return ModelInputs(
         input_ids=input_ids,
         seq_length=seq_length,
@@ -64,6 +69,7 @@ def merge_model_inputs(inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
         local_adapter_ids=local_adapter_ids,
         model_metas=model_metas,
         state_offsets=state_offsets,
+        mrope_pos_ids=mrope_pos_ids,
     )
 
 
@@ -76,7 +82,8 @@ class ARModelInputsStrategy(ModelInputsStrategy):
                    dummy_block_id: int = 0,
                    vocab_size: int = 1,
                    max_q_seqlen: int | None = None,
-                   num_blocks: int = 1) -> ModelInputs:
+                   num_blocks: int = 1,
+                   meta: MakeDummyMeta | None = None) -> ModelInputs:
         """Create dummy model inputs."""
         if max_q_seqlen is None:
             max_q_seqlen = 1
@@ -86,7 +93,8 @@ class ARModelInputsStrategy(ModelInputsStrategy):
                                  device=device,
                                  dummy_block_id=dummy_block_id,
                                  vocab_size=vocab_size,
-                                 num_blocks=num_blocks)
+                                 num_blocks=num_blocks,
+                                 meta=meta)
 
     @record_function('ModelInputs.merge')
     def merge(self, inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
@@ -98,10 +106,10 @@ class ARModelInputsStrategy(ModelInputsStrategy):
                      indices: torch.Tensor,
                      indice_cpu: np.ndarray = None,
                      block_offsets: torch.Tensor = None,
-                     max_q_seqlen: Optional[int] = None,
-                     max_kv_seqlen: Optional[int] = None,
-                     sum_kv_seqlen: Optional[int] = None,
-                     num_ignored_history: Optional[torch.Tensor] = None):
+                     max_q_seqlen: int | None = None,
+                     max_kv_seqlen: int | None = None,
+                     sum_kv_seqlen: int | None = None,
+                     num_ignored_history: torch.Tensor | None = None):
         """Index select."""
         assert inputs.is_decoding, 'Only support index_select in decoding.'
 
@@ -145,6 +153,11 @@ class ARModelInputsStrategy(ModelInputsStrategy):
         if target_position_ids is not None:
             target_position_ids = target_position_ids[indices]
 
+        # mrope
+        mrope_pos_ids = inputs.mrope_pos_ids
+        if mrope_pos_ids is not None:
+            mrope_pos_ids = mrope_pos_ids[:, indices]
+
         # return new inputs
         return ModelInputs(
             input_ids=input_ids,
@@ -161,6 +174,7 @@ class ARModelInputsStrategy(ModelInputsStrategy):
             state_offsets=state_offsets,
             target_hidden_states=target_hidden_states,
             target_position_ids=target_position_ids,
+            mrope_pos_ids=mrope_pos_ids,
         )
 
     @record_function('ModelInputs.update_inputs')
