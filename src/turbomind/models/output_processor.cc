@@ -75,8 +75,16 @@ struct OutputProcessor::Impl {
             auto& r = *c.req;
             auto& g = r.gen_cfg;
             if (g.output_logits || g.compute_ppl) {
-                c.output_logits =
-                    (g.output_logits == kAll || g.compute_ppl) ? Interval{c.step0} : Interval{c.prompt_len - 1};
+                if (g.compute_ppl && !g.output_logits) {
+                    // PPL only needs prompt logits, not decode logits
+                    c.output_logits = Interval{c.step0, Interval::Size{c.prompt_len - c.step0}};
+                }
+                else if (g.output_logits == kAll) {
+                    c.output_logits = Interval{c.step0};
+                }
+                else {
+                    c.output_logits = Interval{c.prompt_len - 1};
+                }
                 c.logits_offset = c.output_logits.begin();
             }
             if (g.output_last_hidden_state) {

@@ -852,5 +852,4 @@ class TurboMindInstance:
             c.random_seed = cfg.random_seed
         if cfg.output_ppl:
             c.compute_ppl = True
-            c.output_logits = 1  # kAll
         return c

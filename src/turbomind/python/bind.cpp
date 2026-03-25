@@ -470,37 +470,20 @@ PYBIND11_MODULE(_turbomind, m)
                     param.logits_cb = [py_cb = std::move(py_cb)](
                                           void* data, int vocab_size, int begin, int count, ft::DataType dtype) {
                         py::gil_scoped_acquire gil;
-                        int64_t                shape[2] = {count, vocab_size};
-                        DLManagedTensor*       dlmt     = new DLManagedTensor{};
-                        dlmt->dl_tensor.data            = data;
-                        dlmt->dl_tensor.ndim            = 2;
-                        dlmt->dl_tensor.shape           = shape;
-                        dlmt->dl_tensor.strides         = nullptr;
-                        dlmt->dl_tensor.byte_offset     = 0;
 
-                        dlmt->dl_tensor.device.device_type = kDLCUDA;
-                        int device_id                      = 0;
+                        int device_id = 0;
                         cudaGetDevice(&device_id);
-                        dlmt->dl_tensor.device.device_id = device_id;
-
-                        if (dtype == ft::DataType::kFloat16) {
-                            dlmt->dl_tensor.dtype = {kDLFloat, 16, 1};
-                        }
-                        else if (dtype == ft::DataType::kBfloat16) {
-                            dlmt->dl_tensor.dtype = {kDLBfloat, 16, 1};
-                        }
-                        else {
-                            dlmt->dl_tensor.dtype = {kDLFloat, 32, 1};
-                        }
-
-                        dlmt->manager_ctx = nullptr;
-                        dlmt->deleter     = [](DLManagedTensor* self) { delete self; };
+                        Tensor           t(data, {count, vocab_size}, dtype, ft::core::Device{ft::kDEVICE, device_id});
+                        DLManagedTensor* dlmt = TritonTensorToDLManagedTensor(t);
 
                         py::capsule cap(dlmt, kDlTensorCapsuleName, [](PyObject* obj) {
-                            DLManagedTensor* p =
+                            DLManagedTensor* dlmt =
                                 static_cast<DLManagedTensor*>(PyCapsule_GetPointer(obj, kDlTensorCapsuleName));
-                            if (p->deleter) {
-                                p->deleter(p);
+                            if (dlmt) {
+                                dlmt->deleter(dlmt);
+                            }
+                            else {
+                                PyErr_Clear();
                             }
                         });
 

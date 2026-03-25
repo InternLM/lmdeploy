@@ -64,7 +64,6 @@ def _compute_ppl_from_logits(logits: torch.Tensor, input_ids: torch.Tensor,
             continue
         seq_logits = logits[offset:offset + length - 1]
         seq_targets = input_ids[offset + 1:offset + length]
-        print(f'seq_logits: {seq_logits.shape}, seq_targets: {seq_targets.shape}')
         loss = torch.nn.functional.cross_entropy(
             seq_logits.float(), seq_targets, reduction='sum')
         losses.append(loss.item())
