@@ -556,6 +556,16 @@ class ArgumentHelper:
                                    help='Enable cache and match prefix')
 
     @staticmethod
+    def linear_prefix_cache_interval_blocks(parser):
+        """Add argument linear_prefix_cache_interval_blocks to parser."""
+
+        return parser.add_argument('--linear-prefix-cache-interval-blocks',
+                                   type=int,
+                                   default=2,
+                                   help='Checkpoint interval, in KV cache blocks, for hybrid '
+                                   'linear-attention prefix state reuse')
+
+    @staticmethod
     def num_tokens_per_iter(parser):
         return parser.add_argument('--num-tokens-per-iter',
                                    type=int,
