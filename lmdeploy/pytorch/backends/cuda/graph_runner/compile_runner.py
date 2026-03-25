@@ -83,7 +83,7 @@ class TorchCompileSinglePrefillRunner:
             max_tokens=max_tokens,
             num_blocks=num_blocks,
             block_size=block_size,
-            is_decoding=True,
+            is_decoding=False,
             device=device,
             input_buffers=dict(),
             output_buffers=dict(),
@@ -98,7 +98,7 @@ class TorchCompileSinglePrefillRunner:
         self.max_batches = max_batches
         self.max_tokens = max_tokens
         self.num_blocks = num_blocks
-        self.is_decoding = True
+        self.is_decoding = False
 
     def forward(self, **kwargs):
         """call."""
@@ -212,12 +212,17 @@ class TorchCompileSingleDecodingRunner:
         self.model_config = model_config
         self.key = key
 
+        self.device = device
+        self.max_batches = max_batches
+        self.max_tokens = max_tokens
+        self.num_blocks = num_blocks
+        self.is_decoding = True
         self.meta = CudaGraphMeta(
             max_batchs=max_batches,
             max_tokens=max_tokens,
             num_blocks=num_blocks,
             block_size=block_size,
-            is_decoding=True,
+            is_decoding=self.is_decoding,
             device=device,
             input_buffers=dict(),
             output_buffers=dict(),
@@ -228,11 +233,6 @@ class TorchCompileSingleDecodingRunner:
             decode_query_len=decode_query_len,
             use_fa3_decoding=model_config.model_paradigm == 'ar_spec',
         )
-        self.device = device
-        self.max_batches = max_batches
-        self.max_tokens = max_tokens
-        self.num_blocks = num_blocks
-        self.is_decoding = True
 
     def forward(self, **kwargs):
         """call."""
@@ -397,7 +397,7 @@ class TorchCompileRunner(GraphRunner):
         enable_graph = self.enable_graph and not long_inputs
 
         if not enable_graph:
-            with record_function('foward'):
+            with record_function('forward'):
                 output = self.model(**kwargs)
                 return self.model.make_output_buffers(output)
 

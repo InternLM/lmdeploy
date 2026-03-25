@@ -53,6 +53,7 @@ def try_reuse_input_buffers(args: tuple[list], kwargs: dict[str, Any], input_buf
         if getattr(arg, 'is_cudagraph_output', False):
             # do not reuse cudagraph output
             input_args.pop(key)
+            continue
         arg_ptr = arg.data_ptr()
         if arg_ptr in buf_ptr_dict:
             buf = buf_ptr_dict[arg_ptr]
@@ -116,11 +117,11 @@ def _mark_outputs_cudagraph(outputs: Any):
 
 
 class CudagraphPiecewiseWrapperImpl:
-    """Wrapper to force eager execution.
+    """Wrapper to force cudagraph execution.
 
     Features:
-    - Wraps operations or modules to always execute in eager mode
-    - Temporarily disables graph mode internally even when outer enable_graph_mode=True
+    - Wraps operations or modules to always execute in cudagraph mode
+    - Temporarily disables eager mode internally even when outer enable_eager_mode=True
     """
 
     def __init__(self, runnable: Callable, is_first_graph: bool, is_last_graph: bool, pool: tuple[int, int],
@@ -193,11 +194,11 @@ class CudagraphPiecewiseWrapperImpl:
 
 
 class CudagraphPiecewiseWrapper(nn.Module):
-    """Wrapper to force eager execution.
+    """Wrapper to force cudagraph execution.
 
     Features:
-    - Wraps operations or modules to always execute in eager mode
-    - Temporarily disables graph mode internally even when outer enable_graph_mode=True
+    - Wraps operations or modules to always execute in cudagraph mode
+    - Temporarily disables eager mode internally even when outer enable_eager_mode=True
     """
 
     def __init__(self, runnable: Callable, is_first_graph: bool, is_last_graph: bool, pool: tuple[int, int],

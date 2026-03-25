@@ -10,15 +10,17 @@ class DLLMModelInputsStrategy(ModelInputsStrategy):
     def __init__(self, block_size: int):
         self.block_size = block_size
 
-    def make_dummy(self,
-                   batch_size: int,
-                   is_decoding: bool,
-                   device: str = 'cpu',
-                   dummy_block_id: int = 0,
-                   vocab_size: int = 1,
-                   max_q_seqlen: int | None = None,
-                   num_blocks: int = 1,
-                   meta: MakeDummyMeta | None = None) -> ModelInputs:
+    def make_dummy(
+        self,
+        batch_size: int,
+        is_decoding: bool,
+        device: str = 'cpu',
+        dummy_block_id: int = 0,
+        vocab_size: int = 1,
+        max_q_seqlen: int | None = None,
+        num_blocks: int = 1,
+        meta: MakeDummyMeta | None = None,
+    ) -> ModelInputs:
         """Create dummy model inputs."""
         if max_q_seqlen is None:
             max_q_seqlen = self.block_size

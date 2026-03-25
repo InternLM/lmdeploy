@@ -1,8 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Dlinfer Piecewise Backend for torch.compile.
+"""Piecewise Backend for torch.compile.
 
 Strategy: Separate attention operations (executed eagerly) from compute operations
-(optimized with ACL Graph) using enable_graph_mode=True.
+(optimized with Graph) using enable_graph_mode=True.
 """
 
 from collections import defaultdict
@@ -33,15 +33,14 @@ def get_graph_pool() -> Any:
 
 
 class LMDeployPiecewiseBackend:
-    """Custom torch.compile backend for Dlinfer with piecewise graph
-    optimization.
+    """Custom torch.compile backend for with piecewise graph optimization.
 
     Reference: vLLM VllmBackend (vllm/vllm/compilation/backends.py)
 
     Features:
     1. Receives dynamo-traced FX graphs
     2. Splits graphs by splitting operations
-    3. Wraps non-attention parts with ACL Graph
+    3. Wraps non-attention parts with Graph
     4. Returns executable split GraphModule
     """
 
@@ -117,7 +116,7 @@ class LMDeployPiecewiseBackend:
                     wrapped = EagerExecutionWrapper(op_or_module=original_submod, op_name=f'eager_{submod_name}')
                 else:
                     is_first = item.graph_id == 0
-                    is_last = item.graph_id == len(split_items) - 1
+                    is_last = item == split_items[-1]
                     wrapped = CudagraphPiecewiseWrapper(
                         runnable=original_submod,
                         is_first_graph=is_first,
@@ -127,7 +126,7 @@ class LMDeployPiecewiseBackend:
                         backend=self,
                     )
 
-                    split_gm.__dict__[submod_name] = wrapped
+                split_gm.__dict__[submod_name] = wrapped
 
             return split_gm
 

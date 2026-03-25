@@ -65,7 +65,7 @@ def split_graph(graph: fx.GraphModule, ops: list[str]) -> tuple[fx.GraphModule, 
             continue
 
         module = getattr(split_gm, name)
-        graph_id = int(name.lstrip('submod_'))
+        graph_id = int(name.removeprefix('submod_'))
 
         outputs.append(
             SplitItem(
