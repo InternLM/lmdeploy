@@ -442,7 +442,7 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     engine_param_.cache_max_block_count               = engine["cache_max_entry_count"].as<float>(0);
     engine_param_.cache_chunk_size                    = engine["cache_chunk_size"].as<int>(0);
     engine_param_.enable_prefix_caching               = engine["enable_prefix_caching"].as<bool>(false);
-    engine_param_.linear_prefix_cache_interval_blocks = engine["linear_prefix_cache_interval_blocks"].as<int>(2);
+    engine_param_.linear_prefix_cache_interval_blocks = engine["linear_prefix_cache_interval_blocks"].as<int>(64);
     engine_param_.enable_metrics                      = engine["enable_metrics"].as<bool>(false);
     TM_CHECK_GE(engine_param_.linear_prefix_cache_interval_blocks, 1);
 

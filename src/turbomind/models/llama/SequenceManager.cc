@@ -31,6 +31,71 @@ std::string vector2string(const std::vector<T>& data)
     return ss.str();
 }
 
+namespace hybrid_prefix_budget {
+
+size_t GetShapeBytes(const std::vector<ssize_t>& shape, DataType dtype)
+{
+    if (shape.empty()) {
+        return 0;
+    }
+
+    size_t numel = 1;
+    for (const auto dim : shape) {
+        TM_CHECK_GT(dim, 0);
+        numel *= static_cast<size_t>(dim);
+    }
+    return static_cast<size_t>(byte_size(dtype, static_cast<std::ptrdiff_t>(numel)));
+}
+
+size_t GetHybridCheckpointSlotBytes(const std::vector<ssize_t>& conv_state_shape,
+                                    DataType                    conv_state_dtype,
+                                    const std::vector<ssize_t>& recurrent_state_shape,
+                                    DataType                    recurrent_state_dtype)
+{
+    return GetShapeBytes(conv_state_shape, conv_state_dtype)
+           + GetShapeBytes(recurrent_state_shape, recurrent_state_dtype);
+}
+
+unsigned __int128 GetHybridCacheBytesForBlocks(size_t kv_block_count,
+                                               size_t kv_block_bytes,
+                                               size_t checkpoint_slot_bytes,
+                                               int    checkpoint_interval_blocks)
+{
+    const size_t checkpoint_slots = checkpoint_interval_blocks > 0 ? kv_block_count / checkpoint_interval_blocks : 0;
+    return static_cast<unsigned __int128>(kv_block_count) * kv_block_bytes
+           + static_cast<unsigned __int128>(checkpoint_slots) * checkpoint_slot_bytes;
+}
+
+size_t SolveHybridKvBlockCount(size_t budget_bytes,
+                               size_t kv_block_bytes,
+                               size_t checkpoint_slot_bytes,
+                               int    checkpoint_interval_blocks)
+{
+    if (!budget_bytes || !kv_block_bytes) {
+        return 0;
+    }
+    if (!checkpoint_slot_bytes || checkpoint_interval_blocks <= 0) {
+        return budget_bytes / kv_block_bytes;
+    }
+
+    size_t lo = 0;
+    size_t hi = budget_bytes / kv_block_bytes;
+    while (lo < hi) {
+        const size_t mid = lo + (hi - lo + 1) / 2;
+        const auto   required_bytes =
+            GetHybridCacheBytesForBlocks(mid, kv_block_bytes, checkpoint_slot_bytes, checkpoint_interval_blocks);
+        if (required_bytes <= budget_bytes) {
+            lo = mid;
+        }
+        else {
+            hi = mid - 1;
+        }
+    }
+    return lo;
+}
+
+}  // namespace hybrid_prefix_budget
+
 SequenceManager::SequenceManager(const ModelParam& model_param,
                                  DataType          runtime_dtype,
                                  int               cache_block_seq_len,
@@ -126,7 +191,15 @@ SequenceManager::SequenceManager(const ModelParam& model_param,
     block::Layout layout{block_config};
     // dump(layout);
 
-    size_t block_size = layout.block_size(cache_layer_num);
+    size_t       block_size                    = layout.block_size(cache_layer_num);
+    const bool   has_linear_prefix_checkpoints = enable_prefix_caching && num_linear_layers > 0;
+    const size_t linear_prefix_slot_bytes =
+        has_linear_prefix_checkpoints ?
+            hybrid_prefix_budget::GetHybridCheckpointSlotBytes(linear_prefix_conv_state_shape,
+                                                               linear_prefix_conv_state_dtype,
+                                                               linear_prefix_recurrent_state_shape,
+                                                               linear_prefix_recurrent_state_dtype) :
+            0;
 
     if (num_linear_layers > 0 && block_count < 1.) {
         const size_t target_bytes = static_cast<size_t>(free_before * block_count);
@@ -142,14 +215,22 @@ SequenceManager::SequenceManager(const ModelParam& model_param,
                 << "Please decrease max_batch_size to reduce total linear state size or increase cache_max_entry_count.";
         }
         const size_t cache_bytes = target_bytes - live_linear_bytes;
-        block_count              = static_cast<double>(cache_bytes) / static_cast<double>(block_size);
+        block_count =
+            has_linear_prefix_checkpoints ? static_cast<double>(hybrid_prefix_budget::SolveHybridKvBlockCount(
+                cache_bytes, block_size, linear_prefix_slot_bytes, linear_prefix_cache_interval_blocks_)) :
+                                            static_cast<double>(cache_bytes) / static_cast<double>(block_size);
         TM_LOG_INFO("[SeqMgr] Adjusted block_count to {:.0f}", block_count);
     }
     else if (num_linear_layers > 0 && block_count >= 1.) {
-        const size_t requested_blocks      = static_cast<size_t>(block_count);
-        const size_t requested_cache_bytes = requested_blocks * block_size;
-        const size_t available_after_live  = get_free_size();
-        TM_CHECK_LE(requested_cache_bytes, available_after_live) << "Insufficient memory for KV cache blocks.";
+        const size_t requested_blocks = static_cast<size_t>(block_count);
+        const auto   requested_cache_bytes =
+            has_linear_prefix_checkpoints ? hybrid_prefix_budget::GetHybridCacheBytesForBlocks(
+                requested_blocks, block_size, linear_prefix_slot_bytes, linear_prefix_cache_interval_blocks_) :
+                                              static_cast<unsigned __int128>(requested_blocks) * block_size;
+        const size_t available_after_live = get_free_size();
+        TM_CHECK(requested_cache_bytes <= static_cast<unsigned __int128>(available_after_live))
+            << "Insufficient memory for "
+            << (has_linear_prefix_checkpoints ? "hybrid prefix cache blocks and checkpoints." : "KV cache blocks.");
     }
 
     block_manager_ = std::make_shared<BlockManager>(block_size, block_count, chunk_size, allocator, get_free_size);
