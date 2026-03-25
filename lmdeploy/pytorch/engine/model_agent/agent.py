@@ -1184,6 +1184,7 @@ class BaseModelAgent:
             return [(k, _construct(v)) for k, v in raw]
 
         def _split_main_and_draft(weights):
+            # TODO, zhouxinyu, support split and update weights for other mtp methods
             if not self.spec_agent.is_enabled() or self.spec_agent.method != 'qwen3_5_mtp':
                 return weights, []
             main = [(name, weight) for name, weight in weights if not name.startswith('mtp.')]
