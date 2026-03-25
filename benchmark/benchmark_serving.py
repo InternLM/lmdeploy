@@ -80,7 +80,7 @@ def wait_server_ready(server_ip: str, server_port: int) -> bool:
     from openai import OpenAI
     while True:
         try:
-            client = OpenAI(api_key='DUMMPY', base_url=f'http://{server_ip}:{server_port}/v1', timeout=60.0)
+            client = OpenAI(api_key='DUMMPY', base_url=f'http://{server_ip}:{server_port}/v1', timeout=60.0, max_retries=3)
             model_name = client.models.list().data[0].id
             if model_name:
                 print('Server is ready.')
