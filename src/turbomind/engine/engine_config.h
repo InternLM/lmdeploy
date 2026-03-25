@@ -23,6 +23,7 @@ struct EngineConfig {
     X(float, cache_max_block_count, 0)                                                                                 \
     X(int, cache_chunk_size, 0)                                                                                        \
     X(bool, enable_prefix_caching, false)                                                                              \
+    X(int, linear_prefix_cache_interval_blocks, 2)                                                                     \
     X(bool, enable_metrics, false)                                                                                     \
     X(int, num_tokens_per_iter, 0)                                                                                     \
     X(int, max_prefill_iters, 1)                                                                                       \

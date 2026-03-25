@@ -153,6 +153,7 @@ TurboMind::Impl::Impl(string model_dir, EngineConfig config, FFICtxFactory ffi_c
 
     // Copy config into the EngineConfig base of engine_param_
     static_cast<EngineConfig&>(engine_param_) = config;
+    TM_CHECK_GE(engine_param_.linear_prefix_cache_interval_blocks, 1);
 
     phases_ = config.async_ ? 2 : 1;
 
