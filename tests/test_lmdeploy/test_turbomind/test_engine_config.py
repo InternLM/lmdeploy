@@ -6,7 +6,7 @@ from lmdeploy import TurbomindEngineConfig
 
 def test_linear_prefix_cache_interval_blocks_default():
     config = TurbomindEngineConfig(enable_prefix_caching=True)
-    assert config.linear_prefix_cache_interval_blocks == 2
+    assert config.linear_prefix_cache_interval_blocks == 64
 
 
 def test_linear_prefix_cache_interval_blocks_validation():
