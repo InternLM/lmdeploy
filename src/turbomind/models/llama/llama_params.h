@@ -133,6 +133,7 @@ struct EngineParam {
     float cache_max_block_count;
     int   cache_chunk_size;
     bool  enable_prefix_caching;
+    int   linear_prefix_cache_interval_blocks;
     bool  enable_metrics;
 
     // chunking params
