@@ -142,8 +142,11 @@ class Qwen3VLModel(VisionModel):
         return prompt, None
 
     def to_pytorch_aux_video(self, messages, prompt, VIDEO_TOKEN, tokenizer, sequence_start):
-        """Pack the video input to the compatible format with pytorch
-        engine."""
+        """Pack the video input to the compatible format with pytorch engine.
+
+        Each video is split into per-frame (temporal step) entries so that the timestamp text tokens between frames get
+        sequential mrope positions and each frame's video-pad tokens get independent 3D spatial positions.
+        """
 
         # collect all preprocessing result from messages
         preps = [x['content'] for x in messages if x['role'] == 'preprocess']
@@ -155,35 +158,56 @@ class Qwen3VLModel(VisionModel):
         assert len(segs) == len(preps) + 1, (f'the number of {self.video_token} is not equal '
                                              f'to input videos, {len(segs) - 1} vs {len(preps)}')
 
-        # calculate the video token offset for each video
+        # calculate the video token offset for each frame
         input_ids = []
+        frame_preps = []
+
         for i, seg in enumerate(segs):
             if i > 0 and i <= len(preps):
-                preps[i - 1].update(offset=len(input_ids))
-                frame_seqlen = preps[i - 1]['frame_seqlen']
-                assert self.video_token_id == preps[i - 1]['video_token_id']
+                video_prep = preps[i - 1]
+                frame_seqlen = video_prep['frame_seqlen']
+                curr_timestamp = video_prep['curr_timestamp']
+                video_grid_thw = video_prep['video_grid_thw']
+                pixel_values_videos = video_prep['pixel_values_videos']
+                assert self.video_token_id == video_prep['video_token_id']
 
-                video_grid_thw = preps[i - 1]['video_grid_thw']
-                curr_timestamp = preps[i - 1]['curr_timestamp']
+                t, h, w = video_grid_thw[0].tolist()
 
-                # update prompt with timestamp index tokens and video pad tokens
-                video_placeholder = ''
-                for frame_idx in range(video_grid_thw[0][0]):
+                # each temporal step becomes an independent multimodal entry
+                for frame_idx in range(t):
                     curr_time = curr_timestamp[frame_idx]
-                    video_placeholder += f'<{curr_time:.1f} seconds>'
-                    video_placeholder += (self.vision_start_token + '<|placeholder|>' * frame_seqlen +
-                                          self.vision_end_token)
 
-                video_placeholder = video_placeholder.replace('<|placeholder|>', self.video_token)
-                video_token_ids = tokenizer.encode(video_placeholder)
-                input_ids.extend(video_token_ids)
+                    # timestamp text + vision_start (regular text tokens)
+                    prefix = f'<{curr_time:.1f} seconds>' + self.vision_start_token
+                    prefix_ids = tokenizer.encode(prefix, add_bos=False)
+                    input_ids.extend(prefix_ids)
 
-                preps[i - 1].update(video_tokens=len(video_token_ids))
+                    # video pad tokens for this frame
+                    frame_offset = len(input_ids)
+                    input_ids.extend([self.video_token_id] * frame_seqlen)
+
+                    # vision_end (regular text token)
+                    suffix_ids = tokenizer.encode(self.vision_end_token, add_bos=False)
+                    input_ids.extend(suffix_ids)
+
+                    # since we use timestamps to separate videos
+                    # like <t1> <vision_start> <frame1> <vision_end> <t2> <vision_start> <frame2> <vision_end>
+                    # the video_grid_thw should also be split, becomes [1, h, w] for each frame
+                    frame_preps.append(
+                        dict(
+                            offset=frame_offset,
+                            video_tokens=frame_seqlen,
+                            pixel_values_videos=pixel_values_videos[frame_idx * h * w:(frame_idx + 1) * h * w],
+                            video_grid_thw=torch.tensor([[1, h, w]]),
+                            video_token_id=self.video_token_id,
+                            modality=video_prep['modality'],
+                        )
+                    )
 
             token_ids = tokenizer.encode(seg, add_bos=((i == 0) and sequence_start))
             input_ids.extend(token_ids)
 
-        return dict(prompt=prompt, input_ids=input_ids, multimodal=preps)
+        return dict(prompt=prompt, input_ids=input_ids, multimodal=frame_preps)
 
     def to_pytorch(self,
                    messages,
