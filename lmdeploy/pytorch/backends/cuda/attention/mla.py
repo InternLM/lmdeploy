@@ -8,7 +8,7 @@ from lmdeploy.pytorch.compile_util import custom_op, get_custom_op_manager
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 from lmdeploy.utils import get_logger
 
-from .default import TritonAttentionImpl, TritonAttentionMetadata, _fill_kv_cache_impl, _get_fill_meta
+from .default import TritonAttentionImpl, TritonAttentionMetadata
 
 logger = get_logger('lmdeploy')
 
@@ -395,7 +395,7 @@ class FlashMLAImpl(TritonAttentionImpl):
         """Fill kv cache."""
         is_fp8_kvcache = k_cache.dtype == torch.float8_e4m3fn
         if not is_fp8_kvcache:
-            return _fill_kv_cache_impl(
+            return super()._fill_kv_cache_impl(
                 key,
                 value,
                 k_cache,
@@ -412,7 +412,8 @@ class FlashMLAImpl(TritonAttentionImpl):
         assert quant_policy == 0
 
         # fill seqlen args
-        fill_seqlens, fill_max_q_seqlen, fill_q_start_loc = _get_fill_meta(
+        fill_seqlens, fill_max_q_seqlen, fill_q_start_loc = self._get_fill_meta(
+            key,
             attn_metadata,
             max_q_seqlen,
         )
@@ -520,58 +521,6 @@ class FlashMLAImpl(TritonAttentionImpl):
         else:
             return self._prefill_triton(query, flatten_k, flatten_v, attn_metadata)
 
-    def forward_impl(
-        self,
-        query: torch.Tensor,
-        key: torch.Tensor,
-        value: torch.Tensor,
-        k_cache: torch.Tensor,
-        v_cache: torch.Tensor,
-        attn_metadata: TritonAttentionMetadata,
-        k_scales_zeros: torch.Tensor | None = None,
-        v_scales_zeros: torch.Tensor | None = None,
-        nsa_indices: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        """Forward pass for MLA attention computation implementation.
-
-        Returns:
-            Attention output tensor.
-        """
-        # Validate NSA requirements
-        is_nsa = nsa_indices is not None
-        if is_nsa:
-            is_fp8_kvcache = k_cache.dtype == torch.float8_e4m3fn
-            assert is_fp8_kvcache, 'NSA sparse attention requires FP8 KV cache'
-
-        # Shared preparation
-        max_q_seqlen = self._get_max_q_seqlen(query, attn_metadata)
-
-        # Fill KV cache with new key/value if provided
-        self._fill_kv_cache_impl(
-            key,
-            value,
-            k_cache,
-            v_cache,
-            attn_metadata,
-            max_q_seqlen,
-            k_scales_zeros=k_scales_zeros,
-            v_scales_zeros=v_scales_zeros,
-        )
-
-        # Dispatch to stage-specific forward method
-        if attn_metadata.is_decoding:
-            return self._forward_decoding(query, k_cache, attn_metadata, nsa_indices)
-        else:
-            return self._forward_prefill(
-                query,
-                k_cache,
-                v_cache,
-                attn_metadata,
-                nsa_indices,
-                k_scales_zeros,
-                v_scales_zeros,
-            )
-
     def forward(
         self,
         query: torch.Tensor,
@@ -626,17 +575,40 @@ class FlashMLAImpl(TritonAttentionImpl):
                 v_scales_zeros=v_scales_zeros,
                 nsa_indices=nsa_indices,
             )
+
+        # Validate NSA requirements
+        is_nsa = nsa_indices is not None
+        if is_nsa:
+            is_fp8_kvcache = k_cache.dtype == torch.float8_e4m3fn
+            assert is_fp8_kvcache, 'NSA sparse attention requires FP8 KV cache'
+
+        # Shared preparation
+        max_q_seqlen = self._get_max_q_seqlen(query, attn_metadata)
+
+        # Fill KV cache with new key/value if provided
+        self._fill_kv_cache_impl(
+            key,
+            value,
+            k_cache,
+            v_cache,
+            attn_metadata,
+            max_q_seqlen,
+            k_scales_zeros=k_scales_zeros,
+            v_scales_zeros=v_scales_zeros,
+        )
+
+        # Dispatch to stage-specific forward method
+        if attn_metadata.is_decoding:
+            return self._forward_decoding(query, k_cache, attn_metadata, nsa_indices)
         else:
-            return self.forward_impl(
+            return self._forward_prefill(
                 query,
-                key,
-                value,
                 k_cache,
                 v_cache,
-                attn_metadata=attn_metadata,
-                k_scales_zeros=k_scales_zeros,
-                v_scales_zeros=v_scales_zeros,
-                nsa_indices=nsa_indices,
+                attn_metadata,
+                nsa_indices,
+                k_scales_zeros,
+                v_scales_zeros,
             )
 
 
@@ -657,16 +629,9 @@ def flash_mla_attention_forward(
 ) -> torch.Tensor:
     """Flash MLA attention forward op."""
     instance: FlashMLAImpl = get_custom_op_manager().get_mod_instance(mod_key)
-    assert isinstance(instance, FlashMLAImpl)
-    step_ctx = get_step_ctx_manager().current_context()
-    attn_metadata: TritonAttentionMetadata = step_ctx.attn_metadata
-    v_cache = k_cache[..., :instance._MLA_NOPE_SIZE]
-    return instance.forward_impl(
-        query,
-        key,
-        value,
-        k_cache,
-        v_cache,
+    attn_metadata = get_step_ctx_manager().current_context().attn_metadata
+    return instance.forward(
+        query, key, value, k_cache, v_cache,
         attn_metadata=attn_metadata,
         k_scales_zeros=k_scales_zeros,
         v_scales_zeros=v_scales_zeros,

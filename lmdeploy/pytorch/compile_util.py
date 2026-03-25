@@ -1,4 +1,16 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+# Two levels of custom op registration exist in this codebase:
+#
+# 1. `custom_op()` (this module) — for ops that act as **graph split points**
+#    in the piecewise torch.compile backend. These are ops that cannot be
+#    captured into a CUDA graph (e.g. attention with dynamic shapes, EP MoE
+#    with NCCL comms). The `split_prefill` / `split_decoding` flags control
+#    which compilation phase treats them as split boundaries.
+#
+# 2. `torch.library.custom_op()` (PyTorch built-in) — for ops that run
+#    **inside** captured CUDA graph subgraphs (e.g. Triton kernel launchers,
+#    FP8 GEMM). These don't need split metadata and are invisible to the
+#    piecewise backend's graph splitter.
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any, Literal, overload
 
@@ -88,20 +100,12 @@ class CustomOpManager:
         self._mod_instances[key] = instance
         return key
 
-    def unregister_mod_instance(self, key: int):
-        """Unregister instance."""
-        if key in self._mod_instances:
-            del self._mod_instances[key]
-
     def get_mod_instance(self, key: int):
         """Get instance."""
         return self._mod_instances.get(key, None)
 
-    def clear_mod_instances(self):
-        """Clear all registered mod instances."""
-        self._mod_instances.clear()
-
-    def add_custom_op(self, name: str, custom_op: CustomOpDef, split_prefill: bool = True, split_decoding: bool = True):
+    def add_custom_op(self, name: str, custom_op: CustomOpDef,
+                      split_prefill: bool = False, split_decoding: bool = False):
         """Add custom op."""
         self._custom_ops[name] = custom_op
         if split_prefill:
@@ -118,6 +122,13 @@ class CustomOpManager:
         return self._split_decoding_ops
 
 
+# Eagerly create the singleton so it exists before any torch.compile tracing.
+# The @singleton decorator returns a factory function; calling it here ensures
+# the instance is created at import time (in eager Python), not during tracing
+# where the constructor call could be captured by dynamo.
+_custom_op_manager = CustomOpManager()
+
+
 def get_custom_op_manager():
     """Get custom op manager."""
-    return CustomOpManager()
+    return _custom_op_manager

@@ -197,7 +197,9 @@ class MoEForwardDPTP:
     def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.LongTensor):
         """forward."""
         # wrap a custom op for torch.compile
-        return moe_forward_dptp(hidden_states, topk_weights, topk_ids, key=self.key)
+        if torch.compiler.is_compiling():
+            return moe_forward_dptp(hidden_states, topk_weights, topk_ids, key=self.key)
+        return self.forward_impl(hidden_states, topk_weights, topk_ids)
 
 
 @custom_op('lmdeploy::moe_forward_dptp', mutates_args=[], split_prefill=True, split_decoding=False)
