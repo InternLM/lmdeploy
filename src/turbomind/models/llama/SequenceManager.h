@@ -54,6 +54,10 @@ struct Sequence {
     mutable Tensor conv_states;
     mutable Tensor recurrent_states;
     mutable bool   linear_states_need_reset = false;
+    mutable Tensor pending_linear_prefix_conv_states;
+    mutable Tensor pending_linear_prefix_recurrent_states;
+    mutable int    pending_linear_prefix_capture_count    = 0;
+    mutable int    pending_linear_prefix_capture_base_len = 0;
 
     explicit Sequence(uint64_t _id): id(_id) {}
 
@@ -97,6 +101,7 @@ public:
                              double            block_count,
                              int               chunk_size,
                              bool              enable_prefix_caching,
+                             int               linear_prefix_cache_interval_blocks,
                              int               rank,
                              int               attn_cp_size,
                              core::Allocator   allocator,
@@ -198,6 +203,7 @@ private:
     void Erase(std::map<uint64_t, Sequence>::iterator& it);
 
     void CommitUnlockAndFree();
+    void VerifyPrefixCache();
 
     void InvalidateStatesAndCache(const Sequence& seq, BlockIds& freed_blocks);
 
@@ -217,6 +223,8 @@ private:
     int block_seq_len_;
     int rank_;
     int attn_cp_size_;
+    int linear_prefix_cache_interval_blocks_{};
+    int linear_prefix_cache_interval_tokens_{};
 
     // Use `std::map` to avoid reference invalidation
     std::map<uint64_t, Sequence> sequences_;
