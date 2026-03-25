@@ -55,7 +55,7 @@ jobs:
           lmdeploy check_env
       - name: Test lmdeploy python UT
         run: |
-          coverage run --branch --source lmdeploy -m pytest -rsE tests
+          coverage run --branch --source lmdeploy -m pytest -vv tests
           coverage xml
           coverage report -m
       - name: Clear workfile
