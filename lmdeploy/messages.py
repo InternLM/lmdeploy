@@ -242,6 +242,9 @@ class TurbomindEngineConfig:
             a k/v block, default to 64
         enable_prefix_caching: enable cache prompts for block reuse,
             default to False
+        linear_prefix_cache_interval_blocks: checkpoint interval, in KV
+            cache blocks, for linear-attention prefix states. Applies only to
+            hybrid models with prefix caching enabled. Default to 2
         quant_policy: default to 0. When k/v is quantized into 4 or 8
             bit, set it to 4 or 8, respectively
         rope_scaling_factor: scaling factor used for dynamic ntk,
@@ -291,6 +294,7 @@ class TurbomindEngineConfig:
     cache_chunk_size: int = -1
     cache_block_seq_len: int = 64
     enable_prefix_caching: bool = False
+    linear_prefix_cache_interval_blocks: int = 2
     quant_policy: int = 0
     rope_scaling_factor: float = 0.0
     use_logn_attn: bool = False
@@ -311,6 +315,8 @@ class TurbomindEngineConfig:
         assert self.dtype in ['auto', 'float16', 'bfloat16']
         assert self.tp >= 1, 'tp must be a positive integer'
         assert self.cache_max_entry_count > 0, 'invalid cache_max_entry_count'
+        assert self.linear_prefix_cache_interval_blocks >= 1, \
+            'invalid linear_prefix_cache_interval_blocks'
         assert self.quant_policy in (QuantPolicy.NONE, QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT), \
                'invalid quant_policy'
         assert self.rope_scaling_factor >= 0, 'invalid rope_scaling_factor'

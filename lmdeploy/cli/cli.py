@@ -70,6 +70,7 @@ class CLI:
         tb_group._group_actions.append(cache_max_entry_act)
         tb_group._group_actions.append(prefix_caching_act)
         tb_group._group_actions.append(quant_policy)
+        ArgumentHelper.linear_prefix_cache_interval_blocks(tb_group)
         ArgumentHelper.model_format(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
         ArgumentHelper.communicator(tb_group)
