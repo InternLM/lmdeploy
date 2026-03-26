@@ -1,13 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import torch
+from torch.profiler import record_function
 
 from lmdeploy.utils import get_logger
 
 from ..backends import get_backend
-from ..config import BackendConfig, CacheConfig, ModelConfig, SpecDecodeConfig
+from ..config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from ..engine.cache_engine import CacheEngine
-from ..engine.logits_process import SamplingInputs
+from ..engine.logits_process import FusedLogitsProcessor, SamplingInputs, _torch_topk
+from ..engine.model_agent.agent import BatchedLogProbs
 from ..model_inputs import ModelInputs
 from ..strategies.ar_spec.model_agent import ARSpecExtraInputs
 from ..strategies.base.model_agent import ExtraInputs
@@ -16,6 +18,83 @@ from .proposers.base import build_specdecode_proposer
 from .reject_sampler import RejectionSampler
 
 logger = get_logger('lmdeploy')
+
+
+def _expand_sampling_inputs(sampling_inputs: SamplingInputs, num_tokens: int) -> SamplingInputs:
+    """Expand per-batch SamplingInputs to per-token by repeating each batch
+    element num_tokens times via repeat_interleave.
+
+    Args:
+        sampling_inputs: SamplingInputs with batch_size elements.
+        num_tokens: Number of tokens per batch element.
+
+    Returns:
+        New SamplingInputs with batch_size * num_tokens elements.
+    """
+    if num_tokens == 1:
+        return sampling_inputs
+
+    from dataclasses import fields
+    out_dict = {}
+    for f in fields(sampling_inputs):
+        k = f.name
+        v = getattr(sampling_inputs, k)
+        if isinstance(v, torch.Tensor):
+            v = v.repeat_interleave(num_tokens, dim=0)
+            if k == 'random_offsets':
+                # Each token position needs a different offset for
+                # reproducible but distinct random sampling
+                arange = torch.arange(num_tokens, device=v.device)
+                v = v + arange.repeat(sampling_inputs.batch_size)
+        out_dict[k] = v
+
+    out_dict['batch_size'] = sampling_inputs.batch_size * num_tokens
+    return SamplingInputs(**out_dict)
+
+
+def _slice_sampling_inputs(sampling_inputs: SamplingInputs, num_tokens: int, is_last: bool = True) -> SamplingInputs:
+    """Slice expanded SamplingInputs.
+
+    After _expand_sampling_inputs repeats each batch element num_tokens
+    times, this function extracts a subset per batch element.
+
+    Args:
+        sampling_inputs: Expanded SamplingInputs with
+            batch_size * num_tokens elements.
+        num_tokens: Number of tokens per batch element.
+        is_last: If True (default), take the last token per batch element
+            (for bonus token sampling), returning batch_size elements.
+            If False, take the first num_tokens-1 tokens per batch element
+            (all except the last), returning
+            batch_size * (num_tokens - 1) elements.
+
+    Returns:
+        Sliced SamplingInputs.
+    """
+    if num_tokens == 1:
+        return sampling_inputs
+
+    from dataclasses import fields
+
+    batch_size = sampling_inputs.batch_size // num_tokens
+    out_dict = {}
+    for f in fields(sampling_inputs):
+        k = f.name
+        v = getattr(sampling_inputs, k)
+        if isinstance(v, torch.Tensor):
+            if is_last:
+                v = v[num_tokens - 1::num_tokens]
+            else:
+                shape = v.shape
+                v = v.view(batch_size, num_tokens, *shape[1:])
+                v = v[:, :-1].reshape(batch_size * (num_tokens - 1), *shape[1:])
+        out_dict[k] = v
+
+    if is_last:
+        out_dict['batch_size'] = batch_size
+    else:
+        out_dict['batch_size'] = batch_size * (num_tokens - 1)
+    return SamplingInputs(**out_dict)
 
 
 class SpecModelAgent(BaseSpecModelAgent):
@@ -27,6 +106,7 @@ class SpecModelAgent(BaseSpecModelAgent):
         backend_config: BackendConfig,
         inputs_strategy,
         agent_strategy,
+        misc_config: MiscConfig,
         device: str = 'cuda',
     ):
         super().__init__(specdecode_config, enable=True)
@@ -36,6 +116,7 @@ class SpecModelAgent(BaseSpecModelAgent):
         self.cache_engine = None
         self.inputs_strategy = inputs_strategy
         self.agent_strategy = agent_strategy
+        self.misc_config = misc_config
         self.rejection_sampler = RejectionSampler()
         self.proposer = build_specdecode_proposer(specdecode_config, device=device)
         self.method = specdecode_config.method
@@ -214,28 +295,110 @@ class SpecModelAgent(BaseSpecModelAgent):
             self._prev_chunk_last.pop(key, None)
         return torch.cat([saved, tensor], dim=1)
 
-    def _rejection_sampling(self, next_token_ids, model_inputs: 'ModelInputs', extra_inputs: ARSpecExtraInputs):
+    async def async_sampling_logits(self, target_logits: torch.Tensor, sampling_inputs: SamplingInputs):
+        """Process target logits and sample bonus token using
+        FusedLogitsProcessor.
+
+        Args:
+            target_logits: [batch_size, num_tokens, vocab_size]
+                num_tokens = 1 + num_spec_tokens (decoding) or 1 (prefill)
+            sampling_inputs: SamplingInputs — already expanded by
+                make_sampling_inputs to batch_size * (num_spec_tokens + 1)
+
+        Returns:
+            processed_logits: [batch_size, num_tokens, vocab_size]
+            next_token_ids: [batch_size] — sampled from the bonus (last) position
+            logprobs: BatchedLogProbs or None
+        """
+        with record_function('spec_sampling_logits'):
+            batch_size, num_tokens, vocab_size = target_logits.shape
+
+            # Reshape to 2D: [batch * num_tokens, vocab]
+            flat_logits = target_logits.reshape(-1, vocab_size)
+
+            # sampling_inputs is already expanded to batch_size * num_tokens
+            logits_processor = FusedLogitsProcessor(
+                sampling_inputs,
+                logprobs_mode=self.misc_config.logprobs_mode,
+            )
+            processed_logits, raw_logprobs = await logits_processor(flat_logits)
+
+            # Slice bonus (last) position logits for each batch element
+            bonus_logits = processed_logits[num_tokens - 1::num_tokens]  # [batch_size, vocab]
+
+            # Create a per-batch processor for bonus token sampling
+            # by slicing the expanded sampling_inputs back to batch_size
+            bonus_sampling_inputs = _slice_sampling_inputs(sampling_inputs, num_tokens)
+            bonus_processor = FusedLogitsProcessor(
+                bonus_sampling_inputs,
+                logprobs_mode=self.misc_config.logprobs_mode,
+            )
+            # Sample next token from bonus position
+            next_token_ids = bonus_processor.sampling(bonus_logits)  # [batch_size]
+
+            # Reshape back to 3D
+            processed_logits = processed_logits.view(batch_size, num_tokens, vocab_size)
+
+        return processed_logits, next_token_ids, raw_logprobs
+
+    async def _rejection_sampling(self, model_inputs: 'ModelInputs', extra_inputs: ARSpecExtraInputs,
+                                  sampling_inputs: SamplingInputs):
         """Do rejection sampling."""
+
+        @torch.inference_mode()
+        def __compute_logprobs(raw_logprobs: torch.Tensor, token_ids: torch.LongTensor,
+                               sampling_inputs: SamplingInputs):
+            """Compute logprobs."""
+            if raw_logprobs is None or sampling_inputs.max_num_logprobs <= 0:
+                return None
+
+            indices = token_ids.flatten().unsqueeze(-1)
+            clamped_indices = indices.clamp_min(0)
+            logprobs = raw_logprobs.gather(-1, clamped_indices)
+            num_logprobs = sampling_inputs.max_num_logprobs
+            topk_logprobs, topk_indices = _torch_topk(raw_logprobs, num_logprobs, dim=-1)
+            logprobs = torch.cat([logprobs, topk_logprobs], dim=-1)
+            indices = torch.cat([indices, topk_indices], dim=-1).to(torch.int32)
+            output_logprobs = BatchedLogProbs(
+                vals=logprobs,
+                indices=indices,
+            )
+            return output_logprobs
+
+        # Process target_logits via FusedLogitsProcessor for BOTH prefill and decoding
+        target_logits = extra_inputs.target_logits
+        num_tokens = target_logits.shape[1]
+        expanded_sampling_inputs = _expand_sampling_inputs(sampling_inputs, num_tokens)
+        processed_logits, next_token_ids, raw_logprobs = await self.async_sampling_logits(
+            target_logits, expanded_sampling_inputs)
+
         num_rejected_tokens = torch.zeros_like(model_inputs.seq_length)
-        bonus_token_ids = output_token_ids = next_token_ids.unsqueeze(-1)
+        output_token_ids = next_token_ids.unsqueeze(-1)
         last_token_indices = model_inputs.seq_length.cumsum(0) - 1
+
         if model_inputs.is_decoding:
-            # only do rejection sample for decoding with draft tokens
-            input_draft_token_ids = model_inputs.input_ids.squeeze(0).unflatten(0, (-1, self.num_spec_tokens + 1))[:,
-                                                                                                                   1:]
+            # Rejection sampling on processed logits (exclude bonus position)
+            target_logits = processed_logits[:, :-1].contiguous()  # [batch, num_spec, vocab]
+            num_tokens = self.num_spec_tokens + 1
+            batch_sampling_inputs = _slice_sampling_inputs(expanded_sampling_inputs, num_tokens, is_last=False)
             output_token_ids, num_rejected_tokens, next_token_ids = self.rejection_sampler(
-                extra_inputs.target_logits,
-                input_draft_token_ids,
-                bonus_token_ids,
+                target_logits,
+                extra_inputs.output_draft_token_ids,
+                next_token_ids,
+                sampling_inputs=batch_sampling_inputs,
             )
             # update last token indices
             last_token_indices = last_token_indices - num_rejected_tokens
+
+        logprobs = __compute_logprobs(raw_logprobs, output_token_ids, sampling_inputs)
+
         new_extra_inputs = extra_inputs.clone(
             next_token_ids=next_token_ids,
             last_token_indices=last_token_indices,
             num_rejected_tokens=num_rejected_tokens,
             output_token_ids=output_token_ids,
             target_logits=None,  # clear for next step
+            logprobs=logprobs,
         )
         return new_extra_inputs
 
@@ -285,18 +448,18 @@ class SpecModelAgent(BaseSpecModelAgent):
             next_token_ids=extra_inputs.next_token_ids,
             num_rejected_tokens=extra_inputs.num_rejected_tokens,
             output_token_ids=extra_inputs.output_token_ids,
+            logprobs=extra_inputs.logprobs,
         )
         return extra_inputs
 
     async def async_model_forward(
         self,
-        next_token_ids: torch.Tensor,
         model_inputs: ModelInputs,
         extra_inputs: ExtraInputs,
         sampling_inputs: SamplingInputs,
     ):
         """Draft model forward."""
-        draft_extra_inputs = self._rejection_sampling(next_token_ids, model_inputs, extra_inputs)
+        draft_extra_inputs = await self._rejection_sampling(model_inputs, extra_inputs, sampling_inputs)
         draft_model_inputs, draft_extra_inputs = self._prepare_inputs_from_main(model_inputs, draft_extra_inputs)
         return await self._async_model_forward(draft_model_inputs, draft_extra_inputs, sampling_inputs)
 

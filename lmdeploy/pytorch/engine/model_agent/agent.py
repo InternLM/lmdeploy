@@ -411,6 +411,7 @@ class BaseModelAgent:
                                            dist_ctx,
                                            self.inputs_strategy,
                                            self.agent_strategy,
+                                           misc_config=misc_config,
                                            device=device)
         # sleep wakeup state
         self.state: SleepWakeupState = SleepWakeupState()
@@ -687,22 +688,21 @@ class BaseModelAgent:
         """Step postprocess with output."""
         rank = self.rank
         logger.debug(f'<ForwardTask> rank[{rank}]: Sampling.')
-        # sampling
-        next_token_ids, logprobs = await self.async_sampling_logits(last_logits, sampling_inputs)
-
-        # post sampling
-        next_token_ids, extra_inputs = self.agent_strategy.post_sampling(inputs, last_logits, next_token_ids,
-                                                                         extra_inputs)
-
-        # spec decoding
-        output_token_ids = next_token_ids
+        # sampling + spec decoding
         if self.spec_agent.is_enabled():
-            extra_inputs = await self.spec_agent.async_model_forward(next_token_ids, inputs, extra_inputs,
-                                                                     sampling_inputs)
+            # spec_agent handles sampling + logprobs + rejection sampling internally
+            extra_inputs = await self.spec_agent.async_model_forward(inputs, extra_inputs, sampling_inputs)
             next_token_ids = extra_inputs.next_token_ids
             output_token_ids = extra_inputs.output_token_ids
+            logprobs = extra_inputs.logprobs
             logits = None
-
+        else:
+            # normal (non-spec-decode) path: sample from main model logits
+            next_token_ids, logprobs = await self.async_sampling_logits(last_logits, sampling_inputs)
+            # post sampling
+            next_token_ids, extra_inputs = self.agent_strategy.post_sampling(inputs, last_logits, next_token_ids,
+                                                                             extra_inputs)
+            output_token_ids = next_token_ids
         with self._broadcast_next_token(next_token_ids, extra_inputs, enable=need_broadcast_next):
             logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids')
 

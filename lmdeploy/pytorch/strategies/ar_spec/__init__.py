@@ -33,7 +33,8 @@ class ARSpecStrategyFactory(StrategyFactoryBase):
         from .sampling import ARSpecSamplingStrategy
         pad_token_id = self.model_config.bos_token_id
         pad_token_id = 0 if pad_token_id is None else pad_token_id
-        return ARSpecSamplingStrategy(pad_token_id)
+        num_spec_tokens = self.specdecode_config.num_speculative_tokens
+        return ARSpecSamplingStrategy(pad_token_id, num_spec_tokens=num_spec_tokens)
 
     def build_model_inputs_strategy(self) -> 'ModelInputsStrategy':
         """Build model inputs strategy."""
