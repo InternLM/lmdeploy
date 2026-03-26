@@ -40,7 +40,7 @@ def sample_video_messages(video_data):
 
 
 def _preprocess(model, messages, **kwargs):
-    result = model.preprocess(messages=messages, **kwargs)
+    result = model.preprocess(messages=list(messages), **kwargs)
     return result[-1]['content'][0]
 
 
