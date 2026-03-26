@@ -47,9 +47,9 @@ def _preprocess(model, messages, **kwargs):
 def test_image_with_custom_pixels(qwen3vl_model, sample_messages):
     """Test that mm_processor_kwargs min/max pixels affect image preprocessing.
 
-    compression ratio for qwen3vl is 32 = patch_size * spatial_merge_size = 16 * 2 image_processor.size['shortest_edge']
-    = 65536 = 64 * 32 * 32    (64 token budget) image_processor.size['longest_edge'] = 16777216 = 16384 * 32 * 32 (16384
-    token budget)
+    compression ratio for qwen3vl is 32 = patch_size * spatial_merge_size = 16 * 2,
+    image_processor.size['shortest_edge'] = 65536 = 64 * 32 * 32      (64 token budget),
+    image_processor.size['longest_edge'] = 16777216 = 16384 * 32 * 32 (16384 token budget),
     """
 
     # [280, 1536]
