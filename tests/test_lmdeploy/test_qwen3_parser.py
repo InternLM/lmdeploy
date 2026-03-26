@@ -5,7 +5,7 @@ from collections.abc import Generator
 
 import pytest
 import shortuuid
-from lmdeploy.serve.openai.reasoning_parser.qwen_qwq_reasoning_parser import QwenQwQReasoningParser
+from lmdeploy.serve.openai.reasoning_parser.qwen_qwq_reasoning_parser import QwenReasoningParser
 from lmdeploy.serve.openai.tool_parser.qwen3_parser import Qwen3ToolParser
 
 from lmdeploy.serve.openai.api_server import VariableInterface
@@ -211,7 +211,7 @@ def _chat_completion_v1(
                         delta_message.tool_calls = tool_delta.tool_calls
                         delta_message.content = tool_delta.content or ''
                 if VariableInterface.reasoning_parser is not None:
-                    reasoning_delta = VariableInterface.reasoning_parser.extract_reasoning_content_streaming(
+                    reasoning_delta = VariableInterface.reasoning_parser.extract_reasoning_streaming(
                         previous_text=previous_text,
                         current_text=current_text,
                         delta_text=delta_message.content,
@@ -252,7 +252,7 @@ def _chat_completion_v1(
                 finish_reason = 'tool_calls'
 
     if VariableInterface.reasoning_parser is not None:
-        reasoning_content, text = VariableInterface.reasoning_parser.extract_reasoning_content(text, request)
+        reasoning_content, text = VariableInterface.reasoning_parser.extract_reasoning(text, request)
 
     choices = []
     choice_data = ChatCompletionResponseChoice(
@@ -308,7 +308,7 @@ def _stream_parse(request: ChatCompletionRequest, text_sequence: list[str]) -> t
 def test_parser_stream(text_sequence: list[str], expects: list[TestExpects]):
     tokenizer = DummyTokenizer()
     VariableInterface.tool_parser = Qwen3ToolParser(tokenizer=tokenizer)
-    VariableInterface.reasoning_parser = QwenQwQReasoningParser(tokenizer=tokenizer)
+    VariableInterface.reasoning_parser = QwenReasoningParser(tokenizer=tokenizer)
     request = ChatCompletionRequest(model='qwen', messages=[], stream=True)
     content, reasoning_content, tool_calls = _stream_parse(request, text_sequence)
     assert len(tool_calls) == len(expects)
@@ -328,7 +328,7 @@ def test_parser_stream(text_sequence: list[str], expects: list[TestExpects]):
 def test_parser_nonstream(text_sequence: list[str], expects: list[TestExpects]):
     tokenizer = DummyTokenizer()
     VariableInterface.tool_parser = Qwen3ToolParser(tokenizer=tokenizer)
-    VariableInterface.reasoning_parser = QwenQwQReasoningParser(tokenizer=tokenizer)
+    VariableInterface.reasoning_parser = QwenReasoningParser(tokenizer=tokenizer)
     resp: ChatCompletionResponse = _chat_completion_v1(ChatCompletionRequest(model='qwen', messages=[], stream=False),
                                                        text_sequence)
 
@@ -358,7 +358,7 @@ def test_no_think_nonstream():
     ]
     tokenizer = DummyTokenizer()
     VariableInterface.tool_parser = Qwen3ToolParser(tokenizer=tokenizer)
-    VariableInterface.reasoning_parser = QwenQwQReasoningParser(tokenizer=tokenizer)
+    VariableInterface.reasoning_parser = QwenReasoningParser(tokenizer=tokenizer)
     resp: ChatCompletionResponse = _chat_completion_v1(ChatCompletionRequest(model='qwen', messages=[], stream=False),
                                                        text_sequence)
 

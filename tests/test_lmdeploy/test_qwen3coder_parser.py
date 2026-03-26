@@ -5,7 +5,6 @@ from collections.abc import Generator
 
 import pytest
 import shortuuid
-from lmdeploy.serve.openai.tool_parser.qwen3coder_parser import Qwen3CoderToolParser
 
 from lmdeploy.serve.openai.api_server import VariableInterface
 from lmdeploy.serve.openai.protocol import (
@@ -19,6 +18,7 @@ from lmdeploy.serve.openai.protocol import (
     DeltaToolCall,
     UsageInfo,
 )
+from lmdeploy.serve.openai.tool_parser.qwen3coder_tool_parser import Qwen3CoderToolParser
 
 TestExpects = collections.namedtuple('TestExpects', 'func_name kwargs')
 
@@ -94,7 +94,7 @@ def _chat_completion_v1(
                         delta_message.content = tool_delta.content or ''
                 if VariableInterface.reasoning_parser is not None:
                     parser = VariableInterface.reasoning_parser
-                    reasoning_delta = parser.extract_reasoning_content_streaming(previous_text=previous_text,
+                    reasoning_delta = parser.extract_reasoning_streaming(previous_text=previous_text,
                                                                                  current_text=current_text,
                                                                                  delta_text=delta_message.content,
                                                                                  previous_token_ids=[],
@@ -135,7 +135,7 @@ def _chat_completion_v1(
 
     if VariableInterface.reasoning_parser is not None:
         parser = VariableInterface.reasoning_parser
-        reasoning_content, text = parser.extract_reasoning_content(text, request)
+        reasoning_content, text = parser.extract_reasoning(text, request)
 
     choices = []
     choice_data = ChatCompletionResponseChoice(
