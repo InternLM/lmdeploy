@@ -18,9 +18,9 @@ class TestBackendInference:
         """Parametrized backend configuration for all tests."""
 
         if backend == 'pytorch':
-            return PytorchEngineConfig(session_len=4096, max_batch_size=4, tp=1)
+            return PytorchEngineConfig(session_len=4096, max_batch_size=4, tp=1, cache_max_entry_count=0.1)
         elif backend == 'turbomind':
-            return TurbomindEngineConfig(session_len=4096, max_batch_size=4, tp=1)
+            return TurbomindEngineConfig(session_len=4096, max_batch_size=4, tp=1, cache_max_entry_count=0.1)
         else:
             raise ValueError(f'Unknown backend type: {backend}')
 
