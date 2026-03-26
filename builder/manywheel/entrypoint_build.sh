@@ -8,6 +8,9 @@ export GROUPID=${GROUPID}
 export NCCL_INCLUDE_DIR=/usr/local/cuda/include
 export NCCL_LIB_DIR=/usr/local/cuda/lib64
 
+# Fix git dubious ownership issue when building inside docker
+git config --global --add safe.directory /lmdeploy
+
 source /opt/conda/bin/activate
 conda activate $PYTHON_VERSION
 
