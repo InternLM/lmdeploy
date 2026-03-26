@@ -420,7 +420,7 @@ class Qwen3_5GatedDeltaNet(nn.Module):
                                                 is_tp=True,
                                                 quant_config=quantization_config)
         # TODO: optimize weight loader
-        self.in_proj_qkv.weight.weight_loader = self.weight_loader_qkv
+        self.in_proj_qkv.weight.weight_loader = self.weight_loader_qkv_quant
         if hasattr(self.in_proj_qkv, 'weight_scale_inv'):
             self.in_proj_qkv.weight_scale_inv.weight_loader = self.weight_loader_qkv_fp8_scale
 
@@ -480,6 +480,28 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         self.register_parameter('dt_bias', nn.Parameter(dt_bias))
         self.A_log.weight_loader = self.weight_loader_a_dt
         self.dt_bias.weight_loader = self.weight_loader_a_dt
+
+    def weight_loader_qkv_quant(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor):
+        """Weight loader for quantization parameters."""
+        if param.dtype == loaded_weight.dtype:
+            self.weight_loader_qkv(param, loaded_weight)
+            return
+
+        if torch.finfo(param.dtype).bits == 8:
+            # for blocked fp8
+            from lmdeploy.pytorch.nn.quant_utils import quant_blocked_fp8
+            mod = self.in_proj_qkv
+            scale_fmt = mod.scale_fmt
+            block_size = mod.block_size
+            quanted_weight, scaling = quant_blocked_fp8(loaded_weight,
+                                                        param.dtype,
+                                                        block_size,
+                                                        scale_fmt=scale_fmt)
+            self.weight_loader_qkv(mod.weight, quanted_weight)
+            self.weight_loader_qkv_fp8_scale(mod.weight_scale_inv, scaling)
+        else:
+            raise NotImplementedError(f'Quantization for dtype {param.dtype} is not implemented.')
+
 
     def weight_loader_qkv(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor):
         """Weight loader for qkv projection."""
