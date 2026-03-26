@@ -18,6 +18,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.routing import Mount
 
@@ -76,7 +77,6 @@ from lmdeploy.serve.openai.protocol import (
 )
 from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParser, ReasoningParserManager
 from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParser, ToolParserManager
-from lmdeploy.serve.utils.server_utils import validate_json_request
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
 
@@ -85,9 +85,10 @@ from lmdeploy.utils import get_logger
 logger = get_logger('lmdeploy')
 
 
-class VariableInterface:
+class ServerContext:
     """A IO interface maintaining variables."""
     async_engine: AsyncEngine = None
+    api_keys: list[str] | None = None
     request_hosts = []
     # following are for registering to proxy server
     proxy_url: str | None = None
@@ -101,7 +102,7 @@ class VariableInterface:
 
     @staticmethod
     def get_session(session_id: int) -> int:
-        session_mgr = VariableInterface.get_session_manager()
+        session_mgr = ServerContext.get_session_manager()
         if session_id == -1:
             return session_mgr.get()
         else:
@@ -109,15 +110,40 @@ class VariableInterface:
 
     @staticmethod
     def get_session_manager():
-        return VariableInterface.async_engine.session_mgr
+        return ServerContext.async_engine.session_mgr
 
     @staticmethod
     def get_engine_config():
-        return VariableInterface.async_engine.backend_config
+        return ServerContext.async_engine.backend_config
 
 
 router = APIRouter()
-server_context = VariableInterface()
+get_bearer_token = HTTPBearer(auto_error=False)
+server_context = ServerContext()
+
+
+async def check_api_key(auth: HTTPAuthorizationCredentials | None = Depends(get_bearer_token), ) -> str:
+    """Check if client provide valid api key.
+
+    Adopted from https://github.com/lm-sys/FastChat/blob/v0.2.35/fastchat/serve/openai_api_server.py#L108-L127
+    """  # noqa
+    if ServerContext.api_keys:
+        if auth is None or (token := auth.credentials) not in ServerContext.api_keys:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    'error': {
+                        'message': 'Please request with valid api key!',
+                        'type': 'invalid_request_error',
+                        'param': None,
+                        'code': 'invalid_api_key',
+                    }
+                },
+            )
+        return token
+    else:
+        # api_keys not set; allow all
+        return None
 
 
 def get_model_list():
@@ -125,13 +151,13 @@ def get_model_list():
 
     If it is a slora serving. The model list would be [model_name, adapter_name1, adapter_name2, ...]
     """
-    model_names = [VariableInterface.async_engine.model_name]
-    cfg = VariableInterface.async_engine.backend_config
+    model_names = [ServerContext.async_engine.model_name]
+    cfg = ServerContext.async_engine.backend_config
     model_names += getattr(cfg, 'adapters', None) or []
     return model_names
 
 
-@router.get('/v1/models')
+@router.get('/v1/models', dependencies=[Depends(check_api_key)])
 def available_models():
     """Show available models."""
     model_cards = []
@@ -181,19 +207,19 @@ def check_request(request) -> JSONResponse | None:
 
 
 def _create_completion_logprobs(tokenizer: Tokenizer,
-                                token_ids: list[int] | None = None,
-                                logprobs: list[dict[int, float]] | None = None,
+                                token_ids: list[int] = None,
+                                logprobs: list[dict[int, float]] = None,
                                 skip_special_tokens: bool = True,
                                 offset: int = 0,
-                                all_token_ids: list[int] | None = None,
+                                all_token_ids: list[int] = None,
                                 state: DetokenizeState = None,
                                 spaces_between_special_tokens: bool = True):
     """Create openai LogProbs for completion.
 
     Args:
         tokenizer (Tokenizer): tokenizer.
-        token_ids (list[int]): output token ids.
-        logprobs (list[dict[int, float]]): the top logprobs for each output
+        token_ids (List[int]): output token ids.
+        logprobs (List[Dict[int, float]]): the top logprobs for each output
             position.
         skip_special_tokens (bool): Whether or not to remove special tokens
             in the decoding. Default to be True.
@@ -240,14 +266,14 @@ def _create_completion_logprobs(tokenizer: Tokenizer,
 
 
 def _create_chat_completion_logprobs(tokenizer: Tokenizer,
-                                     token_ids: list[int] | None = None,
-                                     logprobs: list[dict[int, float]] | None = None):
+                                     token_ids: list[int] = None,
+                                     logprobs: list[dict[int, float]] = None):
     """Create openai LogProbs for chat.completion.
 
     Args:
         tokenizer (Tokenizer): tokenizer.
-        token_ids (list[int]): output token ids.
-        logprobs (list[dict[int, float]]): the top logprobs for each output
+        token_ids (List[int]): output token ids.
+        logprobs (List[Dict[int, float]]): the top logprobs for each output
             position.
     Returns:
         ChoiceLogprobs: logprob result.
@@ -286,7 +312,7 @@ async def terminate():
     """Terminate server."""
     import signal
 
-    if not VariableInterface.allow_terminate_by_client:
+    if not ServerContext.allow_terminate_by_client:
         return create_error_response(
             HTTPStatus.BAD_REQUEST,
             'The server can not be terminated. Please add --allow-terminate-by-client when start the server.')
@@ -325,7 +351,7 @@ def logit_bias_logits_processor(logit_bias: dict[int, float] | dict[str, float],
     return partial(_logit_bias_processor, clamped_logit_bias)
 
 
-@router.post('/v1/chat/completions', dependencies=[Depends(validate_json_request)])
+@router.post('/v1/chat/completions', dependencies=[Depends(check_api_key)])
 async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
@@ -351,9 +377,9 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
       Deprecated: Use max_completion_tokens instead.
     - **repetition_penalty** (float): The parameter for repetition penalty.
       1.0 means no penalty
-    - **stop** (str | list[str] | None): To stop generating further
+    - **stop** (str | List[str] | None): To stop generating further
       tokens. Only accept stop words that's encoded to one token idex.
-    - **response_format** (dict | None): To generate response according to given
+    - **response_format** (Dict | None): To generate response according to given
       schema. Examples:
 
       .. code-block:: json
@@ -373,8 +399,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         }
 
       or ``{"type": "regex_schema", "regex_schema": "call me [A-Za-z]{1,10}"}``
-    - **logit_bias** (dict): Bias to logits. Only supported in pytorch engine.
-    - **tools** (list): A list of tools the model may call. Currently, only
+    - **logit_bias** (Dict): Bias to logits. Only supported in pytorch engine.
+    - **tools** (List): A list of tools the model may call. Currently, only
       internlm2 functions are supported as a tool. Use this to specify a
       list of functions for which the model can generate JSON inputs.
     - **tool_choice** (str | object): Controls which (if any) tool is called by
@@ -409,7 +435,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
-    session = VariableInterface.get_session(request.session_id)
+    session = ServerContext.get_session(request.session_id)
 
     json_request = await raw_request.json()
     migration_request = json_request.pop('migration_request', None)
@@ -420,12 +446,12 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
     model_name = request.model
     adapter_name = None
-    if model_name != VariableInterface.async_engine.model_name:
+    if model_name != ServerContext.async_engine.model_name:
         adapter_name = model_name  # got a adapter name
     request_id = str(session.session_id)
     created_time = int(time.time())
     gpt_oss_parser = None
-    if VariableInterface.async_engine.arch == 'GptOssForCausalLM':
+    if ServerContext.async_engine.arch == 'GptOssForCausalLM':
         gpt_oss_parser = GptOssChatParser()
 
     if isinstance(request.stop, str):
@@ -441,7 +467,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     if request.logit_bias is not None:
         try:
             logits_processors = [
-                logit_bias_logits_processor(request.logit_bias, VariableInterface.async_engine.tokenizer.model)
+                logit_bias_logits_processor(request.logit_bias, ServerContext.async_engine.tokenizer.model)
             ]
         except Exception as e:
             return create_error_response(HTTPStatus.BAD_REQUEST, str(e))
@@ -503,7 +529,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         else:
             logger.warning('`enable_thinking` in `chat_template_kwargs` will override the value in request.')
     enable_thinking = chat_template_kwargs.get('enable_thinking', None)
-    result_generator = VariableInterface.async_engine.generate(
+    result_generator = ServerContext.async_engine.generate(
         request.messages,
         session,
         gen_config=gen_config,
@@ -515,7 +541,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         do_preprocess=do_preprocess,
         adapter_name=adapter_name,
         chat_template_kwargs=chat_template_kwargs or None,
-        media_io_kwargs=request.media_io_kwargs,
         mm_processor_kwargs=request.mm_processor_kwargs)
 
     def create_stream_response_json(index: int,
@@ -544,12 +569,12 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         previous_token_ids = []
         current_token_ids = []
         delta_token_ids = []
-        has_parser = VariableInterface.tool_parser is not None or VariableInterface.reasoning_parser is not None
+        has_parser = ServerContext.tool_parser is not None or ServerContext.reasoning_parser is not None
         streaming_tools = False
         async for res in result_generator:
             logprobs, usage = None, None
             if gen_logprobs and res.logprobs:
-                logprobs = _create_chat_completion_logprobs(VariableInterface.async_engine.tokenizer, res.token_ids,
+                logprobs = _create_chat_completion_logprobs(ServerContext.async_engine.tokenizer, res.token_ids,
                                                             res.logprobs)
             # Only stream chunk `usage` in the final chunk according to OpenAI API spec
             if (res.finish_reason and request.stream_options and request.stream_options.include_usage):
@@ -570,10 +595,10 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 if has_parser:
                     current_text = current_text + res.response
                     current_token_ids = current_token_ids + delta_token_ids
-                if request.tool_choice != 'none' and VariableInterface.tool_parser is not None:
+                if request.tool_choice != 'none' and ServerContext.tool_parser is not None:
                     if res.finish_reason == 'stop' and streaming_tools is True:
                         res.finish_reason = 'tool_calls'
-                    tool_delta = VariableInterface.tool_parser.extract_tool_calls_streaming(
+                    tool_delta = ServerContext.tool_parser.extract_tool_calls_streaming(
                         previous_text=previous_text,
                         current_text=current_text,
                         delta_text=delta_message.content,
@@ -587,10 +612,10 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                         if isinstance(tool_delta.tool_calls, list) and len(tool_delta.tool_calls):
                             streaming_tools = True
                 elif (request.tool_choice != 'none' and request.tools is not None
-                      and VariableInterface.tool_parser is None):
+                      and ServerContext.tool_parser is None):
                     logger.error('Please launch the api_server with --tool-call-parser if you want to use tool.')
-                if VariableInterface.reasoning_parser is not None and enable_thinking is not False:
-                    reasoning_delta = VariableInterface.reasoning_parser.extract_reasoning_content_streaming(
+                if ServerContext.reasoning_parser is not None and enable_thinking is not False:
+                    reasoning_delta = ServerContext.reasoning_parser.extract_reasoning_content_streaming(
                         previous_text=previous_text,
                         current_text=current_text,
                         delta_text=delta_message.content or '',
@@ -648,9 +673,9 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     else:
         tool_calls = None
         reasoning_content = None
-        if request.tool_choice != 'none' and VariableInterface.tool_parser is not None:
+        if request.tool_choice != 'none' and ServerContext.tool_parser is not None:
             try:
-                tool_call_info = VariableInterface.tool_parser.extract_tool_calls(text, request=request)
+                tool_call_info = ServerContext.tool_parser.extract_tool_calls(text, request=request)
                 text, tool_calls = tool_call_info.content, tool_call_info.tool_calls
                 if isinstance(tool_calls, list) and len(tool_calls):
                     if final_res.finish_reason == 'stop':
@@ -659,11 +684,11 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             except Exception as e:
                 logger.error(f'Failed to parse {text}. Exception: {e}.')
                 return create_error_response(HTTPStatus.BAD_REQUEST, 'Failed to parse fc related info to json format!')
-        elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
+        elif request.tool_choice != 'none' and request.tools is not None and ServerContext.tool_parser is None:
             logger.error('Please launch the api_server with --tool-call-parser if you want to use tool.')
 
-        if VariableInterface.reasoning_parser is not None and enable_thinking is not False:
-            reasoning_content, text = VariableInterface.reasoning_parser.extract_reasoning_content(text, request)
+        if ServerContext.reasoning_parser is not None and enable_thinking is not False:
+            reasoning_content, text = ServerContext.reasoning_parser.extract_reasoning_content(text, request)
 
         message = ChatMessage(role='assistant',
                               content=text,
@@ -672,7 +697,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
     logprobs = None
     if gen_logprobs and len(final_logprobs):
-        logprobs = _create_chat_completion_logprobs(VariableInterface.async_engine.tokenizer, final_token_ids,
+        logprobs = _create_chat_completion_logprobs(ServerContext.async_engine.tokenizer, final_token_ids,
                                                     final_logprobs)
 
     assert final_res is not None
@@ -712,7 +737,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     return response
 
 
-@router.post('/v1/completions', dependencies=[Depends(validate_json_request)])
+@router.post('/v1/completions', dependencies=[Depends(check_api_key)])
 async def completions_v1(request: CompletionRequest, raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
@@ -739,7 +764,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     - **repetition_penalty** (float): The parameter for repetition penalty.
       1.0 means no penalty
     - **user** (str): A unique identifier representing your end-user.
-    - **stop** (str | list[str] | None): To stop generating further
+    - **stop** (str | List[str] | None): To stop generating further
       tokens. Only accept stop words that's encoded to one token idex.
 
     Additional arguments supported by LMDeploy:
@@ -777,17 +802,17 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
 
     model_name = request.model
     adapter_name = None
-    if model_name != VariableInterface.async_engine.model_name:
+    if model_name != ServerContext.async_engine.model_name:
         adapter_name = model_name  # got a adapter name
     request_id = str(request.session_id)
     created_time = int(time.time())
     sessions = []
     if isinstance(request.prompt, str):
         request.prompt = [request.prompt]
-        sessions.append(VariableInterface.get_session(request.session_id))
+        sessions.append(ServerContext.get_session(request.session_id))
     elif isinstance(request.prompt, list):
         for i in range(len(request.prompt)):
-            sessions.append(VariableInterface.get_session(i + 1))
+            sessions.append(ServerContext.get_session(i+1))
     if isinstance(request.stop, str):
         request.stop = [request.stop]
     random_seed = request.seed if request.seed else None
@@ -813,7 +838,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     )
     generators = []
     for prompt, session in zip(request.prompt, sessions):
-        result_generator = VariableInterface.async_engine.generate(
+        result_generator = ServerContext.async_engine.generate(
             prompt,
             session,
             gen_config=gen_config,
@@ -856,7 +881,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
                 usage = None
                 if request.logprobs and res.logprobs:
                     logprobs, offset, all_token_ids, state = _create_completion_logprobs(  # noqa E501
-                        VariableInterface.async_engine.tokenizer, res.token_ids, res.logprobs,
+                        ServerContext.async_engine.tokenizer, res.token_ids, res.logprobs,
                         gen_config.skip_special_tokens, offset, all_token_ids, state,
                         gen_config.spaces_between_special_tokens)
                 # Only stream chunk `usage` in the final chunk according to OpenAI API spec
@@ -902,7 +927,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         async for res in generator:
             if await raw_request.is_disconnected():
                 # Abort the request if the client disconnects.
-                await VariableInterface.async_engine.stop_session(request.session_id)
+                await ServerContext.async_engine.stop_session(request.session_id)
                 return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
             final_res = res
             text += res.response
@@ -916,7 +941,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         logprobs = None
         if request.logprobs and len(final_logprobs):
             logprobs, _, _, _ = _create_completion_logprobs(
-                VariableInterface.async_engine.tokenizer,
+                ServerContext.async_engine.tokenizer,
                 final_token_ids,
                 final_logprobs,
                 gen_config.skip_special_tokens,
@@ -956,12 +981,12 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     return response
 
 
-@router.post('/generate', dependencies=[Depends(validate_json_request)])
+@router.post('/generate', dependencies=[Depends(check_api_key)])
 async def generate(request: GenerateReqInput, raw_request: Request = None):
     error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
-    session = VariableInterface.get_session(request.session_id)
+    session = ServerContext.get_session(request.session_id)
 
     prompt = request.prompt
     input_ids = request.input_ids
@@ -996,11 +1021,9 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         spaces_between_special_tokens=request.spaces_between_special_tokens,
         include_stop_str_in_output=request.include_stop_str_in_output,
         return_routed_experts=request.return_routed_experts,
-        repetition_ngram_size=request.repetition_ngram_size,
-        repetition_ngram_threshold=request.repetition_ngram_threshold,
     )
 
-    result_generator = VariableInterface.async_engine.generate(
+    result_generator = ServerContext.async_engine.generate(
         messages=prompt,
         session_id=session,
         input_ids=input_ids,
@@ -1009,7 +1032,6 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         sequence_start=True,
         sequence_end=True,
         do_preprocess=False,
-        media_io_kwargs=request.media_io_kwargs,
         mm_processor_kwargs=request.mm_processor_kwargs)
 
     def create_generate_response_json(res, text, output_ids, logprobs, finish_reason, routed_experts=None):
@@ -1079,13 +1101,13 @@ async def create_embeddings(request: EmbeddingsRequest, raw_request: Request = N
     return create_error_response(HTTPStatus.BAD_REQUEST, 'Unsupported by turbomind.')
 
 
-@router.post('/v1/encode', dependencies=[Depends(validate_json_request)])
+@router.post('/v1/encode', dependencies=[Depends(check_api_key)])
 async def encode(request: EncodeRequest, raw_request: Request = None):
     """Encode prompts.
 
     The request should be a JSON object with the following fields:
 
-    - **input**: the prompt to be encoded. In str or list[str] format.
+    - **input**: the prompt to be encoded. In str or List[str] format.
     - **do_preprocess**: whether do preprocess or not. Default to False.
     - **add_bos**: True when it is the beginning of a conversation. False when it
       is not. Default to True.
@@ -1093,8 +1115,8 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
 
     def encode(prompt: str, do_preprocess: bool, add_bos: bool):
         if do_preprocess:
-            prompt = VariableInterface.async_engine.chat_template.get_prompt(prompt, sequence_start=add_bos)
-        input_ids = VariableInterface.async_engine.tokenizer.encode(prompt, add_bos=add_bos)
+            prompt = ServerContext.async_engine.chat_template.get_prompt(prompt, sequence_start=add_bos)
+        input_ids = ServerContext.async_engine.tokenizer.encode(prompt, add_bos=add_bos)
         return input_ids
 
     if isinstance(request.input, str):
@@ -1109,7 +1131,7 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
         return EncodeResponse(input_ids=encoded, length=length)
 
 
-@router.post('/pooling', dependencies=[Depends(validate_json_request)])
+@router.post('/pooling')
 async def pooling(request: PoolingRequest, raw_request: Request = None):
     """Pooling prompts for reward model.
 
@@ -1122,10 +1144,10 @@ async def pooling(request: PoolingRequest, raw_request: Request = None):
     The request should be a JSON object with the following fields:
 
     - **model** (str): model name. Available from /v1/models.
-    - **input** (list[int] | list[list[int]] | str | list[str]): input text to be embed
+    - **input** (List[int] | List[List[int]] | str | List[str]): input text to be embed
     """
 
-    async_engine = VariableInterface.async_engine
+    async_engine = ServerContext.async_engine
 
     request_input = request.input
     model_name = request.model or async_engine.model_name
@@ -1136,11 +1158,11 @@ async def pooling(request: PoolingRequest, raw_request: Request = None):
     elif isinstance(request_input, list):
         if not request_input:
             return create_error_response(HTTPStatus.BAD_REQUEST, 'Input list cannot be empty.')
-        if isinstance(request_input[0], str):  # list[str]
+        if isinstance(request_input[0], str):  # List[str]
             input_ids = [async_engine.tokenizer.encode(p) for p in request_input]
-        elif isinstance(request_input[0], int):  # list[int]
+        elif isinstance(request_input[0], int):  # List[int]
             input_ids = [request_input]
-        elif isinstance(request_input[0], list):  # list[list[int]]
+        elif isinstance(request_input[0], list):  # List[List[int]]
             input_ids = request_input
         else:
             return create_error_response(HTTPStatus.BAD_REQUEST, 'Input list contains an invalid type.')
@@ -1163,31 +1185,31 @@ async def pooling(request: PoolingRequest, raw_request: Request = None):
     return response.model_dump()
 
 
-@router.post('/update_weights', dependencies=[Depends(validate_json_request)])
+@router.post('/update_weights', dependencies=[Depends(check_api_key)])
 def update_params(request: UpdateParamsRequest, raw_request: Request = None):
     """Update weights for the model."""
-    VariableInterface.async_engine.engine.update_params(request)
+    ServerContext.async_engine.engine.update_params(request)
     return JSONResponse(content=None)
 
 
-@router.post('/sleep', dependencies=[Depends(validate_json_request)])
+@router.post('/sleep', dependencies=[Depends(check_api_key)])
 async def sleep(raw_request: Request = None):
     level = raw_request.query_params.get('level', '1')
-    VariableInterface.async_engine.sleep(int(level))
+    ServerContext.async_engine.sleep(int(level))
     return Response(status_code=200)
 
 
-@router.post('/wakeup', dependencies=[Depends(validate_json_request)])
+@router.post('/wakeup', dependencies=[Depends(check_api_key)])
 async def wakeup(raw_request: Request = None):
     tags = raw_request.query_params.getlist('tags')
     tags = tags or None
-    VariableInterface.async_engine.wakeup(tags)
+    ServerContext.async_engine.wakeup(tags)
     return Response(status_code=200)
 
 
-@router.get('/is_sleeping')
-async def is_sleeping():
-    is_sleeping = VariableInterface.async_engine.is_sleeping
+@router.get('/is_sleeping', dependencies=[Depends(check_api_key)])
+async def is_sleeping(raw_request: Request = None):
+    is_sleeping = ServerContext.async_engine.is_sleeping
     return JSONResponse(content={'is_sleeping': is_sleeping})
 
 
@@ -1196,7 +1218,7 @@ async def is_sleeping():
 
 @router.get('/distserve/engine_info')
 async def engine_info():
-    engine_config = VariableInterface.async_engine.backend_config
+    engine_config = ServerContext.async_engine.backend_config
 
     response = DistServeEngineConfig(tp_size=engine_config.tp,
                                      dp_size=engine_config.dp,
@@ -1212,23 +1234,23 @@ async def engine_info():
 
 @router.post('/distserve/p2p_initialize')
 async def p2p_initialize(init_request: DistServeInitRequest):
-    return VariableInterface.async_engine.p2p_initialize(init_request)
+    return ServerContext.async_engine.p2p_initialize(init_request)
 
 
 @router.post('/distserve/p2p_connect')
 async def p2p_connect(conn_request: DistServeConnectionRequest):
-    return VariableInterface.async_engine.p2p_connect(conn_request)
+    return ServerContext.async_engine.p2p_connect(conn_request)
 
 
 @router.post('/distserve/p2p_drop_connect')
 async def p2p_drop_connect(drop_conn_request: DistServeDropConnectionRequest):
-    return VariableInterface.async_engine.p2p_drop_connect(drop_conn_request)
+    return ServerContext.async_engine.p2p_drop_connect(drop_conn_request)
 
 
 @router.post('/distserve/free_cache')
 async def free_cache(cache_free_request: DistServeCacheFreeRequest) -> JSONResponse:
     session_id = cache_free_request.remote_session_id
-    VariableInterface.async_engine.free_cache(session_id)
+    ServerContext.async_engine.free_cache(session_id)
     return {'status': 'SUCCESS'}
 
 
@@ -1238,20 +1260,20 @@ async def free_cache(cache_free_request: DistServeCacheFreeRequest) -> JSONRespo
 @router.post('/abort_request')
 async def abort_request(request: AbortRequest, raw_request: Request = None):
     """Abort an ongoing request."""
-    if not VariableInterface.enable_abort_handling:
+    if not ServerContext.enable_abort_handling:
         return Response(
             status_code=501,
             content='This server does not support abort requests. Enable with --enable-abort-handling flag.')
 
     if request.abort_all:
-        await VariableInterface.async_engine.stop_all_session()
+        await ServerContext.async_engine.stop_all_session()
     else:
-        session = VariableInterface.get_session(request.session_id)
+        session = ServerContext.get_session(request.session_id)
         await session.async_abort()
     return Response(status_code=200)
 
 
-@router.post('/v1/chat/interactive', dependencies=[Depends(validate_json_request)], include_in_schema=False)
+@router.post('/v1/chat/interactive', dependencies=[Depends(check_api_key)], include_in_schema=False)
 async def chat_interactive_v1(request, raw_request: Request = None):
     return create_error_response(
         HTTPStatus.BAD_REQUEST, 'v1/chat/interactive is deprecated, please launch server with --enable-prefix-cache '
@@ -1273,20 +1295,20 @@ def handle_torchrun():
 
 @router.on_event('startup')
 async def startup_event():
-    async_engine = VariableInterface.async_engine
+    async_engine = ServerContext.async_engine
     async_engine.start_loop(asyncio.get_running_loop(), use_async_api=True)
 
-    if VariableInterface.proxy_url is None:
+    if ServerContext.proxy_url is None:
         return
     elif getattr(async_engine.engine, 'is_dummy', False):
         logger.info('Dummy node started')
         return
     try:
         import requests
-        engine_config = VariableInterface.async_engine.backend_config
+        engine_config = ServerContext.async_engine.backend_config
         engine_role = engine_config.role.value if hasattr(engine_config, 'role') else 1
-        url = f'{VariableInterface.proxy_url}/nodes/add'
-        data = {'url': VariableInterface.api_server_url, 'status': {'models': get_model_list(), 'role': engine_role}}
+        url = f'{ServerContext.proxy_url}/nodes/add'
+        data = {'url': ServerContext.api_server_url, 'status': {'models': get_model_list(), 'role': engine_role}}
         headers = {'accept': 'application/json', 'Content-Type': 'application/json'}
         response = requests.post(url, headers=headers, json=data)
 
@@ -1298,7 +1320,7 @@ async def startup_event():
 
 @router.on_event('shutdown')
 async def shutdown_event():
-    async_engine = VariableInterface.async_engine
+    async_engine = ServerContext.async_engine
     if async_engine is not None:
         async_engine.close()
 
@@ -1331,8 +1353,8 @@ def set_parsers(reasoning_parser: str | None = None, tool_parser: str | None = N
     # set reasoning parser
     if reasoning_parser is not None:
         if reasoning_parser in ReasoningParserManager.module_dict:
-            tokenizer = VariableInterface.async_engine.tokenizer
-            VariableInterface.reasoning_parser = ReasoningParserManager.get(reasoning_parser)(tokenizer)
+            tokenizer = ServerContext.async_engine.tokenizer
+            ServerContext.reasoning_parser = ReasoningParserManager.get(reasoning_parser)(tokenizer)
         else:
             raise ValueError(
                 f'The reasoning parser {reasoning_parser} is not in the parser list: {ReasoningParserManager.module_dict.keys()}'  # noqa
@@ -1340,8 +1362,8 @@ def set_parsers(reasoning_parser: str | None = None, tool_parser: str | None = N
     # set tool parsers
     if tool_parser is not None:
         if tool_parser in ToolParserManager.module_dict:
-            tokenizer = VariableInterface.async_engine.tokenizer
-            VariableInterface.tool_parser = ToolParserManager.get(tool_parser)(tokenizer)
+            tokenizer = ServerContext.async_engine.tokenizer
+            ServerContext.tool_parser = ToolParserManager.get(tool_parser)(tokenizer)
         else:
             raise ValueError(
                 f'The reasoning parser {tool_parser} is not in the parser list: {ToolParserManager.module_dict.keys()}'  # noqa
@@ -1363,7 +1385,8 @@ def mount_metrics(app: FastAPI, backend_config: PytorchEngineConfig | TurbomindE
     app.routes.append(metrics_route)
 
 
-def create_lifespan_handler(backend_config: PytorchEngineConfig | TurbomindEngineConfig, async_engine: AsyncEngine):
+def create_lifespan_handler(backend_config: PytorchEngineConfig | TurbomindEngineConfig,
+                            async_engine: AsyncEngine):
     """Factory function to create a lifespan handler."""
 
     @asynccontextmanager
@@ -1410,7 +1433,7 @@ def serve(model_path: str,
           api_keys: list[str] | str | None = None,
           ssl: bool = False,
           proxy_url: str | None = None,
-          max_log_len: int | None = None,
+          max_log_len: int = None,
           disable_fastapi_docs: bool = False,
           max_concurrent_requests: int | None = None,
           reasoning_parser: str | None = None,
@@ -1448,13 +1471,13 @@ def serve(model_path: str,
         server_name (str): host ip for serving
         server_port (int): server port
         tp (int): tensor parallel
-        allow_origins (list[str]): a list of allowed origins for CORS
+        allow_origins (List[str]): a list of allowed origins for CORS
         allow_credentials (bool): whether to allow credentials for CORS
-        allow_methods (list[str]): a list of allowed HTTP methods for CORS
-        allow_headers (list[str]): a list of allowed HTTP headers for CORS
+        allow_methods (List[str]): a list of allowed HTTP methods for CORS
+        allow_headers (List[str]): a list of allowed HTTP headers for CORS
         log_level(str): set log level whose value among [CRITICAL, ERROR,
             WARNING, INFO, DEBUG]
-        api_keys (list[str] | str | None): Optional list of API keys. Accepts
+        api_keys (List[str] | str | None): Optional list of API keys. Accepts
             string type as a single api_key. Default to None, which means no
             api key applied.
         ssl (bool): Enable SSL. Requires OS Environment variables
@@ -1475,9 +1498,12 @@ def serve(model_path: str,
         os.environ['TM_LOG_LEVEL'] = log_level
     logger.setLevel(log_level)
 
-    VariableInterface.allow_terminate_by_client = allow_terminate_by_client
-    VariableInterface.enable_abort_handling = enable_abort_handling
-
+    ServerContext.allow_terminate_by_client = allow_terminate_by_client
+    ServerContext.enable_abort_handling = enable_abort_handling
+    if api_keys is not None:
+        if isinstance(api_keys, str):
+            api_keys = api_keys.split(',')
+        ServerContext.api_keys = api_keys
     ssl_keyfile, ssl_certfile, http_or_https = None, None, 'http'
     if ssl:
         ssl_keyfile = os.environ['SSL_KEYFILE']
@@ -1485,25 +1511,25 @@ def serve(model_path: str,
         http_or_https = 'https'
 
     handle_torchrun()
-    _, pipeline_class = get_task(backend, model_path)
+    _, pipeline_class = get_task(model_path)
     if isinstance(backend_config, PytorchEngineConfig):
         backend_config.enable_mp_engine = True
         # router replay
         if backend_config.enable_return_routed_experts:
             backend_config.enable_transfer_obj_ref = True
-    VariableInterface.async_engine = pipeline_class(model_path=model_path,
-                                                    model_name=model_name,
-                                                    backend=backend,
-                                                    backend_config=backend_config,
-                                                    chat_template_config=chat_template_config,
-                                                    max_log_len=max_log_len,
-                                                    speculative_config=speculative_config,
-                                                    **kwargs)
+    ServerContext.async_engine = pipeline_class(model_path=model_path,
+                                                model_name=model_name,
+                                                backend=backend,
+                                                backend_config=backend_config,
+                                                chat_template_config=chat_template_config,
+                                                max_log_len=max_log_len,
+                                                speculative_config=speculative_config,
+                                                **kwargs)
     # set reasoning parser and tool parser
     set_parsers(reasoning_parser, tool_call_parser)
 
     # create FastAPI lifespan events
-    lifespan = create_lifespan_handler(backend_config, VariableInterface.async_engine)
+    lifespan = create_lifespan_handler(backend_config, ServerContext.async_engine)
 
     if disable_fastapi_docs:
         app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
@@ -1523,18 +1549,13 @@ def serve(model_path: str,
             allow_headers=allow_headers,
         )
 
-    if api_keys is not None and (tokens := [key for key in api_keys if key]):
-        from lmdeploy.serve.utils.server_utils import AuthenticationMiddleware
-
-        app.add_middleware(AuthenticationMiddleware, tokens=tokens)
-
     # set the maximum number of concurrent requests
     if max_concurrent_requests is not None:
         app.add_middleware(ConcurrencyLimitMiddleware, max_concurrent_requests=max_concurrent_requests)
 
     if proxy_url is not None:
-        VariableInterface.proxy_url = proxy_url
-        VariableInterface.api_server_url = f'{http_or_https}://{server_name}:{server_port}'  # noqa
+        ServerContext.proxy_url = proxy_url
+        ServerContext.api_server_url = f'{http_or_https}://{server_name}:{server_port}'  # noqa
     for i in range(3):
         print(f'HINT:    Please open \033[93m\033[1m{http_or_https}://'
               f'{server_name}:{server_port}\033[0m in a browser for detailed api'
