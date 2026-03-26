@@ -425,7 +425,7 @@ class Qwen3_5GatedDeltaNet(nn.Module):
             self.in_proj_qkv.weight_scale_inv.weight_loader = self.weight_loader_qkv_fp8_scale
 
         # projection of z, b, a
-        # since z would be quanted in fp8 mode but b and a are not quanted
+        # since z would be quantized in fp8 mode but b and a are not quantized
         # we can not fuse them together
         self.in_proj_z = build_colwise_linear(self.hidden_size,
                                               self.value_dim,
