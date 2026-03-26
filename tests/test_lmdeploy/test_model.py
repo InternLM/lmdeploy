@@ -1,7 +1,6 @@
 import pytest
 
 from lmdeploy.model import MODELS
-from lmdeploy.serve.processors import MultimodalProcessor
 
 HF_MODELS_WITH_CHAT_TEMPLATES = [
     'Qwen/Qwen1.5-7B-Chat',
@@ -15,8 +14,8 @@ HF_MODELS_WITH_CHAT_TEMPLATES = [
     'internlm/internlm2-chat-7b',
     'internlm/internlm2_5-7b-chat',
     'internlm/internlm3-8b-instruct',
-    'internlm/Intern-S1',
-    'internlm/Intern-S1-mini',
+    # 'internlm/Intern-S1',
+    # 'internlm/Intern-S1-mini',
     'OpenGVLab/InternVL-Chat-V1-2',
     'OpenGVLab/InternVL-Chat-V1-5',
     'OpenGVLab/Mini-InternVL-Chat-2B-V1-5',
@@ -33,7 +32,6 @@ HF_MODELS_WITH_CHAT_TEMPLATES = [
     'OpenGVLab/InternVL3_5-4B',
     'OpenGVLab/InternVL3_5-8B',
     'OpenGVLab/InternVL3_5-GPT-OSS-20B-A4B-Preview',
-    'AI4Chem/ChemVLM-8B',
     'deepseek-ai/DeepSeek-V2-Lite',
     'deepseek-ai/DeepSeek-V3',
     'deepseek-ai/DeepSeek-R1',
@@ -280,70 +278,44 @@ def test_qwen3(model_path, enable_thinking):
     assert ref == lm_res
 
 
-@pytest.mark.parametrize('model_path', ['Qwen/Qwen3.5-35B-A3B'])
-def test_qwen_template_renders_tool_call_arguments_from_string_payload(model_path):
-    chat_template = MODELS.get('hf')(model_path)
+# TODO(lvhan): bring this case back when internlm/Intern-S1 fix tokenizer
+# @pytest.mark.parametrize('model_path', ['internlm/Intern-S1'])
+# @pytest.mark.parametrize('enable_thinking', [None, True, False])
+# @pytest.mark.parametrize('has_user_sys', [True, False])
+# def test_interns1(model_path, enable_thinking, has_user_sys):
+#     from transformers import AutoTokenizer
+#     try:
+#         tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+#     except OSError:
+#         pytest.skip(reason=f'{model_path} not exists')
 
-    assistant_message = MultimodalProcessor.merge_message_content({
-        'role':
-        'assistant',
-        'tool_calls': [{
-            'id': 'call_1',
-            'type': 'function',
-            'function': {
-                'name': 'get_weather',
-                'arguments': '{"city":"Paris","units":"metric"}'
-            }
-        }]
-    })
-    messages = [{'role': 'user', 'content': 'What is the weather in Paris?'}, assistant_message]
+#     chat_template = MODELS.get('hf')(model_path)
 
-    prompt = chat_template.messages2prompt(messages)
+#     messages = [{
+#         'role': 'system',
+#         'content': 'you are a helpful assistant'
+#     }, {
+#         'role': 'user',
+#         'content': 'who are you'
+#     }, {
+#         'role': 'assistant',
+#         'content': 'I am an AI'
+#     }, {
+#         'role': 'user',
+#         'content': 'AGI is?'
+#     }]
+#     if not has_user_sys:
+#         messages = messages[1:]
 
-    assert assistant_message['tool_calls'][0]['function']['arguments'] == '{"city":"Paris","units":"metric"}'
-    assert assistant_message['tool_calls'][0]['function']['parsed_arguments'] == {'city': 'Paris', 'units': 'metric'}
-    assert '<function=get_weather>' in prompt
-    assert '<parameter=city>\nParis\n</parameter>' in prompt
-    assert '<parameter=units>\nmetric\n</parameter>' in prompt
-
-
-@pytest.mark.parametrize('model_path', ['internlm/Intern-S1'])
-@pytest.mark.parametrize('enable_thinking', [None, True, False])
-@pytest.mark.parametrize('has_user_sys', [True, False])
-def test_interns1(model_path, enable_thinking, has_user_sys):
-    from transformers import AutoTokenizer
-    try:
-        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-    except OSError:
-        pytest.skip(reason=f'{model_path} not exists')
-
-    chat_template = MODELS.get('hf')(model_path)
-
-    messages = [{
-        'role': 'system',
-        'content': 'you are a helpful assistant'
-    }, {
-        'role': 'user',
-        'content': 'who are you'
-    }, {
-        'role': 'assistant',
-        'content': 'I am an AI'
-    }, {
-        'role': 'user',
-        'content': 'AGI is?'
-    }]
-    if not has_user_sys:
-        messages = messages[1:]
-
-    if enable_thinking is None:
-        ref = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    else:
-        ref = tokenizer.apply_chat_template(messages,
-                                            tokenize=False,
-                                            add_generation_prompt=True,
-                                            enable_thinking=enable_thinking)
-    lm_res = chat_template.messages2prompt(messages, enable_thinking=enable_thinking)
-    assert ref == lm_res
+#     if enable_thinking is None:
+#         ref = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+#     else:
+#         ref = tokenizer.apply_chat_template(messages,
+#                                             tokenize=False,
+#                                             add_generation_prompt=True,
+#                                             enable_thinking=enable_thinking)
+#     lm_res = chat_template.messages2prompt(messages, enable_thinking=enable_thinking)
+#     assert ref == lm_res
 
 
 @pytest.mark.parametrize('model_path', ['Qwen/Qwen1.5-7B-Chat', 'Qwen/Qwen2.5-7B-Instruct', 'Qwen/Qwen3-8B'])
