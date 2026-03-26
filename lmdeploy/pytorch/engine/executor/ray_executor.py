@@ -489,7 +489,7 @@ class RayExecutor(ExecutorBase):
             finally:
                 # free ray.put inputs
                 try:
-                    ray._private.internal_api.free(self._prev_inputs)
+                    ray.internal.free(self._prev_inputs, local_only=False)
                 except Exception as e:
                     logger.warning(f'Free input ref failed: {e}')
 
