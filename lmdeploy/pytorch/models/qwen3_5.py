@@ -395,6 +395,7 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         self.layer_idx = layer_idx
         self.activation = config.hidden_act
         self.layer_norm_epsilon = config.rms_norm_eps
+        quantization_config = getattr(config, 'quantization_config', None)
 
         # QKV
         self.conv_dim = self.key_dim * 2 + self.value_dim
@@ -416,17 +417,32 @@ class Qwen3_5GatedDeltaNet(nn.Module):
                                                 bias=False,
                                                 dtype=dtype,
                                                 device=device,
-                                                is_tp=True)
+                                                is_tp=True,
+                                                quant_config=quantization_config)
+        # TODO: optimize weight loader
         self.in_proj_qkv.weight.weight_loader = self.weight_loader_qkv
-        self.in_proj_zba = build_merged_colwise_linear(
-            self.hidden_size,
-            [self.value_dim, self.num_v_heads, self.num_v_heads],
-            bias=False,
-            dtype=dtype,
-            device=device,
-            is_tp=True,
-            out_names=['z', 'b', 'a'],
-        )
+        if hasattr(self.in_proj_qkv, 'weight_scale_inv'):
+            self.in_proj_qkv.weight_scale_inv.weight_loader = self.weight_loader_qkv_fp8_scale
+
+        # projection of z, b, a
+        # since z would be quanted in fp8 mode but b and a are not quanted
+        # we can not fuse them together
+        self.in_proj_z = build_colwise_linear(self.hidden_size,
+                                              self.value_dim,
+                                              bias=False,
+                                              dtype=dtype,
+                                              device=device,
+                                              is_tp=True,
+                                              quant_config=quantization_config)
+
+        self.in_proj_ba = build_merged_colwise_linear(self.hidden_size,
+                                              [self.num_v_heads, self.num_v_heads],
+                                              bias=False,
+                                              dtype=dtype,
+                                              device=device,
+                                              is_tp=True,
+                                              out_names=['b', 'a'])
+
 
         # time step projection (discretization)
         # instantiate once and copy inv_dt in init_weights of PretrainedModel
@@ -443,7 +459,8 @@ class Qwen3_5GatedDeltaNet(nn.Module):
                                      bias=False,
                                      dtype=dtype,
                                      device=device,
-                                     is_tp=True)
+                                     is_tp=True,
+                                     quant_config=quantization_config)
 
         self.gated_delta = GatedDelta()
 
@@ -474,24 +491,32 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         loaded_weight = torch.cat([q, k, v], dim=0)
         default_weight_loader(param, loaded_weight)
 
+    def weight_loader_qkv_fp8_scale(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor):
+        """Weight loader for qkv projection."""
+        tp, rank = get_tp_world_rank()
+        split_sections = [self.key_dim, self.key_dim, self.value_dim]
+        split_sections = [sec//128 for sec in split_sections]
+        q, k, v = loaded_weight.split(split_sections, dim=0)
+        q = q.chunk(tp, dim=0)[rank]
+        k = k.chunk(tp, dim=0)[rank]
+        v = v.chunk(tp, dim=0)[rank]
+        loaded_weight = torch.cat([q, k, v], dim=0)
+        default_weight_loader(param, loaded_weight)
+
     def weight_loader_a_dt(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor):
         """Weight loader."""
         tp, rank = get_tp_world_rank()
         loaded_weight = loaded_weight.chunk(tp, dim=0)[rank]
         default_weight_loader(param, loaded_weight)
 
-    def fix_zba_ordering(self, mixed_zba: torch.Tensor):
-        """Derives `query`, `key` and `value` tensors from `mixed_qkv` and
-        `mixed_zba`."""
-
-        # zba
-        split_arg_list_zba = [self.head_v_dim * self.kv_ratio, self.kv_ratio, self.kv_ratio]
-        num_heads = mixed_zba.size(-1) // sum(split_arg_list_zba)
-        split_arg_list_zba = [num_heads * x for x in split_arg_list_zba]
-        z, b, a = torch.split(mixed_zba, split_arg_list_zba, dim=-1)
-        # [..., ng, np/ng * hn] -> [..., np, hn]
-        z = z.unflatten(-1, (-1, self.head_v_dim))
-        return z, b, a
+    def fix_ba_ordering(self, mixed_ba: torch.Tensor):
+        """Derives `b` and `a` tensors from `mixed_ba`."""
+        # b and a
+        split_arg_list_ba = [self.kv_ratio, self.kv_ratio]
+        num_heads = mixed_ba.size(-1) // sum(split_arg_list_ba)
+        split_arg_list_ba = [num_heads * x for x in split_arg_list_ba]
+        b, a = torch.split(mixed_ba, split_arg_list_ba, dim=-1)
+        return b, a
 
     def _load_state(self, past_key_value: tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
         """Load states from cache."""
@@ -510,8 +535,11 @@ class Qwen3_5GatedDeltaNet(nn.Module):
 
         # inputs proj
         projected_states_qkv = self.in_proj_qkv(hidden_states)
-        projected_states_zba = self.in_proj_zba(hidden_states)
-        z, b, a = self.fix_zba_ordering(projected_states_zba)
+        z = self.in_proj_z(hidden_states)
+        # [..., ng, np/ng * hn] -> [..., np, hn]
+        z = z.unflatten(-1, (-1, self.head_v_dim))
+        projected_states_ba = self.in_proj_ba(hidden_states)
+        b, a = self.fix_ba_ordering(projected_states_ba)
 
         mixed_qkv = projected_states_qkv
         mixed_qkv, conv_state = self.conv1d(mixed_qkv, conv_state, gated_delta_meta=gated_delta_meta)
@@ -1222,9 +1250,8 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
             ('.qkv_proj', '.v_proj', 'v'),
             ('.gate_up_proj', '.gate_proj', 0),
             ('.gate_up_proj', '.up_proj', 1),
-            ('.in_proj_zba', '.in_proj_z', 'z'),
-            ('.in_proj_zba', '.in_proj_b', 'b'),
-            ('.in_proj_zba', '.in_proj_a', 'a'),
+            ('.in_proj_ba', '.in_proj_b', 'b'),
+            ('.in_proj_ba', '.in_proj_a', 'a'),
         ]
 
         rms_norm_keys = ['model.norm', '.input_layernorm', '.post_attention_layernorm', '.q_norm', '.k_norm']
