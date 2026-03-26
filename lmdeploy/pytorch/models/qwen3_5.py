@@ -419,10 +419,7 @@ class Qwen3_5GatedDeltaNet(nn.Module):
                                                 device=device,
                                                 is_tp=True,
                                                 quant_config=quantization_config)
-        # TODO: optimize weight loader
-        self.in_proj_qkv.weight.weight_loader = self.weight_loader_qkv_quant
-        if hasattr(self.in_proj_qkv, 'weight_scale_inv'):
-            self.in_proj_qkv.weight_scale_inv.weight_loader = self.weight_loader_qkv_fp8_scale
+        self._patch_qkv_weight_loader(self.in_proj_qkv)
 
         # projection of z, b, a
         # since z would be quantized in fp8 mode but b and a are not quantized
@@ -481,49 +478,37 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         self.A_log.weight_loader = self.weight_loader_a_dt
         self.dt_bias.weight_loader = self.weight_loader_a_dt
 
-    def weight_loader_qkv_quant(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor):
-        """Weight loader for quantization parameters."""
-        if param.dtype == loaded_weight.dtype:
-            self.weight_loader_qkv(param, loaded_weight)
-            return
+    def _patch_qkv_weight_loader(self, mod):
+        """Patch weight_loader to do non-uniform QKV TP split.
 
-        if torch.finfo(param.dtype).bits == 8:
-            # for blocked fp8
-            from lmdeploy.pytorch.nn.quant_utils import quant_blocked_fp8
-            mod = self.in_proj_qkv
-            scale_fmt = mod.scale_fmt
-            block_size = mod.block_size
-            quanted_weight, scaling = quant_blocked_fp8(loaded_weight,
-                                                        param.dtype,
-                                                        block_size,
-                                                        scale_fmt=scale_fmt)
-            self.weight_loader_qkv(mod.weight, quanted_weight)
-            self.weight_loader_qkv_fp8_scale(mod.weight_scale_inv, scaling)
-        else:
-            raise NotImplementedError(f'Quantization for dtype {param.dtype} is not implemented.')
+        The fused QKV weight has sections [key_dim, key_dim, value_dim] which cannot be uniformly chunked for TP. We
+        override weight_loader (not weight_loader_with_quant) so that the fp8 quant path — which calls weight_loader for
+        both weight and scale — works automatically.
+        """
+        sections = [self.key_dim, self.key_dim, self.value_dim]
 
+        def qkv_weight_loader(param, loaded_weight):
+            if not mod.is_tp:
+                return default_weight_loader(param, loaded_weight)
 
-    def weight_loader_qkv(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor):
-        """Weight loader for qkv projection."""
-        tp, rank = get_tp_world_rank()
-        q, k, v = loaded_weight.split([self.key_dim, self.key_dim, self.value_dim], dim=0)
-        q = q.chunk(tp, dim=0)[rank]
-        k = k.chunk(tp, dim=0)[rank]
-        v = v.chunk(tp, dim=0)[rank]
-        loaded_weight = torch.cat([q, k, v], dim=0)
-        default_weight_loader(param, loaded_weight)
+            world_size, rank = mod.get_tp_world_rank()
+            split_sections = sections
+            # scale tensor has dim0 shrunk by block_size
+            if (loaded_weight.dim() == 2
+                    and loaded_weight.shape[0] < sum(sections)):
+                bs = mod.block_size
+                split_sections = [s // bs for s in sections]
 
-    def weight_loader_qkv_fp8_scale(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor):
-        """Weight loader for qkv projection."""
-        tp, rank = get_tp_world_rank()
-        split_sections = [self.key_dim, self.key_dim, self.value_dim]
-        split_sections = [sec//128 for sec in split_sections]
-        q, k, v = loaded_weight.split(split_sections, dim=0)
-        q = q.chunk(tp, dim=0)[rank]
-        k = k.chunk(tp, dim=0)[rank]
-        v = v.chunk(tp, dim=0)[rank]
-        loaded_weight = torch.cat([q, k, v], dim=0)
-        default_weight_loader(param, loaded_weight)
+            parts = loaded_weight.split(split_sections, dim=0)
+            parts = [p.chunk(world_size, 0)[rank] for p in parts]
+            loaded_weight = torch.cat(parts, dim=0)
+            default_weight_loader(param, loaded_weight)
+
+        mod.weight_loader = qkv_weight_loader
+        # Re-run setup_loaders so param.weight_loader picks up the patched
+        # mod.weight_loader (for BaseLinear) or mod.weight_loader_with_quant
+        # which internally calls the patched mod.weight_loader (for fp8).
+        mod.setup_loaders()
 
     def weight_loader_a_dt(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor):
         """Weight loader."""
