@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Iterable
+from collections.abc import Iterable
 
 import torch
 from torch import nn

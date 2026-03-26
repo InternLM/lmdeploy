@@ -199,6 +199,9 @@ class ModelInputs:
     # mrope, shape(3, sum_seqlens)
     mrope_pos_ids: torch.Tensor | None = None
 
+    # mrope, shape(3, sum_seqlens)
+    mrope_pos_ids: torch.Tensor | None = None
+
     def step(self, input_ids: torch.Tensor, step_seqlens: torch.Tensor = None):
         """Update input ids."""
         assert self.is_decoding

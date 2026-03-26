@@ -2,8 +2,14 @@ import math
 
 import numpy as np
 
-from lmdeploy.vl import (encode_image_base64, encode_time_series_base64, encode_video_base64, load_image,
-                         load_time_series, load_video)
+from lmdeploy.vl import (
+    encode_image_base64,
+    encode_time_series_base64,
+    encode_video_base64,
+    load_image,
+    load_time_series,
+    load_video,
+)
 
 
 def test_image_encode_decode():

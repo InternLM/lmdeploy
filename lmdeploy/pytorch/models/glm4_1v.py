@@ -2,7 +2,8 @@
 # adapted from:
 # https://github.com/huggingface/transformers/blob/main/src/transformers/models/glm4v/modeling_glm4v.py
 
-from typing import Any, Callable, Iterable, List, Optional, Tuple
+from collections.abc import Callable, Iterable
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -21,7 +22,7 @@ from .utils.cudagraph import CudaGraphMixin
 from .utils.model import DeployModelMixin, vlm_model
 
 
-def _apply_mrope_selection(hidden_states: torch.Tensor, mrope_position_ids: torch.Tensor, mrope_section: List[int],
+def _apply_mrope_selection(hidden_states: torch.Tensor, mrope_position_ids: torch.Tensor, mrope_section: list[int],
                            position_ids: torch.Tensor, rotary_emb_func: Callable):
     _mrope_position_ids = torch.zeros(3, position_ids.shape[-1], dtype=position_ids.dtype, device=position_ids.device)
     _mrope_position_ids[:, :mrope_position_ids.shape[-1]] = mrope_position_ids
@@ -71,10 +72,10 @@ class Glm4vTextModel(nn.Module):
     def forward(
         self,
         input_ids: torch.LongTensor = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,
         attn_metadata: Any = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
+        inputs_embeds: torch.FloatTensor | None = None,
         mrope_position_ids: torch.LongTensor = None,
     ):
         """Rewrite of LlamaModel.forward."""
@@ -361,7 +362,7 @@ class Glm4vVisionAttention(nn.Module):
                                          is_tp=True)
 
     def forward(self, hidden_states: torch.Tensor, cu_seqlens: torch.Tensor,
-                rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor]) -> torch.Tensor:
+                rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor]) -> torch.Tensor:
         seq_length = hidden_states.shape[0]
         # qkv proj
         qkv_states = self.qkv(hidden_states)
@@ -400,7 +401,7 @@ class Glm4vVisionBlock(nn.Module):
                 hidden_states,
                 cu_seqlens,
                 rotary_pos_emb,
-                residual: Optional[torch.Tensor] = None) -> torch.Tensor:
+                residual: torch.Tensor | None = None) -> torch.Tensor:
         if residual is None:
             residual = hidden_states
             hidden_states = self.norm1(hidden_states)
@@ -478,7 +479,7 @@ class Glm4vVisionModel(nn.Module):
         return rotary_pos_emb, pos_ids
 
     def forward(self, hidden_states: torch.Tensor, cu_seqlens: torch.Tensor, rotary_pos_emb: torch.Tensor,
-                grid_thw: torch.Tensor, image_type_ids: List[torch.Tensor]) -> torch.Tensor:
+                grid_thw: torch.Tensor, image_type_ids: list[torch.Tensor]) -> torch.Tensor:
         """forward."""
         hidden_states = self.patch_embed(hidden_states)
         hidden_states = self.post_conv_layernorm(hidden_states)
@@ -551,14 +552,14 @@ class Glm4vForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixin)
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
         mrope_position_ids: torch.Tensor = None,
         pixel_values: torch.Tensor = None,
         vis_cu_seqlens: torch.Tensor = None,
         vis_pos_emb: torch.Tensor = None,
-        image_type_ids: List[torch.Tensor] = None,
+        image_type_ids: list[torch.Tensor] = None,
         grid_thw: torch.Tensor = None,
         image_mask: torch.Tensor = None,
         **kwargs,
@@ -602,8 +603,8 @@ class Glm4vForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixin)
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
-        inputs_embeds: Optional[torch.Tensor] = None,
+        past_key_values: list[list[torch.Tensor]],
+        inputs_embeds: torch.Tensor | None = None,
         context: StepContext = None,
     ):
         """Prepare input."""
@@ -672,7 +673,7 @@ class Glm4vForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixin)
             return name[len('model.'):]
         return name
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
         # modify from vllm
         stacked_params_mapping = [

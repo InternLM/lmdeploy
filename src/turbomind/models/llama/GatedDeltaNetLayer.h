@@ -50,17 +50,36 @@ private:
 
     float    norm_eps_;
     DataType dtype_;
+    DataType state_dtype_;  // recurrent state dtype (may differ from dtype_ for float32 state)
 
     LlamaLinear& linear_;
 
     // Per-phase batch data (mirrors UnifiedAttentionLayer pattern)
-    struct PhaseData {
+    struct Data {
         std::vector<RequestCache*> rc;          // borrowed batch RequestCache pointers
         std::vector<int>           input_lens;  // snapshot of input_len per request (captured at Setup time)
         int                        batch_size = 0;
-        Buffer_<int>               q_offsets;  // cumulative token offsets, device buffer
+        Buffer_<int>               q_offsets;  // cumulative input-token offsets, device buffer
+        Buffer_<int>               k_offsets;  // cumulative key (history+input) offsets, device buffer
+        std::vector<Tensor>        conv_states;
+        std::vector<Tensor>        recurrent_states;
+        Buffer_<void*>             conv_state_ptrs;
+        Buffer_<void*>             recurrent_state_ptrs;
     };
-    std::vector<std::shared_ptr<PhaseData>> phase_data_;
+    std::vector<Data> data_;
+
+    // staging buffers
+    Buffer_<void*> conv_state_ptrs_buf_;
+    Buffer_<void*> recurrent_state_ptrs_buf_;
+
+    // Queried once at construction; passed to all three kernel launchers.
+    int          sm_count_{1};
+    Buffer_<int> work_counter_;  // 1-element device int for v3 atomic claiming
+
+    // Dual-stream dispatch: prefill on high-priority aux stream, decode on main
+    cudaStream_t aux_stream_{};
+    cudaEvent_t  ev_before_{};  // main→aux: prior work done
+    cudaEvent_t  ev_after_{};   // aux→main: prefill done
 };
 
 }  // namespace turbomind

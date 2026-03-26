@@ -40,7 +40,7 @@ struct GatedDeltaNetWeight: public core::Module {
     LlamaDenseWeight out_proj;  // value_dim -> hidden
 
     // Non-dense parameters
-    Tensor conv1d;   // depthwise conv weights: (conv_dim, 1, d_conv) flattened
+    Tensor conv1d;   // depthwise conv weights: (d_conv, conv_dim)
     Tensor A_log;    // log-space decay: (num_v_heads,)
     Tensor dt_bias;  // dt bias: (num_v_heads,)
     Tensor norm;     // RMSNormGated weight: (value_head_dim,)

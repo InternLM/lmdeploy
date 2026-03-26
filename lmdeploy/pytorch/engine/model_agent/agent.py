@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
 from multiprocessing.reduction import ForkingPickler
 from os import getenv
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 import pybase64
@@ -52,7 +52,7 @@ class BatchedLogProbs:
 
     def to_cpu(self):
         """To cpu."""
-        return BatchedLogProbs(vals=self.vals.cpu(), indices=self.indices.cpu())
+        return BatchedLogProbs(vals=self.vals.cpu().detach(), indices=self.indices.cpu().detach())
 
     def to_numpy(self):
         """To numpy."""
@@ -75,13 +75,13 @@ class BatchedLogProbs:
 class BatchedOutputs:
     next_token_ids: torch.Tensor
     stopped: torch.Tensor
-    stop_pos: Optional[torch.Tensor] = None
-    logits: Optional[torch.Tensor] = None
-    model_metas: List[Dict[str, Any]] = None
-    logprobs: Optional[BatchedLogProbs] = None
+    stop_pos: torch.Tensor | None = None
+    logits: torch.Tensor | None = None
+    model_metas: list[dict[str, Any]] = None
+    logprobs: BatchedLogProbs | None = None
     new_token_timestamp: int = 0
-    extra_outputs: Optional[ExtraOutputs] = None
-    all_routed_experts: Optional[torch.Tensor] = None
+    extra_outputs: ExtraOutputs | None = None
+    all_routed_experts: torch.Tensor | None = None
 
     def to_cpu(self):
         """To cpu."""
@@ -90,7 +90,7 @@ class BatchedOutputs:
             k = f.name
             v = getattr(self, k)
             if isinstance(v, torch.Tensor):
-                v = v.cpu()
+                v = v.cpu().detach()
             elif hasattr(v, 'to_cpu'):
                 v = v.to_cpu()
             out[k] = v
@@ -182,7 +182,7 @@ def model_forward(
                 context=context,
             )
             output = model(**input_dict)
-            if not isinstance(output, Dict):
+            if not isinstance(output, dict):
                 output = dict(hidden_states=output)
             # InternVL-3.5-Flash will change the seqlen, model_metas during forward
             if getattr(context, 'is_model_meta_updated', False):
@@ -226,7 +226,7 @@ class DistGatherScalar:
         return self.all_vals
 
 
-SwapMap = Dict[int, int]
+SwapMap = dict[int, int]
 
 
 @dataclass
@@ -336,7 +336,7 @@ class BaseModelAgent:
         misc_config: MiscConfig,
         dist_ctx: DistContext,
         device_ctx: DeviceContext,
-        adapters: Dict[str, str] = None,
+        adapters: dict[str, str] = None,
         specdecode_config: SpecDecodeConfig = None,
     ):
 
@@ -420,7 +420,10 @@ class BaseModelAgent:
         self.step_inputs = StepInputs()
 
         # long context
-        self._prev_chunk_output: Dict = None
+        self._prev_chunk_output: dict = None
+
+        # make dummy meta
+        self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(model_config)
 
         # make dummy meta
         self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(model_config)
@@ -754,8 +757,8 @@ class BaseModelAgent:
         self,
         inputs: ModelInputs,
         delta: ModelInputsDelta = None,
-        swap_in_map: Dict = None,
-        swap_out_map: Dict = None,
+        swap_in_map: dict = None,
+        swap_out_map: dict = None,
         sampling_inputs: SamplingInputs = None,
         stopping_criteria: StoppingCriteria = None,
         return_logits: bool = False,
@@ -1138,7 +1141,7 @@ class BaseModelAgent:
         """Model forward.
 
         Args:
-            inputs (Dict): The input data comes from _make_inputs.
+            inputs (dict): The input data comes from _make_inputs.
             swap_in_map (SwapMap): Cache maps to swap in.
             swap_out_map (SwapMap): Cache maps to swap out.
         """
@@ -1181,7 +1184,7 @@ class BaseModelAgent:
             model = self.patched_model.get_model()
             weights = ForkingPickler.loads(pybase64.b64decode(serialized_data))
             if request.load_format == 'flattened_bucket':
-                metadata: List[FlattenedTensorMetadata] = weights['metadata']
+                metadata: list[FlattenedTensorMetadata] = weights['metadata']
                 if metadata:
                     flattened_tensor: torch.Tensor = _construct(weights['flattened_tensor'])
                     bucket = FlattenedTensorBucket(flattened_tensor=flattened_tensor, metadata=metadata)
@@ -1210,6 +1213,7 @@ class BaseModelAgent:
         if self.dist_config.dp > 1:
             await self.state.to_sleep.wait()
         self.cache_engine = None
+        self.state_cache_engine = None
         self.reset_graph_runner()
         device = 'cpu' if level == 1 else 'meta'
         self.patched_model.get_model().to(device=device, non_blocking=True)
@@ -1218,7 +1222,7 @@ class BaseModelAgent:
         self.state.to_sleep.clear()
 
     @torch.inference_mode()
-    def wakeup(self, tags: Optional[List[str]] = None):
+    def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
         if tags is None:
             tags = ['weights', 'kv_cache']
@@ -1247,4 +1251,5 @@ class BaseModelAgent:
         self.reset_graph_runner()
         self.patched_model = None
         self.cache_engine = None
+        self.state_cache_engine = None
         torch.cuda.empty_cache()

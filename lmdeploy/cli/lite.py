@@ -3,7 +3,7 @@ from .cli import CLI
 from .utils import ArgumentHelper, DefaultsAndTypesHelpFormatter, convert_args
 
 
-class SubCliLite(object):
+class SubCliLite:
     """CLI for compressing LLMs."""
     _help = 'Compressing and accelerating LLMs with lmdeploy.lite module'
     _desc = _help

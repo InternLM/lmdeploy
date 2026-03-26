@@ -5,9 +5,8 @@ from pathlib import Path
 
 import fire
 import numpy as np
-from transformers import AutoTokenizer
-
 from lmdeploy.pytorch.decode import Engine
+from transformers import AutoTokenizer
 
 
 def benchmark(model_path, share_gpt_path, downsample=100, accel=None, save_to='decode_result'):
@@ -17,7 +16,7 @@ def benchmark(model_path, share_gpt_path, downsample=100, accel=None, save_to='d
     """
 
     start = time.monotonic()
-    content = json.load(open(share_gpt_path, 'r'))
+    content = json.load(open(share_gpt_path))
 
     texts = []
     for c in content:

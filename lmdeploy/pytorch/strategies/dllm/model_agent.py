@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import torch
@@ -18,7 +18,7 @@ from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 from ..base.model_agent import ExtraInputs, ExtraOutputs, ModelAgentStrategy, StoppingCriteria
 from .unmasking import UnmaskingProcessor
 
-SeqList = List[SchedulerSequence]
+SeqList = list[SchedulerSequence]
 
 
 def get_model_inputs_next_decoding(inputs: ModelInputs, input_ids: torch.Tensor, max_q_seqlen,
@@ -121,8 +121,8 @@ class DLLMStoppingCriteria(StoppingCriteria):
     def step(self,
              token_ids: torch.Tensor,
              stop_words: torch.Tensor,
-             inputs: Optional[ModelInputs] = None,
-             extra_inputs: Optional[DLLMExtraInputs] = None):
+             inputs: ModelInputs | None = None,
+             extra_inputs: DLLMExtraInputs | None = None):
         """Check whether to stop generation."""
         num_appendable_ids = self.num_appendable_ids
         output_start_pos = self.output_start_pos
@@ -198,7 +198,7 @@ class DLLMModelAgentStrategy(ModelAgentStrategy):
         return inputs
 
     def slice_extra_inputs(self, extra_inputs: DLLMExtraInputs, model_inputs: ModelInputs,
-                           model_outputs: Dict[str, torch.Tensor], **kwargs) -> DLLMExtraInputs:
+                           model_outputs: dict[str, torch.Tensor], **kwargs) -> DLLMExtraInputs:
         """Slice outputs."""
         dllm_mask = self.slice_outputs(extra_inputs.dllm_mask, model_inputs.seq_length)
         return DLLMExtraInputs(dllm_mask=dllm_mask)
@@ -269,7 +269,7 @@ class DLLMModelAgentStrategy(ModelAgentStrategy):
         next_token_ids: torch.Tensor,
         model_metas: Any,
         extra_outputs: DLLMExtraOutputs,
-    ) -> Tuple['ModelInputs', DLLMExtraInputs]:
+    ) -> tuple['ModelInputs', DLLMExtraInputs]:
         """Step next decoding."""
         dllm_mask = extra_outputs.dllm_mask
         next_token_ids, dllm_mask, step_seqlens = self._update_dllm(next_token_ids, dllm_mask, model_inputs.seq_length)

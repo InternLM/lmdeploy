@@ -1,12 +1,17 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # Modified from https://github.com/vllm-project/vllm/blob/v0.10.2rc1/vllm/entrypoints/harmony_utils.py
-from typing import List
 
 import shortuuid
 from openai_harmony import HarmonyEncodingName, Role, StreamableParser, load_harmony_encoding
 
-from lmdeploy.serve.openai.protocol import (ChatMessage, DeltaFunctionCall, DeltaMessage, DeltaToolCall, FunctionCall,
-                                            ToolCall)
+from lmdeploy.serve.openai.protocol import (
+    ChatMessage,
+    DeltaFunctionCall,
+    DeltaMessage,
+    DeltaToolCall,
+    FunctionCall,
+    ToolCall,
+)
 
 _harmony_encoding = None
 
@@ -27,7 +32,7 @@ class GptOssChatParser:
     def __init__(self):
         self.parser = get_streamable_parser_for_assistant()
 
-    def parse_streaming(self, tokens: List[int]) -> DeltaMessage:
+    def parse_streaming(self, tokens: list[int]) -> DeltaMessage:
         parser = self.parser
         delta_message = DeltaMessage(role='assistant')
         content = ''
@@ -76,7 +81,7 @@ class GptOssChatParser:
         delta_message.tool_calls = tool_calls
         return delta_message
 
-    def parse_full(self, tokens: List[int]) -> ChatMessage:
+    def parse_full(self, tokens: list[int]) -> ChatMessage:
         delta_message = self.parse_streaming(tokens)
         tool_calls = []
         for delta_tool_call in delta_message.tool_calls:

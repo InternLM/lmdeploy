@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Any, Sequence, Tuple
+from collections.abc import Sequence
+from typing import Any
 
 import torch
 from torch import nn
@@ -99,6 +100,11 @@ class CausalConv1dFunc:
 
         # fill conv state
         final_state = x[0, conv_idx].transpose(-2, -1)
+        # Load all initial conv states before overwriting.
+        # (num_seqs, dim, ks-1): last ks-1 raw input values per sequence.
+        # TODO fix long input that uses inits states
+        # all_inits = conv_state[state_ids, :, 1:]
+        all_inits = None
         # for prefill with spec tokens
         if spec_conv_offsets is not None:
             selected_conv_state = conv_state[state_ids]
@@ -112,14 +118,13 @@ class CausalConv1dFunc:
             x,
             weight,
             bias,
-            seq_idx,
+            seq_idx=seq_idx,
+            initial_states=all_inits,
             return_final_states=False,
             activation=self.activation,
         )
-
         out = out.transpose(-2, -1)
 
-        # store conv_state
         return out, conv_state
 
     def conv1d_update(
@@ -239,7 +244,7 @@ class CausalConv1d(nn.Module):
         self,
         in_channels: int,
         out_channels: int,
-        kernel_size: int | Tuple[int],
+        kernel_size: int | tuple[int],
         split: Sequence[int],
         groups: int = 1,
         bias: bool = True,
@@ -273,7 +278,7 @@ class CausalConv1d(nn.Module):
     def make_weight(
         in_channels: int,
         out_channels: int,
-        kernel_size: int | Tuple[int],
+        kernel_size: int | tuple[int],
         groups: int = 1,
         bias: bool = True,
         device: str | torch.device | None = None,
@@ -314,6 +319,6 @@ class CausalConv1d(nn.Module):
 
 
 @record_function('gated_delta_load_state')
-def load_state(past_key_value: Tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
+def load_state(past_key_value: tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
     """Load states from cache."""
     return past_key_value[:2]

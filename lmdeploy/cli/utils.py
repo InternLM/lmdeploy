@@ -5,7 +5,7 @@ import json
 import re
 import sys
 from collections import defaultdict
-from typing import Any, List
+from typing import Any
 
 from lmdeploy.utils import get_logger
 
@@ -39,14 +39,14 @@ def convert_args(args):
     return kwargs
 
 
-def get_lora_adapters(adapters: List[str]):
+def get_lora_adapters(adapters: list[str]):
     """Parse lora adapers from cli input.
 
     Args:
-        adapters (List[str]): CLI input string of lora adapter path(s).
+        adapters (list[str]): CLI input string of lora adapter path(s).
 
     Returns:
-        Dict[str,str] or None: Parsed lora adapter path(s).
+        dict[str, str] | None: Parsed lora adapter path(s).
     """
     if not adapters:
         return None
@@ -152,10 +152,12 @@ class ArgumentHelper:
         return parser.add_argument('--model-format',
                                    type=str,
                                    default=default,
-                                   choices=['hf', 'awq', 'gptq', 'fp8', 'mxfp4'],
+                                   choices=['hf', 'awq', 'gptq', 'compressed-tensors', 'fp8', 'mxfp4'],
                                    help='The format of input model. `hf` means `hf_llama`, '
-                                   '`awq` represents the quantized model by AWQ,'
-                                   ' and `gptq` refers to the quantized model by GPTQ')
+                                   '`awq` and `gptq` refer to 4-bit grouped quantization, '
+                                   '`compressed-tensors` refers to pack-quantized grouped int4 checkpoints and is '
+                                   'usually auto-detected from the model config, `fp8` refers to blocked fp8 '
+                                   'checkpoints, and `mxfp4` refers to MXFP4 expert weights.')
 
     @staticmethod
     def revision(parser, default: str = None):
@@ -435,7 +437,7 @@ class ArgumentHelper:
         )
 
     @staticmethod
-    def device(parser, default: str = 'cuda', choices: List[str] = ['cuda', 'ascend', 'maca', 'camb']):
+    def device(parser, default: str = 'cuda', choices: list[str] = ['cuda', 'ascend', 'maca', 'camb']):
         """Add argument device to parser."""
 
         return parser.add_argument('--device',

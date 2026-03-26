@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from contextlib import contextmanager
 from dataclasses import dataclass, fields
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import torch
 import torch.distributed as dist
@@ -15,7 +15,7 @@ from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 from ..ar.model_agent import ARStoppingCriteria, get_model_inputs_next_decoding
 from ..base.model_agent import ExtraInputs, ExtraOutputs, ModelAgentStrategy
 
-SeqList = List[SchedulerSequence]
+SeqList = list[SchedulerSequence]
 
 
 @dataclass
@@ -102,8 +102,8 @@ class ARSpecStoppingCriteria(ARStoppingCriteria):
     def step(self,
              next_token_ids: torch.Tensor,
              stop_words: torch.Tensor,
-             inputs: Optional[ModelInputs] = None,
-             extra_inputs: Optional[ARSpecExtraInputs] = None):
+             inputs: ModelInputs | None = None,
+             extra_inputs: ARSpecExtraInputs | None = None):
         """Check whether to stop generation."""
         token_ids = extra_inputs.output_token_ids
 
@@ -150,7 +150,7 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
         return inputs[last_idx]
 
     def slice_extra_inputs(self, extra_inputs: ARSpecExtraInputs, model_inputs: ModelInputs,
-                           model_outputs: Dict[str, torch.Tensor], **kwargs) -> ARSpecExtraInputs:
+                           model_outputs: dict[str, torch.Tensor], **kwargs) -> ARSpecExtraInputs:
         """Slice outputs."""
         if model_inputs.is_decoding:
             batch_size = model_inputs.seq_length.size(0)
@@ -203,7 +203,7 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
         next_token_ids: torch.Tensor,
         model_metas: Any,
         extra_outputs: ARSpecExtraOutputs,
-    ) -> Tuple['ModelInputs', ARSpecExtraInputs]:
+    ) -> tuple['ModelInputs', ARSpecExtraInputs]:
         """Step next decoding."""
         next_token_ids = next_token_ids[:, None]
         next_token_ids = torch.cat([next_token_ids, extra_outputs.draft_token_ids], dim=-1)

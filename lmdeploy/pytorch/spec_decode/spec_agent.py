@@ -128,6 +128,9 @@ class SpecModelAgent(BaseSpecModelAgent):
         # for long context carry-over in chunked decoding
         self._prev_chunk_last = {}
 
+        # make dummy meta
+        self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(self.model_config)
+
     def set_cache_config(self, cache_config: CacheConfig):
         """Set all cache config."""
         self.cache_config = cache_config
@@ -412,7 +415,7 @@ class SpecModelAgent(BaseSpecModelAgent):
         """Model forward.
 
         Args:
-            inputs (Dict): The input data comes from _make_inputs.
+            inputs (dict): The input data comes from _make_inputs.
         """
         outputs = self._forward_impl(inputs)
         if inputs.is_chunk and not inputs.is_last_chunk:

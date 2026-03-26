@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import torch
 from mmengine import Registry
@@ -23,8 +23,8 @@ logger = get_logger('lmdeploy')
 def draft_model_forward(
     model: torch.nn.Module,
     inputs: ModelInputs,
-    model_config: Optional[ModelConfig] = None,
-    cache_engine: Optional[CacheEngine] = None,
+    model_config: ModelConfig | None = None,
+    cache_engine: CacheEngine | None = None,
 ):
     """Perform model forward."""
     stream = torch.cuda.current_stream()
@@ -86,7 +86,7 @@ class BaseSpecProposer:
         self.target_model = target_model
 
     def get_outputs(self,
-                    model_outputs: Dict[str, torch.Tensor],
+                    model_outputs: dict[str, torch.Tensor],
                     model_inputs: ModelInputs,
                     extra_inputs: ExtraInputs = None):
         """Get outputs."""
@@ -103,7 +103,7 @@ class BaseSpecProposer:
         )
 
     def update_inputs_decoding(self, model_inputs: ModelInputs, extra_inputs: ExtraInputs, next_input_ids: torch.Tensor,
-                               target_hidden_states: torch.Tensor, model_metas: List[Any]):
+                               target_hidden_states: torch.Tensor, model_metas: list[Any]):
         """Update to decoding inputs."""
         batch_size = model_inputs.seq_length.size(0)
         history_lengths = model_inputs.history_lengths + model_inputs.seq_length

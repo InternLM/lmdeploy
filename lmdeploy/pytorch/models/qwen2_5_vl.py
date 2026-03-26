@@ -2,7 +2,8 @@
 # adapted from:
 # https://github.com/huggingface/transformers/blob/main/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py
 
-from typing import Any, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -60,7 +61,8 @@ class Qwen2_5_VisionRotaryEmbedding(nn.Module):
 
     def __init__(self, dim: int, theta: float = 10000.0, device: torch.device = None) -> None:
         super().__init__()
-        inv_freq = 1.0 / (theta**(torch.arange(0, dim, 2, dtype=torch.float, device=device) / dim))
+        inv_freq = 1.0 / (theta**(torch.arange(0, dim, 2, dtype=torch.int64).float() / dim))
+        inv_freq = inv_freq.to(device=device)
         self.register_buffer('inv_freq', inv_freq, persistent=False)
 
     def forward(self, seqlen: int) -> torch.Tensor:
@@ -118,7 +120,7 @@ class Qwen2_5_VLVisionAttention(nn.Module):
         )
 
     def forward(self, hidden_states: torch.Tensor, cu_seqlens: torch.Tensor,
-                rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor]) -> torch.Tensor:
+                rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor]) -> torch.Tensor:
         seq_length = hidden_states.shape[0]
         # qkv proj
         qkv_states = self.qkv(hidden_states)
@@ -198,7 +200,7 @@ class Qwen2_5_VLVisionBlock(nn.Module):
     def forward(self,
                 hidden_states: torch.Tensor,
                 cu_seqlens: torch.Tensor,
-                rotary_pos_emb: Optional[torch.Tensor] = None) -> torch.Tensor:
+                rotary_pos_emb: torch.Tensor | None = None) -> torch.Tensor:
         hidden_states = hidden_states + self.attn(
             self.norm1(hidden_states),
             cu_seqlens=cu_seqlens,
@@ -341,7 +343,7 @@ class Qwen2_5_VisionTransformerPretrainedModel(nn.Module):
                 cu_seqlens: torch.Tensor,
                 rotary_pos_emb: torch.Tensor,
                 window_index: torch.Tensor = None,
-                cu_window_seqlens: List = None) -> torch.Tensor:
+                cu_window_seqlens: list = None) -> torch.Tensor:
         """forward."""
         hidden_states = self.patch_embed(hidden_states)
 
@@ -421,7 +423,7 @@ class Qwen2_5_VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGrap
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
         mrope_position_ids: torch.Tensor = None,
@@ -429,7 +431,7 @@ class Qwen2_5_VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGrap
         vis_cu_seqlens: torch.Tensor = None,
         vis_pos_emb: torch.Tensor = None,
         window_index: torch.Tensor = None,
-        cu_window_seqlens: List = None,
+        cu_window_seqlens: list = None,
         image_mask: torch.Tensor = None,
         **kwargs,
     ):
@@ -462,8 +464,8 @@ class Qwen2_5_VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGrap
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
-        inputs_embeds: Optional[torch.Tensor] = None,
+        past_key_values: list[list[torch.Tensor]],
+        inputs_embeds: torch.Tensor | None = None,
         context: StepContext = None,
     ):
         """Prepare input."""
@@ -530,7 +532,7 @@ class Qwen2_5_VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGrap
             image_mask=image_mask,
         )
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
         # modify from vllm
         stacked_params_mapping = [

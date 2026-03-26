@@ -178,7 +178,8 @@ class TestRestfulInterfaceBase:
         api_client = APIClient(BASE_URL)
         model_name = api_client.available_models[0]
         for item in api_client.completions_v1(model=model_name,
-                                              prompt=['你好', '今天天气怎么样', '你是谁', '帮我写一首以梅花为主题的五言律诗', '5+2等于多少'],
+                                              prompt=['你好', '今天天气怎么样', '你是谁',
+                                                      '帮我写一首以梅花为主题的五言律诗', '5+2等于多少'],
                                               max_tokens=400,
                                               min_tokens=50):
             print(str(item))

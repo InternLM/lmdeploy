@@ -1,6 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Optional
-
 import torch
 import triton
 import triton.language as tl
@@ -28,7 +26,7 @@ class RejectionSampler(nn.Module):
         draft_token_ids: LongTensor,
         bonus_token_ids: LongTensor,
         sampling_inputs: SamplingInputs,
-        draft_probs: Optional[Tensor] = None,
+        draft_probs: Tensor | None = None,
     ):
         """forward.
 
@@ -59,7 +57,7 @@ def torch_greedy_rejection_sample(
     draft_token_ids: LongTensor,
     bonus_token_ids: LongTensor,
     sampling_inputs: SamplingInputs = None,
-    draft_probs: Optional[Tensor] = None,
+    draft_probs: Tensor | None = None,
 ):
     """Greedy reject sampler
     1. keep targets tokens that are equal to draft tokens
@@ -120,7 +118,7 @@ def rejection_sample(
     draft_token_ids: LongTensor,
     bonus_token_ids: LongTensor,
     sampling_inputs: SamplingInputs,
-    draft_probs: Optional[Tensor] = None,
+    draft_probs: Tensor | None = None,
 ):
     """Rejection sampling.
 
