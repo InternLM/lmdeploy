@@ -1260,6 +1260,7 @@ class BaseModelAgent:
         if self.dist_config.dp > 1:
             await self.state.to_sleep.wait()
         self.cache_engine = None
+        self.state_cache_engine = None
         self.reset_graph_runner()
         device = 'cpu' if level == 1 else 'meta'
         self.patched_model.get_model().to(device=device, non_blocking=True)
@@ -1297,4 +1298,5 @@ class BaseModelAgent:
         self.reset_graph_runner()
         self.patched_model = None
         self.cache_engine = None
+        self.state_cache_engine = None
         torch.cuda.empty_cache()
