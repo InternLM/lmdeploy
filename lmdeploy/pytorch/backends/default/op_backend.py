@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Tuple
 
 import torch
 
@@ -60,7 +59,7 @@ class DefaultOpsBackend(OpsBackend):
         num_heads: int,
         head_size: int,
         dtype: torch.dtype,
-    ) -> Tuple[int, ...]:
+    ) -> tuple[int, ...]:
         """Get block shape of k."""
         return (
             block_size,
@@ -74,7 +73,7 @@ class DefaultOpsBackend(OpsBackend):
         num_heads: int,
         head_size: int,
         dtype: torch.dtype,
-    ) -> Tuple[int, ...]:
+    ) -> tuple[int, ...]:
         """Get block shape of v."""
         return (
             block_size,

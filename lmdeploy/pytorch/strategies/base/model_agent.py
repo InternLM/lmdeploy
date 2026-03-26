@@ -2,7 +2,7 @@
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from dataclasses import dataclass, fields
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
 import torch
@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from lmdeploy.pytorch.engine.logits_process import SamplingInputs
     from lmdeploy.pytorch.messages import SchedulerSequence
     from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
-    SeqList = List[SchedulerSequence]
+    SeqList = list[SchedulerSequence]
 
 
 def to_device(self, device: str, non_blocking: bool = False):
@@ -103,7 +103,7 @@ class StoppingCriteria(ABC):
              token_ids: torch.Tensor,
              stop_words: torch.Tensor,
              inputs: Optional['ModelInputs'] = None,
-             extra_inputs: Optional[ExtraInputs] = None):
+             extra_inputs: ExtraInputs | None = None):
         """Check whether to stop generation."""
         pass
 
@@ -122,7 +122,7 @@ class ModelAgentStrategy(ABC):
 
     @abstractmethod
     def slice_extra_inputs(self, extra_inputs: ExtraInputs, model_inputs: 'ModelInputs',
-                           model_outputs: Dict[str, torch.Tensor], **kwargs) -> ExtraInputs:
+                           model_outputs: dict[str, torch.Tensor], **kwargs) -> ExtraInputs:
         """Slice outputs."""
         pass
 
@@ -163,14 +163,14 @@ class ModelAgentStrategy(ABC):
         next_token_ids: torch.Tensor,
         model_metas: Any,
         extra_outputs: ExtraOutputs,
-    ) -> Tuple['ModelInputs', ExtraInputs]:
+    ) -> tuple['ModelInputs', ExtraInputs]:
         """Step next decoding."""
         pass
 
     @abstractmethod
     def update_decoding_for_next_step(self, model_inputs: 'ModelInputs', next_token_ids: torch.Tensor, model_metas: Any,
                                       extra_inputs: ExtraInputs,
-                                      extra_outputs: ExtraOutputs) -> Tuple['ModelInputs', ExtraInputs]:
+                                      extra_outputs: ExtraOutputs) -> tuple['ModelInputs', ExtraInputs]:
         """Step next inputs."""
         pass
 

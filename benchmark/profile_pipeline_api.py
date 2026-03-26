@@ -3,7 +3,6 @@ import argparse
 import json
 import os
 import random
-from typing import List, Optional, Tuple
 
 import numpy as np
 from tqdm import tqdm
@@ -21,8 +20,8 @@ def sample_sharegpt_requests(
     dataset_path: str,
     num_requests: int,
     tokenizer: PreTrainedTokenizerBase,
-    fixed_output_len: Optional[int] = None,
-) -> List[Tuple[str, int, int]]:
+    fixed_output_len: int | None = None,
+) -> list[tuple[str, int, int]]:
     if fixed_output_len is not None and fixed_output_len < 4:
         raise ValueError('output_len too small')
 
@@ -38,7 +37,7 @@ def sample_sharegpt_requests(
     random.shuffle(dataset)
 
     # Filter out sequences that are too long or too short
-    filtered_dataset: List[Tuple[str, int, int]] = []
+    filtered_dataset: list[tuple[str, int, int]] = []
     for i in range(len(dataset)):
         if len(filtered_dataset) == num_requests:
             break
@@ -70,7 +69,7 @@ def sample_random_requests(
     range_ratio: float,
     tokenizer: PreTrainedTokenizerBase,
     dataset_path: str,
-) -> List[Tuple[str, int, int]]:
+) -> list[tuple[str, int, int]]:
 
     input_lens = np.random.randint(
         max(int(input_len * range_ratio), 1),
@@ -101,7 +100,7 @@ def sample_random_requests(
         random.shuffle(dataset)
 
         # Filter out sequences that are too long or too short
-        input_requests: List[Tuple[str, int, int]] = []
+        input_requests: list[tuple[str, int, int]] = []
         for i in range(num_prompts):
             # Tokenize the prompts and completions.
             prompt = dataset[i][0]
@@ -150,7 +149,7 @@ class Engine:
                              max_new_tokens=output_len) for _, _, output_len in requests
         ]
 
-        sess: List[Session] = []
+        sess: list[Session] = []
         for _, input_len, output_len in requests:
             sess.append(profiler.new_session(input_len, output_len))
 

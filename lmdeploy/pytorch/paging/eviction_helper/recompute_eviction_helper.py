@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import List
 
 from ...messages import SchedulerSequence
 from ..scheduler import Scheduler
@@ -17,7 +16,7 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
         else:
             self.evict_for_seq = self._evict_for_ssm
 
-    def _evict_for_seq_default(self, seq: SchedulerSequence, evictable_seqs: List[SchedulerSequence],
+    def _evict_for_seq_default(self, seq: SchedulerSequence, evictable_seqs: list[SchedulerSequence],
                                prealloc_size: int):
         """Evict seqs."""
         block_manager = self.block_manager
@@ -56,7 +55,7 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
 
         return success
 
-    def _evict_for_ssm(self, seq: SchedulerSequence, evictable_seqs: List[SchedulerSequence], prealloc_size: int):
+    def _evict_for_ssm(self, seq: SchedulerSequence, evictable_seqs: list[SchedulerSequence], prealloc_size: int):
         """Evict seqs."""
         block_manager = self.block_manager
         state_manager = self.state_manager

@@ -3,7 +3,6 @@
 
 import time
 from dataclasses import dataclass
-from typing import List, Optional
 
 import numpy as np
 
@@ -143,7 +142,7 @@ class RequestStats:
                 f'  latest_token_time={self.lastest_token_time:.6f},\n'
                 ')')
 
-    def update_from_events(self, engine_events: List[EngineEvent]):
+    def update_from_events(self, engine_events: list[EngineEvent]):
         # avoid circular dependency
         from lmdeploy.messages import EventType
 
@@ -209,9 +208,9 @@ class IterationStats:
         self.iteration_timestamp = time.time()
         self.new_generation_tokens = 0
         self.prompt_tokens = 0
-        self.ttft: Optional[float] = None
-        self.tpot: Optional[float] = None
-        self.itl: Optional[float] = None
+        self.ttft: float | None = None
+        self.tpot: float | None = None
+        self.itl: float | None = None
 
     def __repr__(self):
         return ('IterationStats(\n'

@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
@@ -16,7 +15,7 @@ def build_model_agent(
     misc_config: MiscConfig,
     dist_ctx: DistContext = None,
     device_ctx: DeviceContext = None,
-    adapters: Dict[str, str] = None,
+    adapters: dict[str, str] = None,
     specdecode_config: SpecDecodeConfig = None,
 ):
     """Create model agent.
@@ -26,7 +25,7 @@ def build_model_agent(
         cache_config (CacheConfig): config of kv cache
         backend_config (BackendConfig): config of backend devices
         trust_remote_code (bool): To use the remote modeling code or not
-        adapters (Dict): lora adapters
+        adapters (dict): lora adapters
         tp (int): the number of devices to be used in tensor parallelism
         dtype (str): the data type of model weights and activations
         custom_module_map (str): customized nn module map

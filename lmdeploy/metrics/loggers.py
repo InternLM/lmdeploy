@@ -4,7 +4,6 @@
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import List
 
 import numpy as np
 
@@ -349,11 +348,11 @@ class PrometheusStatLogger(StatLoggerBase):
         pass
 
 
-def build_buckets(mantissa_lst: List[int], max_value: int) -> List[int]:
+def build_buckets(mantissa_lst: list[int], max_value: int) -> list[int]:
     """Builds a list of buckets with increasing powers of 10 multiplied by
     mantissa values until the value exceeds the specified maximum."""
     exponent = 0
-    buckets: List[int] = []
+    buckets: list[int] = []
     while True:
         for m in mantissa_lst:
             value = m * 10**exponent
@@ -364,7 +363,7 @@ def build_buckets(mantissa_lst: List[int], max_value: int) -> List[int]:
         exponent += 1
 
 
-def build_1_2_5_buckets(max_value: int) -> List[int]:
+def build_1_2_5_buckets(max_value: int) -> list[int]:
     """
     Example:
     >>> build_1_2_5_buckets(100)

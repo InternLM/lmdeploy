@@ -4,6 +4,7 @@
 #include "src/turbomind/kernels/gemm/arch/config_sm80_s16816.h"
 #include "src/turbomind/kernels/gemm/registry.h"
 #include "src/turbomind/kernels/gemm/types.h"
+#include <type_traits>
 
 namespace turbomind::gemm {
 
@@ -14,63 +15,71 @@ using D = cache_policy::Default;
 
 void Registry::sm80_16816_4()
 {
-    if constexpr (1) {
+    auto register_u4_d = [this](auto group_size_tag) {
+        constexpr int kGroupSize = decltype(group_size_tag)::value;
         // clang-format off
         using C = Config_U4_d<Sm80, half, kColMajor>;
-        // Add<C::Type<128, 256,  64, 1, 8, 1, D, S, 3, true, 1, 128>>(); // 0/0
-        Add<C::Type<128, 256,  32, 1, 8, 1, D, D, 3, true, 1, 128, 128, 128>>(); // 30/3
-        Add<C::Type<128, 256,  32, 1, 8, 1, D, D, 4, true, 1, 128, 128, 128>>(); // --/20
-        Add<C::Type<128, 128,  32, 1, 4, 1, D, D, 3, true, 1, 128, 64, 128>>();  // --/13
-        Add<C::Type<128, 128,  32, 1, 4, 1, D, S, 4, true, 1, 128, 64, 128>>();  // 21/13
-        Add<C::Type<128, 128,  64, 1, 4, 2, D, S, 3, true, 1, 128, 64, 128>>();  // 6/6
+        // Add<C::Type<128, 256,  64, 1, 8, 1, D, S, 3, true, 1, kGroupSize>>(); // 0/0
+        Add<C::Type<128, 256,  32, 1, 8, 1, D, D, 3, true, 1, kGroupSize, 128, 128>>(); // 30/3
+        Add<C::Type<128, 256,  32, 1, 8, 1, D, D, 4, true, 1, kGroupSize, 128, 128>>(); // --/20
+        Add<C::Type<128, 128,  32, 1, 4, 1, D, D, 3, true, 1, kGroupSize, 64, 128>>();  // --/13
+        Add<C::Type<128, 128,  32, 1, 4, 1, D, S, 4, true, 1, kGroupSize, 64, 128>>();  // 21/13
+        Add<C::Type<128, 128,  64, 1, 4, 2, D, S, 3, true, 1, kGroupSize, 64, 128>>();  // 6/6
 
-        Add<C::Type<96, 256,  32, 1, 8, 1, D, D, 4, true, 1, 128>>();  // --/3
-        Add<C::Type<96, 256,  32, 1, 8, 1, D, S, 3, true, 1, 128>>();  // 13/13
-        Add<C::Type<96, 128,  32, 1, 4, 1, D, S, 4, true, 1, 128>>();  // 14/10
-        Add<C::Type<96, 128, 128, 1, 4, 2, D, S, 3, true, 1, 128>>();  // 2/2
+        Add<C::Type<96, 256,  32, 1, 8, 1, D, D, 4, true, 1, kGroupSize>>();  // --/3
+        Add<C::Type<96, 256,  32, 1, 8, 1, D, S, 3, true, 1, kGroupSize>>();  // 13/13
+        Add<C::Type<96, 128,  32, 1, 4, 1, D, S, 4, true, 1, kGroupSize>>();  // 14/10
+        Add<C::Type<96, 128, 128, 1, 4, 2, D, S, 3, true, 1, kGroupSize>>();  // 2/2
 
-        Add<C::Type<64, 256,  32, 1, 4, 1, D, D, 3, true, 1, 128, 64, 128>>(); // --/21
-        Add<C::Type<64, 256,  32, 1, 4, 1, D, S, 4, true, 1, 128, 64, 128>>(); // 27/13
-        Add<C::Type<64, 128,  32, 1, 4, 1, D, S, 4, true, 1, 128>>();  // 8/5
-        Add<C::Type<64, 128,  64, 1, 4, 1, D, S, 3, true, 1, 128>>();  // 7/5
-        Add<C::Type<64, 128, 128, 1, 4, 2, D, S, 3, true, 1, 128>>();  // 6/7
-        Add<C::Type<64,  64,  64, 1, 2, 2, D, S, 6, true, 1, 128>>();
+        Add<C::Type<64, 256,  32, 1, 4, 1, D, D, 3, true, 1, kGroupSize, 64, 128>>(); // --/21
+        Add<C::Type<64, 256,  32, 1, 4, 1, D, S, 4, true, 1, kGroupSize, 64, 128>>(); // 27/13
+        Add<C::Type<64, 128,  32, 1, 4, 1, D, S, 4, true, 1, kGroupSize>>();  // 8/5
+        Add<C::Type<64, 128,  64, 1, 4, 1, D, S, 3, true, 1, kGroupSize>>();  // 7/5
+        Add<C::Type<64, 128, 128, 1, 4, 2, D, S, 3, true, 1, kGroupSize>>();  // 6/7
+        Add<C::Type<64,  64,  64, 1, 2, 2, D, S, 6, true, 1, kGroupSize>>();
 
-        Add<C::Type<48, 256,  64, 1, 4, 1, D, S, 3, true, 1, 128, 48, 128>>(); // 1/1
-        Add<C::Type<48, 128,  64, 1, 4, 1, D, S, 4, true, 1, 128>>();  // 1/1
-        Add<C::Type<48, 128, 128, 1, 4, 2, D, S, 3, true, 1, 128>>();  // 4/4
-        Add<C::Type<48,  64, 128, 1, 2, 2, D, S, 4, true, 1, 128>>();
+        Add<C::Type<48, 256,  64, 1, 4, 1, D, S, 3, true, 1, kGroupSize, 48, 128>>(); // 1/1
+        Add<C::Type<48, 128,  64, 1, 4, 1, D, S, 4, true, 1, kGroupSize>>();  // 1/1
+        Add<C::Type<48, 128, 128, 1, 4, 2, D, S, 3, true, 1, kGroupSize>>();  // 4/4
+        Add<C::Type<48,  64, 128, 1, 2, 2, D, S, 4, true, 1, kGroupSize>>();
 
-        Add<C::Type<32, 256,  64, 1, 4, 1, D, S, 3, true, 1, 128>>();
-        Add<C::Type<32, 128,  64, 1, 4, 1, D, S, 4, true, 1, 128>>();
-        Add<C::Type<32, 128, 128, 1, 4, 2, D, S, 3, true, 1, 128>>();
-        Add<C::Type<32,  64, 128, 1, 2, 2, D, S, 3, true, 1, 128>>();
-        Add<C::Type<32,  64, 128, 1, 2, 2, D, S, 4, true, 1, 128>>();
+        Add<C::Type<32, 256,  64, 1, 4, 1, D, S, 3, true, 1, kGroupSize>>();
+        Add<C::Type<32, 128,  64, 1, 4, 1, D, S, 4, true, 1, kGroupSize>>();
+        Add<C::Type<32, 128, 128, 1, 4, 2, D, S, 3, true, 1, kGroupSize>>();
+        Add<C::Type<32,  64, 128, 1, 2, 2, D, S, 3, true, 1, kGroupSize>>();
+        Add<C::Type<32,  64, 128, 1, 2, 2, D, S, 4, true, 1, kGroupSize>>();
 
-        Add<C::Type<16, 128,  64, 1, 4, 1, D, S, 4, true, 1, 128>>();
-        Add<C::Type<16, 128, 128, 1, 4, 2, D, S, 3, true, 1, 128>>();
-        Add<C::Type<16, 128, 128, 1, 4, 2, D, S, 4, true, 1, 128>>();
-        Add<C::Type<16,  64, 128, 1, 2, 2, D, S, 3, true, 1, 128>>();
-        Add<C::Type<16,  64, 128, 1, 2, 2, D, S, 4, true, 1, 128>>();
+        Add<C::Type<16, 128,  64, 1, 4, 1, D, S, 4, true, 1, kGroupSize>>();
+        Add<C::Type<16, 128, 128, 1, 4, 2, D, S, 3, true, 1, kGroupSize>>();
+        Add<C::Type<16, 128, 128, 1, 4, 2, D, S, 4, true, 1, kGroupSize>>();
+        Add<C::Type<16,  64, 128, 1, 2, 2, D, S, 3, true, 1, kGroupSize>>();
+        Add<C::Type<16,  64, 128, 1, 2, 2, D, S, 4, true, 1, kGroupSize>>();
         // clang-format on
-    }
+    };
 
-    if constexpr (1) {
+    register_u4_d(std::integral_constant<int, 128>{});
+    register_u4_d(std::integral_constant<int, 32>{});
+
+    auto register_u4_g = [this](auto group_size_tag) {
+        constexpr int kGroupSize = decltype(group_size_tag)::value;
         // clang-format off
         using C = Config_U4_g<Sm80, half, kColMajor>;
-        Add<C::Type<128, 256,  32, 2, 4, 1, D, D, 3,   0 , 1, 128>>();  // 10 + 5 + 4 + 10 + 10, 37
-        Add<C::Type<128, 128,  32, 1, 4, 1, D, D, 3, true, 1, 128>>();  // 1 + 6 + 4 + 4 + 2, 3
-        Add<C::Type< 64, 128,  64, 1, 4, 1, D, S, 3, true, 1, 128>>();  // 7 + 4 + 6 + 2 + 4, 26
-        Add<C::Type< 64, 256,  32, 1, 4, 1, D, S, 3, true, 1, 128>>();  // 18
-        Add<C::Type< 32,  64, 128, 1, 2, 2, D, S, 3, true, 1, 128>>();  // 2
-        Add<C::Type< 32, 128,  64, 1, 4, 1, D, S, 5, true, 1, 128>>();  // 1 + 2 + 2 + 2 + 2, 2
-        Add<C::Type< 32, 256,  64, 1, 4, 1, D, S, 3, true, 1, 128>>();  // 9
-        Add<C::Type< 16, 256,  64, 1, 4, 1, D, S, 3, true, 1, 128>>();  // 22
-        Add<C::Type< 16, 256,  32, 1, 4, 1, D, S, 3, true, 1, 128>>();  // 8
-        Add<C::Type< 16, 128,  64, 1, 4, 1, D, S, 3, true, 1, 128>>();  // 1 + 13 + 9 + 13 + 7, 7
-        Add<C::Type< 16,  64, 128, 1, 2, 2, D, S, 3, true, 1, 128>>();  // 12 + 2 + 6 + 2 + 8, 42
+        Add<C::Type<128, 256,  32, 2, 4, 1, D, D, 3,   0 , 1, kGroupSize>>();  // 10 + 5 + 4 + 10 + 10, 37
+        Add<C::Type<128, 128,  32, 1, 4, 1, D, D, 3, true, 1, kGroupSize>>();  // 1 + 6 + 4 + 4 + 2, 3
+        Add<C::Type< 64, 128,  64, 1, 4, 1, D, S, 3, true, 1, kGroupSize>>();  // 7 + 4 + 6 + 2 + 4, 26
+        Add<C::Type< 64, 256,  32, 1, 4, 1, D, S, 3, true, 1, kGroupSize>>();  // 18
+        Add<C::Type< 32,  64, 128, 1, 2, 2, D, S, 3, true, 1, kGroupSize>>();  // 2
+        Add<C::Type< 32, 128,  64, 1, 4, 1, D, S, 5, true, 1, kGroupSize>>();  // 1 + 2 + 2 + 2 + 2, 2
+        Add<C::Type< 32, 256,  64, 1, 4, 1, D, S, 3, true, 1, kGroupSize>>();  // 9
+        Add<C::Type< 16, 256,  64, 1, 4, 1, D, S, 3, true, 1, kGroupSize>>();  // 22
+        Add<C::Type< 16, 256,  32, 1, 4, 1, D, S, 3, true, 1, kGroupSize>>();  // 8
+        Add<C::Type< 16, 128,  64, 1, 4, 1, D, S, 3, true, 1, kGroupSize>>();  // 1 + 13 + 9 + 13 + 7, 7
+        Add<C::Type< 16,  64, 128, 1, 2, 2, D, S, 3, true, 1, kGroupSize>>();  // 12 + 2 + 6 + 2 + 8, 42
         // clang-format on
-    }
+    };
+
+    register_u4_g(std::integral_constant<int, 128>{});
+    register_u4_g(std::integral_constant<int, 32>{});
 
     if constexpr (1) {
         // clang-format off

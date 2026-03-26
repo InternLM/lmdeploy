@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import requests
 
@@ -45,7 +45,7 @@ class APIClient:
             api key will be used.
     """
 
-    def __init__(self, api_server_url: str, api_key: Optional[str] = None, **kwargs):
+    def __init__(self, api_server_url: str, api_key: str | None = None, **kwargs):
         self.api_server_url = api_server_url
         self.chat_completions_v1_url = f'{api_server_url}/v1/chat/completions'
         self.completions_v1_url = f'{api_server_url}/v1/completions'
@@ -66,13 +66,13 @@ class APIClient:
         return self._available_models
 
     def encode(self,
-               input: Union[str, List[str]],
-               do_preprocess: Optional[bool] = False,
-               add_bos: Optional[bool] = True):
+               input: str | list[str],
+               do_preprocess: bool | None = False,
+               add_bos: bool | None = True):
         """Encode prompts.
 
         Args:
-            input: the prompt to be encoded. In str or List[str] format.
+            input: the prompt to be encoded. In str or list[str] format.
             do_preprocess: whether do preprocess or not. Default to False.
             add_bos: True when it is the beginning of a conversation. False
                 when it is not. Default to True.
@@ -90,28 +90,28 @@ class APIClient:
     def chat_completions_v1(
         self,
         model: str,
-        messages: Union[str, List[Dict[str, str]]],
-        temperature: Optional[float] = 0.7,
-        top_p: Optional[float] = 1.0,
-        logprobs: Optional[bool] = False,
-        top_logprobs: Optional[int] = 0,
-        n: Optional[int] = 1,
-        max_completion_tokens: Optional[int] = None,
-        max_tokens: Optional[int] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        stream: Optional[bool] = False,
-        presence_penalty: Optional[float] = 0.0,
-        frequency_penalty: Optional[float] = 0.0,
-        user: Optional[str] = None,
-        repetition_penalty: Optional[float] = 1.0,
-        ignore_eos: Optional[bool] = False,
-        skip_special_tokens: Optional[bool] = True,
-        spaces_between_special_tokens: Optional[bool] = True,
+        messages: str | list[dict[str, str]],
+        temperature: float | None = 0.7,
+        top_p: float | None = 1.0,
+        logprobs: bool | None = False,
+        top_logprobs: int | None = 0,
+        n: int | None = 1,
+        max_completion_tokens: int | None = None,
+        max_tokens: int | None = None,
+        stop: str | list[str] | None = None,
+        stream: bool | None = False,
+        presence_penalty: float | None = 0.0,
+        frequency_penalty: float | None = 0.0,
+        user: str | None = None,
+        repetition_penalty: float | None = 1.0,
+        ignore_eos: bool | None = False,
+        skip_special_tokens: bool | None = True,
+        spaces_between_special_tokens: bool | None = True,
         top_k: int = 40,
-        min_new_tokens: Optional[int] = None,
+        min_new_tokens: int | None = None,
         min_p: float = 0.0,
-        logit_bias: Optional[Dict[str, float]] = None,
-        stream_options: Optional[Dict] = None,
+        logit_bias: dict[str, float] | None = None,
+        stream_options: dict | None = None,
         **kwargs,
     ):
         """Chat completion v1.
@@ -130,7 +130,7 @@ class APIClient:
             max_completion_tokens (int | None): output token nums. Default to None.
             max_tokens (int | None): output token nums. Default to None.
                 Deprecated: Use max_completion_tokens instead.
-            stop (str | List[str] | None): To stop generating further
+            stop (str | list[str] | None): To stop generating further
               tokens. Only accept stop words that's encoded to one token idex.
             repetition_penalty (float): The parameter for repetition penalty.
                 1.0 means no penalty
@@ -148,7 +148,7 @@ class APIClient:
                 0 and 1. Typical values are in the 0.01-0.2 range, comparably
                 selective as setting `top_p` in the 0.99-0.8 range (use the
                 opposite of normal `top_p` values)
-            logit_bias (Dict): Bias to logits. Only supported in pytorch engine.
+            logit_bias (dict): Bias to logits. Only supported in pytorch engine.
             stream_options: Options for streaming response. Only set this when you
                 set stream: true.
 
@@ -175,23 +175,23 @@ class APIClient:
     def completions_v1(
         self,
         model: str,
-        prompt: Union[str, List[Any]],
-        suffix: Optional[str] = None,
-        temperature: Optional[float] = 0.7,
-        n: Optional[int] = 1,
-        max_completion_tokens: Optional[int] = 16,
-        max_tokens: Optional[int] = 16,
-        stream: Optional[bool] = False,
-        stop: Optional[Union[str, List[str]]] = None,
-        top_p: Optional[float] = 1.0,
-        top_k: Optional[int] = 40,
-        user: Optional[str] = None,
+        prompt: str | list[Any],
+        suffix: str | None = None,
+        temperature: float | None = 0.7,
+        n: int | None = 1,
+        max_completion_tokens: int | None = 16,
+        max_tokens: int | None = 16,
+        stream: bool | None = False,
+        stop: str | list[str] | None = None,
+        top_p: float | None = 1.0,
+        top_k: int | None = 40,
+        user: str | None = None,
         # additional argument of lmdeploy
-        repetition_penalty: Optional[float] = 1.0,
-        ignore_eos: Optional[bool] = False,
-        skip_special_tokens: Optional[bool] = True,
-        spaces_between_special_tokens: Optional[bool] = True,
-        stream_options: Optional[Dict] = None,
+        repetition_penalty: float | None = 1.0,
+        ignore_eos: bool | None = False,
+        skip_special_tokens: bool | None = True,
+        spaces_between_special_tokens: bool | None = True,
+        stream_options: dict | None = None,
         **kwargs,
     ):
         """Chat completion v1.
@@ -213,7 +213,7 @@ class APIClient:
             n (int): How many chat completion choices to generate for each
                 input message. Only support one here.
             stream: whether to stream the results or not. Default to false.
-            stop (str | List[str] | None): To stop generating further
+            stop (str | list[str] | None): To stop generating further
               tokens. Only accept stop words that's encoded to one token idex.
             repetition_penalty (float): The parameter for repetition penalty.
                 1.0 means no penalty

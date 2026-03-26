@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Dict, List
 
 from transformers import AutoProcessor
 
@@ -29,11 +28,11 @@ class Phi3VisionModel(LlavaHfVisionModel):
         else:
             raise NotImplementedError('turbomind has not supported phi3v yet')
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refers to `super.preprocess() for spec."""
-        images = self.collect_images(messages)
+        images = self.collect_multimodal_items(messages)
         outputs = []
-        for image, params in images:
+        for modality, image, params in images:
             result = self.processor.image_processor([image], return_tensors='pt')
             image_tokens = result['num_img_tokens']
             result.update(dict(image_size=image.size, image_tokens=image_tokens, image_token_id=self.image_token_id))

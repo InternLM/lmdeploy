@@ -1,7 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/ModelTC/lightllm
 import math
-from typing import Literal, Sequence
+from collections.abc import Sequence
+from typing import Literal
 
 import torch
 import triton

@@ -243,8 +243,8 @@ class Qwen3_5ReaderMixin:
         tie_word_embeddings = self.model_cfg.get('tie_word_embeddings', False)
         if tie_word_embeddings:
             self.output_weight_key = self.tok_embeddings_key
-    # ---- zero-centered RMSNorm: add 1 to weights during export ----
 
+    # ---- zero-centered RMSNorm: add 1 to weights during export ----
     def attn_norm(self, i: int):
         w = super().attn_norm(i)
         if w is not None:
@@ -312,6 +312,35 @@ class Qwen3_5ReaderMixin:
         w = dequantize_gemm(qweight, qzeros, scales, 4, group_size)
         return w.t()  # [in, out] → [out, in] (PyTorch convention)
 
+    @staticmethod
+    def _compressed_tensors_dequant(weight_packed, weight_scale):
+        """Dequantize a compressed-tensors (pack-quantized, symmetric int4)
+        weight to fp16.
+
+        Args:
+            weight_packed: int32 tensor of shape (out_features, in_features//8).
+            weight_scale:  bf16/fp16 tensor of shape (out_features, in_features//group_size).
+        Returns:
+            fp16 tensor of shape (out_features, in_features).
+        """
+        out_features = weight_packed.shape[0]
+        num_groups = weight_scale.shape[1]
+        in_features = weight_packed.shape[1] * 8
+        group_size = in_features // num_groups
+
+        # Reinterpret the packed int32 buffer as bytes and unpack two nibbles
+        # per byte directly into the final fp16 tensor. This avoids creating
+        # eight temporary fp16 tensors before applying scales.
+        packed_bytes = weight_packed.contiguous().view(torch.uint8).reshape(out_features, -1)
+        weight = torch.empty((out_features, in_features), device=weight_packed.device, dtype=torch.float16)
+        weight[:, 0::2] = (packed_bytes & 0xF).to(torch.float16)
+        weight[:, 1::2] = (packed_bytes >> 4).to(torch.float16)
+
+        scales = weight_scale.to(torch.float16).unsqueeze(-1)
+        weight = weight.view(out_features, num_groups, group_size)
+        weight.sub_(8.0).mul_(scales)
+        return weight.reshape(out_features, in_features)
+
     def linear_attn(self, i: int, kind: str):
         if not kind:
             return self.filter(r'linear_attn\.', i)
@@ -329,6 +358,9 @@ class Qwen3_5ReaderMixin:
             if tensor is None and kind == 'weight':
                 if f'{prefix}.qweight' in self.params:
                     tensor = self._awq_dequant(prefix)
+                elif f'{prefix}.weight_packed' in self.params:
+                    tensor = self._compressed_tensors_dequant(self.params[f'{prefix}.weight_packed'],
+                                                              self.params[f'{prefix}.weight_scale'])
             if tensor is not None:
                 tensor = self.transform(tensor, kind)
             result.append(tensor)  # keep None to preserve alignment
@@ -367,7 +399,7 @@ class Qwen3_5Model(Qwen3Model):
             info['inter_size'] = shared_expert_size
         info['moe_shared_gate'] = True
         # Qwen3.5 uses sigmoid MoE routing (not softmax)
-        info['scoring_func'] = 'sigmoid'
+        info['scoring_func'] = 'softmax'
         info['norm_topk_prob'] = True
         # Fix RoPE dim for partial_rotary_factor
         rope_params = cfg.get('rope_parameters', {})
@@ -448,7 +480,7 @@ class Qwen3_5MoeModel(Qwen3MoeModel):
         info['inter_size'] = cfg.get('shared_expert_intermediate_size', 0)
         info['moe_shared_gate'] = True
         # Qwen3.5 uses sigmoid MoE routing (not softmax)
-        info['scoring_func'] = 'sigmoid'
+        info['scoring_func'] = 'softmax'
         info['norm_topk_prob'] = True
         # Fix RoPE dim for partial_rotary_factor
         rope_params = cfg.get('rope_parameters', {})
