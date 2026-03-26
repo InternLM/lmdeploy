@@ -823,7 +823,8 @@ class Qwen3_5TextRotaryEmbedding(nn.Module):
         attention_factor = 1.0  # Unused in this type of RoPE
 
         # Compute the inverse frequencies
-        inv_freq = 1.0 / (base**(torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim))
+        inv_freq = 1.0 / (base**(torch.arange(0, dim, 2, dtype=torch.int64).to(dtype=torch.float) / dim))
+        inv_freq = inv_freq.to(device=device)
         return inv_freq, attention_factor
 
     def apply_interleaved_mrope(self, freqs, mrope_section):
