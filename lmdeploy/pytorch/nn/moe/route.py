@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Tuple
 
 import torch
 
@@ -34,6 +33,6 @@ class NoauxTCRouter(torch.nn.Module):
         )
 
     def forward(self, router_logits: torch.Tensor,
-                e_score_correction_bias: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+                e_score_correction_bias: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Router forward."""
         return self.impl.forward(router_logits, e_score_correction_bias)

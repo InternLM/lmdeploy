@@ -11,6 +11,7 @@
 #include "src/turbomind/core/context.h"
 #include "src/turbomind/core/core.h"
 
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/engine/engine.h"
 #include "src/turbomind/engine/gateway.h"
 #include "src/turbomind/engine/model_executor.h"
@@ -403,6 +404,8 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     model_param_.linear_num_key_heads   = model["linear_num_key_heads"].as<int>(0);
     model_param_.linear_num_value_heads = model["linear_num_value_heads"].as<int>(0);
     model_param_.attn_output_gate       = model["attn_output_gate"].as<bool>(false);
+    model_param_.linear_state_dtype     = data_type_;
+
     if (auto uqel = model["unquantized_expert_layers"]) {
         for (auto it = uqel.begin(); it != uqel.end(); ++it) {
             model_param_.unquantized_expert_layers.insert(it->as<int>());
@@ -441,6 +444,10 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     engine_param_.cache_chunk_size      = engine["cache_chunk_size"].as<int>(0);
     engine_param_.enable_prefix_caching = engine["enable_prefix_caching"].as<bool>(false);
     engine_param_.enable_metrics        = engine["enable_metrics"].as<bool>(false);
+
+    if (engine_param_.enable_prefix_caching && HasLinearAttention(model_param_)) {
+        TM_CHECK(0) << "Prefix caching is unsupported when linear attention is present";
+    }
 
     engine_param_.num_tokens_per_iter = engine["num_tokens_per_iter"].as<int>(0);
     engine_param_.max_prefill_iters   = engine["max_prefill_iters"].as<int>(1);

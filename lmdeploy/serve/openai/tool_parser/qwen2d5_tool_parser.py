@@ -1,14 +1,21 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
 import re
-from typing import Dict, Sequence, Union
+from collections.abc import Sequence
 
 import partial_json_parser
 import shortuuid
 from partial_json_parser.core.options import Allow
 
-from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, DeltaFunctionCall, DeltaMessage, DeltaToolCall,
-                                            ExtractedToolCallInformation, FunctionCall, ToolCall)
+from lmdeploy.serve.openai.protocol import (
+    ChatCompletionRequest,
+    DeltaFunctionCall,
+    DeltaMessage,
+    DeltaToolCall,
+    ExtractedToolCallInformation,
+    FunctionCall,
+    ToolCall,
+)
 from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import get_streaming_state
 from lmdeploy.utils import get_logger
 
@@ -40,7 +47,7 @@ class Qwen2d5ToolParser(ToolParser):
         delta_text: str,
         delta_token_ids: Sequence[int],
         request: ChatCompletionRequest,
-    ) -> Union[DeltaMessage, None]:
+    ) -> DeltaMessage | None:
         state = get_streaming_state(request)
         current_text = state.current_text
         if self.tool_start_token not in current_text:
@@ -78,7 +85,7 @@ class Qwen2d5ToolParser(ToolParser):
             # tool calls are generated in an object in inernlm2
             # it's not support parallel tool calls
             try:
-                tool_call_arr: Dict = partial_json_parser.loads(parsable_arr, flags)
+                tool_call_arr: dict = partial_json_parser.loads(parsable_arr, flags)
             except partial_json_parser.core.exceptions.MalformedJSON:
                 logger.debug('not enough tokens to parse into JSON yet')
                 return None

@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-from typing import Dict
 
 import ray
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
@@ -84,10 +83,10 @@ class RayEngineWorker(EngineWorkerBase):
         return result, stopped
 
 
-def _update_runtime_envs(runtime_env: Dict):
+def _update_runtime_envs(runtime_env: dict):
     """Update runtime envs."""
     new_envs = _envs.get_all_envs()
-    env_vars: Dict = runtime_env.get('env_vars', {})
+    env_vars: dict = runtime_env.get('env_vars', {})
     env_vars.update(new_envs)
     runtime_env['env_vars'] = env_vars
     return runtime_env

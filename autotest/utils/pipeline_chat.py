@@ -43,14 +43,14 @@ def run_pipeline_llm_test(config, run_config, common_case_config, worker_id: str
     with assume:
         assert result, stderr
 
-    with open(pipeline_log, 'r', encoding='utf-8') as file:
+    with open(pipeline_log, encoding='utf-8') as file:
         output_text = file.read()
 
     with open(pipeline_log, 'a') as file:
         for case in common_case_config.keys():
             if is_smoke and case != 'memory_test':
                 continue
-            if case != 'code_testcases' and 'code' in model_path.lower():
+            if case != 'code_testcase' and 'code' in model_path.lower():
                 continue
 
             with allure.step(case):
@@ -101,7 +101,7 @@ def run_pipeline_mllm_test(config, run_config, worker_id: str = '', is_smoke: bo
     with assume:
         assert result, stderr
 
-    with open(pipeline_log, 'r', encoding='utf-8') as file:
+    with open(pipeline_log, encoding='utf-8') as file:
         output_text = file.read()
 
     with open(pipeline_log, 'a') as file:
@@ -156,7 +156,7 @@ def run_pipeline_mllm_test(config, run_config, worker_id: str = '', is_smoke: bo
             if 'qwen' in model.lower():
                 Qwen_vl_testcase(output_text, file)
 
-    with open(pipeline_log, 'r', encoding='utf-8') as file:
+    with open(pipeline_log, encoding='utf-8') as file:
         output_text = file.read()
     print(output_text)
     allure.attach.file(pipeline_log, name=pipeline_log, attachment_type=allure.attachment_type.TEXT)
@@ -356,7 +356,7 @@ def assert_pipeline_common_log(config, log_name):
 
     msg = 'result is empty, please check again'
     result = False
-    with open(config_log, 'r') as f:
+    with open(config_log) as f:
         lines = f.readlines()
 
         for line in lines:

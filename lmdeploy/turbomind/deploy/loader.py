@@ -4,10 +4,10 @@ import os.path as osp
 import re
 from abc import ABC, abstractmethod
 from collections import defaultdict
+from collections.abc import Iterator
 from functools import partial
 from glob import glob
 from queue import Queue
-from typing import Iterator, Tuple, Union
 
 import torch
 from safetensors import safe_open
@@ -29,12 +29,12 @@ class BaseLoader(ABC):
         self.item_count = defaultdict(int)
         self.mappings = mappings
 
-    def get_index(self, index_name: str, file_pattern: str) -> Tuple[dict, list]:
+    def get_index(self, index_name: str, file_pattern: str) -> tuple[dict, list]:
         """Get shards and weight map (if possible) for the model."""
         get_path = partial(osp.join, self.model_path)
         shards = []
         if index_name:
-            with open(get_path(index_name), 'r') as f:
+            with open(get_path(index_name)) as f:
                 index = json.load(f)
             index = index['weight_map']
             shards = list(map(get_path, set(index.values())))
@@ -55,7 +55,7 @@ class BaseLoader(ABC):
             return key
 
     @abstractmethod
-    def items(self) -> Iterator[Tuple[int, dict]]:
+    def items(self) -> Iterator[tuple[int, dict]]:
         pass
 
 
@@ -174,7 +174,7 @@ class StateDictLoader:
             self.que.task_done()
 
 
-def create_loader(model_path: Union[str, Queue], pattern: str, mappings: list) -> BaseLoader:
+def create_loader(model_path: str | Queue, pattern: str, mappings: list) -> BaseLoader:
     args = (model_path, pattern, mappings)
 
     if isinstance(model_path, Queue):

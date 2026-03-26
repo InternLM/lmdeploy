@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
-from typing import Optional
 
 import torch
 from torch import LongTensor, Tensor, nn
@@ -24,7 +23,7 @@ class RejectionSampler(nn.Module):
         target_logits: Tensor,
         draft_token_ids: LongTensor,
         bonus_token_ids: LongTensor,
-        draft_probs: Optional[Tensor] = None,
+        draft_probs: Tensor | None = None,
     ):
         """forward
         Args:
@@ -49,7 +48,7 @@ def rejection_sample(
     draft_token_ids: LongTensor,
     bonus_token_ids: LongTensor,
     sample_policy: SamplePolicy = SamplePolicy.ALL_GREEDY,
-    draft_probs: Optional[Tensor] = None,
+    draft_probs: Tensor | None = None,
 ):
     """rejection sample
     Args:

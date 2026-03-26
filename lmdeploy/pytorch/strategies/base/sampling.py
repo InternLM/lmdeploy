@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
-from typing import List
 
 import torch
 
@@ -10,7 +9,7 @@ from lmdeploy.pytorch.model_inputs import ModelInputsDelta
 
 from .model_agent import ExtraInputs
 
-SeqList = List[SchedulerSequence]
+SeqList = list[SchedulerSequence]
 
 
 class SamplingStrategy(ABC):

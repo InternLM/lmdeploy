@@ -1,11 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 import torch
 from transformers import AutoProcessor
 
 from lmdeploy.utils import get_logger
+from lmdeploy.vl.constants import Modality
 from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
 
 logger = get_logger('lmdeploy')
@@ -31,16 +32,24 @@ class InternS1ProVisionModel(VisionModel):
     def build_preprocessor(self):
         check_transformers()
         self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=True)
-        tokenizer = self.processor.tokenizer
-        self.image_token = self.processor.image_token
-        self.image_token_id = tokenizer.encode(self.image_token)[-1]
-        self.mm_processor_kwargs = None
 
-        # Time Series tokens
+        # image tokens
+        self.image_token = self.processor.image_token
+        self.image_token_id = self.processor.image_token_id
+
+        # video tokens
+        self.video_token = self.processor.video_token
+        self.video_token_id = self.processor.video_token_id
+
+        # time series tokens
         self.ts_token = getattr(self.processor, 'ts_token', None)
         self.ts_token_id = getattr(self.processor, 'ts_token_id', None)
 
-    def get_processor_args(self, mm_processor_kwargs: Optional[Dict[str, Any]] = None):
+        # vision start and end tokens
+        self.vision_start_token = self.processor.vision_start_token
+        self.vision_end_token = self.processor.vision_end_token
+
+    def get_processor_args(self, mm_processor_kwargs: dict[str, Any] | None = None):
         min_pixels = self.processor.image_processor.size['shortest_edge']
         max_pixels = self.processor.image_processor.size['longest_edge']
 
@@ -82,7 +91,64 @@ class InternS1ProVisionModel(VisionModel):
             for message in messages)
         self.has_time_series_input = has_time_series_input
 
-    def time_series_processor(self, ts_input, sr):
+    def _preprocess_image(self,
+                          data: list[Any],
+                          params: dict[str, Any],
+                          mm_processor_kwargs: dict[str, Any] | None = None) -> list[dict]:
+
+        image = data.convert('RGB')
+        min_pixels, max_pixels = self.get_processor_args(mm_processor_kwargs)
+
+        result = self.processor.image_processor(images=image,
+                                                size={
+                                                    'shortest_edge': min_pixels,
+                                                    'longest_edge': max_pixels
+                                                },
+                                                return_tensors='pt')
+        merge_length = self.processor.image_processor.merge_size**2
+        image_tokens = result['image_grid_thw'].prod(dim=1) // merge_length
+        result.update(dict(image_size=image.size, image_tokens=image_tokens, image_token_id=self.image_token_id))
+        return result
+
+    def _preprocess_video(self,
+                          data: list[Any],
+                          params: dict[str, Any],
+                          mm_processor_kwargs: dict[str, Any] | None = None) -> list[dict]:
+
+        # TODO: zhouxinyu, apply transformers smart_resize using per-request kwargs
+        metadata = params['video_metadata']
+        video_kwargs = dict(return_metadata=True,
+                            do_resize=True,
+                            do_sample_frames=False,
+                            video_metadata=metadata,
+                            return_tensors='pt')
+        result = self.processor.video_processor(videos=data, **video_kwargs)
+        video_grid_thw = result['video_grid_thw']
+
+        merge_length = self.processor.video_processor.merge_size**2
+        if metadata.get('fps') is None:
+            logger.warning_once('Qwen3VL: fps not found, defaulting to 24.')
+            metadata['fps'] = metadata['fps'] or 24
+
+        # if timestamps are not provided, calculate them
+        curr_timestamp = self.processor._calculate_timestamps(
+            metadata['frames_indices'],
+            metadata['fps'],
+            self.processor.video_processor.merge_size,
+        )
+
+        frame_seqlen = video_grid_thw[0][1:].prod() // merge_length
+        result.update(curr_timestamp=curr_timestamp, frame_seqlen=frame_seqlen, video_token_id=self.video_token_id)
+        return result
+
+    def _preprocess_time_series(self,
+                                data: list[Any],
+                                params: dict[str, Any],
+                                mm_processor_kwargs: dict[str, Any] | None = None) -> list[dict]:
+
+        ts_input = data
+        sr = params.get('sampling_rate') if params is not None else None
+
         if not isinstance(ts_input, np.ndarray):
             ts_input = np.array(ts_input, dtype=np.float32)
 
@@ -108,43 +174,34 @@ class InternS1ProVisionModel(VisionModel):
         stride = np.floor(160 / ((1 + np.exp(-sr / 100))**6))
         patch_size = stride * 2
         embed_length = (np.ceil((ts_len - patch_size) / stride) + 1)
-        num_ts_tokens = int((embed_length // 2 + 1) // 2)
+        ts_tokens = int((embed_length // 2 + 1) // 2)
 
-        return dict(ts_values=[ts_input], ts_sr=[sr], ts_lens=[ts_len], num_ts_tokens=[num_ts_tokens])
+        return dict(ts_values=[ts_input],
+                    ts_sr=[sr],
+                    ts_lens=[ts_len],
+                    ts_tokens=[ts_tokens],
+                    ts_token_id=self.ts_token_id)
 
-    def preprocess(self, messages: List[Dict], mm_processor_kwargs: Optional[Dict[str, Any]] = None) -> List[Dict]:
+    def preprocess(self, messages: list[dict], mm_processor_kwargs: dict[str, Any] | None = None) -> list[dict]:
         """Refer to `super().preprocess()` for spec."""
+        outputs = []
+        self.contains_video_input = False
+        self.contains_ts_input = False
 
-        self.check_time_series_input(messages)
+        mm_items = self.collect_multimodal_items(messages)
+        for modality, data, params in mm_items:
+            result = {}
+            if modality == Modality.IMAGE:
+                result = self._preprocess_image(data, params, mm_processor_kwargs)
+            elif modality == Modality.VIDEO:
+                self.contains_video_input = True
+                result = self._preprocess_video(data, params, mm_processor_kwargs)
+            elif modality == Modality.TIME_SERIES:
+                self.contains_ts_input = True
+                result = self._preprocess_time_series(data, params, mm_processor_kwargs)
 
-        if self.has_time_series_input:
-            time_series = self.collect_time_series(messages)
-            outputs = []
-            for ts_input, params in time_series:
-                sr = params.get('sampling_rate') if params is not None else None
-                time_series_inputs = self.time_series_processor(ts_input, sr)
-                time_series_inputs.update({'ts_token_id': self.ts_token_id})
-                outputs.append(time_series_inputs)
-        else:
-            min_pixels, max_pixels = self.get_processor_args(mm_processor_kwargs)
-
-            images = self.collect_images(messages)
-            outputs = []
-            for image, params in images:
-                image = image.convert('RGB')
-
-                result = self.processor.image_processor(images=image,
-                                                        videos=None,
-                                                        size={
-                                                            'shortest_edge': min_pixels,
-                                                            'longest_edge': max_pixels
-                                                        },
-                                                        return_tensors='pt')
-                merge_length = self.processor.image_processor.merge_size**2
-                image_tokens = result['image_grid_thw'].prod(dim=1) // merge_length
-                result.update(dict(image_size=image.size, image_tokens=image_tokens,
-                                   image_token_id=self.image_token_id))
-                outputs.append(result)
+            result.update(modality=modality)
+            outputs.append(result)
 
         messages.append(dict(role='preprocess', content=outputs))
         return messages
@@ -153,18 +210,13 @@ class InternS1ProVisionModel(VisionModel):
                       messages,
                       chat_template,
                       sequence_start,
-                      tools: Optional[List[object]] = None,
+                      tools: list[object] | None = None,
                       chat_template_kwargs=None):
         """Apply chat template to get the prompt."""
         chat_template_kwargs = chat_template_kwargs or {}
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         messages = [x for x in messages if x['role'] not in ['preprocess', 'forward']]
-
-        if self.has_time_series_input:
-            prompt_messages = messages
-            prompt = chat_template.messages2prompt(prompt_messages, sequence_start, tools=tools, **chat_template_kwargs)
-            return prompt, self.ts_token
 
         if VisionModel.IMAGE_TOKEN_included(messages):
             # backward compatibility
@@ -179,21 +231,61 @@ class InternS1ProVisionModel(VisionModel):
                 prompt_messages.append(dict(role='user', content=prompt))
         else:
             prompt_messages = messages
+
+        # time series input requires enabling_thinking = False
+        if self.contains_ts_input:
+            chat_template_kwargs['enable_thinking'] = False
+
         prompt = chat_template.messages2prompt(prompt_messages, sequence_start, tools=tools, **chat_template_kwargs)
-        return prompt, self.image_token
+        return prompt, None
 
-    def ts_to_pytorch_aux(self, messages, prompt, TS_TOKEN, tokenizer, sequence_start):
-        """Auxiliary function to pack the preprocessing results in a format
-        compatible with what is required by pytorch engine.
+    def to_pytorch_aux_video(self, messages, prompt, VIDEO_TOKEN, tokenizer, sequence_start):
+        """Pack the video input to the compatible format with pytorch
+        engine."""
 
-        Args:
-            messages(List[Dict]): the output of `preprocess`
-            prompt(str): the prompt after applying chat template
-            TS_TOKEN(str): a placeholder where time series tokens will be
-                inserted
-            tokenizer: the tokenizer model
-            sequence_start: starting flag of a sequence
-        """
+        # collect all preprocessing result from messages
+        preps = [x['content'] for x in messages if x['role'] == 'preprocess']
+        assert len(preps) == 1
+        preps = preps[0]
+
+        # split prompt into segments and validate data
+        segs = prompt.split(self.vision_start_token + self.video_token + self.vision_end_token)
+        assert len(segs) == len(preps) + 1, (f'the number of {self.video_token} is not equal '
+                                             f'to input videos, {len(segs) - 1} vs {len(preps)}')
+
+        # calculate the video token offset for each video
+        input_ids = []
+        for i, seg in enumerate(segs):
+            if i > 0 and i <= len(preps):
+                preps[i - 1].update(offset=len(input_ids))
+                frame_seqlen = preps[i - 1]['frame_seqlen']
+                assert self.video_token_id == preps[i - 1]['video_token_id']
+
+                video_grid_thw = preps[i - 1]['video_grid_thw']
+                curr_timestamp = preps[i - 1]['curr_timestamp']
+
+                # update prompt with timestamp index tokens and video pad tokens
+                video_placeholder = ''
+                for frame_idx in range(video_grid_thw[0][0]):
+                    curr_time = curr_timestamp[frame_idx]
+                    video_placeholder += f'<{curr_time:.1f} seconds>'
+                    video_placeholder += (self.vision_start_token + '<|placeholder|>' * frame_seqlen +
+                                          self.vision_end_token)
+
+                video_placeholder = video_placeholder.replace('<|placeholder|>', self.video_token)
+                video_token_ids = tokenizer.encode(video_placeholder)
+                input_ids.extend(video_token_ids)
+
+                preps[i - 1].update(video_tokens=len(video_token_ids))
+
+            token_ids = tokenizer.encode(seg, add_bos=((i == 0) and sequence_start))
+            input_ids.extend(token_ids)
+
+        return dict(prompt=prompt, input_ids=input_ids, multimodal=preps)
+
+    def to_pytorch_aux_ts(self, messages, prompt, TS_TOKEN, tokenizer, sequence_start):
+        """Pack the time series input to the compatible format with pytorch
+        engine."""
         # collect all preprocessing result from messages
         preps = [x['content'] for x in messages if x['role'] == 'preprocess']
         assert len(preps) == 1
@@ -208,13 +300,12 @@ class InternS1ProVisionModel(VisionModel):
         for i, seg in enumerate(segs):
             if i > 0 and i <= len(preps):
                 preps[i - 1].update(offset=len(input_ids))
-                ts_tokens = preps[i - 1]['num_ts_tokens']
+                ts_tokens = preps[i - 1]['ts_tokens']
 
-                # NOTE: zhouxinyu, better to be valid type in the processor
                 ts_tokens = ts_tokens[0]
                 ts_array = np.array(preps[i - 1]['ts_values'])
 
-                preps[i - 1].update(num_ts_tokens=ts_tokens)
+                preps[i - 1].update(ts_tokens=ts_tokens)
                 preps[i - 1].update(ts_values=torch.from_numpy(ts_array).to(dtype=torch.bfloat16))
                 preps[i - 1].update(ts_lens=torch.tensor(preps[i - 1]['ts_lens']))
                 preps[i - 1].update(ts_sr=torch.tensor(preps[i - 1]['ts_sr']))
@@ -231,33 +322,29 @@ class InternS1ProVisionModel(VisionModel):
                    chat_template,
                    tokenizer,
                    sequence_start,
-                   tools: Optional[List[object]] = None,
-                   chat_template_kwargs: Optional[Dict] = None,
+                   tools: list[object] | None = None,
+                   chat_template_kwargs: dict | None = None,
                    **kwargs):
         """Return to the information needed by pytorch engine."""
-        if self.has_time_series_input:
-            # time series input requires enabling_thinking = False
-            chat_template_kwargs = {'enable_thinking': False}
-            prompt, TS_TOKEN = self.proc_messages(messages,
-                                                  chat_template,
-                                                  sequence_start,
-                                                  tools=tools,
-                                                  chat_template_kwargs=chat_template_kwargs)
-            return self.ts_to_pytorch_aux(messages, prompt, TS_TOKEN, tokenizer, sequence_start)
+        prompt, _ = self.proc_messages(messages,
+                                       chat_template,
+                                       sequence_start,
+                                       tools=tools,
+                                       chat_template_kwargs=chat_template_kwargs)
+
+        if self.contains_video_input:
+            return self.to_pytorch_aux_video(messages, prompt, self.video_token, tokenizer, sequence_start)
+        elif self.contains_ts_input:
+            return self.to_pytorch_aux_ts(messages, prompt, self.ts_token, tokenizer, sequence_start)
         else:
-            prompt, IMAGE_TOKEN = self.proc_messages(messages,
-                                                     chat_template,
-                                                     sequence_start,
-                                                     tools=tools,
-                                                     chat_template_kwargs=chat_template_kwargs)
-            return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
+            return self.to_pytorch_aux(messages, prompt, self.image_token, tokenizer, sequence_start)
 
     def build_model(self):
         # TODO: implement for turbomind
         pass
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         # TODO: implement for turbomind
         pass
 
@@ -266,7 +353,7 @@ class InternS1ProVisionModel(VisionModel):
                      chat_template,
                      tokenizer,
                      sequence_start,
-                     chat_template_kwargs: Optional[Dict] = None,
+                     chat_template_kwargs: dict | None = None,
                      **kwargs):
         # TODO: implement for turbomind
         pass

@@ -61,7 +61,9 @@ class ReasoningParser:
         request: object,
         **kwargs,
     ) -> DeltaMessage | None:
-        """Extract reasoning content from an incomplete (streaming) response.
+        """Instance method that should be implemented for extracting reasoning
+        from an incomplete response; for use when handling reasoning calls and
+        streaming.
 
         Args:
             delta_text: The new text chunk (may have been modified by the tool
@@ -77,7 +79,8 @@ class ReasoningParser:
         raise NotImplementedError('ReasoningParser.extract_reasoning_content_streaming '
                                   'has not been implemented!')
 
-    def extract_reasoning_content(self, model_output: str, request: ChatCompletionRequest, **kwargs) -> tuple[str, str]:
+    def extract_reasoning_content(self, model_output: str, request: ChatCompletionRequest,
+                                  **kwargs) -> tuple[str | None, str | None]:
         """Extract reasoning content from a complete model-generated string.
 
         Used for non-streaming responses where we have the entire model response

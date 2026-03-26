@@ -1,26 +1,34 @@
 import collections
 import json
 import time
-from typing import Generator, List, Tuple, Union
+from collections.abc import Generator
 
 import pytest
 import shortuuid
+from lmdeploy.serve.openai.tool_parser.qwen3coder_parser import Qwen3CoderToolParser
 
 from lmdeploy.serve.openai.api_server import VariableInterface
-from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletionResponse, ChatCompletionResponseChoice,
-                                            ChatCompletionResponseStreamChoice, ChatCompletionStreamResponse,
-                                            ChatMessage, DeltaMessage, DeltaToolCall, UsageInfo)
-from lmdeploy.serve.openai.tool_parser.qwen3coder_tool_parser import Qwen3CoderToolParser
+from lmdeploy.serve.openai.protocol import (
+    ChatCompletionRequest,
+    ChatCompletionResponse,
+    ChatCompletionResponseChoice,
+    ChatCompletionResponseStreamChoice,
+    ChatCompletionStreamResponse,
+    ChatMessage,
+    DeltaMessage,
+    DeltaToolCall,
+    UsageInfo,
+)
 
 TestExpects = collections.namedtuple('TestExpects', 'func_name kwargs')
 
 
 class DummyTokenizer:
 
-    def decode(self, token_ids: List[int]) -> str:
+    def decode(self, token_ids: list[int]) -> str:
         return ' '.join(map(str, token_ids))
 
-    def encode(self, text: str) -> List[int]:
+    def encode(self, text: str) -> list[int]:
         return [ord(c) for c in text]
 
 
@@ -55,7 +63,7 @@ EXPECTED_CONTENT = '好的，我现在帮你调用工具。'
 
 def _chat_completion_v1(
         request: ChatCompletionRequest,
-        text_sequence: List[str]) -> Union[ChatCompletionResponse, Generator[ChatCompletionStreamResponse, None, None]]:
+        text_sequence: list[str]) -> ChatCompletionResponse | Generator[ChatCompletionStreamResponse, None, None]:
     request_id = f'chat-{shortuuid.random()}'
     created_time = int(time.time())
     model_name = request.model
@@ -121,7 +129,7 @@ def _chat_completion_v1(
     if request.tool_choice != 'none' and has_tool:
         tool_call_info = VariableInterface.tool_parser.extract_tool_calls(text, request=request)
         text, tool_calls = tool_call_info.content, tool_call_info.tool_calls
-        if isinstance(tool_calls, List) and len(tool_calls):
+        if isinstance(tool_calls, list) and len(tool_calls):
             if finish_reason == 'stop':
                 finish_reason = 'tool_calls'
 
@@ -146,7 +154,7 @@ def _chat_completion_v1(
     )
 
 
-def _stream_parse(request: ChatCompletionRequest, text_sequence: List[str]) -> Tuple[str, str, List[DeltaToolCall]]:
+def _stream_parse(request: ChatCompletionRequest, text_sequence: list[str]) -> tuple[str, str, list[DeltaToolCall]]:
     content = ''
     reasoning_content = ''
     tool_calls = {}
@@ -185,7 +193,7 @@ def _stream_parse(request: ChatCompletionRequest, text_sequence: List[str]) -> T
         TestExpects('get_weather', {'location': '上海'})
     ]),
 ])
-def test_parser_stream(text_sequence: List[str], expects: List[TestExpects]):
+def test_parser_stream(text_sequence: list[str], expects: list[TestExpects]):
     tokenizer = DummyTokenizer()
     VariableInterface.tool_parser = Qwen3CoderToolParser(tokenizer=tokenizer)
     VariableInterface.reasoning_parser = None
@@ -212,7 +220,7 @@ def test_parser_stream(text_sequence: List[str], expects: List[TestExpects]):
         TestExpects('get_weather', {'location': '上海'})
     ]),
 ])
-def test_parser_nonstream(text_sequence: List[str], expects: List[TestExpects]):
+def test_parser_nonstream(text_sequence: list[str], expects: list[TestExpects]):
     tokenizer = DummyTokenizer()
     VariableInterface.tool_parser = Qwen3CoderToolParser(tokenizer=tokenizer)
     VariableInterface.reasoning_parser = None

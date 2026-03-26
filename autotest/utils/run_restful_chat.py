@@ -8,8 +8,13 @@ import psutil
 import requests
 from openai import OpenAI
 from pytest_assume.plugin import assume
-from utils.config_utils import (get_case_str_by_config, get_cli_common_param, get_cuda_prefix_by_workerid, get_workerid,
-                                resolve_extra_params)
+from utils.config_utils import (
+    get_case_str_by_config,
+    get_cli_common_param,
+    get_cuda_prefix_by_workerid,
+    get_workerid,
+    resolve_extra_params,
+)
 from utils.constant import DEFAULT_PORT, DEFAULT_SERVER
 from utils.restful_return_check import assert_chat_completions_batch_return
 from utils.rule_condition_assert import assert_result
@@ -82,7 +87,7 @@ def start_openai_service(config, run_config, worker_id, timeout: int = 1200):
             # Check if process is still running
             return_code = startRes.wait(timeout=1)  # Small timeout to check status
             if return_code != 0:
-                with open(server_log, 'r') as f:
+                with open(server_log) as f:
                     content = f.read()
                     print(content)
                 return 0, content
@@ -123,6 +128,8 @@ def run_all_step(log_path, case_name, cases_info, port: int = DEFAULT_PORT):
     if model is None:
         assert False, 'server not start correctly'
     for case in cases_info.keys():
+        if case != 'code_testcase' and 'code' in model.lower():
+            continue
         case_info = cases_info.get(case)
 
         with allure.step(case + ' restful_test - openai chat'):
@@ -153,17 +160,34 @@ def open_chat_test(log_path, case_name, case_info, url):
         messages.append({'role': 'user', 'content': prompt})
         file.writelines('prompt:' + prompt + '\n')
 
-        response = client.chat.completions.create(model=model_name,
-                                                  messages=messages,
-                                                  temperature=0.01,
-                                                  top_p=0.8,
-                                                  max_completion_tokens=1024)
+        outputs = client.chat.completions.create(model=model_name,
+                                                 messages=messages,
+                                                 temperature=0.01,
+                                                 top_p=0.8,
+                                                 max_completion_tokens=1024,
+                                                 stream=True)
 
-        output_content = response.choices[0].message.content
-        file.writelines('output:' + output_content + '\n')
+        content_chunks = []
+        reasoning_content_chunks = []
+        for output in outputs:
+            # Safely handle streaming chunks: choices may be empty and content may be None
+            if not getattr(output, 'choices', None):
+                continue
+            choice = output.choices[0]
+            delta = getattr(choice, 'delta', None)
+            reasoning_content = getattr(delta, 'reasoning_content', None) if delta is not None else None
+            content = getattr(delta, 'content', None) if delta is not None else None
+            if reasoning_content:
+                reasoning_content_chunks.append(reasoning_content)
+            if content:
+                content_chunks.append(content)
+        reasoning_content = ''.join(reasoning_content_chunks)
+        output_content = ''.join(content_chunks)
+
+        file.writelines(f'reasoning_content :{reasoning_content}, content: {output_content}\n')
         messages.append({'role': 'assistant', 'content': output_content})
 
-        case_result, reason = assert_result(output_content, prompt_detail.values(), model_name)
+        case_result, reason = assert_result(reasoning_content + output_content, prompt_detail.values(), model_name)
         file.writelines('result:' + str(case_result) + ',reason:' + reason + '\n')
         if not case_result:
             msg += reason
@@ -576,8 +600,6 @@ def _run_tools_case(log_path, port: int = DEFAULT_PORT):
 
     timestamp = time.strftime('%Y%m%d_%H%M%S')
     restful_log = os.path.join(log_path, f'restful_toolcall_{model}_{str(port)}_{timestamp}.log')
-    file = open(restful_log, 'w')
-
     client = OpenAI(api_key='YOUR_API_KEY', base_url=http_url + '/v1')
     model_name = client.models.list().data[0].id
 
@@ -729,7 +751,7 @@ def start_proxy_server(log_path, port, case_name: str = 'default'):
             # Check if process is still running
             return_code = proxy_process.wait(timeout=1)  # Small timeout to check status
             if return_code != 0:
-                with open(proxy_log, 'r') as f:
+                with open(proxy_log) as f:
                     content = f.read()
                     print(content)
                 return 0, proxy_process
