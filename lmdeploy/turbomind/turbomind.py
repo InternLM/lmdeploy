@@ -41,12 +41,20 @@ logger = get_logger('lmdeploy')
 MAX_LOGPROBS = 1024
 
 
-def _construct_stop_or_bad_words(words: list[int] = None):
-    if words is None or len(words) == 0:
+def _construct_stop_or_bad_words(seqs: list[list[int]] = None):
+    """Build packed (token_ids, offsets) for TurboMind stop/bad words.
+
+    Each inner list is a token ID sequence. The offset array stores cumulative lengths so the C++ kernel knows where
+    each sequence ends.
+    """
+    if not seqs:
         return None
-    offsets = list(range(1, len(words) + 1))
-    combined = [words, offsets]
-    return combined
+    tokens: list[int] = []
+    offsets: list[int] = []
+    for seq in seqs:
+        tokens.extend(seq)
+        offsets.append(len(tokens))
+    return [tokens, offsets]
 
 
 def _np_dict_to_tm_dict(np_dict: dict):
@@ -807,9 +815,9 @@ class TurboMindInstance:
         c.min_p = cfg.min_p
         c.temperature = cfg.temperature
         if cfg.stop_token_ids:
-            c.eos_ids = cfg.stop_token_ids
+            c.eos_ids = [s[0] for s in cfg.stop_token_ids if len(s) == 1]
         if cfg.bad_token_ids:
-            c.bad_ids = _construct_stop_or_bad_words(cfg.bad_token_ids)
+            c.bad_ids = _construct_stop_or_bad_words([[tid] for tid in cfg.bad_token_ids])
         if not cfg.ignore_eos and cfg.stop_token_ids:
             c.stop_ids = _construct_stop_or_bad_words(cfg.stop_token_ids)
         c.repetition_penalty = cfg.repetition_penalty

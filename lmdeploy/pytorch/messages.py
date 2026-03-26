@@ -52,7 +52,7 @@ class SamplingParam:
     repetition_penalty: float = 1.0
     ignore_eos: bool = False
     random_seed: int = None
-    stop_words: list[int] = field(default_factory=list)
+    stop_words: list[list[int]] = field(default_factory=list)
     bad_words: list[int] = field(default_factory=list)
     max_new_tokens: int = 512
     min_new_tokens: int = 0
@@ -75,7 +75,11 @@ class SamplingParam:
         stop_words = gen_config.stop_token_ids or []
         bad_words = gen_config.bad_token_ids or []
         if gen_config.ignore_eos:
-            bad_words += stop_words
+            if any(len(s) > 1 for s in stop_words):
+                logger.warning('Multi-token stop words are not supported and '
+                               'will be ignored. Only single-token stop words can '
+                               'be used to stop generation.')
+            bad_words += [s[0] for s in stop_words if len(s) == 1]
             stop_words = []
 
         top_k = gen_config.top_k

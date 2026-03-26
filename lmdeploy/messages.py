@@ -101,7 +101,7 @@ class GenerationConfig:
     """
 
     n: int = 1
-    max_new_tokens: int = 512
+    max_new_tokens: int = None
     do_sample: bool = False
     top_p: float = 1.0
     top_k: int = 50
@@ -112,7 +112,7 @@ class GenerationConfig:
     random_seed: int = None
     stop_words: list[str] = None
     bad_words: list[str] = None
-    stop_token_ids: list[int] = None
+    stop_token_ids: list[int] | list[list[int]] = None
     bad_token_ids: list[int] = None
     min_new_tokens: int = None
     skip_special_tokens: bool = True
@@ -136,46 +136,91 @@ class GenerationConfig:
     repetition_ngram_size: int = 0
     repetition_ngram_threshold: int = 0
 
+    @staticmethod
+    def _normalize_stop_token_ids(ids: list[int] | list[list[int]] | None) -> list[list[int]]:
+        """Normalize stop_token_ids to list[list[int]]."""
+        if ids is None:
+            return []
+        out: list[list[int]] = []
+        for item in ids:
+            if isinstance(item, int):
+                out.append([item])
+            else:
+                out.append(list(item))
+        return out
+
     def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
-        """Convert stop_words/bad_sords to ids and append the ids to
+        """Convert stop_words/bad_words to ids and append the ids to
         stop_token_ids/bad_token_ids."""
 
-        def special_word_token_ids(words):
-            if words is not None:
-                assert isinstance(words, list) and \
-                    all(isinstance(elem, str) for elem in words), \
-                    f'stop_words must be a list of str but got {type(words)}'
-                indexes = []
-                for word in words:
-                    indexes += tokenizer.indexes_containing_token(word)
-                return indexes
-            return None
+        def words_to_token_seqs(words: list[str]) -> list[list[int]]:
+            assert isinstance(words, list) and \
+                all(isinstance(elem, str) for elem in words), \
+                f'stop_words must be a list of str but got {type(words)}'
+            seqs: list[list[int]] = []
+            for word in words:
+                single_matches = tokenizer.indexes_containing_token(word)
+                if single_matches:
+                    for idx in single_matches:
+                        seqs.append([idx])
+                else:
+                    encoded = tokenizer.encode(word, add_bos=False)
+                    if encoded:
+                        seqs.append(encoded)
+            return seqs
 
-        stop_token_ids = special_word_token_ids(self.stop_words) or []
-        bad_token_ids = special_word_token_ids(self.bad_words) or []
-        stop_token_ids.extend(self.stop_token_ids or [])
-        bad_token_ids.extend(self.bad_token_ids or [])
-        self.stop_token_ids = list(set(stop_token_ids)) or None
-        self.bad_token_ids = list(set(bad_token_ids)) or None
+        stop_seqs = words_to_token_seqs(self.stop_words) if self.stop_words else []
+        bad_seqs = words_to_token_seqs(self.bad_words) if self.bad_words else []
+
+        stop_seqs.extend(self._normalize_stop_token_ids(self.stop_token_ids))
+        bad_seqs.extend([[i] for i in (self.bad_token_ids or [])])
+
+        # deduplicate stop_token_ids and bad_token_ids
+        seen = set()
+        deduped: list[list[int]] = []
+        for seq in stop_seqs:
+            key = tuple(seq)
+            if key not in seen:
+                seen.add(key)
+                deduped.append(seq)
+        self.stop_token_ids = deduped or None
+
+        seen_bad = set()
+        deduped_bad: list[int] = []
+        for seq in bad_seqs:
+            if len(seq) > 1:
+                logger.warning(f'Multi-token bad word {seq} is not supported and '
+                               'will be ignored. Only single-token bad words can be '
+                               'masked in logits processing.')
+                continue
+            if seq[0] not in seen_bad:
+                seen_bad.add(seq[0])
+                deduped_bad.append(seq[0])
+        self.bad_token_ids = deduped_bad or None
 
     def update_from_hf_gen_cfg(self, generation_config, tokenizer_eos_token_id):
         """Update the stop_token_ids."""
-        stop_token_ids = set(self.stop_token_ids or [])
+        stop_seqs = self._normalize_stop_token_ids(self.stop_token_ids)
+        existing = {tuple(s) for s in stop_seqs}
 
-        # add tokenizer's eos_token_id
+        def _add_single(tok_id: int):
+            key = (tok_id, )
+            if key not in existing:
+                existing.add(key)
+                stop_seqs.append([tok_id])
+
         if tokenizer_eos_token_id is not None:
-            stop_token_ids.add(tokenizer_eos_token_id)
+            _add_single(tokenizer_eos_token_id)
 
-        # add eos_token_id from model's generation_config.json file if there
-        # is any.
         eos_token_id = generation_config.get('eos_token_id')
         if eos_token_id is not None:
             if isinstance(eos_token_id, int):
-                stop_token_ids.add(eos_token_id)
+                _add_single(eos_token_id)
             else:
-                stop_token_ids.update(eos_token_id)
+                for eid in eos_token_id:
+                    _add_single(eid)
 
-        self.stop_token_ids = list(stop_token_ids)
+        self.stop_token_ids = stop_seqs
 
     def __post_init__(self):
         """Check input validation."""
@@ -185,6 +230,8 @@ class GenerationConfig:
         assert self.temperature >= 0 and self.temperature <= 2  # [0,2]
         assert 0 <= self.min_p <= 1, \
             f'min_p should be in range [0, 1], but found {self.min_p}'
+        if self.stop_token_ids is not None:
+            self.stop_token_ids = self._normalize_stop_token_ids(self.stop_token_ids)
 
 
 @pydantic_dataclass

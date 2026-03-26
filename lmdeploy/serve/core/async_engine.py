@@ -39,6 +39,53 @@ from .exceptions import SafeRunException
 logger = get_logger('lmdeploy')
 
 
+def _commit_stream_tokens(all_ids: list[int], input_len: int, pending_ids: list[int], new_ids: list[int],
+                          multi_stop_seqs: list[list[int]], holdback_len: int):
+    """Commit safe streamed tokens with multi-stop holdback.
+
+    Args:
+        all_ids: full token_ids buffer (prompt + committed generated tokens).
+        input_len: length of the prompt prefix in all_ids; generated tokens start here.
+        pending_ids: tokens buffered but not yet committed (mutated in place).
+        new_ids: freshly arrived tokens to add this iteration.
+        multi_stop_seqs: list of multi-token stop sequences to match against.
+        holdback_len: number of tokens to withhold from the tail (max_stop_len - 1).
+
+    Returns:
+        hit_stop_token: matched stop length (0 if none).
+        matched_stop_ids: matched stop token ids.
+        commit_ids: token ids safe to emit this round.
+        pending_ids: updated pending buffer.
+    """
+    pending_ids.extend(new_ids)
+    hit_stop_token = 0
+    matched_stop_ids: list[int] = []
+    for mseq in multi_stop_seqs:
+        slen = len(mseq)
+        plen = len(pending_ids)
+        total = len(all_ids) - input_len + plen
+        if total < slen:
+            continue
+        if plen >= slen:
+            tail = pending_ids[-slen:]
+        else:
+            need = slen - plen
+            tail = all_ids[len(all_ids) - need:] + pending_ids
+        if tail == mseq:
+            hit_stop_token = slen
+            matched_stop_ids = list(mseq)
+            del pending_ids[-slen:]
+            break
+    if hit_stop_token:
+        commit_ids = list(pending_ids)
+        pending_ids.clear()
+    else:
+        commit_len = max(0, len(pending_ids) - holdback_len)
+        commit_ids = pending_ids[:commit_len]
+        del pending_ids[:commit_len]
+    return hit_stop_token, matched_stop_ids, commit_ids, pending_ids
+
+
 @dataclasses.dataclass
 class GenOut:
     """Pack all response information together."""
@@ -144,8 +191,6 @@ class AsyncEngine:
 
         # parameters for member functions
         self.stop_words = _stop_words(self.chat_template.stop_words, self.tokenizer)
-        if self.stop_words is not None:
-            self.stop_words = self.stop_words[0][0].tolist()
         self.backend = backend
         self.request_logger = RequestLogger(max_log_len)
 
@@ -356,6 +401,8 @@ class AsyncEngine:
             else:
                 logger.warning('chat_template_kwargs["enable_thinking"] is already set, '
                                'the value will not be overwritten by enable_thinking')
+
+        gen_config = self._determine_gen_config(session, input_ids, gen_config=gen_config)
         if messages:
             prompt = messages
             self.request_logger.log_prompt(session, prompt=prompt)
@@ -380,8 +427,6 @@ class AsyncEngine:
             # TODO(lvhan) VLM doesn't support input_ids as an argument.
             # Figure out a graceful way to handle the invalid input
             prompt_input = dict(input_ids=input_ids)
-
-        gen_config = self._determine_gen_config(session, input_ids, gen_config=gen_config)
 
         if gen_config.max_new_tokens == 0:
             logger.info(f'run out of tokens. session={session_id}.')
@@ -416,9 +461,14 @@ class AsyncEngine:
         def is_error(status):
             return status not in [ResponseType.SUCCESS, ResponseType.FINISH, ResponseType.CANCEL]
 
-        stop_ids = []
+        single_stop_ids: set = set()
+        multi_stop_seqs: list = []
         if not gen_config.ignore_eos:
-            stop_ids = gen_config.stop_token_ids or []
+            for seq in (gen_config.stop_token_ids or []):
+                if len(seq) == 1:
+                    single_stop_ids.add(seq[0])
+                else:
+                    multi_stop_seqs.append(seq)
 
         metrics_processor.increase_total_requests()
         async with session.request_handle() as handle:
@@ -451,6 +501,11 @@ class AsyncEngine:
                                      step=history_len) as gen:
                 logger.debug(f'[generate] session {session_id} started')
                 hit_stop_token = 0
+                stop_by_single = False
+                matched_stop_ids: list[int] = []
+                max_multi_stop_len = max((len(s) for s in multi_stop_seqs), default=0)
+                holdback_len = max(0, max_multi_stop_len - 1)
+                pending_ids: list[int] = []
                 req_stats = RequestStats(prompt_tokens=input_len)  # per-request stats
 
                 # We use this as default outputs in case the async_stream_infer of the Engine yields empty generator.
@@ -468,12 +523,32 @@ class AsyncEngine:
                     output_len = len(outputs.token_ids)
                     if hit_stop_token or output_len == 0:
                         continue
-
-                    # This assumes the engine will stop when stop token is hit
-                    if output_len and outputs.token_ids[-1] in stop_ids:
+                    # print(f'outputs.token_ids: {outputs.token_ids}')
+                    # Check single-token stop
+                    if output_len and outputs.token_ids[-1] in single_stop_ids:
                         hit_stop_token = 1
+                        stop_by_single = True
+                        matched_stop_ids = [outputs.token_ids[-1]]
 
-                    token_ids += outputs.token_ids[:output_len - hit_stop_token]
+                    new_ids = outputs.token_ids[:output_len - hit_stop_token]
+                    if not hit_stop_token:
+                        if multi_stop_seqs:
+                            hit_stop_token, matched_multi_ids, commit_ids, pending_ids = _commit_stream_tokens(
+                                token_ids,
+                                input_len,
+                                pending_ids,
+                                new_ids,
+                                multi_stop_seqs,
+                                holdback_len,
+                            )
+                            if matched_multi_ids:
+                                matched_stop_ids = matched_multi_ids
+                        else:
+                            commit_ids = new_ids
+                    else:
+                        commit_ids = pending_ids + new_ids
+                        pending_ids = []
+                    token_ids.extend(commit_ids)
                     gen_len = len(token_ids) - input_len
 
                     ids_offset = state.ids_offset
@@ -507,7 +582,18 @@ class AsyncEngine:
                     if outputs.status == ResponseType.CANCEL:
                         finish_reason = 'abort'
                     else:
-                        finish_reason = 'stop' if outputs.token_ids[-1] in stop_ids else 'length'
+                        if not hit_stop_token and pending_ids:
+                            token_ids.extend(pending_ids)
+                            pending_ids = []
+                            gen_len = len(token_ids) - input_len
+                            ids_offset = state.ids_offset
+                            response, state = self.tokenizer.detokenize_incrementally(
+                                token_ids,
+                                state,
+                                skip_special_tokens=gen_config.skip_special_tokens,
+                                spaces_between_special_tokens=gen_config.spaces_between_special_tokens)
+                        is_stop = stop_by_single or hit_stop_token > 0
+                        finish_reason = 'stop' if is_stop else 'length'
 
                     # utf-8 char at the end means it's a potential unfinished byte sequence
                     if not response.endswith('�'):
@@ -515,13 +601,14 @@ class AsyncEngine:
                         response = ''
                     token_ids, logits, last_hidden_state, logprobs = [], None, None, None
                     if gen_config.include_stop_str_in_output and finish_reason == 'stop':
-                        # return the eos token id (MUST be in a list), eos string, eos token's logits and so on
-                        token_ids = outputs.token_ids[-1:]
+                        token_ids = matched_stop_ids if matched_stop_ids else outputs.token_ids[-1:]
+                        stop_len = len(token_ids)
                         response = self.tokenizer.decode(token_ids, skip_special_tokens=False)
-                        logits = outputs.logits[-1:] if outputs.logits is not None else None
-                        last_hidden_state = outputs.last_hidden_state[-1:] if outputs.last_hidden_state else None
-                        logprobs = outputs.logprobs[-1:] if outputs.logprobs else None
-                        gen_len += 1
+                        logits = outputs.logits[-stop_len:] if outputs.logits is not None else None
+                        last_hidden_state = (outputs.last_hidden_state[-stop_len:]
+                                             if outputs.last_hidden_state else None)
+                        logprobs = outputs.logprobs[-stop_len:] if outputs.logprobs else None
+                        gen_len += stop_len
 
                     # router replay
                     routed_experts = outputs.routed_experts

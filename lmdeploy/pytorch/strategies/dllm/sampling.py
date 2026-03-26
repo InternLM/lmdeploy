@@ -33,7 +33,7 @@ class DLLMSamplingStrategy(ARSamplingStrategy):
             'bad_words',
             'bad_mask',
             'stop_words',
-            'stop_mask',
+            'stop_word_lens',
             'repetition_penalty',
             'top_k',
             'top_p',

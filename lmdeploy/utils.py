@@ -195,28 +195,31 @@ def filter_suffix(response: str, suffixes: list[str] | None = None) -> str:
     return response
 
 
-# TODO remove stop_word_offsets stuff and make it clean
-def _stop_words(stop_words: list[int | str], tokenizer: object):
-    """Return list of stop-words to numpy.ndarray."""
-    import numpy as np
+def _stop_words(stop_words: list[int | str], tokenizer: object) -> list[list[int]] | None:
+    """Convert chat-template stop words to List[List[int]].
+
+    Each element is a token ID sequence representing one stop word. Single-token matches from vocab scan produce
+    length-1 lists. Multi-token words that require encoding produce longer lists.
+    """
     if stop_words is None:
         return None
     assert isinstance(stop_words, list) and \
         all(isinstance(elem, (str, int)) for elem in stop_words), \
         f'stop_words must be a list but got {type(stop_words)}'
-    stop_indexes = []
+    seqs: list[list[int]] = []
     for stop_word in stop_words:
-        if isinstance(stop_word, str):
-            stop_indexes += tokenizer.indexes_containing_token(stop_word)
-        elif isinstance(stop_word, int):
-            stop_indexes.append(stop_word)
-    assert isinstance(stop_indexes, list) and all(isinstance(elem, int) for elem in stop_indexes), 'invalid stop_words'
-    # each id in stop_indexes represents a stop word
-    # refer to https://github.com/fauxpilot/fauxpilot/discussions/165 for
-    # detailed explanation about fastertransformer's stop_indexes
-    stop_word_offsets = range(1, len(stop_indexes) + 1)
-    stop_words = np.array([[stop_indexes, stop_word_offsets]]).astype(np.int32)
-    return stop_words
+        if isinstance(stop_word, int):
+            seqs.append([stop_word])
+        elif isinstance(stop_word, str):
+            single_matches = tokenizer.indexes_containing_token(stop_word)
+            if single_matches:
+                for idx in single_matches:
+                    seqs.append([idx])
+            else:
+                encoded = tokenizer.encode(stop_word, add_bos=False)
+                if encoded:
+                    seqs.append(encoded)
+    return seqs or None
 
 
 def get_hf_gen_cfg(path: str):
