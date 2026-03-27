@@ -70,6 +70,8 @@ private:
     int  attn_tp_rank_;
     int  mlp_tp_size_;
     int  mlp_tp_rank_;
+    int  ep_size_;
+    int  ep_rank_;
 };
 
 }  // namespace turbomind

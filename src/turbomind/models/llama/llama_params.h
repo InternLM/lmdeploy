@@ -111,6 +111,9 @@ struct MoeParam {
     int         router_n_groups;
 
     std::vector<int> expert_num;
+
+    // low latency threshold
+    int ll_max_tokens_per_rank;
 };
 
 struct AttentionParam {
@@ -152,6 +155,8 @@ struct EngineParam {
     int attn_cp_rank;
     int mlp_tp_size;
     int mlp_tp_rank;
+    int ep_size;
+    int ep_rank;
 
     // multi-node
     int nnodes;

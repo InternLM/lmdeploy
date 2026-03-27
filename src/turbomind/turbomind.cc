@@ -6,6 +6,7 @@
 
 #include "src/turbomind/turbomind.h"
 
+#include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/comm/host_comm.h"
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/context.h"
@@ -459,6 +460,7 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     engine_param_.attn_dp_size = engine["attn_dp_size"].as<int>();
     engine_param_.attn_tp_size = engine["attn_tp_size"].as<int>();
     engine_param_.attn_cp_size = engine["attn_cp_size"].as<int>();
+    engine_param_.ep_size      = engine["ep"].as<int>();
 
     engine_param_.mlp_tp_size = engine["mlp_tp_size"].as<int>();
 
@@ -493,6 +495,7 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     for (auto it = expert_num.begin(); it != expert_num.end(); ++it) {
         moe_param_.expert_num.push_back(it->as<int>());
     }
+    moe_param_.ll_max_tokens_per_rank = model["ll_max_tokens_per_rank"].as<int>(-1);  // -1 means not use low latency
 
     HandleMissingParams();
 
@@ -536,6 +539,8 @@ void TurboMind::Impl::CreateContext(int index)
 
     auto& ctx = contexts_[index] = std::make_shared<Context>(p.devices[index]);
 
+    core::ContextGuard guard{ctx->core_stream, ctx->allocator};
+
     // Layout: (outer, dp, tp, cp)
 
     const int global_rank = global_rank_[index];
@@ -553,7 +558,7 @@ void TurboMind::Impl::CreateContext(int index)
 
     auto& c = ctx->comm;
 
-    c.h_global = group_id_->CreateCommunicator(comm_size_, global_rank, p.node_rank);
+    c.h_global = group_id_->CreateCommunicator(comm_size_ * p.outer_dp_size, global_rank, p.node_rank);
 
     c.h_comm = c.h_global->Split(outer_rank, 0);
 
@@ -578,6 +583,18 @@ void TurboMind::Impl::CreateContext(int index)
 
         p.attn_tp_rank = c.d_comm->rank(c.d_tp_group) / p.attn_cp_size;
         p.mlp_tp_rank  = c.d_comm->rank(0);
+
+        if (p.ep_size > 1) {
+            p.ep_rank = inner_rank;
+
+            const int max_expert_num = *std::max_element(moe_param_.expert_num.begin(), moe_param_.expert_num.end());
+            const int ll_max_tokens_per_rank = moe_param_.ll_max_tokens_per_rank;
+            comm::EpConfig cfg{engine_param_.nnodes,  //
+                               max_expert_num,
+                               (int)model_param_.hidden_units,
+                               ll_max_tokens_per_rank};
+            c.d_comm->InitializeEp(cfg);
+        }
     }
 
     if (c.h_tp_group->rank() == 0) {
