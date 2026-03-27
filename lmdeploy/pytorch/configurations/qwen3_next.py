@@ -48,5 +48,6 @@ class Qwen3NextModelConfigBuilder(AutoModelConfigBuilder):
         recurrent_state_shape = (num_delta_layers, num_v_heads, head_k_dim, head_v_dim)
         dtype = torch.bfloat16
         cfg.states_shapes = [(conv_state_shape, dtype), (recurrent_state_shape, dtype)]
+        cfg.is_gated_delta = True
         cfg.check_env_func = _check_env_qwen3_next
         return cfg
