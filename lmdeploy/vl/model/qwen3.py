@@ -75,6 +75,9 @@ class Qwen3VLModel(VisionModel):
                           mm_processor_kwargs: dict[str, Any] | None = None) -> list[dict]:
 
         metadata = params['video_metadata']
+        if metadata.get('fps') is None or metadata['fps'] <= 0:
+            logger.warning('Qwen3VL: fps not found or invalid, fallback to 24.')
+            metadata['fps'] = 24
         size = self.resolve_size_params(self.processor.video_processor, mm_processor_kwargs)
 
         # do_resize = True, we leave resize to hf processor
