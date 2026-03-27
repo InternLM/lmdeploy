@@ -1,3 +1,4 @@
+// clang-format off
 #pragma once
 
 #include "exception.cuh"
@@ -638,3 +639,5 @@ __forceinline__ __device__ T warp_reduce_or(T value) {
 }
 
 }  // namespace deep_ep
+
+// clang-format on

@@ -217,6 +217,53 @@ public:
                         bool                         zero_copy,
                         const std::optional<Tensor>& out = std::nullopt);
 
+    std::tuple<Tensor,
+               std::optional<Tensor>,
+               std::optional<Tensor>,
+               std::optional<Tensor>,
+               std::vector<int>,
+               Tensor,
+               Tensor,
+               Tensor,
+               std::optional<Tensor>,
+               Tensor,
+               std::optional<Tensor>,
+               Tensor,
+               std::optional<Tensor>,
+               std::optional<Tensor>,
+               std::optional<Tensor>>
+    internode_dispatch(const Tensor&                x,
+                       const std::optional<Tensor>& x_scales,
+                       const std::optional<Tensor>& topk_idx,
+                       const std::optional<Tensor>& topk_weights,
+                       const std::optional<Tensor>& num_tokens_per_rank,
+                       const std::optional<Tensor>& num_tokens_per_rdma_rank,
+                       const Tensor&                is_token_in_rank,
+                       const std::optional<Tensor>& num_tokens_per_expert,
+                       int                          cached_num_recv_tokens,
+                       int                          cached_num_rdma_recv_tokens,
+                       const std::optional<Tensor>& cached_rdma_channel_prefix_matrix,
+                       const std::optional<Tensor>& cached_recv_rdma_rank_prefix_sum,
+                       const std::optional<Tensor>& cached_gbl_channel_prefix_matrix,
+                       const std::optional<Tensor>& cached_recv_gbl_rank_prefix_sum,
+                       int                          expert_alignment,
+                       int                          num_worst_tokens,
+                       const Config&                config);
+
+    std::tuple<Tensor, std::optional<Tensor>>  //
+    internode_combine(const Tensor&                x,
+                      const std::optional<Tensor>& topk_weights,
+                      const std::optional<Tensor>& bias_0,
+                      const std::optional<Tensor>& bias_1,
+                      const Tensor&                src_meta,
+                      const Tensor&                is_combined_token_in_rank,
+                      const Tensor&                rdma_channel_prefix_matrix,
+                      const Tensor&                rdma_rank_prefix_sum,
+                      const Tensor&                gbl_channel_prefix_matrix,
+                      Tensor&                      combined_rdma_head,
+                      Tensor&                      combined_nvl_head,
+                      const Config&                config);
+
     Config get_dispatch_config();
 
     Config get_combine_config();

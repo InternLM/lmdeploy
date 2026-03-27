@@ -165,6 +165,7 @@ void notify_dispatch(const int*   num_tokens_per_rank,
                      int*         moe_recv_rdma_counter_mapped,
                      const int*   num_tokens_per_expert,
                      int*         moe_recv_expert_counter_mapped,
+                     int*         moe_recv_expert_counter_ten,
                      int          num_experts,
                      const bool*  is_token_in_rank,
                      int          num_tokens,
@@ -187,7 +188,11 @@ void notify_dispatch(const int*   num_tokens_per_rank,
                      cudaStream_t stream,
                      int64_t      num_rdma_bytes,
                      int64_t      num_nvl_bytes,
-                     bool         low_latency_mode);
+                     bool         low_latency_mode,
+                     void*        gin_base_ptr,
+                     ncclDevComm  dev_comm,
+                     ncclWindow_t nccl_win,
+                     unsigned     signals_base);
 
 void dispatch(void*             recv_x,
               float*            recv_x_scales,
@@ -226,7 +231,11 @@ void dispatch(void*             recv_x,
               bool              is_cached_dispatch,
               cudaStream_t      stream,
               int               num_channels,
-              bool              low_latency_mode);
+              bool              low_latency_mode,
+              void*             gin_base_ptr,
+              ncclDevComm       dev_comm,
+              ncclWindow_t      nccl_win,
+              unsigned          signals_base);
 
 void cached_notify(int          hidden_int4,
                    int          num_scales,
@@ -249,7 +258,11 @@ void cached_notify(int          hidden_int4,
                    int64_t      num_rdma_bytes,
                    int64_t      num_nvl_bytes,
                    bool         is_cached_dispatch,
-                   bool         low_latency_mode);
+                   bool         low_latency_mode,
+                   void*        gin_base_ptr,
+                   ncclDevComm  dev_comm,
+                   ncclWindow_t nccl_win,
+                   unsigned     signals_base);
 
 void combine(cudaDataType_t type,
              void*          combined_x,
@@ -279,7 +292,11 @@ void combine(cudaDataType_t type,
              int            num_ranks,
              cudaStream_t   stream,
              int            num_channels,
-             bool           low_latency_mode);
+             bool           low_latency_mode,
+             void*          gin_base_ptr,
+             ncclDevComm    dev_comm,
+             ncclWindow_t   nccl_win,
+             unsigned       signals_base);
 
 }  // namespace internode
 

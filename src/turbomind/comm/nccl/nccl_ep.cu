@@ -28,10 +28,9 @@ void NcclCommImpl::InitializeEp(const EpConfig& config)
 
     const int num_rdma_bytes = config.num_nodes > 1 ? int(1e9) : 0;
     const int num_ll_rdma_bytes =
-        config.ll_max_tokens_per_rank > 0 ?
-            deep_ep ::get_low_latency_rdma_size_hint(
-                config.ll_max_tokens_per_rank, config.hidden, h_comm_->n_ranks(), config.num_experts) :
-            0;
+        config.ll_max_tokens_per_rank > 0 ? deep_ep ::get_low_latency_rdma_size_hint(
+            config.ll_max_tokens_per_rank, config.hidden, h_comm_->n_ranks(), config.num_experts) :
+                                            0;
 
     const int num_local_experts = config.num_experts / h_comm_->n_ranks();
     const int num_sms           = 24;
@@ -109,45 +108,13 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
             buffer_->get_dispatch_layout(input.topk_idx, ep_config_.num_experts);
         sync_check_cuda_error();
 
-        if (buffer_->get_num_rdma_ranks() > 1) {
-            // internode dispatch
-        }
-        else {
-            auto config      = buffer_->get_dispatch_config();
-            auto [recv_x,
-                  recv_x_scales,
-                  recv_topk_idx,
-                  recv_topk_weights,
-                  num_recv_tokens_per_expert_list,
-                  num_recv_tokens_per_expert,
-                  rank_prefix_matrix,
-                  channel_prefix_matrix,
-                  recv_channel_prefix_matrix,
-                  recv_src_idx,
-                  send_head] = buffer_->intranode_dispatch(input.x,
-                                                           std::nullopt,
-                                                           input.topk_idx,
-                                                           input.topk_weights,
-                                                           num_tokens_per_rank,
-                                                           is_token_in_rank,
-                                                           num_tokens_per_expert,
-                                                           0,
-                                                           std::nullopt,
-                                                           std::nullopt,
-                                                           1,
-                                                           0,
-                                                           config);
-            sync_check_cuda_error();
-
-            // Generate output
-            output.handle           = {rank_prefix_matrix,
-                                       channel_prefix_matrix,
-                                       recv_channel_prefix_matrix,
-                                       recv_src_idx,
-                                       is_token_in_rank,
-                                       send_head};
+        auto Postprocess = [&](Tensor&                 recv_x,
+                               Tensor&                 recv_topk_weights,
+                               Tensor&                 recv_topk_idx,
+                               const std::vector<int>& num_recv_tokens_per_expert_list,
+                               Tensor&                 num_recv_tokens_per_expert) {
             output.out_x            = recv_x;
-            output.out_topk_weights = recv_topk_weights.value();
+            output.out_topk_weights = recv_topk_weights;
             output.out_token_num    = recv_x.shape(0);
             output.out_expert_token_num =
                 std::accumulate(num_recv_tokens_per_expert_list.begin(), num_recv_tokens_per_expert_list.end(), 0);
@@ -179,12 +146,109 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
                                              output.f2E.data(),
                                              output.en2f.data(),
                                              output.offsets.data(),
-                                             recv_topk_idx->data_or((int64_t*)nullptr),
+                                             recv_topk_idx.data_or((int64_t*)nullptr),
                                              num_recv_tokens,
                                              topk,
                                              num_local_experts,
                                              st);
             sync_check_cuda_error();
+        };
+
+        if (buffer_->get_num_rdma_ranks() > 1) {
+            // internode dispatch
+            auto config          = buffer_->get_dispatch_config();
+            auto [recv_x,
+                  recv_x_scales,
+                  recv_topk_idx,
+                  recv_topk_weights,
+                  num_recv_tokens_per_expert_list,
+                  num_recv_tokens_per_expert,
+                  rdma_channel_prefix_matrix,
+                  gbl_channel_prefix_matrix,
+                  recv_rdma_channel_prefix_matrix,
+                  recv_rdma_rank_prefix_sum,
+                  recv_gbl_channel_prefix_matrix,
+                  recv_gbl_rank_prefix_sum,
+                  recv_src_meta,
+                  send_rdma_head,
+                  send_nvl_head] = buffer_->internode_dispatch(input.x,
+                                                               std::nullopt,
+                                                               input.topk_idx,
+                                                               input.topk_weights,
+                                                               num_tokens_per_rank,
+                                                               num_tokens_per_rdma_rank,
+                                                               is_token_in_rank,
+                                                               num_tokens_per_expert,
+                                                               0,
+                                                               0,
+                                                               std::nullopt,
+                                                               std::nullopt,
+                                                               std::nullopt,
+                                                               std::nullopt,
+                                                               1,
+                                                               0,
+                                                               config);
+            sync_check_cuda_error();
+
+            // Generate output
+            output.handle = {is_token_in_rank,
+                             rdma_channel_prefix_matrix,
+                             gbl_channel_prefix_matrix,
+                             recv_rdma_channel_prefix_matrix.value(),
+                             recv_rdma_rank_prefix_sum,
+                             recv_gbl_channel_prefix_matrix.value(),
+                             recv_gbl_rank_prefix_sum,
+                             recv_src_meta.value(),
+                             send_rdma_head.value(),
+                             send_nvl_head.value()};
+
+            Postprocess(recv_x,  //
+                        recv_topk_weights.value(),
+                        recv_topk_idx.value(),
+                        num_recv_tokens_per_expert_list,
+                        num_recv_tokens_per_expert);
+        }
+        else {
+            // intranode dispatch
+            auto config      = buffer_->get_dispatch_config();
+            auto [recv_x,
+                  recv_x_scales,
+                  recv_topk_idx,
+                  recv_topk_weights,
+                  num_recv_tokens_per_expert_list,
+                  num_recv_tokens_per_expert,
+                  rank_prefix_matrix,
+                  channel_prefix_matrix,
+                  recv_channel_prefix_matrix,
+                  recv_src_idx,
+                  send_head] = buffer_->intranode_dispatch(input.x,
+                                                           std::nullopt,
+                                                           input.topk_idx,
+                                                           input.topk_weights,
+                                                           num_tokens_per_rank,
+                                                           is_token_in_rank,
+                                                           num_tokens_per_expert,
+                                                           0,
+                                                           std::nullopt,
+                                                           std::nullopt,
+                                                           1,
+                                                           0,
+                                                           config);
+            sync_check_cuda_error();
+
+            // Generate output
+            output.handle = {rank_prefix_matrix,
+                             channel_prefix_matrix,
+                             recv_channel_prefix_matrix,
+                             recv_src_idx,
+                             is_token_in_rank,
+                             send_head};
+
+            Postprocess(recv_x,  //
+                        recv_topk_weights.value(),
+                        recv_topk_idx.value(),
+                        num_recv_tokens_per_expert_list,
+                        num_recv_tokens_per_expert);
         }
     }
 }
@@ -226,6 +290,30 @@ void NcclCommImpl::Combine(const EpCombineInput& input, EpCombineOutput& output,
     else {
         if (buffer_->get_num_rdma_ranks() > 1) {
             // internode combine
+            auto config = buffer_->get_combine_config();
+
+            auto src_meta                   = input.handle[7];
+            auto is_combined_token_in_rank  = input.handle[0];
+            auto rdma_channel_prefix_matrix = input.handle[3];
+            auto rdma_rank_prefix_sum       = input.handle[4];
+            auto gbl_channel_prefix_matrix  = input.handle[5];
+            auto combined_rdma_head         = input.handle[8];
+            auto combined_nvl_head          = input.handle[9];
+
+            auto [combined_x, combined_topk_weights] = buffer_->internode_combine(input.x,
+                                                                                  input.topk_weights,
+                                                                                  std::nullopt,
+                                                                                  std::nullopt,
+                                                                                  src_meta,
+                                                                                  is_combined_token_in_rank,
+                                                                                  rdma_channel_prefix_matrix,
+                                                                                  rdma_rank_prefix_sum,
+                                                                                  gbl_channel_prefix_matrix,
+                                                                                  combined_rdma_head,
+                                                                                  combined_nvl_head,
+                                                                                  config);
+            sync_check_cuda_error();
+            output.out_x = combined_x;
         }
         else {
             // intranode combine

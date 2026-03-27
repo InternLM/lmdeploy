@@ -8,6 +8,7 @@ set(DEEP_EP_SOURCE_FILES
     deep_ep/kernels/runtime.cu
     deep_ep/kernels/layout.cu
     deep_ep/kernels/intranode.cu
+    deep_ep/kernels/internode.cu
     deep_ep/kernels/internode_ll.cu
 )
 

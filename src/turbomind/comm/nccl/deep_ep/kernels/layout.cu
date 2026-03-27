@@ -1,3 +1,4 @@
+// clang-format off
 #include "configs.cuh"
 #include "exception.cuh"
 #include "launch.cuh"

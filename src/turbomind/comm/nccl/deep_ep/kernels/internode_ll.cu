@@ -11,7 +11,6 @@
 
 using namespace cooperative_groups;
 namespace cg = cooperative_groups;
-#define ENABLE_NCCL 1
 
 namespace deep_ep {
 
