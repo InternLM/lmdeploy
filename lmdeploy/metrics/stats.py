@@ -14,14 +14,27 @@ class SchedulerStats:
     """Stats associated with the scheduler.
     Desc:
         Dataflow: client --> API server --> Engine core
-        API server total  = completed + uncompleted = completed + (api_routed + api_waiting)
-        Engine core total = running + waiting = api_routed
+
+        API server request states (axis view):
+        |<──────────────────────────────── total ────────────────────────────────>|
+        |<──────────── completed ─────────────>|<────── uncompleted ─────────────>|
+        |<─ success ─>|<──────── fail ────────>|<─ routed ─>|<───── waiting ─────>|
+                      |<cancel>|<abort>|<error>|
+
+        Engine core request states (axis view):
+        |<────────────────── routed ──────────────────>|
+        |<───── running ──────>|<────── waiting ──────>|
 
     Attributes:
-        num_total_reqs: API server, the number of all requests received since server start.
-        num_completed_reqs: API server, the number of successfully completed requests since server start.
-        num_api_routed_reqs: API server, the number of requests routed to request handles.
-        num_api_waiting_reqs: API server, the number of requests waiting for free request handles.
+        # API server
+        num_total_reqs: the number of all requests received since server start.
+        num_succeeded_reqs: the number of successfully completed requests since server start.
+        num_cancelled_reqs: the number of cancelled requests since server start.
+        num_aborted_reqs: the number of aborted requests since server start.
+        num_errored_reqs: the number of requests that end with errors since server start.
+        num_api_routed_reqs: the number of requests routed to request handles.
+
+        # Engine core
         num_running_reqs: Engine core, currently executing requests.
         num_waiting_reqs: Engine core, requests queued waiting for execution.
         gpu_cache_usage: Fraction of GPU KV blocks utilized (0.0 to 1.0).
@@ -30,9 +43,11 @@ class SchedulerStats:
 
     # api server
     num_total_reqs: int = 0
-    num_completed_reqs: int = 0
+    num_succeeded_reqs: int = 0
+    num_cancelled_reqs: int = 0
+    num_aborted_reqs: int = 0
+    num_errored_reqs: int = 0
     num_api_routed_reqs: int = 0
-    num_api_waiting_reqs: int = 0
 
     # engine core
     num_running_reqs: int = 0
@@ -40,10 +55,30 @@ class SchedulerStats:
     gpu_cache_usage: float = 0.0
     prefix_cache_hit_rate: float = 0.0
 
+    @property
+    def num_failed_reqs(self) -> int:
+        return self.num_cancelled_reqs + self.num_aborted_reqs + self.num_errored_reqs
+
+    @property
+    def num_completed_reqs(self) -> int:
+        return self.num_succeeded_reqs + self.num_failed_reqs
+
+    @property
+    def num_uncompleted_reqs(self) -> int:
+        return self.num_total_reqs - self.num_completed_reqs
+
+    @property
+    def num_api_waiting_reqs(self) -> int:
+        """The number of requests waiting for free request handles."""
+        return self.num_uncompleted_reqs - self.num_api_routed_reqs
+
     def __repr__(self):
         return ('SchedulerStats(\n'
                 f'  num_total_reqs={self.num_total_reqs},\n'
-                f'  num_completed_reqs={self.num_completed_reqs},\n'
+                f'  num_succeeded_reqs={self.num_succeeded_reqs},\n'
+                f'  num_cancelled_reqs={self.num_cancelled_reqs},\n'
+                f'  num_aborted_reqs={self.num_aborted_reqs},\n'
+                f'  num_errored_reqs={self.num_errored_reqs},\n'
                 f'  num_api_routed_reqs={self.num_api_routed_reqs},\n'
                 f'  num_api_waiting_reqs={self.num_api_waiting_reqs},\n'
                 f'  num_running_reqs={self.num_running_reqs},\n'

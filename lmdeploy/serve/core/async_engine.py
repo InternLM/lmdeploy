@@ -279,6 +279,7 @@ class AsyncEngine:
             yield generator
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
             logger.exception(f'[safe_run] session {session.session_id} exception caught: {e}')
+            metrics_processor.increase_failed_requests('cancel')
             # Use asyncio.shield to protect cleanup coroutines from being cancelled.
             # When a task is in cancelling state, bare `await` raises CancelledError
             # immediately. shield ensures the inner coroutine runs to completion.
@@ -424,8 +425,7 @@ class AsyncEngine:
         async with session.request_handle() as handle:
             if epoch != self.epoch:
                 logger.info(f'[generate] session {session_id} got aborted before starting inference')
-                # TODO(lvhan): metrics_processor.increase_failed_requests('abort')
-                metrics_processor.increase_completed_requests()
+                metrics_processor.increase_failed_requests('abort')
                 yield GenOut(response='',
                              history_token_len=0,
                              input_token_len=len(input_ids),
@@ -501,13 +501,14 @@ class AsyncEngine:
                         out.logits = (outputs.logits[:-hit_stop_token] if hit_stop_token else outputs.logits)
                     yield out
                 # end of generator loop
-                metrics_processor.increase_completed_requests()
 
                 if not is_error(outputs.status):
                     if outputs.status == ResponseType.CANCEL:
                         finish_reason = 'abort'
+                        metrics_processor.increase_failed_requests('abort')
                     else:
                         finish_reason = 'stop' if outputs.token_ids[-1] in stop_ids else 'length'
+                        metrics_processor.increase_succeeded_requests()
 
                     # utf-8 char at the end means it's a potential unfinished byte sequence
                     if not response.endswith('�'):
@@ -547,6 +548,7 @@ class AsyncEngine:
                 else:
                     logger.error(f'session {session_id} finished, {outputs.status}, '
                                  'reason "error"')
+                    metrics_processor.increase_failed_requests('error')
                     yield GenOut(response=f'internal error happened, status code {outputs.status}',
                                  history_token_len=session.step,
                                  input_token_len=len(input_ids),
