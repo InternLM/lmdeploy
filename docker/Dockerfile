@@ -33,6 +33,8 @@ RUN --mount=type=cache,target=/root/.cache \
     pip install --upgrade pip build
 
 FROM dev AS runtime-deps
+ARG PYTHON_VERSION=3.10
+ENV PYTHON_VERSION=${PYTHON_VERSION}
 
 # Should be in the lmdeploy root directory when building docker image
 COPY . /opt/lmdeploy

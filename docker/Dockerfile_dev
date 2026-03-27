@@ -29,6 +29,8 @@ RUN --mount=type=cache,target=/var/cache/apt \
 COPY . /opt/lmdeploy
 WORKDIR /opt/lmdeploy
 
+RUN mkdir -p /wheels
+
 # install lmdeploy and its dependencies
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install -r requirements_cuda.txt --extra-index-url https://download.pytorch.org/whl/cu128 && \
