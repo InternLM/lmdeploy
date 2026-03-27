@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from collections import defaultdict
-from typing import Callable, Dict, List, Optional
+from collections.abc import Callable
 
 import torch
 from torch import nn
@@ -22,7 +22,7 @@ class LinearWeights(nn.Module):
                  dtype: torch.dtype,
                  device: torch.device,
                  bias: bool = False,
-                 expert_list: Optional[List[int]] = None):
+                 expert_list: list[int] | None = None):
         super().__init__()
         weight = torch.empty((num_experts, out_features, in_features), dtype=dtype, device=device)
         weight = torch.nn.Parameter(weight, requires_grad=False)
@@ -115,8 +115,8 @@ class FusedMoE(FusedMoEBase):
                  top_k: int,
                  bias: bool = False,
                  renormalize: bool = False,
-                 dtype: Optional[torch.dtype] = None,
-                 device: Optional[torch.device] = None,
+                 dtype: torch.dtype | None = None,
+                 device: torch.device | None = None,
                  all_reduce: bool = True,
                  layer_idx: int = 0,
                  act_func: Callable = None):
@@ -188,7 +188,7 @@ class FusedMoE(FusedMoEBase):
 
     def before_dispatch(self, state: DispatchInputs):
         """Before dispatch."""
-        if not isinstance(state, Dict):
+        if not isinstance(state, dict):
             state = state.to_dict()
 
         moe_type = state['moe_type']
@@ -199,7 +199,7 @@ class FusedMoE(FusedMoEBase):
             state['previous_event'] = previous_event
         return state
 
-    def dispatch(self, state: Dict):
+    def dispatch(self, state: dict):
         """dispatch."""
         moe_type = state['moe_type']
         if moe_type == MoeType.DSAsyncPrefill:
@@ -265,7 +265,7 @@ class FusedMoE(FusedMoEBase):
             raise NotImplementedError(f'Not supported moe type: {moe_type}')
         return recv_state
 
-    def gemm(self, state: Dict):
+    def gemm(self, state: dict):
         """gemm."""
         moe_type = state['moe_type']
         if moe_type == MoeType.DSAsyncPrefill:
@@ -311,7 +311,7 @@ class FusedMoE(FusedMoEBase):
             gemm_state = {'hidden_states': hidden_states, 'moe_type': state['moe_type']}
         return gemm_state
 
-    def combine(self, state: Dict):
+    def combine(self, state: dict):
         """combine."""
         moe_type = state['moe_type']
         if moe_type == MoeType.DSAsyncPrefill:
@@ -355,7 +355,7 @@ class FusedMoE(FusedMoEBase):
             raise NotImplementedError(f'Not supported moe type: {moe_type}')
         return out_state
 
-    def wait(self, state: Dict):
+    def wait(self, state: dict):
         """wait."""
         if state.get('event', None) is not None:
             state['fusedmoe'].wait(state['event'])

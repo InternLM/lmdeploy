@@ -6,19 +6,29 @@ import dataclasses
 import random
 from contextlib import asynccontextmanager
 from copy import deepcopy
-from typing import Any, Dict, List, Literal
+from typing import Any, Literal
 
 import torch
 
 from lmdeploy.archs import get_model_arch
 from lmdeploy.logger import RequestLogger
-from lmdeploy.messages import (EngineOutput, GenerationConfig, PytorchEngineConfig, Response, ResponseType,
-                               SpeculativeConfig, TurbomindEngineConfig)
+from lmdeploy.messages import (
+    EngineOutput,
+    GenerationConfig,
+    PytorchEngineConfig,
+    Response,
+    ResponseType,
+    SpeculativeConfig,
+    TurbomindEngineConfig,
+)
 from lmdeploy.metrics.metrics_processor import metrics_processor
 from lmdeploy.metrics.stats import IterationStats, RequestStats, SpeculativeDecodingStats
 from lmdeploy.model import ChatTemplateConfig, get_chat_template
-from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
-                                                   DistServeInitRequest)
+from lmdeploy.pytorch.disagg.conn.protocol import (
+    DistServeConnectionRequest,
+    DistServeDropConnectionRequest,
+    DistServeInitRequest,
+)
 from lmdeploy.serve.managers import Session, SessionManager
 from lmdeploy.serve.processors import MultimodalProcessor
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
@@ -37,11 +47,11 @@ class GenOut:
     input_token_len: int
     generate_token_len: int
     finish_reason: Literal['stop', 'length', 'error'] | None = None
-    token_ids: List[int] | None = None
-    logprobs: List[Dict[int, float]] | None = None
+    token_ids: list[int] | None = None
+    logprobs: list[dict[int, float]] | None = None
     logits: Any = None
     last_hidden_state: Any = None
-    cache_block_ids: List[int] | None = None  # for disaggregation
+    cache_block_ids: list[int] | None = None  # for disaggregation
     routed_experts: Any = None  # for RL router replay
 
     def to_response(self, index: int = 0) -> Response:
@@ -218,7 +228,7 @@ class AsyncEngine:
         self.sleeping_tags = {'weights', 'kv_cache'}
         self.is_sleeping = True
 
-    def wakeup(self, tags: List[str] | None = None):
+    def wakeup(self, tags: list[str] | None = None):
         """Wake up the model.
 
         Args:
@@ -269,9 +279,27 @@ class AsyncEngine:
             yield generator
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
             logger.exception(f'[safe_run] session {session.session_id} exception caught: {e}')
-            await session.async_abort()
+            metrics_processor.increase_failed_requests('cancel')
+            # Use asyncio.shield to protect cleanup coroutines from being cancelled.
+            # When a task is in cancelling state, bare `await` raises CancelledError
+            # immediately. shield ensures the inner coroutine runs to completion.
+            # The outer `except (asyncio.CancelledError, Exception)` catches the
+            # CancelledError that shield itself re-raises at the await point.
+            try:
+                await asyncio.shield(handle.async_cancel(session.session_id))
+            except (asyncio.CancelledError, Exception) as cancel_e:
+                logger.debug(f'[safe_run] session {session.session_id} async_cancel exception caught: {cancel_e}')
             if self.backend == 'pytorch':
-                await handle.async_end(session.session_id)
+                logger.info(f'[safe_run] session {session.session_id} ending session')
+                try:
+                    await asyncio.shield(handle.async_end(session.session_id))
+                except (asyncio.CancelledError, Exception) as end_e:
+                    logger.debug(f'[safe_run] session {session.session_id} async_end exception caught: {end_e}')
+            # Wrap as SafeRunException so that the outer `request_handle` context
+            # manager in `session_manager.py` can distinguish a handled cancellation (caught by
+            # `except SafeRunException: pass`) from an unexpected CancelledError.
+            # Without this, the suppressed exception leaves the task in cancelling
+            # state, causing a second CancelledError at the next await point.
             raise SafeRunException(f'Safe run exception for session {session.session_id}') from e
         finally:
             await generator.aclose()
@@ -282,7 +310,7 @@ class AsyncEngine:
             messages,
             session_id: int | Session,
             gen_config: GenerationConfig | None = None,
-            tools: List[object] | None = None,
+            tools: list[object] | None = None,
             reasoning_effort: Literal['low', 'medium', 'high'] | None = None,
             stream_response: bool = True,
             sequence_start: bool = True,
@@ -291,11 +319,11 @@ class AsyncEngine:
             do_preprocess: bool = True,
             adapter_name: str | None = None,
             rewind_stop_tokens: bool = False,
-            input_ids: List | None = None,
+            input_ids: list | None = None,
             enable_thinking: bool | None = None,
-            chat_template_kwargs: Dict | None = None,
-            media_io_kwargs: Dict[str, Any] | None = None,
-            mm_processor_kwargs: Dict[str, Any] | None = None,
+            chat_template_kwargs: dict | None = None,
+            media_io_kwargs: dict[str, Any] | None = None,
+            mm_processor_kwargs: dict[str, Any] | None = None,
             **kwargs):
         """Generate responses.
 
@@ -397,8 +425,7 @@ class AsyncEngine:
         async with session.request_handle() as handle:
             if epoch != self.epoch:
                 logger.info(f'[generate] session {session_id} got aborted before starting inference')
-                # TODO(lvhan): metrics_processor.increase_failed_requests('abort')
-                metrics_processor.increase_completed_requests()
+                metrics_processor.increase_failed_requests('abort')
                 yield GenOut(response='',
                              history_token_len=0,
                              input_token_len=len(input_ids),
@@ -474,13 +501,14 @@ class AsyncEngine:
                         out.logits = (outputs.logits[:-hit_stop_token] if hit_stop_token else outputs.logits)
                     yield out
                 # end of generator loop
-                metrics_processor.increase_completed_requests()
 
                 if not is_error(outputs.status):
                     if outputs.status == ResponseType.CANCEL:
                         finish_reason = 'abort'
+                        metrics_processor.increase_failed_requests('abort')
                     else:
                         finish_reason = 'stop' if outputs.token_ids[-1] in stop_ids else 'length'
+                        metrics_processor.increase_succeeded_requests()
 
                     # utf-8 char at the end means it's a potential unfinished byte sequence
                     if not response.endswith('�'):
@@ -520,6 +548,7 @@ class AsyncEngine:
                 else:
                     logger.error(f'session {session_id} finished, {outputs.status}, '
                                  'reason "error"')
+                    metrics_processor.increase_failed_requests('error')
                     yield GenOut(response=f'internal error happened, status code {outputs.status}',
                                  history_token_len=session.step,
                                  input_token_len=len(input_ids),
@@ -579,21 +608,21 @@ class AsyncEngine:
     def p2p_initialize(self, init_request: DistServeInitRequest):
         return self.engine.p2p_initialize(init_request)
 
-    def p2p_connect(self, conn_request: List[DistServeConnectionRequest]):
+    def p2p_connect(self, conn_request: list[DistServeConnectionRequest]):
         return self.engine.p2p_connect(conn_request)
 
-    def p2p_drop_connect(self, drop_conn_request: List[DistServeDropConnectionRequest]):
+    def p2p_drop_connect(self, drop_conn_request: list[DistServeDropConnectionRequest]):
         return self.engine.p2p_drop_connect(drop_conn_request)
 
     """ DistServe Async Engine API End """
 
-    async def async_get_reward_score(self, input_ids: List) -> List[float]:
+    async def async_get_reward_score(self, input_ids: list) -> list[float]:
         """Async version of get_reward_score."""
         supported_reward_models = ['InternLM2ForRewardModel', 'Qwen2ForRewardModel']
         if self.arch not in supported_reward_models:
             raise ValueError(f'{self.arch} is not in reward model list: {supported_reward_models}')
-        assert isinstance(input_ids, List)
-        assert all(isinstance(x, int) for x in input_ids) or all(isinstance(x, List) for x in input_ids)
+        assert isinstance(input_ids, list)
+        assert all(isinstance(x, int) for x in input_ids) or all(isinstance(x, list) for x in input_ids)
         # Make input_ids a list of token_id list
         input_ids = [input_ids] if isinstance(input_ids[0], int) else input_ids
 
@@ -605,10 +634,10 @@ class AsyncEngine:
 
     async def async_get_logits(self,
                                input_ids,
-                               sessions: List['Session'] | None = None,
+                               sessions: list['Session'] | None = None,
                                sequence_start: bool = True,
-                               sequence_end: bool = True) -> List[torch.Tensor]:
-        assert input_ids and all(isinstance(_, List) for _ in input_ids)
+                               sequence_end: bool = True) -> list[torch.Tensor]:
+        assert input_ids and all(isinstance(_, list) for _ in input_ids)
         assert sessions is None or (len(sessions) == len(input_ids))
 
         logits = [None] * len(input_ids)

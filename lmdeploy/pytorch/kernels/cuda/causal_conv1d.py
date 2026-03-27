@@ -78,7 +78,6 @@ def causal_conv1d_fwd(hidden_size, width, has_bias, activation, dtype, stride_x,
                     bias_var = Bias[bc * ChunkSizeC + row_idx]
 
             # load x
-            # load seq_idx
             for i in T.unroll(l_per_thread + width - 1):
                 x_local[i] = x_smem[col_idx * l_per_thread + i, row_idx]
 
@@ -88,7 +87,6 @@ def causal_conv1d_fwd(hidden_size, width, has_bias, activation, dtype, stride_x,
                 seq_idx_local[i] = T.if_then_else(gi >= 0 and gi < sum_seqlen, seq_idx[gi], -1)
 
             out_vals = T.alloc_local((l_per_thread, ), T.float32)
-            T.clear(out_vals)
             for i in T.unroll(l_per_thread):
                 out_vals[i] = bias_var
                 seq_idx_cur = seq_idx_local[i + width - 1]
@@ -183,7 +181,8 @@ def causal_conv1d_fn(
     tilelang.PassConfigKey.TL_ENABLE_FAST_MATH: True,
 }, )
 def causal_conv1d_update_fwd(hidden_size: int, seqlen: int, state_len: int, width: int, has_bias: bool,
-                             activation: str | None, dtype, conv_stride: tuple[int, int, int], num_warps: int):
+                             activation: str | None, dtype, conv_stride: tuple[int, int, int], is_circular_buffer: bool,
+                             has_state_indices: bool, num_warps: int):
     """TileLang kernel for causal convolution forward pass.
 
     Each thread processes one output position for all channels sequentially.
@@ -195,8 +194,7 @@ def causal_conv1d_update_fwd(hidden_size: int, seqlen: int, state_len: int, widt
     batch = T.dynamic('batch')
     conv_batch = T.dynamic('conv_batch')
     conv_batch_stride = T.dynamic('conv_batch_stride')
-    update_idx = -(width - 1)
-    update_idx = update_idx if update_idx >= 0 else update_idx + state_len
+    update_idx_base = -(width - 1)
 
     @T.prim_func
     def causal_conv1d_update_main(
@@ -207,6 +205,7 @@ def causal_conv1d_update_fwd(hidden_size: int, seqlen: int, state_len: int, widt
         W: T.Tensor((hidden_size, width), dtype=dtype),
         Bias: T.Tensor((hidden_size, ), dtype=dtype) = None,
         Out: T.Tensor((batch, hidden_size, seqlen), dtype=dtype) = None,
+        Cache_seqlens: T.Tensor((batch, ), dtype=T.int32) = None,
         Conv_state_indices: T.Tensor((batch, ), dtype=T.int32) = None,
     ):
         with T.Kernel(batch, T.ceildiv(hidden_size, num_threads), threads=num_threads) as (bi, bc):
@@ -215,8 +214,21 @@ def causal_conv1d_update_fwd(hidden_size: int, seqlen: int, state_len: int, widt
             channel_id = bc * num_threads + tidx
 
             # load conv state index
-            conv_state_batch_coord = T.if_then_else(Conv_state_indices is not None, Conv_state_indices[batch_id],
+            conv_state_batch_coord = T.if_then_else(has_state_indices, Conv_state_indices[batch_id],
                                                     T.cast(batch_id, T.int32))
+
+            # get update_ids
+            if is_circular_buffer:
+                cache_seqlen = T.if_then_else(is_circular_buffer, Cache_seqlens[batch_id] % state_len, 0)
+                # alloc_var outside branch would leads to error
+                # when is_circular_buffer=False and has_state_indices=False
+                # out_val would share same var of update_idx
+                # seems like a bug of tilelang
+                update_idx = T.alloc_var(T.int32)
+                update_idx = cache_seqlen + update_idx_base
+                update_idx = T.if_then_else(update_idx >= 0, update_idx, update_idx + state_len)
+            else:
+                update_idx = update_idx_base
 
             # skip padding tokens
             # tilelang does not support return in branch,
@@ -226,28 +238,38 @@ def causal_conv1d_update_fwd(hidden_size: int, seqlen: int, state_len: int, widt
                     Out[batch_id, channel_id, i] = 0.0
             else:
                 # load bias and weight
-                bias_val = T.if_then_else(has_bias, T.cast(Bias[channel_id], T.float32), 0.0)
+                bias_val = T.if_then_else(has_bias, T.cast(Bias[channel_id], T.float32), T.cast(0.0, T.float32))
                 weight_vals = T.alloc_local((width, ), T.float32)
                 for i in T.unroll(width):
                     weight_vals[i] = W[channel_id, i]
 
                 # fill conv states and read x_vals
                 x_vals = T.alloc_local((width, ), T.float32)
-                for i in T.unroll(state_len - advance_len - (width - 1), unroll_factor=2):
-                    Conv_State[conv_state_batch_coord, channel_id, i] = Conv_State[conv_state_batch_coord, channel_id,
-                                                                                   i + advance_len]
-                for i in T.unroll(width - 1):
-                    state_val = Conv_State[conv_state_batch_coord, channel_id, state_len - (width - 1) + i]
-                    if i < advance_len + (width - 1) and state_len - advance_len - (width - 1) + i >= 0:
-                        Conv_State[conv_state_batch_coord, channel_id,
-                                   state_len - advance_len - (width - 1) + i] = state_val
-                    x_vals[i] = state_val
+                if not is_circular_buffer:
+                    for i in T.unroll(state_len - advance_len - (width - 1), unroll_factor=2):
+                        Conv_State[conv_state_batch_coord, channel_id, i] = Conv_State[conv_state_batch_coord,
+                                                                                       channel_id, i + advance_len]
+                    for i in T.unroll(width - 1):
+                        state_val = Conv_State[conv_state_batch_coord, channel_id, state_len - (width - 1) + i]
+                        if i < advance_len + (width - 1) and state_len - advance_len - (width - 1) + i >= 0:
+                            Conv_State[conv_state_batch_coord, channel_id,
+                                       state_len - advance_len - (width - 1) + i] = state_val
+                        x_vals[i] = state_val
+                else:
+                    for i in T.unroll(width - 1):
+                        state_val = Conv_State[conv_state_batch_coord, channel_id, update_idx]
+                        update_idx = (update_idx + 1) % state_len
+                        x_vals[i] = state_val
 
                 # compute output
                 for i in T.unroll(seqlen, unroll_factor=2):
                     x_val = X[batch_id, channel_id, i]
-                    if i < advance_len and state_len - advance_len + i >= 0:
-                        Conv_State[conv_state_batch_coord, channel_id, state_len - advance_len + i] = x_val
+                    if not is_circular_buffer:
+                        if i < advance_len and state_len - advance_len + i >= 0:
+                            Conv_State[conv_state_batch_coord, channel_id, state_len - advance_len + i] = x_val
+                    else:
+                        Conv_State[conv_state_batch_coord, channel_id, update_idx] = x_val
+                        update_idx = (update_idx + 1) % state_len
                     x_vals[width - 1] = x_val
                     out_val = T.alloc_var(T.float32)
                     out_val = bias_val
@@ -263,7 +285,6 @@ def causal_conv1d_update_fwd(hidden_size: int, seqlen: int, state_len: int, widt
     return causal_conv1d_update_main
 
 
-# TODO: support cache_seqlens
 # TODO: support complex layout
 def causal_conv1d_update(x,
                          conv_state,
@@ -277,10 +298,6 @@ def causal_conv1d_update(x,
     assert conv_state.dim() == 3
     assert weight.dim() == 2
     assert activation in ['silu', 'swish', None]
-    assert cache_seqlens is None, 'cache_seqlens is not supported in this version'
-    if conv_state_indices is not None:
-        assert conv_state_indices.dim() == 1 and conv_state_indices.is_contiguous()
-        assert conv_state_indices.dtype == torch.int32
 
     unsqueeze = x.dim() == 2
     if unsqueeze:
@@ -289,7 +306,19 @@ def causal_conv1d_update(x,
     has_bias = bias is not None
     width = weight.size(-1)
     _, hidden_size, seqlen = x.shape
+    batch = x.size(0)
     state_len = conv_state.size(-1)
+
+    if conv_state_indices is not None:
+        assert conv_state_indices.dim() == 1 and conv_state_indices.is_contiguous()
+        assert conv_state_indices.dtype == torch.int32
+        assert conv_state_indices.device == x.device
+        assert conv_state_indices.numel() == batch
+    if cache_seqlens is not None:
+        assert cache_seqlens.dim() == 1 and cache_seqlens.is_contiguous()
+        assert cache_seqlens.dtype == torch.int32
+        assert cache_seqlens.device == x.device
+        assert cache_seqlens.numel() == batch
 
     out = x.new_empty(x.shape)
 
@@ -302,9 +331,11 @@ def causal_conv1d_update(x,
                                       activation=activation,
                                       dtype=x.dtype,
                                       conv_stride=conv_state.stride(),
+                                      is_circular_buffer=cache_seqlens is not None,
+                                      has_state_indices=conv_state_indices is not None,
                                       num_warps=num_warps)
 
-    kernel(x, conv_state, weight, bias, out, conv_state_indices)
+    kernel(x, conv_state, weight, bias, out, cache_seqlens, conv_state_indices)
 
     if unsqueeze:
         out = out.squeeze(-1)

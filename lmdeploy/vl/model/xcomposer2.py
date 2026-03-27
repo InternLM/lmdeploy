@@ -5,7 +5,7 @@ import os
 import sys
 import warnings
 from contextlib import contextmanager
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import torch
 from PIL.Image import Image
@@ -35,7 +35,7 @@ class ModelType(enum.Enum):
     XCOMPOSER2D5 = enum.auto()
 
 
-def get_xcomposer_type(model_path: str) -> Tuple[ModelType, Any]:
+def get_xcomposer_type(model_path: str) -> tuple[ModelType, Any]:
     """Get xcomposer type."""
     from transformers.dynamic_module_utils import get_class_from_dynamic_module
     match_modules = {
@@ -90,7 +90,7 @@ class Xcomposer2VisionModel(VisionModel):
     def __init__(self,
                  model_path: str,
                  with_llm: bool = False,
-                 max_memory: Dict[int, int] = None,
+                 max_memory: dict[int, int] = None,
                  hf_config: AutoConfig = None,
                  backend: str = ''):
         model_path = model_path.rstrip(os.sep)
@@ -180,7 +180,7 @@ class Xcomposer2VisionModel(VisionModel):
 
         self.model = model.eval()
 
-    def _preprocess_2d5(self, image: Image, params: Dict) -> Dict:
+    def _preprocess_2d5(self, image: Image, params: dict) -> dict:
         """Image preprocessing for internlm-xcomposer2d5-7b."""
         hd_num = params.get('hd_num', 24)
         image = self.HD_transform(image, hd_num=hd_num)
@@ -190,12 +190,12 @@ class Xcomposer2VisionModel(VisionModel):
         n_token_per_image = int((h * w + 1) * 400 + 1 + (h + 1) * 20)
         return pixel_values, n_token_per_image
 
-    def _preprocess_7b(self, image: Image, params: Dict) -> Dict:
+    def _preprocess_7b(self, image: Image, params: dict) -> dict:
         """Image preprocessing for internlm-xcomposer2-7b."""
         pixel_values = self.vis_processor(image).unsqueeze(0).half()
         return pixel_values, 256
 
-    def _preprocess_4khd_7b(self, image: Image, params: Dict) -> Dict:
+    def _preprocess_4khd_7b(self, image: Image, params: dict) -> dict:
         """Image preprocessing for internlm-xcomposer2-4khd-7b."""
         image = self.HD_transform(image, hd_num=25)
         pixel_values = self.vis_processor(image).unsqueeze(0).half()
@@ -204,7 +204,7 @@ class Xcomposer2VisionModel(VisionModel):
         n_token_per_image = int((h * w + 1) * 144 + 1 + (h + 1) * 12)
         return pixel_values, n_token_per_image
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refer to `super().preprocess() for spec."""
         images = self.collect_multimodal_items(messages)
         outputs = []
@@ -220,12 +220,12 @@ class Xcomposer2VisionModel(VisionModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
-            messages(List[Dict]): the outputs of `preprocess`
+            messages(list[dict]): the outputs of `preprocess`
             max_batch_size(int): the max batch size when forwarding vision
                 model
         Return:

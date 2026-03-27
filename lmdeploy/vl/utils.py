@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Dict, Tuple
+from typing import Any
 
 import numpy.typing as npt
 from PIL import Image
@@ -16,7 +16,7 @@ def load_image(image_url: str, **kwargs) -> Image.Image:
     return load_from_url(image_url, image_io)
 
 
-def load_video(video_url: str, **kwargs) -> Tuple[npt.NDArray, Dict[str, Any]]:
+def load_video(video_url: str, **kwargs) -> tuple[npt.NDArray, dict[str, Any]]:
     """Fetch and decode video frames from a URL, path, or base64 string."""
     image_io = ImageMediaIO()
     video_io = VideoMediaIO(image_io=image_io, **kwargs)

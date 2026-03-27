@@ -3,8 +3,14 @@ from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
 from lmdeploy.utils import get_max_batch_size
 
 from .cli import CLI
-from .utils import (ArgumentHelper, DefaultsAndTypesHelpFormatter, convert_args, get_chat_template, get_lora_adapters,
-                    get_speculative_config)
+from .utils import (
+    ArgumentHelper,
+    DefaultsAndTypesHelpFormatter,
+    convert_args,
+    get_chat_template,
+    get_lora_adapters,
+    get_speculative_config,
+)
 
 
 class SubCliServe:

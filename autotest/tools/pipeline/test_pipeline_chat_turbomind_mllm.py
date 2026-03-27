@@ -1,6 +1,9 @@
 import pytest
-from tools.common_case_config import (TURBOMIND_FALLBACK_TEST_MLLM_GPU1, TURBOMIND_PR_TEST_MLLM_GPU1,
-                                      TURBOMIND_PR_TEST_MLLM_GPU2)
+from tools.common_case_config import (
+    TURBOMIND_FALLBACK_TEST_MLLM_GPU1,
+    TURBOMIND_PR_TEST_MLLM_GPU1,
+    TURBOMIND_PR_TEST_MLLM_GPU2,
+)
 from utils.config_utils import get_func_config_list, get_workerid
 from utils.pipeline_chat import run_pipeline_mllm_test
 

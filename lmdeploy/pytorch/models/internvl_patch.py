@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Optional
 
 import torch
 import torch.nn.functional as F
@@ -65,7 +64,7 @@ class InternVisionPatchModel(nn.Module):
 
     def forward(
         self,
-        pixel_values: Optional[torch.FloatTensor] = None,
+        pixel_values: torch.FloatTensor | None = None,
     ):
         if len(pixel_values.shape) != 4:
             raise ValueError(f'wrong pixel_values size: {pixel_values.shape}')

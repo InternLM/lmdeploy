@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import functools
-from typing import Iterable, List, Optional, Tuple
+from collections.abc import Iterable
 
 import torch
 
@@ -36,14 +36,14 @@ class DeployModelMixin:
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
-        inputs_embeds: Optional[torch.Tensor] = None,
+        past_key_values: list[list[torch.Tensor]],
+        inputs_embeds: torch.Tensor | None = None,
         context: StepContext = None,
     ):
         """Prepare input."""
         raise NotImplementedError('Not Implemented')
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
         raise NotImplementedError('Not Implemented')
 
@@ -61,8 +61,8 @@ class DeployModelMixin:
         pass
 
     def update_model_metas(self,
-                           past_key_values: List[List[torch.Tensor]],
-                           inputs_embeds: Optional[torch.Tensor] = None,
+                           past_key_values: list[list[torch.Tensor]],
+                           inputs_embeds: torch.Tensor | None = None,
                            context: StepContext = None):
         """Update model meta."""
         return None
@@ -132,8 +132,8 @@ class DeployModelMixinV1(DeployModelMixin):
                       hidden_size: int,
                       vocab_size: int,
                       bias: bool = False,
-                      dtype: Optional[torch.dtype] = None,
-                      device: Optional[torch.device] = None,
+                      dtype: torch.dtype | None = None,
+                      device: torch.device | None = None,
                       **kwargs):
         """Build LM Head."""
         bm_ctx = get_build_model_context()

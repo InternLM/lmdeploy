@@ -9,7 +9,6 @@ try:
 except ImportError:
     use_deepep = False
 
-from typing import List, Optional, Tuple
 
 import torch
 import torch.distributed as dist
@@ -137,9 +136,9 @@ class DeepEPTokenDispatcher(TokenDispatcherImpl):
         hidden_states: torch.Tensor,
         topk_idx: torch.Tensor,
         topk_weights: torch.Tensor,
-        expert_list: List[int] = None,
+        expert_list: list[int] = None,
         previous_event=None,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         self.hidden_shape = hidden_states.shape
         topk_idx = topk_idx.to(torch.int64)
         (
@@ -218,7 +217,7 @@ class DeepEPTokenDispatcher(TokenDispatcherImpl):
                               x: torch.Tensor,
                               topk_idx: torch.Tensor,
                               topk_weights: torch.Tensor,
-                              num_experts: Optional[int] = None,
+                              num_experts: int | None = None,
                               previous_event=None,
                               async_finish=True):
         (
@@ -271,7 +270,7 @@ class DeepEPTokenDispatcher(TokenDispatcherImpl):
         self.handle = None
         return hidden_states.view(self.hidden_shape)
 
-    def combine_normal(self, x: torch.Tensor, handle: Tuple, previous_event=None):
+    def combine_normal(self, x: torch.Tensor, handle: tuple, previous_event=None):
         combined_x, _, event = self.buffer_normal.combine(
             x,
             handle,
@@ -281,7 +280,7 @@ class DeepEPTokenDispatcher(TokenDispatcherImpl):
         )
         return combined_x, event
 
-    def combine_normal_async(self, x: torch.Tensor, handle: Tuple, previous_event=None, async_finish=True):
+    def combine_normal_async(self, x: torch.Tensor, handle: tuple, previous_event=None, async_finish=True):
         combined_x, _, event = self.buffer_normal.combine(
             x,
             handle,
@@ -307,9 +306,9 @@ class DeepEPTokenDispatcher(TokenDispatcherImpl):
 
     def get_permuted_hidden_states_by_experts(self,
                                               hidden_states: torch.Tensor,
-                                              topk_idx: Optional[torch.Tensor] = None,
-                                              topk_weights: Optional[torch.Tensor] = None,
-                                              num_experts: Optional[int] = None) -> torch.Tensor:
+                                              topk_idx: torch.Tensor | None = None,
+                                              topk_weights: torch.Tensor | None = None,
+                                              num_experts: int | None = None) -> torch.Tensor:
         (dispatched_routing_map,
          topk_weights) = super().indices_to_multihot(self.topk_idx if topk_idx is None else topk_idx,
                                                      self.topk_weights if topk_weights is None else topk_weights,
@@ -328,10 +327,10 @@ class DeepEPTokenDispatcher(TokenDispatcherImpl):
     def get_restored_hidden_states_by_experts(
         self,
         hidden_states: torch.Tensor,
-        reversed_mapping_for_combine: Optional[torch.Tensor] = None,
-        hidden_shape_before_permute: Optional[torch.Size] = None,
-        dispatched_routing_map: Optional[torch.Tensor] = None,
-        topk_weights: Optional[torch.Tensor] = None,
+        reversed_mapping_for_combine: torch.Tensor | None = None,
+        hidden_shape_before_permute: torch.Size | None = None,
+        dispatched_routing_map: torch.Tensor | None = None,
+        topk_weights: torch.Tensor | None = None,
     ) -> torch.Tensor:
         input_dtype = hidden_states.dtype
         assert (self.topk_weights.dtype == torch.float32), 'DeepEP only supports float32 probs'
@@ -381,7 +380,7 @@ class DeepEPTokenDispatcherLowLatency(TokenDispatcherImpl):
         topk_idx: torch.Tensor,
         topk_weights: torch.Tensor,
         num_experts: int,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         topk_idx = topk_idx.to(torch.int64)
         expected_m = (hidden_states.shape[0] * self.buffer_low_latency.group_size * topk_idx.shape[1] +
                       num_experts) // num_experts
@@ -408,7 +407,7 @@ class DeepEPTokenDispatcherLowLatency(TokenDispatcherImpl):
         self,
         hidden_states: torch.Tensor,
         topk_idx: torch.Tensor,
-        num_experts: Optional[int] = None,
+        num_experts: int | None = None,
         use_fp8: bool = True,
         async_finish: bool = True,
     ):
@@ -429,7 +428,7 @@ class DeepEPTokenDispatcherLowLatency(TokenDispatcherImpl):
         hidden_states: torch.Tensor,
         topk_idx: torch.Tensor,
         topk_weights: torch.Tensor,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         combined_hidden_states, event, hook = (self.buffer_low_latency.low_latency_combine(
             hidden_states,
             topk_idx,
@@ -446,9 +445,9 @@ class DeepEPTokenDispatcherLowLatency(TokenDispatcherImpl):
         hidden_states: torch.Tensor,
         topk_idx: torch.Tensor,
         topk_weights: torch.Tensor,
-        handle: Tuple,
+        handle: tuple,
         async_finish: bool,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         assert topk_idx.dtype == torch.int64
         assert topk_weights.dtype == torch.float32
         combined_hidden_states, event, hook = self.buffer_low_latency.low_latency_combine(

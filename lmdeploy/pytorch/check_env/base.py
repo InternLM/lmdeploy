@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from logging import Logger
-from typing import List
 
 from lmdeploy.utils import can_colorize, get_logger
 
@@ -23,7 +22,7 @@ class BaseChecker:
             logger = get_logger('lmdeploy')
         self.logger = logger
         self._is_passed = False
-        self._required_checker: List[BaseChecker] = list()
+        self._required_checker: list[BaseChecker] = list()
 
     def get_logger(self):
         """Get logger."""
