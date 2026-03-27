@@ -52,14 +52,19 @@ class GatedDeltaMeta:
         # conv_idx
         range_idx = torch.arange(-conv_kernel_size, 0, device=device)
         self.conv_idx = self.cu_seqlens[1:, None] + range_idx[None]
-        self.conv_idx = self.conv_idx.clamp_min(0)
+        self.conv_idx = self.conv_idx.clamp_min(0) # ?
 
         # for spec decoding
         if self.num_spec_tokens > 0:
             self.cache_seqlens = (attn_metadata.kv_seqlens - attn_metadata.q_seqlens).to(torch.int32)
             if not self.is_decoding:
-                spec_conv_offsets = attn_metadata.kv_seqlens[:, None] + range_idx[None]
-                self.spec_conv_offsets = torch.remainder(spec_conv_offsets, conv_kernel_size + self.num_spec_tokens)
+                state_len = conv_kernel_size + self.num_spec_tokens
+                read_conv_offsets = torch.remainder(self.cache_seqlens[:, None] + range_idx[1:][None],
+                                                    state_len)
+                write_conv_offsets = torch.remainder(attn_metadata.kv_seqlens[:, None] + range_idx[None],
+                                                     state_len)
+                self.spec_conv_offsets = (read_conv_offsets, write_conv_offsets)
+
                 read_state_offsets = torch.remainder(self.cache_seqlens, 1 + self.num_spec_tokens)
                 write_state_offsets = torch.remainder(attn_metadata.kv_seqlens, 1 + self.num_spec_tokens)
                 self.spec_state_offsets = (read_state_offsets, write_state_offsets)
@@ -100,18 +105,24 @@ class CausalConv1dFunc:
 
         # fill conv state
         final_state = x[0, conv_idx].transpose(-2, -1)
-        # Load all initial conv states before overwriting.
-        # (num_seqs, dim, ks-1): last ks-1 raw input values per sequence.
-        # TODO fix long input that uses inits states
-        # all_inits = conv_state[state_ids, :, 1:]
-        all_inits = None
+
         # for prefill with spec tokens
         if spec_conv_offsets is not None:
-            selected_conv_state = conv_state[state_ids]
-            spec_conv_offsets = spec_conv_offsets.unsqueeze(1).expand(-1, conv_state.size(1), -1)
-            final_state = selected_conv_state.scatter_(2, spec_conv_offsets, final_state)
-
-        conv_state = conv_state.index_copy_(0, state_ids, final_state)
+            read_offsets, write_offsets = spec_conv_offsets
+            # Read directly: conv_state[state_ids[b], :, read_offsets[b, k]]
+            # read_offsets: (B, ks), skip first -> all_inits: (B, dim, ks-1)
+            all_inits = conv_state[state_ids[:, None, None],
+                                   torch.arange(conv_state.size(1), device=conv_state.device)[None, :, None],
+                                   read_offsets[:, None, :]]
+            # Write directly: conv_state[state_ids[b], :, write_offsets[b, k]] = final_state[b, :, k]
+            conv_state[state_ids[:, None, None],
+                       torch.arange(conv_state.size(1), device=conv_state.device)[None, :, None],
+                       write_offsets[:, None, :]] = final_state
+        else:
+            # Load all initial conv states before overwriting.
+            # (num_seqs, dim, ks-1): last ks-1 raw input values per sequence.
+            all_inits = conv_state[state_ids, :, 1:]
+            conv_state = conv_state.index_copy_(0, state_ids, final_state)
         # note that we have not set init states
         x = x.transpose(-2, -1)
         out = self.causal_conv1d_fn(
