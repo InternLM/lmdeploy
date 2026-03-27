@@ -413,6 +413,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
+    if VariableInterface.tool_parser is not None:
+        request = VariableInterface.tool_parser.adjust_request(request)
     session = VariableInterface.get_session(request.session_id)
 
     json_request = await raw_request.json()
