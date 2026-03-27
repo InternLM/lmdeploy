@@ -13,7 +13,7 @@ on:
 
 env:
   TAG: "openmmlab/lmdeploy:nightly-cu12.8"
-  DEV_TAG: "openmmlab/lmdeploy:nightly-dev-cu12.8"
+  DEV_TAG: "openmmlab/lmdeploy:nightly-test-cu12.8"
 
 jobs:
   publish_docker_image:
@@ -58,8 +58,11 @@ jobs:
           ARG BASE_IMAGE=${{ env.TAG }}
           FROM ${BASE_IMAGE}
           COPY requirements /tmp/requirements
-          RUN python3 -m pip install --no-cache-dir auto_gptq matplotlib attrdict && \
-              python3 -m pip install --no-cache-dir -r /tmp/requirements/lite.txt && \
+          RUN apt-get update -y && \
+              apt-get install -y --no-install-recommends libgl1 libglib2.0-0 && \
+              apt-get clean -y && \
+              rm -rf /var/lib/apt/lists/*
+          RUN python3 -m pip install --no-cache-dir -r /tmp/requirements/lite.txt && \
               python3 -m pip install --no-cache-dir -r /tmp/requirements/test.txt && \
               pip install --no-cache-dir ${{ env.OFFLINE_REQUIREMENTS }}
           EOF

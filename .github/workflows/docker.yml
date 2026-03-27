@@ -144,19 +144,3 @@ jobs:
           echo $TAG
           docker build . -t ${TAG} -f docker/Dockerfile_ascend_a3 --platform linux/arm64
           docker push $TAG
-
-  publish_inner_docker_image:
-    needs: publish_docker_image
-    runs-on: image-sync-inner
-    environment: 'prod'
-    env:
-      TAG: "openmmlab/lmdeploy:latest-cu12.8"
-      INNER_REGISTRY: ${{ secrets.INNER_DOCKER_REGISTRY }}
-      INNER_TAG: "${{ secrets.INNER_DOCKER_REGISTRY }}/ailab-puyu-puyu_gpu/lmdeploy:${{github.event.inputs.image_tag}}-cu12.8"
-    steps:
-      - name: Pull and push to inner
-        run: |
-          docker pull ${{ env.TAG }}
-          docker login ${{ env.INNER_REGISTRY }} -p ${{ secrets.CLUSTER_DOCKERHUB_TOKEN }} -u ${{ secrets.CLUSTER_DOCKERHUB_USERNAME }}
-          docker tag ${{ env.TAG }} ${{ env.INNER_TAG }}
-          docker push ${{ env.INNER_TAG }}
