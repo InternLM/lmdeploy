@@ -54,6 +54,7 @@ jobs:
             -w /work \
             openmmlab/lmdeploy-builder:cuda${{ matrix.cudaver }} \
             bash -c "
+              git config --global --add safe.directory /work && \
               source /opt/conda/bin/activate && \
               conda activate py310 && \
               pip install build && \

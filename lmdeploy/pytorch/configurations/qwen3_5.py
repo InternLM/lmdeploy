@@ -49,6 +49,7 @@ class Qwen3_5ModelConfigBuilder(AutoModelConfigBuilder):
         else:
             dtype = torch.float16
         cfg.states_shapes = [(conv_state_shape, dtype), (recurrent_state_shape, dtype)]
+        cfg.is_gated_delta = True
         cfg.check_env_func = _check_env_qwen3_next
 
         cfg.use_mrope = True
