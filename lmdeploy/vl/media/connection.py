@@ -41,8 +41,10 @@ def _is_safe_url(url: str) -> tuple[bool, str]:
 
         for info in infos:
             ip = ipaddress.ip_address(info[4][0])
-            if ip.is_loopback or ip.is_private or ip.is_link_local:
-                return False, f'Blocked IP detected: {ip}'
+            # block any IP that is not globally routable (covers private, loopback,
+            # link-local, multicast, reserved, unspecified, etc.)
+            if not ip.is_global:
+                return False, f'Blocked non-global IP detected: {ip}'
 
         return True, 'URL is safe'
     except Exception as e:
