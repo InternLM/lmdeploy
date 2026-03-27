@@ -299,7 +299,6 @@ class LlavaVisionModel(LlavaHfVisionModel):
         images = self.collect_multimodal_items(messages)
         outputs = []
         for modality, image, params in images:
-            image = image.convert('RGB')
             pixel_values = process_images([image], self.image_processor, self.config)
             outputs.append(
                 dict(pixel_values=pixel_values,

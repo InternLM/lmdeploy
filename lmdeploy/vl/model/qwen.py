@@ -73,7 +73,6 @@ class QwenVisionModel(VisionModel):
         images = self.collect_multimodal_items(messages)
         outputs = []
         for modality, image, params in images:
-            image = image.convert('RGB')
             pixel_values = self.image_transform(image)
             outputs.append(
                 dict(pixel_values=pixel_values,
