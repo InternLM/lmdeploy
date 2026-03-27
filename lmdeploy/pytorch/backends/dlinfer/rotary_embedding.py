@@ -58,7 +58,6 @@ class DlinferRotaryEmbeddingImpl(RotaryEmbeddingImpl, nn.Module):
         self.base = base
         # yapf: disable
         inv_freq = 1.0 / (self.base**(torch.arange(0, self.dim, 2, dtype=torch.int64).float() / self.dim))
-        inv_freq = inv_freq.to(device='cuda')
         # yapf: enable
         self.register_buffer('inv_freq', inv_freq, persistent=False)
 
