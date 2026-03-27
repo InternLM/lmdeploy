@@ -35,7 +35,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install -e .
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    docker/prepare_wheel.sh
+    bash docker/prepare_3rdparty_wheel.sh
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     cp -r requirements /tmp/requirements && \
@@ -45,4 +45,5 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 RUN uv cache clean && \
     rm -rf /wheels /tmp/* /var/tmp/* /root/.cache/uv/* && \
     find /opt/lmdeploy -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true && \
-    find /opt/lmdeploy -type f -name "*.pyc" -delete 2>/dev/null || true
+    find /opt/lmdeploy -type f -name "*.pyc" -delete 2>/dev/null || true && \
+    find /opt/lmdeploy -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true

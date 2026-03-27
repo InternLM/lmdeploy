@@ -32,7 +32,7 @@ RUN --mount=type=cache,target=/root/.cache \
     uv venv -p python${PYTHON_VERSION} --seed /opt/py3 && \
     pip install --upgrade pip build
 
-FROM dev AS builder
+FROM dev AS runtime-deps
 
 # Should be in the lmdeploy root directory when building docker image
 COPY . /opt/lmdeploy
@@ -41,11 +41,22 @@ WORKDIR /opt/lmdeploy
 RUN --mount=type=cache,target=/root/.cache \
     pip install -r requirements/runtime_cuda.txt --extra-index-url https://download.pytorch.org/whl/${CUDA_VERSION_SHORT}
 
+RUN mkdir -p /wheels
+
+FROM runtime-deps AS thirdparty-wheels
+
+RUN --mount=type=cache,target=/root/.cache \
+    bash docker/prepare_3rdparty_wheel.sh
+
+FROM runtime-deps AS lmdeploy-wheel
+
 RUN --mount=type=cache,target=/root/.cache \
     docker/build.sh
 
-RUN --mount=type=cache,target=/root/.cache \
-    docker/prepare_wheel.sh
+FROM runtime-deps AS wheels
+
+COPY --from=thirdparty-wheels /wheels /wheels
+COPY --from=lmdeploy-wheel /wheels /wheels
 
 # Runtime image
 FROM nvidia/cuda:13.0.2-base-ubuntu22.04 AS cu13-base
@@ -66,7 +77,7 @@ ARG PYTHON_VERSION=3.10
 COPY requirements /tmp/requirements
 COPY docker/install.sh /tmp/install.sh
 RUN --mount=type=cache,target=/root/.cache \
-    --mount=type=cache,target=/wheels,from=builder,source=/wheels \
+    --mount=type=cache,target=/wheels,from=wheels,source=/wheels \
     /tmp/install.sh
 
 # explicitly set ptxas path for triton
