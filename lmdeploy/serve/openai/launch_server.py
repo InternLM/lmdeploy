@@ -6,7 +6,6 @@ import random
 import signal
 import socket
 import sys
-from typing import List, Union
 
 from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.utils import get_logger
@@ -16,7 +15,7 @@ from .api_server import serve
 logger = get_logger('lmdeploy')
 
 
-def find_available_ports(num: int) -> List[int]:
+def find_available_ports(num: int) -> list[int]:
     """Find available port."""
 
     def __is_port_ok(port: int):
@@ -47,7 +46,7 @@ def get_host_ip():
         return ip
 
 
-def _run_server(gpu_ids: List[int], model_path: str, **kwargs):
+def _run_server(gpu_ids: list[int], model_path: str, **kwargs):
     """Launch a server process."""
     cuda_visible_devices = ','.join([str(_) for _ in gpu_ids])
     os.setpgrp()
@@ -56,7 +55,7 @@ def _run_server(gpu_ids: List[int], model_path: str, **kwargs):
     serve(model_path, **kwargs)
 
 
-def cleanup_processes(processes: List[mp.Process]):
+def cleanup_processes(processes: list[mp.Process]):
     """Clean up server process."""
     for process in processes:
         logger.info(f'Terminating process group {process.pid}')
@@ -83,7 +82,7 @@ def cleanup_processes(processes: List[mp.Process]):
 def launch_server(num_nodes: int,
                   node_rank: int,
                   model_path: str,
-                  backend_config: Union[PytorchEngineConfig, TurbomindEngineConfig],
+                  backend_config: PytorchEngineConfig | TurbomindEngineConfig,
                   proxy_url: str = None,
                   **kwargs):
     """Run multiple server processes in dp mode."""

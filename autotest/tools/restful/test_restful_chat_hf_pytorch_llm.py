@@ -1,9 +1,14 @@
 import time
 
 import pytest
-from tools.common_case_config import (MODELSCOPE_CONFIG, PYTORCH_LORA_TEST_LLM_GPU1, PYTORCH_LORA_TEST_LLM_GPU2,
-                                      PYTORCH_PR_TEST_LLM_GPU1, PYTORCH_PR_TEST_LLM_GPU2,
-                                      SPECULATIVE_DECODING_RESTFUL_TEST_LLM)
+from tools.common_case_config import (
+    MODELSCOPE_CONFIG,
+    PYTORCH_LORA_TEST_LLM_GPU1,
+    PYTORCH_LORA_TEST_LLM_GPU2,
+    PYTORCH_PR_TEST_LLM_GPU1,
+    PYTORCH_PR_TEST_LLM_GPU2,
+    SPECULATIVE_DECODING_RESTFUL_TEST_LLM,
+)
 from utils.config_utils import get_case_str_by_config, get_func_config_list, get_workerid
 from utils.constant import PROXY_PORT
 from utils.proxy_distributed_utils import ApiServerPerTest, proxy_worker_node_wait

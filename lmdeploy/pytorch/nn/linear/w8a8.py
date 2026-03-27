@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, List, Optional
+from typing import Any
 
 import torch
 
@@ -18,12 +18,12 @@ class W8A8Linear(LinearBase):
                  in_features: int,
                  out_features: int,
                  bias: bool,
-                 dtype: Optional[torch.dtype] = None,
-                 device: Optional[torch.device] = None,
+                 dtype: torch.dtype | None = None,
+                 device: torch.device | None = None,
                  colwise: bool = True,
                  is_tp: bool = False,
                  all_reduce: bool = True,
-                 quant_dtype: Optional[torch.dtype] = torch.int8,
+                 quant_dtype: torch.dtype | None = torch.int8,
                  layer_type: str = 'attn'):
         super().__init__(dtype=torch.float16,
                          device=device,
@@ -53,7 +53,7 @@ class W8A8Linear(LinearBase):
         if self.bias is not None:
             self.bias.weight_loader = self.weight_loader
 
-    def register_all_parameters(self, weight: torch.Tensor, scale: torch.Tensor, bias: Optional[torch.Tensor] = None):
+    def register_all_parameters(self, weight: torch.Tensor, scale: torch.Tensor, bias: torch.Tensor | None = None):
         """Register all parameters."""
         weight = torch.nn.Parameter(weight, requires_grad=False)
         scale = torch.nn.Parameter(scale, requires_grad=False)
@@ -131,12 +131,12 @@ class MergedW8A8Linear(W8A8Linear):
 
     def __init__(self,
                  in_features: int,
-                 all_out_features: List[int],
+                 all_out_features: list[int],
                  bias: bool,
-                 dtype: Optional[torch.dtype] = None,
-                 device: Optional[torch.device] = None,
+                 dtype: torch.dtype | None = None,
+                 device: torch.device | None = None,
                  is_tp: bool = True,
-                 out_names: Optional[List[int]] = None,
+                 out_names: list[int] | None = None,
                  quant_dtype: torch.dtype = torch.int8,
                  layer_type: str = 'attn'):
         self.init_tp_args(is_tp, all_reduce=False, colwise=True, layer_type=layer_type)
@@ -173,7 +173,7 @@ class MergedW8A8Linear(W8A8Linear):
         """Get io features."""
         return in_features, out_features
 
-    def _update_all_out_features(self, all_out_features: List[int]):
+    def _update_all_out_features(self, all_out_features: list[int]):
         """Update all out features."""
         world_size, rank = self.get_tp_world_rank()
         new_all_out_features = []
@@ -208,8 +208,8 @@ class QKVW8A8Linear(MergedW8A8Linear, QKVMixin):
                  head_size: int,
                  head_size_v: int,
                  bias: bool = False,
-                 dtype: Optional[torch.dtype] = None,
-                 device: Optional[torch.device] = None,
+                 dtype: torch.dtype | None = None,
+                 device: torch.device | None = None,
                  is_tp: bool = True,
                  num_replicate_kv_heads: int = 1,
                  quant_dtype: torch.dtype = torch.int8):
@@ -236,7 +236,7 @@ class QKVW8A8Linear(MergedW8A8Linear, QKVMixin):
                          quant_dtype=quant_dtype,
                          layer_type='attn')
 
-    def _update_all_out_features(self, all_out_features: List[int]):
+    def _update_all_out_features(self, all_out_features: list[int]):
         """Update all out features."""
         return all_out_features
 

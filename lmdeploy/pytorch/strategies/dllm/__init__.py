@@ -6,12 +6,12 @@ from lmdeploy.pytorch.strategies.base.sequence import SequenceStrategy
 from lmdeploy.utils import get_logger
 
 if TYPE_CHECKING:
+    from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
     from lmdeploy.pytorch.strategies.base.cudagraph import CudagraphStrategy
+    from lmdeploy.pytorch.strategies.base.engine import EngineStrategy
+    from lmdeploy.pytorch.strategies.base.model_agent import ModelAgentStrategy
     from lmdeploy.pytorch.strategies.base.model_inputs import ModelInputsStrategy
     from lmdeploy.pytorch.strategies.base.sampling import SamplingStrategy
-    from lmdeploy.pytorch.strategies.base.model_agent import ModelAgentStrategy
-    from lmdeploy.pytorch.strategies.base.engine import EngineStrategy
-    from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
 
 from ..base import StrategyFactoryBase
 

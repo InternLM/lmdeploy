@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Any, Dict, Iterable, List, Tuple
+from collections.abc import Iterable
+from typing import Any
 
 import torch
 from torch import nn
@@ -92,8 +93,8 @@ class Gemma3VLInputProcessor(BaseModelInputProcessor):
         self.vision_token_num = self.num_patches // 4
 
     def preprocess_input(self,
-                         input_ids: List[int],
-                         input_multimodals: List[Dict[str, Any]] = None,
+                         input_ids: list[int],
+                         input_multimodals: list[dict[str, Any]] = None,
                          **kwargs) -> PreprocessInputResult:
         """Prepare multimodal input."""
         if input_multimodals is None or len(input_multimodals) == 0:
@@ -163,7 +164,7 @@ class Gemma3ForConditionalGeneration(nn.Module, CudaGraphMixin, DeployModelMixin
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         pixel_values: torch.FloatTensor = None,
         image_mask: torch.Tensor = None,
@@ -302,7 +303,7 @@ class Gemma3ForConditionalGeneration(nn.Module, CudaGraphMixin, DeployModelMixin
     def tie_weights(self):
         return self.language_model.tie_weights()
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)

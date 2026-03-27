@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict
 
 import torch
 from torch import nn
@@ -20,7 +19,7 @@ class RMSNorm(nn.Module):
         eps: float = 1e-6,
         dtype: torch.dtype | None = None,
         device: torch.device | None = None,
-        quant_config: Dict | None = None,
+        quant_config: dict | None = None,
         tp: bool = False,
         align: int = 1,
         prefix: str = '',

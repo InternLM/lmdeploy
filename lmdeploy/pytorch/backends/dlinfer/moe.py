@@ -1,12 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
-from typing import Callable, List
+from collections.abc import Callable
 
 import torch
 
-from lmdeploy.pytorch.kernels.dlinfer import DlinferMoECommType  # noqa: F401
-from lmdeploy.pytorch.kernels.dlinfer import DlinferMoeMetadata  # noqa: F401
-from lmdeploy.pytorch.kernels.dlinfer import fused_moe, moe_gating_topk_softmax
+from lmdeploy.pytorch.kernels.dlinfer import (
+    DlinferMoECommType,  # noqa: F401
+    DlinferMoeMetadata,  # noqa: F401
+    fused_moe,
+    moe_gating_topk_softmax,
+)
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 
 from ..moe import FusedMoEBuilder, FusedMoEImpl, SoftmaxTopKBuilder, SoftmaxTopKImpl
@@ -85,7 +88,7 @@ class DlinferFusedMoEImpl(FusedMoEImpl):
                 down_weights: torch.Tensor,
                 gate_up_bias: torch.Tensor = None,
                 down_bias: torch.Tensor = None,
-                expert_list: List[int] = None,
+                expert_list: list[int] = None,
                 act_func: Callable = None):
         """forward."""
         assert gate_up_bias is None

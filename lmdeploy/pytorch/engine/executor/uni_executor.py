@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-from typing import Dict, List
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.pytorch.devices import DeviceContext
@@ -24,7 +23,7 @@ class UniExecutor(ExecutorBase):
         cache_config: CacheConfig,
         backend_config: BackendConfig,
         misc_config: MiscConfig,
-        adapters: Dict[str, str] = None,
+        adapters: dict[str, str] = None,
         device_type: str = 'cuda',
         specdecode_config: SpecDecodeConfig = None,
     ):
@@ -122,7 +121,7 @@ class UniExecutor(ExecutorBase):
         """
         return [self.model_agent.cache_engine.p2p_initialize(init_request)]
 
-    def p2p_connect(self, remote_engine_id: str, conn_request: List[DistServeKVTransferEndpointInfo]):
+    def p2p_connect(self, remote_engine_id: str, conn_request: list[DistServeKVTransferEndpointInfo]):
         """rdma_connect."""
         self.model_agent.cache_engine.p2p_connect(remote_engine_id, conn_request)
 

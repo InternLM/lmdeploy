@@ -3,7 +3,6 @@
 import os
 from contextlib import contextmanager
 from os import path as osp
-from typing import Dict, List
 
 import torch.nn as nn
 from transformers import AutoConfig
@@ -117,7 +116,7 @@ class YiVisionModel(LlavaVisionModel):
         with init_yi_model(), disable_transformers_logging():
             super().build_model()
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refer to `super().preprocess() for spec."""
         images = self.collect_multimodal_items(messages)
         outputs = []

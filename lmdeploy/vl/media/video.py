@@ -14,8 +14,13 @@ from lmdeploy.utils import get_logger
 
 from .base import MediaIO
 from .image import ImageMediaIO
-from .video_loader import (DecordVideoLoader, OpenCVVideoLoader, TorchCodecVideoLoader, TorchVisionVideoLoader,
-                           VideoLoader)
+from .video_loader import (
+    DecordVideoLoader,
+    OpenCVVideoLoader,
+    TorchCodecVideoLoader,
+    TorchVisionVideoLoader,
+    VideoLoader,
+)
 
 logger = get_logger('lmdeploy')
 

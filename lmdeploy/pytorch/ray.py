@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
 import time
-from typing import Dict, List
 
 import ray
 from ray.util.placement_group import PlacementGroup
@@ -28,7 +27,7 @@ def get_device_str(device_type: str = None) -> str:
     return device_type
 
 
-def get_resource_kwargs(device_str: str, resource_used: float = 0.01) -> Dict[str, float]:
+def get_resource_kwargs(device_str: str, resource_used: float = 0.01) -> dict[str, float]:
     """Get resource kwargs."""
     if device_str == 'GPU':
         resource_kwargs = {'num_gpus': resource_used}
@@ -124,7 +123,7 @@ def init_ray_cluster(world_size: int, ray_address: str = None, dp: int = 1, devi
                 'The number of required %ss exceeds the total '
                 'number of available %ss in the placement group.', device_str, device_str)
         # Create a new placement group
-        placement_group_specs: List[Dict[str, float]] = ([{device_str: 1.0} for _ in range(world_size)])
+        placement_group_specs: list[dict[str, float]] = ([{device_str: 1.0} for _ in range(world_size)])
 
         # Pin at least one bundle to the local node.
         # This helps multi-node DP keep each dp_rank process's workers co-located with

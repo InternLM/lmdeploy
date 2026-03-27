@@ -1,4 +1,3 @@
-from typing import List
 
 import pytest
 
@@ -12,7 +11,7 @@ def test_engine_generation_config():
     stop_token_ids = tokenizer.encode('<eoa>', add_bos=False)
     config.convert_stop_bad_words_to_ids(tokenizer)
     assert stop_token_ids == config.stop_token_ids
-    assert isinstance(config.stop_token_ids, List) and \
+    assert isinstance(config.stop_token_ids, list) and \
         isinstance(config.stop_token_ids[0], int)
 
 
