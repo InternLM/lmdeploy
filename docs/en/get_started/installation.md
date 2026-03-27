@@ -15,17 +15,9 @@ It supports LLMs and VLMs deployment on both Linux and Windows platform, with mi
 It is recommended installing lmdeploy using pip in a conda environment (python 3.10 - 3.13):
 
 ```shell
-conda create -n lmdeploy python=3.10 -y
+conda create -n lmdeploy python=3.12 -y
 conda activate lmdeploy
 pip install lmdeploy
-```
-
-The default prebuilt package is compiled on **CUDA 12**. If CUDA 11+ (>=11.3) is required, you can install lmdeploy by:
-
-```shell
-export LMDEPLOY_VERSION=0.12.2
-export PYTHON_VERSION=310
-pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
 ```
 
 ## Install from source
