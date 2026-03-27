@@ -3,7 +3,7 @@ import ipaddress
 import os
 import socket
 from pathlib import Path
-from typing import Tuple, TypeVar
+from typing import TypeVar
 from urllib.parse import ParseResult, urlparse
 from urllib.request import url2pathname
 
@@ -22,7 +22,7 @@ headers = {
 }
 
 
-def _is_safe_url(url: str) -> Tuple[bool, str]:
+def _is_safe_url(url: str) -> tuple[bool, str]:
     """Check if the URL is safe to fetch (not internal/private)."""
     try:
         parsed = urlparse(url)
