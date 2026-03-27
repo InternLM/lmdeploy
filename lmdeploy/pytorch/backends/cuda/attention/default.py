@@ -5,6 +5,8 @@ from typing import Literal
 import torch
 
 from lmdeploy.pytorch.backends.attention import AttentionImpl, AttentionMetadata
+from lmdeploy.pytorch.compile_util import custom_op, get_custom_op_manager
+from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -51,6 +53,37 @@ class TritonAttentionMetadata(AttentionMetadata):
     scheduler_metadata: torch.Tensor = None
     max_kv_seqlen: int = None
     max_q_seqlen: int = None
+
+    # NOTE: uses torch._dynamo private APIs; may change between PyTorch versions
+    def mark_dynamic(self):
+        """Mark dynamic attributes for torch.compile."""
+        torch._dynamo.mark_dynamic(self.block_offsets, [0, 1])
+        torch._dynamo.mark_dynamic(self.q_start_loc, 0)
+        torch._dynamo.mark_dynamic(self.q_seqlens, 0)
+        torch._dynamo.mark_dynamic(self.kv_start_loc, 0)
+        torch._dynamo.mark_dynamic(self.kv_seqlens, 0)
+        torch._dynamo.mark_dynamic(self.cu_seqlens_q, 0)
+        torch._dynamo.mark_dynamic(self.cu_seqlens_k, 0)
+
+        torch._dynamo.decorators.mark_unbacked(self.block_offsets, [0, 1])
+        torch._dynamo.decorators.mark_unbacked(self.q_start_loc, 0)
+        torch._dynamo.decorators.mark_unbacked(self.q_seqlens, 0)
+        torch._dynamo.decorators.mark_unbacked(self.kv_start_loc, 0)
+        torch._dynamo.decorators.mark_unbacked(self.kv_seqlens, 0)
+        torch._dynamo.decorators.mark_unbacked(self.cu_seqlens_q, 0)
+        torch._dynamo.decorators.mark_unbacked(self.cu_seqlens_k, 0)
+
+        if self.tile_scheduler_metadata is not None:
+            ndim = self.tile_scheduler_metadata.dim()
+            torch._dynamo.mark_dynamic(self.tile_scheduler_metadata, list(range(ndim)))
+            torch._dynamo.decorators.mark_unbacked(self.tile_scheduler_metadata, list(range(ndim)))
+            ndim = self.tile_scheduler_metadata.dim()
+            torch._dynamo.mark_dynamic(self.num_splits, list(range(ndim)))
+            torch._dynamo.decorators.mark_unbacked(self.num_splits, list(range(ndim)))
+        elif self.scheduler_metadata is not None:
+            ndim = self.scheduler_metadata.dim()
+            torch._dynamo.mark_dynamic(self.scheduler_metadata, list(range(ndim)))
+            torch._dynamo.decorators.mark_unbacked(self.scheduler_metadata, list(range(ndim)))
 
 
 def _cdiv(a, b):
@@ -111,6 +144,8 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         self.flash_attention_fwd = flash_attn_varlen_func
 
         self.block_sparse_size = block_sparse_size
+
+        self.mod_key = get_custom_op_manager().register_mod_instance(self)
 
     def _get_max_q_seqlen(
         self,
@@ -335,6 +370,19 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         Returns:
             Attention output tensor.
         """
+        if torch.compiler.is_compiling():
+            return triton_attention_op(
+                self.mod_key,
+                query,
+                key,
+                value,
+                k_cache,
+                v_cache,
+                k_scales_zeros=k_scales_zeros,
+                v_scales_zeros=v_scales_zeros,
+                learnable_sink=learnable_sink,
+            )
+
         # Shared preparation
         max_q_seqlen = self._get_max_q_seqlen(query, attn_metadata)
 
@@ -378,3 +426,37 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
                 v_scales_zeros=v_scales_zeros,
                 learnable_sink=learnable_sink,
             )
+
+
+@custom_op('lmdeploy::triton_attention_op',
+           mutates_args=['k_cache', 'v_cache'],
+           split_prefill=True,
+           split_decoding=False)
+def triton_attention_op(
+    mod_key: int,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    k_cache: torch.Tensor,
+    v_cache: torch.Tensor,
+    k_scales_zeros: torch.Tensor | None = None,
+    v_scales_zeros: torch.Tensor | None = None,
+    learnable_sink: torch.Tensor | None = None,
+) -> torch.Tensor:
+    instance: TritonAttentionImpl = get_custom_op_manager().get_mod_instance(mod_key)
+    attn_metadata = get_step_ctx_manager().current_context().attn_metadata
+    return instance.forward(
+        query, key, value, k_cache, v_cache,
+        attn_metadata=attn_metadata,
+        k_scales_zeros=k_scales_zeros,
+        v_scales_zeros=v_scales_zeros,
+        learnable_sink=learnable_sink,
+    )
+
+
+@triton_attention_op.register_fake
+def _(mod_key: int, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+    """Fake implementation for shape inference."""
+    head_dim = value.size(-1)
+    out_shape = query.shape[:-1] + (head_dim, )
+    return query.new_empty(out_shape)

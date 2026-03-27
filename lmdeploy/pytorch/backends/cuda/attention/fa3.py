@@ -1,6 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
+from lmdeploy.pytorch.compile_util import custom_op, get_custom_op_manager
+from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 from lmdeploy.utils import get_logger
 
 from .default import TritonAttentionImpl, TritonAttentionMetadata
@@ -311,6 +313,18 @@ class FA3Impl(TritonAttentionImpl):
         Returns:
             Attention output tensor.
         """
+        if torch.compiler.is_compiling():
+            return fa3_attention_op(
+                self.mod_key,
+                query,
+                key,
+                value,
+                k_cache,
+                v_cache,
+                k_scales_zeros=k_scales_zeros,
+                v_scales_zeros=v_scales_zeros,
+            )
+
         # Shared preparation
         max_q_seqlen = self._get_max_q_seqlen(query, attn_metadata)
 
@@ -348,3 +362,33 @@ class FA3Impl(TritonAttentionImpl):
                 k_scales_zeros,
                 v_scales_zeros,
             )
+
+
+@custom_op('lmdeploy::fa3_attention_op', mutates_args=['k_cache', 'v_cache'], split_prefill=True, split_decoding=False)
+def fa3_attention_op(
+    mod_key: int,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    k_cache: torch.Tensor,
+    v_cache: torch.Tensor,
+    k_scales_zeros: torch.Tensor | None = None,
+    v_scales_zeros: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Custom op wrapper for FA3 attention implementation."""
+    instance: FA3Impl = get_custom_op_manager().get_mod_instance(mod_key)
+    attn_metadata = get_step_ctx_manager().current_context().attn_metadata
+    return instance.forward(
+        query, key, value, k_cache, v_cache,
+        attn_metadata=attn_metadata,
+        k_scales_zeros=k_scales_zeros,
+        v_scales_zeros=v_scales_zeros,
+    )
+
+
+@fa3_attention_op.register_fake
+def _(mod_key: int, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+    """Fake implementation for shape inference."""
+    head_dim = value.size(-1)
+    out_shape = query.shape[:-1] + (head_dim, )
+    return query.new_empty(out_shape)

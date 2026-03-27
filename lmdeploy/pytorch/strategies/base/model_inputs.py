@@ -24,7 +24,9 @@ def make_dummy_inputs(batch_size: int,
                       device: str = 'cpu',
                       dummy_block_id: int = 0,
                       vocab_size: int = 1,
+                      num_blocks: int = 1,
                       meta: MakeDummyMeta | None = None) -> ModelInputs:
+
     """Make dummy inputs global implement."""
     if meta is None:
         meta = MakeDummyMeta()
@@ -36,7 +38,7 @@ def make_dummy_inputs(batch_size: int,
     ), dtype=torch.long, device=device)
     seq_length = torch.full((batch_size, ), max_q_seqlen, dtype=torch.long, device=device)
     history_lengths = torch.zeros((batch_size, ), dtype=torch.long, device=device)
-    block_offsets = torch.full((batch_size, 1), dummy_block_id, dtype=torch.long, device=device)
+    block_offsets = torch.full((batch_size, num_blocks), dummy_block_id, dtype=torch.long, device=device)
     num_ignored_history = torch.zeros((batch_size, ), dtype=torch.long, device=device)
     local_adapter_ids = torch.zeros((batch_size, ), dtype=torch.long, device=device)
 
@@ -81,6 +83,8 @@ class ModelInputsStrategy(ABC):
                    device: str = 'cpu',
                    dummy_block_id: int = 0,
                    vocab_size: int = 1,
+                   max_q_seqlen: int | None = None,
+                   num_blocks: int = 1,
                    meta: MakeDummyMeta | None = None) -> ModelInputs:
         """Create dummy model inputs."""
         pass

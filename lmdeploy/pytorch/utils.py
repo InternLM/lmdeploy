@@ -8,6 +8,7 @@ from inspect import Parameter, Signature
 from typing import Generic, TypeVar
 
 import psutil
+import torch
 
 from lmdeploy.utils import get_logger
 
@@ -46,8 +47,9 @@ def singleton(cls):
 
     def get_instance(*args, **kwargs):
         if cls not in instances:
-            pid = mp.current_process().pid
-            logger.debug(f'pid:{pid} - Creating instance of singleton class {cls.__name__}')
+            if not torch.compiler.is_compiling():
+                pid = mp.current_process().pid
+                logger.debug(f'pid:{pid} - Creating instance of singleton class {cls.__name__}')
             instances[cls] = cls(*args, **kwargs)
         return instances[cls]
 
