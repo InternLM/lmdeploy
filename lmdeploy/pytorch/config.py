@@ -637,7 +637,7 @@ class QuantizationConfig:
 
         resolved_quant_dtype = getattr(torch, quant_dtype, None)
         if not isinstance(resolved_quant_dtype, torch.dtype):
-            raise ValueError(f'Invalid quant dtype "{resolved_quant_dtype}" resolved from model config; '
+            raise ValueError(f'Invalid quant dtype "{quant_dtype}" resolved from model config; '
                              'expected a torch.dtype attribute on torch.')
         quant_dtype = resolved_quant_dtype
 
