@@ -42,13 +42,17 @@ class Qwen3_5ModelConfigBuilder(AutoModelConfigBuilder):
         conv_dim = key_dim * 2 + value_dim
         conv_kernel_size = text_config.linear_conv_kernel_dim
 
-        conv_state_shape = (num_delta_layers, conv_dim, conv_kernel_size)
-        recurrent_state_shape = (num_delta_layers, num_v_heads, head_k_dim, head_v_dim)
+        conv_state_shape = (conv_kernel_size, conv_dim)
+        recurrent_state_shape = (num_v_heads, head_k_dim, head_v_dim)
         device_type = kwargs.get('device_type', 'cuda')
         if is_bf16_supported(device_type):
             dtype = torch.bfloat16
         else:
             dtype = torch.float16
-        cfg.states_shapes = [(conv_state_shape, dtype), (recurrent_state_shape, dtype)]
+        # Use per-layer shapes so each cache slice is (num_caches, ...) — contiguous by
+        # construction. Storing num_delta_layers as the first shape dim would require a
+        # transpose later, producing non-contiguous views.
+        cfg.states_shapes = ([(conv_state_shape, dtype)] * num_delta_layers +
+                             [(recurrent_state_shape, dtype)] * num_delta_layers)
         cfg.check_env_func = _check_env_qwen3_next
         return cfg

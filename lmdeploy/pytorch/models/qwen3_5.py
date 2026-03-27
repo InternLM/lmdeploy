@@ -1127,8 +1127,10 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         attn_metadata = context.attn_metadata
 
         # make past_key_values
-        state_caches = list(cache.transpose(0, 1) for cache in context.state_caches)
-        state_caches = list(zip(state_caches[0], state_caches[1]))
+        # state_caches holds num_delta_layers conv entries then num_delta_layers recurrent
+        # entries, each already shaped (num_caches, ...) and contiguous.
+        n = len(context.state_caches) // 2
+        state_caches = list(zip(context.state_caches[:n], context.state_caches[n:]))
         past_key_values = list(past_key_values)
         new_past_key_values = []
         for layer_type in self.config.text_config.layer_types:
