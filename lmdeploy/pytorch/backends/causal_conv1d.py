@@ -13,6 +13,7 @@ class CausalConv1dImpl(ABC):
                   weight: torch.Tensor,
                   bias: torch.Tensor | None = None,
                   seq_idx: torch.Tensor | None = None,
+                  initial_states: torch.Tensor | None = None,
                   return_final_states: bool = False,
                   activation: str | None = None):
         """forward."""

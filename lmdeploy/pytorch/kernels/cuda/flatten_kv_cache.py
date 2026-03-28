@@ -55,6 +55,7 @@ def _flatten_kv_cache(
 
     start_loc = tl.load(start_loc_ptr + batch_id)
     b_off = tl.load(block_offsets_ptr + batch_id * stride_boff + page_id)
+    b_off = b_off.to(tl.int64)
 
     offs_bs = tl.arange(0, BLOCK_BS)
     offs_dk = tl.arange(0, BLOCK_DK) % HEAD_DIM_K
@@ -145,7 +146,7 @@ def _flatten_kv_cache_quant(
         return
 
     b_off = tl.load(block_offsets_ptr + batch_id * stride_boff + page_id)
-
+    b_off = b_off.to(tl.int64)
     offs_bs = tl.arange(0, BLOCK_BS)
     if quant_policy == 4:
         HALF_HDK: tl.constexpr = HEAD_DIM_K // 2
@@ -394,6 +395,7 @@ def flatten_kv_cache_mla_fp8_kernel(
         return
 
     b_off = tl.load(block_offsets_ptr + batch_id * stride_boff + page_id)
+    b_off = b_off.to(tl.int64)
 
     BLOCK_SCALE: tl.constexpr = BLOCK_NOPE // GROUP_SIZE
     offs_bs = tl.arange(0, BLOCK_BS)
