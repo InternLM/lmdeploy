@@ -225,7 +225,7 @@ conda activate lmdeploy
 pip install lmdeploy
 ```
 
-自 v0.3.0 版本起，默认预编译包基于 **CUDA 12** 编译。v0.10.1 之后，LMDeploy 不再支持 CUDA 11+。
+自 v0.3.0 版本起，默认预编译包基于 **CUDA 12** 编译。v0.10.2 及更高版本中，LMDeploy 不再支持 CUDA 11+。
 
 若使用 GeForce RTX 50 系列显卡，请按照如下方式安装基于 **CUDA 12.8** 编译的 LMDeploy 预编译包。
 
