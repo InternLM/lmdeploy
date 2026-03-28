@@ -28,7 +28,6 @@ class MllamaVLModel(VisionModel):
         images = self.collect_multimodal_items(messages)
         outputs = []
         for modality, image, params in images:
-            image = image.convert('RGB')
             results = self.processor.image_processor(images=image, return_tensors='pt')
             results.update(image_size=image.size, image_tokens=1, image_token_id=self.image_token_id)
             outputs.append(results)

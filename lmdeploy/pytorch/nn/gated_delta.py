@@ -103,7 +103,11 @@ class CausalConv1dFunc:
             assert weight.size(1) == 1
             weight = weight[:, 0]
 
-        # fill conv state
+        # Load all initial conv states before overwriting.
+        # (num_seqs, dim, ks-1): last ks-1 raw input values per sequence.
+        all_inits = conv_state[state_ids, :, 1:]
+
+        # Save conv state (last kernel_size input tokens per sequence).
         final_state = x[0, conv_idx].transpose(-2, -1)
 
         # for prefill with spec tokens
@@ -123,7 +127,7 @@ class CausalConv1dFunc:
             # (num_seqs, dim, ks-1): last ks-1 raw input values per sequence.
             all_inits = conv_state[state_ids, :, 1:]
             conv_state = conv_state.index_copy_(0, state_ids, final_state)
-        # note that we have not set init states
+
         x = x.transpose(-2, -1)
         out = self.causal_conv1d_fn(
             x,

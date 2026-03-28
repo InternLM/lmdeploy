@@ -200,18 +200,30 @@ class CudaOpsBackend(DefaultOpsBackend):
                 attn_metadata = cls.update_meta_flashattn(attn_metadata, step_context)
 
         # update chunk gated delta indices
-        # TODO: we better add a flag to mark the model instead of checking states_shapes here
-        states_shapes = step_context.model_config.states_shapes
-        is_gateddelta = states_shapes is not None and len(states_shapes) > 0
-        if is_gateddelta and not step_context.is_decoding:
+        is_gated_delta = step_context.model_config.is_gated_delta
+        if is_gated_delta and not step_context.is_decoding:
             try:
                 from fla.ops.utils import prepare_chunk_indices
-                # prepare_chunk_indice would force sync the stream
+            except ImportError:
+                logger.warning(
+                    'Failed to import fla.ops.utils.prepare_chunk_indices for gated delta rule. '
+                    'Please make sure the version of fla is installed, up to date and compatible with lmdeploy.'
+                )
+            else:
+                # prepare_chunk_indices would force sync the stream
                 # we better maintain a cpu cu_seqlens_q cache in the future to avoid this
-                prepare_chunk_indices(attn_metadata.cu_seqlens_q, 64)
-            except Exception:
-                logger.exception('Failed to prepare chunk indices for gated delta rule. '
-                               'Please make sure the version of fla is up to date and compatible with lmdeploy.')
+                try:
+                    # 64 is the default value that hard code inside fla
+                    # so we have to hard code it here.
+                    prepare_chunk_indices(attn_metadata.cu_seqlens_q, 64)
+                except Exception as exc:
+                    logger.exception(
+                        'Unexpected error while preparing chunk indices for gated delta rule. '
+                        'Please make sure the version of fla is up to date and compatible with lmdeploy.'
+                    )
+                    raise RuntimeError(
+                        'Failed to prepare chunk indices for gated delta rule; see logs for details.'
+                    ) from exc
 
         step_context.attn_metadata = attn_metadata
         return step_context
