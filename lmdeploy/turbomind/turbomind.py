@@ -100,7 +100,7 @@ def update_parallel_config(cfg: TurbomindEngineConfig):
         attn_dp_size = overlap
         inner_tp_size = cfg.ep // overlap
         cfg.outer_dp_size = cfg.dp // overlap
-        cfg.attn_dp_size = overlap // cfg.nnodes
+        cfg.attn_dp_size = overlap
         cfg.attn_tp_size = inner_tp_size // cfg.cp
         cfg.attn_cp_size = cfg.cp
         cfg.mlp_dp_size = 1

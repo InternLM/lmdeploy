@@ -253,6 +253,7 @@ void Buffer::allocate_sync_nvl_buffer()
     auto stream = turbomind::core::Context::stream().handle();
 
     HostComm h_nvl_comm = h_comm->Split(rdma_rank, 0);
+    TM_CHECK_EQ(h_nvl_comm->is_same_process(), true);
 
     ipc_comm = CreateDeviceCommunicator("cuda-ipc", h_nvl_comm->n_ranks(), nvl_rank, h_nvl_comm);
 

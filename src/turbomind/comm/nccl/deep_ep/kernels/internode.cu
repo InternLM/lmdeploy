@@ -182,7 +182,7 @@ __global__ void notify_dispatch(const int* num_tokens_per_rank,
         // For each channel we have kNumRDMARanks head and tail signals
         int num_signals = kNumRDMARanks * num_channels * 2;
         EP_DEVICE_ASSERT(num_signals <= num_threads);
-        EP_DEVICE_ASSERT(num_channels * 2 <= dev_comm.ginConnectionCount);
+        EP_DEVICE_ASSERT(num_channels * 2 <= dev_comm.ginContextCount);
 
         // NCCL backend use signal to update head/tail
         // Each thread handles one specific signal across all contexts
@@ -1932,7 +1932,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1) combine(int4* co
     const auto hidden_bytes = hidden_int4 * sizeof(int4);
     const auto num_bytes_per_token = get_num_bytes_per_token(hidden_int4, 0, 0, num_topk);
 
-    EP_DEVICE_ASSERT(num_channels * 2 <= dev_comm.ginConnectionCount);
+    EP_DEVICE_ASSERT(num_channels * 2 <= dev_comm.ginContextCount);
     // Use a diff GIN context for each channel/SM
     ncclGin net(dev_comm, channel_id);
     ncclTeam world = ncclTeamWorld(dev_comm);

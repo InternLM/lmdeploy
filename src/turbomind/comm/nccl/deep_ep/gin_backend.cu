@@ -53,7 +53,7 @@ int NCCLGINBackend::init(
     size_t single_id_size = sizeof(ncclUniqueId);
     size_t expected_ids   = gpus_per_server;
     EP_HOST_ASSERT(root_unique_id_val.size() == expected_ids * single_id_size
-                   && "Number of unique IDs doesn't match NUM_MAX_NVL_PEERS * qps_per_rank");
+                   && "Number of unique IDs doesn't match NUM_MAX_NVL_PEERS");
 
     if (rank == 0) {
         // Print NCCL version from the actually loaded library
