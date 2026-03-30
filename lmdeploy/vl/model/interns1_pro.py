@@ -181,22 +181,3 @@ class InternS1ProVisionModel(Qwen3VLModel):
             return self.to_pytorch_aux_ts(messages, prompt, self.ts_token, tokenizer, sequence_start)
         else:
             return self.to_pytorch_aux(messages, prompt, self.image_token, tokenizer, sequence_start)
-
-    def build_model(self):
-        # TODO: implement for turbomind
-        pass
-
-    @torch.no_grad()
-    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
-        # TODO: implement for turbomind
-        pass
-
-    def to_turbomind(self,
-                     messages,
-                     chat_template,
-                     tokenizer,
-                     sequence_start,
-                     chat_template_kwargs: dict | None = None,
-                     **kwargs):
-        # TODO: implement for turbomind
-        pass
