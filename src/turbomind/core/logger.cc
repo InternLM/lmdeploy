@@ -4,7 +4,9 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -105,6 +107,7 @@ public:
     AsyncLogWorker& operator=(const AsyncLogWorker&) = delete;
 
     void Enqueue(LogRecord record);
+    void Stop();
 
     ~AsyncLogWorker();
 
@@ -115,6 +118,7 @@ private:
 
     moodycamel::BlockingConcurrentQueue<LogRecord> queue_;
     std::thread                                    thread_;
+    std::atomic_flag                               stopped_ = ATOMIC_FLAG_INIT;
 };
 
 // ---------------------------------------------------------------------------
@@ -232,14 +236,34 @@ AsyncLogWorker& AsyncLogWorker::Instance()
     return worker;
 }
 
-AsyncLogWorker::AsyncLogWorker(): thread_(&AsyncLogWorker::Run, this) {}
-
-AsyncLogWorker::~AsyncLogWorker()
+static void OnFatalSignal(int signum)
 {
+    AsyncLogWorker::Instance().Stop();
+    ::signal(signum, SIG_DFL);
+    ::raise(signum);
+}
+
+AsyncLogWorker::AsyncLogWorker(): thread_(&AsyncLogWorker::Run, this)
+{
+    for (int sig : {SIGSEGV, SIGABRT, SIGFPE, SIGILL, SIGBUS}) {
+        ::signal(sig, OnFatalSignal);
+    }
+}
+
+void AsyncLogWorker::Stop()
+{
+    if (stopped_.test_and_set()) {
+        return;  // already stopping or stopped
+    }
     LogRecord stop;
     stop.kind = RecordKind::kStop;
     queue_.enqueue(std::move(stop));
     thread_.join();
+}
+
+AsyncLogWorker::~AsyncLogWorker()
+{
+    Stop();
 }
 
 void AsyncLogWorker::Enqueue(LogRecord record)

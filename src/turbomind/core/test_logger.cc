@@ -8,10 +8,43 @@
 #include <functional>
 #include <string>
 #include <thread>
-#include <unistd.h>
 #include <vector>
 
+// POSIX headers needed for: pipe/fork/dup2 (stderr capture), setenv/unsetenv (env
+// var tests), waitpid/SIGABRT (signal handling test).  All guarded behind #ifndef
+// _WIN32 along with the test cases that use them.
+#ifndef _WIN32
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+
 using turbomind::core::Logger;
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Logger: SetLevel / GetLevel round-trip", "[logger]")
+{
+    auto& log = Logger::Instance();
+
+    log.set_level(Logger::Level::kTrace);
+    REQUIRE(log.get_level() == Logger::Level::kTrace);
+
+    log.set_level(Logger::Level::kWarning);
+    REQUIRE(log.get_level() == Logger::Level::kWarning);
+
+    log.set_level(Logger::Level::kError);
+    REQUIRE(log.get_level() == Logger::Level::kError);
+
+    // Restore default
+    log.set_level(Logger::Level::kDebug);
+}
+
+// ---------------------------------------------------------------------------
+// POSIX-specific tests (stderr capture, env vars, signal handling)
+// ---------------------------------------------------------------------------
+#ifndef _WIN32
 
 // Tests run in sync mode (TM_LOG_ASYNC=0) so log output is written inline and
 // CaptureStderr sees complete output when fn() returns.
@@ -53,27 +86,6 @@ static std::string CaptureStderr(std::function<void()> fn)
     ::close(saved);
     reader.join();
     return output;
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-TEST_CASE("Logger: SetLevel / GetLevel round-trip", "[logger]")
-{
-    auto& log = Logger::Instance();
-
-    log.set_level(Logger::Level::kTrace);
-    REQUIRE(log.get_level() == Logger::Level::kTrace);
-
-    log.set_level(Logger::Level::kWarning);
-    REQUIRE(log.get_level() == Logger::Level::kWarning);
-
-    log.set_level(Logger::Level::kError);
-    REQUIRE(log.get_level() == Logger::Level::kError);
-
-    // Restore default
-    log.set_level(Logger::Level::kDebug);
 }
 
 TEST_CASE("Logger: prefix format", "[logger]")
@@ -247,3 +259,101 @@ TEST_CASE("Logger: async ordering under concurrent producers", "[logger]")
 
     REQUIRE(lines == kTotal);
 }
+
+// ---------------------------------------------------------------------------
+// Signal-handling drain test (fork-based)
+// ---------------------------------------------------------------------------
+// Verifies that OnFatalSignal drains the async worker's queue before
+// re-raising the signal.  Because raising SIGABRT kills the process, we
+// fork a child that enables async mode, enqueues messages, and raises
+// SIGABRT.  The parent reads the child's stderr via a pipe and checks that
+// every message is present and that the child died from SIGABRT.
+//
+// IMPORTANT: This test relies on AsyncLogWorker::Instance() never having
+// been called in the parent process.  All preceding tests use sync mode
+// (TM_LOG_ASYNC=0) and never trigger the singleton.  If a future test
+// triggers async mode before this one, the fork will inherit a destroyed
+// worker thread and the singleton will be in an invalid state.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Logger: async signal handler drains queue on fatal signal", "[logger][signal]")
+{
+    constexpr int kMsgCount = 20;
+    std::vector<std::string> markers;
+    markers.reserve(kMsgCount);
+    for (int i = 0; i < kMsgCount; ++i) {
+        markers.push_back(fmt::format("drain-test-msg-{:03d}-Ax9B{}", i, i));
+    }
+
+    int pipefd[2];
+    REQUIRE(::pipe(pipefd) == 0);
+
+    pid_t pid = ::fork();
+    REQUIRE(pid >= 0);
+
+    if (pid == 0) {
+        // ---- CHILD PROCESS ----
+        ::close(pipefd[0]);
+        ::dup2(pipefd[1], STDERR_FILENO);
+        ::close(pipefd[1]);
+
+        // Enable async mode for any new Logger instance.
+        ::setenv("TM_LOG_ASYNC", "1", 1);
+        ::setenv("TM_LOG_LEVEL", "TRACE", 1);
+
+        // Spawn a fresh thread to get a new thread_local Logger that picks
+        // up TM_LOG_ASYNC=1 (async mode).
+        std::thread worker([&] {
+            auto& log = Logger::Instance();
+            if (!log.is_async()) {
+                fmt::print(stderr, "CHILD-ERROR: not in async mode\n");
+                ::_exit(2);
+            }
+
+            // Enqueue messages rapidly.  Some may be drained by the worker
+            // thread before the signal fires; others will remain in the
+            // queue and must be drained by OnFatalSignal.
+            for (int i = 0; i < kMsgCount; ++i) {
+                log.Log(Logger::Level::kInfo, markers[i]);
+            }
+
+            // Small delay so some messages are consumed by the normal worker
+            // loop, creating a realistic mix of already-printed and queued.
+            ::usleep(1000);
+
+            // OnFatalSignal should: Stop() → drain queue → restore SIG_DFL → re-raise.
+            ::raise(SIGABRT);
+            ::_exit(0);
+        });
+
+        worker.join();
+        ::_exit(1);
+    }
+
+    // ---- PARENT PROCESS ----
+    ::close(pipefd[1]);
+
+    std::string child_output;
+    {
+        char    buf[4096];
+        ssize_t n;
+        while ((n = ::read(pipefd[0], buf, sizeof(buf))) > 0) {
+            child_output.append(buf, static_cast<size_t>(n));
+        }
+        ::close(pipefd[0]);
+    }
+
+    int wstatus = 0;
+    REQUIRE(::waitpid(pid, &wstatus, 0) == pid);
+
+    // Child should have been killed by SIGABRT.
+    REQUIRE(WIFSIGNALED(wstatus));
+    REQUIRE(WTERMSIG(wstatus) == SIGABRT);
+
+    // Every marker must appear in the child's stderr output.
+    for (int i = 0; i < kMsgCount; ++i) {
+        REQUIRE(child_output.find(markers[i]) != std::string::npos);
+    }
+}
+
+#endif  // _WIN32

@@ -263,7 +263,7 @@ void Engine::Impl::Validate(Requests& infer_reqs, Requests& kill_reqs)
                 r->ec = Request::kConflict;
             }
             if (!r->ec && is_infer && has_linear_attention && !r->session.end_flag) {
-                TM_LOG_ERROR("Skip inconsistent %s request for ID %lu. Linear attention only supports stateless "
+                TM_LOG_ERROR("Skip inconsistent {} request for ID {}. Linear attention only supports stateless "
                              "requests",
                              type,
                              r->id);
@@ -350,8 +350,8 @@ void Engine::Impl::Interrupt(RequestCache& c)
     }
     else {
         if (s.recurrent_states && c.seq_len != s.cache_len) {
-            TM_LOG_WARNING(
-                "[Engine][Interrupt] Invalidating cache for ID %llu due to linear-state/cache mismatch (%d vs %d)",
+            TM_LOG_WARN(
+                "[Engine][Interrupt] Invalidating cache for ID {} due to linear-state/cache mismatch ({} vs {})",
                 s.id,
                 c.seq_len,
                 s.cache_len);

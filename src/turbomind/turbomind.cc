@@ -391,7 +391,7 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
                 model_param_.layer_types.push_back(0);
             }
             else {
-                TM_LOG_WARNING("[TM] Unknown layer_type '%s', treating as full_attention.", type_str.c_str());
+                TM_LOG_WARN("Unknown layer_type '{}', treating as full_attention.", type_str);
                 model_param_.layer_types.push_back(0);
             }
         }

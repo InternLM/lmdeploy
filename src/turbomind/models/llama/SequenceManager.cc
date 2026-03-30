@@ -82,15 +82,15 @@ SequenceManager::SequenceManager(const ModelParam& model_param,
         for (int slot = max_batch_size - 1; slot >= 0; --slot) {
             free_linear_state_slots_.push_back(slot);
         }
-        TM_LOG_INFO("[SeqMgr] linear-state slot pool initialized: %d slots", max_batch_size);
+        TM_LOG_INFO("[SeqMgr] linear-state slot pool initialized: {} slots", max_batch_size);
         const auto   conv_one      = pooled_conv_states_.slice(0, 1).squeeze(0);
         const auto   recurrent_one = pooled_recurrent_states_.slice(0, 1).squeeze(0);
         const double mb            = 1.0 / (1024.0 * 1024.0);
-        TM_LOG_INFO("[SeqMgr] linear-state per slot: conv %.2f MB + recurrent %.2f MB = %.2f MB",
+        TM_LOG_INFO("[SeqMgr] linear-state per slot: conv {:.2f} MB + recurrent {:.2f} MB = {:.2f} MB",
                     conv_one.byte_size() * mb,
                     recurrent_one.byte_size() * mb,
                     (conv_one.byte_size() + recurrent_one.byte_size()) * mb);
-        TM_LOG_INFO("[SeqMgr] linear-state combined total: %.2f MB",
+        TM_LOG_INFO("[SeqMgr] linear-state combined total: {:.2f} MB",
                     (pooled_conv_states_.byte_size() + pooled_recurrent_states_.byte_size()) * mb);
     }
 
@@ -115,12 +115,12 @@ SequenceManager::SequenceManager(const ModelParam& model_param,
     if (num_linear_layers > 0 && block_count < 1.) {
         const size_t linear_bytes = pooled_conv_states_.byte_size() + pooled_recurrent_states_.byte_size();
         const size_t target_bytes = static_cast<size_t>(free_before * block_count);
-        TM_LOG_INFO("[SeqMgr] Adjusting block_count: free_before %.2f MB, linear %.2f MB, target %.2f MB",
+        TM_LOG_INFO("[SeqMgr] Adjusting block_count: free_before {:.2f} MB, linear {:.2f} MB, target {:.2f} MB",
                     free_before / (1024. * 1024.),
                     linear_bytes / (1024. * 1024.),
                     target_bytes / (1024. * 1024.));
         if (target_bytes <= linear_bytes) {
-            TM_LOG_ERROR("[SeqMgr] Linear-state memory (%.2f MB) >= cache budget (%.2f MB). ",
+            TM_LOG_ERROR("[SeqMgr] Linear-state memory ({:.2f} MB) >= cache budget ({:.2f} MB). ",
                          linear_bytes / (1024. * 1024.),
                          target_bytes / (1024. * 1024.));
             TM_CHECK(0)
@@ -128,7 +128,7 @@ SequenceManager::SequenceManager(const ModelParam& model_param,
         }
         const size_t cache_bytes = target_bytes - linear_bytes;
         block_count              = static_cast<double>(cache_bytes) / static_cast<double>(block_size);
-        TM_LOG_INFO("[SeqMgr] Adjusted block_count to %.0f", block_count);
+        TM_LOG_INFO("[SeqMgr] Adjusted block_count to {:.0f}", block_count);
     }
 
     block_manager_ = std::make_shared<BlockManager>(block_size, block_count, chunk_size, allocator, get_free_size);

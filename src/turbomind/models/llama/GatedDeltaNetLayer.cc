@@ -5,7 +5,7 @@
 #include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/llama/gated_delta_net_kernels.h"
 #include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/utils/logger.h"
+#include "src/turbomind/core/logger.h"
 
 namespace turbomind {
 
@@ -36,8 +36,8 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(const ModelParam&     model,
             ++num_linear_layers_;
     }
 
-    TM_LOG_INFO("GatedDeltaNetLayer: num_k=%d num_v=%d k_dim=%d v_dim=%d "
-                "conv_dim=%d d_conv=%d num_linear_layers=%d",
+    TM_LOG_INFO("GatedDeltaNetLayer: num_k={} num_v={} k_dim={} v_dim={} "
+                "conv_dim={} d_conv={} num_linear_layers={}",
                 num_k_heads_,
                 num_v_heads_,
                 key_dim_,
