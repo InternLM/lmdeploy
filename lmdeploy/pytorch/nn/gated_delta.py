@@ -52,7 +52,8 @@ class GatedDeltaMeta:
         # conv_idx
         range_idx = torch.arange(-conv_kernel_size, 0, device=device)
         self.conv_idx = self.cu_seqlens[1:, None] + range_idx[None]
-        self.conv_idx = self.conv_idx.clamp_min(0) # ?
+        # TODO: fix last chunk with less conv kernel tokens
+        self.conv_idx = self.conv_idx.clamp_min(0)
 
         # for spec decoding
         if self.num_spec_tokens > 0:
@@ -102,10 +103,6 @@ class CausalConv1dFunc:
         if weight.dim() == 3:
             assert weight.size(1) == 1
             weight = weight[:, 0]
-
-        # Load all initial conv states before overwriting.
-        # (num_seqs, dim, ks-1): last ks-1 raw input values per sequence.
-        all_inits = conv_state[state_ids, :, 1:]
 
         # Save conv state (last kernel_size input tokens per sequence).
         final_state = x[0, conv_idx].transpose(-2, -1)

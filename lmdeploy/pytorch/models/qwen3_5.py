@@ -615,9 +615,10 @@ class Qwen3_5Attention(nn.Module):
 
         # packed qkv
         # Qwen3 uses 'config.attention_bias = False' for q/k/o projections
+        self.attn_output_gate = getattr(config, 'attn_output_gate', False)
         self.qkv_proj = build_qkv_proj(
             hidden_size,
-            num_q_heads=num_heads * 2,
+            num_q_heads=num_heads * (1 + self.attn_output_gate),
             num_kv_heads=num_key_value_heads,
             head_size=head_dim,
             bias=config.attention_bias,

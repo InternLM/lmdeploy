@@ -374,6 +374,7 @@ class ModelConfig:
         num_spec_tokens: int = 0,
         model_format: str = None,
         device_type: str = 'auto',
+        block_size: int = 64,
     ):
         """Instantiate one of the configuration classes of the library from a
         pretrained model configuration.
@@ -422,6 +423,7 @@ class ModelConfig:
 
         # add quant_config
         model_config.quant_config = QuantizationConfig.from_config(hf_config)
+        model_config.block_size = block_size
         return model_config
 
     @classmethod
@@ -566,7 +568,9 @@ class SpecDecodeConfig:
                                                    trust_remote_code=True,
                                                    dtype=dtype,
                                                    is_draft_model=True,
-                                                   spec_method=method)
+                                                   spec_method=method,
+                                                   block_size=target_cache_cfg.block_size,
+                                                   )
         cache_config = None
         # include medusa
         no_caches = ['medusa']

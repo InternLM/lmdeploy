@@ -32,6 +32,8 @@ class Qwen3_5ModelConfigBuilder(AutoModelConfigBuilder):
             text_config.quantization_config = quantization_config
         cfg = DefaultModelConfigBuilder.build(text_config, model_path, tp=tp, **kwargs)
 
+        if getattr(hf_config.text_config, 'attn_output_gate', False):
+            cfg.num_attention_heads *= 2
         # update num layers
         num_layers = cfg.num_layers
         layer_types = text_config.layer_types
