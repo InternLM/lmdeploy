@@ -8,7 +8,6 @@
 
 1. 在 huggingface.co 上面通过 lmdeploy 量化的模型，如 [llama2-70b-4bit](https://huggingface.co/lmdeploy/llama2-chat-70b-4bit), [internlm-chat-20b-4bit](https://huggingface.co/internlm/internlm-chat-20b-4bit)
 2. huggingface.co 上面其他 LM 模型，如Qwen/Qwen-7B-Chat
-3. 通过 `lmdeploy convert` 命令转换好的模型，兼容旧格式
 
 ## 使用方式
 
@@ -26,8 +25,6 @@ model_name=internlm-chat-20b
 # Inference by TurboMind
 lmdeploy chat $repo_id --model-name $model_name
 
-# Serving with gradio
-lmdeploy serve gradio $repo_id --model-name $model_name
 
 # Serving with Restful API
 lmdeploy serve api_server $repo_id --model-name $model_name --tp 1
@@ -46,27 +43,6 @@ model_name=qwen-7b
 # Inference by TurboMind
 lmdeploy chat $repo_id --model-name $model_name
 
-# Serving with gradio
-lmdeploy serve gradio $repo_id --model-name $model_name
-
 # Serving with Restful API
 lmdeploy serve api_server $repo_id --model-name $model_name --tp 1
-```
-
-### 3) 通过 `lmdeploy convert` 命令转换好的模型
-
-使用方式与之前相同
-
-```
-# Convert a model
-lmdeploy convert $MODEL_NAME /path/to/model --dst-path ./workspace
-
-# Inference by TurboMind
-lmdeploy chat ./workspace
-
-# Serving with gradio
-lmdeploy serve gradio ./workspace
-
-# Serving with Restful API
-lmdeploy serve api_server ./workspace --tp 1
 ```

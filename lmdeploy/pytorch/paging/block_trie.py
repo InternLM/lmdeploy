@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import heapq
-from typing import Dict, Set
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -8,6 +8,20 @@ from lmdeploy.pytorch.messages import SchedulerSequence
 
 from ..config import CacheConfig
 from .block_manager import BaseBlockManager
+
+
+@dataclass
+class PrefixCacheStats:
+    """Prefix caching stats."""
+    num_query_tokens: int = 0
+    num_hit_tokens: int = 0
+
+    def reset(self):
+        self.num_query_tokens = 0
+        self.num_hit_tokens = 0
+
+    def hit_rate(self):
+        return 0.0 if self.num_query_tokens <= 0 else float(self.num_hit_tokens) / self.num_query_tokens
 
 
 class Node:
@@ -18,8 +32,8 @@ class Node:
         self.block = block
         self.tokens = tokens
         self.num_matched = num_matched
-        self.children: Dict[int, 'Node'] = dict()
-        self._parent: 'Node' = None
+        self.children: dict[int, Node] = dict()
+        self._parent: Node = None
 
     @property
     def parent(self):
@@ -52,8 +66,13 @@ class BlockTrie:
         self.enable = self.cache_config.enable_prefix_caching
 
         # caches with different adapter should not be shared.
-        self._roots: Dict[str, Node] = dict()
-        self.leaves: Set[Node] = set()
+        self._roots: dict[str, Node] = dict()
+        self.leaves: set[Node] = set()
+        self.stats = PrefixCacheStats()
+
+    def hit_rate(self):
+        """Get hit rate."""
+        return self.stats.hit_rate()
 
     def get_root(self, adapter_name: str):
         """Get root by adapter name."""
@@ -73,6 +92,7 @@ class BlockTrie:
         curr: Node = getattr(logical_blocks, 'last_shared_node', None)
         if curr is None:
             curr = self.get_root(seq.adapter_name)
+        init_num_matched = curr.num_matched
         num_matched = curr.num_matched
 
         def __match_success(node: Node):
@@ -81,7 +101,7 @@ class BlockTrie:
             curr = node
             num_matched += block_size
 
-        while num_matched + block_size < seq.num_all_ids:
+        while num_matched + block_size < seq.num_valid_ids:
             curr_tokens = seq.history_cache[num_matched:num_matched + block_size]
 
             key = hash(('random', tuple(curr_tokens)))
@@ -101,6 +121,10 @@ class BlockTrie:
             seq.logical_blocks.append(matched_blocks)
             seq.set_step(num_matched)
 
+        # record prefix hit
+        self.stats.num_query_tokens += seq.num_all_ids - init_num_matched
+        self.stats.num_hit_tokens += num_matched - init_num_matched
+
         seq.logical_blocks.last_shared_node = curr
 
     def allocate(self, seq: SchedulerSequence):
@@ -116,9 +140,9 @@ class BlockTrie:
             logical_blocks.last_shared_node = node
 
         num_matched = node.num_matched
-        num_all_ids = seq.num_all_ids
+        num_valid_ids = seq.num_valid_ids
 
-        if num_matched + block_size > num_all_ids:
+        if num_matched + block_size > num_valid_ids:
             return
 
         if len(node.children) == 0 and node.parent is not None:
@@ -127,7 +151,7 @@ class BlockTrie:
         block_id = num_matched // block_size
         blocks = []
         free_blocks = []
-        while num_matched + block_size <= num_all_ids:
+        while num_matched + block_size <= num_valid_ids:
             curr_tokens = seq.history_cache[num_matched:num_matched + block_size]
 
             block = logical_blocks[block_id]
@@ -175,6 +199,9 @@ class BlockTrie:
             if self.allocator.get_ref_count(parent.block) == 1:
                 access_time = self.allocator.get_access_time(parent.block)
                 heapq.heappush(leaves, (access_time, parent))
+
+        if len(self.leaves) == 0:
+            return 0
 
         evicted_blocks = []
         leaves = list(self.leaves)

@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
+from typing import Any
 
 import torch
 from torch import nn
@@ -8,12 +9,16 @@ from transformers.models.llama4 import Llama4Config, Llama4TextConfig, Llama4Vis
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
-from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
-from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_merged_colwise_linear, build_qkv_proj,
-                                        build_rowwise_linear)
+from lmdeploy.pytorch.multimodal.data_type import MultiModalData
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
+from lmdeploy.pytorch.nn.linear import (
+    build_colwise_linear,
+    build_merged_colwise_linear,
+    build_qkv_proj,
+    build_rowwise_linear,
+)
 from lmdeploy.pytorch.nn.moe import build_fused_moe
-from lmdeploy.pytorch.nn.rotary_embedding import Llama3Parameters
+from lmdeploy.pytorch.nn.rotary_embedding import get_rope_theta
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -77,8 +82,8 @@ class Llama4TextAttention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: tuple[torch.Tensor] | None = None,
         attn_metadata: Any = None,
     ):
         """forward."""
@@ -206,8 +211,8 @@ class Llama4TextMoe(nn.Module):
         )
         self.shared_expert = Llama4TextMLP(config, dtype=dtype, device=device, is_tp=True, all_reduce=False)
 
-        dist_ctx = dist.get_dist_manager().current_context()
-        self.tp = dist_ctx.tp
+        dist_config = dist.get_dist_manager().current_config()
+        self.tp = dist_config.tp
 
     def forward(self, hidden_states: torch.Tensor):
         """forward."""
@@ -271,9 +276,9 @@ class Llama4TextDecoderLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[List[torch.FloatTensor]],
-        residual: Optional[torch.Tensor] = None,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: list[torch.FloatTensor] | None,
+        residual: torch.Tensor | None = None,
         attn_metadata: Any = None,
     ):
         """forward."""
@@ -325,35 +330,13 @@ class Llama4TextModel(nn.Module):
     @staticmethod
     def build_llama4_rotary_embedding(config: Llama4TextConfig):
         """Build llama4 rotary embedding."""
-
-        scaling_factor = 1.0
-        rope_dim = config.hidden_size // config.num_attention_heads
-        rope_max_pos_emb = config.max_position_embeddings
-        rope_base = config.rope_theta
-        llama3_params = None
-        rope_scaling = config.rope_scaling
-        if rope_scaling is None:
-            emb_type = RopeType.Default
-        else:
-            emb_type = RopeType.Llama3
-            low_freq_factor = rope_scaling.get('low_freq_factor', 1.0)
-            high_freq_factor = rope_scaling.get('high_freq_factor', 1.0)
-            llama3_params = Llama3Parameters(low_freq_factor, high_freq_factor)
-
-        return build_rotary_embedding(
-            rope_dim,
-            rope_max_pos_emb,
-            rope_base,
-            scaling_factor,
-            llama3_params=llama3_params,
-            emb_type=emb_type,
-        )
+        return build_rotary_embedding_from_config(config)
 
     def forward(
         self,
         inputs_embeds: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         **kwargs,
     ):
@@ -404,7 +387,7 @@ class Llama4ForCausalLM(nn.Module):
         self,
         inputs_embeds: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         **kwargs,
     ):
@@ -482,7 +465,7 @@ class Llama4VisionRotaryEmbedding(nn.Module):
         frequencies_x = img_idx % idx  # get the coordinates of the 2d matrix along x
         frequencies_y = img_idx // idx  # get the coordinates of the 2d matrix along y
         freq_dim = config.hidden_size // config.num_attention_heads // 2
-        rope_freq = 1.0 / (config.rope_theta**(torch.arange(0, freq_dim, 2)[:(freq_dim // 2)].float() / freq_dim))
+        rope_freq = 1.0 / (get_rope_theta(config)**(torch.arange(0, freq_dim, 2)[:(freq_dim // 2)].float() / freq_dim))
         freqs_x = ((frequencies_x + 1)[..., None] * rope_freq[None, None, :]).repeat_interleave(2, dim=-1)
         freqs_y = ((frequencies_y + 1)[..., None] * rope_freq[None, None, :]).repeat_interleave(2, dim=-1)
         freqs = torch.cat([freqs_x, freqs_y], dim=-1).float().contiguous()[..., ::2]
@@ -504,7 +487,7 @@ def vision_apply_rotary_emb(
     query: torch.Tensor,
     key: torch.Tensor,
     freqs_ci: torch.Tensor,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     query_ = torch.view_as_complex(query.float().reshape(*query.shape[:-1], -1, 2))
     key_ = torch.view_as_complex(key.float().reshape(*key.shape[:-1], -1, 2))
     freqs_ci = reshape_for_broadcast(freqs_ci=freqs_ci, query=query_)  # freqs_ci[:,:,None,:]
@@ -833,7 +816,6 @@ class Llama4ForConditionalGeneration(nn.Module, CudaGraphMixin):
         self._update_quant_config(config)
         self.language_model = Llama4ForCausalLM(config.text_config, ctx_mgr, dtype=dtype, device=device)
         self.vocab_size = config.text_config.vocab_size
-        self.pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else -1
 
         self.input_processor = Llama4InputProcessor(config, dtype)
 
@@ -872,7 +854,7 @@ class Llama4ForConditionalGeneration(nn.Module, CudaGraphMixin):
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         pixel_values: torch.FloatTensor = None,
         image_mask: torch.Tensor = None,
@@ -905,8 +887,8 @@ class Llama4ForConditionalGeneration(nn.Module, CudaGraphMixin):
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
-        inputs_embeds: Optional[torch.Tensor] = None,
+        past_key_values: list[list[torch.Tensor]],
+        inputs_embeds: torch.Tensor | None = None,
         context: StepContext = None,
     ):
         """Prepare input."""
@@ -941,7 +923,7 @@ class Llama4ForConditionalGeneration(nn.Module, CudaGraphMixin):
             image_mask=image_mask,
         )
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
 
         def _load_experts_bf16(name, loaded_weight):
@@ -1039,8 +1021,8 @@ class Llama4InputProcessor(BaseModelInputProcessor):
         self.vision_config = config.vision_config
 
     def preprocess_input(self,
-                         input_ids: List[int],
-                         input_multimodals: List[Dict[str, Any]] = None,
+                         input_ids: list[int],
+                         input_multimodals: list[dict[str, Any]] = None,
                          **kwargs) -> PreprocessInputResult:
         """Prepare multimodal input."""
 
@@ -1056,10 +1038,10 @@ class Llama4InputProcessor(BaseModelInputProcessor):
             if isinstance(num_pad, torch.Tensor):
                 num_pad = num_pad.item()
 
-            mm_data = MultiModalTensor(data=pixel_values,
-                                       start=offset,
-                                       end=offset + num_pad,
-                                       meta=dict(image_token_id=image_token_id))
+            mm_data = MultiModalData(data=pixel_values,
+                                     start=offset,
+                                     end=offset + num_pad,
+                                     meta=dict(image_token_id=image_token_id))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(

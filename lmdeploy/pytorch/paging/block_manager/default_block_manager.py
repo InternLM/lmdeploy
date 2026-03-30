@@ -25,11 +25,7 @@ class DefaultBlockManager(BaseBlockManager):
     @classmethod
     def num_required_blocks(cls, obj: SchedulerSequence, prealloc_size: int = 0):
         """Get num required blocks."""
-        num_tokens = obj.num_all_tokens() + prealloc_size
-
-        # cross tokens
-        num_cross = obj.num_all_cross_tokens()
-        num_tokens = max(num_tokens, num_cross)
+        num_tokens = obj.num_all_ids + prealloc_size
 
         num_all_blocks = _div_up(num_tokens, obj.block_size)
         return max(0, num_all_blocks - len(obj.logical_blocks))

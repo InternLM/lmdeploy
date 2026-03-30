@@ -1,0 +1,311 @@
+# Copyright (c) OpenMMLab. All rights reserved.
+
+from collections.abc import Iterable
+from typing import Any
+
+import torch
+from torch import nn
+from transformers.configuration_utils import PretrainedConfig
+
+from lmdeploy.pytorch.model_inputs import StepContextManager
+from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
+
+from .patch import add_prefix, get_build_model_context
+from .qwen3_moe import Qwen3MoeModel
+from .qwen3_vl import Qwen3VLForConditionalGeneration
+from .qwen3_vl import Qwen3VLTextRotaryEmbedding as Qwen3VLMoeTextRotaryEmbedding
+
+
+class Qwen3VLMoeTextModel(Qwen3MoeModel):
+    """Text part of Qwen3VL.
+
+    not a pure text-only model, as DeepStack integrates visual features into the early hidden states.
+    """
+
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 prefix: str = ''):
+        super().__init__(config=config, dtype=dtype, device=device, prefix=prefix)
+
+        # build rotary embedding
+        # TODO: zhouxinyu, add triton kernel for interleaved mrope
+        self.rotary_emb = Qwen3VLMoeTextRotaryEmbedding(config, device=device)
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,
+        attn_metadata: Any = None,
+        inputs_embeds: torch.FloatTensor | None = None,
+        mrope_position_ids: torch.LongTensor = None,
+        # args for deepstack
+        visual_pos_masks: torch.Tensor | None = None,
+        deepstack_visual_embeds: list[torch.Tensor] | None = None,
+        all_routed_experts: torch.Tensor | None = None,
+    ):
+        """Rewrite of LlamaModel.forward."""
+
+        # token embedding
+        if inputs_embeds is None:
+            inputs_embeds = self.embed_tokens(input_ids)
+
+        hidden_states = inputs_embeds
+
+        # rotary embedding
+        if mrope_position_ids is None:
+            cos, sin = self.rotary_emb(hidden_states, position_ids)
+        else:
+            mrope_position_ids = mrope_position_ids.unsqueeze(1)
+            cos, sin = self.rotary_emb(hidden_states, mrope_position_ids)
+
+        cos, sin = cos[0], sin[0]
+        rotary_pos_emb = (cos, sin)
+
+        # decoding
+        residual = None
+        for idx, decoder_layer in enumerate(self.layers):
+            past_key_value = past_key_values[idx]
+            hidden_states, residual = decoder_layer(
+                hidden_states,
+                rotary_pos_emb=rotary_pos_emb,
+                past_key_value=past_key_value,
+                residual=residual,
+                attn_metadata=attn_metadata,
+                all_routed_experts=all_routed_experts,
+            )
+
+            # add visual features to the hidden states of first several layers
+            if deepstack_visual_embeds is not None and idx in range(len(deepstack_visual_embeds)):
+                hidden_states = hidden_states + residual
+                hidden_states = self._deepstack_process(
+                    hidden_states,
+                    visual_pos_masks,
+                    deepstack_visual_embeds[idx],
+                )
+                residual = None
+
+        # norm
+        hidden_states, _ = self.norm(hidden_states, residual)
+
+        return hidden_states
+
+    def _deepstack_process(self, hidden_states: torch.Tensor, visual_pos_masks: torch.Tensor,
+                           visual_embeds: torch.Tensor):
+        visual_pos_masks = visual_pos_masks.to(hidden_states.device)
+        visual_embeds = visual_embeds.to(hidden_states.device, hidden_states.dtype)
+        local = torch.zeros_like(hidden_states)
+        local.masked_scatter_(visual_pos_masks, visual_embeds)
+        hidden_states += local
+        return hidden_states
+
+
+class Qwen3VLMoeForConditionalGeneration(Qwen3VLForConditionalGeneration):
+    """ModelForCausalLM."""
+
+    packed_modules_mapping = {
+        'qkv_proj': [
+            'q_proj',
+            'k_proj',
+            'v_proj',
+        ],
+        'gate_up_proj': [
+            'gate_proj',
+            'up_proj',
+        ],
+    }
+
+    def __init__(
+        self,
+        config: PretrainedConfig,
+        ctx_mgr: StepContextManager,
+        dtype: torch.dtype = None,
+        device: torch.device = None,
+        prefix: str = '',
+    ):
+        super().__init__(config=config, ctx_mgr=ctx_mgr, dtype=dtype, device=device, prefix=prefix)
+
+        self.language_model = Qwen3VLMoeTextModel(config.text_config,
+                                                  dtype=dtype,
+                                                  device=device,
+                                                  prefix=add_prefix('language_model', prefix))
+        # for router replay
+        bm_ctx = get_build_model_context()
+        self.enable_return_routed_experts = bm_ctx.enable_return_routed_experts
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        position_ids: torch.Tensor,
+        past_key_values: list[list[torch.Tensor]],
+        attn_metadata: Any = None,
+        inputs_embeds: torch.Tensor = None,
+        mrope_position_ids: torch.Tensor = None,
+        pixel_values: torch.Tensor = None,
+        vis_cu_seqlens: torch.Tensor = None,
+        vis_pos_emb: torch.Tensor = None,
+        image_mask: torch.Tensor = None,
+        pos_embeds: torch.Tensor = None,
+        grid_thw: torch.Tensor = None,
+        **kwargs,
+    ):
+        """Model forward, return logits."""
+
+        visual_pos_masks = None
+        deepstack_visual_embeds = None
+        if inputs_embeds is None:
+            inputs_embeds = self.get_input_embeddings()(input_ids)
+
+            if pixel_values is not None:
+                dtype = inputs_embeds.dtype
+                pixel_values = pixel_values.to(dtype)
+                vis_pos_emb = (vis_pos_emb[0].to(dtype), vis_pos_emb[1].to(dtype))
+
+                # get image embeds and deepstack visual embeds
+                image_embeds, deepstack_visual_embeds = self.visual(pixel_values,
+                                                                    cu_seqlens=vis_cu_seqlens,
+                                                                    rotary_pos_emb=vis_pos_emb,
+                                                                    pos_embeds=pos_embeds)
+
+                # split image embeds per sample
+                split_sizes = (grid_thw.prod(-1) // self.visual.spatial_merge_size**2).tolist()
+                image_embeds = torch.split(image_embeds, split_sizes)
+                image_embeds = torch.cat(image_embeds, dim=0).to(inputs_embeds.device, dtype)
+
+                # mask and scatter to create final input embeddings
+                expanded_image_mask = image_mask.unsqueeze(-1).expand_as(inputs_embeds)
+                inputs_embeds = inputs_embeds.masked_scatter(expanded_image_mask, image_embeds)
+
+                visual_pos_masks = expanded_image_mask
+
+        # router replay
+        all_routed_experts = None
+        if self.enable_return_routed_experts:
+            all_routed_experts = input_ids.new_empty((input_ids.size(1), self.config.text_config.num_hidden_layers,
+                                                      self.config.text_config.num_experts_per_tok),
+                                                     dtype=torch.uint16)
+        hidden_states = self.language_model(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            attn_metadata=attn_metadata,
+            inputs_embeds=inputs_embeds,
+            mrope_position_ids=mrope_position_ids,
+            # args for deepstack
+            visual_pos_masks=visual_pos_masks,
+            deepstack_visual_embeds=deepstack_visual_embeds,
+            all_routed_experts=all_routed_experts)
+        if all_routed_experts is None:
+            return hidden_states
+        return dict(hidden_states=hidden_states, all_routed_experts=all_routed_experts)
+
+    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
+                             expert_params_mapping: list):
+        """Load weight experts."""
+
+        for (param_name, weight_name, expert_id, shard_id) in expert_params_mapping:
+            if weight_name not in name:
+                continue
+            name = name.replace(weight_name, param_name)
+            param = params_dict[name]
+            load_weight(param, loaded_weight, expert_id=expert_id, shard_id=shard_id)
+            break
+        else:
+            param = params_dict[name]
+            load_weight(param, loaded_weight)
+
+    # modify from vllm qwen3vlmoe fused expert loading
+    def _load_weight_fused_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
+                                   fused_expert_params_mapping: list):
+        """Load weight of fused expert weights."""
+        num_experts = self.config.text_config.num_experts
+
+        for (param_name, weight_name) in fused_expert_params_mapping:
+            if weight_name not in name:
+                continue
+            name = name.replace(weight_name, param_name)
+            param = params_dict[name]
+
+            loaded_weight = loaded_weight.transpose(-1, -2)  # no bias
+            if 'gate_up' in name:
+                loaded_weight = loaded_weight.chunk(2, dim=-2)
+                w1 = loaded_weight[0]
+                w3 = loaded_weight[1]
+                for expert_id in range(num_experts):
+                    load_weight(param, w1[expert_id], expert_id=expert_id, shard_id='gate')
+                    load_weight(param, w3[expert_id], expert_id=expert_id, shard_id='up')
+            elif 'down' in name:
+                w2 = loaded_weight
+                for expert_id in range(num_experts):
+                    load_weight(param, w2[expert_id], expert_id=expert_id, shard_id='down')
+
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
+        """Load weights."""
+        # modify from vllm
+        stacked_params_mapping = [
+            # (param_name, shard_name, shard_id)
+            ('.qkv_proj', '.q_proj', 'q'),
+            ('.qkv_proj', '.k_proj', 'k'),
+            ('.qkv_proj', '.v_proj', 'v'),
+            ('.gate_up_proj', '.gate_proj', 0),
+            ('.gate_up_proj', '.up_proj', 1),
+        ]
+
+        # expert mapping
+        num_experts = self.config.text_config.num_experts
+        expert_params_mapping = []
+        for exp_id in range(num_experts):
+            # (param_name, weight_name, expert_id, shard_id)
+            gate_param = ('.experts.gate_up', f'.experts.{exp_id}.gate_proj', exp_id, 'gate')
+            up_param = ('.experts.gate_up', f'.experts.{exp_id}.up_proj', exp_id, 'up')
+            down_param = ('.experts.down', f'.experts.{exp_id}.down_proj', exp_id, 'down')
+            expert_params_mapping += [gate_param, up_param, down_param]
+
+        # fused expert mapping
+        fused_expert_params_mapping = [
+            # (param_name, weight_name)
+            ('.experts.gate_up.weight', '.experts.gate_up_proj'),
+            ('.experts.down.weight', '.experts.down_proj'),
+        ]
+
+        params_dict = dict(self.named_parameters())
+        for name, loaded_weight in weights:
+            if 'rotary_emb.inv_freq' in name:
+                continue
+            if ('rotary_emb.cos_cached' in name or 'rotary_emb.sin_cached' in name):
+                continue
+            if self.config.tie_word_embeddings and 'lm_head.weight' in name:
+                continue
+            name = name.replace('.block_sparse_moe.', '.mlp.')
+            if '.experts' in name:
+                is_fused_expert = ('experts.gate_up_proj' in name or 'experts.down_proj' in name)
+                if is_fused_expert:
+                    self._load_weight_fused_experts(name,
+                                                    loaded_weight,
+                                                    params_dict,
+                                                    fused_expert_params_mapping=fused_expert_params_mapping)
+                else:
+                    self._load_weight_experts(name,
+                                              loaded_weight,
+                                              params_dict,
+                                              expert_params_mapping=expert_params_mapping)
+            else:
+                for (param_name, weight_name, shard_id) in stacked_params_mapping:
+                    if weight_name not in name:
+                        continue
+                    name = name.replace(weight_name, param_name)
+                    param = params_dict[name]
+                    load_weight(param, loaded_weight, shard_id=shard_id)
+                    break
+                else:
+                    if '.qkv.' in name:
+                        param = params_dict[name]
+                        q, k, v = param.weight_spliter(loaded_weight)
+                        load_weight(param, q, shard_id='q')
+                        load_weight(param, k, shard_id='k')
+                        load_weight(param, v, shard_id='v')
+                    else:
+                        param = params_dict[name]
+                        load_weight(param, loaded_weight)

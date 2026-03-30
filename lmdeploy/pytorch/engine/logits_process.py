@@ -1,15 +1,17 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-import json
 from dataclasses import dataclass, fields
-from typing import Dict, List, Optional, Tuple
+from functools import lru_cache
+from typing import Any
 
+import numpy as np
 import torch
 
 from lmdeploy.messages import LogitsProcessor
-from lmdeploy.tokenizer import Tokenizer
+from lmdeploy.pytorch import envs
 
 from ..messages import SchedulerSequence
+from .guided_process import GuidedDecodingManager
 
 
 def _process_temperature_(scores: torch.Tensor, temperature: torch.Tensor):
@@ -20,17 +22,41 @@ def _process_temperature_(scores: torch.Tensor, temperature: torch.Tensor):
 
 
 def _process_bad_words_(scores: torch.Tensor,
-                        bad_words: torch.LongTensor,
-                        mask: torch.BoolTensor,
+                        bad_words: torch.Tensor,
+                        mask: torch.Tensor,
                         filter_value: float = -float('inf')):
-    """Process bad words."""
-    filtered_scores = scores.gather(1, bad_words)
+    """Apply bad-word filtering to token scores.
+
+    This function updates ``scores`` in place by setting the scores of
+    "bad" token indices to ``filter_value``.
+    Args:
+        scores (torch.Tensor): A tensor of shape ``[batch_size, vocab_size]``
+            containing the logits or scores for each token in the vocabulary.
+        bad_words (torch.Tensor): A tensor of shape
+            ``[batch_size, num_bad_words]`` containing token indices that
+            should be suppressed. Invalid or masked positions may contain
+            negative values; these entries are ignored and not used as
+            indices into ``scores``.
+        mask (torch.Tensor): A boolean tensor with the same shape as
+            ``bad_words``. Positions with ``True`` indicate that the
+            corresponding entry in ``bad_words`` is a valid bad-word index
+            that should be filtered. Positions with ``False`` are treated as
+            invalid/masked and are not applied to ``scores``.
+        filter_value (float, optional): The value to assign to the scores of
+            bad-word tokens. Defaults to ``-float('inf')``.
+    Returns:
+        torch.Tensor: The ``scores`` tensor after bad-word filtering has
+        been applied.
+    """
+    # invalid badwords might be negative
+    valid_bad_words = bad_words.where(mask, 0)
+    filtered_scores = scores.gather(1, valid_bad_words)
     filtered_scores[mask] = filter_value
-    scores.scatter_(1, bad_words, filtered_scores)
+    scores.scatter_(1, valid_bad_words, filtered_scores)
     return scores
 
 
-def _process_repetition_penalty_(scores: torch.Tensor, input_ids: torch.LongTensor, penalty: torch.Tensor):
+def _process_repetition_penalty_(scores: torch.Tensor, input_ids: torch.Tensor, penalty: torch.Tensor):
     """Process repetition penalty."""
     score = torch.gather(scores, 1, input_ids)
     penalty = penalty.to(score.dtype)
@@ -69,6 +95,131 @@ def _filter_minp_sorted_(scores: torch.Tensor, minp: torch.Tensor, filter_value:
     return scores
 
 
+@lru_cache
+def _ngram_one(dtype: torch.dtype, device: torch.device, fill: int = 1):
+    return torch.ones(fill, dtype=dtype, device=device)
+
+
+def ngram(
+    token_ids: torch.Tensor,
+    n: torch.Tensor | None,
+    threshold: torch.Tensor,
+    max_n: int,
+    max_window_size: int,
+):
+    """Compute n-gram matches between sliding windows and a target sequence.
+
+    For each batch, performs cosine similarity checking between:
+      - All sliding windows of length `max_n` from the full sequence
+      - The last `max_n` tokens of the sequence (target window)
+
+    A match is counted when both:
+      1. Cosine similarity ≈ 1 (normalized vectors match)
+      2. Vector lengths match (preventing zero/normalization artifacts)
+
+    Parameters
+    ----------
+    token_ids : torch.Tensor
+        Input token IDs of shape (batch_size, seq_len).
+        Values are typically ≥0 (0 may represent padding/special tokens).
+    n : torch.Tensor
+        Effective n-gram length for each batch element, shape (batch_size,).
+        When `same_n=False`, positions beyond `n` in the last `max_n` tokens are masked.
+    threshold : torch.Tensor
+        Minimum number of matching windows required for validity, shape (batch_size,).
+    max_n : int
+        Maximum n-gram length (window size for matching).
+    max_window_size: int
+        Maximum window size for matching.
+
+    Returns
+    -------
+    matched_mask : torch.Tensor
+        Boolean mask of shape (batch_size, seq_len - max_n + 1) indicating
+        which sliding windows match the target n-gram.
+    found : torch.Tensor
+        Boolean tensor of shape (batch_size,) indicating whether each batch
+        element has at least `threshold` matches.
+    """
+
+    batch_size, seq_len = token_ids.size()
+    if seq_len < max_n:
+        # Not enough tokens to form a single n-gram
+        matched_mask = torch.zeros((batch_size, 0), dtype=torch.bool, device=token_ids.device)
+        found = torch.zeros((batch_size, ), dtype=torch.bool, device=token_ids.device)
+        return matched_mask, found
+    # token_ids could be 0, so we add 2 to avoid div 0
+    token_ids = (token_ids + 2).to(torch.float32).log2()
+
+    # Trim to max_window_size
+    if seq_len >= max_window_size:
+        token_ids = token_ids[:, -max_window_size:]
+    max_window_size = token_ids.size(1)
+
+    # normalize ids
+    # we would set n=None if n shared same value. Read lmdeploy/pytorch/strategies/ar/sampling.py for more details
+    same_n = n is None
+    norm = token_ids[:, -max_n:]
+    if not same_n:
+        # fill 0 for n < max_n
+        mask = torch.arange(max_n, device=token_ids.device).unsqueeze(0) >= (max_n - n.unsqueeze(1))
+        norm = norm * mask.to(torch.float32)
+    norm = norm.norm(2, dim=-1, keepdim=True)
+    normed_ids = token_ids / norm
+
+    # concate p1 and p2 so we can check distance and vector in one conv1d
+    normed_n_ids = normed_ids[:, -max_n:]
+    normed_ids_p2 = normed_ids * normed_ids
+    ones_ids = torch.ones_like(normed_n_ids)
+    if not same_n:
+        # fill 0 for n < max_n
+        normed_n_ids = normed_n_ids * mask.to(torch.float32)
+        ones_ids = ones_ids * mask.to(torch.float32)
+    normed_ids = torch.cat([normed_ids, normed_ids_p2], dim=0)
+    normed_n_ids = torch.cat([normed_n_ids, ones_ids], dim=0)
+
+    # check cos distance & check vector length
+    match_norm = torch.conv1d(normed_ids.unsqueeze(0), normed_n_ids.unsqueeze(1), groups=batch_size * 2)[0]
+    match_norm, match_ones = match_norm.chunk(2, dim=0)
+
+    # both match result should be close to 1
+    one_tensor = _ngram_one(dtype=match_norm.dtype, device=match_norm.device, fill=1)
+    matched_mask = match_norm.isclose(one_tensor) & match_ones.isclose(one_tensor)
+
+    # threshold
+    count = matched_mask.sum(-1)
+    found = (count >= threshold) & (threshold > 0)
+
+    return matched_mask, found
+
+
+def _filter_repetition_ngram_(
+    scores: torch.Tensor,
+    stop_words: torch.Tensor,
+    generated_ids: torch.Tensor,
+    n: torch.Tensor | None,
+    threshold: torch.Tensor,
+    max_n: int,
+    max_ngram_window_size: int,
+):
+    """Filter ngram.
+
+    if generated ngram found, set all scores -inf, and set stop words to 0. We assume that stop words always exist.
+    """
+    if stop_words is None or stop_words.numel() == 0:
+        return scores
+    # use first stop words
+    _, found = ngram(generated_ids, n, threshold, max_n, max_ngram_window_size)
+    stop_words = stop_words[:, 0]
+    # fill all scores -inf
+    scores.masked_fill_(found[:, None], -float('inf'))
+    # set stop words to 0
+    stop_scores = scores.gather(1, stop_words[:, None])
+    stop_scores.masked_fill_(found[:, None], 0)
+    scores.scatter_(1, stop_words[:, None], stop_scores)
+    return scores
+
+
 def _multinomial_sampling(scores: torch.Tensor,
                           seeds: torch.LongTensor,
                           offsets: torch.LongTensor,
@@ -78,35 +229,14 @@ def _multinomial_sampling(scores: torch.Tensor,
     return multinomial_sampling(scores, seeds, offsets, indices)
 
 
-def _guided_sampling(response_formats: Tuple[Dict], scores: torch.Tensor, guided_input_ids: Optional[torch.Tensor],
-                     tokenizer: object):
-    if guided_input_ids is None:
-        return scores
-    for i in range(len(response_formats)):
-        _format = response_formats[i]
-        if isinstance(_format, Dict) and _format.get('type', 'text') != 'text':
-            if _format['type'] == 'json_schema':
-                schema = _format['json_schema']
-                if isinstance(schema, Dict):
-                    for key in ['json_schema', 'schema']:
-                        if key in schema:
-                            schema = json.dumps(schema[key], ensure_ascii=False)
-                elif schema is None:
-                    from .guided_process import JSON_GRAMMAR
-                    schema = JSON_GRAMMAR
-                elif isinstance(schema, str):
-                    raise ValueError(f'Cannot parse schema {schema}. The schema must be '
-                                     'either a dictionary or a string that contains the'
-                                     ' JSON Schema specification')
-            elif _format['type'] == 'regex_schema':
-                schema = _format.get('regex_schema', '')
-            else:
-                raise ValueError(f"unsupported format type: {_format['type']}")
-            from .guided_process import _get_guided_logits_processor
-            processor = _get_guided_logits_processor(schema, tokenizer, _format['type'])
-            if processor:
-                scores[i] = processor(guided_input_ids[i].tolist(), scores[i])
-    return scores
+SeqList = list[SchedulerSequence]
+
+
+@dataclass
+class SamplingInputsDelta:
+    num_ignore_eos: torch.Tensor = None
+    random_offsets: torch.Tensor = None
+    all_ids: None | torch.Tensor = None
 
 
 @dataclass
@@ -120,140 +250,32 @@ class SamplingInputs:
     top_k: torch.LongTensor = None
     top_p: torch.Tensor = None
     min_p: torch.Tensor = None
-    random_seeds: int = None
-    random_offsets: int = None
+    random_seeds: torch.Tensor = None
+    random_offsets: torch.Tensor = None
     max_top_k: int = 1
     min_top_p: float = 1.0
-    response_formats: Tuple[str] = ()
-    logits_processors: List[List[LogitsProcessor]] = None
+    response_formats: list[str, ...] = ()
+    logits_processors: list[list[LogitsProcessor]] = None
+    max_num_logprobs: None | int = None
+    all_ids: None | torch.Tensor = None
+    num_ignore_eos: torch.Tensor = None
+    batch_size: int = 0
+    session_ctx: None | list[dict[str, Any]] = None
+    session_to_cleanup: None | list[int] = None
+    # for repetition_penalty and ngram
+    generated_ids: torch.Tensor | None = None
+    generated_ids_cpu: np.ndarray | None = None
 
-    @classmethod
-    def from_sampling_params(cls, seqs: List[SchedulerSequence]):
-        """From samplingg params."""
-        batch_size = len(seqs)
-        temperature = [None] * batch_size
-        repetition_penalty = [None] * batch_size
-        top_k = [None] * batch_size
-        top_p = [None] * batch_size
-        min_p = [None] * batch_size
-        bad_words = [None] * batch_size
-        stop_words = [None] * batch_size
-        random_seeds = [torch.seed() & 0xffffffff] * batch_size
-        random_offsets = [None] * batch_size
-        response_formats = [None] * batch_size
-        logits_processors = [None] * batch_size
-
-        def __gather_params():
-            """Gather params."""
-            for idx, seq in enumerate(seqs):
-                param = seq.sampling_param
-                temperature[idx] = param.temperature
-                repetition_penalty[idx] = param.repetition_penalty
-                top_k[idx] = param.top_k
-                top_p[idx] = param.top_p
-                min_p[idx] = param.min_p
-                random_offsets[idx] = seq.random_offsets
-                response_formats[idx] = param.response_format
-                if param.random_seed is not None:
-                    random_seeds[idx] = param.random_seed & 0xffffffff
-
-                bw = param.bad_words
-                sw = param.stop_words
-                if (not param.ignore_eos and seq.num_new_tokens < param.min_new_tokens):
-                    bw = bw + sw
-                bad_words[idx] = bw
-                stop_words[idx] = sw
-                logits_processors[idx] = param.logits_processors
-
-        def __get_topp(top_p):
-            """Get topp."""
-            min_top_p = min(top_p)
-            if min_top_p == 1.0:
-                top_p = None
-            else:
-                top_p = torch.tensor(top_p)
-            return top_p, min_top_p
-
-        def __get_minp(min_p):
-            """Get minp."""
-            max_min_p = max(min_p)
-            if max_min_p == 0.0:
-                min_p = None
-            else:
-                min_p = torch.Tensor(min_p)
-            return min_p
-
-        def __get_bad_words(bad_words):
-            """Get bad words."""
-            max_bw_len = max(len(bw) for bw in bad_words)
-            if max_bw_len == 0:
-                return None, None
-            if all(len(bw) == max_bw_len for bw in bad_words):
-                ret = torch.tensor(bad_words)
-                mask = torch.ones_like(ret, dtype=bool)
-                return ret, mask
-            ret = torch.full((batch_size, max_bw_len), -1, dtype=torch.int64)
-            for idx, bw in enumerate(bad_words):
-                bw_len = len(bw)
-                if bw_len == 0:
-                    continue
-                bw = ret.new_tensor(bw)
-                ret[idx, :bw_len] = bw
-
-            mask = ret >= 0
-            ret = ret.where(mask, 0)
-            return ret, mask
-
-        __gather_params()
-
-        if all(rp == 1.0 for rp in repetition_penalty):
-            repetition_penalty = None
-        else:
-            repetition_penalty = torch.tensor(repetition_penalty)
-
-        temperature = torch.tensor(temperature)
-
-        bad_words, bad_mask = __get_bad_words(bad_words)
-        stop_words, stop_mask = __get_bad_words(stop_words)
-
-        max_top_k = max(top_k)
-        if min(top_k) <= 0:
-            max_top_k = 0
-        if max_top_k == 1:
-            top_k = None
-            top_p, min_top_p = None, 1.0
-            min_p = None
-            random_seeds = None
-            random_offsets = None
-        else:
-            top_k = torch.tensor(top_k)
-            top_p, min_top_p = __get_topp(top_p)
-            min_p = __get_minp(min_p)
-            random_seeds = torch.tensor(random_seeds)
-            random_offsets = torch.tensor(random_offsets)
-
-        sampling_input = cls(
-            temperature=temperature,
-            bad_words=bad_words,
-            bad_mask=bad_mask,
-            stop_words=stop_words,
-            stop_mask=stop_mask,
-            repetition_penalty=repetition_penalty,
-            top_k=top_k,
-            top_p=top_p,
-            min_p=min_p,
-            random_seeds=random_seeds,
-            random_offsets=random_offsets,
-            response_formats=tuple(response_formats),
-            max_top_k=max_top_k,
-            min_top_p=min_top_p,
-            logits_processors=logits_processors,
-        )
-        return sampling_input
+    # n gram
+    repetition_ngram_size: torch.Tensor | None = None
+    repetition_ngram_threshold: torch.Tensor | None = None
+    max_repetition_ngram_size: int = 0
 
     def to_device(self, device: str, non_blocking: bool = False):
         """To device."""
         out_dict = dict()
+        if self.generated_ids is None and self.generated_ids_cpu is not None:
+            self.generated_ids = torch.from_numpy(self.generated_ids_cpu.copy())
         for f in fields(self):
             k = f.name
             v = getattr(self, k)
@@ -262,6 +284,24 @@ class SamplingInputs:
             out_dict[k] = v
 
         return SamplingInputs(**out_dict)
+
+    def get_delta(self) -> SamplingInputsDelta:
+        """Get delta."""
+        delta = SamplingInputsDelta()
+        for f in fields(self):
+            k = f.name
+            v = getattr(self, k)
+            if isinstance(v, torch.Tensor):
+                setattr(delta, k, v)
+        return delta
+
+    def update_delta(self, delta: SamplingInputsDelta):
+        """Update from delta."""
+        for f in fields(delta):
+            k = f.name
+            v = getattr(delta, k)
+            if v is not None:
+                setattr(self, k, v)
 
 
 def _apply_custom_logits_processors(batched_logits_processors, all_ids, logits):
@@ -273,18 +313,37 @@ def _apply_custom_logits_processors(batched_logits_processors, all_ids, logits):
     return logits
 
 
+def _torch_topk(x: torch.Tensor, k: int, dim: int = -1, largest: bool = True, sorted: bool = True):
+    if k == 1:
+        # torch.topk would not fallback to torch.max/torch.min automatically
+        if largest:
+            return torch.max(x, dim=dim, keepdim=True)
+        else:
+            return torch.min(x, dim=dim, keepdim=True)
+    else:
+        return torch.topk(x, k, dim=dim, largest=largest, sorted=sorted)
+
+
 class FusedLogitsProcessor:
     """Custom logits processor."""
 
-    def __init__(self,
-                 sampling_inputs: SamplingInputs,
-                 ignore_eos: torch.Tensor,
-                 tokenizer: Optional[Tokenizer] = None,
-                 sampling_vocab_size: Optional[int] = None):
+    def __init__(
+        self,
+        sampling_inputs: SamplingInputs,
+        logprobs_mode: None | str = None,
+        guided_decoding_manager: None | GuidedDecodingManager = None,
+    ):
         self.sampling_inputs: SamplingInputs = sampling_inputs
-        self.ignore_eos = ignore_eos
-        self.tokenizer = tokenizer
-        self.sampling_vocab_size = sampling_vocab_size
+        self.logprobs_mode = logprobs_mode
+        self.guided_decoding_manager = guided_decoding_manager
+        if sampling_inputs.session_to_cleanup:
+            self.cleanup_sessions(sampling_inputs.session_to_cleanup)
+
+        if self.guided_decoding_manager:
+            self.guided_processors = self.guided_decoding_manager.get_processors(sampling_inputs.session_ctx,
+                                                                                 sampling_inputs.response_formats)
+        else:
+            self.guided_processors = {}
 
     async def _wait_stream_once(self):
         """Wait stream once."""
@@ -292,13 +351,10 @@ class FusedLogitsProcessor:
         if not stream.query():
             await asyncio.sleep(0)
 
-    async def __call__(self, all_ids: torch.LongTensor, guided_input_ids: torch.LongTensor,
-                       scores: torch.FloatTensor) -> torch.FloatTensor:
+    async def __call__(self, scores: torch.Tensor) -> torch.Tensor:
         r"""
         Args:
-            all_ids (torch.LongTensor): All the token ids.
-            guided_input_ids (torch.LongTensor): Guided prompt ids.
-            scores (torch.FloatTensor):
+            scores (torch.Tensor):
                 Prediction scores of a language modeling head.
                 These can be logits for each vocabulary when not using
                 beam search or log softmax for each vocabulary token
@@ -306,19 +362,61 @@ class FusedLogitsProcessor:
 
 
         Return:
-            torch.FloatTensor: The processed prediction scores.
+            torch.Tensor: The processed prediction scores.
 
         """
-        sampling_inputs = self.sampling_inputs
 
+        num_logprobs = self.sampling_inputs.max_num_logprobs
+        # get raw logprobs
+        if num_logprobs < 0:
+            logprobs = None
+        else:
+            if self.logprobs_mode == 'raw_logits':
+                logprobs = scores.clone()
+            elif self.logprobs_mode == 'raw_logprobs':
+                logprobs = scores.log_softmax(dim=-1)
+            else:
+                logprobs = None
+
+        sampling_inputs = self.sampling_inputs
+        all_ids = sampling_inputs.all_ids
         custom_logits_processors = self.sampling_inputs.logits_processors
+        if self.guided_decoding_manager and self.guided_processors:
+            if not hasattr(self, 'guided_bitmask'):
+                self.guided_bitmask = self.guided_decoding_manager.allocate_batched_bitmap(len(scores))
+
+            assert self.guided_bitmask is not None
+            guided_bitmask = self.guided_bitmask
+
+            await self._wait_stream_once()
+            for i, processor in self.guided_processors.items():
+                self.guided_decoding_manager.fill_bitmap(processor, guided_bitmask, i)
+
+            self.guided_decoding_manager.apply_batched_bitmap(scores, guided_bitmask)
+
         if any(custom_logits_processors):
             await self._wait_stream_once()
             scores = _apply_custom_logits_processors(custom_logits_processors, all_ids, scores)
 
         repetition_penalty = sampling_inputs.repetition_penalty
         if repetition_penalty is not None:
-            scores = _process_repetition_penalty_(scores, all_ids, repetition_penalty)
+            generated_ids = sampling_inputs.generated_ids
+            scores = _process_repetition_penalty_(scores, generated_ids, repetition_penalty)
+
+        if sampling_inputs.max_repetition_ngram_size > 0:
+            generated_ids = sampling_inputs.generated_ids
+            assert generated_ids is not None
+            assert sampling_inputs.repetition_ngram_threshold is not None
+            max_repetition_ngram_window_size = envs.repetition_window_size
+            scores = _filter_repetition_ngram_(
+                scores,
+                sampling_inputs.stop_words,
+                generated_ids,
+                sampling_inputs.repetition_ngram_size,
+                sampling_inputs.repetition_ngram_threshold,
+                sampling_inputs.max_repetition_ngram_size,
+                max_repetition_ngram_window_size,
+            )
 
         temperature = sampling_inputs.temperature
         if temperature is not None:
@@ -331,14 +429,12 @@ class FusedLogitsProcessor:
 
         stop_words = sampling_inputs.stop_words
         if stop_words is not None:
+            ignore_eos = sampling_inputs.num_ignore_eos > 0
             stop_mask = sampling_inputs.stop_mask
-            stop_mask = torch.where(self.ignore_eos[:, None], stop_mask, False)
+            stop_mask = torch.where(ignore_eos[:, None], stop_mask, False)
             scores = _process_bad_words_(scores, stop_words, stop_mask)
 
-        if guided_input_ids is not None:
-            await self._wait_stream_once()
-            scores = _guided_sampling(sampling_inputs.response_formats, scores, guided_input_ids, self.tokenizer)
-        return scores
+        return scores, logprobs
 
     @torch.inference_mode()
     def sampling(self, logits: torch.Tensor):
@@ -352,7 +448,7 @@ class FusedLogitsProcessor:
             if max_topk <= 0:
                 max_topk = scores.size(1)
                 if top_k is not None:
-                    top_k = torch.where(top_k <= 0, top_k.new_tensor(max_topk), top_k)
+                    top_k = torch.masked_fill(top_k, top_k <= 0, max_topk)
 
             if top_k is not None:
                 scores = _filter_topk_sorted_(scores, top_k)
@@ -371,16 +467,40 @@ class FusedLogitsProcessor:
             offsets = sampling_inputs.random_offsets
             return _multinomial_sampling(softmax_scores, seeds, offsets, indices)
 
-        if self.sampling_vocab_size is not None and logits.size(1) > self.sampling_vocab_size:
-            logits = logits[..., :self.sampling_vocab_size]
-
         if sampling_inputs.max_top_k == 1:
-            return logits.argmax(-1)
+            result = logits.argmax(-1)
         else:
             # sort logits is too slow. and we only need topk logits
             max_topk = sampling_inputs.max_top_k
             if max_topk <= 0:
                 scores, indices = logits.sort(1, descending=True)
             else:
-                scores, indices = logits.topk(max_topk, dim=1)
-            return __random_sampling(scores, indices)
+                scores, indices = _torch_topk(logits, max_topk, dim=1)
+            result = __random_sampling(scores, indices)
+
+        if self.guided_decoding_manager and self.guided_processors:
+            for i, processor in self.guided_processors.items():
+                self.guided_decoding_manager.accept_token(processor, result[i])
+
+        return result
+
+    @torch.inference_mode()
+    def compute_logprobs(self, raw_logprobs: torch.Tensor, token_ids: torch.LongTensor):
+        """Compute logprobs."""
+        if raw_logprobs is None:
+            return None
+
+        indices = token_ids.unsqueeze(-1)
+        logprobs = raw_logprobs.gather(-1, indices)
+        num_logprobs = self.sampling_inputs.max_num_logprobs
+        if num_logprobs > 0:
+            topk_logprobs, topk_indices = _torch_topk(raw_logprobs, num_logprobs, dim=-1)
+            logprobs = torch.cat([logprobs, topk_logprobs], dim=-1)
+            indices = torch.cat([indices, topk_indices], dim=-1)
+
+        return logprobs, indices.to(torch.int32)
+
+    def cleanup_sessions(self, session_ids: list[int]):
+        if self.guided_decoding_manager:
+            for session_id in session_ids:
+                self.guided_decoding_manager.remove_processor(session_id)

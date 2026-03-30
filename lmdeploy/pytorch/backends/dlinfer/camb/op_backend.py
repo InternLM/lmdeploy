@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Tuple
 
 import torch
 
@@ -26,7 +25,7 @@ class CambOpsBackend(DlinferOpsBackend):
         num_heads: int,
         head_size: int,
         dtype: torch.dtype,
-    ) -> Tuple[int, ...]:
+    ) -> tuple[int, ...]:
         return (
             num_heads,
             block_size,
@@ -39,7 +38,7 @@ class CambOpsBackend(DlinferOpsBackend):
         num_heads: int,
         head_size: int,
         dtype: torch.dtype,
-    ) -> Tuple[int, ...]:
+    ) -> tuple[int, ...]:
         return (
             num_heads,
             block_size,
@@ -123,3 +122,8 @@ class CambOpsBackend(DlinferOpsBackend):
         """Build graph runner."""
         from lmdeploy.pytorch.backends.cuda.graph_runner import CUDAGraphRunner
         return CUDAGraphRunner(model, model_config, cache_config, backend_config, device)
+
+    @staticmethod
+    def support_ray():
+        """Support ray."""
+        return True

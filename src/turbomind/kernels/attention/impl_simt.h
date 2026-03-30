@@ -7,6 +7,7 @@
 #include <type_traits>
 
 #include "src/turbomind/kernels/core/array_ops.h"
+#include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/layout.h"
 #include "src/turbomind/kernels/core/thread_map.h"
 
@@ -32,6 +33,8 @@ struct Impl<MMA_SIMT, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S,
 
     static constexpr int kQuantKV = !std::is_same_v<T, Tkv>;
 
+    static constexpr bool MLA = HeadDim == 576;
+
     static constexpr int CTA_H = CTA_H_;
     static constexpr int CTA_Q = CTA_Q_;
     static constexpr int CTA_S = CTA_S_;
@@ -44,9 +47,7 @@ struct Impl<MMA_SIMT, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S,
     static constexpr int kWarpCntQ = CTA_Q / WARP_Q;
     static constexpr int kWarpCntS = CTA_S / WARP_S;
 
-    static constexpr int kWarpCount = kWarpCntQ * kWarpCntS;
-
-    static_assert(CTA_H_ == WARP_H_);
+    static constexpr int kWarpCount = kWarpCntH * kWarpCntQ * kWarpCntS;
 
     static_assert(kWarpCntQ == 1);
 
@@ -179,6 +180,9 @@ struct Impl<MMA_SIMT, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S,
 
     __device__ static void Sync()
     {
+        if constexpr (kWarpCntH > 1) {
+            __syncthreads();
+        }
         if constexpr (kQuantKV) {  // Thread layout of KV & KVp is different within warp boundary
             __syncwarp();
         }
@@ -198,13 +202,25 @@ struct Impl<MMA_SIMT, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S,
         }
     }
 
+    static __device__ int2 get_warp_ids()
+    {
+        const int warp_id = threadIdx.x / WARP_SIZE;
+        if constexpr (kWarpCntH > 1) {
+            return {warp_id % kWarpCntS, warp_id / kWarpCntS};
+        }
+        else {
+            return {warp_id, 0};
+        }
+    }
+
     template<class Func>
     __device__ static void ForeachML(FragM& frag_M, FragL& frag_L, Func&& func)
     {
+        const auto warp_ids = get_warp_ids();
         PRAGMA_UNROLL
         for (int m = 0; m < K_M; ++m) {  // Q
-            const int hi = m * OP_H;
-            const int ri = threadIdx.x;
+            const int hi = m * OP_H + warp_ids.y * WARP_H;
+            const int ri = threadIdx.x % (WARP_SIZE * kWarpCntS);
             ((Func &&) func)(hi, 0, ri, frag_M[m][0], frag_L[m][0]);
         }
     }
@@ -212,16 +228,15 @@ struct Impl<MMA_SIMT, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S,
     template<class Fragment, class Func>
     __device__ static void ForeachS(Fragment& S, Func&& func)
     {
-        const int warp_id   = threadIdx.x / WARP_SIZE;
-        const int lane_id   = threadIdx.x % WARP_SIZE;
-        const int warp_id_s = warp_id % kWarpCntS;
-        const int warp_id_h = warp_id / kWarpCntS;
+        const auto warp_ids = get_warp_ids();
+        const int  lane_id  = threadIdx.x % WARP_SIZE;
+
         PRAGMA_UNROLL
         for (int m = 0; m < K_M; ++m) {
             PRAGMA_UNROLL
             for (int n = 0; n < K_N; ++n) {
-                const int hi = m * OP_H + warp_id_h * WARP_H;
-                const int si = lane_id / T_D * S_S_thr + n * S_S + warp_id_s * WARP_S;
+                const int hi = m * OP_H + warp_ids.y * WARP_H;
+                const int si = lane_id / T_D * S_S_thr + n * S_S + warp_ids.x * WARP_S;
                 const int ri = lane_id % T_D;
                 ((Func &&) func)(hi, /*qi*/ 0, si, ri, S[m][n][0]);
             }
@@ -230,10 +245,8 @@ struct Impl<MMA_SIMT, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S,
 
     __device__ static void TransformQ(T* smem_Q, FragQ& frag_Q)
     {
-        const int warp_id = threadIdx.x / WARP_SIZE;
-        const int lane_id = threadIdx.x % WARP_SIZE;
-
-        const int warp_id_h = warp_id / kWarpCntS;
+        const auto warp_ids = get_warp_ids();
+        const int  lane_id  = threadIdx.x % WARP_SIZE;
 
         __syncthreads();
 
@@ -243,7 +256,7 @@ struct Impl<MMA_SIMT, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S,
         for (int m = 0; m < K_M; ++m) {
             PRAGMA_UNROLL
             for (int k = 0; k < K_K; ++k) {
-                const int hi = m + warp_id_h * WARP_H;
+                const int hi = m + warp_ids.y * WARP_H;
                 const int di = k * S_D + lane_id % T_D * S_D_thr;
                 Lds(frag_Q[m][k], &sQ(hi, di));
             }
@@ -275,10 +288,10 @@ struct Impl<MMA_SIMT, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S,
 
         __device__ void Load(int n, int pipe_iter)
         {
-            const int warp_id = threadIdx.x / WARP_SIZE;
-            const int lane_id = threadIdx.x % WARP_SIZE;
+            const auto warp_ids = get_warp_ids();
+            const int  lane_id  = threadIdx.x % WARP_SIZE;
 
-            const int offset_s = lane_id / T_D * S_S_thr + warp_id * WARP_S;
+            const int offset_s = lane_id / T_D * S_S_thr + warp_ids.x * WARP_S;
             const int offset_c = lane_id % T_D * S_D_thr;
 
             if (kQuantKV && n == 0) {
@@ -374,10 +387,10 @@ struct Impl<MMA_SIMT, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S,
 
         __device__ void Load(int k, int pipe_iter)
         {
-            const int warp_id = threadIdx.x / WARP_SIZE;
-            const int lane_id = threadIdx.x % WARP_SIZE;
+            const auto warp_ids = get_warp_ids();
+            const int  lane_id  = threadIdx.x % WARP_SIZE;
 
-            const int offset_s = lane_id / T_D * S_S_thr + warp_id * WARP_S;
+            const int offset_s = lane_id / T_D * S_S_thr + warp_ids.x * WARP_S;
             const int offset_c = lane_id % T_D * S_D_thr;
 
             if (kQuantKV && k == 0) {
@@ -504,11 +517,8 @@ struct Impl<MMA_SIMT, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S,
 
     __device__ static void Merge(FragO& frag_O, FragM& frag_M, FragL& frag_L, float qk_scale, SharedStorage& storage)
     {
-        const int warp_id = threadIdx.x / WARP_SIZE;
-        const int lane_id = threadIdx.x % WARP_SIZE;
-
-        const int warp_id_s = warp_id % kWarpCntS;
-        const int warp_id_h = warp_id / kWarpCntS;
+        const auto warp_ids = get_warp_ids();
+        const int  lane_id  = threadIdx.x % WARP_SIZE;
 
         FragM prev_M;
         copy(frag_M, prev_M);
@@ -524,7 +534,7 @@ struct Impl<MMA_SIMT, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S,
             }
             if (lane_id == 0) {
                 // printf("warp M %d %f\n", warp_id, frag_M[m][0]);
-                storage.M[m][warp_id_h][warp_id_s] = frag_M[m][0];
+                storage.M[m][warp_ids.y][warp_ids.x] = frag_M[m][0];
             }
         }
 
@@ -534,7 +544,7 @@ struct Impl<MMA_SIMT, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S,
         for (int m = 0; m < K_M; ++m) {
             PRAGMA_UNROLL
             for (int w = 0; w < kWarpCntS - 1; ++w) {
-                frag_M[m][0] = fmaxf(frag_M[m][0], storage.M[m][warp_id_h][(warp_id_s + w + 1) % kWarpCntS]);
+                frag_M[m][0] = fmaxf(frag_M[m][0], storage.M[m][warp_ids.y][(warp_ids.x + w + 1) % kWarpCntS]);
             }
             // if (threadIdx.x == 0) {
             //     printf("M %d %f\n", m * OP_H + blockIdx.x * CTA_H, frag_M[m][0]);
@@ -562,7 +572,7 @@ struct Impl<MMA_SIMT, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S,
                 PRAGMA_UNROLL
                 for (int d = 0; d < 8; d += 4) {
                     if (lane_id < T_D) {
-                        Store(storage.O[m][n][d / 4][warp_id_h][warp_id_s][lane_id].data(),
+                        Store(storage.O[m][n][d / 4][warp_ids.y][warp_ids.x][lane_id].data(),
                               (Array<float, 4>&)frag_O[m][n][d]);
                     }
                 }
@@ -573,7 +583,7 @@ struct Impl<MMA_SIMT, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S,
                 frag_L[m][0] += __shfl_xor_sync(uint32_t(-1), frag_L[m][0], mask);
             }
             if (lane_id == 0) {
-                storage.L[m][warp_id_h][warp_id_s] = frag_L[m][0];
+                storage.L[m][warp_ids.y][warp_ids.x] = frag_L[m][0];
             }
         }
 
@@ -592,7 +602,7 @@ struct Impl<MMA_SIMT, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S,
                     PRAGMA_UNROLL
                     for (int d = 0; d < 8; d += 4) {
                         Array<float, 4> tmp_O;
-                        Lds(tmp_O, storage.O[m][n][d / 4][warp_id_h][s + lane_id / 8][lane_id % T_D].data());
+                        Lds(tmp_O, storage.O[m][n][d / 4][warp_ids.y][s + lane_id / 8][lane_id % T_D].data());
                         using namespace ops;
                         (Array<float, 4>&)frag_O[m][n][d] = (Array<float, 4>&)frag_O[m][n][d] + tmp_O;
                     }
@@ -610,7 +620,7 @@ struct Impl<MMA_SIMT, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S,
                     PRAGMA_UNROLL
                     for (int d = 0; d < 8; d += 4) {
                         Array<float, 4> tmp_O;
-                        Lds(tmp_O, storage.O[m][n][d / 4][warp_id_h][s][lane_id % T_D].data());
+                        Lds(tmp_O, storage.O[m][n][d / 4][warp_ids.y][s][lane_id % T_D].data());
                         using namespace ops;
                         (Array<float, 4>&)frag_O[m][n][d] = (Array<float, 4>&)frag_O[m][n][d] + tmp_O;
                     }
@@ -619,7 +629,7 @@ struct Impl<MMA_SIMT, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S,
             }
             PRAGMA_UNROLL
             for (int w = 0; w < kWarpCntS - 1; ++w) {
-                frag_L[m][0] += storage.L[m][warp_id_h][(warp_id_s + w + 1) % kWarpCntS];
+                frag_L[m][0] += storage.L[m][warp_ids.y][(warp_ids.x + w + 1) % kWarpCntS];
             }
             // if (threadIdx.x == 0) {
             //     printf("L %d %f\n", m * OP_H + blockIdx.x * CTA_H, frag_L[m][0]);
@@ -637,13 +647,10 @@ struct Impl<MMA_SIMT, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S,
             inv_L[m][0] = fdividef(1.f, frag_L[m][0]);
         }
 
-        const int warp_id = threadIdx.x / WARP_SIZE;
-        const int lane_id = threadIdx.x % WARP_SIZE;
+        const auto warp_ids = get_warp_ids();
+        const int  lane_id  = threadIdx.x % WARP_SIZE;
 
-        const int warp_id_s = warp_id % kWarpCntS;
-        const int warp_id_h = warp_id / kWarpCntS;
-
-        if (warp_id_s != 0) {
+        if (warp_ids.x != 0) {
             return;
         }
 
@@ -659,7 +666,7 @@ struct Impl<MMA_SIMT, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S,
                 }
 
                 if (lane_id < T_D) {
-                    const int hi = m * OP_H + warp_id_h * WARP_H;
+                    const int hi = m * OP_H + warp_ids.y * WARP_H;
                     const int di = n * S_D + lane_id * S_D_thr;
                     // for (int i = 0; i < 8; ++i) {
                     //     printf("O %4d %4d %f\n", hi + blockIdx.x * CTA_H, di + i, frag_O[m][n][i]);

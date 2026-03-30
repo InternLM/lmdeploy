@@ -1,3 +1,4 @@
-gradio
+aiohttp
+prometheus_client
 protobuf
-tritonclient[grpc]
+timm!=1.0.23

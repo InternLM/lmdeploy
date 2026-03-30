@@ -1,0 +1,70 @@
+#!/bin/bash -ex
+
+# Skip system setup if virtual env already exists (e.g., in dev image)
+if [ ! -f "/opt/py3/bin/python" ]; then
+    # install system packages
+    export DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC
+    sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g' /etc/apt/sources.list
+    apt-get update -y
+    apt-get install -y --no-install-recommends \
+        tzdata wget curl ssh sudo git-core vim libibverbs1 ibverbs-providers ibverbs-utils librdmacm1 libibverbs-dev rdma-core libmlx5-1
+
+    if [[ ${PYTHON_VERSION} != "3.10" ]]; then
+        apt-get install -y --no-install-recommends software-properties-common
+        add-apt-repository -y ppa:deadsnakes/ppa
+        apt-get update -y
+    fi
+
+    # install python, create virtual env
+    apt-get install -y --no-install-recommends \
+        python${PYTHON_VERSION} python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv
+
+    pushd /opt >/dev/null
+        python${PYTHON_VERSION} -m venv py3
+    popd >/dev/null
+
+    # install CUDA build tools
+    if [[ "${CUDA_VERSION_SHORT}" = "cu126" ]]; then
+        apt-get install -y --no-install-recommends cuda-minimal-build-12-6 numactl dkms
+    elif [[ "${CUDA_VERSION_SHORT}" = "cu128" ]]; then
+        apt-get install -y --no-install-recommends cuda-minimal-build-12-8 numactl dkms
+    elif [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
+        apt-get install -y --no-install-recommends cuda-minimal-build-13-0 numactl dkms
+    fi
+
+    apt-get clean -y
+    rm -rf /var/lib/apt/lists/*
+fi
+
+# install GDRCopy debs
+if [ "$(ls -A /wheels/*.deb 2>/dev/null)" ]; then
+    dpkg -i /wheels/*.deb
+fi
+
+# install python packages
+export PATH=/opt/py3/bin:$PATH
+
+pip install -U pip wheel setuptools
+
+if [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
+    pip install nvidia-nvshmem-cu13==3.4.5
+else
+    pip install nvidia-nvshmem-cu12==3.4.5
+fi
+
+pip install /wheels/*.whl
+pip install dlblas==0.0.7 dlslime==0.0.2.post1
+
+pip install ninja einops packaging
+
+# install requirements/serve.txt dependencies such as timm
+if [ -f /tmp/requirements/serve.txt ]; then
+    pip install -r /tmp/requirements/serve.txt
+fi
+
+if [[ "${CUDA_VERSION_SHORT}" = "cu128" ]]; then
+    # As described in https://github.com/InternLM/lmdeploy/pull/4313,
+    # window registration may cause memory leaks in NCCL 2.27, NCCL 2.28+ resolves the issue,
+    # but turbomind engine will use nccl GIN for EP in future, which is brought in since 2.29
+    pip install "nvidia-nccl-cu12>2.29"
+fi

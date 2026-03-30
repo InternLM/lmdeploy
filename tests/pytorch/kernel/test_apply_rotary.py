@@ -1,7 +1,6 @@
 import pytest
 import torch
 
-from lmdeploy.pytorch.kernels import apply_rotary_pos_emb
 from lmdeploy.utils import is_bf16_supported
 
 
@@ -36,7 +35,7 @@ class TestApplyRotary:
 
     @pytest.fixture
     def feature_dim(self):
-        yield 16
+        yield 128
 
     @pytest.fixture
     def seq_length(self, batch_size):
@@ -48,11 +47,11 @@ class TestApplyRotary:
 
     @pytest.fixture
     def q_states(self, seq_length, num_heads_q, feature_dim, dtype):
-        yield torch.rand(seq_length.sum(), num_heads_q, feature_dim, dtype=dtype, device='cuda')
+        yield torch.randn(seq_length.sum(), num_heads_q, feature_dim, dtype=dtype, device='cuda')
 
     @pytest.fixture
     def k_states(self, seq_length, num_heads_k, feature_dim, dtype):
-        yield torch.rand(seq_length.sum(), num_heads_k, feature_dim, dtype=dtype, device='cuda')
+        yield torch.randn(seq_length.sum(), num_heads_k, feature_dim, dtype=dtype, device='cuda')
 
     @pytest.fixture
     def position_ids_1d(self, seq_length, max_seqlen):
@@ -60,11 +59,11 @@ class TestApplyRotary:
 
     @pytest.fixture
     def cached_cos(self, max_seqlen, feature_dim, dtype):
-        yield torch.rand(max_seqlen, feature_dim, dtype=dtype, device='cuda')
+        yield torch.randn(max_seqlen, feature_dim, dtype=dtype, device='cuda')
 
     @pytest.fixture
     def cached_sin(self, max_seqlen, feature_dim, dtype):
-        yield torch.rand(max_seqlen, feature_dim, dtype=dtype, device='cuda')
+        yield torch.randn(max_seqlen, feature_dim, dtype=dtype, device='cuda')
 
     @pytest.fixture
     def cos(self, cached_cos, position_ids_1d):
@@ -86,13 +85,11 @@ class TestApplyRotary:
                              indirect=True)
     @pytest.mark.parametrize(('num_heads_q', 'num_heads_k'), [(8, 8), (8, 4)], indirect=True)
     def test_apply_rotary(self, q_states, k_states, cos, sin, gt):
+        from lmdeploy.pytorch.kernels.cuda import apply_rotary_pos_emb
         q_embed, k_embed = apply_rotary_pos_emb(q_states, k_states, cos, sin)
         q_gt, k_gt = gt
 
         rtol = None
         atol = None
-        if q_states.dtype == torch.float16:
-            rtol = 1e-5
-            atol = 1e-3
         torch.testing.assert_close(q_embed, q_gt, rtol=rtol, atol=atol)
         torch.testing.assert_close(k_embed, k_gt, rtol=rtol, atol=atol)

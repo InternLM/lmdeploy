@@ -8,14 +8,14 @@ import signal
 import struct
 from contextlib import asynccontextmanager, contextmanager
 from multiprocessing.context import SpawnContext
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
 from lmdeploy.pytorch.backends.selector import init_backend
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.utils import get_logger, try_import_deeplink
 
 from .base import ExecutorBase
@@ -224,17 +224,17 @@ class MPExecutor(ExecutorBase):
                  backend_config: BackendConfig,
                  dist_config: DistConfig,
                  misc_config: MiscConfig,
-                 tokenizer: Any,
-                 adapters: Dict[str, str] = None,
+                 adapters: dict[str, str] = None,
+                 specdecode_config: SpecDecodeConfig = None,
                  device_type: str = 'cuda'):
         """Initialize Executor."""
         super().__init__(model_path=model_path,
                          model_config=model_config,
                          cache_config=cache_config,
                          backend_config=backend_config,
-                         tokenizer=tokenizer,
                          dist_config=dist_config,
                          misc_config=misc_config,
+                         specdecode_config=specdecode_config,
                          adapters=adapters,
                          device_type=device_type)
 
@@ -247,8 +247,8 @@ class MPExecutor(ExecutorBase):
         self.comm_buf_name = self.comm_buf.name()
 
         logger.info('Creating processes.')
-        self.procs: List[ExecutorProc] = []
-        self.ret_bufs: List[SharedBuffer] = []
+        self.procs: list[ExecutorProc] = []
+        self.ret_bufs: list[SharedBuffer] = []
         for proc_id in range(self.world_size):
             proc = ExecutorProc(proc_id=proc_id, mp_ctx=mp_ctx)
 
@@ -266,7 +266,7 @@ class MPExecutor(ExecutorBase):
                        backend_config=backend_config,
                        dist_config=dist_config,
                        misc_config=misc_config,
-                       tokenizer=tokenizer,
+                       specdecode_config=specdecode_config,
                        adapters=adapters,
                        device_type=device_type,
                        log_level=logger.level)
@@ -285,8 +285,8 @@ class MPExecutor(ExecutorBase):
 
     def collective_rpc(self,
                        method: str,
-                       args: Tuple[Any] = None,
-                       kwargs: Dict[str, Any] = None,
+                       args: tuple[Any] = None,
+                       kwargs: dict[str, Any] = None,
                        receiver_mask: int = 0xff,
                        return_mask: int = 0xff):
         """Collective rpc."""
@@ -314,8 +314,8 @@ class MPExecutor(ExecutorBase):
 
     async def collective_rpc_async(self,
                                    method: str,
-                                   args: Tuple[Any] = None,
-                                   kwargs: Dict[str, Any] = None,
+                                   args: tuple[Any] = None,
+                                   kwargs: dict[str, Any] = None,
                                    receiver_mask: int = 0xff,
                                    return_mask: int = 0xff):
         """Collective rpc."""
@@ -353,13 +353,13 @@ class MPExecutor(ExecutorBase):
         ret = self.collective_rpc('get_free_mem')
         return ret
 
-    def set_cache_config(self, cache_config: CacheConfig):
+    def set_cache_config(self, cache_config: CacheConfig, spec_cache_config: CacheConfig = None):
         """Set all cache config."""
-        self.collective_rpc('set_cache_config', args=(cache_config, ))
+        self.collective_rpc('set_cache_config', args=(cache_config, spec_cache_config))
 
-    def set_model_config(self, model_config: ModelConfig):
+    def set_model_config(self, model_config: ModelConfig, spec_model_config: ModelConfig = None):
         """Set all cache config."""
-        self.collective_rpc('set_model_config', args=(model_config, ))
+        self.collective_rpc('set_model_config', args=(model_config, spec_model_config))
 
     def build_graph_runner(self):
         """Build graph runner."""
@@ -375,9 +375,8 @@ class MPExecutor(ExecutorBase):
 
     async def _prefetch_outputs(self):
         while True:
-            outs = (await self.collective_rpc_async('get_outputs', receiver_mask=1, return_mask=1))[0]
-            for out in outs:
-                self.remote_outs.put_nowait(out)
+            out = (await self.collective_rpc_async('get_outputs', receiver_mask=1, return_mask=1))[0]
+            self.remote_outs.put_nowait(out)
 
     def start(self, forward_event: asyncio.Event):
         """Start engine loop."""
@@ -386,6 +385,11 @@ class MPExecutor(ExecutorBase):
         self.remote_outs = asyncio.Queue()
         event_loop = asyncio.get_event_loop()
         self._prefetch_task = event_loop.create_task(self._prefetch_outputs())
+
+    async def wait_tasks(self):
+        """Wait tasks."""
+        # we don't need a complex wait tasks since MPExecutor will be deprecated soon.
+        await self._prefetch_task
 
     async def forward_async(self, inputs):
         """Start forward."""
@@ -428,9 +432,9 @@ class MPWorkerWrapper(WorkerWrapperBase):
         model_config: ModelConfig,
         dist_config: DistConfig,
         misc_config: MiscConfig,
-        adapters: Dict[str, str] = None,
+        specdecode_config: SpecDecodeConfig = None,
+        adapters: dict[str, str] = None,
         device_type: str = 'cuda',
-        tokenizer: Any = None,
         log_level: int = 30,
     ):
         super().__init__(
@@ -440,9 +444,9 @@ class MPWorkerWrapper(WorkerWrapperBase):
             model_config=model_config,
             dist_config=dist_config,
             misc_config=misc_config,
+            specdecode_config=specdecode_config,
             adapters=adapters,
             device_type=device_type,
-            tokenizer=tokenizer,
             log_level=log_level,
         )
 
@@ -491,8 +495,8 @@ class ExecutorProc:
         backend_config: BackendConfig,
         dist_config: DistConfig,
         misc_config: MiscConfig,
-        tokenizer: Any,
-        adapters: Dict[str, str] = None,
+        specdecode_config: SpecDecodeConfig = None,
+        adapters: dict[str, str] = None,
         device_type: str = 'cuda',
         log_level: int = 30,
     ):
@@ -513,9 +517,9 @@ class ExecutorProc:
                                  model_config=model_config,
                                  dist_config=dist_config,
                                  misc_config=misc_config,
+                                 specdecode_config=specdecode_config,
                                  adapters=adapters,
                                  device_type=device_type,
-                                 tokenizer=tokenizer,
                                  log_level=log_level)
         try_import_deeplink(device_type)
         worker.init_process_group(proc_id)
@@ -550,7 +554,7 @@ class ExecutorProc:
                 dist.destroy_process_group()
 
     @staticmethod
-    async def _task_wrapper(func, args: List, kwargs: Dict, need_return: bool, ret_buf: SharedBuffer):
+    async def _task_wrapper(func, args: list, kwargs: dict, need_return: bool, ret_buf: SharedBuffer):
         ret = await func(*args, **kwargs)
         if need_return:
             await ret_buf.send_async(ret)

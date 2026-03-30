@@ -1,0 +1,11 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 46dc180..b746ac1 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1,5 +1,5 @@
+ # 3.5 is actually available almost everywhere, but this a good minimum
+-cmake_minimum_required(VERSION 3.4)
++cmake_minimum_required(VERSION 3.5)
+ 
+ # enable MSVC_RUNTIME_LIBRARY target property
+ # see https://cmake.org/cmake/help/latest/policy/CMP0091.html

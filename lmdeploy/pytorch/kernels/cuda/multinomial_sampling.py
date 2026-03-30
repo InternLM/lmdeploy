@@ -6,47 +6,60 @@ import triton.language as tl
 
 @triton.jit
 def _multinomial_sampling_kernel(Scores, Seeds, Offsets, Indices, Outputs, stride_sb, stride_st, stride_ib, stride_it,
-                                 num_batchs, num_tokens, BLOCK: tl.constexpr, BLOCK_N: tl.constexpr):
+                                 num_tokens, BLOCK_N: tl.constexpr):
     """Kernel."""
-    batch_block_id = tl.program_id(0)
-
-    off = batch_block_id * BLOCK + tl.arange(0, BLOCK)
+    batch_id = tl.program_id(0)
     n_off = tl.arange(0, BLOCK_N)
 
-    off_mask = off < num_batchs
-    seed = tl.load(Seeds + off, mask=off_mask)
-    offset = tl.load(Offsets + off, mask=off_mask).to(tl.int32)
+    # sampling random seed
+    seed = tl.load(Seeds + batch_id)
+    offset = tl.load(Offsets + batch_id).to(tl.int32)
+    samp = tl.rand(seed, offset)
 
-    samp = tl.rand(seed, offset)[:, None]
-    acc = tl.zeros((BLOCK, ), dtype=tl.float32)
-    output = tl.load(Indices + off * stride_ib, mask=off_mask)
+    # initialize
+    acc = 0.0
+    score_ptr = Scores + batch_id * stride_sb + n_off * stride_st
+    indice_ptr = Indices + batch_id * stride_ib
+    output = tl.load(indice_ptr)
 
-    for b_idx in range(0, num_tokens, BLOCK_N):
-        s_off = b_idx + n_off
-        s_mask = off_mask[:, None] & (s_off[None, :] < num_tokens)
-        scores = tl.load(Scores + off[:, None] * stride_sb + s_off[None, :] * stride_st, mask=s_mask,
-                         other=0.0).to(tl.float32)
-        c_scores = tl.cumsum(scores, 1)
-        cum_scores = acc[:, None] + c_scores
-        acc += tl.max(c_scores, 1)
+    found_mask = False
+    for b_idx in tl.range(0, num_tokens, BLOCK_N):
+        # triton does not have break statement, use mask to skip computation
+        if not found_mask:
+            s_off = b_idx + n_off
+            s_mask = (s_off < num_tokens)
+            scores = tl.load(score_ptr, mask=s_mask, other=0.0).to(tl.float32)
+            c_scores = tl.cumsum(scores, 0)
+            cum_scores = acc + c_scores
+            acc += tl.max(c_scores, 0)
 
-        pre_cum_scores = cum_scores - scores
-        valid_mask = (samp > pre_cum_scores) & (samp <= cum_scores)
-        found_mask = tl.sum(valid_mask, 1) > 0
+            pre_cum_scores = cum_scores - scores
+            valid_mask = (samp > pre_cum_scores) & (samp <= cum_scores)
+            found_mask = tl.sum(valid_mask, 0) > 0
 
-        valid_pos = b_idx + tl.argmax(valid_mask.to(tl.int32), 1)
-        indices = tl.load(Indices + off * stride_ib + valid_pos * stride_it, mask=found_mask & off_mask, other=-1)
-        output = tl.where(found_mask, indices, output)
+            if found_mask:
+                valid_pos = tl.argmax(valid_mask.to(tl.int32), 0)
+                indice = tl.load(indice_ptr + valid_pos * stride_it)
+                output = indice
+        score_ptr += stride_st * BLOCK_N
+        indice_ptr += stride_it * BLOCK_N
 
-    tl.store(Outputs + off, output, mask=off_mask)
+    tl.store(Outputs + batch_id, output)
 
 
 def multinomial_sampling(scores: torch.Tensor,
                          seeds: torch.LongTensor,
                          offsets: torch.LongTensor,
                          indices: torch.Tensor = None):
-    """Multinomial sampling."""
+    """Multinomial sampling.
 
+    Note that this kernel assumes the input scores are already sorted in descending order.
+
+    scores: [batch_size, num_tokens], sorted softmax scores
+    seeds: [batch_size]
+    offsets: [batch_size]
+    indices: [batch_size, num_tokens], original token indices before sorting
+    """
     assert scores.dim() == 2
     batch_size, num_tokens = scores.size()
     device = scores.device
@@ -63,10 +76,9 @@ def multinomial_sampling(scores: torch.Tensor,
 
     outputs = indices[:, 0].clone()
 
-    BLOCK = 8
     BLOCK_N = 128
 
-    grid = [triton.cdiv(batch_size, BLOCK)]
+    grid = [batch_size]
     _multinomial_sampling_kernel[grid](scores,
                                        seeds,
                                        offsets,
@@ -76,10 +88,8 @@ def multinomial_sampling(scores: torch.Tensor,
                                        stride_st=scores.stride(1),
                                        stride_ib=indices.stride(0),
                                        stride_it=indices.stride(1),
-                                       num_batchs=batch_size,
                                        num_tokens=num_tokens,
-                                       BLOCK=BLOCK,
                                        BLOCK_N=BLOCK_N,
-                                       num_warps=8)
+                                       num_warps=1)
 
     return outputs

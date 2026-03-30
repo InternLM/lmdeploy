@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import time
-from typing import Dict
 
 import numpy as np
 
@@ -28,31 +27,13 @@ class LogicalMemory:
         return self._num_blocks
 
 
-class PhysicalMemory:
-    """Physical memory blocks."""
-
-    def __init__(self, num_cpu_blocks: int, num_gpu_blocks: int) -> None:
-        self._num_cpu_blocks = num_cpu_blocks
-        self._num_gpu_blocks = num_gpu_blocks
-        self._num_blocks = num_cpu_blocks + num_gpu_blocks
-
-    def num_cpu_blocks(self):
-        """Get num cpu blocks."""
-        return self._num_cpu_blocks
-
-    def num_gpu_blocks(self):
-        """Get num gpu blocks."""
-        return self._num_gpu_blocks
-
-
 class PhysicalAllocator:
     """The physical block allocator.
 
     The allocator won't allocate real memory. It is used to support block manager.
     """
 
-    def __init__(self, memory: PhysicalMemory, num_blocks: int, offset: int = 0):
-        self._mem = memory
+    def __init__(self, num_blocks: int, offset: int = 0):
         self._num_blocks = num_blocks
         self._offset = offset
 
@@ -87,13 +68,13 @@ class PhysicalAllocator:
 class LogicalAllocator:
     """The logical block allocator."""
 
-    def __init__(self, num_cpu_blocks: int, num_gpu_blocks: int) -> None:
+    def __init__(self, num_cpu_blocks: int, num_gpu_blocks: int, num_gpu_reserved: int = 0) -> None:
         self._log_mem = LogicalMemory(num_cpu_blocks + num_gpu_blocks)
-        self._phy_mem = PhysicalMemory(num_cpu_blocks, num_gpu_blocks)
 
         self._cpu_mem_offset = num_gpu_blocks
-        self._gpu_allocator = PhysicalAllocator(self._phy_mem, num_gpu_blocks, 0)
-        self._cpu_allocator = PhysicalAllocator(self._phy_mem, num_cpu_blocks, self._cpu_mem_offset)
+        num_gpu_blocks -= num_gpu_reserved
+        self._gpu_allocator = PhysicalAllocator(num_gpu_blocks, num_gpu_reserved)
+        self._cpu_allocator = PhysicalAllocator(num_cpu_blocks, self._cpu_mem_offset)
 
         num_blocks = self._log_mem.num_blocks()
         self._num_blocks = num_blocks
@@ -225,13 +206,13 @@ class BaseBlockManager:
         num_cpu_blocks (int): number of cpu blocks.
     """
 
-    def __init__(self, num_gpu_blocks: int, num_cpu_blocks: int) -> None:
+    def __init__(self, num_gpu_blocks: int, num_cpu_blocks: int, num_gpu_reserved: int = 0) -> None:
         self.num_gpu_blocks = num_gpu_blocks
         self.num_cpu_blocks = num_cpu_blocks
 
-        self.allocator = LogicalAllocator(num_cpu_blocks, num_gpu_blocks)
+        self.allocator = LogicalAllocator(num_cpu_blocks, num_gpu_blocks, num_gpu_reserved)
 
-        self.block_tables: Dict[int, BlockTable] = {}
+        self.block_tables: dict[int, BlockTable] = {}
 
     @classmethod
     def num_required_blocks(cls, obj: SchedulerSequence, prealloc_size: int = 0):
@@ -270,10 +251,7 @@ class BaseBlockManager:
 
     def allocate(self, data: SchedulerSequence, prealloc_size: int = 0):
         """Allocate stuff."""
-        if isinstance(data, SchedulerSequence):
-            return self.allocate_msg(data, prealloc_size)
-        else:
-            raise TypeError(f'Unsupported allocate type: {type(data)}')
+        return self.allocate_msg(data, prealloc_size)
 
     def get_num_free_gpu_blocks(self) -> int:
         """Get number of free gpu blocks."""

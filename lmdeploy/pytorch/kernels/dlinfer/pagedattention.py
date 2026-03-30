@@ -1,7 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from collections.abc import Sequence
+
 import dlinfer.ops as ext_ops
-import torch
-from dlinfer.utils.type_annotation import Optional, Sequence, Tensor
+from torch import Tensor
 
 
 def prefill_attention(
@@ -22,12 +23,12 @@ def prefill_attention(
     num_q_heads: int,
     num_kv_heads: int,
     head_size_v: int,
-    attn_mask: Sequence[Optional[Tensor]],
-    softmax_scale: Optional[float],
-    is_unpaged_prefill: Optional[bool],
-    kv_scales: Optional[Tensor],
-    kv_zeros: Optional[Tensor],
-    quant_bits: Optional[int],
+    attn_mask: Sequence[Tensor | None],
+    softmax_scale: float | None,
+    is_unpaged_prefill: bool | None,
+    kv_scales: Tensor | None,
+    kv_zeros: Tensor | None,
+    quant_bits: int | None,
 ) -> Tensor:
     if is_unpaged_prefill:
         return ext_ops.prefill_attention(
@@ -85,10 +86,10 @@ def paged_token_attention(
     num_q_heads,
     num_kv_heads,
     head_size_v,
-    softmax_scale: Optional[float],
-    kv_scales: Optional[Tensor],
-    kv_zeros: Optional[Tensor],
-    quant_bits: Optional[int],
+    softmax_scale: float | None,
+    kv_scales: Tensor | None,
+    kv_zeros: Tensor | None,
+    quant_bits: int | None,
 ):
     return ext_ops.paged_decode_attention(
         q,
@@ -111,8 +112,8 @@ def paged_token_attention(
 
 def paged_attention_fwd(
     query_states: Tensor,
-    key_states: torch.Tensor,
-    value_states: torch.Tensor,
+    key_states: Tensor,
+    value_states: Tensor,
     attn_output: Tensor,
     key_cache: Tensor,
     value_cache: Tensor,
@@ -128,12 +129,12 @@ def paged_attention_fwd(
     num_heads: int,
     num_kv_heads: int,
     v_head_size: int,
-    attn_mask: Sequence[Optional[Tensor]] = (),
-    softmax_scale: Optional[float] = None,
-    is_unpaged_prefill: Optional[bool] = None,
-    kv_scales: Optional[Tensor] = None,
-    kv_zeros: Optional[Tensor] = None,
-    quant_bits: Optional[int] = 0,
+    attn_mask: Sequence[Tensor | None] = (),
+    softmax_scale: float | None = None,
+    is_unpaged_prefill: bool | None = None,
+    kv_scales: Tensor | None = None,
+    kv_zeros: Tensor | None = None,
+    quant_bits: int | None = 0,
 ):
     if not is_decoding:
         return prefill_attention(

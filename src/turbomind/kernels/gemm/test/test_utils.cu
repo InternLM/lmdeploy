@@ -142,6 +142,14 @@ template std::vector<float> FastCompare(const nv_bfloat16* src,  //
                                         float              rtol,
                                         float              atol);
 
+template std::vector<float> FastCompare(const float* src,  //
+                                        const float* ref,
+                                        int          dims,
+                                        int          bsz,
+                                        cudaStream_t stream,
+                                        float        rtol,
+                                        float        atol);
+
 std::vector<float> FastCompare(const Tensor& x, const Tensor& r, cudaStream_t stream, float rtol, float atol)
 {
     TM_CHECK_EQ(x.ndim(), 2);
@@ -155,7 +163,7 @@ std::vector<float> FastCompare(const Tensor& x, const Tensor& r, cudaStream_t st
         return FastCompare(x.data<T>(), r.data<T>(), dim, bsz, stream, rtol, atol);
     };
 
-    TM_DISPATCH_DTYPES_RET(x.dtype(), invoke, half_t, bfloat16_t);
+    TM_DISPATCH_DTYPES_RET(x.dtype(), invoke, half_t, bfloat16_t, float);
 }
 
 void FC_Header()

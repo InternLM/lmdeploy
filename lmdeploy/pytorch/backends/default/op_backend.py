@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Tuple
 
 import torch
 
@@ -45,6 +44,12 @@ class DefaultOpsBackend(OpsBackend):
         elif layer_type == OpType.SoftmaxTopK:
             from .moe import DefaultSoftmaxTopKBuilder
             return DefaultSoftmaxTopKBuilder
+        elif layer_type == OpType.Embedding:
+            from .embedding import DefaultEmbeddingBuilder
+            return DefaultEmbeddingBuilder
+        elif layer_type == OpType.RouterNoauxTC:
+            from .moe_router import DefaultRouterNoauxTCBuilder
+            return DefaultRouterNoauxTCBuilder
         else:
             raise RuntimeError(f'{layer_type} not supported.')
 
@@ -54,7 +59,7 @@ class DefaultOpsBackend(OpsBackend):
         num_heads: int,
         head_size: int,
         dtype: torch.dtype,
-    ) -> Tuple[int, ...]:
+    ) -> tuple[int, ...]:
         """Get block shape of k."""
         return (
             block_size,
@@ -68,7 +73,7 @@ class DefaultOpsBackend(OpsBackend):
         num_heads: int,
         head_size: int,
         dtype: torch.dtype,
-    ) -> Tuple[int, ...]:
+    ) -> tuple[int, ...]:
         """Get block shape of v."""
         return (
             block_size,

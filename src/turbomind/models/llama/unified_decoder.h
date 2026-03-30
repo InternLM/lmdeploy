@@ -1,13 +1,13 @@
 #pragma once
 
 #include "src/turbomind/comm/device_comm.h"
+#include "src/turbomind/models/llama/GatedDeltaNetLayer.h"
 #include "src/turbomind/models/llama/LlamaDecoderLayerWeight.h"
 #include "src/turbomind/models/llama/LlamaFfnLayer.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/llama/moe_ffn_layer.h"
 #include "src/turbomind/models/llama/unified_attention_layer.h"
-#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
@@ -19,10 +19,12 @@ public:
                    const EngineParam&    engine,
                    const AttentionParam& attn,
                    const MoeParam&       moe,
-                   const LoraParam&      lora,
-                   const Context&        ctx);
+                   const Context&        ctx,
+                   int                   phases);
 
-    void Forward(TensorMap& args, const std::vector<WeightType*>& weights);
+    void Run(BatchOp op, int phase, TensorMap& env);
+
+    void Forward(int phase, TensorMap& env, const std::vector<WeightType*>& weights);
 
 private:
     const size_t layer_num_;
@@ -35,14 +37,16 @@ private:
 
     const int attn_tp_group_;
 
-    const float        rmsnorm_eps_;
-    cudaStream_t const stream_;
+    const float rmsnorm_eps_;
 
     comm::DeviceCommImpl* const d_comm_;
 
     const int tune_layer_num_;
 
+    int& is_warm_up_;
+
     std::unique_ptr<UnifiedAttentionLayer> attn_layer_;
+    std::unique_ptr<GatedDeltaNetLayer>    linear_attn_layer_;
     std::unique_ptr<LlamaFfnLayer>         ffn_layer_;
     std::unique_ptr<MoeFfnLayer>           moe_ffn_layer_;
 

@@ -16,7 +16,7 @@ from lmdeploy.utils import try_import_deeplink
 
 def smooth_quant(model: str,
                  work_dir: str = './work_dir',
-                 calib_dataset: str = 'ptb',
+                 calib_dataset: str = 'wikitext2',
                  calib_samples: int = 128,
                  calib_seqlen: int = 2048,
                  search_scale: bool = False,
@@ -58,7 +58,7 @@ def smooth_quant(model: str,
 
     # calibrate function exports the calibration statistics
     # (inputs, outputs, keys and values) to `work_dir`.
-    inp_stats = torch.load(work_dir / 'inputs_stats.pth')
+    inp_stats = torch.load(work_dir / 'inputs_stats.pth', weights_only=True)
     act_scales = inp_stats['absmax']
 
     model_type = type(model).__name__
@@ -116,7 +116,7 @@ def smooth_quant(model: str,
         parent = model.get_submodule(parent_name)
         setattr(parent, child_name, q_norm)
         norm.to('cpu')
-        q_linear.to('cpu')
+        q_norm.to('cpu')
         torch.cuda.empty_cache()
 
     quant_dtype_s = str(quant_dtype).split('.')[1]

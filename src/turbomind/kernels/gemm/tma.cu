@@ -7,6 +7,11 @@ namespace turbomind::gemm {
 
 #if __CUDACC_VER_MAJOR__ >= 12
 
+#if (CUDA_VERSION >= 13000) && (!defined(PFN_cuTensorMapEncodeTiled))
+// PFN_cuTensorMapEncodeTiled not defined in cuda 13 headers.
+#define PFN_cuTensorMapEncodeTiled PFN_cuTensorMapEncodeTiled_v12000
+#endif
+
 namespace {
 
 PFN_cuTensorMapEncodeTiled get_cuTensorMapEncodeTiled()
@@ -16,7 +21,8 @@ PFN_cuTensorMapEncodeTiled get_cuTensorMapEncodeTiled()
         cudaDriverEntryPointQueryResult driver_status;
         void*                           cuTensorMapEncodeTiled_ptr = nullptr;
 
-#if CUDA_VERSION >= 12050
+// https://github.com/NVIDIA/cutlass/pull/2086
+#if CUDA_VERSION >= 13000
         cudaGetDriverEntryPointByVersion(
             "cuTensorMapEncodeTiled", &cuTensorMapEncodeTiled_ptr, 12000, cudaEnableDefault, &driver_status);
 #else

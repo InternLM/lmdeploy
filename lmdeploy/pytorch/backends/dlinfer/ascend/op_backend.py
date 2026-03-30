@@ -1,34 +1,37 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import itertools
+import math
 import os
 import re
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, Tuple
 
 import torch
+import torch.distributed as dist
 
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
+from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.utils import get_logger
 
+from ..moe import DlinferMoECommType, DlinferMoeMetadata
 from ..op_backend import DlinferOpsBackend
-from .utils import nd_to_nz_spec
 
 logger = get_logger('lmdeploy')
 
 
 class SocVersion:
     Ascend310P: str = 'Ascend310P'
-    Ascend910B: str = 'Ascend910B'
+    Ascend910: str = 'Ascend910'
 
     @classmethod
     @lru_cache(maxsize=1)
     def device_name(cls) -> str:
         try:
-            import torch_npu
-            return torch_npu.npu.get_device_name()
+            return torch.npu.get_device_name()
         except ImportError:
-            logger.warning('Failed to import torch_npu. Please make sure torch_npu is installed correctly. ')
+            logger.warning('Failed to import torch_npu. Please make sure torch_npu is installed correctly.')
         except Exception as e:
             logger.warning(f'Error during Ascend get device name: {str(e)}. '
                            'Please check your Ascend environment configuration.')
@@ -38,17 +41,41 @@ class SocVersion:
         return cls.device_name().startswith(cls.Ascend310P)
 
     @classmethod
-    def is_Ascend910B(cls) -> bool:
-        return cls.device_name().startswith(cls.Ascend910B)
+    def is_Ascend910(cls) -> bool:
+        return cls.device_name().startswith(cls.Ascend910)
+
+    @classmethod
+    @lru_cache(maxsize=1)
+    def soc_version(cls) -> int:
+        return torch.npu.get_soc_version()
+
+    @classmethod
+    def is_A2(cls) -> bool:
+        return 220 <= cls.soc_version() <= 225
+
+    @classmethod
+    def is_A3(cls) -> bool:
+        return 250 <= cls.soc_version() <= 255
+
+
+@dataclass
+class DistMeta:
+    dp_size: int
+    tp_size: int
+    ep_size: int
+    tp_rank: int
+    ep_rank: int
+    tp_group: torch.distributed.ProcessGroup
+    ep_group: torch.distributed.ProcessGroup
 
 
 class AscendKVQuantMeta:
     has_set_value: bool = False
-    quant_meta: Dict = {}
+    quant_meta: dict = {}
 
     @classmethod
     def set_value(cls, device: str, dtype: torch.dtype, record_file: str, total_layers: int):
-        with open(record_file, 'r') as file:
+        with open(record_file) as file:
             data = file.read()
         scale_offset_pairs = re.findall(r'scale:\s*([\d\.\-]+)\s*offset:\s*(-?\d+)', data)
         scale_offset_pairs = [(float(scale), float(offset)) for scale, offset in scale_offset_pairs]
@@ -89,9 +116,10 @@ class AscendKVQuantMeta:
 
 class AscendOpsBackend(DlinferOpsBackend):
     """Ascend layer backend."""
-    enable_graph = False
-    half_negative_inf = torch.finfo(torch.float16).min
+    enable_graph: bool = False
     total_slots = None
+    max_batches = None
+    dist_meta: DistMeta = None
 
     @staticmethod
     def get_name() -> str:
@@ -104,15 +132,9 @@ class AscendOpsBackend(DlinferOpsBackend):
         num_heads: int,
         head_size: int,
         dtype: torch.dtype,
-    ) -> Tuple[int, ...]:
-        if SocVersion.is_Ascend910B():
+    ) -> tuple[int, ...]:
+        if SocVersion.is_Ascend910():
             return (block_size, num_heads, head_size)
-        elif SocVersion.is_Ascend310P():
-            return (
-                (num_heads * head_size + 15) // 16,
-                block_size,
-                16,
-            )
         else:
             raise ValueError(f'dlinfer does not support {SocVersion.device_name()} device currently.')
 
@@ -122,15 +144,9 @@ class AscendOpsBackend(DlinferOpsBackend):
         num_heads: int,
         head_size: int,
         dtype: torch.dtype,
-    ) -> Tuple[int, ...]:
-        if SocVersion.is_Ascend910B():
+    ) -> tuple[int, ...]:
+        if SocVersion.is_Ascend910():
             return (block_size, num_heads, head_size)
-        elif SocVersion.is_Ascend310P():
-            return (
-                (num_heads * head_size + 15) // 16,
-                block_size,
-                16,
-            )
         else:
             raise ValueError(f'dlinfer does not support {SocVersion.device_name()} device currently.')
 
@@ -138,137 +154,219 @@ class AscendOpsBackend(DlinferOpsBackend):
     def update_step_context(cls, step_context):
         """Update step context."""
 
+        block_num, block_size, *_ = step_context.kv_caches[0][0].shape
+        is_unpaged_prefill = False
+        if not step_context.is_decoding:
+            is_unpaged_prefill = all((step_context.q_seqlens == step_context.kv_seqlens).tolist())
+        if step_context.block_offsets.dtype != torch.int32:
+            step_context.block_offsets = step_context.block_offsets.to(torch.int32)
+        if not (step_context.is_decoding or is_unpaged_prefill):
+            step_context.block_offsets = step_context.block_offsets.repeat_interleave(step_context.q_seqlens, 0)
+        if step_context.kv_seqlens.dtype != torch.int32:
+            step_context.kv_seqlens = step_context.kv_seqlens.to(torch.int32)
+        if step_context.q_seqlens.dtype != torch.int32:
+            step_context.q_seqlens = step_context.q_seqlens.to(torch.int32)
+
         def get_total_slots():
             if cls.total_slots is None:
                 cls.total_slots = torch.arange(block_num * block_size,
-                                               dtype=torch.long,
+                                               dtype=torch.int32,
                                                device=step_context.block_offsets.device)
                 cls.total_slots = cls.total_slots.view(block_num, block_size)
             return cls.total_slots
 
-        kv_start_indices, attention_mask = [], []
-        if SocVersion.is_Ascend910B():
-            block_num, block_size, *_ = step_context.kv_caches[0][0].shape
-        elif SocVersion.is_Ascend310P():
-            block_num, _, block_size, _ = step_context.kv_caches[0][0].shape
+        def get_cpu_seqlens(is_decoding, is_unpaged_prefill):
+            """Get sequence lengths on CPU.
 
-        is_unpaged_prefill = False
-        if not step_context.is_decoding:
-            is_unpaged_prefill = \
-                all((step_context.q_seqlens ==
-                     step_context.kv_seqlens).tolist())
-        q_seqlens_list = step_context.q_seqlens.tolist()
-        kv_seqlens_list = step_context.kv_seqlens.tolist()
-        max_q_seq_len = max(q_seqlens_list)
-        max_kv_seq_len = max(kv_seqlens_list)
+            Returns:
+                q_seqlens_cpu: query sequence lengths (per sequence).
+                kv_seqlens_cpu: kv sequence lengths (per sequence), used for
+                    list/max seqlens calculation.
+                kv_seqlens_expanded: kv sequence lengths expanded per token via
+                    repeat_interleave, used for attention metadata.
+            """
+            if is_decoding:
+                q_seqlens_cpu = None
+                kv_seqlens_cpu = kv_seqlens_expanded = step_context.kv_seqlens.cpu()
+            elif is_unpaged_prefill:
+                q_seqlens_cpu = step_context.q_seqlens.cpu()
+                kv_seqlens_cpu = kv_seqlens_expanded = q_seqlens_cpu
+            else:
+                q_seqlens_cpu = step_context.q_seqlens.cpu()
+                kv_seqlens_cpu = step_context.kv_seqlens.cpu()
+                # Expand kv_seqlens to per-token for paged prefill attention
+                kv_seqlens_expanded = kv_seqlens_cpu.repeat_interleave(q_seqlens_cpu, 0)
+            return q_seqlens_cpu, kv_seqlens_cpu, kv_seqlens_expanded
 
-        if step_context.is_decoding:
-            # collect kv_start_indices without using a for-loop,
-            # (fill kv-cache for just ONE token during the decoding phase)
-            idx = (step_context.kv_seqlens - 1) % block_size
-            block_num = (step_context.kv_seqlens - 1) // block_size
-            last_block = step_context.block_offsets.gather(1, block_num.view(-1, 1)).view(-1)
-            kv_start_indices = last_block * block_size + idx
-        else:
-            for i in range(step_context.q_start_loc.size(0)):
-                q_seq_len = q_seqlens_list[i]
-                kv_seq_len = kv_seqlens_list[i]
+        def get_list_seqlens(is_decoding, is_unpaged_prefill, q_seqlens_cpu=None, kv_seqlens_cpu=None):
+            if is_decoding:
+                q_seqlens_list, kv_seqlens_list = None, None
+            elif is_unpaged_prefill:
+                q_seqlens_list = kv_seqlens_list = q_seqlens_cpu.tolist()
+            else:
+                q_seqlens_list, kv_seqlens_list = q_seqlens_cpu.tolist(), kv_seqlens_cpu.tolist()
+            return q_seqlens_list, kv_seqlens_list
 
-                # collect kv start indices during the prefill phase.
-                history_length = kv_seq_len - q_seq_len
-                total_slots = get_total_slots()
-                slot_tables = total_slots[step_context.block_offsets[i]].view(-1)
-                slots = slot_tables[history_length:kv_seq_len]
-                kv_start_indices.append(slots)
+        def get_max_seqlens(is_decoding, is_unpaged_prefill, q_seqlens_list=None, kv_seqlens_list=None):
+            if is_decoding:
+                max_q_seq_len, max_kv_seq_len = 1, None
+            elif is_unpaged_prefill:
+                max_q_seq_len = max_kv_seq_len = max(q_seqlens_list)
+            else:
+                max_q_seq_len = max(q_seqlens_list)
+                max_kv_seq_len = max(kv_seqlens_list)
+            return max_q_seq_len, max_kv_seq_len
 
-                # collect attention mask of paged_prefill attention stage.
-                if not is_unpaged_prefill:
-                    single_attention_mask = torch.logical_not(
-                        torch.tril(
+        def get_kv_start_indices_and_attention_mask(is_decoding, is_unpaged_prefill, q_seqlens_list, kv_seqlens_list,
+                                                    max_q_seq_len, max_kv_seq_len):
+            kv_start_indices, attention_mask = [], []
+            if is_decoding:
+                idx = (step_context.kv_seqlens - 1) % block_size
+                block_num = (step_context.kv_seqlens - 1) // block_size
+                last_block = step_context.block_offsets.gather(1, block_num.view(-1, 1)).view(-1)
+                kv_start_indices = last_block * block_size + idx
+            else:
+                for i in range(step_context.q_start_loc.size(0)):
+                    q_seq_len = q_seqlens_list[i]
+                    kv_seq_len = kv_seqlens_list[i]
+
+                    history_length = kv_seq_len - q_seq_len
+                    total_slots = get_total_slots()
+                    slot_tables = total_slots[step_context.block_offsets[i]].view(-1)
+                    slots = slot_tables[history_length:kv_seq_len]
+                    kv_start_indices.append(slots)
+
+                    if not is_unpaged_prefill:
+                        single_attention_mask = torch.triu(
                             torch.ones(q_seq_len,
                                        step_context.block_offsets.shape[1] * block_size,
                                        dtype=torch.bool,
                                        device=step_context.block_offsets.device),
-                            diagonal=kv_seq_len - q_seq_len,
-                        ))
-                    attention_mask.append(single_attention_mask)
-
-            kv_start_indices = torch.cat(kv_start_indices)
-
-        if step_context.is_decoding:
-            # prepare some params of paged_decode attention stage.
-            q_start_loc_cpu, q_seqlens_cpu = None, None
-        elif is_unpaged_prefill:
-            # prepare some params of unpaged_prefill attention stage.
-            q_start_loc_cpu, kv_seqlens_cpu = None, None
-            q_seqlens_cpu = step_context.q_seqlens.cpu()
-            if SocVersion.is_Ascend910B():
-                single_attention_mask = torch.logical_not(
-                    torch.tril(
-                        torch.ones(max_q_seq_len, max_kv_seq_len, dtype=torch.bool).cuda(),
-                        diagonal=max_kv_seq_len - max_q_seq_len,
-                    ))
-                attention_mask.append(single_attention_mask)
-            elif SocVersion.is_Ascend310P():
-                if not cls.enable_graph:
-                    for i in range(q_seqlens_cpu.size(0)):
-                        single_attention_mask = torch.zeros(q_seqlens_cpu[i],
-                                                            q_seqlens_cpu[i]).fill_(-float('inf')).cuda()
-                        single_attention_mask = torch.triu(single_attention_mask, diagonal=1)
+                            diagonal=kv_seq_len - q_seq_len + 1,
+                        )
                         attention_mask.append(single_attention_mask)
-                else:
-                    # Transdata needs dtype to be float16 or int8
-                    single_attention_mask = torch.triu(
-                        torch.ones(max_q_seq_len, max_kv_seq_len, dtype=torch.float16).fill_(-float('inf')).cuda(),
-                        diagonal=max_kv_seq_len - max_q_seq_len + 1,
-                    )
-                    # Convert to NZ format
-                    attention_mask.append(nd_to_nz_spec(single_attention_mask))
-            else:
-                raise ValueError(f"dlinfer doesn't support {SocVersion.device_name()} device currently.")
-        else:
-            # prepare some params of paged_prefill attention stage.
-            q_start_loc_cpu, q_seqlens_cpu = None, None
-            attention_mask = [torch.cat([mask for mask in attention_mask])]
 
-        if cls.enable_graph:
-            kv_start_indices = kv_start_indices.view(-1).to(torch.int32)
-            import torch._dynamo as dynamo
-            if not is_unpaged_prefill:
-                step_context.block_offsets = step_context.block_offsets.to(torch.int32)
-                if not step_context.is_decoding:
-                    step_context.block_offsets = step_context.block_offsets\
-                        .repeat_interleave(step_context.q_seqlens, 0)
-            dynamo.mark_dynamic(step_context.block_offsets, [0, 1])
-            kv_seqlens = step_context.kv_seqlens.to(torch.int32)
-            if not step_context.is_decoding:
                 if is_unpaged_prefill:
-                    if SocVersion.is_Ascend910B():
-                        attention_mask = [mask.half() for mask in attention_mask]
+                    attention_mask.append(
+                        torch.triu(torch.ones(max_q_seq_len,
+                                              max_kv_seq_len,
+                                              dtype=step_context.kv_caches[0][0].dtype,
+                                              device=step_context.block_offsets.device),
+                                   diagonal=max_kv_seq_len - max_q_seq_len + 1))
                 else:
-                    if SocVersion.is_Ascend910B():
-                        attention_mask = [
-                            torch.cat([mask.half() * cls.half_negative_inf for mask in attention_mask]).unsqueeze(1)
-                        ]
-                    elif SocVersion.is_Ascend310P():
-                        # Convert mask to NZ format.
-                        attention_mask = [
-                            nd_to_nz_spec(torch.cat([mask.half() * cls.half_negative_inf for mask in attention_mask]))
-                        ]
-                    else:
-                        raise ValueError(f"dlinfer doesn't support {SocVersion.device_name()} device currently.")
-                    kv_seqlens = kv_seqlens.repeat_interleave(step_context.q_seqlens, 0)
-        else:
-            if step_context.is_decoding:
-                kv_seqlens_cpu = step_context.kv_seqlens.cpu()
-            elif is_unpaged_prefill:
-                pass
+                    attention_mask = [torch.cat(attention_mask)]
+
+                kv_start_indices = torch.cat(kv_start_indices)
+
+            return kv_start_indices, attention_mask
+
+        def get_dist_meta():
+            if cls.dist_meta is not None:
+                return cls.dist_meta
+            dist_ctx = get_dist_manager().current_context()
+            dp_size, tp_size, ep_size = dist_ctx.dist_config.dp, dist_ctx.dist_config.tp, dist_ctx.dist_config.ep
+            tp_rank, ep_rank = dist_ctx.attn_tp_group.rank, dist_ctx.ep_rank
+            tp_group = dist_ctx.attn_tp_group.gpu_group
+            ep_group = dist_ctx.ep_gpu_group
+            cls.dist_meta = DistMeta(dp_size=dp_size,
+                                     tp_size=tp_size,
+                                     ep_size=ep_size,
+                                     tp_rank=tp_rank,
+                                     ep_rank=ep_rank,
+                                     tp_group=tp_group,
+                                     ep_group=ep_group)
+            return cls.dist_meta
+
+        def get_tokens_info(dp_size, tp_size, ep_size, ep_group):
+            if ep_size <= 1:
+                return 0, 0, 0
+            # get padded_tokens_current_rank
+            is_graph = cls.enable_graph and step_context.is_decoding
+            if is_graph:
+                from dlinfer.framework.lmdeploy_ext.cudagraph.ascend_cudagraph import get_ascend_compatible_size
+                actual_tokens_current_rank = step_context.q_seqlens.shape[0]
+                padded_tokens_current_rank = min(get_ascend_compatible_size(actual_tokens_current_rank),
+                                                 cls.max_batches)
             else:
-                kv_seqlens_cpu = step_context.kv_seqlens.repeat_interleave(step_context.q_seqlens, 0).cpu()
-                block_offsets_int32 = step_context.block_offsets.to(torch.int32)
-                step_context.block_offsets = block_offsets_int32\
-                    .repeat_interleave(step_context.q_seqlens, 0)
-            kv_seqlens = kv_seqlens_cpu
+                actual_tokens_current_rank = step_context.q_seqlens.sum().item()
+                padded_tokens_current_rank = actual_tokens_current_rank
+            # get max_tokens_across_dp
+            if dp_size > 1:
+                runtime_tokens_tensor = torch.tensor([padded_tokens_current_rank],
+                                                     dtype=step_context.q_seqlens.dtype,
+                                                     device=torch.npu.current_device())
+                world_size = dp_size * tp_size
+                runtime_tokens_buffer = torch.zeros([world_size],
+                                                    dtype=step_context.q_seqlens.dtype,
+                                                    device=torch.npu.current_device())
+                dist.all_gather_into_tensor(runtime_tokens_buffer, runtime_tokens_tensor, ep_group)
+                max_tokens_across_dp = torch.max(runtime_tokens_buffer).item()
+            else:
+                max_tokens_across_dp = padded_tokens_current_rank
+            return actual_tokens_current_rank, padded_tokens_current_rank, max_tokens_across_dp
+
+        @lru_cache
+        def init_mc2_token_capacity(tp_size):
+            max_num_tokens = min(cls.max_batches, 512)
+            num_tokens_per_tp_rank = (max_num_tokens + tp_size - 1) // tp_size
+            return num_tokens_per_tp_rank * tp_size
+
+        def select_moe_comm_type(max_tokens_across_dp, dp_size, tp_size, ep_size):
+            if ep_size <= 1:
+                return DlinferMoECommType.ALLGATHER
+            mc2_token_capacity = init_mc2_token_capacity(tp_size)
+            is_graph = cls.enable_graph and step_context.is_decoding
+            if is_graph:
+                max_tokens_across_dp = math.ceil(max_tokens_across_dp / tp_size) * tp_size
+            if SocVersion.is_A2():
+                if max_tokens_across_dp <= mc2_token_capacity and dp_size * tp_size >= 16:
+                    return DlinferMoECommType.MC2
+                else:
+                    return DlinferMoECommType.ALLGATHER
+            elif SocVersion.is_A3():
+                if max_tokens_across_dp <= mc2_token_capacity:
+                    return DlinferMoECommType.MC2
+                else:
+                    return DlinferMoECommType.ALLTOALL
+            else:
+                raise ValueError(f'Unsupported soc_version: {SocVersion.soc_version()}')
+
+        def get_pad_info(actual_tokens_current_rank, padded_tokens_current_rank, max_tokens_across_dp, tp_size,
+                         moe_comm_type):
+            x_active_mask = None
+            if moe_comm_type == DlinferMoECommType.MC2:
+                padded_size = math.ceil(max_tokens_across_dp / tp_size) * tp_size
+                pad_size = padded_size - padded_tokens_current_rank
+                x_active_mask = torch.ones(actual_tokens_current_rank,
+                                           dtype=torch.bool,
+                                           device=torch.npu.current_device())
+            elif moe_comm_type == DlinferMoECommType.ALLTOALL:
+                pad_size = tp_size - padded_tokens_current_rank
+            elif moe_comm_type == DlinferMoECommType.ALLGATHER:
+                pad_size = max_tokens_across_dp - padded_tokens_current_rank
+            else:
+                pad_size = 0
+            return pad_size, x_active_mask
+
+        @lru_cache(maxsize=1)
+        def get_moe_group_name(group):
+            if group is None:
+                return None
+            local_rank = torch.distributed.get_rank(group=group)
+            backend = group._get_backend(torch.device('npu'))
+            group_name = backend.get_hccl_comm_name(local_rank)
+            return group_name
+
+        q_seqlens_cpu, kv_seqlens_cpu, kv_seqlens_expanded = get_cpu_seqlens(step_context.is_decoding,
+                                                                             is_unpaged_prefill)
+        q_seqlens_list, kv_seqlens_list = get_list_seqlens(step_context.is_decoding, is_unpaged_prefill, q_seqlens_cpu,
+                                                           kv_seqlens_cpu)
+        max_q_seq_len, max_kv_seq_len = get_max_seqlens(step_context.is_decoding, is_unpaged_prefill, q_seqlens_list,
+                                                        kv_seqlens_list)
+        kv_start_indices, attention_mask = get_kv_start_indices_and_attention_mask(step_context.is_decoding,
+                                                                                   is_unpaged_prefill, q_seqlens_list,
+                                                                                   kv_seqlens_list, max_q_seq_len,
+                                                                                   max_kv_seq_len)
 
         if not cls.enable_graph and step_context.kv_quant_policy == 8:
             record_file = os.getenv('ASCEND_QUANT_RECORD_FILE')
@@ -287,9 +385,11 @@ class AscendOpsBackend(DlinferOpsBackend):
         attn_metadata = attn_meta_cls(
             step_context.is_decoding,
             step_context.block_offsets,
-            q_start_loc=q_start_loc_cpu,
+            q_start_loc=None,
             q_seqlens=q_seqlens_cpu,
-            kv_seqlens=kv_seqlens,
+            # kv_seqlens_expanded is only expanded in paged prefill,
+            # otherwise it equals kv_seqlens_cpu
+            kv_seqlens=kv_seqlens_expanded,
             kv_start_indices=kv_start_indices,
             block_size=block_size,
             attention_mask=attention_mask,
@@ -299,27 +399,48 @@ class AscendOpsBackend(DlinferOpsBackend):
             quant_policy=step_context.kv_quant_policy,
             quant_meta=AscendKVQuantMeta.quant_meta,
         )
-
         step_context.attn_metadata = attn_metadata
+
+        cls.dist_meta = get_dist_meta()
+        actual_tokens_current_rank, padded_tokens_current_rank, max_tokens_across_dp = get_tokens_info(
+            cls.dist_meta.dp_size, cls.dist_meta.tp_size, cls.dist_meta.ep_size, cls.dist_meta.ep_group)
+        moe_comm_type = select_moe_comm_type(max_tokens_across_dp, cls.dist_meta.dp_size, cls.dist_meta.tp_size,
+                                             cls.dist_meta.ep_size)
+        pad_size, x_active_mask = get_pad_info(actual_tokens_current_rank, padded_tokens_current_rank,
+                                               max_tokens_across_dp, cls.dist_meta.tp_size, moe_comm_type)
+        moe_group_name = get_moe_group_name(cls.dist_meta.ep_group)
+
+        moe_metadata = DlinferMoeMetadata(
+            max_tokens_across_dp=max_tokens_across_dp,
+            pad_size=pad_size,
+            dp_size=cls.dist_meta.dp_size,
+            tp_size=cls.dist_meta.tp_size,
+            ep_size=cls.dist_meta.ep_size,
+            tp_rank=cls.dist_meta.tp_rank,
+            ep_rank=cls.dist_meta.ep_rank,
+            tp_group=cls.dist_meta.tp_group,
+            ep_group=cls.dist_meta.ep_group,
+            moe_comm_type=moe_comm_type,
+            x_active_mask=x_active_mask,
+            moe_group_name=moe_group_name,
+        )
+        step_context.moe_metadata = moe_metadata
         return step_context
 
     @staticmethod
     def build_graph_runner(model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
                            backend_config: BackendConfig, device: torch.device):
         """Build graph runner."""
-        from .graph_runner import AscendGraphRunner
-        ascend_graph_runner = AscendGraphRunner(model, model_config, cache_config, backend_config, device)
-        AscendOpsBackend.enable_graph = ascend_graph_runner.enable_graph
-        return ascend_graph_runner
+        AscendOpsBackend.enable_graph = not backend_config.eager_mode
+        AscendOpsBackend.max_batches = cache_config.max_batches
+        from dlinfer.framework.lmdeploy_ext.cudagraph.ascend_cudagraph import AscendGraphRunner
+        return AscendGraphRunner(model, model_config, cache_config, backend_config, device)
 
     @staticmethod
     def init():
         """Initialize Ascend backend."""
         try:
             from torch_npu.contrib import transfer_to_npu  # noqa: F401
-            if SocVersion.is_Ascend310P():
-                # NOTE: Ascend310P has a bug with InternVL vision embedding using interpolate.
-                torch.npu.set_compile_mode(jit_compile=False)
         except ImportError:
             logger.warning('Failed to import torch_npu. Please make sure torch_npu is installed correctly. '
                            'Ascend initialization skipped.')
@@ -339,5 +460,6 @@ class AscendOpsBackend(DlinferOpsBackend):
     @staticmethod
     def support_ray():
         """Support ray."""
-        os.environ['RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES'] = '1'
+        if not _envs.ascend_set_rt_visable_devices_by_ray:
+            os.environ['RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES'] = '1'
         return True

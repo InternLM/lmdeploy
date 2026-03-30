@@ -1,18 +1,19 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Any, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
+from typing import Any
 
 import torch
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
-from lmdeploy.pytorch.nn.linear import (build_down_linear, build_gateup_linear, build_o_proj, build_qkv_proj,
-                                        build_rowwise_linear)
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
+from lmdeploy.pytorch.nn.linear import build_down_linear, build_gateup_linear, build_o_proj, build_qkv_proj
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
+from .utils.model import DeployModelMixinV1, build_embedding
 
 
 class InternLM2Attention(nn.Module):
@@ -61,8 +62,8 @@ class InternLM2Attention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: tuple[torch.Tensor] | None = None,
         attn_metadata: Any = None,
     ):
         """Rewrite of InternLM2Attention.forward."""
@@ -172,9 +173,9 @@ class InternLM2DecoderLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[List[torch.FloatTensor]],
-        residual: Optional[torch.Tensor] = None,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: list[torch.FloatTensor] | None,
+        residual: torch.Tensor | None = None,
         attn_metadata: Any = None,
     ):
 
@@ -208,12 +209,13 @@ class InternLM2Model(nn.Module):
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
 
-        self.tok_embeddings = nn.Embedding(config.vocab_size,
-                                           config.hidden_size,
-                                           self.padding_idx,
-                                           dtype=dtype,
-                                           device=device)
-
+        self.tok_embeddings = build_embedding(
+            config.vocab_size,
+            config.hidden_size,
+            self.padding_idx,
+            dtype=dtype,
+            device=device,
+        )
         # build all decode layers
         self.layers = nn.ModuleList([
             InternLM2DecoderLayer(config, layer_idx, dtype=dtype, device=device)
@@ -224,36 +226,15 @@ class InternLM2Model(nn.Module):
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
 
         # build rotary embedding in Model
-        rope_scaling = config.rope_scaling
-        scaling_factor = 1.0
-        emb_type = RopeType.LinearScaling
-        if rope_scaling is not None:
-            scaling_factor = rope_scaling.get('factor', scaling_factor)
-            rope_type = rope_scaling['type']
-            if rope_type == 'linear':
-                emb_type = RopeType.LinearScaling
-            if rope_type == 'dynamic':
-                emb_type = RopeType.DynamicNTKScaling
-            else:
-                raise RuntimeError(f'Unsupported rope type: {rope_type}')
-        rope_dim = config.hidden_size // config.num_attention_heads
-        rope_max_pos_emb = config.max_position_embeddings
-        rope_base = config.rope_theta
-        self.rotary_emb = build_rotary_embedding(
-            rope_dim,
-            rope_max_pos_emb,
-            rope_base,
-            scaling_factor,
-            emb_type=emb_type,
-        )
+        self.rotary_emb = build_rotary_embedding_from_config(config)
 
     def forward(
         self,
         input_ids: torch.LongTensor = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,
         attn_metadata: Any = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
+        inputs_embeds: torch.FloatTensor | None = None,
     ):
         """Rewrite of forward."""
 
@@ -290,7 +271,7 @@ class InternLM2Model(nn.Module):
         return self.tok_embeddings
 
 
-class InternLM2ForCausalLM(nn.Module, CudaGraphMixin):
+class InternLM2ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
     """Rewrote model of InternLM2ForCausalLM."""
 
     packed_modules_mapping = {
@@ -311,17 +292,14 @@ class InternLM2ForCausalLM(nn.Module, CudaGraphMixin):
         # build Model
         self.model = InternLM2Model(config, dtype=dtype, device=device)
         # build lm_head
-        self.output = build_rowwise_linear(config.hidden_size,
-                                           config.vocab_size,
-                                           bias=False,
-                                           dtype=dtype,
-                                           device=device)
+        self.output = self.build_lm_head(config.hidden_size, config.vocab_size, bias=False, dtype=dtype, device=device)
+        self.lm_head = self.output
 
     def forward(
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
         **kwargs,
@@ -336,18 +314,14 @@ class InternLM2ForCausalLM(nn.Module, CudaGraphMixin):
         )
         return hidden_states
 
-    def get_logits(self, hidden_states: torch.Tensor):
-        """Compute logits of the model output."""
-        return self.output(hidden_states)
-
     def get_input_embeddings(self):
         """Get input embeddings."""
         return self.model.get_input_embeddings()
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
-        inputs_embeds: Optional[torch.Tensor] = None,
+        past_key_values: list[list[torch.Tensor]],
+        inputs_embeds: torch.Tensor | None = None,
         context: StepContext = None,
     ):
         """Prepare input."""
@@ -373,7 +347,7 @@ class InternLM2ForCausalLM(nn.Module, CudaGraphMixin):
             inputs_embeds=inputs_embeds,
         )
 
-    def load_lora_weights(self, weights: Iterable[Tuple[str, torch.Tensor]], adapter_id: int):
+    def load_lora_weights(self, weights: Iterable[tuple[str, torch.Tensor]], adapter_id: int):
         """Load lora weights."""
 
         from lmdeploy.pytorch.adapter.adapter import load_lora_weights
@@ -397,7 +371,7 @@ class InternLM2ForCausalLM(nn.Module, CudaGraphMixin):
         weights_iter = _rearange_wqkv(weights)
         load_lora_weights(self, weights_iter, adapter_id)
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
         # modify from vllm
         stacked_params_mapping = [

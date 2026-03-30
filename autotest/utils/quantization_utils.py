@@ -2,8 +2,6 @@ import os
 import subprocess
 from subprocess import PIPE
 
-from lmdeploy.utils import is_bf16_supported
-
 
 def quantization(config,
                  quantization_model_name,
@@ -12,8 +10,8 @@ def quantization(config,
                  cuda_prefix: str = 'CUDA_VISIBLE_DEVICES=0'):
     model_path = config.get('model_path')
     log_path = config.get('log_path')
-    origin_model_path = config.get('model_path') + '/' + origin_model_name
-    quantization_model_path = model_path + '/' + quantization_model_name
+    origin_model_path = os.path.join(config.get('model_path'), origin_model_name)
+    quantization_model_path = os.path.join(model_path, quantization_model_name)
     quantization_log = os.path.join(
         log_path, '_'.join(['quantization', quantization_type,
                             quantization_model_name.split('/')[1]]) + '.log')
@@ -31,15 +29,18 @@ def quantization(config,
         return False, 'quantization type should in [awq, gptq, w8a8], \
             now the type is ' + quantization_type
 
+    # Add device option if specified in environment
+    device = os.environ.get('DEVICE', '')
+    if device == 'ascend':
+        quantization_cmd += ' --device npu '
+
     if cuda_prefix is not None:
         quantization_cmd = ' '.join([cuda_prefix, quantization_cmd])
 
     if 'llama-3' in origin_model_name.lower():
         quantization_cmd += ' --search-scale'
 
-    if not is_bf16_supported() or quantization_type == 'gptq':
-        quantization_cmd += ' --batch-size 8'
-    elif str(config.get('env_tag')) == '3090':
+    if quantization_type == 'gptq' or str(config.get('env_tag')) == '3090' or str(config.get('env_tag')) == '5080':
         quantization_cmd += ' --batch-size 8'
     else:
         quantization_cmd += ' --batch-size 32'
@@ -61,7 +62,8 @@ def quantization(config,
                                          stderr=PIPE,
                                          shell=True,
                                          text=True,
-                                         encoding='utf-8')
+                                         encoding='utf-8',
+                                         errors='replace')
         f.writelines(quantizationRes.stderr)
         result = quantizationRes.returncode == 0
 

@@ -12,7 +12,7 @@ from .llama import LlamaModel, LlamaReader
 class Glm4Reader(LlamaReader):
     """Glm4Reader."""
 
-    attn_layer_patten = r'transformer.encoder.layers.([0-9]+).'
+    attn_layer_patten = r'transformer\.encoder\.layers\.([0-9]+).'
     tok_embeddings_key = 'transformer.embedding.word_embeddings.weight'
     norm_weight_key = 'transformer.encoder.final_layernorm.weight'
     output_weight_key = 'transformer.output_layer.weight'

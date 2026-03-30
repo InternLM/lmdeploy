@@ -33,6 +33,8 @@ struct Sm90: Arch<900> {
 inline bool is_arch_compatible(int karch, int darch)
 {
     switch (karch) {
+        case 0:
+            return true;
         case 700:
             return Sm70::is_compatible(darch);
         case 750:

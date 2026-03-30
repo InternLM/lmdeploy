@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
-from typing import Dict, List, Union
+from itertools import groupby
 
 import numpy as np
 from mmengine import Registry
@@ -11,14 +11,14 @@ from lmdeploy.archs import get_model_arch
 VISION_MODELS = Registry('vision_model')
 
 
-class VisonModel(ABC):
+class VisionModel(ABC):
     """Visual model which extract image feature."""
-    _arch: Union[str, List[str]] = None
+    _arch: str | list[str] = None
 
     def __init__(self,
                  model_path: str,
                  with_llm: bool = False,
-                 max_memory: Dict[int, int] = None,
+                 max_memory: dict[int, int] = None,
                  hf_config: AutoConfig = None,
                  backend: str = ''):
         """init."""
@@ -61,7 +61,7 @@ class VisonModel(ABC):
             raise NotImplementedError()
 
     @abstractmethod
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Preprocess multimodal data in the messages.
 
         The derived class,
@@ -70,7 +70,7 @@ class VisonModel(ABC):
         It can integrate the result into the messages list, or insert it to
         the individual image item.
         Args:
-            message(Dict): multimodal data in a dict, which is as follows:
+            message(dict): multimodal data in a dict, which is as follows:
             [
                 {'role': 'user', 'content': 'user prompt'},
                 {'role': 'assisant', 'content': 'AI reponse'},
@@ -104,12 +104,24 @@ class VisonModel(ABC):
         """  # noqa
         raise NotImplementedError()
 
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def has_input_ids(self, messages: list[dict]) -> bool:
+        """Check whether the messages contain input_ids directly.
+
+        Args:
+            messages (list[dict]): a list of message, which is supposed to be
+                the output of `preprocess`
+        Returns:
+            bool: whether the messages contain input_ids directly
+        """
+        users = [x['content'] for x in messages if x['role'] == 'user']
+        return len(users) == 1 and isinstance(users[0], list) and isinstance(users[0][0].get('text', ''), list)
+
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
-            messages(List[Dict]): the outputs of `preprocess`
+            messages(list[dict]): the outputs of `preprocess`
             max_batch_size(int): the max batch size when forwarding vision
                 model
         Return:
@@ -119,61 +131,132 @@ class VisonModel(ABC):
         if self.backend == 'turbomind':
             raise NotImplementedError()
 
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
+    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, chat_template_kwargs=None, **kwargs):
         """Pack the preprocessing results in a format compatible with what is
         required by pytorch engine. ONLY implement it when the backend is
         pytorch engine.
 
         Args:
-            messages(List[Dict]): the output of `preprocess`
+            messages(list[dict]): the output of `preprocess`
             chat_template: the chat template defined in `lmdeploy/model.py`
             tokenzer: the tokenizer model
             sequence_start: starting flag of a sequence
+            chat_template_kwargs: additional arguments for chat template
+                processing, such as `add_vision_id` and `enable_thinking`
         """
         if self.backend == 'pytorch':
             raise NotImplementedError()
 
-    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
+    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start, chat_template_kwargs=None, **kwargs):
         """Pack the forwarding results in a format compatible with what is
         required by turbomind engine. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
-            messages(List[Dict]): the output of `preprocess`
+            messages(list[dict]): the output of `preprocess`
             chat_template: the chat template defined in `lmdeploy/model.py`
             tokenzer: the tokenizer model
             sequence_start: starting flag of a sequence
+            chat_template_kwargs: additional arguments for chat template
+                processing, such as `add_vision_id` and `enable_thinking`
         """
         if self.backend == 'turbomind':
             raise NotImplementedError()
 
     @staticmethod
-    def collect_images(messages):
-        """Gather all images along with their respective parameters from the
-        messages and compile them into a single list. Each image is converted
-        to RGB color space.
+    def collect_multimodal_items(messages):
+        """Gather all multimodal items along with their respective parameters
+        from the messages and compile them into a single list.
 
         Args:
-            messages (List[Tuple[Image, Dict]]): a list of images with their
-                corresponding parameters
-        """  # noqa
-        images = []
+            messages (list[dict]): a list of message
+        Returns:
+            list[tuple[Modality, Any, dict]]: a list of (modality, data, params) for each multimodal item
+        """
+        multimodal_items = []
         for message in messages:
             content = message['content']
-            if not isinstance(content, List):
+            if not isinstance(content, list):
                 continue
-            images.extend([(x['image'], {
-                k: v
-                for k, v in x.items() if k not in {'type', 'image'}
-            }) for x in content if x['type'] == 'image'])
-        return images
+
+            for x in content:
+                if not isinstance(x, dict):
+                    continue
+
+                modality = x.get('type')
+                if modality is None or modality == 'text':
+                    continue
+
+                data = x.get('data')
+                params = {k: v for k, v in x.items() if k not in ['type', 'data']}
+                multimodal_items.append((modality, data, params))
+
+        return multimodal_items
+
+    @staticmethod
+    def IMAGE_TOKEN_included(messages):
+        """Check whether the IMAGE_TOKEN is included in the messages.
+
+        Args:
+            messages (list[dict]): a list of message
+        Returns:
+            bool: whether the IMAGE_TOKEN is included in the messages
+        """
+        for message in messages:
+            role, content = message['role'], message['content']
+            if role != 'user':
+                continue
+            if isinstance(content, str) and '<IMAGE_TOKEN>' in content:
+                return True
+            elif isinstance(content, list):
+                content = [x['text'] for x in content if x['type'] == 'text']
+                if any('<IMAGE_TOKEN>' in x for x in content):
+                    return True
+        return False
+
+    def to_pytorch_with_input_ids(self, messages):
+        """Pack the preprocessing results in a format compatible with what is
+        required by pytorch engine when input_ids are provided directly.
+
+        Args:
+            messages(list[dict]): the output of `preprocess`
+        """
+        # collect all preprocessing result from messages
+        preps = [x['content'] for x in messages if x['role'] == 'preprocess']
+        assert len(preps) == 1
+        preps = preps[0]
+
+        _input_ids = messages[0]['content'][0]['text']
+        segs = []
+        for k, g in groupby(_input_ids, lambda x: x == self.image_token_id):
+            if not k:
+                segs.append(list(g))
+            else:
+                segs.extend([[]] * (len(list(g)) - 1))
+        if _input_ids[0] == self.image_token_id:
+            segs = [[]] + segs
+        if _input_ids[-1] == self.image_token_id:
+            segs = segs + [[]]
+
+        assert self.image_token_id == preps[0]['image_token_id']
+        assert len(segs) == len(preps) + 1, (f'the number of image token id {self.image_token_id} is not equal '
+                                             f'to input images, {len(segs) - 1} vs {len(preps)}')
+        input_ids = []
+        for i, seg in enumerate(segs):
+            if i > 0 and i <= len(preps):
+                preps[i - 1].update(offset=len(input_ids))
+                image_tokens = preps[i - 1]['image_tokens']
+                input_ids.extend([self.image_token_id] * image_tokens)
+            input_ids.extend(seg)
+
+        return dict(prompt=None, input_ids=input_ids, multimodal=preps)
 
     def to_pytorch_aux(self, messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start):
         """Auxiliary function to pack the preprocessing results in a format
         compatible with what is required by pytorch engine.
 
         Args:
-            messages(List[Dict]): the output of `preprocess`
+            messages(list[dict]): the output of `preprocess`
             prompt(str): the prompt after applying chat template
             IMAGE_TOKEN(str): a placeholder where image tokens will be
                 inserted
@@ -208,7 +291,7 @@ class VisonModel(ABC):
         compatible with what is required by turbomind engine.
 
         Args:
-            messages(List[Dict]): the output of `preprocess`
+            messages(list[dict]): the output of `preprocess`
             prompt(str): the prompt after applying chat template
             IMAGE_TOKEN(str): a placeholder where image tokens will be
                 inserted
@@ -218,7 +301,7 @@ class VisonModel(ABC):
         # collect image features from messages
         features = [x['content'] for x in messages if x['role'] == 'forward']
         features = features[0]
-        features = [x.cpu().numpy() for x in features]
+        features = [x.cpu() for x in features]
         # split prompt into segments and validate data
         segs = prompt.split(IMAGE_TOKEN)
         assert len(segs) == len(features) + 1, (f'the number of {IMAGE_TOKEN} is not equal '

@@ -1,64 +1,93 @@
+# Base images
+ARG IMAGE_TYPE=final
 ARG CUDA_VERSION=cu12
 
-FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS cu12
-ENV CUDA_VERSION_SHORT=cu121
+FROM nvidia/cuda:13.0.2-devel-ubuntu22.04 AS cu13
+ENV CUDA_VERSION_SHORT=cu130
 
-FROM nvidia/cuda:11.8.0-devel-ubuntu22.04 AS cu11
-ENV CUDA_VERSION_SHORT=cu118
+FROM nvidia/cuda:12.8.1-devel-ubuntu22.04 AS cu12.8
+ENV CUDA_VERSION_SHORT=cu128
 
-FROM ${CUDA_VERSION} AS final
+FROM nvidia/cuda:12.6.3-devel-ubuntu22.04 AS cu12
+ENV CUDA_VERSION_SHORT=cu126
 
-ARG PYTHON_VERSION=3.10
+# Builder image
+FROM ${CUDA_VERSION} AS dev
+ARG PYTHON_VERSION=3.12
 
-RUN apt-get update -y && apt-get install -y software-properties-common wget vim git curl openssh-server ssh sudo &&\
-    apt-get install libibverbs1 ibverbs-providers ibverbs-utils librdmacm1 libibverbs-dev rdma-core -y &&\
-    curl https://sh.rustup.rs -sSf | sh -s -- -y &&\
-    add-apt-repository ppa:deadsnakes/ppa -y && apt-get update -y && apt-get install -y --no-install-recommends \
-    ninja-build rapidjson-dev libgoogle-glog-dev gdb python${PYTHON_VERSION} python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv \
-    && apt-get clean -y && rm -rf /var/lib/apt/lists/* && cd /opt && python3 -m venv py3
+ENV PATH=/opt/py3/bin:/root/.local/bin:${PATH}
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Etc/UTC
 
-ENV PATH=/opt/py3/bin:$PATH
+RUN --mount=type=cache,target=/root/.cache \
+    sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g' /etc/apt/sources.list && \
+    apt-get update -y && \
+    apt-get install -y --no-install-recommends \
+        tzdata wget curl openssh-server ssh sudo git-core \
+        libibverbs1 ibverbs-providers ibverbs-utils librdmacm1 libibverbs-dev rdma-core libmlx5-1 \
+        libssl-dev pkg-config vim rapidjson-dev libgoogle-glog-dev gdb && \
+    apt-get clean -y && \
+    rm -rf /var/lib/apt/lists/* && \
+    wget -qO- https://astral.sh/uv/install.sh | sh && \
+    uv venv -p python${PYTHON_VERSION} --seed /opt/py3 && \
+    pip install --upgrade pip build
 
-# install nccl manually for cuda11.8
-RUN if [ "$CUDA_VERSION_SHORT" = "cu118" ]; then \
-    git clone --depth=1 --branch v2.22.3-1 https://github.com/NVIDIA/nccl.git &&\
-    cd nccl && make -j$(nproc) src.build &&\
-    mv build/include/* /usr/local/include &&\
-    mkdir -p /usr/local/nccl/lib &&\
-    mv build/lib/lib* /usr/local/nccl/lib/ &&\
-    cd .. && rm -rf nccl ; \
-    fi
+# Pip deps only (cache until requirements/runtime_cuda.txt changes). No full repo COPY yet.
+FROM dev AS runtime-deps-pip
+ARG PYTHON_VERSION=3.12
+ENV PYTHON_VERSION=${PYTHON_VERSION}
 
+COPY requirements/runtime_cuda.txt /tmp/runtime_cuda.txt
 
-ENV LD_LIBRARY_PATH=/usr/local/nccl/lib:$LD_LIBRARY_PATH
+RUN --mount=type=cache,target=/root/.cache \
+    pip install -r /tmp/runtime_cuda.txt --extra-index-url https://download.pytorch.org/whl/${CUDA_VERSION_SHORT}
 
+RUN mkdir -p /wheels
 
-RUN --mount=type=cache,target=/root/.cache/pip python3 -m pip install --upgrade pip setuptools==69.5.1 &&\
-    python3 -m pip install cmake packaging wheel
+# Does not use lmdeploy sources; base on runtime-deps-pip so it is not invalidated by app code changes.
+FROM runtime-deps-pip AS thirdparty-wheels
 
-ENV NCCL_LAUNCH_MODE=GROUP
+COPY docker/prepare_3rdparty_wheel.sh /tmp/prepare_3rdparty_wheel.sh
 
-# Should be in the lmdeploy root directory when building docker image
+RUN --mount=type=cache,target=/root/.cache \
+    bash /tmp/prepare_3rdparty_wheel.sh
+
+# Full tree for local package build
+FROM runtime-deps-pip AS lmdeploy-wheel
+
 COPY . /opt/lmdeploy
-
 WORKDIR /opt/lmdeploy
 
-RUN --mount=type=cache,target=/root/.cache/pip cd /opt/lmdeploy &&\
-    python3 -m pip install -r requirements_cuda.txt --extra-index-url https://download.pytorch.org/whl/${CUDA_VERSION_SHORT} &&\
-    mkdir -p build && cd build &&\
-    sh ../generate.sh &&\
-    ninja -j$(nproc) && ninja install &&\
-    cd .. &&\
-    python3 -m pip install -e . &&\
-    rm -rf build
+RUN --mount=type=cache,target=/root/.cache \
+    docker/build.sh
 
-# use locally built nccl for cuda11.8
-RUN if [ "$CUDA_VERSION_SHORT" = "cu118" ]; then python3 -m pip uninstall -y nvidia-nccl-cu11 ; fi
-# torch 2.7 brings in nvidia-nccl-cu12 2.26.x. Somehow, it causes performance degradation of pytorch engine
-RUN if [ "$CUDA_VERSION_SHORT" = "cu121" ]; then python3 -m pip install nvidia-nccl-cu12==2.25.1; fi
+FROM runtime-deps-pip AS wheels
 
-ENV LD_LIBRARY_PATH=/opt/lmdeploy/install/lib:$LD_LIBRARY_PATH
-ENV PATH=/opt/lmdeploy/install/bin:$PATH
+COPY --from=thirdparty-wheels /wheels /wheels
+COPY --from=lmdeploy-wheel /wheels /wheels
+
+# Runtime image
+FROM nvidia/cuda:13.0.2-base-ubuntu22.04 AS cu13-base
+ENV CUDA_VERSION_SHORT=cu130
+
+FROM nvidia/cuda:12.8.1-base-ubuntu22.04 AS cu12.8-base
+ENV CUDA_VERSION_SHORT=cu128
+
+FROM nvidia/cuda:12.6.3-base-ubuntu22.04 AS cu12-base
+ENV CUDA_VERSION_SHORT=cu126
+
+FROM ${CUDA_VERSION}-base AS final
+ARG PYTHON_VERSION=3.12
+ENV PYTHON_VERSION=${PYTHON_VERSION}
+
+# Some dependencies such as timm (required by InternVL models) are listed in requirements/serve.txt.
+COPY requirements/serve.txt /tmp/requirements/serve.txt
+COPY docker/install.sh /tmp/install.sh
+RUN --mount=type=cache,target=/root/.cache \
+    --mount=type=cache,target=/wheels,from=wheels,source=/wheels \
+    /tmp/install.sh
 
 # explicitly set ptxas path for triton
+ENV PATH=/opt/py3/bin:$PATH
 ENV TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
+FROM ${IMAGE_TYPE}

@@ -186,6 +186,9 @@ inline __device__ void Store(T* dst, const Array<T, N>& src)
     else if constexpr (sizeof(Array<T, N>) == sizeof(ushort)) {
         *(ushort*)dst = (const ushort&)src;
     }
+    else if constexpr (sizeof(Array<T, N>) == sizeof(char)) {
+        *(char*)dst = (const char&)src;
+    }
     else if constexpr (sizeof(Array<T, N>) % sizeof(uint4) == 0) {  //  uncoalesced
         static_assert(bitsof<T> % 8 == 0, "raw pointer arithmetic of sub-byte types");
         constexpr int M = sizeof(Array<T, N>) / sizeof(uint4);
@@ -213,6 +216,12 @@ inline __device__ void Stcs(T* __restrict__ dst, const Array<T, N>& src)
     else if constexpr (sizeof(Array<T, N>) == sizeof(uint1)) {
         __stcs((uint*)dst, (const uint&)src);
     }
+    else if constexpr (sizeof(Array<T, N>) == sizeof(uint16_t)) {
+        __stcs((uint16_t*)dst, (const uint16_t&)src);
+    }
+    else if constexpr (sizeof(Array<T, N>) == sizeof(uint8_t)) {
+        __stcs((uint8_t*)dst, (const uint8_t&)src);
+    }
     else {
         static_assert(!std::is_same_v<T, T>);
     }
@@ -231,6 +240,12 @@ inline __device__ void Stcg(T* __restrict__ dst, const Array<T, N>& src)
     }
     else if constexpr (sizeof(Array<T, N>) == sizeof(uint1)) {
         __stcg((uint*)dst, (const uint&)src);
+    }
+    else if constexpr (sizeof(Array<T, N>) == sizeof(uint16_t)) {
+        __stcg((uint16_t*)dst, (const uint16_t&)src);
+    }
+    else if constexpr (sizeof(Array<T, N>) == sizeof(uint8_t)) {
+        __stcg((uint8_t*)dst, (const uint8_t&)src);
     }
     else {
         static_assert(!std::is_same_v<T, T>);
@@ -251,6 +266,12 @@ inline __device__ void Ldg(Array<T, N>& dst, const T* src)
     else if constexpr (sizeof(Array<T, N>) == sizeof(uint)) {
         (uint&)dst = __ldg((const uint*)src);
     }
+    else if constexpr (sizeof(Array<T, N>) == sizeof(uint16_t)) {
+        (uint16_t&)dst = __ldg((const uint16_t*)src);
+    }
+    else if constexpr (sizeof(Array<T, N>) == sizeof(uint8_t)) {
+        (uint8_t&)dst = __ldg((const uint8_t*)src);
+    }
     else {
         static_assert(!std::is_same_v<T, T>);
     }
@@ -270,6 +291,37 @@ inline __device__ void Ldcs(Array<T, N>& dst, const T* src)
     else if constexpr (sizeof(Array<T, N>) == sizeof(uint)) {
         (uint&)dst = __ldcs((const uint*)src);
     }
+    else if constexpr (sizeof(Array<T, N>) == sizeof(uint16_t)) {
+        (uint16_t&)dst = __ldcs((const uint16_t*)src);
+    }
+    else if constexpr (sizeof(Array<T, N>) == sizeof(uint8_t)) {
+        (uint8_t&)dst = __ldcs((const uint8_t*)src);
+    }
+    else {
+        static_assert(!std::is_same_v<T, T>);
+    }
+}
+
+template<typename T, int N>
+inline __device__ void Ldcg(Array<T, N>& dst, const T* src)
+{
+    static_assert(sizeof(Array<T, N>) <= sizeof(uint4));
+
+    if constexpr (sizeof(Array<T, N>) == sizeof(uint4)) {
+        (uint4&)dst = __ldcg((const uint4*)src);
+    }
+    else if constexpr (sizeof(Array<T, N>) == sizeof(uint2)) {
+        (uint2&)dst = __ldcg((const uint2*)src);
+    }
+    else if constexpr (sizeof(Array<T, N>) == sizeof(uint)) {
+        (uint&)dst = __ldcg((const uint*)src);
+    }
+    else if constexpr (sizeof(Array<T, N>) == sizeof(uint16_t)) {
+        (uint16_t&)dst = __ldcg((const uint16_t*)src);
+    }
+    else if constexpr (sizeof(Array<T, N>) == sizeof(uint8_t)) {
+        (uint8_t&)dst = __ldcg((const uint8_t*)src);
+    }
     else {
         static_assert(!std::is_same_v<T, T>);
     }
@@ -286,6 +338,12 @@ inline __device__ void Load(Array<T, N>& dst, const T* src)
     }
     else if constexpr (sizeof(Array<T, N>) == sizeof(uint)) {
         (uint1&)dst = *(const uint1*)src;
+    }
+    else if constexpr (sizeof(Array<T, N>) == sizeof(uint16_t)) {
+        (uint16_t&)dst = *(const uint16_t*)src;
+    }
+    else if constexpr (sizeof(Array<T, N>) == sizeof(uint8_t)) {
+        (uint8_t&)dst = *(const uint8_t*)src;
     }
     else if constexpr (sizeof(Array<T, N>) % sizeof(uint4) == 0) {  //  uncoalesced
         static_assert(bitsof<T> % 8 == 0, "raw pointer arithmetic of sub-byte types");

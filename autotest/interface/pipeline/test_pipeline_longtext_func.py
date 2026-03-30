@@ -1,41 +1,56 @@
-import json
+import multiprocessing as mp
 import os
 
 import numpy as np
 import pytest
-from utils.config_utils import get_cuda_id_by_workerid
-from utils.get_run_config import close_pipeline, get_tp_num
+from utils.config_utils import set_device_env_variable, unset_device_env_variable
 
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
 
 SESSION_LEN = 198000
-SESSION_LEN_PASSKEY = 168000
-SESSION_LEN_PASSKEY_1M = 1048576
+SESSION_LEN_128K = 128000
+SESSION_LEN_32K = 32000
+
+SESSION_LEN_CONFIG = {
+    'Qwen/Qwen2.5-7B-Instruct': SESSION_LEN_32K,
+    'Qwen/Qwen3-235B-A22B': SESSION_LEN_128K,
+    'Qwen/Qwen3-30B-A3B': SESSION_LEN_128K,
+    'Qwen/Qwen3-32B': SESSION_LEN_128K,
+    'meta-llama/Meta-Llama-3-1-8B-Instruct': SESSION_LEN_128K,
+    'meta-llama/Meta-Llama-3-1-70B-Instruct': SESSION_LEN_128K,
+}
+
+
+def run_case_in_spawn(target, args):
+    ctx = mp.get_context('spawn')
+    process = ctx.Process(target=target, args=args)
+    process.start()
+    process.join()
 
 
 @pytest.mark.gpu_num_1
-@pytest.mark.parametrize('model',
-                         ['internlm/internlm2-chat-7b', 'internlm/internlm2_5-7b', 'internlm/internlm2-chat-1_8b'])
+@pytest.mark.parametrize('model', ['Qwen/Qwen3-8B'])
 def test_history_issue_tp1(config, model, worker_id):
-    log_name = ''.join(['pipeline_longtext_issue_', worker_id, '.log'])
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
-    stream_infer_basic(config, model, log_name)
+        set_device_env_variable(worker_id)
+    run_case_in_spawn(stream_infer_worker, (config, model, 1))
+    if 'gw' in worker_id:
+        unset_device_env_variable()
 
 
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b', 'internlm/internlm2-chat-20b-inner-4bits'])
+@pytest.mark.parametrize('model', ['Qwen/Qwen3-32B', 'Qwen/Qwen3-32B-inner-4bits', 'Qwen/Qwen3-30B-A3B'])
 def test_history_issue_tp2(config, model, worker_id):
-    log_name = ''.join(['pipeline_longtext_issue_', worker_id, '.log'])
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    stream_infer_basic(config, model, log_name)
+    run_case_in_spawn(stream_infer_worker, (config, model, 2))
+    if 'gw' in worker_id:
+        unset_device_env_variable()
 
 
-def stream_infer_basic(config, model, log_name):
-    tp_num = get_tp_num(config, model)
-    model_path = '/'.join([config.get('model_path'), model])
+def stream_infer_worker(config, model, tp_num):
+    model_path = os.path.join(config.get('model_path'), model)
 
     backend_config = TurbomindEngineConfig(session_len=SESSION_LEN, tp=tp_num)
     pipe = pipeline(model_path, backend_config=backend_config)
@@ -53,66 +68,94 @@ def stream_infer_basic(config, model, log_name):
         continue
     print(outputs)
 
-    close_pipeline(pipe)
+    pipe.close()
 
 
 @pytest.mark.gpu_num_1
-@pytest.mark.parametrize(
-    'model', ['internlm/internlm2-chat-7b', 'Qwen/Qwen2-7B-Instruct', 'meta-llama/Meta-Llama-3-1-8B-Instruct'])
-@pytest.mark.parametrize('backend', ['turbomind'])
+@pytest.mark.parametrize('model', ['Qwen/Qwen2.5-7B-Instruct', 'meta-llama/Meta-Llama-3-1-8B-Instruct'])
+@pytest.mark.parametrize('backend', ['turbomind', 'pytorch'])
 def test_long_test_passkey_tp1(config, model, backend, worker_id):
     log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
-    passkey_retrival(config, model, backend, log_name, 1)
+        set_device_env_variable(worker_id)
+    run_case_in_spawn(passkey_retrival_worker,
+                      (config, model, backend, log_name, 1, SESSION_LEN_CONFIG.get(model, SESSION_LEN_128K)))
+    if 'gw' in worker_id:
+        unset_device_env_variable()
 
 
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize(
-    'model', ['internlm/internlm2-chat-20b', 'internlm/internlm2-chat-20b-inner-4bits', 'Qwen/Qwen2-7B-Instruct'])
-@pytest.mark.parametrize('backend', ['turbomind'])
+@pytest.mark.parametrize('model', ['Qwen/Qwen3-30B-A3B', 'Qwen/Qwen3-32B'])
+@pytest.mark.parametrize('backend', ['turbomind', 'pytorch'])
 def test_long_test_passkey_tp2(config, model, backend, worker_id):
     log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    passkey_retrival(config, model, backend, log_name, 2)
+    run_case_in_spawn(passkey_retrival_worker,
+                      (config, model, backend, log_name, 2, SESSION_LEN_CONFIG.get(model, SESSION_LEN_128K)))
+    if 'gw' in worker_id:
+        unset_device_env_variable()
 
 
-@pytest.mark.gpu_num_4
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-7b-chat-1m'])
-@pytest.mark.parametrize('backend', ['turbomind'])
-def test_long_test_passkey_tp4(config, model, backend, worker_id):
+@pytest.mark.gpu_num_8
+@pytest.mark.parametrize('model', ['Qwen/Qwen3-235B-A22B', 'meta-llama/Meta-Llama-3-1-70B-Instruct'])
+@pytest.mark.parametrize('backend', ['turbomind', 'pytorch'])
+def test_long_test_passkey_tp8(config, model, backend, worker_id):
     log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=4)
+        set_device_env_variable(worker_id, parallel_config=8)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    passkey_retrival(config, model, backend, log_name, 4, SESSION_LEN_PASSKEY_1M)
+    run_case_in_spawn(passkey_retrival_worker,
+                      (config, model, backend, log_name, 8, SESSION_LEN_CONFIG.get(model, SESSION_LEN_128K)))
+    if 'gw' in worker_id:
+        unset_device_env_variable()
 
 
-def passkey_retrival(config, model, backend, log_name, tp_num, session_len: int = SESSION_LEN_PASSKEY):
+YARN_CONFIG = {'rope_scaling': {'rope_type': 'yarn', 'factor': 4.0, 'original_max_position_embeddings': 32768}}
+
+NTK_CONFIG = {
+    'rope_scaling': {
+        'type': 'dynamic',
+        'factor': 2.0
+    },
+}
+
+
+def passkey_retrival_worker(config, model, backend, log_name, tp_num, session_len: int = SESSION_LEN_128K):
     model_path = '/'.join([config.get('model_path'), model])
-    if 'llama-3' in model.lower():
-        session_len = 128000
     if backend == 'turbomind':
-        if 'internlm2_5' in model and '-1m' in model:
+        if 'qwen' in model.lower():
+            backend_config = TurbomindEngineConfig(session_len=session_len,
+                                                   max_batch_size=1,
+                                                   cache_max_entry_count=0.7,
+                                                   tp=tp_num,
+                                                   hf_overrides=YARN_CONFIG)
+        elif 'intern-s1' in model.lower():
+            backend_config = TurbomindEngineConfig(session_len=session_len,
+                                                   max_batch_size=1,
+                                                   cache_max_entry_count=0.7,
+                                                   tp=tp_num,
+                                                   hf_overrides={'text_config': NTK_CONFIG})
+        else:
             backend_config = TurbomindEngineConfig(session_len=session_len,
                                                    max_batch_size=1,
                                                    cache_max_entry_count=0.7,
                                                    tp=tp_num)
-        else:
-            backend_config = TurbomindEngineConfig(session_len=session_len, tp=tp_num)
     else:
-        if 'internlm2_5' in model and '-1m' in model:
+        if 'qwen' in model.lower():
             backend_config = PytorchEngineConfig(session_len=session_len,
+                                                 tp=tp_num,
                                                  max_batch_size=1,
-                                                 cache_max_entry_count=0.7,
-                                                 tp=tp_num)
+                                                 hf_overrides=YARN_CONFIG)
+        elif 'intern-s1' in model.lower():
+            backend_config = TurbomindEngineConfig(session_len=session_len,
+                                                   max_batch_size=1,
+                                                   cache_max_entry_count=0.7,
+                                                   tp=tp_num,
+                                                   hf_overrides={'text_config': NTK_CONFIG})
         else:
-            backend_config = PytorchEngineConfig(session_len=session_len, tp=tp_num)
-    # add config according to https://huggingface.co/Qwen/Qwen2.5-7B-Instruct
-    if 'qwen' in model.lower():
-        add_config_Qwen(model_path)
+            backend_config = PytorchEngineConfig(session_len=session_len, tp=tp_num, max_batch_size=1)
 
     pipe = pipeline(model_path, backend_config=backend_config)
 
@@ -121,15 +164,11 @@ def passkey_retrival(config, model, backend, log_name, tp_num, session_len: int 
     pass_key1, prompt = get_passkey_prompt(pipe, session_len)
     response1 = pipe(prompt, gen_config=gen_config)
 
-    # remove config, https://huggingface.co/Qwen/Qwen2.5-7B-Instruct
-    if 'qwen' in model.lower():
-        remove_config_Qwen(model_path)
-
     # inference
     pass_key2, prompt = get_passkey_prompt(pipe, session_len)
     response2 = pipe([prompt] * 2, gen_config=gen_config)
 
-    close_pipeline(pipe)
+    pipe.close()
 
     assert str(pass_key1) in response1.text, str(response1)
     assert str(pass_key2) in response2[0].text and str(pass_key2) in response2[1].text, str(response2)
@@ -160,25 +199,3 @@ def get_passkey_prompt(pipe, session_len):
     # inference
     prompt = ' '.join(lines)
     return pass_key, prompt
-
-
-def add_config_Qwen(model_path):
-    data = {'rope_scaling': {'factor': 4.0, 'original_max_position_embeddings': 32768, 'type': 'yarn'}}
-
-    with open('/'.join([model_path, 'config.json']), 'r') as f:
-        config = json.load(f)
-    if 'rope_scaling' not in config:
-        config.update(data)
-        with open('/'.join([model_path, 'config.json']), 'w') as f:
-            json.dump(config, f, indent=4)
-
-
-def remove_config_Qwen(model_path):
-    with open('/'.join([model_path, 'config.json']), 'r') as f:
-        config = json.load(f)
-
-    if 'rope_scaling' in config:
-        del config['rope_scaling']
-
-    with open('/'.join([model_path, 'config.json']), 'w') as f:
-        json.dump(config, f, indent=4)

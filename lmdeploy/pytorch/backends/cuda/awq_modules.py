@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Optional
 
 import torch
 
@@ -54,13 +53,14 @@ class AwqLinearW4A16Impl(LinearW4A16Impl):
                 qweight: torch.Tensor,
                 scales: torch.Tensor,
                 qzeros: torch.Tensor,
-                bias: Optional[torch.Tensor] = None,
-                all_reduce: bool = False):
+                bias: torch.Tensor | None = None,
+                all_reduce: bool = False,
+                group: torch.distributed.ProcessGroup | None = None):
         """forward."""
         out_features = scales.size(1)
         out = wq_gemm_forward(x, qweight, qzeros, scales, self.w_bit, self.group_size, bias, out_features)
         if all_reduce:
-            dist.all_reduce(out)
+            dist.all_reduce(out, group=group)
         return out
 
 

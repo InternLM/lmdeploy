@@ -1,0 +1,783 @@
+# Copyright (c) OpenMMLab. All rights reserved.
+
+from collections.abc import Iterable
+from typing import Any
+
+import torch
+import torch.nn.functional as F
+from torch import nn
+from transformers.configuration_utils import PretrainedConfig
+
+import lmdeploy.pytorch.distributed as dist
+import lmdeploy.pytorch.nn.gated_delta as gated_delta_util
+from lmdeploy.pytorch.distributed import get_dist_manager, get_tp_world_rank
+from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
+from lmdeploy.pytorch.nn.gated_delta import CausalConv1d, GatedDelta, GatedDeltaMeta, build_rmsnorm_gated
+from lmdeploy.pytorch.nn.linear import (
+    build_colwise_linear,
+    build_merged_colwise_linear,
+    build_o_proj,
+    build_qkv_proj,
+    build_rowwise_linear,
+)
+from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
+from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader, load_weight
+
+from .utils.cudagraph import CudaGraphMixin
+from .utils.model import DeployModelMixinV1, build_embedding
+
+
+class Qwen3NextGatedDeltaNet(nn.Module):
+    """Gated deltanet."""
+
+    def __init__(self,
+                 config: PretrainedConfig,
+                 layer_idx: int,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        self.hidden_size = config.hidden_size
+        self.num_v_heads = config.linear_num_value_heads
+        self.num_k_heads = config.linear_num_key_heads
+        self.head_k_dim = config.linear_key_head_dim
+        self.head_v_dim = config.linear_value_head_dim
+        self.key_dim = self.head_k_dim * self.num_k_heads
+        self.value_dim = self.head_v_dim * self.num_v_heads
+        self.kv_ratio = self.num_v_heads // self.num_k_heads
+
+        self.conv_kernel_size = config.linear_conv_kernel_dim
+        self.layer_idx = layer_idx
+        self.activation = config.hidden_act
+        self.layer_norm_epsilon = config.rms_norm_eps
+
+        # QKV
+        self.conv_dim = self.key_dim * 2 + self.value_dim
+        self.conv1d = CausalConv1d(
+            in_channels=self.conv_dim,
+            out_channels=self.conv_dim,
+            kernel_size=self.conv_kernel_size,
+            split=[self.key_dim, self.key_dim, self.value_dim],
+            bias=False,
+            groups=self.conv_dim,
+            dtype=dtype,
+            device=device,
+        )
+
+        # projection of the input hidden states
+        projection_size_qkvz = self.key_dim * 2 + self.value_dim * 2
+        projection_size_ba = self.num_v_heads * 2
+        self.in_proj_qkvz = build_colwise_linear(self.hidden_size,
+                                                 projection_size_qkvz,
+                                                 bias=False,
+                                                 dtype=dtype,
+                                                 device=device,
+                                                 is_tp=True)
+        self.in_proj_ba = build_colwise_linear(self.hidden_size,
+                                               projection_size_ba,
+                                               bias=False,
+                                               dtype=dtype,
+                                               device=device,
+                                               is_tp=True)
+
+        # time step projection (discretization)
+        # instantiate once and copy inv_dt in init_weights of PretrainedModel
+        self.make_params(self.num_v_heads, device=device)
+        self.A_log_exp = None
+
+        self.norm = build_rmsnorm_gated(self.head_v_dim,
+                                        eps=self.layer_norm_epsilon,
+                                        activation=self.activation,
+                                        dtype=dtype,
+                                        device=device)
+        self.out_proj = build_o_proj(self.value_dim,
+                                     self.hidden_size,
+                                     bias=False,
+                                     dtype=dtype,
+                                     device=device,
+                                     is_tp=True)
+
+        self.gated_delta = GatedDelta()
+
+    def get_A_log_exp(self):
+        if self.A_log_exp is None:
+            self.A_log_exp = -self.A_log.float().exp()
+
+        return self.A_log_exp
+
+    def make_params(self, num_v_heads: int, device: torch.device | None):
+        tp, _ = get_tp_world_rank()
+        num_v_heads = num_v_heads // tp
+        A = torch.empty(num_v_heads, device=device)
+        dt_bias = torch.empty(num_v_heads, device=device)
+
+        self.register_parameter('A_log', nn.Parameter(torch.log(A)))
+        self.register_parameter('dt_bias', nn.Parameter(dt_bias))
+        self.A_log.weight_loader = self.weight_loader_a_dt
+        self.dt_bias.weight_loader = self.weight_loader_a_dt
+
+    def weight_loader_a_dt(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor):
+        """Weight loader."""
+        tp, rank = get_tp_world_rank()
+        loaded_weight = loaded_weight.chunk(tp, dim=0)[rank]
+        default_weight_loader(param, loaded_weight)
+
+    def fix_query_key_value_ordering(self, mixed_qkvz: torch.Tensor, mixed_ba: torch.Tensor):
+        """Derives `query`, `key` and `value` tensors from `mixed_qkvz` and
+        `mixed_ba`."""
+        # qkvz
+        split_arg_list_qkvz = [
+            self.head_k_dim * 2,
+            (self.kv_ratio * self.head_v_dim),
+            (self.kv_ratio * self.head_v_dim),
+        ]
+        mixed_qkvz = mixed_qkvz.unflatten(-1, (-1, sum(split_arg_list_qkvz)))
+        qk, value, z = torch.split(mixed_qkvz, split_arg_list_qkvz, dim=-1)
+        qk = qk.unflatten(-1, (2, self.head_k_dim))
+        qk = qk.transpose(-3, -2).flatten(-3, -1)
+        value = value.flatten(-2, -1)
+        mixed_qkv = torch.cat((qk, value), dim=-1)
+        # [..., ng, np/ng * hn] -> [..., np, hn]
+        z = z.reshape(*z.shape[:-2], -1, self.head_v_dim)
+
+        # chunk_ba
+        mixed_ba = mixed_ba.unflatten(-1, (-1, 2 * self.kv_ratio))
+        b, a = mixed_ba.chunk(2, -1)
+        # do sigmoid and float here to prevent contiguous kernel
+        b = b.sigmoid().flatten(-2, -1)
+        a = a.float().flatten(-2, -1)
+        return mixed_qkv, z, b, a
+
+    def _load_state(self, past_key_value: tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
+        """Load states from cache."""
+        return gated_delta_util.load_state(past_key_value=past_key_value, gated_delta_meta=gated_delta_meta)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        past_key_value: tuple[torch.Tensor, torch.Tensor],
+        gated_delta_meta: GatedDeltaMeta,
+    ):
+        """forward."""
+
+        # load states
+        conv_state, recurrent_state = self._load_state(past_key_value, gated_delta_meta)
+
+        # inputs proj
+        projected_states_qkvz = self.in_proj_qkvz(hidden_states)
+        projected_states_ba = self.in_proj_ba(hidden_states)
+        mixed_qkv, z, b, a = self.fix_query_key_value_ordering(projected_states_qkvz, projected_states_ba)
+
+        mixed_qkv, conv_state = self.conv1d(mixed_qkv, conv_state, gated_delta_meta=gated_delta_meta)
+
+        tp = (self.key_dim * 2 + self.value_dim) // mixed_qkv.size(-1)
+        query, key, value = torch.split(
+            mixed_qkv,
+            [
+                self.key_dim // tp,
+                self.key_dim // tp,
+                self.value_dim // tp,
+            ],
+            dim=-1,
+        )
+        query = query.unflatten(-1, (-1, self.head_k_dim))
+        key = key.unflatten(-1, (-1, self.head_k_dim))
+        value = value.unflatten(-1, (-1, self.head_v_dim))
+
+        beta = b
+        # If the model is loaded in fp16, without the .float() here, A might be -inf
+        g = self.get_A_log_exp() * F.softplus(a + self.dt_bias)
+        if self.kv_ratio > 1:
+            query = query.repeat_interleave(self.kv_ratio, dim=-2)
+            key = key.repeat_interleave(self.kv_ratio, dim=-2)
+
+        core_attn_out, recurrent_state = self.gated_delta(
+            query,
+            key,
+            value,
+            g=g,
+            beta=beta,
+            recurrent_state=recurrent_state,
+            gated_delta_meta=gated_delta_meta,
+        )
+
+        z_shape_og = z.shape
+        core_attn_out = core_attn_out.reshape(-1, core_attn_out.shape[-1])
+        z = z.reshape(-1, z.shape[-1])
+        core_attn_out = self.norm(core_attn_out, z)
+        core_attn_out = core_attn_out.reshape(z_shape_og)
+        core_attn_out = core_attn_out.reshape(core_attn_out.shape[0], core_attn_out.shape[1], -1)
+
+        output = self.out_proj(core_attn_out)
+        return output
+
+
+class Qwen3NextAttention(nn.Module):
+    """Rewrite module of Qwen3MoeAttention."""
+
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
+        super().__init__()
+        quantization_config = getattr(config, 'quantization_config', None)
+        num_heads = config.num_attention_heads
+        num_key_value_heads = config.num_key_value_heads
+        hidden_size = config.hidden_size
+        head_dim = getattr(config, 'head_dim', hidden_size // num_heads)
+        self.head_dim = head_dim
+        num_replicate_kv_heads = getattr(config, 'num_replicate_key_value_heads', 1)
+
+        # packed qkv
+        # Qwen3 uses 'config.attention_bias = False' for q/k/o projections
+        self.qkv_proj = build_qkv_proj(
+            hidden_size,
+            num_q_heads=num_heads * 2,
+            num_kv_heads=num_key_value_heads,
+            head_size=head_dim,
+            bias=config.attention_bias,
+            quant_config=quantization_config,
+            num_replicate_kv_heads=num_replicate_kv_heads,
+            dtype=dtype,
+            device=device,
+        )
+
+        # rotary embedding
+        self.apply_rotary_pos_emb = ApplyRotaryEmb()
+
+        # attention
+        self.attn_fwd = Attention(
+            num_heads,
+            head_dim,
+            num_kv_heads=num_key_value_heads,
+            v_head_size=head_dim,
+        )
+
+        # o_proj
+        self.o_proj = build_o_proj(num_heads * head_dim,
+                                   hidden_size,
+                                   bias=config.attention_bias,
+                                   quant_config=quantization_config,
+                                   dtype=dtype,
+                                   device=device,
+                                   is_tp=True)
+
+        # q, k norm
+        self.q_norm = RMSNorm(head_dim,
+                              config.rms_norm_eps,
+                              quant_config=quantization_config,
+                              dtype=dtype,
+                              device=device)
+        self.k_norm = RMSNorm(head_dim,
+                              config.rms_norm_eps,
+                              quant_config=quantization_config,
+                              dtype=dtype,
+                              device=device)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: tuple[torch.Tensor] | None = None,
+        attn_metadata: Any = None,
+    ):
+        """Rewrite of LlamaAttention.forward."""
+        # qkv proj
+        qkv_states = self.qkv_proj(hidden_states)
+        # (-1, heads, head_dim)
+        qkv_states = qkv_states.flatten(0, -2)
+        query_states, key_states, value_states = self.qkv_proj.split_qkv(qkv_states)
+        query_states, gate = query_states.view(*query_states.shape[:-2], -1, 2 * self.head_dim).chunk(2, dim=-1)
+
+        # apply q, k norm
+        query_states = self.q_norm(query_states)
+        key_states = self.k_norm(key_states)
+
+        # apply rotary embedding
+        cos, sin = rotary_pos_emb
+        query_states, key_states = self.apply_rotary_pos_emb(
+            query_states,
+            key_states,
+            cos,
+            sin,
+            inplace=True,
+        )
+
+        # attention
+        attn_output = self.attn_fwd(
+            query_states,
+            key_states,
+            value_states,
+            past_key_value[0],
+            past_key_value[1],
+            attn_metadata,
+            k_scales_zeros=None if len(past_key_value) == 2 else past_key_value[2],
+            v_scales_zeros=None if len(past_key_value) == 2 else past_key_value[3],
+            inplace=True,
+        )
+        attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
+        gate = gate.reshape(*hidden_states.shape[:-1], -1)
+        attn_output = attn_output * gate.sigmoid()
+
+        # o proj
+        attn_output = self.o_proj(attn_output)
+        return attn_output
+
+
+class Qwen3NextMLP(nn.Module):
+    """mlp."""
+
+    def __init__(self,
+                 config: PretrainedConfig,
+                 intermediate_size: int = None,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 is_tp: bool = True,
+                 all_reduce: bool = True):
+        super().__init__()
+        quantization_config = getattr(config, 'quantization_config', None)
+        if intermediate_size is None:
+            intermediate_size = config.intermediate_size
+        # gate up
+        self.gate_up_proj = build_merged_colwise_linear(
+            config.hidden_size,
+            [intermediate_size, intermediate_size],
+            bias=False,
+            dtype=dtype,
+            device=device,
+            quant_config=quantization_config,
+            is_tp=is_tp,
+        )
+
+        # silu and mul
+        self.act_fn = SiluAndMul(inplace=True)
+
+        # down
+        self.down_proj = build_rowwise_linear(intermediate_size,
+                                              config.hidden_size,
+                                              bias=False,
+                                              quant_config=quantization_config,
+                                              dtype=dtype,
+                                              device=device,
+                                              is_tp=is_tp,
+                                              all_reduce=all_reduce)
+
+    def forward(self, x):
+        """forward."""
+        gate_up = self.gate_up_proj(x)
+        act = self.act_fn(gate_up)
+        return self.down_proj(act)
+
+
+class Qwen3NextSparseMoeBlock(nn.Module):
+    """Moe block."""
+
+    def __init__(self,
+                 config: PretrainedConfig,
+                 layer_idx: int,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        quantization_config = getattr(config, 'quantization_config', None)
+        self.layer_idx = layer_idx
+        self.hidden_dim = config.hidden_size
+        self.ffn_dim = config.moe_intermediate_size
+        self.num_experts = config.num_experts
+        self.top_k = config.num_experts_per_tok
+        self.norm_topk_prob = config.norm_topk_prob
+        self.renormalize = self.norm_topk_prob
+
+        self.gate = build_rowwise_linear(
+            self.hidden_dim,
+            self.num_experts,
+            bias=False,
+            dtype=dtype,
+            device=device,
+            is_tp=False,
+        )
+
+        self.softmax_topk = SoftmaxTopK(
+            self.top_k,
+            n_groups=getattr(config, 'router_n_groups', -1),
+        )
+
+        self.experts = build_fused_moe(
+            self.hidden_dim,
+            self.ffn_dim,
+            self.num_experts,
+            top_k=self.top_k,
+            renormalize=self.renormalize,
+            dtype=dtype,
+            device=device,
+            quant_config=quantization_config,
+            all_reduce=False,
+            layer_idx=layer_idx,
+        )
+
+        self.shared_expert = Qwen3NextMLP(
+            config=config,
+            intermediate_size=config.shared_expert_intermediate_size,
+            dtype=dtype,
+            device=device,
+            is_tp=True,
+            all_reduce=False,
+        )
+        self.shared_expert_gate = torch.nn.Linear(config.hidden_size, 1, bias=False, device=device, dtype=dtype)
+
+        # get all reduce
+        dist_ctx = get_dist_manager().current_context()
+        dp = dist_ctx.dist_config.dp
+        world_size = dist_ctx.dist_config.moe_tp
+        if dp == 1 and world_size > 1:
+            self._all_reduce = True
+        else:
+            self._all_reduce = False
+
+    def forward(self, hidden_states: torch.Tensor):
+        """forward."""
+        batch_size, sequence_length, hidden_dim = hidden_states.shape
+        hidden_states = hidden_states.view(-1, hidden_dim)
+        router_logits = self.gate(hidden_states)
+        topk_weights, topk_ids = self.softmax_topk(router_logits)
+        out_states = self.experts(
+            hidden_states,
+            topk_weights,
+            topk_ids,
+        )
+
+        shared_states = self.shared_expert(hidden_states)
+        shared_states = self.shared_expert_gate(hidden_states).sigmoid() * shared_states
+
+        out_states += shared_states
+        out_states = out_states.reshape(batch_size, sequence_length, -1)
+
+        if self._all_reduce:
+            dist.all_reduce(out_states)
+        return out_states
+
+
+class Qwen3NextDecoderLayer(nn.Module):
+    """Decoder layer."""
+
+    def __init__(self,
+                 config: PretrainedConfig,
+                 layer_idx: int,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        self.layer_idx = layer_idx
+        quantization_config = getattr(config, 'quantization_config', None)
+
+        # build attention layer
+        self.layer_type = config.layer_types[layer_idx]
+        if self.layer_type == 'linear_attention':
+            self.linear_attn = Qwen3NextGatedDeltaNet(config, layer_idx, dtype=dtype, device=device)
+        elif self.layer_type == 'full_attention':
+            self.self_attn = Qwen3NextAttention(config, dtype=dtype, device=device)
+
+        # build MLP
+        if (layer_idx not in config.mlp_only_layers) and (config.num_experts
+                                                          > 0) and ((layer_idx + 1) % config.decoder_sparse_step == 0):
+            self.mlp = Qwen3NextSparseMoeBlock(config, layer_idx=layer_idx, dtype=dtype, device=device)
+        else:
+            self.mlp = Qwen3NextMLP(config, intermediate_size=config.intermediate_size, dtype=dtype, device=device)
+
+        # build input layer norm
+        self.input_layernorm = RMSNorm(config.hidden_size,
+                                       config.rms_norm_eps,
+                                       quant_config=quantization_config,
+                                       dtype=dtype,
+                                       device=device)
+
+        # build attention layer norm
+        self.post_attention_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: list[torch.FloatTensor] | None,
+        residual: torch.Tensor | None,
+        attn_metadata: Any,
+        gated_delta_meta: GatedDeltaMeta,
+    ):
+
+        if residual is None:
+            residual = hidden_states
+            hidden_states = self.input_layernorm(hidden_states)
+        else:
+            hidden_states, residual = self.input_layernorm(hidden_states, residual)
+
+        # Self Attention
+        if self.layer_type == 'linear_attention':
+            hidden_states = self.linear_attn(
+                hidden_states=hidden_states,
+                past_key_value=past_key_value,
+                gated_delta_meta=gated_delta_meta,
+            )
+        elif self.layer_type == 'full_attention':
+            hidden_states = self.self_attn(
+                hidden_states=hidden_states,
+                rotary_pos_emb=rotary_pos_emb,
+                past_key_value=past_key_value,
+                attn_metadata=attn_metadata,
+            )
+
+        # Fully Connected
+        hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
+        hidden_states = self.mlp(hidden_states)
+
+        outputs = (hidden_states, residual)
+        return outputs
+
+
+class Qwen3NextModel(nn.Module):
+    """Qwen3 next model."""
+
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
+        super().__init__()
+        self.config = config
+        self.padding_idx = config.pad_token_id
+        self.vocab_size = config.vocab_size
+        self.embed_tokens = build_embedding(
+            config.vocab_size,
+            config.hidden_size,
+            self.padding_idx,
+            dtype=dtype,
+            device=device,
+        )
+
+        # build all decode layers
+        # TODO: use full config.num_hidden_layers
+        self.layers = nn.ModuleList([
+            Qwen3NextDecoderLayer(config, layer_idx, dtype=dtype, device=device)
+            for layer_idx in range(self.config.num_hidden_layers)
+        ])
+
+        # build norm
+        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
+
+        # build rotary embedding
+        self.rotary_emb = build_rotary_embedding_from_config(config)
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor,
+        position_ids: torch.LongTensor,
+        past_key_values: list[torch.FloatTensor],
+        attn_metadata: Any,
+        state_ids: torch.Tensor,
+        inputs_embeds: torch.FloatTensor | None = None,
+    ):
+        """Rewrite of LlamaModel.forward."""
+
+        # token embedding
+        if inputs_embeds is None:
+            inputs_embeds = self.embed_tokens(input_ids)
+
+        hidden_states = inputs_embeds
+
+        # rotary embedding
+        cos, sin = self.rotary_emb(hidden_states, position_ids)
+        cos, sin = cos[0], sin[0]
+        rotary_pos_emb = (cos, sin)
+
+        # make seq_idx
+        gated_delta_meta = GatedDeltaMeta(hidden_states.size(1), self.config.linear_conv_kernel_dim, state_ids,
+                                          attn_metadata)
+
+        # decoding
+        residual = None
+        for idx, decoder_layer in enumerate(self.layers):
+            hidden_states, residual = decoder_layer(
+                hidden_states,
+                rotary_pos_emb=rotary_pos_emb,
+                past_key_value=past_key_values[idx],
+                residual=residual,
+                attn_metadata=attn_metadata,
+                gated_delta_meta=gated_delta_meta,
+            )
+
+        # norm
+        hidden_states, _ = self.norm(hidden_states, residual)
+
+        return hidden_states
+
+    def get_input_embeddings(self):
+        """Get input embeddings."""
+        return self.embed_tokens
+
+
+class Qwen3NextForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
+    """ModelForCausalLM."""
+
+    packed_modules_mapping = {
+        'qkv_proj': [
+            'q_proj',
+            'k_proj',
+            'v_proj',
+        ],
+        'gate_up_proj': [
+            'gate_proj',
+            'up_proj',
+        ],
+    }
+
+    def __init__(self,
+                 config: PretrainedConfig,
+                 ctx_mgr: StepContextManager,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        self.config = config
+        self.ctx_mgr = ctx_mgr
+        # build model
+        self.model = Qwen3NextModel(config, dtype=dtype, device=device)
+        # build lm_head
+        self.lm_head = self.build_lm_head(config.hidden_size, config.vocab_size, bias=False, dtype=dtype, device=device)
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        position_ids: torch.Tensor,
+        past_key_values: list[list[torch.Tensor]],
+        attn_metadata: Any = None,
+        inputs_embeds: torch.Tensor = None,
+        state_ids: torch.Tensor = None,
+        **kwargs,
+    ):
+        """Model forward, return logits."""
+        hidden_states = self.model(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            attn_metadata=attn_metadata,
+            inputs_embeds=inputs_embeds,
+            state_ids=state_ids,
+        )
+        return hidden_states
+
+    def get_input_embeddings(self):
+        """Get input embeddings."""
+        return self.model.get_input_embeddings()
+
+    def prepare_inputs_for_generation(
+        self,
+        past_key_values: list[list[torch.Tensor]],
+        inputs_embeds: torch.Tensor | None = None,
+        context: StepContext = None,
+    ):
+        """Prepare input."""
+        # get input_ids, position_ids and attention metadatas
+        input_ids = context.input_ids
+        position_ids = context.position_ids
+        attn_metadata = context.attn_metadata
+
+        # make past_key_values
+        state_caches = list(cache.transpose(0, 1) for cache in context.state_caches)
+        state_caches = list(zip(state_caches[0], state_caches[1]))
+        past_key_values = list(past_key_values)
+        new_past_key_values = []
+        for layer_type in self.config.layer_types:
+            if layer_type == 'linear_attention':
+                new_past_key_values.append(state_caches.pop(0))
+            elif layer_type == 'full_attention':
+                new_past_key_values.append(past_key_values.pop(0))
+
+        # process vision embeddings
+        vision_embeddings = context.input_embeddings
+        vision_embedding_indexing = context.input_embedding_indexing
+        if vision_embeddings is not None and len(vision_embeddings) > 0:
+            if inputs_embeds is None:
+                inputs_embeds = self.get_input_embeddings()(input_ids)
+            inputs_embeds[:, vision_embedding_indexing, :] = vision_embeddings.to(inputs_embeds)
+
+        # inputs of forward
+        return dict(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            past_key_values=new_past_key_values,
+            attn_metadata=attn_metadata,
+            inputs_embeds=inputs_embeds,
+            state_ids=context.state_offsets,
+        )
+
+    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
+                             expert_params_mapping: list):
+        """Load weight experts."""
+        # load fused weights
+        for (param_name, weight_name, expert_id, shard_id) in expert_params_mapping:
+            if weight_name not in name:
+                continue
+            name = name.replace(weight_name, param_name)
+            param = params_dict[name]
+            load_weight(param, loaded_weight, expert_id=expert_id, shard_id=shard_id)
+            break
+        else:
+            param = params_dict[name]
+            load_weight(param, loaded_weight)
+
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
+        """Load weights."""
+
+        def __skip_layers(name):
+            """We might change the number of layers so we can debug the model
+            with less gpus."""
+            import re
+            if '.layers.' not in name:
+                return False
+            matches = re.findall(r'\.layers\.(\d+)\.', name)
+            layer_id = int(matches[0])
+            return layer_id >= self.config.num_hidden_layers
+
+        # modify from vllm
+        stacked_params_mapping = [
+            # (param_name, shard_name, shard_id)
+            ('.qkv_proj', '.q_proj', 'q'),
+            ('.qkv_proj', '.k_proj', 'k'),
+            ('.qkv_proj', '.v_proj', 'v'),
+            ('.gate_up_proj', '.gate_proj', 0),
+            ('.gate_up_proj', '.up_proj', 1),
+        ]
+
+        # expert map
+        num_experts = self.config.num_experts
+        expert_params_mapping = []
+        for exp_id in range(num_experts):
+            gate_param = ('.experts.gate_up', f'.experts.{exp_id}.gate_proj', exp_id, 'gate')
+            up_param = ('.experts.gate_up', f'.experts.{exp_id}.up_proj', exp_id, 'up')
+            down_param = ('.experts.down', f'.experts.{exp_id}.down_proj', exp_id, 'down')
+            expert_params_mapping += [gate_param, up_param, down_param]
+
+        rms_norm_keys = ['model.norm', '.input_layernorm', '.post_attention_layernorm', '.q_norm', '.k_norm']
+
+        params_dict = dict(self.named_parameters())
+        for name, loaded_weight in weights:
+
+            if __skip_layers(name):
+                continue
+
+            if 'mtp.' in name:
+                continue
+            if 'rotary_emb.inv_freq' in name:
+                continue
+            if ('rotary_emb.cos_cached' in name or 'rotary_emb.sin_cached' in name):
+                continue
+            if self.config.tie_word_embeddings and 'lm_head.weight' in name:
+                continue
+
+            name = name.replace('.block_sparse_moe.', '.mlp.')
+            if '.experts' in name and '.shared_expert' not in name:
+                self._load_weight_experts(name, loaded_weight, params_dict, expert_params_mapping=expert_params_mapping)
+            else:
+                for (param_name, weight_name, shard_id) in stacked_params_mapping:
+                    if weight_name not in name:
+                        continue
+                    name = name.replace(weight_name, param_name)
+                    param = params_dict[name]
+                    load_weight(param, loaded_weight, shard_id=shard_id)
+                    break
+                else:
+                    for rms_norm_key in rms_norm_keys:
+                        if rms_norm_key in name and 'weight' in name:
+                            loaded_weight = loaded_weight + 1
+                            break
+                    param = params_dict[name]
+                    load_weight(param, loaded_weight)

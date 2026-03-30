@@ -7,7 +7,7 @@
 启动代理服务：
 
 ```shell
-lmdeploy serve proxy --server-name {server_name} --server-port {server_port} --strategy "min_expected_latency"
+lmdeploy serve proxy --server-name {server_name} --server-port {server_port} --routing-strategy "min_expected_latency" --serving-strategy Hybrid
 ```
 
 启动成功后，代理服务的 URL 也会被脚本打印。浏览器访问这个 URL，可以打开 Swagger UI。
@@ -86,6 +86,13 @@ params = {'node_url': 'http://0.0.0.0:23333',}
 response = requests.post(url, headers=headers, data='', params=params)
 print(response.text)
 ```
+
+## 服务策略
+
+LMDeploy 当前支持混合部署服务（Hybrid），以及 PD 分离部署服务（DistServe）
+
+- Hybrid: 不区分 Prefill 和 Decoding 实例，即传统的推理部署模式。
+- DistServe: 将 Prefill 和 Decoding 实例分离，部署在不同的服务节点上以实现更灵活高效的资源调度和扩展。
 
 ## 分发策略
 

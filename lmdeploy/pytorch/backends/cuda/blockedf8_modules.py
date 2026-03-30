@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import List, Optional
 
 import torch
 
@@ -13,19 +12,11 @@ from .warmup_manager import WarmupMeta, get_warmup_manager
 logger = get_logger('lmdeploy')
 
 
-def _reduce_scatter_input(out: torch.Tensor, rank: int, tp_sizes: List[int]):
-    """Reduce scatter."""
-    outs = out.split(tp_sizes, -2)
-    out = outs[rank]
-    outs = list(outs)
-    dist.reduce_scatter(out, outs)
-    return out
-
-
 class TritonLinearBlockedF8Impl(LinearBlockedF8Impl):
     """Triton linear blocked f8 implementation."""
 
     def __init__(self, in_features: int, out_features: int, block_size: int, out_dtype: torch.dtype = torch.float16):
+        super().__init__()
         self.in_features = in_features
         self.out_features = out_features
         self.out_dtype = out_dtype
@@ -35,14 +26,19 @@ class TritonLinearBlockedF8Impl(LinearBlockedF8Impl):
                 x,
                 weight: torch.Tensor,
                 scale: torch.Tensor,
-                bias: Optional[torch.Tensor] = None,
+                bias: torch.Tensor | None = None,
                 all_reduce: bool = False,
+                group: dist.ProcessGroup | None = None,
                 rank: int = 0,
-                scatter_size: List[int] = None):
+                scatter_size: list[int] = None):
         """forward."""
         x_shape = x.shape
         x = x.flatten(0, -2)
-        input_quant, input_scale = quant_fp8(x, self.block_size, dtype=weight.dtype, trans_scale=True)
+        input_quant, input_scale = quant_fp8(x,
+                                             self.block_size,
+                                             dtype=weight.dtype,
+                                             trans_scale=True,
+                                             scale_fmt=self.scale_fmt)
 
         out = blocked_gemm_fp8(input_quant, input_scale, weight.t(), scale.t(), out_dtype=x.dtype)
         if bias is not None:
@@ -52,7 +48,7 @@ class TritonLinearBlockedF8Impl(LinearBlockedF8Impl):
 
         if all_reduce:
             if scatter_size is not None:
-                out = _reduce_scatter_input(out, rank, scatter_size)
+                out = dist.reduce_scatter_by_tp_sizes(out, rank, scatter_size, group=group)
             else:
                 dist.all_reduce(out)
         return out
@@ -77,6 +73,7 @@ class DeepGemmLinearBlockedF8Impl(LinearBlockedF8Impl):
     """Deep gemm blocked f8 implementation."""
 
     def __init__(self, in_features: int, out_features: int, block_size: int, out_dtype: torch.dtype = torch.float16):
+        super().__init__()
         self.in_features = in_features
         self.out_features = out_features
         self.out_dtype = out_dtype
@@ -92,7 +89,7 @@ class DeepGemmLinearBlockedF8Impl(LinearBlockedF8Impl):
         """warmup."""
         import random
 
-        from deep_gemm.jit_kernels.utils import get_m_alignment_for_contiguous_layout
+        from lmdeploy.pytorch.third_party.deep_gemm import get_m_alignment_for_contiguous_layout
         device = 'cuda'
         max_num_tokens = warmup_meta.max_num_tokens
         alignment = get_m_alignment_for_contiguous_layout()
@@ -115,25 +112,25 @@ class DeepGemmLinearBlockedF8Impl(LinearBlockedF8Impl):
                 x,
                 weight: torch.Tensor,
                 scale: torch.Tensor,
-                bias: Optional[torch.Tensor] = None,
+                bias: torch.Tensor | None = None,
                 all_reduce: bool = False,
+                group: dist.ProcessGroup | None = None,
                 rank: int = 0,
-                scatter_size: List[int] = None):
+                scatter_size: list[int] = None):
         """forward."""
         x_shape = x.shape
         x = x.flatten(0, -2)
-        input_quant, input_scale = quant_fp8_tma(x, self.block_size, dtype=weight.dtype)
+        input_quant, input_scale = quant_fp8_tma(x, self.block_size, dtype=weight.dtype, scale_fmt=self.scale_fmt)
 
         out = deep_gemm_fp8(input_quant, input_scale, weight, scale, out_dtype=x.dtype)
         out = out[:x.size(0)]
         if bias is not None:
             out += bias
+        out = out.unflatten(0, x_shape[:-1])
 
         if all_reduce:
             if scatter_size is not None:
-                out = _reduce_scatter_input(out, rank, scatter_size)
+                out = dist.reduce_scatter_by_tp_sizes(out, rank, scatter_size, group=group)
             else:
-                dist.all_reduce(out)
-
-        out = out.unflatten(0, x_shape[:-1])
+                dist.all_reduce(out, group=group)
         return out

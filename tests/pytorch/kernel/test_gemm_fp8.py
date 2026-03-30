@@ -2,20 +2,62 @@ import pytest
 import torch
 
 
-def _make_A(M, K, group_size, out_dtype):
-    quant_A = torch.rand(M, K // group_size, group_size, dtype=torch.float32, device='cuda')
+def _make_quant_val(shape, out_dtype):
+    x = torch.rand(shape, dtype=torch.float32, device='cuda')
     # -1 ~ 1
-    quant_A = quant_A * 2 - 1
+    x = x * 2 - 1
     # scaling abs max to fmax
     finfo = torch.finfo(out_dtype)
     fmax = finfo.max
-    scaling = fmax / quant_A.abs().amax(-1, keepdim=True)
-    quant_A *= scaling
-    quant_A = quant_A.to(out_dtype).to(torch.float32)
+    scaling = fmax / x.abs().amax(-1, keepdim=True)
+    x *= scaling
+    return x.to(out_dtype).to(torch.float32)
+
+
+def fast_log2_ceil_torch(x: torch.Tensor) -> torch.Tensor:
+    bits_x = x.view(torch.int32)
+    exp_x = (bits_x >> 23) & 0xFF
+    man_bits = bits_x & ((1 << 23) - 1)
+    result = (exp_x - 127).to(torch.int32)
+    result = result + torch.where(man_bits != 0, 1, 0)
+
+    return result.to(torch.int32)
+
+
+def fast_pow2_torch(x: torch.Tensor) -> torch.Tensor:
+    bits_x = (x + 127) << 23
+    return bits_x.view(torch.float32)
+
+
+def fast_round_scale_torch(amax: torch.Tensor, fp8_max_inv: torch.Tensor) -> torch.Tensor:
+    return fast_pow2_torch(fast_log2_ceil_torch(amax * fp8_max_inv))
+
+
+def _make_quant_scale_ue8m0(shape, out_dtype):
+    scale = torch.randn(shape, dtype=torch.float32, device='cuda')
+    finfo = torch.finfo(out_dtype)
+    fmax = finfo.max
+    scale = fast_round_scale_torch(scale, 1 / fmax)
+    return scale
+
+
+def _make_quant_scale(shape, out_dtype, scale_fmt: str = None):
+    if scale_fmt == 'ue8m0':
+        return _make_quant_scale_ue8m0(shape, out_dtype)
+
+    # default
+    scale = torch.rand(shape, dtype=torch.float32, device='cuda')
+    finfo = torch.finfo(out_dtype)
+    fmax = finfo.max
+    scale /= fmax
+    return scale
+
+
+def _make_A(M, K, group_size, out_dtype, scale_fmt: str = None):
+    quant_A = _make_quant_val((M, K // group_size, group_size), out_dtype)
 
     # create scale and A
-    scale = torch.rand(M, K // group_size, dtype=torch.float32, device='cuda')
-    scale /= fmax
+    scale = _make_quant_scale((M, K // group_size), out_dtype, scale_fmt)
     A = quant_A * scale[..., None]
 
     A = A.reshape(M, K)
@@ -28,27 +70,13 @@ def _aligned_size(a, b):
     return (a + b - 1) // b * b
 
 
-def _make_B(K, N, group_size, out_dtype):
+def _make_B(K, N, group_size, out_dtype, scale_fmt: str = None):
     K_aligned = _aligned_size(K, group_size)
     N_aligned = _aligned_size(N, group_size)
 
-    quant_B = torch.rand(K_aligned // group_size,
-                         group_size,
-                         N_aligned // group_size,
-                         group_size,
-                         dtype=torch.float32,
-                         device='cuda')
-    quant_B = quant_B * 2 - 1
+    quant_B = _make_quant_val((K_aligned // group_size, group_size, N_aligned // group_size, group_size), out_dtype)
 
-    # scaling abs max to fmax
-    finfo = torch.finfo(out_dtype)
-    fmax = finfo.max
-    scaling = fmax / quant_B.abs().amax((1, 3), keepdim=True)
-    quant_B *= scaling
-    quant_B = quant_B.to(out_dtype).to(torch.float32)
-
-    scale = torch.rand(K_aligned // group_size, 1, N_aligned // group_size, 1, dtype=torch.float32, device='cuda')
-    scale /= fmax
+    scale = _make_quant_scale((K_aligned // group_size, 1, N_aligned // group_size, 1), out_dtype, scale_fmt)
 
     B = quant_B * scale
 
@@ -79,8 +107,12 @@ class TestQuantFP8:
         yield torch.float8_e4m3fn
 
     @pytest.fixture
-    def build_A(self, M, K, group_size, out_dtype):
-        return _make_A(M, K, group_size, out_dtype)
+    def scale_fmt(self, request):
+        yield request.param
+
+    @pytest.fixture
+    def build_A(self, M, K, group_size, out_dtype, scale_fmt):
+        return _make_A(M, K, group_size, out_dtype, scale_fmt)
 
     @pytest.fixture
     def A(self, build_A):
@@ -98,12 +130,13 @@ class TestQuantFP8:
     def gt(self, quant_A, scale):
         yield quant_A, scale
 
+    @pytest.mark.parametrize('scale_fmt', [None, 'ue8m0'], indirect=True)
     @pytest.mark.parametrize('M', [65536, 256], indirect=True)
-    def test_quant_fp8(self, A, group_size, out_dtype, gt):
+    def test_quant_fp8(self, A, group_size, out_dtype, scale_fmt, gt):
         from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
         quant_A_gt, scale_gt = gt
 
-        quant_A, scale = quant_fp8(A, group_size=group_size, dtype=out_dtype)
+        quant_A, scale = quant_fp8(A, group_size=group_size, dtype=out_dtype, scale_fmt=scale_fmt)
         torch.testing.assert_close(scale, scale_gt)
         diff = (quant_A.to(torch.float16) - quant_A_gt.to(torch.float16)).abs()
         diff_count = (diff > 1e-5).count_nonzero()

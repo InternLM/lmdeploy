@@ -1,19 +1,18 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import warnings
-from typing import Dict, List
 
 import torch
 from transformers import AutoProcessor
 
 from lmdeploy.utils import get_logger
-from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
 from lmdeploy.vl.model.utils import disable_logging
 
 logger = get_logger('lmdeploy')
 
 
 @VISION_MODELS.register_module()
-class LlavaHfVisionModel(VisonModel):
+class LlavaHfVisionModel(VisionModel):
     """Llava hf vision model."""
 
     _arch = 'LlavaForConditionalGeneration'
@@ -55,12 +54,11 @@ class LlavaHfVisionModel(VisonModel):
         model.eval()
         self.model = model
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refers to `super.preprocess() for spec."""
-        images = self.collect_images(messages)
+        images = self.collect_multimodal_items(messages)
         outputs = []
-        for image, params in images:
-            image = image.convert('RGB')
+        for modality, image, params in images:
             pixel_values = self.processor(image, return_tensors='pt', input_data_format='channels_last').pixel_values
             outputs.append(
                 dict(pixel_values=pixel_values,
@@ -71,12 +69,12 @@ class LlavaHfVisionModel(VisonModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
-            messages(List[Dict]): the outputs of `preprocess`
+            messages(list[dict]): the outputs of `preprocess`
             max_batch_size(int): the max batch size when forwarding vision
                 model
         Return:
@@ -123,10 +121,10 @@ class LlavaHfVisionModel(VisonModel):
         prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
         return prompt, IMAGE_TOKEN
 
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
+    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
         prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
         return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
 
-    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
+    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
         prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
         return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)

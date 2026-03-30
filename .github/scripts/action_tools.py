@@ -7,14 +7,13 @@ import shutil
 import subprocess
 import time
 from collections import OrderedDict
-from typing import List
 
 import fire
 import pandas as pd
 from mmengine.config import Config
 
 
-def run_cmd(cmd_lines: List[str], log_path: str, cwd: str = None):
+def run_cmd(cmd_lines: list[str], log_path: str, cwd: str = None):
     """
     Args:
         cmd_lines: (list[str]): A command in multiple line style.
@@ -43,7 +42,7 @@ def run_cmd(cmd_lines: List[str], log_path: str, cwd: str = None):
 
     if return_code != 0:
         logging.error(f'Got shell abnormal return code={return_code}')
-        with open(log_path, 'r') as f:
+        with open(log_path) as f:
             content = f.read()
             logging.error(f'Log error message\n{content}')
     return return_code
@@ -61,7 +60,7 @@ def add_summary(csv_path: str):
     Args:
         csv_path (str): Input csv file.
     """
-    with open(csv_path, 'r') as fr:
+    with open(csv_path) as fr:
         lines = fr.readlines()
         header = lines[0].strip().split(',')
         n_col = len(header)
@@ -75,7 +74,12 @@ def add_summary(csv_path: str):
         _append_summary('\n')
 
 
-def evaluate(models: List[str], datasets: List[str], workspace: str, evaluate_type: str, is_smoke: bool = False):
+def evaluate(models: list[str],
+             datasets: list[str],
+             workspace: str,
+             evaluate_type: str,
+             max_num_workers: int = 8,
+             is_smoke: bool = False):
     """Evaluate models from lmdeploy using opencompass.
 
     Args:
@@ -121,7 +125,7 @@ def evaluate(models: List[str], datasets: List[str], workspace: str, evaluate_ty
 
         work_dir = os.path.join(workspace, model)
         cmd_eval = [
-            f'opencompass {config_path_new} -w {work_dir} --reuse --max-num-workers 8'  # noqa: E501
+            f'opencompass {config_path_new} -w {work_dir} --reuse --max-num-workers {max_num_workers} --dump-res-length'  # noqa: E501
         ]
         eval_log = os.path.join(workspace, f'eval.{ori_model}.txt')
         start_time = time.time()
@@ -141,12 +145,12 @@ def evaluate(models: List[str], datasets: List[str], workspace: str, evaluate_ty
         # print csv_txt to screen
         csv_txt = csv_file.replace('.csv', '.txt')
         if os.path.exists(csv_txt):
-            with open(csv_txt, 'r') as f:
+            with open(csv_txt) as f:
                 print(f.read())
 
         # parse evaluation results from csv file
         model_results = OrderedDict()
-        with open(csv_file, 'r') as f:
+        with open(csv_file) as f:
             lines = f.readlines()
             for line in lines[1:]:
                 row = line.strip().split(',')
@@ -155,7 +159,7 @@ def evaluate(models: List[str], datasets: List[str], workspace: str, evaluate_ty
                     model_results[row[0]] = row[-1]
         crows_pairs_json = glob.glob(os.path.join(work_dir, '*/results/*/crows_pairs.json'), recursive=True)
         if len(crows_pairs_json) == 1:
-            with open(crows_pairs_json[0], 'r') as f:
+            with open(crows_pairs_json[0]) as f:
                 acc = json.load(f)['accuracy']
                 acc = f'{float(acc):.2f}'  # noqa E231
                 model_results['crows_pairs'] = acc
@@ -224,14 +228,18 @@ def generate_benchmark_report(report_path: str):
                     for f in csv_files:
                         df = pd.read_csv(f)
                         merged_df = pd.concat([merged_df, df], ignore_index=True)
+                    if 'throughput' in backend_subfolder or 'longtext' in backend_subfolder:
+                        merged_df = merged_df.sort_values(by=merged_df.columns[1])
 
-                    merged_df = merged_df.sort_values(by=merged_df.columns[0])
+                        grouped_df = merged_df.groupby(merged_df.columns[1])
+                    else:
+                        merged_df = merged_df.sort_values(by=merged_df.columns[0])
 
-                    grouped_df = merged_df.groupby(merged_df.columns[0])
+                        grouped_df = merged_df.groupby(merged_df.columns[0])
                     if 'generation' not in backend_subfolder:
-                        average_values = grouped_df.pipe((lambda group: {
-                            'mean': group.mean().round(decimals=3)
-                        }))['mean']
+                        average_values = grouped_df.pipe(lambda group: {
+                            'mean': group.mean(numeric_only=True).round(decimals=3)
+                        })['mean']
                         average_values.to_csv(average_csv_path, index=True)
                         avg_df = pd.read_csv(average_csv_path)
                         merged_df = pd.concat([merged_df, avg_df], ignore_index=True)
@@ -244,7 +252,7 @@ def generate_benchmark_report(report_path: str):
 
 
 def generate_csv_from_profile_result(file_path: str, out_path: str):
-    with open(file_path, 'r') as f:
+    with open(file_path) as f:
         data = f.readlines()
         data = [json.loads(line) for line in data]
 

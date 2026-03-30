@@ -1,19 +1,18 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Dict, List
 
 import torch
 from transformers import AutoModelForCausalLM, AutoProcessor
 
 from lmdeploy.utils import get_logger
-from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
 from lmdeploy.vl.model.utils import disable_logging
 
 logger = get_logger('lmdeploy')
 
 
 @VISION_MODELS.register_module()
-class MolmoVisionModel(VisonModel):
+class MolmoVisionModel(VisionModel):
     """Molmo's vision model."""
 
     _arch = 'MolmoForCausalLM'
@@ -50,10 +49,10 @@ class MolmoVisionModel(VisonModel):
         # avoid randomness in inference.
         self.model = model.eval()
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refer to the `super.preprocess() for spec."""
         for i, message in enumerate(messages):
-            if not isinstance(message['content'], List):
+            if not isinstance(message['content'], list):
                 continue
             images = [x['image'] for x in message['content'] if x['type'] == 'image']
             content = [x.get('text', '') for x in message['content'] if x['type'] == 'text']
@@ -75,12 +74,12 @@ class MolmoVisionModel(VisonModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
-            messages(List[Dict]): the outputs of `preprocess`
+            messages(list[dict]): the outputs of `preprocess`
             max_batch_size(int): the max batch size when forwarding vision
                 model
         Return:
@@ -131,7 +130,7 @@ class MolmoVisionModel(VisonModel):
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         for message in messages:
             role, content = message['role'], message['content']
-            if isinstance(content, List):
+            if isinstance(content, list):
                 n_images = len([1 for x in content if x['type'] == 'image'])
                 content = [x['text'] for x in content if x['type'] == 'text']
                 prompt.append(' User: ' + (IMAGE_TOKEN + '\n') * n_images + content[0])
@@ -145,10 +144,10 @@ class MolmoVisionModel(VisonModel):
         prompt.append(' Assistant:')
         return ''.join(prompt)
 
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
+    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
         assert 0, 'molmo is not supported by pytorch engine'
 
-    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
+    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
         # results is a list of tuple(input_ids, embeddings)
         results = []
         # Prepend BOS
@@ -160,7 +159,7 @@ class MolmoVisionModel(VisonModel):
         for i, message in enumerate(messages):
             prompt = ''
             role, content = message['role'], message['content']
-            if isinstance(content, List):
+            if isinstance(content, list):
                 forward_result = message.pop('forward')
                 input_ids = forward_result['input_ids']
                 embeddings = forward_result['embeddings']

@@ -31,5 +31,7 @@ class GemmaVLModelConfigBuilder(AutoModelConfigBuilder):
         """Build gemma."""
         hf_config.text_config.architectures = ['Gemma3ForCausalLM']
         cfg = DefaultModelConfigBuilder.build(hf_config.text_config, model_path, **kwargs)
+        # gemma 3 does not enable sliding window on every layers
+        cfg.sliding_window = -1
         cfg.hf_config = hf_config
         return cfg

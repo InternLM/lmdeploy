@@ -47,9 +47,9 @@ void Copy(const Tensor& src, Ref<Tensor> dst_, const Stream& stream)
     TM_CHECK(src.shape() == dst.shape());
     TM_CHECK(src.is_contiguous());
     TM_CHECK(dst.is_contiguous());
-
-    check_cuda_error(
-        cudaMemcpyAsync(dst.raw_data(), src.raw_data(), src.byte_size(), cudaMemcpyDefault, stream.handle()));
+    if (auto size = src.byte_size()) {
+        check_cuda_error(cudaMemcpyAsync(dst.raw_data(), src.raw_data(), size, cudaMemcpyDefault, stream.handle()));
+    }
 }
 
 void Copy(const Tensor& src, Ref<Tensor> dst_)
@@ -61,7 +61,9 @@ void Clear(Ref<Tensor> a_, const Stream& stream)
 {
     auto& a = a_.get();
     TM_CHECK(a.is_contiguous());
-    check_cuda_error(cudaMemsetAsync(a.raw_data(), 0, a.byte_size(), stream.handle()));
+    if (auto size = a.byte_size()) {
+        check_cuda_error(cudaMemsetAsync(a.raw_data(), 0, size, stream.handle()));
+    }
 }
 
 void Clear(Ref<Tensor> a_)

@@ -20,6 +20,8 @@
 
 #pragma once
 
+#include <unordered_map>
+
 #include "src/turbomind/core/context.h"
 #include "src/turbomind/models/llama/LlamaDecoderLayerWeight.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
@@ -33,7 +35,6 @@ struct LlamaWeight: core::Module {
     LlamaWeight(DataType           data_type,
                 const ModelParam&  model_param,
                 const EngineParam& engine_param,
-                const LoraParam&   lora_param,
                 const MoeParam&    moe_param);
 
     ~LlamaWeight();
@@ -42,6 +43,14 @@ struct LlamaWeight: core::Module {
     LlamaWeight& operator=(const LlamaWeight&) = delete;
 
     void prepare(const cudaDeviceProp& prop);
+
+    bool is_initialized() const;
+
+    void initialize();
+
+    void release();
+
+    void to_device(const core::Device& device);
 
     core::ContextGuard context() const;
 
@@ -53,6 +62,10 @@ struct LlamaWeight: core::Module {
     Tensor output_norm_weight;
 
 private:
+    const ModelParam  model_param_;
+    const EngineParam engine_param_;
+    const MoeParam    moe_param_;
+
     int hidden_units_;
     int vocab_size_;
     int vocab_size_padded_;
@@ -62,6 +75,8 @@ private:
     DataType data_type_;
     DataType weight_type_;
 
+    std::unordered_map<std::string, Tensor> pinned_weights_;
+
     int tp_size_;  // this will follow attn tp param
     int tp_rank_;
 
@@ -69,6 +84,7 @@ private:
 
     core::Stream    stream_;
     core::Allocator alloca_;
+    bool            initialized_{false};
 };
 
 }  // namespace turbomind

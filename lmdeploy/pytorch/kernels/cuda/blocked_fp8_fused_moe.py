@@ -1,12 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
+from collections.abc import Callable
+
 import torch
 import triton
 import triton.language as tl
 
 from .activation import silu_and_mul
 from .blocked_gemm_fp8 import quant_fp8
-from .fused_moe import _get_sorted_idx, _make_intermediate, _renormalize
+from .fused_moe import _get_sorted_idx, _make_intermediate, _renormalize, moe_reduce
 
 
 def get_cuda_autotune_config():
@@ -28,11 +30,11 @@ def fused_moe_blocked_f8_kernel(
     A_scale,
     B,
     B_scale,
+    bias,
     C,
     SortedIdx,
     ExpStart,
     ExpEnd,
-    Weights,
     N: tl.constexpr,
     K: tl.constexpr,
     group_ak: tl.constexpr,
@@ -48,6 +50,8 @@ def fused_moe_blocked_f8_kernel(
     stride_bse: tl.constexpr,
     stride_bsk: tl.constexpr,
     stride_bsn: tl.constexpr,
+    stride_bie: tl.constexpr,
+    stride_bin: tl.constexpr,
     stride_cm,
     stride_cn: tl.constexpr,
     BLOCK_SIZE_M: tl.constexpr,
@@ -55,7 +59,6 @@ def fused_moe_blocked_f8_kernel(
     BLOCK_SIZE_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
     M_NP2: tl.constexpr,
-    ENABLE_WEIGHTS: tl.constexpr,
     top_k: tl.constexpr,
     expert_offset: tl.constexpr,
     reindex_a: tl.constexpr,
@@ -120,7 +123,7 @@ def fused_moe_blocked_f8_kernel(
     k_start = BLOCK_SIZE_K
     offs_ksa = k_start // group_ak
     offs_ksb = k_start // group_bk
-    a_scale = tl.load(as_ptrs + offs_ksa * stride_ask, mask=mask_sid and k_start < K, other=1.0)
+    a_scale = tl.load(as_ptrs + offs_ksa * stride_ask, mask=mask_sid & (k_start < K), other=1.0)
     b_scale = tl.load(bs_ptrs + offs_ksb * stride_bsk, mask=k_start < K, other=1.0)
     acc_scale1 = tl.maximum(a_scale * b_scale, 1e-12)
     acc_ratio = acc_scale0 / acc_scale1
@@ -131,7 +134,7 @@ def fused_moe_blocked_f8_kernel(
         k_start = (k + 2) * BLOCK_SIZE_K
         offs_ksa = k_start // group_ak
         offs_ksb = k_start // group_bk
-        a_scale = tl.load(as_ptrs + offs_ksa * stride_ask, mask=mask_sid and k_start < K, other=1.0)
+        a_scale = tl.load(as_ptrs + offs_ksa * stride_ask, mask=mask_sid & (k_start < K), other=1.0)
         b_scale = tl.load(bs_ptrs + offs_ksb * stride_bsk, mask=k_start < K, other=1.0)
 
         # load ab
@@ -152,9 +155,10 @@ def fused_moe_blocked_f8_kernel(
 
     c = accumulator * (acc_ratio * acc_scale)[:, None]
 
-    if ENABLE_WEIGHTS:
-        weight = tl.load(Weights + sid, mask=mask_sid)
-        c = c * weight[:, None].to(c.dtype)
+    if bias is not None:
+        bias_ptrs = bias + exp_id * stride_bie + offs_bn * stride_bin
+        bias_val = tl.load(bias_ptrs).to(accumulator.dtype)
+        c += bias_val[None]
 
     c = c.to(C.dtype.element_ty)
 
@@ -175,8 +179,7 @@ def fused_moe_blocked_fp8_kernel_launcher(
     sorted_idx: torch.Tensor,
     exp_start: torch.Tensor,
     exp_end: torch.Tensor,
-    weights: torch.Tensor,
-    enable_weights: bool = False,
+    bias: torch.Tensor = None,
     top_k: int = 1,
     num_tokens: int = None,
     expert_offset: int = 0,
@@ -210,6 +213,7 @@ def fused_moe_blocked_fp8_kernel_launcher(
 
     A = A.flatten(0, -2)
     C = C.flatten(0, -2)
+    enable_bias = bias is not None
 
     BLOCK_SIZE_K = group_bk
     GROUP_SIZE_M = 1
@@ -219,11 +223,11 @@ def fused_moe_blocked_fp8_kernel_launcher(
         A_scale,
         B,
         B_scale,
+        bias,
         C,
         sorted_idx,
         exp_start,
         exp_end,
-        weights,
         N=N,
         K=K,
         group_ak=group_ak,
@@ -241,7 +245,8 @@ def fused_moe_blocked_fp8_kernel_launcher(
         stride_bsk=B_scale.stride(2),
         stride_cm=C.stride(0),
         stride_cn=C.stride(1),
-        ENABLE_WEIGHTS=enable_weights,
+        stride_bie=bias.stride(0) if enable_bias else 0,
+        stride_bin=bias.stride(1) if enable_bias else 0,
         top_k=top_k,
         expert_offset=expert_offset,
         reindex_a=reindex_a,
@@ -261,10 +266,13 @@ def fused_moe_blocked_fp8(input: torch.Tensor,
                           topk_weights: torch.Tensor,
                           topk_ids: torch.Tensor,
                           topk: int,
+                          w1_bias: torch.Tensor = None,
+                          w2_bias: torch.Tensor = None,
                           out_dtype: torch.dtype = torch.float16,
                           expert_offset: int = 0,
                           num_experts: int = None,
-                          renormalize: bool = False) -> torch.Tensor:
+                          renormalize: bool = False,
+                          act_func: Callable = None) -> torch.Tensor:
     """Fused moe."""
     device = input.device
     M = input.size(0)
@@ -288,8 +296,7 @@ def fused_moe_blocked_fp8(input: torch.Tensor,
         sorted_idx=sorted_idx,
         exp_start=exp_start,
         exp_end=exp_end,
-        weights=topk_weights,
-        enable_weights=False,
+        bias=w1_bias,
         top_k=topk,
         num_tokens=M,
         expert_offset=expert_offset,
@@ -299,7 +306,10 @@ def fused_moe_blocked_fp8(input: torch.Tensor,
 
     # activate
     intermediate_cache1 = intermediate_cache1.flatten(0, -2)
-    gate_cache = silu_and_mul(intermediate_cache1)
+    if act_func is None:
+        gate_cache = silu_and_mul(intermediate_cache1)
+    else:
+        gate_cache = act_func(intermediate_cache1)
     del intermediate_cache1
     gate_cache, gate_scale = quant_fp8(gate_cache, group_size, dtype=input.dtype)
 
@@ -314,8 +324,7 @@ def fused_moe_blocked_fp8(input: torch.Tensor,
         sorted_idx=sorted_idx,
         exp_start=exp_start,
         exp_end=exp_end,
-        weights=topk_weights,
-        enable_weights=True,
+        bias=w2_bias,
         top_k=1,
         num_tokens=M,
         expert_offset=expert_offset,
@@ -323,5 +332,5 @@ def fused_moe_blocked_fp8(input: torch.Tensor,
         reindex_c=True,
     )
 
-    ret = intermediate_cache2.sum(dim=1)
+    ret = moe_reduce(intermediate_cache2, topk_weights)
     return ret

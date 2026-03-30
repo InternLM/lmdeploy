@@ -68,9 +68,6 @@ class TestZMQRPC:
                     condition.wait()
             port = shared_dict['rpc_server_port']
 
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
         asyncio.run(self.async_main(port))
 
         proc.join()

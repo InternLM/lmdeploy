@@ -10,7 +10,7 @@ import threading
 import time
 from collections import deque
 from http import HTTPStatus
-from typing import Deque, Dict, List, Literal, Optional, Union
+from typing import Literal
 
 import aiohttp
 import numpy as np
@@ -21,16 +21,24 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from lmdeploy.pytorch.disagg.config import (DistServeRDMAConfig, EngineRole, MigrationProtocol, RDMALinkType,
-                                            ServingStrategy)
-from lmdeploy.pytorch.disagg.conn import PDConnectionPool
+from lmdeploy.pytorch.disagg.config import DistServeRDMAConfig, EngineRole, RDMALinkType, ServingStrategy
+from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol, MigrationRequest
+from lmdeploy.pytorch.disagg.conn.proxy_conn import PDConnectionPool
 from lmdeploy.pytorch.disagg.messages import PDConnectionMessage
-from lmdeploy.pytorch.disagg.request import MigrationRequest
-from lmdeploy.serve.openai.api_server import check_api_key, create_error_response
-from lmdeploy.serve.openai.protocol import ModelCard  # noqa: E501
-from lmdeploy.serve.openai.protocol import ChatCompletionRequest, CompletionRequest, ModelList, ModelPermission
-from lmdeploy.serve.proxy.constants import AIOHTTP_TIMEOUT, LATENCY_DEQUE_LEN, ErrorCodes, RoutingStrategy, err_msg
+from lmdeploy.serve.openai.api_server import create_error_response
+from lmdeploy.serve.openai.protocol import (
+    ChatCompletionRequest,
+    CompletionRequest,
+    ModelCard,  # noqa: E501
+    ModelList,
+    ModelPermission,
+)
+from lmdeploy.serve.proxy.utils import AIOHTTP_TIMEOUT, LATENCY_DEQUE_LEN, ErrorCodes, RoutingStrategy, err_msg
+from lmdeploy.serve.utils.server_utils import validate_json_request
 from lmdeploy.utils import get_logger
+
+from .streaming_response import ProxyStreamingResponse
+from .utils import APIServerException
 
 logger = get_logger('lmdeploy')
 
@@ -38,16 +46,16 @@ logger = get_logger('lmdeploy')
 class Status(BaseModel):
     """Status protocol consists of models' information."""
     role: EngineRole = EngineRole.Hybrid
-    models: Optional[List[str]] = Field(default=[], examples=[[]])
+    models: list[str] = Field(default=[], examples=[[]])
     unfinished: int = 0
-    latency: Deque = Field(default=deque(maxlen=LATENCY_DEQUE_LEN), examples=[[]])
-    speed: Optional[int] = Field(default=None, examples=[None])
+    latency: deque = Field(default=deque(maxlen=LATENCY_DEQUE_LEN), examples=[[]])
+    speed: int | None = Field(default=None, examples=[None])
 
 
 class Node(BaseModel):
     """Node protocol consists of url and status."""
     url: str
-    status: Optional[Status] = None
+    status: Status | None = None
 
 
 CONTROLLER_HEART_BEAT_EXPIRATION = int(os.getenv('LMDEPLOY_CONTROLLER_HEART_BEAT_EXPIRATION', 90))
@@ -66,23 +74,23 @@ class NodeManager:
     Args:
         config_path (str): the path of the config file.
         strategy (str): the strategy to dispatch node to handle the requests.
-            - random: not fully radom, but decided by the speed of nodes.
-            - min_expected_latency: will compute the expected latency to
+            - **random**: not fully radom, but decided by the speed of nodes.
+            - **min_expected_latency**: will compute the expected latency to
                 process the requests. The sooner of the node, the more requests
                 will be dispatched to it.
-            - min_observed_latency: Based on previous finished requests. The
+            - **min_observed_latency**: Based on previous finished requests. The
                 sooner they get processed, the more requests will be dispatched
                 to.
     """
 
     def __init__(self,
-                 config_path: Optional[str] = None,
+                 config_path: str | None = None,
                  serving_strategy: str = 'Hybrid',
                  routing_strategy: str = 'min_expected_latency',
                  migration_protocol: str = 'RDMA',
                  link_type: str = 'RoCE',
                  with_gdr: bool = True,
-                 cache_status: Optional[bool] = True) -> None:
+                 cache_status: bool = True) -> None:
         self.nodes = dict()
         self.serving_strategy = ServingStrategy[serving_strategy]
         self.routing_strategy = RoutingStrategy.from_str(routing_strategy)
@@ -93,7 +101,7 @@ class NodeManager:
         if config_path is not None:
             self.config_path = config_path
         if osp.exists(self.config_path) and self.cache_status:
-            with open(self.config_path, 'r') as config_file:
+            with open(self.config_path) as config_file:
                 if os.path.getsize(self.config_path) > 0:
                     logger.info(f'loading node configuration: {self.config_path}')
                     config = json.load(config_file)
@@ -109,9 +117,9 @@ class NodeManager:
         self.migration_protocol = MigrationProtocol[migration_protocol]
         self.rdma_config = DistServeRDMAConfig(with_gdr=with_gdr, link_type=RDMALinkType[link_type])
         self.pd_connection_pool = PDConnectionPool()
-        self.initialized = False
+        self.dummy_prefill = False
 
-    def get_nodes(self, role: EngineRole) -> Dict:
+    def get_nodes(self, role: EngineRole) -> dict[str, Status]:
         items = list(self.nodes.items())
         return {node_url: node_status for (node_url, node_status) in items if node_status.role == role}
 
@@ -141,13 +149,13 @@ class NodeManager:
                           config_file,
                           indent=2)
 
-    def add(self, node_url: str, status: Optional[Status] = None):
+    def add(self, node_url: str, status: Status | None = None):
         """Add a node to the manager.
 
         Args:
             node_url (str): A http url. Can be the url generated by
                 `lmdeploy serve api_server`.
-            description (Dict): The description of the node. An example:
+            description (dict): The description of the node. An example:
                 {'http://0.0.0.0:23333': {models: ['internlm-chat-7b]},
                 speed: -1}. The speed here can be RPM or other metric. All the
                 values of nodes should be the same metric.
@@ -174,12 +182,7 @@ class NodeManager:
         if node_url in self.nodes.keys():
             self.nodes.pop(node_url)
             self.update_config_file()
-            dropped_conn = []
-            for conn in self.pd_connection_pool.pool:
-                if node_url in conn:
-                    dropped_conn.append(conn)
-            for conn in dropped_conn:
-                self.pd_connection_pool.drop(*conn)
+            self.pd_connection_pool.dereg_instance(node_url)
 
     def terminate_node(self, node_url: str):
         """Terminate a node."""
@@ -314,11 +317,11 @@ class NodeManager:
         else:
             raise ValueError(f'Invalid strategy: {self.routing_strategy}')
 
-    async def check_request_model(self, model_name) -> Optional[JSONResponse]:
+    async def check_request_model(self, model_name) -> JSONResponse | None:
         """Check if a request is valid."""
         if model_name in self.model_list:
             return
-        ret = create_error_response(HTTPStatus.NOT_FOUND, f'The model `{model_name}` does not exist.')
+        ret = create_error_response(HTTPStatus.NOT_FOUND, f'The model {model_name!r} does not exist.')
         return ret
 
     def handle_unavailable_model(self, model_name):
@@ -343,16 +346,11 @@ class NodeManager:
         }
         return json.dumps(ret).encode() + b'\n'
 
-    async def stream_generate(self,
-                              request: Dict,
-                              node_url: str,
-                              endpoint: str,
-                              prefill_url: Optional[str] = None,
-                              remote_session_id: int = None):
+    async def stream_generate(self, request: dict, node_url: str, endpoint: str):
         """Return a generator to handle the input request.
 
         Args:
-            request (Dict): the input request.
+            request (dict): the input request.
             node_url (str): the node url.
             endpoint (str): the endpoint. Such as `/v1/chat/completions`.
         """
@@ -362,20 +360,16 @@ class NodeManager:
                     async for line in response.content:
                         if line.strip():
                             yield line + b'\n\n'
-                if prefill_url:
-                    async with session.post(f'{prefill_url}/distserve/free_cache',
-                                            json={'session_id': remote_session_id}) as response:
-                        await response.json()
         except (Exception, GeneratorExit, aiohttp.ClientError) as e:  # noqa
-            logger.error(f'catched an exception: {e}')
+            logger.error(f'caught an exception: {e}')
             # exception happened, reduce unfinished num
             yield self.handle_api_timeout(node_url)
 
-    async def generate(self, request: Dict, node_url: str, endpoint: str, is_prefill: bool = False):
+    async def generate(self, request: dict, node_url: str, endpoint: str):
         """Return a the response of the input request.
 
         Args:
-            request (Dict): the input request.
+            request (dict): the input request.
             node_url (str): the node url.
             endpoint (str): the endpoint. Such as `/v1/chat/completions`.
         """
@@ -384,7 +378,42 @@ class NodeManager:
                 async with session.post(node_url + endpoint, json=request, timeout=self.aiotimeout) as response:
                     return await response.text()
         except (Exception, GeneratorExit, aiohttp.ClientError, asyncio.CancelledError) as e:  # noqa  # yapf: disable
-            logger.error(f'catched an exception: {e}')
+            logger.error(f'caught an exception: {e}')
+            return self.handle_api_timeout(node_url)
+
+    async def forward_raw_request_stream_generate(self, raw_request: Request, node_url: str, endpoint: str):
+        try:
+            target_url = node_url.rstrip('/') + endpoint
+            headers = self._prepare_headers(raw_request)
+            body_bytes = await raw_request.body()
+            async with aiohttp.ClientSession() as session:
+                async with session.post(target_url, headers=headers, data=body_bytes,
+                                        timeout=self.aiotimeout) as response:
+                    if response.status != 200:
+                        error_body = await response.read()
+                        raise APIServerException(status_code=response.status, body=error_body)
+                    async for line in response.content:
+                        if line.strip():
+                            yield line + b'\n\n'
+        except APIServerException:
+            # raise APIServerException again to be caught by the outer layer
+            raise
+        except (Exception, GeneratorExit, aiohttp.ClientError) as e:  # noqa
+            logger.error(f'caught an exception: {e}')
+            # exception happened, reduce unfinished num
+            yield self.handle_api_timeout(node_url)
+
+    async def forward_raw_request_generate(self, raw_request: Request, node_url: str, endpoint: str):
+        try:
+            target_url = node_url.rstrip('/') + endpoint
+            headers = self._prepare_headers(raw_request)
+            body_bytes = await raw_request.body()
+            async with aiohttp.ClientSession() as session:
+                async with session.post(target_url, headers=headers, data=body_bytes,
+                                        timeout=self.aiotimeout) as response:
+                    return await response.text()
+        except (Exception, GeneratorExit, aiohttp.ClientError, asyncio.CancelledError) as e:  # noqa  # yapf: disable
+            logger.error(f'caught an exception: {e}')
             return self.handle_api_timeout(node_url)
 
     def pre_call(self, node_url):
@@ -403,8 +432,9 @@ class NodeManager:
             node_url (str): the node url.
             start (int): the start time point. time.time()
         """
-        self.nodes[node_url].unfinished -= 1
-        self.nodes[node_url].latency.append(time.time() - start)
+        if node_url in self.nodes:
+            self.nodes[node_url].unfinished -= 1
+            self.nodes[node_url].latency.append(time.time() - start)
 
     def create_background_tasks(self, url: str, start: int):
         """To create a background task.
@@ -416,6 +446,18 @@ class NodeManager:
         background_tasks = BackgroundTasks()
         background_tasks.add_task(self.post_call, url, start)
         return background_tasks
+
+    def _prepare_headers(self, raw_request: Request) -> dict[str, str]:
+        headers = dict((name, value) for name, value in raw_request.headers.items() if name.lower() != 'host')
+
+        client_ip = raw_request.client.host if raw_request.client else 'unknown'
+        headers.update({
+            'X-Forwarded-For': client_ip,
+            'X-Forwarded-Host': raw_request.headers.get('host', ''),
+            'X-Forwarded-Proto': raw_request.url.scheme,
+        })
+
+        return headers
 
 
 app = FastAPI(docs_url='/')
@@ -429,7 +471,7 @@ app.add_middleware(
 node_manager = NodeManager()
 
 
-@app.get('/v1/models', dependencies=[Depends(check_api_key)])
+@app.get('/v1/models')
 def available_models():
     """Show available models."""
     model_cards = []
@@ -438,7 +480,7 @@ def available_models():
     return ModelList(data=model_cards)
 
 
-@app.get('/nodes/status', dependencies=[Depends(check_api_key)])
+@app.get('/nodes/status')
 def node_status():
     """Show nodes status."""
     try:
@@ -447,15 +489,15 @@ def node_status():
         return False
 
 
-@app.post('/nodes/add', dependencies=[Depends(check_api_key)])
+@app.post('/nodes/add', dependencies=[Depends(validate_json_request)])
 def add_node(node: Node, raw_request: Request = None):
     """Add a node to the manager.
 
-    - url (str): A http url. Can be the url generated by
-        `lmdeploy serve api_server`.
-    - status (Dict): The description of the node. An example:
-        {models: ['internlm-chat-7b],  speed: 1}. The speed here can be
-        RPM or other metric. All the values of nodes should be the same metric.
+    - **url** (str): A http url. Can be the url generated by
+      `lmdeploy serve api_server`.
+    - **status** (dict): The description of the node. An example:
+      ``{models: ['internlm-chat-7b],  speed: 1}``. The speed here can be
+      RPM or other metric. All the values of nodes should be the same metric.
     """
     try:
         res = node_manager.add(node.url, node.status)
@@ -468,7 +510,7 @@ def add_node(node: Node, raw_request: Request = None):
         return 'Failed to add, please check the input url.'
 
 
-@app.post('/nodes/remove', dependencies=[Depends(check_api_key)])
+@app.post('/nodes/remove', dependencies=[Depends(validate_json_request)])
 def remove_node(node: Node):
     """Show available models."""
     try:
@@ -481,7 +523,7 @@ def remove_node(node: Node):
         return 'Failed to delete, please check the input url.'
 
 
-@app.post('/nodes/terminate', dependencies=[Depends(check_api_key)])
+@app.post('/nodes/terminate', dependencies=[Depends(validate_json_request)])
 def terminate_node(node: Node):
     """Terminate nodes."""
     try:
@@ -495,7 +537,7 @@ def terminate_node(node: Node):
         return 'Failed to terminate node {node_url}, please check the input url.'
 
 
-@app.get('/nodes/terminate_all', dependencies=[Depends(check_api_key)])
+@app.get('/nodes/terminate_all', dependencies=[Depends(validate_json_request)])
 def terminate_node_all():
     """Terminate nodes."""
     try:
@@ -508,7 +550,7 @@ def terminate_node_all():
         return 'Failed to terminate all nodes.'
 
 
-@app.post('/distserve/connection_warmup')
+@app.post('/distserve/connection_warmup', dependencies=[Depends(validate_json_request)])
 async def connection_warmup():
     await asyncio.gather(*[
         node_manager.pd_connection_pool.connect(
@@ -522,61 +564,88 @@ async def connection_warmup():
     return JSONResponse({'SUCCESS': True})
 
 
-@app.post('/v1/chat/completions', dependencies=[Depends(check_api_key)])
+@app.post('/distserve/gc', dependencies=[Depends(validate_json_request)])
+async def cache_block_gc_to_be_migrated():
+    # TODO (JimyMa): add garbage collection of to be migrated request
+    raise NotImplementedError
+
+
+@app.post('/v1/chat/completions', dependencies=[Depends(validate_json_request)])
 async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
-    Refer to  `https://platform.openai.com/docs/api-reference/chat/create`
+    Refer to https://platform.openai.com/docs/api-reference/chat/create
     for the API specification.
 
     The request should be a JSON object with the following fields:
-    - model: model name. Available from /v1/models.
-    - messages: string prompt or chat history in OpenAI format. Chat history
-        example: `[{"role": "user", "content": "hi"}]`.
-    - temperature (float): to modulate the next token probability
-    - top_p (float): If set to float < 1, only the smallest set of most
-        probable tokens with probabilities that add up to top_p or higher
-        are kept for generation.
-    - n (int): How many chat completion choices to generate for each input
-        message. **Only support one here**.
-    - stream: whether to stream the results or not. Default to false.
-    - max_tokens (int | None): output token nums. Default to None.
-    - repetition_penalty (float): The parameter for repetition penalty.
-        1.0 means no penalty
-    - stop (str | List[str] | None): To stop generating further
-        tokens. Only accept stop words that's encoded to one token idex.
-    - response_format (Dict | None): Only pytorch backend support formatting
-        response. Examples: `{"type": "json_schema", "json_schema": {"name":
-        "test","schema": {"properties": {"name": {"type": "string"}},
-        "required": ["name"], "type": "object"}}}`
-        or `{"type": "regex_schema", "regex_schema": "call me [A-Za-z]{1,10}"}`
-    - logit_bias (Dict): Bias to logits. Only supported in pytorch engine.
-    - tools (List): A list of tools the model may call. Currently, only
-        internlm2 functions are supported as a tool. Use this to specify a
-        list of functions for which the model can generate JSON inputs.
-    - tool_choice (str | object): Controls which (if any) tool is called by
-        the model. `none` means the model will not call any tool and instead
-        generates a message. Specifying a particular tool via {"type":
-        "function", "function": {"name": "my_function"}} forces the model to
-        call that tool. `auto` or `required` will put all the tools information
-        to the model.
+
+    - **model**: model name. Available from /v1/models.
+    - **messages**: string prompt or chat history in OpenAI format. Chat history
+      example: `[{"role": "user", "content": "hi"}]`.
+    - **temperature** (float): to modulate the next token probability
+    - **top_p** (float): If set to float < 1, only the smallest set of most
+      probable tokens with probabilities that add up to top_p or higher
+      are kept for generation.
+    - **n** (int): How many chat completion choices to generate for each input
+      message. **Only support one here**.
+    - **stream**: whether to stream the results or not. Default to false.
+    - **max_completion_tokens** (int | None): output token nums. Default to None.
+    - **max_tokens** (int | None): output token nums. Default to None.
+      Deprecated: Use max_completion_tokens instead.
+    - **repetition_penalty** (float): The parameter for repetition penalty.
+      1.0 means no penalty
+    - **stop** (str | list[str] | None): To stop generating further
+      tokens. Only accept stop words that's encoded to one token idex.
+    - **response_format** (dict | None): To generate response according to given
+      schema. Examples:
+
+      .. code-block:: json
+
+        {
+          "type": "json_schema",
+          "json_schema":{
+            "name": "test",
+            "schema":{
+              "properties":{
+                "name":{"type":"string"}
+              },
+              "required":["name"],
+              "type":"object"
+            }
+          }
+        }
+
+      or
+      ``{"type": "regex_schema", "regex_schema": "call me [A-Za-z]{1,10}"}``
+    - **logit_bias** (dict): Bias to logits. Only supported in pytorch engine.
+    - **tools** (list): A list of tools the model may call. Currently, only
+      internlm2 functions are supported as a tool. Use this to specify a
+      list of functions for which the model can generate JSON inputs.
+    - **tool_choice** (str | object): Controls which (if any) tool is called by
+      the model. `none` means the model will not call any tool and instead
+      generates a message. Specifying a particular tool via
+      ``{"type": "function", "function": {"name": "my_function"}}``
+      forces the model to call that tool. `auto` or `required` will put all
+      the tools information to the model.
 
     Additional arguments supported by LMDeploy:
-    - top_k (int): The number of the highest probability vocabulary
-        tokens to keep for top-k-filtering
-    - ignore_eos (bool): indicator for ignoring eos
-    - skip_special_tokens (bool): Whether or not to remove special tokens
-        in the decoding. Default to be True.
-    - min_new_tokens (int): To generate at least numbers of tokens.
-    - min_p (float): Minimum token probability, which will be scaled by the
-        probability of the most likely token. It must be a value between
-        0 and 1. Typical values are in the 0.01-0.2 range, comparably
-        selective as setting `top_p` in the 0.99-0.8 range (use the
-        opposite of normal `top_p` values)
+
+    - **top_k** (int): The number of the highest probability vocabulary
+      tokens to keep for top-k-filtering
+    - **ignore_eos** (bool): indicator for ignoring eos
+    - **skip_special_tokens** (bool): Whether or not to remove special tokens
+      in the decoding. Default to be True.
+    - **min_new_tokens** (int): To generate at least numbers of tokens.
+    - **min_p** (float): Minimum token probability, which will be scaled by the
+      probability of the most likely token. It must be a value between
+      0 and 1. Typical values are in the 0.01-0.2 range, comparably
+      selective as setting `top_p` in the 0.99-0.8 range (use the
+      opposite of normal `top_p` values)
 
     Currently we do not support the following features:
-    - presence_penalty (replaced with repetition_penalty)
-    - frequency_penalty (replaced with repetition_penalty)
+
+    - **presence_penalty** (replaced with repetition_penalty)
+    - **frequency_penalty** (replaced with repetition_penalty)
     """
     check_response = await node_manager.check_request_model(request.model)
     if check_response is not None:
@@ -588,14 +657,13 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             return node_manager.handle_unavailable_model(request.model)
 
         logger.info(f'A request is dispatched to {node_url}')
-        request_dict = request.model_dump()
         start = node_manager.pre_call(node_url)
         if request.stream is True:
-            response = node_manager.stream_generate(request_dict, node_url, '/v1/chat/completions')
+            response = node_manager.forward_raw_request_stream_generate(raw_request, node_url, '/v1/chat/completions')
             background_task = node_manager.create_background_tasks(node_url, start)
-            return StreamingResponse(response, background=background_task)
+            return ProxyStreamingResponse(response, background=background_task, media_type='text/event-stream')
         else:
-            response = await node_manager.generate(request_dict, node_url, '/v1/chat/completions')
+            response = await node_manager.forward_raw_request_generate(raw_request, node_url, '/v1/chat/completions')
             node_manager.post_call(node_url, start)
             return JSONResponse(json.loads(response))
     elif node_manager.serving_strategy == ServingStrategy.DistServe:
@@ -604,21 +672,22 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         # Prefill
         prefill_request_dict = copy.deepcopy(request_dict)
         prefill_request_dict['max_tokens'] = 1
+        prefill_request_dict['max_completion_tokens'] = 1
         prefill_request_dict['stream'] = False
         prefill_request_dict['with_cache'] = True
         prefill_request_dict['preserve_cache'] = True
 
-        p_url = node_manager.get_node_url(request.model, EngineRole.Prefill)
-        if not p_url:
-            return node_manager.handle_unavailable_model(request.model)
-        logger.info(f'A Prefill request is dispatched to {p_url}')
+        prefill_info = {}
+        p_url = 'dummy:dummy'
+        if not node_manager.dummy_prefill:
+            p_url = node_manager.get_node_url(request.model, EngineRole.Prefill)
+            if not p_url:
+                return node_manager.handle_unavailable_model(request.model)
+            logger.info(f'A Prefill request is dispatched to {p_url}')
 
-        start = node_manager.pre_call(p_url)
-        prefill_info = json.loads(await node_manager.generate(prefill_request_dict,
-                                                              p_url,
-                                                              '/v1/chat/completions',
-                                                              is_prefill=True))
-        node_manager.post_call(p_url, start)
+            start = node_manager.pre_call(p_url)
+            prefill_info = json.loads(await node_manager.generate(prefill_request_dict, p_url, '/v1/chat/completions'))
+            node_manager.post_call(p_url, start)
 
         # # Decode
         d_url = node_manager.get_node_url(request.model, EngineRole.Decode)
@@ -626,82 +695,90 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             return node_manager.handle_unavailable_model(request.model)
         logger.info(f'A Decode request is dispatched to {d_url}')
 
-        if not node_manager.pd_connection_pool.is_connected(p_url, d_url):
-            await node_manager.pd_connection_pool.connect(
-                PDConnectionMessage(
-                    p_url=p_url,
-                    d_url=d_url,
-                    protocol=node_manager.migration_protocol,
-                    rdma_config=node_manager.rdma_config,
-                ))
+        if not node_manager.dummy_prefill:
+            if not node_manager.pd_connection_pool.is_connected(p_url, d_url):
+                await node_manager.pd_connection_pool.connect(
+                    PDConnectionMessage(
+                        p_url=p_url,
+                        d_url=d_url,
+                        protocol=node_manager.migration_protocol,
+                        rdma_config=node_manager.rdma_config,
+                    ))
+
+        remote_session_id = int(prefill_info.get('id')) if prefill_info.get('id') else 0
+        remote_block_ids = prefill_info.get('cache_block_ids') or []
+        remote_token_id = prefill_info.get('remote_token_ids')[-1] if prefill_info.get('remote_token_ids') else 0
+
         request_dict['migration_request'] = MigrationRequest(
             protocol=node_manager.migration_protocol,
             remote_engine_id=p_url,
-            remote_session_id=int(prefill_info['id']),
-            remote_block_ids=prefill_info['cache_block_ids'],
-            remote_token_id=prefill_info['remote_token_ids'][-1],
-        ).model_dump(mode='json')
+            remote_session_id=remote_session_id,
+            remote_block_ids=remote_block_ids,
+            remote_token_id=remote_token_id,
+            is_dummy_prefill=node_manager.dummy_prefill).model_dump(mode='json')
 
         start = node_manager.pre_call(d_url)
+        if not node_manager.dummy_prefill:
+            node_manager.pd_connection_pool.shelf_prefill_session((p_url, d_url), prefill_info['id'])
         if request.stream is True:
-            response = node_manager.stream_generate(request_dict,
-                                                    d_url,
-                                                    '/v1/chat/completions',
-                                                    prefill_url=p_url,
-                                                    remote_session_id=int(prefill_info['id']))
+            response = node_manager.stream_generate(request_dict, d_url, '/v1/chat/completions')
             background_task = node_manager.create_background_tasks(d_url, start)
-            return StreamingResponse(response, background=background_task)
+            resp = StreamingResponse(response, background=background_task, media_type='text/event-stream')
         else:
-            try:
-                response = await node_manager.generate(request_dict, d_url, '/v1/chat/completions')
-                node_manager.post_call(d_url, start)
-                resp = JSONResponse(json.loads(response))
-            finally:
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(f'{p_url}/distserve/free_cache', json={'session_id':
-                                                                                   prefill_info['id']}) as response:
-                        await response.json()
-                return resp
+            response = await node_manager.generate(request_dict, d_url, '/v1/chat/completions')
+            node_manager.post_call(d_url, start)
+            resp = JSONResponse(json.loads(response))
+
+        if not node_manager.dummy_prefill:
+            node_manager.pd_connection_pool.unshelf_prefill_session((p_url, d_url), prefill_info['id'])
+
+        return resp
+
     else:
         raise ValueError(f'No serving strategy named {node_manager.serving_strategy}')
 
 
-@app.post('/v1/completions', dependencies=[Depends(check_api_key)])
+@app.post('/v1/completions', dependencies=[Depends(validate_json_request)])
 async def completions_v1(request: CompletionRequest, raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
-    Go to `https://platform.openai.com/docs/api-reference/completions/create`
+    Go to https://platform.openai.com/docs/api-reference/completions/create
     for the API specification.
 
     The request should be a JSON object with the following fields:
-    - model (str): model name. Available from /v1/models.
-    - prompt (str): the input prompt.
-    - suffix (str): The suffix that comes after a completion of inserted text.
-    - max_tokens (int): output token nums. Default to 16.
-    - temperature (float): to modulate the next token probability
-    - top_p (float): If set to float < 1, only the smallest set of most
-        probable tokens with probabilities that add up to top_p or higher
-        are kept for generation.
-    - n (int): How many chat completion choices to generate for each input
-        message. **Only support one here**.
-    - stream: whether to stream the results or not. Default to false.
-    - repetition_penalty (float): The parameter for repetition penalty.
-        1.0 means no penalty
-    - user (str): A unique identifier representing your end-user.
-    - stop (str | List[str] | None): To stop generating further
-        tokens. Only accept stop words that's encoded to one token idex.
+
+    - **model** (str): model name. Available from /v1/models.
+    - **prompt** (str): the input prompt.
+    - **suffix** (str): The suffix that comes after a completion of inserted text.
+    - **max_completion_tokens** (int | None): output token nums. Default to None.
+    - **max_tokens** (int): output token nums. Default to 16.
+      Deprecated: Use max_completion_tokens instead.
+    - **temperature** (float): to modulate the next token probability
+    - **top_p** (float): If set to float < 1, only the smallest set of most
+      probable tokens with probabilities that add up to top_p or higher
+      are kept for generation.
+    - **n** (int): How many chat completion choices to generate for each input
+      message. **Only support one here**.
+    - **stream**: whether to stream the results or not. Default to false.
+    - **repetition_penalty** (float): The parameter for repetition penalty.
+      1.0 means no penalty
+    - **user** (str): A unique identifier representing your end-user.
+    - **stop** (str | list[str] | None): To stop generating further
+      tokens. Only accept stop words that's encoded to one token idex.
 
     Additional arguments supported by LMDeploy:
-    - ignore_eos (bool): indicator for ignoring eos
-    - skip_special_tokens (bool): Whether or not to remove special tokens
-        in the decoding. Default to be True.
-    - top_k (int): The number of the highest probability vocabulary
-        tokens to keep for top-k-filtering
+
+    - **ignore_eos** (bool): indicator for ignoring eos
+    - **skip_special_tokens** (bool): Whether or not to remove special tokens
+      in the decoding. Default to be True.
+    - **top_k** (int): The number of the highest probability vocabulary
+      tokens to keep for top-k-filtering
 
     Currently we do not support the following features:
-    - logprobs (not supported yet)
-    - presence_penalty (replaced with repetition_penalty)
-    - frequency_penalty (replaced with repetition_penalty)
+
+    - **logprobs** (not supported yet)
+    - **presence_penalty** (replaced with repetition_penalty)
+    - **frequency_penalty** (replaced with repetition_penalty)
     """
     check_response = await node_manager.check_request_model(request.model)
     if check_response is not None:
@@ -712,14 +789,13 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             return node_manager.handle_unavailable_model(request.model)
 
         logger.info(f'A request is dispatched to {node_url}')
-        request_dict = request.model_dump()
         start = node_manager.pre_call(node_url)
         if request.stream is True:
-            response = node_manager.stream_generate(request_dict, node_url, '/v1/completions')
+            response = node_manager.forward_raw_request_stream_generate(raw_request, node_url, '/v1/completions')
             background_task = node_manager.create_background_tasks(node_url, start)
-            return StreamingResponse(response, background=background_task)
+            return ProxyStreamingResponse(response, background=background_task, media_type='text/event-stream')
         else:
-            response = await node_manager.generate(request_dict, node_url, '/v1/completions')
+            response = await node_manager.forward_raw_request_generate(raw_request, node_url, '/v1/completions')
             node_manager.post_call(node_url, start)
             return JSONResponse(json.loads(response))
     elif node_manager.serving_strategy == ServingStrategy.DistServe:
@@ -732,59 +808,75 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         prefill_request_dict['with_cache'] = True
         prefill_request_dict['preserve_cache'] = True
 
-        p_url = node_manager.get_node_url(request.model, EngineRole.Prefill)
-        if not p_url:
-            return node_manager.handle_unavailable_model(request.model)
-        logger.info(f'A Prefill request is dispatched to {p_url}')
+        if not node_manager.dummy_prefill:
+            try:
+                p_url = node_manager.get_node_url(request.model, EngineRole.Prefill)
+            except Exception as e:
+                logger.error(f'error Msg: {str(e)}')
+                return {'status': 'Instance sch error, cannot find available p_url'}
 
-        start = node_manager.pre_call(p_url)
-        prefill_info = json.loads(await node_manager.generate(prefill_request_dict,
-                                                              p_url,
-                                                              '/v1/completions',
-                                                              is_prefill=True))
-        node_manager.post_call(p_url, start)
+            if not p_url:
+                return node_manager.handle_unavailable_model(request.model)
+            logger.info(f'A Prefill request is dispatched to {p_url}')
 
-        # # Decode
-        d_url = node_manager.get_node_url(request.model, EngineRole.Decode)
+            start = node_manager.pre_call(p_url)
+            prefill_info = json.loads(await node_manager.generate(prefill_request_dict, p_url, '/v1/completions'))
+            node_manager.post_call(p_url, start)
+        else:
+            p_url = 'dummy:dummy'
+            prefill_info = {}
+
+        # Decode
+        try:
+            d_url = node_manager.get_node_url(request.model, EngineRole.Decode)
+        except Exception as e:
+            logger.error(f'error Msg: {str(e)}')
+            return {'status': 'Instance sch error, cannot find available p_url'}
+
         if not d_url:
             return node_manager.handle_unavailable_model(request.model)
         logger.info(f'A Decode request is dispatched to {d_url}')
 
-        if not node_manager.pd_connection_pool.is_connected(p_url, d_url):
-            await node_manager.pd_connection_pool.connect(
-                PDConnectionMessage(
-                    p_url=p_url,
-                    d_url=d_url,
-                    protocol=node_manager.migration_protocol,
-                    rdma_config=node_manager.rdma_config,
-                ))
+        if not node_manager.dummy_prefill:
+            if not node_manager.pd_connection_pool.is_connected(p_url, d_url):
+                try:
+                    await node_manager.pd_connection_pool.connect(
+                        PDConnectionMessage(
+                            p_url=p_url,
+                            d_url=d_url,
+                            protocol=node_manager.migration_protocol,
+                            rdma_config=node_manager.rdma_config,
+                        ))
+                except Exception as e:
+                    logger.error(f'error Msg: {str(e)}')
+                    return {'status': f'Connection error, cannot establish connection {(p_url, d_url)}'}
+            node_manager.pd_connection_pool.shelf_prefill_session((p_url, d_url), prefill_info['id'])
 
+        remote_session_id = int(prefill_info.get('id')) if prefill_info.get('id') else 0
+        remote_block_ids = prefill_info.get('cache_block_ids') or []
+        remote_token_id = prefill_info.get('remote_token_ids')[-1] if prefill_info.get('remote_token_ids') else 0
         request_dict['migration_request'] = MigrationRequest(
             protocol=node_manager.migration_protocol,
             remote_engine_id=p_url,
-            remote_session_id=int(prefill_info['id']),
-            remote_block_ids=prefill_info['cache_block_ids'],
-            remote_token_id=prefill_info['remote_token_ids'][-1],
-        ).model_dump(mode='json')
+            remote_session_id=remote_session_id,
+            remote_block_ids=remote_block_ids,
+            remote_token_id=remote_token_id,
+            is_dummy_prefill=node_manager.dummy_prefill).model_dump(mode='json')
 
         start = node_manager.pre_call(d_url)
+        if not node_manager.dummy_prefill:
+            node_manager.pd_connection_pool.shelf_prefill_session((p_url, d_url), prefill_info['id'])
         if request.stream is True:
-            response = node_manager.stream_generate(request_dict,
-                                                    d_url,
-                                                    '/v1/completions',
-                                                    prefill_url=p_url,
-                                                    remote_session_id=int(prefill_info['id']))
+            response = node_manager.stream_generate(request_dict, d_url, '/v1/completions')
             background_task = node_manager.create_background_tasks(d_url, start)
-            return StreamingResponse(response, background=background_task)
+            resp = StreamingResponse(response, background=background_task, media_type='text/event-stream')
         else:
             response = await node_manager.generate(request_dict, d_url, '/v1/completions')
             node_manager.post_call(d_url, start)
             resp = JSONResponse(json.loads(response))
-            async with aiohttp.ClientSession() as session:
-                async with session.post(f'{p_url}/distserve/free_cache', json={'session_id':
-                                                                               prefill_info['id']}) as response:
-                    await response.json()
-            return resp
+        if not node_manager.dummy_prefill:
+            node_manager.pd_connection_pool.unshelf_prefill_session((p_url, d_url), prefill_info.get('id'))
+        return resp
     else:
         raise ValueError(f'No serving strategy named {node_manager.serving_strategy}')
 
@@ -793,12 +885,13 @@ def proxy(server_name: str = '0.0.0.0',
           server_port: int = 8000,
           serving_strategy: Literal['Hybrid', 'DistServe'] = 'Hybrid',
           routing_strategy: Literal['random', 'min_expected_latency', 'min_observed_latency'] = 'min_expected_latency',
-          api_keys: Optional[Union[List[str], str]] = None,
+          api_keys: list[str] | str | None = None,
           ssl: bool = False,
           log_level: str = 'INFO',
           disable_cache_status: bool = False,
           link_type: Literal['RoCE', 'IB'] = 'RoCE',
           migration_protocol: Literal['RDMA'] = 'RDMA',
+          dummy_prefill: bool = False,
           **kwargs):
     """To launch the proxy server.
 
@@ -810,7 +903,7 @@ def proxy(server_name: str = '0.0.0.0',
         route_strategy ('random' | 'min_expected_latency' | 'min_observed_latency'):
             the strategy to dispatch requests to nodes. Default to
             'min_expected_latency'
-        api_keys (List[str] | str | None): Optional list of API keys. Accepts string type as
+        api_keys (list[str] | str | None): Optional list of API keys. Accepts string type as
             a single api_key. Default to None, which means no api key applied.
         ssl (bool): Enable SSL. Requires OS Environment variables 'SSL_KEYFILE' and 'SSL_CERTFILE'.
         log_level (str): Set the log level. Default to INFO.
@@ -821,21 +914,23 @@ def proxy(server_name: str = '0.0.0.0',
     node_manager.serving_strategy = ServingStrategy[serving_strategy]
     node_manager.routing_strategy = RoutingStrategy.from_str(routing_strategy)
     node_manager.migration_protocol = MigrationProtocol[migration_protocol]
+    node_manager.dummy_prefill = dummy_prefill
 
     node_manager.rdma_config = DistServeRDMAConfig(
         link_type=RDMALinkType[link_type],
         with_gdr=True,
     )
     node_manager.cache_status = not disable_cache_status
-    if api_keys is not None:
-        if isinstance(api_keys, str):
-            api_keys = api_keys.split(',')
-        from lmdeploy.serve.openai.api_server import VariableInterface
-        VariableInterface.api_keys = api_keys
+    if api_keys is not None and (tokens := [key for key in api_keys if key]):
+        from lmdeploy.serve.utils.server_utils import AuthenticationMiddleware
+
+        app.add_middleware(AuthenticationMiddleware, tokens=tokens)
+
     ssl_keyfile, ssl_certfile = None, None
     if ssl:
         ssl_keyfile = os.environ['SSL_KEYFILE']
         ssl_certfile = os.environ['SSL_CERTFILE']
+
     logger.setLevel(log_level)
     uvicorn_log_level = os.getenv('UVICORN_LOG_LEVEL', 'info').lower()
     uvicorn.run(app=app,

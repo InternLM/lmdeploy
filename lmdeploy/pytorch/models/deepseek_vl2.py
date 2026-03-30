@@ -1,7 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # adapted from https://github.com/deepseek-ai/DeepSeek-VL2/blob/main/deepseek_vl2/models/modeling_deepseek_vl_v2.py
 
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -11,14 +12,15 @@ from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
+from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .deepseek_v2 import DeepseekV2ForCausalLM
 from .utils.cudagraph import CudaGraphMixin
-from .utils.model import DeployModelMixin
+from .utils.model import DeployModelMixin, vlm_model
 
 
+@vlm_model
 class MlpProjector(nn.Module):
 
     def __init__(self, cfg, dtype):
@@ -171,9 +173,9 @@ class DeepseekVLV2ForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
 
     def prepare_inputs_embeds(self,
                               input_ids: torch.LongTensor,
-                              images: Optional[torch.FloatTensor] = None,
-                              images_seq_mask: Optional[torch.LongTensor] = None,
-                              images_spatial_crop: Optional[torch.LongTensor] = None,
+                              images: torch.FloatTensor | None = None,
+                              images_seq_mask: torch.LongTensor | None = None,
+                              images_spatial_crop: torch.LongTensor | None = None,
                               **ignore_kwargs):
         """
 
@@ -305,7 +307,7 @@ class DeepseekVLV2ForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         pixel_values: torch.Tensor = None,
         image_mask: torch.Tensor = None,
@@ -339,7 +341,7 @@ class DeepseekVLV2ForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         inputs_embeds: torch.Tensor = None,
         context: StepContext = None,
     ):
@@ -381,7 +383,7 @@ class DeepseekVLV2ForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
             inputs_embeds=inputs_embeds,
         )
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
 
         lang_prefix = 'language.'
@@ -422,8 +424,8 @@ class DeepSeekVLV2InputProcessor(BaseModelInputProcessor):
         self.patch_size = vision_config.patch_size
 
     def preprocess_input(self,
-                         input_ids: List[int],
-                         input_multimodals: List[Dict[str, Any]] = None,
+                         input_ids: list[int],
+                         input_multimodals: list[dict[str, Any]] = None,
                          **kwargs) -> PreprocessInputResult:
         """Prepare multimodal input."""
         if input_multimodals is None or len(input_multimodals) == 0:
@@ -439,13 +441,13 @@ class DeepSeekVLV2InputProcessor(BaseModelInputProcessor):
             if isinstance(num_pad, torch.Tensor):
                 num_pad = num_pad.item()
 
-            mm_data = MultiModalTensor(data=pixel_values,
-                                       start=offset,
-                                       end=offset + num_pad,
-                                       meta=dict(
-                                           image_token_id=image_token_id,
-                                           images_spatial_crop=images_spatial_crop,
-                                       ))
+            mm_data = MultiModalData(data=pixel_values,
+                                     start=offset,
+                                     end=offset + num_pad,
+                                     meta=dict(
+                                         image_token_id=image_token_id,
+                                         images_spatial_crop=images_spatial_crop,
+                                     ))
 
             input_imgs.append(mm_data)
 

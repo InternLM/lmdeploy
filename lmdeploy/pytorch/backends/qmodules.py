@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
-from typing import Optional
 
 import torch
 
@@ -37,7 +36,7 @@ class RMSNormW8A8Builder(ABC):
 class LinearW8A8Impl(ABC):
     """Linear w8a8 implementation api."""
 
-    def update_weights(self, weight: torch.Tensor, scale: torch.Tensor, bias: Optional[torch.Tensor] = None):
+    def update_weights(self, weight: torch.Tensor, scale: torch.Tensor, bias: torch.Tensor | None = None):
         """Update weights."""
         return weight, scale, bias
 
@@ -46,8 +45,9 @@ class LinearW8A8Impl(ABC):
                 x,
                 weight: torch.Tensor,
                 scale: torch.Tensor,
-                bias: Optional[torch.Tensor] = None,
-                all_reduce: bool = False):
+                bias: torch.Tensor | None = None,
+                all_reduce: bool = False,
+                group: torch.distributed.ProcessGroup | None = None):
         """forward."""
         raise NotImplementedError
 

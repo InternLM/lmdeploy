@@ -5,14 +5,14 @@ import os
 import sys
 import warnings
 from contextlib import contextmanager
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import torch
 from PIL.Image import Image
 from transformers import AutoConfig, AutoModelForCausalLM
 
 from lmdeploy.utils import get_logger
-from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
 from lmdeploy.vl.model.utils import add_device_hook, disable_logging, rewrite_ctx
 
 logger = get_logger('lmdeploy')
@@ -35,7 +35,7 @@ class ModelType(enum.Enum):
     XCOMPOSER2D5 = enum.auto()
 
 
-def get_xcomposer_type(model_path: str) -> Tuple[ModelType, Any]:
+def get_xcomposer_type(model_path: str) -> tuple[ModelType, Any]:
     """Get xcomposer type."""
     from transformers.dynamic_module_utils import get_class_from_dynamic_module
     match_modules = {
@@ -84,13 +84,13 @@ def init_empty_vit(model_path):
 
 
 @VISION_MODELS.register_module()
-class Xcomposer2VisionModel(VisonModel):
+class Xcomposer2VisionModel(VisionModel):
     """InternLM-Xcomposer2 vision model."""
 
     def __init__(self,
                  model_path: str,
                  with_llm: bool = False,
-                 max_memory: Dict[int, int] = None,
+                 max_memory: dict[int, int] = None,
                  hf_config: AutoConfig = None,
                  backend: str = ''):
         model_path = model_path.rstrip(os.sep)
@@ -180,7 +180,7 @@ class Xcomposer2VisionModel(VisonModel):
 
         self.model = model.eval()
 
-    def _preprocess_2d5(self, image: Image, params: Dict) -> Dict:
+    def _preprocess_2d5(self, image: Image, params: dict) -> dict:
         """Image preprocessing for internlm-xcomposer2d5-7b."""
         hd_num = params.get('hd_num', 24)
         image = self.HD_transform(image, hd_num=hd_num)
@@ -190,12 +190,12 @@ class Xcomposer2VisionModel(VisonModel):
         n_token_per_image = int((h * w + 1) * 400 + 1 + (h + 1) * 20)
         return pixel_values, n_token_per_image
 
-    def _preprocess_7b(self, image: Image, params: Dict) -> Dict:
+    def _preprocess_7b(self, image: Image, params: dict) -> dict:
         """Image preprocessing for internlm-xcomposer2-7b."""
         pixel_values = self.vis_processor(image).unsqueeze(0).half()
         return pixel_values, 256
 
-    def _preprocess_4khd_7b(self, image: Image, params: Dict) -> Dict:
+    def _preprocess_4khd_7b(self, image: Image, params: dict) -> dict:
         """Image preprocessing for internlm-xcomposer2-4khd-7b."""
         image = self.HD_transform(image, hd_num=25)
         pixel_values = self.vis_processor(image).unsqueeze(0).half()
@@ -204,12 +204,11 @@ class Xcomposer2VisionModel(VisonModel):
         n_token_per_image = int((h * w + 1) * 144 + 1 + (h + 1) * 12)
         return pixel_values, n_token_per_image
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refer to `super().preprocess() for spec."""
-        images = self.collect_images(messages)
+        images = self.collect_multimodal_items(messages)
         outputs = []
-        for image, params in images:
-            image = image.convert('RGB')
+        for modality, image, params in images:
             pixel_values, n_token = self.preprocess_func(image, params)
             outputs.append(
                 dict(pixel_values=pixel_values,
@@ -220,12 +219,12 @@ class Xcomposer2VisionModel(VisonModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
-            messages(List[Dict]): the outputs of `preprocess`
+            messages(list[dict]): the outputs of `preprocess`
             max_batch_size(int): the max batch size when forwarding vision
                 model
         Return:
@@ -281,10 +280,10 @@ class Xcomposer2VisionModel(VisonModel):
         prompt = prefix_image_token + chat_template.messages2prompt(prompt_messages, sequence_start)
         return prompt, IMAGE_TOKEN
 
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
+    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
         prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start, self.model_type)
         return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
 
-    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
+    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
         prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start, self.model_type)
         return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)

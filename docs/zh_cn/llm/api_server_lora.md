@@ -4,7 +4,7 @@
 
 LoRA 目前只有 pytorch 后端支持。它的服务化，和其他模型服务化一样，命令都可以用 `lmdeploy serve api_server -h` 查看。其中 pytorch 后端支持的参数就有 LoRA 的配置内容。
 
-```txt
+```
 PyTorch engine arguments:
   --adapters [ADAPTERS [ADAPTERS ...]]
                         Used to set path(s) of lora adapter(s). One can input key-value pairs in xxx=yyy format for multiple lora adapters. If only have one adapter, one can only input the path of the adapter.. Default:
@@ -91,6 +91,6 @@ print(response)
 
 打印的响应内容为：
 
-```txt
+```
 ChatCompletion(id='4', choices=[Choice(finish_reason='stop', index=0, logprobs=None, message=ChatCompletionMessage(content=' 很高兴能够见到你哪，我也在辐射区开了个愣儿，你呢，还活着。', role='assistant', function_call=None, tool_calls=None))], created=1721377497, model='mylora', object='chat.completion', service_tier=None, system_fingerprint=None, usage=CompletionUsage(completion_tokens=22, prompt_tokens=17, total_tokens=39))
 ```

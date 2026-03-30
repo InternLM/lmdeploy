@@ -1,8 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Dict, List
 
-from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
 
 
 def check_transformers():
@@ -14,7 +13,7 @@ def check_transformers():
 
 
 @VISION_MODELS.register_module()
-class MllamaVLModel(VisonModel):
+class MllamaVLModel(VisionModel):
     """llama3.2 model."""
 
     _arch = 'MllamaForConditionalGeneration'
@@ -24,12 +23,11 @@ class MllamaVLModel(VisonModel):
         self.processor = AutoProcessor.from_pretrained(self.model_path)
         self.image_token_id = 128256
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refer to the spec of `super().preprocess`"""
-        images = self.collect_images(messages)
+        images = self.collect_multimodal_items(messages)
         outputs = []
-        for image, params in images:
-            image = image.convert('RGB')
+        for modality, image, params in images:
             results = self.processor.image_processor(images=image, return_tensors='pt')
             results.update(image_size=image.size, image_tokens=1, image_token_id=self.image_token_id)
             outputs.append(results)
@@ -63,6 +61,6 @@ class MllamaVLModel(VisonModel):
         prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
         return prompt, IMAGE_TOKEN
 
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
+    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
         prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
         return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)

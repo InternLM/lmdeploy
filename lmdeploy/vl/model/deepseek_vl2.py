@@ -1,13 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
 from contextlib import redirect_stdout
-from typing import Dict, List
 
 import torch
 from transformers import AutoConfig
 
 from lmdeploy.utils import get_logger
-from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
 
 logger = get_logger('lmdeploy')
 
@@ -36,7 +35,7 @@ def check_trans_version():
 
 
 @VISION_MODELS.register_module()
-class DeepSeek2VisionModel(VisonModel):
+class DeepSeek2VisionModel(VisionModel):
     """DeepSeek2 vision model."""
 
     _arch = 'DeepseekV2ForCausalLM'
@@ -67,12 +66,12 @@ class DeepSeek2VisionModel(VisonModel):
         # TODO, implement for tubomind engine
         raise NotImplementedError()
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refers to the spec of `super.preprocess()"""
-        images = self.collect_images(messages)
+        images = self.collect_multimodal_items(messages)
 
         # convert to upstream api formats
-        images = [img_parameter[0] for img_parameter in images]
+        images = [item[1] for item in images]
         formatted_messages = []
         for message in messages:
             text_content = DeepSeek2VisionModel.proc_single_message(message)
@@ -80,8 +79,8 @@ class DeepSeek2VisionModel(VisonModel):
             formatted_messages.append(dict(role=message['role'], content=text_content, images=image_content))
 
         # NOTE: DeepseekVLV2Processor inputs
-        # conversations (List[Dict]): conversations with a list of messages;
-        # images (List[ImageType]): the list of images;
+        # conversations (list[dict]): conversations with a list of messages;
+        # images (list[ImageType]): the list of images;
         # force_batchify (bool): force batchify the inputs;
         # inference_mode (bool): if True, then remove the last eos token;
         prepare = self.image_processor(conversations=formatted_messages,
@@ -103,12 +102,12 @@ class DeepSeek2VisionModel(VisonModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
-            messages(List[Dict]): the outputs of `preprocess`
+            messages(list[dict]): the outputs of `preprocess`
             max_batch_size(int): the max batch size when forwarding vision
                 model
         Return:
@@ -159,10 +158,10 @@ class DeepSeek2VisionModel(VisonModel):
         prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
         return prompt, IMAGE_TOKEN
 
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
+    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
         prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
         return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
 
-    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
+    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
         prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
         return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)

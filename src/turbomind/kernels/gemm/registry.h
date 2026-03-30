@@ -11,6 +11,7 @@ class Registry {
 public:
     explicit Registry(std::shared_ptr<cudaDeviceProp> device_prop);
 
+    /// TODO: remove this
     template<class Config>
     [[maybe_unused]] bool Add()
     {
@@ -25,22 +26,25 @@ public:
 private:
     bool Add(std::unique_ptr<Kernel> kernel);
 
-    void f16_u4g128_f16_tnt_sm70_s884();
-    void f16_u4g128_f16_tnt_sm75_simt();
-    void f16_u4g128_f16_tnt_sm75_s16816();
-    void f16_u4g128_f16_tnt_sm80_s16816();
-    void f16_u4g128_f16_tnt_sm90_s16816();
+    void sm90_16816_4();
+    void sm90_16816_8();
+    void sm90_16816_16();
 
-    void sm70_s884_dynamic();
-    void sm75_s16816_dynamic();
-    template<class T>
-    void sm80_s16816_dynamic();
-    template<class T>
-    void sm90_s16816_dynamic();
+    void sm80_16816_4();
+    void sm80_16816_8();
+    void sm80_16816_16();
 
-    void sm90_s64n32_dynamic();
+    void sm75_16816_4();
+    void sm75_16816_8();
+    void sm75_16816_16();
 
-    void u4g128_f16_f16_nnn_sm80_s16816();
+    void sm70_884_4();
+    void sm70_884_8();
+    void sm70_884_16();
+
+    void sm90_64n32_8();
+
+    void cublas_float();
 
 private:
     std::shared_ptr<cudaDeviceProp>      device_prop_;

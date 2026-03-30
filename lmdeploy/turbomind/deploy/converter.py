@@ -1,27 +1,54 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import os
-import os.path as osp
-import shutil
-
-import fire
 import torch
 
 from lmdeploy.archs import get_model_arch, search_nested_config
 from lmdeploy.messages import TurbomindEngineConfig
-from lmdeploy.model import MODELS, best_match_model
-from lmdeploy.utils import get_logger, get_model
+from lmdeploy.utils import get_logger
 
 from ...utils import _get_and_verify_max_len, is_bf16_supported
-from ..supported_models import SUPPORTED_ARCHS, is_supported
-from ..turbomind import update_parallel_config
+from ..supported_models import SUPPORTED_ARCHS
 from .config import TurbomindModelConfig
 from .module import Transformer
 from .policy import get_input_policy
 from .source_model.base import INPUT_MODELS
 from .target_model.base import OUTPUT_MODELS, BaseOutputModel
 
-SUPPORTED_FORMATS = ['hf', 'awq', 'gptq', 'fp8', None]
+SUPPORTED_FORMATS = ['hf', 'awq', 'gptq', 'compressed-tensors', 'fp8', 'mxfp4', None]
 logger = get_logger('lmdeploy')
+
+_DEFAULT_GROUP_SIZES = {
+    'awq': 128,
+    'gptq': 128,
+    'compressed-tensors': 128,
+    'fp8': 128,
+    'mxfp4': 32,
+}
+
+_SUPPORTED_GROUP_SIZES = {
+    'awq': frozenset({128}),
+    'gptq': frozenset({128}),
+    'compressed-tensors': frozenset({32, 128}),
+    'fp8': frozenset({128}),
+    'mxfp4': frozenset({32}),
+}
+
+
+def _validate_quant_group_size(model_format: str | None, group_size: int | None) -> int | None:
+    """Normalize and validate quantized group sizes.
+
+    The low-level int4 kernels can be shared across formats, but we only expose the format/group-size combinations that
+    are verified end to end.
+    """
+    if group_size in (None, 0):
+        group_size = _DEFAULT_GROUP_SIZES.get(model_format, group_size)
+
+    supported_group_sizes = _SUPPORTED_GROUP_SIZES.get(model_format)
+    if supported_group_sizes is not None and group_size not in supported_group_sizes:
+        supported = ', '.join(map(str, sorted(supported_group_sizes)))
+        raise ValueError(f'Unsupported group_size={group_size} for model_format="{model_format}". '
+                         f'Supported group_size values: {supported}.')
+
+    return group_size
 
 
 def get_input_model_registered_name(model_path: str, model_format: str):
@@ -31,53 +58,11 @@ def get_input_model_registered_name(model_path: str, model_format: str):
     Args:
         model_path (str): the path of the input model
         model_format (str): the format of the model, which can be one of
-            ['hf', 'awq', 'gptq']
+            ['hf', 'awq', 'gptq', 'compressed-tensors', 'fp8', 'mxfp4']
     """
     arch = get_model_arch(model_path)[0]
     register_name = SUPPORTED_ARCHS[arch]
     return register_name
-
-
-def create_workspace(_path: str):
-    """Create a workspace.
-
-    Args:
-        _path (str): the path of the workspace
-    """
-    if osp.exists(_path):
-        print(f'remove workspace in directory {_path}')
-        shutil.rmtree(_path)
-    print(f'create workspace in directory {_path}')
-    weight_path = osp.join(_path, 'triton_models', 'weights')
-    os.makedirs(weight_path)
-    return weight_path, _path
-
-
-def copy_tokenizer(model_path: str, tokenizer_path: str, tm_tokenizer_path: str):
-    """Copy tokenizer."""
-
-    if tokenizer_path is not None:
-        assert osp.exists(tokenizer_path), f'{tokenizer_path} does not exists.'
-
-        shutil.copy(tokenizer_path, osp.join(tm_tokenizer_path, osp.basename(tokenizer_path)))
-    else:
-        from transformers import AutoTokenizer
-        try:
-            _ = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-        except Exception as e:
-            assert 0, f'{e}'
-
-    # move tokenizer model to the target path
-    candidate = ['tokenizer.model', 'qwen.tiktoken', 'merges.txt']
-    for name in candidate:
-        tmp_path = osp.join(model_path, name)
-        if osp.exists(tmp_path):
-            shutil.copy(tmp_path, osp.join(tm_tokenizer_path, name))
-    # copy py/json files that are related to tokenizer to the target path
-    for _file in os.listdir(model_path):
-        if _file.endswith('.json') or _file.endswith('.py'):
-            json_path = osp.join(model_path, _file)
-            shutil.copy(json_path, osp.join(tm_tokenizer_path, _file))
 
 
 def get_output_model_registered_name_and_config(model_path: str, model_format: str, dtype: str, group_size: int):
@@ -88,73 +73,114 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
     Args:
         model_path (str): the path of the input model
         model_format (str): the format of the model, which can be one of
-            ['hf', 'awq', 'gptq']
+            ['hf', 'awq', 'gptq', 'compressed-tensors', 'fp8', 'mxfp4']
         dtype (str): the data type of the model's weights and activations
-        group_size (int): the size of group used by awq model
+        group_size (int): the quantization group size used by grouped formats
     """
     register_name = 'tm'
-    weight_type = 'float16'
+
+    has_bf16 = is_bf16_supported()
+
+    model_arch, model_config = get_model_arch(model_path)
+
+    # infer dtype from device and model config
+    if dtype == 'auto':
+        # pick dtype by device as default
+        dtype = 'bfloat16' if has_bf16 else 'float16'
+        # dtype from model (prefer `dtype` over deprecated `torch_dtype`)
+        torch_dtype = getattr(model_config, 'dtype', None)
+        if torch_dtype is None:
+            torch_dtype = getattr(model_config, 'torch_dtype', None)
+        if not torch_dtype:
+            if model_arch in ['QWenLMHeadModel', 'GptOssForCausalLM']:
+                torch_dtype = torch.bfloat16
+        TORCH_DTYPE_MAP = {torch.bfloat16: 'bfloat16', torch.float16: 'float16'}
+        dtype = TORCH_DTYPE_MAP.get(torch_dtype, dtype)
+
+    if dtype == 'bfloat16' and not has_bf16:
+        logger.warning('data type fallback to float16 since '
+                       'torch.cuda.is_bf16_supported is False')
+        dtype = 'float16'
+
+    weight_type = dtype
 
     config = TurbomindModelConfig.from_dict()
 
-    model_arch, model_config = get_model_arch(model_path)
     session_len = _get_and_verify_max_len(model_config, None)
-    if model_format in ['awq', 'gptq']:
+
+    group_size = _validate_quant_group_size(model_format, group_size)
+
+    if model_format in ['awq', 'gptq', 'compressed-tensors']:
         weight_type = 'int4'
-        group_size = 128 if group_size == 0 else group_size
+        dtype = 'float16'  # force float16 for int4 quantized weights
+        if model_format == 'compressed-tensors':
+            # TurboMind reuses the AWQ int4 export path for pack-quantized
+            # compressed-tensors weights after the format-specific checks above.
+            model_format = 'awq'
     elif model_format == 'fp8':
         weight_type = 'fp8'
-        group_size = 128
-    else:
-        torch_dtype = getattr(model_config, 'torch_dtype', 'float16')
-        TORCH_DTYPE_MAP = {torch.bfloat16: 'bfloat16', torch.float16: 'float16'}
-        weight_type = TORCH_DTYPE_MAP.get(torch_dtype, 'float16')
+    elif model_format == 'mxfp4':
+        weight_type = 'e2m1'
 
-        # Qwen-1 didn't set torch_dtype. It used bf16 as default
-        if model_arch == 'QWenLMHeadModel':
-            weight_type = 'bfloat16'
+    expert_weight_type = weight_type
 
-    if dtype == 'auto':
-        weight_type = weight_type if weight_type in ['float16', 'bfloat16', 'int4', 'fp8'] else 'float16'
-    elif dtype in ['float16', 'bfloat16']:
-        if weight_type == 'int4':
-            logger.warning(f'The model {model_path} is a quantized model, so the '
-                           f'specified data type {dtype} is ignored')
+    # ONLY experts are in mxfp4
+    if model_arch == 'GptOssForCausalLM':
+        weight_type = dtype
+
+    # Three weight types control allocation for mixed quantization:
+    #   weight_type        - attention weights
+    #   ffn_weight_type    - dense FFN / shared expert weights
+    #   expert_weight_type - MoE routed expert weights
+    #
+    # The assignment order matters:
+    #   1. expert_weight_type = original weight_type (before any overrides)
+    #   2. GptOss override:   weight_type -> dtype  (attn + shared experts are fp16)
+    #   3. ffn_weight_type  = weight_type           (captures post-GptOss value)
+    #   4. Mixed AWQ override: weight_type -> dtype  (only attn becomes fp16)
+    #
+    #                  weight_type   ffn_weight_type   expert_weight_type
+    #  Pure fp16       float16       float16           float16
+    #  Full AWQ        int4          int4              int4
+    #  Mixed AWQ       float16       int4              int4
+    #  GptOss mxfp4    bfloat16      bfloat16          e2m1
+    ffn_weight_type = weight_type
+
+    # When attention weights are not quantized (e.g. AWQ with self_attn in
+    # modules_to_not_convert), weight_type becomes fp16 for attention.
+    # ffn_weight_type and expert_weight_type retain int4.
+    if model_format in ['awq', 'gptq'] and weight_type != dtype:
+        quant_config = getattr(model_config, 'quantization_config', None)
+        if quant_config is None:
+            quant_config = {}
+        if isinstance(quant_config, dict):
+            modules_to_not_convert = quant_config.get('modules_to_not_convert') or []
         else:
+            modules_to_not_convert = getattr(quant_config, 'modules_to_not_convert', None) or []
+        if any('self_attn' in m for m in modules_to_not_convert):
             weight_type = dtype
-    else:
-        assert 0, f'unsupported specified data type {dtype}'
+        if any('shared_expert' in m for m in modules_to_not_convert):
+            ffn_weight_type = dtype
+        # Detect per-layer exclusions like 'model.layers.0.' which mean
+        # ALL weights in that layer (including MoE experts) are fp16.
+        import re as _re
+        unquantized_expert_layers = []
+        for m in modules_to_not_convert:
+            _m = _re.match(r'model\.layers\.(\d+)\.?$', m)
+            if _m:
+                unquantized_expert_layers.append(int(_m.group(1)))
+        config.model_config.unquantized_expert_layers = unquantized_expert_layers
 
-    if weight_type == 'bfloat16' and not is_bf16_supported():
-        logger.warning('data type fallback to float16 since '
-                       'torch.cuda.is_bf16_supported is False')
-        weight_type = 'float16'
     config.model_config.model_arch = model_arch
+    config.model_config.data_type = dtype
     config.model_config.weight_type = weight_type
+    config.model_config.expert_weight_type = expert_weight_type
+    config.model_config.ffn_weight_type = ffn_weight_type
     config.model_config.model_format = model_format
     config.model_config.group_size = group_size
     config.model_config.session_len = session_len
 
     return register_name, config
-
-
-def pack_model_repository(workspace_path: str):
-    """Package the model repository.
-
-    Args:
-        workspace_path: the path of workspace
-    """
-    os.symlink(src=osp.join('..', '..', 'tokenizer'),
-               dst=osp.join(workspace_path, 'triton_models', 'preprocessing', '1', 'tokenizer'))
-    os.symlink(src=osp.join('..', '..', 'tokenizer'),
-               dst=osp.join(workspace_path, 'triton_models', 'postprocessing', '1', 'tokenizer'))
-    os.symlink(src=osp.join('..', '..', 'weights'),
-               dst=osp.join(workspace_path, 'triton_models', 'interactive', '1', 'weights'))
-    model_repo_dir = osp.join(workspace_path, 'model_repository')
-    os.makedirs(model_repo_dir, exist_ok=True)
-    os.symlink(src=osp.join('..', 'triton_models', 'interactive'), dst=osp.join(model_repo_dir, 'turbomind'))
-    os.symlink(src=osp.join('..', 'triton_models', 'preprocessing'), dst=osp.join(model_repo_dir, 'preprocessing'))
-    os.symlink(src=osp.join('..', 'triton_models', 'postprocessing'), dst=osp.join(model_repo_dir, 'postprocessing'))
 
 
 def get_tm_model(model_path,
@@ -174,67 +200,82 @@ def get_tm_model(model_path,
             the input model
         engine_config(TurbomindEngineConfig): user input engine config
         group_size(int): refers to the group_size if the input model
-            is a w4a16(awq or gptq) quantized model
+            is a grouped quantized model
         out_dir(str): the output directory where to save to turbomind model.
             If it is None, the turbomind model won't be saved
     """
     _, cfg = get_model_arch(model_path)
     quant_config = search_nested_config(cfg.to_dict(), 'quantization_config')
+    mixed_awq = False
     if quant_config:
         quant_method = quant_config.get('quant_method')
         _group_size = int(quant_config.get('group_size', 0))
         version = quant_config.get('version')
-        assert engine_config.model_format is None or \
-            engine_config.model_format == quant_method, \
-            f'mismatched quant method: user input ' \
-            f'"{engine_config.model_format}" ' \
-            f'vs model quant_config "{quant_method}"'
-        assert not group_size or group_size == _group_size, \
-            f'mismatched quant group size: user input "{group_size}" ' \
-            f'vs model quant_config "{_group_size}"'
+        assert engine_config.model_format is None or engine_config.model_format == quant_method, (
+            f'mismatched quant method: user input "{engine_config.model_format}" '
+            f'vs model quant_config "{quant_method}"')
+        assert not group_size or group_size == _group_size, (f'mismatched quant group size: user input "{group_size}" '
+                                                             f'vs model quant_config "{_group_size}"')
 
         if quant_method == 'awq':
-            assert version == 'gemm', \
-                f'unsupported quant config: {quant_config}'
+            assert version == 'gemm', f'unsupported quant config: {quant_config}'
+            modules_to_not_convert = quant_config.get('modules_to_not_convert') or []
+            if any('self_attn' in name for name in modules_to_not_convert):
+                mixed_awq = True
         elif quant_method == 'gptq':
-            assert not quant_config.get('desc_act', False) and \
-                quant_config.get('sym', True), \
-                f'unsupported quant config: {quant_config}'
+            assert not quant_config.get('desc_act', False) and quant_config.get(
+                'sym', True), f'unsupported quant config: {quant_config}'
         elif quant_method == 'fp8':
             pass
+        elif quant_method == 'mxfp4':
+            _group_size = 32
+        elif quant_method == 'compressed-tensors':
+            _format = quant_config['config_groups']['group_0']['format']
+            assert _format == 'pack-quantized', ('compressed-tennsors only supports pack-quantized format, '
+                                                 f'but got {_format}')
+            _weights = quant_config['config_groups']['group_0']['weights']
+            _group_size = _weights['group_size']
+            _num_bits = _weights['num_bits']
+            _type = _weights['type']
+            assert _num_bits == 4 and _type == 'int', ('pack-quantized requires 4-bit int, '
+                                                       f'but got {_num_bits}-bit {_type}')
         else:
             assert 0, f'unsupported quant_config: {quant_config}'
 
         engine_config.model_format = quant_method
         group_size = _group_size
 
-    if engine_config.model_format in ['awq', 'gptq']:
-        # Compatible to awq models that are quantized by lmdeploy (<=v0.3.0)
-        if not group_size:
-            group_size = 128
-        assert group_size == 128, \
-            f'model format is "{engine_config.model_format}" ' \
-            f'but group_size is {group_size}. Currently, only 128 ' \
-            'is supported'
+    group_size = _validate_quant_group_size(engine_config.model_format, group_size)
 
     input_model_name = get_input_model_registered_name(model_path, engine_config.model_format)
+
+    fp8_quant = (engine_config.model_format == 'fp8' and not quant_config)
     input_policy = get_input_policy(engine_config.model_format)
     input_model = INPUT_MODELS.get(input_model_name)(model_path=model_path,
                                                      tokenizer_path=model_path,
-                                                     input_policy=input_policy)
+                                                     input_policy=input_policy,
+                                                     fp8_quant=fp8_quant)
 
-    output_model_name, tm_cfg = \
-        get_output_model_registered_name_and_config(
-            model_path=model_path,
-            model_format=engine_config.model_format,
-            dtype=engine_config.dtype,
-            group_size=group_size)
+    output_model_name, tm_cfg = get_output_model_registered_name_and_config(model_path=model_path,
+                                                                            model_format=engine_config.model_format,
+                                                                            dtype=engine_config.dtype,
+                                                                            group_size=group_size)
+
+    if mixed_awq:
+        # Mixed-precision AWQ: attention weights are fp16 (not quantized),
+        # but expert weights remain as int4 AWQ for efficient inference.
+        tm_cfg.model_config.weight_type = tm_cfg.model_config.data_type
+        # expert_weight_type stays as 'int4' (set by get_output_model_registered_name_and_config)
 
     tm_cfg.model_config.chat_template = chat_template_name
     tm_cfg.model_config.model_name = model_name
 
-    tm_cfg.model_config.attn_tp_size = engine_config.attn_tp_size
-    tm_cfg.model_config.mlp_tp_size = engine_config.mlp_tp_size
+    if engine_config.attn_tp_size is not None:
+        tm_cfg.model_config.attn_tp_size = engine_config.attn_tp_size
+    if engine_config.attn_cp_size is not None:
+        tm_cfg.model_config.attn_cp_size = engine_config.attn_cp_size
+    if engine_config.mlp_tp_size is not None:
+        tm_cfg.model_config.mlp_tp_size = engine_config.mlp_tp_size
 
     output_model = OUTPUT_MODELS.get(output_model_name)(input_model=input_model,
                                                         cfg=tm_cfg,
@@ -242,78 +283,3 @@ def get_tm_model(model_path,
                                                         out_dir=out_dir)
 
     return output_model
-
-
-def main(model_name: str,
-         model_path: str,
-         model_format: str = 'hf',
-         dtype: str = 'auto',
-         chat_template: str = None,
-         tokenizer_path: str = None,
-         dst_path: str = 'workspace',
-         tp: int = 1,
-         group_size: int = 0,
-         revision: str = None,
-         download_dir: str = None,
-         **kwargs):
-    """Deploy llama family models via turbomind.
-
-    Args:
-        model_name (str): the served model name, which can be accessed by
-            `v1/model`
-        model_path (str): the directory path of the model
-        model_format (str): the format of the model, should choose from
-            ['hf', 'awq', 'gptq']. 'hf' means huggingface model, and 'awq',
-            `gptq` means models quantized by `autoawq` and `autogptq`
-            respectively. The default value is hf
-        dtype (str): data type for model weights and activations. It can be
-            one of the following values, ['auto', 'float16', 'bfloat16']
-            The `auto` option will use FP16 precision for FP32 and FP16
-            models, and BF16 precision for BF16 models.
-        chat_template (str): the name of the built-in chat template.
-        tokenizer_path (str): the path of tokenizer model
-        dst_path (str): the destination path that saves outputs
-        tp (int): the number of GPUs used for tensor parallelism, should be 2^n
-        quant_path (str): Path of the quantized model, which can be None.
-        group_size (int): a parameter used in AWQ to quantize fp16 weights
-            to 4 bits
-        revision (str): The specific model version to use. It can be a branch
-            name, a tag name, or a commit id. If unspecified, will use
-            the default version.
-        download_dir (str): Directory to download and load the weights,
-            default to the default cache directory of huggingface.
-        kwargs (dict): other params for convert
-    """
-    if chat_template is None:
-        chat_template = best_match_model(model_path)
-    assert chat_template in MODELS.module_dict.keys(), \
-        f"chat template '{chat_template}' is not a built-in template. " \
-        f'The built-ins are: {MODELS.module_dict.keys()}'
-    assert is_supported(model_path), (f'turbomind does not support {model_path}. '
-                                      'Plz try pytorch engine instead.')
-
-    assert ((tp & (tp - 1) == 0) and tp != 0), 'tp should be 2^n'
-
-    assert model_format in SUPPORTED_FORMATS, 'the model format ' \
-        f'should be in {SUPPORTED_FORMATS}'
-
-    if not os.path.exists(model_path):
-        print(f"can't find model from local_path {model_path}, "
-              'try to download from huggingface')
-        model_path = get_model(
-            model_path,
-            revision=revision,
-            download_dir=download_dir,
-        )
-        print(f'load model from {model_path}')
-
-    tm_weight_path, tm_tokenizer_path = create_workspace(dst_path)
-    copy_tokenizer(model_path, tokenizer_path, tm_tokenizer_path)
-    engine_config = TurbomindEngineConfig(tp=tp, device_num=tp, model_format=model_format, dtype=dtype)
-    update_parallel_config(engine_config)
-    tm_model = get_tm_model(model_path, model_name, chat_template, engine_config, group_size, tm_weight_path)
-    tm_model.export()
-
-
-if __name__ == '__main__':
-    fire.Fire(main)

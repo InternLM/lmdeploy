@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
+from typing import Any
 
 import torch
 from torch import nn
@@ -9,14 +10,28 @@ from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
-from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
-from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_down_linear, build_gateup_linear, build_o_proj,
-                                        build_qkv_proj, build_rowwise_linear)
+from lmdeploy.pytorch.multimodal.data_type import MultiModalData
+from lmdeploy.pytorch.nn import (
+    ApplyRotaryEmb,
+    Attention,
+    RMSNorm,
+    RopeType,
+    SiluAndMul,
+    build_rotary_embedding,
+    build_rotary_params,
+)
+from lmdeploy.pytorch.nn.linear import (
+    build_colwise_linear,
+    build_down_linear,
+    build_gateup_linear,
+    build_o_proj,
+    build_qkv_proj,
+    build_rowwise_linear,
+)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
-from .utils.model import DeployModelMixin
+from .utils.model import DeployModelMixin, vlm_model
 
 LANGUAGE_TOKEN_TYPE = 0
 VISION_TOKEN_TYPE = 1
@@ -86,8 +101,8 @@ class SelfAttention(torch.nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: tuple[torch.Tensor] | None = None,
         attn_metadata: Any = None,
     ):
         """Rewrite of LlamaAttention.forward."""
@@ -210,9 +225,9 @@ class GLMBlock(torch.nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[List[torch.FloatTensor]],
-        residual: Optional[torch.Tensor] = None,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: list[torch.FloatTensor] | None,
+        residual: torch.Tensor | None = None,
         attn_metadata: Any = None,
     ):
 
@@ -263,8 +278,8 @@ class GLMTransformer(nn.Module):
     def forward(
         self,
         hidden_states: torch.LongTensor,
-        rotary_pos_emb: List[torch.Tensor],
-        past_key_values: Optional[List[torch.FloatTensor]],
+        rotary_pos_emb: list[torch.Tensor],
+        past_key_values: list[torch.FloatTensor] | None,
         attn_metadata: Any,
     ):
         """forward."""
@@ -492,6 +507,7 @@ class GLU(nn.Module):
         return x
 
 
+@vlm_model
 class EVA2CLIPModel(nn.Module):
     """Vision model."""
 
@@ -546,12 +562,13 @@ class ChatGLMModel(nn.Module):
                       config.num_attention_heads if config.kv_channels is None else config.kv_channels)
         rope_max_pos_emb = 1 << 20
         rope_base = 10000 * getattr(config, 'rope_ratio', 1.0)
-        self.rotary_pos_emb = build_rotary_embedding(
-            rotary_dim // 2,
-            rope_max_pos_emb,
-            rope_base,
-            emb_type=emb_type,
-        )
+        rope_params = dict(emb_type=emb_type,
+                           dim=rotary_dim // 2,
+                           max_position_embeddings=rope_max_pos_emb,
+                           base=rope_base)
+        update_params = build_rotary_params(config)
+        rope_params.update(update_params)
+        self.rotary_pos_emb = build_rotary_embedding(**rope_params)
 
         # build encoder
         self.encoder = GLMTransformer(config, dtype=dtype, device=device)
@@ -570,12 +587,12 @@ class ChatGLMModel(nn.Module):
     def forward(
         self,
         input_ids: torch.LongTensor = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,
         attn_metadata: Any = None,
         images: torch.Tensor = None,
         image_mask: torch.Tensor = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
+        inputs_embeds: torch.FloatTensor | None = None,
     ):
         """forward."""
 
@@ -630,7 +647,7 @@ class ChatGLMForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         images: torch.Tensor = None,
         image_mask: torch.Tensor = None,
@@ -659,8 +676,8 @@ class ChatGLMForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
-        inputs_embeds: Optional[torch.Tensor] = None,
+        past_key_values: list[list[torch.Tensor]],
+        inputs_embeds: torch.Tensor | None = None,
         context: StepContext = None,
     ):
         """Prepare input."""
@@ -702,12 +719,20 @@ class ChatGLMForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
             inputs_embeds=inputs_embeds,
         )
 
+    def _get_model_metas(self, context: StepContext):
+        """Get model metas."""
+        model_metas = context.model_metas
+        if model_metas is None:
+            batch_size = context.q_seqlens.numel()
+            return [dict(num_img_tokens=0)] * batch_size
+        return [dict(num_img_tokens=0) if meta is None else meta for meta in model_metas]
+
     def update_model_metas(self,
-                           past_key_values: List[List[torch.Tensor]],
-                           inputs_embeds: Optional[torch.Tensor] = None,
+                           past_key_values: list[list[torch.Tensor]],
+                           inputs_embeds: torch.Tensor | None = None,
                            context: StepContext = None):
         """Update model meta."""
-        model_metas = context.model_metas
+        model_metas = self._get_model_metas(context)
         if not hasattr(self.config, 'vision_config'):
             return model_metas
 
@@ -779,7 +804,7 @@ class ChatGLMForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
 
         return new_model_metas
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
         # modify from vllm
 
@@ -839,8 +864,8 @@ class ChatGLMInputProcessor(BaseModelInputProcessor):
             self.vision_token_num = self.num_patches // 4
 
     def preprocess_input(self,
-                         input_ids: List[int],
-                         input_multimodals: List[Dict[str, Any]] = None,
+                         input_ids: list[int],
+                         input_multimodals: list[dict[str, Any]] = None,
                          **kwargs) -> PreprocessInputResult:
         """Prepare multimodal input."""
         if input_multimodals is None or len(input_multimodals) == 0:
@@ -855,10 +880,10 @@ class ChatGLMInputProcessor(BaseModelInputProcessor):
             if isinstance(num_pad, torch.Tensor):
                 num_pad = num_pad.item()
 
-            mm_data = MultiModalTensor(data=pixel_values,
-                                       start=offset,
-                                       end=offset + num_pad,
-                                       meta=dict(image_token_id=image_token_id))
+            mm_data = MultiModalData(data=pixel_values,
+                                     start=offset,
+                                     end=offset + num_pad,
+                                     meta=dict(image_token_id=image_token_id))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(

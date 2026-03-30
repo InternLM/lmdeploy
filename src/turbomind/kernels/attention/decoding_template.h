@@ -10,10 +10,9 @@
 namespace turbomind {
 
 template<class Kernel>
-bool invokeDecoding(const typename Kernel::ParamType& params)
+bool invokeDecoding(const typename Kernel::ParamType& params, int sm_count, int max_active_ctas)
 {
-    static const size_t kSmemSize =
-        std::max(sizeof(typename Kernel::SharedStorage), sizeof(typename Kernel::ReduceOp::SharedStorage));
+    static const size_t kSmemSize = sizeof(typename Kernel::SharedStorage);
 
     if constexpr (1) {
         [[maybe_unused]] static const int _ = [&] {
@@ -25,7 +24,8 @@ bool invokeDecoding(const typename Kernel::ParamType& params)
         }();
     }
 
-    const int tile_count      = (params.max_k_len + Kernel::CTA_S - 1) / Kernel::CTA_S;
+    const int max_cp_k_len    = cdiv(params.max_k_len, (int)params.cp_size);
+    const int tile_count      = cdiv(std::min(max_cp_k_len, params.window_size), Kernel::CTA_S);
     const int max_split_count = std::min(params.max_split_k, tile_count);
 
     using CtaMap = typename Kernel::CtaMap;
@@ -33,21 +33,6 @@ bool invokeDecoding(const typename Kernel::ParamType& params)
     dim3 block(Kernel::kWarpCount * WARP_SIZE);
 
     auto kernel_func = &attention_kernel<Kernel>;
-
-    thread_local const int2 caps = [&] {
-        auto err = cudaFuncSetAttribute(kernel_func, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize);
-        if (err) {
-            std::cout << cudaGetErrorString(err) << "\n";
-            std::abort();
-        }
-        int device_id{};
-        cudaGetDevice(&device_id);
-        int sm_count{};
-        cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device_id);
-        int max_active_ctas{};
-        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_active_ctas, kernel_func, block.x, kSmemSize);
-        return int2{sm_count, max_active_ctas};
-    }();
 
     const int q_group_size   = params.num_heads / params.num_kv_heads;
     const int q_head_per_cta = std::min(q_group_size, Kernel::CTA_H);
@@ -61,11 +46,13 @@ bool invokeDecoding(const typename Kernel::ParamType& params)
     dim3 grid = CtaMap::get_grid_shape(params.num_kv_heads, params.batch_size, 1, cta_per_q_group);
 
     const int grid_size = grid.x * grid.y * grid.z;
-    const int split_cnt = GetSplitCount(max_split_count, grid_size, caps.y, caps.x, 4);
+    const int split_cnt = GetSplitCount(max_split_count, grid_size, max_active_ctas, sm_count, 4);
 
     grid = CtaMap::get_grid_shape(params.num_kv_heads, params.batch_size, split_cnt, cta_per_q_group);
 
     // Print(typename Kernel::Impl::ThreadMapKVp{});
+
+    // std::cout << "split count: " << split_cnt << "\n";
 
     auto cache_iter_factory = CreateCacheIterFactory<typename Kernel::CacheIteratorFactory>::apply(params);
 
@@ -77,18 +64,23 @@ bool invokeDecoding(const typename Kernel::ParamType& params)
         std::abort();
     }
 
-    if (Kernel::need_separate_reduce(split_cnt)) {
-        attention::invokeReduce<Kernel::kHeadDim>(params.out,
-                                                  params.partial_M,
-                                                  params.partial_L,
-                                                  params.partial_O,
-                                                  params.split_cnt,
-                                                  params.max_split_k,
-                                                  split_cnt,
-                                                  params.token_num,
-                                                  params.num_heads,
-                                                  params.inv_sqrt_dh,
-                                                  params.stream);
+    if (params.cp_fn) {
+        params.cp_fn(params.cp_fn_ctx);
+    }
+
+    if (split_cnt > 1 || params.cp_size > 1) {
+        attention::invokeReduceV3<Kernel::kHeadDim>(params.out,
+                                                    params.partial_ML,
+                                                    params.partial_O,
+                                                    split_cnt > 1 ? params.split_cnt : nullptr,
+                                                    params.max_split_k,
+                                                    split_cnt,
+                                                    params.cp_size,
+                                                    params.cp_rank,
+                                                    params.token_num,
+                                                    params.num_heads,
+                                                    params.inv_sqrt_dh,
+                                                    params.stream);
     }
 
     return true;

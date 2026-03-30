@@ -1,14 +1,16 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include <algorithm>
+#include <iostream>
+#include <numeric>
+#include <sstream>
+
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/gemm/arch.h"
 #include "src/turbomind/kernels/gemm/desc.h"
 #include "src/turbomind/kernels/gemm/kernel.h"
 #include "src/turbomind/kernels/gemm/types.h"
-#include <algorithm>
-#include <iostream>
-#include <numeric>
-#include <sstream>
+#include "src/turbomind/kernels/gemm/utils.h"
 
 namespace turbomind::gemm {
 
@@ -58,7 +60,7 @@ bool Kernel::is_feasible(const GemmDesc& desc) const noexcept
         return false;
     }
 
-    if (desc.sched != desc_.sched) {
+    if (desc.group_axis >= 0 && desc.group_axis != desc_.group_axis) {
         return false;
     }
 
@@ -130,12 +132,12 @@ std::string Kernel::GetName() const
 
     ss << "sm" << desc_.arch / 10;
     ss << "_" << to_string(desc_.type_a);  //
-    if ((int)desc_.quant_a.type) {
-        ss << "g" << desc_.quant_a.group_size;
+    if (desc_.quant_a) {
+        ss << to_string(desc_.quant_a);
     }
     ss << "_" << to_string(desc_.type_b);  //
-    if ((int)desc_.quant_b.type) {
-        ss << "g" << desc_.quant_b.group_size;
+    if (desc_.quant_b) {
+        ss << to_string(desc_.quant_b);
     }
     ss << "_" << to_string(desc_.type_c);
     ss << "_"                                        //
@@ -151,12 +153,90 @@ std::string Kernel::GetName() const
        << "_" << desc_.cluster_shape.x << "x" << desc_.cluster_shape.y                   //
        << "_" << to_string(desc_.op_class)                                               //
        << "_" << desc_.mma_tile.x << "x" << desc_.mma_tile.y << "x" << desc_.mma_tile.z;
-    ss << (desc_.sched ? "_dynamic" : "");
+    if (desc_.group_axis >= 0) {
+        ss << "_"
+           << "mn"[desc_.group_axis] << "group";
+    }
     ss << "_c" << desc_.c_tile.x << "x" << desc_.c_tile.y                        //
        << "_a" << desc_.align.x << "x" << desc_.align.y << "x" << desc_.align.z  //
        << "_" << desc_.policy_a << desc_.policy_b;
 
     return ss.str();
+}
+
+class TransposedKernel: public Kernel {
+public:
+    explicit TransposedKernel(Kernel& kernel): kernel_(&kernel)
+    {
+        desc_ = kernel.desc();
+        info_ = kernel.info();
+
+        desc_.transpose = !desc_.transpose;
+    }
+
+    int Launch(const Operation&    operation,
+               float               alpha,
+               const void*         A,
+               const MatrixLayout& Adesc,
+               const void*         U,
+               const MatrixLayout& Udesc,
+               const void*         B,
+               const MatrixLayout& Bdesc,
+               const void*         V,
+               const MatrixLayout& Vdesc,
+               float               beta,
+               const void*         C,
+               const MatrixLayout& Cdesc,
+               void*               D,
+               const MatrixLayout& Ddesc,
+               int                 swizzle,
+               int                 splits,
+               Workspace&          workspace,
+               cudaStream_t        stream) override
+    {
+        return kernel_->Launch(transpose(operation),
+                               alpha,
+                               B,
+                               transpose(Bdesc),
+                               V,
+                               transpose(Vdesc),
+                               A,
+                               transpose(Adesc),
+                               U,
+                               transpose(Udesc),
+                               beta,
+                               C,
+                               transpose(Cdesc),
+                               D,
+                               transpose(Ddesc),
+                               swizzle,
+                               splits,
+                               workspace,
+                               stream);
+    }
+
+    bool is_feasible(const GemmDesc& desc) const noexcept override
+    {
+        return kernel_->is_feasible(desc);
+    }
+
+    int GetMaxSwizzle(const int4& shape) const override
+    {
+        return kernel_->GetMaxSwizzle(shape);
+    }
+
+    int GetMaxSplits(const int4& shape, int swizzle, size_t bsize, size_t psize) const override
+    {
+        return kernel_->GetMaxSplits(shape, swizzle, bsize, psize);
+    }
+
+private:
+    Kernel* kernel_;
+};
+
+std::unique_ptr<Kernel> transpose(Kernel& kernel)
+{
+    return std::make_unique<TransposedKernel>(kernel);
 }
 
 template<class Op>
@@ -189,6 +269,8 @@ std::vector<std::vector<LaunchSpec>> Cluster(const std::vector<LaunchSpec>& spec
             }
         }
         if (param.max_active_ctas) {
+            const auto& a = u->kernel->info();
+            const auto& b = v->kernel->info();
             if (a.max_active_ctas != b.max_active_ctas) {
                 return a.max_active_ctas < b.max_active_ctas;
             }

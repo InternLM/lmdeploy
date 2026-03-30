@@ -6,6 +6,7 @@
 #include "src/turbomind/kernels/attention/impl_m16n8.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/layout.h"
+#include "src/turbomind/kernels/core/mma.h"
 #include "src/turbomind/kernels/core/smem.h"
 #include "src/turbomind/kernels/core/thread_map.h"
 
@@ -16,6 +17,8 @@ struct Impl<MMA_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, H
     Impl_m16k8<T_, WARP_H, WARP_Q, WARP_S, HeadDim> {
 
     using Base = Impl_m16k8<T_, WARP_H, WARP_Q, WARP_S, HeadDim>;
+
+    static constexpr bool MLA = HeadDim == 576;
 
     using Base::OP_M;
     using Base::OP_N;
@@ -252,6 +255,23 @@ struct Impl<MMA_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, H
 
         __device__ void Transform(int k) {}
     };
+
+    template<class Storage>
+    __device__ static void Merge(FragO& frag_O, FragM& frag_M, FragL& frag_L, float qk_scale, Storage& storage)
+    {
+        static_assert(kWarpCntS == 1);
+
+        PRAGMA_UNROLL
+        for (int m = 0; m < V_M; ++m) {
+            PRAGMA_UNROLL
+            for (int q = 0; q < 2; ++q) {
+                if constexpr (Base::kDeferReduceL) {
+                    frag_L[m][q] += __shfl_xor_sync(uint32_t(-1), frag_L[m][q], 1);
+                    frag_L[m][q] += __shfl_xor_sync(uint32_t(-1), frag_L[m][q], 2);
+                }
+            }
+        }
+    }
 
     template<class Prefetch, class Preload>
     __device__ static void

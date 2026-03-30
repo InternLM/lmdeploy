@@ -1,22 +1,25 @@
-# Build lmdeploy manylinux wheel
+# LMDeploy Build System
 
-## Prepare docker image
+## Building lmdeploy builder images
 
-To build all docker images you can use the convenient script:
-
-```bash
-./build_all_docker.sh
-# Build with pushing
-WITH_PUSH=true ./build_all_docker.sh
-```
-
-To build a docker image with specific cuda version or manylinux-docker version, you may use:
+To build all lmdeploy builder images, such as "lmdeploy-builder:cuda11.8", ""lmdeploy-builder:cuda12.4", execute:
 
 ```bash
-MANY_LINUX_VERSION=2014 GPU_ARCH_VERSION=12.4 ./build_docker.sh
+./build_all_lmdeploy_builders.sh
+
+# Build and push images (for CI/CD)
+WITH_PUSH=true ./build_all_lmdeploy_builders.sh
 ```
 
-## Build lmdeploy wheel
+For custom builds with specific versions:
+
+```bash
+MANY_LINUX_VERSION=2014 GPU_ARCH_VERSION=12.4 ./build_lmdeploy_builder.sh
+```
+
+## Build lmdeploy wheels
+
+Compile all wheel packages:
 
 ```bash
 ./build_all_wheel.sh

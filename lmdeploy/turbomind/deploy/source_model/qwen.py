@@ -1,10 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
 import os.path as osp
+import re
 
 import torch
 
 from ..config import RopeParam
+from ..loader import create_loader
 from .base import INPUT_MODELS
 from .llama import LlamaModel, LlamaReader
 
@@ -12,7 +14,7 @@ from .llama import LlamaModel, LlamaReader
 class QwenReader(LlamaReader):
     """QwenReader."""
 
-    attn_layer_patten = r'transformer.h.([0-9]+).'
+    attn_layer_patten = r'transformer\.h\.([0-9]+).'
     tok_embeddings_key = 'transformer.wte.weight'
     norm_weight_key = 'transformer.ln_f.weight'
     output_weight_key = 'lm_head.weight'
@@ -117,35 +119,38 @@ class Qwen2Model(LlamaModel):
 
 class Qwen2MoeReader(LlamaReader):
 
-    ffn_pattern = r'shared_expert\.'
-
     def moe_ffn_expert(self, e=None, i=None, kind=None):
         if not kind:
-            return self.filter(r'experts')
+            return self.filter(r'experts', i)
         result = []
         for key in ['gate', 'down', 'up']:
-            name = f'model.layers.{i}.mlp.experts.{e}.{key}_proj.{kind}'
+            name = f'{self.attn_layer_prefix}.{i}.mlp.experts.{e}.{key}_proj.{kind}'
             tensor = self.params.get(name)
             tensor = self.transform(tensor, kind)
             result.append(tensor)
         return (*result, )
 
-    def moe_ffn_gate(self, i):
-        return self.transform(self.params.get(f'model.layers.{i}.mlp.gate.weight'), 'weight')
+    def moe_ffn_gate(self, i, kind):
+        return self.transform(self.params.get(f'{self.attn_layer_prefix}.{i}.mlp.gate.{kind}'), kind)
 
     def _ffn(self, i: int, kind: str):
         """Get ffn kind for layer i."""
         if not kind:
-            return self.filter(self.ffn_pattern)
+            return self.filter(r'shared_expert\.', i)
         result = []
         for key in ['gate', 'down', 'up']:
-            tensor = self.params[f'model.layers.{i}.mlp.shared_expert.{key}_proj.{kind}']
+            tensor = self.params[f'{self.attn_layer_prefix}.{i}.mlp.shared_expert.{key}_proj.{kind}']
             tensor = self.transform(tensor, kind)
             result.append(tensor)
         return (*result, )
 
+    def ffn(self, i: int, kind: str):
+        if not kind:
+            return self.filter(r'shared_expert\.', i)
+        return self._ffn(i, kind)
+
     def moe_ffn_shared_gate(self, i):
-        return self.params.get(f'model.layers.{i}.mlp.shared_expert_gate.weight')
+        return self.params.get(f'{self.attn_layer_prefix}.{i}.mlp.shared_expert_gate.weight')
 
 
 @INPUT_MODELS.register_module(name='qwen2-moe')
@@ -212,4 +217,283 @@ class Qwen3MoeModel(LlamaModel):
             attn_bias=cfg.get('attention_bias', 0),
             inter_size=0,  # no shared expert
             norm_topk_prob=cfg.get('norm_topk_prob', False))
+        return info
+
+
+class Qwen3_5ReaderMixin:
+    """Mixin providing linear attention weight reading for Qwen3.5 models.
+
+    Qwen3.5 uses a zero-centered RMSNorm: ``output = norm(x) * (1 + weight)``
+    where weight is initialized to zeros.  TurboMind's RMSNorm kernel computes
+    ``norm(x) * weight`` (standard LLaMA style), so we add 1 to every
+    RMSNorm weight during export.  The GDN-internal norm
+    (``Qwen3_5MoeRMSNormGated``) uses standard weight and is NOT affected.
+    """
+
+    attn_layer_pattern = r'(?:model\.language_model\.|model\.)layers\.([0-9]+)\.'
+
+    _LINEAR_ATTN_KEYS = ['conv1d', 'in_proj_qkv', 'in_proj_z', 'in_proj_b', 'in_proj_a', 'out_proj', 'A_log', 'dt_bias']
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if any(k.startswith('model.language_model.') for k in self.params.keys()):
+            self.attn_layer_prefix = 'model.language_model.layers'
+            self.tok_embeddings_key = 'model.language_model.embed_tokens.weight'
+            self.norm_weight_key = 'model.language_model.norm.weight'
+        tie_word_embeddings = self.model_cfg.get('tie_word_embeddings', False)
+        if tie_word_embeddings:
+            self.output_weight_key = self.tok_embeddings_key
+
+    # ---- zero-centered RMSNorm: add 1 to weights during export ----
+    def attn_norm(self, i: int):
+        w = super().attn_norm(i)
+        if w is not None:
+            w = w.float() + 1.0
+        return w
+
+    def ffn_norm(self, i: int):
+        w = super().ffn_norm(i)
+        if w is not None:
+            w = w.float() + 1.0
+        return w
+
+    def norm_weight(self):
+        w = super().norm_weight()
+        if w is not None:
+            w = w.float() + 1.0
+        return w
+
+    def qk_norm(self, i: int):
+        result = super().qk_norm(i)
+        return tuple(w.float() + 1.0 if w is not None else w for w in result)
+
+    # ---- handle mixed QKV(fp16) + O(AWQ) attention layers -------
+
+    def _attn(self, i: int, kind: str):
+        """Override to handle mixed QKV(fp16) + O(AWQ) attention layers.
+
+        Some AWQ-quantized Qwen3.5 models keep QKV in fp16 while quantizing only the O projection.  TurboMind requires
+        uniform weight types per layer, so we dequantize O to fp16 at export time.
+        """
+        prefix = f'{self.attn_layer_prefix}.{i}.self_attn'
+        q_is_fp16 = f'{prefix}.q_proj.weight' in self.params
+        o_is_awq = f'{prefix}.o_proj.qweight' in self.params
+
+        if not (q_is_fp16 and o_is_awq):
+            # Not a mixed-format layer, use standard behaviour.
+            return super()._attn(i, kind)
+
+        # Mixed format detected: QKV are fp16 but O is AWQ.
+        if kind == 'weight':
+            # Get fp16 QKV the normal way, then dequantize O.
+            q, k, v, _ = super()._attn(i, kind)
+            o = self._awq_dequant(f'{prefix}.o_proj')
+            o = self.transform(o, kind)
+            return (q, k, v, o)
+
+        # For any quant kind (qweight/scales/qzeros), return all None
+        # so that the AWQ handler skips this layer entirely — the O
+        # weight is already handled via dequantization above.
+        return (None, None, None, None)
+
+    def _awq_dequant(self, prefix: str):
+        """Dequantize an AWQ-quantized linear layer to fp16.
+
+        AWQ stores weights in transposed form relative to PyTorch's
+        convention ([in, out] vs [out, in]), so we transpose here to
+        match the fp16 ``.weight`` layout that downstream export
+        expects.
+        """
+        from lmdeploy.pytorch.backends.default.awq_modules import dequantize_gemm
+        qweight = self.params[f'{prefix}.qweight']
+        scales = self.params[f'{prefix}.scales']
+        qzeros = self.params[f'{prefix}.qzeros']
+        group_size = qweight.shape[0] // scales.shape[0]
+        w = dequantize_gemm(qweight, qzeros, scales, 4, group_size)
+        return w.t()  # [in, out] → [out, in] (PyTorch convention)
+
+    @staticmethod
+    def _compressed_tensors_dequant(weight_packed, weight_scale):
+        """Dequantize a compressed-tensors (pack-quantized, symmetric int4)
+        weight to fp16.
+
+        Args:
+            weight_packed: int32 tensor of shape (out_features, in_features//8).
+            weight_scale:  bf16/fp16 tensor of shape (out_features, in_features//group_size).
+        Returns:
+            fp16 tensor of shape (out_features, in_features).
+        """
+        out_features = weight_packed.shape[0]
+        num_groups = weight_scale.shape[1]
+        in_features = weight_packed.shape[1] * 8
+        group_size = in_features // num_groups
+
+        # Reinterpret the packed int32 buffer as bytes and unpack two nibbles
+        # per byte directly into the final fp16 tensor. This avoids creating
+        # eight temporary fp16 tensors before applying scales.
+        packed_bytes = weight_packed.contiguous().view(torch.uint8).reshape(out_features, -1)
+        weight = torch.empty((out_features, in_features), device=weight_packed.device, dtype=torch.float16)
+        weight[:, 0::2] = (packed_bytes & 0xF).to(torch.float16)
+        weight[:, 1::2] = (packed_bytes >> 4).to(torch.float16)
+
+        scales = weight_scale.to(torch.float16).unsqueeze(-1)
+        weight = weight.view(out_features, num_groups, group_size)
+        weight.sub_(8.0).mul_(scales)
+        return weight.reshape(out_features, in_features)
+
+    def linear_attn(self, i: int, kind: str):
+        if not kind:
+            return self.filter(r'linear_attn\.', i)
+        # Always return a fixed-length tuple with None placeholders to
+        # preserve positional alignment with the name list in module.py.
+        result = []
+        for key in self._LINEAR_ATTN_KEYS:
+            prefix = f'{self.attn_layer_prefix}.{i}.linear_attn.{key}'
+            tensor = self.params.get(f'{prefix}.{kind}')
+            # A_log and dt_bias are bare nn.Parameter (no .weight suffix)
+            if tensor is None:
+                tensor = self.params.get(prefix)
+            # If requesting weight but only AWQ qweight exists,
+            # dequantize on the fly so LinearAttn gets fp16 tensors.
+            if tensor is None and kind == 'weight':
+                if f'{prefix}.qweight' in self.params:
+                    tensor = self._awq_dequant(prefix)
+                elif f'{prefix}.weight_packed' in self.params:
+                    tensor = self._compressed_tensors_dequant(self.params[f'{prefix}.weight_packed'],
+                                                              self.params[f'{prefix}.weight_scale'])
+            if tensor is not None:
+                tensor = self.transform(tensor, kind)
+            result.append(tensor)  # keep None to preserve alignment
+        if all(t is None for t in result):
+            return tuple()
+        return tuple(result)
+
+    def linear_norm(self, i: int, kind: str = 'weight'):
+        tensor = self.params.get(f'{self.attn_layer_prefix}.{i}.linear_attn.norm.{kind}')
+        if tensor is not None:
+            return self.transform(tensor, kind)
+        return None
+
+
+class Qwen3_5Reader(Qwen3_5ReaderMixin, Qwen3Reader):
+    pass
+
+
+@INPUT_MODELS.register_module(name='qwen3_5')
+class Qwen3_5Model(Qwen3Model):
+    Reader = Qwen3_5Reader
+
+    def model_info(self):
+        if 'text_config' in self.model_config:
+            self.model_config = self.model_config['text_config']
+        cfg = self.model_config
+        info = super().model_info()
+        # MoE parameters (same as Qwen2MoeModel / Qwen3MoeModel)
+        info['expert_num'] = cfg.get('num_experts', 0)
+        info['expert_inter_size'] = cfg.get('moe_intermediate_size', 0)
+        info['experts_per_token'] = cfg.get('num_experts_per_tok', 0)
+        # For MoE models, inter_size is the shared expert intermediate size;
+        # for dense models, keep the value from super() (intermediate_size).
+        shared_expert_size = cfg.get('shared_expert_intermediate_size')
+        if shared_expert_size is not None:
+            info['inter_size'] = shared_expert_size
+        info['moe_shared_gate'] = True
+        # Qwen3.5 uses sigmoid MoE routing (not softmax)
+        info['scoring_func'] = 'softmax'
+        info['norm_topk_prob'] = True
+        # Fix RoPE dim for partial_rotary_factor
+        rope_params = cfg.get('rope_parameters', {})
+        partial_rotary_factor = rope_params.get('partial_rotary_factor', cfg.get('partial_rotary_factor', 1.0))
+        if partial_rotary_factor < 1.0:
+            info['rope_param'].dim = int(info['size_per_head'] * partial_rotary_factor)
+        # Linear attention parameters
+        info['layer_types'] = cfg.get('layer_types', [])
+        info['linear_key_head_dim'] = cfg.get('linear_key_head_dim', 0)
+        info['linear_value_head_dim'] = cfg.get('linear_value_head_dim', 0)
+        info['linear_conv_kernel_dim'] = cfg.get('linear_conv_kernel_dim', 0)
+        info['linear_num_key_heads'] = cfg.get('linear_num_key_heads', 0)
+        info['linear_num_value_heads'] = cfg.get('linear_num_value_heads', 0)
+        # attn_output_gate doubles Q projection for full-attention layers
+        info['attn_output_gate'] = cfg.get('attn_output_gate', False)
+        return info
+
+
+class Qwen3_5MoeReader(Qwen3_5ReaderMixin, Qwen3MoeReader):
+
+    def _unpacked_moe_expert(self, e: int, i: int, kind: str):
+        prefix = f'{self.attn_layer_prefix}.{i}.mlp.experts'
+        gate_up = self.params.get(f'{prefix}.gate_up_proj.{kind}')
+        down = self.params.get(f'{prefix}.down_proj.{kind}')
+        if gate_up is None or down is None:
+            return None
+
+        # Packed Qwen3.5 MoE checkpoints store all experts in the first
+        # dimension. Slice one expert before transform so quantized policies
+        # still see a 2D tensor.
+        gate_up = self.transform(gate_up[e], kind)
+        down = self.transform(down[e], kind)
+        gate, up = gate_up.chunk(2, dim=0)
+        return (gate, down, up)
+
+    def moe_ffn_expert(self, e=None, i=None, kind=None):
+        if not kind:
+            return self.filter(r'experts', i)
+        unpacked = self._unpacked_moe_expert(e, i, kind)
+        if unpacked is not None:
+            return unpacked
+
+        return super().moe_ffn_expert(e, i, kind)
+
+
+@INPUT_MODELS.register_module(name='qwen3_5-moe')
+class Qwen3_5MoeModel(Qwen3MoeModel):
+    Reader = Qwen3_5MoeReader
+
+    @staticmethod
+    def map_packed_qwen35_experts(name: str):
+        """Map packed expert names to weight names, i.e.,
+        "mlp.experts.gate_up_proj" -> "mlp.experts.gate_up_proj.weight" so that
+        class Weight in parameter.py can classify them."""
+        s = re.sub(r'(mlp\.experts\.(?:gate_up|down)_proj)$', r'\1.weight', name)
+        return s
+
+    def readers(self):
+        pattern = getattr(self.Reader, 'attn_layer_pattern', self.Reader.attn_layer_patten)
+        loader = create_loader(self.model_path, pattern, [])
+
+        has_packed_gate_up = any('mlp.experts.gate_up_proj' in k for k in loader.index.keys())
+        has_packed_down = any('mlp.experts.down_proj' in k for k in loader.index.keys())
+        if has_packed_gate_up and has_packed_down:
+            loader.mappings = [self.map_packed_qwen35_experts]
+
+        for i, param in loader.items():
+            reader = self.Reader(param, {}, False, self.model_config, policy=self.policy, fp8_quant=self.fp8_quant)
+            yield i, reader
+        torch.cuda.empty_cache()
+
+    def model_info(self):
+        if 'text_config' in self.model_config:
+            self.model_config = self.model_config['text_config']
+        cfg = self.model_config
+        info = super().model_info()
+        # Shared expert params (missing from Qwen3MoeModel base)
+        info['inter_size'] = cfg.get('shared_expert_intermediate_size', 0)
+        info['moe_shared_gate'] = True
+        # Qwen3.5 uses sigmoid MoE routing (not softmax)
+        info['scoring_func'] = 'softmax'
+        info['norm_topk_prob'] = True
+        # Fix RoPE dim for partial_rotary_factor
+        rope_params = cfg.get('rope_parameters', {})
+        partial_rotary_factor = rope_params.get('partial_rotary_factor', cfg.get('partial_rotary_factor', 1.0))
+        if partial_rotary_factor < 1.0:
+            info['rope_param'].dim = int(info['size_per_head'] * partial_rotary_factor)
+        # Linear attention parameters
+        info['layer_types'] = cfg.get('layer_types', [])
+        info['linear_key_head_dim'] = cfg.get('linear_key_head_dim', 0)
+        info['linear_value_head_dim'] = cfg.get('linear_value_head_dim', 0)
+        info['linear_conv_kernel_dim'] = cfg.get('linear_conv_kernel_dim', 0)
+        info['linear_num_key_heads'] = cfg.get('linear_num_key_heads', 0)
+        info['linear_num_value_heads'] = cfg.get('linear_num_value_heads', 0)
+        # attn_output_gate doubles Q projection for full-attention layers
+        info['attn_output_gate'] = cfg.get('attn_output_gate', False)
         return info

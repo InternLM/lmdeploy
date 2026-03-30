@@ -1,9 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from logging import Logger
-from typing import Any, Dict
 
 from lmdeploy.pytorch import envs
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.utils import get_logger
 
 from .base import ExecutorBase
@@ -53,22 +52,34 @@ def get_distributed_executor_backend(world_size: int, dp: int, device_type: str,
     #     return _log_and_set_backend(f'local device_count({device_count})>=world_size({world_size}),', 'mp')
 
 
-def build_executor(model_path: str,
-                   cache_config: CacheConfig,
-                   backend_config: BackendConfig,
-                   dist_config: DistConfig,
-                   misc_config: MiscConfig,
-                   tokenizer: Any,
-                   adapters: Dict[str, str] = None,
-                   device_type: str = 'cuda',
-                   distributed_executor_backend: str = None,
-                   dtype: str = 'auto') -> ExecutorBase:
+def build_executor(
+    model_path: str,
+    cache_config: CacheConfig,
+    backend_config: BackendConfig,
+    dist_config: DistConfig,
+    misc_config: MiscConfig,
+    adapters: dict[str, str] = None,
+    device_type: str = 'cuda',
+    distributed_executor_backend: str = None,
+    dtype: str = 'auto',
+    specdecode_config: SpecDecodeConfig = None,
+) -> ExecutorBase:
     """Build model agent executor."""
     logger = get_logger('lmdeploy')
     dp = dist_config.dp
     world_size = dist_config.world_size
 
-    model_config = ModelConfig.from_pretrained(model_path, trust_remote_code=True, dtype=dtype, dist_config=dist_config)
+    model_config = ModelConfig.from_pretrained(
+        model_path,
+        trust_remote_code=True,
+        dtype=dtype,
+        hf_overrides=misc_config.hf_overrides,
+        dist_config=dist_config,
+        is_draft_model=False,
+        spec_method=None if specdecode_config is None else specdecode_config.method,
+        model_format=misc_config.model_format,
+        device_type=device_type,
+    )
 
     if distributed_executor_backend is None:
         distributed_executor_backend = get_distributed_executor_backend(world_size, dp, device_type, logger)
@@ -94,12 +105,13 @@ def build_executor(model_path: str,
             cache_config=cache_config,
             backend_config=backend_config,
             misc_config=misc_config,
-            tokenizer=tokenizer,
             adapters=adapters,
             device_type=device_type,
+            specdecode_config=specdecode_config,
         )
     elif distributed_executor_backend == 'mp':
         from .mp_executor import MPExecutor
+        logger.warning('MPExecutor will be deprecated in future releases, please use RayExecutor instead.')
         return MPExecutor(
             model_path=model_path,
             model_config=model_config,
@@ -107,9 +119,9 @@ def build_executor(model_path: str,
             backend_config=backend_config,
             dist_config=dist_config,
             misc_config=misc_config,
-            tokenizer=tokenizer,
             adapters=adapters,
             device_type=device_type,
+            specdecode_config=specdecode_config,
         )
     elif distributed_executor_backend == 'ray':
         from .ray_executor import RayExecutor
@@ -120,10 +132,10 @@ def build_executor(model_path: str,
             backend_config=backend_config,
             dist_config=dist_config,
             misc_config=misc_config,
-            tokenizer=tokenizer,
             adapters=adapters,
             device_type=device_type,
             dtype=dtype,
+            specdecode_config=specdecode_config,
         )
     else:
         raise RuntimeError(f'Unsupported distributed_executor_backend: {distributed_executor_backend}.')

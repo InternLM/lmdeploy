@@ -40,6 +40,11 @@ using bfloat16_t = __nv_bfloat16;
 using fp8_e4m3_t = __nv_fp8_e4m3;
 using fp8_e5m2_t = __nv_fp8_e5m2;
 
+struct fp4_e2m1_t {};
+
+template <> struct bitsof_t<fp4_e2m1_t>: int_constant<4> {};
+
+
 constexpr int encode_data_type(bool sign, int exponent, int mantissa) {
     return ((sign << 16) | (exponent << 8) | mantissa);
 }
@@ -59,20 +64,30 @@ enum class DataType: int {
     kFloat32     = encode_data_type(1,  8, 23),
     kFloat64     = encode_data_type(1, 11, 52),
     kBfloat16    = encode_data_type(1,  8,  7),
+    kFloat4_e2m1 = encode_data_type(1,  2,  1),
+    kFloat6_e2m3 = encode_data_type(1,  2,  3),
+    kFloat6_e3m2 = encode_data_type(1,  3,  2),
     kFloat8_e4m3 = encode_data_type(1,  4,  3),
     kFloat8_e5m2 = encode_data_type(1,  5,  2),
     kUint2       = encode_data_type(0,  0,  2),
     kUint4       = encode_data_type(0,  0,  4),
     kUint6       = encode_data_type(0,  0,  6),
+    kPointer,
     kUint        = kUint32,
     kInt         = kInt32,
     kFloat       = kFloat32,
     kHalf        = kFloat16,
     kDouble      = kFloat64,
+    kE2m1        = kFloat4_e2m1,
+    kE2m3        = kFloat6_e2m3,
+    kE3m2        = kFloat6_e3m2,
+    kE4m3        = kFloat8_e4m3,
+    kE5m2        = kFloat8_e5m2,
 };
 
 inline constexpr DataType kNull = DataType::kNull;
 inline constexpr DataType kBool = DataType::kBool;
+inline constexpr DataType kPointer = DataType::kPointer;
 inline constexpr DataType kUint8  = DataType::kUint8;
 inline constexpr DataType kUint16 = DataType::kUint16;
 inline constexpr DataType kUint32 = DataType::kUint32;
@@ -87,6 +102,7 @@ inline constexpr DataType kFloat64 = DataType::kFloat64;
 inline constexpr DataType kBfloat16 = DataType::kBfloat16;
 inline constexpr DataType kFloat8_e4m3 = DataType::kFloat8_e4m3;
 inline constexpr DataType kFloat8_e5m2 = DataType::kFloat8_e5m2;
+inline constexpr DataType kFloat4_e2m1 = DataType::kFloat4_e2m1;
 inline constexpr DataType kUint2  = DataType::kUint2;
 inline constexpr DataType kUint4  = DataType::kUint4;
 inline constexpr DataType kUint6  = DataType::kUint6;
@@ -123,6 +139,7 @@ CVT_DATA_TYPE(kFloat16, half_t);
 CVT_DATA_TYPE(kFloat32, float);
 CVT_DATA_TYPE(kFloat64, double);
 CVT_DATA_TYPE(kBfloat16, bfloat16_t);
+CVT_DATA_TYPE(kFloat4_e2m1, fp4_e2m1_t);
 CVT_DATA_TYPE(kFloat8_e4m3, fp8_e4m3_t);
 CVT_DATA_TYPE(kFloat8_e5m2, fp8_e5m2_t);
 
@@ -131,6 +148,9 @@ CVT_DATA_TYPE(kUint4, uint4_t);
 CVT_DATA_TYPE(kUint6, uint6_t);
 
 #undef CVT_DATA_TYPE
+
+template <class T> struct to_data_type<T*> { static constexpr auto value = DataType::kPointer; };
+template <>  struct from_data_type<DataType::kPointer> { using type = void*; };
 
 template <class T>
 inline constexpr auto data_type_v = to_data_type<std::remove_cv_t<T>>::value;
@@ -161,8 +181,13 @@ constexpr std::ptrdiff_t byte_size(DataType type, std::ptrdiff_t size = 1) {
         case kFloat64:
             return size * 8;
         case kUint2: return size * 2 / 8;
-        case kUint4: return size * 4 / 8;
+        case kUint4:
+        case kFloat4_e2m1:
+            return size * 4 / 8;
         case kUint6: return size * 6 / 8;
+        case kPointer: return size * sizeof(void*);
+        default:
+            return 0;
     }
     return 0;
 }
@@ -193,8 +218,13 @@ constexpr std::ptrdiff_t numel(DataType type, std::ptrdiff_t size = 1) {
         case kFloat64:
             return size / 8;
         case kUint2: return size * 8 / 2;
-        case kUint4: return size * 8 / 4;
+        case kUint4:
+        case kFloat4_e2m1:
+            return size * 8 / 4;
         case kUint6: return size * 8 / 6;
+        case kPointer: return size / sizeof(void*);
+        default:
+            return 0;
     }
     return 0;
 }
@@ -220,9 +250,11 @@ constexpr const char* to_string(DataType type) {
         case kBfloat16: return "bf16";
         case kFloat8_e4m3: return "e4m3";
         case kFloat8_e5m2: return "e5m2";
+        case kFloat4_e2m1: return "e2m1";
         case kUint2: return "u2";
         case kUint4: return "u4";
         case kUint6: return "u8";
+        case kPointer: return "pointer";
         default:
             return "unknown";
     }

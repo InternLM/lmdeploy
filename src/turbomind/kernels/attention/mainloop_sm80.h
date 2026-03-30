@@ -49,10 +49,22 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
     using SharedStorage = typename Impl::SharedStorage;
 
+    int cp_size_{1};
+    int cp_rank_{0};
+
+    __device__ void SetCpInfo(int cp_size, int cp_rank)
+    {
+        cp_size_ = cp_size;
+        cp_rank_ = cp_rank;
+    }
+
     template<class... Args>
     __device__ void operator()(Args&&... args)
     {
-        Run(Sm80_CpAsync<Stages>{}, std::integral_constant<int, Impl::kHeadDim>{}, ((Args &&) args)...);
+        Run(Sm80_CpAsync<Stages>{},
+            std::integral_constant<int, Impl::kHeadDim>{},
+            std::integral_constant<bool, Impl::MLA>{},
+            ((Args &&) args)...);
     }
 
     template<int Idx, class A, class B>
@@ -84,15 +96,19 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
     template<int head_dim, class CacheIter, class StoreS, int Stages_>
     __device__ void Run(Sm80_CpAsync<Stages_>,
                         std::integral_constant<int, head_dim>,
+                        std::false_type,  // is MLA
                         FragQ&         frag_Q,
                         CacheIter&     cache_iter,
                         FragO&         frag_O,
                         FragM&         frag_M,
                         FragL&         frag_L,
                         int            offset_Q,
+                        int            offset_K,
                         int            max_step,
                         int            tile_iter,
-                        int            mask_iter,
+                        int            mask_iter_back,
+                        int            mask_iter_front,
+                        int            window_size,
                         float          qk_scale,
                         SharedStorage& storage,
                         const StoreS&  store_S)
@@ -115,11 +131,11 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
         Impl::Sync();
 
         // 0
-        gmem_K.Prefetch(true_c, cache_iter, max_step - tile_iter * CTA_S, (++pipe_iter).w);
+        gmem_K.Prefetch(true_c, cache_iter, max_step - offset_K, (++pipe_iter).w);
         __pipeline_commit();
 
         // 1
-        gmem_V.Prefetch(true_c, cache_iter, max_step - tile_iter * CTA_S, (++pipe_iter).w);
+        gmem_V.Prefetch(true_c, cache_iter, max_step - offset_K, (++pipe_iter).w);
         __pipeline_commit();
 
         cache_iter.Advance();
@@ -155,8 +171,6 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
         state_QK.Load(0, (++pipe_iter).r);
 
         auto loop = [&](auto is_mask) {
-            const int offset_K = tile_iter * CTA_S;
-
             __align__(16) FragS frag_S{};
 
             auto prefetch_0 = [&, pipe_iter](int k) {
@@ -169,7 +183,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
             });
 
             if constexpr (is_mask) {
-                ApplyCasualMask(frag_S, offset_Q, offset_K);
+                ApplyCasualMask(frag_S, offset_Q, offset_K, window_size);
             }
 
             Impl::Softmax<is_mask>(frag_S, frag_M, frag_L, frag_O, qk_scale);
@@ -184,16 +198,21 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
                 Wait();
                 state_QK.Load(0, (++pipe_iter).r);
             });
+
+            offset_K -= CTA_S;
         };
 
-        PRAGMA_UNROLL
-        for (; tile_iter >= 0 && mask_iter != 0; --tile_iter, --mask_iter) {
+        for (int mask_iter = mask_iter_back; tile_iter > 0 && mask_iter > 0; --tile_iter, --mask_iter) {
             loop(true_c);
         }
 
         PRAGMA_NO_UNROLL
-        for (; tile_iter >= 0; --tile_iter) {
+        for (; tile_iter > mask_iter_front; --tile_iter) {
             loop(false_c);
+        }
+
+        for (; tile_iter > 0; --tile_iter) {
+            loop(true_c);
         }
 
         __pipeline_commit();
@@ -204,15 +223,19 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
     template<class CacheIter, class StoreS>
     __device__ void Run(Sm80_CpAsync<2>,
                         std::integral_constant<int, 192>,
+                        std::false_type,  // is MLA
                         FragQ&         frag_Q,
                         CacheIter&     cache_iter,
                         FragO&         frag_O,
                         FragM&         frag_M,
                         FragL&         frag_L,
                         int            offset_Q,
+                        int            offset_K,
                         int            max_step,
                         int            tile_iter,
-                        int            mask_iter,
+                        int            mask_iter_back,
+                        int            mask_iter_front,
+                        int            window_size,
                         float          qk_scale,
                         SharedStorage& storage,
                         const StoreS&  store_S)
@@ -227,7 +250,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
             gmem_K.ClearSmem(i);
         }
 
-        gmem_K.Prefetch(true_c, cache_iter, max_step - tile_iter * CTA_S, 0);
+        gmem_K.Prefetch(true_c, cache_iter, max_step - offset_K, 0);
         __pipeline_commit();
 
         typename Impl::StateQK state_QK{storage, frag_Q};
@@ -239,8 +262,6 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
         constexpr auto _ = [](int) {};
 
         auto loop = [&](auto is_residue, auto is_mask) {
-            const int offset_K = tile_iter * CTA_S;
-
             __align__(16) FragS frag_S{};
 
             auto prefetch_V = [&](int k) {
@@ -267,7 +288,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
             prefetch_K(0);
 
             if constexpr (is_mask) {
-                ApplyCasualMask(frag_S, offset_Q, offset_K);
+                ApplyCasualMask(frag_S, offset_Q, offset_K, window_size);
             }
 
             Impl::Softmax<is_mask>(frag_S, frag_M, frag_L, frag_O, qk_scale);
@@ -278,23 +299,28 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
                 Wait();
                 state_QK.Load(0, 0);
             });
+
+            offset_K -= CTA_S;
         };
 
-        PRAGMA_UNROLL
-        for (; tile_iter >= 0 && mask_iter != 0; --tile_iter, --mask_iter) {
+        for (int mask_iter = max(1, mask_iter_back); tile_iter > 0 && mask_iter > 0; --tile_iter, --mask_iter) {
             loop(true_c, true_c);
         }
 
         PRAGMA_NO_UNROLL
-        for (; tile_iter >= 0; --tile_iter) {
+        for (; tile_iter > mask_iter_front; --tile_iter) {
             loop(false_c, false_c);
+        }
+
+        for (; tile_iter > 0; --tile_iter) {
+            loop(false_c, true_c);
         }
 
         __pipeline_commit();
         __pipeline_wait_prior(0);
     }
 
-    // #elif 1
+#if 1
     // Load      : K0,K1 | V0,K2,V1,K3 ...
     // Compute   :    K0 | K1,V0,K2,V1 ...
     // - more register consumption
@@ -303,15 +329,19 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
     template<int head_dim, class CacheIter, class StoreS>
     __device__ void Run(Sm80_CpAsync<2>,
                         std::integral_constant<int, head_dim>,
+                        std::false_type,  // is MLA
                         FragQ&         frag_Q,
                         CacheIter&     cache_iter_,
                         FragO&         frag_O,
                         FragM&         frag_M,
                         FragL&         frag_L,
                         int            offset_Q,
+                        int            offset_K,
                         int            max_step,
                         int            tile_iter,
-                        int            mask_iter,
+                        int            mask_iter_back,
+                        int            mask_iter_front,
+                        int            window_size,
                         float          qk_scale,
                         SharedStorage& storage,
                         const StoreS&  store_S)
@@ -327,7 +357,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
         auto cache_iter_K = cache_iter_;
         auto cache_iter_V = cache_iter_;
 
-        gmem_K.Prefetch(true_c, cache_iter_K, max_step - tile_iter * CTA_S, 0);
+        gmem_K.Prefetch(true_c, cache_iter_K, max_step - offset_K, 0);
         __pipeline_commit();
         cache_iter_K.Advance();
 
@@ -351,11 +381,10 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
         cache_iter_K.Advance();
 
         auto loop = [&](auto is_residue, auto is_mask, auto is_last) {
-            const int offset_K = tile_iter * CTA_S;
-
             if constexpr (is_mask) {
-                ApplyCasualMask(frag_S, offset_Q, offset_K);
+                ApplyCasualMask(frag_S, offset_Q, offset_K, window_size);
             }
+
             Impl::Softmax<is_mask>(frag_S, frag_M, frag_L, frag_O, qk_scale);
 
             Impl::ConvertStoP(frag_S, state_PV.frag_P, storage);
@@ -391,26 +420,129 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
                 state_QK.Load(0, 1);
             });
             cache_iter_K.Advance();
+
+            offset_K -= CTA_S;
         };
 
-        PRAGMA_UNROLL
-        for (; tile_iter >= 0 && mask_iter != 0; --tile_iter, --mask_iter) {
+        for (int mask_iter = max(1, mask_iter_back); tile_iter > 0 && mask_iter > 0; --tile_iter, --mask_iter) {
             loop(true_c, true_c, false_c);
         }
 
+        mask_iter_front = max(1, mask_iter_front);
+
         PRAGMA_NO_UNROLL
-        for (; tile_iter >= 1; --tile_iter) {
+        for (; tile_iter > mask_iter_front; --tile_iter) {
             loop(false_c, false_c, false_c);
         }
 
-        if (tile_iter >= 0) {
-            loop(false_c, false_c, true_c);
+        for (; tile_iter > 1; --tile_iter) {
+            loop(false_c, true_c, false_c);
+        }
+
+        if (tile_iter > 0) {
+            loop(false_c, true_c, true_c);
         }
 
         __pipeline_commit();
         __pipeline_wait_prior(0);
     }
-    // #endif
+#endif
+
+    // Simplified MLA implementation
+    template<int head_dim, class CacheIter, class StoreS, int Stages_>
+    __device__ void Run(Sm80_CpAsync<Stages_>,
+                        std::integral_constant<int, head_dim>,
+                        std::true_type,  // is MLA
+                        FragQ&         frag_Q,
+                        CacheIter&     cache_iter,
+                        FragO&         frag_O,
+                        FragM&         frag_M,
+                        FragL&         frag_L,
+                        int            offset_Q,
+                        int            offset_K,
+                        int            max_step,
+                        int            tile_iter,
+                        int            mask_iter_back,
+                        int            mask_iter_front,
+                        int            window_size,
+                        float          qk_scale,
+                        SharedStorage& storage,
+                        const StoreS&  store_S)
+    {
+        GmemIterK gmem_KV{};
+
+        Impl::SetSmemKV(gmem_KV, gmem_KV, storage, false);
+
+        PipeIter<Stages> pipe_iter;
+
+        PRAGMA_UNROLL
+        for (int i = 0; i < Stages; ++i) {
+            gmem_KV.ClearSmem((++pipe_iter).w);
+        }
+
+        Impl::Sync();
+
+        gmem_KV.Prefetch(true_c, cache_iter, max_step - offset_K, (++pipe_iter).w);
+        __pipeline_commit();
+        cache_iter.Advance();
+
+        PRAGMA_UNROLL
+        for (int stages = 1; stages < Stages - 1; ++stages) {
+            gmem_KV.Prefetch(false_c, cache_iter, CTA_S, (++pipe_iter).w);
+            __pipeline_commit();
+            cache_iter.Advance();
+        }
+
+        typename Impl::StateQK state_QK{storage, frag_Q};
+        typename Impl::StatePV state_PV{storage};
+
+        Wait();
+        state_QK.Load(0, (++pipe_iter).r);
+
+        auto loop = [&](auto is_mask) {
+            __align__(16) FragS frag_S{};
+
+            gmem_KV.Prefetch(false_c, cache_iter, CTA_S, pipe_iter.w);
+            __pipeline_commit();
+            cache_iter.Advance();
+
+            Impl::ComputeQK(
+                state_QK, frag_S, pipe_iter.r, [](int) {}, [] {});
+
+            if constexpr (is_mask) {
+                ApplyCasualMask(frag_S, offset_Q, offset_K, window_size);
+            }
+
+            Impl::Softmax<is_mask>(frag_S, frag_M, frag_L, frag_O, qk_scale);
+
+            Impl::ConvertStoP(frag_S, state_PV.frag_P, storage);
+
+            state_PV.Load(0, pipe_iter.r);
+            Impl::ComputePV(
+                state_PV, frag_O, pipe_iter.r, [](int) {}, [] {});
+
+            Wait();
+            state_QK.Load(0, (++pipe_iter).r);
+
+            offset_K -= CTA_S;
+        };
+
+        for (int mask_iter = mask_iter_back; tile_iter > 0 && mask_iter > 0; --tile_iter, --mask_iter) {
+            loop(true_c);
+        }
+
+        PRAGMA_NO_UNROLL
+        for (; tile_iter > mask_iter_front; --tile_iter) {
+            loop(false_c);
+        }
+
+        for (; tile_iter > 0; --tile_iter) {
+            loop(true_c);
+        }
+
+        __pipeline_commit();
+        __pipeline_wait_prior(0);
+    }
 
     __device__ void Wait()
     {
@@ -418,10 +550,12 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
         Impl::Sync();
     }
 
-    __device__ void ApplyCasualMask(FragS& frag_S, int offset_Q, int offset_K)
+    __device__ void ApplyCasualMask(FragS& frag_S, int offset_Q, int offset_K, int window_size)
     {
         Impl::ForeachS(frag_S, [&](int hi, int qi, int si, int ri, float& score) {
-            if (offset_Q + qi < offset_K + si) {
+            int w = (offset_Q + qi) - ((offset_K + si) * cp_size_ + cp_rank_);
+            if (0 <= w && w < window_size) {}
+            else {
                 score -= std::numeric_limits<float>::infinity();
             }
         });

@@ -1,3 +1,6 @@
+// Copyright (c) OpenMMLab. All rights reserved.
+#ifndef TURBOMIND_CORE_MODULE_H
+#define TURBOMIND_CORE_MODULE_H
 
 #include "src/turbomind/core/tensor.h"
 
@@ -21,10 +24,10 @@ public:
     void remove_module(Module& module);
     void remove_parameter(Tensor& param);
 
-    TensorMap get_parameters() const;
+    std::unordered_map<std::string, Tensor*> get_parameters() const;
 
 private:
-    void get_parameters_impl(std::string prefix, TensorMap& m) const;
+    void get_parameters_impl(std::string prefix, std::unordered_map<std::string, Tensor*>& m) const;
 
 protected:
     Module* parent_;
@@ -34,3 +37,5 @@ protected:
 };
 
 }  // namespace turbomind::core
+
+#endif  // TURBOMIND_CORE_MODULE_H

@@ -86,14 +86,14 @@ __global__ void RMSNorm(T*       dst,
 
 void invokeRMSNorm(Tensor& out, const Tensor& x, const Tensor& w, float eps, cudaStream_t st)
 {
+    if (x.size() == 0) {
+        return;
+    }
+
     TM_CHECK(x.ndim() == 2);
     TM_CHECK(out.shape() == x.shape());
     TM_CHECK(out.dtype() == x.dtype());
     TM_CHECK(w.dtype() == x.dtype() && w.shape(-1) == x.shape(-1));
-
-    if (x.size() == 0) {
-        return;
-    }
 
     auto invoke = [&](auto t) {
         using T = decltype(t);
@@ -192,24 +192,32 @@ void invokeQkRMSNorm(void*        data,
                      cudaStream_t stream)
 {
 
-    constexpr constant<128> max_dim{};
-    TM_CHECK_LE(head_dim, max_dim);
-
     auto invoke = [&](auto t) {
         using T = decltype(t);
 
-        constexpr int vec_size = sizeof(uint4) / sizeof(T);
-        // Captured constexpr may not be constant to MSVC
-        constexpr int thr_per_qk = max_dim.value / vec_size;
+        auto launch = [&](auto max_dim_c) {
+            constexpr int kMaxDim = std::decay_t<decltype(max_dim_c)>::value;
+            TM_CHECK_LE(head_dim, kMaxDim);
 
-        FT_CHECK(head_dim % vec_size == 0);
+            constexpr int vec_size   = sizeof(uint4) / sizeof(T);
+            constexpr int thr_per_qk = kMaxDim / vec_size;
 
-        const int threads   = thr_per_qk * n * (int64_t)token_num;
-        const int block_dim = 512;
-        const int grid_dim  = cdiv(threads, block_dim);
+            FT_CHECK(head_dim % vec_size == 0);
 
-        kernel::RMSNormQK<T, float, vec_size, max_dim><<<grid_dim, block_dim, 0, stream>>>(
-            (T*)data, ld, (const T*)weight, head_dim, n, token_num, eps, 1.f / head_dim);
+            const int threads   = thr_per_qk * n * (int64_t)token_num;
+            const int block_dim = 512;
+            const int grid_dim  = cdiv(threads, block_dim);
+
+            kernel::RMSNormQK<T, float, vec_size, kMaxDim><<<grid_dim, block_dim, 0, stream>>>(
+                (T*)data, ld, (const T*)weight, head_dim, n, token_num, eps, 1.f / head_dim);
+        };
+
+        if (head_dim <= 128) {
+            launch(constant<128>{});
+        }
+        else {
+            launch(constant<256>{});
+        }
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(dtype, invoke);
@@ -227,23 +235,32 @@ void invokeRMSNormQK(Tensor& x, const Tensor& w, float eps, cudaStream_t st)
     auto data   = x.raw_data();
     auto stride = x.stride(0);
 
-    constexpr constant<128> max_dim{};
-    TM_CHECK_LE(head_dim, max_dim);
-
     auto invoke = [&](auto t) {
         using T = decltype(t);
 
-        constexpr int vec_size   = sizeof(uint4) / sizeof(T);
-        constexpr int thr_per_qk = max_dim.value / vec_size;
+        auto launch = [&](auto max_dim_c) {
+            constexpr int kMaxDim = std::decay_t<decltype(max_dim_c)>::value;
+            TM_CHECK_LE(head_dim, kMaxDim);
 
-        TM_CHECK(head_dim % vec_size == 0);
+            constexpr int vec_size   = sizeof(uint4) / sizeof(T);
+            constexpr int thr_per_qk = kMaxDim / vec_size;
 
-        const int threads   = token_num * head_num * thr_per_qk;
-        const int block_dim = 512;
-        const int grid_dim  = cdiv(threads, block_dim);
+            TM_CHECK(head_dim % vec_size == 0);
 
-        kernel::RMSNormQK<T, float, vec_size, max_dim><<<grid_dim, block_dim, 0, st>>>(
-            (T*)data, stride, (const T*)w.raw_data(), head_dim, head_num, token_num, eps, 1.f / head_dim);
+            const int threads   = token_num * head_num * thr_per_qk;
+            const int block_dim = 512;
+            const int grid_dim  = cdiv(threads, block_dim);
+
+            kernel::RMSNormQK<T, float, vec_size, kMaxDim><<<grid_dim, block_dim, 0, st>>>(
+                (T*)data, stride, (const T*)w.raw_data(), head_dim, head_num, token_num, eps, 1.f / head_dim);
+        };
+
+        if (head_dim <= 128) {
+            launch(constant<128>{});
+        }
+        else {
+            launch(constant<256>{});
+        }
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(x.dtype(), invoke);
@@ -324,6 +341,7 @@ __global__ void BiasResidualRMSNormKernel(T* __restrict__ residual,
         PRAGMA_UNROLL
         for (int c = 0; c < vec_size; ++c) {
             r_vec[c] = (T)((float)r_vec[c] * sum) * w_vec[c];
+            // r_vec[c] = (T)((float)r_vec[c] * sum * (float)w_vec[c]);
         }
         Store(&hidden_states[i], r_vec);
     }
@@ -396,6 +414,137 @@ void invokeResidualBiasRMSNorm(void*        hidden_states,
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(dtype, invoke);
+}
+
+template<class T, class B, int vec_size>
+__global__ void biasKernel(T* data, const B* bias, int num, int dim)
+{
+    int ti = blockIdx.x;
+    int di = threadIdx.x * vec_size;
+
+    Array<B, vec_size> b;
+    Ldg(b, bias + di);
+
+    Array<T, vec_size> x;
+    Load(x, data + ti * dim + di);
+    using namespace ops;
+    x = x + cast<T>(b);
+    Store(data + ti * dim + di, x);
+}
+
+void ApplyBias(Tensor& data, const Tensor& bias, cudaStream_t st)
+{
+    if (!bias) {
+        return;
+    }
+
+    const int num = data.shape(0);
+    const int dim = data.shape(1);
+
+    TM_CHECK_EQ(dim, bias.shape(-1));
+
+    auto invoke0 = [&](auto t) {
+        using T      = decltype(t);
+        auto invoke1 = [&](auto b) {
+            using B                = decltype(b);
+            constexpr int vec_size = sizeof(uint4) / std::max(sizeof(T), sizeof(B));
+            TM_CHECK(dim % vec_size == 0);
+            const int blocks  = num;
+            const int threads = dim / vec_size;
+            TM_CHECK_LE(threads, 1024);
+            biasKernel<T, B, vec_size><<<blocks, threads, 0, st>>>(data.data<T>(),  //
+                                                                   bias.data<B>(),
+                                                                   num,
+                                                                   dim);
+        };
+        if constexpr (data_type_v<T> == kFloat) {
+            TM_DISPATCH_PRIMARY_DTYPES(bias.dtype(), invoke1);
+        }
+        else {  // skip mixing half and bf16
+            invoke1(t);
+        }
+    };
+    TM_DISPATCH_DTYPES(data.dtype(), invoke0, float, half, nv_bfloat16);
+}
+
+template<class T, int vec_size>
+__global__ void biasKernel(T* data, const T* bias, const int* offsets, int num, int dim, int groups, float scale)
+{
+    int ti = blockIdx.x;
+    int di = threadIdx.x * vec_size;
+
+    __shared__ int s_idx;
+
+    if (int tid = threadIdx.x; tid < groups) {
+        int b = __ldg(&offsets[tid]);
+        int e = __ldg(&offsets[tid + 1]);
+        if (b <= ti && ti < e) {
+            s_idx = tid;
+        }
+    }
+
+    data += ti * dim;
+
+    __syncthreads();
+
+    bias += s_idx * dim;
+
+    if (di >= dim) {
+        return;
+    }
+
+    Array<T, vec_size> b;
+    Ldg(b, bias + di);
+
+    PRAGMA_UNROLL
+    for (int i = 0; i < vec_size; ++i) {
+        b[i] = (T)((float)b[i] * scale);
+    }
+
+    Array<T, vec_size> x;
+    Load(x, data + di);
+
+    using namespace ops;
+    x = x + b;
+
+    Store(data + di, x);
+}
+
+void ApplyBias(Tensor& data, const Tensor& bias, const Buffer_<int>& offsets, float scale, cudaStream_t st)
+{
+    if (!bias) {
+        return;
+    }
+
+    const int num    = data.shape(0);
+    const int dim    = data.shape(1);
+    const int groups = offsets.size() - 1;
+
+    TM_CHECK_EQ(dim, bias.shape(-1));
+
+    // std::cout << data << " " << bias << " " << offsets << "\n";
+
+    auto invoke = [&](auto t) {
+        using T = decltype(t);
+
+        constexpr int vec_size = sizeof(uint4) / sizeof(T);
+        TM_CHECK(dim % vec_size == 0);
+
+        const int blocks  = num;
+        const int threads = std::max(dim / vec_size, groups);
+
+        TM_CHECK_LE(threads, 1024);
+
+        biasKernel<T, vec_size><<<blocks, threads, 0, st>>>(data.data<T>(),  //
+                                                            bias.data<T>(),
+                                                            offsets.data(),
+                                                            num,
+                                                            dim,
+                                                            offsets.size() - 1,
+                                                            scale);
+    };
+
+    TM_DISPATCH_PRIMARY_DTYPES(data.dtype(), invoke);
 }
 
 }  // namespace turbomind

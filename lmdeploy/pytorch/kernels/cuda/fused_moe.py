@@ -1,5 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
+from collections.abc import Callable
+
 import torch
 import triton
 import triton.language as tl
@@ -25,6 +27,7 @@ def get_cuda_autotune_config():
         },
                       num_stages=4,
                       num_warps=4),
+        # SM8
         triton.Config({
             'BLOCK_SIZE_M': 128,
             'BLOCK_SIZE_N': 128,
@@ -49,18 +52,46 @@ def get_cuda_autotune_config():
         },
                       num_stages=4,
                       num_warps=4),
+        # SM7-
+        triton.Config({
+            'BLOCK_SIZE_M': 64,
+            'BLOCK_SIZE_N': 128,
+            'BLOCK_SIZE_K': 32,
+            'GROUP_SIZE_M': 1,
+        },
+                      num_stages=4,
+                      num_warps=4),
+        triton.Config({
+            'BLOCK_SIZE_M': 128,
+            'BLOCK_SIZE_N': 32,
+            'BLOCK_SIZE_K': 32,
+            'GROUP_SIZE_M': 1,
+        },
+                      num_stages=4,
+                      num_warps=4),
+        triton.Config({
+            'BLOCK_SIZE_M': 64,
+            'BLOCK_SIZE_N': 32,
+            'BLOCK_SIZE_K': 32,
+            'GROUP_SIZE_M': 1,
+        },
+                      num_stages=5,
+                      num_warps=2),
     ]
 
 
-def _config_prune_func(config: dict, *args, **kwargs):
+def _config_prune_func(config: list, *args, **kwargs):
     """Fused moe config prune."""
     device_cap = torch.cuda.get_device_capability()
     num_sm9x = 2
+    cum_num_sm8x = 5
 
     if device_cap[0] >= 9:
         return config[:num_sm9x]
+    elif device_cap[0] >= 8:
+        return config[num_sm9x:cum_num_sm8x]
     else:
-        return config[num_sm9x:]
+        return config[cum_num_sm8x:]
 
 
 @triton.autotune(
@@ -72,11 +103,11 @@ def _config_prune_func(config: dict, *args, **kwargs):
 def fused_moe_kernel(
     A,
     B,
+    bias,
     C,
     SortedIdx,
     ExpStart,
     ExpEnd,
-    Weights,
     N: tl.constexpr,
     K: tl.constexpr,
     stride_am: tl.constexpr,
@@ -86,12 +117,13 @@ def fused_moe_kernel(
     stride_bk: tl.constexpr,
     stride_cm: tl.constexpr,
     stride_cn: tl.constexpr,
+    stride_bie: tl.constexpr,
+    stride_bin: tl.constexpr,
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
     M_NP2: tl.constexpr,
-    ENABLE_WEIGHTS: tl.constexpr,
     tune_hint: tl.constexpr,
     top_k: tl.constexpr,
     expert_offset: tl.constexpr,
@@ -151,9 +183,10 @@ def fused_moe_kernel(
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
 
-    if ENABLE_WEIGHTS:
-        weight = tl.load(Weights + sid, mask=mask_sid)
-        accumulator = accumulator * weight[:, None].to(accumulator.dtype)
+    if bias is not None:
+        bias_ptrs = bias + exp_id * stride_bie + offs_bn * stride_bin
+        bias_val = tl.load(bias_ptrs).to(accumulator.dtype)
+        accumulator += bias_val[None]
 
     c = accumulator.to(A.dtype.element_ty)
 
@@ -172,8 +205,7 @@ def fused_moe_kernel_launcher(
     sorted_idx: torch.Tensor,
     exp_start: torch.Tensor,
     exp_end: torch.Tensor,
-    weights: torch.Tensor,
-    enable_weights: bool = False,
+    bias: torch.Tensor = None,
     top_k: int = 1,
     num_tokens: int = None,
     expert_offset: int = 0,
@@ -195,16 +227,17 @@ def fused_moe_kernel_launcher(
 
     A = A.flatten(0, -2)
     C = C.flatten(0, -2)
+    enable_bias = bias is not None
 
     grid = _grid_fn
     fused_moe_kernel[grid](
         A,
         B,
+        bias,
         C,
         sorted_idx,
         exp_start,
         exp_end,
-        weights,
         N=N,
         K=K,
         stride_am=A.stride(0),
@@ -214,7 +247,8 @@ def fused_moe_kernel_launcher(
         stride_bk=B.stride(2),
         stride_cm=C.stride(0),
         stride_cn=C.stride(1),
-        ENABLE_WEIGHTS=enable_weights,
+        stride_bie=bias.stride(0) if enable_bias else 0,
+        stride_bin=bias.stride(1) if enable_bias else 0,
         tune_hint=tune_hint,
         top_k=top_k,
         expert_offset=expert_offset,
@@ -348,7 +382,7 @@ def get_start_end(exp_cum: torch.Tensor, exp_topk: torch.Tensor, topk: int):
     exp_start = start_end[0, :]
     exp_end = start_end[1, :]
 
-    out = exp_cum.new_empty((num_tokens * topk))
+    out = exp_cum.new_empty(num_tokens * topk)
 
     num_warps = 1
 
@@ -405,15 +439,102 @@ def _make_intermediate(shape: tuple, dtype: torch.dtype, device: torch.device, z
         return torch.empty(shape, dtype=dtype, device=device)
 
 
+@triton.jit
+def _moe_reduce_kernel(
+    hidden_states_ptr,
+    weights_ptr,
+    out_ptr,
+    stride_hm,
+    stride_hk: tl.constexpr,
+    stride_hn: tl.constexpr,
+    stride_wm,
+    stride_wk: tl.constexpr,
+    stride_om,
+    stride_on: tl.constexpr,
+    fp32_acc: tl.constexpr,
+    K: tl.constexpr,
+    N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    num_n_split = tl.cdiv(N, BLOCK_N)
+    mid = pid // num_n_split
+    nid = pid % num_n_split
+
+    offs_k = tl.arange(0, BLOCK_K)
+    offs_n = nid * BLOCK_N + tl.arange(0, BLOCK_N)
+    weights_ptrs = weights_ptr + mid * stride_wm + offs_k * stride_wk
+    h_ptrs = hidden_states_ptr + mid * stride_hm + offs_k[:, None] * stride_hk + offs_n[None, :] * stride_hn
+    o_ptrs = out_ptr + mid * stride_om + offs_n * stride_on
+
+    mask_k = offs_k < K
+    mask_n = offs_n < N  # dummy load to get N
+    mask_h = mask_k[:, None] & mask_n[None, :]
+
+    h = tl.load(h_ptrs, mask=mask_h, other=0.0)
+    w = tl.load(weights_ptrs, mask=mask_k, other=0.0)
+
+    if fp32_acc:
+        h = h.to(tl.float32)
+        w = w.to(tl.float32)
+    else:
+        w = w.to(h.dtype)
+
+    wh = h * w[:, None]
+    o = wh.sum(axis=0)
+    tl.store(o_ptrs, o, mask=mask_n)
+
+
+def moe_reduce(hidden_states: torch.Tensor, topk_weights: torch.Tensor, fp32_acc: bool = False) -> torch.Tensor:
+    """Moe reduce."""
+    assert hidden_states.dim() == 3
+    assert topk_weights.dim() == 2
+    assert hidden_states.size(0) == topk_weights.size(0)
+    assert hidden_states.size(1) == topk_weights.size(1)
+    M, K, N = hidden_states.shape
+
+    out = hidden_states.new_empty((M, N))
+
+    BLOCK_K = triton.next_power_of_2(K)
+    num_warps = 1
+    BLOCK_N = triton.cdiv(num_warps * 512, hidden_states.element_size())
+    grid = (M * triton.cdiv(N, BLOCK_N), )
+
+    _moe_reduce_kernel[grid](
+        hidden_states,
+        topk_weights,
+        out,
+        hidden_states.stride(0),
+        hidden_states.stride(1),
+        hidden_states.stride(2),
+        topk_weights.stride(0),
+        topk_weights.stride(1),
+        out.stride(0),
+        out.stride(1),
+        fp32_acc,
+        K,
+        N,
+        BLOCK_K,
+        BLOCK_N,
+        num_warps=num_warps,
+    )
+
+    return out
+
+
 def fused_moe(hidden_states: torch.Tensor,
               w1: torch.Tensor,
               w2: torch.Tensor,
               topk_weights: torch.Tensor,
               topk_ids: torch.Tensor,
               topk: int,
+              w1_bias: torch.Tensor = None,
+              w2_bias: torch.Tensor = None,
               expert_offset: int = 0,
               num_experts: int = None,
-              renormalize: bool = False) -> torch.Tensor:
+              renormalize: bool = False,
+              act_func: Callable = None) -> torch.Tensor:
     """Fused moe."""
     M = hidden_states.size(0)
     E, N, _ = w1.shape
@@ -436,8 +557,7 @@ def fused_moe(hidden_states: torch.Tensor,
         sorted_idx=sorted_idx,
         exp_start=exp_start,
         exp_end=exp_end,
-        weights=topk_weights,
-        enable_weights=False,
+        bias=w1_bias,
         top_k=topk,
         num_tokens=M,
         expert_offset=expert_offset,
@@ -448,7 +568,11 @@ def fused_moe(hidden_states: torch.Tensor,
     # activate
     unflat_size = intermediate_cache1.shape[:-1]
     intermediate_cache1 = intermediate_cache1.flatten(0, -2)
-    gate_cache = silu_and_mul(intermediate_cache1)
+
+    if act_func is None:
+        gate_cache = silu_and_mul(intermediate_cache1)
+    else:
+        gate_cache = act_func(intermediate_cache1)
     gate_cache = gate_cache.unflatten(0, unflat_size)
 
     intermediate_cache2 = _make_intermediate((M, topk, w2.shape[1]),
@@ -463,8 +587,7 @@ def fused_moe(hidden_states: torch.Tensor,
         sorted_idx=sorted_idx,
         exp_start=exp_start,
         exp_end=exp_end,
-        weights=topk_weights,
-        enable_weights=True,
+        bias=w2_bias,
         top_k=1,
         num_tokens=M,
         expert_offset=expert_offset,
@@ -472,5 +595,5 @@ def fused_moe(hidden_states: torch.Tensor,
         reindex_c=True,
     )
 
-    ret = intermediate_cache2.sum(dim=1)
+    ret = moe_reduce(intermediate_cache2, topk_weights)
     return ret

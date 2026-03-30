@@ -5,9 +5,20 @@ import math
 import torch
 from torch import nn
 
-from ..default.rotary_embedding import LlamaDynamicNTKScalingRotaryEmbedding, YarnRotaryEmbeddingImpl
-from ..rotary_embedding import (Llama3Parameters, LongRoPEScalingParameters, RopeType, RotaryEmbeddingBuilder,
-                                RotaryEmbeddingImpl, YarnParameters)
+from ..default.rotary_embedding import (
+    FopeRotaryEmbeddingImpl,
+    LlamaDynamicNTKScalingRotaryEmbedding,
+    YarnRotaryEmbeddingImpl,
+)
+from ..rotary_embedding import (
+    FopeParameters,
+    Llama3Parameters,
+    LongRoPEScalingParameters,
+    RopeType,
+    RotaryEmbeddingBuilder,
+    RotaryEmbeddingImpl,
+    YarnParameters,
+)
 
 
 def _rotary_embedding_fwd(position_ids: torch.Tensor,
@@ -46,8 +57,7 @@ class DlinferRotaryEmbeddingImpl(RotaryEmbeddingImpl, nn.Module):
         self.dim = dim
         self.base = base
         # yapf: disable
-        inv_freq = 1.0 / (self.base
-                          ** (torch.arange(0, self.dim, 2, dtype=torch.int64).float() / self.dim)).float().cuda()
+        inv_freq = 1.0 / (self.base**(torch.arange(0, self.dim, 2, dtype=torch.int64).float() / self.dim))
         # yapf: enable
         self.register_buffer('inv_freq', inv_freq, persistent=False)
 
@@ -157,6 +167,7 @@ class DlinferRotaryEmbeddingBuilder(RotaryEmbeddingBuilder):
         yarn_params: YarnParameters = None,
         longrope_params: LongRoPEScalingParameters = None,
         llama3_params: Llama3Parameters = None,
+        fope_params: FopeParameters = None,
         emb_type: RopeType = RopeType.Default,
     ):
         """build."""
@@ -173,5 +184,12 @@ class DlinferRotaryEmbeddingBuilder(RotaryEmbeddingBuilder):
                                                   scaling_factor,
                                                   max_position_embeddings,
                                                   yarn_params=yarn_params)
+        elif emb_type == RopeType.Fope:
+            return FopeRotaryEmbeddingImpl(
+                dim,
+                max_position_embeddings=max_position_embeddings,
+                scaling_factor=scaling_factor,
+                params=fope_params,
+            )
         else:
             raise NotImplementedError(f'Unsupported embedding type: {emb_type}')

@@ -175,6 +175,14 @@ TEST_CASE("test basic buffer", "[buffer]")
     Buffer e;
     REQUIRE(!e.data_or((void*)0));
     REQUIRE(!e.data_or<int>(nullptr));
+
+    Buffer_<int> w;
+    REQUIRE(!w.data_or(nullptr));
+    REQUIRE(!std::as_const(w).data_or(nullptr));
+
+    w = {1024, kCPU};
+    REQUIRE(w.raw_data());
+    REQUIRE(std::as_const(w).raw_data());
 }
 
 TEST_CASE("test buffer view", "[buffer]")

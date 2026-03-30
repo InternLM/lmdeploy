@@ -5,7 +5,6 @@ import json
 import os
 import random
 from queue import Queue
-from typing import List, Optional, Tuple, Union
 
 import numpy as np
 from tqdm import tqdm
@@ -25,8 +24,8 @@ def sample_sharegpt_requests(
     dataset_path: str,
     num_requests: int,
     tokenizer: PreTrainedTokenizerBase,
-    fixed_output_len: Optional[int] = None,
-) -> List[Tuple[str, int, int]]:
+    fixed_output_len: int | None = None,
+) -> list[tuple[str, int, int]]:
     if fixed_output_len is not None and fixed_output_len < 4:
         raise ValueError('output_len too small')
     # Load the dataset.
@@ -41,7 +40,7 @@ def sample_sharegpt_requests(
     random.shuffle(dataset)
 
     # Filter out sequences that are too long or too short
-    filtered_dataset: List[Tuple[str, int, int]] = []
+    filtered_dataset: list[tuple[str, int, int]] = []
     for i in range(len(dataset)):
         if len(filtered_dataset) == num_requests:
             break
@@ -73,7 +72,7 @@ def sample_random_requests(
     range_ratio: float,
     tokenizer: PreTrainedTokenizerBase,
     dataset_path: str,
-) -> List[Tuple[str, int, int]]:
+) -> list[tuple[str, int, int]]:
 
     input_lens = np.random.randint(
         max(int(input_len * range_ratio), 1),
@@ -104,7 +103,7 @@ def sample_random_requests(
         random.shuffle(dataset)
 
         # Filter out sequences that are too long or too short
-        input_requests: List[Tuple[str, int, int]] = []
+        input_requests: list[tuple[str, int, int]] = []
         for i in range(num_prompts):
             # Tokenize the prompts and completions.
             prompt = dataset[i][0]
@@ -134,15 +133,15 @@ def sample_random_requests(
 
 class Engine:
 
-    def __init__(self, model_path: str, engine_config: Union[PytorchEngineConfig, TurbomindEngineConfig]):
+    def __init__(self, model_path: str, engine_config: PytorchEngineConfig | TurbomindEngineConfig):
         self.tokenizer = Tokenizer(model_path)
         if isinstance(engine_config, TurbomindEngineConfig):
             from lmdeploy.turbomind import TurboMind
-            tm_model = TurboMind.from_pretrained(model_path, tokenizer=self.tokenizer, engine_config=engine_config)
+            tm_model = TurboMind.from_pretrained(model_path, engine_config=engine_config)
             self.backend = 'turbomind'
         elif isinstance(engine_config, PytorchEngineConfig):
             from lmdeploy.pytorch.engine import Engine as PytorchEngine
-            tm_model = PytorchEngine.from_pretrained(model_path, tokenizer=self.tokenizer, engine_config=engine_config)
+            tm_model = PytorchEngine.from_pretrained(model_path, engine_config=engine_config)
             self.backend = 'pytorch'
 
         self.tm_model = tm_model
@@ -163,7 +162,7 @@ class Engine:
 
             state = DetokenizeState(len(input_ids))
 
-            prev_len = 0
+            n_token = 0
             token_ids = input_ids.copy()
 
             generator = model_inst.async_stream_infer(session_id,
@@ -178,15 +177,13 @@ class Engine:
                                                       stream_output=stream_output)
             try:
                 async for outputs in generator:
-                    n_token = outputs.num_token
-                    if n_token > prev_len:
-                        token_ids += outputs.token_ids[prev_len - n_token:]
-                        if not skip_detokenize:
-                            _, state = self.tokenizer.detokenize_incrementally(token_ids, state)
-                        sess.tick(n_token)
-                        prev_len = n_token
-                        if n_token > cancel_after:
-                            break
+                    n_token += len(outputs.token_ids)
+                    token_ids += outputs.token_ids
+                    if not skip_detokenize:
+                        _, state = self.tokenizer.detokenize_incrementally(token_ids, state)
+                    sess.tick(n_token)
+                    if n_token > cancel_after:
+                        break
                 sess.finish(Session.SUCCESS)
             finally:
                 await generator.aclose()
@@ -224,18 +221,14 @@ class Engine:
             tasks.append(task)
 
         async def _gather_tasks(tasks):
-            return await asyncio.gather(*tasks)
+            profiler.start()
+            ret = await asyncio.gather(*tasks)
+            profiler.finish()
+            return ret
 
         self.pbar = tqdm(total=len(requests))
 
-        event_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(event_loop)
-
-        profiler.start()
-
         asyncio.run(_gather_tasks(tasks))
-
-        profiler.finish()
 
         self.pbar.close()
 
@@ -307,6 +300,10 @@ def parse_args():
     # pytorch engine args
     pt_group = parser.add_argument_group('PyTorch engine arguments')
     ArgumentHelper.eager_mode(pt_group)
+    ArgumentHelper.dllm_block_length(pt_group)
+    ArgumentHelper.dllm_unmasking_strategy(pt_group)
+    ArgumentHelper.dllm_denoising_steps(pt_group)
+    ArgumentHelper.dllm_confidence_threshold(pt_group)
 
     tp_act = ArgumentHelper.tp(pt_group)
     cache_count_act = ArgumentHelper.cache_max_entry_count(pt_group)
@@ -325,9 +322,11 @@ def parse_args():
     tb_group._group_actions.append(dtype_act)
 
     ArgumentHelper.dp(tb_group)
+    ArgumentHelper.cp(tb_group)
     ArgumentHelper.model_format(tb_group, default='hf')
     ArgumentHelper.num_tokens_per_iter(tb_group)
     ArgumentHelper.max_prefill_iters(tb_group)
+    ArgumentHelper.async_(tb_group)
     ArgumentHelper.communicator(tb_group)
 
     args = parser.parse_args()
@@ -342,12 +341,14 @@ def main():
             max_batch_size=args.concurrency // args.dp,
             tp=args.tp,
             dp=args.dp,
+            cp=args.cp,
             cache_max_entry_count=args.cache_max_entry_count,
             cache_block_seq_len=args.cache_block_seq_len,
             model_format=args.model_format,
             quant_policy=args.quant_policy,
             num_tokens_per_iter=args.num_tokens_per_iter,
             max_prefill_iters=args.max_prefill_iters,
+            async_=args.async_,
             enable_prefix_caching=args.enable_prefix_caching,
             dtype=args.dtype,
             communicator=args.communicator,
@@ -363,6 +364,10 @@ def main():
             quant_policy=args.quant_policy,
             dtype=args.dtype,
             distributed_executor_backend=args.distributed_executor_backend,
+            dllm_block_length=args.dllm_block_length,
+            dllm_unmasking_strategy=args.dllm_unmasking_strategy,
+            dllm_denoising_steps=args.dllm_denoising_steps,
+            dllm_confidence_threshold=args.dllm_confidence_threshold,
         )
 
     if args.use_uvloop:

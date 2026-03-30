@@ -165,6 +165,9 @@ struct TestComm {
 
         std::tie(h_comm_, d_comm_, h_split_, d_split_) = Init(device_num, 4, "cuda-ipc");
 
+        TM_CHECK_GT(h_comm_.size(), 0);
+        TM_CHECK_GT(d_comm_.size(), 0);
+
         warmup_ = warmup;
         iters_  = iters;
         tokens_ = tokens;
@@ -173,13 +176,14 @@ struct TestComm {
 
         const int g = 0;
 
-        // TestAllReduce<half>(hidden_dim, g);
-        TestAllreduceResidualBiasRMSnorm<half>(hidden_dim, g);
-        TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 0, 0);
-        TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 1, 0);
-        TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 0, 1);
+        TestAllReduce<half>(hidden_dim, 0);
+        // TestAllreduceResidualBiasRMSnorm<half>(hidden_dim, g);
+        // TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 0, 0);
+        // TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 1, 0);
+        // TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 0, 1);
         // TestAllGather<half>(hidden_dim / tp, g);  // tp embedding
-        // TestAllGather<float>(vocab_size / tp, g);
+        // TestAllGather<half>(vocab_size / tp, g);
+        // TestBroadcast<half>(32768, g);
     }
 
     template<class T>
@@ -372,7 +376,7 @@ struct TestComm {
                     ref_res[d][idx]  = src_res[d][idx] + ref_data[d][idx] + bias[i];  // r' <- r + (h + b)
                     sum += (float)ref_res[d][idx] * (float)ref_res[d][idx];
                 }
-                sum = rsqrtf(sum / dim + eps);
+                sum = 1 / (sqrtf(sum / dim) + eps);
                 for (size_t i = 0; i < dim; ++i) {
                     const size_t idx = t * dim + i;
                     float        tmp = (float)ref_res[d][idx];
@@ -570,7 +574,7 @@ struct TestComm {
                     check_cuda_error(cudaMemsetAsync(d_tmp, 0, sizeof(T) * count * n_ranks, ctx.stream));
                     ctx.copy_n(d_data, count, d_tmp + rank * count);
                     auto ms = ctx.exec([&](auto stream) {  //
-                        if (d_comm->Query(kHasAllGather2D)) {
+                        if (d_comm->Query(kHasAllGather2D) && 0) {
                             d_comm->AllGather2D(
                                 d_tmp + rank * count, d_tmp, dim, count, dim, n, dtype, {1, 1}, group, stream);
                         }
@@ -593,6 +597,117 @@ struct TestComm {
                     const size_t count = n_ranks * tokens_[i] * dim;
                     const float  algbw = sizeof(T) * count / 1e9f / avg * 1000.f;
                     const float  busbw = algbw * (n_ranks - 1) / n_ranks;
+
+                    SummaryEntry(tokens_[i], count, sizeof(T), avg, algbw, busbw);
+                }
+            }
+
+            d_comm->Deregister(d_tmp);
+            d_comm->Free(d_tmp);
+        };
+
+        std::vector<std::thread> threads;
+        for (size_t i = 0; i < d_comm_.size(); ++i) {
+            threads.emplace_back(func, i, std::ref(d_comm_[i]), std::ref(h_comm_[i]));
+        }
+        for (auto& t : threads) {
+            t.join();
+        }
+    }
+
+    template<class T>
+    void TestBroadcast(size_t dim, int group)
+    {
+        const auto dtype = data_type_v<T>;
+
+        const int tp_size = d_comm_[0]->n_ranks(group);
+        const int dp_size = d_comm_.size() / tp_size;
+
+        constexpr int root = 0;
+
+        vector<vector<T>> data(dp_size);
+
+        auto func = [&](int index, DeviceComm& d_comm, HostComm& h_comm) {
+            const int rank    = d_comm->rank(group);
+            const int n_ranks = d_comm->n_ranks(group);
+            const int g_rank  = d_comm->rank(0);
+            const int d       = g_rank / n_ranks;
+
+            const size_t max_count = max_tokens_ * dim;
+
+            if (h_comm->rank() == root) {
+                std::cout << "preparing data ... " << std::flush;
+                std::mt19937                  gen{(unsigned)index};
+                std::uniform_int_distribution dist{0, 100};
+                data[d].resize(max_count);
+                for (size_t i = 0; i < max_count; ++i) {
+                    data[d][i] = T(dist(gen));
+                }
+                std::cout << "done.\n";
+            }
+
+            h_comm->Sync();
+
+            Context ctx{g_rank};
+
+            T* d_data = ctx.malloc<T>(max_count);
+
+            T* d_tmp = (T*)d_comm->Allocate(sizeof(T) * max_count);
+            d_comm->Register(d_tmp, sizeof(T) * max_count);
+
+            if (rank == root) {
+                ctx.copy_n(data[d].data(), max_count, d_data);
+            }
+
+            [[maybe_unused]] auto verify = [&](int64_t count) {
+                auto           total_count = count;
+                std::vector<T> res(total_count);
+                ctx.copy_n(d_tmp, total_count, res.data());
+                ctx.sync();
+                size_t diff = 0;
+                for (auto i = 0; i < count; ++i) {
+                    auto& x = res[i];
+                    auto& y = data[d][i];
+                    diff += (x != y);
+                    if (diff == 1) {
+                        printf("%d: %f vs %f\n", (int)i, (float)x, (float)y);
+                    }
+                }
+                if (diff) {
+                    printf("[rank %d] count = %d, diff = %lu\n", g_rank, (int)count, diff);
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                    std::abort();
+                }
+            };
+
+            std::vector<float> deltas;
+            for (const auto& n : tokens_) {
+                const size_t count = (size_t)n * dim;  // dim = hidden_dim / tp
+                auto&        delta = deltas.emplace_back();
+                h_comm->Sync();
+                for (int i = 0; i < warmup_ + iters_; ++i) {
+                    check_cuda_error(cudaMemsetAsync(d_tmp, 0, sizeof(T) * count, ctx.stream));
+                    if (rank == root) {
+                        ctx.copy_n(d_data, count, d_tmp);
+                    }
+                    auto ms = ctx.exec([&](auto stream) {  //
+                        d_comm->Broadcast(d_tmp, d_tmp, count, dtype, 0, group, stream);
+                    });
+                    if (i >= warmup_) {
+                        delta += ms;
+                    }
+                    // verify(count);
+                }
+                verify(count);
+            }
+
+            if (g_rank == 0) {
+                SummaryHeader("broadcast", dim, n_ranks);
+                for (size_t i = 0; i < tokens_.size(); ++i) {
+                    const float  avg   = deltas[i] / iters_;
+                    const size_t count = tokens_[i] * dim;
+                    const float  algbw = sizeof(T) * count / 1e9f / avg * 1000.f;
+                    const float  busbw = algbw;
                     SummaryEntry(tokens_[i], count, sizeof(T), avg, algbw, busbw);
                 }
             }
@@ -613,8 +728,8 @@ struct TestComm {
     template<class T>
     void TestAllreduceResidualBiasRMSnormEx(size_t dim, int group0, int group1)
     {
-        const int tp_size_0 = d_comm_[0]->n_ranks(group0);
-        const int tp_size_1 = d_comm_[0]->n_ranks(group1);
+        const int tp_size_0 = d_comm_.at(0)->n_ranks(group0);
+        const int tp_size_1 = d_comm_.at(0)->n_ranks(group1);
         const int dp_size_0 = d_comm_.size() / tp_size_0;
         const int dp_size_1 = d_comm_.size() / tp_size_1;
 
@@ -684,7 +799,7 @@ struct TestComm {
                 ref_res[idx] = src_res[idx] + ref_data[idx] + bias[d];  // r' <- r + (h + b)
                 sum += (float)ref_res[idx] * (float)ref_res[idx];
             }
-            sum = rsqrtf(sum / dim + eps);
+            sum = 1 / (sqrtf(sum / dim) + eps);
             for (size_t d = 0; d < dim; ++d) {
                 size_t idx    = i * dim + d;
                 ref_data[idx] = (float)ref_res[idx] * sum * (float)weight[d];  // h' <- norm(r) * w
@@ -849,65 +964,25 @@ struct TestComm {
 
 int main(int argc, char* argv[])
 {
-#if 0
-    const int                N     = 8;
-    auto                     state = std::make_shared<HostComm::State>(N);
-    std::vector<std::thread> threads;
-    for (int r = 0; r < N; ++r) {
-        threads.emplace_back([&, r] {
-            HostComm comm(N, r, state);
-            int      group    = 0;
-            // group             = comm.Split(r / (N / 2), 0);
-            group             = comm.Split(r % 4, 0);
-            auto         tick = std::chrono::steady_clock::now();
-            volatile int a;
-            volatile int b;
-            for (int i = 0; i < 1; ++i) {
-                a      = Allreduce<RedOp::kSum>(comm, r, group);
-                auto v = Allgather(comm, r, group);
-                b      = std::accumulate(v.begin(), v.end(), 0);
-                for (int j = 0; j < N; ++j) {
-                    comm.Sync();
-                    if (j == r) {
-                        std::cout << a << " " << b << std::endl;
-                    }
-                }
-            }
-            auto tock = std::chrono::steady_clock::now();
-
-            for (int i = 0; i < N; ++i) {
-                comm.Sync();
-                if (i == r) {
-                    std::cout << std::chrono::duration<float, std::milli>(tock - tick).count() << std::endl;
-                }
-            }
-        });
-    }
-    std::cout << "main thread waiting.\n";
-    for (auto& t : threads) {
-        t.join();
-    }
-    return 0;
-#endif
 
     TestComm test;
 
-    test.Run(8192,  //
+    test.Run(2048,  //
              128000,
              -1,
              10,
-             100,
+             10000,
              //   {1024});
              //   {1024, 2048, 4096, 8192});
              // {512});
-             //  {1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 24, 32, 48, 64, 96, 128});
+             //    {1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 24, 32, 48, 64, 96, 128});
              //  {2, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128});
              //  {128, 256, 512, 1024, 2048, 4096, 8192});
              //  {8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 4096, 6144, 8192});
              //   {8192, 16384, 32768});
-             //  {1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024});
-             {1,   2,   4,   6,   8,   12,   16,   24,   32,   48,   64,   96,  128,
-              192, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192});
+             //  {1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 8192});
+             {1,   2,   4,   6,   8,   12,   16,   24,   32,   48,   64,   96,   128,
+              192, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192, 16384});
 
     return 0;
 }

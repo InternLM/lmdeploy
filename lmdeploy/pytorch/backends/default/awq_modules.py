@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from functools import lru_cache
-from typing import Optional
 
 import torch
 
@@ -61,8 +60,9 @@ class DefaultLinearW4A16Impl(LinearW4A16Impl):
                 qweight: torch.Tensor,
                 scales: torch.Tensor,
                 qzeros: torch.Tensor,
-                bias: Optional[torch.Tensor] = None,
-                all_reduce: bool = False):
+                bias: torch.Tensor | None = None,
+                all_reduce: bool = False,
+                group: torch.distributed.ProcessGroup | None = None):
         """forward."""
         out_shape = x.shape[:-1] + (self.out_features, )
         input_dtype = x.dtype
@@ -77,7 +77,7 @@ class DefaultLinearW4A16Impl(LinearW4A16Impl):
         if input_dtype != torch.float16:
             out = out.to(dtype=input_dtype)
         if all_reduce:
-            dist.all_reduce(out)
+            dist.all_reduce(out, group=group)
         return out
 
 

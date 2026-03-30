@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 from functools import partial
-from typing import Union
 
 import torch
 from torch import nn
@@ -9,11 +8,15 @@ from transformers import PreTrainedTokenizer
 
 from lmdeploy.lite.quantization.activation import ActivationObserver
 from lmdeploy.lite.quantization.awq import FC_FCS_MAP, NORM_FCS_MAP
-from lmdeploy.lite.utils import (bimap_name_mod, collect_target_modules, concat_decoder_layer_outputs,
-                                 split_decoder_layer_inputs)
+from lmdeploy.lite.utils import (
+    bimap_name_mod,
+    collect_target_modules,
+    concat_decoder_layer_outputs,
+    split_decoder_layer_inputs,
+)
 
 
-class CalibrationContext():
+class CalibrationContext:
     """Calibration context manager for model quantization.
 
     Parameters:
@@ -30,8 +33,8 @@ class CalibrationContext():
     def __init__(self,
                  model: nn.Module,
                  tokenizer: PreTrainedTokenizer,
-                 layer_type: Union[str, type],
-                 norm_type: Union[str, type],
+                 layer_type: str | type,
+                 norm_type: str | type,
                  batch_size: int = 1,
                  device: str = 'cuda',
                  **kwargs) -> None:
@@ -40,8 +43,8 @@ class CalibrationContext():
         Args:
             model (nn.Module): Model to be calibrated.
             tokenizer (PreTrainedTokenizer): Tokenizer of the given model.
-            layer_type (Union[str, type]): Type of the layers to be observed.
-            norm_type (Union[str, type]): Norm type used in the model.
+            layer_type (str | type): Type of the layers to be observed.
+            norm_type (str | type): Norm type used in the model.
             batch_size (int): The batch size for running the calib samples.
                 Low GPU mem requires small batch_size. Large batch_size
                 reduces the calibration time while costs more VRAM.
@@ -156,7 +159,7 @@ class CalibrationContext():
             del batch_outputs, batch_args, batch_kwargs, args
             mod.to('cpu')
             torch.cuda.empty_cache()
-            max_memory = torch.cuda.max_memory_allocated() / 1024 / 1024 / 1024
+            max_memory = torch.cuda.max_memory_allocated(device=self.device) / 1024 / 1024 / 1024
             print(f'{m_name}, samples: {samples}, '
                   f'max gpu memory: {max_memory:.2f} GB')
             return outputs
@@ -201,7 +204,7 @@ class CalibrationContext():
         to specified directory.
 
         Args:
-            out_dir (Union[str, Path]): The directory path where the stats
+            out_dir (str | Path): The directory path where the stats
                 will be saved.
         """
 
@@ -339,8 +342,8 @@ class CalibrationContextV2(CalibrationContext):
     def __init__(self,
                  model: nn.Module,
                  tokenizer: PreTrainedTokenizer,
-                 layer_type: Union[str, type],
-                 norm_type: Union[str, type],
+                 layer_type: str | type,
+                 norm_type: str | type,
                  batch_size: int = 1,
                  device: str = 'cuda',
                  search_scale: bool = True,
@@ -374,7 +377,7 @@ class CalibrationContextV2(CalibrationContext):
         to specified directory.
 
         Args:
-            out_dir (Union[str, Path]): The directory path where the stats
+            out_dir (str | Path): The directory path where the stats
                 will be saved.
         """
         inputs_stats = {
@@ -428,7 +431,7 @@ class CalibrationContextV2(CalibrationContext):
             import gc
             gc.collect()
             torch.cuda.empty_cache()
-            max_memory = torch.cuda.max_memory_allocated() / (1 << 30)
+            max_memory = torch.cuda.max_memory_allocated(device=self.device) / (1 << 30)
             print(f'{m_name}, samples: {samples}, '
                   f'max gpu memory: {max_memory:.2f} GB')
             return outputs

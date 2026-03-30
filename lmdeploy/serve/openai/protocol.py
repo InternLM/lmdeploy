@@ -2,10 +2,10 @@
 # Modified from
 # https://github.com/lm-sys/FastChat/blob/168ccc29d3f7edc50823016105c024fe2282732a/fastchat/protocol/openai_api_protocol.py
 import time
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Literal
 
 import shortuuid
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ErrorResponse(BaseModel):
@@ -13,7 +13,7 @@ class ErrorResponse(BaseModel):
     message: str
     type: str
     code: int
-    param: Optional[str] = None
+    param: str | None = None
     object: str = 'error'
 
 
@@ -29,7 +29,7 @@ class ModelPermission(BaseModel):
     allow_view: bool = True
     allow_fine_tuning: bool = False
     organization: str = '*'
-    group: Optional[str] = None
+    group: str | None = None
     is_blocking: bool = False
 
 
@@ -39,29 +39,29 @@ class ModelCard(BaseModel):
     object: str = 'model'
     created: int = Field(default_factory=lambda: int(time.time()))
     owned_by: str = 'lmdeploy'
-    root: Optional[str] = None
-    parent: Optional[str] = None
-    permission: List[ModelPermission] = []
+    root: str | None = None
+    parent: str | None = None
+    permission: list[ModelPermission] = []
 
 
 class ModelList(BaseModel):
     """Model list consists of model cards."""
     object: str = 'list'
-    data: List[ModelCard] = []
+    data: list[ModelCard] = []
 
 
 class UsageInfo(BaseModel):
     """Usage information."""
     prompt_tokens: int = 0
     total_tokens: int = 0
-    completion_tokens: Optional[int] = 0
+    completion_tokens: int | None = 0
 
 
 class Function(BaseModel):
     """Function descriptions."""
-    description: Optional[str] = Field(default=None, examples=[None])
+    description: str | None = Field(default=None, examples=[None])
     name: str
-    parameters: Optional[object] = None
+    parameters: dict[str, Any] | None = None
 
 
 class Tool(BaseModel):
@@ -83,61 +83,91 @@ class ToolChoice(BaseModel):
 
 class StreamOptions(BaseModel):
     """The stream options."""
-    include_usage: Optional[bool] = False
+    include_usage: bool | None = False
 
 
 class JsonSchema(BaseModel):
     name: str
     # description is not used since it depends on model
-    description: Optional[str] = None
+    description: str | None = None
+    # `schema` is a reserved field in Pydantic BaseModel
     # use alias since pydantic does not support the OpenAI key `schema`
-    json_schema: Optional[Dict[str, Any]] = Field(default=None, alias='schema', examples=[None])
+    json_schema: dict[str, Any] | None = Field(default=None, alias='schema', examples=[None])
     # strict is not used
-    strict: Optional[bool] = False
+    strict: bool | None = False
+    model_config = ConfigDict(serialize_by_alias=True)
 
 
 class ResponseFormat(BaseModel):
     # regex_schema is extended by lmdeploy to support regex output
     type: Literal['text', 'json_object', 'json_schema', 'regex_schema']
-    json_schema: Optional[JsonSchema] = None
-    regex_schema: Optional[str] = None
+    json_schema: JsonSchema | None = None
+    regex_schema: str | None = None
 
 
 class ChatCompletionRequest(BaseModel):
     """Chat completion request."""
     model: str
 
-    messages: Union[str, List[Dict[str, Any]]] = Field(examples=[[{'role': 'user', 'content': 'hi'}]])  # noqa
-    temperature: Optional[float] = 0.7
-    top_p: Optional[float] = 1.0
-    tools: Optional[List[Tool]] = Field(default=None, examples=[None])
-    tool_choice: Union[ToolChoice, Literal['auto', 'required', 'none']] = Field(default='auto',
-                                                                                examples=['none'])  # noqa
-    logprobs: Optional[bool] = False
-    top_logprobs: Optional[int] = None
-    n: Optional[int] = 1
-    logit_bias: Optional[Dict[str, float]] = Field(default=None, examples=[None])  # noqa
-    max_tokens: Optional[int] = Field(default=None, examples=[None])
-    stop: Optional[Union[str, List[str]]] = Field(default=None, examples=[None])  # noqa
+    messages: str | list[dict[str, Any]] = Field(examples=[[{'role': 'user', 'content': 'hi'}]])
+    temperature: float | None = 0.7
+    top_p: float | None = 1.0
+    tools: list[Tool] | None = Field(default=None, examples=[None])
+    tool_choice: ToolChoice | Literal['auto', 'required', 'none'] = Field(default='auto', examples=['none'])
+    logprobs: bool | None = False
+    top_logprobs: int | None = None
+    n: int | None = 1
+    logit_bias: dict[str, float] | None = Field(default=None, examples=[None])
+    max_completion_tokens: int | None = Field(
+        default=None,
+        examples=[None],
+        description=('An upper bound for the number of tokens that can be generated for a completion, '
+                     'including visible output tokens and reasoning tokens'),
+    )
+    max_tokens: int | None = Field(
+        default=None,
+        examples=[None],
+        deprecated='max_tokens is deprecated in favor of the max_completion_tokens field',
+    )
+    stop: str | list[str] | None = Field(default=None, examples=[None])
 
-    stream: Optional[bool] = False
-    stream_options: Optional[StreamOptions] = Field(default=None, examples=[None])
-    presence_penalty: Optional[float] = 0.0
-    frequency_penalty: Optional[float] = 0.0
-    user: Optional[str] = None
-    response_format: Optional[ResponseFormat] = Field(default=None, examples=[None])  # noqa
+    stream: bool | None = False
+    stream_options: StreamOptions | None = Field(default=None, examples=[None])
+    presence_penalty: float | None = 0.0
+    frequency_penalty: float | None = 0.0
+    user: str | None = None
+    reasoning_effort: Literal['low', 'medium', 'high'] | None = None
+    response_format: ResponseFormat | None = Field(default=None, examples=[None])
     # additional argument of lmdeploy
-    do_preprocess: Optional[bool] = True
-    repetition_penalty: Optional[float] = 1.0
-    session_id: Optional[int] = -1
-    ignore_eos: Optional[bool] = False
-    skip_special_tokens: Optional[bool] = True
-    spaces_between_special_tokens: Optional[bool] = True
-    top_k: Optional[int] = 40
-    seed: Optional[int] = None
-    min_new_tokens: Optional[int] = Field(default=None, examples=[None])
+    do_preprocess: bool | None = True
+    repetition_penalty: float | None = 1.0
+    session_id: int | None = -1
+    ignore_eos: bool | None = False
+    skip_special_tokens: bool | None = True
+    spaces_between_special_tokens: bool | None = True
+    top_k: int | None = 40
+    seed: int | None = None
+    min_new_tokens: int | None = Field(default=None, examples=[None])
     min_p: float = 0.0
-    enable_thinking: Optional[bool] = None
+    enable_thinking: bool | None = None  # will be deprecated in the future
+    return_token_ids: bool | None = False
+    include_stop_str_in_output: bool | None = False
+    # kwargs for chat template renderer
+    chat_template_kwargs: dict[str, Any] | None = Field(
+        default=None,
+        description=('Additional keyword args to pass to the template renderer. '
+                     'Will be accessible by the chat template.'),
+    )
+    # kwargs for media IO
+    media_io_kwargs: dict[str, Any] | None = Field(
+        default=None,
+        description=('Additional kwargs to pass to the media IO processing, keyed by modality.'),
+    )
+    # kwargs for hf processor
+    mm_processor_kwargs: dict[str, Any] | None = Field(
+        default=None,
+        description=('Additional kwargs to pass to the HF processor'),
+    )
 
 
 class FunctionCall(BaseModel):
@@ -158,50 +188,51 @@ class ExtractedToolCallInformation(BaseModel):
     # indicate if tools were called
     tools_called: bool
     # extracted tool calls
-    tool_calls: List[ToolCall]
+    tool_calls: list[ToolCall]
     # content - per OpenAI spec, content AND tool calls can be returned rarely
     # But some models will do this intentionally
-    content: Optional[str] = None
+    content: str | None = None
 
 
 class ChatMessage(BaseModel):
     """Chat messages."""
     role: str
-    content: Optional[str] = None
-    reasoning_content: Optional[str] = Field(default=None, examples=[None])
-    tool_calls: Optional[List[ToolCall]] = Field(default=None, examples=[None])
+    content: str | None = None
+    gen_tokens: list[int] | None = None
+    reasoning_content: str | None = Field(default=None, examples=[None])
+    tool_calls: list[ToolCall] | None = Field(default=None, examples=[None])
 
 
 class LogProbs(BaseModel):
-    text_offset: List[int] = Field(default_factory=list)
-    token_logprobs: List[Optional[float]] = Field(default_factory=list)
-    tokens: List[str] = Field(default_factory=list)
-    top_logprobs: Optional[List[Optional[Dict[str, float]]]] = None
+    text_offset: list[int] = Field(default_factory=list)
+    token_logprobs: list[float | None] = Field(default_factory=list)
+    tokens: list[str] = Field(default_factory=list)
+    top_logprobs: list[dict[str, float] | None] | None = None
 
 
 class TopLogprob(BaseModel):
     token: str
-    bytes: Optional[List[int]] = None
+    bytes: list[int] | None = None
     logprob: float
 
 
 class ChatCompletionTokenLogprob(BaseModel):
     token: str
-    bytes: Optional[List[int]] = None
+    bytes: list[int] | None = None
     logprob: float
-    top_logprobs: List[TopLogprob]
+    top_logprobs: list[TopLogprob]
 
 
 class ChoiceLogprobs(BaseModel):
-    content: Optional[List[ChatCompletionTokenLogprob]] = None
+    content: list[ChatCompletionTokenLogprob] | None = None
 
 
 class ChatCompletionResponseChoice(BaseModel):
     """Chat completion response choices."""
     index: int
     message: ChatMessage
-    logprobs: Optional[ChoiceLogprobs] = None
-    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None
+    logprobs: ChoiceLogprobs | None = None
+    finish_reason: Literal['stop', 'length', 'tool_calls', 'error', 'abort'] | None = None
 
 
 class ChatCompletionResponse(BaseModel):
@@ -210,13 +241,13 @@ class ChatCompletionResponse(BaseModel):
     object: str = 'chat.completion'
     created: int = Field(default_factory=lambda: int(time.time()))
     model: str
-    choices: List[ChatCompletionResponseChoice]
+    choices: list[ChatCompletionResponseChoice]
     usage: UsageInfo
 
 
 class DeltaFunctionCall(BaseModel):
-    name: Optional[str] = None
-    arguments: Optional[str] = None
+    name: str | None = None
+    arguments: str | None = None
 
 
 # a tool call delta where everything is optional
@@ -224,23 +255,24 @@ class DeltaToolCall(BaseModel):
     id: str = Field(default_factory=lambda: f'chatcmpl-tool-{shortuuid.random()}')
     type: Literal['function'] = 'function'
     index: int
-    function: Optional[DeltaFunctionCall] = None
+    function: DeltaFunctionCall | None = None
 
 
 class DeltaMessage(BaseModel):
     """Delta messages."""
-    role: Optional[str] = None
-    content: Optional[str] = None
-    reasoning_content: Optional[str] = None
-    tool_calls: List[DeltaToolCall] = Field(default_factory=list)
+    role: str | None = None
+    content: str | None = None
+    reasoning_content: str | None = None
+    gen_tokens: list[int] | None = None
+    tool_calls: list[DeltaToolCall] = Field(default_factory=list)
 
 
 class ChatCompletionResponseStreamChoice(BaseModel):
     """Chat completion response stream choice."""
     index: int
     delta: DeltaMessage
-    logprobs: Optional[ChoiceLogprobs] = None
-    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None
+    logprobs: ChoiceLogprobs | None = None
+    finish_reason: Literal['stop', 'length', 'tool_calls', 'error', 'abort'] | None = None
 
 
 class ChatCompletionStreamResponse(BaseModel):
@@ -249,44 +281,56 @@ class ChatCompletionStreamResponse(BaseModel):
     object: str = 'chat.completion.chunk'
     created: int = Field(default_factory=lambda: int(time.time()))
     model: str
-    choices: List[ChatCompletionResponseStreamChoice]
-    usage: Optional[UsageInfo] = None
+    choices: list[ChatCompletionResponseStreamChoice]
+    usage: UsageInfo | None = None
 
 
 class CompletionRequest(BaseModel):
     """Completion request."""
     model: str
-    prompt: Union[str, List[Any]]
-    suffix: Optional[str] = None
-    temperature: Optional[float] = 0.7
-    n: Optional[int] = 1
-    logprobs: Optional[int] = None
-    max_tokens: Optional[int] = 16
-    stop: Optional[Union[str, List[str]]] = Field(default=None, examples=[None])
-    stream: Optional[bool] = False
-    stream_options: Optional[StreamOptions] = Field(default=None, examples=[None])
-    top_p: Optional[float] = 1.0
-    echo: Optional[bool] = False
-    presence_penalty: Optional[float] = 0.0
-    frequency_penalty: Optional[float] = 0.0
-    user: Optional[str] = None
+    prompt: str | list[Any]
+    suffix: str | None = None
+    temperature: float | None = 0.7
+    n: int | None = 1
+    logprobs: int | None = None
+    max_completion_tokens: int | None = Field(
+        default=None,
+        examples=[None],
+        description=('An upper bound for the number of tokens that can be generated for a completion, '
+                     'including visible output tokens and reasoning tokens'),
+    )
+    max_tokens: int | None = Field(
+        default=16,
+        examples=[16],
+        deprecated='max_tokens is deprecated in favor of the max_completion_tokens field',
+    )
+    stop: str | list[str] | None = Field(default=None, examples=[None])
+    stream: bool | None = False
+    stream_options: StreamOptions | None = Field(default=None, examples=[None])
+    top_p: float | None = 1.0
+    echo: bool | None = False
+    presence_penalty: float | None = 0.0
+    frequency_penalty: float | None = 0.0
+    user: str | None = None
     # additional argument of lmdeploy
-    repetition_penalty: Optional[float] = 1.0
-    session_id: Optional[int] = -1
-    ignore_eos: Optional[bool] = False
-    skip_special_tokens: Optional[bool] = True
-    spaces_between_special_tokens: Optional[bool] = True
-    top_k: Optional[int] = 40  # for opencompass
-    seed: Optional[int] = None
+    repetition_penalty: float | None = 1.0
+    session_id: int | None = -1
+    ignore_eos: bool | None = False
+    skip_special_tokens: bool | None = True
+    spaces_between_special_tokens: bool | None = True
+    top_k: int | None = 40  # for opencompass
+    seed: int | None = None
     min_p: float = 0.0
+    return_token_ids: bool | None = False
 
 
 class CompletionResponseChoice(BaseModel):
     """Completion response choices."""
     index: int
     text: str
-    logprobs: Optional[LogProbs] = None
-    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None
+    logprobs: LogProbs | None = None
+    gen_tokens: list[int] | None = None
+    finish_reason: Literal['stop', 'length', 'tool_calls', 'error', 'abort'] | None = None
 
 
 class CompletionResponse(BaseModel):
@@ -295,7 +339,7 @@ class CompletionResponse(BaseModel):
     object: str = 'text_completion'
     created: int = Field(default_factory=lambda: int(time.time()))
     model: str
-    choices: List[CompletionResponseChoice]
+    choices: list[CompletionResponseChoice]
     usage: UsageInfo
 
 
@@ -303,8 +347,9 @@ class CompletionResponseStreamChoice(BaseModel):
     """Completion response stream choice."""
     index: int
     text: str
-    logprobs: Optional[LogProbs] = None
-    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None
+    logprobs: LogProbs | None = None
+    gen_tokens: list[int] | None = None
+    finish_reason: Literal['stop', 'length', 'tool_calls', 'error', 'abort'] | None = None
 
 
 class CompletionStreamResponse(BaseModel):
@@ -313,21 +358,21 @@ class CompletionStreamResponse(BaseModel):
     object: str = 'text_completion'
     created: int = Field(default_factory=lambda: int(time.time()))
     model: str
-    choices: List[CompletionResponseStreamChoice]
-    usage: Optional[UsageInfo] = None
+    choices: list[CompletionResponseStreamChoice]
+    usage: UsageInfo | None = None
 
 
 class EmbeddingsRequest(BaseModel):
     """Embedding request."""
     model: str = None
-    input: Union[str, List[str]]
-    user: Optional[str] = None
+    input: str | list[str]
+    user: str | None = None
 
 
 class EmbeddingsResponse(BaseModel):
     """Embedding response."""
     object: str = 'list'
-    data: List[Dict[str, Any]]
+    data: list[dict[str, Any]]
     model: str
     usage: UsageInfo
 
@@ -342,11 +387,11 @@ class PoolingRequest(BaseModel):
     https://github.com/vllm-project/vllm/blob/main/vllm/entrypoints/openai/protocol.py#L1174
     https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/entrypoints/http_server.py#L383
     """
-    model: Optional[str] = None
-    input: Union[List[int], List[List[int]], str, List[str]]
+    model: str | None = None
+    input: list[int] | list[list[int]] | str | list[str]
     encoding_format: Literal['float', 'base64'] = 'float'
-    dimensions: Optional[int] = None
-    user: Optional[str] = None
+    dimensions: int | None = None
+    user: str | None = None
 
 
 class PoolingResponse(BaseModel):
@@ -355,44 +400,21 @@ class PoolingResponse(BaseModel):
     object: str = 'list'
     created: int = Field(default_factory=lambda: int(time.time()))
     model: str = None
-    data: List[Dict[str, Any]]
+    data: list[dict[str, Any]]
     usage: UsageInfo
 
 
 class EncodeRequest(BaseModel):
     """Encode request."""
-    input: Union[str, List[str]]
-    do_preprocess: Optional[bool] = False
-    add_bos: Optional[bool] = True
+    input: str | list[str]
+    do_preprocess: bool | None = False
+    add_bos: bool | None = True
 
 
 class EncodeResponse(BaseModel):
     """Encode response."""
-    input_ids: Union[List[int], List[List[int]]]
-    length: Union[int, List[int]]
-
-
-class GenerateRequest(BaseModel):
-    """Generate request."""
-    prompt: Union[str, List[Dict[str, Any]]]
-    image_url: Optional[Union[str, List[str]]] = Field(default=None, examples=[None])
-    session_id: int = -1
-    interactive_mode: bool = False
-    stream: bool = False
-    stop: Optional[Union[str, List[str]]] = Field(default=None, examples=[None])
-    request_output_len: Optional[int] = Field(default=None, examples=[None])  # noqa
-    top_p: float = 0.8
-    top_k: int = 40
-    temperature: float = 0.8
-    repetition_penalty: float = 1.0
-    ignore_eos: bool = False
-    skip_special_tokens: Optional[bool] = True
-    spaces_between_special_tokens: Optional[bool] = True
-    cancel: Optional[bool] = False  # cancel a responding request
-    adapter_name: Optional[str] = Field(default=None, examples=[None])
-    seed: Optional[int] = None
-    min_new_tokens: Optional[int] = Field(default=None, examples=[None])
-    min_p: float = 0.0
+    input_ids: list[int] | list[list[int]]
+    length: int | list[int]
 
 
 class GenerateResponse(BaseModel):
@@ -401,10 +423,76 @@ class GenerateResponse(BaseModel):
     tokens: int
     input_tokens: int
     history_tokens: int
-    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None
+    finish_reason: Literal['stop', 'length', 'tool_calls', 'error', 'abort'] | None = None
 
 
 class UpdateParamsRequest(BaseModel):
     """Update weights request."""
-    serialized_named_tensors: Union[str, List[str], Dict]
+    serialized_named_tensors: str | list[str] | dict
+    load_format: str | None = None  # 'flattened_bucket' or None
     finished: bool = False
+
+
+# str for url/base64, base64 should be data:image/jpeg;base64, dict should be {'url': url/base64, 'options': ...}
+ImageDataInputItem = str | dict
+ImageDataFormat = ImageDataInputItem | list[ImageDataInputItem]
+
+
+# /generate input
+class GenerateReqInput(BaseModel):
+    session_id: int | None = -1
+    prompt: str | None = None
+    input_ids: list[int] | None = None
+    image_data: ImageDataFormat | None = None
+    return_logprob: bool | None = None
+    max_tokens: int = 128
+    stop: str | list[str] | None = None
+    stop_token_ids: list[int] | None = None
+    stream: bool | None = False
+    temperature: float = 1.0
+    repetition_penalty: float | None = 1.0
+    ignore_eos: bool | None = False
+    top_p: float = 1.0
+    top_k: int = 0
+    min_p: float = 0.0
+    skip_special_tokens: bool | None = True
+    spaces_between_special_tokens: bool | None = True
+    include_stop_str_in_output: bool | None = False
+    return_routed_experts: bool | None = False
+    repetition_ngram_size: int = 0
+    repetition_ngram_threshold: int = 0
+    # kwargs for media IO
+    media_io_kwargs: dict[str, Any] | None = Field(
+        default=None,
+        description=('Additional kwargs to pass to the media IO processing, keyed by modality.'),
+    )
+    # kwargs for hf processor
+    mm_processor_kwargs: dict[str, Any] | None = Field(
+        default=None,
+        description=('Additional kwargs to pass to the HF processor'),
+    )
+
+
+class GenerateReqMetaOutput(BaseModel):
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    finish_reason: dict[str, Any] | None = None
+    output_token_logprobs: list[tuple[float, int]] | None = None  # (logprob, token_id)
+    routed_experts: list[list[list[int]]] | str | None = None  # (num_token, num_layer, topk_expert)
+
+
+# /generate output
+class GenerateReqOutput(BaseModel):
+    text: str
+    output_ids: list[int]
+    meta_info: GenerateReqMetaOutput
+
+
+class AbortRequest(BaseModel):
+    # Whether to abort all requests
+    abort_all: bool = False
+    # The finished reason data
+    finished_reason: dict[str, Any] | None = None
+    abort_message: str | None = None
+    # The session ID to abort. If `abort_all` is True, this field is ignored.
+    session_id: int | None = -1

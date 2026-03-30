@@ -1,184 +1,155 @@
 import json
 import os
-import random
-import string
 import subprocess
-from time import sleep, time
+import time
 
 import allure
 import psutil
+import requests
 from openai import OpenAI
 from pytest_assume.plugin import assume
-from utils.config_utils import get_cuda_prefix_by_workerid, get_workerid
-from utils.get_run_config import get_command_with_extra
+from utils.config_utils import (
+    get_case_str_by_config,
+    get_cli_common_param,
+    get_cuda_prefix_by_workerid,
+    get_workerid,
+    resolve_extra_params,
+)
+from utils.constant import DEFAULT_PORT, DEFAULT_SERVER
 from utils.restful_return_check import assert_chat_completions_batch_return
 from utils.rule_condition_assert import assert_result
-from utils.run_client_chat import command_line_test
 
 from lmdeploy.serve.openai.api_client import APIClient
-from lmdeploy.utils import is_bf16_supported
 
-BASE_HTTP_URL = 'http://localhost'
-DEFAULT_PORT = 23333
+BASE_HTTP_URL = f'http://{DEFAULT_SERVER}'
 
 
-def start_restful_api(config, param, model, model_path, backend_type, worker_id):
-    log_path = config.get('log_path')
+def start_openai_service(config, run_config, worker_id, timeout: int = 1200):
+    port = DEFAULT_PORT + get_workerid(worker_id)
+    case_name = get_case_str_by_config(run_config)
+    timestamp = time.strftime('%Y%m%d_%H%M%S')
+    server_log = os.path.join(config.get('server_log_path'), f'log_{case_name}_{port}_{timestamp}.log')
 
-    cuda_prefix = param['cuda_prefix']
-    tp_num = param['tp_num']
-
-    if 'extra' in param.keys():
-        extra = param['extra']
+    model = run_config.get('model')
+    if run_config.get('env', {}).get('LMDEPLOY_USE_MODELSCOPE', 'False') == 'True':
+        model_path = model
     else:
-        extra = ''
+        model_path = os.path.join(config.get('model_path'), model)
 
-    # temp remove testcase because of issue 3434
-    if ('InternVL3' in model or 'InternVL2_5' in model or 'MiniCPM-V-2_6' in model):
-        if 'turbomind' in backend_type and extra is not None and 'communicator native' in extra and tp_num > 1:
-            return
+    cuda_prefix = get_cuda_prefix_by_workerid(worker_id, run_config.get('parallel_config'))
 
-    if 'modelscope' in param.keys():
-        modelscope = param['modelscope']
-        if modelscope:
-            os.environ['LMDEPLOY_USE_MODELSCOPE'] = 'True'
-            model_path = model
+    # Ensure extra_params exists before modifying
+    if 'extra_params' not in run_config:
+        run_config['extra_params'] = {}
 
-    if cuda_prefix is None:
-        cuda_prefix = get_cuda_prefix_by_workerid(worker_id, tp_num=tp_num)
+    resolve_extra_params(run_config['extra_params'], config.get('model_path'))
 
-    if tp_num > 1 and 'gw' in worker_id:
-        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
+    run_config['extra_params']['server-port'] = str(port)
+    run_config['extra_params']['allow-terminate-by-client'] = None
+    model_name = case_name if run_config['extra_params'].get(
+        'model-name', None) is None else run_config['extra_params'].pop('model-name')
+    cmd = ' '.join([
+        cuda_prefix, 'lmdeploy serve api_server', model_path,
+        get_cli_common_param(run_config), f'--model-name {model_name}'
+    ]).strip()
 
-    worker_num = get_workerid(worker_id)
-    if worker_num is None:
-        port = DEFAULT_PORT
-    else:
-        port = DEFAULT_PORT + worker_num
+    env = os.environ.copy()
+    env['MASTER_PORT'] = str(get_workerid(worker_id) + 29500)
+    env.update(run_config.get('env', {}))
 
-    cmd = get_command_with_extra('lmdeploy serve api_server ' + model_path + ' --session-len 8096 --server-port ' +
-                                 str(port),
-                                 config,
-                                 model,
-                                 need_tp=True,
-                                 cuda_prefix=cuda_prefix,
-                                 extra=extra)
-
-    if backend_type == 'turbomind':
-        if ('w4' in model or '4bits' in model or 'awq' in model.lower()):
-            cmd += ' --model-format awq'
-        elif 'gptq' in model.lower():
-            cmd += ' --model-format gptq'
-    if backend_type == 'pytorch':
-        cmd += ' --backend pytorch'
-        if not is_bf16_supported():
-            cmd += ' --dtype float16'
-    if 'quant_policy' in param.keys() and param['quant_policy'] is not None:
-        quant_policy = param['quant_policy']
-        cmd += f' --quant-policy {quant_policy}'
-
-    if not is_bf16_supported():
-        cmd += ' --cache-max-entry-count 0.5'
-    if str(config.get('env_tag')) == '3090':
-        cmd += ' --cache-max-entry-count 0.5'
-
-    start_log = os.path.join(log_path, 'start_restful_' + model.split('/')[1] + worker_id + '.log')
-
+    file = open(server_log, 'w')
     print('reproduce command restful: ' + cmd)
-
-    file = open(start_log, 'w')
-
-    startRes = subprocess.Popen([cmd], stdout=file, stderr=file, shell=True, text=True, encoding='utf-8')
+    file.write('reproduce command restful: ' + cmd + '\n')
+    startRes = subprocess.Popen(cmd,
+                                stdout=file,
+                                stderr=file,
+                                shell=True,
+                                text=True,
+                                env=env,
+                                encoding='utf-8',
+                                errors='replace',
+                                start_new_session=True)
     pid = startRes.pid
 
-    http_url = BASE_HTTP_URL + ':' + str(port)
-    start_time = int(time())
-    start_timeout = 300
-    if not is_bf16_supported():
-        start_timeout = 600
+    http_url = ':'.join([BASE_HTTP_URL, str(port)])
+    start_time = int(time.time())
+    start_timeout = timeout
 
-    sleep(5)
+    time.sleep(5)
     for i in range(start_timeout):
-        sleep(1)
-        end_time = int(time())
+        time.sleep(1)
+        end_time = int(time.time())
         total_time = end_time - start_time
-        result = health_check(http_url)
+        result = health_check(http_url, case_name)
         if result or total_time >= start_timeout:
             break
         try:
             # Check if process is still running
             return_code = startRes.wait(timeout=1)  # Small timeout to check status
             if return_code != 0:
-                with open(start_log, 'r') as f:
+                with open(server_log) as f:
                     content = f.read()
                     print(content)
-                return 0, startRes
+                return 0, content
         except subprocess.TimeoutExpired:
             continue
     file.close()
-    allure.attach.file(start_log, attachment_type=allure.attachment_type.TEXT)
-    return pid, startRes
+    allure.attach.file(server_log, name=server_log, attachment_type=allure.attachment_type.TEXT)
+    return pid, ''
 
 
-def stop_restful_api(pid, startRes, param):
+def stop_restful_api(pid, startRes):
     if pid > 0:
         parent = psutil.Process(pid)
         for child in parent.children(recursive=True):
             child.terminate()
         parent.terminate()
-    if 'modelscope' in param.keys():
-        modelscope = param['modelscope']
-        if modelscope:
-            del os.environ['LMDEPLOY_USE_MODELSCOPE']
-    if 'MASTER_PORT' in os.environ:
-        del os.environ['MASTER_PORT']
 
 
-def run_all_step(config, cases_info, worker_id: str = '', port: int = DEFAULT_PORT):
-    http_url = BASE_HTTP_URL + ':' + str(port)
+def terminate_restful_api(worker_id):
+    port = DEFAULT_PORT + get_workerid(worker_id)
+    http_url = ':'.join([BASE_HTTP_URL, str(port)])
 
+    response = None
+    request_error = None
+    try:
+        response = requests.get(f'{http_url}/terminate')
+    except requests.exceptions.RequestException as exc:
+        request_error = exc
+    if request_error is not None:
+        assert False, f'terminate request failed: {request_error}'
+    assert response is not None and response.status_code == 200, f'terminate with {response}'
+
+
+def run_all_step(log_path, case_name, cases_info, port: int = DEFAULT_PORT):
+    http_url = ':'.join([BASE_HTTP_URL, str(port)])
     model = get_model(http_url)
 
     if model is None:
         assert False, 'server not start correctly'
     for case in cases_info.keys():
-        if ('coder' in model.lower() or 'codellama' in model.lower()) and 'code' not in case:
+        if case != 'code_testcase' and 'code' in model.lower():
             continue
-
         case_info = cases_info.get(case)
 
-        with allure.step(case + ' step1 - command chat regression'):
-            chat_result, chat_log, msg = command_line_test(config, case, case_info, model, 'api_client', http_url,
-                                                           worker_id)
-            allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
-        with assume:
-            assert chat_result, msg
-
-        with allure.step(case + ' step2 - restful_test - openai chat'):
-            restful_result, restful_log, msg = open_chat_test(config, case, case_info, model, http_url, worker_id)
-            allure.attach.file(restful_log, attachment_type=allure.attachment_type.TEXT)
+        with allure.step(case + ' restful_test - openai chat'):
+            restful_result, restful_log, msg = open_chat_test(log_path, case_name, case_info, http_url)
+            allure.attach.file(restful_log, name=restful_log, attachment_type=allure.attachment_type.TEXT)
         with assume:
             assert restful_result, msg
 
-        with allure.step(case + ' step3 - restful_test - interactive chat'):
-            active_result, interactive_log, msg = interactive_test(config, case, case_info, model, http_url, worker_id)
-            allure.attach.file(interactive_log, attachment_type=allure.attachment_type.TEXT)
 
-        with assume:
-            assert active_result, msg
+def open_chat_test(log_path, case_name, case_info, url):
+    timestamp = time.strftime('%Y%m%d_%H%M%S')
 
-
-def open_chat_test(config, case, case_info, model, url, worker_id: str = ''):
-    log_path = config.get('log_path')
-
-    restful_log = os.path.join(log_path, 'restful_' + model + worker_id + '_' + case + '.log')
+    restful_log = os.path.join(log_path, f'log_restful_{case_name}_{timestamp}.log')
 
     file = open(restful_log, 'w')
 
     result = True
 
-    api_client = APIClient(url)
-    model_name = api_client.available_models[0]
+    client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{url}/v1')
+    model_name = client.models.list().data[0].id
 
     messages = []
     msg = ''
@@ -189,78 +160,60 @@ def open_chat_test(config, case, case_info, model, url, worker_id: str = ''):
         messages.append({'role': 'user', 'content': prompt})
         file.writelines('prompt:' + prompt + '\n')
 
-        for output in api_client.chat_completions_v1(model=model_name, messages=messages, top_k=1, max_tokens=256):
-            output_message = output.get('choices')[0].get('message')
-            messages.append(output_message)
+        outputs = client.chat.completions.create(model=model_name,
+                                                 messages=messages,
+                                                 temperature=0.01,
+                                                 top_p=0.8,
+                                                 max_completion_tokens=1024,
+                                                 stream=True)
 
-            output_content = output_message.get('content')
-            file.writelines('output:' + output_content + '\n')
+        content_chunks = []
+        reasoning_content_chunks = []
+        for output in outputs:
+            # Safely handle streaming chunks: choices may be empty and content may be None
+            if not getattr(output, 'choices', None):
+                continue
+            choice = output.choices[0]
+            delta = getattr(choice, 'delta', None)
+            reasoning_content = getattr(delta, 'reasoning_content', None) if delta is not None else None
+            content = getattr(delta, 'content', None) if delta is not None else None
+            if reasoning_content:
+                reasoning_content_chunks.append(reasoning_content)
+            if content:
+                content_chunks.append(content)
+        reasoning_content = ''.join(reasoning_content_chunks)
+        output_content = ''.join(content_chunks)
 
-            case_result, reason = assert_result(output_content, prompt_detail.values(), model_name)
-            file.writelines('result:' + str(case_result) + ',reason:' + reason + '\n')
-            if not case_result:
-                msg += reason
-            result = result & case_result
+        file.writelines(f'reasoning_content :{reasoning_content}, content: {output_content}\n')
+        messages.append({'role': 'assistant', 'content': output_content})
+
+        case_result, reason = assert_result(reasoning_content + output_content, prompt_detail.values(), model_name)
+        file.writelines('result:' + str(case_result) + ',reason:' + reason + '\n')
+        if not case_result:
+            msg += reason
+        result = result and case_result
     file.close()
     return result, restful_log, msg
 
 
-def interactive_test(config, case, case_info, model, url, worker_id: str = ''):
-    log_path = config.get('log_path')
-
-    interactive_log = os.path.join(log_path, 'interactive_' + model + worker_id + '_' + case + '.log')
-
-    result = True
-
-    file = open(interactive_log, 'w')
-
-    api_client = APIClient(url)
-    file.writelines('available_models:' + ','.join(api_client.available_models) + '\n')
-
-    # Randomly generate 6 characters and concatenate them into a string.
-    characters = string.digits
-    random_chars = ''.join(random.choice(characters) for i in range(6))
-
-    messages = []
-    msg = ''
-    for prompt_detail in case_info:
-        prompt = list(prompt_detail.keys())[0]
-        new_prompt = {'role': 'user', 'content': prompt}
-        messages.append(new_prompt)
-        file.writelines('prompt:' + prompt + '\n')
-
-        for output in api_client.chat_interactive_v1(prompt=prompt,
-                                                     interactive_mode=True,
-                                                     session_id=random_chars,
-                                                     top_k=1,
-                                                     request_output_len=256):
-            output_content = output.get('text')
-            file.writelines('output:' + output_content + '\n')
-
-            case_result, reason = assert_result(output_content, prompt_detail.values(), model)
-            file.writelines('result:' + str(case_result) + ',reason:' + reason + '\n')
-            if not case_result:
-                msg += reason
-            result = result & case_result
-    file.close()
-    return result, interactive_log, msg
-
-
-def health_check(url):
+def health_check(url, model_name):
     try:
         api_client = APIClient(url)
-        model_name = api_client.available_models[0]
+        model_name_current = api_client.available_models[0]
         messages = []
         messages.append({'role': 'user', 'content': '你好'})
         for output in api_client.chat_completions_v1(model=model_name, messages=messages, top_k=1):
             if output.get('code') is not None and output.get('code') != 0:
                 return False
-            return True
+            # Return True on first successful response
+            return model_name == model_name_current
+        return False  # No output received
     except Exception:
         return False
 
 
 def get_model(url):
+    print(url)
     try:
         api_client = APIClient(url)
         model_name = api_client.available_models[0]
@@ -269,15 +222,11 @@ def get_model(url):
         return None
 
 
-def test_logprobs(worker_id: str = None):
-    worker_num = get_workerid(worker_id)
-    if worker_num is None:
-        port = DEFAULT_PORT
-    else:
-        port = DEFAULT_PORT + worker_num
-    http_url = BASE_HTTP_URL + ':' + str(port)
+def _run_logprobs_test(port: int = DEFAULT_PORT):
+    http_url = ':'.join([BASE_HTTP_URL, str(port)])
     api_client = APIClient(http_url)
     model_name = api_client.available_models[0]
+    output = None
     for output in api_client.chat_completions_v1(model=model_name,
                                                  messages='Hi, pls intro yourself',
                                                  max_tokens=5,
@@ -285,19 +234,20 @@ def test_logprobs(worker_id: str = None):
                                                  logprobs=True,
                                                  top_logprobs=10):
         continue
+    if output is None:
+        assert False, 'No output received from logprobs test'
     print(output)
     assert_chat_completions_batch_return(output, model_name, check_logprobs=True, logprobs_num=10)
     assert output.get('choices')[0].get('finish_reason') == 'length'
     assert output.get('usage').get('completion_tokens') == 6 or output.get('usage').get('completion_tokens') == 5
 
 
-PIC = 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg'  # noqa E501
-PIC2 = 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg'  # noqa E501
+PIC = 'tiger.jpeg'  # noqa E501
+PIC2 = 'human-pose.jpg'  # noqa E501
 
 
-def run_vl_testcase(config, port: int = DEFAULT_PORT):
-    http_url = BASE_HTTP_URL + ':' + str(port)
-    log_path = config.get('log_path')
+def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
+    http_url = ':'.join([BASE_HTTP_URL, str(port)])
 
     model = get_model(http_url)
     if model is None:
@@ -306,7 +256,10 @@ def run_vl_testcase(config, port: int = DEFAULT_PORT):
     client = OpenAI(api_key='YOUR_API_KEY', base_url=http_url + '/v1')
     model_name = client.models.list().data[0].id
 
-    restful_log = os.path.join(log_path, 'restful_vl_' + model_name.split('/')[-1] + str(port) + '.log')
+    timestamp = time.strftime('%Y%m%d_%H%M%S')
+
+    simple_model_name = model_name.split('/')[-1]
+    restful_log = os.path.join(log_path, f'restful_vl_{simple_model_name}_{str(port)}_{timestamp}.log')  # noqa
     file = open(restful_log, 'w')
 
     prompt_messages = [{
@@ -318,12 +271,12 @@ def run_vl_testcase(config, port: int = DEFAULT_PORT):
         }, {
             'type': 'image_url',
             'image_url': {
-                'url': PIC,
+                'url': f'{resource_path}/{PIC}',
             },
         }, {
             'type': 'image_url',
             'image_url': {
-                'url': PIC2,
+                'url': f'{resource_path}/{PIC2}',
             },
         }],
     }]
@@ -338,7 +291,7 @@ def run_vl_testcase(config, port: int = DEFAULT_PORT):
     file.writelines(str(item) + '\n')
     file.close()
 
-    allure.attach.file(restful_log, attachment_type=allure.attachment_type.TEXT)
+    allure.attach.file(restful_log, name=restful_log, attachment_type=allure.attachment_type.TEXT)
 
     assert 'tiger' in str(response).lower() or '虎' in str(response).lower() or 'ski' in str(
         response).lower() or '滑雪' in str(response).lower(), response
@@ -346,16 +299,16 @@ def run_vl_testcase(config, port: int = DEFAULT_PORT):
         item).lower(), item
 
 
-def run_reasoning_case(config, port: int = DEFAULT_PORT):
-    http_url = BASE_HTTP_URL + ':' + str(port)
-    log_path = config.get('log_path')
+def _run_reasoning_case(log_path, port: int = DEFAULT_PORT):
+    http_url = ':'.join([BASE_HTTP_URL, str(port)])
 
     model = get_model(http_url)
 
     if model is None:
         assert False, 'server not start correctly'
 
-    restful_log = os.path.join(log_path, 'restful_reasoning_' + model + str(port) + '.log')
+    timestamp = time.strftime('%Y%m%d_%H%M%S')
+    restful_log = os.path.join(log_path, f'restful_reasoning_{model}_{str(port)}_{timestamp}.log')
     file = open(restful_log, 'w')
 
     client = OpenAI(api_key='YOUR_API_KEY', base_url=http_url + '/v1')
@@ -388,7 +341,7 @@ def run_reasoning_case(config, port: int = DEFAULT_PORT):
             assert '9.11' in reasoning_content and '9.11' in content and len(outputList) > 1, str(outputList)
 
     file.close()
-    allure.attach.file(restful_log, attachment_type=allure.attachment_type.TEXT)
+    allure.attach.file(restful_log, name=restful_log, attachment_type=allure.attachment_type.TEXT)
 
 
 def test_internlm_multiple_round_prompt(client, model):
@@ -451,7 +404,8 @@ def test_internlm_multiple_round_prompt(client, model):
     response_list = [response]
     func1_name = response.choices[0].message.tool_calls[0].function.name
     func1_args = response.choices[0].message.tool_calls[0].function.arguments
-    func1_out = eval(f'{func1_name}(**{func1_args})')
+    func1_args_dict = json.loads(func1_args)
+    func1_out = add(**func1_args_dict) if func1_name == 'add' else mul(**func1_args_dict)
     with assume:
         assert response.choices[0].finish_reason == 'tool_calls'
     with assume:
@@ -475,7 +429,8 @@ def test_internlm_multiple_round_prompt(client, model):
     response_list.append(response)
     func2_name = response.choices[0].message.tool_calls[0].function.name
     func2_args = response.choices[0].message.tool_calls[0].function.arguments
-    func2_out = eval(f'{func2_name}(**{func2_args})')
+    func2_args_dict = json.loads(func2_args)
+    func2_out = add(**func2_args_dict) if func2_name == 'add' else mul(**func2_args_dict)
     with assume:
         assert response.choices[0].finish_reason == 'tool_calls'
     with assume:
@@ -512,9 +467,9 @@ def test_qwen_multiple_round_prompt(client, model):
         """Get temperature at a location and date.
 
         Args:
-            location: The location to get the temperature for, in the format "City, State, Country".
-            date: The date to get the temperature for, in the format "Year-Month-Day".
-            unit: The unit to return the temperature in. Defaults to "celsius". (choices: ["celsius", "fahrenheit"])
+            location: The location to get the temperature for, in the format 'City, State, Country'.
+            date: The date to get the temperature for, in the format 'Year-Month-Day'.
+            unit: The unit to return the temperature in. Defaults to 'celsius'. (choices: ['celsius', 'fahrenheit'])
 
         Returns:
             the temperature, the location, the date and the unit in a dict
@@ -635,102 +590,247 @@ def test_qwen_multiple_round_prompt(client, model):
     return response_list
 
 
-def run_tools_case(config, port: int = DEFAULT_PORT):
-    http_url = BASE_HTTP_URL + ':' + str(port)
-    log_path = config.get('log_path')
+def _run_tools_case(log_path, port: int = DEFAULT_PORT):
+    http_url = ':'.join([BASE_HTTP_URL, str(port)])
 
     model = get_model(http_url)
 
     if model is None:
         assert False, 'server not start correctly'
 
-    restful_log = os.path.join(log_path, 'restful_reasoning_' + model + str(port) + '.log')
-    file = open(restful_log, 'w')
-
+    timestamp = time.strftime('%Y%m%d_%H%M%S')
+    restful_log = os.path.join(log_path, f'restful_toolcall_{model}_{str(port)}_{timestamp}.log')
     client = OpenAI(api_key='YOUR_API_KEY', base_url=http_url + '/v1')
     model_name = client.models.list().data[0].id
 
-    with allure.step('step1 - one_round_prompt'):
-        tools = [{
-            'type': 'function',
-            'function': {
-                'name': 'get_current_weather',
-                'description': 'Get the current weather in a given location',
-                'parameters': {
-                    'type': 'object',
-                    'properties': {
-                        'location': {
-                            'type': 'string',
-                            'description': 'The city and state, e.g. San Francisco, CA',
+    with open(restful_log, 'a') as file:
+        with allure.step('step1 - one_round_prompt'):
+            tools = [{
+                'type': 'function',
+                'function': {
+                    'name': 'get_current_weather',
+                    'description': 'Get the current weather in a given location',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'location': {
+                                'type': 'string',
+                                'description': 'The city and state, e.g. San Francisco, CA',
+                            },
+                            'unit': {
+                                'type': 'string',
+                                'enum': ['celsius', 'fahrenheit']
+                            },
                         },
-                        'unit': {
-                            'type': 'string',
-                            'enum': ['celsius', 'fahrenheit']
-                        },
+                        'required': ['location'],
                     },
-                    'required': ['location'],
-                },
-            }
-        }]
-        messages = [{'role': 'user', 'content': "What's the weather like in Boston today?"}]
-        response = client.chat.completions.create(model=model_name,
-                                                  messages=messages,
-                                                  temperature=0.01,
-                                                  stream=False,
-                                                  tools=tools)
-        print(response)
-        with assume:
-            assert response.choices[0].finish_reason == 'tool_calls'
-        with assume:
-            assert response.choices[0].message.tool_calls[0].function.name == 'get_current_weather'
-        with assume:
-            assert 'Boston' in response.choices[0].message.tool_calls[0].function.arguments
-        with assume:
-            assert response.choices[0].message.tool_calls[0].type == 'function'
-        file.writelines(str(response) + '\n')
-
-    with allure.step('step2 - search prompt'):
-        tools = [{
-            'type': 'function',
-            'function': {
-                'name': 'search',
-                'description': 'BING search API',
-                'parameters': {
-                    'type': 'object',
-                    'properties': {
-                        'query': {
-                            'type': 'string',
-                            'description': 'list of search query strings'
-                        }
-                    },
-                    'required': ['location']
                 }
-            }
-        }]
-        messages = [{'role': 'user', 'content': '搜索最近的人工智能发展趋势'}]
-        response = client.chat.completions.create(model=model_name,
-                                                  messages=messages,
-                                                  temperature=0.01,
-                                                  stream=False,
-                                                  tools=tools)
-        print(response)
-        with assume:
-            assert response.choices[0].finish_reason == 'tool_calls'
-        with assume:
-            assert response.choices[0].message.tool_calls[0].function.name == 'search'
-        with assume:
-            assert '人工智能' in response.choices[0].message.tool_calls[0].function.arguments
-        with assume:
-            assert response.choices[0].message.tool_calls[0].type == 'function'
-        file.writelines(str(response) + '\n')
+            }]
+            messages = [{'role': 'user', 'content': 'What\'s the weather like in Boston today?'}]
+            response = client.chat.completions.create(model=model_name,
+                                                      messages=messages,
+                                                      temperature=0.01,
+                                                      stream=False,
+                                                      tools=tools)
+            print(response)
+            with assume:
+                assert response.choices[0].finish_reason == 'tool_calls'
+            with assume:
+                assert response.choices[0].message.tool_calls[0].function.name == 'get_current_weather'
+            with assume:
+                assert 'Boston' in response.choices[0].message.tool_calls[0].function.arguments
+            with assume:
+                assert response.choices[0].message.tool_calls[0].type == 'function'
+            file.writelines(str(response) + '\n')
 
-    with allure.step('step3 - multiple_round_prompt'):
-        if 'intern' in model.lower():
-            response_list = test_internlm_multiple_round_prompt(client, model_name)
-        if 'qwen' in model.lower():
-            response_list = test_qwen_multiple_round_prompt(client, model_name)
+        with allure.step('step2 - search prompt'):
+            tools = [{
+                'type': 'function',
+                'function': {
+                    'name': 'search',
+                    'description': 'BING search API',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'query': {
+                                'type': 'string',
+                                'description': 'list of search query strings'
+                            }
+                        },
+                        'required': ['location']
+                    }
+                }
+            }]
+            messages = [{'role': 'user', 'content': '搜索最近的人工智能发展趋势'}]
+            response = client.chat.completions.create(model=model_name,
+                                                      messages=messages,
+                                                      temperature=0.01,
+                                                      stream=False,
+                                                      tools=tools)
+            print(response)
+            with assume:
+                assert response.choices[0].finish_reason == 'tool_calls'
+            with assume:
+                assert response.choices[0].message.tool_calls[0].function.name == 'search'
+            with assume:
+                assert '人工智能' in response.choices[0].message.tool_calls[0].function.arguments
+            with assume:
+                assert response.choices[0].message.tool_calls[0].type == 'function'
+            file.writelines(str(response) + '\n')
 
-        file.writelines(str(response_list) + '\n')
+        with allure.step('step3 - multiple_round_prompt'):
+            response_list = None
+            if 'intern' in model.lower():
+                response_list = test_internlm_multiple_round_prompt(client, model_name)
+            elif 'qwen' in model.lower():
+                response_list = test_qwen_multiple_round_prompt(client, model_name)
 
-    file.close()
-    allure.attach.file(restful_log, attachment_type=allure.attachment_type.TEXT)
+            if response_list is not None:
+                file.writelines(str(response_list) + '\n')
+
+    allure.attach.file(restful_log, name=restful_log, attachment_type=allure.attachment_type.TEXT)
+
+
+def proxy_health_check(url):
+    """Check if proxy server is healthy."""
+    try:
+        # For proxy server, we check if it responds to the /v1/models endpoint
+        import requests
+        response = requests.get(f'{url}/v1/models', timeout=5)
+        if response.status_code == 200:
+            return True
+        return False
+    except Exception:
+        return False
+
+
+def start_proxy_server(log_path, port, case_name: str = 'default'):
+    """Start the proxy server for testing with enhanced error handling and
+    logging."""
+    if log_path is None:
+        log_path = '/nvme/qa_test_models/evaluation_report'
+
+    timestamp = time.strftime('%Y%m%d_%H%M%S')
+    proxy_log = os.path.join(log_path, f'proxy_server_{case_name}_{str(port)}_{timestamp}.log')
+
+    proxy_url = f'http://{DEFAULT_SERVER}:{port}'  # noqa: E231, E261
+    try:
+        response = requests.get(f'{proxy_url}/nodes/status', timeout=5)
+        if response.status_code == 200:
+            print(f'Terminating existing nodes on proxy {proxy_url}')
+            requests.get(f'{proxy_url}/nodes/terminate_all', timeout=10)
+            time.sleep(5)
+    except requests.exceptions.RequestException:
+        pass
+
+    cmd = (f'lmdeploy serve proxy --server-name {DEFAULT_SERVER} --server-port {port} '
+           f'--routing-strategy min_expected_latency --serving-strategy Hybrid')
+
+    print(f'Starting proxy server with command: {cmd}')
+    print(f'Proxy log will be saved to: {proxy_log}')
+
+    proxy_file = open(proxy_log, 'w')
+    proxy_process = subprocess.Popen([cmd],
+                                     stdout=proxy_file,
+                                     stderr=proxy_file,
+                                     shell=True,
+                                     text=True,
+                                     encoding='utf-8')
+    pid = proxy_process.pid
+
+    start_time = int(time.time())
+    timeout = 300
+
+    time.sleep(5)
+    for i in range(timeout):
+        time.sleep(1)
+        if proxy_health_check(f'http://{DEFAULT_SERVER}:{port}'):  # noqa: E231, E261
+            break
+
+        try:
+            # Check if process is still running
+            return_code = proxy_process.wait(timeout=1)  # Small timeout to check status
+            if return_code != 0:
+                with open(proxy_log) as f:
+                    content = f.read()
+                    print(content)
+                return 0, proxy_process
+        except subprocess.TimeoutExpired:
+            continue
+
+        end_time = int(time.time())
+        total_time = end_time - start_time
+        if total_time >= timeout:
+            break
+
+    proxy_file.close()
+    allure.attach.file(proxy_log, name=proxy_log, attachment_type=allure.attachment_type.TEXT)
+
+    print(f'Proxy server started successfully with PID: {pid}')
+    return pid, proxy_process
+
+
+def run_llm_test(config, run_config, common_case_config, worker_id):
+    pid, content = start_openai_service(config, run_config, worker_id)
+    try:
+        if pid > 0:
+            case_name = get_case_str_by_config(run_config)
+            run_all_step(config.get('log_path'),
+                         case_name,
+                         common_case_config,
+                         port=DEFAULT_PORT + get_workerid(worker_id))
+        else:
+            assert False, f'Failed to start RESTful API server: {content}'
+    finally:
+        if pid > 0:
+            terminate_restful_api(worker_id)
+
+
+def run_mllm_test(config, run_config, worker_id):
+    pid, content = start_openai_service(config, run_config, worker_id)
+    try:
+        if pid > 0:
+            run_vl_testcase(config.get('log_path'),
+                            config.get('resource_path'),
+                            port=DEFAULT_PORT + get_workerid(worker_id))
+        else:
+            assert False, f'Failed to start RESTful API server: {content}'
+    finally:
+        if pid > 0:
+            terminate_restful_api(worker_id)
+
+
+def run_reasoning_case(config, run_config, worker_id):
+    pid, content = start_openai_service(config, run_config, worker_id)
+    try:
+        if pid > 0:
+            _run_reasoning_case(config.get('log_path'), port=DEFAULT_PORT + get_workerid(worker_id))
+        else:
+            assert False, f'Failed to start RESTful API server: {content}'
+    finally:
+        if pid > 0:
+            terminate_restful_api(worker_id)
+
+
+def run_tools_case(config, run_config, worker_id):
+    pid, content = start_openai_service(config, run_config, worker_id)
+    try:
+        if pid > 0:
+            _run_tools_case(config.get('log_path'), port=DEFAULT_PORT + get_workerid(worker_id))
+        else:
+            assert False, f'Failed to start RESTful API server: {content}'
+    finally:
+        if pid > 0:
+            terminate_restful_api(worker_id)
+
+
+def run_logprob_test(config, run_config, worker_id):
+    pid, content = start_openai_service(config, run_config, worker_id)
+    try:
+        if pid > 0:
+            _run_logprobs_test(port=DEFAULT_PORT + get_workerid(worker_id))
+        else:
+            assert False, f'Failed to start RESTful API server: {content}'
+    finally:
+        if pid > 0:
+            terminate_restful_api(worker_id)

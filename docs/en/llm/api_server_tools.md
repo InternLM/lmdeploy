@@ -157,13 +157,11 @@ ChatCompletion(id='2', choices=[Choice(finish_reason='tool_calls', index=0, logp
 
 Meta announces in [Llama3's official user guide](https://llama.meta.com/docs/model-cards-and-prompt-formats/llama3_1) that,
 
-```{note}
-There are three built-in tools (brave_search, wolfram_alpha, and code interpreter) can be turned on using the system prompt:
-
-1. Brave Search: Tool call to perform web searches.
-2. Wolfram Alpha: Tool call to perform complex mathematical calculations.
-3. Code Interpreter: Enables the model to output python code.
-```
+> There are three built-in tools (brave_search, wolfram_alpha, and code interpreter) can be turned on using the system prompt:
+>
+> 1. Brave Search: Tool call to perform web searches.
+> 2. Wolfram Alpha: Tool call to perform complex mathematical calculations.
+> 3. Code Interpreter: Enables the model to output python code.
 
 Additionally, it cautions: "**Note:** We recommend using Llama 70B-instruct or Llama 405B-instruct for applications that combine conversation and tool calling. Llama 8B-Instruct can not reliably maintain a conversation alongside tool calling definitions. It can be used for zero-shot tool calling, but tool instructions should be removed for regular conversations between the model and the user."
 

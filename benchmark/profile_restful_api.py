@@ -12,6 +12,7 @@ python3 -m sglang.bench_serving --backend sglang --dataset-name random --request
 import argparse
 import asyncio
 import csv
+import io
 import json
 import os
 import random
@@ -21,15 +22,24 @@ import time
 import traceback
 import warnings
 from argparse import ArgumentParser
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 import aiohttp
 import numpy as np
+import pybase64
 import requests
+from PIL import Image
 from tqdm.asyncio import tqdm
-from transformers import AutoTokenizer, PreTrainedTokenizer, PreTrainedTokenizerBase, PreTrainedTokenizerFast
+from transformers import (
+    AutoProcessor,
+    AutoTokenizer,
+    PreTrainedTokenizer,
+    PreTrainedTokenizerBase,
+    PreTrainedTokenizerFast,
+)
 
 AIOHTTP_TIMEOUT = aiohttp.ClientTimeout(total=None)
 
@@ -54,7 +64,8 @@ class RequestFuncInput:
     prompt_len: int
     output_len: int
     model: str
-    extra_request_body: Dict[str, Any]
+    image_data: list[str] | None
+    extra_request_body: dict[str, Any]
 
 
 @dataclass
@@ -63,10 +74,10 @@ class RequestFuncOutput:
     success: bool = False
     latency: float = 0.0
     ttft: float = 0.0  # Time to first token
-    itl: List[float] = field(default_factory=list)  # List of inter-token latencies
+    itl: list[float] = field(default_factory=list)  # List of inter-token latencies
     prompt_len: int = 0
-    error: str = ''
     output_len: int = 0
+    error: str = ''
 
 
 def remove_prefix(text: str, prefix: str) -> str:
@@ -77,7 +88,7 @@ def remove_prefix(text: str, prefix: str) -> str:
 # https://github.com/triton-inference-server/tensorrtllm_backend/issues/505
 async def async_request_trt_llm(
     request_func_input: RequestFuncInput,
-    pbar: Optional[tqdm] = None,
+    pbar: tqdm | None = None,
 ) -> RequestFuncOutput:
     api_url = request_func_input.api_url
     assert api_url.endswith('generate_stream')
@@ -147,7 +158,7 @@ async def async_request_trt_llm(
 # set ignore_eos True by default
 async def async_request_openai_completions(
     request_func_input: RequestFuncInput,
-    pbar: Optional[tqdm] = None,
+    pbar: tqdm | None = None,
 ) -> RequestFuncOutput:
     api_url = request_func_input.api_url
     assert api_url.endswith('completions'), "OpenAI Completions API URL must end with 'completions'."
@@ -223,9 +234,117 @@ async def async_request_openai_completions(
     return output
 
 
+async def async_request_openai_chat_completions(
+    request_func_input: RequestFuncInput,
+    pbar: tqdm | None = None,
+) -> RequestFuncOutput:
+    api_url = request_func_input.api_url
+    assert api_url.endswith('chat/completions'), "OpenAI Chat Completions API URL must end with 'chat/completions'."
+
+    if request_func_input.image_data:
+        # Build multi-image content: a list of image_url entries followed by the text
+        content_items = [{
+            'type': 'image_url',
+            'image_url': {
+                'url': img_url
+            },
+        } for img_url in request_func_input.image_data]
+        content_items.append({'type': 'text', 'text': request_func_input.prompt})
+        messages = [
+            {
+                'role': 'user',
+                'content': content_items,
+            },
+        ]
+    else:
+        messages = [{'role': 'user', 'content': request_func_input.prompt}]
+
+    async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+        payload = {
+            'model': request_func_input.model,
+            'messages': messages,
+            'temperature': 0.0,
+            'max_completion_tokens': request_func_input.output_len,
+            'stream': not args.disable_stream,
+            'ignore_eos': not args.disable_ignore_eos,
+            **request_func_input.extra_request_body,
+        }
+        headers = {'Authorization': f"Bearer {os.environ.get('OPENAI_API_KEY')}"}
+
+        output = RequestFuncOutput()
+        output.prompt_len = request_func_input.prompt_len
+
+        generated_text = ''
+        output_len = request_func_input.output_len
+        ttft = 0.0
+        st = time.perf_counter()
+        most_recent_timestamp = st
+        try:
+            async with session.post(url=api_url, json=payload, headers=headers) as response:
+                if response.status == 200:
+                    if args.disable_stream:
+                        # Non-streaming response
+                        response_json = await response.json()
+                        output.generated_text = response_json['choices'][0]['message']['content']
+                        output.success = True
+                        output.latency = time.perf_counter() - st
+                        output.ttft = (output.latency)  # For non-streaming, TTFT = total latency
+                        output.output_len = response_json.get('usage', {}).get('completion_tokens', output_len)
+                    else:
+                        # Streaming response
+                        async for chunk_bytes in response.content:
+                            chunk_bytes = chunk_bytes.strip()
+                            if not chunk_bytes:
+                                continue
+
+                            chunk = remove_prefix(chunk_bytes.decode('utf-8'), 'data: ')
+                            latency = time.perf_counter() - st
+                            if chunk == '[DONE]':
+                                pass
+                            else:
+                                data = json.loads(chunk)
+
+                                # Check if this chunk contains content
+                                delta = data.get('choices', [{}])[0].get('delta', {})
+                                content = delta.get('content', '')
+
+                                if content:
+                                    timestamp = time.perf_counter()
+                                    # First token
+                                    if ttft == 0.0:
+                                        ttft = timestamp - st
+                                        output.ttft = ttft
+
+                                    # Decoding phase
+                                    else:
+                                        output.itl.append(timestamp - most_recent_timestamp)
+
+                                    most_recent_timestamp = timestamp
+                                    generated_text += content
+
+                                # Check for usage info in final chunk
+                                output_len = (data.get('usage') or {}).get('completion_tokens', output_len)
+
+                        output.generated_text = generated_text
+                        output.success = True
+                        output.latency = latency
+                        output.output_len = output_len
+                else:
+                    output.error = ((response.reason or '') + ': ' + (await response.text()))
+                    output.success = False
+        except Exception:
+            output.success = False
+            exc_info = sys.exc_info()
+            output.error = ''.join(traceback.format_exception(*exc_info))
+
+    if pbar:
+        pbar.update(1)
+    return output
+
+
 async def async_request_sglang_generate(
     request_func_input: RequestFuncInput,
-    pbar: Optional[tqdm] = None,
+    pbar: tqdm | None = None,
 ) -> RequestFuncOutput:
     api_url = request_func_input.api_url
     prompt = request_func_input.prompt
@@ -302,7 +421,7 @@ async def async_request_sglang_generate(
 
 async def async_request_gserver(
     request_func_input: RequestFuncInput,
-    pbar: Optional[tqdm] = None,
+    pbar: tqdm | None = None,
 ) -> RequestFuncOutput:
     raise NotImplementedError()
 
@@ -322,7 +441,7 @@ def get_model(pretrained_model_name_or_path: str) -> str:
     return pretrained_model_name_or_path
 
 
-def get_tokenizer(pretrained_model_name_or_path: str, ) -> Union[PreTrainedTokenizer, PreTrainedTokenizerFast]:
+def get_tokenizer(pretrained_model_name_or_path: str, ) -> PreTrainedTokenizer | PreTrainedTokenizerFast:
     if pretrained_model_name_or_path.endswith('.json') or pretrained_model_name_or_path.endswith('.model'):
         from sglang.srt.hf_transformers_utils import get_tokenizer
 
@@ -333,12 +452,27 @@ def get_tokenizer(pretrained_model_name_or_path: str, ) -> Union[PreTrainedToken
     return AutoTokenizer.from_pretrained(pretrained_model_name_or_path, trust_remote_code=True)
 
 
+def get_processor(pretrained_model_name_or_path: str, ) -> PreTrainedTokenizer | PreTrainedTokenizerFast:
+    assert (pretrained_model_name_or_path is not None and pretrained_model_name_or_path != '')
+    if pretrained_model_name_or_path.endswith('.json') or pretrained_model_name_or_path.endswith('.model'):
+        from sglang.srt.utils.hf_transformers_utils import get_processor
+
+        return get_processor(pretrained_model_name_or_path)
+
+    if pretrained_model_name_or_path is not None and not os.path.exists(pretrained_model_name_or_path):
+        pretrained_model_name_or_path = get_model(pretrained_model_name_or_path)
+    return AutoProcessor.from_pretrained(pretrained_model_name_or_path, trust_remote_code=True)
+
+
 ASYNC_REQUEST_FUNCS = {
     'sglang': async_request_sglang_generate,
     'sglang-native': async_request_sglang_generate,
     'sglang-oai': async_request_openai_completions,
+    'sglang-oai-chat': async_request_openai_chat_completions,
     'vllm': async_request_openai_completions,
+    'vllm-chat': async_request_openai_chat_completions,
     'lmdeploy': async_request_openai_completions,
+    'lmdeploy-chat': async_request_openai_chat_completions,
     'trt': async_request_trt_llm,
     'gserver': async_request_gserver,
 }
@@ -348,6 +482,8 @@ ASYNC_REQUEST_FUNCS = {
 class BenchmarkMetrics:
     completed: int
     total_input: int
+    total_input_text: int
+    total_input_vision: int
     total_output: int
     total_output_retokenized: int
     request_throughput: float
@@ -373,7 +509,7 @@ class BenchmarkMetrics:
 SHAREGPT_URL = 'https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json'  # noqa
 
 
-def download_and_cache_file(url: str, filename: Optional[str] = None):
+def download_and_cache_file(url: str, filename: str | None = None):
     """Read and cache a file from a url."""
     if filename is None:
         filename = os.path.join('/tmp', url.split('/')[-1])
@@ -407,12 +543,26 @@ def download_and_cache_file(url: str, filename: Optional[str] = None):
     return filename
 
 
-def sample_sharegpt_requests(
-    dataset_path: str,
-    num_requests: int,
-    tokenizer: PreTrainedTokenizerBase,
-    fixed_output_len: Optional[int] = None,
-) -> List[Tuple[str, int, int]]:
+@dataclass
+class DatasetRow:
+    prompt: str
+    prompt_len: int
+    output_len: int
+    text_prompt_len: int | None = None
+    vision_prompt_len: int | None = None
+    image_data: list[str] | None = None
+
+    def __post_init__(self):
+        if self.text_prompt_len is None:
+            self.text_prompt_len = self.prompt_len
+        if self.vision_prompt_len is None:
+            self.vision_prompt_len = 0
+
+
+def sample_sharegpt_requests(dataset_path: str,
+                             num_requests: int,
+                             tokenizer: PreTrainedTokenizerBase,
+                             fixed_output_len: int | None = None) -> list[DatasetRow]:
     if fixed_output_len is not None and fixed_output_len < 4:
         raise ValueError('output_len too small')
 
@@ -432,7 +582,7 @@ def sample_sharegpt_requests(
     random.shuffle(dataset)
 
     # Filter out sequences that are too long or too short
-    filtered_dataset: List[Tuple[str, int, int]] = []
+    filtered_dataset: list[DatasetRow] = []
     for i in range(len(dataset)):
         if len(filtered_dataset) == num_requests:
             break
@@ -450,11 +600,24 @@ def sample_sharegpt_requests(
         if prompt_len > 1024 or (prompt_len + output_len > 2048 and fixed_output_len is None):
             # Prune too long sequences.
             continue
-        filtered_dataset.append((prompt, prompt_len, output_len))
 
-    print(f'#Input tokens: {np.sum([x[1] for x in filtered_dataset])}')
-    print(f'#Output tokens: {np.sum([x[2] for x in filtered_dataset])}')
+        filtered_dataset.append(DatasetRow(
+            prompt=prompt,
+            prompt_len=prompt_len,
+            output_len=output_len,
+        ))
+
+    print(f'#Input tokens: {sum(x.prompt_len for x in filtered_dataset)}')
+    print(f'#Output tokens: {sum(x.output_len for x in filtered_dataset)}')
     return filtered_dataset
+
+
+def compute_random_lens(full_len: int, range_ratio: float, num: int):
+    return np.random.randint(
+        max(int(full_len * range_ratio), 1),
+        full_len + 1,
+        size=num,
+    )
 
 
 def sample_random_requests(
@@ -464,73 +627,273 @@ def sample_random_requests(
     range_ratio: float,
     tokenizer: PreTrainedTokenizerBase,
     dataset_path: str,
-) -> List[Tuple[str, int, int]]:
+) -> list[DatasetRow]:
 
-    input_lens = np.random.randint(
-        max(int(input_len * range_ratio), 1),
-        input_len + 1,
-        size=num_prompts,
+    input_lens = compute_random_lens(
+        full_len=input_len,
+        range_ratio=range_ratio,
+        num=num_prompts,
     )
-    output_lens = np.random.randint(
-        int(output_len * range_ratio),
-        output_len + 1,
-        size=num_prompts,
+    output_lens = compute_random_lens(
+        full_len=output_len,
+        range_ratio=range_ratio,
+        num=num_prompts,
     )
 
-    if True:
-        # Sample token ids from ShareGPT and repeat/truncate them to
-        # satisfy the input_lens
+    # Sample token ids from ShareGPT and repeat/truncate them to
+    # satisfy the input_lens
 
-        # Download sharegpt if necessary
-        if not os.path.isfile(dataset_path):
-            dataset_path = download_and_cache_file(SHAREGPT_URL)
+    # Download sharegpt if necessary
+    if not os.path.isfile(dataset_path):
+        dataset_path = download_and_cache_file(SHAREGPT_URL)
 
-        # Load the dataset.
-        with open(dataset_path) as f:
-            dataset = json.load(f)
-        # Filter out the conversations with less than 2 turns.
-        dataset = [data for data in dataset if len(data['conversations']) >= 2]
-        # Only keep the first two turns of each conversation.
-        dataset = [(data['conversations'][0]['value'], data['conversations'][1]['value']) for data in dataset]
-        # remove the empty prompt
-        dataset = [(query, answer) for query, answer in dataset if len(query) > 0]
+    # Load the dataset.
+    with open(dataset_path) as f:
+        dataset = json.load(f)
+    # Filter out the conversations with less than 2 turns.
+    dataset = [data for data in dataset if len(data['conversations']) >= 2]
+    # Only keep the first two turns of each conversation.
+    dataset = [(data['conversations'][0]['value'], data['conversations'][1]['value']) for data in dataset]
+    # remove the empty prompt
+    dataset = [(query, answer) for query, answer in dataset if len(query) > 0]
 
-        # Shuffle the dataset.
-        random.shuffle(dataset)
+    # Shuffle the dataset.
+    random.shuffle(dataset)
 
-        # Filter out sequences that are too long or too short
-        input_requests: List[Tuple[str, int, int]] = []
-        for i in range(num_prompts):
-            # Tokenize the prompts and completions.
-            prompt = dataset[i][0]
-            prompt_token_ids = tokenizer.encode(prompt)
-            prompt_len = len(prompt_token_ids)
+    # Filter out sequences that are too long or too short
+    input_requests: list[DatasetRow] = []
+    origin_output_lens: list[int] = []
+    for i in range(num_prompts):
+        # Tokenize the prompts and completions.
+        prompt = dataset[i][0]
+        prompt_token_ids = tokenizer.encode(prompt)
+        prompt_len = len(prompt_token_ids)
+        completion = dataset[i][1]
+        completion_token_ids = tokenizer.encode(completion)
+        origin_output_lens.append(len(completion_token_ids))
 
-            if prompt_len > input_lens[i]:
-                input_ids = prompt_token_ids[:input_lens[i]]
-            else:
-                ratio = (input_lens[i] + prompt_len - 1) // prompt_len
-                input_ids = (prompt_token_ids * ratio)[:input_lens[i]]
-            prompt = tokenizer.decode(input_ids)
-            input_requests.append((prompt, int(input_lens[i]), int(output_lens[i])))
-    else:
-        # Sample token ids from random integers.
-        # This can cause some NaN issues.
-        offsets = np.random.randint(0, tokenizer.vocab_size, size=num_prompts)
-        input_requests = []
-        for i in range(num_prompts):
-            prompt = tokenizer.decode([(offsets[i] + i + j) % tokenizer.vocab_size for j in range(input_lens[i])])
-            input_requests.append((prompt, int(input_lens[i]), int(output_lens[i])))
+        if prompt_len > input_lens[i]:
+            input_ids = prompt_token_ids[:input_lens[i]]
+        else:
+            ratio = (input_lens[i] + prompt_len - 1) // prompt_len
+            input_ids = (prompt_token_ids * ratio)[:input_lens[i]]
+        prompt = tokenizer.decode(input_ids)
+        input_requests.append(DatasetRow(
+            prompt=prompt,
+            prompt_len=int(input_lens[i]),
+            output_len=int(output_lens[i]),
+        ))
 
-    print(f'#Input tokens: {np.sum(input_lens)}')
-    print(f'#Output tokens: {np.sum(output_lens)}')
+    print(f'#Input tokens: {sum(x.prompt_len for x in input_requests)}')
+    print(f'#Output tokens: {sum(x.output_len for x in input_requests)}')
     return input_requests
 
 
+def parse_image_resolution(image_resolution: str) -> tuple[int, int]:
+    """Parse image resolution into (width, height).
+
+    Supports presets '1080p', '720p', '360p'. And custom 'heightxwidth' format (e.g., '1080x1920' means height=1080,
+    width=1920) will be parsed into (width, height).
+    """
+    resolution_to_size = {
+        '4k': (3840, 2160),
+        '1080p': (1920, 1080),
+        '720p': (1280, 720),
+        '360p': (640, 360),
+    }
+    if image_resolution in resolution_to_size:
+        return resolution_to_size[image_resolution]
+
+    res = image_resolution.strip().lower()
+    if 'x' in res:
+        parts = res.split('x')
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            height = int(parts[0])
+            width = int(parts[1])
+            if height > 0 and width > 0:
+                return (width, height)
+
+    raise ValueError(f'Unsupported image resolution: {image_resolution}. '
+                     "Choose from 4k, 1080p, 720p, 360p, or provide custom 'heightxwidth' (e.g., 1080x1920).")
+
+
+def gen_mm_prompt(tokenizer, image_pad_id, token_num):
+    """Generate a random prompt of specified token length using tokenizer
+    vocabulary."""
+    all_available_tokens = list(tokenizer.get_vocab().values())
+    if image_pad_id:
+        all_available_tokens.remove(image_pad_id)
+    selected_tokens = random.choices(all_available_tokens, k=token_num)
+    return tokenizer.decode(selected_tokens)
+
+
+def create_mm_data_row(text_prompt, images: list, images_base64, output_len, processor, backend):
+    try:
+        content_items = [{'type': 'image', 'image': {'url': image_base64}} for image_base64 in images_base64]
+        content_items.append({'type': 'text', 'text': text_prompt})
+        prompt_str = processor.apply_chat_template(
+            [{
+                'role': 'user',
+                'content': content_items
+            }],
+            add_generation_prompt=True,
+            tokenize=False,
+        )
+    except Exception as e:
+        # Note (Xinyuan): This is a workaround for an issue where some tokenizers
+        # do not support content as a list. (e.g. InternVL)
+        print(f'Error applying chat template: {e}, fallback to <image> tag')
+        # Some tokenizers do not support list content; fall back to a placeholder in the text
+        prompt_str = f'<image>{text_prompt}'
+
+    # Calculate total tokens (text + vision)
+    prompt_len = processor(
+        text=[prompt_str],
+        images=images,
+        padding=False,
+        return_tensors='pt',
+    )['input_ids'].numel()
+
+    # Calculate text-only tokens
+    try:
+        # Create text-only version of the prompt
+        text_only_prompt = processor.apply_chat_template(
+            [{
+                'role': 'user',
+                'content': text_prompt
+            }],
+            add_generation_prompt=True,
+            tokenize=False,
+        )
+        text_prompt_len = processor(
+            text=[text_only_prompt],
+            padding=False,
+            return_tensors='pt',
+        )['input_ids'].numel()
+    except Exception:
+        # Fallback: just tokenize the text prompt directly
+        tokenizer_to_use = (processor.tokenizer if hasattr(processor, 'tokenizer') else processor)
+        text_prompt_len = len(tokenizer_to_use.encode(text_prompt))
+
+    # Vision tokens = total tokens - text tokens
+    vision_prompt_len = prompt_len - text_prompt_len
+
+    use_raw_prompt = backend in [
+        'sglang',
+        'sglang-oai',
+        'sglang-oai-chat',
+        'vllm',
+        'vllm-chat',
+        'lmdeploy',
+        'lmdeploy-chat',
+    ]
+    return DatasetRow(
+        prompt=text_prompt if use_raw_prompt else prompt_str,
+        prompt_len=prompt_len,
+        output_len=output_len,
+        text_prompt_len=text_prompt_len,
+        vision_prompt_len=vision_prompt_len,
+        image_data=images_base64,
+    )
+
+
+def sample_image_requests(
+    num_requests: int,
+    image_count: int,
+    input_len: int,
+    output_len: int,
+    range_ratio: float,
+    processor: AutoProcessor,
+    image_content: str,
+    image_format: str,
+    image_resolution: str,
+    backend: str,
+) -> list[DatasetRow]:
+    """Generate requests with images.
+
+    - Each request includes ``image_count`` images.
+    - Supported resolutions: 4k (3840x2160), 1080p (1920x1080), 720p (1280x720), 360p (640x360),
+      or custom 'heightxwidth' (e.g., 1080x1920).
+    - Text lengths follow the 'random' dataset sampling rule. ``prompt_len``
+      only counts text tokens and excludes image data.
+    """
+
+    # Parse resolution (supports presets and 'heightxwidth')
+    width, height = parse_image_resolution(image_resolution)
+
+    # Check for potentially problematic combinations and warn user
+    if width * height >= 1920 * 1080 and image_count * num_requests >= 100:
+        warnings.warn(
+            f'High resolution ({width}x{height}) with {image_count * num_requests} total images '
+            f'may take a long time. Consider reducing resolution or image count.',
+            UserWarning,
+            stacklevel=2,
+        )
+
+    # Sample text lengths
+    input_lens = compute_random_lens(
+        full_len=input_len,
+        range_ratio=range_ratio,
+        num=num_requests,
+    )
+    output_lens = compute_random_lens(
+        full_len=output_len,
+        range_ratio=range_ratio,
+        num=num_requests,
+    )
+
+    def _gen_random_image_data_uri(width: int = width, height: int = height) -> tuple[Image.Image, str, int]:
+        if image_content == 'blank':
+            # Generate blank white image
+            arr = np.full((height, width, 3), 255, dtype=np.uint8)
+        else:
+            # Generate random colored image
+            arr = (np.random.rand(height, width, 3) * 255).astype(np.uint8)
+        img = Image.fromarray(arr)
+        buf = io.BytesIO()
+        img.save(buf, format=image_format, quality=85)
+        encoded = pybase64.b64encode(buf.getvalue()).decode('utf-8')
+        image_data = f'data:image/{image_format};base64,{encoded}'  # noqa
+        image_bytes = len(image_data.encode('utf-8'))
+        return img, image_data, image_bytes
+
+    dataset: list[DatasetRow] = []
+    total_image_bytes = 0
+    for i in range(num_requests):
+        # Generate text prompt
+        text_prompt = gen_mm_prompt(
+            processor.tokenizer,
+            processor.image_token_id if hasattr(processor, 'image_token_id') else None,
+            int(input_lens[i]),
+        )
+
+        # Generate image list
+        images, images_base64, images_bytes = zip(*[_gen_random_image_data_uri() for _ in range(image_count)])
+        total_image_bytes += sum(list(images_bytes))
+
+        data_row = create_mm_data_row(
+            text_prompt,
+            list(images),
+            list(images_base64),
+            int(output_lens[i]),
+            processor,
+            backend,
+        )
+
+        dataset.append(data_row)
+    avg_image_bytes = total_image_bytes // num_requests if num_requests > 0 else 0
+
+    print(f'#Input tokens: {np.sum([x.prompt_len for x in dataset])}')
+    print(f'#Output tokens: {np.sum([x.output_len for x in dataset])}')
+    print(f'\nCreated {len(dataset)} {image_content} {image_format} images \
+            with average {avg_image_bytes} bytes per request')  # noqa
+    return dataset
+
+
 async def get_request(
-    input_requests: List[Tuple[str, int, int]],
+    input_requests: list[DatasetRow],
     request_rate: float,
-) -> AsyncGenerator[Tuple[str, int, int], None]:
+) -> AsyncGenerator[DatasetRow, None]:
     input_requests = iter(input_requests)
     for request in input_requests:
         yield request
@@ -546,27 +909,32 @@ async def get_request(
 
 
 def calculate_metrics(
-    input_requests: List[Tuple[str, int, int]],
-    outputs: List[RequestFuncOutput],
+    input_requests: list[DatasetRow],
+    outputs: list[RequestFuncOutput],
     dur_s: float,
     tokenizer: PreTrainedTokenizerBase,
     backend: str,
-) -> Tuple[BenchmarkMetrics, List[int]]:
-    output_lens: List[int] = []
-    retokenized_output_lens: List[int] = []
+) -> tuple[BenchmarkMetrics, list[int]]:
+    output_lens: list[int] = []
+    retokenized_output_lens: list[int] = []
     total_input = 0
+    total_input_text = 0
+    total_input_vision = 0
     completed = 0
-    itls: List[float] = []
-    tpots: List[float] = []
-    ttfts: List[float] = []
-    e2e_latencies: List[float] = []
+    itls: list[float] = []
+    tpots: list[float] = []
+    ttfts: list[float] = []
+    e2e_latencies: list[float] = []
+
     for i in range(len(outputs)):
         if outputs[i].success:
             output_len = outputs[i].output_len
             output_lens.append(output_len)
             retokenized_output_len = len(tokenizer.encode(outputs[i].generated_text, add_special_tokens=False))
             retokenized_output_lens.append(retokenized_output_len)
-            total_input += input_requests[i][1]
+            total_input += input_requests[i].prompt_len
+            total_input_text += input_requests[i].text_prompt_len
+            total_input_vision += input_requests[i].vision_prompt_len
             if output_len > 1:
                 tpots.append((outputs[i].latency - outputs[i].ttft) / (output_len - 1))
             itls += outputs[i].itl
@@ -588,6 +956,8 @@ def calculate_metrics(
     metrics = BenchmarkMetrics(
         completed=completed,
         total_input=total_input,
+        total_input_text=total_input_text,
+        total_input_vision=total_input_vision,
         total_output=sum(output_lens),
         total_output_retokenized=sum(retokenized_output_lens),
         request_throughput=completed / dur_s,
@@ -618,10 +988,10 @@ async def benchmark(
     api_url: str,
     model_id: str,
     tokenizer: PreTrainedTokenizerBase,
-    input_requests: List[Tuple[str, int, int]],
+    input_requests: list[DatasetRow],
     request_rate: float,
     disable_tqdm: bool,
-    extra_request_body: Dict[str, Any],
+    extra_request_body: dict[str, Any],
 ):
     if backend in ASYNC_REQUEST_FUNCS:
         request_func = ASYNC_REQUEST_FUNCS[backend]
@@ -631,14 +1001,15 @@ async def benchmark(
     if not args.disable_warmup:
         print('Starting initial single prompt test run...')
         start_warmup = time.perf_counter()
-        test_prompt, test_prompt_len, test_output_len = input_requests[0]
+        test_request = input_requests[0]
         test_input = RequestFuncInput(
             model=model_id,
-            prompt=test_prompt,
+            prompt=test_request.prompt,
             api_url=api_url,
-            prompt_len=test_prompt_len,
-            output_len=test_output_len,
+            prompt_len=test_request.prompt_len,
+            output_len=test_request.output_len,
             extra_request_body=extra_request_body,
+            image_data=test_request.image_data,
         )
         test_output = await request_func(request_func_input=test_input)
         if not test_output.success:
@@ -653,19 +1024,19 @@ async def benchmark(
     pbar = None if disable_tqdm else tqdm(total=len(input_requests))
 
     benchmark_start_time = time.perf_counter()
-    tasks: List[asyncio.Task] = []
+    tasks: list[asyncio.Task] = []
     async for request in get_request(input_requests, request_rate):
-        prompt, prompt_len, output_len = request
         request_func_input = RequestFuncInput(
             model=model_id,
-            prompt=prompt,
+            prompt=request.prompt,
             api_url=api_url,
-            prompt_len=prompt_len,
-            output_len=output_len,
+            prompt_len=request.prompt_len,
+            output_len=request.output_len,
+            image_data=request.image_data,
             extra_request_body=extra_request_body,
         )
         tasks.append(asyncio.create_task(request_func(request_func_input=request_func_input, pbar=pbar)))
-    outputs: List[RequestFuncOutput] = await asyncio.gather(*tasks)
+    outputs: list[RequestFuncOutput] = await asyncio.gather(*tasks)
 
     if pbar is not None:
         pbar.close()
@@ -686,6 +1057,8 @@ async def benchmark(
     print('{:<40} {:<10}'.format('Successful requests:', metrics.completed))
     print('{:<40} {:<10.2f}'.format('Benchmark duration (s):', benchmark_duration))
     print('{:<40} {:<10}'.format('Total input tokens:', metrics.total_input))
+    print('{:<40} {:<10}'.format('Total input text tokens:', metrics.total_input_text))
+    print('{:<40} {:<10}'.format('Total input vision tokens:', metrics.total_input_vision))
     print('{:<40} {:<10}'.format('Total generated tokens:', metrics.total_output))
     print('{:<40} {:<10}'.format('Total generated tokens (retokenized):', metrics.total_output_retokenized))
     print('{:<40} {:<10.2f}'.format('Request throughput (req/s):', metrics.request_throughput))
@@ -827,8 +1200,11 @@ def run_benchmark(args_: argparse.Namespace):
             'sglang': 30000,
             'sglang-native': 30000,
             'sglang-oai': 30000,
+            'sglang-oai-chat': 30000,
             'lmdeploy': 23333,
+            'lmdeploy-chat': 23333,
             'vllm': 8000,
+            'vllm-chat': 8000,
             'trt': 8000,
             'gserver': 9988,
         }.get(args.backend, 30000)
@@ -840,6 +1216,9 @@ def run_benchmark(args_: argparse.Namespace):
     elif args.backend in ['sglang-oai', 'vllm', 'lmdeploy']:
         api_url = (f'{args.base_url}/v1/completions'
                    if args.base_url else f'http://{args.host}:{args.port}/v1/completions')
+    elif args.backend in ['lmdeploy-chat', 'vllm-chat', 'sglang-oai-chat']:
+        api_url = (f'{args.base_url}/v1/chat/completions'
+                   if args.base_url else f'http://{args.host}:{args.port}/v1/chat/completions')
     elif args.backend == 'trt':
         api_url = (
             f'{args.base_url}/v2/models/ensemble/generate_stream'
@@ -866,23 +1245,24 @@ def run_benchmark(args_: argparse.Namespace):
                   '`--host` and `--port`.')
             sys.exit(1)
 
+    # Read dataset
+    backend = args.backend
+    model_id = args.model
+    model_path = args.model_path if args.model_path is not None else args.model
+    tokenizer_id = args.tokenizer if args.tokenizer is not None else model_path
+
     if args.model is None:
         print('No model specified or found. Please provide a model '
               'using `--model`.')
         sys.exit(1)
 
-    if not check_chat_template(args.model):
+    if not check_chat_template(model_path):
         print('\nWARNING It is recommended to use the `Chat` or `Instruct` '
               'model for benchmarking.\n'
               'Because when the tokenizer counts the output tokens, if '
               'there is gibberish, it might count incorrectly.\n')
 
     print(f'{args}\n')
-
-    # Read dataset
-    backend = args.backend
-    model_id = args.model
-    tokenizer_id = args.tokenizer if args.tokenizer is not None else args.model
 
     tokenizer = get_tokenizer(tokenizer_id)
 
@@ -904,6 +1284,20 @@ def run_benchmark(args_: argparse.Namespace):
             range_ratio=args.random_range_ratio,
             tokenizer=tokenizer,
             dataset_path=args.dataset_path,
+        )
+    elif args.dataset_name == 'image':
+        processor = get_processor(model_path)
+        input_requests = sample_image_requests(
+            num_requests=args.num_prompts,
+            image_count=args.image_count,
+            input_len=args.random_input_len,
+            output_len=args.random_output_len,
+            range_ratio=args.random_range_ratio,
+            processor=processor,
+            image_content=args.image_content,
+            image_format=args.image_format,
+            image_resolution=args.image_resolution,
+            backend=args.backend,
         )
     else:
         raise ValueError(f'Unknown dataset: {args.dataset_name}')
@@ -976,7 +1370,7 @@ if __name__ == '__main__':
         '--dataset-name',
         type=str,
         default='sharegpt',
-        choices=['sharegpt', 'random'],
+        choices=['sharegpt', 'random', 'image'],
         help='Name of the dataset to benchmark on.',
     )
     parser.add_argument('--dataset-path', type=str, default='', help='Path to the dataset.')
@@ -985,6 +1379,11 @@ if __name__ == '__main__':
         type=str,
         help='Name or path of the model. If not set, the default model will '
         'request /v1/models for conf.',
+    )
+    parser.add_argument(
+        '--model-path',
+        type=str,
+        help='Path to the model. If not set, the default model will be model',
     )
     parser.add_argument(
         '--tokenizer',
@@ -1023,6 +1422,34 @@ if __name__ == '__main__':
         default=0.0,
         help='Range of sampled ratio of input/output length, '
         'used only for random dataset.',
+    )
+    # image dataset args
+    parser.add_argument(
+        '--image-count',
+        type=int,
+        default=1,
+        help='Number of images per request (only available with the image dataset)',
+    )
+    parser.add_argument(
+        '--image-resolution',
+        type=str,
+        default='1080p',
+        help=('Resolution of images for image dataset. '
+              "Supports presets 4k/1080p/720p/360p or custom 'heightxwidth' (e.g., 1080x1920)."),
+    )
+    parser.add_argument(
+        '--image-format',
+        type=str,
+        default='jpeg',
+        help=('Format of images for image dataset. '
+              'Supports jpeg and png.'),
+    )
+    parser.add_argument(
+        '--image-content',
+        type=str,
+        default='random',
+        help=('Content for images for image dataset. '
+              'Supports random and blank.'),
     )
     parser.add_argument(
         '--request-rate',

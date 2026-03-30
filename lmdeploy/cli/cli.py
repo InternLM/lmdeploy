@@ -1,70 +1,23 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-import argparse
 import os
 
 from ..version import __version__
-from .utils import ArgumentHelper, DefaultsAndTypesHelpFormatter, convert_args, get_chat_template, get_lora_adapters
+from .utils import (
+    ArgumentHelper,
+    DefaultsAndTypesHelpFormatter,
+    FlexibleArgumentParser,
+    convert_args,
+    get_speculative_config,
+)
 
 
-class CLI(object):
+class CLI:
     _desc = 'The CLI provides a unified API for converting, ' \
             'compressing and deploying large language models.'
-    parser = argparse.ArgumentParser(prog='lmdeploy', description=_desc, add_help=True)
+    parser = FlexibleArgumentParser(prog='lmdeploy', description=_desc, add_help=True)
     parser.add_argument('-v', '--version', action='version', version=__version__)
     subparsers = parser.add_subparsers(title='Commands', description='lmdeploy has following commands:', dest='command')
-
-    @staticmethod
-    def add_parser_convert():
-        """Add parser for convert command."""
-        parser = CLI.subparsers.add_parser('convert',
-                                           formatter_class=DefaultsAndTypesHelpFormatter,
-                                           description=CLI.convert.__doc__,
-                                           help=CLI.convert.__doc__)
-        # define arguments
-        parser.add_argument('model_name',
-                            type=str,
-                            help='deprecated and unused, '
-                            'it will be removed on 2024.12.31. It was originally used to '
-                            'specify the name of the built-in chat template, but now it '
-                            'is substituted with a clearer parameter `--chat-template`')
-        parser.add_argument('model_path', type=str, help='The directory path of the model')
-        ArgumentHelper.model_format(parser)
-        ArgumentHelper.tp(parser)
-        # other args
-        ArgumentHelper.revision(parser)
-        ArgumentHelper.download_dir(parser)
-        parser.add_argument('--tokenizer-path', type=str, default=None, help='The path of tokenizer model')
-        parser.add_argument('--dst-path', type=str, default='workspace', help='The destination path that saves outputs')
-        parser.add_argument('--group-size',
-                            type=int,
-                            default=0,
-                            help='A parameter used in awq to quantize fp16 weights '
-                            'to 4 bits')
-        parser.add_argument('--chat-template',
-                            type=str,
-                            default=None,
-                            help='the name of the built-in chat template, which can be '
-                            'overviewed by `lmdeploy list`')
-        parser.add_argument('--dtype',
-                            type=str,
-                            default='auto',
-                            choices=['auto', 'float16', 'bfloat16'],
-                            help='data type for model weights and activations. '
-                            'The "auto" option will use FP16 precision '
-                            'for FP32 and FP16 models, and BF16 precision '
-                            'for BF16 models. This option will be ignored if '
-                            'the model is a quantized model')
-        parser.set_defaults(run=CLI.convert)
-
-    @staticmethod
-    def add_parser_list():
-        """Add parser for list command."""
-        parser = CLI.subparsers.add_parser('list',
-                                           formatter_class=DefaultsAndTypesHelpFormatter,
-                                           description=CLI.list.__doc__,
-                                           help=CLI.list.__doc__)
-        parser.set_defaults(run=CLI.list)
 
     @staticmethod
     def add_parser_chat():
@@ -88,17 +41,18 @@ class CLI(object):
                             ', "baichuan-inc/baichuan2-7b-chat" and so on')
         # common args
         ArgumentHelper.backend(parser)
-        # # chat template args
+        # chat template args
         ArgumentHelper.chat_template(parser)
         # model args
         ArgumentHelper.revision(parser)
         ArgumentHelper.download_dir(parser)
-        #
+
         # pytorch engine args
         pt_group = parser.add_argument_group('PyTorch engine arguments')
         ArgumentHelper.adapters(pt_group)
         ArgumentHelper.device(pt_group)
         ArgumentHelper.eager_mode(pt_group)
+        ArgumentHelper.dllm_block_length(pt_group)
         # common engine args
         dtype_act = ArgumentHelper.dtype(pt_group)
         tp_act = ArgumentHelper.tp(pt_group)
@@ -119,6 +73,11 @@ class CLI(object):
         ArgumentHelper.model_format(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
         ArgumentHelper.communicator(tb_group)
+        ArgumentHelper.cp(tb_group)
+        ArgumentHelper.async_(tb_group)
+
+        # speculative decoding
+        ArgumentHelper.add_spec_group(parser)
 
     @staticmethod
     def add_parser_checkenv():
@@ -134,22 +93,6 @@ class CLI(object):
                             help='The file path to save env info. Only '
                             'support file format in `json`, `yml`,'
                             ' `pkl`')
-
-    @staticmethod
-    def convert(args):
-        """Convert LLMs to turbomind format."""
-        from lmdeploy.turbomind.deploy.converter import main
-        kwargs = convert_args(args)
-        main(**kwargs)
-
-    @staticmethod
-    def list(args):
-        """List the supported model names."""
-        from lmdeploy.model import MODELS
-        model_names = list(MODELS.module_dict.keys())
-        model_names.sort()
-        print('The supported chat template names are:')
-        print('\n'.join(model_names))
 
     @staticmethod
     def check_env(args):
@@ -172,7 +115,7 @@ class CLI(object):
                 env_info.pop(req)
 
         # extra important dependencies
-        extra_reqs = ['transformers', 'gradio', 'fastapi', 'pydantic', 'triton']
+        extra_reqs = ['transformers', 'fastapi', 'pydantic', 'triton']
 
         for req in extra_reqs:
             try:
@@ -186,8 +129,7 @@ class CLI(object):
             if sys.platform.startswith('linux'):
                 try:
                     res = subprocess.run(['nvidia-smi', 'topo', '-m'],
-                                         stdout=subprocess.PIPE,
-                                         stderr=subprocess.PIPE,
+                                         capture_output=True,
                                          text=True,
                                          check=True)
                     if res.returncode == 0:
@@ -217,45 +159,18 @@ class CLI(object):
 
     @staticmethod
     def chat(args):
-        """Chat with pytorch or turbomind engine."""
-        from lmdeploy.archs import autoget_backend
+        from .chat import main
 
-        chat_template_config = get_chat_template(args.chat_template)
-
-        backend = args.backend
-        if backend != 'pytorch':
-            # set auto backend mode
-            backend = autoget_backend(args.model_path)
-
-        if backend == 'pytorch':
-            from lmdeploy.messages import PytorchEngineConfig
-            from lmdeploy.pytorch.chat import run_chat
-
-            adapters = get_lora_adapters(args.adapters)
-            engine_config = PytorchEngineConfig(dtype=args.dtype,
-                                                tp=args.tp,
-                                                session_len=args.session_len,
-                                                cache_max_entry_count=args.cache_max_entry_count,
-                                                adapters=adapters,
-                                                enable_prefix_caching=args.enable_prefix_caching,
-                                                device_type=args.device,
-                                                eager_mode=args.eager_mode,
-                                                quant_policy=args.quant_policy)
-            run_chat(args.model_path, engine_config, chat_template_config=chat_template_config)
-        else:
-            from lmdeploy.turbomind.chat import main as run_chat
-            kwargs = convert_args(args)
-            kwargs.pop('chat_template')
-            kwargs.pop('backend')
-            kwargs.pop('device')
-            kwargs.pop('eager_mode')
-            kwargs['chat_template_config'] = chat_template_config
-            run_chat(**kwargs)
+        kwargs = convert_args(args)
+        speculative_config = get_speculative_config(args)
+        to_remove = ['speculative_algorithm', 'speculative_draft_model', 'speculative_num_draft_tokens']
+        for key in to_remove:
+            kwargs.pop(key)
+        kwargs['speculative_config'] = speculative_config
+        main(**kwargs)
 
     @staticmethod
     def add_parsers():
         """Add all parsers."""
-        CLI.add_parser_convert()
-        CLI.add_parser_list()
         CLI.add_parser_checkenv()
         CLI.add_parser_chat()

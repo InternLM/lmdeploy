@@ -1,9 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import abstractmethod
 
-from lmdeploy.pytorch.disagg.config import MigrationProtocol
+from lmdeploy.pytorch.disagg.conn.protocol import (
+    DistServeInitRequest,
+    DistServeKVTransferEndpointInfo,
+    MigrationProtocol,
+)
 from lmdeploy.pytorch.disagg.messages import DistServeRegisterMRMessage, MigrationAssignment
-from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 
 
 class MigrationBackendImpl:
@@ -17,11 +20,11 @@ class MigrationBackendImpl:
         raise NotImplementedError
 
     @abstractmethod
-    def endpoint_info(self, remote_engine_id: int, protocol: MigrationProtocol):
+    def endpoint_info(self, remote_engine_id: str, protocol: MigrationProtocol):
         return NotImplementedError
 
     @abstractmethod
-    def p2p_connect(self, conn_req: DistServeConnectionRequest):
+    def p2p_connect(self, remote_engine_id: str, conn_req: DistServeKVTransferEndpointInfo):
         raise NotImplementedError
 
     @abstractmethod

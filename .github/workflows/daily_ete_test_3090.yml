@@ -15,12 +15,12 @@ on:
         default: 'main'
       backend:
         required: true
-        description: 'Set backend testcase filter: turbomind or pytorch or turbomind, pytorch. Default is "["turbomind", "pytorch"]"'
+        description: 'Set backend filter. Default is "["turbomind", "pytorch"]"'
         type: string
         default: "['turbomind', 'pytorch']"
       model:
         required: true
-        description: 'Set testcase module filter: llm, vllm. Default contains all models'
+        description: 'Set testcase module filter: llm, mllm. Default contains all models'
         type: string
         default: "['llm','mllm']"
       function:
@@ -37,21 +37,22 @@ on:
         required: true
         description: 'regression functions'
         type: string
-        default: "['quant', 'tools']"
+        default: "['quant', 'tools', 'restful']"
   schedule:
-    - cron:  '00 16 * * 0-4'
+    - cron:  '00 14 * * 0-4'
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
-  OUTPUT_FOLDER: cuda12.1_dist_${{ github.run_id }}
+  OUTPUT_FOLDER: cuda12.4_dist_${{ github.run_id }}
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
-  REPORT_DIR: /nvme/qa_test_models/test-reports/${{ github.run_id }}
+  REPORT_DIR: /nvme/qa_test_models/test-reports/${{ inputs.repo_ref || 'main' }}_${{ github.run_id }}
   COV_PARAM: --cov /opt/py3/lib/python3.10/site-packages/lmdeploy
   FAIL_CONFIG: ${{ github.event_name == 'schedule' && github.run_attempt != 1 && '--lf --lfnf none' || '--lf'}}
-  TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy
+  TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy/${{ inputs.repo_ref || 'main' }}_${{ github.run_id }}
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
   OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
+  RUN_ID: ${{ inputs.repo_ref || 'main' }}_${{ github.run_id }}
 
 jobs:
   linux-build:
@@ -63,8 +64,20 @@ jobs:
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
       PLAT_NAME: manylinux2014_x86_64
-      DOCKER_TAG: cuda12.1
+      DOCKER_TAG: cuda12.4
     steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # This might remove tools that are actually needed, if set to "true" but frees about 6 GB
+          tool-cache: false
+          docker-images: false
+          # All of these default to true, but feel free to set to "false" if necessary for your workflow
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: false
       - name: Checkout repository
         uses: actions/checkout@v3
         with:
@@ -95,7 +108,7 @@ jobs:
     runs-on: [self-hosted, 3090-r1]
     timeout-minutes: 50
     container:
-      image: openmmlab/lmdeploy:latest
+      image: openmmlab/lmdeploy:latest-cu12
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/qa_test_models:/nvme/qa_test_models
@@ -110,10 +123,10 @@ jobs:
           ref: ${{github.event.inputs.repo_ref || 'main'}}
       - name: Copy repository
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
-        run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r . ${{env.TEST_CODE_PATH}} && mv ${{env.TEST_CODE_PATH}}/autotest/config-3090.yaml ${{env.TEST_CODE_PATH}}/autotest/config.yaml
+        run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r . ${{env.TEST_CODE_PATH}}
       - name: Copy repository - offline
         if: ${{inputs.offline_mode}}
-        run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r ${{env.OFFLINE_CODE_PATH}}/. ${{env.TEST_CODE_PATH}} && mv ${{env.TEST_CODE_PATH}}/autotest/config-3090.yaml ${{env.TEST_CODE_PATH}}/autotest/config.yaml
+        run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r ${{env.OFFLINE_CODE_PATH}}/. ${{env.TEST_CODE_PATH}}
       - name: Download Artifacts
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
@@ -125,6 +138,10 @@ jobs:
       - name: Copy Artifacts - offline
         if: ${{inputs.offline_mode}}
         run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl -f && cp ${{env.OFFLINE_CODE_PATH}}/lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
+      - name: Mark as start
+        run: |
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
 
   test_quantization:
     needs: download_pkgs
@@ -135,8 +152,9 @@ jobs:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
+      TEST_ENV: 3090_legacy
     container:
-      image: openmmlab/lmdeploy:latest
+      image: openmmlab/lmdeploy:latest-cu12
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -147,22 +165,24 @@ jobs:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
+          python3 -m pip install auto_gptq matplotlib
+          python3 -m pip install -r requirements/lite.txt
       - name: Install lmdeploy
         run: |
-          python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
-          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
+          pip install transformers==4.57.6
           lmdeploy check_env
           rm -rf allure-results
           # remove tmp log in testcase
-          rm -rf /nvme/qa_test_models/autotest_model/log/*
-          mkdir ${{env.REPORT_DIR}}/.pytest_cache -p
+          mkdir ${{env.REPORT_DIR}}/.pytest_cache -p && rm autotest/.pytest_cache -f
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Test lmdeploy - quantization w4a16
         continue-on-error: true
@@ -179,6 +199,7 @@ jobs:
       - name: Clear workfile
         if: always()
         run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           chmod -R 777 $REPORT_DIR
           export workdir=$(pwd)
           cd ..
@@ -195,6 +216,7 @@ jobs:
       fail-fast: false
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
+        transformers: ["3090", "3090_legacy"]
         model: ${{ fromJSON(inputs.model || '["llm", "mllm"]')}}
         function: ${{ fromJSON(inputs.function || '["pipeline","restful","chat"]')}}
         exclude:
@@ -208,8 +230,9 @@ jobs:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
+      TEST_ENV: ${{matrix.transformers}}
     container:
-      image: openmmlab/lmdeploy:latest
+      image: openmmlab/lmdeploy:latest-cu12
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -220,22 +243,26 @@ jobs:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
-          python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
+      - name: Downgrade transformers
+        if: ${{matrix.transformers == '3090_legacy'}}
+        run: |
+          pip install transformers==4.57.6
       - name: Check env
         run: |
-          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
           # remove tmp log in testcase
-          rm -rf /nvme/qa_test_models/autotest_model/log/*
-          mkdir ${{env.REPORT_DIR}}/.pytest_cache -p
+          mkdir ${{env.REPORT_DIR}}/.pytest_cache -p && rm autotest/.pytest_cache -f
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Test lmdeploy - chat
         continue-on-error: true
@@ -258,6 +285,7 @@ jobs:
       - name: Clear workfile
         if: always()
         run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           chmod -R 777 $REPORT_DIR
           export workdir=$(pwd)
           cd ..
@@ -273,72 +301,89 @@ jobs:
       fail-fast: false
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
+        transformers: ["3090", "3090_legacy"]
+        model_path: ['internlm/internlm3-8b-instruct', 'Qwen/Qwen3-8B']
+        include:
+          - tp: 1
+            model: internlm3-8b-instruct
+            model_path: internlm/internlm3-8b-instruct
+            case_info: ['chat_completions_v1', 'generate']
+            generate_type: logprob
+            extra: '--logprobs-mode raw_logprobs'
+          - tp: 1
+            model: Qwen3-8B
+            model_path: Qwen/Qwen3-8B
+            case_info: ['completions_v1']
+            generate_type: base
     timeout-minutes: 60
     container:
-      image: openmmlab/lmdeploy:latest
+      image: openmmlab/lmdeploy:latest-cu12
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
+    env:
+      TEST_ENV: ${{matrix.transformers}}
     steps:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
-          python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
+      - name: Downgrade transformers
+        if: ${{matrix.transformers == '3090_legacy'}}
+        run: |
+          pip install transformers==4.57.6
       - name: Check env
         run: |
-          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
           # remove tmp log in testcase
-          rm -rf /nvme/qa_test_models/autotest_model/log/*
-          mkdir ${{env.REPORT_DIR}}/.pytest_cache -p
+          mkdir ${{env.REPORT_DIR}}/.pytest_cache -p && rm autotest/.pytest_cache -f
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
-      - name: Start restful api turbomind
-        if: matrix.backend == 'turbomind'
+      - name: Start restful api
         run: |
-          lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm3-8b-instruct > restful.log  2>&1  &
+          lmdeploy serve api_server /nvme/qa_test_models/${{matrix.model_path}} --tp ${{matrix.tp}} --backend ${{matrix.backend}} ${{matrix.extra}} > ${{env.REPORT_DIR}}/${{matrix.backend}}_${{matrix.model}}_${{matrix.generate_type}}_start_restful.log 2>&1 &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 120s
-      - name: Start restful api pytorch
-        if: matrix.backend == 'pytorch'
+          for i in $(seq 1 180)
+          do
+            sleep 5
+            echo "health check try $i"
+            if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
+              echo "health check success"
+              exit 0
+            fi
+          done
+
+          echo "health check fail"
+          kill -15 $restful_pid 2>/dev/null || true
+          exit 1
+      - name: Test lmdeploy - chat_completions_v1
+        if:  contains(matrix.case_info, 'chat_completions_v1')
+        timeout-minutes: 60
         run: |
-          lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm3-8b-instruct --backend pytorch > restful.log  2>&1  &
-          echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 180s
-      - name: Test lmdeploy - restful api
-        timeout-minutes: 75
-        run: |
-          pytest autotest/interface/restful/test_restful_chat_func.py -n 20 -m 'not not_${{matrix.backend}}' --alluredir=${{env.REPORT_DIR}}/interface-${{matrix.backend}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'not not_${{matrix.backend}} and not internlm2_5 and not interns1' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Kill api server
-        if: always()
+      - name: Test lmdeploy - completions_v1 - other
+        if: contains(matrix.case_info, 'completions_v1')
+        timeout-minutes: 60
         run: |
-          kill -15 "$restful_pid"
-      - name: Start restful api turbomind - base
-        if: matrix.backend == 'turbomind'
+          pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}} and not internlm2_5' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+      - name: Test generate - logprob
+        if:  matrix.generate_type == 'logprob' && contains(matrix.case_info, 'generate')
+        timeout-minutes: 60
         run: |
-          lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm3-8b-instruct > restful.log  2>&1  &
-          echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 120s
-      - name: Start restful api pytorch - base
-        if: matrix.backend == 'pytorch'
-        run: |
-          lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm3-8b-instruct --backend pytorch > restful.log  2>&1  &
-          echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 180s
-      - name: Test lmdeploy - restful api - base
-        timeout-minutes: 40
-        run: |
-          pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 --alluredir=${{env.REPORT_DIR}}/interface-${{matrix.backend}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/restful/test_restful_generate.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'not not_${{matrix.backend}} and not experts' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Kill api server
         if: always()
@@ -347,6 +392,7 @@ jobs:
       - name: Clear workfile
         if: always()
         run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           chmod -R 777 $REPORT_DIR
           export workdir=$(pwd)
           cd ..
@@ -355,12 +401,12 @@ jobs:
           chmod -R 777 $workdir
 
   get_coverage_report:
-    if: ${{!cancelled() && success()}}
+    if: ${{!cancelled()}}
     runs-on: [self-hosted, 3090-r1]
     needs: [test_tools, test_restful]
     timeout-minutes: 5
     container:
-      image: openmmlab/lmdeploy:latest
+      image: openmmlab/lmdeploy:latest-cu12
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -371,7 +417,8 @@ jobs:
         run: cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install lmdeploy
         run: |
-          python3 -m pip install lmdeploy-*.whl --no-deps
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
+          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
       - name: Get coverage report
         run: |

@@ -29,8 +29,6 @@ LMDeploy 工具箱提供以下核心功能：
 
 - **便捷的服务：** 通过请求分发服务，LMDeploy 支持多模型在多机、多卡上的推理服务。
 
-- **有状态推理：** 通过缓存多轮对话过程中 attention 的 k/v，记住对话历史，从而避免重复处理历史会话。显著提升长文本多轮对话场景中的效率。
-
 - **卓越的兼容性:**  LMDeploy 支持 `KV Cache 量化 <https://lmdeploy.readthedocs.io/zh-cn/latest/quantization/kv_quant.html>`_, `AWQ <https://lmdeploy.readthedocs.io/zh-cn/latest/quantization/w4a16.html>`_ 和 `Automatic Prefix Caching <https://lmdeploy.readthedocs.io/zh-cn/latest/inference/turbomind_config.html>`_ 同时使用。
 
 中文文档
@@ -63,7 +61,6 @@ LMDeploy 工具箱提供以下核心功能：
    llm/api_server_tools.md
    llm/api_server_reasoning.md
    llm/api_server_lora.md
-   llm/gradio.md
    llm/proxy_server.md
 
 .. _vlm_部署:
@@ -84,6 +81,7 @@ LMDeploy 工具箱提供以下核心功能：
    quantization/w4a16.md
    quantization/w8a8.md
    quantization/kv_quant.md
+   quantization/llm_compressor.md
 
 .. _测试基准:
 .. toctree::
@@ -92,6 +90,7 @@ LMDeploy 工具箱提供以下核心功能：
 
    benchmark/benchmark.md
    benchmark/evaluate_with_opencompass.md
+   benchmark/evaluate_with_vlmevalkit.md
 
 .. toctree::
    :maxdepth: 1
@@ -106,15 +105,22 @@ LMDeploy 工具箱提供以下核心功能：
    advance/structed_output.md
    advance/pytorch_multinodes.md
    advance/pytorch_profiling.md
+   advance/metrics.md
+   advance/context_parallel.md
+   advance/spec_decoding.md
+   advance/update_weights.md
 
 .. toctree::
    :maxdepth: 1
    :caption: API 文档
 
    api/pipeline.rst
+   api/openapi.rst
+   api/cli.rst
 
 索引与表格
 ==================
 
 * :ref:`genindex`
 * :ref:`search`
+* :ref:`routingtable`

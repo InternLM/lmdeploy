@@ -68,8 +68,6 @@ struct Snapshot {
 
 using GetFreeMemSize = std::function<size_t()>;
 
-size_t GetSyncFreeMemSize(Barrier& barrier, std::atomic<size_t>& value);
-
 class BlockManager {
 public:
     explicit BlockManager(
@@ -104,6 +102,11 @@ public:
         return max_block_count_;
     }
 
+    int total_count() const noexcept
+    {
+        return blocks_.size();
+    }
+
     int active_count() const noexcept
     {
         return active_ids_.size();
@@ -116,7 +119,7 @@ public:
 
     int free_count() const noexcept
     {
-        return (max_block_count_ - blocks_.size()) + free_ids_.size();
+        return free_ids_.size();
     }
 
     Block& block(int idx)

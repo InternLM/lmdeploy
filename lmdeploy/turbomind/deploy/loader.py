@@ -4,10 +4,10 @@ import os.path as osp
 import re
 from abc import ABC, abstractmethod
 from collections import defaultdict
+from collections.abc import Iterator
 from functools import partial
 from glob import glob
 from queue import Queue
-from typing import Iterator, Tuple, Union
 
 import torch
 from safetensors import safe_open
@@ -23,17 +23,18 @@ EXTRA_SAFE_WEIGHT_PATTERN = '*.safetensors'
 
 class BaseLoader(ABC):
 
-    def __init__(self, model_path: str, pattern):
+    def __init__(self, model_path: str, pattern, mappings: list):
         self.model_path = model_path
         self.pattern = pattern
         self.item_count = defaultdict(int)
+        self.mappings = mappings
 
-    def get_index(self, index_name: str, file_pattern: str) -> Tuple[dict, list]:
+    def get_index(self, index_name: str, file_pattern: str) -> tuple[dict, list]:
         """Get shards and weight map (if possible) for the model."""
         get_path = partial(osp.join, self.model_path)
         shards = []
         if index_name:
-            with open(get_path(index_name), 'r') as f:
+            with open(get_path(index_name)) as f:
                 index = json.load(f)
             index = index['weight_map']
             shards = list(map(get_path, set(index.values())))
@@ -44,15 +45,24 @@ class BaseLoader(ABC):
             raise RuntimeError(f'failed to locate weight files for {self.model_path}')
         return sorted(shards), index
 
+    def map_key(self, key: str):
+        if self.mappings:
+            k = str(key)
+            for f in self.mappings:
+                k = f(k)
+            return k
+        else:
+            return key
+
     @abstractmethod
-    def items(self) -> Iterator[Tuple[int, dict]]:
+    def items(self) -> Iterator[tuple[int, dict]]:
         pass
 
 
 class SafetensorsLoader(BaseLoader):
 
-    def __init__(self, model_path: str, pattern: str, index_name=None, file_pattern=None):
-        super().__init__(model_path, pattern)
+    def __init__(self, model_path: str, pattern: str, mappings: list, index_name=None, file_pattern=None):
+        super().__init__(model_path, pattern, mappings)
         self.shards, index = self.get_index(index_name, file_pattern)
         if not index:
             # there is no model.safetensors.index.json in the model_path,
@@ -87,7 +97,7 @@ class SafetensorsLoader(BaseLoader):
                     else:
                         idx = int(match[0])
                         param = params[idx]
-                        param[k] = f.get_tensor(k)
+                        param[self.map_key(k)] = f.get_tensor(k)
                         if len(param) == self.item_count[idx]:
                             yield (idx, params.pop(idx))
                 if misc:
@@ -97,8 +107,8 @@ class SafetensorsLoader(BaseLoader):
 
 class PytorchLoader(BaseLoader):
 
-    def __init__(self, model_path: str, pattern: str, index_name=None, file_pattern=None):
-        super().__init__(model_path, pattern)
+    def __init__(self, model_path: str, pattern: str, mappings: list, index_name=None, file_pattern=None):
+        super().__init__(model_path, pattern, mappings)
         self.shards, index = self.get_index(index_name, file_pattern)
         for k in index.keys():
             match = re.findall(self.pattern, k)
@@ -109,7 +119,7 @@ class PytorchLoader(BaseLoader):
         params = defaultdict(dict)
         for shard in self.shards:
             misc = {}
-            tmp = torch.load(shard, map_location='cpu')
+            tmp = torch.load(shard, map_location='cpu', weights_only=True)
             for k, v in tmp.items():
                 match = re.findall(self.pattern, k)
                 if not match:
@@ -142,7 +152,7 @@ class StateDictLoader:
     lm_head, norm).
     """
 
-    def __init__(self, queue: Queue, pattern: str):
+    def __init__(self, queue: Queue, pattern: str, mappings: list):
         self.que = queue
         self.pattern = pattern
 
@@ -164,8 +174,8 @@ class StateDictLoader:
             self.que.task_done()
 
 
-def create_loader(model_path: Union[str, Queue], pattern: str) -> BaseLoader:
-    args = (model_path, pattern)
+def create_loader(model_path: str | Queue, pattern: str, mappings: list) -> BaseLoader:
+    args = (model_path, pattern, mappings)
 
     if isinstance(model_path, Queue):
         # used for `update_params`

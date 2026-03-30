@@ -3,7 +3,6 @@ import argparse
 import json
 import os
 import random
-from typing import List, Optional, Tuple
 
 import numpy as np
 from tqdm import tqdm
@@ -21,8 +20,8 @@ def sample_sharegpt_requests(
     dataset_path: str,
     num_requests: int,
     tokenizer: PreTrainedTokenizerBase,
-    fixed_output_len: Optional[int] = None,
-) -> List[Tuple[str, int, int]]:
+    fixed_output_len: int | None = None,
+) -> list[tuple[str, int, int]]:
     if fixed_output_len is not None and fixed_output_len < 4:
         raise ValueError('output_len too small')
 
@@ -38,7 +37,7 @@ def sample_sharegpt_requests(
     random.shuffle(dataset)
 
     # Filter out sequences that are too long or too short
-    filtered_dataset: List[Tuple[str, int, int]] = []
+    filtered_dataset: list[tuple[str, int, int]] = []
     for i in range(len(dataset)):
         if len(filtered_dataset) == num_requests:
             break
@@ -70,7 +69,7 @@ def sample_random_requests(
     range_ratio: float,
     tokenizer: PreTrainedTokenizerBase,
     dataset_path: str,
-) -> List[Tuple[str, int, int]]:
+) -> list[tuple[str, int, int]]:
 
     input_lens = np.random.randint(
         max(int(input_len * range_ratio), 1),
@@ -101,7 +100,7 @@ def sample_random_requests(
         random.shuffle(dataset)
 
         # Filter out sequences that are too long or too short
-        input_requests: List[Tuple[str, int, int]] = []
+        input_requests: list[tuple[str, int, int]] = []
         for i in range(num_prompts):
             # Tokenize the prompts and completions.
             prompt = dataset[i][0]
@@ -134,7 +133,7 @@ class Engine:
     def __init__(self, model_path: str, engine_config, csv: str):
         self.pipe = pipeline(model_path, backend_config=engine_config, log_level='ERROR')
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-
+        self.return_routed_experts = getattr(self.pipe.backend_config, 'enable_return_routed_experts', False)
         self.csv = csv
 
     def process_request(self, requests, profiler: Profiler, temperature, top_p, top_k, stream_output):
@@ -146,10 +145,11 @@ class Engine:
                              top_k=top_k,
                              ignore_eos=True,
                              do_sample=False,
+                             return_routed_experts=self.return_routed_experts,
                              max_new_tokens=output_len) for _, _, output_len in requests
         ]
 
-        sess: List[Session] = []
+        sess: list[Session] = []
         for _, input_len, output_len in requests:
             sess.append(profiler.new_session(input_len, output_len))
 
@@ -166,7 +166,7 @@ class Engine:
 
         if stream_output:
             pbar = tqdm(total=len(requests))
-            for output in self.pipe.stream_infer(prompts, gen_configs, do_preprocess=False):
+            for output in self.pipe.stream_infer(prompts, gen_config=gen_configs, do_preprocess=False):
                 index = output.index
                 n_token = output.generate_token_len
                 finish_reason = output.finish_reason
@@ -254,9 +254,11 @@ def parse_args():
     # pytorch engine args
     pt_group = parser.add_argument_group('PyTorch engine arguments')
     ArgumentHelper.eager_mode(pt_group)
+    ArgumentHelper.enable_return_routed_experts(pt_group)
 
     tp_act = ArgumentHelper.tp(pt_group)
     cache_count_act = ArgumentHelper.cache_max_entry_count(pt_group)
+    session_len_act = ArgumentHelper.session_len(pt_group)
     cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
     prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
 
@@ -264,6 +266,7 @@ def parse_args():
     tb_group = parser.add_argument_group('TurboMind engine argument')
     tb_group._group_actions.append(tp_act)
     tb_group._group_actions.append(cache_count_act)
+    tb_group._group_actions.append(session_len_act)
     tb_group._group_actions.append(cache_block_seq_len_act)
     tb_group._group_actions.append(prefix_caching_act)
     ArgumentHelper.model_format(tb_group, default='hf')
@@ -271,6 +274,7 @@ def parse_args():
     ArgumentHelper.num_tokens_per_iter(tb_group)
     ArgumentHelper.max_prefill_iters(tb_group)
     ArgumentHelper.communicator(tb_group)
+    ArgumentHelper.async_(tb_group)
 
     args = parser.parse_args()
     return args
@@ -281,27 +285,30 @@ def main():
     random.seed(args.seed)
     os.environ['TM_LOG_LEVEL'] = args.log_level
     if args.backend == 'turbomind':
-        engine_config = TurbomindEngineConfig(
-            max_batch_size=args.concurrency,
-            tp=args.tp,
-            cache_max_entry_count=args.cache_max_entry_count,
-            cache_block_seq_len=args.cache_block_seq_len,
-            model_format=args.model_format,
-            quant_policy=args.quant_policy,
-            num_tokens_per_iter=args.num_tokens_per_iter,
-            max_prefill_iters=args.max_prefill_iters,
-            enable_prefix_caching=args.enable_prefix_caching,
-            communicator=args.communicator,
-        )
+        engine_config = TurbomindEngineConfig(max_batch_size=args.concurrency,
+                                              tp=args.tp,
+                                              cache_max_entry_count=args.cache_max_entry_count,
+                                              session_len=args.session_len,
+                                              cache_block_seq_len=args.cache_block_seq_len,
+                                              model_format=args.model_format,
+                                              quant_policy=args.quant_policy,
+                                              num_tokens_per_iter=args.num_tokens_per_iter,
+                                              max_prefill_iters=args.max_prefill_iters,
+                                              enable_prefix_caching=args.enable_prefix_caching,
+                                              communicator=args.communicator,
+                                              enable_metrics=False,
+                                              async_=args.async_)
     elif args.backend == 'pytorch':
         engine_config = PytorchEngineConfig(
             cache_max_entry_count=args.cache_max_entry_count,
+            session_len=args.session_len,
             block_size=args.cache_block_seq_len,
             max_batch_size=args.concurrency,
             tp=args.tp,
             thread_safe=False,
             eager_mode=args.eager_mode,
             enable_prefix_caching=args.enable_prefix_caching,
+            enable_return_routed_experts=args.enable_return_routed_experts,
         )
 
     engine = Engine(args.model_path, engine_config, csv=args.csv)

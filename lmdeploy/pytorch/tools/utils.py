@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from contextlib import contextmanager
-from typing import List
 
 
 class Timer:
@@ -132,31 +131,108 @@ def visualize_pipe_out(outputs, enable_meta: bool = True):
 
     from lmdeploy.messages import Response
 
+    try:
+        from termcolor import colored
+    except ImportError:
+
+        def colored(text, color=None, on_color=None, attrs=None):
+            return text
+
     if isinstance(outputs, Response):
+        outputs = [outputs]
+    elif outputs is None:
         outputs = [outputs]
     try:
         term_size = os.get_terminal_size().columns
     except Exception:
         term_size = 100
 
-    def _lined_print(msg: str, line_format: str = '-', full_line: bool = False):
-        print(msg)
-        if full_line:
-            columns = term_size
-        else:
-            columns = max(len(m) for m in msg.split('\n'))
-        print(line_format * columns)
+    border_color = 'cyan'
+    meta_color = 'light_grey'
+    number_color = 'green'
 
-    outputs: List[Response] = outputs
-    term_line = '—' * term_size
-    print(term_line)
+    def _print_title(title: str, color: str = border_color):
+        title_text = f' {title} '
+        print(colored(f'【{title_text}】', color, attrs=['bold']))
+
+    def _print_section(title: str, content: str, color: str = border_color):
+        """Simple title and content printing."""
+        _print_title(title, color)
+        print(content)
+
+    def _print_meta(out: Response):
+        """Enhanced meta information display."""
+        # Create a clean table-like format
+        finish_color = 'yellow' if out.finish_reason == 'stop' else 'red'
+        meta_content = [
+            f"{colored('• Input Tokens:', meta_color)}     {colored(out.input_token_len, number_color)}",
+            f"{colored('• Generated Tokens:', meta_color)} {colored(out.generate_token_len, number_color)}",
+            f"{colored('• Finish Reason:', meta_color)}    {colored(out.finish_reason, finish_color)}"
+        ]
+        if out.routed_experts is not None:
+            shape = tuple(out.routed_experts.shape)
+            meta_content.append(f"{colored('• Routed Experts:', meta_color)}  {colored(shape, number_color)}")
+        if out.logits is not None:
+            shape = tuple(out.logits.shape)
+            meta_content.append(f"{colored('• Logits Shape:', meta_color)}     {colored(shape, number_color)}")
+        if out.logprobs is not None:
+            size = len(out.logprobs)
+            meta_content.append(f"{colored('• Logprobs:', meta_color)}      {colored(size, number_color)}")
+
+        lines = '\n'.join(meta_content)
+        lines += '\n'
+        _print_section('METADATA', lines, border_color)
+
+    # Main loop
+    print(colored('━' * term_size, border_color))
+
+    outputs: list[Response] = outputs
     for idx, out in enumerate(outputs):
-        _lined_print(f'output[{idx}]', '=')
-        if enable_meta:
-            _lined_print('meta', '-')
-            _lined_print(
-                f'input_token_len={out.input_token_len}\n'
-                f'generate_token_len={out.generate_token_len}\n'
-                f'finish_reason="{out.finish_reason}"', '—')
-        _lined_print('text', '-')
-        _lined_print(f'{out.text}', '—', full_line=True)
+        header = f'OUTPUT [{idx + 1}/{len(outputs)}]'
+        header_formatted = colored(f'✦ {header}', 'light_magenta', attrs=['bold'])
+        print(header_formatted)
+        print()
+
+        if out is not None:
+            if enable_meta:
+                _print_meta(out)
+
+            _print_section('TEXT', out.text, border_color)
+
+        if idx < len(outputs) - 1:  # Add separator when it's not the last output
+            print(colored('─' * (term_size), border_color, attrs=['dark']))
+        else:
+            print(colored('━' * term_size, border_color))
+
+
+def visualize_chat_completions(outputs, enable_meta: bool = True):
+    """Visualize chat completions."""
+    from openai.types.chat import ChatCompletion
+
+    from lmdeploy.messages import Response
+    if isinstance(outputs, ChatCompletion):
+        outputs = [outputs]
+
+    resps = []
+    for out in outputs:
+        assert isinstance(out, ChatCompletion)
+        choice = out.choices[0]
+        resp = Response(text=choice.message.content,
+                        input_token_len=out.usage.prompt_tokens,
+                        generate_token_len=out.usage.completion_tokens,
+                        finish_reason=choice.finish_reason)
+        resps.append(resp)
+
+    return visualize_pipe_out(resps, enable_meta=enable_meta)
+
+
+sources = None
+
+
+def dump_tilelang_source(kernel, path: str = 'sources/tvm_kernels.cu'):
+    global sources
+    if sources is not None:
+        return
+    sources = kernel.get_kernel_source()
+    with open(path, 'w') as f:
+        f.write(sources)

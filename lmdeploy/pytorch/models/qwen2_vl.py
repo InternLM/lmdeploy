@@ -1,25 +1,38 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from collections.abc import Callable, Iterable, Sequence
+from typing import Any
 
+import numpy as np
 import torch
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, FlashAttention, LayerNorm, RMSNorm, RopeType, SiluAndMul,
-                                 build_rotary_embedding)
-from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_merged_colwise_linear, build_qkv_proj,
-                                        build_rowwise_linear)
+from lmdeploy.pytorch.multimodal.data_type import MultiModalData
+from lmdeploy.pytorch.nn import (
+    ApplyRotaryEmb,
+    Attention,
+    FlashAttention,
+    LayerNorm,
+    RMSNorm,
+    SiluAndMul,
+    build_rotary_embedding_from_config,
+)
+from lmdeploy.pytorch.nn.linear import (
+    build_colwise_linear,
+    build_merged_colwise_linear,
+    build_qkv_proj,
+    build_rowwise_linear,
+)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
-from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin, next_power_of_2
-from .utils.model import DeployModelMixin
+from .utils.cudagraph import CudaGraphMixin
+from .utils.model import DeployModelMixinV1, build_embedding, vlm_model
 
 
-def _apply_mrope_selection(hidden_states: torch.Tensor, mrope_position_ids: torch.Tensor, mrope_section: List[int],
+def _apply_mrope_selection(hidden_states: torch.Tensor, mrope_position_ids: torch.Tensor, mrope_section: list[int],
                            position_ids: torch.Tensor, rotary_emb_func: Callable):
     _mrope_position_ids = torch.zeros(3, position_ids.shape[-1], dtype=position_ids.dtype, device=position_ids.device)
     _mrope_position_ids[:, :mrope_position_ids.shape[-1]] = mrope_position_ids
@@ -87,8 +100,8 @@ class Qwen2Attention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: tuple[torch.Tensor] | None = None,
         attn_metadata: Any = None,
     ):
         """Rewrite of LlamaAttention.forward."""
@@ -198,9 +211,9 @@ class Qwen2DecoderLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[List[torch.FloatTensor]],
-        residual: Optional[torch.Tensor] = None,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: list[torch.FloatTensor] | None,
+        residual: torch.Tensor | None = None,
         attn_metadata: Any = None,
     ):
 
@@ -235,11 +248,13 @@ class Qwen2Model(nn.Module):
         self.vocab_size = config.vocab_size
         self.mrope_section = config.rope_scaling['mrope_section']
 
-        self.embed_tokens = nn.Embedding(config.vocab_size,
-                                         config.hidden_size,
-                                         self.padding_idx,
-                                         dtype=dtype,
-                                         device=device)
+        self.embed_tokens = build_embedding(
+            config.vocab_size,
+            config.hidden_size,
+            self.padding_idx,
+            dtype=dtype,
+            device=device,
+        )
 
         # build all decode layers
         self.layers = nn.ModuleList([
@@ -251,24 +266,15 @@ class Qwen2Model(nn.Module):
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
 
         # build rotary embedding
-        emb_type = RopeType.LinearScaling
-        rope_dim = config.hidden_size // config.num_attention_heads
-        rope_max_pos_emb = config.max_position_embeddings
-        rope_base = config.rope_theta
-        self.rotary_emb = build_rotary_embedding(
-            rope_dim,
-            rope_max_pos_emb,
-            rope_base,
-            emb_type=emb_type,
-        )
+        self.rotary_emb = build_rotary_embedding_from_config(config)
 
     def forward(
         self,
         input_ids: torch.LongTensor = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,
         attn_metadata: Any = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
+        inputs_embeds: torch.FloatTensor | None = None,
         mrope_position_ids: torch.LongTensor = None,
     ):
         """Rewrite of LlamaModel.forward."""
@@ -348,7 +354,8 @@ class VisionRotaryEmbedding(nn.Module):
 
     def __init__(self, dim: int, theta: float = 10000.0, device: torch.device = None) -> None:
         super().__init__()
-        inv_freq = 1.0 / (theta**(torch.arange(0, dim, 2, dtype=torch.float, device=device) / dim))
+        inv_freq = 1.0 / (theta**(torch.arange(0, dim, 2, dtype=torch.int64).float() / dim))
+        inv_freq = inv_freq.to(device=device)
         self.register_buffer('inv_freq', inv_freq, persistent=False)
 
     def forward(self, seqlen: int) -> torch.Tensor:
@@ -400,7 +407,7 @@ class VisionAttention(nn.Module):
                                          is_tp=True)
 
     def forward(self, hidden_states: torch.Tensor, cu_seqlens: torch.Tensor,
-                rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor]) -> torch.Tensor:
+                rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor]) -> torch.Tensor:
         seq_length = hidden_states.shape[0]
         # qkv proj
         qkv_states = self.qkv(hidden_states)
@@ -487,7 +494,7 @@ class Qwen2VLVisionBlock(nn.Module):
                 hidden_states,
                 cu_seqlens,
                 rotary_pos_emb,
-                residual: Optional[torch.Tensor] = None) -> torch.Tensor:
+                residual: torch.Tensor | None = None) -> torch.Tensor:
         if residual is None:
             residual = hidden_states
             hidden_states = self.norm1(hidden_states)
@@ -524,6 +531,7 @@ class PatchMerger(nn.Module):
         return x
 
 
+@vlm_model
 class Qwen2VisionTransformerPretrainedModel(nn.Module):
     """Vision transformer."""
 
@@ -600,7 +608,7 @@ class Qwen2VisionTransformerPretrainedModel(nn.Module):
         return self.merger(hidden_states)
 
 
-class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixin):
+class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMixin):
     """ModelForCausalLM."""
 
     packed_modules_mapping = {
@@ -633,20 +641,22 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
             dtype=dtype,
             device=device,
         )
+        # get text_config
+        text_config = getattr(config, 'text_config', config)
         # build model
-        self.model = Qwen2Model(config, dtype=dtype, device=device)
+        self.model = Qwen2Model(text_config, dtype=dtype, device=device)
         # build lm_head
-        self.lm_head = build_rowwise_linear(config.hidden_size,
-                                            config.vocab_size,
-                                            bias=False,
-                                            dtype=dtype,
-                                            device=device)
+        self.lm_head = self.build_lm_head(text_config.hidden_size,
+                                          text_config.vocab_size,
+                                          bias=False,
+                                          dtype=dtype,
+                                          device=device)
 
     def forward(
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
         mrope_position_ids: torch.Tensor = None,
@@ -676,23 +686,14 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
         )
         return hidden_states
 
-    def get_logits(self, hidden_states: torch.Tensor):
-        """Compute logits of the model output."""
-        return self.lm_head(hidden_states)
-
-    def update_weights(self):
-        """Update weights."""
-        if self.config.tie_word_embeddings:
-            self.lm_head.weight = self.model.embed_tokens.weight
-
     def get_input_embeddings(self):
         """Get input embeddings."""
         return self.model.get_input_embeddings()
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
-        inputs_embeds: Optional[torch.Tensor] = None,
+        past_key_values: list[list[torch.Tensor]],
+        inputs_embeds: torch.Tensor | None = None,
         context: StepContext = None,
     ):
         """Prepare input."""
@@ -746,7 +747,7 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
             image_mask=image_mask,
         )
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
         # modify from vllm
         stacked_params_mapping = [
@@ -784,125 +785,9 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
                     param = params_dict[name]
                     load_weight(param, loaded_weight)
 
-    def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, **kwargs):
-        """Make cudagraph buffers from forward inputs."""
-        max_tokens = graph_meta.max_tokens
-
-        input_buffers = super().make_buffers_cudagraph(graph_meta=graph_meta, **kwargs)
-        mrope_position_ids = kwargs.get('mrope_position_ids', None)
-        if mrope_position_ids is not None:
-            input_buffers['mrope_position_ids'] = mrope_position_ids.new_zeros(3, max_tokens)
-
-        return input_buffers
-
-    def fill_buffers_cudagraph(self, graph_meta: CudaGraphMeta, **kwargs):
-        """Fill cudagraph buffers from forward inputs."""
-
-        new_inputs = super().fill_buffers_cudagraph(graph_meta=graph_meta, **kwargs)
-
-        input_ids = kwargs.get('input_ids')
-        attn_metadata = kwargs.get('attn_metadata')
-        block_offsets = attn_metadata.block_offsets
-        num_tokens = input_ids.size(-1)
-        batch_size, _ = block_offsets.size()
-        new_batch_size = next_power_of_2(batch_size)
-
-        is_decoding = graph_meta.is_decoding
-        input_buffers = graph_meta.input_buffers
-        mrope_position_ids = kwargs.get('mrope_position_ids', None)
-        if mrope_position_ids is not None:
-            input_buffers['mrope_position_ids'][:, :num_tokens] = mrope_position_ids
-            if is_decoding:
-                new_inputs['mrope_position_ids'] = input_buffers['mrope_position_ids'][:, :new_batch_size]
-            else:
-                new_inputs['mrope_position_ids'] = input_buffers['mrope_position_ids']
-
-        return new_inputs
-
-    def _update_model_meta_decoding(self, context: StepContext):
-        """Update model meta for decoding."""
-        model_metas = context.model_metas
-        position_ids = context.position_ids
-
-        mrope_deltas = [meta['mrope_delta'] for meta in model_metas]
-        mrope_deltas = position_ids.new_tensor(mrope_deltas)
-        mrope_position_ids = position_ids + mrope_deltas[None]
-        mrope_position_ids = mrope_position_ids.expand(3, -1)
-
-        context.mrope_position_ids = mrope_position_ids
-        return model_metas
-
-    def _get_multimodal_pos_ids(self, grid_thw: list, device: torch.device):
-        """Get mrope ids."""
-        t, h, w = grid_thw
-        h //= 2
-        w //= 2
-        stride = torch.tensor([h * w, w, 1], device=device)[:, None]
-        size = torch.tensor([t, h, w], device=device)[:, None]
-        pos_ids = torch.arange(t * h * w, device=device)[None].expand(3, -1)
-        pos_ids = pos_ids // stride % size
-        return pos_ids
-
-    def _update_model_meta_prefilling(self, context: StepContext):
-        """Update model meta for prefilling."""
-        model_metas = context.model_metas
-        input_multimodals = context.input_multimodals
-        if input_multimodals is None:
-            input_multimodals = [None] * len(model_metas)
-        position_ids = context.position_ids
-        batched_pos_ids = position_ids[0].split(context.q_seqlens.tolist())
-        mrope_position_ids = []
-        new_model_metas = []
-        for pos_ids, model_meta, input_mm in zip(batched_pos_ids, model_metas, input_multimodals):
-            images = []
-            if input_mm is not None:
-                images = input_mm.get('image', [])
-            if model_meta is None or 'mrope_delta' not in model_meta:
-                mrope_delta = 0
-            else:
-                mrope_delta = model_meta['mrope_delta']
-
-            pos_start = pos_ids[0].item()
-            mrope_pos_ids = pos_ids + mrope_delta
-            mrope_pos_ids = mrope_pos_ids[None].expand(3, -1).clone()
-            for img in images:
-                grid_thw = img.meta['grid_thw'][0].tolist()
-                _, h, w = grid_thw
-                h //= 2
-                w //= 2
-                num_pad = img.end - img.start - max(h, w)
-                mrope_delta -= num_pad
-                fill_start = img.start - pos_start
-                fill_end = img.end - pos_start
-                img_pos_ids = self._get_multimodal_pos_ids(grid_thw, pos_ids.device)
-                img_pos_ids += mrope_pos_ids[:, fill_start:fill_start + 1]
-                mrope_pos_ids[:, fill_end:] -= num_pad
-                mrope_pos_ids[:, fill_start:fill_end] = img_pos_ids
-
-            mrope_position_ids.append(mrope_pos_ids)
-            new_model_metas.append(dict(mrope_delta=mrope_delta))
-
-        mrope_position_ids = torch.cat(mrope_position_ids, dim=1)
-        context.mrope_position_ids = mrope_position_ids
-
-        return new_model_metas
-
-    def update_model_metas(self,
-                           past_key_values: List[List[torch.Tensor]],
-                           inputs_embeds: Optional[torch.Tensor] = None,
-                           context: StepContext = None):
-        """Update model meta."""
-        if context.is_decoding:
-            return self._update_model_meta_decoding(context)
-        else:
-            return self._update_model_meta_prefilling(context)
-
     def get_input_processor(self) -> BaseModelInputProcessor:
         """Get input processor."""
         return self.input_processor
-
-
-InputMultiModalType = List[Dict[str, Any]]
 
 
 class Qwen2VLInputProcessor(BaseModelInputProcessor):
@@ -911,9 +796,26 @@ class Qwen2VLInputProcessor(BaseModelInputProcessor):
     def __init__(self, config: PretrainedConfig) -> None:
         self.config = config
 
+    @staticmethod
+    def _get_multimodal_pos_ids(grid_thw: Sequence[int]) -> np.ndarray:
+        """Get mrope ids."""
+        t, h, w = grid_thw
+        h = h // 2
+        w = w // 2
+        stride = np.array([h * w, w, 1])[None]
+        size = np.array([t, h, w])[None]
+        pos_ids = np.arange(t * h * w)[:, None].repeat(3, axis=1)
+        pos_ids = pos_ids // stride % size
+        return pos_ids
+
+    @staticmethod
+    def make_mrope(grid_thw: torch.Tensor, ):
+        img_pos_ids = Qwen2VLInputProcessor._get_multimodal_pos_ids(grid_thw[0].tolist())
+        return img_pos_ids
+
     def preprocess_input(self,
-                         input_ids: List[int],
-                         input_multimodals: List[Dict[str, Any]] = None,
+                         input_ids: list[int],
+                         input_multimodals: list[dict[str, Any]] = None,
                          **kwargs) -> PreprocessInputResult:
         """Prepare multimodal input."""
         if input_multimodals is None or len(input_multimodals) == 0:
@@ -930,10 +832,13 @@ class Qwen2VLInputProcessor(BaseModelInputProcessor):
             if isinstance(num_pad, torch.Tensor):
                 num_pad = num_pad.item()
 
-            mm_data = MultiModalTensor(data=pixel_values,
-                                       start=start,
-                                       end=start + num_pad,
-                                       meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
+            mrope_pos_ids = self.make_mrope(image_grid_thw)
+
+            mm_data = MultiModalData(data=pixel_values,
+                                     start=start,
+                                     end=start + num_pad,
+                                     mrope_pos_ids=mrope_pos_ids,
+                                     meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(

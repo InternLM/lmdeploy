@@ -6,9 +6,10 @@ import os
 import sys
 import time
 from contextlib import contextmanager
+from dataclasses import dataclass
 from logging import Logger, LogRecord
-from typing import List, Optional, TypeVar, Union
 
+import torch
 from transformers import PretrainedConfig
 
 logger_initialized = {}
@@ -20,6 +21,36 @@ class _ASNI_COLOR:
     YELLOW = '\033[33m'
     WHITE = '\033[37m'
     GREEN = '\033[32m'
+
+
+# copy from: https://github.com/termcolor/termcolor
+@functools.cache
+def can_colorize(*, no_color: bool | None = None, force_color: bool | None = None) -> bool:
+    """Check env vars and for tty/dumb terminal."""
+    import io
+    if no_color is not None and no_color:
+        return False
+    if force_color is not None and force_color:
+        return True
+
+    # Then check env vars:
+    if os.environ.get('ANSI_COLORS_DISABLED'):
+        return False
+    if os.environ.get('NO_COLOR'):
+        return False
+    if os.environ.get('FORCE_COLOR'):
+        return True
+
+    # Then check system:
+    if os.environ.get('TERM') == 'dumb':
+        return False
+    if not hasattr(sys.stdout, 'fileno'):
+        return False
+
+    try:
+        return os.isatty(sys.stdout.fileno())
+    except io.UnsupportedOperation:
+        return sys.stdout.isatty()
 
 
 class ColorFormatter(logging.Formatter):
@@ -35,7 +66,7 @@ class ColorFormatter(logging.Formatter):
 
     def format(self, record: LogRecord):
         """format."""
-        if sys.platform == 'win32':
+        if not can_colorize():
             # windows does not support ASNI color
             return super().format(record)
         levelname = record.levelname
@@ -78,8 +109,8 @@ _FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d' \
           ' - %(message)s'
 
 
-def get_logger(name: Optional[str] = None,
-               log_file: Optional[str] = None,
+def get_logger(name: str | None = None,
+               log_file: str | None = None,
                log_level: int = logging.INFO,
                file_mode: str = 'a',
                log_formatter: str = _FORMAT) -> Logger:
@@ -146,7 +177,7 @@ def get_logger(name: Optional[str] = None,
     return logger
 
 
-def filter_suffix(response: str, suffixes: Optional[List[str]] = None) -> str:
+def filter_suffix(response: str, suffixes: list[str] | None = None) -> str:
     """Filter response with suffixes.
 
     Args:
@@ -165,12 +196,12 @@ def filter_suffix(response: str, suffixes: Optional[List[str]] = None) -> str:
 
 
 # TODO remove stop_word_offsets stuff and make it clean
-def _stop_words(stop_words: List[Union[int, str]], tokenizer: object):
+def _stop_words(stop_words: list[int | str], tokenizer: object):
     """Return list of stop-words to numpy.ndarray."""
     import numpy as np
     if stop_words is None:
         return None
-    assert isinstance(stop_words, List) and \
+    assert isinstance(stop_words, list) and \
         all(isinstance(elem, (str, int)) for elem in stop_words), \
         f'stop_words must be a list but got {type(stop_words)}'
     stop_indexes = []
@@ -179,7 +210,7 @@ def _stop_words(stop_words: List[Union[int, str]], tokenizer: object):
             stop_indexes += tokenizer.indexes_containing_token(stop_word)
         elif isinstance(stop_word, int):
             stop_indexes.append(stop_word)
-    assert isinstance(stop_indexes, List) and all(isinstance(elem, int) for elem in stop_indexes), 'invalid stop_words'
+    assert isinstance(stop_indexes, list) and all(isinstance(elem, int) for elem in stop_indexes), 'invalid stop_words'
     # each id in stop_indexes represents a stop word
     # refer to https://github.com/fauxpilot/fauxpilot/discussions/165 for
     # detailed explanation about fastertransformer's stop_indexes
@@ -264,19 +295,15 @@ def logging_timer(op_name: str, logger: Logger, level: int = logging.DEBUG):
 
 # modified from https://github.com/vllm-project/vllm/blob/0650e5935b0f6af35fb2acf71769982c47b804d7/vllm/config.py#L1082-L1150  # noqa
 def _get_and_verify_max_len(
-    hf_tm_config: Union[PretrainedConfig, TypeVar('TurbomindModelConfig')],
-    max_model_len: Optional[int],
+    hf_config: PretrainedConfig,
+    max_model_len: int | None,
 ) -> int:
     """Get and verify the model's maximum length."""
-    if hasattr(hf_tm_config, 'session_len'):
-        # `hf_tm_config` is TurbomindModelConfig
-        session_len = getattr(hf_tm_config, 'session_len')
-        return max_model_len if max_model_len else session_len
 
     # vl configs hide session-len inside llm configs
     llm_keys = ['language_config', 'llm_config', 'text_config']
     for key in llm_keys:
-        hf_tm_config = getattr(hf_tm_config, key, hf_tm_config)
+        hf_config = getattr(hf_config, key, hf_config)
 
     logger = get_logger('lmdeploy')
     derived_max_model_len = float('inf')
@@ -298,7 +325,11 @@ def _get_and_verify_max_len(
     ]
     max_len_key = None
     for key in possible_keys:
-        max_len = getattr(hf_tm_config, key, None)
+        max_len = None
+        if hasattr(hf_config, key):
+            max_len = getattr(hf_config, key)
+        elif key in hf_config:
+            max_len = hf_config[key]
         if max_len is not None:
             max_len_key = key if max_len < derived_max_model_len \
                 else max_len_key
@@ -321,7 +352,7 @@ def _get_and_verify_max_len(
         # Some models might have a separate key for specifying model_max_length
         # that will be bigger than derived_max_model_len. We compare user input
         # with model_max_length and allow this override when it's smaller.
-        model_max_length = getattr(hf_tm_config, 'model_max_length', None)
+        model_max_length = getattr(hf_config, 'model_max_length', None)
         if model_max_length is not None and max_model_len <= model_max_length:
             pass
         else:
@@ -341,7 +372,7 @@ def get_max_batch_size(device_type: str):
     """
     assert device_type in ['cuda', 'ascend', 'maca', 'camb']
     if device_type == 'cuda':
-        max_batch_size_map = {'a100': 256, 'a800': 256, 'h100': 512, 'h800': 512}
+        max_batch_size_map = {'a100': 384, 'a800': 384, 'h100': 1024, 'h800': 1024, 'l20y': 1024, 'h200': 1024}
         import torch
         device_name = torch.cuda.get_device_name(0).lower()
         for name, size in max_batch_size_map.items():
@@ -393,6 +424,8 @@ def is_bf16_supported(device_type: str = 'cuda'):
         return True
     elif device_type == 'camb':
         return True
+    elif device_type == 'rocm':
+        return True
     else:
         return False
 
@@ -425,17 +458,24 @@ def serialize_state_dict(state_dict: dict) -> str:
     Returns:
         str: serialized state dict.
     """
-    import base64
     from io import BytesIO
     from multiprocessing.reduction import ForkingPickler
 
+    import pybase64
     from torch.multiprocessing.reductions import reduce_tensor
-    assert all(v.device.type == 'cuda' for v in state_dict.values())
-    data = [(k, reduce_tensor(v)) for k, v in state_dict.items()]
+
+    # flattened_tensor
+    if 'metadata' in state_dict and 'flattened_tensor' in state_dict:
+        data = state_dict
+        if isinstance(data['flattened_tensor'], torch.Tensor):
+            data['flattened_tensor'] = reduce_tensor(state_dict['flattened_tensor'])
+    else:
+        data = [(k, reduce_tensor(v)) for k, v in state_dict.items()]
+
     buf = BytesIO()
     ForkingPickler(buf).dump(data)
     buf.seek(0)
-    return base64.b64encode(buf.read()).decode('utf-8')
+    return pybase64.b64encode(buf.read()).decode('utf-8')
 
 
 def is_dlblas_installed():
@@ -445,3 +485,88 @@ def is_dlblas_installed():
     except Exception:
         is_dlblas_installed = False
     return is_dlblas_installed
+
+
+# from https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/weight_sync/tensor_bucket.py
+
+
+@dataclass
+class FlattenedTensorMetadata:
+    """Metadata for flatten bucket tensor."""
+    name: str
+    shape: torch.Size
+    dtype: torch.dtype
+    start_idx: int
+    end_idx: int
+    numel: int
+
+
+class FlattenedTensorBucket:
+    """Pack multiple flattened tensor into one to transfer efficiently."""
+
+    def __init__(
+        self,
+        named_tensors: list[tuple[str, torch.Tensor]] | None = None,
+        flattened_tensor: torch.Tensor = None,
+        metadata: list[FlattenedTensorMetadata] | None = None,
+    ):
+        """Initialize a tensor bucket from a list of named tensors or from pre-
+        flattened data.
+
+        Args:
+            named_tensors: List of (name, tensor) tuples (for creating new bucket)
+            flattened_tensor: Pre-flattened tensor (for reconstruction)
+            metadata: Pre-computed metadata (for reconstruction)
+        """
+        if named_tensors is not None:
+            num_tensors = len(named_tensors)
+            self.metadata = [None] * num_tensors
+            self.flattened_tensor = [None] * num_tensors
+            if num_tensors > 0:
+                if num_tensors > 1:
+                    dtypes = [t.dtype for _, t in named_tensors]
+                    if not all([d == dtypes[0] for d in dtypes[1:]]):
+                        raise ValueError(f'All tensors should have same dtype, but given {dtypes}')
+
+                current_idx = 0
+                for idx, (name, tensor) in enumerate(named_tensors):
+                    self.flattened_tensor[idx] = tensor.flatten()
+                    numel = tensor.numel()
+                    self.metadata[idx] = FlattenedTensorMetadata(name=name,
+                                                                 shape=tensor.shape,
+                                                                 dtype=tensor.dtype,
+                                                                 start_idx=current_idx,
+                                                                 end_idx=current_idx + numel,
+                                                                 numel=numel)
+                    current_idx += numel
+
+                self.flattened_tensor = torch.cat(self.flattened_tensor, dim=0)
+        else:
+            if flattened_tensor is None or metadata is None:
+                raise ValueError('Must provide either named_tensors or both flattened_tensor and metadata')
+            self.metadata = metadata
+            self.flattened_tensor = flattened_tensor
+
+    def get_flattened_tensor(self) -> torch.Tensor:
+        """Get the flattened tensor containing multiple tensors."""
+        return self.flattened_tensor
+
+    def get_metadata(self) -> list[FlattenedTensorMetadata]:
+        """Get all metadatas for all tensors in the bucket."""
+        return self.metadata
+
+    def reconstruct_tensors(self) -> list[tuple[str, torch.Tensor]]:
+        """Reconstruct original tensors."""
+        # preallocate the result list
+        reconstructed = [None] * len(self.metadata)
+
+        for i, meta in enumerate(self.metadata):
+            tensor = self.flattened_tensor[meta.start_idx:meta.end_idx].reshape(meta.shape)
+
+            # batch dtype conversion (if needed)
+            if tensor.dtype != meta.dtype:
+                tensor = tensor.to(meta.dtype)
+
+            reconstructed[i] = (meta.name, tensor)
+
+        return reconstructed

@@ -7,7 +7,7 @@ The request distributor service can parallelize multiple api_server services. Us
 Start the proxy service:
 
 ```shell
-lmdeploy serve proxy --server-name {server_name} --server-port {server_port} --strategy "min_expected_latency"
+lmdeploy serve proxy --server-name {server_name} --server-port {server_port} --routing-strategy "min_expected_latency" --serving-strategy Hybrid
 ```
 
 After startup is successful, the URL of the proxy service will also be printed by the script. Access this URL in your browser to open the Swagger UI.
@@ -87,6 +87,13 @@ params = {'node_url': 'http://0.0.0.0:23333',}
 response = requests.post(url, headers=headers, data='', params=params)
 print(response.text)
 ```
+
+## Serving Strategy
+
+LMDeploy currently supports two serving strategies:
+
+- Hybrid: Does not distinguish between Prefill and Decoding instances, following the traditional inference deployment mode.
+- DistServe: Separates Prefill and Decoding instances, deploying them on different service nodes to achieve more flexible and efficient resource scheduling and scalability.
 
 ## Dispatch Strategy
 

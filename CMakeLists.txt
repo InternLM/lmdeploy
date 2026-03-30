@@ -13,12 +13,14 @@
 # limitations under the License.
 
 cmake_minimum_required(VERSION 3.11 FATAL_ERROR) # for PyTorch extensions, version should be greater than 3.13
+cmake_policy(SET CMP0074 NEW)
 project(TurboMind LANGUAGES CXX CUDA)
 
 if (MSVC)
     # use standard conformant preprocessor
     add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>)
-    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler=/Zc:preprocessor")
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/Zc:__cplusplus>)
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler=/Zc:preprocessor -Xcompiler=/Zc:__cplusplus")
 endif ()
 
 find_package(CUDAToolkit REQUIRED)
@@ -42,6 +44,10 @@ if (BUILD_TEST)
     Catch2
     GIT_REPOSITORY https://github.com/catchorg/Catch2.git
     GIT_TAG        v3.8.0
+    GIT_SHALLOW ON
+    GIT_PROGRESS            TRUE
+    USES_TERMINAL_DOWNLOAD  TRUE
+    EXCLUDE_FROM_ALL
   )
   FetchContent_MakeAvailable(Catch2)
 endif()
@@ -50,8 +56,11 @@ endif()
 FetchContent_Declare(
   repo-cutlass
   GIT_REPOSITORY https://github.com/NVIDIA/cutlass.git
-  GIT_TAG        v3.9.2
-  GIT_SHALLOW ON
+  GIT_TAG                 v3.9.2
+  GIT_SHALLOW             ON
+  GIT_PROGRESS            TRUE
+  USES_TERMINAL_DOWNLOAD  TRUE
+  EXCLUDE_FROM_ALL
 )
 
 set(CUTLASS_ENABLE_SM90_EXTENDED_MMA_SHAPES ON CACHE BOOL "Enable extended GMMA shapes")
@@ -62,14 +71,43 @@ FetchContent_MakeAvailable(repo-cutlass)
 FetchContent_Declare(
   yaml-cpp
   GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
-  GIT_TAG 0.8.0
+  GIT_TAG                 65c1c270dbe7eec37b2df2531d7497c4eea79aee
+  GIT_PROGRESS            TRUE
+  USES_TERMINAL_DOWNLOAD  TRUE
 )
 set(YAML_BUILD_SHARED_LIBS OFF CACHE BOOL "Build static library of yaml-cpp")
 FetchContent_MakeAvailable(yaml-cpp)
 
+FetchContent_Declare(
+  xgrammar
+  GIT_REPOSITORY          https://github.com/mlc-ai/xgrammar.git
+  GIT_TAG                 v0.1.27
+  GIT_SUBMODULES          "3rdparty/dlpack"
+  GIT_PROGRESS            TRUE
+  USES_TERMINAL_DOWNLOAD  TRUE
+)
+
+FetchContent_GetProperties(xgrammar)
+if(NOT xgrammar_POPULATED)
+  # Fetch the content using previously declared details
+  FetchContent_Populate(xgrammar)
+
+  file(WRITE ${xgrammar_SOURCE_DIR}/config.cmake "set(XGRAMMAR_BUILD_PYTHON_BINDINGS OFF)\n")
+  if(NOT MSVC)
+    file(APPEND ${xgrammar_SOURCE_DIR}/config.cmake "set(CMAKE_CXX_FLAGS \"-Wno-error\")\n")
+  endif()
+
+  # Bring the populated content into the build
+  add_subdirectory(${xgrammar_SOURCE_DIR} ${xgrammar_BINARY_DIR})
+  if(TARGET xgrammar)
+    target_compile_options(xgrammar PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+    target_compile_options(xgrammar PRIVATE $<$<C_COMPILER_ID:MSVC>:/utf-8>)
+  endif()
+endif()
 
 # the environment variable
 #   ASAN_OPTIONS=protect_shadow_gap=0,intercept_tls_get_addr=0
+#   LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libasan.so.6:/usr/lib/x86_64-linux-gnu/libstdc++.so.6
 # must be set at runtime
 # https://github.com/google/sanitizers/issues/1322
 if (LMDEPLOY_ASAN_ENABLE)
@@ -85,6 +123,31 @@ if (LMDEPLOY_UBSAN_ENABLE)
 endif ()
 
 if(BUILD_MULTI_GPU)
+    execute_process(
+      COMMAND python -c "import importlib.util; print(importlib.util.find_spec('nvidia.nccl').submodule_search_locations[0])"
+      RESULT_VARIABLE result
+      OUTPUT_VARIABLE nccl_path
+      ERROR_QUIET
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+
+    if(result EQUAL 0 AND NOT nccl_path STREQUAL "")
+      set(NCCL_ROOT ${nccl_path})
+      message(STATUS "Found NCCL at: ${nccl_path}")
+
+      if(result EQUAL 0 AND NOT nccl_path STREQUAL "")
+        file(GLOB nccl_lib_files "${nccl_path}/lib/libnccl.so.*")
+        if(nccl_lib_files)
+          list(GET nccl_lib_files -1 latest_lib)
+          string(REGEX MATCH "\\.([0-9]+)$" version_match ${latest_lib})
+          if(version_match)
+            set(NCCL_ROOT ${nccl_path})
+            set(ENV{NCCL_VERSION} ${CMAKE_MATCH_1})
+          endif()
+        endif()
+      endif()
+    endif()
+
     add_definitions("-DBUILD_MULTI_GPU=1")
     set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake/Modules)
     find_package(NCCL)
@@ -97,8 +160,15 @@ endif()
 
 set(CXX_STD "17" CACHE STRING "C++ standard")
 # enable gold linker for binary and .so
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fuse-ld=gold")
-set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fuse-ld=gold")
+if(NOT MSVC)
+  find_program(GOLD_PATH ld.gold REQUIRED)
+  if(NOT GOLD_PATH)
+    message(FATAL_ERROR "GNU gold linker is required but not found. "
+                         "Please install binutils-gold package.")
+  endif()
+  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fuse-ld=gold")
+  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fuse-ld=gold")
+endif()
 set(CUDA_PATH ${CUDA_TOOLKIT_ROOT_DIR})
 
 set(CUSPARSELT_PATH "" CACHE STRING "cuSPARSELt path")
@@ -117,25 +187,74 @@ set(CMAKE_C_FLAGS    "${CMAKE_C_FLAGS}")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler -Wall -ldl") # -Xptxas -v
 
-# TODO: build for sm_72 & sm_87 on aarch64 platform (Jetson devices)
-if (NOT CMAKE_CUDA_ARCHITECTURES)
-  set(CMAKE_CUDA_ARCHITECTURES 70-real 75-real)
-  if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "11")
-    list(APPEND CMAKE_CUDA_ARCHITECTURES 80-real)
+if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
+  set(ARCH "x86_64")
+elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "amd64")
+  set(ARCH "x86_64")
+elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "AMD64")
+  # cmake reports AMD64 on Windows, but we might be building for 32-bit.
+  if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+    set(ARCH "x86_64")
+  else()
+    set(ARCH "x86")
+  endif()
+elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86")
+  set(ARCH "x86")
+elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "i386")
+  set(ARCH "x86")
+elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "i686")
+  set(ARCH "x86")
+elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
+  set(ARCH "aarch64")
+elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
+  set(ARCH "aarch64")
+# Apple A12 Bionic chipset which is added in iPhone XS/XS Max/XR uses arm64e architecture.
+elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64e")
+  set(ARCH "aarch64")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^arm*")
+  set(ARCH "arm")
+elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "mips")
+  # Just to avoid the “unknown processor” error.
+  set(ARCH "generic")
+elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "ppc64le")
+  set(ARCH "ppc64le")
+else()
+  message(FATAL_ERROR "Unknown processor:" ${CMAKE_SYSTEM_PROCESSOR})
+endif()
+
+
+if(ARCH STREQUAL "x86_64")
+  if (NOT CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES "")
+    if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_LESS "13.0")
+      list(APPEND CMAKE_CUDA_ARCHITECTURES 70-real 75-real)  # V100, 2080
+    endif()
+    if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "11")
+      list(APPEND CMAKE_CUDA_ARCHITECTURES 80-real) # A100
+    endif ()
+    if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "11.1")
+      list(APPEND CMAKE_CUDA_ARCHITECTURES 86-real) # 3090
+    endif ()
+    if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "11.8")
+      list(APPEND CMAKE_CUDA_ARCHITECTURES 89-real) # 4090
+    endif ()
+    if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "12.0")
+      list(APPEND CMAKE_CUDA_ARCHITECTURES 90a-real) # H100
+    endif ()
+    if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "12.8")
+      list(APPEND CMAKE_CUDA_ARCHITECTURES 120a-real) # 5090
+    endif ()
+    if (MSVC)
+      list(REMOVE_ITEM CMAKE_CUDA_ARCHITECTURES 80-real 90a-real)
+    endif ()
   endif ()
-  if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "11.1")
-    list(APPEND CMAKE_CUDA_ARCHITECTURES 86-real)
-  endif ()
-  if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "11.8")
-    list(APPEND CMAKE_CUDA_ARCHITECTURES 89-real)
-  endif ()
-  if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "12.0")
-    list(APPEND CMAKE_CUDA_ARCHITECTURES 90a-real)
-  endif ()
-  if (MSVC)
-    list(REMOVE_ITEM CMAKE_CUDA_ARCHITECTURES 80-real 90a-real)
-  endif ()
-endif ()
+elseif(ARCH STREQUAL "aarch64")
+  if (NOT CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES 72-real 87-real)  # Jetson
+  endif()
+else()
+  message(FATAL_ERROR "Unsupported Architecture:" ${ARCH})
+endif()
 
 message(STATUS "Building with CUDA archs: ${CMAKE_CUDA_ARCHITECTURES}")
 
@@ -212,6 +331,8 @@ if (MSVC)
     CMAKE_CUDA_FLAGS_RELWITHDEBINFO)
     string(REGEX REPLACE "-Wall" " /W0 " ${flag_var} "${${flag_var}}")
   endforeach()
+  # avoid min/max macro in "windows.h" conflict with std::min/std::max
+  add_definitions(-DNOMINMAX=1)
 endif()
 
 include_directories(
@@ -230,5 +351,11 @@ add_subdirectory(src)
 
 # install python api
 if (BUILD_PY_FFI)
-  install(TARGETS _turbomind DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
+  if (CALL_FROM_SETUP_PY)
+    install(TARGETS _turbomind DESTINATION ${CMAKE_INSTALL_PREFIX})
+    install(TARGETS _xgrammar DESTINATION ${CMAKE_INSTALL_PREFIX})
+  else()
+    install(TARGETS _turbomind DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
+    install(TARGETS _xgrammar DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
+  endif()
 endif ()

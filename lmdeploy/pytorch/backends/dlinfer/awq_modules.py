@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Optional
 
 import torch
 
@@ -22,8 +21,9 @@ class AwqLinearW4A16Impl(LinearW4A16Impl):
                 qweight: torch.Tensor,
                 scales: torch.Tensor,
                 qzeros: torch.Tensor,
-                bias: Optional[torch.Tensor] = None,
-                all_reduce: bool = False):
+                bias: torch.Tensor | None = None,
+                all_reduce: bool = False,
+                group: torch.distributed.ProcessGroup | None = None):
         """forward."""
         out = awq_linear(x, qweight, scales, qzeros, bias, all_reduce, self.group_size)
         return out

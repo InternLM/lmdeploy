@@ -15,8 +15,10 @@ class DefaultModelConfigBuilder(AutoModelConfigBuilder):
     def build(cls, hf_config, model_path: str = None, **kwargs):
         """build."""
         head_dim = getattr(hf_config, 'head_dim', None)
-        if head_dim is None:
-            head_dim = hf_config.hidden_size // hf_config.num_attention_heads
+        head_dim = head_dim or hf_config.hidden_size // hf_config.num_attention_heads
+
+        # head_dim should not be None
+        hf_config.head_dim = head_dim
         num_attention_heads = hf_config.num_attention_heads
         num_key_value_heads = getattr(hf_config, 'num_key_value_heads', num_attention_heads)
         use_sliding_window = getattr(hf_config, 'use_sliding_window', True)
@@ -36,6 +38,8 @@ class DefaultModelConfigBuilder(AutoModelConfigBuilder):
             eos_token_id=hf_config.eos_token_id,
             sliding_window=sliding_window,
             head_dim=head_dim,
+            k_head_dim=head_dim,
+            v_head_dim=head_dim,
             vocab_size=hf_config.vocab_size,
             llm_config=hf_config,
         )

@@ -5,12 +5,10 @@ import numpy as np
 from PIL import Image
 
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
-from lmdeploy.utils import is_bf16_supported
-from lmdeploy.vl import load_image
+from lmdeploy.vl import encode_image_base64, load_image
 from lmdeploy.vl.constants import IMAGE_TOKEN
-from lmdeploy.vl.utils import encode_image_base64
 
-gen_config = GenerationConfig(max_new_tokens=500, min_new_tokens=2)
+gen_config = GenerationConfig(max_new_tokens=500, min_new_tokens=10)
 
 PIC1 = 'tiger.jpeg'
 PIC2 = 'human-pose.jpg'
@@ -22,31 +20,51 @@ DESC = 'What are the similarities and differences between these two images.'
 DESC_ZH = '两张图有什么相同和不同的地方.'
 
 
-def run_pipeline_mllm_test(model_path, resource_path, tp, backend_type, is_pr_test, extra: object = None):
-    if 'pytorch' in backend_type:
-        backend_config = PytorchEngineConfig(tp=tp, session_len=32576, cache_max_entry_count=0.6)
+def run_pipeline_mllm_test(model_path, run_config, resource_path, is_pr_test: bool = False):
+    backend = run_config.get('backend')
+    communicator = run_config.get('communicator')
+    quant_policy = run_config.get('quant_policy')
+    extra_params = run_config.get('extra_params', {})
+    parallel_config = run_config.get('parallel_config', {})
+
+    if 'pytorch' == backend:
+        backend_config = PytorchEngineConfig(session_len=65152, quant_policy=quant_policy, cache_max_entry_count=0.6)
     else:
-        backend_config = TurbomindEngineConfig(tp=tp, session_len=32576, cache_max_entry_count=0.6)
+        backend_config = TurbomindEngineConfig(session_len=65152,
+                                               communicator=communicator,
+                                               quant_policy=quant_policy,
+                                               cache_max_entry_count=0.6)
 
-    if 'kvint' in backend_type:
-        backend_config.quant_policy = extra.get('quant_policy')
-    if 'turbomind' in backend_type and extra is not None and 'communicator' in extra:
-        backend_config.communicator = extra.get('communicator')
-
-    if extra is not None and 'cache-max-entry-count' in extra and extra.get('cache-max-entry-count') is not None:
-        backend_config.cache_max_entry_count = extra.get('cache-max-entry-count')
-
-    if 'w4' in model_path or ('4bits' in model_path or 'awq' in model_path.lower()):
+    # quant format
+    model_lower = model_path.lower()
+    if 'w4' in model_lower or '4bits' in model_lower or 'awq' in model_lower:
         backend_config.model_format = 'awq'
-    if not is_bf16_supported():
-        backend_config.dtype = 'float16'
+    elif 'gptq' in model_lower:
+        backend_config.model_format = 'gptq'
+
+    # Parallel config
+    for para_key in ('dp', 'ep', 'cp'):
+        if para_key in parallel_config:
+            setattr(backend_config, para_key, parallel_config[para_key])
+    if 'tp' in parallel_config and parallel_config['tp'] > 1:
+        backend_config.tp = parallel_config['tp']
+
+    # Extra params
+    # Map CLI param names to PytorchEngineConfig attribute names
+    param_name_map = {'device': 'device_type'}
+    for key, value in extra_params.items():
+        attr_name = param_name_map.get(key, key)
+        try:
+            setattr(backend_config, attr_name, value)
+        except AttributeError:
+            print(f"Warning: Cannot set attribute '{attr_name}' on backend_config. Skipping.")
 
     print('backend_config config: ' + str(backend_config))
     pipe = pipeline(model_path, backend_config=backend_config)
 
     image = load_image(f'{resource_path}/{PIC1}')
 
-    if 'deepseek' in model_path:
+    if 'deepseek' in model_lower:
         prompt = f'describe this image{IMAGE_TOKEN}'
     else:
         prompt = 'describe this image'
@@ -95,18 +113,13 @@ def run_pipeline_mllm_test(model_path, resource_path, tp, backend_type, is_pr_te
     if not is_pr_test:
         if 'internvl' in model_path.lower() and 'internvl2-4b' not in model_path.lower():
             internvl_vl_testcase(pipe, resource_path)
-            internvl_vl_testcase(pipe, resource_path, 'cn')
+            internvl_vl_testcase(pipe, resource_path, lang='cn')
         if 'minicpm' in model_path.lower():
             MiniCPM_vl_testcase(pipe, resource_path)
         if 'qwen' in model_path.lower():
             Qwen_vl_testcase(pipe, resource_path)
 
     pipe.close()
-    import gc
-
-    import torch
-    gc.collect()
-    torch.cuda.empty_cache()
 
 
 def internvl_vl_testcase(pipe, resource_path, lang='en'):
@@ -170,15 +183,26 @@ def internvl_vl_testcase(pipe, resource_path, lang='en'):
         return frame_indices
 
     def load_video(video_path, bound=None, num_segments=32):
-        from decord import VideoReader, cpu
-        vr = VideoReader(video_path, ctx=cpu(0), num_threads=1)
-        max_frame = len(vr) - 1
-        fps = float(vr.get_avg_fps())
+        import cv2
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise ValueError(f'Cannot open video file: {video_path}')
+
+        max_frame = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) - 1
+        fps = cap.get(cv2.CAP_PROP_FPS)
+
         frame_indices = get_index(bound, fps, max_frame, first_idx=0, num_segments=num_segments)
         imgs = []
+
         for frame_index in frame_indices:
-            img = Image.fromarray(vr[frame_index].asnumpy()).convert('RGB')
-            imgs.append(img)
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+            ret, frame = cap.read()
+            if ret:
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                img = Image.fromarray(rgb_frame).convert('RGB')
+                imgs.append(img)
+
+        cap.release()
         return imgs
 
     video_path = resource_path + '/red-panda.mp4'
@@ -189,9 +213,9 @@ def internvl_vl_testcase(pipe, resource_path, lang='en'):
         question = question + f'Frame{i+1}: {IMAGE_TOKEN}\n'
 
     if lang == 'cn':
-        question += '小熊猫在做什么？'
+        question += '视频里有什么动物，它在做什么？'
     else:
-        question += 'What is the red panda doing?'
+        question += 'What animals are in the video, and what are they doing?'
 
     content = [{'type': 'text', 'text': question}]
     for img in imgs:
@@ -273,20 +297,34 @@ def MiniCPM_vl_testcase(pipe, resource_path):
             idxs = [int(i * gap + gap / 2) for i in range(n)]
             return [length[i] for i in idxs]
 
-        from decord import VideoReader, cpu
-        vr = VideoReader(video_path, ctx=cpu(0))
-        sample_fps = round(vr.get_avg_fps() / 1)  # FPS
-        frame_idx = [i for i in range(0, len(vr), sample_fps)]
+        import cv2
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise ValueError(f'Cannot open video file: {video_path}')
+
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        sample_fps = round(fps / 1)  # FPS
+        frame_idx = [i for i in range(0, total_frames, sample_fps)]
         if len(frame_idx) > MAX_NUM_FRAMES:
             frame_idx = uniform_sample(frame_idx, MAX_NUM_FRAMES)
-        frames = vr.get_batch(frame_idx).asnumpy()
-        frames = [Image.fromarray(v.astype('uint8')) for v in frames]
+
+        frames = []
+        for idx in frame_idx:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ret, frame = cap.read()
+            if ret:
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                frames.append(Image.fromarray(rgb_frame.astype('uint8')).convert('RGB'))
+
+        cap.release()
         print('num frames:', len(frames))
         return frames
 
     video_path = resource_path + '/red-panda.mp4'
     frames = encode_video(video_path)
-    question = 'Describe the video'
+    question = 'What animals are in the video, and what are they doing?'
 
     content = [dict(type='text', text=question)]
     for frame in frames:

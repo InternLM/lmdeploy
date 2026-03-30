@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
-from typing import Optional
 
 from pydantic import BaseModel
 
@@ -42,24 +41,6 @@ class MigrationBackend(enum.Enum):
 
     DLSlime = enum.auto()
     Mooncake = enum.auto()
-    InfiniStore = enum.auto()
-
-
-class MigrationProtocol(enum.Enum):
-    """Migration Transport Protocol.
-
-    Attributes:
-        TCP: TCP for General Purpose Transport Protocol.
-        RDMA: IB or RoCEv1/v2.
-        NVLINK: High device-to-device link.
-
-    Warning: By now, only `GPU Directed RDMA` is supported in DistServe.
-        We preserve several protocol and will be implemented in the future.
-    """
-
-    TCP = enum.auto()
-    RDMA = enum.auto()
-    NVLINK = enum.auto()
 
 
 class RDMALinkType(enum.Enum):
@@ -116,7 +97,7 @@ class DistServeEngineConfig(BaseModel):
     tp_size: int
     ep_size: int
     dp_size: int
-    pp_size: Optional[int]
+    pp_size: int | None
 
     # Rank of DP
     dp_rank: int
@@ -133,13 +114,3 @@ class MooncakeEngineConfig(DistServeEngineConfig):
     TODO: Support more specific config for Mooncake.
     """
     pass
-
-
-class DistServeConfig(BaseModel):
-    """DistServe Config."""
-
-    serving_strategy: ServingStrategy
-    distserve_transport_protocol: MigrationProtocol
-    rdma_config: Optional[DistServeRDMAConfig] = None
-    nvlink_config: Optional[DistServeNVLinkConfig] = None
-    tcp_config: Optional[DistServeTCPConfig] = None

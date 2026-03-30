@@ -1,3 +1,6 @@
+import re
+
+
 def assert_chat_completions_batch_return(output, model_name, check_logprobs: bool = False, logprobs_num: int = 5):
     assert_usage(output.get('usage'))
     assert output.get('id') is not None
@@ -43,16 +46,16 @@ def assert_usage(usage):
 def assert_logprobs(logprobs, logprobs_num):
     assert_logprob_element(logprobs)
     assert len(logprobs.get('top_logprobs')) >= 0
-    assert type(logprobs.get('top_logprobs')) == list
+    assert type(logprobs.get('top_logprobs')) is list
     assert len(logprobs.get('top_logprobs')) <= logprobs_num
     for logprob_element in logprobs.get('top_logprobs'):
         assert_logprob_element(logprob_element)
 
 
 def assert_logprob_element(logprob):
-    assert len(logprob.get('token')) > 0 and type(logprob.get('token')) == str
-    assert len(logprob.get('bytes')) > 0 and type(logprob.get('bytes')) == list
-    assert type(logprob.get('logprob')) == float
+    assert len(logprob.get('token')) > 0 and type(logprob.get('token')) is str
+    assert len(logprob.get('bytes')) > 0 and type(logprob.get('bytes')) is list
+    assert type(logprob.get('logprob')) is float
 
 
 def assert_chat_completions_stream_return(output,
@@ -77,8 +80,8 @@ def assert_chat_completions_stream_return(output,
                 for content in message.get('logprobs').get('content'):
                     assert_logprobs(content, logprobs_num)
         if is_last is True:
-            assert len(message.get('delta').get('content')) == 0
-            assert message.get('finish_reason') in ['stop', 'length']
+            assert len(message.get('delta').get('content')) == 0 or 'error' in message.get('delta').get('content')
+            assert message.get('finish_reason') in ['stop', 'length', 'error']
             if check_logprobs is True:
                 assert message.get('logprobs') is None
 
@@ -111,28 +114,11 @@ def assert_completions_stream_return(output,
                 assert message.get('logprobs') is None
 
 
-def assert_chat_interactive_batch_return(output):
-    assert output.get('input_tokens') > 0
-    assert output.get('tokens') > 0
-    assert output.get('history_tokens') >= 0
-    assert output.get('finish_reason') in ['stop', 'length']
-    assert len(output.get('text')) > 0
-
-
-def assert_chat_interactive_stream_return(output, is_last: bool = False, index: int = None):
-    assert output.get('input_tokens') > 0
-    if index is not None:
-        assert output.get('tokens') >= index
-    assert output.get('tokens') > 0
-    assert output.get('history_tokens') >= 0
-    if is_last:
-        assert len(output.get('text')) >= 0
-        assert output.get('finish_reason') in ['stop', 'length']
-    else:
-        assert len(output.get('text')) >= 0
-        assert output.get('finish_reason') is None
-
-
-def get_repeat_times(input, sub_input):
-    time = input.count(sub_input)
-    return time
+def has_repeated_fragment(text, repeat_count=5):
+    pattern = r'(.+?)\1{' + str(repeat_count - 1) + ',}'
+    match = re.search(pattern, text.replace('\n', ''))
+    if match:
+        repeated_fragment = match.group(1)
+        start_pos = match.start()
+        return True, {'repeated_fragment': repeated_fragment, 'position': start_pos}
+    return False, f'{text} does not contain repeated fragments'

@@ -4,13 +4,16 @@ import json
 import os
 import socket
 import subprocess
-from typing import Dict
 
 from lmdeploy.pytorch.disagg.backend.backend import MIGRATION_BACKENDS
 from lmdeploy.pytorch.disagg.backend.base import MigrationBackendImpl
-from lmdeploy.pytorch.disagg.config import MigrationBackend, MigrationProtocol, MooncakeEngineConfig
+from lmdeploy.pytorch.disagg.config import MigrationBackend, MooncakeEngineConfig
+from lmdeploy.pytorch.disagg.conn.protocol import (
+    DistServeInitRequest,
+    DistServeKVTransferEndpointInfo,
+    MigrationProtocol,
+)
 from lmdeploy.pytorch.disagg.messages import DistServeRegisterMRMessage, MigrationAssignment
-from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -87,8 +90,8 @@ class MooncakeMigrationManagement:
         # Get all RDMA information once during initialization
         self.ibv_devices = get_rdma_nics()
 
-        self.local_kv_table: Dict[str, Dict] = {}
-        self.remote_kv_table: Dict[str, Dict] = {}
+        self.local_kv_table: dict[str, dict] = {}
+        self.remote_kv_table: dict[str, dict] = {}
         self.remote_url: str = ''  # Store remote URL for this connection
 
         # Initialize the p2p connection
@@ -141,7 +144,7 @@ class MooncakeMigrationManagement:
                     f'addr: {buffer_addr}, length: {buffer_length} for remote_engine_id {self.remote_engine_id}')
 
     @property
-    def endpoint_info(self) -> Dict:
+    def endpoint_info(self) -> dict:
         """Get endpoint information for this connection."""
 
         mr_info = {}
@@ -160,9 +163,9 @@ class MooncakeMigrationManagement:
 
         return endpoint_info
 
-    def connect(self, connect_request: DistServeConnectionRequest):
+    def connect(self, connect_request: DistServeKVTransferEndpointInfo):
         """Connect to the remote engine."""
-        remote_endpoint_info = json.loads(connect_request.remote_endpoint_info)
+        remote_endpoint_info = json.loads(connect_request.endpoint_info)
 
         self.remote_url = remote_endpoint_info['session_id']
         self.remote_kv_table = remote_endpoint_info['mr_info']
@@ -236,7 +239,7 @@ class MooncakeBackend(MigrationBackendImpl):
     """Mooncake backend that manages multiple migration connections."""
 
     def __init__(self):
-        self.links: Dict[int, MooncakeMigrationManagement] = {}
+        self.links: dict[int, MooncakeMigrationManagement] = {}
 
     def p2p_initialize(self, init_request: DistServeInitRequest):
         self.links[init_request.remote_engine_id] = MooncakeMigrationManagement(init_request)
@@ -247,8 +250,8 @@ class MooncakeBackend(MigrationBackendImpl):
     def endpoint_info(self, remote_engine_id: int, protocol: MigrationProtocol):
         return self.links[remote_engine_id].endpoint_info
 
-    def p2p_connect(self, connect_request: DistServeConnectionRequest):
-        self.links[connect_request.remote_engine_id].connect(connect_request)
+    def p2p_connect(self, remote_engine_id: str, connect_request: DistServeKVTransferEndpointInfo):
+        self.links[remote_engine_id].connect(connect_request)
 
     async def p2p_migrate(self, assignment: MigrationAssignment, async_op: bool = False):
         await self.links[assignment.remote_engine_id].p2p_migrate(assignment, async_op=async_op)

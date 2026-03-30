@@ -1,10 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import math
+from collections.abc import Iterable
 from copy import deepcopy
 from enum import Enum, auto
 from os import getenv
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -13,12 +14,26 @@ from torch import nn
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank, get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager, get_step_ctx_manager
-from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
+from lmdeploy.pytorch.nn import (
+    ApplyRotaryEmb,
+    Attention,
+    ParallelEmbedding,
+    RMSNorm,
+    RopeType,
+    SiluAndMul,
+    build_rotary_embedding,
+    build_rotary_params,
+)
 from lmdeploy.pytorch.nn.eplb import EPLBDispatchInfo, EPLBManager
-from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_down_linear, build_gateup_linear, build_o_proj,
-                                        build_rowwise_linear)
+from lmdeploy.pytorch.nn.linear import (
+    build_colwise_linear,
+    build_down_linear,
+    build_gateup_linear,
+    build_o_proj,
+    build_rowwise_linear,
+)
 from lmdeploy.pytorch.nn.moe import MoeType, SoftmaxTopK, build_fused_moe
-from lmdeploy.pytorch.nn.rotary_embedding import YarnParameters
+from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters, get_rope_theta
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -27,7 +42,7 @@ from .utils.expert_distribution_recorder import ExpertsDistributionRecorder
 
 # microbatch
 class ExecType(Enum):
-    """Batch ecex type."""
+    """Batch exec type."""
     One = auto()
     Two0101 = auto()
     Two0110 = auto()
@@ -342,16 +357,9 @@ class DeepseekV2BMM(nn.Module):
         self.dtype = dtype
         self.device = device
 
-    def _get_tp_world_rank(self):
-        """Get tp world rank."""
-        dist_ctx = get_dist_manager().current_context()
-        if dist_ctx.dp == 1:
-            return get_tp_world_rank()
-        return 1, 0
-
     def _update_batch(self, batch: int):
         """Update out features."""
-        world_size, _ = self._get_tp_world_rank()
+        world_size, _ = get_tp_world_rank('attn')
         batch = batch // world_size
         return batch
 
@@ -361,7 +369,7 @@ class DeepseekV2BMM(nn.Module):
 
     def weight_loader(self, param: nn.Parameter, weight: torch.Tensor):
         """Weight loader."""
-        world_size, rank = self._get_tp_world_rank()
+        world_size, rank = get_tp_world_rank('attn')
         weight = weight.chunk(world_size, 0)[rank]
         param.data.copy_(weight)
 
@@ -449,9 +457,10 @@ class DeepseekV2Attention(nn.Module):
 
         self.softmax_scale = self.q_head_dim**(-0.5)
 
-        if config.rope_scaling is not None:
-            mscale_all_dim = config.rope_scaling.get('mscale_all_dim', 0)
-            scaling_factor = config.rope_scaling['factor']
+        rope_scaling = get_rope_parameters(config)
+        if rope_scaling is not None:
+            mscale_all_dim = rope_scaling.get('mscale_all_dim', 0)
+            scaling_factor = rope_scaling.get('factor', 1.0)
             if mscale_all_dim:
                 mscale = yarn_get_mscale(scaling_factor, mscale_all_dim)
                 self.softmax_scale = self.softmax_scale * mscale * mscale
@@ -517,16 +526,16 @@ class DeepseekV2Attention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: tuple[torch.Tensor] | None = None,
         attn_metadata: Any = None,
     ):
         """Rewrite of LlamaAttention.forward."""
-        dist_ctx = get_dist_manager().current_context()
-        if dist_ctx.dp > 1:
+        dist_config = get_dist_manager().current_config()
+        if dist_config.dp > 1:
             num_heads = self.num_heads
         else:
-            world_size = dist_ctx.world_size
+            world_size = dist_config.world_size
             num_heads = self.num_heads // world_size
         nope_size = self.kv_lora_rank
         q_len = hidden_states.size(1)
@@ -579,21 +588,31 @@ class MoEGate(nn.Module):
         self.n_routed_experts = config.n_routed_experts
         self.routed_scaling_factor = config.routed_scaling_factor
         self.scoring_func = config.scoring_func
-        self.seq_aux = config.seq_aux
         self.topk_method = config.topk_method
         self.n_group = config.n_group
         self.topk_group = config.topk_group
         self.norm_topk_prob = config.norm_topk_prob
         self.renormalize = self.top_k > 1 and self.norm_topk_prob
-
+        self.router_n_groups = getattr(config, 'router_n_groups', -1)
+        assert self.top_k % self.router_n_groups == 0, f'{self.top_k} cannot be divided by {self.router_n_groups}'
         # topk selection algorithm
         self.norm_topk_prob = config.norm_topk_prob
         self.gating_dim = config.hidden_size
-        self.weight = nn.Parameter(torch.empty((self.n_routed_experts, self.gating_dim), dtype=dtype, device=device))
+        self.weight = nn.Parameter(
+            torch.empty((self.n_routed_experts, self.gating_dim), dtype=torch.float32, device=device))
         if self.topk_method == 'noaux_tc':
+            from lmdeploy.pytorch.nn.moe.route import NoauxTCRouter
             self.e_score_correction_bias = nn.Parameter(
-                torch.empty((self.n_routed_experts, ), dtype=dtype, device=device))
-        self.softmax_topk = SoftmaxTopK(self.top_k)
+                torch.empty((self.n_routed_experts, ), dtype=torch.float32, device=device))
+            self.noaux_tc_router = NoauxTCRouter(self.scoring_func,
+                                                 top_k=self.top_k,
+                                                 n_group=self.n_group,
+                                                 topk_group=self.topk_group,
+                                                 n_routed_experts=self.n_routed_experts,
+                                                 routed_scaling_factor=self.routed_scaling_factor,
+                                                 renormalize=self.renormalize,
+                                                 router_n_groups=self.router_n_groups)
+        self.softmax_topk = SoftmaxTopK(self.top_k, n_groups=self.router_n_groups)
         self.fake_eplb = getenv('LMDEPLOY_FAKE_EPLB', 'False').lower() == 'true'
         self.eplb_dispatch_info = info
 
@@ -604,14 +623,23 @@ class MoEGate(nn.Module):
         elif self.scoring_func == 'sigmoid':
             scores = logits.sigmoid()
         else:
-            raise NotImplementedError('insupportable scoring function '
+            raise NotImplementedError('unsupported scoring function '
                                       f'for MoE gating: {self.scoring_func}')
         return scores
 
+    def _postprocess_topk_weight(self, topk_weight: torch.Tensor):
+        if self.renormalize:
+            denominator = topk_weight.sum(dim=-1, keepdim=True) + 1e-20
+            topk_weight = topk_weight / denominator
+            if not topk_weight.is_contiguous():
+                topk_weight = topk_weight.contiguous()
+        if not self.renormalize:
+            topk_weight = topk_weight * self.routed_scaling_factor
+        return topk_weight
+
     def forward(self, hidden_states: torch.Tensor):
         """forward."""
-        sequence_length, hidden_dim = hidden_states.shape
-        router_logits = F.linear(hidden_states, self.weight)
+        router_logits = F.linear(hidden_states.to(self.weight.dtype), self.weight)
         if self.fake_eplb:
             # Forcefully manipulate router_logits to simulate expert load balancing (EPLB).
             # This is a benchmark-only hack to achieve optimal performance metrics.
@@ -619,6 +647,8 @@ class MoEGate(nn.Module):
 
         if self.topk_method == 'greedy':
             topk_weight, topk_idx = self.softmax_topk(router_logits)
+
+            topk_weight = self._postprocess_topk_weight(topk_weight)
         elif self.topk_method == 'group_limited_greedy':
             scores = router_logits
             grouped_logits = scores.unflatten(-1, (self.n_group, -1))
@@ -630,31 +660,12 @@ class MoEGate(nn.Module):
             grouped_logits = grouped_logits.masked_fill(group_mask, 0.0)
             scores = grouped_logits.flatten(1, 2)
             topk_weight, topk_idx = self.softmax_topk(scores)
+
+            topk_weight = self._postprocess_topk_weight(topk_weight)
         elif self.topk_method == 'noaux_tc':
-            scores = self._compute_scores(router_logits)
-            scores_for_choice = scores.view(sequence_length, -1) + self.e_score_correction_bias[None]
-            group_scores = (scores_for_choice.view(sequence_length, self.n_group,
-                                                   -1).topk(2, dim=-1)[0].sum(dim=-1))  # [n, n_group]
-            group_idx = torch.topk(group_scores, k=self.topk_group, dim=-1, sorted=False)[1]  # [n, top_k_group]
-            group_mask = torch.zeros_like(group_scores)  # [n, n_group]
-            group_mask.scatter_(1, group_idx, 1)  # [n, n_group]
-            score_mask = (group_mask.unsqueeze(-1).expand(sequence_length, self.n_group,
-                                                          self.n_routed_experts // self.n_group).reshape(
-                                                              sequence_length, -1))  # [n, e]
-            tmp_scores = scores_for_choice.masked_fill(~score_mask.bool(), 0.0)  # [n, e]
-            _, topk_idx = torch.topk(tmp_scores, k=self.top_k, dim=-1, sorted=False)
-            topk_weight = scores.gather(1, topk_idx)
+            topk_weight, topk_idx = self.noaux_tc_router(router_logits, self.e_score_correction_bias)
         else:
             raise RuntimeError(f'Unsupported topk_method: {self.topk_method}')
-
-        if self.renormalize:
-            denominator = topk_weight.sum(dim=-1, keepdim=True) + 1e-20
-            topk_weight = topk_weight / denominator
-            if not topk_weight.is_contiguous():
-                topk_weight = topk_weight.contiguous()
-
-        if not self.renormalize or self.topk_method == 'noaux_tc':
-            topk_weight = topk_weight * self.routed_scaling_factor
 
         if self.eplb_dispatch_info is not None:
             topk_idx = EPLBManager.topk_ids_logical_to_physical(topk_idx, self.eplb_dispatch_info)
@@ -682,9 +693,10 @@ class DeepseekV2MoE(nn.Module):
         self.topk_group = config.topk_group
 
         dist_ctx = get_dist_manager().current_context()
-        dp = dist_ctx.dp
-        world_size = dist_ctx.world_size
-        moe_all_reduce = dp > 1 and dist_ctx.tp > 1
+        dist_config = dist_ctx.dist_config
+        dp = dist_config.dp
+        world_size = dist_config.world_size
+        moe_all_reduce = dp > 1 and dist_config.tp > 1
         if get_dist_manager().current_context().dist_config.enable_eplb:
             eplb_dispatch_info = EPLBManager.get_dispatch_info(
                 ep_rank=dist_ctx.ep_rank,
@@ -727,6 +739,7 @@ class DeepseekV2MoE(nn.Module):
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
         topk_weights, topk_ids = self.gate(hidden_states)
+
         out_states = self.experts(
             hidden_states,
             topk_weights,
@@ -757,8 +770,8 @@ class DeepseekV2MLP(nn.Module):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         if is_shared_expert:
-            dist_ctx = get_dist_manager().current_context()
-            dp = dist_ctx.dp
+            dist_config = get_dist_manager().current_config()
+            dp = dist_config.dp
             if dp == 1:
                 # split weight, do all reduce in moe
                 is_tp = True
@@ -841,11 +854,11 @@ class DeepseekV2DecoderLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[List[torch.FloatTensor]],
-        residual: Optional[torch.Tensor] = None,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: list[torch.FloatTensor] | None,
+        residual: torch.Tensor | None = None,
         attn_metadata: Any = None,
-    ) -> Tuple[torch.FloatTensor, torch.FloatTensor]:
+    ) -> tuple[torch.FloatTensor, torch.FloatTensor]:
 
         if residual is None:
             residual = hidden_states
@@ -871,9 +884,9 @@ class DeepseekV2DecoderLayer(nn.Module):
     def forward_yield(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[List[torch.FloatTensor]],
-        residual: Optional[torch.Tensor] = None,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: list[torch.FloatTensor] | None,
+        residual: torch.Tensor | None = None,
         attn_metadata: Any = None,
         tag: Any = None,
     ):
@@ -960,11 +973,13 @@ class DeepseekV2Model(nn.Module):
         self.config = config
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
-        self.embed_tokens = nn.Embedding(config.vocab_size,
-                                         config.hidden_size,
-                                         self.padding_idx,
-                                         dtype=dtype,
-                                         device=device)
+        self.embed_tokens = ParallelEmbedding(config.vocab_size,
+                                              config.hidden_size,
+                                              self.padding_idx,
+                                              dtype=dtype,
+                                              device=device,
+                                              is_tp=True)
+
         if get_dist_manager().current_context().dist_config.enable_eplb:
             ep_size_, _ = get_ep_world_rank()
             EPLBManager.init_global_eplb_metadata(ep_size_, config.n_routed_experts, config.num_hidden_layers)
@@ -980,42 +995,20 @@ class DeepseekV2Model(nn.Module):
         rope_dim = config.qk_rope_head_dim if getattr(config, 'use_mla', True) else (config.hidden_size //
                                                                                      config.num_attention_heads)
         rope_max_pos_emb = config.max_position_embeddings
-        rope_base = config.rope_theta
-        scaling_factor = 1.0
-        other_params = dict()
-        if config.rope_scaling is not None:
-            scaling_type = config.rope_scaling['type']
-            scaling_factor = config.rope_scaling['factor']
-            if scaling_type == 'dynamic':
-                emb_type = RopeType.DynamicNTKScaling
-            elif scaling_type == 'yarn':
-                emb_type = RopeType.Yarn
-                rope_max_pos_emb = config.rope_scaling.get('original_max_position_embeddings', 4096)
-                kwargs = {
-                    key: config.rope_scaling[key]
-                    for key in [
-                        'beta_fast',
-                        'beta_slow',
-                        'mscale',
-                        'mscale_all_dim',
-                    ] if key in self.config.rope_scaling
-                }
-                yarn_params = YarnParameters(**kwargs)
-                other_params['yarn_params'] = yarn_params
-        self.rotary_emb = build_rotary_embedding(rope_dim,
-                                                 rope_max_pos_emb,
-                                                 rope_base,
-                                                 scaling_factor,
-                                                 emb_type=emb_type,
-                                                 **other_params)
+        rope_base = get_rope_theta(config)
+
+        rope_params = dict(emb_type=emb_type, dim=rope_dim, max_position_embeddings=rope_max_pos_emb, base=rope_base)
+        update_params = build_rotary_params(config)
+        rope_params.update(update_params)
+        self.rotary_emb = build_rotary_embedding(**rope_params)
 
     def forward(
         self,
         input_ids: torch.LongTensor = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,
         attn_metadata: Any = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
+        inputs_embeds: torch.FloatTensor | None = None,
     ):
         """forward."""
         if inputs_embeds is None:
@@ -1043,10 +1036,10 @@ class DeepseekV2Model(nn.Module):
     def forward_microbatch(
         self,
         input_ids: torch.LongTensor = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,
         attn_metadata: Any = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
+        inputs_embeds: torch.FloatTensor | None = None,
     ):
         """forward_microbatch."""
         assert self.config.moe_layer_freq == 1
@@ -1096,9 +1089,9 @@ class DeepseekV2Model(nn.Module):
 
     def forward_yieldlayers(self,
                             hidden_states: torch.Tensor,
-                            rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-                            past_key_values: Optional[List[torch.FloatTensor]] = None,
-                            residual: Optional[torch.Tensor] = None,
+                            rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+                            past_key_values: list[torch.FloatTensor] | None = None,
+                            residual: torch.Tensor | None = None,
                             attn_metadata: Any = None,
                             start_idx: int = -1,
                             end_idx: int = -1,
@@ -1140,19 +1133,12 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                                             dtype=dtype,
                                             device=device)
         self._load_buffers = dict()
-        self.enable_microbatch = get_dist_manager().current_context().dist_config.enable_microbatch
-        self.enable_microbatch_prefill_batchsize_threshold = \
-            int(getenv('ENABLE_MICROBATCH_PREFILL_BATCHSIZE_THRESHOLD', 2))
-        self.enable_microbatch_prefill_token_threshold = \
-            int(getenv('ENABLE_MICROBATCH_PREFILL_TOKEN_THRESHOLD', 2))
-        self.enable_microbatch_decode_batchsize_threshold = \
-            int(getenv('ENABLE_MICROBATCH_DECODE_BATCHSIZE_THRESHOLD', 2))
 
     def forward(
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
         **kwargs,
@@ -1185,33 +1171,14 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
-        inputs_embeds: Optional[torch.Tensor] = None,
+        past_key_values: list[list[torch.Tensor]],
+        inputs_embeds: torch.Tensor | None = None,
         context: StepContext = None,
     ):
         """Prepare input."""
         input_ids = context.input_ids
         position_ids = context.position_ids
         attn_metadata = context.attn_metadata
-
-        # twobatch or onebatch
-        if self.enable_microbatch:
-            batch_size = attn_metadata.q_start_loc.size(dim=0)
-            tokens = input_ids.numel()
-            if attn_metadata.is_decoding:
-                enable_microbatch = batch_size >= self.enable_microbatch_decode_batchsize_threshold
-            else:
-                enable_microbatch = batch_size >= self.enable_microbatch_prefill_batchsize_threshold and \
-                                    tokens >= self.enable_microbatch_prefill_token_threshold
-            if enable_microbatch:
-                disable_num = torch.tensor(0, dtype=torch.int32, device=input_ids.device)
-            else:
-                disable_num = torch.tensor(1, dtype=torch.int32, device=input_ids.device)
-            ep_group = get_dist_manager().current_context().ep_gpu_group
-            dist.all_reduce(disable_num, op=dist.ReduceOp.SUM, group=ep_group)
-            step_ctx = get_step_ctx_manager().current_context()
-            enable_microbatch = disable_num.item() == 0
-            step_ctx.enable_microbatch = enable_microbatch
 
         return dict(
             input_ids=input_ids,
@@ -1221,8 +1188,8 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             inputs_embeds=inputs_embeds,
         )
 
-    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
-                             expert_params_mapping: List):
+    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
+                             expert_params_mapping: list):
         """Load weight experts."""
         for (param_name, weight_name, expert_id, shard_id) in expert_params_mapping:
             if weight_name not in name:
@@ -1235,8 +1202,8 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             param = params_dict[name]
             load_weight(param, loaded_weight)
 
-    def _load_weight_attention(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
-                               update_pe_mapping: List):
+    def _load_weight_attention(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
+                               update_pe_mapping: list):
         """Load weight attention."""
         device = next(iter(params_dict.values())).device
 
@@ -1328,7 +1295,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                 param = params_dict[name]
                 load_weight(param, loaded_weight)
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
 
         def __skip_nextn(name, nextn_keys):
@@ -1336,6 +1303,14 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                 if nextn_key in name:
                     return True
             return False
+
+        def __skip_layers():
+            """We might change the number of layers so we can debug the model
+            with less gpus."""
+            import re
+            matches = re.findall(r'\.layers\.(\d+)\.', name)
+            layer_id = int(matches[0])
+            return layer_id >= self.config.num_hidden_layers
 
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)
@@ -1386,6 +1361,10 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                 # skip nextn
                 if __skip_nextn(name, nextn_keys):
                     continue
+
+                if __skip_layers():
+                    continue
+
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
 

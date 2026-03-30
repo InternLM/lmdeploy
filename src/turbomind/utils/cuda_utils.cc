@@ -286,12 +286,6 @@ int getDeviceCount()
     return count;
 }
 
-bool is_16xx_series(const char* name)
-{
-    const std::regex re(R"(GTX 16\d\d)");
-    return std::regex_search(name, re);
-}
-
 void trim_default_mempool(int device_id)
 {
     cudaMemPool_t mempool;

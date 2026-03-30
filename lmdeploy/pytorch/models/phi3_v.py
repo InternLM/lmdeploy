@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
+from typing import Any
 
 import torch
 from torch import nn
@@ -8,12 +9,11 @@ from transformers import CLIPVisionConfig, CLIPVisionModel, PretrainedConfig
 
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
-from lmdeploy.pytorch.nn.linear import build_rowwise_linear
+from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .phi3 import Phi3ForCausalLM, Phi3Model
-from .utils.model import DeployModelMixin
+from .utils.model import vlm_model
 
 CLIP_VIT_LARGE_PATCH14_336_CONFIG = CLIPVisionConfig(attention_dropout=0.0,
                                                      dropout=0.0,
@@ -31,6 +31,7 @@ CLIP_VIT_LARGE_PATCH14_336_CONFIG = CLIPVisionConfig(attention_dropout=0.0,
                                                      projection_dim=768)
 
 
+@vlm_model
 class Phi3ImageEmbedding(nn.Module):
     """Image embedding."""
 
@@ -236,13 +237,13 @@ class Phi3VModel(Phi3Model):
     def forward(
         self,
         input_ids: torch.LongTensor = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,
         attn_metadata: Any = None,
-        pixel_values: Optional[torch.FloatTensor] = None,
-        image_sizes: Optional[torch.LongTensor] = None,
+        pixel_values: torch.FloatTensor | None = None,
+        image_sizes: torch.LongTensor | None = None,
         image_mask: torch.Tensor = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
+        inputs_embeds: torch.FloatTensor | None = None,
     ):
         """Rewrite of LlamaModel.forward."""
 
@@ -263,7 +264,7 @@ class Phi3VModel(Phi3Model):
         )
 
 
-class Phi3VForCausalLM(Phi3ForCausalLM, DeployModelMixin):
+class Phi3VForCausalLM(Phi3ForCausalLM):
 
     def __init__(self,
                  config: PretrainedConfig,
@@ -276,11 +277,7 @@ class Phi3VForCausalLM(Phi3ForCausalLM, DeployModelMixin):
         # build model
         self.model = Phi3VModel(config, dtype=dtype, device=device)
         # build lm_head
-        self.lm_head = build_rowwise_linear(config.hidden_size,
-                                            config.vocab_size,
-                                            bias=False,
-                                            dtype=dtype,
-                                            device=device)
+        self.lm_head = self.build_lm_head(config.hidden_size, config.vocab_size, bias=False, dtype=dtype, device=device)
 
         self.input_processor = Phi3VInputProcessor(config, dtype)
 
@@ -288,7 +285,7 @@ class Phi3VForCausalLM(Phi3ForCausalLM, DeployModelMixin):
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         pixel_values: torch.Tensor = None,
         image_sizes: torch.Tensor = None,
@@ -311,7 +308,7 @@ class Phi3VForCausalLM(Phi3ForCausalLM, DeployModelMixin):
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         inputs_embeds: torch.Tensor = None,
         context: StepContext = None,
     ):
@@ -337,7 +334,7 @@ class Phi3VForCausalLM(Phi3ForCausalLM, DeployModelMixin):
 
         return output
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
         import itertools
 
@@ -366,8 +363,8 @@ class Phi3VInputProcessor(BaseModelInputProcessor):
         self.dtype = dtype
 
     def preprocess_input(self,
-                         input_ids: List[int],
-                         input_multimodals: List[Dict[str, Any]] = None,
+                         input_ids: list[int],
+                         input_multimodals: list[dict[str, Any]] = None,
                          **kwargs) -> PreprocessInputResult:
         """Prepare multimodal input."""
         if input_multimodals is None or len(input_multimodals) == 0:
@@ -383,10 +380,10 @@ class Phi3VInputProcessor(BaseModelInputProcessor):
             if isinstance(num_pad, torch.Tensor):
                 num_pad = num_pad.item()
 
-            mm_data = MultiModalTensor(data=pixel_values,
-                                       start=offset,
-                                       end=offset + num_pad,
-                                       meta=dict(image_sizes=image_sizes, image_token_id=image_token_id))
+            mm_data = MultiModalData(data=pixel_values,
+                                     start=offset,
+                                     end=offset + num_pad,
+                                     meta=dict(image_sizes=image_sizes, image_token_id=image_token_id))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(

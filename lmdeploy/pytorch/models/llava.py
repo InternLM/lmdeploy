@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -11,13 +12,13 @@ from transformers.models.llava.configuration_llava import LlavaConfig
 
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
+from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .patch import build_model_from_hf_config
 from .utils.cudagraph import CudaGraphMixin
-from .utils.model import DeployModelMixin
+from .utils.model import DeployModelMixin, vlm_model
 
 
 class LlavaMultiModalProjector(nn.Module):
@@ -174,8 +175,8 @@ class CLIPAttention(nn.Module):
     def forward(
         self,
         hidden_states,
-        attention_mask: Optional[torch.Tensor] = None,
-        causal_attention_mask: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
+        causal_attention_mask: torch.Tensor | None = None,
     ):
         """forward."""
         # qkv proj
@@ -287,8 +288,8 @@ class CLIPEncoder(nn.Module):
     def forward(
         self,
         inputs_embeds,
-        attention_mask: Optional[torch.Tensor] = None,
-        causal_attention_mask: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
+        causal_attention_mask: torch.Tensor | None = None,
         vision_feature_layer: int = -1,
     ):
         """forward."""
@@ -343,6 +344,7 @@ class CLIPVisionTransformer(nn.Module):
         )
 
 
+@vlm_model
 class CLIPVisionModel(nn.Module):
     """Clip vision model."""
 
@@ -413,7 +415,7 @@ class LlavaForConditionalGeneration(nn.Module, CudaGraphMixin, DeployModelMixin)
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         pixel_values: torch.Tensor = None,
         image_mask: torch.Tensor = None,
@@ -448,7 +450,7 @@ class LlavaForConditionalGeneration(nn.Module, CudaGraphMixin, DeployModelMixin)
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         inputs_embeds: torch.Tensor = None,
         context: StepContext = None,
     ):
@@ -491,7 +493,7 @@ class LlavaForConditionalGeneration(nn.Module, CudaGraphMixin, DeployModelMixin)
             inputs_embeds=inputs_embeds,
         )
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
 
         stacked_params_mapping = [
@@ -538,8 +540,8 @@ class LLavaInputProcessor(BaseModelInputProcessor):
         self.dtype = dtype
 
     def preprocess_input(self,
-                         input_ids: List[int],
-                         input_multimodals: List[Dict[str, Any]] = None,
+                         input_ids: list[int],
+                         input_multimodals: list[dict[str, Any]] = None,
                          **kwargs) -> PreprocessInputResult:
         """Prepare multimodal input."""
         if input_multimodals is None or len(input_multimodals) == 0:
@@ -554,10 +556,10 @@ class LLavaInputProcessor(BaseModelInputProcessor):
             if isinstance(num_pad, torch.Tensor):
                 num_pad = num_pad.item()
 
-            mm_data = MultiModalTensor(data=pixel_values,
-                                       start=offset,
-                                       end=offset + num_pad,
-                                       meta=dict(image_token_id=image_token_id))
+            mm_data = MultiModalData(data=pixel_values,
+                                     start=offset,
+                                     end=offset + num_pad,
+                                     meta=dict(image_token_id=image_token_id))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(
@@ -720,7 +722,7 @@ class LlavaNextForConditionalGeneration(LlavaForConditionalGeneration):
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         pixel_values: torch.Tensor = None,
         image_sizes: torch.Tensor = None,
@@ -761,7 +763,7 @@ class LlavaNextForConditionalGeneration(LlavaForConditionalGeneration):
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         inputs_embeds: torch.Tensor = None,
         context: StepContext = None,
     ):
@@ -816,8 +818,8 @@ class LLavaNextInputProcessor(BaseModelInputProcessor):
         self.dtype = dtype
 
     def preprocess_input(self,
-                         input_ids: List[int],
-                         input_multimodals: List[Dict[str, Any]] = None,
+                         input_ids: list[int],
+                         input_multimodals: list[dict[str, Any]] = None,
                          **kwargs) -> PreprocessInputResult:
         """Prepare multimodal input."""
         if input_multimodals is None or len(input_multimodals) == 0:
@@ -833,10 +835,10 @@ class LLavaNextInputProcessor(BaseModelInputProcessor):
             if isinstance(num_pad, torch.Tensor):
                 num_pad = num_pad.item()
 
-            mm_data = MultiModalTensor(data=pixel_values,
-                                       start=offset,
-                                       end=offset + num_pad,
-                                       meta=dict(image_sizes=image_sizes, image_token_id=image_token_id))
+            mm_data = MultiModalData(data=pixel_values,
+                                     start=offset,
+                                     end=offset + num_pad,
+                                     meta=dict(image_sizes=image_sizes, image_token_id=image_token_id))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(

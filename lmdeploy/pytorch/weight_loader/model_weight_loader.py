@@ -68,7 +68,7 @@ def _get_weight_map(model_path: str, weight_type: str):
     else:
         raise RuntimeError(f'Unsupported weight type: {weight_type}.')
 
-    with open(load_index, mode='r', encoding='utf-8') as f:
+    with open(load_index, encoding='utf-8') as f:
         index = json.load(f)
 
     weight_map = index['weight_map']
@@ -101,13 +101,15 @@ def _get_safetensors_weights_iterator(file: str, prefix: str):
 def _get_pt_weights_iterator(file: str, prefix: str):
     """Get pt weights iterator."""
     state = torch.load(file, weights_only=True, map_location='cpu')
-    if prefix is None:
-        yield from state.items()
-    else:
-        for k, v in state.items():
-            yield f'{prefix}{k}', v
-    del state
-    torch.cuda.empty_cache()
+    try:
+        if prefix is None:
+            yield from state.items()
+        else:
+            for k, v in state.items():
+                yield f'{prefix}{k}', v
+    finally:
+        del state
+        torch.cuda.empty_cache()
 
 
 class ModelWeightLoader:
@@ -142,6 +144,21 @@ class ModelWeightLoader:
             weights_iterator = _get_pt_weights_iterator(path, self._prefix)
         return weights_iterator
 
+    @staticmethod
+    def _skip_dummy_iterator(iterator, dummy_prefix: list):
+        """Wrap iterator to skip dummy weights."""
+        for name, param in iterator:
+            if not any(name.startswith(prefix) for prefix in dummy_prefix):
+                yield name, param
+
+    @staticmethod
+    def _rename_weights_iterator(iterator, model: torch.nn.Module):
+        """Wrap iterator to rename weights."""
+        rename_func = getattr(model, 'rename_weight', lambda x: x)
+        for name, param in iterator:
+            new_name = rename_func(name)
+            yield new_name, param
+
     def load_model_weights(
         self,
         model: torch.nn.Module,
@@ -153,11 +170,20 @@ class ModelWeightLoader:
         _, rank = get_world_rank()
         disable_tqdm = rank != 0
 
+        # get dummy prefix
+        dummy_prefix = []
+        for name, mod in model.named_modules():
+            if getattr(mod, '_is_dummy_mod', False):
+                dummy_prefix.append(f'{name}.')
+
         paths = sorted(paths)
         if _envs.random_load_weight:
             np.random.shuffle(paths)
         for path in tqdm(paths, desc='Loading weights from safetensors', disable=disable_tqdm):
             weights_iterator = self._get_weights_iterator(path)
+            weights_iterator = self._rename_weights_iterator(weights_iterator, model)
+            if len(dummy_prefix) > 0:
+                weights_iterator = self._skip_dummy_iterator(weights_iterator, dummy_prefix)
             model.load_weights(weights_iterator)
         if device is not None:
             model.to(device)

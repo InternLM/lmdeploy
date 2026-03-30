@@ -3,7 +3,6 @@
 # https://github.com/vllm-project/vllm/blob/main/vllm/attention/backends/abstract.py
 from abc import ABC, abstractmethod
 from enum import Enum, auto
-from typing import Tuple
 
 import torch
 
@@ -31,6 +30,15 @@ class OpType(Enum):
     FusedMoEW8A8 = auto()
     LinearBlockedF8 = auto()
     FusedMoEBlockedF8 = auto()
+    NSAIndexFP8 = auto()
+    Embedding = auto()
+
+    # MoE router
+    RouterNoauxTC = auto()
+
+    # Gated Delta
+    CausalConv1d = auto()
+    GatedDeltaRule = auto()
 
 
 class OpsBackend(ABC):
@@ -61,7 +69,7 @@ class OpsBackend(ABC):
         num_heads: int,
         head_size: int,
         dtype: torch.dtype,
-    ) -> Tuple[int, ...]:
+    ) -> tuple[int, ...]:
         """Get block shape of k."""
         raise NotImplementedError
 
@@ -72,7 +80,7 @@ class OpsBackend(ABC):
         num_heads: int,
         head_size: int,
         dtype: torch.dtype,
-    ) -> Tuple[int, ...]:
+    ) -> tuple[int, ...]:
         """Get block shape of v."""
         raise NotImplementedError
 

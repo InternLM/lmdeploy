@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Tuple
 
 import torch
 
@@ -26,9 +25,8 @@ class MacaOpsBackend(DlinferOpsBackend):
         num_heads: int,
         head_size: int,
         dtype: torch.dtype,
-    ) -> Tuple[int, ...]:
-        x = 16
-        return (num_heads, head_size // x, block_size, x)
+    ) -> tuple[int, ...]:
+        return (block_size, num_heads, head_size)
 
     @staticmethod
     def get_v_block_shape(
@@ -36,8 +34,8 @@ class MacaOpsBackend(DlinferOpsBackend):
         num_heads: int,
         head_size: int,
         dtype: torch.dtype,
-    ) -> Tuple[int, ...]:
-        return (num_heads, block_size, head_size)
+    ) -> tuple[int, ...]:
+        return (block_size, num_heads, head_size)
 
     @classmethod
     def update_step_context(cls, step_context):
@@ -52,21 +50,24 @@ class MacaOpsBackend(DlinferOpsBackend):
             return cls.total_slots
 
         kv_start_indices, attention_mask = [], []
-        block_num, _, block_size, _ = step_context.kv_caches[0][1].shape
-        device = step_context.block_offsets.device
+        block_num, block_size, _, _ = step_context.kv_caches[0][1].shape
 
         is_unpaged_prefill = False
         if not step_context.is_decoding:
             is_unpaged_prefill = \
                all((step_context.q_seqlens ==
                     step_context.kv_seqlens).tolist())
-        q_start_loc = torch.cat((torch.tensor([0], device=device), step_context.q_seqlens.cumsum(0))).int()
+        q_start_loc = step_context.q_start_loc
+        cu_seqlens = torch.cat((q_start_loc, step_context.q_seqlens.sum().unsqueeze(0))).int()
+
         q_seqlens = step_context.q_seqlens.int()
         kv_seqlens = step_context.kv_seqlens.int()
-        max_q_seq_len = torch.max(q_seqlens).item()
-        max_kv_seq_len = torch.max(kv_seqlens).item()
 
         if step_context.is_decoding:
+            # max_q_seq_len, max_kv_seq_len is not used in decoding stage
+            max_q_seq_len = -1
+            max_kv_seq_len = -1
+
             # collect kv_start_indices without using a for-loop,
             # (fill kv-cache for just ONE token during the decoding phase)
             idx = (step_context.kv_seqlens - 1) % block_size
@@ -74,6 +75,9 @@ class MacaOpsBackend(DlinferOpsBackend):
             last_block = step_context.block_offsets.gather(1, b_num.view(-1, 1)).view(-1)
             kv_start_indices = (last_block * block_size + idx).reshape((-1, 1))
         else:
+            max_q_seq_len = torch.max(q_seqlens).cpu().item()
+            max_kv_seq_len = torch.max(kv_seqlens).cpu().item()
+
             for i in range(step_context.q_start_loc.size(0)):
                 q_seq_len = int(step_context.q_seqlens[i])
                 kv_seq_len = int(step_context.kv_seqlens[i])
@@ -89,7 +93,7 @@ class MacaOpsBackend(DlinferOpsBackend):
         attn_metadata = attn_meta_cls(
             step_context.is_decoding,
             step_context.block_offsets.int(),
-            q_start_loc=q_start_loc,
+            q_start_loc=cu_seqlens,
             q_seqlens=q_seqlens,
             kv_seqlens=kv_seqlens,
             kv_start_indices=kv_start_indices,
@@ -109,3 +113,8 @@ class MacaOpsBackend(DlinferOpsBackend):
         """Build graph runner."""
         from lmdeploy.pytorch.backends.cuda.graph_runner import CUDAGraphRunner
         return CUDAGraphRunner(model, model_config, cache_config, backend_config, device)
+
+    @staticmethod
+    def support_ray():
+        """Support ray."""
+        return True

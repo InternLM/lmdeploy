@@ -13,6 +13,8 @@
 
 namespace turbomind {
 
+using cutlass::FastDivmod;
+
 template<class Tkv, int CTA_S, int HeadDim, int WarpCnt, class T, class BlockLayout>
 __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
                                                     const T*        k,
@@ -28,6 +30,8 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
                                                     int64_t         stride_h,
                                                     int64_t         stride_s,
                                                     int             layer_id,
+                                                    int             cp_rank,
+                                                    FastDivmod      cp_size,
                                                     BlockLayout     block_layout)
 {
 
@@ -38,6 +42,8 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
 
     constexpr int ITER_C = Map::kIterC;
     constexpr int ITER_S = Map::kIterS;
+
+    constexpr bool HAS_V = !(typename BlockLayout::Config{}.is_share_kv());
 
     const int token_idx = blockIdx.x * CTA_S;  // local offset into `input_length`
     const int head_idx  = blockIdx.y;
@@ -72,7 +78,7 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
             Ldg(bias_K[c], &k_bias[head_idx * HeadDim + di]);
         }
     }
-    if (v_bias) {
+    if (v_bias && HAS_V) {
         PRAGMA_UNROLL
         for (int c = 0; c < ITER_C; ++c) {
             const int di = offset.x + c * Map::kDeltaC;
@@ -90,7 +96,9 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
                 (batch_idx * stride_b + qi_beg * stride_c + qi * stride_s + head_idx * stride_h) * HeadDim + di;
             if (qi < q_len) {
                 Ldg(vec_K[s][c], &k[index]);
-                Ldg(vec_V[s][c], &v[index]);
+                if constexpr (HAS_V) {
+                    Ldg(vec_V[s][c], &v[index]);
+                }
             }
         }
     }
@@ -105,7 +113,7 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
             }
         }
     }
-    if (v_bias) {
+    if (v_bias && HAS_V) {
         using namespace ops;
         PRAGMA_UNROLL
         for (int s = 0; s < ITER_S; ++s) {
@@ -135,7 +143,9 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
 
     if constexpr (!std::is_same_v<T, Tkv>) {
         warp_stats<Map::kWarpThreadC>(param_K, vec_K, bitsof<Tkv>);
-        warp_stats<Map::kWarpThreadC>(param_V, vec_V, bitsof<Tkv>);
+        if constexpr (HAS_V) {
+            warp_stats<Map::kWarpThreadC>(param_V, vec_V, bitsof<Tkv>);
+        }
     }
 
     Array<Tkv, kVecSize> out_K[ITER_S][ITER_C];
@@ -148,9 +158,13 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
         PRAGMA_UNROLL
         for (int c = 0; c < ITER_C; ++c) {
             out_K[s][c] = conv_K(vec_K[s][c]);
-            out_V[s][c] = conv_V(vec_V[s][c]);
+            if constexpr (HAS_V) {
+                out_V[s][c] = conv_V(vec_V[s][c]);
+            }
         }
     }
+
+    int local_ti, local_ti_rank;
 
     blocks += cu_block_num[batch_idx];
 
@@ -159,19 +173,24 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
     PRAGMA_UNROLL
     for (int s = 0; s < ITER_S; ++s) {
         const int qi = offset.y + s * Map::kDeltaS + token_idx;  // local offset into `input_length`
-        if (qi < q_len) {
-            const int ti = history_len + qi;  // timestep
-            block_head.with((char**)blocks, ti, [&](auto k_cache, auto v_cache, T* k_param, T* v_param) {
+        const int ti = history_len + qi;                         // timestep
+        local_ti     = cp_size.divmod(local_ti_rank, ti);
+        if (qi < q_len && local_ti_rank == cp_rank) {
+            block_head.with((char**)blocks, local_ti, [&](auto k_cache, auto v_cache, T* k_param, T* v_param) {
                 PRAGMA_UNROLL
                 for (int c = 0; c < ITER_C; ++c) {
                     int di = offset.x + c * Map::kDeltaC;
                     Store(&k_cache[di], out_K[s][c]);
-                    Store(&v_cache[di], out_V[s][c]);
+                    if constexpr (HAS_V) {
+                        Store(&v_cache[di], out_V[s][c]);
+                    }
                 }
                 if constexpr (!std::is_same_v<T, Tkv>) {
                     if (offset.x == 0) {
                         StoreQuantParam<Tkv>(k_param, param_K[s]);
-                        StoreQuantParam<Tkv>(v_param, param_V[s]);
+                        if constexpr (HAS_V) {
+                            StoreQuantParam<Tkv>(v_param, param_V[s]);
+                        }
                         // if (ti == history_len) {
                         // printf("src %d %f %f\n", ti, (float)param_K[s][0], (float)param_K[s][1]);
                         // }
@@ -198,6 +217,8 @@ void invokeProcessKV_v2(char**                 blocks,
                         int64_t                stride_s,
                         int                    block_seq_len,
                         int                    layer_id,
+                        int                    cp_rank,
+                        FastDivmod             cp_size,
                         int                    max_q_len,
                         int                    head_num,
                         int                    head_dim,
@@ -205,19 +226,22 @@ void invokeProcessKV_v2(char**                 blocks,
                         int                    quant_policy,
                         cudaStream_t           stream)
 {
-    constexpr int WARPS = 4;
-    constexpr int CTA_S = 64;
-
-    int  block = WARPS * WARP_SIZE;
-    dim3 grid((max_q_len + CTA_S - 1) / CTA_S, head_num, batch_size);
 
     auto invoke = [&](auto tkv, const auto dim) {
         using Tkv = decltype(tkv);
 
-        constexpr int kHeadDim = dim;
-        FT_CHECK(head_dim == kHeadDim);
+        constexpr int  kHeadDim = dim;
+        constexpr bool kShareKV = kHeadDim == 576;
 
-        block::Layout block_layout{block::Config<T, Tkv, kHeadDim>{head_num, block_seq_len}};
+        constexpr int WARPS = 4;
+        constexpr int CTA_S = kShareKV ? 32 : 64;
+
+        int  block = WARPS * WARP_SIZE;
+        dim3 grid(cdiv(max_q_len, CTA_S), head_num, batch_size);
+
+        TM_CHECK_EQ(head_dim, kHeadDim);
+
+        block::Layout block_layout{block::Config<T, Tkv, kHeadDim, kShareKV>{head_num, block_seq_len}};
 
         ProcessKV_v2<Tkv, CTA_S, kHeadDim, WARPS><<<grid, block, 0, stream>>>(blocks,
                                                                               k,
@@ -233,11 +257,14 @@ void invokeProcessKV_v2(char**                 blocks,
                                                                               stride_h,
                                                                               stride_s,
                                                                               layer_id,
+                                                                              cp_rank,
+                                                                              cp_size,
                                                                               block_layout);
     };
 
     auto dispatch = [&](auto tkv) {
-        if (head_dim == 64) {
+        if (0) {}
+        else if (head_dim == 64) {
             return invoke(tkv, std::integral_constant<int, 64>{});
         }
         else if (head_dim == 128) {
@@ -245,6 +272,12 @@ void invokeProcessKV_v2(char**                 blocks,
         }
         else if (head_dim == 192) {
             return invoke(tkv, std::integral_constant<int, 192>{});
+        }
+        else if (head_dim == 256) {
+            return invoke(tkv, std::integral_constant<int, 256>{});
+        }
+        else if (head_dim == 576) {
+            return invoke(tkv, std::integral_constant<int, 576>{});
         }
         FT_CHECK(0);
     };
@@ -276,6 +309,8 @@ void invokeProcessKV_v2(char**                 blocks,
                                      int64_t                stride_s,                                                  \
                                      int                    block_seq_len,                                             \
                                      int                    layer_id,                                                  \
+                                     int                    cp_rank,                                                   \
+                                     FastDivmod             cp_size,                                                   \
                                      int                    max_q_len,                                                 \
                                      int                    head_num,                                                  \
                                      int                    head_dim,                                                  \
@@ -300,6 +335,8 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*              k,
                                                     int64_t         stride_h,
                                                     int64_t         stride_s,
                                                     int             layer_id,
+                                                    int             cp_rank,
+                                                    FastDivmod      cp_size,
                                                     BlockLayout     block_layout)
 {
     constexpr int kVecSize = sizeof(uint4) / sizeof(T);
@@ -308,6 +345,8 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*              k,
 
     constexpr int ITER_C = Map::kIterC;
     constexpr int ITER_S = Map::kIterS;
+
+    constexpr bool HAS_V = !(typename BlockLayout::Config{}.is_share_kv());
 
     const int token_idx = blockIdx.x * CTA_S;
     const int head_idx  = blockIdx.y;
@@ -341,20 +380,27 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*              k,
     Array<T, 2> param_K[ITER_S];
     Array<T, 2> param_V[ITER_S];
 
+    int local_ti, local_ti_rank;
+
     PRAGMA_UNROLL
     for (int s = 0; s < ITER_S; ++s) {
         const int si = offset.y + s * Map::kDeltaS + token_idx;
-        if (si < seq_len) {
-            block_head.with((char**)blocks, si, [&](auto k_cache, auto v_cache, T* k_param, T* v_param) {
+        local_ti     = cp_size.divmod(local_ti_rank, si);
+        if (si < seq_len && local_ti_rank == cp_rank) {
+            block_head.with((char**)blocks, local_ti, [&](auto k_cache, auto v_cache, T* k_param, T* v_param) {
                 PRAGMA_UNROLL
                 for (int c = 0; c < ITER_C; ++c) {
                     int di = offset.x + c * Map::kDeltaC;
                     Ldg(vec_K[s][c], &k_cache[di]);
-                    Ldg(vec_V[s][c], &v_cache[di]);
+                    if constexpr (HAS_V) {
+                        Ldg(vec_V[s][c], &v_cache[di]);
+                    }
                 }
                 if constexpr (!std::is_same_v<T, Tkv>) {
                     Ldg(param_K[s], k_param);
-                    Ldg(param_V[s], v_param);
+                    if constexpr (HAS_V) {
+                        Ldg(param_V[s], v_param);
+                    }
                 }
             });
         }
@@ -367,7 +413,9 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*              k,
         PRAGMA_UNROLL
         for (int c = 0; c < ITER_C; ++c) {
             out_K[s][c] = conv_K(vec_K[s][c]);
-            out_V[s][c] = conv_V(vec_V[s][c]);
+            if constexpr (HAS_V) {
+                out_V[s][c] = conv_V(vec_V[s][c]);
+            }
         }
     }
 
@@ -389,13 +437,17 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*              k,
     for (int s = 0; s < ITER_S; ++s) {
         PRAGMA_UNROLL
         for (int c = 0; c < ITER_C; ++c) {
-            const int     si = offset.y + s * Map::kDeltaS + token_idx;
-            const int     di = offset.x + c * Map::kDeltaC;
-            const int64_t index =
-                (batch_idx * stride_b + ti_beg * stride_c + si * stride_s + head_idx * stride_h) * HeadDim + di;
-            if (si < seq_len) {
+            const int si = offset.y + s * Map::kDeltaS + token_idx;
+            const int di = offset.x + c * Map::kDeltaC;
+            local_ti     = cp_size.divmod(local_ti_rank, si);
+            if (si < seq_len && local_ti_rank == cp_rank) {
+                const int64_t index =
+                    (batch_idx * stride_b + ti_beg * stride_c + local_ti * stride_s + head_idx * stride_h) * HeadDim
+                    + di;
                 Store(&k[index], out_K[s][c]);
-                Store(&v[index], out_V[s][c]);
+                if constexpr (HAS_V) {
+                    Store(&v[index], out_V[s][c]);
+                }
             }
         }
     }
@@ -414,6 +466,8 @@ void invokeFlattenKV_v2(T*                     k,
                         int64_t                stride_s,
                         int                    block_seq_len,
                         int                    layer_id,
+                        int                    cp_rank,
+                        FastDivmod             cp_size,
                         int                    max_seq_len,
                         int                    head_num,
                         int                    head_dim,
@@ -421,19 +475,22 @@ void invokeFlattenKV_v2(T*                     k,
                         int                    quant_policy,
                         cudaStream_t           stream)
 {
-    constexpr int kWarpCnt = 4;
-    constexpr int CTA_S    = 64;
-
-    constexpr int block = kWarpCnt * WARP_SIZE;
-    const dim3    grid((max_seq_len + CTA_S - 1) / CTA_S, head_num, batch_size);
 
     auto invoke = [&](auto tkv, const auto dim) {
         using Tkv = decltype(tkv);
 
-        constexpr int kHeadDim = dim;
-        FT_CHECK(head_dim == kHeadDim);
+        constexpr int  kHeadDim = dim;
+        constexpr bool kShareKV = kHeadDim == 576;
 
-        block::Layout block_layout{block::Config<T, Tkv, kHeadDim>{head_num, block_seq_len}};
+        constexpr int kWarpCnt = 4;
+        constexpr int CTA_S    = kShareKV ? 32 : 64;
+
+        constexpr int block = kWarpCnt * WARP_SIZE;
+        const dim3    grid((max_seq_len + CTA_S - 1) / CTA_S, head_num, batch_size);
+
+        TM_CHECK_EQ(head_dim, kHeadDim);
+
+        block::Layout block_layout{block::Config<T, Tkv, kHeadDim, kShareKV>{head_num, block_seq_len}};
 
         flattenKV_v2<CTA_S, kHeadDim, kWarpCnt><<<grid, block, 0, stream>>>(k,
                                                                             v,
@@ -446,11 +503,14 @@ void invokeFlattenKV_v2(T*                     k,
                                                                             stride_h,
                                                                             stride_s,
                                                                             layer_id,
+                                                                            cp_rank,
+                                                                            cp_size,
                                                                             block_layout);
     };
 
     auto dispatch = [&](auto tkv) {
-        if (head_dim == 64) {
+        if (0) {}
+        else if (head_dim == 64) {
             return invoke(tkv, std::integral_constant<int, 64>{});
         }
         else if (head_dim == 128) {
@@ -458,6 +518,12 @@ void invokeFlattenKV_v2(T*                     k,
         }
         else if (head_dim == 192) {
             return invoke(tkv, std::integral_constant<int, 192>{});
+        }
+        else if (head_dim == 256) {
+            return invoke(tkv, std::integral_constant<int, 256>{});
+        }
+        else if (head_dim == 576) {
+            return invoke(tkv, std::integral_constant<int, 576>{});
         }
         FT_CHECK(0);
     };
@@ -486,6 +552,8 @@ void invokeFlattenKV_v2(T*                     k,
                                      int64_t                stride_s,                                                  \
                                      int                    block_seq_len,                                             \
                                      int                    layer_id,                                                  \
+                                     int                    cp_rank,                                                   \
+                                     FastDivmod             cp_size,                                                   \
                                      int                    max_seq_len,                                               \
                                      int                    head_num,                                                  \
                                      int                    head_dim,                                                  \

@@ -1,12 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-from typing import Any, Dict, List
+import gc
+from typing import Any
 
 from lmdeploy.pytorch.backends.selector import get_backend
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.pytorch.devices import DeviceContext
+from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
-from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.pytorch.distributed import DistContext
 from lmdeploy.pytorch.engine.model_agent import build_model_agent
 from lmdeploy.utils import get_logger
@@ -27,10 +28,10 @@ class WorkerWrapperBase:
         model_config: ModelConfig,
         dist_config: DistConfig,
         misc_config: MiscConfig,
-        adapters: Dict[str, str] = None,
+        adapters: dict[str, str] = None,
         device_type: str = 'cuda',
-        tokenizer: Any = None,
         log_level: int = 30,
+        specdecode_config: SpecDecodeConfig = None,
     ):
         self.model_path = model_path
         self.model_config = model_config
@@ -38,7 +39,6 @@ class WorkerWrapperBase:
         self.backend_config = backend_config
         self.dist_config = dist_config
         self.misc_config = misc_config
-        self.tokenizer = tokenizer
         self.adapters = adapters
         self.device_type = device_type
         self.log_level = log_level
@@ -46,10 +46,13 @@ class WorkerWrapperBase:
         self.tp = dist_config.tp
         self.world_size = dist_config.world_size
         self.device_type = device_type
-
+        self.specdecode_config = specdecode_config
         logger.setLevel(log_level)
         self.out_que: asyncio.Queue = None
-        self._output_loop: asyncio.Task = None
+
+        # frequently gc would cause latency spike
+        # default threshold (700, 10, 10)
+        gc.set_threshold(10000, 100, 100)
 
     def init_process_group(self, rank: int, master_addr: str = None, master_port: str = None):
         """Initialize process group."""
@@ -63,56 +66,42 @@ class WorkerWrapperBase:
         ccl_backend = get_backend(self.device_type).ccl_backend()
         self.dist_ctx = DistContext.build(self.rank, self.dist_config, ccl_backend)
 
-    def pack_output(self, output: Dict):
+    def pack_output(self, output: dict):
         """Pack output."""
         return output
 
-    async def _get_outputs_loop(self):
-        """Get outputs loop."""
-        assert self.out_que is not None
-        while True:
-            ret = await self.get_output_async()
-            ret = self.pack_output(ret)
-            self.out_que.put_nowait(ret)
-
     async def get_outputs(self):
         """Get outputs."""
-        assert self.out_que is not None
-        qsize = self.out_que.qsize()
-        if qsize > 0:
-            outs = []
-            for _ in range(qsize):
-                outs.append(self.out_que.get_nowait())
-            return outs
-        else:
-            return [await self.out_que.get()]
+        return await self.get_output_async()
 
     def build_model(self):
         """Build model."""
         self.device_ctx = DeviceContext(device_type=self.device_type)
 
-        self.model_agent = build_model_agent(model_path=self.model_path,
-                                             model_config=self.model_config,
-                                             cache_config=self.cache_config,
-                                             backend_config=self.backend_config,
-                                             misc_config=self.misc_config,
-                                             tokenizer=self.tokenizer,
-                                             device_ctx=self.device_ctx,
-                                             dist_ctx=self.dist_ctx,
-                                             adapters=self.adapters)
+        self.model_agent = build_model_agent(
+            model_path=self.model_path,
+            model_config=self.model_config,
+            cache_config=self.cache_config,
+            backend_config=self.backend_config,
+            misc_config=self.misc_config,
+            device_ctx=self.device_ctx,
+            dist_ctx=self.dist_ctx,
+            adapters=self.adapters,
+            specdecode_config=self.specdecode_config,
+        )
         self.model_agent.build_model()
 
     def get_free_mem(self):
         """Gather free mem."""
         return self.model_agent.get_free_mem()
 
-    def set_cache_config(self, cache_config: CacheConfig):
+    def set_cache_config(self, cache_config: CacheConfig, spec_cache_config: CacheConfig = None):
         """Set all cache config."""
-        self.model_agent.set_cache_config(cache_config)
+        self.model_agent.set_cache_config(cache_config, spec_cache_config)
 
-    def set_model_config(self, model_config: ModelConfig):
+    def set_model_config(self, model_config: ModelConfig, spec_model_config: ModelConfig = None):
         """Set all model config."""
-        self.model_agent.set_model_config(model_config)
+        self.model_agent.set_model_config(model_config, spec_model_config)
 
     def build_graph_runner(self):
         """Build graph runner."""
@@ -130,6 +119,14 @@ class WorkerWrapperBase:
         """warmup."""
         self.model_agent.warmup()
 
+    async def sleep(self, level: int = 1):
+        """Sleep."""
+        await self.model_agent.sleep(level)
+
+    def wakeup(self, tags: list[str] | None = None):
+        """Wakeup."""
+        self.model_agent.wakeup(tags)
+
     def get_input_processor(self):
         """Build cache engine."""
         return self.model_agent.get_input_processor()
@@ -137,24 +134,27 @@ class WorkerWrapperBase:
     def start(self):
         """Start engine loop."""
         self.model_agent.start()
-        event_loop = asyncio.get_event_loop()
         self.out_que = asyncio.Queue()
-        self._output_loop = event_loop.create_task(self._get_outputs_loop(), name='GetOutputsLoop')
+
+    async def wait_tasks(self):
+        """Wait tasks."""
+        try:
+            await self.model_agent.wait_tasks()
+        except asyncio.CancelledError:
+            logger.debug('WorkerWrapper wait_tasks cancelled.')
+            raise
+        except BaseException:
+            # we want to keep logs in both ray logs and engine logs
+            msg = f'WorkerWrapper rank[{self.rank}] wait_tasks failed.'
+            logger.exception(msg)
+            raise
 
     def stop(self):
         """Stop engine loop."""
         self.model_agent.stop()
-        if self._output_loop is not None:
-            self._output_loop.cancel()
 
     async def stop_async(self):
         await self.model_agent.stop_async()
-        if self._output_loop is not None:
-            self._output_loop.cancel()
-            try:
-                await self._output_loop
-            except asyncio.CancelledError:
-                logger.debug('worker output loop cancelled.')
 
     async def forward_async(self, inputs):
         """Start forward."""
@@ -163,6 +163,7 @@ class WorkerWrapperBase:
     async def get_output_async(self):
         """Get output async."""
         ret = await self.model_agent.get_output_async()
+        ret = self.pack_output(ret)
         return ret
 
     def release(self):
@@ -174,8 +175,8 @@ class WorkerWrapperBase:
     def p2p_initialize(self, init_request: DistServeInitRequest):
         return self.model_agent.cache_engine.p2p_initialize(init_request)
 
-    def p2p_connect(self, conn_request: List[DistServeConnectionRequest]):
-        return self.model_agent.cache_engine.p2p_connect(conn_request)
+    def p2p_connect(self, remote_engine_id: str, conn_request: list[DistServeKVTransferEndpointInfo]):
+        return self.model_agent.cache_engine.p2p_connect(remote_engine_id, conn_request)
 
     async def migrate(self, inputs: MigrationExecutionBatch):
         return await self.model_agent.cache_engine.migrate(inputs)

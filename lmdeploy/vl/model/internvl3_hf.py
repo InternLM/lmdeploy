@@ -1,21 +1,20 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict, List, Optional
 
 import torch
-from transformers import AutoConfig, AutoModel, AutoProcessor
+from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, AutoProcessor
 from transformers.processing_utils import ImagesKwargs, ProcessingKwargs
 
 from lmdeploy.utils import get_logger
-from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
+from lmdeploy.vl.model.internvl import VISION_MODELS, InternVLVisionModel
 from lmdeploy.vl.model.utils import disable_logging
 
 logger = get_logger('lmdeploy')
 
 
 class InternVLImagesKwargs(ImagesKwargs, total=False):
-    crop_to_patches: Optional[bool]
-    min_patches: Optional[int]
-    max_patches: Optional[int]
+    crop_to_patches: bool | None
+    min_patches: int | None
+    max_patches: int | None
 
 
 class InternVLProcessorKwargs(ProcessingKwargs, total=False):
@@ -32,22 +31,24 @@ class InternVLProcessorKwargs(ProcessingKwargs, total=False):
 
 
 @VISION_MODELS.register_module()
-class InternVL3VisionModel(VisonModel):
+class InternVL3VisionModel(InternVLVisionModel):
     """Internvl3 vision model."""
 
-    _arch = 'InternVLForConditionalGeneration'
+    _arch = ['InternVLForConditionalGeneration', 'InternS1ForConditionalGeneration']
 
     def __init__(self,
                  model_path: str,
                  with_llm: bool = False,
-                 max_memory: Dict[int, int] = None,
+                 max_memory: dict[int, int] = None,
                  hf_config: AutoConfig = None,
                  backend: str = ''):
         super().__init__(model_path, with_llm, max_memory, hf_config, backend)
+        self.arch = self.hf_config.architectures[0]
 
     def build_preprocessor(self):
-        self.processor = AutoProcessor.from_pretrained(self.model_path)
+        self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=True)
         tokenizer = self.processor.tokenizer
+        self.image_token = self.processor.image_token
         self.image_token_id = tokenizer.context_image_token_id
         self.image_tokens_per_patch = self.processor.image_seq_length
         self.tokenizer_init_kwargs = tokenizer.init_kwargs
@@ -57,10 +58,16 @@ class InternVL3VisionModel(VisonModel):
         load the whole VLM model when `self.with_llm==True`"""
         from accelerate import init_empty_weights
         with init_empty_weights():
-            model = AutoModel.from_config(self.hf_config, trust_remote_code=True)
-            self.vl_model = model
-            if not self.with_llm:
-                del model.language_model
+            if self.arch == 'InternVLForConditionalGeneration':
+                model = AutoModel.from_config(self.hf_config, trust_remote_code=True)
+                if not self.with_llm:
+                    del model.language_model
+            elif self.arch == 'InternS1ForConditionalGeneration':
+                model = AutoModelForCausalLM.from_config(self.hf_config, trust_remote_code=True)
+                if not self.with_llm:
+                    del model.model.language_model
+            else:
+                raise ValueError(f'unsupported model arch {self.arch}')
 
         model.half()
         from accelerate import load_checkpoint_and_dispatch
@@ -69,14 +76,13 @@ class InternVL3VisionModel(VisonModel):
                                          checkpoint=self.model_path,
                                          device_map='auto' if not self.with_llm else {'': 'cpu'},
                                          max_memory=self.max_memory,
-                                         no_split_module_classes=['InternVLVisionLayer'],
+                                         no_split_module_classes=['InternVLVisionLayer', 'InternS1VisionLayer'],
                                          dtype=torch.half)
-
         # We need eval mode to freeze the weights in model, thus,
         # avoid randomness in inference.
         self.model = model.eval()
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refers to `super.preprocess() for spec."""
         from transformers.image_utils import make_flat_list_of_images
         output_kwargs = self.processor._merge_kwargs(
@@ -87,8 +93,8 @@ class InternVL3VisionModel(VisonModel):
                 'add_special_tokens': False
             },
         )
-        images = self.collect_images(messages)
-        images = [image.convert('RGB') for image, _ in images]
+        images = self.collect_multimodal_items(messages)
+        images = [image for modality, image, _ in images]
         num_image = len(images)
         images = make_flat_list_of_images(images)
         image_inputs = self.processor.image_processor(images, **output_kwargs['images_kwargs'])
@@ -109,12 +115,12 @@ class InternVL3VisionModel(VisonModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
-            messages(List[Dict]): the outputs of `preprocess`
+            messages(list[dict]): the outputs of `preprocess`
             max_batch_size(int): the max batch size when forwarding vision
                 model
         Return:
@@ -139,38 +145,3 @@ class InternVL3VisionModel(VisonModel):
             outputs.extend([x.reshape(-1, x.shape[-1]) for x in feats])
         messages.append(dict(role='forward', content=outputs))
         return messages
-
-    @staticmethod
-    def proc_messages(messages, chat_template, sequence_start):
-        """Apply chat template to get the prompt."""
-        prompt_messages = []
-        IMAGE_TOKEN = '<IMAGE_TOKEN>'
-        for message in messages:
-            if isinstance(message['content'], str):
-                prompt_messages.append(message)
-                continue
-            elif message['role'] in ['preprocess', 'forward']:
-                continue
-            n_images = len([1 for x in message['content'] if x['type'] == 'image'])
-            content = [x.get('text', '') for x in message['content'] if x['type'] == 'text']
-            prompt = content[0]
-            if IMAGE_TOKEN in prompt and f'<img>{IMAGE_TOKEN}' not in prompt:
-                prompt = prompt.replace(f'{IMAGE_TOKEN}', f'<img>{IMAGE_TOKEN}</img>')
-                prompt = prompt.replace('</img><img>', '')
-                prompt = prompt.replace('<img><img>', '<img>')
-                prompt = prompt.replace('</img></img>', '</img>')
-            elif IMAGE_TOKEN not in prompt:
-                prompt = f'<img>{IMAGE_TOKEN * n_images}</img>\n' + prompt
-            else:
-                pass
-            prompt_messages.append(dict(role='user', content=prompt))
-        prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
-        return prompt, IMAGE_TOKEN
-
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
-        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
-
-    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
-        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)

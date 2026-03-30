@@ -1,19 +1,19 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Any, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
+from typing import Any
 
 import torch
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding,
-                                 build_rotary_params)
-from lmdeploy.pytorch.nn.linear import (build_down_linear, build_gateup_linear, build_o_proj, build_qkv_proj,
-                                        build_rowwise_linear)
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
+from lmdeploy.pytorch.nn.linear import build_down_linear, build_gateup_linear, build_o_proj, build_qkv_proj
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
+from .utils.model import DeployModelMixinV1, build_embedding
 
 
 class Qwen2Attention(nn.Module):
@@ -62,8 +62,8 @@ class Qwen2Attention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: tuple[torch.Tensor] | None = None,
         attn_metadata: Any = None,
     ):
         """Rewrite of LlamaAttention.forward."""
@@ -173,9 +173,9 @@ class Qwen2DecoderLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[List[torch.FloatTensor]],
-        residual: Optional[torch.Tensor] = None,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: list[torch.FloatTensor] | None,
+        residual: torch.Tensor | None = None,
         attn_metadata: Any = None,
     ):
 
@@ -209,11 +209,13 @@ class Qwen2Model(nn.Module):
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
 
-        self.embed_tokens = nn.Embedding(config.vocab_size,
-                                         config.hidden_size,
-                                         self.padding_idx,
-                                         dtype=dtype,
-                                         device=device)
+        self.embed_tokens = build_embedding(
+            config.vocab_size,
+            config.hidden_size,
+            self.padding_idx,
+            dtype=dtype,
+            device=device,
+        )
 
         # build all decode layers
         self.layers = nn.ModuleList([
@@ -225,25 +227,15 @@ class Qwen2Model(nn.Module):
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
 
         # build rotary embedding
-        # emb_type = RopeType.LinearScaling
-        rope_params = build_rotary_params(config)
-        rope_dim = config.hidden_size // config.num_attention_heads
-        rope_max_pos_emb = config.max_position_embeddings
-        rope_base = config.rope_theta
-        self.rotary_emb = build_rotary_embedding(
-            rope_dim,
-            rope_max_pos_emb,
-            rope_base,
-            **rope_params,
-        )
+        self.rotary_emb = build_rotary_embedding_from_config(config)
 
     def forward(
         self,
         input_ids: torch.LongTensor = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,
         attn_metadata: Any = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
+        inputs_embeds: torch.FloatTensor | None = None,
     ):
         """Rewrite of LlamaModel.forward."""
 
@@ -280,7 +272,7 @@ class Qwen2Model(nn.Module):
         return self.embed_tokens
 
 
-class Qwen2ForCausalLM(nn.Module, CudaGraphMixin):
+class Qwen2ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
     """ModelForCausalLM."""
 
     packed_modules_mapping = {
@@ -306,17 +298,13 @@ class Qwen2ForCausalLM(nn.Module, CudaGraphMixin):
         # build model
         self.model = Qwen2Model(config, dtype=dtype, device=device)
         # build lm_head
-        self.lm_head = build_rowwise_linear(config.hidden_size,
-                                            config.vocab_size,
-                                            bias=False,
-                                            dtype=dtype,
-                                            device=device)
+        self.lm_head = self.build_lm_head(config.hidden_size, config.vocab_size, bias=False, dtype=dtype, device=device)
 
     def forward(
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
         **kwargs,
@@ -331,23 +319,14 @@ class Qwen2ForCausalLM(nn.Module, CudaGraphMixin):
         )
         return hidden_states
 
-    def get_logits(self, hidden_states: torch.Tensor):
-        """Compute logits of the model output."""
-        return self.lm_head(hidden_states)
-
-    def update_weights(self):
-        """Update weights."""
-        if self.config.tie_word_embeddings:
-            self.lm_head.weight = self.model.embed_tokens.weight
-
     def get_input_embeddings(self):
         """Get input embeddings."""
         return self.model.get_input_embeddings()
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
-        inputs_embeds: Optional[torch.Tensor] = None,
+        past_key_values: list[list[torch.Tensor]],
+        inputs_embeds: torch.Tensor | None = None,
         context: StepContext = None,
     ):
         """Prepare input."""
@@ -373,7 +352,7 @@ class Qwen2ForCausalLM(nn.Module, CudaGraphMixin):
             inputs_embeds=inputs_embeds,
         )
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
         # modify from vllm
         stacked_params_mapping = [

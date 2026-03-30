@@ -26,6 +26,12 @@
     },
     {
       "pattern": "^http://0.0.0.0"
+    },
+    {
+      "pattern": "^https://kexue.fm"
+    },
+    {
+      "pattern": "^https://wiki.python.org/moin/DebuggingWithGdb"
     }
   ],
   "httpHeaders": [

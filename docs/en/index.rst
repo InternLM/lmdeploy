@@ -29,8 +29,6 @@ LMDeploy has the following core features:
 
 * **Effortless Distribution Server**: Leveraging the request distribution service, LMDeploy facilitates an easy and efficient deployment of multi-model services across multiple machines and cards.
 
-* **Interactive Inference Mode**: By caching the k/v of attention during multi-round dialogue processes, the engine remembers dialogue history, thus avoiding repetitive processing of historical sessions.
-
 * **Excellent Compatibility**: LMDeploy supports `KV Cache Quant <https://lmdeploy.readthedocs.io/en/latest/quantization/kv_quant.html>`_, `AWQ <https://lmdeploy.readthedocs.io/en/latest/quantization/w4a16.html>`_ and `Automatic Prefix Caching <https://lmdeploy.readthedocs.io/en/latest/inference/turbomind_config.html>`_ to be used simultaneously.
 
 Documentation
@@ -63,7 +61,6 @@ Documentation
    llm/api_server_tools.md
    llm/api_server_reasoning.md
    llm/api_server_lora.md
-   llm/gradio.md
    llm/proxy_server.md
 
 .. _vlm_deployment:
@@ -83,6 +80,7 @@ Documentation
    quantization/w4a16.md
    quantization/w8a8.md
    quantization/kv_quant.md
+   quantization/llm_compressor.md
 
 .. _benchmark:
 .. toctree::
@@ -91,6 +89,7 @@ Documentation
 
    benchmark/benchmark.md
    benchmark/evaluate_with_opencompass.md
+   benchmark/evaluate_with_vlmevalkit.md
 
 .. toctree::
    :maxdepth: 1
@@ -105,15 +104,22 @@ Documentation
    advance/structed_output.md
    advance/pytorch_multinodes.md
    advance/pytorch_profiling.md
+   advance/metrics.md
+   advance/context_parallel.md
+   advance/spec_decoding.md
+   advance/update_weights.md
 
 .. toctree::
    :maxdepth: 1
    :caption: API Reference
 
    api/pipeline.rst
+   api/openapi.rst
+   api/cli.rst
 
 Indices and tables
 ==================
 
 * :ref:`genindex`
 * :ref:`search`
+* :ref:`routingtable`

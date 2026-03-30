@@ -60,6 +60,7 @@ struct FastRoPE {
     Array<float, N / 2> inv_freq_;
     bool                is_valid_;
     float               attention_scaling_{1.f};
+    int                 idx_;
 
     typedef void (*Func)(Array<float, N / 2>&, int, RopeKernelParam&);
     Func fill_func_;
@@ -74,15 +75,22 @@ struct FastRoPE {
         else if (param_.type == RopeType::kYarn) {
             attention_scaling_ = param_.yarn.attention_factor;
         }
+        else if (param_.type == RopeType::kMrope) {
+            param_.mrope.position_ids += batch_idx * param_.mrope.stride;
+            param_.mrope.position_delta += batch_idx;
+            param_.mrope.length += batch_idx;
+        }
     }
 
     __device__ void init(int idx)
     {
         is_valid_ = idx < param_.dim;
+        idx_      = idx;
         switch (param_.type) {
             case RopeType::kDefault:
             case RopeType::kLinear:
             case RopeType::kDynamic:
+            case RopeType::kMrope:
                 init_default<N>(inv_freq_, idx, param_);
                 break;
             case RopeType::kYarn:
@@ -97,6 +105,9 @@ struct FastRoPE {
     template<typename T>
     __device__ void apply(Array<T, N>& x, float timestep)
     {
+        if (param_.type == RopeType::kMrope) {
+            return apply_mrope(x, timestep);
+        }
         // Most models apply rotary embedding in half precision
         PRAGMA_UNROLL
         for (int i = 0; i < N; i += 2) {
@@ -104,6 +115,43 @@ struct FastRoPE {
             sincosf(timestep * inv_freq_[i / 2], &s, &c);
             s *= attention_scaling_;
             c *= attention_scaling_;
+            T tmp0 = (T)c * x[i] - (T)s * x[i + 1];
+            T tmp1 = (T)c * x[i + 1] + (T)s * x[i];
+            if (is_valid_) {
+                x[i]     = tmp0;
+                x[i + 1] = tmp1;
+            }
+        }
+    }
+
+    template<typename T>
+    __device__ void apply_mrope(Array<T, N>& x, float timestep)
+    {
+        int  tt, th, tw;
+        int3 section = param_.mrope.section;
+        if (timestep < *param_.mrope.length) {
+            const int* t = param_.mrope.position_ids + 3 * (int)timestep;
+            tt           = t[0];
+            th           = t[1];
+            tw           = t[2];
+        }
+        else {
+            tt = th = tw = (int)timestep + (*param_.mrope.position_delta);
+        }
+
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; i += 2) {
+            if (i + idx_ < section.x) {
+                timestep = (float)tt;
+            }
+            else if (i + idx_ < section.y) {
+                timestep = (float)th;
+            }
+            else {
+                timestep = (float)tw;
+            }
+            float c, s;
+            sincosf(timestep * inv_freq_[i / 2], &s, &c);
             T tmp0 = (T)c * x[i] - (T)s * x[i + 1];
             T tmp1 = (T)c * x[i + 1] + (T)s * x[i];
             if (is_valid_) {
@@ -150,8 +198,8 @@ struct RotaryEmbedding {
 
         PRAGMA_UNROLL
         for (int i = 0; i < N; i += 2) {
-            float tmp0 = cs_[i] * (float)x[i] - cs_[i + 1] * (float)x[i + 1];
-            float tmp1 = cs_[i] * (float)x[i + 1] + cs_[i + 1] * (float)x[i];
+            auto tmp0 = (T)cs_[i] * x[i] - (T)cs_[i + 1] * x[i + 1];
+            auto tmp1 = (T)cs_[i] * x[i + 1] + (T)cs_[i + 1] * x[i];
             if (is_valid_) {
                 x[i]     = (T)tmp0;
                 x[i + 1] = (T)tmp1;

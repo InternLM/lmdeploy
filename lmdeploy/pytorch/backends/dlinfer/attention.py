@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Dict, Optional, Sequence
 
 from torch import Tensor
 
@@ -10,14 +10,14 @@ from ..attention import AttentionBuilder, AttentionImpl, AttentionMetadata
 
 @dataclass
 class DlinferAttentionMetadata(AttentionMetadata):
-    kv_start_indices: Optional[Tensor] = None
+    kv_start_indices: Tensor | None = None
     block_size: int = 64
     attention_mask: Sequence[Tensor] = tuple()
-    is_unpaged_prefill: Optional[bool] = None
+    is_unpaged_prefill: bool | None = None
     max_q_seq_len: int = 1
     max_kv_seq_len: int = 1
-    quant_meta: Dict = None
-    cu_seq_lens_kv: Optional[Tensor] = None
+    quant_meta: dict = None
+    cu_seq_lens_kv: Tensor | None = None
 
 
 class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
@@ -65,6 +65,8 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
         attn_metadata: DlinferAttentionMetadata,
         k_scales_zeros: Tensor = None,
         v_scales_zeros: Tensor = None,
+        learnable_sink: Tensor = None,
+        nsa_indices: Tensor = None,
         inplace: bool = True,
     ) -> Tensor:
         """forward."""
@@ -157,8 +159,9 @@ class DlinferAttentionBuilder(AttentionBuilder[DlinferAttentionMetadata]):
         v_head_size: int = None,
         alibi_scale: float = None,
         sliding_window: int = None,
-        logical_softcapping: float = None,
+        logit_softcapping: float = None,
         causal: bool = True,
+        learnable_sink: bool = False,
         **kwargs,
     ) -> DlinferAttentionImpl:
         """build."""
@@ -169,6 +172,6 @@ class DlinferAttentionBuilder(AttentionBuilder[DlinferAttentionMetadata]):
                                     v_head_size=v_head_size,
                                     alibi_scale=alibi_scale,
                                     sliding_window=sliding_window,
-                                    logical_softcapping=logical_softcapping,
+                                    logit_softcapping=logit_softcapping,
                                     causal=causal,
                                     **kwargs)

@@ -1,11 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict, List
 
 import torch
 from transformers import AutoConfig
 
 from lmdeploy.utils import get_logger
-from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
 
 logger = get_logger('lmdeploy')
 
@@ -24,7 +23,7 @@ def check_trans_version():
 
 
 @VISION_MODELS.register_module()
-class LLama4VisionModel(VisonModel):
+class LLama4VisionModel(VisionModel):
     """Llama4 vision model."""
 
     _arch = 'Llama4ForConditionalGeneration'
@@ -58,15 +57,15 @@ class LLama4VisionModel(VisonModel):
         # TODO, implement for tubomind engine
         raise NotImplementedError()
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refers to `super.preprocess() for spec."""
-        images = self.collect_images(messages)
+        images = self.collect_multimodal_items(messages)
         outputs = []
         processor = self.processor
         patch_size = processor.patch_size
         downsample_ratio = processor.downsample_ratio
         images_kwargs = self.images_kwargs
-        for image, params in images:
+        for modality, image, params in images:
             image_inputs = processor.image_processor(images=[image], **images_kwargs)
             pixel_values = image_inputs['pixel_values']
             image_height, image_width = image_inputs['pixel_values'][0].shape[-2:]
@@ -84,12 +83,12 @@ class LLama4VisionModel(VisonModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
-            messages(List[Dict]): the outputs of `preprocess`
+            messages(list[dict]): the outputs of `preprocess`
             max_batch_size(int): the max batch size when forwarding vision
                 model
         Return:
@@ -123,7 +122,7 @@ class LLama4VisionModel(VisonModel):
         compatible with what is required by pytorch engine.
 
         Args:
-            messages(List[Dict]): the output of `preprocess`
+            messages(list[dict]): the output of `preprocess`
             prompt(str): the prompt after applying chat template
             IMAGE_TOKEN(str): a placeholder where image tokens will be
                 inserted
@@ -153,10 +152,10 @@ class LLama4VisionModel(VisonModel):
             input_ids.extend(token_ids)
         return dict(prompt=prompt, input_ids=input_ids, multimodal=preps)
 
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
+    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
         prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
         return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
 
-    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
+    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
         prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
         return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)

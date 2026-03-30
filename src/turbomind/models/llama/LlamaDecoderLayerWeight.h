@@ -22,6 +22,7 @@
 
 #include "src/turbomind/core/core.h"
 
+#include "src/turbomind/models/llama/GatedDeltaNetWeight.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/llama_params.h"
 
@@ -35,7 +36,6 @@ public:
                             int                layer_id,
                             const ModelParam&  model,
                             const EngineParam& engine,
-                            const LoraParam&   lora_param,
                             const MoeParam&    moe_param);
 
     ~LlamaDecoderLayerWeight();
@@ -48,6 +48,7 @@ public:
     Tensor ffn_norm;
 
     std::unique_ptr<LlamaAttentionWeight> self_attn_weights;
+    std::unique_ptr<GatedDeltaNetWeight>  linear_attn_weights;
 
     std::unique_ptr<LlamaFfnWeight> ffn_weights;
     std::unique_ptr<MoeFfnWeight>   moe_weights;
@@ -61,6 +62,7 @@ private:
 
     DataType data_type_;
     DataType weight_type_;
+    DataType expert_weight_type_;
 
     int  bit_size_;
     bool attn_bias_;

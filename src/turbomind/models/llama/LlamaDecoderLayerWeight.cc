@@ -25,6 +25,7 @@
 
 #include "src/turbomind/models/llama/LlamaDecoderLayerWeight.h"
 
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -45,18 +46,14 @@ static bool is_fuse_silu_act()
             catch (...) {
             }
         }
-        TM_LOG_INFO("TM_FUSE_SILU_ACT=1");
+        // TM_LOG_INFO("TM_FUSE_SILU_ACT=1");
         return true;
     }();
     return value;
 }
 
-LlamaDecoderLayerWeight::LlamaDecoderLayerWeight(DataType           data_type,
-                                                 int                layer_id,
-                                                 const ModelParam&  model,
-                                                 const EngineParam& engine,
-                                                 const LoraParam&   lora_param,
-                                                 const MoeParam&    moe_param):
+LlamaDecoderLayerWeight::LlamaDecoderLayerWeight(
+    DataType data_type, int layer_id, const ModelParam& model, const EngineParam& engine, const MoeParam& moe_param):
     head_num_(model.head_num),
     kv_head_num_(model.kv_head_num),
     size_per_head_(model.head_dim),
@@ -64,49 +61,90 @@ LlamaDecoderLayerWeight::LlamaDecoderLayerWeight(DataType           data_type,
     inter_size_(model.inter_size.at(layer_id)),
     data_type_{data_type},
     weight_type_(model.weight_type),
+    expert_weight_type_(model.expert_weight_type),
     attn_bias_(model.attn_bias),
     attn_tp_size_(engine.attn_tp_size),
     attn_tp_rank_(engine.attn_tp_rank),
     mlp_tp_size_(engine.mlp_tp_size),
     mlp_tp_rank_(engine.mlp_tp_rank)
 {
-    self_attn_weights.reset(new LlamaAttentionWeight{hidden_units_,
-                                                     size_per_head_,
-                                                     head_num_,
-                                                     kv_head_num_,
-                                                     model.mla,
-                                                     attn_bias_,
-                                                     model.qk_norm,
-                                                     attn_tp_size_,
-                                                     attn_tp_rank_,
-                                                     data_type_,
-                                                     weight_type_,
-                                                     model.group_size});
-    register_module("attention", *self_attn_weights);
+    bool is_linear_attention = false;
+    if (layer_id < (int)model.layer_types.size() && model.layer_types[layer_id] == 1) {
+        is_linear_attention = true;
+    }
 
+    if (is_linear_attention) {
+        linear_attn_weights.reset(
+            new GatedDeltaNetWeight{hidden_units_,
+                                    model.linear_num_key_heads,
+                                    model.linear_num_value_heads,
+                                    model.linear_key_head_dim,
+                                    model.linear_value_head_dim,
+                                    model.linear_conv_kernel_dim > 0 ? model.linear_conv_kernel_dim : 4,
+                                    attn_bias_,
+                                    attn_tp_size_,
+                                    attn_tp_rank_,
+                                    data_type_,
+                                    weight_type_,
+                                    model.group_size});
+        register_module("linear_attn", *linear_attn_weights);
+    }
+    else {
+        // Attention uses weight_type (fp16 in mixed quant scenarios)
+        self_attn_weights.reset(new LlamaAttentionWeight{hidden_units_,
+                                                         size_per_head_,
+                                                         head_num_,
+                                                         kv_head_num_,
+                                                         model.mla,
+                                                         attn_bias_,
+                                                         model.qk_norm,
+                                                         attn_tp_size_,
+                                                         attn_tp_rank_,
+                                                         data_type_,
+                                                         weight_type_,
+                                                         model.group_size,
+                                                         model.window_size.empty() ? 0 : model.window_size.at(layer_id),
+                                                         model.attn_sink,
+                                                         model.attn_output_gate});
+        register_module("attention", *self_attn_weights);
+    }
+
+    // FFN uses ffn_weight_type, except for layers fully excluded from
+    // quantization (e.g. 'model.layers.0.' in modules_to_not_convert)
+    // where all weights—including FFN—are in data_type (fp16).
     if (inter_size_) {
+        const DataType ffn_wtype = model.unquantized_expert_layers.count(layer_id) ? data_type_ : model.ffn_weight_type;
+        const bool     is_cublas_gemm = byte_size(ffn_wtype, 8) == 16;
         ffn_weights.reset(new LlamaFfnWeight{
             hidden_units_,
             inter_size_,
+            model.mlp_bias,
             mlp_tp_size_,
             mlp_tp_rank_,
             data_type_,
-            weight_type_,
+            ffn_wtype,
             model.group_size,
-            weight_type_ == data_type_v<uint4_t> && is_fuse_silu_act(),
+            model.act_type,
+            is_fuse_silu_act() && !is_cublas_gemm,
         });
         register_module("feed_forward", *ffn_weights);
     }
 
+    // MoE routed experts use expert_weight_type (int4 for AWQ, e2m1 for mxfp4)
+    // unless the layer is in unquantized_expert_layers (e.g. layer 0 excluded
+    // from quantization via modules_to_not_convert).
     if (layer_id < moe_param.expert_num.size() && moe_param.expert_num[layer_id]) {
+        const DataType moe_wtype = model.unquantized_expert_layers.count(layer_id) ? data_type_ : expert_weight_type_;
         moe_weights.reset(new MoeFfnWeight{layer_id,
                                            moe_param,
                                            hidden_units_,
+                                           model.mlp_bias,
                                            data_type_,
-                                           weight_type_,
+                                           moe_wtype,
                                            model.group_size,
                                            mlp_tp_size_,
                                            mlp_tp_rank_,
+                                           model.act_type,
                                            is_fuse_silu_act()});
         register_module("moe_ffn", *moe_weights);
     }
@@ -121,16 +159,20 @@ LlamaDecoderLayerWeight::~LlamaDecoderLayerWeight() = default;
 
 void LlamaDecoderLayerWeight::prepare(const cudaDeviceProp& prop, cudaStream_t st)
 {
-    const bool use_simt = is_16xx_series(prop.name);
+    if (self_attn_weights) {
+        self_attn_weights->prepare();
+    }
 
-    self_attn_weights->prepare(use_simt);
+    if (linear_attn_weights) {
+        linear_attn_weights->prepare();
+    }
 
     if (ffn_weights) {
-        ffn_weights->prepare(false, use_simt);
+        ffn_weights->prepare(false);
     }
 
     if (moe_weights) {
-        moe_weights->prepare(use_simt);
+        moe_weights->prepare();
     }
 }
 

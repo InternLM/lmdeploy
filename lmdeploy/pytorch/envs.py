@@ -1,15 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import contextlib
 import os
-from typing import Union
 
 
 def env_to_bool(
     env_var: str,
     default: bool = False,
     *,
-    true_values: Union[set, list] = {'true', '1', 'yes', 'on'},
-    false_values: Union[set, list] = {'false', '0', 'no', 'off'},
+    true_values: set | list = {'true', '1', 'yes', 'on'},
+    false_values: set | list = {'false', '0', 'no', 'off'},
 ):
     """Env to bool."""
     value = os.getenv(env_var)
@@ -40,6 +39,37 @@ def env_to_int(
     return value
 
 
+def env_to_list_int(
+    env_var: str,
+    default: list[int] = None,
+):
+    """Env to list of int."""
+    default_ = default if default is not None else []
+    value = os.getenv(env_var)
+    if value is None:
+        return default_
+    try:
+        value = [int(x) for x in value.split(',')]
+    except Exception:
+        value = default_
+    return value
+
+
+def env_to_float(
+    env_var: str,
+    default: float = 0,
+):
+    """Env to float."""
+    value = os.getenv(env_var)
+    if value is None:
+        return default
+    try:
+        value = float(value)
+    except Exception:
+        value = default
+    return value
+
+
 _ENVS = dict()
 
 
@@ -49,7 +79,7 @@ def set_envs():
 
     def _patched_get_env(
         env_var: str,
-        default: Union[str, None] = None,
+        default: str | None = None,
     ):
         """Patched get_env."""
         if env_var in os.environ:
@@ -71,6 +101,7 @@ with set_envs():
     ray_nsys_output_prefix = os.getenv('LMDEPLOY_RAY_NSYS_OUT_PREFIX', None)
 
     # ascend
+    ascend_set_rt_visable_devices_by_ray = env_to_bool('ASCEND_SET_RT_VISIBLE_DEVICES_BY_RAY', False)
     ascend_rank_table_file = os.getenv('ASCEND_RANK_TABLE_FILE_PATH')
 
     # dp
@@ -91,12 +122,45 @@ with set_envs():
     ray_timeline_enable = env_to_bool('LMDEPLOY_RAY_TIMELINE_ENABLE', False)
     ray_timeline_output_path = os.getenv('LMDEPLOY_RAY_TIMELINE_OUT_PATH', 'ray_timeline.json')
 
+    # ray external placement group bundles
+    # only used when lmdeploy is initialized inside a Ray Actor with pg allocated
+    ray_external_pg_bundles = env_to_list_int('LMDEPLOY_RAY_EXTERNAL_PG_BUNDLES', [])
+
+    # enable ray zero-copy tensors
+    os.getenv('RAY_ENABLE_ZERO_COPY_TORCH_TENSORS', '1')
+
     # dist
     dist_master_addr = os.getenv('LMDEPLOY_DIST_MASTER_ADDR', None)
     dist_master_port = os.getenv('LMDEPLOY_DIST_MASTER_PORT', None)
 
     # logging
     log_file = os.getenv('LMDEPLOY_LOG_FILE', None)
+
+    # check env
+    enable_check_env = env_to_bool('LMDEPLOY_ENABLE_CHECK_ENV', True)
+
+    # dlblas
+    # we don't need to read this, it would be passed to ray workers
+    # If Ray is launched from outside, it may fail to access the environment variables.
+    os.getenv('DEEPEP_MAX_TOKENS_PER_RANK', None)
+    os.getenv('DEEPEP_ENABLE_MNNVL', None)
+    os.getenv('DEEPEP_MODE', 'auto')
+
+    # deepep
+    deep_ep_buffer_num_sms = env_to_int('DEEPEP_BUFFER_NUM_SMS', 20)
+
+    # deepgemm
+    os.getenv('DG_JIT_DEBUG', '0')
+    os.getenv('DG_JIT_PRINT_COMPILER_COMMAND', '0')
+
+    # model agent
+    skip_warmup = env_to_bool('LMDEPLOY_SKIP_WARMUP', False)
+
+    # model format
+    scale_fmt = os.getenv('LMDEPLOY_SCALE_FMT', None)
+
+    # repetition check
+    repetition_window_size = env_to_int('LMDEPLOY_REPETITION_WINDOW_SIZE', 1024)
 
     # dump expert distribution
     dump_expert_distribution = env_to_bool('LMDEPLOY_DUMP_EXPERT_DISTRIBUTION', False)

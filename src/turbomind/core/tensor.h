@@ -22,10 +22,7 @@ public:
         buffer_ = Buffer(layout_.cosize(), dtype, alloc);
     }
 
-    Tensor(Buffer buffer, Layout layout): layout_{std::move(layout)}, buffer_{std::move(buffer)}
-    {
-        TM_CHECK_LE(layout_.cosize(), buffer_.size());
-    }
+    Tensor(Buffer buffer, Layout layout): layout_{std::move(layout)}, buffer_{buffer.slice(0, layout_.cosize())} {}
 
     Tensor(Buffer buffer): layout_{buffer.size()}, buffer_{buffer} {}
 
@@ -149,6 +146,12 @@ public:
         return layout_.stride(i);
     }
 
+    template<class... Is>
+    auto strides(Is&&... is) const
+    {
+        return layout_.strides(((Is &&) is)...);
+    }
+
     bool is_contiguous() const noexcept
     {
         return layout().is_contiguous();
@@ -204,9 +207,19 @@ private:
     Buffer buffer_;
 };
 
-static Tensor empty_like(const Tensor& tensor, std::optional<Device> device = {})
+inline Tensor empty_like(const Tensor& tensor)
 {
-    return Tensor{tensor.layout(), tensor.dtype(), device ? *device : tensor.device()};
+    return Tensor{tensor.layout(), tensor.dtype(), tensor.device()};
+}
+
+inline Tensor empty_like(const Tensor& tensor, Device device)
+{
+    return Tensor{tensor.layout(), tensor.dtype(), device};
+}
+
+inline Tensor empty_like(const Tensor& tensor, DataType dtype)
+{
+    return Tensor{tensor.layout(), dtype, tensor.device()};
 }
 
 void Copy(const Tensor& src, Ref<Tensor> dst_, const Stream& stream);
@@ -327,8 +340,76 @@ public:
         return find(key) != end();
     }
 
+    void produce(const std::string& key, Tensor value)
+    {
+        TM_CHECK(emplace(key, std::move(value)).second);
+    }
+
+    Tensor try_consume(const std::string& key)
+    {
+        if (auto it = find(key); it != end()) {
+            auto value = std::move(it->second);
+            erase(it);
+            return value;
+        }
+        return Tensor{};
+    }
+
+    Tensor consume(const std::string& key)
+    {
+        auto value = try_consume(key);
+        TM_CHECK(value) << get_out_of_range_msg(key);
+        return value;
+    }
+
 private:
     std::string get_out_of_range_msg(const std::string& key) const;
 };
+
+// clang-format off
+template<class Archive, class T, std::enable_if_t<std::is_same_v<Tensor, T>, int> = 0>
+void save(Archive& ar, const T& tensor)
+{
+    TM_CHECK(tensor.size() == 0 || tensor.is_contiguous());
+    ar & tensor.buffer(); // implicit convert to tensor
+    ar & tensor.layout();
+}
+
+template<class Archive>
+void load(Archive& ar, Tensor& tensor)
+{
+    Buffer buffer;
+    Layout layout;
+    ar & buffer;
+    ar & layout;
+    tensor = Tensor{std::move(buffer), std::move(layout)};
+}
+
+
+template<class Archive>
+void save(Archive& ar, const TensorMap& map)
+{
+    ar & map.size();
+    for (const auto& [k, t]: map) {
+        ar & k;
+        ar & t;
+    }
+}
+
+template<class Archive>
+void load(Archive& ar, TensorMap& map)
+{
+    map.clear();
+    decltype(map.size()) size;
+    ar & size;
+    for (int i = 0; i < size; ++i) {
+        std::string k;
+        Tensor   t;
+        ar & k;
+        ar & t;
+        map.emplace(std::move(k), std::move(t));
+    }
+}
+// clang-format on
 
 }  // namespace turbomind::core

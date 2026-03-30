@@ -2,6 +2,7 @@ from copy import deepcopy
 
 from mmengine.config import read_base
 from opencompass.models import TurboMindModelwithChatTemplate
+from opencompass.utils.text_postprocessors import extract_non_reasoning_content
 
 with read_base():
     # choose a list of datasets
@@ -9,86 +10,120 @@ with read_base():
     from opencompass.configs.datasets.ceval.ceval_gen_2daf24 import ceval_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.cmmlu.cmmlu_gen_c13365 import cmmlu_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.crowspairs.crowspairs_gen_381af0 import crowspairs_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.GaokaoBench.GaokaoBench_no_subjective_gen_4c31db import \
-        GaokaoBench_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.GaokaoBench.GaokaoBench_no_subjective_gen_4c31db import (
+        GaokaoBench_datasets,  # noqa: F401, E501
+    )
     from opencompass.configs.datasets.gpqa.gpqa_gen_4baadb import gpqa_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.gsm8k.gsm8k_gen_1d7fe4 import gsm8k_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.hellaswag.hellaswag_10shot_gen_e42710 import \
-        hellaswag_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.hellaswag.hellaswag_10shot_gen_e42710 import (
+        hellaswag_datasets,  # noqa: F401, E501
+    )
     from opencompass.configs.datasets.humaneval.humaneval_gen_8e312c import humaneval_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.IFEval.IFEval_gen_3321a3 import ifeval_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.math.math_0shot_gen_393424 import math_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.mbpp.sanitized_mbpp_gen_a0fc46 import sanitized_mbpp_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.mmlu.mmlu_gen_4d595a import mmlu_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.mmlu_pro.mmlu_pro_0shot_cot_gen_08c1de import (
+        mmlu_pro_datasets,  # noqa: F401, E501
+    )
     from opencompass.configs.datasets.nq.nq_open_1shot_gen_01cf41 import nq_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.race.race_gen_69ee4f import race_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.TheoremQA.TheoremQA_5shot_gen_6f0af8 import TheoremQA_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.triviaqa.triviaqa_wiki_1shot_gen_eaf81e import \
-        triviaqa_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.winogrande.winogrande_5shot_gen_b36770 import \
-        winogrande_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.triviaqa.triviaqa_wiki_1shot_gen_eaf81e import (
+        triviaqa_datasets,  # noqa: F401, E501
+    )
+    from opencompass.configs.datasets.winogrande.winogrande_5shot_gen_b36770 import (
+        winogrande_datasets,  # noqa: F401, E501
+    )
+
     # read models
-    from opencompass.configs.models.baichuan.hf_baichuan2_7b_chat import \
-        models as hf_baichuan2_chat_7b  # noqa: F401, E501
+    from opencompass.configs.models.baichuan.hf_baichuan2_7b_chat import (
+        models as hf_baichuan2_chat_7b,  # noqa: F401, E501
+    )
     from opencompass.configs.models.gemma.hf_gemma2_9b_it import models as hf_gemma2_9b_it  # noqa: F401, E501
-    from opencompass.configs.models.hf_internlm.hf_internlm2_5_7b_chat import \
-        models as hf_internlm2_5_7b_chat  # noqa: F401, E501
-    from opencompass.configs.models.hf_internlm.hf_internlm2_5_20b_chat import \
-        models as hf_internlm2_5_20b_chat  # noqa: F401, E501
-    from opencompass.configs.models.hf_internlm.hf_internlm2_chat_7b import \
-        models as hf_internlm2_chat_7b  # noqa: F401, E501
-    from opencompass.configs.models.hf_internlm.hf_internlm2_chat_20b import \
-        models as hf_internlm2_chat_20b  # noqa: F401, E501
-    from opencompass.configs.models.hf_internlm.lmdeploy_internlm2_5_7b_chat import \
-        models as lmdeploy_internlm2_5_7b_chat  # noqa: F401, E501
-    from opencompass.configs.models.hf_internlm.lmdeploy_internlm2_5_20b_chat import \
-        models as lmdeploy_internlm2_5_20b_chat  # noqa: F401, E501
-    from opencompass.configs.models.hf_internlm.lmdeploy_internlm2_chat_7b import \
-        models as lmdeploy_internlm2_chat_7b  # noqa: F401, E501
-    from opencompass.configs.models.hf_internlm.lmdeploy_internlm2_chat_20b import \
-        models as lmdeploy_internlm2_chat_20b  # noqa: F401, E501
-    from opencompass.configs.models.hf_internlm.lmdeploy_internlm3_8b_instruct import \
-        models as lmdeploy_internlm3_8b_instruct  # noqa: F401, E501
-    from opencompass.configs.models.hf_internlm.lmdeploy_internlm_chat_7b import \
-        models as lmdeploy_internlm_chat_7b  # noqa: F401, E501
+    from opencompass.configs.models.hf_internlm.hf_internlm2_5_7b_chat import (
+        models as hf_internlm2_5_7b_chat,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.hf_internlm.hf_internlm2_5_20b_chat import (
+        models as hf_internlm2_5_20b_chat,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.hf_internlm.hf_internlm2_chat_7b import (
+        models as hf_internlm2_chat_7b,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.hf_internlm.hf_internlm2_chat_20b import (
+        models as hf_internlm2_chat_20b,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.hf_internlm.lmdeploy_internlm2_5_7b_chat import (
+        models as lmdeploy_internlm2_5_7b_chat,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.hf_internlm.lmdeploy_internlm2_5_20b_chat import (
+        models as lmdeploy_internlm2_5_20b_chat,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.hf_internlm.lmdeploy_internlm2_chat_7b import (
+        models as lmdeploy_internlm2_chat_7b,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.hf_internlm.lmdeploy_internlm2_chat_20b import (
+        models as lmdeploy_internlm2_chat_20b,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.hf_internlm.lmdeploy_internlm3_8b_instruct import (
+        models as lmdeploy_internlm3_8b_instruct,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.hf_internlm.lmdeploy_internlm_chat_7b import (
+        models as lmdeploy_internlm_chat_7b,  # noqa: F401, E501
+    )
     from opencompass.configs.models.hf_llama.hf_llama2_7b_chat import models as hf_llama2_chat_7b  # noqa: F401, E501
-    from opencompass.configs.models.hf_llama.hf_llama3_1_8b_instruct import \
-        models as hf_llama3_1_8b_instruct  # noqa: F401, E501
-    from opencompass.configs.models.hf_llama.hf_llama3_8b_instruct import \
-        models as hf_llama_3_8b_instruct  # noqa: F401, E501
-    from opencompass.configs.models.hf_llama.lmdeploy_llama2_7b_chat import \
-        models as lmdeploy_llama2_7b_chat  # noqa: F401, E501
-    from opencompass.configs.models.hf_llama.lmdeploy_llama3_1_8b_instruct import \
-        models as lmdeploy_llama3_1_8b_instruct  # noqa: F401, E501
-    from opencompass.configs.models.hf_llama.lmdeploy_llama3_8b_instruct import \
-        models as lmdeploy_llama3_8b_instruct  # noqa: F401, E501
-    from opencompass.configs.models.mistral.hf_mistral_7b_instruct_v0_1 import \
-        models as hf_mistral_chat_7b  # noqa: F401, E501
-    from opencompass.configs.models.mistral.hf_mixtral_8x7b_instruct_v0_1 import \
-        models as hf_mixtral_chat_8x7b  # noqa: F401, E501
-    from opencompass.configs.models.qwen2_5.lmdeploy_qwen2_5_7b_instruct import \
-        models as lmdeploy_qwen2_5_7b_instruct  # noqa: F401, E501
-    from opencompass.configs.models.qwen2_5.lmdeploy_qwen2_5_32b_instruct import \
-        models as lmdeploy_qwen2_5_32b_instruct  # noqa: F401, E501
+    from opencompass.configs.models.hf_llama.hf_llama3_1_8b_instruct import (
+        models as hf_llama3_1_8b_instruct,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.hf_llama.hf_llama3_8b_instruct import (
+        models as hf_llama_3_8b_instruct,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.hf_llama.lmdeploy_llama2_7b_chat import (
+        models as lmdeploy_llama2_7b_chat,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.hf_llama.lmdeploy_llama3_1_8b_instruct import (
+        models as lmdeploy_llama3_1_8b_instruct,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.hf_llama.lmdeploy_llama3_8b_instruct import (
+        models as lmdeploy_llama3_8b_instruct,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.mistral.hf_mistral_7b_instruct_v0_1 import (
+        models as hf_mistral_chat_7b,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.mistral.hf_mixtral_8x7b_instruct_v0_1 import (
+        models as hf_mixtral_chat_8x7b,  # noqa: F401, E501
+    )
     from opencompass.configs.models.qwen.hf_qwen1_5_7b_chat import models as hf_qwen1_5_chat_7b  # noqa: F401, E501
-    from opencompass.configs.models.qwen.hf_qwen1_5_moe_a2_7b_chat import \
-        models as hf_qwen1_5_moe_a2_7b_chat  # noqa: F401, E501
+    from opencompass.configs.models.qwen.hf_qwen1_5_moe_a2_7b_chat import (
+        models as hf_qwen1_5_moe_a2_7b_chat,  # noqa: F401, E501
+    )
     from opencompass.configs.models.qwen.hf_qwen2_7b_instruct import models as hf_qwen2_7b_instruct  # noqa: F401, E501
     from opencompass.configs.models.qwen.hf_qwen_7b_chat import models as hf_qwen_chat_7b  # noqa: F401, E501
-    from opencompass.configs.models.qwen.lmdeploy_qwen1_5_7b_chat import \
-        models as lmdeploy_qwen1_5_7b_chat  # noqa: F401, E501
-    from opencompass.configs.models.qwen.lmdeploy_qwen2_7b_instruct import \
-        models as lmdeploy_qwen2_7b_instruct  # noqa: F401, E501
-    from opencompass.configs.models.qwen.lmdeploy_qwen_7b_chat import \
-        models as lmdeploy_qwen_7b_chat  # noqa: F401, E501
+    from opencompass.configs.models.qwen.lmdeploy_qwen1_5_7b_chat import (
+        models as lmdeploy_qwen1_5_7b_chat,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.qwen.lmdeploy_qwen2_7b_instruct import (
+        models as lmdeploy_qwen2_7b_instruct,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.qwen.lmdeploy_qwen_7b_chat import (
+        models as lmdeploy_qwen_7b_chat,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.qwen2_5.lmdeploy_qwen2_5_7b_instruct import (
+        models as lmdeploy_qwen2_5_7b_instruct,  # noqa: F401, E501
+    )
+    from opencompass.configs.models.qwen2_5.lmdeploy_qwen2_5_32b_instruct import (
+        models as lmdeploy_qwen2_5_32b_instruct,  # noqa: F401, E501
+    )
+
     # Summary Groups
     from opencompass.configs.summarizers.groups.bbh import bbh_summary_groups  # noqa: F401, E501
     from opencompass.configs.summarizers.groups.cmmlu import cmmlu_summary_groups  # noqa: F401, E501
     from opencompass.configs.summarizers.groups.ds1000 import ds1000_summary_groups  # noqa: F401, E501
     from opencompass.configs.summarizers.groups.GaokaoBench import GaokaoBench_summary_groups  # noqa: F401, E501
     from opencompass.configs.summarizers.groups.humanevalx import humanevalx_summary_groups  # noqa: F401, E501
-    from opencompass.configs.summarizers.groups.mathbench_v1_2024 import \
-        mathbench_2024_summary_groups  # noqa: F401, E501
+    from opencompass.configs.summarizers.groups.mathbench_v1_2024 import (
+        mathbench_2024_summary_groups,  # noqa: F401, E501
+    )
     from opencompass.configs.summarizers.groups.mmlu import mmlu_summary_groups  # noqa: F401, E501
     from opencompass.configs.summarizers.groups.mmlu_pro import mmlu_pro_summary_groups  # noqa: F401, E501
     from opencompass.configs.summarizers.groups.scicode import scicode_summary_groups  # noqa: F401, E501
@@ -201,6 +236,71 @@ turbomind_llama2_7b_chat_4bits = deepcopy(*lmdeploy_llama2_7b_chat)
 turbomind_llama2_7b_chat_kvint4 = deepcopy(*lmdeploy_llama2_7b_chat)
 turbomind_llama2_7b_chat_kvint8 = deepcopy(*lmdeploy_llama2_7b_chat)
 
+base_model = dict(type=TurboMindModelwithChatTemplate,
+                  engine_config=dict(session_len=32768, max_batch_size=256),
+                  gen_config=dict(top_k=1, temperature=1e-6, top_p=0.9, max_new_tokens=32768),
+                  max_seq_len=32768,
+                  max_out_len=32768,
+                  batch_size=500,
+                  pred_postprocessor=dict(type=extract_non_reasoning_content),
+                  run_cfg=dict(num_gpus=1))
+
+turbomind_qwen3_32b = deepcopy(base_model)
+pytorch_qwen3_32b = deepcopy(base_model)
+turbomind_qwen3_32b_4bits = deepcopy(base_model)
+turbomind_qwen3_32b_kvint8 = deepcopy(base_model)
+
+turbomind_qwen3_30b_a3b = deepcopy(base_model)
+pytorch_qwen3_30b_a3b = deepcopy(base_model)
+turbomind_qwen3_30b_a3b_4bits = deepcopy(base_model)
+turbomind_qwen3_30b_a3b_kvint8 = deepcopy(base_model)
+turbomind_qwen3_30b_a3b_fp8 = deepcopy(base_model)
+pytorch_qwen3_30b_a3b_fp8 = deepcopy(base_model)
+turbomind_qwen3_30b_a3b_fp8['engine_config']['cache_max_entry_count'] = 0.6
+
+turbomind_qwen3_235b_a22b = deepcopy(base_model)
+pytorch_qwen3_235b_a22b = deepcopy(base_model)
+turbomind_qwen3_235b_a22b_4bits = deepcopy(base_model)
+turbomind_qwen3_235b_a22b_kvint8 = deepcopy(base_model)
+turbomind_qwen3_235b_a22b_fp8 = deepcopy(base_model)
+pytorch_qwen3_235b_a22b_fp8 = deepcopy(base_model)
+
+# update config for Qwen3-32B, Qwen3-30B-A3B, Qwen3-235B-A22B
+for model in [
+        v for k, v in locals().items() if k.startswith('turbomind_qwen3_32b') or k.startswith('pytorch_qwen3_32b')
+]:
+    model['abbr'] = 'qwen3_32b_turbomind'
+    model['path'] = 'Qwen/Qwen3-32B'
+
+for model in [
+        v for k, v in locals().items()
+        if k.startswith('turbomind_qwen3_30b_a3b') or k.startswith('pytorch_qwen3_30b_a3b')
+]:
+    model['abbr'] = 'qwen3_30b_a3b_turbomind'
+    model['path'] = 'Qwen/Qwen3-30B-A3B'
+
+for model in [
+        v for k, v in locals().items()
+        if k.startswith('turbomind_qwen3_30b_a3b_fp8') or k.startswith('pytorch_qwen3_30b_a3b_fp8')
+]:
+    model['abbr'] = 'qwen3_30b_a3b_fp8_turbomind'
+    model['path'] = 'Qwen/Qwen3-30B-A3B-FP8'
+
+for model in [
+        v for k, v in locals().items()
+        if k.startswith('turbomind_qwen3_235b_a22b') or k.startswith('pytorch_qwen3_235b_a22b')
+]:
+    model['abbr'] = 'qwen3_235b_a22b_turbomind'
+    model['path'] = 'Qwen/Qwen3-235B-A22B'
+
+for model in [
+        v for k, v in locals().items()
+        if k.startswith('turbomind_qwen3_235b_a22b_fp8') or k.startswith('pytorch_qwen3_235b_a22b_fp8')
+]:
+    model['abbr'] = 'qwen3_235b_a22b_fp8_turbomind'
+    model['path'] = 'Qwen/Qwen3-235B-A22B-FP8'
+
+# update config for turbomind, w4a4, w8a8, kvint4, kvint8, pytorch models
 for model in [v for k, v in locals().items() if k.startswith('turbomind_')]:
     model['engine_config']['max_batch_size'] = 512
     model['gen_config']['do_sample'] = False
@@ -234,6 +334,39 @@ for model in [v for k, v in locals().items() if '_batch1' in k]:
     model['abbr'] = model['abbr'] + '_batch1'
     model['engine_config']['max_batch_size'] = 1
     model['batch_size'] = 1
+
+# update config for Qwen3-32B, Qwen3-30B-A3B, Qwen3-235B-A22B
+for model in [
+        v for k, v in locals().items() if k.startswith('turbomind_qwen3_32b') or k.startswith('pytorch_qwen3_32b')
+]:
+    model['run_cfg']['num_gpus'] = 2
+    model['engine_config']['tp'] = 2
+    model['engine_config']['max_batch_size'] = 1024
+    model['batch_size'] = 2048
+
+for model in [
+        v for k, v in locals().items()
+        if k.startswith('turbomind_qwen3_30b_a3b') or k.startswith('pytorch_qwen3_30b_a3b')
+]:
+    model['run_cfg']['num_gpus'] = 2
+    model['engine_config']['tp'] = 2
+    model['engine_config']['max_batch_size'] = 1024
+    model['batch_size'] = 2048
+
+for model in [
+        v for k, v in locals().items()
+        if k.startswith('turbomind_qwen3_235b_a22b') or k.startswith('pytorch_qwen3_235b_a22b')
+]:
+    model['run_cfg']['num_gpus'] = 8
+    model['engine_config']['tp'] = 8
+    model['engine_config']['max_batch_size'] = 1024
+    model['batch_size'] = 2048
+
+turbomind_qwen3_235b_a22b_fp8['engine_config']['cache_max_entry_count'] = 0.6
+turbomind_qwen3_235b_a22b_fp8['engine_config']['tp'] = 4
+turbomind_qwen3_235b_a22b_fp8['run_cfg']['num_gpus'] = 4
+pytorch_qwen3_235b_a22b_fp8['engine_config']['tp'] = 4
+pytorch_qwen3_235b_a22b_fp8['run_cfg']['num_gpus'] = 4
 
 basic_pytorch_chat_tp1 = dict(type=TurboMindModelwithChatTemplate,
                               engine_config=dict(session_len=MAX_SESSION_LEN, max_batch_size=512, tp=1),

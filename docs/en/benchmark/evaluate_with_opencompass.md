@@ -1,156 +1,117 @@
-# Evaluate LLMs with OpenCompass
+# Model Evaluation Guide
 
-The LLMs accelerated by lmdeploy can be evaluated with OpenCompass.
+This document describes how to evaluate a model's capabilities on academic datasets using OpenCompass and LMDeploy. The complete evaluation process consists of two main stages: inference stage and evaluation stage.
 
-## Setup
+During the inference stage, the target model is first deployed as an inference service using LMDeploy. OpenCompass then sends dataset content as requests to this service and collects the generated responses.
 
-In this part, we are going to setup the environment for evaluation.
+In the evaluation stage, the OpenCompass evaluation model `opencompass/CompassVerifier-32B` is deployed as a service via LMDeploy. OpenCompass subsequently submits the inference results to this service to obtain final evaluation scores.
 
-### Install lmdeploy
+If sufficient computational resources are available, please refer to the [End-to-End Evaluation](#end-to-end-evaluation) section for complete workflow execution. Otherwise, we recommend following the [Step-by-Step Evaluation](#step-by-step-evaluation) section to execute both stages sequentially.
 
-Please follow the [installation guide](../get_started/installation.md) to install lmdeploy.
-
-### Install OpenCompass
-
-Install OpenCompass from source. Refer to [installation](https://opencompass.readthedocs.io/en/latest/get_started/installation.html) for more information.
+## Environment Setup
 
 ```shell
-git clone https://github.com/open-compass/opencompass.git
-cd opencompass
-pip install -e .
+pip install lmdeploy
+pip install "opencompass[full]"
+
+# Download the lmdeploy source code, which will be used in subsequent steps to access eval script and configuration
+git clone --depth=1 https://github.com/InternLM/lmdeploy.git
 ```
 
-At present, you can check the [Quick Start](https://opencompass.readthedocs.io/en/latest/get_started/quick_start.html#)
-to get to know the basic usage of OpenCompass.
+It is recommended to install LMDeploy and OpenCompass in separate Python virtual environments to avoid potential dependency conflicts.
 
-### Download datasets
+## End-to-End Evaluation
 
-Download the core datasets
+1. **Deploy Target Model**
 
 ```shell
-# Run in the OpenCompass directory
-cd opencompass
-wget https://github.com/open-compass/opencompass/releases/download/0.1.8.rc1/OpenCompassData-core-20231110.zip
-unzip OpenCompassData-core-20231110.zip
+lmdeploy serve api_server <model_path> --server-port 10000 <--other-options>
 ```
 
-## Prepare Evaluation Config
-
-OpenCompass uses the configuration files as the OpenMMLab style. One can define a python config and start evaluating at ease.
-OpenCompass has supported the evaluation for lmdeploy's TurboMind engine using python API.
-
-### Dataset Config
-
-In the home directory of OpenCompass, we are writing the config file `$OPENCOMPASS_DIR/configs/eval_lmdeploy.py`.
-We select multiple predefined datasets and import them from OpenCompass base dataset configs as `datasets`.
-
-```python
-from mmengine.config import read_base
-
-
-with read_base():
-    # choose a list of datasets
-    from .datasets.mmlu.mmlu_gen_a484b3 import mmlu_datasets
-    from .datasets.ceval.ceval_gen_5f30c7 import ceval_datasets
-    from .datasets.SuperGLUE_WiC.SuperGLUE_WiC_gen_d06864 import WiC_datasets
-    from .datasets.SuperGLUE_WSC.SuperGLUE_WSC_gen_7902a7 import WSC_datasets
-    from .datasets.triviaqa.triviaqa_gen_2121ce import triviaqa_datasets
-    from .datasets.gsm8k.gsm8k_gen_1d7fe4 import gsm8k_datasets
-    from .datasets.race.race_gen_69ee4f import race_datasets
-    from .datasets.crowspairs.crowspairs_gen_381af0 import crowspairs_datasets
-    # and output the results in a chosen format
-    from .summarizers.medium import summarizer
-
-datasets = sum((v for k, v in locals().items() if k.endswith('_datasets')), [])
-```
-
-### Model Config
-
-This part shows how to setup model config for LLMs. Let's check some examples:
-
-`````{tabs}
-````{tab} internlm-20b
-
-```python
-from opencompass.models.turbomind import TurboMindModel
-
-internlm_20b = dict(
-        type=TurboMindModel,
-        abbr='internlm-20b-turbomind',
-        path="internlm/internlm-20b",  # this path should be same as in huggingface
-        engine_config=dict(session_len=2048,
-                           max_batch_size=8,
-                           rope_scaling_factor=1.0),
-        gen_config=dict(top_k=1, top_p=0.8,
-                        temperature=1.0,
-                        max_new_tokens=100),
-        max_out_len=100,
-        max_seq_len=2048,
-        batch_size=8,
-        concurrency=8,
-        run_cfg=dict(num_gpus=1, num_procs=1),
-    )
-
-models = [internlm_20b]
-```
-
-````
-
-````{tab} internlm-chat-20b
-
-For Chat models, you have to pass `meta_template` for chat models. Different Chat models may have different `meta_template` and it's important
-to keep it the same as in training settings. You can read [meta_template](https://opencompass.readthedocs.io/en/latest/prompt/meta_template.html) for more information.
-
-
-```python
-from opencompass.models.turbomind import TurboMindModel
-
-internlm_meta_template = dict(round=[
-    dict(role='HUMAN', begin='<|User|>:', end='\n'),
-    dict(role='BOT', begin='<|Bot|>:', end='<eoa>\n', generate=True),
-],
-                              eos_token_id=103028)
-
-internlm_chat_20b = dict(
-    type=TurboMindModel,
-    abbr='internlm-chat-20b-turbomind',
-    path='internlm/internlm-chat-20b',
-    engine_config=dict(session_len=2048,
-                       max_batch_size=8,
-                       rope_scaling_factor=1.0),
-    gen_config=dict(top_k=1,
-                    top_p=0.8,
-                    temperature=1.0,
-                    max_new_tokens=100),
-    max_out_len=100,
-    max_seq_len=2048,
-    batch_size=8,
-    concurrency=8,
-    meta_template=internlm_meta_template,
-    run_cfg=dict(num_gpus=1, num_procs=1),
-    end_str='<eoa>'
-)
-
-models = [internlm_chat_20b]
-
-```
-
-````
-
-`````
-
-**Note**
-
-- If you want to pass more arguments for `engine_config`和`gen_config` in the evaluation config file, please refer to [TurbomindEngineConfig](https://github.com/InternLM/lmdeploy/blob/061f99736544c8bf574309d47baf574b69ab7eaf/lmdeploy/messages.py#L114)
-  and [EngineGenerationConfig](https://github.com/InternLM/lmdeploy/blob/061f99736544c8bf574309d47baf574b69ab7eaf/lmdeploy/messages.py#L56)
-
-## Execute Evaluation Task
-
-After defining the evaluation config, we can run the following command to start evaluating models.
-You can check [Execution Task](https://opencompass.readthedocs.io/en/latest/user_guides/experimentation.html#task-execution-and-monitoring)
-for more arguments of `run.py`.
+2. **Deploy Evaluation Model (Judger)**
 
 ```shell
-# in the root directory of opencompass
-python3 run.py configs/eval_lmdeploy.py --work-dir ./workdir
+lmdeploy serve api_server opencompass/CompassVerifier-32B --server-port 20000 --tp 2
 ```
+
+3. **Generate Evaluation Configuration and Execute**
+
+```shell
+
+cd {the/root/path/of/lmdeploy/repo}
+
+## Specify the dataset path. OC will download the datasets automatically if they are
+## not found in the path
+export HF_DATASETS_CACHE=/nvme4/huggingface_hub/datasets
+export COMPASS_DATA_CACHE=/nvme1/shared/opencompass/.cache
+python eval/eval.py {task_name} \
+    --mode all \
+    --api-server http://{api-server-ip}:10000 \
+    --judger-server http://{judger-server-ip}:20000 \
+    -w {oc_output_dir}
+```
+
+For detailed usage instructions about `eval.py`, such as specifying evaluation datasets, please run `python eval/eval.py --help`.
+
+After evaluation completion, results are saved in `{oc_output_dir}/{yyyymmdd_hhmmss}`, where `{yyyymmdd_hhmmss}` represents the task timestamp.
+
+## Step-by-Step Evaluation
+
+### Inference Stage
+
+This stage generates model responses for the dataset.
+
+1. **Deploy Target Model**
+
+```shell
+lmdeploy serve api_server <model_path> --server-port 10000 <--other-options>
+```
+
+2. **Generate Inference Configuration and Execute**
+
+```shell
+cd {the/root/path/of/lmdeploy/repo}
+
+## Specify the dataset path. OC will download the datasets automatically if they are
+## not found in the path
+export COMPASS_DATA_CACHE=/nvme1/shared/opencompass/.cache
+export HF_DATASETS_CACHE=/nvme4/huggingface_hub/datasets
+# Run inference task
+python eval/eval.py {task_name} \
+    --mode infer \
+    --api-server http://{api-server-ip}:10000 \
+    -w {oc_output_dir}
+```
+
+For detailed usage instructions about `eval.py`, such as specifying evaluation datasets, please run `python eval/eval.py --help`.
+
+### Evaluation Stage
+
+This stage uses the evaluation model (Judger) to assess the quality of inference results.
+
+1. **Deploy Evaluation Model (Judger)**
+
+```shell
+lmdeploy serve api_server opencompass/CompassVerifier-32B --server-port 20000 --tp 2 --session-len 65536
+```
+
+2. **Generate Evaluation Configuration and Execute**
+
+```shell
+cd {the/root/path/of/lmdeploy/repo}
+
+## Specify the dataset path. OC will download the datasets automatically if they are
+## not found in the path
+export COMPASS_DATA_CACHE=/nvme1/shared/opencompass/.cache
+export HF_DATASETS_CACHE=/nvme4/huggingface_hub/datasets
+# Run evaluation task
+opencompass /path/to/judger_config.py -m eval -w {oc_output_dir} -r {yyyymmdd_hhmmss}
+```
+
+Important Notes:
+
+- `task_name` must be identical to the one used in the inference stage
+- The `oc_output_dir` specified with `-w` must match the directory used in the inference stage
+- The `-r` parameter indicates "previous outputs & results" and should specify the timestamp directory generated during the inference stage (the subdirectory under `{oc_output_dir}`)
+
+For detailed usage instructions about `eval.py`, such as specifying evaluation datasets, please run `python eval/eval.py --help`.

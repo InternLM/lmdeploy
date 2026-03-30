@@ -41,7 +41,7 @@ Reference::Reference()
 {
     cublasCreate(&handle_);
 
-    // cublasSetWorkspace(handle_, nullptr, 0);
+    cublasSetWorkspace(handle_, nullptr, 0);
     cublasSetMathMode(handle_, CUBLAS_MATH_DISALLOW_REDUCED_PRECISION_REDUCTION);
 }
 
@@ -71,15 +71,16 @@ void Reference::gemm(const void* A, MatrixLayout Adesc, const void* B, MatrixLay
         // (n, k) (k, m)
     }
 
-    CHECK(Adesc.cols == Bdesc.rows);
+    TM_CHECK_EQ(Adesc.cols, Bdesc.rows);
 
     // (m, k) (k, n)
     int m = Cdesc.rows;
     int n = Cdesc.cols;
     int k = Adesc.cols;
-    CHECK(Adesc.rows == m);
-    CHECK(Bdesc.cols == n);
-    CHECK(Bdesc.rows == k);
+
+    TM_CHECK_EQ(Adesc.rows, m);
+    TM_CHECK_EQ(Bdesc.cols, n);
+    TM_CHECK_EQ(Bdesc.rows, k);
 
     float alpha = 1.f;
     float beta  = 0.f;

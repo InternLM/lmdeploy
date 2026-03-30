@@ -10,17 +10,60 @@ def _conti_input(data, seq_lens):
     return data
 
 
-def _make_bias(seq_lens, history_lens, neg_val):
-    full_seq_lens = seq_lens + history_lens
-    max_seq_len = seq_lens.max().item()
-    max_full_len = full_seq_lens.max().item()
-    seq_ranges = [torch.arange(max_seq_len) for _ in seq_lens]
-    for r, l in zip(seq_ranges, seq_lens):
-        r[l:] = -max_full_len
-    seq_ranges = torch.stack(seq_ranges, dim=0).cuda()
-    kv_ranges = [torch.arange(max_full_len) for _ in full_seq_lens]
-    kv_ranges = torch.stack(kv_ranges, 0).cuda()
+def _make_bias(q_seqlens, history_lens, neg_val):
+    batch_size = q_seqlens.shape[0]
+    full_seq_lens = q_seqlens + history_lens
+    max_seq_len = q_seqlens.max().item()
+    max_kv_len = full_seq_lens.max().item()
+    seq_ranges = torch.arange(max_seq_len).cuda()
+    seq_ranges = seq_ranges.repeat(batch_size, 1)
+    seq_ranges = torch.where(seq_ranges < q_seqlens[:, None], seq_ranges, -max_kv_len)
+
+    kv_ranges = torch.arange(max_kv_len).cuda()
+    kv_ranges = kv_ranges.repeat(batch_size, 1)
     mask = kv_ranges[:, None, :] - seq_ranges[:, :, None] > history_lens[:, None, None]
+    return mask.float() * neg_val
+
+
+def _make_alibi_bias(q_seqlens, history_lens, neg_val, alibi_slopes):
+    batch_size = q_seqlens.shape[0]
+    kv_seqlens = q_seqlens + history_lens
+    max_seq_len = q_seqlens.max().item()
+    max_kv_len = kv_seqlens.max().item()
+
+    seq_ranges = torch.arange(max_seq_len).cuda()
+    seq_ranges = seq_ranges.repeat(batch_size, 1) + history_lens[:, None]
+
+    kv_ranges = torch.arange(max_kv_len).cuda()
+    kv_ranges = kv_ranges.repeat(batch_size, 1)
+
+    diff = (seq_ranges[:, :, None] - kv_ranges[:, None, :]).abs()
+    slope_diff = -diff[:, None] * alibi_slopes[None, :, None, None]
+
+    # add bias
+    bias = _make_bias(q_seqlens, history_lens, neg_val)
+    bias = bias[:, None] + slope_diff
+    return bias
+
+
+def _make_block_sparse_bias(q_seqlens: torch.Tensor, history_lens: torch.Tensor, neg_val: float,
+                            block_sparse_size: int):
+    """Make block sparse bias."""
+    batch_size = q_seqlens.shape[0]
+    kv_seqlens = q_seqlens + history_lens
+    max_seq_len = q_seqlens.max().item()
+    max_kv_len = kv_seqlens.max().item()
+
+    seq_ranges = torch.arange(max_seq_len).cuda()
+    seq_ranges = seq_ranges // block_sparse_size * block_sparse_size
+    seq_ranges = seq_ranges.repeat(batch_size, 1)
+    seq_ranges = torch.where(seq_ranges < q_seqlens[:, None], seq_ranges, -max_kv_len)
+
+    kv_ranges = torch.arange(max_kv_len).cuda()
+    kv_ranges = kv_ranges // block_sparse_size * block_sparse_size
+    kv_ranges = kv_ranges.repeat(batch_size, 1)
+
+    mask = (kv_ranges[:, None, :] - seq_ranges[:, :, None] > history_lens[:, None, None])
     return mask.float() * neg_val
 
 
@@ -58,7 +101,7 @@ def _make_blocked_cache(batched_k,
     return blocked_k, blocked_v
 
 
-def _naive_attention(batched_q, batched_kv, bias):
+def _naive_attention(batched_q, batched_kv, bias, sinks=None):
     batched_k, batched_v = batched_kv
 
     num_heads_q = batched_q.shape[2]
@@ -75,8 +118,19 @@ def _naive_attention(batched_q, batched_kv, bias):
     v = v.unsqueeze(2).expand(-1, -1, group, -1, -1).flatten(1, 2)
 
     qk = torch.matmul(q, k) / math.sqrt(head_dim)
-    attn_weight = qk + bias[:, None]
-    attn_weight = torch.softmax(attn_weight, dim=-1, dtype=torch.float32)
+    if bias.dim() == 3:
+        bias = bias[:, None]
+    attn_weight = qk + bias
+    if sinks is None:
+        attn_weight = torch.softmax(attn_weight, dim=-1, dtype=torch.float32)
+    else:
+        sinks = sinks[None, :, None, None].to(torch.float32)
+        sinks = sinks.expand(attn_weight.shape[0], -1, attn_weight.shape[2], -1)
+        attn_weight = attn_weight.to(torch.float32)
+        combined_logits = torch.cat([attn_weight, sinks], dim=-1)
+        combined_logits = combined_logits - combined_logits.max(dim=-1, keepdim=True).values
+        attn_weight = torch.softmax(combined_logits, dim=-1, dtype=torch.float32)
+        attn_weight = attn_weight[..., :-1]
     attn_weight = attn_weight.to(q.dtype)
     attn_output = torch.matmul(attn_weight, v)
     attn_output = attn_output.transpose(1, 2).contiguous()
@@ -85,7 +139,13 @@ def _naive_attention(batched_q, batched_kv, bias):
 
 
 def _naive_window_attention(q, k, v, seqlens_q, seqlens_k, window_size):
-    from flash_attn import flash_attn_varlen_func
+    try:
+        from lmdeploy.pytorch.third_party.flash_attn_interface import flash_attn_varlen_func
+    except Exception:
+        try:
+            from flash_attn import flash_attn_varlen_func
+        except Exception:
+            pytest.skip('Skip window attention test since flash attention is not available.')
 
     def _make_cu_seqlens(seqlens):
         cu_seqlens = seqlens.cumsum(0)
@@ -110,7 +170,7 @@ def _naive_window_attention(q, k, v, seqlens_q, seqlens_k, window_size):
     return output
 
 
-class TestPagedAttention:
+class TestPagedAttentionBase:
 
     @pytest.fixture
     def dtype(self):
@@ -145,18 +205,22 @@ class TestPagedAttention:
         yield torch.tensor(request.param, device='cuda')
 
     @pytest.fixture
-    def seq_lens(self, history_lens):
-        yield torch.ones_like(history_lens)
+    def seq_len(self):
+        yield 1
 
     @pytest.fixture
-    def kv_seqlens(self, history_lens):
-        yield 1 + history_lens
+    def seq_lens(self, seq_len, history_lens):
+        yield torch.ones_like(history_lens) * seq_len
 
     @pytest.fixture
-    def batched_q(self, kv_seqlens, num_heads_q, feat_dim, dtype):
+    def kv_seqlens(self, seq_lens, history_lens):
+        yield seq_lens + history_lens
+
+    @pytest.fixture
+    def batched_q(self, seq_len, kv_seqlens, num_heads_q, feat_dim, dtype):
         torch.manual_seed(123)
         batch_size = len(kv_seqlens)
-        inputs = torch.rand(batch_size, 1, num_heads_q, feat_dim, dtype=dtype, device='cuda')
+        inputs = torch.rand(batch_size, seq_len, num_heads_q, feat_dim, dtype=dtype, device='cuda')
         yield inputs
 
     @pytest.fixture
@@ -169,8 +233,7 @@ class TestPagedAttention:
         yield k, v
 
     @pytest.fixture
-    def conti_q(self, kv_seqlens, batched_q):
-        seq_lens = torch.ones_like(kv_seqlens)
+    def conti_q(self, seq_lens, batched_q):
         yield _conti_input(batched_q, seq_lens)
 
     @pytest.fixture
@@ -216,26 +279,25 @@ class TestPagedAttention:
     def conti_gt(self, gt, seq_lens):
         yield _conti_input(gt, seq_lens)
 
-    @pytest.mark.parametrize('feat_dim', [48, 32], indirect=True)
+
+class TestPagedAttention(TestPagedAttentionBase):
+
+    @pytest.mark.parametrize('feat_dim', [32, 32], indirect=True)
     @pytest.mark.parametrize('feat_dim_v', [32], indirect=True)
     @pytest.mark.parametrize(['num_heads_q', 'num_heads_k'], [(128, 2), (8, 2), (2, 2)], indirect=True)
     @pytest.mark.parametrize('history_lens', [(50, 40, 30, 20)], indirect=True)
     @pytest.mark.parametrize('block_size', [16], indirect=True)
     @pytest.mark.parametrize('layout', ['bshd', 'bhsd'], indirect=True)
-    def test_paged_attention(self, conti_q, blocked_kv, block_offsets, history_lens, feat_dim_v, layout, conti_gt):
-        from lmdeploy.pytorch.kernels import paged_attention_fwd
-        kv_seq_lens = 1 + history_lens
+    def test_paged_attention(self, conti_q, blocked_kv, block_offsets, kv_seqlens, layout, conti_gt):
+        from lmdeploy.pytorch.kernels.cuda import flash_attn_with_kvcache
 
         blocked_k, blocked_v = blocked_kv
-        out = conti_q.new_empty(*conti_q.shape[:-1], feat_dim_v)
-
-        paged_attention_fwd(conti_q,
-                            blocked_k,
-                            blocked_v,
-                            out,
-                            block_offsets=block_offsets,
-                            kv_seqlens=kv_seq_lens,
-                            kv_layout=layout)
+        out = flash_attn_with_kvcache(conti_q,
+                                      blocked_k,
+                                      blocked_v,
+                                      page_table=block_offsets,
+                                      cache_seqlens=kv_seqlens,
+                                      kv_layout=layout)
         torch.testing.assert_close(out, conti_gt, atol=1e-3, rtol=1e-5)
 
     @pytest.fixture
@@ -261,22 +323,53 @@ class TestPagedAttention:
     @pytest.mark.parametrize('win_size', (32, ), indirect=True)
     @pytest.mark.parametrize('block_size', [16], indirect=True)
     @pytest.mark.parametrize('layout', ['bshd'], indirect=True)
-    def test_window_attention(self, conti_q, blocked_kv, block_offsets, history_lens, feat_dim_v, win_size, layout,
-                              window_gt):
-        from lmdeploy.pytorch.kernels import paged_attention_fwd
-        kv_seq_lens = 1 + history_lens
+    def test_window_attention(self, conti_q, blocked_kv, block_offsets, kv_seqlens, win_size, layout, window_gt):
+        from lmdeploy.pytorch.kernels.cuda import flash_attn_with_kvcache
 
         blocked_k, blocked_v = blocked_kv
-        out = conti_q.new_empty(*conti_q.shape[:-1], feat_dim_v)
-        paged_attention_fwd(conti_q,
-                            blocked_k,
-                            blocked_v,
-                            out,
-                            block_offsets=block_offsets,
-                            kv_seqlens=kv_seq_lens,
-                            window_size=win_size,
-                            kv_layout=layout)
+        out = flash_attn_with_kvcache(conti_q,
+                                      blocked_k,
+                                      blocked_v,
+                                      page_table=block_offsets,
+                                      cache_seqlens=kv_seqlens,
+                                      window_size=win_size,
+                                      kv_layout=layout)
         torch.testing.assert_close(out, window_gt, atol=1e-3, rtol=1e-5)
+
+
+class TestPagedAttentionSink(TestPagedAttentionBase):
+
+    @pytest.fixture
+    def sinks(self, num_heads_q, dtype):
+        yield torch.rand(num_heads_q, dtype=dtype, device='cuda')
+
+    @pytest.fixture
+    def sink_gt(self, batched_q, batched_kv, mask, sinks):
+        yield _naive_attention(batched_q, batched_kv, mask, sinks)
+
+    @pytest.fixture
+    def conti_sink_gt(self, sink_gt, seq_lens):
+        yield _conti_input(sink_gt, seq_lens)
+
+    @pytest.mark.parametrize('feat_dim', [32], indirect=True)
+    @pytest.mark.parametrize('feat_dim_v', [32], indirect=True)
+    @pytest.mark.parametrize(['num_heads_q', 'num_heads_k'], [(8, 2)], indirect=True)
+    @pytest.mark.parametrize('history_lens', [(50, 40, 30, 20)], indirect=True)
+    @pytest.mark.parametrize('block_size', [16], indirect=True)
+    @pytest.mark.parametrize('layout', ['bshd'], indirect=True)
+    def test_paged_attention(self, conti_q, blocked_kv, block_offsets, kv_seqlens, layout, sinks, conti_sink_gt):
+        from lmdeploy.pytorch.kernels.cuda import flash_attn_with_kvcache
+
+        blocked_k, blocked_v = blocked_kv
+
+        out = flash_attn_with_kvcache(conti_q,
+                                      blocked_k,
+                                      blocked_v,
+                                      page_table=block_offsets,
+                                      cache_seqlens=kv_seqlens,
+                                      sinks=sinks,
+                                      kv_layout=layout)
+        torch.testing.assert_close(out, conti_sink_gt, atol=1e-3, rtol=1e-5)
 
 
 def quant(kv: torch.Tensor, nbits: int = 8):
@@ -345,23 +438,19 @@ class TestPagedAttentionInt8(TestPagedAttention):
     @pytest.mark.parametrize(['num_heads_q', 'num_heads_k'], [(8, 2), (2, 2)], indirect=True)
     @pytest.mark.parametrize('history_lens', [(50, 40, 30, 20)], indirect=True)
     @pytest.mark.parametrize('block_size', [16], indirect=True)
-    def test_paged_attention(self, conti_q, blocked_kv, block_offsets, seq_lens, history_lens, feat_dim_v, conti_gt,
-                             nbits):
-        from lmdeploy.pytorch.kernels import paged_attention_fwd
-        kv_seq_lens = 1 + history_lens
+    def test_paged_attention(self, conti_q, blocked_kv, block_offsets, kv_seqlens, conti_gt, nbits):
+        from lmdeploy.pytorch.kernels.cuda import flash_attn_with_kvcache
 
         blocked_k, blocked_v, blocked_ksz, blocked_vsz = blocked_kv
-        out = conti_q.new_empty(*conti_q.shape[:-1], feat_dim_v)
 
-        paged_attention_fwd(conti_q,
-                            blocked_k,
-                            blocked_v,
-                            out,
-                            k_scales_zeros=blocked_ksz,
-                            v_scales_zeros=blocked_vsz,
-                            quant_policy=nbits,
-                            block_offsets=block_offsets,
-                            kv_seqlens=kv_seq_lens)
+        out = flash_attn_with_kvcache(conti_q,
+                                      blocked_k,
+                                      blocked_v,
+                                      k_scales_zeros=blocked_ksz,
+                                      v_scales_zeros=blocked_vsz,
+                                      quant_policy=nbits,
+                                      page_table=block_offsets,
+                                      cache_seqlens=kv_seqlens)
         if nbits == 4:
             torch.testing.assert_close(out, conti_gt, atol=0.05, rtol=0.01)
         else:
@@ -375,23 +464,19 @@ class TestPagedAttentionInt8(TestPagedAttention):
     ], indirect=True)
     @pytest.mark.parametrize('win_size', (32, ), indirect=True)
     @pytest.mark.parametrize('block_size', [16], indirect=True)
-    def test_window_attention(self, conti_q, blocked_kv, block_offsets, history_lens, feat_dim_v, win_size, window_gt,
-                              nbits):
-        from lmdeploy.pytorch.kernels import paged_attention_fwd
-        kv_seq_lens = 1 + history_lens
+    def test_window_attention(self, conti_q, blocked_kv, block_offsets, kv_seqlens, win_size, window_gt, nbits):
+        from lmdeploy.pytorch.kernels.cuda import flash_attn_with_kvcache
 
         blocked_k, blocked_v, blocked_ksz, blocked_vsz = blocked_kv
-        out = conti_q.new_empty(*conti_q.shape[:-1], feat_dim_v)
-        paged_attention_fwd(conti_q,
-                            blocked_k,
-                            blocked_v,
-                            out,
-                            k_scales_zeros=blocked_ksz,
-                            v_scales_zeros=blocked_vsz,
-                            quant_policy=nbits,
-                            block_offsets=block_offsets,
-                            kv_seqlens=kv_seq_lens,
-                            window_size=win_size)
+        out = flash_attn_with_kvcache(conti_q,
+                                      blocked_k,
+                                      blocked_v,
+                                      k_scales_zeros=blocked_ksz,
+                                      v_scales_zeros=blocked_vsz,
+                                      quant_policy=nbits,
+                                      page_table=block_offsets,
+                                      cache_seqlens=kv_seqlens,
+                                      window_size=win_size)
         if nbits == 4:
             torch.testing.assert_close(out, window_gt, atol=0.05, rtol=0.01)
         else:
@@ -403,3 +488,74 @@ class TestPagedAttentionInt4(TestPagedAttentionInt8):
     @pytest.fixture
     def nbits(self):
         yield 4
+
+
+class TestPagedAttentionBlockDecoding(TestPagedAttentionBase):
+
+    @pytest.fixture
+    def seq_len(self):
+        yield 4
+
+    @pytest.fixture
+    def mask(self, seq_lens, history_lens, seq_len):
+        neg_val = -1e30
+        yield _make_block_sparse_bias(seq_lens, history_lens, neg_val, seq_len)
+
+    @pytest.fixture
+    def gt(self, batched_q, batched_kv, mask):
+        yield _naive_attention(batched_q, batched_kv, mask)
+
+    @pytest.fixture
+    def conti_gt(self, gt, seq_lens):
+        yield _conti_input(gt, seq_lens)
+
+    @pytest.mark.parametrize('feat_dim', [48, 32], indirect=True)
+    @pytest.mark.parametrize('feat_dim_v', [32], indirect=True)
+    @pytest.mark.parametrize(['num_heads_q', 'num_heads_k'], [(128, 2), (8, 2), (2, 2)], indirect=True)
+    @pytest.mark.parametrize('history_lens', [(52, 40, 32, 20)], indirect=True)
+    @pytest.mark.parametrize('block_size', [16], indirect=True)
+    @pytest.mark.parametrize('layout', ['bshd'], indirect=True)
+    def test_paged_attention(self, conti_q, blocked_kv, block_offsets, kv_seqlens, layout, conti_gt):
+        from lmdeploy.pytorch.kernels.cuda import flash_attn_with_kvcache
+
+        blocked_k, blocked_v = blocked_kv
+
+        out = flash_attn_with_kvcache(conti_q,
+                                      blocked_k,
+                                      blocked_v,
+                                      page_table=block_offsets,
+                                      cache_seqlens=kv_seqlens,
+                                      kv_layout=layout)
+        torch.testing.assert_close(out, conti_gt, atol=1e-3, rtol=1e-5)
+
+
+class TestPagedAttentionAlibi(TestPagedAttentionBase):
+
+    @pytest.fixture
+    def alibi_slopes(self, num_heads_q):
+        yield torch.rand(num_heads_q, dtype=torch.float32, device='cuda')
+
+    @pytest.fixture
+    def mask(self, seq_lens, history_lens, alibi_slopes):
+        neg_val = -1e30
+        yield _make_alibi_bias(seq_lens, history_lens, neg_val, alibi_slopes)
+
+    @pytest.mark.parametrize('feat_dim', [128], indirect=True)
+    @pytest.mark.parametrize('feat_dim_v', [128], indirect=True)
+    @pytest.mark.parametrize(['num_heads_q', 'num_heads_k'], [(40, 8)], indirect=True)
+    @pytest.mark.parametrize('history_lens', [(52, 40, 32, 20)], indirect=True)
+    @pytest.mark.parametrize('layout', ['bshd'], indirect=True)
+    @pytest.mark.parametrize('block_size', [16], indirect=True)
+    def test_paged_attention(self, conti_q, blocked_kv, block_offsets, kv_seqlens, layout, alibi_slopes, conti_gt):
+        from lmdeploy.pytorch.kernels.cuda import flash_attn_with_kvcache
+
+        blocked_k, blocked_v = blocked_kv
+
+        out = flash_attn_with_kvcache(conti_q,
+                                      blocked_k,
+                                      blocked_v,
+                                      page_table=block_offsets,
+                                      cache_seqlens=kv_seqlens,
+                                      alibi_slopes=alibi_slopes,
+                                      kv_layout=layout)
+        torch.testing.assert_close(out, conti_gt, atol=1e-3, rtol=1e-5)

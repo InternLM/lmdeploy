@@ -1,25 +1,30 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Any, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
+from typing import Any
 
 import torch
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding,
-                                 build_rotary_params)
-from lmdeploy.pytorch.nn.linear import (build_down_linear, build_gateup_linear, build_o_proj, build_qkv_proj,
-                                        build_rowwise_linear)
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
+from lmdeploy.pytorch.nn.linear import build_down_linear, build_gateup_linear, build_o_proj, build_qkv_proj
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .patch import add_prefix
 from .utils.cudagraph import CudaGraphMixin
+from .utils.model import DeployModelMixinV1, build_embedding
 
 
 class Qwen3Attention(nn.Module):
     """Rewrite module of Qwen3Attention."""
 
-    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 prefix: str = ''):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         num_heads = config.num_attention_heads
@@ -29,15 +34,18 @@ class Qwen3Attention(nn.Module):
         num_replicate_kv_heads = getattr(config, 'num_replicate_key_value_heads', 1)
         # packed qkv
         # Qwen3 uses 'config.attention_bias = False' for q/k/o projections
-        self.qkv_proj = build_qkv_proj(hidden_size,
-                                       num_q_heads=num_heads,
-                                       num_kv_heads=num_key_value_heads,
-                                       head_size=head_dim,
-                                       bias=config.attention_bias,
-                                       quant_config=quantization_config,
-                                       dtype=dtype,
-                                       device=device,
-                                       num_replicate_kv_heads=num_replicate_kv_heads)
+        self.qkv_proj = build_qkv_proj(
+            hidden_size,
+            num_q_heads=num_heads,
+            num_kv_heads=num_key_value_heads,
+            head_size=head_dim,
+            bias=config.attention_bias,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device,
+            num_replicate_kv_heads=num_replicate_kv_heads,
+            prefix=add_prefix('qkv_proj', prefix),
+        )
 
         # rotary embedding
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
@@ -48,35 +56,30 @@ class Qwen3Attention(nn.Module):
             head_dim,
             num_kv_heads=num_key_value_heads,
             v_head_size=head_dim,
-            sliding_window=config.sliding_window,
+            sliding_window=getattr(config, 'sliding_window', None),
         )
 
         # o_proj
-        self.o_proj = build_o_proj(num_heads * head_dim,
-                                   hidden_size,
-                                   bias=config.attention_bias,
-                                   quant_config=quantization_config,
-                                   dtype=dtype,
-                                   device=device,
-                                   is_tp=True)
+        self.o_proj = build_o_proj(
+            num_heads * head_dim,
+            hidden_size,
+            bias=config.attention_bias,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device,
+            is_tp=True,
+            prefix=add_prefix('o_proj', prefix),
+        )
 
         # q, k norm
-        self.q_norm = RMSNorm(head_dim,
-                              config.rms_norm_eps,
-                              quant_config=quantization_config,
-                              dtype=dtype,
-                              device=device)
-        self.k_norm = RMSNorm(head_dim,
-                              config.rms_norm_eps,
-                              quant_config=quantization_config,
-                              dtype=dtype,
-                              device=device)
+        self.q_norm = RMSNorm(head_dim, config.rms_norm_eps, dtype=dtype, device=device)
+        self.k_norm = RMSNorm(head_dim, config.rms_norm_eps, dtype=dtype, device=device)
 
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: tuple[torch.Tensor] | None = None,
         attn_metadata: Any = None,
     ):
         """Rewrite of LlamaAttention.forward."""
@@ -122,7 +125,11 @@ class Qwen3Attention(nn.Module):
 class Qwen3MLP(nn.Module):
     """mlp."""
 
-    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 prefix: str = ''):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         # gate up
@@ -134,19 +141,23 @@ class Qwen3MLP(nn.Module):
             device=device,
             quant_config=quantization_config,
             is_tp=True,
+            prefix=add_prefix('gate_up_proj', prefix),
         )
 
         # silu and mul
         self.act_fn = SiluAndMul(inplace=True)
 
         # down
-        self.down_proj = build_down_linear(config.intermediate_size,
-                                           config.hidden_size,
-                                           bias=False,
-                                           quant_config=quantization_config,
-                                           dtype=dtype,
-                                           device=device,
-                                           is_tp=True)
+        self.down_proj = build_down_linear(
+            config.intermediate_size,
+            config.hidden_size,
+            bias=False,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device,
+            is_tp=True,
+            prefix=add_prefix('down_proj', prefix),
+        )
 
     def forward(self, x):
         """forward."""
@@ -162,37 +173,44 @@ class Qwen3DecoderLayer(nn.Module):
                  config: PretrainedConfig,
                  layer_idx: int,
                  dtype: torch.dtype = None,
-                 device: torch.device = None):
+                 device: torch.device = None,
+                 prefix: str = ''):
         super().__init__()
         self.layer_idx = layer_idx
         quantization_config = getattr(config, 'quantization_config', None)
 
         # build attention layer
-        self.self_attn = Qwen3Attention(config, dtype=dtype, device=device)
+        self.self_attn = Qwen3Attention(config, dtype=dtype, device=device, prefix=add_prefix('self_attn', prefix))
 
         # build MLP
-        self.mlp = Qwen3MLP(config, dtype=dtype, device=device)
+        self.mlp = Qwen3MLP(config, dtype=dtype, device=device, prefix=add_prefix('mlp', prefix))
 
         # build input layer norm
-        self.input_layernorm = RMSNorm(config.hidden_size,
-                                       config.rms_norm_eps,
-                                       quant_config=quantization_config,
-                                       dtype=dtype,
-                                       device=device)
+        self.input_layernorm = RMSNorm(
+            config.hidden_size,
+            config.rms_norm_eps,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device,
+            prefix=add_prefix('input_layernorm', prefix),
+        )
 
         # build attention layer norm
-        self.post_attention_layernorm = RMSNorm(config.hidden_size,
-                                                config.rms_norm_eps,
-                                                quant_config=quantization_config,
-                                                dtype=dtype,
-                                                device=device)
+        self.post_attention_layernorm = RMSNorm(
+            config.hidden_size,
+            config.rms_norm_eps,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device,
+            prefix=add_prefix('post_attention_layernorm', prefix),
+        )
 
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[List[torch.FloatTensor]],
-        residual: Optional[torch.Tensor] = None,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: list[torch.FloatTensor] | None,
+        residual: torch.Tensor | None = None,
         attn_metadata: Any = None,
     ):
 
@@ -221,20 +239,30 @@ class Qwen3DecoderLayer(nn.Module):
 class Qwen3model(nn.Module):
     """model."""
 
-    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 prefix: str = ''):
         super().__init__()
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
 
-        self.embed_tokens = nn.Embedding(config.vocab_size,
-                                         config.hidden_size,
-                                         self.padding_idx,
-                                         dtype=dtype,
-                                         device=device)
+        self.embed_tokens = build_embedding(
+            config.vocab_size,
+            config.hidden_size,
+            self.padding_idx,
+            dtype=dtype,
+            device=device,
+        )
 
         # build all decode layers
         self.layers = nn.ModuleList([
-            Qwen3DecoderLayer(config, layer_idx, dtype=dtype, device=device)
+            Qwen3DecoderLayer(config,
+                              layer_idx,
+                              dtype=dtype,
+                              device=device,
+                              prefix=add_prefix(f'layers.{layer_idx}', prefix))
             for layer_idx in range(config.num_hidden_layers)
         ])
 
@@ -242,26 +270,15 @@ class Qwen3model(nn.Module):
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
 
         # build rotary embedding
-        # emb_type = RopeType.LinearScaling
-        rope_params = build_rotary_params(config)
-        # Qwen3 explicitly set head_dim in config
-        rope_dim = config.head_dim
-        rope_max_pos_emb = config.max_position_embeddings
-        rope_base = config.rope_theta
-        self.rotary_emb = build_rotary_embedding(
-            rope_dim,
-            rope_max_pos_emb,
-            rope_base,
-            **rope_params,
-        )
+        self.rotary_emb = build_rotary_embedding_from_config(config, device=device)
 
     def forward(
         self,
         input_ids: torch.LongTensor = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,
         attn_metadata: Any = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
+        inputs_embeds: torch.FloatTensor | None = None,
     ):
         """Rewrite of LlamaModel.forward."""
 
@@ -298,7 +315,7 @@ class Qwen3model(nn.Module):
         return self.embed_tokens
 
 
-class Qwen3ForCausalLM(nn.Module, CudaGraphMixin):
+class Qwen3ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
     """ModelForCausalLM."""
 
     packed_modules_mapping = {
@@ -317,24 +334,21 @@ class Qwen3ForCausalLM(nn.Module, CudaGraphMixin):
                  config: PretrainedConfig,
                  ctx_mgr: StepContextManager,
                  dtype: torch.dtype = None,
-                 device: torch.device = None):
+                 device: torch.device = None,
+                 prefix: str = ''):
         super().__init__()
         self.config = config
         self.ctx_mgr = ctx_mgr
         # build model
-        self.model = Qwen3model(config, dtype=dtype, device=device)
+        self.model = Qwen3model(config, dtype=dtype, device=device, prefix=add_prefix('model', prefix))
         # build lm_head
-        self.lm_head = build_rowwise_linear(config.hidden_size,
-                                            config.vocab_size,
-                                            bias=False,
-                                            dtype=dtype,
-                                            device=device)
+        self.lm_head = self.build_lm_head(config.hidden_size, config.vocab_size, bias=False, dtype=dtype, device=device)
 
     def forward(
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
         **kwargs,
@@ -349,23 +363,14 @@ class Qwen3ForCausalLM(nn.Module, CudaGraphMixin):
         )
         return hidden_states
 
-    def get_logits(self, hidden_states: torch.Tensor):
-        """Compute logits of the model output."""
-        return self.lm_head(hidden_states)
-
-    def update_weights(self):
-        """Update weights."""
-        if self.config.tie_word_embeddings:
-            self.lm_head.weight = self.model.embed_tokens.weight
-
     def get_input_embeddings(self):
         """Get input embeddings."""
         return self.model.get_input_embeddings()
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
-        inputs_embeds: Optional[torch.Tensor] = None,
+        past_key_values: list[list[torch.Tensor]],
+        inputs_embeds: torch.Tensor | None = None,
         context: StepContext = None,
     ):
         """Prepare input."""
@@ -391,7 +396,7 @@ class Qwen3ForCausalLM(nn.Module, CudaGraphMixin):
             inputs_embeds=inputs_embeds,
         )
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
         # modify from vllm
         stacked_params_mapping = [

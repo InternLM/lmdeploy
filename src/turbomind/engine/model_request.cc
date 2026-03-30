@@ -6,9 +6,13 @@
 #include <type_traits>
 #include <utility>
 
+#include "xgrammar/compiler.h"
+#include "xgrammar/matcher.h"
+
 #include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/engine/request.h"
 #include "src/turbomind/utils/constant.h"
+#include "src/turbomind/utils/metrics.h"
 
 namespace turbomind {
 
@@ -105,6 +109,12 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
 
     auto state = std::make_shared<AtomicRequestState>();
 
+    auto metrics = param.enable_metrics ? std::make_shared<RequestMetrics>() : nullptr;
+    if (metrics) {
+        metrics->enqueue_time.store(RequestMetrics::timestamp(), std::memory_order_relaxed);
+        metrics->scheduled_time.store(0, std::memory_order_relaxed);
+    }
+
     if (param.session.start_flag) {
         session_id_ = param.session.id;
     }
@@ -115,16 +125,27 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
     r->stream_output = param.stream_output;
     r->forward_cb    = std::move(cb);
     r->state         = state;
+    r->metrics       = metrics;
 
     r->output_ids      = outputs_->at("output_ids");
     r->sequence_length = outputs_->at("sequence_length");
 
-    // Keep a weak reference for canceling the request
+    if (grammar_) {
+        r->grammar = std::move(grammar_);
+        r->matcher = std::make_shared<xgrammar::GrammarMatcher>(*r->grammar);
+    }
+
+    // Keep a WEAK reference for canceling the request
     request_ = r;
 
     gateway_->push({std::move(r)});
 
-    return OutputParam{outputs_, state};
+    return OutputParam{outputs_, state, metrics};
+}
+
+void ModelRequest::setGrammar(const xgrammar::CompiledGrammar& grammar)
+{
+    grammar_ = std::make_shared<xgrammar::CompiledGrammar>(grammar);
 }
 
 }  // namespace turbomind

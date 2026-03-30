@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
-from typing import Optional
 
 import torch
 import torch.distributed as dist
@@ -24,18 +23,20 @@ class DlinferLinearW8A8Impl(LinearW8A8Impl):
         self.out_dtype = out_dtype
         self.quant_dtype = quant_dtype
 
-    def update_weights(self, weight: torch.Tensor, scale: torch.Tensor, bias: Optional[torch.Tensor] = None):
+    def update_weights(self, weight: torch.Tensor, scale: torch.Tensor, bias: torch.Tensor | None = None):
         """Update weights."""
-        if os.getenv('DLINER_LINEAR_USE_NN_LAYOUT', '0') == '1':
+        if os.getenv('DLINFER_LINEAR_USE_NN_LAYOUT', '0') == '1':
             weight = weight.data.t().contiguous()
+            scale = scale.data.t().contiguous()
         return weight, scale, bias
 
     def forward(self,
                 x,
                 weight: torch.Tensor,
                 scale: torch.Tensor,
-                bias: Optional[torch.Tensor] = None,
-                all_reduce: bool = False):
+                bias: torch.Tensor | None = None,
+                all_reduce: bool = False,
+                group: torch.distributed.ProcessGroup | None = None):
         """forward."""
         if isinstance(x, torch.Tensor):
             input_quant, input_scale = dynamic_quant(x, self.quant_dtype)
@@ -45,7 +46,7 @@ class DlinferLinearW8A8Impl(LinearW8A8Impl):
 
         out = linear_w8a8(input_quant, weight, input_scale, scale, self.out_dtype, self.quant_dtype, bias)
         if all_reduce:
-            dist.all_reduce(out)
+            dist.all_reduce(out, group=group)
         return out
 
 

@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from contextlib import contextmanager
 
 import torch
 import triton
@@ -14,12 +13,34 @@ logger = get_logger('lmdeploy')
 
 
 @triton.jit
+def fast_log2_ceil(x):
+    bits_x = tl.cast(x, tl.uint32, bitcast=True)
+    exp_x = (bits_x >> 23) & 0xFF
+    man_bits = bits_x & ((1 << 23) - 1)
+    tmp = exp_x - 127 + tl.where(man_bits != 0, 1, 0)
+    return tl.cast(tmp, tl.int32)
+
+
+@triton.jit
+def fast_pow2(x):
+    bits_x = (x + 127) << 23
+    return tl.cast(bits_x, tl.float32, bitcast=True)
+
+
+@triton.jit
+def fast_round_scale(amax, fp8_max_inv):
+    return fast_pow2(fast_log2_ceil(amax * fp8_max_inv))
+
+
+@triton.jit(do_not_specialize=['M', 'M_out'])
 def _quant_fp8_kernel(
     a_ptr,
     out_ptr,
     scale_ptr,
     M,
     M_out,
+    K: tl.constexpr,
+    num_groups_per_cta: tl.constexpr,
     fp8_min: tl.constexpr,
     fp8_max: tl.constexpr,
     stride_am,
@@ -28,44 +49,63 @@ def _quant_fp8_kernel(
     stride_ok: tl.constexpr,
     stride_sm,
     stride_sg,
+    ROUND_SCALE: tl.constexpr,
     GROUP_SIZE: tl.constexpr,
     NUM_STAGES: tl.constexpr,
 ):
     """Quant fp8 kernel."""
-    group_id = tl.program_id(0)
+    group_id = tl.program_id(0) * num_groups_per_cta
     m_id_start = tl.program_id(1)
     m_id_stride = tl.num_programs(1)
 
-    g_offs = group_id * GROUP_SIZE + tl.arange(0, GROUP_SIZE)
+    GROUP_SIZE_CTA: tl.constexpr = GROUP_SIZE * num_groups_per_cta
+    g_offs = group_id * GROUP_SIZE + tl.arange(0, GROUP_SIZE_CTA)
     g_offs = tl.max_contiguous(tl.multiple_of(g_offs, GROUP_SIZE), GROUP_SIZE)
+    gs_offs = group_id + tl.arange(0, num_groups_per_cta)
     rfp8_max = 1 / fp8_max
 
     m_id = m_id_start
     a_ptrs = a_ptr + m_id * stride_am + g_offs * stride_ak
     o_ptrs = out_ptr + m_id * stride_om + g_offs * stride_ok
-    s_ptr = scale_ptr + m_id * stride_sm + group_id * stride_sg
+    s_ptr = scale_ptr + m_id * stride_sm + gs_offs * stride_sg
+    if K % GROUP_SIZE_CTA == 0:
+        mask_n = True
+        mask_s = True
+        mask_o = True
+    else:
+        mask_n = g_offs < K
+        mask_o = g_offs < K
+        mask_s = gs_offs < tl.cdiv(K, GROUP_SIZE)
 
     for m_id in tl.range(m_id_start, M_out, m_id_stride, num_stages=NUM_STAGES):
-
-        a = tl.load(a_ptrs, mask=m_id < M, other=0).to(tl.float32)
-        scale = tl.maximum(tl.max(tl.abs(a)), 1e-6) * rfp8_max
-        out = a / scale
+        a = tl.load(a_ptrs, mask=mask_n & (m_id < M), other=0)
+        a = a.reshape(num_groups_per_cta, GROUP_SIZE)
+        a_max = tl.max(tl.abs(a), axis=1)
+        a_max = tl.maximum(a_max, 1e-6).to(tl.float32)
+        if ROUND_SCALE == 1:
+            scale = fast_round_scale(a_max, rfp8_max)
+            rscale = 1 / scale
+        else:
+            scale = a_max * rfp8_max
+            rscale = fp8_max / a_max  # triton does not support rcp
+        out = a.to(tl.float32) * rscale[:, None]
 
         out = tl.clamp(out, fp8_min, fp8_max)
         out = out.to(out_ptr.dtype.element_ty)
-
-        tl.store(o_ptrs, out)
-        tl.store(s_ptr, scale)
+        out = out.reshape(GROUP_SIZE * num_groups_per_cta)
+        tl.store(o_ptrs, out, mask=mask_o)
+        tl.store(s_ptr, scale, mask=mask_s)
 
         a_ptrs += m_id_stride * stride_am
         o_ptrs += m_id_stride * stride_om
         s_ptr += m_id_stride * stride_sm
 
 
-def _quant_fp8_launcher(A: Tensor, group_size: int, out: Tensor, scales: Tensor):
+def _quant_fp8_launcher(A: Tensor, group_size: int, out: Tensor, scales: Tensor, scale_fmt: str | None = None):
     """Quant online."""
+    assert scale_fmt in (None, 'ue8m0')
+    round_scale = 1 if scale_fmt == 'ue8m0' else 0
     M, K = A.shape
-    num_groups = K // group_size
     M_out = out.size(0)
 
     dtype = out.dtype
@@ -73,22 +113,30 @@ def _quant_fp8_launcher(A: Tensor, group_size: int, out: Tensor, scales: Tensor)
     fmin = finfo.min
     fmax = finfo.max
 
-    num_warps = 1
-
+    num_warps = 2
+    # every cp/ldg instruct can load 128bit=16byte data
+    # each warp can read 512 byte data
+    elem_size = A.element_size()
+    num_groups_per_warp = 512 // (group_size * elem_size)
+    num_groups_per_cta = num_groups_per_warp * num_warps
+    grid_size0 = triton.cdiv(K, group_size * num_groups_per_cta)
     props = get_device_props(A.device.index)
     num_sm = props['multi_processor_count']
     warps_per_sm = props['warps_per_sm']
-    max_ctas = num_sm * warps_per_sm // num_warps
-    grid_size1 = min(M_out, max_ctas // num_groups)
+    blocks_per_sm = props['blocks_per_sm']
+    max_ctas = num_sm * min(blocks_per_sm, warps_per_sm // num_warps)
+    grid_size1 = min(M_out, max_ctas // grid_size0)
     assert grid_size1 < 65536
-    num_stages = min(5, max(1, triton.cdiv(M_out, grid_size1)))
-    grid = (num_groups, grid_size1)
+    num_stages = min(4, max(1, triton.cdiv(M_out, grid_size1)))
+    grid = (grid_size0, grid_size1)
     _quant_fp8_kernel[grid](
         A,
         out,
         scales,
         M,
         M_out,
+        K,
+        num_groups_per_cta=num_groups_per_cta,
         fp8_min=fmin,
         fp8_max=fmax,
         stride_am=A.stride(0),
@@ -97,6 +145,7 @@ def _quant_fp8_launcher(A: Tensor, group_size: int, out: Tensor, scales: Tensor)
         stride_ok=out.stride(1),
         stride_sm=scales.stride(0),
         stride_sg=scales.stride(1),
+        ROUND_SCALE=round_scale,
         GROUP_SIZE=group_size,
         NUM_STAGES=num_stages,
         num_warps=num_warps,
@@ -106,7 +155,11 @@ def _quant_fp8_launcher(A: Tensor, group_size: int, out: Tensor, scales: Tensor)
     return out, scales
 
 
-def quant_fp8(A: Tensor, group_size: int, dtype: torch.dtype = torch.float8_e4m3fn, trans_scale: bool = False):
+def quant_fp8(A: Tensor,
+              group_size: int,
+              dtype: torch.dtype = torch.float8_e4m3fn,
+              trans_scale: bool = False,
+              scale_fmt: str | None = None):
     """Quant fp8."""
     assert A.dim() == 2
     M, K = A.shape
@@ -117,12 +170,15 @@ def quant_fp8(A: Tensor, group_size: int, dtype: torch.dtype = torch.float8_e4m3
         scales = A.new_empty(num_groups, M, dtype=torch.float32).T
     else:
         scales = A.new_empty(M, num_groups, dtype=torch.float32)
-    return _quant_fp8_launcher(A, group_size, out, scales)
+    return _quant_fp8_launcher(A, group_size, out, scales, scale_fmt=scale_fmt)
 
 
-def quant_fp8_tma(A: Tensor, group_size: int, dtype: torch.dtype = torch.float8_e4m3fn):
+def quant_fp8_tma(A: Tensor,
+                  group_size: int,
+                  dtype: torch.dtype = torch.float8_e4m3fn,
+                  scale_fmt: str | None = None):
     """Quant fp8 tma."""
-    from deep_gemm.jit_kernels.utils import ceil_div, get_m_alignment_for_contiguous_layout
+    from lmdeploy.pytorch.third_party.deep_gemm import ceil_div, get_m_alignment_for_contiguous_layout
     assert A.dim() == 2
     M, K = A.shape
     assert K % group_size == 0
@@ -131,18 +187,26 @@ def quant_fp8_tma(A: Tensor, group_size: int, dtype: torch.dtype = torch.float8_
     aligned_M = ceil_div(M, alignment) * alignment
     out = A.new_empty(aligned_M, K, dtype=dtype)
     scales = A.new_empty(num_groups, aligned_M, dtype=torch.float32).T
-    return _quant_fp8_launcher(A, group_size, out, scales)
+    return _quant_fp8_launcher(A, group_size, out, scales, scale_fmt=scale_fmt)
+
+
+def _gemm_fp8_tma_pre_hook(nargs):
+    BLOCK_M = nargs['BLOCK_M']
+    BLOCK_N = nargs['BLOCK_N']
+    BLOCK_K = nargs['BLOCK_K']
+    nargs['desc_a'].block_shape = (BLOCK_M, BLOCK_K)
+    nargs['desc_b'].block_shape = (BLOCK_N, BLOCK_K)
 
 
 @triton.autotune(configs=[
     triton.Config({
         'BLOCK_M': 128,
         'BLOCK_N': 128,
-    }, num_stages=3, num_warps=8),
+    }, num_stages=3, num_warps=8, pre_hook=_gemm_fp8_tma_pre_hook),
     triton.Config({
         'BLOCK_M': 128,
         'BLOCK_N': 64,
-    }, num_stages=3, num_warps=4)
+    }, num_stages=3, num_warps=4, pre_hook=_gemm_fp8_tma_pre_hook)
 ],
                  key=['N', 'K'])
 @triton.jit
@@ -164,7 +228,6 @@ def _gemm_fp8_tma_kernel(
     stride_bsn: tl.constexpr,
     stride_cm,
     stride_cn: tl.constexpr,
-    dtype: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
     BLOCK_K: tl.constexpr,
@@ -202,8 +265,8 @@ def _gemm_fp8_tma_kernel(
         b_scale = tl.load(bs_ptrs + offs_ksb * stride_bsk, mask=k_start < K, other=1.0)
 
         # load ab
-        a = tl._experimental_descriptor_load(desc_a, [off_m, off_k], [BLOCK_M, BLOCK_K], dtype)
-        b = tl._experimental_descriptor_load(desc_b, [off_n, off_k], [BLOCK_N, BLOCK_K], dtype).T
+        a = desc_a.load([off_m, off_k])
+        b = desc_b.load([off_n, off_k]).T
 
         # mma
         accumulator = tl.dot(a, b, acc=accumulator * acc_ratio[:, None])
@@ -233,9 +296,7 @@ def _gemm_fp8_tma_kernel(
         'BLOCK_N': 64,
     }, num_stages=3, num_warps=4)
 ],
-                 key=['N', 'K'],
-                 warmup=5,
-                 rep=10)
+                 key=['N', 'K'])
 @triton.jit
 def _gemm_fp8_kernel(
     A,
@@ -352,41 +413,17 @@ def blocked_gemm_fp8(A: Tensor,
 
     # run_tma = False
     if run_tma:
-        from .utils import TmaAutoTuneHelper
+        from .utils import TensorDescriptor
 
-        desc_helper = TmaAutoTuneHelper()
-        desc_helper.init_tma_descriptor('desc_a')
-        desc_helper.init_tma_descriptor('desc_b')
-
-        desc_a = desc_helper.get_tma_descriptor_kernel_param('desc_a')
-        desc_b = desc_helper.get_tma_descriptor_kernel_param('desc_b')
+        dummy_block = (1, 1)
+        desc_a = TensorDescriptor.from_tensor(A, block_shape=dummy_block)
+        desc_b = TensorDescriptor.from_tensor(B.T, block_shape=dummy_block)
 
         def _grid_tma(META):
             """Grid tma."""
             BLOCK_M = META['BLOCK_M']
             BLOCK_N = META['BLOCK_N']
-            desc_helper.fill_2d_tma_descriptor('desc_a',
-                                               A.data_ptr(),
-                                               dim1=M,
-                                               dim0=K,
-                                               block_dim1=BLOCK_M,
-                                               block_dim0=BLOCK_K,
-                                               element_size=A.element_size())
-            desc_helper.fill_2d_tma_descriptor('desc_b',
-                                               B.data_ptr(),
-                                               dim1=N,
-                                               dim0=K,
-                                               block_dim1=BLOCK_N,
-                                               block_dim0=BLOCK_K,
-                                               element_size=B.element_size())
             return (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), )
-
-        if A.dtype in (torch.float8_e4m3fn, torch.float8_e4m3fnuz):
-            dtype = tl.float8e4nv
-        elif A.dtype in (torch.float8_e5m2, torch.float8_e5m2fnuz):
-            dtype = tl.float8e5
-        else:
-            raise RuntimeError(f'Not supported dtype: {A.dtype}')
 
         _gemm_fp8_tma_kernel[_grid_tma](
             desc_a,
@@ -406,13 +443,8 @@ def blocked_gemm_fp8(A: Tensor,
             stride_bsn=B_scale.stride(1),
             stride_cm=C.stride(0),
             stride_cn=C.stride(1),
-            dtype=dtype,
-            # BLOCK_M=BLOCK_M,
-            # BLOCK_N=BLOCK_N,
             BLOCK_K=BLOCK_K,
             GROUP_M=8,
-            # num_warps=num_warps,
-            # num_stages=num_stages,
         )
     else:
         _gemm_fp8_kernel[grid](
@@ -444,38 +476,16 @@ def blocked_gemm_fp8(A: Tensor,
     return C
 
 
-@contextmanager
-def _log_jit_build(M: int, N: int, K: int):
-    from deep_gemm.jit.runtime import RuntimeCache
-
-    if hasattr(RuntimeCache, 'get'):
-        func_name = 'get'
-    else:
-        func_name = '__getitem__'
-    origin_func = getattr(RuntimeCache, func_name)
-
-    def __patched_func(self, *args, **kwargs):
-        ret = origin_func(self, *args, **kwargs)
-        if ret is None:
-            logger.warning(f'DeepGemm build <gemm_fp8_fp8_bf16_nt>: M={M}, N={N}, K={K}. Please waiting.')
-        return ret
-
-    setattr(RuntimeCache, func_name, __patched_func)
-    yield
-    setattr(RuntimeCache, func_name, origin_func)
-
-
 def deep_gemm_fp8(A: Tensor,
                   A_scale: Tensor,
                   B: Tensor,
                   B_scale: torch.Tensor,
                   out_dtype: torch.dtype = torch.bfloat16):
     """Deepgemm fp8."""
-    from deep_gemm.jit_kernels.gemm import gemm_fp8_fp8_bf16_nt
-    M, K = A.shape
+    from lmdeploy.pytorch.third_party.deep_gemm import fp8_gemm_nt
+    M, _ = A.shape
     N, _ = B.shape
     assert out_dtype == torch.bfloat16, 'DeepGemm requires bf16 output.'
     C = A.new_empty(M, N, dtype=out_dtype)
-    with _log_jit_build(M, N, K):
-        gemm_fp8_fp8_bf16_nt((A, A_scale), (B, B_scale), C)
+    fp8_gemm_nt((A, A_scale), (B, B_scale), C, None)
     return C

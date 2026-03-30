@@ -49,24 +49,18 @@ __device__ inline __nv_bfloat16 getMaxValue<__nv_bfloat16>()
 }
 #endif
 
-template<typename T>
-__global__ void ban_bad_words(T*         logits,
-                              const int* output_ids_buf,
-                              const int* parent_ids_buf,
-                              int        batch_size,
-                              int        beam_width,
-                              const int* bad_words,
-                              size_t     bad_words_len,
-                              bool       share_words,
-                              int        id_offset,
-                              int        vocab_size_padded,
-                              size_t     step)
+template<class T>
+__global__ void BanBadWordsKernel(T*                logits,
+                                  const int* const* token_ids_ptrs,
+                                  const int*        sequence_length,
+                                  const int*        bad_words,
+                                  size_t            bad_words_len,
+                                  int               vocab_size)
 {
     const int id        = blockIdx.x * blockDim.x + threadIdx.x;
-    const int batch_idx = blockIdx.y / beam_width;
-    const int beam_idx  = blockIdx.y % beam_width;
+    const int batch_idx = blockIdx.y;
 
-    const int* base_bad_words         = share_words ? bad_words : bad_words + batch_idx * 2 * bad_words_len;
+    const int* base_bad_words         = bad_words + batch_idx * 2 * bad_words_len;
     const int* base_bad_words_offsets = base_bad_words + bad_words_len;
 
     if (id >= bad_words_len || base_bad_words_offsets[id] < 0) {
@@ -77,92 +71,57 @@ __global__ void ban_bad_words(T*         logits,
     const int item_start = (id > 0) ? base_bad_words_offsets[id - 1] : 0;
     const int item_size  = item_end - item_start;
 
+    const int  seq_len   = sequence_length[batch_idx];
+    const int* token_ids = token_ids_ptrs[batch_idx];
+
     /* The single-token case unconditionally bans the token */
     bool should_ban = item_size == 1;
 
     /* Multi-token case and enough previously generated tokens to look for a match */
-    if (item_size > 1 && step >= item_size - 1) {
-        should_ban             = true;
-        int        parent_id   = beam_idx;
-        const bool gather_beam = beam_width > 1;
-
-        for (int token_idx = item_size - 2; token_idx >= 0; token_idx--) {
-            const int previous_token = output_ids_buf[(step - (item_size - 1) + token_idx) * batch_size * beam_width
-                                                      + id_offset + batch_idx * beam_width + parent_id];
-
-            if (previous_token != base_bad_words[item_start + token_idx]) {
+    if (item_size > 1 && seq_len >= item_size - 1) {
+        should_ban = true;
+        for (int token_idx = item_size - 2, offset = seq_len - 1; token_idx >= 0; token_idx--, offset--) {
+            if (token_ids[offset] != base_bad_words[item_start + token_idx]) {
                 should_ban = false;
                 break;
             }
-            if (gather_beam) {
-                parent_id = parent_ids_buf[(step - (item_size - 1) + token_idx) * beam_width * batch_size + id_offset
-                                           + batch_idx * beam_width + parent_id];
-
-                if (parent_id < 0 || parent_id >= beam_width) {
-                    should_ban = false;
-                    break;
-                }
-            }
         }
     }
 
+    logits += batch_idx * (int64_t)vocab_size;
     if (should_ban) {
         int banned_token = base_bad_words[item_end - 1];
-        if (0 < banned_token && banned_token < vocab_size_padded) {
-            logits[batch_idx * beam_width * vocab_size_padded + beam_idx * vocab_size_padded + banned_token] =
-                -getMaxValue<T>();
+        if (0 < banned_token && banned_token < vocab_size) {
+            logits[banned_token] = -getMaxValue<T>();
         }
     }
 }
 
-template<typename T>
-void invokeBanBadWords(T*           logits,
-                       const int*   output_ids_buf,
-                       const int*   parent_ids_buf,
-                       int          batch_size,
-                       int          local_batch_size,
-                       int          beam_width,
-                       const int*   bad_words,
-                       bool         share_words,
-                       size_t       bad_words_len,
-                       int          id_offset,
-                       int          vocab_size_padded,
-                       size_t       step,
-                       cudaStream_t stream)
+void BanBadWords(Tensor&             logits,
+                 const Buffer_<int*> token_ids_ptrs,
+                 const Buffer_<int>& sequence_length,
+                 const Tensor_<int>& bad_words,
+                 cudaStream_t        stream)
 {
-    dim3 block, grid;
-    block.x = min((unsigned long)((bad_words_len + 32 - 1) / 32) * 32, 256UL);
-    grid.x  = (bad_words_len + block.x - 1) / block.x;
-    grid.y  = local_batch_size * beam_width;
 
-    ban_bad_words<<<grid, block, 0, stream>>>(logits,
-                                              output_ids_buf,
-                                              parent_ids_buf,
-                                              batch_size,
-                                              beam_width,
-                                              bad_words,
-                                              bad_words_len,
-                                              share_words,
-                                              id_offset,
-                                              vocab_size_padded,
-                                              step);
+    auto invoke = [&](auto dtype) {
+        using T = decltype(dtype);
+
+        const auto [bsz, vocab_size] = logits.shapes(0, 1);
+        const int bad_words_len      = bad_words.shape(2);
+
+        const int  block = std::min(round_up(bad_words_len, WARP_SIZE), 256);
+        const dim3 grid(cdiv(bad_words_len, block), bsz);
+
+        BanBadWordsKernel<<<grid, block, 0, stream>>>(logits.data<T>(),
+                                                      token_ids_ptrs.data(),
+                                                      sequence_length.data(),
+                                                      bad_words.data(),
+                                                      bad_words_len,
+                                                      vocab_size);
+    };
+
+    invoke(float{});
 }
-
-#define INSTANTIATE_INVOKE_BAN_BAD_WORDS(T)                                                                            \
-    template void invokeBanBadWords<T>(T * logits,                                                                     \
-                                       const int*   output_ids_buf,                                                    \
-                                       const int*   parent_ids_buf,                                                    \
-                                       int          batch_size,                                                        \
-                                       int          local_batch_size,                                                  \
-                                       int          beam_width,                                                        \
-                                       const int*   bad_words,                                                         \
-                                       bool         share_words,                                                       \
-                                       size_t       bad_words_len,                                                     \
-                                       int          id_offset,                                                         \
-                                       int          vocab_size_padded,                                                 \
-                                       size_t       step,                                                              \
-                                       cudaStream_t stream);
-
-INSTANTIATE_INVOKE_BAN_BAD_WORDS(float);
 
 }  // namespace turbomind

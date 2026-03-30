@@ -1,0 +1,105 @@
+model_path: /mnt/vc-intern-delivery/qa-llm-cicd/qa_test_models
+resource_path: /mnt/vc-intern-delivery/qa-llm-cicd/resource
+log_path: /mnt/vc-intern-delivery/qa-llm-cicd/log
+server_log_path: /mnt/vc-intern-delivery/qa-llm-cicd/server_log
+eval_path: /mnt/vc-intern-delivery/qa-llm-cicd/evaluation_report
+mllm_eval_path: /mnt/vc-intern-delivery/qa-llm-cicd/mllm_evaluation_report
+benchmark_path: /mnt/vc-intern-delivery/qa-llm-cicd/benchmark_report
+dataset_path: /mnt/vc-intern-delivery/qa-llm-cicd/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
+prefix_dataset_path: /mnt/vc-intern-delivery/qa-llm-cicd/datasets/prefix_cache_test.json
+env_tag: ascend
+device: ascend
+
+config:
+    tp:
+        Qwen/Qwen3-30B-A3B: 4
+        Qwen/Qwen3-235B-A22B: 16
+        Qwen/Qwen3-32B: 4
+        Qwen/Qwen3-8B: 2
+        internlm/Intern-S1: 16
+        internlm/Intern-S1-mini: 2
+        OpenGVLab/InternVL3_5-8B: 2
+        OpenGVLab/InternVL3_5-38B: 4
+        Qwen/Qwen3-VL-30B-A3B-Instruct: 4
+        Qwen/Qwen3-VL-8B-Instruct: 2
+        Qwen/Qwen3-VL-32B-Instruct: 4
+
+pytorch_chat_model:
+    tp:
+        - Qwen/Qwen3-30B-A3B
+        - Qwen/Qwen3-235B-A22B
+        - Qwen/Qwen3-32B
+        - Qwen/Qwen3-8B
+        - Qwen/Qwen3-0.6B
+
+pytorch_vl_model:
+    tp:
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
+        - OpenGVLab/InternVL3_5-2B
+        - OpenGVLab/InternVL3_5-8B
+        - OpenGVLab/InternVL3_5-38B
+        - Qwen/Qwen3-VL-30B-A3B-Instruct
+        - Qwen/Qwen3-VL-8B-Instruct
+        - Qwen/Qwen3-VL-32B-Instruct
+
+
+pytorch_base_model:
+    tp:
+        - Qwen/Qwen3-0.6B
+
+pytorch_quantization:
+    awq:
+        - Empty
+    w8a8:
+        - Empty
+    no_kvint4:
+        - Qwen/Qwen3-30B-A3B
+        - Qwen/Qwen3-235B-A22B
+        - Qwen/Qwen3-32B
+        - Qwen/Qwen3-8B
+        - Qwen/Qwen3-0.6B
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
+        - OpenGVLab/InternVL3_5-2B
+        - OpenGVLab/InternVL3_5-8B
+        - OpenGVLab/InternVL3_5-38B
+        - Qwen/Qwen3-VL-30B-A3B-Instruct
+        - Qwen/Qwen3-VL-8B-Instruct
+        - Qwen/Qwen3-VL-32B-Instruct
+    no_kvint8:
+        - Qwen/Qwen3-30B-A3B
+        - Qwen/Qwen3-235B-A22B
+        - Qwen/Qwen3-32B
+        - Qwen/Qwen3-8B
+        - Qwen/Qwen3-0.6B
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
+        - OpenGVLab/InternVL3_5-2B
+        - OpenGVLab/InternVL3_5-8B
+        - OpenGVLab/InternVL3_5-38B
+        - Qwen/Qwen3-VL-30B-A3B-Instruct
+        - Qwen/Qwen3-VL-8B-Instruct
+        - Qwen/Qwen3-VL-32B-Instruct
+
+longtext_model:
+    - Qwen/Qwen3-30B-A3B
+
+benchmark_model:
+    - Qwen/Qwen3-30B-A3B
+    - Qwen/Qwen3-235B-A22B
+    - Qwen/Qwen3-32B
+    - Qwen/Qwen3-8B
+    - Qwen/Qwen3-0.6B
+    - internlm/Intern-S1
+    - internlm/Intern-S1-mini
+
+
+evaluate_model:
+    - Qwen/Qwen3-30B-A3B
+    - Qwen/Qwen3-235B-A22B
+
+mllm_evaluate_model:
+    - Qwen/Qwen3-VL-30B-A3B-Instruct
+    - Qwen/Qwen3-VL-8B-Instruct
+    - Qwen/Qwen3-VL-32B-Instruct

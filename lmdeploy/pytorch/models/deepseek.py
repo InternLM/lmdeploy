@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
+from typing import Any
 
 import torch
 from torch import nn
@@ -9,7 +10,7 @@ from transformers.configuration_utils import PretrainedConfig
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
 from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
@@ -62,8 +63,8 @@ class DeepseekAttention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: tuple[torch.Tensor] | None = None,
         attn_metadata: Any = None,
     ):
         """Rewrite of LlamaAttention.forward."""
@@ -123,7 +124,10 @@ class DeepseekMoE(nn.Module):
             is_tp=False,
         )
 
-        self.softmax_topk = SoftmaxTopK(self.top_k)
+        self.softmax_topk = SoftmaxTopK(
+            self.top_k,
+            n_groups=getattr(config, 'router_n_groups', -1),
+        )
 
         self.experts = build_fused_moe(
             self.hidden_dim,
@@ -257,9 +261,9 @@ class DeepseekDecoderLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[List[torch.FloatTensor]],
-        residual: Optional[torch.Tensor] = None,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: list[torch.FloatTensor] | None,
+        residual: torch.Tensor | None = None,
         attn_metadata: Any = None,
     ):
 
@@ -309,37 +313,15 @@ class DeepseekModel(nn.Module):
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
 
         # build rotary embedding
-        rope_scaling = getattr(config, 'rope_scaling', None)
-        emb_type = RopeType.LinearScaling
-        scaling_factor = 1.0
-        if rope_scaling is not None:
-            rope_type = rope_scaling['type']
-            if rope_type == 'linear':
-                emb_type = RopeType.LinearScaling
-            if rope_type == 'dynamic':
-                emb_type = RopeType.DynamicNTKScaling
-            else:
-                raise RuntimeError(f'Unsupported rope type: {rope_type}')
-            scaling_factor = rope_scaling.get('factor', scaling_factor)
-
-        rope_dim = config.hidden_size // config.num_attention_heads
-        rope_max_pos_emb = config.max_position_embeddings
-        rope_base = config.rope_theta
-        self.rotary_emb = build_rotary_embedding(
-            rope_dim,
-            rope_max_pos_emb,
-            rope_base,
-            scaling_factor,
-            emb_type=emb_type,
-        )
+        self.rotary_emb = build_rotary_embedding_from_config(config)
 
     def forward(
         self,
         input_ids: torch.LongTensor = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,
         attn_metadata: Any = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
+        inputs_embeds: torch.FloatTensor | None = None,
     ):
         """Rewrite of LlamaModel.forward."""
 
@@ -412,7 +394,7 @@ class DeepseekForCausalLM(nn.Module, CudaGraphMixin):
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
         **kwargs,
@@ -437,8 +419,8 @@ class DeepseekForCausalLM(nn.Module, CudaGraphMixin):
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
-        inputs_embeds: Optional[torch.Tensor] = None,
+        past_key_values: list[list[torch.Tensor]],
+        inputs_embeds: torch.Tensor | None = None,
         context: StepContext = None,
     ):
         """Prepare input."""
@@ -464,8 +446,8 @@ class DeepseekForCausalLM(nn.Module, CudaGraphMixin):
             inputs_embeds=inputs_embeds,
         )
 
-    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
-                             expert_params_mapping: List):
+    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
+                             expert_params_mapping: list):
         """Load weight experts."""
         for (param_name, weight_name, expert_id, shard_id) in expert_params_mapping:
             if weight_name not in name:
@@ -478,7 +460,7 @@ class DeepseekForCausalLM(nn.Module, CudaGraphMixin):
             param = params_dict[name]
             load_weight(param, loaded_weight)
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
         # modify from vllm
         stacked_params_mapping = [
