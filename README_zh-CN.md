@@ -217,25 +217,23 @@ LMDeploy 支持 2 种推理引擎： [TurboMind](./docs/zh_cn/inference/turbomin
 
 ## 安装
 
-我们推荐在一个干净的conda环境下（python3.9 - 3.12），安装 lmdeploy：
+我们推荐在一个干净的conda环境下（python3.10 - 3.13），安装 lmdeploy：
 
 ```shell
-conda create -n lmdeploy python=3.10 -y
+conda create -n lmdeploy python=3.12 -y
 conda activate lmdeploy
 pip install lmdeploy
 ```
 
-自 v0.3.0 版本起，默认预编译包基于 **CUDA 12** 编译。
+自 v0.3.0 版本起，默认预编译包基于 **CUDA 12** 编译。v0.10.2 及更高版本中，LMDeploy 不再支持 CUDA 11+。
 
-若使用 GeForce RTX 50 系列显卡，请安装基于 **CUDA 12.8** 编译的 LMDeploy 预编译包。
+若使用 GeForce RTX 50 系列显卡，请按照如下方式安装基于 **CUDA 12.8** 编译的 LMDeploy 预编译包。
 
 ```shell
 export LMDEPLOY_VERSION=0.12.2
-export PYTHON_VERSION=310
+export PYTHON_VERSION=312
 pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu128-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu128
 ```
-
-如果需要在 CUDA 11+ 下安装 LMDeploy，或者源码安装 LMDeploy，请参考[安装文档](docs/zh_cn/get_started/installation.md)
 
 ## 离线批处理
 

@@ -409,6 +409,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
+    if VariableInterface.tool_parser is not None:
+        request = VariableInterface.tool_parser.adjust_request(request)
     _n = request.n or 1
     if _n == 1:
         sessions = [VariableInterface.get_session(request.session_id)]
@@ -528,6 +530,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 do_preprocess=do_preprocess,
                 adapter_name=adapter_name,
                 chat_template_kwargs=chat_template_kwargs or None,
+                media_io_kwargs=request.media_io_kwargs,
                 mm_processor_kwargs=request.mm_processor_kwargs))
 
     def create_stream_response_json(index: int,

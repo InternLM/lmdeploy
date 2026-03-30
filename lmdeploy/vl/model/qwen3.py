@@ -41,59 +41,32 @@ class Qwen3VLModel(VisionModel):
         self.vision_start_token = self.processor.vision_start_token
         self.vision_end_token = self.processor.vision_end_token
 
-    def get_processor_args(self, mm_processor_kwargs: dict[str, Any] | None = None):
-        min_pixels = self.processor.image_processor.size['shortest_edge']
-        max_pixels = self.processor.image_processor.size['longest_edge']
+    def resolve_size_params(self, processor, mm_processor_kwargs: dict[str, Any] | None = None):
+        default_min = processor.size['shortest_edge']
+        default_max = processor.size['longest_edge']
 
-        if mm_processor_kwargs is None:
-            return min_pixels, max_pixels
+        if not mm_processor_kwargs:
+            return processor.size
 
-        input_min_pixels = mm_processor_kwargs.get('min_pixels', None)
-        input_max_pixels = mm_processor_kwargs.get('max_pixels', None)
+        min_pixels = mm_processor_kwargs.get('min_pixels', default_min)
+        max_pixels = mm_processor_kwargs.get('max_pixels', default_max)
 
-        # boundary check for min_pixels and max_pixels
-        if input_min_pixels is None:
-            if input_max_pixels is not None:
-                # only max_pixels is given in the input
-                if input_max_pixels < min_pixels:
-                    logger.warning(
-                        f'input max_pixels {input_max_pixels} < default min_pixels {min_pixels}, fall back to default.')
-                    return min_pixels, max_pixels
-                max_pixels = input_max_pixels
-        else:
-            if input_max_pixels is None:
-                # only min_pixels is given in the input
-                if input_min_pixels > max_pixels:
-                    logger.warning(
-                        f'input min_pixels {input_min_pixels} > default max_pixels {max_pixels}, fall back to default.')
-                    return min_pixels, max_pixels
-            else:
-                if input_min_pixels > input_max_pixels:
-                    logger.warning(
-                        f'input min_pixels {input_min_pixels} > max_pixels {input_max_pixels}, fall back to default.')
-                    return min_pixels, max_pixels
-                max_pixels = input_max_pixels
-            min_pixels = input_min_pixels
+        if min_pixels > max_pixels:
+            logger.warning(f'min_pixels {min_pixels} > max_pixels {max_pixels}, falling back to defaults.')
+            return processor.size
 
-        return min_pixels, max_pixels
+        return {'shortest_edge': min_pixels, 'longest_edge': max_pixels}
 
     def _preprocess_image(self,
                           data: list[Any],
                           params: dict[str, Any],
                           mm_processor_kwargs: dict[str, Any] | None = None) -> list[dict]:
 
-        image = data.convert('RGB')
-        min_pixels, max_pixels = self.get_processor_args(mm_processor_kwargs)
-
-        result = self.processor.image_processor(images=image,
-                                                size={
-                                                    'shortest_edge': min_pixels,
-                                                    'longest_edge': max_pixels
-                                                },
-                                                return_tensors='pt')
+        size = self.resolve_size_params(self.processor.image_processor, mm_processor_kwargs)
+        result = self.processor.image_processor(images=data, size=size, return_tensors='pt')
         merge_length = self.processor.image_processor.merge_size**2
         image_tokens = result['image_grid_thw'].prod(dim=1) // merge_length
-        result.update(dict(image_size=image.size, image_tokens=image_tokens, image_token_id=self.image_token_id))
+        result.update(dict(image_size=data.size, image_tokens=image_tokens, image_token_id=self.image_token_id))
         return result
 
     def _preprocess_video(self,
@@ -101,29 +74,31 @@ class Qwen3VLModel(VisionModel):
                           params: dict[str, Any],
                           mm_processor_kwargs: dict[str, Any] | None = None) -> list[dict]:
 
-        # TODO: zhouxinyu, apply transformers smart_resize using per-request kwargs
         metadata = params['video_metadata']
-        video_kwargs = dict(return_metadata=True,
-                            do_resize=True,
-                            do_sample_frames=False,
-                            video_metadata=metadata,
-                            return_tensors='pt')
-        result = self.processor.video_processor(videos=data, **video_kwargs)
-        video_grid_thw = result['video_grid_thw']
+        if metadata.get('fps') is None or metadata['fps'] <= 0:
+            logger.warning('Qwen3VL: fps not found or invalid, fallback to 24.')
+            metadata['fps'] = 24
+        size = self.resolve_size_params(self.processor.video_processor, mm_processor_kwargs)
+
+        # do_resize = True, we leave resize to hf processor
+        # do_sample_frames = False, we already sample frames in video loader, avoid duplicates in hf processor
+        result = self.processor.video_processor(videos=data,
+                                                size=size,
+                                                return_metadata=True,
+                                                do_resize=True,
+                                                do_sample_frames=False,
+                                                video_metadata=metadata,
+                                                return_tensors='pt')
 
         merge_length = self.processor.video_processor.merge_size**2
-        if metadata.get('fps') is None:
-            logger.warning_once('Qwen3VL: fps not found, defaulting to 24.')
-            metadata['fps'] = metadata['fps'] or 24
-
-        # if timestamps are not provided, calculate them
+        video_grid_thw = result['video_grid_thw']
+        frame_seqlen = video_grid_thw[0][1:].prod() // merge_length
         curr_timestamp = self.processor._calculate_timestamps(
             metadata['frames_indices'],
             metadata['fps'],
             self.processor.video_processor.merge_size,
         )
 
-        frame_seqlen = video_grid_thw[0][1:].prod() // merge_length
         result.update(curr_timestamp=curr_timestamp, frame_seqlen=frame_seqlen, video_token_id=self.video_token_id)
         return result
 
@@ -170,8 +145,11 @@ class Qwen3VLModel(VisionModel):
         return prompt, None
 
     def to_pytorch_aux_video(self, messages, prompt, VIDEO_TOKEN, tokenizer, sequence_start):
-        """Pack the video input to the compatible format with pytorch
-        engine."""
+        """Pack the video input to the compatible format with pytorch engine.
+
+        Each video is split into per-frame (temporal step) entries so that the timestamp text tokens between frames get
+        sequential mrope positions and each frame's video-pad tokens get independent 3D spatial positions.
+        """
 
         # collect all preprocessing result from messages
         preps = [x['content'] for x in messages if x['role'] == 'preprocess']
@@ -183,35 +161,56 @@ class Qwen3VLModel(VisionModel):
         assert len(segs) == len(preps) + 1, (f'the number of {self.video_token} is not equal '
                                              f'to input videos, {len(segs) - 1} vs {len(preps)}')
 
-        # calculate the video token offset for each video
+        # calculate the video token offset for each frame
         input_ids = []
+        frame_preps = []
+
         for i, seg in enumerate(segs):
             if i > 0 and i <= len(preps):
-                preps[i - 1].update(offset=len(input_ids))
-                frame_seqlen = preps[i - 1]['frame_seqlen']
-                assert self.video_token_id == preps[i - 1]['video_token_id']
+                video_prep = preps[i - 1]
+                frame_seqlen = video_prep['frame_seqlen']
+                curr_timestamp = video_prep['curr_timestamp']
+                video_grid_thw = video_prep['video_grid_thw']
+                pixel_values_videos = video_prep['pixel_values_videos']
+                assert self.video_token_id == video_prep['video_token_id']
 
-                video_grid_thw = preps[i - 1]['video_grid_thw']
-                curr_timestamp = preps[i - 1]['curr_timestamp']
+                t, h, w = video_grid_thw[0].tolist()
 
-                # update prompt with timestamp index tokens and video pad tokens
-                video_placeholder = ''
-                for frame_idx in range(video_grid_thw[0][0]):
+                # each temporal step becomes an independent multimodal entry
+                for frame_idx in range(t):
                     curr_time = curr_timestamp[frame_idx]
-                    video_placeholder += f'<{curr_time:.1f} seconds>'
-                    video_placeholder += (self.vision_start_token + '<|placeholder|>' * frame_seqlen +
-                                          self.vision_end_token)
 
-                video_placeholder = video_placeholder.replace('<|placeholder|>', self.video_token)
-                video_token_ids = tokenizer.encode(video_placeholder)
-                input_ids.extend(video_token_ids)
+                    # timestamp text + vision_start (regular text tokens)
+                    prefix = f'<{curr_time:.1f} seconds>' + self.vision_start_token
+                    prefix_ids = tokenizer.encode(prefix, add_bos=False)
+                    input_ids.extend(prefix_ids)
 
-                preps[i - 1].update(video_tokens=len(video_token_ids))
+                    # video pad tokens for this frame
+                    frame_offset = len(input_ids)
+                    input_ids.extend([self.video_token_id] * frame_seqlen)
+
+                    # vision_end (regular text token)
+                    suffix_ids = tokenizer.encode(self.vision_end_token, add_bos=False)
+                    input_ids.extend(suffix_ids)
+
+                    # since we use timestamps to separate videos
+                    # like <t1> <vision_start> <frame1> <vision_end> <t2> <vision_start> <frame2> <vision_end>
+                    # the video_grid_thw should also be split, becomes [1, h, w] for each frame
+                    frame_preps.append(
+                        dict(
+                            offset=frame_offset,
+                            video_tokens=frame_seqlen,
+                            pixel_values_videos=pixel_values_videos[frame_idx * h * w:(frame_idx + 1) * h * w],
+                            video_grid_thw=torch.tensor([[1, h, w]]),
+                            video_token_id=self.video_token_id,
+                            modality=video_prep['modality'],
+                        )
+                    )
 
             token_ids = tokenizer.encode(seg, add_bos=((i == 0) and sequence_start))
             input_ids.extend(token_ids)
 
-        return dict(prompt=prompt, input_ids=input_ids, multimodal=preps)
+        return dict(prompt=prompt, input_ids=input_ids, multimodal=frame_preps)
 
     def to_pytorch(self,
                    messages,

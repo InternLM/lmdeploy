@@ -43,7 +43,6 @@ class CogVLMVisionModel(VisionModel):
         images = self.collect_multimodal_items(messages)
         outputs = []
         for modality, image, _ in images:
-            image = image.convert('RGB')
             pixel_values = self.image_transform(image)
             outputs.append(
                 dict(pixel_values=pixel_values,
