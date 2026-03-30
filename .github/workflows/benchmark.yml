@@ -133,7 +133,7 @@ jobs:
         run: |
           chmod -R 777 ${{env.TEST_CODE_PATH}}
           mkdir ${{env.REPORT_DIR}} -p
-          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
+          chmod -R 777 ${{env.REPORT_DIR}}
 
   benchmark:
     needs: download_pkgs
@@ -174,7 +174,6 @@ jobs:
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
           mkdir ${{env.REPORT_DIR}} -p
-          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
@@ -216,7 +215,6 @@ jobs:
       - name: Clear workfile
         if: always()
         run: |
-          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
