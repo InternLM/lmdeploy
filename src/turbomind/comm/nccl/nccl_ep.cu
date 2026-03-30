@@ -26,11 +26,14 @@ void NcclCommImpl::InitializeEp(const EpConfig& config)
     TM_CHECK_GE(version, NCCL_VERSION(2, 29, 7));
     ep_config_ = config;
 
-    const int num_rdma_bytes = config.num_nodes > 1 ? int(1e9) : 0;
-    const int num_ll_rdma_bytes =
-        config.ll_max_tokens_per_rank > 0 ? deep_ep ::get_low_latency_rdma_size_hint(
-            config.ll_max_tokens_per_rank, config.hidden, h_comm_->n_ranks(), config.num_experts) :
-                                            0;
+    const int num_rdma_bytes    = config.num_nodes > 1 ? int(1e9) : 0;
+    const int num_ll_rdma_bytes = [&]() -> int {
+        if (config.ll_max_tokens_per_rank > 0) {
+            return deep_ep::get_low_latency_rdma_size_hint(
+                config.ll_max_tokens_per_rank, config.hidden, h_comm_->n_ranks(), config.num_experts);
+        }
+        return 0;
+    }();
 
     const int num_local_experts = config.num_experts / h_comm_->n_ranks();
     const int num_sms           = 24;

@@ -88,9 +88,11 @@ public:
                    int          group,
                    cudaStream_t stream) override;
 
+#if NCCL_VERSION_CODE >= NCCL_VERSION(2, 29, 7)
     void InitializeEp(const EpConfig& config) override;
     void Dispatch(const EpDispatchInput& input, EpDispatchOutput& output, int group) override;
     void Combine(const EpCombineInput& input, EpCombineOutput& output, int group) override;
+#endif
 
 private:
     void Register(int group, void* buff, size_t size);
@@ -107,7 +109,9 @@ private:
 
     std::unordered_map<void*, size_t> buffers_;
 
+#if NCCL_VERSION_CODE >= NCCL_VERSION(2, 29, 7)
     std::unique_ptr<deep_ep::Buffer> buffer_;
+#endif
     EpConfig                         ep_config_;
 };
 
