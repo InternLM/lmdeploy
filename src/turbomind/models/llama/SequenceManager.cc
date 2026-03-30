@@ -723,7 +723,7 @@ auto SequenceManager::Materialize(Sequences             sequences,
         }
     }
 
-    // TM_LOG_ERROR("active: %4d, cached: %4d, free: %4d",
+    // TM_LOG_ERROR("active: {:4}, cached: {:4}, free: {:4}",
     //              block_manager_->active_count(),
     //              block_manager_->cached_count(),
     //              block_manager_->free_count());

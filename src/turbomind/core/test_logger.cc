@@ -278,6 +278,13 @@ TEST_CASE("Logger: async ordering under concurrent producers", "[logger]")
 
 TEST_CASE("Logger: async signal handler drains queue on fatal signal", "[logger][signal]")
 {
+    // Guard: verify we haven't triggered async mode in this process.
+    // All preceding tests force TM_LOG_ASYNC=0 via kSyncMode. If a future
+    // test enables async before this one, the fork inherits a destroyed
+    // AsyncLogWorker thread and the singleton is in an invalid state.
+    const char* async_env = std::getenv("TM_LOG_ASYNC");
+    REQUIRE((async_env != nullptr && std::string_view{async_env} == "0"));
+
     constexpr int kMsgCount = 20;
     std::vector<std::string> markers;
     markers.reserve(kMsgCount);
@@ -354,6 +361,121 @@ TEST_CASE("Logger: async signal handler drains queue on fatal signal", "[logger]
     for (int i = 0; i < kMsgCount; ++i) {
         REQUIRE(child_output.find(markers[i]) != std::string::npos);
     }
+}
+
+// ---------------------------------------------------------------------------
+// TM_LOG_FATAL abort test (fork-based)
+// ---------------------------------------------------------------------------
+TEST_CASE("Logger: TM_LOG_FATAL aborts the process", "[logger][fatal]")
+{
+    int pipefd[2];
+    REQUIRE(::pipe(pipefd) == 0);
+
+    pid_t pid = ::fork();
+    REQUIRE(pid >= 0);
+
+    if (pid == 0) {
+        // ---- CHILD PROCESS ----
+        ::close(pipefd[0]);
+        ::dup2(pipefd[1], STDERR_FILENO);
+        ::close(pipefd[1]);
+
+        ::setenv("TM_LOG_ASYNC", "0", 1);
+        ::setenv("TM_LOG_LEVEL", "TRACE", 1);
+
+        std::thread worker([&] {
+            // Reset Catch2's inherited SIGABRT handler so std::abort()
+            // kills the process rather than triggering Catch2's reporter.
+            ::signal(SIGABRT, SIG_DFL);
+            TM_LOG_FATAL("fatal-test-marker-{}", 42);
+        });
+        worker.join();
+        ::_exit(0);  // Should not reach here
+    }
+
+    // ---- PARENT PROCESS ----
+    ::close(pipefd[1]);
+
+    std::string child_output;
+    {
+        char    buf[4096];
+        ssize_t n;
+        while ((n = ::read(pipefd[0], buf, sizeof(buf))) > 0) {
+            child_output.append(buf, static_cast<size_t>(n));
+        }
+        ::close(pipefd[0]);
+    }
+
+    int wstatus = 0;
+    REQUIRE(::waitpid(pid, &wstatus, 0) == pid);
+
+    // Child should have been killed by SIGABRT (from std::abort).
+    REQUIRE(WIFSIGNALED(wstatus));
+    REQUIRE(WTERMSIG(wstatus) == SIGABRT);
+
+    // Fatal message should appear in output.
+    REQUIRE(child_output.find("fatal-test-marker-42") != std::string::npos);
+    REQUIRE(child_output.find("[FATAL]") != std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// Color disable test
+// ---------------------------------------------------------------------------
+TEST_CASE("Logger: TM_LOG_COLOR=0 disables ANSI escape codes", "[logger][color]")
+{
+    Logger::Instance().set_level(Logger::Level::kTrace);
+
+    auto output = CaptureStderr([&] {
+        // Color is determined at first use; since this test process started
+        // with TM_LOG_COLOR potentially unset, we use a forked child to
+        // control the env var from scratch.
+    });
+
+    // Fork a child with TM_LOG_COLOR=0 to test colorless output.
+    int pipefd[2];
+    REQUIRE(::pipe(pipefd) == 0);
+
+    pid_t pid = ::fork();
+    REQUIRE(pid >= 0);
+
+    if (pid == 0) {
+        ::close(pipefd[0]);
+        ::dup2(pipefd[1], STDERR_FILENO);
+        ::close(pipefd[1]);
+
+        ::setenv("TM_LOG_COLOR", "0", 1);
+        ::setenv("TM_LOG_ASYNC", "0", 1);
+        ::setenv("TM_LOG_LEVEL", "TRACE", 1);
+
+        std::thread worker([&] {
+            auto& log = Logger::Instance();
+            log.Log(Logger::Level::kError, "no-color-marker");
+        });
+        worker.join();
+        ::_exit(0);
+    }
+
+    ::close(pipefd[1]);
+
+    std::string child_output;
+    {
+        char    buf[4096];
+        ssize_t n;
+        while ((n = ::read(pipefd[0], buf, sizeof(buf))) > 0) {
+            child_output.append(buf, static_cast<size_t>(n));
+        }
+        ::close(pipefd[0]);
+    }
+
+    int wstatus = 0;
+    REQUIRE(::waitpid(pid, &wstatus, 0) == pid);
+    REQUIRE(WIFEXITED(wstatus));
+
+    // Message must be present.
+    REQUIRE(child_output.find("no-color-marker") != std::string::npos);
+
+    // Must NOT contain ANSI escape sequences (\x1b[).
+    REQUIRE(child_output.find("\x1b[") == std::string::npos);
 }
 
 #endif  // _WIN32

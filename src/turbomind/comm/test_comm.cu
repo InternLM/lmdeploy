@@ -817,7 +817,7 @@ struct TestComm {
             const int tp_rank_1 = d_comm->rank(group1);
             const int local_id  = g_rank / inner_tp;  // which local partition this rank belongs to
 
-            // TM_LOG_INFO("g_rank %d, dp_rank_0 %d, tp_rank_0 %d, dp_rank_1 %d, tp_rank_1 %d, local_id %d",
+            // TM_LOG_INFO("g_rank {}, dp_rank_0 {}, tp_rank_0 {}, dp_rank_1 {}, tp_rank_1 {}, local_id {}",
             //             g_rank,
             //             dp_rank_0,
             //             tp_rank_0,

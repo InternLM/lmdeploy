@@ -13,6 +13,9 @@
 #include <ctime>
 #include <string_view>
 #include <thread>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 #include <blockingconcurrentqueue.h>
 #include <fmt/color.h>
@@ -56,8 +59,14 @@ static std::string Timestamp()
 // ---------------------------------------------------------------------------
 static const char* Basename(const char* file)
 {
-    const char* last_slash = std::strrchr(file, '/');
-    return last_slash != nullptr ? last_slash + 1 : file;
+    const char* last_sep = std::strrchr(file, '/');
+#ifdef _WIN32
+    const char* last_bs = std::strrchr(file, '\\');
+    if (last_bs && (!last_sep || last_bs > last_sep)) {
+        last_sep = last_bs;
+    }
+#endif
+    return last_sep ? last_sep + 1 : file;
 }
 
 // ---------------------------------------------------------------------------
@@ -80,6 +89,35 @@ static fmt::text_style StyleFor(Logger::Level level)
             return fmt::fg(fmt::color::red) | fmt::emphasis::bold;
         default:
             return {};
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Color auto-detection: TM_LOG_COLOR env var → isatty fallback
+// ---------------------------------------------------------------------------
+static bool UseColor()
+{
+    static const bool kUseColor = [] {
+        const char* env = std::getenv("TM_LOG_COLOR");
+        if (env != nullptr) {
+            return std::string_view{env} != "0";
+        }
+#ifndef _WIN32
+        return ::isatty(STDERR_FILENO) != 0;
+#else
+        return true;
+#endif
+    }();
+    return kUseColor;
+}
+
+static void PrintStyled(Logger::Level level, std::string_view msg)
+{
+    if (UseColor()) {
+        fmt::print(stderr, StyleFor(level), "{}", msg);
+    }
+    else {
+        fmt::print(stderr, "{}", msg);
     }
 }
 
@@ -161,10 +199,8 @@ Logger::Logger()
             level_ = it->second;
         }
         else {
-            fmt::print(stderr,
-                       StyleFor(Level::kWarning),
-                       "[TM][WARN] Invalid TM_LOG_LEVEL='{}'. Using default level.\n",
-                       level_env);
+            PrintStyled(Level::kWarning,
+                        fmt::format("[TM][WARN] Invalid TM_LOG_LEVEL='{}'. Using default level.\n", level_env));
         }
     }
 }
@@ -217,7 +253,7 @@ void Logger::Enqueue(Level level, const char* file, int line, std::string messag
         AsyncLogWorker::Instance().Enqueue(std::move(record));
     }
     else {
-        fmt::print(stderr, StyleFor(level), "{}", line_str);
+        PrintStyled(level, line_str);
     }
 }
 
@@ -245,8 +281,11 @@ static void OnFatalSignal(int signum)
 
 AsyncLogWorker::AsyncLogWorker(): thread_(&AsyncLogWorker::Run, this)
 {
-    for (int sig : {SIGSEGV, SIGABRT, SIGFPE, SIGILL, SIGBUS}) {
-        ::signal(sig, OnFatalSignal);
+    const char* signals_env = std::getenv("TM_LOG_SIGNALS");
+    if (signals_env == nullptr || std::string_view{signals_env} != "0") {
+        for (int sig : {SIGSEGV, SIGABRT, SIGFPE, SIGILL, SIGBUS}) {
+            ::signal(sig, OnFatalSignal);
+        }
     }
 }
 
@@ -281,12 +320,12 @@ void AsyncLogWorker::Run()
             // Drain remaining records so we don't lose messages enqueued before shutdown.
             while (queue_.try_dequeue(record)) {
                 if (record.kind != RecordKind::kStop) {
-                    fmt::print(stderr, StyleFor(record.level), "{}", record.message);
+                    PrintStyled(record.level, record.message);
                 }
             }
             break;
         }
-        fmt::print(stderr, StyleFor(record.level), "{}", record.message);
+        PrintStyled(record.level, record.message);
     }
 }
 
