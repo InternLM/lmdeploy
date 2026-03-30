@@ -3,6 +3,7 @@
 from typing import TYPE_CHECKING
 
 from lmdeploy.serve.openai.protocol import DeltaMessage
+from lmdeploy.serve.openai.response_parser import StreamBuffer
 
 from .identity_reasoning_parser import IdentityReasoningParser
 from .reasoning_parser import ReasoningParser
@@ -39,11 +40,14 @@ class DeepSeekV3ReasoningParser(ReasoningParser):
         delta_text: str,
         delta_token_ids: list[int],
         request: object,
+        *,
+        stream_buffer: StreamBuffer,
         **kwargs,
     ) -> DeltaMessage | None:
         return self._parser.extract_reasoning_streaming(
             delta_text,
             delta_token_ids,
             request,
+            stream_buffer=stream_buffer,
             **kwargs,
         )

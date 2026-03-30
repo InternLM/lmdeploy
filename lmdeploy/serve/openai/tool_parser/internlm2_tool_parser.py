@@ -15,7 +15,7 @@ from lmdeploy.serve.openai.protocol import (
     FunctionCall,
     ToolCall,
 )
-from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import get_streaming_state
+from lmdeploy.serve.openai.response_parser import StreamBuffer
 from lmdeploy.utils import get_logger
 
 from .tool_parser import ToolParser, ToolParserManager
@@ -29,7 +29,11 @@ class Internlm2ToolParser(ToolParser):
 
     def __init__(self, tokenizer: object):
         super().__init__(tokenizer)
-        self.position = 0
+        self.parse_cursor = 0
+        self.current_tool_id = -1
+        self.current_tool_name_sent = False
+        self.streamed_args_for_tool: list[str] = []
+        self.prev_tool_call_arr: list[dict] = []
 
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         if request.tools and request.tool_choice != 'none':
@@ -51,18 +55,20 @@ class Internlm2ToolParser(ToolParser):
         delta_text: str,
         delta_token_ids: Sequence[int],
         request: ChatCompletionRequest,
+        *,
+        stream_buffer: StreamBuffer,
+        **kwargs,
     ) -> DeltaMessage | None:
-        state = get_streaming_state(request)
-        current_text = state.current_text
+        current_text = stream_buffer.current_text
         if '<|action_start|>' not in current_text:
-            self.position = len(current_text)
+            self.parse_cursor = len(current_text)
             return DeltaMessage(content=delta_text)
         # if the tool call is sended, return a empty delta message
         # to make sure the finish_reason will be send correctly.
         if self.current_tool_id > 0:
             return DeltaMessage(content='')
 
-        last_pos = self.position
+        last_pos = self.parse_cursor
         if '<|action_start|><|plugin|>\n' not in current_text[last_pos:]:
             return None
 
@@ -70,7 +76,7 @@ class Internlm2ToolParser(ToolParser):
         text, action = new_delta.split('<|action_start|><|plugin|>\n')
 
         if len(text) > 0:
-            self.position = self.position + len(text)
+            self.parse_cursor = self.parse_cursor + len(text)
             return DeltaMessage(content=text)
 
         action = action.strip()

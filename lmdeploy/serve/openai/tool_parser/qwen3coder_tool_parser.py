@@ -2,7 +2,6 @@
 import json
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
 from typing import Any
 
 import shortuuid
@@ -16,7 +15,7 @@ from lmdeploy.serve.openai.protocol import (
     FunctionCall,
     ToolCall,
 )
-from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import get_streaming_state
+from lmdeploy.serve.openai.response_parser import StreamBuffer
 from lmdeploy.utils import get_logger
 
 from .tool_parser import ToolParser, ToolParserManager
@@ -38,19 +37,6 @@ def _parse_tool_call_arguments_dict(arguments: Any) -> dict[str, Any] | None:
     return None
 
 
-@dataclass
-class ParserState:
-    """Maintains the state of parsing during tool call extraction."""
-    position: int = 0  # Current position in the text being parsed
-    current_index: int = -1  # Index of the current tool call
-
-    id: str = ''  # ID of the current tool call
-
-    def reset_tool_call(self):
-        """Called when `</tool_call>` finish tag occurred."""
-        self.id = ''
-
-
 @ToolParserManager.register_module(['qwen3coder'])
 class Qwen3CoderToolParser(ToolParser):
     """Parser for Qwen3 Coder model's tool call format.
@@ -70,6 +56,13 @@ class Qwen3CoderToolParser(ToolParser):
         self.param_end_token = '</parameter>'
 
         self.tool_call_pat = re.compile(r'\n*<tool_call>(.*?)</tool_call>', re.DOTALL)
+        self.parse_cursor = 0
+        self.qwen_tool_serial_index = -1
+        self.qwen_active_tool_call_id = ''
+        self.coder_has_emitted_name = False
+        self.coder_has_emitted_json_start = False
+        self.coder_json_closed = False
+        self.coder_emitted_param_names: set[str] = set()
 
     def _normalize_request_messages(self, messages: list[dict]) -> list[dict] | None:
         """Return a render-safe copy of request messages when needed."""
@@ -121,13 +114,13 @@ class Qwen3CoderToolParser(ToolParser):
             return request
         return request.model_copy(update={'messages': normalized_messages})
 
-    def _split(self, parser_state: ParserState, parsing_content: str) -> tuple[str, str, bool]:
+    def _split(self, parsing_content: str) -> tuple[str, str, bool]:
         """Split content into tuple: (text_content, tool_content, has_tool_end)"""
         try:
             start_idx = parsing_content.index(self.tool_start_token)
-            parser_state.position += start_idx
+            self.parse_cursor += start_idx
         except ValueError:
-            parser_state.position += len(parsing_content)
+            self.parse_cursor += len(parsing_content)
             return parsing_content, '', False
 
         try:
@@ -136,7 +129,7 @@ class Qwen3CoderToolParser(ToolParser):
             return parsing_content[:start_idx], parsing_content[start_idx:], False
 
         rem = end_idx - start_idx
-        parser_state.position += rem + len(self.tool_end_token)
+        self.parse_cursor += rem + len(self.tool_end_token)
         return parsing_content[:start_idx], parsing_content[start_idx:end_idx + len(self.tool_end_token)], True
 
     def _extract_params(self, content: str) -> tuple[str | None, dict[str, Any], bool]:
@@ -195,15 +188,13 @@ class Qwen3CoderToolParser(ToolParser):
         delta_text: str,
         delta_token_ids: Sequence[int],
         request: ChatCompletionRequest,
+        *,
+        stream_buffer: StreamBuffer,
+        **kwargs,
     ) -> DeltaMessage | None:
-        state = get_streaming_state(request)
-        current_text = state.current_text
-        parser_state = getattr(request, '_tool_parser_state', None)
-        if parser_state is None:
-            parser_state = ParserState()
-            setattr(request, '_tool_parser_state', parser_state)
+        current_text = stream_buffer.current_text
 
-        split_result = self._split(parser_state, current_text[parser_state.position:])
+        split_result = self._split(current_text[self.parse_cursor:])
         text_content, tool_content, has_tool_end = split_result
 
         delta = DeltaMessage()
@@ -211,41 +202,41 @@ class Qwen3CoderToolParser(ToolParser):
             delta.content = text_content
 
         if tool_content:
-            if not parser_state.id:
-                parser_state.id = f'chatcmpl-tool-{shortuuid.random()}'
-                parser_state.current_index += 1
-                parser_state.has_emitted_name = False
-                parser_state.has_emitted_json_start = False
-                parser_state.json_closed = False
-                parser_state.emitted_params = set()
+            if not self.qwen_active_tool_call_id:
+                self.qwen_active_tool_call_id = f'chatcmpl-tool-{shortuuid.random()}'
+                self.qwen_tool_serial_index += 1
+                self.coder_has_emitted_name = False
+                self.coder_has_emitted_json_start = False
+                self.coder_json_closed = False
+                self.coder_emitted_param_names.clear()
 
             func_name, args_dict, is_func_closed = self._extract_params(tool_content)
 
             fcall_delta = DeltaFunctionCall()
             has_updates = False
 
-            if func_name and not getattr(parser_state, 'has_emitted_name', False):
+            if func_name and not self.coder_has_emitted_name:
                 fcall_delta.name = func_name
-                parser_state.has_emitted_name = True
+                self.coder_has_emitted_name = True
                 has_updates = True
 
             json_fragments = []
-            if not getattr(parser_state, 'has_emitted_json_start', False):
+            if not self.coder_has_emitted_json_start:
                 if args_dict or is_func_closed:
                     json_fragments.append('{')
-                    parser_state.has_emitted_json_start = True
+                    self.coder_has_emitted_json_start = True
 
             for k, v in args_dict.items():
-                if k not in parser_state.emitted_params:
-                    prefix = ', ' if len(parser_state.emitted_params) > 0 else ''
+                if k not in self.coder_emitted_param_names:
+                    prefix = ', ' if len(self.coder_emitted_param_names) > 0 else ''
                     serialized = json.dumps(v, ensure_ascii=False)
                     json_fragments.append(f'{prefix}\"{k}\": {serialized}')
-                    parser_state.emitted_params.add(k)
+                    self.coder_emitted_param_names.add(k)
 
-            if is_func_closed and not getattr(parser_state, 'json_closed', False):
-                if getattr(parser_state, 'has_emitted_json_start', False):
+            if is_func_closed and not self.coder_json_closed:
+                if self.coder_has_emitted_json_start:
                     json_fragments.append('}')
-                    parser_state.json_closed = True
+                    self.coder_json_closed = True
 
             joined_fragments = ''.join(json_fragments)
             if joined_fragments:
@@ -254,20 +245,18 @@ class Qwen3CoderToolParser(ToolParser):
 
             if has_updates:
                 parsed_delta = DeltaToolCall(
-                    id=parser_state.id,
-                    index=parser_state.current_index,
+                    id=self.qwen_active_tool_call_id,
+                    index=self.qwen_tool_serial_index,
                     function=fcall_delta,
                 )
                 delta.tool_calls = [parsed_delta]
 
         if has_tool_end:
-            parser_state.reset_tool_call()
-            # Prepare for the next tool call
-            if hasattr(parser_state, 'has_emitted_name'):
-                delattr(parser_state, 'has_emitted_name')
-                delattr(parser_state, 'has_emitted_json_start')
-                delattr(parser_state, 'json_closed')
-                delattr(parser_state, 'emitted_params')
+            self.qwen_active_tool_call_id = ''
+            self.coder_has_emitted_name = False
+            self.coder_has_emitted_json_start = False
+            self.coder_json_closed = False
+            self.coder_emitted_param_names.clear()
 
         return delta
 

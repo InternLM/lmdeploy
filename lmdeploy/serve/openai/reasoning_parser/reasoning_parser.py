@@ -1,45 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modified from https://github.com/vllm-project/vllm/tree/v0.7.3/vllm/entrypoints/openai/reasoning_parsers
-from dataclasses import dataclass, field
 from functools import cached_property
 
 from mmengine import Registry
 
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaMessage
+from lmdeploy.serve.openai.response_parser import StreamBuffer
 
 ReasoningParserManager = Registry('reasoning_parser', locations=['lmdeploy.serve.openai.reasoning_parser'])
 
-
-@dataclass
-class StreamingParserState:
-    """Shared state for streaming parsing, attached to a request object.
-
-    Both reasoning parsers and tool parsers read/write the same state so that text accumulated by the streaming loop is
-    available to all parsers without duplication.
-    """
-    previous_text: str = ''
-    current_text: str = ''
-    previous_token_ids: list[int] = field(default_factory=list)
-    current_token_ids: list[int] = field(default_factory=list)
-
-    def update(self, delta_text: str, delta_token_ids: list[int]) -> None:
-        """Accumulate new delta into current_text / current_token_ids."""
-        self.current_text += delta_text
-        self.current_token_ids.extend(delta_token_ids)
-
-    def step(self) -> None:
-        """Advance: copy current -> previous (call at end of each iteration)."""
-        self.previous_text = self.current_text
-        self.previous_token_ids = self.current_token_ids
-
-
-def get_streaming_state(request: object) -> StreamingParserState:
-    """Get or create a StreamingParserState on the request object."""
-    state = getattr(request, '_streaming_parser_state', None)
-    if state is None:
-        state = StreamingParserState()
-        setattr(request, '_streaming_parser_state', state)
-    return state
+StreamingParserState = StreamBuffer
 
 
 class ReasoningParser:
@@ -59,6 +29,8 @@ class ReasoningParser:
         delta_text: str,
         delta_token_ids: list[int],
         request: object,
+        *,
+        stream_buffer: StreamBuffer,
         **kwargs,
     ) -> DeltaMessage | None:
         """Instance method that should be implemented for extracting reasoning
@@ -69,9 +41,10 @@ class ReasoningParser:
             delta_text: The new text chunk (may have been modified by the tool
                 parser before being passed here).
             delta_token_ids: The new token ids for this chunk.
-            request: The request object; a ``StreamingParserState`` is attached
-                to it via ``get_streaming_state(request)`` so that previous /
-                current text and token ids are available.
+            request: The request object.
+            stream_buffer: Cumulative decoding state (``ResponseParser.stream``);
+                Token ids from prior chunks are in ``stream_buffer.previous_token_ids``
+                at the time this method runs (after ``stream_buffer.update`` for this chunk).
 
         Returns a DeltaMessage with reasoning_content and/or content fields,
         or None if the delta should be skipped.
@@ -129,6 +102,8 @@ class ThinkingReasoningParser(ReasoningParser):
         delta_text: str,
         delta_token_ids: list[int],
         request: object,
+        *,
+        stream_buffer: StreamBuffer,
         **kwargs,
     ) -> DeltaMessage | None:
         """Extract reasoning content from a streaming model-generated string.
@@ -137,15 +112,13 @@ class ThinkingReasoningParser(ReasoningParser):
             delta_text: The new text chunk (may have been modified by the tool
                 parser before being passed here).
             delta_token_ids: The new token ids for this chunk.
-            request: The request object; a ``StreamingParserState`` is attached
-                to it via ``get_streaming_state(request)`` so that previous /
-                current text and token ids are available.
+            request: The request object.
+            stream_buffer: Cumulative decoding state (see base class).
 
         Returns a DeltaMessage with reasoning_content and/or content fields,
         or None if the delta should be skipped.
         """
-        state = get_streaming_state(request)
-        previous_token_ids = state.previous_token_ids
+        previous_token_ids = stream_buffer.previous_token_ids
 
         # Handle single special tokens
         if len(delta_token_ids) == 1 and (delta_token_ids[0] in [self.start_token_id, self.end_token_id]):
@@ -192,8 +165,10 @@ class ThinkingReasoningParser(ReasoningParser):
         Returns:
             A tuple of (reasoning_content, final_output). Either may be None.
         """
-        # Check if the start token is present in the model output, remove it
-        # if it is present.
+
+        if self.start_token not in model_output and self.end_token not in model_output:
+            return None, model_output
+
         model_output_parts = model_output.partition(self.start_token)
         model_output = (
             model_output_parts[2] if model_output_parts[1] else model_output_parts[0]
@@ -205,6 +180,8 @@ class ThinkingReasoningParser(ReasoningParser):
             return model_output, None
         else:
             reasoning, _, content = model_output.partition(self.end_token)
-            # If generation stops right after end-of-think, return null content
+            # If generation stops right after end-of-think, return None content
             final_content = content or None
+            # If the model_output is like "<think></think>...", return None reasoning
+            reasoning = reasoning or None
             return reasoning, final_content

@@ -8,7 +8,7 @@ from packaging.version import Version
 
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 from lmdeploy.serve.openai.reasoning_parser.deepseek_v3_reasoning_parser import DeepSeekV3ReasoningParser
-from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import get_streaming_state
+from lmdeploy.serve.openai.response_parser import StreamBuffer
 from lmdeploy.tokenizer import DetokenizeState, HuggingFaceTokenizer
 
 TRANSFORMERS_LT_5 = Version(transformers.__version__) < Version('5.0.0')
@@ -70,7 +70,7 @@ def run_reasoning_stream(
     request: object,
     chunks: list[tuple[str, list[int]]],
 ) -> tuple[str, str]:
-    state = get_streaming_state(request)
+    state = StreamBuffer()
     reasoning_acc = ''
     content_acc = ''
     for delta_text, delta_ids in chunks:
@@ -79,6 +79,7 @@ def run_reasoning_stream(
             delta_text=delta_text or '',
             delta_token_ids=delta_ids,
             request=request,
+            stream_buffer=state,
         )
         if delta_msg is not None:
             if delta_msg.reasoning_content:

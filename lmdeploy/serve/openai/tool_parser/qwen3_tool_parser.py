@@ -2,9 +2,10 @@
 import json
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
 
+import partial_json_parser
 import shortuuid
+from partial_json_parser.core.options import Allow
 
 from lmdeploy.serve.openai.protocol import (
     ChatCompletionRequest,
@@ -15,26 +16,13 @@ from lmdeploy.serve.openai.protocol import (
     FunctionCall,
     ToolCall,
 )
-from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import get_streaming_state
+from lmdeploy.serve.openai.response_parser import StreamBuffer
 from lmdeploy.utils import get_logger
 
 from .tool_parser import ToolParser, ToolParserManager
+from .utils import find_common_prefix, is_complete_json
 
 logger = get_logger('lmdeploy')
-
-
-@dataclass
-class ParserState:
-    """Maintains the state of parsing during tool call extraction."""
-    position: int = 0  # Current position in the text being parsed
-    current_index: int = -1  # Index of the current tool call
-    parsing_reasoning: bool = False  # Whether currently parsing reasoning content
-
-    id: str = ''  # ID of the current tool call
-
-    def reset_tool_call(self):
-        """Called when `</tool_call>` finish tag occurred."""
-        self.id = ''
 
 
 @ToolParserManager.register_module(['qwen', 'qwen3'])
@@ -50,6 +38,12 @@ class Qwen3ToolParser(ToolParser):
         self.tool_start_token = '<tool_call>'
         self.tool_end_token = '</tool_call>'
         self.tool_call_pat = re.compile(r'\n*<tool_call>(.*?)</tool_call>', re.DOTALL)
+        self.parse_cursor = 0
+        self.qwen_tool_serial_index = -1
+        self.qwen_active_tool_call_id = ''
+        self.current_tool_name_sent = False
+        self.prev_tool_call_arr: list[dict] = []
+        self.streamed_args_for_tool: list[str] = []
 
     def get_argments(self, obj):
         """Extract arguments from tool call object, handling different formats.
@@ -62,60 +56,27 @@ class Qwen3ToolParser(ToolParser):
             return obj.get('arguments')
         return None
 
-    def _split(self, parser_state: ParserState, parsing_content: str):
+    def _split(self, parsing_content: str):
         """Split content into tuple: (text_content, tool_content, has_tool_end)
 
         This method parses the model output and separates it into regular text,
         and tool call content.
         """
-        # tool call
         try:
             start_idx = parsing_content.index(self.tool_start_token)
-            # move to the beginning of tool_start_token
-            parser_state.position += start_idx
+            self.parse_cursor += start_idx
         except ValueError:
-            parser_state.position += len(parsing_content)
+            self.parse_cursor += len(parsing_content)
             return parsing_content, '', False
         try:
             end_idx = parsing_content.index(self.tool_end_token)
         except ValueError:
-            # position holds until tool_end_token is found
             return parsing_content[:start_idx], '', False
-        # move position to the end of tool_end_token
-        parser_state.position += (end_idx - start_idx) + len(self.tool_end_token)
-        return parsing_content[:start_idx], parsing_content[start_idx + len(self.tool_start_token):end_idx], True
-
-    def _parse_delta_tool_call(self, parser_state: ParserState, tool_content: str) -> DeltaToolCall | None:
-        """Parse tool content into a DeltaToolCall object.
-
-        This method handles parsing tool calls only when it's a valid tool
-        """
-        parsable_arr = tool_content.strip()
-        try:
-            tool_call_arr: dict = json.loads(parsable_arr)
-        except json.JSONDecodeError:
-            logger.debug('cannot parse into JSON yet')
-            return
-
-        fcall = DeltaFunctionCall()
-        func_name = tool_call_arr.get('name')
-        if func_name:
-            fcall.name = func_name
-        args = self.get_argments(tool_call_arr)
-        if args and isinstance(args, dict):
-            fcall.arguments = json.dumps(args, ensure_ascii=False)
-        # Return None if no new information to send
-        if not fcall.name and not fcall.arguments:
-            return
-        if not parser_state.id:
-            # A new tool call parsed, allocate a new id & index
-            parser_state.id = f'chatcmpl-tool-{shortuuid.random()}'
-            parser_state.current_index += 1
-        # Create and return the DeltaToolCall object
-        return DeltaToolCall(
-            id=parser_state.id,
-            index=parser_state.current_index,
-            function=fcall.model_dump(exclude_none=True),
+        self.parse_cursor += (end_idx - start_idx) + len(self.tool_end_token)
+        return (
+            parsing_content[:start_idx],
+            parsing_content[start_idx + len(self.tool_start_token):end_idx],
+            True,
         )
 
     def extract_tool_calls_streaming(
@@ -123,36 +84,86 @@ class Qwen3ToolParser(ToolParser):
         delta_text: str,
         delta_token_ids: Sequence[int],
         request: ChatCompletionRequest,
+        *,
+        stream_buffer: StreamBuffer,
+        **kwargs,
     ) -> DeltaMessage | None:
-        """Extract tool calls from streaming model output.
-
-        This method processes incremental model output to extract tool calls, reasoning content, and regular text
-        content in a streaming fashion. It maintains parser state between calls to handle partial outputs.
-        """
-        state = get_streaming_state(request)
-        current_text = state.current_text
-
-        parser_state = getattr(request, '_tool_parser_state', None)
-        if parser_state is None:
-            parser_state = ParserState()
-            setattr(request, '_tool_parser_state', parser_state)
-
-        # Split the new content into text and tool content
-        split_result = self._split(parser_state, current_text[parser_state.position:])
+        """Extract tool calls from streaming model output."""
+        current_text = stream_buffer.current_text
+        split_result = self._split(current_text[self.parse_cursor:])
         text_content, tool_content, has_tool_end = split_result
         delta = DeltaMessage()
 
-        # Add each type of content to the delta message if present
         if text_content:
             delta.content = text_content
+
         if tool_content:
-            # Parse tool content into a DeltaToolCall object
-            delta_tool_call = self._parse_delta_tool_call(parser_state, tool_content)
-            if delta_tool_call is not None:
-                delta.tool_calls = [delta_tool_call]
-            if has_tool_end:
-                parser_state.reset_tool_call()
-        return delta
+            strip = tool_content.strip()
+            if strip:
+                flags = Allow.ALL if self.current_tool_name_sent else Allow.ALL & ~Allow.STR
+                obj: dict | None
+                try:
+                    obj = partial_json_parser.loads(strip, flags)
+                except partial_json_parser.core.exceptions.MalformedJSON:
+                    logger.debug('cannot parse into partial JSON yet')
+                    obj = None
+
+                if obj is not None and not self.current_tool_name_sent:
+                    func_name = obj.get('name')
+                    if func_name:
+                        if not self.qwen_active_tool_call_id:
+                            self.qwen_active_tool_call_id = f'chatcmpl-tool-{shortuuid.random()}'
+                            self.qwen_tool_serial_index += 1
+                            self.streamed_args_for_tool.append('')
+                        idx = self.qwen_tool_serial_index
+                        delta.tool_calls = [
+                            DeltaToolCall(
+                                id=self.qwen_active_tool_call_id,
+                                index=idx,
+                                type='function',
+                                function=DeltaFunctionCall(name=func_name).model_dump(exclude_none=True),
+                            )
+                        ]
+                        self.current_tool_name_sent = True
+                        self.prev_tool_call_arr = [dict(obj)]
+                elif obj is not None:
+                    idx = self.qwen_tool_serial_index
+                    args = self.get_argments(obj)
+                    cur_arguments = args if isinstance(args, dict) else None
+                    prev_arguments = (
+                        self.get_argments(self.prev_tool_call_arr[0]) if self.prev_tool_call_arr else None
+                    )
+                    is_comp = is_complete_json(strip)
+                    argument_diff = None
+                    if cur_arguments:
+                        cur_args_json = json.dumps(cur_arguments, ensure_ascii=False)
+                        if is_comp:
+                            sent = len(self.streamed_args_for_tool[idx])
+                            argument_diff = cur_args_json[sent:]
+                        elif prev_arguments:
+                            prev_args_json = json.dumps(prev_arguments, ensure_ascii=False)
+                            if cur_args_json != prev_args_json:
+                                prefix = find_common_prefix(prev_args_json, cur_args_json)
+                                sent = len(self.streamed_args_for_tool[idx])
+                                argument_diff = prefix[sent:]
+                        if argument_diff is not None:
+                            delta.tool_calls = [
+                                DeltaToolCall(
+                                    index=idx,
+                                    id=self.qwen_active_tool_call_id,
+                                    function=DeltaFunctionCall(
+                                        arguments=argument_diff).model_dump(exclude_none=True),
+                                )
+                            ]
+                            self.streamed_args_for_tool[idx] += argument_diff
+                    self.prev_tool_call_arr = [obj]
+
+        if has_tool_end:
+            self.qwen_active_tool_call_id = ''
+            self.current_tool_name_sent = False
+            self.prev_tool_call_arr = []
+
+        return delta if delta.content is not None or delta.tool_calls else None
 
     def extract_tool_calls(
         self,
@@ -166,19 +177,18 @@ class Qwen3ToolParser(ToolParser):
         """
         text = model_output
 
-        # Extract tool calls (content inside <tool_call> tags)
         buf = []
         scan_pos = 0
         tool_calls = []
         for idx, match in enumerate(self.tool_call_pat.finditer(text)):
-            buf.append(text[scan_pos:match.start()])  # Add text before the <tool_call> tag
+            buf.append(text[scan_pos:match.start()])
             scan_pos = match.end()
-            action = json.loads(match.group(1))  # Parse the tool call JSON
+            action = json.loads(match.group(1))
             name, arguments = action['name'], json.dumps(action['arguments'], ensure_ascii=False)
             tool_calls.append(ToolCall(function=FunctionCall(name=name, arguments=arguments)))
         if scan_pos < len(text):
-            buf.append(text[scan_pos:])  # Add remaining text
-        text = ''.join(buf)  # Reconstruct text without <tool_call> tags
+            buf.append(text[scan_pos:])
+        text = ''.join(buf)
 
         return ExtractedToolCallInformation(
             content=text,

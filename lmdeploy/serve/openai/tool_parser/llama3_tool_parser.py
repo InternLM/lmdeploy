@@ -16,7 +16,7 @@ from lmdeploy.serve.openai.protocol import (
     FunctionCall,
     ToolCall,
 )
-from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import get_streaming_state
+from lmdeploy.serve.openai.response_parser import StreamBuffer
 from lmdeploy.utils import get_logger
 
 from .tool_parser import ToolParser, ToolParserManager
@@ -35,13 +35,11 @@ class Llama3JsonToolParser(ToolParser):
 
     def __init__(self, tokenizer: object):
         super().__init__(tokenizer)
-
-        # initialize properties used for state when parsing tool calls in
-        # streaming mode
+        self.current_tool_id = -1
+        self.current_tool_name_sent = False
+        self.streamed_args_for_tool: list[str] = []
         self.prev_tool_call_arr: list[dict] = []
-        self.current_tool_id: int = -1
-        self.current_tool_name_sent: bool = False
-        self.streamed_args_for_tool: list[str] = []  # map what has been streamed for each tool so far to a list
+
         self.bot_token = '<|python_tag|>'
         self.bot_token_id = tokenizer.encode(self.bot_token, add_special_tokens=False)[0]
         self.tool_call_regex = re.compile(r'\[{.*?}\]', re.DOTALL)
@@ -75,9 +73,11 @@ class Llama3JsonToolParser(ToolParser):
         delta_text: str,
         delta_token_ids: Sequence[int],
         request: ChatCompletionRequest,
+        *,
+        stream_buffer: StreamBuffer,
+        **kwargs,
     ) -> DeltaMessage | None:
-        state = get_streaming_state(request)
-        current_text = state.current_text
+        current_text = stream_buffer.current_text
         if not (current_text.startswith(self.bot_token) or current_text.startswith('{')):
             return DeltaMessage(content=delta_text)
 

@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 from lmdeploy.serve.openai.protocol import DeltaMessage
 from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParser
+from lmdeploy.serve.openai.response_parser import StreamBuffer
 
 if TYPE_CHECKING:
     from lmdeploy.serve.openai.protocol import ChatCompletionRequest
@@ -26,6 +27,8 @@ class IdentityReasoningParser(ReasoningParser):
         delta_text: str,
         delta_token_ids: list[int],
         request: object,
+        *,
+        stream_buffer: StreamBuffer,
         **kwargs,
     ) -> DeltaMessage | None:
         # Just wrap delta_text as content, ignore reasoning

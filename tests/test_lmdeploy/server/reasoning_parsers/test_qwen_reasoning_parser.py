@@ -19,7 +19,8 @@ import pytest
 
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 from lmdeploy.serve.openai.reasoning_parser.qwen_reasoning_parser import QwenReasoningParser
-from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParserManager, get_streaming_state
+from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParserManager
+from lmdeploy.serve.openai.response_parser import StreamBuffer
 from lmdeploy.tokenizer import DetokenizeState, HuggingFaceTokenizer
 
 # We use Qwen3-8B's tokenizer to simulate all the test cases.
@@ -77,7 +78,7 @@ def run_reasoning_stream(
 
     Returns (accumulated_reasoning, accumulated_content).
     """
-    state = get_streaming_state(request)
+    state = StreamBuffer()
     reasoning_acc = ''
     content_acc = ''
     for delta_text, delta_ids in chunks:
@@ -86,6 +87,7 @@ def run_reasoning_stream(
             delta_text=delta_text or '',
             delta_token_ids=delta_ids,
             request=request,
+            stream_buffer=state,
         )
         if delta_msg is not None:
             if delta_msg.reasoning_content:

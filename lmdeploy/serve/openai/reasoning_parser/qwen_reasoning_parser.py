@@ -1,10 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modified from https://github.com/vllm-project/vllm/blob/main/vllm/reasoning/qwen3_reasoning_parser.py
+from typing import TYPE_CHECKING
 
 from lmdeploy.serve.openai.protocol import DeltaMessage
+from lmdeploy.serve.openai.response_parser import StreamBuffer
 
-from .reasoning_parser import ReasoningParserManager, ThinkingReasoningParser, get_streaming_state
+from .reasoning_parser import ReasoningParserManager, ThinkingReasoningParser
 
+if TYPE_CHECKING:
+    pass
 
 @ReasoningParserManager.register_module(name=['qwen-qwq', 'qwen3', 'intern-s1', 'deepseeek-r1'])
 class QwenReasoningParser(ThinkingReasoningParser):
@@ -21,10 +25,16 @@ class QwenReasoningParser(ThinkingReasoningParser):
     start_token = '<think>'
     end_token = '</think>'
 
-    def extract_reasoning_streaming(self, delta_text: str, delta_token_ids: list[int],
-                                    request: object, **kwargs) -> DeltaMessage | None:
-        state = get_streaming_state(request)
-        previous_token_ids = state.previous_token_ids
+    def extract_reasoning_streaming(
+        self,
+        delta_text: str,
+        delta_token_ids: list[int],
+        request: object,
+        *,
+        stream_buffer: StreamBuffer,
+        **kwargs,
+    ) -> DeltaMessage | None:
+        previous_token_ids = stream_buffer.previous_token_ids
 
         # Strip <think> from delta if present (old template / edge case where the model generates <think> itself).
         if self.start_token_id in delta_token_ids:

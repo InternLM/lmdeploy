@@ -6,6 +6,7 @@ from functools import cached_property
 from mmengine import Registry
 
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaMessage, ExtractedToolCallInformation
+from lmdeploy.serve.openai.response_parser import StreamBuffer
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -19,12 +20,6 @@ class ToolParser:
     """
 
     def __init__(self, tokenizer: object):
-        self.prev_tool_call_arr: list[dict] = []
-        # the index of the tool call that is currently being parsed
-        self.current_tool_id: int = -1
-        self.current_tool_name_sent: bool = False
-        self.streamed_args_for_tool: list[str] = []
-
         self.model_tokenizer = tokenizer
 
     @cached_property
@@ -51,6 +46,9 @@ class ToolParser:
         delta_text: str,
         delta_token_ids: Sequence[int],
         request: ChatCompletionRequest,
+        *,
+        stream_buffer: StreamBuffer,
+        **kwargs,
     ) -> DeltaMessage | None:
         """Instance method that should be implemented for extracting tool calls
         from an incomplete response; for use when handling tool calls and
@@ -59,13 +57,13 @@ class ToolParser:
         Args:
             delta_text: The new text chunk for this iteration.
             delta_token_ids: The new token ids for this chunk.
-            request: The request object; a ``StreamingParserState`` is attached
-                to it via ``get_streaming_state(request)`` so that previous /
-                current text and token ids are available.
+            request: The chat completion request.
+            stream_buffer: Cumulative decoding state (``ResponseParser`` or a test
+                double); use ``stream_buffer.current_text`` for the full partial output.
+                Tool-specific
+                fields live on the parser instance (one instance per request).
 
-        Has to be an instance method because it requires state - the current
-        tokens/diffs, but also the information about what has previously been
-        parsed and extracted (see constructor).
+        Instance method because streaming uses the shared buffer plus parser-local state.
         """
         raise NotImplementedError('AbstractToolParser.extract_tool_calls_streaming has not been '
                                   'implemented!')

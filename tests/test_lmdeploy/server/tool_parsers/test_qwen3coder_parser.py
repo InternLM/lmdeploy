@@ -19,6 +19,7 @@ from lmdeploy.serve.openai.protocol import (
     DeltaToolCall,
     UsageInfo,
 )
+from lmdeploy.serve.openai.response_parser import StreamBuffer
 from lmdeploy.serve.openai.tool_parser.qwen3coder_tool_parser import Qwen3CoderToolParser
 
 TestExpects = collections.namedtuple('TestExpects', 'func_name kwargs')
@@ -71,41 +72,38 @@ def _chat_completion_v1(
     if request.stream:
 
         def completion_stream_generator() -> Generator[ChatCompletionStreamResponse, None, None]:
-            previous_text = ''
-            current_text = ''
             finish_reason = 'stop'
+            parser_state = StreamBuffer()
             has_parser = (VariableInterface.tool_parser is not None or VariableInterface.reasoning_parser is not None)
             for text in text_sequence:
                 logprobs, usage = None, None
                 delta_message = DeltaMessage(role='assistant', content=text)
                 if has_parser:
-                    current_text = current_text + text
+                    parser_state.update(text, [])
                 has_tool = VariableInterface.tool_parser is not None
                 if request.tool_choice != 'none' and has_tool:
                     tool_delta = VariableInterface.tool_parser.extract_tool_calls_streaming(
-                        previous_text=previous_text,
-                        current_text=current_text,
-                        delta_text=delta_message.content,
-                        previous_token_ids=[],
-                        current_token_ids=[],
+                        delta_text=text,
                         delta_token_ids=[],
-                        request=request)
+                        request=request,
+                        stream_buffer=parser_state,
+                    )
                     if tool_delta is not None:
                         delta_message.tool_calls = tool_delta.tool_calls
                         delta_message.content = tool_delta.content or ''
                 if VariableInterface.reasoning_parser is not None:
                     parser = VariableInterface.reasoning_parser
-                    reasoning_delta = parser.extract_reasoning_streaming(previous_text=previous_text,
-                                                                                 current_text=current_text,
-                                                                                 delta_text=delta_message.content,
-                                                                                 previous_token_ids=[],
-                                                                                 current_token_ids=[],
-                                                                                 delta_token_ids=[])
+                    reasoning_delta = parser.extract_reasoning_streaming(
+                        delta_text=delta_message.content,
+                        delta_token_ids=[],
+                        request=request,
+                        stream_buffer=parser_state,
+                    )
                     if reasoning_delta is not None:
                         delta_message.reasoning_content = (reasoning_delta.reasoning_content)
                         delta_message.content = reasoning_delta.content or ''
                 if has_parser:
-                    previous_text = current_text
+                    parser_state.step()
 
                 choice_data = ChatCompletionResponseStreamChoice(index=0,
                                                                  delta=delta_message,
