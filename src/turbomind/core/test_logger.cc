@@ -159,6 +159,30 @@ TEST_CASE("Logger: TM_LOG_LEVEL env var", "[logger]")
     REQUIRE(output.find("env-visible") != std::string::npos);
 }
 
+TEST_CASE("Logger: TM_LOG_LEVEL is case-insensitive", "[logger]")
+{
+    for (const char* val : {"warning", "Warning", "WARNING"}) {
+        ::setenv("TM_LOG_LEVEL", val, /*overwrite=*/1);
+
+        std::string output;
+        {
+            std::thread t([&] {
+                output = CaptureStderr([&] {
+                    auto& log = Logger::Instance();
+                    log.Log(Logger::Level::kDebug, "case-suppressed");
+                    log.Log(Logger::Level::kWarning, "case-visible");
+                });
+            });
+            t.join();
+        }
+
+        REQUIRE(output.find("case-suppressed") == std::string::npos);
+        REQUIRE(output.find("case-visible") != std::string::npos);
+    }
+
+    ::unsetenv("TM_LOG_LEVEL");
+}
+
 TEST_CASE("Logger: macros emit correct prefix", "[logger]")
 {
     Logger::Instance().set_level(Logger::Level::kTrace);

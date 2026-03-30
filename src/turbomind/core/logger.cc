@@ -192,9 +192,13 @@ Logger::Logger()
             {"FATAL", Level::kFatal},
         }};
 
-        const std::string_view name{level_env};
+        const std::string name_upper = [&] {
+            std::string s{level_env};
+            std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return std::toupper(c); });
+            return s;
+        }();
         auto                   it =
-            std::find_if(kNameToLevel.begin(), kNameToLevel.end(), [&](const Entry& e) { return e.first == name; });
+            std::find_if(kNameToLevel.begin(), kNameToLevel.end(), [&](const Entry& e) { return e.first == name_upper; });
         if (it != kNameToLevel.end()) {
             level_ = it->second;
         }
