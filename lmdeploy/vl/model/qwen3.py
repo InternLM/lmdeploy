@@ -46,14 +46,14 @@ class Qwen3VLModel(VisionModel):
         default_max = processor.size['longest_edge']
 
         if not mm_processor_kwargs:
-            return processor.size
+            return {'shortest_edge': default_min, 'longest_edge': default_max}
 
         min_pixels = mm_processor_kwargs.get('min_pixels', default_min)
         max_pixels = mm_processor_kwargs.get('max_pixels', default_max)
 
         if min_pixels > max_pixels:
             logger.warning(f'min_pixels {min_pixels} > max_pixels {max_pixels}, falling back to defaults.')
-            return processor.size
+            return {'shortest_edge': default_min, 'longest_edge': default_max}
 
         return {'shortest_edge': min_pixels, 'longest_edge': max_pixels}
 
