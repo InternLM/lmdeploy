@@ -55,7 +55,7 @@ class GLM4VisionModel(VisionModel):
                                f' in a single chat round, but got {len(images)} images.')
             # we still pass all the images to the model and let the
             # model decide what to do
-            images = [x.convert('RGB') for x in images]
+            images = [x for x in images]
             pixel_values = [self.image_transform(x) for x in images]
             outputs.extend([
                 dict(pixel_values=_2,

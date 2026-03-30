@@ -137,7 +137,7 @@ class MiniCPMVModel(VisionModel):
                 continue
             for item in message['content']:
                 if item['type'] == 'image':
-                    image = item['image'].convert('RGB')
+                    image = item['image']
                     params = {k: v for k, v in item.items() if k not in {'type', 'image'}}
                     result = self._preprocess_func(image, params)
                     outputs.append(result)

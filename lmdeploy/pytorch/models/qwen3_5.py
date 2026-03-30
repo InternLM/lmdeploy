@@ -395,6 +395,7 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         self.layer_idx = layer_idx
         self.activation = config.hidden_act
         self.layer_norm_epsilon = config.rms_norm_eps
+        quantization_config = getattr(config, 'quantization_config', None)
 
         # QKV
         self.conv_dim = self.key_dim * 2 + self.value_dim
@@ -416,17 +417,29 @@ class Qwen3_5GatedDeltaNet(nn.Module):
                                                 bias=False,
                                                 dtype=dtype,
                                                 device=device,
-                                                is_tp=True)
-        self.in_proj_qkv.weight.weight_loader = self.weight_loader_qkv
-        self.in_proj_zba = build_merged_colwise_linear(
-            self.hidden_size,
-            [self.value_dim, self.num_v_heads, self.num_v_heads],
-            bias=False,
-            dtype=dtype,
-            device=device,
-            is_tp=True,
-            out_names=['z', 'b', 'a'],
-        )
+                                                is_tp=True,
+                                                quant_config=quantization_config)
+        self._patch_qkv_weight_loader(self.in_proj_qkv)
+
+        # projection of z, b, a
+        # since z would be quantized in fp8 mode but b and a are not quantized
+        # we can not fuse them together
+        self.in_proj_z = build_colwise_linear(self.hidden_size,
+                                              self.value_dim,
+                                              bias=False,
+                                              dtype=dtype,
+                                              device=device,
+                                              is_tp=True,
+                                              quant_config=quantization_config)
+
+        self.in_proj_ba = build_merged_colwise_linear(self.hidden_size,
+                                              [self.num_v_heads, self.num_v_heads],
+                                              bias=False,
+                                              dtype=dtype,
+                                              device=device,
+                                              is_tp=True,
+                                              out_names=['b', 'a'])
+
 
         # time step projection (discretization)
         # instantiate once and copy inv_dt in init_weights of PretrainedModel
@@ -443,7 +456,8 @@ class Qwen3_5GatedDeltaNet(nn.Module):
                                      bias=False,
                                      dtype=dtype,
                                      device=device,
-                                     is_tp=True)
+                                     is_tp=True,
+                                     quant_config=quantization_config)
 
         self.gated_delta = GatedDelta()
 
@@ -464,15 +478,37 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         self.A_log.weight_loader = self.weight_loader_a_dt
         self.dt_bias.weight_loader = self.weight_loader_a_dt
 
-    def weight_loader_qkv(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor):
-        """Weight loader for qkv projection."""
-        tp, rank = get_tp_world_rank()
-        q, k, v = loaded_weight.split([self.key_dim, self.key_dim, self.value_dim], dim=0)
-        q = q.chunk(tp, dim=0)[rank]
-        k = k.chunk(tp, dim=0)[rank]
-        v = v.chunk(tp, dim=0)[rank]
-        loaded_weight = torch.cat([q, k, v], dim=0)
-        default_weight_loader(param, loaded_weight)
+    def _patch_qkv_weight_loader(self, mod):
+        """Patch weight_loader to do non-uniform QKV TP split.
+
+        The fused QKV weight has sections [key_dim, key_dim, value_dim] which cannot be uniformly chunked for TP. We
+        override weight_loader (not weight_loader_with_quant) so that the fp8 quant path — which calls weight_loader for
+        both weight and scale — works automatically.
+        """
+        sections = [self.key_dim, self.key_dim, self.value_dim]
+
+        def qkv_weight_loader(param, loaded_weight):
+            if not mod.is_tp:
+                return default_weight_loader(param, loaded_weight)
+
+            world_size, rank = mod.get_tp_world_rank()
+            split_sections = sections
+            # scale tensor has dim0 shrunk by block_size
+            if (loaded_weight.dim() == 2
+                    and loaded_weight.shape[0] < sum(sections)):
+                bs = mod.block_size
+                split_sections = [s // bs for s in sections]
+
+            parts = loaded_weight.split(split_sections, dim=0)
+            parts = [p.chunk(world_size, 0)[rank] for p in parts]
+            loaded_weight = torch.cat(parts, dim=0)
+            default_weight_loader(param, loaded_weight)
+
+        mod.weight_loader = qkv_weight_loader
+        # Re-run setup_loaders so param.weight_loader picks up the patched
+        # mod.weight_loader (for BaseLinear) or mod.weight_loader_with_quant
+        # which internally calls the patched mod.weight_loader (for fp8).
+        mod.setup_loaders()
 
     def weight_loader_a_dt(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor):
         """Weight loader."""
@@ -480,18 +516,14 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         loaded_weight = loaded_weight.chunk(tp, dim=0)[rank]
         default_weight_loader(param, loaded_weight)
 
-    def fix_zba_ordering(self, mixed_zba: torch.Tensor):
-        """Derives `query`, `key` and `value` tensors from `mixed_qkv` and
-        `mixed_zba`."""
-
-        # zba
-        split_arg_list_zba = [self.head_v_dim * self.kv_ratio, self.kv_ratio, self.kv_ratio]
-        num_heads = mixed_zba.size(-1) // sum(split_arg_list_zba)
-        split_arg_list_zba = [num_heads * x for x in split_arg_list_zba]
-        z, b, a = torch.split(mixed_zba, split_arg_list_zba, dim=-1)
-        # [..., ng, np/ng * hn] -> [..., np, hn]
-        z = z.unflatten(-1, (-1, self.head_v_dim))
-        return z, b, a
+    def fix_ba_ordering(self, mixed_ba: torch.Tensor):
+        """Derives `b` and `a` tensors from `mixed_ba`."""
+        # b and a
+        split_arg_list_ba = [self.kv_ratio, self.kv_ratio]
+        num_heads = mixed_ba.size(-1) // sum(split_arg_list_ba)
+        split_arg_list_ba = [num_heads * x for x in split_arg_list_ba]
+        b, a = torch.split(mixed_ba, split_arg_list_ba, dim=-1)
+        return b, a
 
     def _load_state(self, past_key_value: tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
         """Load states from cache."""
@@ -510,8 +542,11 @@ class Qwen3_5GatedDeltaNet(nn.Module):
 
         # inputs proj
         projected_states_qkv = self.in_proj_qkv(hidden_states)
-        projected_states_zba = self.in_proj_zba(hidden_states)
-        z, b, a = self.fix_zba_ordering(projected_states_zba)
+        z = self.in_proj_z(hidden_states)
+        # [..., ng, np/ng * hn] -> [..., np, hn]
+        z = z.unflatten(-1, (-1, self.head_v_dim))
+        projected_states_ba = self.in_proj_ba(hidden_states)
+        b, a = self.fix_ba_ordering(projected_states_ba)
 
         mixed_qkv = projected_states_qkv
         mixed_qkv, conv_state = self.conv1d(mixed_qkv, conv_state, gated_delta_meta=gated_delta_meta)
@@ -1223,9 +1258,8 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
             ('.qkv_proj', '.v_proj', 'v'),
             ('.gate_up_proj', '.gate_proj', 0),
             ('.gate_up_proj', '.up_proj', 1),
-            ('.in_proj_zba', '.in_proj_z', 'z'),
-            ('.in_proj_zba', '.in_proj_b', 'b'),
-            ('.in_proj_zba', '.in_proj_a', 'a'),
+            ('.in_proj_ba', '.in_proj_b', 'b'),
+            ('.in_proj_ba', '.in_proj_a', 'a'),
         ]
 
         rms_norm_keys = ['model.norm', '.input_layernorm', '.post_attention_layernorm', '.q_norm', '.k_norm']

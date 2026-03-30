@@ -94,7 +94,7 @@ class InternVL3VisionModel(InternVLVisionModel):
             },
         )
         images = self.collect_multimodal_items(messages)
-        images = [image.convert('RGB') for modality, image, _ in images]
+        images = [image for modality, image, _ in images]
         num_image = len(images)
         images = make_flat_list_of_images(images)
         image_inputs = self.processor.image_processor(images, **output_kwargs['images_kwargs'])
