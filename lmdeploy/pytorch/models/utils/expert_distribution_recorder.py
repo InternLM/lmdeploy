@@ -54,9 +54,9 @@ class _ExpertsDistributionRecorderImpl:
         self.dispatch_count[key] += 1
         if key not in self.accum_token_counts:
             self.accum_token_counts[key] = torch.zeros(num_experts, dtype=torch.int64, device=topk_ids.device)
-        topk_ids_flat = topk_ids.reshape(-1)
-        step_local_counts = torch.bincount(topk_ids_flat, minlength=num_experts)
-        self.accum_token_counts[key] += step_local_counts
+        topk_ids_flat = topk_ids.reshape(-1).long()
+        self.accum_token_counts[key].scatter_add_(
+            0, topk_ids_flat, torch.ones(topk_ids_flat.numel(), dtype=torch.int64, device=topk_ids_flat.device))
         rank = dist.get_rank() if dist.is_initialized() else 0
         now = datetime.now()
         dump_interval_seconds = self.dump_frequency * 60
