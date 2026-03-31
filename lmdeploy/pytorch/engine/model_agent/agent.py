@@ -425,9 +425,6 @@ class BaseModelAgent:
         # make dummy meta
         self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(model_config)
 
-        # make dummy meta
-        self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(model_config)
-
     @contextmanager
     def all_context(self):
         device_mgr = get_device_manager()
