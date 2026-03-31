@@ -38,11 +38,13 @@ class _ExpertsDistributionRecorderImpl:
         self.dump_frequency = dump_frequency
         self.dump_rank = envs.expert_dump_rank
 
-    def _build_counts_tensor(self):
+    def _build_counts_tensor(self, counts_dict=None):
         """Stack per-layer counts into a (num_layers, num_experts) tensor,
         sorted by layer index."""
-        sorted_keys = sorted(self.accum_token_counts.keys(), key=lambda k: int(k.split('_')[0]))
-        return torch.stack([self.accum_token_counts[k].cpu() for k in sorted_keys])
+        if counts_dict is None:
+            counts_dict = self.accum_token_counts
+        sorted_keys = sorted(counts_dict.keys(), key=lambda k: int(k.split('_')[0]))
+        return torch.stack([counts_dict[k].cpu() for k in sorted_keys])
 
     @staticmethod
     def _compute_balancedness(counts: torch.Tensor) -> torch.Tensor:
@@ -62,30 +64,36 @@ class _ExpertsDistributionRecorderImpl:
         self.accum_token_counts[key].scatter_add_(
             0, topk_ids_flat, torch.ones(topk_ids_flat.numel(), dtype=torch.int64, device=topk_ids_flat.device))
 
-        rank = dist.get_rank() if dist.is_initialized() else 0
-        if rank != self.dump_rank:
+        # never dump during CUDA graph capture - collectives and file I/O are illegal there.
+        if torch.cuda.is_current_stream_capturing():
             return
 
-        # skip until this layer has been seen at least twice, which guarantees
-        # one full forward pass has completed and all layers have accumulated data.
+        # skip until one full forward pass has completed and all layers have accumulated data.
         if self.dispatch_count[key] < 2:
             return
 
         now = datetime.now()
-        dump_interval_seconds = self.dump_frequency
-        if self.last_dump_time is not None and (now - self.last_dump_time).total_seconds() < dump_interval_seconds:
+        if self.last_dump_time is not None and (now - self.last_dump_time).total_seconds() < self.dump_frequency:
             return
 
         self.last_dump_time = now
+        rank = dist.get_rank() if dist.is_initialized() else 0
         self._dump(rank, step=self.dispatch_count[key])
 
     def _dump(self, rank: int, step: int):
-        # all-reduce local counts to get global distribution.
-        for k, local_counts in self.accum_token_counts.items():
-            if dist.is_initialized():
-                dist.all_reduce(local_counts, op=dist.ReduceOp.SUM)
+        # clone before all_reduce to avoid corrupting the local accumulator.
+        if dist.is_initialized():
+            global_counts = {k: v.clone() for k, v in self.accum_token_counts.items()}
+            for t in global_counts.values():
+                dist.all_reduce(t, op=dist.ReduceOp.SUM)
+        else:
+            global_counts = self.accum_token_counts
 
-        counts_tensor = self._build_counts_tensor()  # (num_layers, num_experts)
+        # only dump_rank handles logging and file I/O.
+        if rank != self.dump_rank:
+            return
+
+        counts_tensor = self._build_counts_tensor(global_counts)  # (num_layers, num_experts)
         balancedness = self._compute_balancedness(counts_tensor)  # (num_layers,)
 
         # log per-layer balancedness; highlight the most imbalanced layers.
@@ -100,8 +108,9 @@ class _ExpertsDistributionRecorderImpl:
         filepath = os.path.join(self.output_dir, f'rank{rank}_step{step}_expert_counts.pt')
         torch.save(
             {
-                'counts': counts_tensor,       # (num_layers, num_experts), int64
-                'balancedness': balancedness,  # (num_layers,), float32
+                'counts': counts_tensor,          # (num_layers, num_experts), int64
+                'balancedness': balancedness,     # (num_layers,), float32
+                'total_tokens': counts_tensor.sum(dim=1),  # (num_layers,); total dispatches
                 'step': step,
                 'rank': rank,
             },

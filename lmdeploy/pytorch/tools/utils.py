@@ -305,7 +305,7 @@ def visualize_expert_distribution(path: str, output_path: str = None, no_plot: b
     FONT = 14
     TITLE_FONT = 16
 
-    im = ax_heat.imshow(counts_np, aspect='auto', cmap='YlOrRd', interpolation='nearest')
+    im = ax_heat.imshow(counts_np, aspect='auto', cmap='YlOrRd', interpolation='nearest', origin='lower')
     ax_heat.set_xlabel('Expert Index', fontsize=FONT)
     ax_heat.set_ylabel('Layer Index', fontsize=FONT)
     ax_heat.set_title(f'Expert Token Counts  |  rank={rank}  step={step}', fontsize=TITLE_FONT)
