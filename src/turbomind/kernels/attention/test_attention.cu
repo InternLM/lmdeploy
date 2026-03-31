@@ -59,6 +59,11 @@ struct Config {
     {
         return block_len_;
     }
+
+    TM_HOST_DEVICE constexpr bool is_share_kv() const
+    {
+        return false;
+    }
 };
 
 // [S/S, H, S, D] <-> [S/b, H, b, D]

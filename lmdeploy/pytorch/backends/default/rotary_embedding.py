@@ -7,8 +7,15 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from ..rotary_embedding import (FopeParameters, Llama3Parameters, LongRoPEScalingParameters, RopeType,
-                                RotaryEmbeddingBuilder, RotaryEmbeddingImpl, YarnParameters)
+from ..rotary_embedding import (
+    FopeParameters,
+    Llama3Parameters,
+    LongRoPEScalingParameters,
+    RopeType,
+    RotaryEmbeddingBuilder,
+    RotaryEmbeddingImpl,
+    YarnParameters,
+)
 
 
 def safe_torch_compile(**compile_kwargs):
@@ -107,10 +114,9 @@ class LlamaDynamicNTKScalingRotaryEmbedding(RotaryEmbeddingImpl):
 
     def _ntk_inv_freq(self, seq_len: torch.Tensor):
         """ntk_inv_freq."""
-        device = seq_len.device
         base = self.base * ((self.scaling_factor * seq_len / self.max_position_embeddings) -
                             (self.scaling_factor - 1))**(self.dim / (self.dim - 2))
-        inv_freq = 1.0 / (base**(torch.arange(0, self.dim, 2, dtype=torch.int64, device=device).float() / self.dim))
+        inv_freq = 1.0 / (base**(torch.arange(0, self.dim, 2, dtype=torch.int64).float() / self.dim))
         return inv_freq
 
     def forward(self, x: torch.Tensor, position_ids: torch.Tensor):

@@ -1,11 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import functools
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import torch
 from torch.profiler import record_function
 
-from lmdeploy.pytorch.backends.deepep_moe_checker import get_moe_backend
+from lmdeploy.pytorch.backends.deepep_state import get_deepep_state
 from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
@@ -66,7 +66,7 @@ class CUDASingleGraphRunner:
         max_tokens: int,
         num_blocks: int,
         is_decoding: bool,
-        pool: Tuple[int, int],
+        pool: tuple[int, int],
         model_config: ModelConfig,
         device: torch.device,
         decode_query_len: int = 1,
@@ -89,6 +89,8 @@ class CUDASingleGraphRunner:
             mla_index_topk=getattr(self.model_config, 'mla_index_topk', None),
             decode_query_len=decode_query_len,
             use_fa3_decoding=model_config.model_paradigm == 'ar_spec',
+            is_ssm=len(model_config.states_shapes) > 0,
+            use_mrope=model_config.use_mrope,
         )
         self.device = device
         self.max_batches = max_batches
@@ -153,7 +155,7 @@ class CUDAGraphRunner(GraphRunner):
         self.enable_graph = self.check_enable_graph()
 
         self.graph_pool_handle = torch.cuda.graph_pool_handle()
-        self._runner_map: Dict[Any, CUDASingleGraphRunner] = dict()
+        self._runner_map: dict[Any, CUDASingleGraphRunner] = dict()
         self.has_try_compile_model: bool = False
 
         # strategy factory
@@ -187,7 +189,7 @@ class CUDAGraphRunner(GraphRunner):
                 return size
         assert False, f'Unsupported batch_size={batch_size}'
 
-    def get_graph_key(self, input_ids: torch.Tensor, position_ids: torch.Tensor, past_key_values: List,
+    def get_graph_key(self, input_ids: torch.Tensor, position_ids: torch.Tensor, past_key_values: list,
                       attn_metadata: TritonAttentionMetadata, inputs_embeds: torch.Tensor, **kwargs):
         """Get graph key."""
         context = self.ctx_mgr.current_context()
@@ -261,13 +263,13 @@ class CUDAGraphRunner(GraphRunner):
     @record_function('prepare_inputs_for_generation')
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         inputs_embeds: torch.Tensor = None,
         context: StepContext = None,
     ):
         """Prepare inputs."""
 
-        if get_moe_backend().use_deepep_moe_backend():
+        if get_deepep_state().enabled():
             from dlblas.layers.moe.token_dispatcher import DeepEPBuffer, DeepEPMode
             deepep_mode = DeepEPMode.LOW_LATENCY if context.is_decoding else DeepEPMode.NORMAL
             DeepEPBuffer.set_deepep_mode(deepep_mode)
@@ -281,7 +283,7 @@ class CUDAGraphRunner(GraphRunner):
     def reset(self):
         """Remove all graphs to prevent hanging on exit."""
         self._runner_map.clear()
-        if get_moe_backend().use_deepep_moe_backend():
+        if get_deepep_state().enabled():
             from dlblas.layers.moe.token_dispatcher import DeepEPBuffer
 
             if hasattr(DeepEPBuffer, 'destroy'):
@@ -303,6 +305,6 @@ class CUDAGraphRunner(GraphRunner):
             dp_meta.sync_tp_size(tp_size)
         return inputs
 
-    def get_capture_batch_sizes(self) -> List[int]:
+    def get_capture_batch_sizes(self) -> list[int]:
         """Capture batch sizes."""
         return _get_capture_batch_size_impl(self.cache_config.max_batches)

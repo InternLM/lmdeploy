@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Dict, Optional, Sequence
 
 from torch import Tensor
 
@@ -10,14 +10,14 @@ from ..attention import AttentionBuilder, AttentionImpl, AttentionMetadata
 
 @dataclass
 class DlinferAttentionMetadata(AttentionMetadata):
-    kv_start_indices: Optional[Tensor] = None
+    kv_start_indices: Tensor | None = None
     block_size: int = 64
     attention_mask: Sequence[Tensor] = tuple()
-    is_prefill_no_cache: Optional[bool] = None
+    is_prefill_no_cache: bool | None = None
     max_q_seq_len: int = 1
     max_kv_seq_len: int = 1
-    quant_meta: Dict = None
-    cu_seq_lens_kv: Optional[Tensor] = None
+    quant_meta: dict = None
+    cu_seq_lens_kv: Tensor | None = None
 
 
 class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):

@@ -6,7 +6,6 @@ information."""
 import json
 import logging
 from enum import Enum
-from typing import List, Optional, Union
 
 import _xgrammar as _xgr  # noqa: E402
 
@@ -71,27 +70,27 @@ class TokenizerInfo(_xgr.TokenizerInfo):
 
     def __init__(
         self,
-        encoded_vocab: Union[List[bytes], List[str]],
+        encoded_vocab: list[bytes] | list[str],
         vocab_type: VocabType = VocabType.RAW,
         *,
-        vocab_size: Optional[int] = None,
-        stop_token_ids: Optional[Union[List[int], int]] = None,
+        vocab_size: int | None = None,
+        stop_token_ids: list[int] | int | None = None,
         add_prefix_space: bool = False,
     ) -> None:
         """Construct the tokenizer info.
 
         Parameters
         ----------
-        encoded_vocab : Union[List[bytes], List[str]]
+        encoded_vocab : list[bytes] | list[str]
             The encoded vocabulary of the tokenizer.
 
         vocab_type : VocabType, default: VocabType.RAW
             The type of the vocabulary. See also VocabType.
 
-        vocab_size : Optional[int], default: None
+        vocab_size : int | None, default: None
             The size of the vocabulary. If not provided, the vocabulary size will be len(encoded_vocab).
 
-        stop_token_ids : Optional[List[int]], default: None
+        stop_token_ids : list[int] | None, default: None
             The stop token ids. If not provided, the stop token ids will be auto detected (but may not
             be correct).
 
@@ -134,8 +133,8 @@ class TokenizerInfo(_xgr.TokenizerInfo):
     def from_huggingface(
         tokenizer: PreTrainedTokenizerBase,
         *,
-        vocab_size: Optional[int] = None,
-        stop_token_ids: Optional[Union[List[int], int]] = None,
+        vocab_size: int | None = None,
+        stop_token_ids: list[int] | int | None = None,
     ) -> 'TokenizerInfo':
         """Construct the tokenizer info from the huggingface tokenizer. This
         constructor supports various tokenizer backends, including the
@@ -154,7 +153,7 @@ class TokenizerInfo(_xgr.TokenizerInfo):
         tokenizer : PreTrainedTokenizerBase
             The huggingface tokenizer.
 
-        vocab_size : Optional[int], default: None
+        vocab_size : int | None, default: None
             The vocabulary size **defined by the model** (**not the tokenizer**). This equals to the
             vocab dimension of the model's lm_head. This is the size of the token mask.
 
@@ -172,7 +171,7 @@ class TokenizerInfo(_xgr.TokenizerInfo):
             model_vocab_size need to be provided for case 2 and 3. If not provided, it will be
             set to the tokenizer's vocabulary size.
 
-        stop_token_ids : Optional[List[int]], default: None
+        stop_token_ids : list[int] | None, default: None
             The stop token ids. If not provided, the eos_token_id of the tokenizer will be used.
 
         Returns

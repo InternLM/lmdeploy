@@ -1,6 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
-                                                   DistServeInitRequest)
+from lmdeploy.pytorch.disagg.conn.protocol import (
+    DistServeConnectionRequest,
+    DistServeDropConnectionRequest,
+    DistServeInitRequest,
+)
 
 
 class EngineBase:

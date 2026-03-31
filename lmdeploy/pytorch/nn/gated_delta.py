@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Any, Sequence, Tuple
+from collections.abc import Sequence
+from typing import Any
 
 import torch
 from torch import nn
@@ -76,31 +77,30 @@ class CausalConv1dFunc:
         state_ids = gated_delta_meta.state_ids
 
         assert x.dim() == 3
-        x = x.transpose(-2, -1)
         if weight.dim() == 3:
             assert weight.size(1) == 1
             weight = weight[:, 0]
 
-        # fill conv state
-        # TODO: find efficient way to fill conv state without gather + scatter
-        final_state = conv_state.index_select(0, state_ids)
-        batch_size = conv_state.size(0)
-        conv_idx = conv_idx[:, None].expand(-1, x.size(1), -1)
-        torch.gather(x.expand(batch_size, -1, -1), -1, conv_idx, out=final_state)
+        # Load all initial conv states before overwriting.
+        # (num_seqs, dim, ks-1): last ks-1 raw input values per sequence.
+        all_inits = conv_state[state_ids, :, 1:]
+
+        # Save conv state (last kernel_size input tokens per sequence).
+        final_state = x[0, conv_idx].transpose(-2, -1)
         conv_state = conv_state.index_copy_(0, state_ids, final_state)
 
+        x = x.transpose(-2, -1)
         out = self.causal_conv1d_fn(
             x,
             weight,
             bias,
-            seq_idx,
+            seq_idx=seq_idx,
+            initial_states=all_inits,
             return_final_states=False,
             activation=self.activation,
         )
-
         out = out.transpose(-2, -1)
 
-        # store conv_state
         return out, conv_state
 
     def conv1d_update(
@@ -198,7 +198,7 @@ class CausalConv1d(nn.Module):
         self,
         in_channels: int,
         out_channels: int,
-        kernel_size: int | Tuple[int],
+        kernel_size: int | tuple[int],
         split: Sequence[int],
         groups: int = 1,
         bias: bool = True,
@@ -232,7 +232,7 @@ class CausalConv1d(nn.Module):
     def make_weight(
         in_channels: int,
         out_channels: int,
-        kernel_size: int | Tuple[int],
+        kernel_size: int | tuple[int],
         groups: int = 1,
         bias: bool = True,
         device: str | torch.device | None = None,
@@ -273,6 +273,6 @@ class CausalConv1d(nn.Module):
 
 
 @record_function('gated_delta_load_state')
-def load_state(past_key_value: Tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
+def load_state(past_key_value: tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
     """Load states from cache."""
     return past_key_value[:2]

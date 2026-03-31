@@ -83,7 +83,7 @@ def llm_summary(case_name, result, msg, work_dir, result_dir=None):
             if not os.path.exists(csv_file):
                 raise FileNotFoundError('CSV file does not exist')
 
-            with open(csv_file, 'r') as f:
+            with open(csv_file) as f:
                 reader = csv.reader(f)
                 next(reader)
                 for row in reader:
@@ -126,7 +126,7 @@ def mllm_summary(case_name,
         if dataset == 'OCRBench_MINI':
             score_file = f'{latest_dir}/{case_name}_{dataset}_score.json'
             cur_score = 0
-            with open(score_file, 'r') as f:
+            with open(score_file) as f:
                 total_score = json.load(f)
                 cur_score = total_score['Final Score Norm']
             metrics[dataset] = f'{cur_score:.2f}'  # noqa: E231

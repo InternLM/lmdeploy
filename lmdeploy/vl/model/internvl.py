@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict, List, Optional
 
 import torch
 from transformers import AutoConfig, AutoModel, AutoTokenizer, CLIPImageProcessor
@@ -72,7 +71,7 @@ class InternVLVisionModel(VisionModel):
     def __init__(self,
                  model_path: str,
                  with_llm: bool = False,
-                 max_memory: Dict[int, int] = None,
+                 max_memory: dict[int, int] = None,
                  hf_config: AutoConfig = None,
                  backend: str = ''):
         super().__init__(model_path, with_llm, max_memory, hf_config, backend)
@@ -190,12 +189,11 @@ class InternVLVisionModel(VisionModel):
             outputs.extend([x.squeeze() for x in feats])
         return outputs
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refers to `super.preprocess() for spec."""
         images = self.collect_multimodal_items(messages)
         outputs = []
         for modality, image, params in images:
-            image = image.convert('RGB')
             pixel_values = self.processor(image, params)
             image_tokens = (pixel_values.shape[0] * self.image_tokens_per_patch)
             outputs.append(
@@ -207,12 +205,12 @@ class InternVLVisionModel(VisionModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
-            messages(List[Dict]): the outputs of `preprocess`
+            messages(list[dict]): the outputs of `preprocess`
             max_batch_size(int): the max batch size when forwarding vision
                 model
         Return:
@@ -229,8 +227,8 @@ class InternVLVisionModel(VisionModel):
         messages,
         chat_template,
         sequence_start,
-        tools: Optional[List[object]] = None,
-        chat_template_kwargs: Optional[Dict] = None,
+        tools: list[object] | None = None,
+        chat_template_kwargs: dict | None = None,
     ):
         chat_template_kwargs = chat_template_kwargs or {}
         """Apply chat template to get the prompt."""
@@ -272,8 +270,8 @@ class InternVLVisionModel(VisionModel):
                    chat_template,
                    tokenizer,
                    sequence_start,
-                   tools: Optional[List[object]] = None,
-                   chat_template_kwargs: Optional[Dict] = None,
+                   tools: list[object] | None = None,
+                   chat_template_kwargs: dict | None = None,
                    **kwargs):
         prompt, IMAGE_TOKEN = self.proc_messages(messages,
                                                  chat_template,
@@ -287,8 +285,8 @@ class InternVLVisionModel(VisionModel):
                      chat_template,
                      tokenizer,
                      sequence_start,
-                     tools: Optional[List[object]] = None,
-                     chat_template_kwargs: Optional[Dict] = None,
+                     tools: list[object] | None = None,
+                     chat_template_kwargs: dict | None = None,
                      **kwargs):
         prompt, IMAGE_TOKEN = self.proc_messages(messages,
                                                  chat_template,

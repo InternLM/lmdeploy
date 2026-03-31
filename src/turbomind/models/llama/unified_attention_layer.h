@@ -104,6 +104,8 @@ private:
 
     std::vector<std::shared_ptr<AttentionData>> data_;
 
+    std::vector<int> cache_layer_ids_;
+
     ///////////////////////////////////////////////////////
     /// temp runtime buffers
     Tensor_<float> partial_O_;

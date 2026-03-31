@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import math
-from typing import Iterable, Set, Tuple, Union
+from collections.abc import Iterable
 
 import torch
 from torch import nn
@@ -206,7 +206,7 @@ class SiglipEncoderLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-    ) -> Tuple[torch.Tensor, None]:
+    ) -> tuple[torch.Tensor, None]:
         residual = hidden_states
         hidden_states = self.layer_norm1(hidden_states)
         hidden_states, _ = self.self_attn(hidden_states=hidden_states)
@@ -242,7 +242,7 @@ class SiglipEncoder(nn.Module):
         self,
         inputs_embeds: torch.Tensor,
         **kwargs,
-    ) -> Union[torch.Tensor, list[torch.Tensor]]:
+    ) -> torch.Tensor | list[torch.Tensor]:
         hidden_states = inputs_embeds
 
         for encoder_layer in self.layers:
@@ -357,7 +357,7 @@ class SiglipVisionModel(nn.Module):
             interpolate_pos_encoding=interpolate_pos_encoding,
         )
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]) -> Set[str]:
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)
             ('qkv_proj', 'q_proj', 'q'),
@@ -365,7 +365,7 @@ class SiglipVisionModel(nn.Module):
             ('qkv_proj', 'v_proj', 'v'),
         ]
         params_dict = dict(self.named_parameters())
-        loaded_params: Set[str] = set()
+        loaded_params: set[str] = set()
         layer_count = len(self.vision_model.encoder.layers)
 
         for name, loaded_weight in weights:

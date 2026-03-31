@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
-from typing import Optional, Union
 
 import torch
 
@@ -40,7 +39,7 @@ logger = get_logger('lmdeploy')
 def load_vl_model(model_path: str,
                   backend: str,
                   with_llm: bool = False,
-                  backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None):
+                  backend_config: TurbomindEngineConfig | PytorchEngineConfig | None = None):
     """Load visual model.
 
     Args:

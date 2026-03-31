@@ -1,7 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+from collections.abc import Iterable
 from functools import lru_cache
-from typing import Any, Iterable, List, Tuple
+from typing import Any
 
 import numpy as np
 import torch
@@ -16,8 +17,13 @@ from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, LayerNorm, RMSNorm, SiluAndMul
 from lmdeploy.pytorch.nn.gated_delta import CausalConv1d, GatedDelta, GatedDeltaMeta, build_rmsnorm_gated
-from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_merged_colwise_linear, build_o_proj, build_qkv_proj,
-                                        build_rowwise_linear)
+from lmdeploy.pytorch.nn.linear import (
+    build_colwise_linear,
+    build_merged_colwise_linear,
+    build_o_proj,
+    build_qkv_proj,
+    build_rowwise_linear,
+)
 from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader, load_weight
 from lmdeploy.vl.constants import Modality
@@ -26,7 +32,7 @@ from .patch import add_prefix
 from .qwen2_5_vl import Qwen2_5_VisionRotaryEmbedding as Qwen3_5VisionRotaryEmbedding
 from .qwen2_5_vl import Qwen2_5_VLVisionAttention as Qwen3_5VisionAttention
 from .qwen3_vl import Qwen3VLInputProcessor as Qwen3_5InputProcessor
-from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
+from .utils.cudagraph import CudaGraphMixin
 from .utils.model import DeployModelMixinV1, vlm_model
 
 
@@ -244,7 +250,7 @@ class Qwen3_5VisionModel(nn.Module):
         return rotary_pos_emb
 
     # copy from https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/models/qwen3_vl.py#L474
-    def fast_pos_embed_interpolate(self, grid_thw: List[List[int]]) -> torch.Tensor:
+    def fast_pos_embed_interpolate(self, grid_thw: list[list[int]]) -> torch.Tensor:
         num_grid_per_side = self.num_grid_per_side
         m_size = self.spatial_merge_size
         hidden_dim = self.pos_embed.embedding_dim
@@ -389,6 +395,7 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         self.layer_idx = layer_idx
         self.activation = config.hidden_act
         self.layer_norm_epsilon = config.rms_norm_eps
+        quantization_config = getattr(config, 'quantization_config', None)
 
         # QKV
         self.conv_dim = self.key_dim * 2 + self.value_dim
@@ -410,17 +417,29 @@ class Qwen3_5GatedDeltaNet(nn.Module):
                                                 bias=False,
                                                 dtype=dtype,
                                                 device=device,
-                                                is_tp=True)
-        self.in_proj_qkv.weight.weight_loader = self.weight_loader_qkv
-        self.in_proj_zba = build_merged_colwise_linear(
-            self.hidden_size,
-            [self.value_dim, self.num_v_heads, self.num_v_heads],
-            bias=False,
-            dtype=dtype,
-            device=device,
-            is_tp=True,
-            out_names=['z', 'b', 'a'],
-        )
+                                                is_tp=True,
+                                                quant_config=quantization_config)
+        self._patch_qkv_weight_loader(self.in_proj_qkv)
+
+        # projection of z, b, a
+        # since z would be quantized in fp8 mode but b and a are not quantized
+        # we can not fuse them together
+        self.in_proj_z = build_colwise_linear(self.hidden_size,
+                                              self.value_dim,
+                                              bias=False,
+                                              dtype=dtype,
+                                              device=device,
+                                              is_tp=True,
+                                              quant_config=quantization_config)
+
+        self.in_proj_ba = build_merged_colwise_linear(self.hidden_size,
+                                              [self.num_v_heads, self.num_v_heads],
+                                              bias=False,
+                                              dtype=dtype,
+                                              device=device,
+                                              is_tp=True,
+                                              out_names=['b', 'a'])
+
 
         # time step projection (discretization)
         # instantiate once and copy inv_dt in init_weights of PretrainedModel
@@ -437,7 +456,8 @@ class Qwen3_5GatedDeltaNet(nn.Module):
                                      bias=False,
                                      dtype=dtype,
                                      device=device,
-                                     is_tp=True)
+                                     is_tp=True,
+                                     quant_config=quantization_config)
 
         self.gated_delta = GatedDelta()
 
@@ -458,15 +478,37 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         self.A_log.weight_loader = self.weight_loader_a_dt
         self.dt_bias.weight_loader = self.weight_loader_a_dt
 
-    def weight_loader_qkv(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor):
-        """Weight loader for qkv projection."""
-        tp, rank = get_tp_world_rank()
-        q, k, v = loaded_weight.split([self.key_dim, self.key_dim, self.value_dim], dim=0)
-        q = q.chunk(tp, dim=0)[rank]
-        k = k.chunk(tp, dim=0)[rank]
-        v = v.chunk(tp, dim=0)[rank]
-        loaded_weight = torch.cat([q, k, v], dim=0)
-        default_weight_loader(param, loaded_weight)
+    def _patch_qkv_weight_loader(self, mod):
+        """Patch weight_loader to do non-uniform QKV TP split.
+
+        The fused QKV weight has sections [key_dim, key_dim, value_dim] which cannot be uniformly chunked for TP. We
+        override weight_loader (not weight_loader_with_quant) so that the fp8 quant path — which calls weight_loader for
+        both weight and scale — works automatically.
+        """
+        sections = [self.key_dim, self.key_dim, self.value_dim]
+
+        def qkv_weight_loader(param, loaded_weight):
+            if not mod.is_tp:
+                return default_weight_loader(param, loaded_weight)
+
+            world_size, rank = mod.get_tp_world_rank()
+            split_sections = sections
+            # scale tensor has dim0 shrunk by block_size
+            if (loaded_weight.dim() == 2
+                    and loaded_weight.shape[0] < sum(sections)):
+                bs = mod.block_size
+                split_sections = [s // bs for s in sections]
+
+            parts = loaded_weight.split(split_sections, dim=0)
+            parts = [p.chunk(world_size, 0)[rank] for p in parts]
+            loaded_weight = torch.cat(parts, dim=0)
+            default_weight_loader(param, loaded_weight)
+
+        mod.weight_loader = qkv_weight_loader
+        # Re-run setup_loaders so param.weight_loader picks up the patched
+        # mod.weight_loader (for BaseLinear) or mod.weight_loader_with_quant
+        # which internally calls the patched mod.weight_loader (for fp8).
+        mod.setup_loaders()
 
     def weight_loader_a_dt(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor):
         """Weight loader."""
@@ -474,27 +516,23 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         loaded_weight = loaded_weight.chunk(tp, dim=0)[rank]
         default_weight_loader(param, loaded_weight)
 
-    def fix_zba_ordering(self, mixed_zba: torch.Tensor):
-        """Derives `query`, `key` and `value` tensors from `mixed_qkv` and
-        `mixed_zba`."""
+    def fix_ba_ordering(self, mixed_ba: torch.Tensor):
+        """Derives `b` and `a` tensors from `mixed_ba`."""
+        # b and a
+        split_arg_list_ba = [self.kv_ratio, self.kv_ratio]
+        num_heads = mixed_ba.size(-1) // sum(split_arg_list_ba)
+        split_arg_list_ba = [num_heads * x for x in split_arg_list_ba]
+        b, a = torch.split(mixed_ba, split_arg_list_ba, dim=-1)
+        return b, a
 
-        # zba
-        split_arg_list_zba = [self.head_v_dim * self.kv_ratio, self.kv_ratio, self.kv_ratio]
-        num_heads = mixed_zba.size(-1) // sum(split_arg_list_zba)
-        split_arg_list_zba = [num_heads * x for x in split_arg_list_zba]
-        z, b, a = torch.split(mixed_zba, split_arg_list_zba, dim=-1)
-        # [..., ng, np/ng * hn] -> [..., np, hn]
-        z = z.unflatten(-1, (-1, self.head_v_dim))
-        return z, b, a
-
-    def _load_state(self, past_key_value: Tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
+    def _load_state(self, past_key_value: tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
         """Load states from cache."""
         return gated_delta_util.load_state(past_key_value=past_key_value, gated_delta_meta=gated_delta_meta)
 
     def forward(
         self,
         hidden_states: torch.Tensor,
-        past_key_value: Tuple[torch.Tensor, torch.Tensor],
+        past_key_value: tuple[torch.Tensor, torch.Tensor],
         gated_delta_meta: GatedDeltaMeta,
     ):
         """forward."""
@@ -504,8 +542,11 @@ class Qwen3_5GatedDeltaNet(nn.Module):
 
         # inputs proj
         projected_states_qkv = self.in_proj_qkv(hidden_states)
-        projected_states_zba = self.in_proj_zba(hidden_states)
-        z, b, a = self.fix_zba_ordering(projected_states_zba)
+        z = self.in_proj_z(hidden_states)
+        # [..., ng, np/ng * hn] -> [..., np, hn]
+        z = z.unflatten(-1, (-1, self.head_v_dim))
+        projected_states_ba = self.in_proj_ba(hidden_states)
+        b, a = self.fix_ba_ordering(projected_states_ba)
 
         mixed_qkv = projected_states_qkv
         mixed_qkv, conv_state = self.conv1d(mixed_qkv, conv_state, gated_delta_meta=gated_delta_meta)
@@ -630,8 +671,8 @@ class Qwen3_5Attention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Tuple[torch.Tensor, torch.Tensor],
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: tuple[torch.Tensor, torch.Tensor],
         attn_metadata: Any,
     ):
         """Rewrite of LlamaAttention.forward."""
@@ -728,8 +769,8 @@ class Qwen3_5DecoderLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: List[torch.FloatTensor],
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: list[torch.FloatTensor],
         residual: torch.Tensor | None,
         attn_metadata: Any,
         gated_delta_meta: GatedDeltaMeta,
@@ -817,7 +858,8 @@ class Qwen3_5TextRotaryEmbedding(nn.Module):
         attention_factor = 1.0  # Unused in this type of RoPE
 
         # Compute the inverse frequencies
-        inv_freq = 1.0 / (base**(torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim))
+        inv_freq = 1.0 / (base**(torch.arange(0, dim, 2, dtype=torch.int64).to(dtype=torch.float) / dim))
+        inv_freq = inv_freq.to(device=device)
         return inv_freq, attention_factor
 
     def apply_interleaved_mrope(self, freqs, mrope_section):
@@ -897,7 +939,7 @@ class Qwen3_5TextModel(nn.Module):
         self,
         input_ids: torch.LongTensor,
         position_ids: torch.LongTensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any,
         state_ids: torch.Tensor,
         inputs_embeds: torch.Tensor | None = None,
@@ -971,7 +1013,7 @@ class Qwen3_5Model(nn.Module):
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any,
         state_ids: torch.Tensor,
         inputs_embeds: torch.Tensor | None = None,
@@ -1069,7 +1111,7 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any,
         state_ids: torch.Tensor,
         inputs_embeds: torch.Tensor | None = None,
@@ -1116,7 +1158,7 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         inputs_embeds: torch.Tensor | None = None,
         context: StepContext | None = None,
     ):
@@ -1195,7 +1237,7 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
             pos_embeds=pos_embeds,
         )
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
 
         def __skip_layers(name):
@@ -1216,9 +1258,8 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
             ('.qkv_proj', '.v_proj', 'v'),
             ('.gate_up_proj', '.gate_proj', 0),
             ('.gate_up_proj', '.up_proj', 1),
-            ('.in_proj_zba', '.in_proj_z', 'z'),
-            ('.in_proj_zba', '.in_proj_b', 'b'),
-            ('.in_proj_zba', '.in_proj_a', 'a'),
+            ('.in_proj_ba', '.in_proj_b', 'b'),
+            ('.in_proj_ba', '.in_proj_a', 'a'),
         ]
 
         rms_norm_keys = ['model.norm', '.input_layernorm', '.post_attention_layernorm', '.q_norm', '.k_norm']
@@ -1260,179 +1301,6 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
                             break
                     param = params_dict[name]
                     load_weight(param, loaded_weight)
-
-    def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, **kwargs):
-        """Make cudagraph buffers from forward inputs."""
-
-        max_batchs = graph_meta.max_batchs
-        device = graph_meta.device
-        max_tokens = graph_meta.max_tokens
-
-        input_buffers = super().make_buffers_cudagraph(graph_meta=graph_meta, **kwargs)
-        mrope_position_ids = kwargs.get('mrope_position_ids', None)
-        if mrope_position_ids is not None:
-            input_buffers['mrope_position_ids'] = mrope_position_ids.new_zeros(3, max_tokens)
-
-        state_ids = torch.full((max_batchs, ), -1, dtype=torch.long, device=device)
-        input_buffers['state_ids'] = state_ids
-        return input_buffers
-
-    def fill_buffers_cudagraph(self, graph_meta: CudaGraphMeta, *args, **kwargs):
-        """Fill cudagraph buffers from forward inputs."""
-        input_buffers = graph_meta.input_buffers
-        new_inputs = super().fill_buffers_cudagraph(graph_meta, *args, **kwargs)
-        state_ids = kwargs['state_ids']
-        input_buffers['state_ids'].fill_(-1)
-        input_buffers['state_ids'][:state_ids.size(0)].copy_(state_ids)
-        new_inputs['state_ids'] = input_buffers['state_ids']
-
-        input_ids = kwargs.get('input_ids')
-        num_tokens = input_ids.size(-1)
-        new_batch_size = graph_meta.max_batchs
-
-        is_decoding = graph_meta.is_decoding
-        mrope_position_ids = kwargs.get('mrope_position_ids', None)
-        if mrope_position_ids is not None:
-            input_buffers['mrope_position_ids'][:, :num_tokens] = mrope_position_ids
-            if is_decoding:
-                new_inputs['mrope_position_ids'] = input_buffers['mrope_position_ids'][:, :new_batch_size]
-            else:
-                new_inputs['mrope_position_ids'] = input_buffers['mrope_position_ids']
-
-        return new_inputs
-
-    def _get_model_metas(self, context: StepContext):
-        """Get model metas."""
-        model_metas = context.model_metas
-        if model_metas is None:
-            batch_size = context.q_seqlens.numel()
-            return [dict(mrope_delta=0)] * batch_size
-        return [dict(mrope_delta=0) if meta is None else meta for meta in model_metas]
-
-    def _update_model_meta_decoding(self, context: StepContext):
-        """Update model meta for decoding."""
-        model_metas = self._get_model_metas(context)
-        position_ids = context.position_ids
-
-        mrope_deltas = [meta['mrope_delta'] for meta in model_metas]
-        mrope_deltas_cpu = torch.tensor(mrope_deltas, device='cpu')
-        if (mrope_deltas_cpu == mrope_deltas_cpu[0]).all():
-            mrope_deltas = position_ids.new_full((len(mrope_deltas), ), mrope_deltas[0])
-        else:
-            mrope_deltas = position_ids.new_tensor(mrope_deltas)
-        mrope_position_ids = position_ids + mrope_deltas[None]
-        mrope_position_ids = mrope_position_ids.expand(3, -1)
-
-        context.mrope_position_ids = mrope_position_ids
-        return model_metas
-
-    def _get_multimodal_pos_ids(self, grid_thw: list, device: torch.device):
-        """Get mrope ids."""
-        t, h, w = grid_thw
-        h //= 2
-        w //= 2
-        stride = torch.tensor([h * w, w, 1], device=device)[:, None]
-        size = torch.tensor([t, h, w], device=device)[:, None]
-        pos_ids = torch.arange(t * h * w, device=device)[None].expand(3, -1)
-        pos_ids = pos_ids // stride % size
-        return pos_ids
-
-    def _update_model_meta_prefilling(self, context: StepContext):
-        """Update model meta for prefilling."""
-        model_metas = self._get_model_metas(context)
-        input_multimodals = context.input_multimodals
-        if input_multimodals is None:
-            input_multimodals = [None] * len(model_metas)
-        position_ids = context.position_ids
-        batched_pos_ids = position_ids[0].split(context.q_seqlens.tolist())
-        mrope_position_ids = []
-        new_model_metas = []
-        for pos_ids, model_meta, input_mm in zip(batched_pos_ids, model_metas, input_multimodals):
-            mm_data_list = []
-            if input_mm is not None:
-                mm_data_list.extend(input_mm.get('mm_data', []))
-
-            if model_meta is None or 'mrope_delta' not in model_meta:
-                mrope_delta = 0
-            else:
-                mrope_delta = model_meta['mrope_delta']
-
-            pos_start = pos_ids[0].item()
-            mrope_pos_ids = pos_ids + mrope_delta
-            mrope_pos_ids = mrope_pos_ids[None].expand(3, -1).clone()
-
-            for mm_data in mm_data_list:
-                if mm_data.modality == Modality.IMAGE:
-                    grid_thw = mm_data.meta['grid_thw'][0].tolist()
-                    _, h, w = grid_thw
-                    h //= 2
-                    w //= 2
-                    num_pad = mm_data.end - mm_data.start - max(h, w)
-                    mrope_delta -= num_pad
-                    fill_start = mm_data.start - pos_start
-                    fill_end = mm_data.end - pos_start
-                    img_pos_ids = self._get_multimodal_pos_ids(grid_thw, pos_ids.device)
-                    img_pos_ids += mrope_pos_ids[:, fill_start:fill_start + 1]
-                    mrope_pos_ids[:, fill_end:] -= num_pad
-                    mrope_pos_ids[:, fill_start:fill_end] = img_pos_ids
-                elif mm_data.modality == Modality.VIDEO:
-                    video_token_id = self.config.video_token_id
-                    grid_thw = mm_data.meta['grid_thw']
-
-                    grid_thw = torch.repeat_interleave(grid_thw, grid_thw[:, 0], dim=0)
-                    grid_thw[:, 0] = 1
-
-                    position_ids_list = []
-                    input_tokens = context.input_ids.tolist()[0]
-
-                    st = 0
-                    # treat each frame separately as a single image
-                    for video_idx in range(grid_thw.shape[0]):
-                        # text before video. e.g. <0.3 seconds><|vision_start|> ...
-                        ed_video = input_tokens.index(video_token_id, st)
-                        ed = ed_video
-                        text_len = ed - st
-                        st_idx = position_ids_list[-1].max() + 1 if len(position_ids_list) > 0 else 0
-                        text_pos_ids = torch.arange(text_len, device=pos_ids.device).view(1, -1).expand(3, -1) + st_idx
-                        position_ids_list.append(text_pos_ids)
-
-                        # video frame. <video_pad> ... <|video_end|>
-                        t, h, w = (
-                            grid_thw[video_idx][0],
-                            grid_thw[video_idx][1] // 2,
-                            grid_thw[video_idx][2] // 2,
-                        )
-                        video_pos_ids = self._get_multimodal_pos_ids(grid_thw[video_idx], pos_ids.device)
-                        position_ids_list.append(video_pos_ids + text_len + st_idx)
-
-                        st = ed + t * h * w
-
-                    # text after video, <|vision_end|> ...
-                    if st < len(input_tokens):
-                        st_idx = position_ids_list[-1].max() + 1 if len(position_ids_list) > 0 else 0
-                        text_len = len(input_tokens) - st
-                        text_pos_ids = torch.arange(text_len, device=pos_ids.device).view(1, -1).expand(3, -1) + st_idx
-                        position_ids_list.append(text_pos_ids)
-
-                    mrope_pos_ids = torch.cat(position_ids_list, dim=1).reshape(3, -1)
-                    mrope_delta = mrope_pos_ids.max() + 1 - pos_ids.size(0)
-                    mrope_pos_ids += pos_start  # add back the original position offset
-
-            mrope_position_ids.append(mrope_pos_ids)
-            new_model_metas.append(dict(mrope_delta=mrope_delta))
-
-        mrope_position_ids = torch.cat(mrope_position_ids, dim=1)
-        context.mrope_position_ids = mrope_position_ids
-
-        return new_model_metas
-
-    def update_model_metas(self, past_key_values: List[List[torch.Tensor]], inputs_embeds: torch.Tensor | None,
-                           context: StepContext):
-        """Update model meta."""
-        if context.is_decoding:
-            return self._update_model_meta_decoding(context)
-        else:
-            return self._update_model_meta_prefilling(context)
 
     def get_input_processor(self) -> BaseModelInputProcessor:
         """Get input processor."""

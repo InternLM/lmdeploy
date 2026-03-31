@@ -11,39 +11,51 @@ with read_base():
     from opencompass.configs.datasets.cmmlu.cmmlu_ppl_041cbf import cmmlu_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.crowspairs.crowspairs_ppl import crowspairs_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.drop.drop_gen_a2697c import drop_datasets  # noqa: F401, E501
+
     # Corebench v1.7
-    from opencompass.configs.datasets.GaokaoBench.GaokaoBench_no_subjective_gen_d21e37 import \
-        GaokaoBench_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.GaokaoBench.GaokaoBench_no_subjective_gen_d21e37 import (
+        GaokaoBench_datasets,  # noqa: F401, E501
+    )
     from opencompass.configs.datasets.gpqa.gpqa_few_shot_ppl_4b5a83 import gpqa_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.gsm8k.gsm8k_gen_17d0dc import gsm8k_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.hellaswag.hellaswag_10shot_ppl_59c85e import \
-        hellaswag_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.humaneval.internal_humaneval_gen_ce6b06 import \
-        humaneval_datasets as humaneval_v2_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.humaneval.internal_humaneval_gen_d2537e import \
-        humaneval_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.hellaswag.hellaswag_10shot_ppl_59c85e import (
+        hellaswag_datasets,  # noqa: F401, E501
+    )
+    from opencompass.configs.datasets.humaneval.internal_humaneval_gen_ce6b06 import (
+        humaneval_datasets as humaneval_v2_datasets,  # noqa: F401, E501
+    )
+    from opencompass.configs.datasets.humaneval.internal_humaneval_gen_d2537e import (
+        humaneval_datasets,  # noqa: F401, E501
+    )
     from opencompass.configs.datasets.math.math_4shot_base_gen_43d5b6 import math_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.MathBench.mathbench_2024_few_shot_mixed_4a3fd4 import \
-        mathbench_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.MathBench.mathbench_2024_few_shot_mixed_4a3fd4 import (
+        mathbench_datasets,  # noqa: F401, E501
+    )
     from opencompass.configs.datasets.mbpp.sanitized_mbpp_gen_742f0c import sanitized_mbpp_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.mmlu.mmlu_ppl_ac766d import mmlu_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.mmlu_pro.mmlu_pro_few_shot_gen_bfaf90 import mmlu_pro_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.nq.nq_open_1shot_gen_20a989 import nq_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.race.race_few_shot_ppl import race_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.SuperGLUE_BoolQ.SuperGLUE_BoolQ_few_shot_ppl import \
-        BoolQ_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.SuperGLUE_BoolQ.SuperGLUE_BoolQ_few_shot_ppl import (
+        BoolQ_datasets,  # noqa: F401, E501
+    )
     from opencompass.configs.datasets.TheoremQA.TheoremQA_5shot_gen_6f0af8 import TheoremQA_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.triviaqa.triviaqa_wiki_1shot_gen_20a989 import \
-        triviaqa_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.wikibench.wikibench_few_shot_ppl_c23d79 import \
-        wikibench_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.winogrande.winogrande_5shot_ll_252f01 import \
-        winogrande_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.triviaqa.triviaqa_wiki_1shot_gen_20a989 import (
+        triviaqa_datasets,  # noqa: F401, E501
+    )
+    from opencompass.configs.datasets.wikibench.wikibench_few_shot_ppl_c23d79 import (
+        wikibench_datasets,  # noqa: F401, E501
+    )
+    from opencompass.configs.datasets.winogrande.winogrande_5shot_ll_252f01 import (
+        winogrande_datasets,  # noqa: F401, E501
+    )
+
     # Summary Groups
     from opencompass.configs.summarizers.groups.cmmlu import cmmlu_summary_groups  # noqa: F401, E501
     from opencompass.configs.summarizers.groups.GaokaoBench import GaokaoBench_summary_groups  # noqa: F401, E501
-    from opencompass.configs.summarizers.groups.mathbench_v1_2024 import \
-        mathbench_2024_summary_groups  # noqa: F401, E501
+    from opencompass.configs.summarizers.groups.mathbench_v1_2024 import (
+        mathbench_2024_summary_groups,  # noqa: F401, E501
+    )
     from opencompass.configs.summarizers.groups.mmlu import mmlu_summary_groups  # noqa: F401, E501
     from opencompass.configs.summarizers.groups.mmlu_pro import mmlu_pro_summary_groups  # noqa: F401, E501
 

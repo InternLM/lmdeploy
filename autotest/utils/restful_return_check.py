@@ -46,16 +46,16 @@ def assert_usage(usage):
 def assert_logprobs(logprobs, logprobs_num):
     assert_logprob_element(logprobs)
     assert len(logprobs.get('top_logprobs')) >= 0
-    assert type(logprobs.get('top_logprobs')) == list
+    assert type(logprobs.get('top_logprobs')) is list
     assert len(logprobs.get('top_logprobs')) <= logprobs_num
     for logprob_element in logprobs.get('top_logprobs'):
         assert_logprob_element(logprob_element)
 
 
 def assert_logprob_element(logprob):
-    assert len(logprob.get('token')) > 0 and type(logprob.get('token')) == str
-    assert len(logprob.get('bytes')) > 0 and type(logprob.get('bytes')) == list
-    assert type(logprob.get('logprob')) == float
+    assert len(logprob.get('token')) > 0 and type(logprob.get('token')) is str
+    assert len(logprob.get('bytes')) > 0 and type(logprob.get('bytes')) is list
+    assert type(logprob.get('logprob')) is float
 
 
 def assert_chat_completions_stream_return(output,

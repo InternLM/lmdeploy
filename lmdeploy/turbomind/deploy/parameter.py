@@ -30,14 +30,9 @@ def pack_u4_row(x: torch.Tensor) -> torch.Tensor:
     return a.squeeze(dim=-1)
 
 
-def generate_zero_point(g):
-    weight_shapes = g('weight_shape')
-    result = []
-    for weight_shape in weight_shapes:
-        row, col = weight_shape
-        tensor = torch.full((row, col // 128), 8, dtype=torch.uint8)
-        result.append(tensor)
-    return (*result, )
+def generate_zero_point(scales):
+    """Synthesize symmetric int4 zero-points from exported scale shapes."""
+    return tuple(torch.full(s.shape, 8, dtype=torch.uint8) for s in scales)
 
 
 class Parameter:
@@ -61,12 +56,51 @@ class Parameter:
 
 
 class QuantWeightOnly(Parameter):
-    KEYS = '.qweight', '.scales', '.qzeros'
+    AWQ_KEYS = '.qweight', '.scales', '.qzeros'
+    COMPRESSED_KEYS = '.weight_packed', '.weight_scale', '.weight_zero_point'
+    KEYS = AWQ_KEYS + COMPRESSED_KEYS
+
+    @classmethod
+    def take(cls, keys: list[str]):
+        if any(k.endswith(cls.AWQ_KEYS[0]) for k in keys):
+            suffixes = cls.AWQ_KEYS
+        elif any(k.endswith(cls.COMPRESSED_KEYS[0]) for k in keys):
+            suffixes = cls.COMPRESSED_KEYS
+        else:
+            return False
+
+        xs = []
+        for k in keys:
+            if any(k.endswith(p) for p in suffixes):
+                xs.append(k)
+        for x in xs:
+            keys.remove(x)
+        return xs
+
+    def __init__(self, xs):
+        self.compressed_tensors = any(key.endswith(self.COMPRESSED_KEYS[0]) for key in xs)
+        self.has_zero_point = any(key.endswith(self.COMPRESSED_KEYS[2]) for key in xs)
+
+    def _get(self, g, kind: str):
+        if not self.compressed_tensors:
+            return g(kind)
+
+        mapping = {
+            'qweight': 'weight_packed',
+            'scales': 'weight_scale',
+            'qzeros': 'weight_zero_point',
+        }
+        return g(mapping[kind])
 
     def __call__(self, f, g, i):
-        f(i, g('qweight'), 'qweight', pack_u4_row)
-        f(i, g('scales'), 'scales', to_half, apply_gs=['w2'])
-        f(i, g('qzeros'), 'zeros', to_half, apply_gs=['w2'])
+        f(i, self._get(g, 'qweight'), 'qweight', pack_u4_row)
+        scales = self._get(g, 'scales')
+        f(i, scales, 'scales', to_half, apply_gs=['w2'])
+        if self.compressed_tensors and not self.has_zero_point:
+            zeros = generate_zero_point(scales)
+        else:
+            zeros = self._get(g, 'qzeros')
+        f(i, zeros, 'zeros', to_half, apply_gs=['w2'])
 
 
 class WeightScaleInv(Parameter):
@@ -76,23 +110,6 @@ class WeightScaleInv(Parameter):
     def __call__(self, f, g, i):
         f(i, g('weight_scale_inv'), 'scales', to_float, apply_gs=['w1', 'w3', 'w2'])
         f(i, g('weight'), 'weight', identity)
-
-
-class CompressedWeight(Parameter):
-    KEYS = '.weight_packed', '.weight_scale', '.weight_zero_point'
-
-    def __init__(self, xs):
-        self.has_zero_point = False
-        if any(key.endswith(self.KEYS[2]) for key in xs):
-            self.has_zero_point = True
-
-    def __call__(self, f, g, i):
-        f(i, g('weight_packed'), 'qweight', pack_u4_row)
-        f(i, g('weight_scale'), 'scales', to_half, apply_gs=['w2'])
-        if self.has_zero_point:
-            f(i, g('weight_zero_point'), 'zeros', to_half, apply_gs=['w2'])
-        else:
-            f(i, generate_zero_point(g), 'zeros', to_half, apply_gs=['w2'])
 
 
 class Mxfp4Weight(Parameter):
@@ -129,13 +146,11 @@ def get_params(keys: list[str], bias=0):
     ps = []
     if PLora.take(keys):
         ps.append(PLora())
-    if QuantWeightOnly.take(keys):
-        ps.append(QuantWeightOnly())
+    xs = QuantWeightOnly.take(keys)
+    if xs:
+        ps.append(QuantWeightOnly(xs))
     if WeightScaleInv.take(keys):
         ps.append(WeightScaleInv())
-    xs = CompressedWeight.take(keys)
-    if xs:
-        ps.append(CompressedWeight(xs))
     if Mxfp4Weight.take(keys):
         ps.append(Mxfp4Weight())
     if Weight.take(keys):

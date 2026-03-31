@@ -1,7 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
+from typing import Any, Literal
 
 import torch
 
@@ -56,7 +57,13 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str, device_type: str = 'a
             torch_dtype = torch_dtype if torch_dtype in ['float16', 'bfloat16'] else 'float16'
         else:
             torch_dtype = dtype
-    config.dtype = eval(f'torch.{torch_dtype}')
+
+    resolved_dtype = getattr(torch, torch_dtype, None)
+    if not isinstance(resolved_dtype, torch.dtype):
+        raise ValueError(f'Invalid torch dtype "{torch_dtype}" resolved from model config; '
+                         'expected a torch.dtype attribute on torch.')
+    config.dtype = resolved_dtype
+
     return config
 
 
@@ -94,7 +101,7 @@ class CacheConfig:
     quant_policy: Literal[0, 4, 8] = 0
     device_type: str = 'cuda'
     num_state_caches: int = None
-    states_shapes: List[Tuple] = field(default_factory=list)
+    states_shapes: list[tuple] = field(default_factory=list)
 
     # reserved blocks for dummy inputs, init to 0 for unit test.
     num_reserved_gpu_blocks: int = 0
@@ -257,7 +264,7 @@ def _override_hf_config(hf_config: Any, key: str, hf_overrides):
         _overide_hf_config_cfg(hf_config, key, hf_overrides)
 
 
-def override_hf_config(hf_config: Any, hf_overrides: Dict[str, Any]):
+def override_hf_config(hf_config: Any, hf_overrides: dict[str, Any]):
     """Override HF config."""
     for k, v in hf_overrides.items():
         _override_hf_config(hf_config, k, v)
@@ -305,7 +312,7 @@ class ModelConfig:
     num_attention_heads: int
     num_key_value_heads: int
     bos_token_id: int
-    eos_token_id: List[int]
+    eos_token_id: list[int]
     head_dim: int
     k_head_dim: int = None
     v_head_dim: int = None
@@ -315,12 +322,12 @@ class ModelConfig:
     hf_config: Any = None
     llm_config: Any = None
     cogvlm_style: bool = False
-    custom_module_map: Dict[str, setattr] = None
+    custom_module_map: dict[str, setattr] = None
 
     # flash mla
     use_flash_mla: bool = False
     use_mla_fp8_cache: bool = False
-    mla_index_topk: Optional[int] = None
+    mla_index_topk: int | None = None
 
     # dllm
     model_paradigm: str = 'ar'
@@ -329,10 +336,13 @@ class ModelConfig:
 
     # Added for deepseekv3.2 nsa index
     # caches would be added after kv cache
-    cache_shapes: List[Tuple[List[int], torch.dtype]] = field(default_factory=list)
+    cache_shapes: list[tuple[list[int], torch.dtype]] = field(default_factory=list)
     # added for qwen3_next
     # could used for any SSM model.
-    states_shapes: List[Tuple[Tuple[int], torch.dtype]] = field(default_factory=list)
+    states_shapes: list[tuple[tuple[int], torch.dtype]] = field(default_factory=list)
+    # flag to indicate that the model uses gated delta rule layers
+    # and requires prepare_chunk_indices during prefill
+    is_gated_delta: bool = False
 
     # check env for model-device combination
     check_env_func: Callable = _default_check_env
@@ -343,6 +353,9 @@ class ModelConfig:
 
     # quant config
     quant_config: 'QuantizationConfig' = None
+
+    # flags mark if this model use mrope
+    use_mrope: bool = False
 
     def get_head_size(self):
         """Get head size."""
@@ -355,7 +368,7 @@ class ModelConfig:
         trust_remote_code: bool = True,
         dtype: str = 'auto',
         dist_config: DistConfig = None,
-        hf_overrides: Dict[str, Any] = None,
+        hf_overrides: dict[str, Any] = None,
         is_draft_model: bool = False,
         spec_method: str = None,
         model_format: str = None,
@@ -370,7 +383,7 @@ class ModelConfig:
                 models defined on the Hub in their own modeling files.
             dtype (str): user specified data type for model weights and
                 activations. Refer to `PyTorchEngineConfig` for details
-            hf_overrides (Dict[str, Any]): overrides for the HF config.
+            hf_overrides (dict[str, Any]): overrides for the HF config.
         """
         from transformers import AutoConfig
 
@@ -494,7 +507,7 @@ class MiscConfig:
     custom_module_map: str = None
     empty_init: bool = False
     model_format: str = None
-    hf_overrides: Dict[str, Any] = None
+    hf_overrides: dict[str, Any] = None
     disable_vision_encoder: bool = False
     logprobs_mode: str = None
     dllm_config: DLLMConfig = None
@@ -577,10 +590,10 @@ class QuantizationConfig:
     scale_fmt: str = None
     bits: int = None
     group_size: int = None
-    weight_block_size: Tuple[int] = None
+    weight_block_size: tuple[int] = None
     activation_scheme: str = None
-    ignored_layers: List[str] = field(default_factory=list)
-    hf_quant_config: Dict[str, Any] = field(default_factory=dict)
+    ignored_layers: list[str] = field(default_factory=list)
+    hf_quant_config: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_config(cls, hf_config: Any):
@@ -622,8 +635,11 @@ class QuantizationConfig:
         else:
             raise TypeError(f'Unsupported quant method: {quant_method}')
 
-        if quant_dtype is not None:
-            quant_dtype = eval(f'torch.{quant_dtype}')
+        resolved_quant_dtype = getattr(torch, quant_dtype, None)
+        if not isinstance(resolved_quant_dtype, torch.dtype):
+            raise ValueError(f'Invalid quant dtype "{quant_dtype}" resolved from model config; '
+                             'expected a torch.dtype attribute on torch.')
+        quant_dtype = resolved_quant_dtype
 
         ignored_layers = quant_config.get('ignored_layers', [])
         if not ignored_layers:

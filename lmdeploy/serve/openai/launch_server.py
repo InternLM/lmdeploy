@@ -6,7 +6,6 @@ import random
 import signal
 import socket
 import sys
-from typing import List, Union
 
 from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.utils import get_logger
@@ -16,24 +15,24 @@ from .api_server import serve
 logger = get_logger('lmdeploy')
 
 
-def find_available_ports(num: int) -> List[int]:
-    """Find available port."""
+def is_port_available(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind(('127.0.0.1', port))
+            return True
+        except Exception:
+            return False
 
-    def __is_port_ok(port: int):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            try:
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                s.bind(('127.0.0.1', port))
-                s.listen(1)
-                return True
-            except Exception:
-                return False
+
+def find_available_ports(num: int) -> list[int]:
+    """Find available port."""
 
     ports = []
     test_port = 3000
     while len(ports) < num:
         test_port += random.randint(10, 500)
-        if __is_port_ok(test_port):
+        if is_port_available(test_port):
             ports.append(test_port)
 
     return ports
@@ -47,7 +46,7 @@ def get_host_ip():
         return ip
 
 
-def _run_server(gpu_ids: List[int], model_path: str, **kwargs):
+def _run_server(gpu_ids: list[int], model_path: str, **kwargs):
     """Launch a server process."""
     cuda_visible_devices = ','.join([str(_) for _ in gpu_ids])
     os.setpgrp()
@@ -56,7 +55,7 @@ def _run_server(gpu_ids: List[int], model_path: str, **kwargs):
     serve(model_path, **kwargs)
 
 
-def cleanup_processes(processes: List[mp.Process]):
+def cleanup_processes(processes: list[mp.Process]):
     """Clean up server process."""
     for process in processes:
         logger.info(f'Terminating process group {process.pid}')
@@ -83,11 +82,11 @@ def cleanup_processes(processes: List[mp.Process]):
 def launch_server(num_nodes: int,
                   node_rank: int,
                   model_path: str,
-                  backend_config: Union[PytorchEngineConfig, TurbomindEngineConfig],
+                  backend_config: PytorchEngineConfig | TurbomindEngineConfig,
                   proxy_url: str = None,
+                  server_port: int = 23333,
                   **kwargs):
     """Run multiple server processes in dp mode."""
-    assert proxy_url is not None, 'Please launch proxy server and pass proxy_url'
     log_level = kwargs.get('log_level', 'ERROR')
     logger.setLevel(log_level)
 
@@ -109,7 +108,13 @@ def launch_server(num_nodes: int,
     server_urls = []
     processes = []
 
-    server_port_li = find_available_ports(dp_per_node)
+    if proxy_url is not None:
+        server_port_li = find_available_ports(dp_per_node)
+    else:
+        server_port_li = [server_port + i for i in range(dp_per_node)]
+        for port in server_port_li:
+            if not is_port_available(port):
+                raise ValueError(f'Port {port} is not available')
 
     for idx in range(dp_per_node):
         backend_config_dp = copy.deepcopy(backend_config)

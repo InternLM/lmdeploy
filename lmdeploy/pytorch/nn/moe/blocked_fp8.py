@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Callable, Dict, List, Optional
+from collections.abc import Callable
 
 import torch
 
@@ -25,8 +25,8 @@ class LinearWeightsBlockedF8(LinearWeights):
                  dtype: torch.dtype,
                  device: torch.device,
                  bias: bool = False,
-                 expert_list: List[int] = None,
-                 scale_fmt: Optional[str] = None):
+                 expert_list: list[int] = None,
+                 scale_fmt: str | None = None):
         super().__init__(num_experts=num_experts,
                          in_features=in_features,
                          out_features=out_features,
@@ -150,9 +150,9 @@ class FusedMoEBlockedF8(FusedMoEBase):
                  bias: bool = False,
                  renormalize: bool = False,
                  fp8_dtype: torch.dtype = torch.float8_e4m3fn,
-                 scale_fmt: Optional[str] = None,
-                 dtype: Optional[torch.dtype] = None,
-                 device: Optional[torch.device] = None,
+                 scale_fmt: str | None = None,
+                 dtype: torch.dtype | None = None,
+                 device: torch.device | None = None,
                  all_reduce: bool = True,
                  layer_idx: int = 0,
                  act_func: Callable = None):
@@ -239,7 +239,7 @@ class FusedMoEBlockedF8(FusedMoEBase):
 
     def before_dispatch(self, state: DispatchInputs):
         """Before dispatch."""
-        if not isinstance(state, Dict):
+        if not isinstance(state, dict):
             state = state.to_dict()
 
         moe_type = state['moe_type']
@@ -252,7 +252,7 @@ class FusedMoEBlockedF8(FusedMoEBase):
             state['previous_event'] = previous_event
         return state
 
-    def dispatch(self, state: Dict):
+    def dispatch(self, state: dict):
         moe_type = state['moe_type']
         if moe_type == MoeType.DSAsyncPrefill:
             fusedmoe = state['fusedmoe']
@@ -315,7 +315,7 @@ class FusedMoEBlockedF8(FusedMoEBase):
             }
         return recv_state
 
-    def gemm(self, state: Dict):
+    def gemm(self, state: dict):
         moe_type = state['moe_type']
         if moe_type == MoeType.DSAsyncPrefill:
             if (state['recv_hidden_states'][0]
@@ -364,7 +364,7 @@ class FusedMoEBlockedF8(FusedMoEBase):
                 gemm_state = {'hidden_states': hidden_states, 'moe_type': state['moe_type']}
         return gemm_state
 
-    def combine(self, state: Dict):
+    def combine(self, state: dict):
         moe_type = state['moe_type']
         if moe_type == MoeType.DSAsyncPrefill:
             fusedmoe = state['fusedmoe']
