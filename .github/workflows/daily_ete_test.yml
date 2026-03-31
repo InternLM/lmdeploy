@@ -141,6 +141,7 @@ jobs:
       - name: Mark as start
         run: |
           mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Clear workfile
         if: always()
         run: |
@@ -177,6 +178,7 @@ jobs:
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
           mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install auto_gptq matplotlib attrdict
@@ -211,6 +213,7 @@ jobs:
       - name: Clear workfile
         if: always()
         run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -262,6 +265,7 @@ jobs:
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
           mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
@@ -328,6 +332,7 @@ jobs:
       - name: Clear workfile
         if: always()
         run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -435,6 +440,7 @@ jobs:
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
           mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
@@ -522,6 +528,7 @@ jobs:
       - name: Clear workfile
         if: always()
         run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -550,6 +557,7 @@ jobs:
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
           mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
@@ -582,6 +590,7 @@ jobs:
       - name: Clear workfile
         if: always()
         run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -611,6 +620,7 @@ jobs:
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
           mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
@@ -635,6 +645,7 @@ jobs:
       - name: Clear workfile
         if: always()
         run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -675,6 +686,7 @@ jobs:
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
           mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
@@ -763,6 +775,7 @@ jobs:
       - name: Clear workfile
         if: always()
         run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -791,6 +804,7 @@ jobs:
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
           mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
@@ -824,6 +838,7 @@ jobs:
       - name: Clear workfile
         if: always()
         run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
