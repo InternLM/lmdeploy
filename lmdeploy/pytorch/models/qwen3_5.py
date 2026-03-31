@@ -1010,8 +1010,6 @@ class Qwen3_5Model(nn.Module):
                                                device=device,
                                                prefix=add_prefix('language_model', prefix))
 
-        self.is_spec_decoding = get_build_model_context().num_spec_tokens > 0
-
     def forward(
         self,
         input_ids: torch.Tensor,
@@ -1028,6 +1026,7 @@ class Qwen3_5Model(nn.Module):
         pos_embeds: torch.Tensor | None = None,
         grid_thw: torch.Tensor | None = None,
         all_routed_experts: torch.Tensor | None = None,
+        return_input_embeds: bool = False,
     ):
         """Model forward, return logits."""
 
@@ -1055,8 +1054,7 @@ class Qwen3_5Model(nn.Module):
                 expanded_image_mask = image_mask.unsqueeze(-1).expand_as(inputs_embeds)
                 inputs_embeds = inputs_embeds.masked_scatter(expanded_image_mask, image_embeds)
 
-                if self.is_spec_decoding:
-                    output_inputs_embeds = inputs_embeds
+        output_inputs_embeds = inputs_embeds if return_input_embeds else None
 
         hidden_states = self.language_model(
             input_ids=input_ids,
@@ -1113,6 +1111,8 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
                                           device=device)
         # dense model
         self.enable_return_routed_experts = False
+        self.is_spec_decoding = get_build_model_context().num_spec_tokens > 0
+
 
     def forward(
         self,
@@ -1129,6 +1129,7 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         image_mask: torch.Tensor | None = None,
         pos_embeds: torch.Tensor | None = None,
         grid_thw: torch.Tensor | None = None,
+        return_input_embeds: bool = False,
         **kwargs,
     ):
         """Model forward, return logits."""
@@ -1154,6 +1155,7 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
             pos_embeds=pos_embeds,
             grid_thw=grid_thw,
             all_routed_experts=all_routed_experts,
+            return_input_embeds=return_input_embeds,
         )
         return dict(hidden_states=hidden_states,
                     all_routed_experts=all_routed_experts,
@@ -1226,6 +1228,9 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
                 inputs_embeds = self.get_input_embeddings()(input_ids)
             inputs_embeds[:, vision_embedding_indexing, :] = vision_embeddings.to(inputs_embeds)
 
+        # return input embeds for spec decoding
+        return_input_embeds = self.is_spec_decoding and (pixel_values is not None or context.is_chunk_multimodal)
+
         # inputs of forward
         return dict(
             input_ids=input_ids,
@@ -1242,6 +1247,7 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
             image_mask=image_mask,
             grid_thw=grid_thw,
             pos_embeds=pos_embeds,
+            return_input_embeds=return_input_embeds,
         )
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):

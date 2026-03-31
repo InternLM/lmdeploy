@@ -204,8 +204,7 @@ class SpecModelAgent(BaseSpecModelAgent):
                     target_position_ids = self._prepare_long_context_chunk_save_last(
                         'position_ids', target_position_ids)
                 if target_inputs_embeds is not None:
-                    target_inputs_embeds = self._prepare_long_context_chunk_save_last(
-                        'input_embeds', target_inputs_embeds)
+                    target_inputs_embeds = target_inputs_embeds[:, 1:]
                 if mrope_pos_ids is not None:
                     mrope_pos_ids = self._prepare_long_context_chunk_save_last('mrope_pos_ids', mrope_pos_ids)
 
@@ -224,11 +223,9 @@ class SpecModelAgent(BaseSpecModelAgent):
                                                                                          target_position_ids,
                                                                                          save_last=False)
                 if target_inputs_embeds is not None:
-                    saved = self._prev_chunk_last['input_embeds']
-                    next_token_embeds = self.proposer.embed_input_ids(next_token_ids)
+                    next_token_embeds = self.proposer.embed_input_ids(next_token_ids)[None]
                     target_inputs_embeds = torch.cat(
-                        [saved, target_inputs_embeds, next_token_embeds.unsqueeze(1)], dim=1)
-                    self._prev_chunk_last.pop('input_embeds', None)
+                        [target_inputs_embeds, next_token_embeds], dim=1)
                 if mrope_pos_ids is not None:
                     mrope_pos_ids = self._prepare_long_context_chunk_prepend_saved('mrope_pos_ids',
                                                                                    mrope_pos_ids,
@@ -248,9 +245,6 @@ class SpecModelAgent(BaseSpecModelAgent):
                 if target_position_ids is not None:
                     target_position_ids = self._prepare_long_context_chunk_prepend_saved(
                         'position_ids', target_position_ids)
-                if target_inputs_embeds is not None:
-                    target_inputs_embeds = self._prepare_long_context_chunk_prepend_saved(
-                        'input_embeds', target_inputs_embeds)
                 if mrope_pos_ids is not None:
                     mrope_pos_ids = self._prepare_long_context_chunk_prepend_saved('mrope_pos_ids', mrope_pos_ids)
 

@@ -276,6 +276,7 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
         # for router replay
         bm_ctx = get_build_model_context()
         self.enable_return_routed_experts = bm_ctx.enable_return_routed_experts
+        self.is_spec_decoding = get_build_model_context().num_spec_tokens > 0
 
     def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter]):
         """Load weight experts."""

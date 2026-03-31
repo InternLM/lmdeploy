@@ -195,7 +195,7 @@ class ModelInputs:
     is_chunk: bool = False
     is_first_chunk: bool = False
     is_last_chunk: bool = False
-
+    is_chunk_multimodal: bool = False
     # mrope, shape(3, sum_seqlens)
     mrope_pos_ids: torch.Tensor | None = None
 
@@ -293,6 +293,9 @@ class StepContext:
 
     _outputs: dict = field(default_factory=dict)
 
+    # chunk with multimodal
+    is_chunk_multimodal: bool = False
+
     @classmethod
     def new(
         cls,
@@ -358,6 +361,7 @@ class StepContext:
             target_hidden_states=inputs.target_hidden_states,
             target_inputs_embeds=inputs.target_inputs_embeds,
             mrope_position_ids=inputs.mrope_pos_ids,
+            is_chunk_multimodal=inputs.is_chunk_multimodal,
         )
 
         ret = get_backend().update_step_context(ret)
