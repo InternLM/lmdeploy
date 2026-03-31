@@ -19,6 +19,10 @@ def has_fla():
 class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
 
     def __init__(self):
+        # intracard_cp implement would force sync cuda stream
+        import os
+        os.environ['FLA_INTRACARD_CP'] = '0'
+
         if not has_fla() or not has_tilelang():
             raise ImportError('fla and tilelang is required for CudaGatedDeltaRuleImpl')
         from fla.ops.gated_delta_rule import chunk_gated_delta_rule
