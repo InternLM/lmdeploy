@@ -524,9 +524,9 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         key = key.unflatten(-1, (-1, self.head_k_dim))
         value = value.unflatten(-1, (-1, self.head_v_dim))
 
-        beta = b.sigmoid()
+        # beta = b.sigmoid()
         # If the model is loaded in fp16, without the .float() here, A might be -inf
-        g = self.get_A_log_exp() * F.softplus(a.float() + self.dt_bias)
+        # g = self.get_A_log_exp() * F.softplus(a.float() + self.dt_bias)
         if self.kv_ratio > 1:
             query = query.repeat_interleave(self.kv_ratio, dim=-2)
             key = key.repeat_interleave(self.kv_ratio, dim=-2)
@@ -535,8 +535,12 @@ class Qwen3_5GatedDeltaNet(nn.Module):
             query,
             key,
             value,
-            g=g,
-            beta=beta,
+            g=None,
+            beta=None,
+            A_log=self.A_log,
+            dt_bias=self.dt_bias,
+            a=a,
+            b=b,
             recurrent_state=recurrent_state,
             gated_delta_meta=gated_delta_meta,
         )
@@ -1126,11 +1130,8 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         position_ids = context.position_ids
         attn_metadata = context.attn_metadata
 
-        # make past_key_values
-        # state_caches holds num_delta_layers conv entries then num_delta_layers recurrent
-        # entries, each already shaped (num_caches, ...) and contiguous.
-        n = len(context.state_caches) // 2
-        state_caches = list(zip(context.state_caches[:n], context.state_caches[n:]))
+        state_caches = list(cache.transpose(0, 1) for cache in context.state_caches)
+        state_caches = list(zip(state_caches[0], state_caches[1]))
         past_key_values = list(past_key_values)
         new_past_key_values = []
         for layer_type in self.config.text_config.layer_types:
