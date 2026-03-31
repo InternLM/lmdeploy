@@ -33,7 +33,7 @@ class _ExpertsDistributionRecorderImpl:
         self.last_dump_time = None
         dump_frequency = envs.expert_dump_frequency
         if dump_frequency < 1:
-            logger.warning(f'LMDEPLOY_EXPERT_DUMP_FREQUENCY={dump_frequency} is invalid; defaulting to 1.')
+            logger.warning(f'LMDEPLOY_EXPERT_DUMP_FREQUENCY={dump_frequency} is invalid; defaulting to 1 second.')
             dump_frequency = 1
         self.dump_frequency = dump_frequency
         self.dump_rank = envs.expert_dump_rank
@@ -66,8 +66,13 @@ class _ExpertsDistributionRecorderImpl:
         if rank != self.dump_rank:
             return
 
+        # skip until this layer has been seen at least twice, which guarantees
+        # one full forward pass has completed and all layers have accumulated data.
+        if self.dispatch_count[key] < 2:
+            return
+
         now = datetime.now()
-        dump_interval_seconds = self.dump_frequency * 60
+        dump_interval_seconds = self.dump_frequency
         if self.last_dump_time is not None and (now - self.last_dump_time).total_seconds() < dump_interval_seconds:
             return
 
@@ -102,7 +107,12 @@ class _ExpertsDistributionRecorderImpl:
             },
             filepath,
         )
-        logger.info(f'[Expert Statistics] Expert distribution dumped to {filepath} [shape={list(counts_tensor.shape)}]')
+        logger.info(f'[Expert Statistics] Expert distribution dumped to {filepath}, shape={list(counts_tensor.shape)}')
+
+        if envs.expert_dump_visualize:
+            from lmdeploy.pytorch.tools.utils import visualize_expert_distribution
+            visualize_expert_distribution(filepath)
+            logger.info(f'[Expert Statistics] Heatmap saved alongside {filepath}')
 
 
 class ExpertsDistributionRecorder:
