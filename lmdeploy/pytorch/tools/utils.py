@@ -236,3 +236,98 @@ def dump_tilelang_source(kernel, path: str = 'sources/tvm_kernels.cu'):
     sources = kernel.get_kernel_source()
     with open(path, 'w') as f:
         f.write(sources)
+
+
+def visualize_expert_distribution(path: str, output_path: str = None, no_plot: bool = False):
+    """Visualize an expert distribution dump file.
+
+    Args:
+        path: Path to a ``*_expert_counts.pt`` dump file.
+        output_path: Where to save the heatmap PNG. Defaults to ``<path>_heatmap.png``.
+        no_plot: If True, only print the text summary (no matplotlib required).
+    """
+    import os
+
+    import torch
+
+    data = torch.load(path, map_location='cpu', weights_only=True)
+    counts = data['counts']          # (num_layers, num_experts), int64
+    balancedness = data['balancedness']  # (num_layers,), float32
+    step = data['step']
+    rank = data['rank']
+    num_layers, num_experts = counts.shape
+
+    # Text summary
+    sep = '=' * 68
+    print(f'\n{sep}')
+    print(f'  File  : {path}')
+    print(f'  Rank  : {rank}   Step : {step}')
+    print(f'  Shape : {num_layers} layers x {num_experts} experts')
+    print(sep)
+
+    avg_bal = balancedness.mean().item()
+    bal = balancedness.tolist()
+    min_idx, max_idx = bal.index(min(bal)), bal.index(max(bal))
+    print(f'\n  Avg balancedness : {avg_bal:.4f}  (1.0 = perfect)')
+    print(f'  Min balancedness : {min(bal):.4f}  (layer {min_idx})')
+    print(f'  Max balancedness : {max(bal):.4f}  (layer {max_idx})')
+
+    sorted_layers = sorted(range(num_layers), key=lambda i: bal[i])
+    print(f'\n  {"Layer":>6}  {"Balance":>9}  {"TotalTokens":>12}  {"TopExpert (count)"}')
+    print('  ' + '-' * 56)
+    for i in sorted_layers[:10]:
+        row = counts[i]
+        top_e = row.argmax().item()
+        print(f'  {i:>6}  {bal[i]:>9.4f}  {row.sum().item():>12}  expert {top_e} ({row[top_e].item()})')
+    if num_layers > 10:
+        print(f'  ... ({num_layers - 10} more layers not shown)')
+
+    if no_plot:
+        return
+
+    # Heatmap
+    try:
+        import matplotlib.pyplot as plt
+        import numpy as np
+    except ImportError:
+        print('\n[WARN] matplotlib not installed; skipping heatmap.')
+        return
+
+    counts_np = counts.float().numpy()
+    bal_np = balancedness.numpy()
+    avg_bal_np = bal_np.mean()
+
+    fig, (ax_heat, ax_bal) = plt.subplots(
+        1, 2, figsize=(16, max(6, num_layers // 4)),
+        gridspec_kw={'width_ratios': [6, 1]},
+    )
+
+    FONT = 14
+    TITLE_FONT = 16
+
+    im = ax_heat.imshow(counts_np, aspect='auto', cmap='YlOrRd', interpolation='nearest')
+    ax_heat.set_xlabel('Expert Index', fontsize=FONT)
+    ax_heat.set_ylabel('Layer Index', fontsize=FONT)
+    ax_heat.set_title(f'Expert Token Counts  |  rank={rank}  step={step}', fontsize=TITLE_FONT)
+    ax_heat.tick_params(axis='both', labelsize=FONT - 2)
+    cbar = fig.colorbar(im, ax=ax_heat)
+    cbar.set_label('Token Count', fontsize=FONT)
+    cbar.ax.tick_params(labelsize=FONT - 2)
+
+    y = np.arange(num_layers)
+    ax_bal.barh(y, bal_np, color='steelblue', height=0.8)
+    ax_bal.set_xlim(0, 1.05)
+    ax_bal.set_xlabel('Balancedness', fontsize=FONT)
+    ax_bal.set_yticks([])
+    ax_bal.tick_params(axis='x', labelsize=FONT - 2)
+    ax_bal.set_title('Per-layer\nBalancedness', fontsize=TITLE_FONT)
+    ax_bal.axvline(avg_bal_np, color='red', linestyle='--', linewidth=1,
+                   label=f'avg={avg_bal_np:.3f}')
+    ax_bal.legend(fontsize=FONT - 2)
+
+    plt.tight_layout()
+    if output_path is None:
+        output_path = os.path.splitext(path)[0] + '_heatmap.png'
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    print(f'\n  Heatmap saved to {output_path}')
+    plt.close()
