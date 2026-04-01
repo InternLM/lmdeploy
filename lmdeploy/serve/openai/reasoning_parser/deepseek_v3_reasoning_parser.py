@@ -2,14 +2,11 @@
 
 from typing import TYPE_CHECKING
 
-from lmdeploy.serve.openai.protocol import DeltaMessage
-from lmdeploy.serve.openai.response_parser import StreamBuffer
-
 from .identity_reasoning_parser import IdentityReasoningParser
 from .reasoning_parser import ReasoningParser
 
 if TYPE_CHECKING:
-    from lmdeploy.serve.openai.protocol import ChatCompletionRequest
+    pass
 
 class DeepSeekV3ReasoningParser(ReasoningParser):
     """The reasoning behavior of the DeepSeek V3.1 model varies depending on
@@ -31,26 +28,6 @@ class DeepSeekV3ReasoningParser(ReasoningParser):
             self._parser = DeepSeekR1ReasoningParser(tokenizer, **kwargs)
         else:
             self._parser = IdentityReasoningParser(tokenizer, **kwargs)
-
-    def extract_reasoning(self, model_output: str, request: 'ChatCompletionRequest') -> tuple[str | None, str | None]:
-        return self._parser.extract_reasoning(model_output, request)
-
-    def extract_reasoning_streaming(
-        self,
-        delta_text: str,
-        delta_token_ids: list[int],
-        request: object,
-        *,
-        stream_buffer: StreamBuffer,
-        **kwargs,
-    ) -> DeltaMessage | None:
-        return self._parser.extract_reasoning_streaming(
-            delta_text,
-            delta_token_ids,
-            request,
-            stream_buffer=stream_buffer,
-            **kwargs,
-        )
 
     def get_reasoning_open_tag(self) -> str | None:
         return self._parser.get_reasoning_open_tag()

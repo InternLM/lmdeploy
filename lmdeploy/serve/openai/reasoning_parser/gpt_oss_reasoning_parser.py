@@ -6,7 +6,6 @@ import shortuuid
 from openai_harmony import HarmonyEncodingName, Role, StreamableParser, load_harmony_encoding
 
 from lmdeploy.serve.openai.protocol import (
-    ChatCompletionRequest,
     ChatMessage,
     DeltaFunctionCall,
     DeltaMessage,
@@ -14,7 +13,6 @@ from lmdeploy.serve.openai.protocol import (
     FunctionCall,
     ToolCall,
 )
-from lmdeploy.serve.openai.response_parser import StreamBuffer
 
 from .reasoning_parser import ReasoningParser, ReasoningParserManager
 
@@ -123,25 +121,6 @@ class GptOssReasoningParser(ReasoningParser):
         """Parse the full completion token sequence into a
         :class:`~lmdeploy.serve.openai.protocol.ChatMessage`."""
         return self._chat.parse_full(tokens)
-
-    def extract_reasoning_streaming(
-        self,
-        delta_text: str,
-        delta_token_ids: list[int],
-        request: object,
-        *,
-        stream_buffer: StreamBuffer,
-        **kwargs,
-    ):
-        """Not used; GPT-OSS uses :meth:`parse_streaming` on token ids in the
-        API server."""
-        return None
-
-    def extract_reasoning(self, model_output: str, request:
-        ChatCompletionRequest, **kwargs) -> tuple[str | None, str | None]:
-        """Not used for Harmony decoding; non-streaming path uses
-        :meth:`parse_full` on token ids."""
-        return None, model_output
 
     def get_reasoning_open_tag(self) -> str | None:
         return None

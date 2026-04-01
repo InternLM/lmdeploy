@@ -1,21 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
 import re
-from collections.abc import Sequence
 from typing import Any
-
-import shortuuid
 
 from lmdeploy.serve.openai.protocol import (
     ChatCompletionRequest,
     DeltaFunctionCall,
-    DeltaMessage,
     DeltaToolCall,
-    ExtractedToolCallInformation,
     FunctionCall,
     ToolCall,
 )
-from lmdeploy.serve.openai.response_parser import StreamBuffer
 from lmdeploy.utils import get_logger
 
 from .tool_parser import ToolParser, ToolParserManager
@@ -113,6 +107,70 @@ class Qwen3CoderToolParser(ToolParser):
     def get_tool_payload_format(self) -> str:
         return 'xml'
 
+    def start_tool_call(self) -> None:
+        super().start_tool_call()
+        self.coder_has_emitted_name = False
+        self.coder_has_emitted_json_start = False
+        self.coder_json_closed = False
+        self.coder_emitted_param_names.clear()
+
+    def finish_tool_call(self) -> None:
+        super().finish_tool_call()
+        self.coder_has_emitted_name = False
+        self.coder_has_emitted_json_start = False
+        self.coder_json_closed = False
+        self.coder_emitted_param_names.clear()
+
+    def decode_tool_incremental(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:
+        """Decode XML tool payload incrementally into OpenAI tool-call
+        deltas."""
+        self._tool_payload += added_text
+        func_name, args_dict, is_func_closed = self._extract_params(self._tool_payload)
+
+        out: list[DeltaToolCall] = []
+        if func_name and not self.coder_has_emitted_name:
+            out.append(
+                DeltaToolCall(
+                    id=self._active_tool_call_id,
+                    index=self._active_tool_index,
+                    type='function',
+                    function=DeltaFunctionCall(name=func_name),
+                ))
+            self.coder_has_emitted_name = True
+
+        json_fragments: list[str] = []
+        if not self.coder_has_emitted_json_start and (args_dict or is_func_closed):
+            json_fragments.append('{')
+            self.coder_has_emitted_json_start = True
+
+        for k, v in args_dict.items():
+            if k in self.coder_emitted_param_names:
+                continue
+            prefix = ', ' if len(self.coder_emitted_param_names) > 0 else ''
+            json_fragments.append(f'{prefix}\"{k}\": {json.dumps(v, ensure_ascii=False)}')
+            self.coder_emitted_param_names.add(k)
+
+        if is_func_closed and self.coder_has_emitted_json_start and not self.coder_json_closed:
+            json_fragments.append('}')
+            self.coder_json_closed = True
+
+        if json_fragments:
+            out.append(
+                DeltaToolCall(
+                    id=self._active_tool_call_id,
+                    index=self._active_tool_index,
+                    type=None,
+                    function=DeltaFunctionCall(arguments=''.join(json_fragments)),
+                ))
+        return out
+
+    def parse_tool_call_complete(self, payload: str) -> ToolCall | None:
+        func_name, args_dict, _ = self._extract_params(payload)
+        if not func_name:
+            return None
+        args_json = json.dumps(args_dict, ensure_ascii=False) if args_dict else '{}'
+        return ToolCall(function=FunctionCall(name=func_name, arguments=args_json))
+
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         messages = request.messages
         if not isinstance(messages, list):
@@ -191,130 +249,3 @@ class Qwen3CoderToolParser(ToolParser):
 
         is_func_closed = self.func_end_token in content
         return func_name, args_dict, is_func_closed
-
-    def detect_tool_start_tag(
-        self,
-        delta_text: str,
-        delta_token_ids: Sequence[int],
-        *,
-        stream_buffer: StreamBuffer,
-        request: ChatCompletionRequest,
-    ) -> int | None:
-        """Return index in ``delta_text`` where ``<tool_call>`` starts."""
-        text = stream_buffer.current_text
-        start_idx = text.rfind(self.tool_start_token)
-        end_idx = text.rfind(self.tool_end_token)
-        if start_idx >= 0 and end_idx < start_idx:
-            return 0
-        idx = delta_text.find(self.tool_start_token)
-        return idx if idx >= 0 else None
-
-    def extract_tool_calls_streaming(
-        self,
-        delta_text: str,
-        delta_token_ids: Sequence[int],
-        request: ChatCompletionRequest,
-        *,
-        stream_buffer: StreamBuffer,
-        **kwargs,
-    ) -> DeltaMessage | None:
-        current_text = stream_buffer.current_text
-
-        split_result = self._split(current_text[self.parse_cursor:])
-        text_content, tool_content, has_tool_end = split_result
-
-        delta = DeltaMessage()
-        if text_content:
-            delta.content = text_content
-
-        if tool_content:
-            if not self.qwen_active_tool_call_id:
-                self.qwen_active_tool_call_id = f'chatcmpl-tool-{shortuuid.random()}'
-                self.qwen_tool_serial_index += 1
-                self.coder_has_emitted_name = False
-                self.coder_has_emitted_json_start = False
-                self.coder_json_closed = False
-                self.coder_emitted_param_names.clear()
-
-            func_name, args_dict, is_func_closed = self._extract_params(tool_content)
-
-            fcall_delta = DeltaFunctionCall()
-            has_updates = False
-
-            if func_name and not self.coder_has_emitted_name:
-                fcall_delta.name = func_name
-                self.coder_has_emitted_name = True
-                has_updates = True
-
-            json_fragments = []
-            if not self.coder_has_emitted_json_start:
-                if args_dict or is_func_closed:
-                    json_fragments.append('{')
-                    self.coder_has_emitted_json_start = True
-
-            for k, v in args_dict.items():
-                if k not in self.coder_emitted_param_names:
-                    prefix = ', ' if len(self.coder_emitted_param_names) > 0 else ''
-                    serialized = json.dumps(v, ensure_ascii=False)
-                    json_fragments.append(f'{prefix}\"{k}\": {serialized}')
-                    self.coder_emitted_param_names.add(k)
-
-            if is_func_closed and not self.coder_json_closed:
-                if self.coder_has_emitted_json_start:
-                    json_fragments.append('}')
-                    self.coder_json_closed = True
-
-            joined_fragments = ''.join(json_fragments)
-            if joined_fragments:
-                fcall_delta.arguments = joined_fragments
-                has_updates = True
-
-            if has_updates:
-                parsed_delta = DeltaToolCall(
-                    id=self.qwen_active_tool_call_id,
-                    index=self.qwen_tool_serial_index,
-                    function=fcall_delta,
-                )
-                delta.tool_calls = [parsed_delta]
-
-        if has_tool_end:
-            self.qwen_active_tool_call_id = ''
-            self.coder_has_emitted_name = False
-            self.coder_has_emitted_json_start = False
-            self.coder_json_closed = False
-            self.coder_emitted_param_names.clear()
-
-        return delta
-
-    def extract_tool_calls(
-        self,
-        model_output: str,
-        request: ChatCompletionRequest,
-    ) -> ExtractedToolCallInformation:
-        text = model_output
-        buf = []
-        scan_pos = 0
-        tool_calls = []
-
-        for idx, match in enumerate(self.tool_call_pat.finditer(text)):
-            buf.append(text[scan_pos:match.start()])
-            scan_pos = match.end()
-
-            tool_content = match.group(1)
-            func_name, args_dict, _ = self._extract_params(tool_content)
-
-            if func_name:
-                tool_calls.append(
-                    ToolCall(function=FunctionCall(
-                        name=func_name, arguments=json.dumps(args_dict, ensure_ascii=False) if args_dict else '{}')))
-
-        if scan_pos < len(text):
-            buf.append(text[scan_pos:])
-
-        text = ''.join(buf)
-
-        return ExtractedToolCallInformation(
-            content=text,
-            tool_calls=tool_calls,
-            tools_called=bool(tool_calls),
-        )
