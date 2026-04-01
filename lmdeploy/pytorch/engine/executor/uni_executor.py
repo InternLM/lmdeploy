@@ -81,6 +81,15 @@ class UniExecutor(ExecutorBase):
     def warmup(self):
         self.model_agent.warmup()
 
+    def start_expert_distribution_record(self):
+        self.model_agent.start_expert_distribution_record()
+
+    def stop_expert_distribution_record(self):
+        self.model_agent.stop_expert_distribution_record()
+
+    def dump_expert_distribution_record(self):
+        return self.model_agent.dump_expert_distribution_record()
+
     def start(self, forward_event: asyncio.Event):
         """Start engine loop."""
         self.model_agent.start(forward_event)

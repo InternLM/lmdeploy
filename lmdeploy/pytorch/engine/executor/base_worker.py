@@ -127,6 +127,18 @@ class WorkerWrapperBase:
         """Wakeup."""
         self.model_agent.wakeup(tags)
 
+    def start_expert_distribution_record(self):
+        """Start recording expert distribution."""
+        self.model_agent.start_expert_distribution_record()
+
+    def stop_expert_distribution_record(self):
+        """Stop recording expert distribution."""
+        self.model_agent.stop_expert_distribution_record()
+
+    def dump_expert_distribution_record(self):
+        """Dump accumulated expert distribution data."""
+        return self.model_agent.dump_expert_distribution_record()
+
     def get_input_processor(self):
         """Build cache engine."""
         return self.model_agent.get_input_processor()

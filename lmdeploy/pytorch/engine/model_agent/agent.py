@@ -1242,6 +1242,27 @@ class BaseModelAgent:
             if self.dist_config.dp > 1:
                 self.state.to_wakeup.set()
 
+    def start_expert_distribution_record(self):
+        """Start recording expert distribution on this worker."""
+        from lmdeploy.pytorch.models.utils.expert_distribution_recorder import (
+            get_expert_distribution_recorder,
+        )
+        get_expert_distribution_recorder().start_record()
+
+    def stop_expert_distribution_record(self):
+        """Stop recording expert distribution on this worker."""
+        from lmdeploy.pytorch.models.utils.expert_distribution_recorder import (
+            get_expert_distribution_recorder,
+        )
+        get_expert_distribution_recorder().stop_record()
+
+    def dump_expert_distribution_record(self):
+        """Dump accumulated expert distribution data on this worker."""
+        from lmdeploy.pytorch.models.utils.expert_distribution_recorder import (
+            get_expert_distribution_recorder,
+        )
+        return get_expert_distribution_recorder().dump_record()
+
     def release(self):
         """release."""
         self.reset_graph_runner()

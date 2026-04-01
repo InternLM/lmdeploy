@@ -37,7 +37,7 @@ from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters, get_rope_t
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
-from .utils.expert_distribution_recorder import ExpertsDistributionRecorder
+from .utils.expert_distribution_recorder import get_expert_distribution_recorder
 
 
 # microbatch
@@ -675,7 +675,6 @@ class MoEGate(nn.Module):
 
 class DeepseekV2MoE(nn.Module):
     """Deepseek v2 MoE."""
-    recorder = ExpertsDistributionRecorder()
 
     def __init__(self, config: Any, layer_idx, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -754,7 +753,7 @@ class DeepseekV2MoE(nn.Module):
         if self._all_reduce:
             dist.all_reduce(out_states)
 
-        DeepseekV2MoE.recorder.record(topk_ids, self.layer_idx, self.num_experts)
+        get_expert_distribution_recorder().record(topk_ids, self.layer_idx, self.num_experts)
         return out_states
 
 

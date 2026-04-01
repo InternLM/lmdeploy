@@ -82,6 +82,18 @@ class ExecutorBase:
         """Wakeup."""
         raise NotImplementedError('Not Implemented.')
 
+    def start_expert_distribution_record(self):
+        """Start recording expert distribution."""
+        raise NotImplementedError('Not Implemented.')
+
+    def stop_expert_distribution_record(self):
+        """Stop recording expert distribution."""
+        raise NotImplementedError('Not Implemented.')
+
+    def dump_expert_distribution_record(self):
+        """Dump accumulated expert distribution data."""
+        raise NotImplementedError('Not Implemented.')
+
     def update_params(self, request: Any):
         """Update params."""
         raise NotImplementedError('Not Implemented.')

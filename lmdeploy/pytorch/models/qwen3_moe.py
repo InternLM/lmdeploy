@@ -17,7 +17,7 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .patch import add_prefix, get_build_model_context
 from .utils.cudagraph import CudaGraphMixin
-from .utils.expert_distribution_recorder import ExpertsDistributionRecorder
+from .utils.expert_distribution_recorder import get_expert_distribution_recorder
 from .utils.model import DeployModelMixinV1, build_embedding
 
 
@@ -192,7 +192,6 @@ class Qwen3MoeMLP(nn.Module):
 
 class Qwen3MoeSparseMoeBlock(nn.Module):
     """Moe block."""
-    recorder = ExpertsDistributionRecorder()
 
     def __init__(self,
                  config: PretrainedConfig,
@@ -266,7 +265,7 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
 
         out_states = out_states.reshape(batch_size, sequence_length, -1)
 
-        Qwen3MoeSparseMoeBlock.recorder.record(topk_ids, self.layer_idx, self.num_experts)
+        get_expert_distribution_recorder().record(topk_ids, self.layer_idx, self.num_experts)
         return out_states
 
 

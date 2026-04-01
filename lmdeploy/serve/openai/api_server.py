@@ -1187,6 +1187,24 @@ async def wakeup(raw_request: Request = None):
     return Response(status_code=200)
 
 
+@router.post('/start_expert_distribution_record')
+async def start_expert_distribution_record():
+    VariableInterface.async_engine.engine.start_expert_distribution_record()
+    return Response(status_code=200)
+
+
+@router.post('/stop_expert_distribution_record')
+async def stop_expert_distribution_record():
+    VariableInterface.async_engine.engine.stop_expert_distribution_record()
+    return Response(status_code=200)
+
+
+@router.post('/dump_expert_distribution_record')
+async def dump_expert_distribution_record():
+    result = VariableInterface.async_engine.engine.dump_expert_distribution_record()
+    return JSONResponse(content={'filepaths': result})
+
+
 @router.get('/is_sleeping')
 async def is_sleeping():
     is_sleeping = VariableInterface.async_engine.is_sleeping

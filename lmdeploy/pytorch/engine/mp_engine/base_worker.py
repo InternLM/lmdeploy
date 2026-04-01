@@ -108,6 +108,15 @@ class EngineWorkerBase:
         """Wakeup."""
         return self.engine.wakeup(tags)
 
+    def start_expert_distribution_record(self):
+        return self.engine.start_expert_distribution_record()
+
+    def stop_expert_distribution_record(self):
+        return self.engine.stop_expert_distribution_record()
+
+    def dump_expert_distribution_record(self):
+        return self.engine.dump_expert_distribution_record()
+
     def update_params(self, request: Any):
         """Update params."""
         return self.engine.update_params(request)

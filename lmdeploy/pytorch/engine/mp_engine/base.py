@@ -61,6 +61,15 @@ class MPEngine(EngineBase):
         """Wakeup."""
         return self._collective_rpc('wakeup', tags)
 
+    def start_expert_distribution_record(self):
+        return self._collective_rpc('start_expert_distribution_record')
+
+    def stop_expert_distribution_record(self):
+        return self._collective_rpc('stop_expert_distribution_record')
+
+    def dump_expert_distribution_record(self):
+        return self._collective_rpc('dump_expert_distribution_record')
+
     def update_params(self, request: Any):
         """Update params."""
         return self._collective_rpc('update_params', request)

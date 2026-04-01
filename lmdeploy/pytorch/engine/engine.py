@@ -451,6 +451,18 @@ class Engine(EngineBase):
         """Wakeup."""
         self.executor.wakeup(tags)
 
+    def start_expert_distribution_record(self):
+        """Start recording expert distribution on all workers."""
+        self.executor.start_expert_distribution_record()
+
+    def stop_expert_distribution_record(self):
+        """Stop recording expert distribution on all workers."""
+        self.executor.stop_expert_distribution_record()
+
+    def dump_expert_distribution_record(self):
+        """Dump accumulated expert distribution data on all workers."""
+        return self.executor.dump_expert_distribution_record()
+
     async def async_loop(self):
         engine_loop = None
         try:

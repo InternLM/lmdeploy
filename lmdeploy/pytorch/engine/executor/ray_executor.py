@@ -363,6 +363,15 @@ class RayExecutor(ExecutorBase):
             self.update_configs()
         self.collective_rpc('wakeup', (tags, ))
 
+    def start_expert_distribution_record(self):
+        self.collective_rpc('start_expert_distribution_record')
+
+    def stop_expert_distribution_record(self):
+        self.collective_rpc('stop_expert_distribution_record')
+
+    def dump_expert_distribution_record(self):
+        return self.collective_rpc('dump_expert_distribution_record')
+
     def get_input_processor(self):
         """Build cache engine."""
         return ray.get(self.workers[0].get_input_processor.remote())
