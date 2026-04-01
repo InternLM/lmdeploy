@@ -27,6 +27,7 @@ from .qwen3_5 import (
 )
 from .qwen3_5 import Qwen3_5VisionModel as Qwen3_5MoeVisionModel
 from .qwen3_vl import Qwen3VLInputProcessor as Qwen3_5MoeInputProcessor
+from .utils.expert_distribution_recorder import get_expert_distribution_recorder
 
 
 class Qwen3_5MoeTopKRouter(nn.Module):
@@ -123,6 +124,8 @@ class Qwen3_5MoeSparseMoeBlock(nn.Module):
 
         if self._all_reduce:
             dist.all_reduce(out_states)
+
+        get_expert_distribution_recorder().record(topk_ids, self.layer_idx, self.num_experts)
         return out_states
 
 
