@@ -27,10 +27,7 @@ ToolParserManager = Registry('tool_parser', locations=['lmdeploy.serve.openai.to
 
 
 class ToolParser:
-    """Abstract ToolParser class that should not be used directly.
-
-    Provided properties and methods should be used in derived classes.
-    """
+    """Base class for model-specific tool parsers."""
 
     def __init__(self, tokenizer: object):
         self.model_tokenizer = tokenizer
@@ -38,11 +35,7 @@ class ToolParser:
         self._active_tool_call_id: str = ''
         self._active_tool_index: int = -1
         self._name_emitted: bool = False
-        self._args_prefix_emitted: bool = False
-        self._value_chars_emitted: int = 0
-        self._args_closed_emitted: bool = False
         self._args_emitted_len: int = 0
-        self._prev_args_json: str | None = None
 
     @cached_property
     def vocab(self) -> dict[str, int]:
@@ -51,7 +44,7 @@ class ToolParser:
         return self.model_tokenizer.get_vocab()
 
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
-        """Static method that used to adjust the request parameters."""
+        """Adjust request payload before rendering, if needed."""
         if request.tools is not None and request.tool_choice != 'none':
             if not isinstance(request.tool_choice, str):
                 request.tools = [
@@ -79,22 +72,14 @@ class ToolParser:
         self._active_tool_index += 1
         self._active_tool_call_id = f'chatcmpl-tool-{shortuuid.random()}'
         self._name_emitted = False
-        self._args_prefix_emitted = False
-        self._value_chars_emitted = 0
-        self._args_closed_emitted = False
         self._args_emitted_len = 0
-        self._prev_args_json = None
         self._tool_payload = ''
 
     def finish_tool_call(self) -> None:
         """Mark end of a tool-call block."""
         self._active_tool_call_id = ''
         self._name_emitted = False
-        self._args_prefix_emitted = False
-        self._value_chars_emitted = 0
-        self._args_closed_emitted = False
         self._args_emitted_len = 0
-        self._prev_args_json = None
         self._tool_payload = ''
 
     def decode_tool_incremental(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:
@@ -154,22 +139,6 @@ class ToolParser:
                 ))
             self._args_emitted_len = len(args_json)
         return out
-
-    @staticmethod
-    def _is_complete_json(text: str) -> bool:
-        try:
-            json.loads(text)
-            return True
-        except json.JSONDecodeError:
-            return False
-
-    @staticmethod
-    def _common_prefix(s1: str, s2: str) -> str:
-        i = 0
-        n = min(len(s1), len(s2))
-        while i < n and s1[i] == s2[i]:
-            i += 1
-        return s1[:i]
 
     @staticmethod
     def _parse_tool_call_complete_json(payload: str) -> ToolCall | None:

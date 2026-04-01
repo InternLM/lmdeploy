@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import TYPE_CHECKING, Any
 
 from lmdeploy.serve.openai.protocol import (
@@ -11,18 +10,15 @@ from lmdeploy.serve.openai.protocol import (
     FunctionCall,
     ToolCall,
 )
-from lmdeploy.utils import get_logger
 
 from .tool_parser import ToolParser, ToolParserManager
 
 if TYPE_CHECKING:
     from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 
-logger = get_logger('lmdeploy')
-
 
 def _parse_tool_call_arguments_dict(arguments: Any) -> dict[str, Any] | None:
-    """Return dict-like tool arguments for Qwen3Coder request rendering."""
+    """Return dict-like tool arguments for Qwen3Coder request normalization."""
     if not isinstance(arguments, str):
         return None
 
@@ -37,12 +33,7 @@ def _parse_tool_call_arguments_dict(arguments: Any) -> dict[str, Any] | None:
 
 @ToolParserManager.register_module(['qwen3coder'])
 class Qwen3CoderToolParser(ToolParser):
-    """Parser for Qwen3 Coder model's tool call format.
-
-    Handles the extraction of tool calls from Qwen3 Coder's output format, which uses purely XML tags for function names
-    and parameters, e.g., <tool_call> <function=func_name> <parameter=arg_name>arg_value</parameter> </function>
-    </tool_call>
-    """
+    """Tool parser for Qwen3Coder XML tool-call payloads."""
 
     def __init__(self, tokenizer: object):
         super().__init__(tokenizer)
@@ -52,11 +43,6 @@ class Qwen3CoderToolParser(ToolParser):
         self.func_end_token = '</function>'
         self.param_prefix = '<parameter='
         self.param_end_token = '</parameter>'
-
-        self.tool_call_pat = re.compile(r'\n*<tool_call>(.*?)</tool_call>', re.DOTALL)
-        self.parse_cursor = 0
-        self.qwen_tool_serial_index = -1
-        self.qwen_active_tool_call_id = ''
         self.coder_has_emitted_name = False
         self.coder_has_emitted_json_start = False
         self.coder_json_closed = False
@@ -126,8 +112,7 @@ class Qwen3CoderToolParser(ToolParser):
         self.coder_emitted_param_names.clear()
 
     def decode_tool_incremental(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:
-        """Decode XML tool payload incrementally into OpenAI tool-call
-        deltas."""
+        """Decode incremental XML tool payload."""
         self._tool_payload += added_text
         func_name, args_dict, is_func_closed = self._extract_params(self._tool_payload)
 
@@ -185,26 +170,8 @@ class Qwen3CoderToolParser(ToolParser):
             return request
         return request.model_copy(update={'messages': normalized_messages})
 
-    def _split(self, parsing_content: str) -> tuple[str, str, bool]:
-        """Split content into tuple: (text_content, tool_content, has_tool_end)"""
-        try:
-            start_idx = parsing_content.index(self.tool_start_token)
-            self.parse_cursor += start_idx
-        except ValueError:
-            self.parse_cursor += len(parsing_content)
-            return parsing_content, '', False
-
-        try:
-            end_idx = parsing_content.index(self.tool_end_token)
-        except ValueError:
-            return parsing_content[:start_idx], parsing_content[start_idx:], False
-
-        rem = end_idx - start_idx
-        self.parse_cursor += rem + len(self.tool_end_token)
-        return parsing_content[:start_idx], parsing_content[start_idx:end_idx + len(self.tool_end_token)], True
-
     def _extract_params(self, content: str) -> tuple[str | None, dict[str, Any], bool]:
-        """Parse XML tool content into components."""
+        """Extract function name, parameter map, and close status from XML."""
         content = content.replace(self.tool_start_token, '').replace(self.tool_end_token, '').strip()
 
         func_name = None

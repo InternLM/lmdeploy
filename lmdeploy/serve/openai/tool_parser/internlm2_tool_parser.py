@@ -3,30 +3,23 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from lmdeploy.serve.openai.protocol import (
-    DeltaToolCall,
-    ToolCall,
-)
-from lmdeploy.utils import get_logger
-
 from .tool_parser import ToolParser, ToolParserManager
 
 if TYPE_CHECKING:
-    from lmdeploy.serve.openai.protocol import ChatCompletionRequest
+    from transformers import PreTrainedTokenizerBase
 
-logger = get_logger('lmdeploy')
-
+    from lmdeploy.serve.openai.protocol import (
+        ChatCompletionRequest,
+        DeltaToolCall,
+        ToolCall,
+    )
 
 @ToolParserManager.register_module(['internlm', 'intern-s1'])
 class Internlm2ToolParser(ToolParser):
+    """Tool parser for InternLM JSON tool-call payloads."""
 
-    def __init__(self, tokenizer: object):
+    def __init__(self, tokenizer: PreTrainedTokenizerBase):
         super().__init__(tokenizer)
-        self.parse_cursor = 0
-        self.current_tool_id = -1
-        self.current_tool_name_sent = False
-        self.streamed_args_for_tool: list[str] = []
-        self.prev_tool_call_arr: list[dict] = []
 
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         if request.tools and request.tool_choice != 'none':
@@ -35,13 +28,6 @@ class Internlm2ToolParser(ToolParser):
             # information.
             request.skip_special_tokens = False
         return request
-
-    def get_argments(self, obj):
-        if 'parameters' in obj:
-            return obj.get('parameters')
-        elif 'arguments' in obj:
-            return obj.get('arguments')
-        return None
 
     def get_tool_open_tag(self) -> str | None:
         return '<|action_start|><|plugin|>'
@@ -53,8 +39,7 @@ class Internlm2ToolParser(ToolParser):
         return 'json'
 
     def decode_tool_incremental(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:
-        """InternLM2 tool payload is JSON; reuse shared JSON incremental
-        decoder."""
+        """Decode incremental JSON tool payload."""
         return self._decode_tool_incremental_json(added_text=added_text, final=final)
 
     def parse_tool_call_complete(self, payload: str) -> ToolCall | None:
