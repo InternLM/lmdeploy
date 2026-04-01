@@ -18,7 +18,7 @@ class AttentionMetadata:
     fill_seqlens: torch.Tensor = None
     cu_seqlens_q: torch.Tensor = None
     cu_seqlens_k: torch.Tensor = None
-    quant_policy: Literal[0, 4, 8] = 0
+    quant_policy: Literal[0, 4, 8, 42] = 0
 
 
 T = TypeVar('T', bound=AttentionMetadata)

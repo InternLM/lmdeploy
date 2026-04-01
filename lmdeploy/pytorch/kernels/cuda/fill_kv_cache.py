@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import math
 from typing import Literal
 
 import torch
@@ -6,6 +7,154 @@ import triton
 import triton.language as tl
 from torch import Tensor
 
+_TURBOQUANT_CACHE = {}
+
+def _get_deterministic_signs(d: int, device: str = 'cuda'):
+    """Fixed deterministic ±1 signs for HD transform."""
+    cache_key = (d, device, 'deterministic_signs')
+    if cache_key not in _TURBOQUANT_CACHE:
+        idx = torch.arange(d, device=device)
+        signs = torch.where((idx & 1) == 0, 1.0, -1.0).to(torch.float32)
+        _TURBOQUANT_CACHE[cache_key] = signs
+    return _TURBOQUANT_CACHE[cache_key]
+
+def _hadamard_matrix(d: int, device: str = 'cuda'):
+    """Construct normalized Hadamard matrix H / sqrt(d)."""
+    if d & (d - 1) != 0:
+        raise ValueError(f'Hadamard matrix requires power-of-2 dimension, got d={d}')
+
+    cache_key = (d, device, 'hadamard_matrix')
+    if cache_key not in _TURBOQUANT_CACHE:
+        H = torch.tensor([[1.0]], dtype=torch.float32)
+        n = 1
+        while n < d:
+            H = torch.cat([
+                torch.cat([H,  H], dim=1),
+                torch.cat([H, -H], dim=1),
+            ], dim=0)
+            n *= 2
+        H = H.to(device=device, dtype=torch.float32) / math.sqrt(d)
+        _TURBOQUANT_CACHE[cache_key] = H
+    return _TURBOQUANT_CACHE[cache_key]
+
+def fwht(x: Tensor) -> Tensor:
+    """Normalized Fast Walsh-Hadamard Transform on the last dimension.
+
+    Input shape: (..., d), where d must be a power of 2.
+    """
+    d = x.shape[-1]
+    if d & (d - 1) != 0:
+        raise ValueError(f'FWHT requires power-of-2 dimension, got d={d}')
+
+    y = x.contiguous()
+    h = 1
+    while h < d:
+        y = y.reshape(*y.shape[:-1], d // (2 * h), 2, h)
+        a = y[..., 0, :]
+        b = y[..., 1, :]
+        y = torch.stack((a + b, a - b), dim=-2).reshape(*x.shape[:-1], d)
+        h *= 2
+    return y / math.sqrt(d)
+
+def ifwht(x: Tensor) -> Tensor:
+    """Inverse of normalized FWHT.
+
+    Since normalized FWHT is self-inverse, this equals fwht(x).
+    """
+    return fwht(x)
+
+def butterfly_rotate(x: Tensor) -> Tensor:
+    """
+    Deterministic orthogonal transform:
+        y = (H / sqrt(d)) @ (D @ x)
+    applied along the last dimension.
+    """
+    d = x.shape[-1]
+    if d & (d - 1) != 0:
+        raise ValueError(f'butterfly_rotate requires power-of-2 dimension, got d={d}')
+
+    signs = _get_deterministic_signs(d, device=x.device)
+    return fwht(x * signs)
+
+def butterfly_rotate_inv(x: Tensor) -> Tensor:
+    """
+    Inverse of butterfly_rotate:
+        x = D @ (H / sqrt(d)) @ y
+    """
+    d = x.shape[-1]
+    signs = _get_deterministic_signs(d, device=x.device)
+    return fwht(x) * signs
+
+def _get_rotation_matrix(
+    d: int,
+    device: str = 'cuda',
+):
+    """Get orthogonal mixing matrix for testing."""
+    cache_key = (d, device, 'rotation_matrix')
+    if cache_key in _TURBOQUANT_CACHE:
+        return _TURBOQUANT_CACHE[cache_key]
+
+    H = _hadamard_matrix(d, device=device)
+    signs = _get_deterministic_signs(d, device=device)
+    Q = H * signs.unsqueeze(0)   # equivalent to H @ diag(signs)
+
+    _TURBOQUANT_CACHE[cache_key] = Q
+    return Q
+
+def _get_lloyd_max_codebook(d: int, bits: int, device: str = 'cuda'):
+    """Get precomputed Lloyd-Max codebook for 2-bit and 4-bit only.
+
+    The table is baked from the same construction logic as the original
+    implementation under sigma=1, then scaled at runtime by sigma=1/sqrt(d).
+
+    Supported:
+        bits = 2, 4
+    """
+    if bits not in (2, 4):
+        raise NotImplementedError(
+            f'Only 2-bit and 4-bit precomputed codebooks are supported, got bits={bits}'
+        )
+
+    cache_key = (d, bits, device, 'codebook')
+    if cache_key in _TURBOQUANT_CACHE:
+        return _TURBOQUANT_CACHE[cache_key]
+
+    sigma = 1.0 / math.sqrt(d)
+
+    # Precomputed with the original implementation logic at sigma=1:
+    #   - range [-3, 3]
+    #   - uniform midpoint initialization
+    #   - 10 Lloyd-Max iterations
+    if bits == 2:
+        centroids_std = torch.tensor(
+            [-1.5104176, -0.4527808, 0.4527808, 1.5104176],
+            device=device, dtype=torch.float32
+        )
+        boundaries_std = torch.tensor(
+            [-0.9815992, 0.0, 0.9815992],
+            device=device, dtype=torch.float32
+        )
+    else:  # bits == 4
+        centroids_std = torch.tensor(
+            [-2.4175594, -1.7094618, -1.2629677, -0.9265621,
+             -0.6470380, -0.4015197, -0.1756835,  0.0391761,
+              0.2508093,  0.4675656,  0.6996375,  0.9615010,
+              1.2788204,  1.7009784,  2.3481500,  3.0000000],
+            device=device, dtype=torch.float32
+        )
+        boundaries_std = torch.tensor(
+            [-2.0635107, -1.4862148, -1.0947649, -0.7868000,
+             -0.5242788, -0.2886016, -0.0682537,  0.1449927,
+              0.3591875,  0.5836016,  0.8305693,  1.1201607,
+              1.4898994,  2.0245643,  2.6740751],
+            device=device, dtype=torch.float32
+        )
+
+    centroids = centroids_std * sigma
+    boundaries = boundaries_std * sigma
+
+    _TURBOQUANT_CACHE[cache_key] = (centroids, boundaries)
+    return centroids, boundaries
 
 @triton.jit
 def _quant_int8(val):
@@ -28,6 +177,24 @@ def _quant_int4(val1, val2):
     q_val1 = (val1 / scales[:, None] + zeros[:, None] + 0.5).to(tl.uint8)
     q_val2 = (val2 / scales[:, None] + zeros[:, None] + 0.5).to(tl.uint8)
     q_val = q_val1 + q_val2 * 16
+    return q_val, scales, zeros
+
+
+@triton.jit
+def _quant_int2(val1, val2, val3, val4):
+    val1 = val1.to(tl.float32)
+    val2 = val2.to(tl.float32)
+    val3 = val3.to(tl.float32)
+    val4 = val4.to(tl.float32)
+    val_min = tl.min(tl.minimum(tl.minimum(val1, val2), tl.minimum(val3, val4)), 1)
+    val_max = tl.max(tl.maximum(tl.maximum(val1, val2), tl.maximum(val3, val4)), 1)
+    scales = (val_max - val_min) / 3
+    zeros = -val_min / scales
+    q_val1 = (val1 / scales[:, None] + zeros[:, None] + 0.5).to(tl.uint8)
+    q_val2 = (val2 / scales[:, None] + zeros[:, None] + 0.5).to(tl.uint8)
+    q_val3 = (val3 / scales[:, None] + zeros[:, None] + 0.5).to(tl.uint8)
+    q_val4 = (val4 / scales[:, None] + zeros[:, None] + 0.5).to(tl.uint8)
+    q_val = q_val1 + q_val2 * 4 + q_val3 * 16 + q_val4 * 64
     return q_val, scales, zeros
 
 
@@ -213,12 +380,222 @@ def _fill_page_quant_int4(
 
 
 @triton.jit
+def _fill_page_quant_int2(
+    state_ptr,
+    cache_ptr,
+    scales_zeros_ptr,
+    block_off,
+    head_id,
+    page_offs,
+    q_offs,
+    kv_mask,
+    head_dim: tl.constexpr,
+    stride_ss,
+    stride_sh,
+    stride_sd,
+    stride_cn: tl.constexpr,
+    stride_cb: tl.constexpr,
+    stride_ch: tl.constexpr,
+    stride_cd: tl.constexpr,
+    stride_szn: tl.constexpr,
+    stride_szb: tl.constexpr,
+    stride_szh: tl.constexpr,
+    stride_szd: tl.constexpr,
+    BLOCK_D: tl.constexpr,
+):
+    """Fill page int2.
+
+    head_dim means packed cache dim = original_head_dim // 4.
+    """
+    d_off = tl.arange(0, BLOCK_D)
+    mask_kc = kv_mask[:, None] & (d_off[None, :] < head_dim)
+
+    state_ptr = state_ptr + head_id * stride_sh
+    state0_ptrs = state_ptr + q_offs[:, None] * stride_ss + d_off[None, :] * stride_sd
+    state1_ptrs = state0_ptrs + head_dim * stride_sd
+    state2_ptrs = state0_ptrs + 2 * head_dim * stride_sd
+    state3_ptrs = state0_ptrs + 3 * head_dim * stride_sd
+
+    cache_ptr = cache_ptr + block_off * stride_cn + head_id * stride_ch
+    cache_ptrs = cache_ptr + page_offs[:, None] * stride_cb + d_off[None, :] * stride_cd
+
+    scales_zeros_ptr = scales_zeros_ptr + block_off * stride_szn + head_id * stride_szh
+    scales_ptrs = scales_zeros_ptr + page_offs[:, None] * stride_szb
+    zeros_ptrs = scales_ptrs + stride_szd
+
+    state0 = tl.load(state0_ptrs, mask=mask_kc)
+    state1 = tl.load(state1_ptrs, mask=mask_kc)
+    state2 = tl.load(state2_ptrs, mask=mask_kc)
+    state3 = tl.load(state3_ptrs, mask=mask_kc)
+
+    state, scales, zeros = _quant_int2(state0, state1, state2, state3)
+
+    tl.store(cache_ptrs, state, mask=mask_kc)
+    tl.store(scales_ptrs, scales[:, None], mask=kv_mask[:, None])
+    tl.store(zeros_ptrs, zeros[:, None], mask=kv_mask[:, None])
+
+@triton.jit
+def _fill_page_quant_turbo_int4(
+    state_ptr,
+    cache_ptr,
+    scales_zeros_ptr,
+    block_off,
+    head_id,
+    page_offs,
+    q_offs,
+    kv_mask,
+    head_dim: tl.constexpr,        # packed dim
+    stride_ss,
+    stride_sh,
+    stride_sd,
+    stride_cn: tl.constexpr,
+    stride_cb: tl.constexpr,
+    stride_ch: tl.constexpr,
+    stride_cd: tl.constexpr,
+    stride_szn: tl.constexpr,
+    stride_szb: tl.constexpr,
+    stride_szh: tl.constexpr,
+    stride_szd: tl.constexpr,
+    BLOCK_D: tl.constexpr,
+):
+    """TurboQuant K path: raw dim = 2 * head_dim, packed to head_dim bytes."""
+    d_off = tl.arange(0, head_dim)
+    mask_kc = kv_mask[:, None]
+    state_ptr = state_ptr + head_id * stride_sh
+    state0_ptrs = state_ptr + q_offs[:, None] * stride_ss + d_off[None, :] * stride_sd
+    state1_ptrs = state0_ptrs + head_dim * stride_sd
+    cache_ptr = cache_ptr + block_off * stride_cn + head_id * stride_ch
+    cache_ptrs = cache_ptr + page_offs[:, None] * stride_cb + d_off[None, :] * stride_cd
+    scales_zeros_ptr = scales_zeros_ptr + block_off * stride_szn + head_id * stride_szh
+    scales_ptrs = scales_zeros_ptr + page_offs[:, None] * stride_szb
+    x0 = tl.load(state0_ptrs, mask=mask_kc, other=0.0).to(tl.float32)
+    x1 = tl.load(state1_ptrs, mask=mask_kc, other=0.0).to(tl.float32)
+    norm = tl.sqrt(tl.sum(x0 * x0 + x1 * x1, axis=1) + 1e-8)
+    sigma = 1.0 / math.sqrt(BLOCK_D)
+    u0 = x0 / norm[:, None]
+    u1 = x1 / norm[:, None]
+    idx0 = tl.zeros_like(u0).to(tl.uint8)
+    idx0 += (u0 > (-2.0635107 * sigma))
+    idx0 += (u0 > (-1.4862148 * sigma))
+    idx0 += (u0 > (-1.0947649 * sigma))
+    idx0 += (u0 > (-0.7868000 * sigma))
+    idx0 += (u0 > (-0.5242788 * sigma))
+    idx0 += (u0 > (-0.2886016 * sigma))
+    idx0 += (u0 > (-0.0682537 * sigma))
+    idx0 += (u0 > (0.1449927 * sigma))
+    idx0 += (u0 > (0.3591875 * sigma))
+    idx0 += (u0 > (0.5836016 * sigma))
+    idx0 += (u0 > (0.8305693 * sigma))
+    idx0 += (u0 > (1.1201607 * sigma))
+    idx0 += (u0 > (1.4898994 * sigma))
+    idx0 += (u0 > (2.0245643 * sigma))
+    idx0 += (u0 > (2.6740751 * sigma))
+    idx0 = idx0.to(tl.uint8)
+    idx1 = tl.zeros_like(u1).to(tl.uint8)
+    idx1 += (u1 > (-2.0635107 * sigma))
+    idx1 += (u1 > (-1.4862148 * sigma))
+    idx1 += (u1 > (-1.0947649 * sigma))
+    idx1 += (u1 > (-0.7868000 * sigma))
+    idx1 += (u1 > (-0.5242788 * sigma))
+    idx1 += (u1 > (-0.2886016 * sigma))
+    idx1 += (u1 > (-0.0682537 * sigma))
+    idx1 += (u1 > (0.1449927 * sigma))
+    idx1 += (u1 > (0.3591875 * sigma))
+    idx1 += (u1 > (0.5836016 * sigma))
+    idx1 += (u1 > (0.8305693 * sigma))
+    idx1 += (u1 > (1.1201607 * sigma))
+    idx1 += (u1 > (1.4898994 * sigma))
+    idx1 += (u1 > (2.0245643 * sigma))
+    idx1 += (u1 > (2.6740751 * sigma))
+    idx1 = idx1.to(tl.uint8)
+    packed = idx0 | (idx1 << 4)
+    tl.store(cache_ptrs, packed, mask=mask_kc)
+    # For quant_policy==42, K only has norm (scale), no zero
+    tl.store(scales_ptrs, norm[:, None], mask=kv_mask[:, None])
+
+@triton.jit
+def _fill_page_quant_turbo_int2(
+    state_ptr,
+    cache_ptr,
+    scales_zeros_ptr,
+    block_off,
+    head_id,
+    page_offs,
+    q_offs,
+    kv_mask,
+    head_dim: tl.constexpr,        # packed dim
+    stride_ss,
+    stride_sh,
+    stride_sd,
+    stride_cn: tl.constexpr,
+    stride_cb: tl.constexpr,
+    stride_ch: tl.constexpr,
+    stride_cd: tl.constexpr,
+    stride_szn: tl.constexpr,
+    stride_szb: tl.constexpr,
+    stride_szh: tl.constexpr,
+    stride_szd: tl.constexpr,
+    BLOCK_D: tl.constexpr,
+):
+    """TurboQuant V path: raw dim = 4 * head_dim, packed to head_dim bytes."""
+    d_off = tl.arange(0, head_dim)
+    mask_kc = kv_mask[:, None]
+    state_ptr = state_ptr + head_id * stride_sh
+    state0_ptrs = state_ptr + q_offs[:, None] * stride_ss + d_off[None, :] * stride_sd
+    state1_ptrs = state0_ptrs + head_dim * stride_sd
+    state2_ptrs = state0_ptrs + 2 * head_dim * stride_sd
+    state3_ptrs = state0_ptrs + 3 * head_dim * stride_sd
+    cache_ptr = cache_ptr + block_off * stride_cn + head_id * stride_ch
+    cache_ptrs = cache_ptr + page_offs[:, None] * stride_cb + d_off[None, :] * stride_cd
+    scales_zeros_ptr = scales_zeros_ptr + block_off * stride_szn + head_id * stride_szh
+    scales_ptrs = scales_zeros_ptr + page_offs[:, None] * stride_szb
+    x0 = tl.load(state0_ptrs, mask=mask_kc, other=0.0).to(tl.float32)
+    x1 = tl.load(state1_ptrs, mask=mask_kc, other=0.0).to(tl.float32)
+    x2 = tl.load(state2_ptrs, mask=mask_kc, other=0.0).to(tl.float32)
+    x3 = tl.load(state3_ptrs, mask=mask_kc, other=0.0).to(tl.float32)
+    norm = tl.sqrt(tl.sum(x0 * x0 + x1 * x1 + x2 * x2 + x3 * x3, axis=1) + 1e-8)
+    sigma = 1.0 / math.sqrt(BLOCK_D)
+    u0 = x0 / norm[:, None]
+    u1 = x1 / norm[:, None]
+    u2 = x2 / norm[:, None]
+    u3 = x3 / norm[:, None]
+    idx0 = tl.zeros_like(u0).to(tl.uint8)
+    idx0 += (u0 > (-0.9815992 * sigma))
+    idx0 += (u0 > (0.0 * sigma))
+    idx0 += (u0 > (0.9815992 * sigma))
+    idx0 = idx0.to(tl.uint8)
+    idx1 = tl.zeros_like(u1).to(tl.uint8)
+    idx1 += (u1 > (-0.9815992 * sigma))
+    idx1 += (u1 > (0.0 * sigma))
+    idx1 += (u1 > (0.9815992 * sigma))
+    idx1 = idx1.to(tl.uint8)
+    idx2 = tl.zeros_like(u2).to(tl.uint8)
+    idx2 += (u2 > (-0.9815992 * sigma))
+    idx2 += (u2 > (0.0 * sigma))
+    idx2 += (u2 > (0.9815992 * sigma))
+    idx2 = idx2.to(tl.uint8)
+    idx3 = tl.zeros_like(u3).to(tl.uint8)
+    idx3 += (u3 > (-0.9815992 * sigma))
+    idx3 += (u3 > (0.0 * sigma))
+    idx3 += (u3 > (0.9815992 * sigma))
+    idx3 = idx3.to(tl.uint8)
+    packed = idx0 | (idx1 << 2) | (idx2 << 4) | (idx3 << 6)
+    tl.store(cache_ptrs, packed, mask=mask_kc)
+    # For quant_policy==42, V only has norm (scale), no zero
+    tl.store(scales_ptrs, norm[:, None], mask=kv_mask[:, None])
+
+@triton.jit
 def _fill_page_quant(state_ptr, cache_ptr, scales_zeros_ptr, block_off, head_id, page_offs, q_offs, kv_mask,
                      head_dim: tl.constexpr, stride_ss, stride_sh, stride_sd, stride_cn: tl.constexpr,
                      stride_cb: tl.constexpr, stride_ch: tl.constexpr, stride_cd: tl.constexpr,
                      stride_szn: tl.constexpr, stride_szb: tl.constexpr, stride_szh: tl.constexpr,
-                     stride_szd: tl.constexpr, BLOCK_D: tl.constexpr, quant_policy: tl.constexpr):
-    """Fill page."""
+                     stride_szd: tl.constexpr, BLOCK_D: tl.constexpr, quant_policy: tl.constexpr,
+                     is_value: tl.constexpr):
+    """Fill page.
+
+    Args:
+        is_value: If True, this is for V cache; if False, this is for K cache.
+    """
     if quant_policy == 8:
         return _fill_page_quant_int8(state_ptr,
                                      cache_ptr,
@@ -263,9 +640,53 @@ def _fill_page_quant(state_ptr, cache_ptr, scales_zeros_ptr, block_off, head_id,
                                      stride_szh=stride_szh,
                                      stride_szd=stride_szd,
                                      BLOCK_D=BLOCK_D)
+    elif quant_policy == 42:
+        if is_value:
+            return _fill_page_quant_turbo_int2(state_ptr,
+                                               cache_ptr,
+                                               scales_zeros_ptr,
+                                               block_off,
+                                               head_id,
+                                               page_offs,
+                                               q_offs,
+                                               kv_mask,
+                                               head_dim=head_dim,
+                                               stride_ss=stride_ss,
+                                               stride_sh=stride_sh,
+                                               stride_sd=stride_sd,
+                                               stride_cn=stride_cn,
+                                               stride_cb=stride_cb,
+                                               stride_ch=stride_ch,
+                                               stride_cd=stride_cd,
+                                               stride_szn=stride_szn,
+                                               stride_szb=stride_szb,
+                                               stride_szh=stride_szh,
+                                               stride_szd=stride_szd,
+                                               BLOCK_D=BLOCK_D)
+        else:
+            return _fill_page_quant_turbo_int4(state_ptr,
+                                               cache_ptr,
+                                               scales_zeros_ptr,
+                                               block_off,
+                                               head_id,
+                                               page_offs,
+                                               q_offs,
+                                               kv_mask,
+                                               head_dim=head_dim,
+                                               stride_ss=stride_ss,
+                                               stride_sh=stride_sh,
+                                               stride_sd=stride_sd,
+                                               stride_cn=stride_cn,
+                                               stride_cb=stride_cb,
+                                               stride_ch=stride_ch,
+                                               stride_cd=stride_cd,
+                                               stride_szn=stride_szn,
+                                               stride_szb=stride_szb,
+                                               stride_szh=stride_szh,
+                                               stride_szd=stride_szd,
+                                               BLOCK_D=BLOCK_D)
     else:
         tl.static_assert(False, 'Unsupported quant policy')
-
 
 @triton.jit
 def _fill_kv_cache_quant_kernel(
@@ -304,7 +725,8 @@ def _fill_kv_cache_quant_kernel(
     stride_vszb: tl.constexpr,
     stride_vszh: tl.constexpr,
     stride_vszd: tl.constexpr,
-    quant_policy: tl.constexpr,
+    k_quant_policy: tl.constexpr,
+    v_quant_policy: tl.constexpr,
     stride_boff,
     BLOCK: tl.constexpr,
     BLOCK_D: tl.constexpr,
@@ -373,7 +795,8 @@ def _fill_kv_cache_quant_kernel(
                      stride_szh=stride_kszh,
                      stride_szd=stride_kszd,
                      BLOCK_D=BLOCK_D,
-                     quant_policy=quant_policy)
+                     quant_policy=k_quant_policy,
+                     is_value=False)
 
     if BLOCK_DV > 0:
         _fill_page_quant(VStates,
@@ -397,7 +820,8 @@ def _fill_kv_cache_quant_kernel(
                          stride_szh=stride_vszh,
                          stride_szd=stride_vszd,
                          BLOCK_D=BLOCK_DV,
-                         quant_policy=quant_policy)
+                         quant_policy=v_quant_policy,
+                         is_value=True)
 
 
 def fill_kv_cache(k_states: Tensor,
@@ -411,7 +835,7 @@ def fill_kv_cache(k_states: Tensor,
                   block_offsets: Tensor,
                   k_scales_zeros: Tensor = None,
                   v_scales_zeros: Tensor = None,
-                  quant_policy: Literal[0, 4, 8] = 0,
+                  quant_policy: Literal[0, 4, 8, 42] = 0,
                   kv_layout: str = 'bshd'):
     """Fill key/value state to cache for paged attention."""
     if kv_layout == 'bshd':
@@ -439,10 +863,40 @@ def fill_kv_cache(k_states: Tensor,
         max_num_blocks = triton.cdiv(max_q_seq_length, block_size) + 1
 
     BLOCK = block_size
-    BLOCK_D = triton.next_power_of_2(head_dim)
-    BLOCK_DV = triton.next_power_of_2(head_dim_v)
-    if k_caches.data_ptr() == v_caches.data_ptr() and head_dim_v <= head_dim:
-        BLOCK_DV = 0
+    if quant_policy == 42:
+        # packed dims in cache; raw dims in state
+        raw_k_dim = k_states.size(-1)
+        if raw_k_dim & (raw_k_dim - 1) != 0:
+            raise ValueError(
+                f'TurboQuant K requires power-of-2 raw dim, got {raw_k_dim}'
+            )
+        if raw_k_dim != head_dim * 2:
+            raise ValueError(
+                'TurboQuant K expects k_cache last dim = raw_k_dim/2,'
+                f' got raw={raw_k_dim}, packed={head_dim}'
+            )
+        k_states = butterfly_rotate(k_states).contiguous()
+        BLOCK_D = triton.next_power_of_2(raw_k_dim)
+        if v_states.size(-1) > 0:
+            raw_v_dim = v_states.size(-1)
+            if raw_v_dim & (raw_v_dim - 1) != 0:
+                raise ValueError(
+                    f'TurboQuant V requires power-of-2 raw dim, got {raw_v_dim}'
+                )
+            if raw_v_dim != head_dim_v * 4:
+                raise ValueError(
+                    'TurboQuant V expects v_cache last dim = raw_v_dim/4,'
+                    f' got raw={raw_v_dim}, packed={head_dim_v}'
+                )
+            v_states = butterfly_rotate(v_states).contiguous()
+            BLOCK_DV = triton.next_power_of_2(raw_v_dim)
+        else:
+            BLOCK_DV = 0
+    else:
+        BLOCK_D = triton.next_power_of_2(head_dim)
+        BLOCK_DV = triton.next_power_of_2(head_dim_v)
+        if k_caches.data_ptr() == v_caches.data_ptr() and head_dim_v <= head_dim:
+            BLOCK_DV = 0
     grid = (num_heads, max_num_blocks, batch_size)
     is_decoding = max_num_blocks == 1
     if quant_policy == 0:
@@ -480,6 +934,14 @@ def fill_kv_cache(k_states: Tensor,
             num_stages=3,
         )
     else:
+        if quant_policy == 42:
+            #   K = 4bit FWHT TurboQuant
+            #   V = 2bit FWHT TurboQuant
+            k_quant_policy = 42
+            v_quant_policy = 42
+        else:
+            k_quant_policy = quant_policy
+            v_quant_policy = quant_policy
         _fill_kv_cache_quant_kernel[grid](
             k_states,
             v_states,
@@ -516,7 +978,8 @@ def fill_kv_cache(k_states: Tensor,
             stride_vszb=v_scales_zeros.stride(s_dim),
             stride_vszh=v_scales_zeros.stride(h_dim),
             stride_vszd=v_scales_zeros.stride(d_dim),
-            quant_policy=quant_policy,
+            k_quant_policy=k_quant_policy,
+            v_quant_policy=v_quant_policy,
             stride_boff=block_offsets.stride(0),
             BLOCK=BLOCK,
             BLOCK_D=BLOCK_D,

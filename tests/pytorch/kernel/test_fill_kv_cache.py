@@ -1,5 +1,12 @@
+import math
+
 import pytest
 import torch
+
+from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import (
+    _get_lloyd_max_codebook,
+    _get_rotation_matrix,
+)
 
 
 def _div_up(a, b):
@@ -16,7 +23,146 @@ def quant(kv: torch.Tensor, nbits: int = 8):
     if nbits == 4:
         q_kv1, q_kv2 = q_kv.split(q_kv.shape[-1] // 2, -1)
         q_kv = q_kv1 + q_kv2 * 16
+    elif nbits == 2:
+        q_kv1, q_kv2, q_kv3, q_kv4 = q_kv.split(q_kv.shape[-1] // 4, -1)
+        q_kv = q_kv1 + q_kv2 * 4 + q_kv3 * 16 + q_kv4 * 64
     return q_kv, torch.cat([scales, zeros], dim=-1)
+
+
+def quant_turboquant_mse(kv: torch.Tensor, nbits: int):
+    """TurboQuant MSE quantization (without QJL).
+
+    Args:
+        kv: input tensor of shape (..., head_dim)
+        nbits: number of bits (2 or 4)
+
+    Returns:
+        q_kv: bit-packed indices (uint8)
+        norms: L2 norms for dequantization, shape (...,)
+    """
+    head_dim = kv.shape[-1]
+    device = str(kv.device)
+
+    # Get rotation matrix
+    Pi = _get_rotation_matrix(head_dim, device=device)
+
+    # Get Lloyd-Max codebook
+    centroids, boundaries = _get_lloyd_max_codebook(head_dim, nbits, device=device)
+    # boundaries now contains n_levels - 1 boundaries directly
+    decision_boundaries = boundaries  # (n_levels - 1,)
+
+    # Compute L2 norms
+    norms = kv.norm(dim=-1, keepdim=True)
+
+    # Normalize to unit sphere
+    kv_unit = kv / (norms + 1e-10)
+
+    # Apply random rotation: y = kv_unit @ Pi^T
+    y = torch.matmul(kv_unit, Pi.T)
+
+    # Quantize: find nearest centroid via searchsorted
+    indices = torch.searchsorted(decision_boundaries, y.contiguous())
+    indices = indices.clamp(0, 2 ** nbits - 1)
+
+    # Bit-pack indices
+    if nbits == 4:
+        q_kv1, q_kv2 = indices.split(indices.shape[-1] // 2, -1)
+        q_kv = q_kv1 + q_kv2 * 16
+    elif nbits == 2:
+        q_kv1, q_kv2, q_kv3, q_kv4 = indices.split(indices.shape[-1] // 4, -1)
+        q_kv = q_kv1 + q_kv2 * 4 + q_kv3 * 16 + q_kv4 * 64
+    else:
+        q_kv = indices
+
+    return q_kv.to(torch.uint8), norms.squeeze(-1)
+
+
+def _unpack_indices(packed: torch.Tensor, nbits: int, original_dim: int) -> torch.Tensor:
+    """Unpack bit-packed indices back to integer tensor."""
+    # Save original shape
+    orig_shape = list(packed.shape)
+    batch_dims = orig_shape[:-1]
+    batch_size = 1
+    for d in batch_dims:
+        batch_size *= d
+
+    # Flatten all batch dims
+    packed_flat = packed.flatten()  # [batch_size * packed_last_dim]
+
+    if nbits == 4:
+        packed_d = ((original_dim + 1) // 2) * 2
+        required_packed = packed_d // 2
+        total_required = batch_size * required_packed
+        if packed_flat.shape[-1] < total_required:
+            packed_flat = torch.nn.functional.pad(packed_flat, (0, total_required - packed_flat.shape[-1]), value=0)
+    elif nbits == 2:
+        packed_d = ((original_dim + 3) // 4) * 4
+        required_packed = packed_d // 4
+        total_required = batch_size * required_packed
+        if packed_flat.shape[-1] < total_required:
+            packed_flat = torch.nn.functional.pad(packed_flat, (0, total_required - packed_flat.shape[-1]), value=0)
+
+    # Unpack
+    if nbits == 4:
+        low = (packed & 0x0F)          # (..., d/2) ->  indices[0 : d/2]
+        high = (packed >> 4) & 0x0F    # (..., d/2) ->  indices[d/2 : d]
+        indices = torch.cat([low, high], dim=-1)  # (..., d)
+
+    elif nbits == 2:
+        i0 = (packed & 0x03)            # (..., d/4) -> indices[0 : d/4]
+        i1 = ((packed >> 2) & 0x03)     # (..., d/4) -> indices[d/4 : d/2]
+        i2 = ((packed >> 4) & 0x03)     # (..., d/4) -> indices[d/2 : 3d/4]
+        i3 = ((packed >> 6) & 0x03)     # (..., d/4) -> indices[3d/4 : d]
+        indices = torch.cat([i0, i1, i2, i3], dim=-1)  # (..., d)
+
+    else:
+        indices = packed
+
+    # Trim to exact size and reshape
+    new_shape = batch_dims + [original_dim]
+    return indices[:, :original_dim].reshape(new_shape).long()
+
+
+def dequantize_turboquant_mse(q_kv: torch.Tensor, norms: torch.Tensor, nbits: int):
+    """TurboQuant MSE dequantization (without QJL).
+
+    Args:
+        q_kv: bit-packed indices (uint8)
+        norms: L2 norms for rescaling, shape (...,)
+        nbits: number of bits (2 or 4)
+
+    Returns:
+        reconstructed kv tensor
+    """
+    # Infer head_dim from packed shape
+    if nbits == 4:
+        head_dim = q_kv.shape[-1] * 2
+    elif nbits == 2:
+        head_dim = q_kv.shape[-1] * 4
+    else:
+        head_dim = q_kv.shape[-1]
+
+    device = str(q_kv.device)
+
+    # Get rotation matrix
+    Pi = _get_rotation_matrix(head_dim, device=device)
+
+    # Get Lloyd-Max codebook
+    centroids, _ = _get_lloyd_max_codebook(head_dim, nbits, device=device)
+
+    # Unpack indices
+    indices = _unpack_indices(q_kv, nbits, head_dim)
+
+    # Look up centroids
+    y_hat = centroids[indices]  # (..., head_dim)
+
+    # Rotate back: x_hat = y_hat @ Pi
+    x_hat = torch.matmul(y_hat, Pi)
+
+    # Rescale by original norms
+    x_hat = x_hat * norms.unsqueeze(-1)
+
+    return x_hat
 
 
 class TestFillKVCache:
@@ -278,9 +424,8 @@ class TestFillKVCacheBlockedFP8(TestFillKVCache):
 
     @pytest.fixture(autouse=True, scope='class')
     def initialize(self):
-        seed = 42
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed(seed)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed(42)
         yield
 
     @pytest.fixture
@@ -417,3 +562,209 @@ class TestFillKVCacheBlockedFP8(TestFillKVCache):
         torch.testing.assert_close(out_ks, gt_ks)
         torch.testing.assert_close(out_v, gt_v)
         torch.testing.assert_close(out_vs, gt_vs)
+
+
+class TestFillKVCacheInt42(TestFillKVCacheInt4):
+    """Test for quant_policy=42: K=4bit, V=2bit using TurboQuant MSE."""
+
+    @pytest.fixture
+    def k_caches(self, batch_size, max_num_blocks, block_size, num_heads, head_dim):
+        shape = (batch_size * max_num_blocks, block_size, num_heads, head_dim // 2)
+        yield torch.full(shape, 0, dtype=torch.uint8).cuda()
+
+    @pytest.fixture
+    def v_caches(self, batch_size, max_num_blocks, block_size, num_heads, head_dim):
+        shape = (batch_size * max_num_blocks, block_size, num_heads, head_dim // 4)
+        yield torch.full(shape, 0, dtype=torch.uint8).cuda()
+
+    @pytest.fixture
+    def k_scales_zeros(self, batch_size, max_num_blocks, block_size, num_heads):
+        # TurboQuant MSE 只需要存储 norms，维度为 1（而不是原来的 2）
+        shape = (batch_size * max_num_blocks, block_size, num_heads, 1)
+        yield torch.full(shape, 0.0).cuda()
+
+    @pytest.fixture
+    def v_scales_zeros(self, k_scales_zeros):
+        yield torch.zeros_like(k_scales_zeros)
+
+    @pytest.fixture
+    def nbits(self):
+        yield 42
+
+    @pytest.fixture
+    def gt(self, k_states, v_states, k_caches, v_caches, seq_lens, history_lens, block_offsets, block_size,
+           k_scales_zeros, v_scales_zeros, nbits):
+        # 使用 TurboQuant MSE 量化（不用 QJL）
+        k_states, k_states_norms = quant_turboquant_mse(k_states, 4)
+        v_states, v_states_norms = quant_turboquant_mse(v_states, 2)
+        batch_size = len(seq_lens)
+        k_caches = k_caches.clone()
+        v_caches = v_caches.clone()
+        splited_k_states = k_states.split(seq_lens)
+        splited_v_states = v_states.split(seq_lens)
+        splited_k_states_norms = k_states_norms.split(seq_lens)
+        splited_v_states_norms = v_states_norms.split(seq_lens)
+        for bidx in range(batch_size):
+            k_state = splited_k_states[bidx]
+            v_state = splited_v_states[bidx]
+            k_state_norms = splited_k_states_norms[bidx]
+            v_state_norms = splited_v_states_norms[bidx]
+            h_len = history_lens[bidx]
+            b_offs = block_offsets[bidx]
+            block_id = _div_up(h_len + 1, block_size) - 1
+            fill_start = h_len % block_size
+            fill_size = min(block_size - fill_start, k_state.size(0))
+            while True:
+                boff = b_offs[block_id]
+                tmp_ks = k_state[:fill_size]
+                tmp_vs = v_state[:fill_size]
+                tmp_ks_norms = k_state_norms[:fill_size].unsqueeze(-1)
+                tmp_vs_norms = v_state_norms[:fill_size].unsqueeze(-1)
+                fill_end = fill_start + fill_size
+                k_caches[boff, fill_start:fill_end] = tmp_ks
+                v_caches[boff, fill_start:fill_end] = tmp_vs
+                # TurboQuant MSE 存储的是 norms，不是 scales_zeros
+                k_scales_zeros[boff, fill_start:fill_end] = tmp_ks_norms
+                v_scales_zeros[boff, fill_start:fill_end] = tmp_vs_norms
+                k_state = k_state[fill_size:]
+                v_state = v_state[fill_size:]
+                k_state_norms = k_state_norms[fill_size:]
+                v_state_norms = v_state_norms[fill_size:]
+                block_id += 1
+                fill_start = 0
+                fill_size = min(block_size, k_state.size(0))
+                if fill_size == 0:
+                    break
+
+        yield k_caches, v_caches, k_scales_zeros, v_scales_zeros
+
+    @pytest.mark.parametrize('head_dim', [128], indirect=True)
+    @pytest.mark.parametrize(['seq_lens', 'history_lens'], [
+        ((1, 1, 1, 1), (1, 16, 31, 24)),
+        ((1, 8, 16, 24), (1, 16, 31, 24)),
+    ],
+                             indirect=True)
+    def test_fill_kv_cache(self, k_states, v_states, k_caches, v_caches, k_scales_zeros, v_scales_zeros, block_offsets,
+                           q_start_loc, q_seq_length, kv_seq_length, max_q_seq_length, gt, nbits):
+        from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache
+        k_scales_zeros = torch.zeros_like(k_scales_zeros)
+        v_scales_zeros = torch.zeros_like(v_scales_zeros)
+        fill_kv_cache(k_states, v_states, k_caches, v_caches, q_start_loc, q_seq_length, kv_seq_length,
+                      max_q_seq_length, block_offsets, k_scales_zeros, v_scales_zeros, nbits)
+
+        torch.testing.assert_close(k_scales_zeros, gt[2])
+        torch.testing.assert_close(v_scales_zeros, gt[3])
+        torch.testing.assert_close(k_caches, gt[0])
+        torch.testing.assert_close(v_caches, gt[1])
+
+
+# ========== TurboQuant MSE 正确性验证测试 ==========
+
+class TestTurboQuantMSE:
+    """验证 TurboQuant MSE 量化-反量化正确性."""
+
+    @pytest.fixture
+    def head_dim(self):
+        yield 128
+
+    @pytest.fixture
+    def n_vectors(self):
+        yield 100
+
+    @pytest.mark.parametrize('nbits', [2, 4])
+    def test_quant_dequant_roundtrip(self, head_dim, n_vectors, nbits):
+        """测试量化-反量化往返."""
+        torch.manual_seed(42)
+        x = torch.randn(n_vectors, head_dim).cuda()
+
+        # 量化
+        q_x, norms = quant_turboquant_mse(x, nbits)
+
+        # 验证 norms 形状正确
+        assert norms.shape == (n_vectors,), f'norms shape 错误: {norms.shape}'
+
+        # 验证量化值在有效范围内
+        max_val = 2 ** nbits - 1
+        # unpack 后验证
+        unpacked = _unpack_indices(q_x, nbits, head_dim)
+        assert unpacked.max().item() <= max_val, '量化值超过范围'
+        assert unpacked.min().item() >= 0, '量化值小于0'
+
+        print(f'  bits={nbits}: quant OK, norms range=[{norms.min():.3f}, {norms.max():.3f}]')
+
+    @pytest.mark.parametrize('nbits', [2, 4])
+    def test_mse_within_theoretical_bound(self, head_dim, n_vectors, nbits):
+        """验证量化-反量化的 MSE 在理论界内（针对单位向量）"""
+        torch.manual_seed(42)
+        x = torch.randn(n_vectors, head_dim).cuda()
+        # 归一化到单位球面（理论界针对单位向量）
+        x = x / torch.norm(x, dim=-1, keepdim=True)
+
+        # 量化
+        q_x, norms = quant_turboquant_mse(x, nbits)
+
+        # 反量化
+        x_reconstructed = dequantize_turboquant_mse(q_x, norms, nbits)
+
+        # 计算 MSE
+        mse = ((x - x_reconstructed) ** 2).mean().item()
+
+        # 理论界: D_mse <= sqrt(3)*pi/2 * (1/4^bits)
+        theoretical_bound = math.sqrt(3) * math.pi / 2 * (1 / (4 ** nbits))
+
+        ratio = mse / theoretical_bound
+
+        print(f'  bits={nbits}: MSE={mse:.6f}, theory_bound={theoretical_bound:.6f}, ratio={ratio:.3f}')
+
+        # 理论界是上界，实际 MSE 必须小于理论界
+        assert ratio < 1, f'MSE {mse} 超过理论界 {theoretical_bound} (ratio={ratio:.3f})'
+
+    @pytest.mark.parametrize('nbits', [2, 4])
+    def test_reconstruction_quality(self, head_dim, n_vectors, nbits):
+        """验证重建质量（使用余弦相似度，针对单位向量）
+
+        对于单位向量，使用余弦相似度更能反映量化对方向的影响。
+        """
+        torch.manual_seed(42)
+        x = torch.randn(n_vectors, head_dim).cuda()
+        # 归一化到单位球面
+        x = x / torch.norm(x, dim=-1, keepdim=True)
+
+        # 量化
+        q_x, norms = quant_turboquant_mse(x, nbits)
+
+        # 反量化
+        x_reconstructed = dequantize_turboquant_mse(q_x, norms, nbits)
+
+        # 计算余弦相似度（归一化后）
+        x_norm = x / (x.norm(dim=-1, keepdim=True) + 1e-10)
+        recon_norm = x_reconstructed / (x_reconstructed.norm(dim=-1, keepdim=True) + 1e-10)
+        cos_sim = (x_norm * recon_norm).sum(dim=-1).mean().item()
+
+        print(f'  bits={nbits}: cos_sim={cos_sim:.4f}')
+
+        # 余弦相似度应该接近 1.0
+        # 4bit: 约 0.90, 2bit: 约 0.80
+        if nbits == 4:
+            assert cos_sim > 0.89, f'4bit 余弦相似度 {cos_sim} 过低'
+        else:
+            assert cos_sim > 0.79, f'2bit 余弦相似度 {cos_sim} 过低'
+
+    def test_determinism(self, head_dim):
+        """验证相同输入产生相同输出."""
+        torch.manual_seed(42)
+        x = torch.randn(10, head_dim).cuda()
+
+        # 两次量化应该得到相同结果
+        q1, n1 = quant_turboquant_mse(x, 4)
+        q2, n2 = quant_turboquant_mse(x, 4)
+
+        torch.testing.assert_close(q1, q2)
+        torch.testing.assert_close(n1, n2)
+
+        # 两次反量化应该得到相同结果
+        r1 = dequantize_turboquant_mse(q1, n1, 4)
+        r2 = dequantize_turboquant_mse(q2, n2, 4)
+
+        torch.testing.assert_close(r1, r2)
+        print('  determinism: OK')

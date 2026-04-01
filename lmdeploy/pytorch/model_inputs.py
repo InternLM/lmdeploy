@@ -278,7 +278,7 @@ class StepContext:
     input_multimodals: list[MultiModalData] | None = None
     vision_inputs: VisionModelInputs | None = None
     attn_metadata: Any = None
-    kv_quant_policy: Literal[0, 4, 8] = 0
+    kv_quant_policy: Literal[0, 4, 8, 42] = 0
     model_metas: list[dict[str, Any]] | None = None
     dp_meta: DPMeta | None = None
     enable_microbatch: bool = False
@@ -306,7 +306,7 @@ class StepContext:
         cache_config: CacheConfig,
         kv_caches: list | None = None,
         state_caches: list | None = None,
-        kv_quant_policy: Literal[0, 4, 8] = 0,
+        kv_quant_policy: Literal[0, 4, 8, 42] = 0,
     ):
         """Build step context.
 
@@ -444,7 +444,7 @@ class StepContextManager(CtxMgrBase[StepContext]):
         cache_config: CacheConfig,
         kv_caches: list | None = None,
         state_caches: list | None = None,
-        kv_quant_policy: Literal[0, 4, 8] = 0,
+        kv_quant_policy: Literal[0, 4, 8, 42] = 0,
     ):
         """Build context."""
         return StepContext.new(

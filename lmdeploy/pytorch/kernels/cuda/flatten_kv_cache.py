@@ -6,6 +6,8 @@ import triton
 import triton.language as tl
 from torch import Tensor
 
+from .fill_kv_cache import _get_lloyd_max_codebook
+
 
 @triton.jit
 def _flatten_kv_cache(
@@ -89,6 +91,14 @@ def _dequant_int4(val, HEAD_DIM: tl.constexpr, BLOCK: tl.constexpr):
 
 
 @triton.jit
+def _dequant_int2(val, HEAD_DIM: tl.constexpr, BLOCK: tl.constexpr):
+    quarter = HEAD_DIM // 4
+    group_id = tl.arange(0, BLOCK) // quarter
+    shift = group_id * 2
+    return (val >> shift) & 0x3
+
+
+@triton.jit
 def _flatten_kv_cache_quant(
     kc_ptr,
     vc_ptr,
@@ -96,6 +106,8 @@ def _flatten_kv_cache_quant(
     vo_ptr,
     ksz_ptr,
     vsz_ptr,
+    k_codebook_ptr,
+    v_codebook_ptr,
     start_loc_ptr,
     seqlens_ptr,
     block_offsets_ptr,
@@ -152,6 +164,12 @@ def _flatten_kv_cache_quant(
         HALF_HDV: tl.constexpr = HEAD_DIM_V // 2
         offs_dk = tl.arange(0, BLOCK_DK) % HALF_HDK
         offs_dv = tl.arange(0, BLOCK_DV) % HALF_HDV
+    elif quant_policy == 42:
+        # K is 4-bit (packed 2x), V is 2-bit (packed 4x)
+        HALF_HDK: tl.constexpr = HEAD_DIM_K // 2
+        QUARTER_HDV: tl.constexpr = HEAD_DIM_V // 4
+        offs_dk = tl.arange(0, BLOCK_DK) % HALF_HDK
+        offs_dv = tl.arange(0, BLOCK_DV) % QUARTER_HDV
     else:
         offs_dk = tl.arange(0, BLOCK_DK) % HEAD_DIM_K
         offs_dv = tl.arange(0, BLOCK_DV) % HEAD_DIM_V
@@ -175,20 +193,32 @@ def _flatten_kv_cache_quant(
                offs_dov[None, :] * stride_vod)
 
     kc = tl.load(kc_ptrs)
-    if quant_policy == 4:
+    if quant_policy == 4 or quant_policy == 42:
         kc = _dequant_int4(kc, HEAD_DIM_K, BLOCK_DK)
     ks = tl.load(ksz_ptrs)
-    kz = tl.load(ksz_ptrs + stride_kszd)
-    ksz = ks * kz
-    kq = (kc * ks[:, None] - ksz[:, None]).to(ko_ptr.dtype.element_ty)
+    # For quant_policy==42, K only has norm (scale), no zero
+    if quant_policy == 42:
+        kq = tl.load(k_codebook_ptr + kc.to(tl.int32))
+        kq = (kq * ks[:, None]).to(ko_ptr.dtype.element_ty)
+    else:
+        kz = tl.load(ksz_ptrs + stride_kszd)
+        ksz = ks * kz
+        kq = (kc * ks[:, None] - ksz[:, None]).to(ko_ptr.dtype.element_ty)
     tl.store(ko_ptrs, kq, mask=mask_bs[:, None] & mask_dok[None, :])
     vc = tl.load(vc_ptrs)
-    if quant_policy == 4:
+    if quant_policy == 42:
+        vc = _dequant_int2(vc, HEAD_DIM_V, BLOCK_DV)
+    elif quant_policy == 4:
         vc = _dequant_int4(vc, HEAD_DIM_V, BLOCK_DV)
     vs = tl.load(vsz_ptrs)
-    vz = tl.load(vsz_ptrs + stride_vszd)
-    vsz = vs * vz
-    vq = (vc * vs[:, None] - vsz[:, None]).to(vo_ptr.dtype.element_ty)
+    # For quant_policy==42, V only has norm (scale), no zero
+    if quant_policy == 42:
+        vq = tl.load(v_codebook_ptr + vc.to(tl.int32))
+        vq = (vq * vs[:, None]).to(vo_ptr.dtype.element_ty)
+    else:
+        vz = tl.load(vsz_ptrs + stride_vszd)
+        vsz = vs * vz
+        vq = (vc * vs[:, None] - vsz[:, None]).to(vo_ptr.dtype.element_ty)
     tl.store(vo_ptrs, vq, mask=mask_bs[:, None] & mask_dov[None, :])
 
 
@@ -201,7 +231,7 @@ def flatten_kv_cache(k_caches: Tensor,
                      out_dtype: torch.dtype = None,
                      k_scales_zeros: Tensor = None,
                      v_scales_zeros: Tensor = None,
-                     quant_policy: Literal[0, 4, 8] = 0,
+                     quant_policy: Literal[0, 4, 8, 42] = 0,
                      kv_layout: str = 'bshd',
                      flatten_kv_layout: str = 'hsd'):
     """Recovery paged kv cache to normal kv cache."""
@@ -228,6 +258,9 @@ def flatten_kv_cache(k_caches: Tensor,
     if quant_policy == 4:
         k_head_dim *= 2
         v_head_dim *= 2
+    elif quant_policy == 42:
+        k_head_dim *= 2  # K is 4-bit
+        v_head_dim *= 4  # V is 2-bit
     BLOCK_DK = triton.next_power_of_2(k_head_dim)
     BLOCK_DV = triton.next_power_of_2(v_head_dim)
     BLOCK_BS = k_caches.size(s_dim)
@@ -290,6 +323,12 @@ def flatten_kv_cache(k_caches: Tensor,
             BLOCK_DV=BLOCK_DV,
         )
     else:
+        if quant_policy == 42:
+            k_codebook, _ = _get_lloyd_max_codebook(k_head_dim, bits=4, device=k_caches.device)
+            v_codebook, _ = _get_lloyd_max_codebook(v_head_dim, bits=2, device=v_caches.device)
+        else:
+            k_codebook = torch.empty((1, ), device=k_caches.device, dtype=torch.float32)
+            v_codebook = torch.empty((1, ), device=v_caches.device, dtype=torch.float32)
         _flatten_kv_cache_quant[grid](
             k_caches,
             v_caches,
@@ -297,6 +336,8 @@ def flatten_kv_cache(k_caches: Tensor,
             v_states,
             k_scales_zeros,
             v_scales_zeros,
+            k_codebook,
+            v_codebook,
             start_loc,
             seqlens,
             block_offsets,

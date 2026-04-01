@@ -12,6 +12,7 @@ from torch import Tensor
 
 from lmdeploy.utils import get_logger
 
+from .fill_kv_cache import _get_lloyd_max_codebook, butterfly_rotate, butterfly_rotate_inv
 from .utils import get_device_props
 
 logger = get_logger('lmdeploy')
@@ -226,6 +227,8 @@ def _fwd_grouped_split_quant_kernel(
     v_ptr,
     KScalesZeros,
     VScalesZeros,
+    k_codebook_ptr,
+    v_codebook_ptr,
     sm_scale,
     cache_seqlens_ptr,
     page_table_ptr,
@@ -251,6 +254,7 @@ def _fwd_grouped_split_quant_kernel(
     stride_vszh: tl.constexpr,
     stride_vszd: tl.constexpr,
     quant_policy: tl.constexpr,
+    turbo_quant: tl.constexpr,
     stride_ok: tl.constexpr,
     stride_obs: tl.constexpr,
     stride_oh: tl.constexpr,
@@ -334,21 +338,47 @@ def _fwd_grouped_split_quant_kernel(
     # initialize pointer to m and l
     m_i = tl.zeros([BLOCK_H], dtype=tl.float32) - float('inf')
     l_i = tl.zeros([BLOCK_H], dtype=tl.float32)
-    if quant_policy == 4:
+    if quant_policy == 4 or quant_policy == 42:
+        packed_k_dim: tl.constexpr = head_size // 2
+
+        # K: raw dim -> packed dim (two halves packed into one byte)
+        raw_offs_dk = tl.arange(0, BLOCK_DMODEL)
+        packed_offs_dk = raw_offs_dk % packed_k_dim
+        shift_kd = (raw_offs_dk // packed_k_dim * 4)[:, None]
+        off_k = (cur_kv_head * stride_kh
+                + packed_offs_dk[:, None] * stride_kd
+                + offs_n[None, :] * stride_kbs)
+
         if BLOCK_DMODEL1 != 0:
-            offs_d1 = BLOCK_DMODEL // 2 + tl.arange(0, BLOCK_DMODEL1)
-            shift_k1d = (offs_d1 // (head_size // 2) * 4)[:, None]
-            offs_d1 = offs_d1 % (head_size // 2)
-            off_k1 = (cur_kv_head * stride_kh + offs_d1[:, None] * stride_kd + offs_n[None, :] * stride_kbs)
-        offs_d = tl.arange(0, BLOCK_DMODEL) % (head_size // 2)
-        shift_kd = (tl.arange(0, BLOCK_DMODEL) // (head_size // 2) * 4)[:, None]
-        off_k = (cur_kv_head * stride_kh + offs_d[:, None] * stride_kd + offs_n[None, :] * stride_kbs)
-        offs_dv = tl.arange(0, BLOCK_DV * 2) % head_size_v
-        shift_vd = (tl.arange(0, BLOCK_DV * 2) // head_size_v * 4)
-        off_v = (cur_kv_head * stride_vh + offs_dv[None, :] * stride_vd + offs_n[:, None] * stride_vbs)
-        acc = tl.zeros([BLOCK_H, BLOCK_DV * 2], dtype=tl.float32)  # v head_dim packed
-        mask_dv = tl.arange(0, BLOCK_DV * 2) < (head_size_v * 2)
-        offs_dv = tl.arange(0, BLOCK_DV * 2) % (head_size_v * 2)
+            raw_offs_dk1 = BLOCK_DMODEL + tl.arange(0, BLOCK_DMODEL1)
+            packed_offs_dk1 = raw_offs_dk1 % packed_k_dim
+            shift_k1d = (raw_offs_dk1 // packed_k_dim * 4)[:, None]
+            off_k1 = (cur_kv_head * stride_kh
+                    + packed_offs_dk1[:, None] * stride_kd
+                    + offs_n[None, :] * stride_kbs)
+
+        if quant_policy == 42:
+            # V: packed dim = head_size_v, raw dim = head_size_v * 4
+            raw_offs_dv = tl.arange(0, BLOCK_DV * 4)
+            packed_offs_dv = raw_offs_dv % head_size_v
+            shift_vd = (raw_offs_dv // head_size_v) * 2
+            off_v = (cur_kv_head * stride_vh
+                    + packed_offs_dv[None, :] * stride_vd
+                    + offs_n[:, None] * stride_vbs)
+            mask_dv = raw_offs_dv < (head_size_v * 4)
+            offs_dv = raw_offs_dv
+            acc = tl.zeros([BLOCK_H, BLOCK_DV * 4], dtype=tl.float32)
+        else:
+            # quant_policy == 4, V is 4-bit, packed dim = head_size_v, raw dim = head_size_v * 2
+            raw_offs_dv = tl.arange(0, BLOCK_DV * 2)
+            packed_offs_dv = raw_offs_dv % head_size_v
+            shift_vd = (raw_offs_dv // head_size_v) * 4
+            off_v = (cur_kv_head * stride_vh
+                    + packed_offs_dv[None, :] * stride_vd
+                    + offs_n[:, None] * stride_vbs)
+            mask_dv = raw_offs_dv < (head_size_v * 2)
+            offs_dv = raw_offs_dv
+            acc = tl.zeros([BLOCK_H, BLOCK_DV * 2], dtype=tl.float32)
     else:
         acc = tl.zeros([BLOCK_H, BLOCK_DV], dtype=tl.float32)
 
@@ -373,26 +403,48 @@ def _fwd_grouped_split_quant_kernel(
         # -- compute qk ----
         # k = tl.load(k_ptrs + b_offset * stride_kp)
         k = tl.load(k_ptr + off_k + b_offset * stride_kp)
-        if quant_policy == 4:
+        if quant_policy == 4 or quant_policy == 42:
             k = (k >> shift_kd) & 0x0F
-        ks = tl.load(ksz_ptrs + b_offset * stride_kszp)
-        kz = tl.load(ksz_ptrs + b_offset * stride_kszp + 1)
+
+        if turbo_quant:
+            ks = tl.load(ksz_ptrs + b_offset * stride_kszp)
+            k = tl.load(k_codebook_ptr + k.to(tl.int32))
+            k = (k * ks).to(q.dtype)
+        else:
+            ks = tl.load(ksz_ptrs + b_offset * stride_kszp)
+            kz = tl.load(ksz_ptrs + b_offset * stride_kszp + 1)
+            k = ((k - kz) * ks).to(q.dtype)
+
         if BLOCK_DMODEL1 != 0:
             k1 = tl.load(k_ptr + off_k1 + b_offset * stride_kp)
-            if quant_policy == 4:
+            if quant_policy == 4 or quant_policy == 42:
                 k1 = (k1 >> shift_k1d) & 0x0F
-            k1 = ((k1 - kz) * ks).to(q.dtype)
+            if turbo_quant:
+                k1 = tl.load(k_codebook_ptr + k1.to(tl.int32))
+                k1 = (k1 * ks).to(q.dtype)
+            else:
+                k1 = ((k1 - kz) * ks).to(q.dtype)
 
-        if quant_policy == 4:
+        # -- load / dequant v ----
+        if quant_policy == 42:
             v = tl.load(v_ptr + off_v + b_offset * stride_vp)
-            v = (v >> shift_vd) & 0x0F
+            v = (v >> shift_vd[None, :]) & 0x03
+        elif quant_policy == 4:
+            v = tl.load(v_ptr + off_v + b_offset * stride_vp)
+            v = (v >> shift_vd[None, :]) & 0x0F
         else:
             v = tl.load(v_ptr + off_v + b_offset * stride_vp)
-        vs = tl.load(vsz_ptrs + b_offset * stride_vszp)
-        vz = tl.load(vsz_ptrs + b_offset * stride_vszp + 1)
 
-        k = ((k - kz) * ks).to(q.dtype)
-        v = ((v - vz) * vs).to(q.dtype)
+        if turbo_quant:
+            vs = tl.load(vsz_ptrs + b_offset * stride_vszp)
+            v = tl.load(v_codebook_ptr + v.to(tl.int32))
+            v = (v * vs).to(q.dtype)
+        else:
+            vs = tl.load(vsz_ptrs + b_offset * stride_vszp)
+            vz = tl.load(vsz_ptrs + b_offset * stride_vszp + 1)
+            v = ((v - vz) * vs).to(q.dtype)
+
+        # -- compute qk ----
         qk = tl.zeros([BLOCK_H, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
         if BLOCK_DMODEL1 != 0:
@@ -444,6 +496,8 @@ def _fwd_grouped_split_quant_kernel(
 
     if quant_policy == 4:
         off_meta = (cur_batch * stride_obs + split_k_id * stride_ok + cur_head * stride_oh + head_size_v * 2)
+    elif quant_policy == 42:
+        off_meta = (cur_batch * stride_obs + split_k_id * stride_ok + cur_head * stride_oh + head_size_v * 4)
     else:
         off_meta = (cur_batch * stride_obs + split_k_id * stride_ok + cur_head * stride_oh + head_size_v)
     tl.store(acc_out_ptr + off_meta, m_i, mask=mask_h)
@@ -568,7 +622,7 @@ def flash_attn_with_kvcache(
     alibi_slopes: Tensor = None,
     k_scales_zeros: Tensor = None,
     v_scales_zeros: Tensor = None,
-    quant_policy: Literal[0, 4, 8] = 0,
+    quant_policy: Literal[0, 4, 8, 42] = 0,
     sinks: Tensor = None,
     kv_layout: str = 'bshd',
 ):
@@ -608,14 +662,46 @@ def flash_attn_with_kvcache(
         BLOCK_DV = triton.next_power_of_2(Lv)
         return BLOCK_DMODEL, BLOCK_DMODEL1, BLOCK_DV
 
+    turbo_quant = False
+    turbo_k_codebook = None
+    turbo_v_codebook = None
+    orig_q_dtype = q.dtype
+
     # shape constraints
     Lq, Lk, Lv = q.shape[-1], k_cache.shape[d_dim], v_cache.shape[d_dim]
-    if quant_policy == 4:
+    if quant_policy == 4 or quant_policy == 42:
+        # K uses 4-bit: Lq == Lk * 2
+        # For quant_policy==42, V uses 2-bit: raw V dim == Lv * 4
         assert Lq == Lk * 2
-        o = q.new_empty(q.shape[:-1] + (Lv * 2, ))
+        if quant_policy == 42:
+            o = q.new_empty(q.shape[:-1] + (Lv * 4, ))
+        else:
+            o = q.new_empty(q.shape[:-1] + (Lv * 2, ))
     else:
         assert Lq == Lk
         o = q.new_empty(q.shape[:-1] + (Lv, ))
+
+    # quant_policy == 42: interpret as
+    #   - K: 4bit FWHT TurboQuant
+    #   - V: 2bit FWHT TurboQuant
+    # Minimal-change implementation:
+    #   - q rotated outside Triton
+    #   - k/v dequant by codebook * norm inside Triton
+    #   - output inverse-rotated outside Triton
+    if quant_policy == 42:
+        turbo_quant = True
+        real_k_dim = Lq
+        real_v_dim = Lv * 4
+        if real_k_dim & (real_k_dim - 1) != 0:
+            raise ValueError(f'TurboQuant requires power-of-2 K/Q head dim, got {real_k_dim}')
+        if real_v_dim & (real_v_dim - 1) != 0:
+            raise ValueError(f'TurboQuant requires power-of-2 V head dim, got {real_v_dim}')
+
+        turbo_k_codebook, _ = _get_lloyd_max_codebook(real_k_dim, bits=4, device=q.device)
+        turbo_v_codebook, _ = _get_lloyd_max_codebook(real_v_dim, bits=2, device=q.device)
+
+        # rotate query into the same domain as quantized K/V
+        q = butterfly_rotate(q.float()).to(orig_q_dtype)
 
     if softmax_scale is None:
         softmax_scale = 1.0 / (Lq**0.5)
@@ -656,10 +742,10 @@ def flash_attn_with_kvcache(
 
     SPLIT_K = _get_split_k(q.device.index, grid_1, batch, num_warps)
 
-    if quant_policy != 4:
-        acc = q.new_empty(num_tokens, head, SPLIT_K, Lv + 2, dtype=torch.float32)
-    else:
+    if quant_policy == 4 or quant_policy == 42:
         acc = q.new_empty(num_tokens, head, SPLIT_K, o.shape[-1] + 2, dtype=torch.float32)
+    else:
+        acc = q.new_empty(num_tokens, head, SPLIT_K, Lv + 2, dtype=torch.float32)
 
     grid = (
         grid_1,
@@ -668,11 +754,17 @@ def flash_attn_with_kvcache(
     )
 
     if quant_policy > 0:
+        # For turbo_quant=True (currently quant_policy==42), k_scales_zeros/v_scales_zeros
+        # are interpreted minimally as:
+        #   [..., 0] = norm
+        #   [..., 1] = unused
         _fwd_grouped_split_quant_kernel[grid](q,
                                               k_cache,
                                               v_cache,
                                               k_scales_zeros,
                                               v_scales_zeros,
+                                              turbo_k_codebook,
+                                              turbo_v_codebook,
                                               softmax_scale,
                                               cache_seqlens,
                                               page_table,
@@ -698,6 +790,7 @@ def flash_attn_with_kvcache(
                                               stride_vszh=v_scales_zeros.stride(h_dim),
                                               stride_vszd=v_scales_zeros.stride(d_dim),
                                               quant_policy=quant_policy,
+                                              turbo_quant=turbo_quant,
                                               stride_ok=acc.stride(-2),
                                               stride_obs=acc.stride(-4),
                                               stride_oh=acc.stride(-3),
@@ -765,6 +858,9 @@ def flash_attn_with_kvcache(
     if quant_policy == 4:
         Lv *= 2
         BLOCK_DV *= 2
+    elif quant_policy == 42:
+        Lv *= 4
+        BLOCK_DV *= 4
     _reduce_split_kernel[grid](acc,
                                o,
                                sinks,
@@ -780,4 +876,8 @@ def flash_attn_with_kvcache(
                                BLOCK_DV=BLOCK_DV,
                                num_warps=num_warps,
                                num_stages=1)
+
+    if quant_policy == 42:
+        o = butterfly_rotate_inv(o.float()).to(orig_q_dtype)
+
     return o

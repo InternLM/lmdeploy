@@ -298,7 +298,7 @@ class TurbomindEngineConfig:
         assert self.dtype in ['auto', 'float16', 'bfloat16']
         assert self.tp >= 1, 'tp must be a positive integer'
         assert self.cache_max_entry_count > 0, 'invalid cache_max_entry_count'
-        assert self.quant_policy in (0, 4, 8), 'invalid quant_policy'
+        assert self.quant_policy in (0, 4, 8, 42), 'invalid quant_policy'
         assert self.rope_scaling_factor >= 0, 'invalid rope_scaling_factor'
         assert self.max_prefill_token_num >= 0, \
             'invalid max_prefill_token_num'
@@ -403,7 +403,7 @@ class PytorchEngineConfig:
     custom_module_map: dict[str, str] = None
     download_dir: str = None
     revision: str = None
-    quant_policy: Literal[0, 4, 8] = 0
+    quant_policy: Literal[0, 4, 8, 42] = 0
     distributed_executor_backend: str = None
     empty_init: bool = False
     enable_microbatch: bool = False
@@ -440,7 +440,7 @@ class PytorchEngineConfig:
         assert self.max_prefill_token_num >= 0, \
             'invalid max_prefill_token_num'
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
-        assert self.quant_policy in (0, 4, 8), 'invalid quant_policy'
+        assert self.quant_policy in (0, 4, 8, 42), 'invalid quant_policy'
         assert self.device_type in ['cuda', 'ascend', 'maca', 'camb'], (f'invalid device_type: {self.device_type}')
         assert self.block_size >= 16 and (self.block_size & (self.block_size - 1)) == 0, \
             f'block_size must be >= 16 and a power of 2, but got {self.block_size}'
