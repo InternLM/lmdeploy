@@ -183,6 +183,23 @@ class Qwen3CoderToolParser(ToolParser):
         is_func_closed = self.func_end_token in content
         return func_name, args_dict, is_func_closed
 
+    def detect_tool_start_tag(
+        self,
+        delta_text: str,
+        delta_token_ids: Sequence[int],
+        *,
+        stream_buffer: StreamBuffer,
+        request: ChatCompletionRequest,
+    ) -> int | None:
+        """Return index in ``delta_text`` where ``<tool_call>`` starts."""
+        text = stream_buffer.current_text
+        start_idx = text.rfind(self.tool_start_token)
+        end_idx = text.rfind(self.tool_end_token)
+        if start_idx >= 0 and end_idx < start_idx:
+            return 0
+        idx = delta_text.find(self.tool_start_token)
+        return idx if idx >= 0 else None
+
     def extract_tool_calls_streaming(
         self,
         delta_text: str,

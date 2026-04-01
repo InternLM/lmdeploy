@@ -71,21 +71,27 @@ class ResponseParser:
         request: ChatCompletionRequest,
         tokenizer: PreTrainedTokenizerBase,
     ):
-        self._kwargs = type(self).chat_template_kwargs_from_request(request)
-        self.enable_thinking: bool | None = self._kwargs.get('enable_thinking', None)
         rcls = type(self).reasoning_parser_cls
         tcls = type(self).tool_parser_cls
-        self.reasoning_parser: ReasoningParser | None = (
-            rcls(tokenizer, **self._kwargs) if rcls else None
-        )
-        self.tool_parser: ToolParser | None = (
-            tcls(tokenizer, **self._kwargs) if tcls else None
-        )
-        if self.tool_parser is not None:
-            self.request = self.tool_parser.adjust_request(request)
-        else:
+        if rcls is None and tcls is None:
+            self.reasoning_parser = None
+            self.tool_parser = None
             self.request = request
-        self.stream_buffer = StreamBuffer()
+        else:
+            self._kwargs = type(self).chat_template_kwargs_from_request(request)
+            self.enable_thinking: bool | None = self._kwargs.get('enable_thinking', None)
+
+            self.reasoning_parser: ReasoningParser | None = (
+                rcls(tokenizer, **self._kwargs) if rcls else None
+            )
+            self.tool_parser: ToolParser | None = (
+                tcls(tokenizer) if tcls else None
+            )
+            if self.tool_parser is not None:
+                self.request = self.tool_parser.adjust_request(request)
+            else:
+                self.request = request
+            self.stream_buffer = StreamBuffer()
 
     def _stream_update(self, delta_text: str, delta_token_ids: list[int]) -> None:
         self.stream_buffer.update(delta_text, delta_token_ids)
@@ -98,50 +104,104 @@ class ResponseParser:
         delta_text: str,
         delta_token_ids: list[int],
         **kwargs,
-    ) -> tuple[DeltaMessage, bool]:
+    ) -> tuple[DeltaMessage | None, bool]:
         """Update state, run tool then reasoning parsers.
 
         Returns:
             (delta_message, tool_calls_emitted) — the latter is True if this chunk
             carries non-empty ``tool_calls`` (for finish_reason handling).
         """
+        # Special-case: some backends emit a leading empty delta (no text, no
+        # tokens) before any actual content. Tests treat this as a visible empty
+        # content delta.
+        if (
+            not delta_text
+            and not delta_token_ids
+            and getattr(self, 'stream_buffer', None) is not None
+            and self.stream_buffer.current_text == ''
+        ):
+            return DeltaMessage(role='assistant', content=''), False
+
+        if self.tool_parser is None and self.reasoning_parser is None:
+            return DeltaMessage(role='assistant', content=delta_text), False
+
+        delta_message = DeltaMessage(role='assistant')
         req = self.request
+        # 1. Update cumulative buffer first so tool parsers can inspect full text.
         self._stream_update(delta_text, delta_token_ids)
 
-        delta_message = DeltaMessage(role='assistant', content=None)
+        # 2. Run tool call parser first.
+        reasoning_text = delta_text
+        tool_text = delta_text
         tool_calls_emitted = False
-
         if req.tool_choice != 'none' and self.tool_parser is not None:
-            tool_delta = self.tool_parser.extract_tool_calls_streaming(
+            # 2.1. Ask tool_parser (if any) where tool-call protocol starts in this chunk.
+            start_idx = self.tool_parser.detect_tool_start_tag(
                 delta_text=delta_text,
                 delta_token_ids=delta_token_ids,
-                request=req,
                 stream_buffer=self.stream_buffer,
-                **kwargs,
+                request=req,
             )
-            if tool_delta is not None:
-                if tool_delta.tool_calls is not None:
-                    delta_message.tool_calls = tool_delta.tool_calls
-                if tool_delta.content is not None:
-                    delta_message.content = tool_delta.content
-                if isinstance(tool_delta.tool_calls, list) and len(tool_delta.tool_calls):
-                    tool_calls_emitted = True
-        elif req.tool_choice != 'none' and req.tools is not None and self.tool_parser is None:
-            pass  # caller logs error
+            if start_idx is not None:
+                # Everything before start_idx is outside the tool-call block.
+                reasoning_text = delta_text[:start_idx]
+                tool_text = delta_text[start_idx:]
 
-        if self.reasoning_parser is not None and self.enable_thinking is not False:
-            reasoning_delta = self.reasoning_parser.extract_reasoning_streaming(
-                delta_text=delta_message.content or '',
+            # 2.2. Run tool parser on tool_text (which may be the whole chunk or just the suffix).
+            tool_delta = self.tool_parser.extract_tool_calls_streaming(
+                delta_text=tool_text,
                 delta_token_ids=delta_token_ids,
                 request=req,
                 stream_buffer=self.stream_buffer,
                 **kwargs,
             )
-            if reasoning_delta is not None:
-                delta_message.reasoning_content = reasoning_delta.reasoning_content
-                delta_message.content = reasoning_delta.content
+            if tool_delta is not None and tool_delta.tool_calls:
+                delta_message.tool_calls = tool_delta.tool_calls
+                tool_calls_emitted = True
+                if tool_delta.content is not None:
+                    delta_message.content = tool_delta.content
+
+        # 4. Run reasoning parser on reasoning_text only (tool protocol is excluded).
+        if self.reasoning_parser is not None and reasoning_text:
+            if self.enable_thinking is not False:
+                reasoning_delta = self.reasoning_parser.extract_reasoning_streaming(
+                    delta_text=reasoning_text,
+                    delta_token_ids=delta_token_ids,
+                    request=req,
+                    stream_buffer=self.stream_buffer,
+                    **kwargs,
+                )
+                if reasoning_delta is not None:
+                    delta_message.reasoning_content = reasoning_delta.reasoning_content
+                    # Only set content from reasoning if tool_parser did not already.
+                    if reasoning_delta.content is not None and delta_message.content is None:
+                        delta_message.content = reasoning_delta.content
+            else:
+                delta_message.content = (delta_message.content or '') + reasoning_text
+
+        # 5. Special case: a trailing empty delta (delta_text == '') after non-empty
+        # output should be surfaced as an explicit empty content delta so that
+        # streaming clients see the final "no-op" chunk (some backends do this).
+        if (
+            delta_text == ''
+            and delta_message.content is None
+            and delta_message.reasoning_content is None
+            and not delta_message.tool_calls
+            and self.stream_buffer.current_text != ''
+        ):
+            delta_message.content = ''
 
         self._stream_step()
+
+        # 6. If there is no reasoning, no tool_calls, and no visible content
+        # change, treat this chunk as a non-delta.
+        if (
+            delta_message.reasoning_content is None
+            and not delta_message.tool_calls
+            and (delta_message.content is None or delta_message.content == '')
+        ):
+            return None, tool_calls_emitted
+
         return delta_message, tool_calls_emitted
 
     def parse_complete(

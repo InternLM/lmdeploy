@@ -30,6 +30,14 @@ class ToolParser:
 
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         """Static method that used to adjust the request parameters."""
+        if request.tools is not None and request.tool_choice != 'none':
+            if not isinstance(request.tool_choice, str):
+                request.tools = [
+                    item.function.model_dump() for item in request.tools
+                    if item.function.name == request.tool_choice.function.name
+                ]
+            else:
+                request.tools = [item.function.model_dump() for item in request.tools]
         return request
 
     def extract_tool_calls(self, model_output: str, request: ChatCompletionRequest) -> ExtractedToolCallInformation:
@@ -67,3 +75,19 @@ class ToolParser:
         """
         raise NotImplementedError('AbstractToolParser.extract_tool_calls_streaming has not been '
                                   'implemented!')
+
+    def detect_tool_start_tag(
+        self,
+        delta_text: str,
+        delta_token_ids: Sequence[int],
+        *,
+        stream_buffer: StreamBuffer,
+        request: ChatCompletionRequest,
+    ) -> int | None:
+        """Optional hint for where tool-call protocol starts in *delta_text*.
+
+        Default implementation returns None, meaning "no tool start detected in this chunk". Concrete parsers can
+        override this to let ResponseParser know where to split reasoning vs tool content without hard-coding any
+        protocol details here.
+        """
+        return None

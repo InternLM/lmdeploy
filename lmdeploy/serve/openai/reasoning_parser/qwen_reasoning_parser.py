@@ -35,7 +35,6 @@ class QwenReasoningParser(ThinkingReasoningParser):
         **kwargs,
     ) -> DeltaMessage | None:
         previous_token_ids = stream_buffer.previous_token_ids
-
         # Strip <think> from delta if present (old template / edge case where the model generates <think> itself).
         if self.start_token_id in delta_token_ids:
             start_idx = delta_text.find(self.start_token)

@@ -68,6 +68,26 @@ class Llama3JsonToolParser(ToolParser):
             # return information to just treat the tool call as regular JSON
             return ExtractedToolCallInformation(tools_called=False, tool_calls=[], content=model_output)
 
+    def detect_tool_start_tag(
+        self,
+        delta_text: str,
+        delta_token_ids: Sequence[int],
+        *,
+        stream_buffer: StreamBuffer,
+        request: ChatCompletionRequest,
+    ) -> int | None:
+        """Return index where Llama3 tool-call JSON protocol starts."""
+        if stream_buffer.previous_text.startswith(self.bot_token) or stream_buffer.previous_text.startswith('{'):
+            return 0
+        idx = delta_text.find(self.bot_token)
+        if idx >= 0:
+            return idx
+        # Llama may emit raw JSON without the python tag.
+        # Keep this conservative to avoid splitting ordinary prose with braces.
+        if stream_buffer.previous_text == '' and delta_text.startswith('{'):
+            return 0
+        return None
+
     def extract_tool_calls_streaming(
         self,
         delta_text: str,

@@ -106,9 +106,8 @@ class GptOssReasoningParser(ReasoningParser):
     """Reasoning / channel parser for OpenAI Harmony GPT-OSS wire format (token
     stream).
 
-    Use ``--reasoning-parser gpt-oss`` when serving GPT-OSS models. When the engine
-    architecture is ``GptOssForCausalLM``, the API server also enables this parser
-    automatically even if the flag is omitted.
+    Use ``--reasoning-parser gpt-oss`` when serving models that emit OpenAI Harmony
+    GPT-OSS token streams.
     """
 
     def __init__(self, tokenizer: object, **kwargs):

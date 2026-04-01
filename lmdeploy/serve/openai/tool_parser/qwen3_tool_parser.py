@@ -37,13 +37,15 @@ class Qwen3ToolParser(ToolParser):
         super().__init__(tokenizer)
         self.tool_start_token = '<tool_call>'
         self.tool_end_token = '</tool_call>'
-        self.tool_call_pat = re.compile(r'\n*<tool_call>(.*?)</tool_call>', re.DOTALL)
+        self.tool_call_pattern = re.compile(r'\n*<tool_call>(.*?)</tool_call>', re.DOTALL)
         self.parse_cursor = 0
         self.qwen_tool_serial_index = -1
         self.qwen_active_tool_call_id = ''
         self.current_tool_name_sent = False
         self.prev_tool_call_arr: list[dict] = []
         self.streamed_args_for_tool: list[str] = []
+        # True when we are between <tool_call> and </tool_call> in the accumulated output.
+        self.in_tool_block: bool = False
 
     def get_argments(self, obj):
         """Extract arguments from tool call object, handling different formats.
@@ -66,18 +68,39 @@ class Qwen3ToolParser(ToolParser):
             start_idx = parsing_content.index(self.tool_start_token)
             self.parse_cursor += start_idx
         except ValueError:
+            # No new <tool_call> in this slice.
             self.parse_cursor += len(parsing_content)
             return parsing_content, '', False
         try:
             end_idx = parsing_content.index(self.tool_end_token)
         except ValueError:
+            # Saw a start tag but not an end tag: enter tool block.
+            self.in_tool_block = True
             return parsing_content[:start_idx], '', False
+        # Completed a full <tool_call>...</tool_call> block in this slice.
         self.parse_cursor += (end_idx - start_idx) + len(self.tool_end_token)
+        self.in_tool_block = False
         return (
             parsing_content[:start_idx],
             parsing_content[start_idx + len(self.tool_start_token):end_idx],
             True,
         )
+
+    def detect_tool_start_tag(
+        self,
+        delta_text: str,
+        delta_token_ids: Sequence[int],
+        *,
+        stream_buffer: StreamBuffer,
+        request: ChatCompletionRequest,
+    ) -> int | None:
+        """Return index in delta_text where <tool_call> starts, if present.
+
+        This is used by ResponseParser to split the chunk into reasoning vs tool-call portions without hard-coding
+        protocol details there.
+        """
+        idx = delta_text.find(self.tool_start_token)
+        return idx if idx >= 0 else None
 
     def extract_tool_calls_streaming(
         self,
@@ -180,7 +203,7 @@ class Qwen3ToolParser(ToolParser):
         buf = []
         scan_pos = 0
         tool_calls = []
-        for idx, match in enumerate(self.tool_call_pat.finditer(text)):
+        for idx, match in enumerate(self.tool_call_pattern.finditer(text)):
             buf.append(text[scan_pos:match.start()])
             scan_pos = match.end()
             action = json.loads(match.group(1))

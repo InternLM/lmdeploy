@@ -364,7 +364,7 @@ class TestQwen3ToolStreamingParser:
         for response in responses:
             delta_message: DeltaMessage = response.choices[0].delta
             print(f'delta_message: {delta_message}')
-            assert delta_message.tool_calls is None
+            assert not delta_message.tool_calls
         # Should not parse tool call since it's incomplete
 
 
