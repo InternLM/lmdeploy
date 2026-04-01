@@ -1,7 +1,7 @@
 import pytest
 
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaToolCall
-from lmdeploy.serve.openai.reasoning_parser.qwen_reasoning_parser import QwenReasoningParser
+from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParser
 from lmdeploy.serve.openai.response_parser import ResponseParser
 from lmdeploy.serve.openai.tool_parser.qwen3coder_tool_parser import Qwen3CoderToolParser
 from lmdeploy.tokenizer import HuggingFaceTokenizer
@@ -19,8 +19,8 @@ def tokenizer():
 
 @pytest.fixture()
 def response_parser(tokenizer):
-    # Configure ResponseParser to use Qwen3 reasoning parser and Qwen3.5 Coder tool parser.
-    ResponseParser.reasoning_parser_cls = QwenReasoningParser
+    # Configure ResponseParser to use unified reasoning parser and Qwen3.5 Coder tool parser.
+    ResponseParser.reasoning_parser_cls = ReasoningParser
     ResponseParser.tool_parser_cls = Qwen3CoderToolParser
 
     request = ChatCompletionRequest(

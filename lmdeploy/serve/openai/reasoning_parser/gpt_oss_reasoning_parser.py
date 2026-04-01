@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# Modified from https://github.com/vllm-project/vllm/blob/v0.10.2rc1/vllm/entrypoints/harmony_utils.py
 from __future__ import annotations
 
 import shortuuid
@@ -31,8 +30,7 @@ def get_streamable_parser_for_assistant() -> StreamableParser:
 
 
 class GptOssChatParser:
-    """Harmony stream parser for GPT-OSS (assistant role): content, reasoning,
-    tool calls."""
+    """Harmony stream parser for GPT-OSS (assistant role)."""
 
     def __init__(self):
         self.parser = get_streamable_parser_for_assistant()
@@ -68,13 +66,7 @@ class GptOssChatParser:
                                                     index=base_index,
                                                     function=DeltaFunctionCall(name=tool_name, arguments=''))
                 elif delta_text:
-                    # Continuing the same tool call. Ensure we don't duplicate the
-                    # very first delta string in this chunk. Previously we initialized
-                    # with arguments=delta_text and then appended again, causing
-                    # duplicated content like "locationlocation".
                     if delta_tool_call is None:
-                        # We are in the middle of a tool call carried over from the
-                        # previous chunk. Initialize an empty arguments buffer.
                         delta_tool_call = DeltaToolCall(index=base_index, function=DeltaFunctionCall(arguments=''))
                     delta_tool_call.function.arguments += delta_text
 
@@ -101,25 +93,16 @@ class GptOssChatParser:
 
 @ReasoningParserManager.register_module('gpt-oss')
 class GptOssReasoningParser(ReasoningParser):
-    """Reasoning / channel parser for OpenAI Harmony GPT-OSS wire format (token
-    stream).
-
-    Use ``--reasoning-parser gpt-oss`` when serving models that emit OpenAI Harmony
-    GPT-OSS token streams.
-    """
+    """Reasoning / channel parser for OpenAI Harmony GPT-OSS wire format."""
 
     def __init__(self, tokenizer: object, **kwargs):
         super().__init__(tokenizer, **kwargs)
         self._chat = GptOssChatParser()
 
     def parse_streaming(self, tokens: list[int]) -> DeltaMessage:
-        """Parse one engine chunk of token ids into a
-        :class:`~lmdeploy.serve.openai.protocol.DeltaMessage`."""
         return self._chat.parse_streaming(tokens)
 
     def parse_full(self, tokens: list[int]) -> ChatMessage:
-        """Parse the full completion token sequence into a
-        :class:`~lmdeploy.serve.openai.protocol.ChatMessage`."""
         return self._chat.parse_full(tokens)
 
     def get_reasoning_open_tag(self) -> str | None:

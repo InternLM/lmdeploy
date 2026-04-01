@@ -2,7 +2,7 @@
 """Unified profile-driven streaming parser for reasoning/content/tool calls."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar
 
 from transformers import PreTrainedTokenizerBase
@@ -20,25 +20,6 @@ if TYPE_CHECKING:
     from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParser
 
 logger = get_logger(__name__)
-
-
-@dataclass
-class StreamBuffer:
-    """Cumulative decode snapshot (``ResponseParser.stream_buffer``); also
-    passed as ``stream_buffer=``."""
-
-    previous_text: str = ''
-    current_text: str = ''
-    previous_token_ids: list[int] = field(default_factory=list)
-    current_token_ids: list[int] = field(default_factory=list)
-
-    def update(self, delta_text: str, delta_token_ids: list[int]) -> None:
-        self.current_text += delta_text
-        self.current_token_ids.extend(delta_token_ids)
-
-    def step(self) -> None:
-        self.previous_text = self.current_text
-        self.previous_token_ids = self.current_token_ids
 
 
 @dataclass
@@ -114,7 +95,7 @@ class ResponseParser:
             self.request = self.tool_parser.adjust_request(request)
         else:
             self.request = request
-        self.stream_buffer = StreamBuffer()
+        self._accumulated_text = ''
 
         self.profile = self._build_profile()
         if (self.reasoning_parser is not None and self.enable_thinking is not False
@@ -124,12 +105,6 @@ class ResponseParser:
             self._mode = self.MODE_PLAIN
         self._pending = ''
         self._queued_deltas: list[_QueuedDelta] = []
-
-    def _stream_update(self, delta_text: str, delta_token_ids: list[int]) -> None:
-        self.stream_buffer.update(delta_text, delta_token_ids)
-
-    def _stream_step(self) -> None:
-        self.stream_buffer.step()
 
     def stream_chunk(
         self,
@@ -155,15 +130,14 @@ class ResponseParser:
         if (
             not delta_text
             and not delta_token_ids
-            and getattr(self, 'stream_buffer', None) is not None
-            and self.stream_buffer.current_text == ''
+            and self._accumulated_text == ''
         ):
             return DeltaMessage(role='assistant', content=''), False
 
         if self.tool_parser is None and self.reasoning_parser is None:
             return DeltaMessage(role='assistant', content=delta_text), False
 
-        self._stream_update(delta_text, delta_token_ids)
+        self._accumulated_text += delta_text
         self._pending += delta_text
         produced_any = False
 
@@ -200,11 +174,9 @@ class ResponseParser:
         if (
             delta_text == ''
             and not produced_any
-            and self.stream_buffer.current_text != ''
+            and self._accumulated_text != ''
         ):
             self._queued_deltas.append(_QueuedDelta(DeltaMessage(role='assistant', content=''), False))
-
-        self._stream_step()
         if not self._queued_deltas:
             return None, False
         queued = self._queued_deltas.pop(0)
