@@ -32,7 +32,7 @@ on:
         required: true
         description: 'result_tag if is not none, benchmark results will be uploaded to feishu'
         type: string
-        default: ""
+        default: "default"
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
@@ -202,8 +202,13 @@ jobs:
         if: contains(fromJson(github.event.inputs.backend), 'pytorch') && !contains(fromJson(github.event.inputs.backend), 'turbomind')
         run: |
             pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n ${{matrix.n}} -m '${{matrix.gpu_num}} and not pr_test and not function and pytorch' --alluredir=${{env.ALLURE_REPORT_DIR}}
+      - name: Generate result
+        if: always()
+        run: |
+            cd /nvme/qa_test_models/feishu_upload
+            python3 test_benchmark.py --root ${{env.REPORT_DIR}} --output ${{env.REPORT_DIR}}/${{inputs.result_tag}}.txt --hardware A100 --infer-version ${{inputs.result_tag}}
       - name: Async result
-        if: always() && inputs.result_tag != ''
+        if: always() && inputs.result_tag != 'default'
         env:
           FEISHU_APP_ID: ${{secrets.FEISHU_APP_ID}}
           FEISHU_APP_SECRET: ${{secrets.FEISHU_APP_SECRET}}
@@ -211,8 +216,7 @@ jobs:
           FEISHU_TABLE_ID: ${{secrets.BENCHMARK_FEISHU_TABLE_ID}}
         run: |
             cd /nvme/qa_test_models/feishu_upload
-            python3 test_benchmark.py --root ${{env.REPORT_DIR}} --output ${{inputs.result_tag}}.txt --hardware A100 --infer-version ${{inputs.result_tag}}
-            python3 main.py --skip-duplicates ${{inputs.result_tag}}.txt --config config-benchmark.py
+            python3 main.py --skip-duplicates ${{env.REPORT_DIR}}/${{inputs.result_tag}}.txt --config config-benchmark.py
       - name: Clear workfile
         if: always()
         run: |
