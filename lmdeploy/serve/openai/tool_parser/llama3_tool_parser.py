@@ -44,6 +44,15 @@ class Llama3JsonToolParser(ToolParser):
         self.bot_token_id = tokenizer.encode(self.bot_token, add_special_tokens=False)[0]
         self.tool_call_regex = re.compile(r'\[{.*?}\]', re.DOTALL)
 
+    def get_tool_open_tag(self) -> str | None:
+        return self.bot_token
+
+    def get_tool_close_tag(self) -> str | None:
+        return None
+
+    def get_tool_payload_format(self) -> str:
+        return 'json'
+
     def extract_tool_calls(self, model_output: str, request: ChatCompletionRequest) -> ExtractedToolCallInformation:
         """Extract the tool calls from a complete model response."""
         try:

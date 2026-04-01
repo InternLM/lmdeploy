@@ -46,6 +46,15 @@ class Qwen2d5ToolParser(ToolParser):
             return obj.get('arguments')
         return None
 
+    def get_tool_open_tag(self) -> str | None:
+        return self.tool_start_token
+
+    def get_tool_close_tag(self) -> str | None:
+        return self.tool_end_token
+
+    def get_tool_payload_format(self) -> str:
+        return 'json'
+
     def detect_tool_start_tag(
         self,
         delta_text: str,

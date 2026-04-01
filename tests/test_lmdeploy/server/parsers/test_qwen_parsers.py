@@ -206,3 +206,44 @@ class TestQwenResponseParserStreaming:
                 assert call.function is not None
                 assert call.function.name == exp_function_name
                 assert call.function.arguments == exp_function_arguments
+
+    def test_stream_chunk_handles_mixed_reasoning_content_tool(self, tokenizer, response_parser):
+        """A single delta may contain reasoning/content/tool segments together.
+
+        This test covers chunk shapes:
+        1) ``<think>``
+        2) ``<think> Let me think ``
+        3) ``The answer is 9 </think> OK. The``
+        4) ``fine. </think> \\n\\n <tool_call> ``
+        """
+
+        def _call(delta_text: str):
+            ids = self._encode_ids(tokenizer, delta_text)
+            return response_parser.stream_chunk(delta_text=delta_text, delta_token_ids=ids)
+
+        # 1) tag-only chunk should be swallowed
+        delta_msg, tool_emitted = _call('<think>')
+        assert delta_msg is None
+        assert tool_emitted is False
+
+        # 2) open-think plus reasoning text should emit only reasoning
+        delta_msg, tool_emitted = _call('<think> Let me think ')
+        assert delta_msg is not None
+        assert delta_msg.reasoning_content == ' Let me think '
+        assert delta_msg.content is None
+        assert tool_emitted is False
+
+        # 3) chunk carries reasoning end + normal content
+        delta_msg, tool_emitted = _call('The answer is 9 </think> OK. The')
+        assert delta_msg is not None
+        assert delta_msg.reasoning_content == 'The answer is 9 '
+        assert delta_msg.content == ' OK. The'
+        assert tool_emitted is False
+
+        # 4) chunk carries stray think-close + content + tool-open
+        delta_msg, tool_emitted = _call('fine. </think> \n\n <tool_call> ')
+        assert delta_msg is not None
+        # Stray closing tag after reasoning has ended is treated as plain content.
+        assert delta_msg.reasoning_content is None
+        assert delta_msg.content == 'fine. </think> \n\n '
+        assert tool_emitted is False

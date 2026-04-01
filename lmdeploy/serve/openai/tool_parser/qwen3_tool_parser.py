@@ -58,6 +58,15 @@ class Qwen3ToolParser(ToolParser):
             return obj.get('arguments')
         return None
 
+    def get_tool_open_tag(self) -> str | None:
+        return self.tool_start_token
+
+    def get_tool_close_tag(self) -> str | None:
+        return self.tool_end_token
+
+    def get_tool_payload_format(self) -> str:
+        return 'json'
+
     def _split(self, parsing_content: str):
         """Split content into tuple: (text_content, tool_content, has_tool_end)
 

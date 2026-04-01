@@ -91,3 +91,15 @@ class ToolParser:
         protocol details here.
         """
         return None
+
+    def get_tool_open_tag(self) -> str | None:
+        """Return tool opening tag string, or None if unsupported."""
+        raise NotImplementedError('ToolParser.get_tool_open_tag has not been implemented!')
+
+    def get_tool_close_tag(self) -> str | None:
+        """Return tool closing tag string, or None if unsupported."""
+        raise NotImplementedError('ToolParser.get_tool_close_tag has not been implemented!')
+
+    def get_tool_payload_format(self) -> str:
+        """Return payload format for tool call body."""
+        raise NotImplementedError('ToolParser.get_tool_payload_format has not been implemented!')

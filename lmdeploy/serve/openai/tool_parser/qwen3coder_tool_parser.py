@@ -104,6 +104,15 @@ class Qwen3CoderToolParser(ToolParser):
 
         return normalized_messages
 
+    def get_tool_open_tag(self) -> str | None:
+        return self.tool_start_token
+
+    def get_tool_close_tag(self) -> str | None:
+        return self.tool_end_token
+
+    def get_tool_payload_format(self) -> str:
+        return 'xml'
+
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         messages = request.messages
         if not isinstance(messages, list):

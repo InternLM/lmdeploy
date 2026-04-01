@@ -40,3 +40,12 @@ class IdentityReasoningParser(ReasoningParser):
         # No reasoning separation: return None for reasoning,
         # and full model_output as content
         return None, model_output
+
+    def get_reasoning_open_tag(self) -> str | None:
+        return None
+
+    def get_reasoning_close_tag(self) -> str | None:
+        return None
+
+    def starts_in_reasoning_mode(self) -> bool:
+        return False

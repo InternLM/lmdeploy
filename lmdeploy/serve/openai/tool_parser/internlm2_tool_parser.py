@@ -50,6 +50,15 @@ class Internlm2ToolParser(ToolParser):
             return obj.get('arguments')
         return None
 
+    def get_tool_open_tag(self) -> str | None:
+        return '<|action_start|><|plugin|>'
+
+    def get_tool_close_tag(self) -> str | None:
+        return '<|action_end|>'
+
+    def get_tool_payload_format(self) -> str:
+        return 'json'
+
     def detect_tool_start_tag(
         self,
         delta_text: str,

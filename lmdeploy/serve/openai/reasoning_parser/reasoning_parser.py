@@ -69,6 +69,18 @@ class ReasoningParser:
         raise NotImplementedError('ReasoningParser.extract_reasoning '
                                   'has not been implemented!')
 
+    def get_reasoning_open_tag(self) -> str | None:
+        """Return reasoning opening tag string, or None if no opening tag."""
+        raise NotImplementedError('ReasoningParser.get_reasoning_open_tag has not been implemented!')
+
+    def get_reasoning_close_tag(self) -> str | None:
+        """Return reasoning closing tag string, or None if no closing tag."""
+        raise NotImplementedError('ReasoningParser.get_reasoning_close_tag has not been implemented!')
+
+    def starts_in_reasoning_mode(self) -> bool:
+        """Whether streaming should begin in reasoning mode."""
+        raise NotImplementedError('ReasoningParser.starts_in_reasoning_mode has not been implemented!')
+
 
 class ThinkingReasoningParser(ReasoningParser):
     """Base class for reasoning parsers that use <think>...</think> style tags.
@@ -185,3 +197,12 @@ class ThinkingReasoningParser(ReasoningParser):
             # If the model_output is like "<think></think>...", return None reasoning
             reasoning = reasoning or None
             return reasoning, final_content
+
+    def get_reasoning_open_tag(self) -> str | None:
+        return self.start_token
+
+    def get_reasoning_close_tag(self) -> str | None:
+        return self.end_token
+
+    def starts_in_reasoning_mode(self) -> bool:
+        return True

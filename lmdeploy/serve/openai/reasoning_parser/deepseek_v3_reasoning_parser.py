@@ -51,3 +51,12 @@ class DeepSeekV3ReasoningParser(ReasoningParser):
             stream_buffer=stream_buffer,
             **kwargs,
         )
+
+    def get_reasoning_open_tag(self) -> str | None:
+        return self._parser.get_reasoning_open_tag()
+
+    def get_reasoning_close_tag(self) -> str | None:
+        return self._parser.get_reasoning_close_tag()
+
+    def starts_in_reasoning_mode(self) -> bool:
+        return self._parser.starts_in_reasoning_mode()
