@@ -1,10 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from __future__ import annotations
+
 import json
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from lmdeploy.serve.openai.protocol import (
-    ChatCompletionRequest,
     DeltaFunctionCall,
     DeltaToolCall,
     FunctionCall,
@@ -13,6 +14,9 @@ from lmdeploy.serve.openai.protocol import (
 from lmdeploy.utils import get_logger
 
 from .tool_parser import ToolParser, ToolParserManager
+
+if TYPE_CHECKING:
+    from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 
 logger = get_logger('lmdeploy')
 

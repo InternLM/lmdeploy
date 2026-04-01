@@ -1,7 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modified from https://github.com/vllm-project/vllm/tree/v0.7.3/vllm/entrypoints/openai/tool_parsers
+from __future__ import annotations
+
 import json
 from functools import cached_property
+from typing import TYPE_CHECKING
 
 import partial_json_parser
 import shortuuid
@@ -9,13 +12,15 @@ from mmengine import Registry
 from partial_json_parser.core.options import Allow
 
 from lmdeploy.serve.openai.protocol import (
-    ChatCompletionRequest,
     DeltaFunctionCall,
     DeltaToolCall,
     FunctionCall,
     ToolCall,
 )
 from lmdeploy.utils import get_logger
+
+if TYPE_CHECKING:
+    from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 
 logger = get_logger('lmdeploy')
 ToolParserManager = Registry('tool_parser', locations=['lmdeploy.serve.openai.tool_parser'])

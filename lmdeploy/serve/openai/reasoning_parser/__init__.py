@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from .deepseek_v3_reasoning_parser import DeepSeekV3ReasoningParser
 from .gpt_oss_reasoning_parser import GptOssReasoningParser
 from .reasoning_parser import (
     ReasoningParser,
@@ -8,5 +9,6 @@ from .reasoning_parser import (
 __all__ = [
     'ReasoningParser',
     'ReasoningParserManager',
+    'DeepSeekV3ReasoningParser',
     'GptOssReasoningParser',
 ]

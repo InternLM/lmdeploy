@@ -5,25 +5,35 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar
 
-from transformers import PreTrainedTokenizerBase
-
-from lmdeploy.serve.openai.protocol import (
-    ChatCompletionRequest,
-    DeltaMessage,
-    DeltaToolCall,
-    ToolCall,
-)
+from lmdeploy.serve.openai.protocol import DeltaMessage
 from lmdeploy.utils import get_logger
 
 if TYPE_CHECKING:
+    from transformers import PreTrainedTokenizerBase
+
+    from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaToolCall, ToolCall
     from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParser
     from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParser
 
-logger = get_logger(__name__)
+logger = get_logger('lmdeploy')
 
 
 @dataclass
 class ProtocolProfile:
+    """Protocol tags and startup mode used by :class:`ResponseParser`.
+
+    ``starts_in_reasoning_mode`` decides the initial parse mode before any tags are seen.
+    In ResponseParser, it controls whether the parser treats the beginning of generation as:
+    - reasoning (MODE_REASONING) -> text goes to reasoning_content, or
+    - plain (MODE_PLAIN) -> text goes to normal content.
+    Practically:
+    - If parser has reasoning support, ``enable_thinking`` is not False, and
+    ``starts_in_reasoning_mode=True``, first chunks are parsed as reasoning until ``</think>``.
+    - Otherwise it starts in plain mode and only enters reasoning when it sees ``<think>``.
+    It is only a profile default and can be customized by concrete reasoning
+    parsers (for example DeepSeek-V3).
+    """
+
     reasoning_open_tag: str | None = None
     reasoning_close_tag: str | None = None
     tool_open_tag: str | None = None
