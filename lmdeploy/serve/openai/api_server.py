@@ -483,8 +483,18 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 if res.finish_reason == 'stop' and streaming_tools is True:
                     res.finish_reason = 'tool_calls'
             elif request.tool_choice != 'none' and request.tools is not None:
-                if ResponseParser.tool_parser is None:
+                if ResponseParser.tool_parser_cls is None:
                     logger.error('Please launch the api_server with --tool-call-parser if you want to use tool.')
+
+            # The parser may intentionally suppress no-op chunks by returning
+            # ``None``. Keep them suppressed unless this is a visible terminal
+            # frame (finish/usage/logprobs), where OpenAI-style streams still
+            # expect a delta object.
+            if delta_message is None:
+                if res.finish_reason is None and usage is None and logprobs is None:
+                    continue
+                delta_message = DeltaMessage(role='assistant')
+
             if request.return_token_ids:
                 delta_message.gen_tokens = delta_token_ids
             response_json = create_stream_response_json(index=0,

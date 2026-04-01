@@ -131,85 +131,23 @@ class ToolParser:
         if args_obj is None:
             return out
 
-        if isinstance(args_obj, dict):
-            items = list(args_obj.items())
-            if not self._args_prefix_emitted and items:
-                first_key = items[0][0]
-                out.append(
-                    DeltaToolCall(
-                        id=self._active_tool_call_id,
-                        index=self._active_tool_index,
-                        type=None,
-                        function=DeltaFunctionCall(arguments=f'{{\"{first_key}\": \"')),
-                )
-                self._args_prefix_emitted = True
-
-            values_concat = ''.join(v for _, v in items if isinstance(v, str))
-            if len(values_concat) > self._value_chars_emitted:
-                diff = values_concat[self._value_chars_emitted:]
-                out.append(
-                    DeltaToolCall(
-                        id=self._active_tool_call_id,
-                        index=self._active_tool_index,
-                        type=None,
-                        function=DeltaFunctionCall(arguments=diff),
-                    ))
-                self._value_chars_emitted = len(values_concat)
-
-            if self._is_complete_json(payload) and self._args_prefix_emitted and not self._args_closed_emitted:
-                out.append(
-                    DeltaToolCall(
-                        id=self._active_tool_call_id,
-                        index=self._active_tool_index,
-                        type=None,
-                        function=DeltaFunctionCall(arguments='"}'),
-                    ))
-                self._args_closed_emitted = True
-            return out
-
         args_json = json.dumps(args_obj, ensure_ascii=False)
         if args_json in ('{}', '[]'):
             return out
 
-        emitted_arg = False
-        candidate: str | None = None
-        if self._is_complete_json(payload):
-            candidate = args_json
-        elif self._prev_args_json:
-            candidate = self._common_prefix(self._prev_args_json, args_json)
-        elif self._args_emitted_len == 0 and added_text:
-            pos = args_json.find(added_text)
-            if pos >= 0:
-                candidate = args_json[:pos + len(added_text)]
-
-        if candidate and len(candidate) > self._args_emitted_len:
-            diff = candidate[self._args_emitted_len:]
-            if final or any(ch.isalnum() for ch in diff):
-                out.append(
-                    DeltaToolCall(
-                        id=self._active_tool_call_id,
-                        index=self._active_tool_index,
-                        type=None,
-                        function=DeltaFunctionCall(arguments=diff),
-                    ))
-                self._args_emitted_len = len(candidate)
-                emitted_arg = True
-
-        if (
-            not emitted_arg
-            and self._args_emitted_len > 0
-            and added_text
-            and any(ord(ch) > 127 for ch in added_text)
-        ):
+        # Emit argument text only when the tool payload is complete. This keeps
+        # streamed argument chunks valid JSON and avoids malformed intermediate
+        # fragments when partial parsers expose transient dict states.
+        if final and len(args_json) > self._args_emitted_len:
+            diff = args_json[self._args_emitted_len:]
             out.append(
                 DeltaToolCall(
                     id=self._active_tool_call_id,
                     index=self._active_tool_index,
                     type=None,
-                    function=DeltaFunctionCall(arguments=added_text),
+                    function=DeltaFunctionCall(arguments=diff),
                 ))
-            self._args_emitted_len += len(added_text)
-        self._prev_args_json = args_json
+            self._args_emitted_len = len(args_json)
         return out
 
     @staticmethod
