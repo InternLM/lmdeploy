@@ -451,7 +451,7 @@ void invokeMoeLocalCombineEp(Ref<Tensor>   out_,
 
         auto invoke = [&](auto e) {
             constexpr int exp_per_tok = decltype(e)::value;
-            MoeCombineKernel<vsize, exp_per_tok, has_bias.value, threads><<<tokens, threads, 0, st>>>(  //
+            MoeCombineKernel<vsize, exp_per_tok, decltype(has_bias)::value, threads><<<tokens, threads, 0, st>>>(  //
                 out.data<T>(),
                 src.data<T>(),
                 bias.data_or((T*)nullptr),
