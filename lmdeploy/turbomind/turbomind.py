@@ -87,6 +87,7 @@ def complete_parallel_config(cfg: TurbomindEngineConfig):
 def update_parallel_config(cfg: TurbomindEngineConfig):
     cfg.device_num = len(cfg.devices) * cfg.nnodes if cfg.devices else cfg.device_num
     if not complete_parallel_config(cfg) and cfg.ep > 1:
+        os.environ['NCCL_GIN_GDAKI_QP_DEPTH'] = '1024'
         if cfg.communicator in ['cuda-ipc', 'native']:
             assert cfg.nnodes == 1, 'TurboMind does not support multi-node with ep > 1'
         total = cfg.dp * cfg.ep

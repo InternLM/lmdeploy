@@ -170,9 +170,6 @@ Buffer::Buffer(int      rank,
     qps_per_rank(qps_per_rank),
     h_comm(h_comm)
 {
-    // move to turbomind.py
-    setenv("NCCL_GIN_GDAKI_QP_DEPTH", "1024", 0);
-
     // Common checks
     EP_STATIC_ASSERT(NUM_BUFFER_ALIGNMENT_BYTES % sizeof(int4) == 0, "Invalid alignment");
     EP_HOST_ASSERT(num_nvl_bytes % NUM_BUFFER_ALIGNMENT_BYTES == 0

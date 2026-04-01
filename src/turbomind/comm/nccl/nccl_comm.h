@@ -112,7 +112,7 @@ private:
 #if NCCL_VERSION_CODE >= NCCL_VERSION(2, 29, 7)
     std::unique_ptr<deep_ep::Buffer> buffer_;
 #endif
-    EpConfig                         ep_config_;
+    EpConfig ep_config_;
 };
 
 DeviceComm CreateNcclCommunicator(int n_ranks, int rank, HostComm h_comm);

@@ -165,7 +165,7 @@ void MoeFfnLayer::RouteTP(ForwardParam& p, Tensor_<float>& logits)
 
 void MoeFfnLayer::RouteEP(ForwardParam& p, Tensor_<float>& logits)
 {
-    TM_CHECK_EQ(ep_mode_, comm::EpMode::kNull);
+    TM_CHECK(ep_mode_ != comm::EpMode::kNull);
 
     const int   tokens     = p.input.shape(0);
     const auto& moe        = *p.weights;
@@ -210,7 +210,7 @@ void MoeFfnLayer::RouteEP(ForwardParam& p, Tensor_<float>& logits)
     dispatch_output_ = std::make_unique<comm::EpDispatchOutput>(dispatch_output);
 }
 
-void MoeFfnLayer::SetWarpup(ForwardParam& p)
+void MoeFfnLayer::SetWarmup(ForwardParam& p)
 {
     const int  tokens     = p.input.shape(0);
     const int  expert_num = p.weights->experts.size();
@@ -253,7 +253,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
     const auto st = core::Context::stream().handle();
 
     if (is_warm_up_) {
-        SetWarpup(p);
+        SetWarmup(p);
     }
     else if (ep_size_ == 1) {
         RouteTP(p, logits);
@@ -370,7 +370,7 @@ void MoeFfnLayer::CombineTP(ForwardParam& p)
 
 void MoeFfnLayer::CombineEP(ForwardParam& p)
 {
-    TM_CHECK_NE(ep_mode_, comm::EpMode::kNull);
+    TM_CHECK(ep_mode_ != comm::EpMode::kNull);
     auto st = core::Context::stream().handle();
     // Local reduce
     if (ep_mode_ == comm::EpMode::kHighThroughput) {

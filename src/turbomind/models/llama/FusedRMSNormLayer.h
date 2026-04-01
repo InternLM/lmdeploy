@@ -169,4 +169,4 @@ inline std::unique_ptr<FusedRMSNormLayer> CreateFusedRMSNormLayer(const FusedRMS
     return std::make_unique<FusedRMSNormLayerTp>(param);
 }
 
-};  // namespace turbomind
+}  // namespace turbomind

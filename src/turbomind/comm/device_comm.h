@@ -21,7 +21,7 @@ struct EpConfig {
     int ll_max_tokens_per_rank;
 };
 
-enum EpMode
+enum class EpMode
 {
     kNull,
     kHighThroughput,

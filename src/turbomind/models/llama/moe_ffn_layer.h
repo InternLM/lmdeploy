@@ -31,7 +31,7 @@ public:
 private:
     Tensor_<float> Gate(const Tensor& input, const LlamaDenseWeight& gate);
 
-    void SetWarpup(ForwardParam& p);
+    void SetWarmup(ForwardParam& p);
 
     void ForwardNative(ForwardParam& p);
 

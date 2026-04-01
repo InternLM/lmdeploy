@@ -55,7 +55,7 @@ void NcclCommImpl::InitializeEp(const EpConfig& config)
 void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& output, int group)
 {
     TM_CHECK_EQ(group, 0);
-    TM_CHECK_NE(input.mode, EpMode::kNull);
+    TM_CHECK(input.mode != EpMode::kNull);
 
     if (input.mode == EpMode::kLowLatency) {
         auto [packed_recv_x, packed_recv_x_scales, packed_recv_count, packed_recv_src_info, packed_recv_layout_range] =
@@ -259,7 +259,7 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
 void NcclCommImpl::Combine(const EpCombineInput& input, EpCombineOutput& output, int group)
 {
     TM_CHECK_EQ(group, 0);
-    TM_CHECK_NE(input.mode, EpMode::kNull);
+    TM_CHECK(input.mode != EpMode::kNull);
 
     if (input.mode == EpMode::kLowLatency) {
         const int   num_local_experts = ep_config_.num_experts / h_comm_->n_ranks();
