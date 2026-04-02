@@ -431,9 +431,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         adapter_name = model_name  # got a adapter name
     request_id = str(session.session_id)
     created_time = int(time.time())
-    gpt_oss_parser = None
-    if VariableInterface.async_engine.arch == 'GptOssForCausalLM':
-        gpt_oss_parser = GptOssChatParser()
+    is_gpt_oss = VariableInterface.async_engine.arch == 'GptOssForCausalLM'
 
     if isinstance(request.stop, str):
         request.stop = [request.stop]
@@ -484,7 +482,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         gen_config.skip_special_tokens = False
         # internlm2 only uses contents inside function regardless of 'type'
         if not isinstance(request.tool_choice, str):
-            if gpt_oss_parser:
+            if is_gpt_oss:
                 tools = [
                     item.model_dump() for item in request.tools
                     if item.function.name == request.tool_choice.function.name
@@ -495,7 +493,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                     if item.function.name == request.tool_choice.function.name
                 ]
         else:
-            if gpt_oss_parser:
+            if is_gpt_oss:
                 tools = [item.model_dump() for item in request.tools]
             else:
                 tools = [item.function.model_dump() for item in request.tools]
@@ -563,7 +561,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             delta_token_ids = []
             streaming_tools = False
             # each generator needs its own stateful streaming parser instance
-            _gpt_oss_parser = GptOssChatParser() if gpt_oss_parser is not None else None
+            _gpt_oss_parser = GptOssChatParser() if is_gpt_oss else None
             async for res in _gen:
                 logprobs, usage = None, None
                 if gen_logprobs and res.logprobs:
@@ -666,7 +664,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             cache_block_ids_i.append(res.cache_block_ids)
             remote_token_ids_i.append(res.token_ids)
 
-        if gpt_oss_parser:
+        if is_gpt_oss:
             _parser_i = GptOssChatParser()
             message_i = _parser_i.parse_full(final_token_ids_i)
             if final_res_i.finish_reason == 'stop' and len(message_i.tool_calls) > 0:
@@ -1054,6 +1052,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         sequence_start=True,
         sequence_end=True,
         do_preprocess=False,
+        media_io_kwargs=request.media_io_kwargs,
         mm_processor_kwargs=request.mm_processor_kwargs)
 
     def create_generate_response_json(res, text, output_ids, logprobs, finish_reason, routed_experts=None):
