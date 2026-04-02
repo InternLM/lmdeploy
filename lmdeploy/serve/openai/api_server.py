@@ -404,9 +404,31 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         with_cache=with_cache,
         preserve_cache=preserve_cache,
     )
+
     response_parser = ResponseParser(request=request, tokenizer=tokenizer)
     # request might be adjusted by tool parser
     request = response_parser.request
+
+    tools = None
+    if request.tools:
+        arch = VariableInterface.async_engine.arch
+        gen_config.skip_special_tokens = False
+        if not isinstance(request.tool_choice, str):
+            if arch == 'GptOssForCausalLM':
+                tools = [
+                    item.model_dump() for item in request.tools
+                    if item.function.name == request.tool_choice.function.name
+                ]
+            else:
+                tools = [
+                    item.function.model_dump() for item in request.tools
+                    if item.function.name == request.tool_choice.function.name
+                ]
+        else:
+            if arch == 'GptOssForCausalLM':
+                tools = [item.model_dump() for item in request.tools]
+            else:
+                tools = [item.function.model_dump() for item in request.tools]
 
     # text completion for string input
     do_preprocess = False if isinstance(request.messages, str) else request.do_preprocess
@@ -423,7 +445,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         request.messages,
         session,
         gen_config=gen_config,
-        tools=request.tools,
+        tools=tools,
         reasoning_effort=request.reasoning_effort,
         stream_response=True,  # always use stream to enable batching
         sequence_start=True,
