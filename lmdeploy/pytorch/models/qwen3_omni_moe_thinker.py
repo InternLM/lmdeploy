@@ -1,8 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import math
+from collections.abc import Iterable, Sequence
 from functools import lru_cache
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any
 
 import numpy as np
 import torch
@@ -21,7 +22,7 @@ from lmdeploy.vl.constants import Modality
 
 from .qwen3_vl import Qwen3VLVisionBlock, Qwen3VLVisionPatchEmbed, Qwen3VLVisionRotaryEmbedding
 from .qwen3_vl_moe import Qwen3VLMoeTextModel
-from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
+from .utils.cudagraph import CudaGraphMixin
 from .utils.model import DeployModelMixin, vlm_model
 
 
@@ -413,7 +414,7 @@ class Qwen3OmniMoeVisionEncoder(nn.Module):
         return rotary_pos_emb
 
     # copy from https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/models/qwen3_vl.py#L474
-    def fast_pos_embed_interpolate(self, grid_thw: List[List[int]]) -> torch.Tensor:
+    def fast_pos_embed_interpolate(self, grid_thw: list[list[int]]) -> torch.Tensor:
         num_grid_per_side = self.num_grid_per_side
         m_size = self.spatial_merge_size
         hidden_dim = self.pos_embed.embedding_dim
@@ -544,7 +545,7 @@ class Qwen3OmniMoeThinkerForConditionalGeneration(nn.Module, DeployModelMixin, C
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
         mrope_position_ids: torch.Tensor = None,
@@ -620,7 +621,7 @@ class Qwen3OmniMoeThinkerForConditionalGeneration(nn.Module, DeployModelMixin, C
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         inputs_embeds: torch.Tensor | None = None,
         context: StepContext = None,
     ):
@@ -716,8 +717,8 @@ class Qwen3OmniMoeThinkerForConditionalGeneration(nn.Module, DeployModelMixin, C
             return 'lm_head.' + name[len('thinker.lm_head.'):]
         return name
 
-    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
-                             expert_params_mapping: List):
+    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
+                             expert_params_mapping: list):
         """Load weight experts."""
 
         for (param_name, weight_name, expert_id, shard_id) in expert_params_mapping:
@@ -731,32 +732,7 @@ class Qwen3OmniMoeThinkerForConditionalGeneration(nn.Module, DeployModelMixin, C
             param = params_dict[name]
             load_weight(param, loaded_weight)
 
-    # modify from vllm qwen3vlmoe fused expert loading
-    def _load_weight_fused_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
-                                   fused_expert_params_mapping: List):
-        """Load weight of fused expert weights."""
-        num_experts = self.config.text_config.num_experts
-
-        for (param_name, weight_name) in fused_expert_params_mapping:
-            if weight_name not in name:
-                continue
-            name = name.replace(weight_name, param_name)
-            param = params_dict[name]
-
-            loaded_weight = loaded_weight.transpose(-1, -2)  # no bias
-            if 'gate_up' in name:
-                loaded_weight = loaded_weight.chunk(2, dim=-2)
-                w1 = loaded_weight[0]
-                w3 = loaded_weight[1]
-                for expert_id in range(num_experts):
-                    load_weight(param, w1[expert_id], expert_id=expert_id, shard_id='gate')
-                    load_weight(param, w3[expert_id], expert_id=expert_id, shard_id='up')
-            elif 'down' in name:
-                w2 = loaded_weight
-                for expert_id in range(num_experts):
-                    load_weight(param, w2[expert_id], expert_id=expert_id, shard_id='down')
-
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
         # modify from vllm
         stacked_params_mapping = [
@@ -778,13 +754,6 @@ class Qwen3OmniMoeThinkerForConditionalGeneration(nn.Module, DeployModelMixin, C
             down_param = ('.experts.down', f'.experts.{exp_id}.down_proj', exp_id, 'down')
             expert_params_mapping += [gate_param, up_param, down_param]
 
-        # fused expert mapping
-        fused_expert_params_mapping = [
-            # (param_name, weight_name)
-            ('.experts.gate_up.weight', '.experts.gate_up_proj'),
-            ('.experts.down.weight', '.experts.down_proj'),
-        ]
-
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
             if 'rotary_emb.inv_freq' in name:
@@ -797,17 +766,10 @@ class Qwen3OmniMoeThinkerForConditionalGeneration(nn.Module, DeployModelMixin, C
 
             name = name.replace('.block_sparse_moe.', '.mlp.')
             if '.experts' in name:
-                is_fused_expert = ('experts.gate_up_proj' in name or 'experts.down_proj' in name)
-                if is_fused_expert:
-                    self._load_weight_fused_experts(name,
-                                                    loaded_weight,
-                                                    params_dict,
-                                                    fused_expert_params_mapping=fused_expert_params_mapping)
-                else:
-                    self._load_weight_experts(name,
-                                              loaded_weight,
-                                              params_dict,
-                                              expert_params_mapping=expert_params_mapping)
+                self._load_weight_experts(name,
+                                          loaded_weight,
+                                          params_dict,
+                                          expert_params_mapping=expert_params_mapping)
             else:
                 for (param_name, weight_name, shard_id) in stacked_params_mapping:
                     if weight_name not in name:
@@ -827,165 +789,6 @@ class Qwen3OmniMoeThinkerForConditionalGeneration(nn.Module, DeployModelMixin, C
                         param = params_dict[name]
                         load_weight(param, loaded_weight)
 
-    def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, **kwargs):
-        """Make cudagraph buffers from forward inputs."""
-        max_tokens = graph_meta.max_tokens
-
-        input_buffers = super().make_buffers_cudagraph(graph_meta=graph_meta, **kwargs)
-        mrope_position_ids = kwargs.get('mrope_position_ids', None)
-        if mrope_position_ids is not None:
-            input_buffers['mrope_position_ids'] = mrope_position_ids.new_zeros(3, max_tokens)
-
-        return input_buffers
-
-    def fill_buffers_cudagraph(self, graph_meta: CudaGraphMeta, **kwargs):
-        """Fill cudagraph buffers from forward inputs."""
-
-        new_inputs = super().fill_buffers_cudagraph(graph_meta=graph_meta, **kwargs)
-
-        input_ids = kwargs.get('input_ids')
-        num_tokens = input_ids.size(-1)
-        new_batch_size = graph_meta.max_batchs
-
-        is_decoding = graph_meta.is_decoding
-        input_buffers = graph_meta.input_buffers
-        mrope_position_ids = kwargs.get('mrope_position_ids', None)
-        if mrope_position_ids is not None:
-            input_buffers['mrope_position_ids'][:, :num_tokens] = mrope_position_ids
-            if is_decoding:
-                new_inputs['mrope_position_ids'] = input_buffers['mrope_position_ids'][:, :new_batch_size]
-            else:
-                new_inputs['mrope_position_ids'] = input_buffers['mrope_position_ids']
-
-        return new_inputs
-
-    def _get_model_metas(self, context: StepContext):
-        """Get model metas."""
-        model_metas = context.model_metas
-        if model_metas is None:
-            batch_size = context.q_seqlens.numel()
-            return [dict(mrope_delta=0)] * batch_size
-        return [dict(mrope_delta=0) if meta is None else meta for meta in model_metas]
-
-    def _update_model_meta_decoding(self, context: StepContext):
-        """Update model meta for decoding."""
-        model_metas = self._get_model_metas(context)
-        position_ids = context.position_ids
-
-        mrope_deltas = [meta['mrope_delta'] for meta in model_metas]
-        mrope_deltas = position_ids.new_tensor(mrope_deltas)
-        mrope_position_ids = position_ids + mrope_deltas[None]
-        mrope_position_ids = mrope_position_ids.expand(3, -1)
-
-        context.mrope_position_ids = mrope_position_ids
-        return model_metas
-
-    def _get_multimodal_pos_ids(self, grid_thw: list, device: torch.device):
-        """Get mrope ids."""
-        t, h, w = grid_thw
-        h //= 2
-        w //= 2
-        stride = torch.tensor([h * w, w, 1], device=device)[:, None]
-        size = torch.tensor([t, h, w], device=device)[:, None]
-        pos_ids = torch.arange(t * h * w, device=device)[None].expand(3, -1)
-        pos_ids = pos_ids // stride % size
-        return pos_ids
-
-    def _update_model_meta_prefilling(self, context: StepContext):
-        """Update model meta for prefilling."""
-        model_metas = self._get_model_metas(context)
-        input_multimodals = context.input_multimodals
-        if input_multimodals is None:
-            input_multimodals = [None] * len(model_metas)
-        position_ids = context.position_ids
-        batched_pos_ids = position_ids[0].split(context.q_seqlens.tolist())
-        mrope_position_ids = []
-        new_model_metas = []
-        for pos_ids, model_meta, input_mm in zip(batched_pos_ids, model_metas, input_multimodals):
-            mm_data_list = []
-            if input_mm is not None:
-                mm_data_list.extend(input_mm.get('mm_data', []))
-
-            if model_meta is None or 'mrope_delta' not in model_meta:
-                mrope_delta = 0
-            else:
-                mrope_delta = model_meta['mrope_delta']
-
-            pos_start = pos_ids[0].item()
-            mrope_pos_ids = pos_ids + mrope_delta
-            mrope_pos_ids = mrope_pos_ids[None].expand(3, -1).clone()
-
-            for mm_data in mm_data_list:
-                if mm_data.modality == Modality.IMAGE:
-                    grid_thw = mm_data.meta['grid_thw'][0].tolist()
-                    _, h, w = grid_thw
-                    h //= 2
-                    w //= 2
-                    num_pad = mm_data.end - mm_data.start - max(h, w)
-                    mrope_delta -= num_pad
-                    fill_start = mm_data.start - pos_start
-                    fill_end = mm_data.end - pos_start
-                    img_pos_ids = self._get_multimodal_pos_ids(grid_thw, pos_ids.device)
-                    img_pos_ids += mrope_pos_ids[:, fill_start:fill_start + 1]
-                    mrope_pos_ids[:, fill_end:] -= num_pad
-                    mrope_pos_ids[:, fill_start:fill_end] = img_pos_ids
-                elif mm_data.modality == Modality.VIDEO:
-                    second_per_grid = mm_data.meta.get('second_per_grid', 2.0)
-                    position_id_per_seconds = self.config.thinker_config.position_id_per_seconds
-
-                    grid_thw = mm_data.meta['grid_thw'][0].tolist()
-                    t, h, w = grid_thw
-                    llm_h = h // 2  # spatial_merge_size = 2
-                    llm_w = w // 2
-
-                    device = pos_ids.device
-                    # Temporal indices as real timestamps (float, e.g. 0, 1.083, 2.167 for fps=24)
-                    t_index = torch.arange(t, device=device).float() * (second_per_grid * position_id_per_seconds)
-                    h_index = torch.arange(llm_h, device=device).float()
-                    w_index = torch.arange(llm_w, device=device).float()
-
-                    # Build [3, T*llm_h*llm_w] pos ids
-                    t_expanded = t_index.view(-1, 1).expand(-1, llm_h * llm_w).flatten()
-                    h_expanded = h_index.view(1, -1, 1).expand(t, -1, llm_w).flatten()
-                    w_expanded = w_index.view(1, 1, -1).expand(t, llm_h, -1).flatten()
-                    video_pos_ids = torch.stack([t_expanded, h_expanded, w_expanded])  # [3, T*llm_h*llm_w]
-
-                    max_video_pos = max(
-                        float((t - 1) * second_per_grid * position_id_per_seconds) if t > 1 else 0.0,
-                        float(llm_h - 1),
-                        float(llm_w - 1),
-                    )
-                    video_num_tokens = t * llm_h * llm_w
-                    num_pad = video_num_tokens - max_video_pos - 1
-                    mrope_delta -= num_pad
-
-                    fill_start = mm_data.start - pos_start
-                    fill_end = mm_data.end - pos_start
-
-                    # Convert to float to hold non-integer temporal positions
-                    mrope_pos_ids = mrope_pos_ids.float()
-                    offset = mrope_pos_ids[0, fill_start].item()
-                    mrope_pos_ids[:, fill_start:fill_end] = video_pos_ids + offset
-                    mrope_pos_ids[:, fill_end:] -= num_pad
-
-            mrope_position_ids.append(mrope_pos_ids)
-            new_model_metas.append(dict(mrope_delta=mrope_delta))
-
-        mrope_position_ids = torch.cat(mrope_position_ids, dim=1)
-        context.mrope_position_ids = mrope_position_ids
-
-        return new_model_metas
-
-    def update_model_metas(self,
-                           past_key_values: List[List[torch.Tensor]],
-                           inputs_embeds: torch.Tensor | None = None,
-                           context: StepContext = None):
-        """Update model meta."""
-        if context.is_decoding:
-            return self._update_model_meta_decoding(context)
-        else:
-            return self._update_model_meta_prefilling(context)
-
     def get_input_processor(self) -> BaseModelInputProcessor:
         """Get input processor."""
         return self.input_processor
@@ -997,7 +800,24 @@ class Qwen3OmniInputProcessor(BaseModelInputProcessor):
     def __init__(self, config: PretrainedConfig) -> None:
         self.config = config
 
-    def _make_image_mm_data(self, input_mm: Dict[str, Any]) -> MultiModalData:
+    @classmethod
+    def _get_multimodal_pos_ids(cls, grid_thw: Sequence[int]) -> np.ndarray:
+        """Get mrope ids."""
+        t, h, w = grid_thw
+        h = h // 2
+        w = w // 2
+        stride = np.array([h * w, w, 1])[None]
+        size = np.array([t, h, w])[None]
+        pos_ids = np.arange(t * h * w)[:, None].repeat(3, axis=1)
+        pos_ids = pos_ids // stride % size
+        return pos_ids
+
+    @classmethod
+    def make_mrope(cls, grid_thw: torch.Tensor):
+        img_pos_ids = cls._get_multimodal_pos_ids(grid_thw[0].tolist())
+        return img_pos_ids
+
+    def _make_image_mm_data(self, input_mm: dict[str, Any]) -> MultiModalData:
         """Make image MultiModalData."""
         pixel_values = input_mm['pixel_values']
         image_grid_thw = input_mm['image_grid_thw']
@@ -1008,14 +828,17 @@ class Qwen3OmniInputProcessor(BaseModelInputProcessor):
         if isinstance(num_pad, torch.Tensor):
             num_pad = num_pad.item()
 
+        mrope_pos_ids = self.make_mrope(image_grid_thw)
+
         mm_data = MultiModalData(modality=Modality.IMAGE,
                                  data=pixel_values,
                                  start=start,
                                  end=start + num_pad,
+                                 mrope_pos_ids=mrope_pos_ids,
                                  meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
         return mm_data
 
-    def _make_video_mm_data(self, input_mm: Dict[str, Any]) -> MultiModalData:
+    def _make_video_mm_data(self, input_mm: dict[str, Any]) -> MultiModalData:
         """Make video MultiModalData."""
         pixel_values_videos = input_mm['pixel_values_videos']
         video_grid_thw = input_mm['video_grid_thw']
@@ -1026,10 +849,13 @@ class Qwen3OmniInputProcessor(BaseModelInputProcessor):
         if isinstance(num_pad, torch.Tensor):
             num_pad = num_pad.item()
 
+        mrope_pos_ids = self.make_mrope(video_grid_thw)
+
         mm_data = MultiModalData(modality=Modality.VIDEO,
                                  data=pixel_values_videos,
                                  start=start,
                                  end=start + num_pad,
+                                 mrope_pos_ids=mrope_pos_ids,
                                  meta=dict(
                                      grid_thw=video_grid_thw,
                                      video_token_id=video_token_id,
@@ -1037,7 +863,7 @@ class Qwen3OmniInputProcessor(BaseModelInputProcessor):
                                  ))
         return mm_data
 
-    def _make_audio_mm_data(self, input_mm: Dict[str, Any]) -> MultiModalData:
+    def _make_audio_mm_data(self, input_mm: dict[str, Any]) -> MultiModalData:
         """Make audio MultiModalData."""
         input_features = input_mm['input_features']
         offset = input_mm['offset']
@@ -1058,8 +884,8 @@ class Qwen3OmniInputProcessor(BaseModelInputProcessor):
         return mm_data
 
     def preprocess_input(self,
-                         input_ids: List[int],
-                         input_multimodals: List[Dict[str, Any]] = None,
+                         input_ids: list[int],
+                         input_multimodals: list[dict[str, Any]] = None,
                          **kwargs) -> PreprocessInputResult:
         """Prepare multimodal input."""
         if input_multimodals is None or len(input_multimodals) == 0:
