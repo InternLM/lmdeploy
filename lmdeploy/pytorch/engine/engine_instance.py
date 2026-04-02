@@ -92,7 +92,7 @@ class SharedStore:
         import ray
         all_data = list(self._data.values())
         if len(all_data) > 0:
-            ray.internal.free([all_data], local_only=False)
+            ray.internal.free(all_data, local_only=False)
 
 
 _SHARED_STORE = None
