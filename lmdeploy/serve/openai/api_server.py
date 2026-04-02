@@ -75,9 +75,7 @@ from lmdeploy.serve.openai.protocol import (
     UpdateParamsRequest,
     UsageInfo,
 )
-from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParserManager
 from lmdeploy.serve.openai.response_parser import ResponseParser
-from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParserManager
 from lmdeploy.serve.utils.server_utils import validate_json_request
 from lmdeploy.utils import get_logger
 
@@ -470,7 +468,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                     completion_tokens=res.generate_token_len,
                     total_tokens=total_tokens,
                 )
-            print(f'[completion_stream_generator] res.response: {res.response}, res.token_ids: {res.token_ids}')
             delta_token_ids = res.token_ids if res.token_ids is not None else []
             delta_message, tool_emitted = response_parser.stream_chunk(
                 res.response,
@@ -557,8 +554,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
     logprobs = None
     if gen_logprobs and len(final_logprobs):
-        logprobs = _create_chat_completion_logprobs(VariableInterface.async_engine.tokenizer, final_token_ids,
-                                                    final_logprobs)
+        logprobs = _create_chat_completion_logprobs(tokenizer, final_token_ids, final_logprobs)
 
     assert final_res is not None
     choices = []
@@ -1200,19 +1196,7 @@ class ConcurrencyLimitMiddleware(BaseHTTPMiddleware):
 def set_parsers(reasoning_parser_name: str | None = None, tool_parser_name: str | None = None, **kwargs):
     """Set tool parser and reasoning parser types on
     :class:`~lmdeploy.serve.openai.response_parser.ResponseParser`."""
-    if reasoning_parser_name is not None:
-        if reasoning_parser_name in ReasoningParserManager.module_dict:
-            ResponseParser.reasoning_parser_cls = ReasoningParserManager.get(reasoning_parser_name)
-        else:
-            raise ValueError(f'The reasoning parser {reasoning_parser_name} is not in the parser list: '
-                             f'{ReasoningParserManager.module_dict.keys()}')
-
-    if tool_parser_name is not None:
-        if tool_parser_name in ToolParserManager.module_dict:
-            ResponseParser.tool_parser_cls = ToolParserManager.get(tool_parser_name)
-        else:
-            raise ValueError(f'The tool parser {tool_parser_name} is not in the parser list: '
-                             f'{ToolParserManager.module_dict.keys()}')
+    ResponseParser.set_parsers(reasoning_parser_name=reasoning_parser_name, tool_parser_name=tool_parser_name)
 
 
 def mount_metrics(app: FastAPI, backend_config: PytorchEngineConfig | TurbomindEngineConfig):
@@ -1351,6 +1335,8 @@ def serve(model_path: str,
         ssl_certfile = os.environ['SSL_CERTFILE']
         http_or_https = 'https'
 
+    set_parsers(reasoning_parser, tool_call_parser)
+
     handle_torchrun()
     _, pipeline_class = get_task(backend, model_path)
     if isinstance(backend_config, PytorchEngineConfig):
@@ -1366,8 +1352,6 @@ def serve(model_path: str,
                                                     max_log_len=max_log_len,
                                                     speculative_config=speculative_config,
                                                     **kwargs)
-    # set reasoning parser and tool parser
-    set_parsers(reasoning_parser, tool_call_parser)
 
     # create FastAPI lifespan events
     lifespan = create_lifespan_handler(backend_config, VariableInterface.async_engine)

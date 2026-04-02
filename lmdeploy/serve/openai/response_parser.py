@@ -68,6 +68,36 @@ class ResponseParser:
     MODE_TOOL: ClassVar[str] = 'tool'
 
     @classmethod
+    def set_parsers(
+        cls,
+        reasoning_parser_name: str | None = None,
+        tool_parser_name: str | None = None,
+    ) -> None:
+        """Configure reasoning/tool parser classes by registry name."""
+        from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParserManager
+        from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParserManager
+
+        legacy_reasoning_parser_names = ['qwen-qwq', 'intern-s1', 'deepseek-r1']
+        if reasoning_parser_name in legacy_reasoning_parser_names:
+            logger.warning(f'The reasoning parser {reasoning_parser_name} is deprecated, '
+                           'please use the default reasoning parser instead.')
+            reasoning_parser_name = 'default'
+
+        if reasoning_parser_name is not None:
+            if reasoning_parser_name in ReasoningParserManager.module_dict:
+                cls.reasoning_parser_cls = ReasoningParserManager.get(reasoning_parser_name)
+            else:
+                raise ValueError(f'The reasoning parser {reasoning_parser_name} is not in the parser list: '
+                                 f'{ReasoningParserManager.module_dict.keys()}')
+
+        if tool_parser_name is not None:
+            if tool_parser_name in ToolParserManager.module_dict:
+                cls.tool_parser_cls = ToolParserManager.get(tool_parser_name)
+            else:
+                raise ValueError(f'The tool parser {tool_parser_name} is not in the parser list: '
+                                 f'{ToolParserManager.module_dict.keys()}')
+
+    @classmethod
     def chat_template_kwargs_from_request(cls, request: ChatCompletionRequest) -> dict:
         """Normalize parser-related template kwargs from the request.
 

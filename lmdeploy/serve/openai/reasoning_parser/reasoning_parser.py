@@ -11,9 +11,7 @@ if TYPE_CHECKING:
 ReasoningParserManager = Registry('reasoning_parser', locations=['lmdeploy.serve.openai.reasoning_parser'])
 
 
-@ReasoningParserManager.register_module(name=[
-    'qwen-qwq', 'qwen3', 'intern-s1', 'deepseek-r1'
-])
+@ReasoningParserManager.register_module(name='default')
 class ReasoningParser:
     """Unified reasoning parser for all ``--reasoning-parser`` options."""
 
