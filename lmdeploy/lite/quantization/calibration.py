@@ -80,6 +80,11 @@ class CalibrationContext():
 
     def _guess_num_heads(self, model):
 
+        if hasattr(model.config, 'text_config'):
+            model.config = model.config.text_config
+        if hasattr(model.config, 'llm_config'):
+            model.config = model.config.llm_config
+
         if hasattr(model.config, 'num_key_value_heads'):
             num_kv_heads = model.config.num_key_value_heads
         else:
@@ -147,8 +152,12 @@ class CalibrationContext():
             samples = len(batch_args)
 
             m_name = self.mod2name[mod]
+            # if m_name == 'model.layers.0':
+            #     print('debug here model.layers.0')
 
             for i in range(len(batch_args)):
+                # if i == 0:
+                #     print('debug here, batch {}'.format(i))
                 batch_outputs.append(self._ori_forwards[mod](*batch_args[i], **batch_kwargs[i]))
 
             outputs = concat_decoder_layer_outputs(batch_outputs)
