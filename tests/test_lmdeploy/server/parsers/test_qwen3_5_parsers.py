@@ -33,108 +33,53 @@ def response_parser(tokenizer):
     return ResponseParser(request=request, tokenizer=tokenizer)
 
 
-# NOTE: This REFERENCE_CHUNKS is currently a direct copy of the Qwen3 test.
-# The user will later adjust it to match the actual Qwen3.5 XML-style ground
-# truth stream. The structure is kept identical so the same assertions apply.
 REFERENCE_CHUNKS = [
-    # (delta_text, expected_reasoning, expected_content,
-    #  expected_tool_emitted, expected_function_name,
-    #  expected_function_arguments, expected_type)
-    ('用户', '用户', None, False, None, None, None),
-    ('询问', '询问', None, False, None, None, None),
-    ('北京的', '北京的', None, False, None, None, None),
-    ('天气', '天气', None, False, None, None, None),
-    ('情况', '情况', None, False, None, None, None),
-    ('。', '。', None, False, None, None, None),
-    ('我', '我', None, False, None, None, None),
-    ('需要使用', '需要使用', None, False, None, None, None),
-    ('get', 'get', None, False, None, None, None),
-    ('_current', '_current', None, False, None, None, None),
-    ('_temperature', '_temperature', None, False, None, None, None),
-    ('函数', '函数', None, False, None, None, None),
-    ('来获取', '来获取', None, False, None, None, None),
-    ('北京的', '北京的', None, False, None, None, None),
-    ('当前', '当前', None, False, None, None, None),
-    ('温度', '温度', None, False, None, None, None),
-    ('。', '。', None, False, None, None, None),
-    ('根据', '根据', None, False, None, None, None),
-    ('函数', '函数', None, False, None, None, None),
-    ('要求', '要求', None, False, None, None, None),
-    ('，', '，', None, False, None, None, None),
-    ('location', 'location', None, False, None, None, None),
-    ('参数', '参数', None, False, None, None, None),
-    ('需要', '需要', None, False, None, None, None),
-    ('是', '是', None, False, None, None, None),
-    ('"', '"', None, False, None, None, None),
-    ('City', 'City', None, False, None, None, None),
-    (',', ',', None, False, None, None, None),
-    (' State', ' State', None, False, None, None, None),
-    (',', ',', None, False, None, None, None),
-    (' Country', ' Country', None, False, None, None, None),
-    ('"', '"', None, False, None, None, None),
-    ('的', '的', None, False, None, None, None),
-    ('格式', '格式', None, False, None, None, None),
-    ('，', '，', None, False, None, None, None),
-    ('所以', '所以', None, False, None, None, None),
-    ('北京', '北京', None, False, None, None, None),
-    ('应该', '应该', None, False, None, None, None),
-    ('写成', '写成', None, False, None, None, None),
-    ('"', '"', None, False, None, None, None),
-    ('Be', 'Be', None, False, None, None, None),
-    ('ijing', 'ijing', None, False, None, None, None),
-    (',', ',', None, False, None, None, None),
-    (' China', ' China', None, False, None, None, None),
-    ('"', '"', None, False, None, None, None),
-    ('。', '。', None, False, None, None, None),
-    ('unit', 'unit', None, False, None, None, None),
-    ('参数', '参数', None, False, None, None, None),
-    ('是', '是', None, False, None, None, None),
-    ('可选', '可选', None, False, None, None, None),
-    ('的', '的', None, False, None, None, None),
-    ('，', '，', None, False, None, None, None),
-    ('默认', '默认', None, False, None, None, None),
-    ('是', '是', None, False, None, None, None),
-    ('c', 'c', None, False, None, None, None),
-    ('elsius', 'elsius', None, False, None, None, None),
-    ('，', '，', None, False, None, None, None),
-    ('我不', '我不', None, False, None, None, None),
-    ('需要', '需要', None, False, None, None, None),
-    ('特别', '特别', None, False, None, None, None),
-    ('指定', '指定', None, False, None, None, None),
-    ('。', '。', None, False, None, None, None),
-    ('\n', '\n', None, False, None, None, None),
-    ('</think>', None, None, False, None, None, None),
-    ('\n\n', None, '\n\n', False, None, None, None),
+    # (delta_text, emitted_delta_msg, reasoning_content, content,
+    # tool_emitted, function_name, function_arguments, tool_call_type)
+    # Short representative reasoning stream; literal text is irrelevant.
+    ('计划', True, '计划', None, False, None, None, None),
+    ('调用', True, '调用', None, False, None, None, None),
+    ('get', True, 'get', None, False, None, None, None),
+    ('_current', True, '_current', None, False, None, None, None),
+    ('_temperature', True, '_temperature', None, False, None, None, None),
+    ('函数', True, '函数', None, False, None, None, None),
+    ('并提供', True, '并提供', None, False, None, None, None),
+    ('location', True, 'location', None, False, None, None, None),
+    ('参数', True, '参数', None, False, None, None, None),
+    ('。', True, '。', None, False, None, None, None),
+    ('\n', True, '\n', None, False, None, None, None),
+    ('</think>', False, None, None, False, None, None, None),
+    ('\n\n', True, None, '\n\n', False, None, None, None),
     # Tool call section: placeholder; will be updated to match Qwen3.5 XML-style.
-    ('<tool_call>', None, None, False, None, None, None),
-    ('\n', None, None, False, None, None, None),
-    ('<', None, None, False, None, None, None),
-    ('function', None, None, False, None, None, None),
-    ('=get', None, None, False, None, None, None),
-    ('_current', None, None, False, None, None, None),
-    ('_temperature', None, None, False, None, None, None),
-    ('>', None, None, False, None, None, None),
-    ('\n', None, None, False, None, None, None),
-    ('<', None, None, False, None, None, None),
-    ('parameter', None, None, False, None, None, None),
-    ('=location', None, None, False, None, None, None),
-    ('>', None, None, False, None, None, None),
-    ('\n', None, None, False, None, None, None),
-    ('Be', None, None, False, None, None, None),
-    ('ijing', None, None, False, None, None, None),
-    (',', None, None, False, None, None, None),
-    (' China', None, None, False, None, None, None),
-    ('\n', None, None, False, None, None, None),
-    ('</', None, None, False, None, None, None),
-    ('parameter', None, None, False, None, None, None),
-    ('>', None, None, False, None, None, None),
-    ('\n', None, None, False, None, None, None),
-    ('</', None, None, False, None, None, None),
-    ('function', None, None, False, None, None, None),
-    ('>', None, None, False, None, None, None),
-    ('\n', None, None, False, None, None, None),
-    ('</tool_call>', None, None, False, None, None, None),
-    ('', None, None, False, None, None, None),
+    ('<tool_call>', False, None, None, False, None, None, None),
+    ('\n', False, None, None, False, None, None, None),
+    ('<', False, None, None, False, None, None, None),
+    ('function', False, None, None, False, None, None, None),
+    ('=get', False, None, None, False, None, None, None),
+    ('_current', False, None, None, False, None, None, None),
+    ('_temperature', False, None, None, False, None, None, None),
+    ('>', True, None, None, True, 'get_current_temperature', None, 'function'),
+    ('\n', False, None, None, False, None, None, None),
+    ('<', False, None, None, False, None, None, None),
+    ('parameter', False, None, None, False, None, None, None),
+    ('=location', False, None, None, False, None, None, None),
+    ('>', False, None, None, False, None, None, None),
+    ('\n', False, None, None, False, None, None, None),
+    ('Be', False, None, None, False, None, None, None),
+    ('ijing', False, None, None, False, None, None, None),
+    (',', False, None, None, False, None, None, None),
+    (' China', False, None, None, False, None, None, None),
+    ('\n', False, None, None, False, None, None, None),
+    ('</', False, None, None, False, None, None, None),
+    ('parameter', False, None, None, False, None, None, None),
+    ('>', True, None, None, True, None, '{', None),
+    ('\n', True, None, None, True, None, '"location": "Beijing, China"', None),
+    ('</', False, None, None, False, None, None, None),
+    ('function', False, None, None, False, None, None, None),
+    ('>', True, None, None, True, None, '}', None),
+    ('\n', False, None, None, False, None, None, None),
+    ('</tool_call>', False, None, None, False, None, None, None),
+    ('', True, None, '', False, None, None, None),
 ]
 
 
@@ -153,7 +98,7 @@ class TestQwen3_5ResponseParserStreaming:
         Expectations for tool_calls will be refined once the Qwen3.5 ground-truth stream is finalized.
         """
 
-        for (delta_text, exp_reasoning, exp_content, exp_tool_emitted,
+        for (delta_text, exp_delta_msg, exp_reasoning, exp_content, exp_tool_emitted,
              exp_function_name, exp_function_arguments,
              exp_type) in REFERENCE_CHUNKS:
             delta_ids = self._encode_ids(tokenizer, delta_text)
@@ -161,17 +106,12 @@ class TestQwen3_5ResponseParserStreaming:
                 delta_text=delta_text,
                 delta_token_ids=delta_ids,
             )
-
-            if delta_msg is None:
-                assert exp_reasoning is None
-                assert exp_content is None
-                assert exp_tool_emitted is False
-                assert tool_emitted is False
+            if exp_delta_msg is False:
+                assert delta_msg is None
                 continue
 
             assert delta_msg.reasoning_content == exp_reasoning
-            if exp_content is not None:
-                assert delta_msg.content == exp_content
+            assert delta_msg.content == exp_content
 
             # Tool-call expectations in this fixture are placeholders for now.
             # Only enforce the exact tool_emitted flag when an explicit tool
