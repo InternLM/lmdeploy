@@ -164,7 +164,7 @@ html_theme_options = {
     #     {
     #         "name": "切换至简体中文",
     #         "url": "https://lmdeploy.readthedocs.io/en/latest",
-    #         "icon": "https://img.shields.io/badge/Doc-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-blue", # noqa: #501
+    #         "icon": "https://img.shields.io/badge/Doc-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-blue", # noqa: E501
     #         "type": "url",
     #     },
     # ],

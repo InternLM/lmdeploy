@@ -2,6 +2,7 @@
 # adapted from https://github.com/vllm-project/vllm/blob/main/vllm/multimodal/media/video.py
 
 import base64
+import os
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -43,16 +44,36 @@ class VideoMediaIO(MediaIO[tuple[npt.NDArray, dict[str, Any]]]):
         self.video_loader = self._get_video_loader_backend()
 
     def _get_video_loader_backend(self) -> VideoLoader:
-        """Determines the best available video loader backend."""
-        # vLLM:          OpenCV
-        # SGLang:        Decord
-        # qwen-vl-utils: TorchCodec -> Decord -> TorchVision (deprecated soon)
+        """Determines the best available video loader backend. Override with
+        LMDEPLOY_VIDEO_BACKEND={cv2,decord,torchcodec,torchvision}.
+
+        vLLM:          OpenCV
+        SGLang:        Decord
+        qwen-vl-utils: TorchCodec -> Decord -> TorchVision (deprecated soon)
+        """
+
         backends = [
             ('cv2', OpenCVVideoLoader),
             ('decord', DecordVideoLoader),
             ('torchcodec', TorchCodecVideoLoader),
             ('torchvision', TorchVisionVideoLoader),
         ]
+        backend_map = dict(backends)
+
+        preferred = os.getenv('LMDEPLOY_VIDEO_BACKEND', None)
+        if preferred is not None:
+            if preferred not in backend_map:
+                valid = list(backend_map.keys())
+                raise ValueError(
+                    f"LMDEPLOY_VIDEO_BACKEND='{preferred}' is not valid. "
+                    f'Choose from: {valid}')
+            try:
+                __import__(preferred)
+                return backend_map[preferred]()
+            except (ImportError, RuntimeError) as e:
+                raise ImportError(
+                    f"Video backend '{preferred}' (set via LMDEPLOY_VIDEO_BACKEND) "
+                    f'is not available: {e}') from e
 
         for module_name, loader_cls in backends:
             try:

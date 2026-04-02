@@ -9,10 +9,13 @@ import torch
 @tilelang.jit(pass_configs={
     tilelang.PassConfigKey.TL_ENABLE_FAST_MATH: True,
 }, )
-def causal_conv1d_fwd(hidden_size, width, has_bias, activation, dtype, stride_x, num_warps, ChunkSizeL=64):
+def causal_conv1d_fwd(hidden_size, width, has_bias, activation, dtype, stride_x, has_init_states, num_warps,
+                      ChunkSizeL=64):
     """TileLang kernel for causal convolution forward pass.
 
-    Each thread processes one output position for all channels sequentially.
+    Each thread processes one output position for all channels sequentially. When has_init_states=True, the kernel reads
+    per-sequence initial states from Init_states[seq_id, channel, :] for positions before a sequence's start boundary,
+    instead of contributing zero.
     """
     num_threads = num_warps * 32
     num_bits = T.DataType(dtype).bits
@@ -27,6 +30,7 @@ def causal_conv1d_fwd(hidden_size, width, has_bias, activation, dtype, stride_x,
     thrs_per_row = ChunkSizeL // l_per_thread
     assert thrs_per_row * l_per_thread == ChunkSizeL
     sum_seqlen = T.dynamic('sum_seqlen')
+    n_seqs = T.dynamic('n_seqs')
 
     @T.prim_func
     def causal_conv1d_fwd_main(
@@ -34,7 +38,7 @@ def causal_conv1d_fwd(hidden_size, width, has_bias, activation, dtype, stride_x,
         W: T.Tensor([hidden_size, width], dtype=dtype),
         seq_idx: T.Tensor([sum_seqlen], dtype=T.int32),
         Bias: T.Tensor([hidden_size], dtype=dtype) = None,
-        Init_states: T.Tensor([hidden_size, width - 1], dtype=dtype) = None,
+        Init_states: T.Tensor([n_seqs, hidden_size, width - 1], dtype=dtype) = None,
         Out: T.StridedTensor([hidden_size, sum_seqlen], dtype=dtype, strides=(1, hidden_size)) = None,
         Final_States: T.Tensor([hidden_size, width - 1], dtype=dtype) = None,
     ):
@@ -69,13 +73,14 @@ def causal_conv1d_fwd(hidden_size, width, has_bias, activation, dtype, stride_x,
             tid = T.get_thread_binding(0)
             row_idx = tid // thrs_per_row
             col_idx = tid % thrs_per_row
+            c_idx = bc * ChunkSizeC + row_idx
 
             # load w/b
-            if bc * ChunkSizeC + row_idx < hidden_size:
+            if c_idx < hidden_size:
                 for widx in T.unroll(width):
-                    w_local[widx] = W[bc * ChunkSizeC + row_idx, widx]
+                    w_local[widx] = W[c_idx, widx]
                 if has_bias:
-                    bias_var = Bias[bc * ChunkSizeC + row_idx]
+                    bias_var = Bias[c_idx]
 
             # load x
             for i in T.unroll(l_per_thread + width - 1):
@@ -93,8 +98,35 @@ def causal_conv1d_fwd(hidden_size, width, has_bias, activation, dtype, stride_x,
                 if seq_idx_cur < 0:
                     out_vals[i] = 0.0
                     continue
-                for w in T.unroll(width):
-                    out_vals[i] += T.if_then_else(seq_idx_local[i + w] == seq_idx_cur, w_local[w] * x_local[i + w], 0.0)
+
+                if has_init_states:
+                    # Count how many consecutive positions before the output
+                    # belong to the same sequence (k_val). Positions outside
+                    # that range need init state instead of x data.
+                    k_val = T.alloc_var(T.int32)
+                    k_val = 0
+                    for j in T.unroll(width - 1):
+                        k_val = T.if_then_else(
+                            (seq_idx_local[i + width - 2 - j] == seq_idx_cur) and (k_val == j), j + 1, k_val)
+
+                    for w in T.unroll(width):
+                        if seq_idx_local[i + w] == seq_idx_cur:
+                            out_vals[i] += w_local[w] * x_local[i + w]
+                        else:
+                            # w goes from 0..width-1, output is at i+width-1.
+                            # The init state column: (width-1) - (width-1 - w) - 1 + k_val = w - 1 + k_val
+                            # But more directly: the distance from seq start
+                            # for this position is k_val + w (counting from
+                            # the leftmost halo). init_col maps to the state.
+                            init_col = k_val + w
+                            if init_col < width - 1:
+                                out_vals[i] += w_local[w] * T.cast(Init_states[seq_idx_cur, c_idx, init_col],
+                                                                    T.float32)
+                else:
+                    for w in T.unroll(width):
+                        out_vals[i] += T.if_then_else(seq_idx_local[i + w] == seq_idx_cur,
+                                                      w_local[w] * x_local[i + w], 0.0)
+
                 if silu_activation:
                     out_vals[i] = T.sigmoid(out_vals[i]) * out_vals[i]
 
@@ -128,7 +160,7 @@ def causal_conv1d_fn(
         weight: Convolution weights of shape [hidden_size, kernel_size]
         bias: Optional bias of shape [hidden_size]
         seq_idx: Sequence indices of shape [sequence_length] to handle multiple sequences
-        initial_states: Initial states for sequence start [hidden_size, kernel_size-1]
+        initial_states: Per-sequence initial states [n_seqs, hidden_size, kernel_size-1]
         return_final_states: Whether to return final states
         final_states_out: Output tensor for final states
         activation: Activation function name ('silu', 'gelu', 'relu', or None)
@@ -148,6 +180,7 @@ def causal_conv1d_fn(
     _, hidden_size, _ = x.shape
     kernel_size = weight.shape[1]
     dtype = x.dtype
+    has_init_states = initial_states is not None
 
     # Reshape to 2D format for kernel: [hidden_size, sum_seqlen]
     x_2d = x.squeeze(0)  # [hidden_size, sum_seqlen]
@@ -159,7 +192,8 @@ def causal_conv1d_fn(
 
     # Create and call the TileLang kernel
     num_warps = 4  # Tunable parameter
-    kernel = causal_conv1d_fwd(hidden_size, kernel_size, bias is not None, activation, dtype, x.stride(2), num_warps)
+    kernel = causal_conv1d_fwd(hidden_size, kernel_size, bias is not None, activation, dtype, x.stride(2),
+                               has_init_states, num_warps)
 
     kernel(
         x_2d,

@@ -33,6 +33,11 @@ pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/d
 # sm100 compilation for Flash MLA requires NVCC 12.9 or higher
 FLASH_MLA_DISABLE_SM100=1 pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/deepseek-ai/FlashMLA.git@${FLASH_MLA_VERSION}"
 
+# flash_attn_3 (prebuilt wheels; CUDA + torch must match this image)
+TORCH_VER=$(python3 -c "import torch; print(''.join(torch.__version__.split('+')[0].split('.')))")
+FA3_WHEELS_URL="https://windreamer.github.io/flash-attention3-wheels/${CUDA_VERSION_SHORT}_torch${TORCH_VER}"
+pip download --no-deps -d /wheels "flash_attn_3" --find-links "${FA3_WHEELS_URL}"
+
 # GDRCopy debs
 apt-get update -y \
 && apt-get install -y --no-install-recommends build-essential devscripts debhelper fakeroot pkg-config dkms
