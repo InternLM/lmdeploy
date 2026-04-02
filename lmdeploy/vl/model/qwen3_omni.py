@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import torch
 from transformers import AutoProcessor
@@ -42,90 +42,58 @@ class Qwen3OmniModel(VisionModel):
         self.audio_token = self.processor.audio_token
         self.audio_token_id = tokenizer.encode(self.audio_token)[-1]
 
-    def get_processor_args(self, mm_processor_kwargs: Optional[Dict[str, Any]] = None):
-        min_pixels = self.processor.image_processor.size['shortest_edge']
-        max_pixels = self.processor.image_processor.size['longest_edge']
+    def resolve_size_params(self, processor, mm_processor_kwargs: dict[str, Any] | None = None):
+        default_min = processor.size['shortest_edge']
+        default_max = processor.size['longest_edge']
 
-        if mm_processor_kwargs is None:
-            return min_pixels, max_pixels
+        if not mm_processor_kwargs:
+            return {'shortest_edge': default_min, 'longest_edge': default_max}
 
-        input_min_pixels = mm_processor_kwargs.get('min_pixels', None)
-        input_max_pixels = mm_processor_kwargs.get('max_pixels', None)
+        min_pixels = mm_processor_kwargs.get('min_pixels', default_min)
+        max_pixels = mm_processor_kwargs.get('max_pixels', default_max)
 
-        # boundary check for min_pixels and max_pixels
-        if input_min_pixels is None:
-            if input_max_pixels is not None:
-                # only max_pixels is given in the input
-                if input_max_pixels < min_pixels:
-                    logger.warning(
-                        f'input max_pixels {input_max_pixels} < default min_pixels {min_pixels}, fall back to default.')
-                    return min_pixels, max_pixels
-                max_pixels = input_max_pixels
-        else:
-            if input_max_pixels is None:
-                # only min_pixels is given in the input
-                if input_min_pixels > max_pixels:
-                    logger.warning(
-                        f'input min_pixels {input_min_pixels} > default max_pixels {max_pixels}, fall back to default.')
-                    return min_pixels, max_pixels
-            else:
-                if input_min_pixels > input_max_pixels:
-                    logger.warning(
-                        f'input min_pixels {input_min_pixels} > max_pixels {input_max_pixels}, fall back to default.')
-                    return min_pixels, max_pixels
-                max_pixels = input_max_pixels
-            min_pixels = input_min_pixels
+        if min_pixels > max_pixels:
+            logger.warning(f'min_pixels {min_pixels} > max_pixels {max_pixels}, falling back to defaults.')
+            return {'shortest_edge': default_min, 'longest_edge': default_max}
 
-        return min_pixels, max_pixels
+        return {'shortest_edge': min_pixels, 'longest_edge': max_pixels}
 
     def _preprocess_image(self,
-                          data: List[Any],
-                          params: Dict[str, Any],
-                          mm_processor_kwargs: Dict[str, Any] | None = None) -> List[Dict]:
+                          data: list[Any],
+                          params: dict[str, Any],
+                          mm_processor_kwargs: dict[str, Any] | None = None) -> list[dict]:
 
-        image = data.convert('RGB')
-        min_pixels, max_pixels = self.get_processor_args(mm_processor_kwargs)
-
-        result = self.processor.image_processor(images=image,
-                                                size={
-                                                    'shortest_edge': min_pixels,
-                                                    'longest_edge': max_pixels
-                                                },
-                                                return_tensors='pt')
+        size = self.resolve_size_params(self.processor.image_processor, mm_processor_kwargs)
+        result = self.processor.image_processor(images=data, size=size, return_tensors='pt')
         merge_length = self.processor.image_processor.merge_size**2
         image_tokens = result['image_grid_thw'].prod(dim=1) // merge_length
-        result.update(dict(image_size=image.size, mm_token_num=image_tokens, image_token_id=self.image_token_id))
+        result.update(dict(image_size=data.size, mm_token_num=image_tokens, image_token_id=self.image_token_id))
         return result
 
     def _preprocess_video(self,
-                          data: List[Any],
-                          params: Dict[str, Any],
-                          mm_processor_kwargs: Dict[str, Any] | None = None) -> List[Dict]:
+                          data: list[Any],
+                          params: dict[str, Any],
+                          mm_processor_kwargs: dict[str, Any] | None = None) -> list[dict]:
 
-        # TODO: zhouxinyu, apply transformers smart_resize using per-request kwargs
         metadata = params['video_metadata']
-        video_kwargs = dict(return_metadata=True,
-                            do_resize=True,
-                            do_sample_frames=False,
-                            video_metadata=metadata,
-                            return_tensors='pt')
+        if metadata.get('fps') is None or metadata['fps'] <= 0:
+            logger.warning('Qwen3Omni: fps not found or invalid, fallback to 24.')
+            metadata['fps'] = 24
+        size = self.resolve_size_params(self.processor.video_processor, mm_processor_kwargs)
 
-        # TODO: update from mm_processor_kwargs when needed
-        video_kwargs.update(size={
-            'shortest_edge': 128 * 32 * 32,
-            'longest_edge': 768 * 32 * 32,
-        })
-        result = self.processor.video_processor(videos=data, **video_kwargs)
-        video_grid_thw = result['video_grid_thw']
+        # do_resize = True, we leave resize to hf processor
+        # do_sample_frames = False, we already sample frames in video loader, avoid duplicates in hf processor
+        result = self.processor.video_processor(videos=data,
+                                                size=size,
+                                                return_metadata=True,
+                                                do_resize=True,
+                                                do_sample_frames=False,
+                                                video_metadata=metadata,
+                                                return_tensors='pt')
 
         merge_length = self.processor.video_processor.merge_size**2
-        if metadata.get('fps') is None:
-            logger.warning_once('Qwen3VL: fps not found, defaulting to 24.')
-            metadata['fps'] = metadata['fps'] or 24
-
-        # TODO: update fps from video kwargs, refer to transformers/models/qwen3_omni_moe/processing_qwen3_omni_moe.py
-        second_per_grid = self.processor.video_processor.temporal_patch_size / video_kwargs.get('fps', 1.0)
-
+        video_grid_thw = result['video_grid_thw']
+        second_per_grid = self.processor.video_processor.temporal_patch_size / metadata.get('fps', 1.0)
         frame_seqlen = video_grid_thw[0][1:].prod() // merge_length
         video_tokens = video_grid_thw[0].prod() // merge_length  # T*H*W / merge^2
         result.update(frame_seqlen=frame_seqlen,
@@ -144,21 +112,21 @@ class Qwen3OmniModel(VisionModel):
         return output_lengths
 
     def _preprocess_audio(self,
-                          data: List[Any],
-                          params: Dict[str, Any],
-                          mm_processor_kwargs: Dict[str, Any] | None = None) -> List[Dict]:
+                          data: list[Any],
+                          params: dict[str, Any],
+                          mm_processor_kwargs: dict[str, Any] | None = None) -> list[dict]:
         audio, original_sr = data
-        # NOTE: WhisperFeatureExtractor was trained using a fixed sampling rate of 16000
-        # TODO: zhouxinyu, get truncation from mm_processor_kwargs when needed
+        # WhisperFeatureExtractor was trained using a fixed sampling rate of 16000
         sr = self.processor.feature_extractor.sampling_rate
-        audio_kwargs = {
-            'sampling_rate': sr,
-            'padding': True,
-            'truncation': False,
-            'return_attention_mask': True,
-            'return_tensors': 'pt'
-        }
-        result = self.processor.feature_extractor(audio, **audio_kwargs)
+        truncation = mm_processor_kwargs.get('truncation', False) if mm_processor_kwargs else False
+
+        result = self.processor.feature_extractor(audio,
+                                                  sampling_rate=sr,
+                                                  padding=True,
+                                                  truncation=truncation,
+                                                  return_attention_mask=True,
+                                                  return_tensors='pt')
+
         feature_attention_mask = result.get('attention_mask')
         audio_feature_lengths = torch.sum(feature_attention_mask, dim=1)
         audio_output_length = self._get_feat_extract_output_lengths(audio_feature_lengths)
@@ -170,7 +138,7 @@ class Qwen3OmniModel(VisionModel):
                  audio_token_id=self.audio_token_id))
         return result
 
-    def preprocess(self, messages: List[Dict], mm_processor_kwargs: Dict[str, Any] | None = None) -> List[Dict]:
+    def preprocess(self, messages: list[dict], mm_processor_kwargs: dict[str, Any] | None = None) -> list[dict]:
         """Refer to `super().preprocess()` for spec."""
         outputs = []
         self.contains_video_input = False
@@ -213,7 +181,7 @@ class Qwen3OmniModel(VisionModel):
                    chat_template,
                    tokenizer,
                    sequence_start,
-                   chat_template_kwargs: Dict | None = None,
+                   chat_template_kwargs: dict | None = None,
                    **kwargs):
         """Return to the information needed by pytorch engine."""
         prompt, mm_placeholder = self.proc_messages(messages, chat_template, sequence_start, chat_template_kwargs)
