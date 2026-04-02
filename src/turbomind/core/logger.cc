@@ -146,6 +146,7 @@ public:
 
     void Enqueue(LogRecord record);
     void Stop();
+    void OnSignal();
 
     ~AsyncLogWorker();
 
@@ -157,6 +158,11 @@ private:
     moodycamel::BlockingConcurrentQueue<LogRecord> queue_;
     std::thread                                    thread_;
     std::atomic_flag                               stopped_ = ATOMIC_FLAG_INIT;
+
+    std::atomic<bool> signal_shutdown_{false};
+    std::atomic<bool> signal_drain_done_{false};
+    std::atomic<bool> worker_ready_{false};
+    std::thread::id   worker_thread_id_{};
 };
 
 // ---------------------------------------------------------------------------
@@ -278,17 +284,45 @@ AsyncLogWorker& AsyncLogWorker::Instance()
 
 static void OnFatalSignal(int signum)
 {
-    AsyncLogWorker::Instance().Stop();
+    AsyncLogWorker::Instance().OnSignal();
     ::signal(signum, SIG_DFL);
     ::raise(signum);
 }
 
-AsyncLogWorker::AsyncLogWorker(): thread_(&AsyncLogWorker::Run, this)
+AsyncLogWorker::AsyncLogWorker()
 {
+    thread_ = std::thread(&AsyncLogWorker::Run, this);
+    while (!worker_ready_.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+
     const char* signals_env = std::getenv("TM_LOG_SIGNALS");
     if (signals_env == nullptr || std::string_view{signals_env} != "0") {
         for (int sig : {SIGSEGV, SIGABRT, SIGFPE, SIGILL, SIGBUS}) {
             ::signal(sig, OnFatalSignal);
+        }
+    }
+}
+
+void AsyncLogWorker::OnSignal()
+{
+    stopped_.test_and_set();
+
+    if (std::this_thread::get_id() == worker_thread_id_) {
+        LogRecord record;
+        while (queue_.try_dequeue(record)) {
+            if (record.kind != RecordKind::kStop) {
+                PrintStyled(record.level, record.message);
+            }
+        }
+    }
+    else {
+        signal_shutdown_.store(true, std::memory_order_release);
+        for (int i = 0; i < 2000; ++i) {
+            if (signal_drain_done_.load(std::memory_order_acquire)) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
 }
@@ -316,20 +350,35 @@ void AsyncLogWorker::Enqueue(LogRecord record)
 
 void AsyncLogWorker::Run()
 {
+    worker_thread_id_ = std::this_thread::get_id();
+    worker_ready_.store(true, std::memory_order_release);
+
     LogRecord record;
     while (true) {
-        queue_.wait_dequeue(record);
+        bool got = queue_.wait_dequeue_timed(record, std::chrono::milliseconds(100));
 
-        if (record.kind == RecordKind::kStop) {
-            // Drain remaining records so we don't lose messages enqueued before shutdown.
+        if (got) {
+            if (record.kind == RecordKind::kStop) {
+                while (queue_.try_dequeue(record)) {
+                    if (record.kind != RecordKind::kStop) {
+                        PrintStyled(record.level, record.message);
+                    }
+                }
+                signal_drain_done_.store(true, std::memory_order_release);
+                return;
+            }
+            PrintStyled(record.level, record.message);
+        }
+
+        if (signal_shutdown_.load(std::memory_order_acquire)) {
             while (queue_.try_dequeue(record)) {
                 if (record.kind != RecordKind::kStop) {
                     PrintStyled(record.level, record.message);
                 }
             }
-            break;
+            signal_drain_done_.store(true, std::memory_order_release);
+            return;
         }
-        PrintStyled(record.level, record.message);
     }
 }
 
