@@ -158,6 +158,36 @@ class CudaOpsBackend(DefaultOpsBackend):
         return attn_metadata
 
     @classmethod
+    def update_chunked_gated_delta_rule_meta(cls, attn_metadata, step_context):
+        try:
+            from fla.ops.utils import prepare_chunk_indices
+        except ImportError:
+            logger.warning(
+                'Failed to import fla.ops.utils.prepare_chunk_indices for gated delta rule. '
+                'Please make sure the version of fla is installed, up to date and compatible with lmdeploy.'
+            )
+        else:
+            # prepare_chunk_indices would force sync the stream
+            # we better maintain a cpu cu_seqlens_q cache in the future to avoid this
+            try:
+                # 64 is the default value that hard code inside fla
+                # so we have to hard code it here.
+                cu_seqlens_q = attn_metadata.cu_seqlens_q
+                chunk_size = 64
+                try:
+                    prepare_chunk_indices(cu_seqlens_q, chunk_size, cu_seqlens_cpu=None)
+                except TypeError:
+                    prepare_chunk_indices(cu_seqlens_q, chunk_size)
+            except Exception as exc:
+                logger.exception(
+                    'Unexpected error while preparing chunk indices for gated delta rule. '
+                    'Please make sure the version of fla is up to date and compatible with lmdeploy.'
+                )
+                raise RuntimeError(
+                    'Failed to prepare chunk indices for gated delta rule; see logs for details.'
+                ) from exc
+
+    @classmethod
     def update_step_context(cls, step_context):
         """Update step context."""
         attn_meta_cls = cls.get_attention_metadata_cls()
@@ -198,6 +228,11 @@ class CudaOpsBackend(DefaultOpsBackend):
                 cls.update_meta_flashmla(attn_metadata, model_config, decode_query_len)
             elif use_flash_attn3_decoding:
                 attn_metadata = cls.update_meta_flashattn(attn_metadata, step_context)
+
+        # update chunk gated delta indices
+        is_gated_delta = step_context.model_config.is_gated_delta
+        if is_gated_delta and not step_context.is_decoding:
+            cls.update_chunked_gated_delta_rule_meta(attn_metadata, step_context)
 
         step_context.attn_metadata = attn_metadata
         return step_context

@@ -93,6 +93,7 @@ def _fill_kv_cache_kernel(
         q_offs = token_off + page_offs
 
     block_off = tl.load(BlockOffsets + batch_id * stride_boff + kv_block_id)
+    block_off = block_off.to(tl.int64)
 
     d_off = tl.arange(0, BLOCK_D)
     mask_ks = kv_mask[:, None]
@@ -349,6 +350,7 @@ def _fill_kv_cache_quant_kernel(
         q_offs = token_off + page_offs
 
     block_off = tl.load(BlockOffsets + batch_id * stride_boff + kv_block_id)
+    block_off = block_off.to(tl.int64)
 
     _fill_page_quant(KStates,
                      KCaches,
@@ -645,6 +647,7 @@ def _fill_kv_cache_blocked_fp8_kernel(
         q_offs = token_off + page_offs
 
     block_off = tl.load(BlockOffsets + batch_id * stride_boff + kv_block_id)
+    block_off = block_off.to(tl.int64)
 
     d_off = tl.arange(0, BLOCK_D)
     mask_ks = kv_mask[:, None]
