@@ -309,8 +309,7 @@ struct TurboMind::Impl {
     {
         if (!engine_param_.max_context_token_num) {
             engine_param_.max_context_token_num = engine_param_.session_len;
-            TM_LOG_WARN("`max_context_token_num` is not set, default to {}.",
-                        (int)engine_param_.max_context_token_num);
+            TM_LOG_WARN("`max_context_token_num` is not set, default to {}.", (int)engine_param_.max_context_token_num);
         }
 
         if (engine_param_.max_context_token_num <= engine_param_.max_batch_size) {

@@ -309,7 +309,7 @@ TEST_CASE("Logger: async signal handler drains queue on fatal signal", "[logger]
     const char* async_env = std::getenv("TM_LOG_ASYNC");
     REQUIRE((async_env != nullptr && std::string_view{async_env} == "0"));
 
-    constexpr int kMsgCount = 20;
+    constexpr int            kMsgCount = 20;
     std::vector<std::string> markers;
     markers.reserve(kMsgCount);
     for (int i = 0; i < kMsgCount; ++i) {

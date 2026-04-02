@@ -2,10 +2,10 @@
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/data_type.h"
+#include "src/turbomind/core/logger.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/llama/gated_delta_net_kernels.h"
 #include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/core/logger.h"
 
 namespace turbomind {
 

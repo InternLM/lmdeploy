@@ -104,10 +104,10 @@ private:
 #define TM_LOG_INFO(...) TM_LOG(turbomind::core::Logger::Level::kInfo, __VA_ARGS__)
 #define TM_LOG_WARN(...) TM_LOG(turbomind::core::Logger::Level::kWarning, __VA_ARGS__)
 #define TM_LOG_ERROR(...) TM_LOG(turbomind::core::Logger::Level::kError, __VA_ARGS__)
-#define TM_LOG_FATAL(...)                                                                                               \
-    do {                                                                                                                 \
-        turbomind::core::Logger::Instance().LogFatal(                                                                   \
-            turbomind::core::SourceLocation{__FILE__, __LINE__}, __VA_ARGS__);                                          \
+#define TM_LOG_FATAL(...)                                                                                              \
+    do {                                                                                                               \
+        turbomind::core::Logger::Instance().LogFatal(turbomind::core::SourceLocation{__FILE__, __LINE__},              \
+                                                     __VA_ARGS__);                                                     \
     } while (0)
 
 #define TM_LOG_WARNING(...) TM_LOG_WARN(__VA_ARGS__)

@@ -61,8 +61,7 @@ std::string* CheckOpStringBuilder::NewString()
     return new std::string{oss_->str()};
 }
 
-CheckErrorStream::CheckErrorStream(const char* file, int line, const char* expr):
-    file_{file}, line_{line}
+CheckErrorStream::CheckErrorStream(const char* file, int line, const char* expr): file_{file}, line_{line}
 {
     oss_ = new std::ostringstream{};
     *oss_ << StripSrcPrefix(file) << "(" << line << "): Check failed: " << expr << " ";

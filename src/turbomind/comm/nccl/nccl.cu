@@ -83,9 +83,8 @@ static NcclApis& nccl_apis()
             load_symbol(apis.ncclCommWindowDeregister, "ncclCommWindowDeregister");
         }
         else {
-            TM_LOG_WARN(
-                "Window registration is not supported by NCCL {}, use NCCL 2.28+ for better performance.",
-                version);
+            TM_LOG_WARN("Window registration is not supported by NCCL {}, use NCCL 2.28+ for better performance.",
+                        version);
         }
         if (version >= NCCL_VERSION(2, 19, 0)) {
             load_symbol(apis.ncclMemAlloc, "ncclMemAlloc");
@@ -97,8 +96,7 @@ static NcclApis& nccl_apis()
             load_symbol(apis.ncclCommSplit, "ncclCommSplit");
         }
         else {
-            TM_LOG_WARN("Splitting communicators is not supported by NCCL {}, use NCCL 2.18+ if needed.",
-                        version);
+            TM_LOG_WARN("Splitting communicators is not supported by NCCL {}, use NCCL 2.18+ if needed.", version);
         }
         return apis;
     }();

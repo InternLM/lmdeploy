@@ -203,8 +203,8 @@ Logger::Logger()
             std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return std::toupper(c); });
             return s;
         }();
-        auto                   it =
-            std::find_if(kNameToLevel.begin(), kNameToLevel.end(), [&](const Entry& e) { return e.first == name_upper; });
+        auto it = std::find_if(
+            kNameToLevel.begin(), kNameToLevel.end(), [&](const Entry& e) { return e.first == name_upper; });
         if (it != kNameToLevel.end()) {
             level_ = it->second;
         }
