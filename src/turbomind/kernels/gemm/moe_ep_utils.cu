@@ -444,36 +444,36 @@ void invokeMoeLocalCombineEp(Ref<Tensor>   out_,
 
     const int dim = src.shape(1);
 
+    auto invoke = [&](auto t, auto e, auto has_bias_) {
+        using T                    = decltype(t);
+        constexpr int  threads     = 256;
+        constexpr int  vsize       = 16 / sizeof(T);
+        constexpr int  exp_per_tok = decltype(e)::value;
+        constexpr bool has_bias    = decltype(has_bias_)::value;
+        MoeCombineKernel<vsize, exp_per_tok, has_bias, threads><<<tokens, threads, 0, st>>>(  //
+            out.data<T>(),
+            src.data<T>(),
+            bias.data_or((T*)nullptr),
+            topk_weights,
+            en2f,
+            f2E,
+            dim,
+            tokens);
+        sync_check_cuda_error();
+    };
+
     auto dispatch_topk = [&](auto has_bias, auto t) {
-        using T               = decltype(t);
-        constexpr int threads = 256;
-        constexpr int vsize   = 16 / sizeof(T);
-
-        auto invoke = [&](auto e) {
-            constexpr int exp_per_tok = decltype(e)::value;
-            MoeCombineKernel<vsize, exp_per_tok, decltype(has_bias)::value, threads><<<tokens, threads, 0, st>>>(  //
-                out.data<T>(),
-                src.data<T>(),
-                bias.data_or((T*)nullptr),
-                topk_weights,
-                en2f,
-                f2E,
-                dim,
-                tokens);
-            sync_check_cuda_error();
-        };
-
         switch (experts_per_token) {
             case 1:
-                return invoke(std::integral_constant<int, 1>{});
+                return invoke(t, std::integral_constant<int, 1>{}, has_bias);
             case 2:
-                return invoke(std::integral_constant<int, 2>{});
+                return invoke(t, std::integral_constant<int, 2>{}, has_bias);
             case 4:
-                return invoke(std::integral_constant<int, 4>{});
+                return invoke(t, std::integral_constant<int, 4>{}, has_bias);
             case 6:
-                return invoke(std::integral_constant<int, 6>{});
+                return invoke(t, std::integral_constant<int, 6>{}, has_bias);
             case 8:
-                return invoke(std::integral_constant<int, 8>{});
+                return invoke(t, std::integral_constant<int, 8>{}, has_bias);
             default:
                 TM_CHECK(0) << "unsupported experts_per_token " << experts_per_token;
         }
