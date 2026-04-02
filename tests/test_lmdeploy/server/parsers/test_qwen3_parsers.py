@@ -6,7 +6,7 @@ from lmdeploy.serve.openai.response_parser import ResponseParser
 from lmdeploy.serve.openai.tool_parser.qwen3_tool_parser import Qwen3ToolParser
 from lmdeploy.tokenizer import HuggingFaceTokenizer
 
-MODEL_ID = '/nvme4/huggingface_hub/hub/models--Qwen--Qwen3-8B/snapshots/1808139acb3a01b52eb3a2cf54defbc8a163146e'
+MODEL_ID = 'Qwen/Qwen3-8B'
 
 
 @pytest.fixture(scope='module')
@@ -35,98 +35,77 @@ def response_parser(tokenizer):
     return ResponseParser(request=request, tokenizer=tokenizer)
 
 
-# Reference streaming sequence based on the attached example:
-# - First: reasoning tokens (Chinese text explaining the need to call get_current_temperature).
-# - Then: </think> and plain content (\n\n).
-# - Finally: the <tool_call> section is streamed token-by-token, following the real model output:
-#   <tool_call>, \n, <, function, =get, _current, _temperature, ... </tool_call>.
-#
-# For tool_call, we feed the raw token stream into ResponseParser.stream_chunk
-# and rely on the ground-truth deltas to specify exactly which chunks should
-# emit tool_calls and what those deltas should look like.
-REFERENCE_CHUNKS = [
-    # (delta_text, expected_delta_msg, expected_reasoning, expected_content,
-    #  expected_tool_emitted, expected_function_name,
-    #  expected_function_arguments, expected_type)
-    ('', True, None, '', False, None, None, None),
-    ('用户', True, '用户', None, False, None, None, None),
-    ('询问', True, '询问', None, False, None, None, None),
-    ('北京', True, '北京', None, False, None, None, None),
-    ('今天的', True, '今天的', None, False, None, None, None),
-    ('天气', True, '天气', None, False, None, None, None),
-    ('情况', True, '情况', None, False, None, None, None),
-    ('。', True, '。', None, False, None, None, None),
-    ('我', True, '我', None, False, None, None, None),
-    ('需要使用', True, '需要使用', None, False, None, None, None),
-    ('get', True, 'get', None, False, None, None, None),
-    ('_weather', True, '_weather', None, False, None, None, None),
-    ('工具', True, '工具', None, False, None, None, None),
-    ('来获取', True, '来获取', None, False, None, None, None),
-    ('北京的', True, '北京的', None, False, None, None, None),
-    ('天气', True, '天气', None, False, None, None, None),
-    ('信息', True, '信息', None, False, None, None, None),
-    ('。', True, '。', None, False, None, None, None),
-    ('\n\n', True, '\n\n', None, False, None, None, None),
-    ('参数', True, '参数', None, False, None, None, None),
-    ('要求', True, '要求', None, False, None, None, None),
-    ('：', True, '：', None, False, None, None, None),
-    ('\n', True, '\n', None, False, None, None, None),
-    ('-', True, '-', None, False, None, None, None),
-    (' location', True, ' location', None, False, None, None, None),
-    (':', True, ':', None, False, None, None, None),
-    (' ', True, ' ', None, False, None, None, None),
-    ('必需', True, '必需', None, False, None, None, None),
-    ('参数', True, '参数', None, False, None, None, None),
-    ('，', True, '，', None, False, None, None, None),
-    ('用户', True, '用户', None, False, None, None, None),
-    ('问', True, '问', None, False, None, None, None),
-    ('的是', True, '的是', None, False, None, None, None),
-    ('"', True, '"', None, False, None, None, None),
-    ('北京', True, '北京', None, False, None, None, None),
-    ('"', True, '"', None, False, None, None, None),
-    ('，', True, '，', None, False, None, None, None),
-    ('所以', True, '所以', None, False, None, None, None),
-    ('location', True, 'location', None, False, None, None, None),
-    ('应该是', True, '应该是', None, False, None, None, None),
-    ('"', True, '"', None, False, None, None, None),
-    ('北京', True, '北京', None, False, None, None, None),
-    ('"', True, '"', None, False, None, None, None),
-    ('\n', True, '\n', None, False, None, None, None),
-    ('-', True, '-', None, False, None, None, None),
-    (' unit', True, ' unit', None, False, None, None, None),
-    (':', True, ':', None, False, None, None, None),
-    (' ', True, ' ', None, False, None, None, None),
-    ('可选', True, '可选', None, False, None, None, None),
-    ('参数', True, '参数', None, False, None, None, None),
-    ('，', True, '，', None, False, None, None, None),
-    ('用户', True, '用户', None, False, None, None, None),
-    ('没有', True, '没有', None, False, None, None, None),
-    ('特别', True, '特别', None, False, None, None, None),
-    ('指定', True, '指定', None, False, None, None, None),
-    ('，', True, '，', None, False, None, None, None),
-    ('我可以', True, '我可以', None, False, None, None, None),
-    ('不', True, '不', None, False, None, None, None),
-    ('填', True, '填', None, False, None, None, None),
-    ('或者', True, '或者', None, False, None, None, None),
-    ('用', True, '用', None, False, None, None, None),
-    ('默认', True, '默认', None, False, None, None, None),
-    ('值', True, '值', None, False, None, None, None),
-    ('\n\n', True, '\n\n', None, False, None, None, None),
-    ('我只', True, '我只', None, False, None, None, None),
-    ('需要提供', True, '需要提供', None, False, None, None, None),
-    ('location', True, 'location', None, False, None, None, None),
-    ('参数', True, '参数', None, False, None, None, None),
-    ('即可', True, '即可', None, False, None, None, None),
-    ('。', True, '。', None, False, None, None, None),
-    ('\n', True, '\n', None, False, None, None, None),
+# Reference streaming sequence
+# reasoning part: <think> This is the mock user prompt </think>
+REASONING_0 = [
+    # (delta_text, emitted_delta_msg, reasoning_content, content,
+    # tool_emitted, function_name, function_arguments, tool_call_type)
+    # reasoning part
+    ('<think>', False, None, None, False, None, None, None),
+    ('This is the mock', True, 'This is the mock', None, False, None, None, None),
+    (' user prompt', True, ' user prompt', None, False, None, None, None),
     ('</think>', False, None, None, False, None, None, None),
-    ('\n\n', True, None, '\n\n', False, None, None, None),
-    # (delta_text, expected_delta_msg,expected_reasoning, expected_content,
-    #  expected_tool_emitted, expected_function_name,
-    #  expected_function_arguments, expected_type)
+]
+# reasoning part: This is the mock user prompt </think>
+REASONING_1 = [
+    # (delta_text, emitted_delta_msg, reasoning_content, content,
+    # tool_emitted, function_name, function_arguments, tool_call_type)
+    # reasoning part
+    ('This is the mock', True, 'This is the mock', None, False, None, None, None),
+    (' user prompt', True, ' user prompt', None, False, None, None, None),
+    ('</think>', False, None, None, False, None, None, None),
+]
+
+# tool call part: <tool_call> {"name": "get_weather", "arguments": {"location": "北京", "unit": "celsius"}} </tool_call>
+TOOL_CALL_0 = [
+    # (delta_text, emitted_delta_msg, reasoning_content, content,
+    # tool_emitted, function_name, function_arguments, tool_call_type)
+    # tool call part
     ('<tool_call>', False, None, None, False, None, None, None),
     ('\n', False, None, None, False, None, None, None),
     ('{"', False, None, None, False, None, None, None),
+    ('name', False, None, None, False, None, None, None),
+    ('":', False, None, None, False, None, None, None),
+    (' "', False, None, None, False, None, None, None),
+    ('get', False, None, None, False, None, None, None),
+    ('_weather', False, None, None, False, None, None, None),
+    ('",', True, None, None, True, 'get_weather', None, 'function'),
+    (' "', False, None, None, False, None, None, None),
+    ('arguments', False, None, None, False, None, None, None),
+    ('":', False, None, None, False, None, None, None),
+    (' {"', False, None, None, False, None, None, None),
+    ('location', False, None, None, False, None, None, None),
+    ('":', False, None, None, False, None, None, None),
+    (' "', False, None, None, False, None, None, None),
+    ('北京', False, None, None, False, None, None, None),
+    ('",', False, None, None, False, None, None, None),
+    (' "', False, None, None, False, None, None, None),
+    ('unit', False, None, None, False, None, None, None),
+    ('":', False, None, None, False, None, None, None),
+    (' "', False, None, None, False, None, None, None),
+    ('celsius', False, None, None, False, None, None, None),
+    ('"}}\n', False, None, None, False, None, None, None),
+    ('</tool_call>', True, None, None, True, None, '{"location": "北京", "unit": "celsius"}', None),
+]
+
+REFERENCE_CHUNKS_0 = REASONING_0 + [
+    ('\n\n', True, None, '\n\n', False, None, None, None)] + TOOL_CALL_0 + [
+    ('', True, None, '', False, None, None, None),
+]
+
+REFERENCE_CHUNKS_1 = REASONING_1 + [
+    ('\n\n', True, None, '\n\n', False, None, None, None)] + TOOL_CALL_0 + [
+    ('', True, None, '', False, None, None, None),
+]
+
+REFERENCE_CHUNKS_2 = [
+    # (delta_text, emitted_delta_msg, reasoning_content, content,
+    # tool_emitted, function_name, function_arguments, tool_call_type)
+    # reasoning part
+    ('This is the mock', True, 'This is the mock', None, False, None, None, None),
+    (' user prompt.', True, ' user prompt.', None, False, None, None, None),
+    (' reasoning</think>\n\n<tool_call>\n', True, ' reasoning', None, False, None, None, None),
+    ('{"', True, None, '\n\n', False, None, None, None),
     ('name', False, None, None, False, None, None, None),
     ('":', False, None, None, False, None, None, None),
     (' "', False, None, None, False, None, None, None),
@@ -160,7 +139,8 @@ class TestQwenResponseParserStreaming:
     def _encode_ids(tokenizer, text: str) -> list[int]:
         return tokenizer.encode(text, add_bos=False, add_special_tokens=False)
 
-    def test_stream_chunk_matches_reference(self, tokenizer, response_parser):
+    @pytest.mark.parametrize('reference_chunks', [REFERENCE_CHUNKS_0, REFERENCE_CHUNKS_1, REFERENCE_CHUNKS_2])
+    def test_stream_chunk_matches_reference(self, tokenizer, response_parser, reference_chunks):
         """Feed the real streaming sequence into ResponseParser.stream_chunk
         and verify each parsed chunk.
 
@@ -183,7 +163,7 @@ class TestQwenResponseParserStreaming:
 
         for (delta_text, exp_delta_msg, exp_reasoning, exp_content, exp_tool_emitted,
              exp_function_name, exp_function_arguments,
-             exp_type) in REFERENCE_CHUNKS:
+             exp_type) in reference_chunks:
             delta_ids = self._encode_ids(tokenizer, delta_text)
             delta_msg, tool_emitted = response_parser.stream_chunk(
                 delta_text=delta_text,
