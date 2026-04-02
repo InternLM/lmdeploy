@@ -374,16 +374,16 @@ class ResponseParser:
             profile.reasoning_close_tag = rparser.get_reasoning_close_tag()
             profile.starts_in_reasoning_mode = bool(rparser.starts_in_reasoning_mode())
             if not profile.reasoning_close_tag:
-                raise ValueError(f'Reasoning parser {rparser.__class__.__name__} must provide a reasoning close tag')
+                raise RuntimeError(f'Reasoning parser {rparser.__class__.__name__} must provide a reasoning end tag')
 
         if tparser is not None and self.request.tool_choice != 'none':
             profile.tool_open_tag = tparser.get_tool_open_tag()
             profile.tool_close_tag = tparser.get_tool_close_tag()
             profile.tool_payload_format = tparser.get_tool_payload_format()
             if not profile.tool_open_tag:
-                raise ValueError(f'Tool parser {tparser.__class__.__name__} must provide a tool open tag')
+                raise RuntimeError(f'Tool parser {tparser.__class__.__name__} must provide a tool start tag')
             if not profile.tool_close_tag:
-                raise ValueError(f'Tool parser {tparser.__class__.__name__} must provide a tool close tag')
+                raise RuntimeError(f'Tool parser {tparser.__class__.__name__} must provide a tool end tag')
         return profile
 
     def parse_complete(
