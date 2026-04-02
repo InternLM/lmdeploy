@@ -81,6 +81,19 @@ void BatchCopy::Run()
         return;
     }
 
+    // cuMemcpyBatchAsync is known to crash on sm_100 (Blackwell); use sequential path.
+    int device = 0;
+    (void)cudaGetDevice(&device);
+    int major = 0;
+    (void)cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device);
+    if (major >= 10) {
+        for (unsigned i = 0; i < src_.size(); ++i) {
+            core::Copy(src_[i], size_[i], dst_[i]);
+        }
+        Reset();
+        return;
+    }
+
     std::visit(
         [&](auto&& copy) {
             using T = std::decay_t<decltype(copy)>;

@@ -580,7 +580,10 @@ MoeFfnWeight::MoeFfnWeight(int             layer_id,
     method = param.method;
 
     const bool is_cublas_gemm = method == MoeParam::kNaive && byte_size(weight_type, 8) == 16;
-    if (is_cublas_gemm || mlp_bias) {
+    // SM100+ grouped bf16/fp16: CublasGroupedKernel has no fused GatedSilu; use chunk() weights
+    // so Activation() runs separately.
+    const bool is_cublas_grouped = getSMVersion() >= 100 && byte_size(weight_type, 8) == 16;
+    if (is_cublas_gemm || mlp_bias || is_cublas_grouped) {
         fuse_silu_act = false;
     }
 
