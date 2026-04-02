@@ -212,6 +212,9 @@ class SpecModelAgent(BaseSpecModelAgent):
                 # Case C: last chunk — prepend saved last, append next_token
                 seq_length = model_inputs.seq_length + 1
                 max_q_seqlen = model_inputs.max_q_seqlen + 1
+                last_token_indices = last_token_indices + 1
+                max_kv_seqlen = model_inputs.max_kv_seqlen - 1
+                sum_kv_seqlen = model_inputs.sum_kv_seqlen - 1
                 history_lengths = model_inputs.history_lengths - 1
                 input_ids = torch.cat([model_inputs.input_ids, next_token_ids.unsqueeze(0)], dim=-1)
 
@@ -271,6 +274,7 @@ class SpecModelAgent(BaseSpecModelAgent):
             target_hidden_states=None,
             target_inputs_embeds=None,
             target_position_ids=None,
+            last_token_indices=last_token_indices,
         )
         return new_model_inputs, new_extra_inputs
 
@@ -418,10 +422,11 @@ class SpecModelAgent(BaseSpecModelAgent):
                 outputs, inputs, extra_inputs)
             draft_tokens_li = [draft_token_ids]
             if loop_count > 0:
-                # set last_token_indices to None for decoding
-                extra_inputs.last_token_indices = None
                 inputs = self.proposer.update_inputs_decoding(inputs, extra_inputs, draft_token_ids.transpose(0, 1),
                                                               target_hidden_states, model_metas)
+               # set last_token_indices to None for decoding
+                extra_inputs.last_token_indices = None
+
                 for loop_idx in range(loop_count):
                     outputs = self._forward_impl(inputs)
                     draft_token_ids, model_metas, target_hidden_states = self.proposer.get_outputs(outputs, inputs)
@@ -433,6 +438,8 @@ class SpecModelAgent(BaseSpecModelAgent):
                         inputs.target_hidden_states = target_hidden_states
                         if inputs.target_position_ids is not None:
                             inputs.target_position_ids += 1
+                        if inputs.mrope_pos_ids is not None:
+                            inputs.mrope_pos_ids += 1
 
             output_draft_ids = torch.cat(draft_tokens_li, dim=-1)
 

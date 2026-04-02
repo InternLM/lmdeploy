@@ -43,6 +43,8 @@ class ARSpecModelInputsStrategy(ModelInputsStrategy):
             inputs.target_hidden_states = torch.randn((1, batch_size * max_q_seqlen, target_hidden_size),
                                                       dtype=target_dtype,
                                                       device=device)
+            inputs.target_position_ids = torch.zeros_like(inputs.input_ids, dtype=torch.long, device=device)
+
         return inputs
 
     @record_function('ModelInputs.merge')
@@ -91,6 +93,12 @@ class ARSpecModelInputsStrategy(ModelInputsStrategy):
         if state_offsets is not None:
             state_offsets = state_offsets[indices]
 
+        # for mrope
+        mrope_pos_ids = inputs.mrope_pos_ids
+        if mrope_pos_ids is not None:
+            mrope_pos_ids = mrope_pos_ids.reshape(3, -1, self.num_spec_tokens + 1)
+            mrope_pos_ids = mrope_pos_ids[:, indices].reshape(3, -1)
+
         # return new inputs
         return ModelInputs(
             input_ids=input_ids,
@@ -105,4 +113,5 @@ class ARSpecModelInputsStrategy(ModelInputsStrategy):
             local_adapter_ids=local_adapter_ids,
             model_metas=model_metas,
             state_offsets=state_offsets,
+            mrope_pos_ids=mrope_pos_ids
         )

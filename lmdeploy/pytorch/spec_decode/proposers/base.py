@@ -110,6 +110,10 @@ class BaseSpecProposer:
         if extra_inputs.num_rejected_tokens is not None:
             history_lengths = history_lengths - extra_inputs.num_rejected_tokens
 
+        mrope_pos_ids = None
+        if model_inputs.mrope_pos_ids is not None:
+            mrope_pos_ids = model_inputs.mrope_pos_ids[:, extra_inputs.last_token_indices] + 1
+
         return model_inputs.clone(
             input_ids=next_input_ids,
             seq_length=model_inputs.seq_length.new_ones(batch_size),
@@ -121,7 +125,7 @@ class BaseSpecProposer:
             sum_kv_seqlen=model_inputs.sum_kv_seqlen + model_inputs.seq_length.numel(),
             target_position_ids=history_lengths.unsqueeze(0).clone(),
             target_inputs_embeds=None,
-            mrope_pos_ids=None,
+            mrope_pos_ids=mrope_pos_ids,
             target_hidden_states=target_hidden_states,
             model_metas=model_metas,
         )

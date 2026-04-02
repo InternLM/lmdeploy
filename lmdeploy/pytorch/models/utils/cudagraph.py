@@ -298,6 +298,8 @@ class CudaGraphMixin:
             if mrope_position_ids is not None:
                 input_buffers['mrope_position_ids'][:, :num_tokens] = mrope_position_ids
                 new_inputs['mrope_position_ids'] = input_buffers['mrope_position_ids']
+            else:
+                raise ValueError('MROPE position ids is required for MROPE model.')
 
         # ssm
         if graph_meta.is_ssm:

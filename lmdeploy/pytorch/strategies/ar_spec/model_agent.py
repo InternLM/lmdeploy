@@ -213,6 +213,14 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
                                                 next_token_ids,
                                                 max_q_seqlen=max_q_seqlen,
                                                 model_metas=model_metas)
+
+        # update mrope pos ids
+        mrope_pos_ids = inputs.mrope_pos_ids
+        if mrope_pos_ids is not None:
+            offsets = torch.arange(max_q_seqlen, dtype=mrope_pos_ids.dtype, device=mrope_pos_ids.device)[None, None,:]
+            mrope_pos_ids = mrope_pos_ids.unflatten(1, (-1, 1)).repeat(1, 1, max_q_seqlen) + offsets
+            inputs.mrope_pos_ids = mrope_pos_ids.flatten(1, 2)
+
         extra_inputs = extra_inputs.clone()
         return inputs, extra_inputs
 

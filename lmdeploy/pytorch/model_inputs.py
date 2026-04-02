@@ -199,9 +199,6 @@ class ModelInputs:
     # mrope, shape(3, sum_seqlens)
     mrope_pos_ids: torch.Tensor | None = None
 
-    # mrope, shape(3, sum_seqlens)
-    mrope_pos_ids: torch.Tensor | None = None
-
     def step(self, input_ids: torch.Tensor, step_seqlens: torch.Tensor = None):
         """Update input ids."""
         assert self.is_decoding
@@ -211,12 +208,17 @@ class ModelInputs:
         if input_ids.dim() == 1:
             input_ids = input_ids[None, :]
 
+        mrope_pos_ids = self.mrope_pos_ids
+        if mrope_pos_ids is not None:
+            mrope_pos_ids = mrope_pos_ids.unflatten(1, (-1, self.max_q_seqlen)) + step_seqlens[None, :, None]
+            mrope_pos_ids = mrope_pos_ids.flatten(1, 2)
+
         return self.clone(
             input_ids=input_ids,
             history_lengths=self.history_lengths + step_seqlens,
             max_kv_seqlen=self.max_kv_seqlen + self.max_q_seqlen,
             sum_kv_seqlen=self.sum_kv_seqlen + self.max_q_seqlen * self.seq_length.numel(),
-            mrope_pos_ids=self.mrope_pos_ids + step_seqlens[None] if self.mrope_pos_ids is not None else None,
+            mrope_pos_ids=mrope_pos_ids,
         )
 
     @torch.inference_mode()
@@ -390,6 +392,9 @@ class StepContext:
         # batch with same seqlens
         if max_q_seqlen * batch_size == num_tokens:
             attention_mask = None
+            if target_position_ids is not None:
+                return attention_mask, target_position_ids
+
             ranges = torch.arange(0, max_q_seqlen, device=device)
             position_ids = history_seqlens[:, None] + ranges[None, :]
             position_ids = position_ids.flatten()
