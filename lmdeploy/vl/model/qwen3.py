@@ -66,7 +66,7 @@ class Qwen3VLModel(VisionModel):
         result = self.processor.image_processor(images=data, size=size, return_tensors='pt')
         merge_length = self.processor.image_processor.merge_size**2
         image_tokens = result['image_grid_thw'].prod(dim=1) // merge_length
-        result.update(dict(image_size=data.size, image_tokens=image_tokens, image_token_id=self.image_token_id))
+        result.update(dict(image_size=data.size, mm_token_num=image_tokens, image_token_id=self.image_token_id))
         return result
 
     def _preprocess_video(self,
@@ -199,7 +199,7 @@ class Qwen3VLModel(VisionModel):
                     frame_preps.append(
                         dict(
                             offset=frame_offset,
-                            video_tokens=frame_seqlen,
+                            mm_token_num=frame_seqlen,
                             pixel_values_videos=pixel_values_videos[frame_idx * h * w:(frame_idx + 1) * h * w],
                             video_grid_thw=torch.tensor([[1, h, w]]),
                             video_token_id=self.video_token_id,
