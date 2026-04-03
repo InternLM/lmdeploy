@@ -462,12 +462,14 @@ class ArgumentHelper:
     @staticmethod
     def reasoning_parser(parser):
         """Add reasoning parser to parser."""
+        legacy_names = ['qwen-qwq', 'intern-s1', 'deepseek-r1']
         from lmdeploy.serve.openai.reasoning_parser import ReasoningParserManager
         return parser.add_argument(
             '--reasoning-parser',
             type=str,
             default=None,
-            help=f'The registered reasoning parser name from {ReasoningParserManager.module_dict.keys()}. '
+            help=f'The registered reasoning parser name: {ReasoningParserManager.module_dict.keys()}. '
+            f'Legacy names: {legacy_names}. '
             'Default to None.')
 
     @staticmethod

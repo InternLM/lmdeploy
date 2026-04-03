@@ -1,31 +1,41 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modified from https://github.com/vllm-project/vllm/tree/v0.7.3/vllm/entrypoints/openai/tool_parsers
-from collections.abc import Sequence
+from __future__ import annotations
+
+import json
 from functools import cached_property
+from typing import TYPE_CHECKING
 
+import partial_json_parser
+import shortuuid
 from mmengine import Registry
+from partial_json_parser.core.options import Allow
 
-from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaMessage, ExtractedToolCallInformation
+from lmdeploy.serve.openai.protocol import (
+    DeltaFunctionCall,
+    DeltaToolCall,
+    FunctionCall,
+    ToolCall,
+)
 from lmdeploy.utils import get_logger
+
+if TYPE_CHECKING:
+    from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 
 logger = get_logger('lmdeploy')
 ToolParserManager = Registry('tool_parser', locations=['lmdeploy.serve.openai.tool_parser'])
 
 
 class ToolParser:
-    """Abstract ToolParser class that should not be used directly.
-
-    Provided properties and methods should be used in derived classes.
-    """
+    """Base class for model-specific tool parsers."""
 
     def __init__(self, tokenizer: object):
-        self.prev_tool_call_arr: list[dict] = []
-        # the index of the tool call that is currently being parsed
-        self.current_tool_id: int = -1
-        self.current_tool_name_sent: bool = False
-        self.streamed_args_for_tool: list[str] = []
-
         self.model_tokenizer = tokenizer
+        self._tool_payload: str = ''
+        self._active_tool_call_id: str = ''
+        self._active_tool_index: int = -1
+        self._name_emitted: bool = False
+        self._args_emitted_len: int = 0
 
     @cached_property
     def vocab(self) -> dict[str, int]:
@@ -34,34 +44,115 @@ class ToolParser:
         return self.model_tokenizer.get_vocab()
 
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
-        """Static method that used to adjust the request parameters."""
+        """Adjust request payload before rendering, if needed."""
+        if request.tools is not None and request.tool_choice != 'none':
+            if not isinstance(request.tool_choice, str):
+                request.tools = [
+                    item.function.model_dump() for item in request.tools
+                    if item.function.name == request.tool_choice.function.name
+                ]
+            else:
+                request.tools = [item.function.model_dump() for item in request.tools]
         return request
 
-    def extract_tool_calls(self, model_output: str, request: ChatCompletionRequest) -> ExtractedToolCallInformation:
-        """Static method that should be implemented for extracting tool calls
-        from a complete model-generated string.
+    def get_tool_open_tag(self) -> str | None:
+        """Return tool opening tag string, or None if unsupported."""
+        raise NotImplementedError('ToolParser.get_tool_open_tag has not been implemented!')
 
-        Used for non-streaming responses where we have the entire model response available before sending to the client.
-        Static because it's stateless.
-        """
-        raise NotImplementedError('AbstractToolParser.extract_tool_calls has not been implemented!')
+    def get_tool_close_tag(self) -> str | None:
+        """Return tool closing tag string, or None if unsupported."""
+        raise NotImplementedError('ToolParser.get_tool_close_tag has not been implemented!')
 
-    def extract_tool_calls_streaming(
-        self,
-        previous_text: str,
-        current_text: str,
-        delta_text: str,
-        previous_token_ids: Sequence[int],
-        current_token_ids: Sequence[int],
-        delta_token_ids: Sequence[int],
-        request: ChatCompletionRequest,
-    ) -> DeltaMessage | None:
-        """Instance method that should be implemented for extracting tool calls
-        from an incomplete response; for use when handling tool calls and
-        streaming.
+    def get_tool_payload_format(self) -> str:
+        """Return payload format for tool call body."""
+        raise NotImplementedError('ToolParser.get_tool_payload_format has not been implemented!')
 
-        Has to be an instance method because  it requires state - the current tokens/diffs, but also the information
-        about what has previously been parsed and extracted (see constructor)
-        """
-        raise NotImplementedError('AbstractToolParser.extract_tool_calls_streaming has not been '
-                                  'implemented!')
+    def start_tool_call(self) -> None:
+        """Mark start of a tool-call block."""
+        self._active_tool_index += 1
+        self._active_tool_call_id = f'chatcmpl-tool-{shortuuid.random()}'
+        self._name_emitted = False
+        self._args_emitted_len = 0
+        self._tool_payload = ''
+
+    def finish_tool_call(self) -> None:
+        """Mark end of a tool-call block."""
+        self._active_tool_call_id = ''
+        self._name_emitted = False
+        self._args_emitted_len = 0
+        self._tool_payload = ''
+
+    def decode_tool_incremental(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:
+        """Decode incremental tool payload emitted between tool tags."""
+        raise NotImplementedError('ToolParser.decode_tool_incremental has not been implemented!')
+
+    def parse_tool_call_complete(self, payload: str) -> ToolCall | None:
+        """Parse one complete tool payload into OpenAI tool call object."""
+        raise NotImplementedError('ToolParser.parse_tool_call_complete has not been implemented!')
+
+    def _decode_tool_incremental_json(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:
+        self._tool_payload += added_text
+        payload = self._tool_payload.strip()
+        if not payload:
+            return []
+
+        flags = Allow.ALL if self._name_emitted else Allow.ALL & ~Allow.STR
+        try:
+            obj = partial_json_parser.loads(payload, flags)
+        except partial_json_parser.core.exceptions.MalformedJSON:
+            return []
+        if not isinstance(obj, dict):
+            return []
+
+        out: list[DeltaToolCall] = []
+        if not self._name_emitted:
+            fn_name = obj.get('name')
+            if isinstance(fn_name, str) and fn_name:
+                out.append(
+                    DeltaToolCall(
+                        id=self._active_tool_call_id,
+                        index=self._active_tool_index,
+                        type='function',
+                        function=DeltaFunctionCall(name=fn_name),
+                    ))
+                self._name_emitted = True
+
+        args_obj = obj.get('arguments', obj.get('parameters', None))
+        if args_obj is None:
+            return out
+
+        args_json = json.dumps(args_obj, ensure_ascii=False)
+        if args_json in ('{}', '[]'):
+            return out
+
+        # Emit argument text only when the tool payload is complete. This keeps
+        # streamed argument chunks valid JSON and avoids malformed intermediate
+        # fragments when partial parsers expose transient dict states.
+        if final and len(args_json) > self._args_emitted_len:
+            diff = args_json[self._args_emitted_len:]
+            out.append(
+                DeltaToolCall(
+                    id=self._active_tool_call_id,
+                    index=self._active_tool_index,
+                    type=None,
+                    function=DeltaFunctionCall(arguments=diff),
+                ))
+            self._args_emitted_len = len(args_json)
+        return out
+
+    @staticmethod
+    def _parse_tool_call_complete_json(payload: str) -> ToolCall | None:
+        if not payload:
+            return None
+        try:
+            obj = json.loads(payload)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(obj, dict):
+            return None
+        name = obj.get('name')
+        if not isinstance(name, str) or not name:
+            return None
+        args_obj = obj.get('arguments', obj.get('parameters', {}))
+        args_json = json.dumps(args_obj, ensure_ascii=False)
+        return ToolCall(function=FunctionCall(name=name, arguments=args_json))

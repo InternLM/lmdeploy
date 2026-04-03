@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # yapf: disable
 import asyncio
-import copy
 import json
 import os
 import re
@@ -10,7 +9,10 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from functools import partial
 from http import HTTPStatus
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from transformers import PreTrainedTokenizerBase
 
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
@@ -40,7 +42,6 @@ from lmdeploy.pytorch.disagg.conn.protocol import (
     MigrationRequest,
 )
 from lmdeploy.serve.core import AsyncEngine
-from lmdeploy.serve.openai.harmony_utils import GptOssChatParser
 from lmdeploy.serve.openai.protocol import (
     AbortRequest,
     ChatCompletionRequest,
@@ -74,10 +75,8 @@ from lmdeploy.serve.openai.protocol import (
     UpdateParamsRequest,
     UsageInfo,
 )
-from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParser, ReasoningParserManager
-from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParser, ToolParserManager
+from lmdeploy.serve.openai.response_parser import ResponseParser
 from lmdeploy.serve.utils.server_utils import validate_json_request
-from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
 
 # yapf: enable
@@ -92,10 +91,6 @@ class VariableInterface:
     # following are for registering to proxy server
     proxy_url: str | None = None
     api_server_url: str | None = None
-    # following are for reasoning parsers
-    reasoning_parser: ReasoningParser | None = None
-    # following is for tool parsers
-    tool_parser: ToolParser | None = None
     allow_terminate_by_client: bool = False
     enable_abort_handling: bool = False
 
@@ -180,72 +175,13 @@ def check_request(request) -> JSONResponse | None:
     return None
 
 
-def _create_completion_logprobs(tokenizer: Tokenizer,
-                                token_ids: list[int] | None = None,
-                                logprobs: list[dict[int, float]] | None = None,
-                                skip_special_tokens: bool = True,
-                                offset: int = 0,
-                                all_token_ids: list[int] | None = None,
-                                state: DetokenizeState = None,
-                                spaces_between_special_tokens: bool = True):
-    """Create openai LogProbs for completion.
-
-    Args:
-        tokenizer (Tokenizer): tokenizer.
-        token_ids (list[int]): output token ids.
-        logprobs (list[dict[int, float]]): the top logprobs for each output
-            position.
-        skip_special_tokens (bool): Whether or not to remove special tokens
-            in the decoding. Default to be True.
-        offset (int): text offset.
-        all_token_ids (int): the history output token ids.
-        state (DetokenizeState): tokenizer decode state.
-        spaces_between_special_tokens (bool): Whether or not to add spaces
-            around special tokens. The behavior of Fast tokenizers is to have
-            this to False. This is setup to True in slow tokenizers.
-    """
-    if logprobs is None or len(logprobs) == 0:
-        return None, None, None, None
-
-    if all_token_ids is None:
-        all_token_ids = []
-    if state is None:
-        state = DetokenizeState()
-
-    out_logprobs = LogProbs()
-    out_logprobs.top_logprobs = []
-    for token_id, tops in zip(token_ids, logprobs):
-        out_logprobs.text_offset.append(offset)
-        out_logprobs.token_logprobs.append(tops[token_id])
-
-        res = {}
-        out_state = None
-        for top_id, prob in tops.items():
-            response, _state = tokenizer.detokenize_incrementally(
-                all_token_ids + [top_id],
-                copy.deepcopy(state),
-                skip_special_tokens=skip_special_tokens,
-                spaces_between_special_tokens=spaces_between_special_tokens)
-            res[response] = prob
-            if top_id == token_id:
-                out_state = _state
-                offset += len(response)
-                out_logprobs.tokens.append(response)
-
-        out_logprobs.top_logprobs.append(res)
-        state = out_state
-        all_token_ids.append(token_id)
-
-    return out_logprobs, offset, all_token_ids, state
-
-
-def _create_chat_completion_logprobs(tokenizer: Tokenizer,
+def _create_chat_completion_logprobs(tokenizer: 'PreTrainedTokenizerBase',
                                      token_ids: list[int] | None = None,
                                      logprobs: list[dict[int, float]] | None = None):
     """Create openai LogProbs for chat.completion.
 
     Args:
-        tokenizer (Tokenizer): tokenizer.
+        tokenizer (PreTrainedTokenizerBase): tokenizer.
         token_ids (list[int]): output token ids.
         logprobs (list[dict[int, float]]): the top logprobs for each output
             position.
@@ -259,7 +195,7 @@ def _create_chat_completion_logprobs(tokenizer: Tokenizer,
     for token_id, tops in zip(token_ids, logprobs):
         item = ChatCompletionTokenLogprob(token='', bytes=[], logprob=0.0, top_logprobs=[])
         for top_id, prob in tops.items():
-            token = tokenizer.model.model.convert_ids_to_tokens(top_id)
+            token = tokenizer.convert_ids_to_tokens(top_id)
             if isinstance(token, bytes):
                 _bytes = list(token)
                 token = token.decode('utf-8', errors='backslashreplace')
@@ -295,7 +231,8 @@ async def terminate():
 
 
 # modified from https://github.com/vllm-project/vllm/blob/v0.5.4/vllm/entrypoints/openai/logits_processors.py#L51  # noqa
-def logit_bias_logits_processor(logit_bias: dict[int, float] | dict[str, float], tokenizer) -> LogitsProcessor:
+def logit_bias_logits_processor(logit_bias: dict[int, float] | dict[str, float],
+                                tokenizer: 'PreTrainedTokenizerBase') -> LogitsProcessor:
     try:
         # Convert token_id to integer
         # Clamp the bias between -100 and 100 per OpenAI API spec
@@ -409,8 +346,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
-    if VariableInterface.tool_parser is not None:
-        request = VariableInterface.tool_parser.adjust_request(request)
     session = VariableInterface.get_session(request.session_id)
 
     json_request = await raw_request.json()
@@ -426,31 +361,27 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         adapter_name = model_name  # got a adapter name
     request_id = str(session.session_id)
     created_time = int(time.time())
-    gpt_oss_parser = None
-    if VariableInterface.async_engine.arch == 'GptOssForCausalLM':
-        gpt_oss_parser = GptOssChatParser()
 
     if isinstance(request.stop, str):
         request.stop = [request.stop]
 
+    tokenizer = VariableInterface.async_engine.tokenizer.model.model
     gen_logprobs, logits_processors = None, None
     if request.logprobs and request.top_logprobs:
         gen_logprobs = request.top_logprobs
-    response_format = None
-    if request.response_format and request.response_format.type != 'text':
-        response_format = request.response_format.model_dump()
-
     if request.logit_bias is not None:
         try:
             logits_processors = [
-                logit_bias_logits_processor(request.logit_bias, VariableInterface.async_engine.tokenizer.model)
+                logit_bias_logits_processor(request.logit_bias, tokenizer)
             ]
         except Exception as e:
             return create_error_response(HTTPStatus.BAD_REQUEST, str(e))
 
     random_seed = request.seed if request.seed else None
     max_new_tokens = (request.max_completion_tokens if request.max_completion_tokens else request.max_tokens)
-
+    response_format = None
+    if request.response_format and request.response_format.type != 'text':
+        response_format = request.response_format.model_dump()
     gen_config = GenerationConfig(
         max_new_tokens=max_new_tokens,
         do_sample=True,
@@ -473,27 +404,10 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         with_cache=with_cache,
         preserve_cache=preserve_cache,
     )
+    response_parser = ResponseParser(request=request, tokenizer=tokenizer)
+    # request might be adjusted by tool parser
+    request = response_parser.request
 
-    tools = None
-    if request.tools and request.tool_choice != 'none':
-        gen_config.skip_special_tokens = False
-        # internlm2 only uses contents inside function regardless of 'type'
-        if not isinstance(request.tool_choice, str):
-            if gpt_oss_parser:
-                tools = [
-                    item.model_dump() for item in request.tools
-                    if item.function.name == request.tool_choice.function.name
-                ]
-            else:
-                tools = [
-                    item.function.model_dump() for item in request.tools
-                    if item.function.name == request.tool_choice.function.name
-                ]
-        else:
-            if gpt_oss_parser:
-                tools = [item.model_dump() for item in request.tools]
-            else:
-                tools = [item.function.model_dump() for item in request.tools]
     # text completion for string input
     do_preprocess = False if isinstance(request.messages, str) else request.do_preprocess
     chat_template_kwargs = request.chat_template_kwargs or {}
@@ -504,12 +418,12 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             chat_template_kwargs['enable_thinking'] = request.enable_thinking
         else:
             logger.warning('`enable_thinking` in `chat_template_kwargs` will override the value in request.')
-    enable_thinking = chat_template_kwargs.get('enable_thinking', None)
+
     result_generator = VariableInterface.async_engine.generate(
         request.messages,
         session,
         gen_config=gen_config,
-        tools=tools,
+        tools=request.tools,
         reasoning_effort=request.reasoning_effort,
         stream_response=True,  # always use stream to enable batching
         sequence_start=True,
@@ -541,18 +455,11 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         return response_json
 
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
-        previous_text = ''
-        current_text = ''
-        previous_token_ids = []
-        current_token_ids = []
-        delta_token_ids = []
-        has_parser = VariableInterface.tool_parser is not None or VariableInterface.reasoning_parser is not None
         streaming_tools = False
         async for res in result_generator:
             logprobs, usage = None, None
             if gen_logprobs and res.logprobs:
-                logprobs = _create_chat_completion_logprobs(VariableInterface.async_engine.tokenizer, res.token_ids,
-                                                            res.logprobs)
+                logprobs = _create_chat_completion_logprobs(tokenizer, res.token_ids, res.logprobs)
             # Only stream chunk `usage` in the final chunk according to OpenAI API spec
             if (res.finish_reason and request.stream_options and request.stream_options.include_usage):
                 total_tokens = sum([res.input_token_len, res.generate_token_len])
@@ -561,50 +468,30 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                     completion_tokens=res.generate_token_len,
                     total_tokens=total_tokens,
                 )
-
             delta_token_ids = res.token_ids if res.token_ids is not None else []
-            if gpt_oss_parser:
-                delta_message = gpt_oss_parser.parse_streaming(res.token_ids)
-                if res.finish_reason == 'stop' and len(delta_message.tool_calls) > 0:
+            delta_message, tool_emitted = response_parser.stream_chunk(
+                res.response,
+                delta_token_ids
+            )
+            if tool_emitted:
+                streaming_tools = True
+
+            if (request.tool_choice != 'none' and response_parser.tool_parser is not None):
+                if res.finish_reason == 'stop' and streaming_tools is True:
                     res.finish_reason = 'tool_calls'
-            else:
-                delta_message = DeltaMessage(role='assistant', content=res.response)
-                if has_parser:
-                    current_text = current_text + res.response
-                    current_token_ids = current_token_ids + delta_token_ids
-                if request.tool_choice != 'none' and VariableInterface.tool_parser is not None:
-                    if res.finish_reason == 'stop' and streaming_tools is True:
-                        res.finish_reason = 'tool_calls'
-                    tool_delta = VariableInterface.tool_parser.extract_tool_calls_streaming(
-                        previous_text=previous_text,
-                        current_text=current_text,
-                        delta_text=delta_message.content,
-                        previous_token_ids=previous_token_ids,
-                        current_token_ids=current_token_ids,
-                        delta_token_ids=delta_token_ids,
-                        request=request)
-                    if tool_delta is not None:
-                        delta_message.tool_calls = tool_delta.tool_calls
-                        delta_message.content = tool_delta.content
-                        if isinstance(tool_delta.tool_calls, list) and len(tool_delta.tool_calls):
-                            streaming_tools = True
-                elif (request.tool_choice != 'none' and request.tools is not None
-                      and VariableInterface.tool_parser is None):
+            elif request.tool_choice != 'none' and request.tools is not None:
+                if ResponseParser.tool_parser_cls is None:
                     logger.error('Please launch the api_server with --tool-call-parser if you want to use tool.')
-                if VariableInterface.reasoning_parser is not None and enable_thinking is not False:
-                    reasoning_delta = VariableInterface.reasoning_parser.extract_reasoning_content_streaming(
-                        previous_text=previous_text,
-                        current_text=current_text,
-                        delta_text=delta_message.content or '',
-                        previous_token_ids=previous_token_ids,
-                        current_token_ids=current_token_ids,
-                        delta_token_ids=delta_token_ids)
-                    if reasoning_delta is not None:
-                        delta_message.reasoning_content = reasoning_delta.reasoning_content
-                        delta_message.content = reasoning_delta.content
-                if has_parser:
-                    previous_text = current_text
-                    previous_token_ids = current_token_ids
+
+            # The parser may intentionally suppress no-op chunks by returning
+            # ``None``. Keep them suppressed unless this is a visible terminal
+            # frame (finish/usage/logprobs), where OpenAI-style streams still
+            # expect a delta object.
+            if delta_message is None:
+                if res.finish_reason is None and usage is None and logprobs is None:
+                    continue
+                delta_message = DeltaMessage(role='assistant')
+
             if request.return_token_ids:
                 delta_message.gen_tokens = delta_token_ids
             response_json = create_stream_response_json(index=0,
@@ -643,39 +530,31 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         cache_block_ids.append(res.cache_block_ids)
         remote_token_ids.append(res.token_ids)
 
-    if gpt_oss_parser:
-        message = gpt_oss_parser.parse_full(final_token_ids)
-        if final_res.finish_reason == 'stop' and len(message.tool_calls) > 0:
-            final_res.finish_reason = 'tool_calls'
-    else:
-        tool_calls = None
-        reasoning_content = None
-        if request.tool_choice != 'none' and VariableInterface.tool_parser is not None:
-            try:
-                tool_call_info = VariableInterface.tool_parser.extract_tool_calls(text, request=request)
-                text, tool_calls = tool_call_info.content, tool_call_info.tool_calls
-                if isinstance(tool_calls, list) and len(tool_calls):
-                    if final_res.finish_reason == 'stop':
-                        final_res.finish_reason = 'tool_calls'
+    tool_calls = None
+    reasoning_content = None
 
-            except Exception as e:
-                logger.error(f'Failed to parse {text}. Exception: {e}.')
-                return create_error_response(HTTPStatus.BAD_REQUEST, 'Failed to parse fc related info to json format!')
-        elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
+    try:
+        text, tool_calls, reasoning_content = response_parser.parse_complete(
+            text)
+        if isinstance(tool_calls, list) and len(tool_calls):
+            if final_res.finish_reason == 'stop':
+                final_res.finish_reason = 'tool_calls'
+
+    except Exception as e:
+        logger.error(f'Failed to parse {text}. Exception: {e}.')
+        return create_error_response(HTTPStatus.BAD_REQUEST, 'Failed to parse fc related info to json format!')
+    if request.tool_choice != 'none' and request.tools is not None:
+        if ResponseParser.tool_parser_cls is None:
             logger.error('Please launch the api_server with --tool-call-parser if you want to use tool.')
 
-        if VariableInterface.reasoning_parser is not None and enable_thinking is not False:
-            reasoning_content, text = VariableInterface.reasoning_parser.extract_reasoning_content(text, request)
-
-        message = ChatMessage(role='assistant',
-                              content=text,
-                              tool_calls=tool_calls,
-                              reasoning_content=reasoning_content)
+    message = ChatMessage(role='assistant',
+                            content=text,
+                            tool_calls=tool_calls,
+                            reasoning_content=reasoning_content)
 
     logprobs = None
     if gen_logprobs and len(final_logprobs):
-        logprobs = _create_chat_completion_logprobs(VariableInterface.async_engine.tokenizer, final_token_ids,
-                                                    final_logprobs)
+        logprobs = _create_chat_completion_logprobs(tokenizer, final_token_ids, final_logprobs)
 
     assert final_res is not None
     choices = []
@@ -850,17 +729,11 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
         # First chunk with role
         for generator in generators:
-            offset = 0
-            all_token_ids = []
-            state = DetokenizeState()
             async for res in generator:
                 logprobs = None
                 usage = None
                 if request.logprobs and res.logprobs:
-                    logprobs, offset, all_token_ids, state = _create_completion_logprobs(  # noqa E501
-                        VariableInterface.async_engine.tokenizer, res.token_ids, res.logprobs,
-                        gen_config.skip_special_tokens, offset, all_token_ids, state,
-                        gen_config.spaces_between_special_tokens)
+                    raise ValueError('logprobs is removed')
                 # Only stream chunk `usage` in the final chunk according to OpenAI API spec
                 if (res.finish_reason and request.stream_options and request.stream_options.include_usage):
                     final_res = res
@@ -916,14 +789,6 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
                 final_logprobs.extend(res.logprobs)
 
         logprobs = None
-        if request.logprobs and len(final_logprobs):
-            logprobs, _, _, _ = _create_completion_logprobs(
-                VariableInterface.async_engine.tokenizer,
-                final_token_ids,
-                final_logprobs,
-                gen_config.skip_special_tokens,
-                spaces_between_special_tokens=gen_config.spaces_between_special_tokens)
-
         assert final_res is not None
         choice_data = CompletionResponseChoice(index=i,
                                                text=text,
@@ -1328,26 +1193,10 @@ class ConcurrencyLimitMiddleware(BaseHTTPMiddleware):
             return response
 
 
-def set_parsers(reasoning_parser: str | None = None, tool_parser: str | None = None):
-    """Set tool parser and reasoning parsers."""
-    # set reasoning parser
-    if reasoning_parser is not None:
-        if reasoning_parser in ReasoningParserManager.module_dict:
-            tokenizer = VariableInterface.async_engine.tokenizer
-            VariableInterface.reasoning_parser = ReasoningParserManager.get(reasoning_parser)(tokenizer)
-        else:
-            raise ValueError(
-                f'The reasoning parser {reasoning_parser} is not in the parser list: {ReasoningParserManager.module_dict.keys()}'  # noqa
-            )
-    # set tool parsers
-    if tool_parser is not None:
-        if tool_parser in ToolParserManager.module_dict:
-            tokenizer = VariableInterface.async_engine.tokenizer
-            VariableInterface.tool_parser = ToolParserManager.get(tool_parser)(tokenizer)
-        else:
-            raise ValueError(
-                f'The reasoning parser {tool_parser} is not in the parser list: {ToolParserManager.module_dict.keys()}'  # noqa
-            )
+def set_parsers(reasoning_parser_name: str | None = None, tool_parser_name: str | None = None, **kwargs):
+    """Set tool parser and reasoning parser types on
+    :class:`~lmdeploy.serve.openai.response_parser.ResponseParser`."""
+    ResponseParser.set_parsers(reasoning_parser_name=reasoning_parser_name, tool_parser_name=tool_parser_name)
 
 
 def mount_metrics(app: FastAPI, backend_config: PytorchEngineConfig | TurbomindEngineConfig):
@@ -1466,7 +1315,7 @@ def serve(model_path: str,
             being printed in log. Default: Unlimited
         max_concurrent_requests: This refers to the number of concurrent
             requests that the server can handle. The server is designed to
-            process the engine’s tasks once the maximum number of concurrent
+            process the engine's tasks once the maximum number of concurrent
             requests is reached, regardless of any additional requests sent by
             clients concurrently during that time. Default to None.
         reasoning_parser (str): The reasoning parser name.
@@ -1486,6 +1335,8 @@ def serve(model_path: str,
         ssl_certfile = os.environ['SSL_CERTFILE']
         http_or_https = 'https'
 
+    set_parsers(reasoning_parser, tool_call_parser)
+
     handle_torchrun()
     _, pipeline_class = get_task(backend, model_path)
     if isinstance(backend_config, PytorchEngineConfig):
@@ -1501,8 +1352,6 @@ def serve(model_path: str,
                                                     max_log_len=max_log_len,
                                                     speculative_config=speculative_config,
                                                     **kwargs)
-    # set reasoning parser and tool parser
-    set_parsers(reasoning_parser, tool_call_parser)
 
     # create FastAPI lifespan events
     lifespan = create_lifespan_handler(backend_config, VariableInterface.async_engine)
