@@ -20,8 +20,13 @@ if (MSVC)
     # use standard conformant preprocessor
     add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>)
     add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/Zc:__cplusplus>)
-    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/utf-8>)
-    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler=/Zc:preprocessor -Xcompiler=/Zc:__cplusplus -Xcompiler=/utf-8")
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler=/Zc:preprocessor -Xcompiler=/Zc:__cplusplus")
+    # nvcc's front-end has a known bug (fixed in NVCC 13.1) where the fmt 11.x
+    # literal-encoding probe (fmt/base.h:is_utf8_enabled) always returns false,
+    # causing a static_assert failure.  Disable fmt's Unicode check project-wide;
+    # without /utf-8 the MSVC host compiler also sees use_utf8=false, so all TUs
+    # agree and there is no ODR inconsistency.
+    add_compile_definitions(FMT_UNICODE=0)
 endif ()
 
 find_package(CUDAToolkit REQUIRED)
