@@ -383,8 +383,6 @@ class AscendOpsBackend(DlinferOpsBackend):
             step_context.block_offsets,
             q_start_loc=None,
             q_seqlens=q_seqlens_cpu,
-            # kv_seqlens_expanded is only expanded in paged prefill,
-            # otherwise it equals kv_seqlens_cpu
             kv_seqlens=kv_seqlens_cpu,
             kv_start_indices=kv_start_indices,
             block_size=block_size,
