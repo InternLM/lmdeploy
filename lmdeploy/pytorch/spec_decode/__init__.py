@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from ..config import BackendConfig, SpecDecodeConfig
+from ..config import BackendConfig, MiscConfig, SpecDecodeConfig
 from ..distributed import DistContext
 
 
@@ -9,15 +9,21 @@ def build_spec_agent(specdecode_config: SpecDecodeConfig,
                      dist_ctx: DistContext,
                      inputs_strategy,
                      agent_strategy,
+                     misc_config: MiscConfig,
                      device: str = 'cuda'):
     """Build spec agent."""
     enable = dist_ctx.rank % dist_ctx.dist_config.attn_tp == 0 and specdecode_config is not None
     if enable:
         from .spec_agent import SpecModelAgent
-        return SpecModelAgent(specdecode_config, backend_config, inputs_strategy, agent_strategy, device=device)
+        return SpecModelAgent(specdecode_config,
+                              backend_config,
+                              inputs_strategy,
+                              agent_strategy,
+                              misc_config,
+                              device=device)
     else:
         from .base import BaseSpecModelAgent
-        return BaseSpecModelAgent()
+        return BaseSpecModelAgent(specdecode_config)
 
 
 __all__ = ['build_spec_agent']

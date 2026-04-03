@@ -415,6 +415,7 @@ class BaseModelAgent:
                                            dist_ctx,
                                            self.inputs_strategy,
                                            self.agent_strategy,
+                                           misc_config=misc_config,
                                            device=device)
         # sleep wakeup state
         self.state: SleepWakeupState = SleepWakeupState()
@@ -671,7 +672,7 @@ class BaseModelAgent:
             model_metas = self._prev_chunk_output.get('model_metas')
             inputs.model_metas = model_metas
 
-            if not inputs.is_chunk:
+            if inputs.is_last_chunk:
                 # remove _prev_chunk_output
                 self._prev_chunk_output = None
 
@@ -691,22 +692,21 @@ class BaseModelAgent:
         """Step postprocess with output."""
         rank = self.rank
         logger.debug(f'<ForwardTask> rank[{rank}]: Sampling.')
-        # sampling
-        next_token_ids, logprobs = await self.async_sampling_logits(last_logits, sampling_inputs)
-
-        # post sampling
-        next_token_ids, extra_inputs = self.agent_strategy.post_sampling(inputs, last_logits, next_token_ids,
-                                                                         extra_inputs)
-
-        # spec decoding
-        output_token_ids = next_token_ids
+        # sampling + spec decoding
         if self.spec_agent.is_enabled():
-            extra_inputs = await self.spec_agent.async_model_forward(next_token_ids, inputs, extra_inputs,
-                                                                     sampling_inputs)
+            # spec_agent handles sampling + logprobs + rejection sampling internally
+            extra_inputs = await self.spec_agent.async_model_forward(inputs, extra_inputs, sampling_inputs)
             next_token_ids = extra_inputs.next_token_ids
             output_token_ids = extra_inputs.output_token_ids
+            logprobs = extra_inputs.logprobs
             logits = None
-
+        else:
+            # normal (non-spec-decode) path: sample from main model logits
+            next_token_ids, logprobs = await self.async_sampling_logits(last_logits, sampling_inputs)
+            # post sampling
+            next_token_ids, extra_inputs = self.agent_strategy.post_sampling(inputs, last_logits, next_token_ids,
+                                                                             extra_inputs)
+            output_token_ids = next_token_ids
         with self._broadcast_next_token(next_token_ids, extra_inputs, enable=need_broadcast_next):
             logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids')
 
@@ -875,30 +875,32 @@ class BaseModelAgent:
                 stopping_criteria,
                 extra_outputs,
                 next_token_ids,
-            ) = await self._step_postprocess_with_output(
-                last_logits,
-                logits,
-                inputs,
-                sampling_inputs,
-                stopping_criteria,
-                model_metas,
-                need_broadcast_next,
-                return_logits=return_logits,
-                all_routed_experts=all_routed_experts,
-                extra_inputs=extra_inputs,
-            )
+            ) = await asyncio.shield(
+                self._step_postprocess_with_output(
+                    last_logits,
+                    logits,
+                    inputs,
+                    sampling_inputs,
+                    stopping_criteria,
+                    model_metas,
+                    need_broadcast_next,
+                    return_logits=return_logits,
+                    all_routed_experts=all_routed_experts,
+                    extra_inputs=extra_inputs,
+                ))
         else:
             (
                 inputs,
                 next_token_ids,
                 extra_inputs,
                 extra_outputs,
-            ) = await self._step_postprocess_without_output(
-                inputs,
-                last_logits,
-                extra_inputs,
-                need_broadcast_next,
-            )
+            ) = await asyncio.shield(
+                self._step_postprocess_without_output(
+                    inputs,
+                    last_logits,
+                    extra_inputs,
+                    need_broadcast_next,
+                ))
 
         sampling_delta = sampling_inputs.get_delta()
         if need_update_inputs:
@@ -909,7 +911,7 @@ class BaseModelAgent:
                             extra_outputs,
                             stopping_criteria,
                             sampling_delta=sampling_delta)
-        elif inputs.is_chunk:
+        elif inputs.is_chunk and not inputs.is_last_chunk:
             # _prev_chunk_output is used to update model metas
             self._prev_chunk_output = output
         elif self.cache_config.role != EngineRole.Prefill:
@@ -1072,15 +1074,14 @@ class BaseModelAgent:
         # for router replay
         enable_return_routed_experts = self.misc_config.enable_return_routed_experts and self.need_output
 
-        build_model_ctx = BuildModelContext(
-            disable_vision_encoder=self.misc_config.disable_vision_encoder,
-            dllm_config=self.misc_config.dllm_config,
-            strategy_factory=self.strategy_factory,
-            enable_return_routed_experts=enable_return_routed_experts,
-            quant_config=self.model_config.quant_config,
-            fp32_lm_head=self.model_config.fp32_lm_head,
-            tie_word_embeddings=self.model_config.tie_word_embeddings,
-        )
+        build_model_ctx = BuildModelContext(disable_vision_encoder=self.misc_config.disable_vision_encoder,
+                                            dllm_config=self.misc_config.dllm_config,
+                                            strategy_factory=self.strategy_factory,
+                                            enable_return_routed_experts=enable_return_routed_experts,
+                                            quant_config=self.model_config.quant_config,
+                                            fp32_lm_head=self.model_config.fp32_lm_head,
+                                            tie_word_embeddings=self.model_config.tie_word_embeddings,
+                                            num_spec_tokens=self.spec_agent.num_spec_tokens)
         patched_model = build_patched_model(self.model_config, device=device, build_model_ctx=build_model_ctx)
         logger.debug(msg_with_rank(rank, 'loading weights.'))
         if not self.misc_config.empty_init:

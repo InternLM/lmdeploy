@@ -26,6 +26,12 @@ class ARSpecModelInputsStrategy(ModelInputsStrategy):
         meta: MakeDummyMeta | None = None,
     ) -> ModelInputs:
         """Create dummy model inputs."""
+        is_draft_model = target_hidden_size is not None
+
+        # warmup decoding for main model
+        if not is_draft_model and is_decoding and max_q_seqlen == 1:
+            max_q_seqlen = self.num_spec_tokens + 1
+
         inputs = make_dummy_inputs(batch_size,
                                    max_q_seqlen=max_q_seqlen,
                                    is_decoding=is_decoding,
@@ -33,10 +39,12 @@ class ARSpecModelInputsStrategy(ModelInputsStrategy):
                                    dummy_block_id=dummy_block_id,
                                    vocab_size=vocab_size,
                                    meta=meta)
-        if target_hidden_size is not None:
+        if is_draft_model:
             inputs.target_hidden_states = torch.randn((1, batch_size * max_q_seqlen, target_hidden_size),
                                                       dtype=target_dtype,
                                                       device=device)
+            inputs.target_position_ids = torch.zeros_like(inputs.input_ids, dtype=torch.long, device=device)
+
         return inputs
 
     @record_function('ModelInputs.merge')
@@ -85,6 +93,12 @@ class ARSpecModelInputsStrategy(ModelInputsStrategy):
         if state_offsets is not None:
             state_offsets = state_offsets[indices]
 
+        # for mrope
+        mrope_pos_ids = inputs.mrope_pos_ids
+        if mrope_pos_ids is not None:
+            mrope_pos_ids = mrope_pos_ids.reshape(3, -1, self.num_spec_tokens + 1)
+            mrope_pos_ids = mrope_pos_ids[:, indices].reshape(3, -1)
+
         # return new inputs
         return ModelInputs(
             input_ids=input_ids,
@@ -99,4 +113,5 @@ class ARSpecModelInputsStrategy(ModelInputsStrategy):
             local_adapter_ids=local_adapter_ids,
             model_metas=model_metas,
             state_offsets=state_offsets,
+            mrope_pos_ids=mrope_pos_ids
         )

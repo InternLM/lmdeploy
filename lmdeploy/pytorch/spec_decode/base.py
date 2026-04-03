@@ -3,7 +3,7 @@
 
 import torch
 
-from ..config import CacheConfig, ModelConfig
+from ..config import CacheConfig, ModelConfig, SpecDecodeConfig
 from ..engine.logits_process import SamplingInputs
 from ..model_inputs import ModelInputs
 from ..strategies.base.model_agent import ExtraInputs
@@ -12,8 +12,10 @@ from ..strategies.base.model_agent import ExtraInputs
 class BaseSpecModelAgent:
     """Speculative model agent."""
 
-    def __init__(self, enable: bool = False):
+    def __init__(self, specdecode_config: SpecDecodeConfig | None, enable: bool = False):
         self._enabled = enable
+        self.specdecode_config = specdecode_config
+        self.num_spec_tokens = specdecode_config.num_speculative_tokens if specdecode_config is not None else 0
 
     def is_enabled(self):
         return self._enabled
