@@ -1,9 +1,14 @@
 import torch
 
 from lmdeploy.pytorch.engine.logits_process import SamplingInputs
-from lmdeploy.pytorch.spec_decode.reject_sampler import (PLACEHOLDER_TOKEN_ID, _extract_outputs,
-                                                         rejection_greedy_sample_kernel, rejection_sample,
-                                                         sample_recovered_tokens_kernel, torch_greedy_rejection_sample)
+from lmdeploy.pytorch.spec_decode.reject_sampler import (
+    PLACEHOLDER_TOKEN_ID,
+    _extract_outputs,
+    rejection_greedy_sample_kernel,
+    rejection_sample,
+    sample_recovered_tokens_kernel,
+    torch_greedy_rejection_sample,
+)
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 

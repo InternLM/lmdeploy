@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 import torch
 from torch import nn
@@ -24,28 +25,49 @@ class Qwen3_5MtpDecoderLayer(Qwen3_5DecoderLayer):
                  config: PretrainedConfig,
                  layer_idx: int,
                  dtype: torch.dtype = None,
-                 device: torch.device = None):
+                 device: torch.device = None,
+                 prefix: str = ''):
         nn.Module.__init__(self)
         self.layer_idx = layer_idx
         self.layer_type = 'full_attention'
         quantization_config = getattr(config, 'quantization_config', None)
 
         # build attention layer
-        self.self_attn = Qwen3_5Attention(config, layer_idx, dtype=dtype, device=device, is_tp=False)
+        self.self_attn = Qwen3_5Attention(config,
+                                          layer_idx,
+                                          dtype=dtype,
+                                          device=device,
+                                          is_tp=False,
+                                          prefix=add_prefix('self_attn', prefix=prefix),
+                                          )
 
         # build MLP
         if 'moe' in config.model_type.lower():
-            self.mlp = Qwen3_5MoeSparseMoeBlock(config, layer_idx, dtype=dtype, device=device, is_tp=False)
+            self.mlp = Qwen3_5MoeSparseMoeBlock(config,
+                                                layer_idx,
+                                                dtype=dtype,
+                                                device=device,
+                                                is_tp=False,
+                                                prefix=add_prefix('mlp', prefix=prefix),
+                                                )
             self.mlp._all_reduce = False
         else:
-            self.mlp = Qwen3_5MLP(config, dtype=dtype, device=device, is_tp=False, all_reduce=False)
+            self.mlp = Qwen3_5MLP(config,
+                                  dtype=dtype,
+                                  device=device,
+                                  is_tp=False,
+                                  all_reduce=False,
+                                  prefix=add_prefix('mlp', prefix=prefix),
+                                  )
 
         # build input layer norm
         self.input_layernorm = RMSNorm(config.hidden_size,
                                        config.rms_norm_eps,
                                        quant_config=quantization_config,
                                        dtype=dtype,
-                                       device=device)
+                                       device=device,
+                                       prefix=add_prefix('input_layernorm', prefix=prefix),
+                                       )
 
         # build attention layer norm
         self.post_attention_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
@@ -72,6 +94,7 @@ class Qwen3_5MultiTokenPredictor(nn.Module):
                 self.mtp_start_layer_idx + idx,
                 dtype=dtype,
                 device=device,
+                prefix=add_prefix(f'layers.{self.mtp_start_layer_idx + idx}', prefix=prefix),
             )
             for idx in range(self.num_mtp_layers)
         })

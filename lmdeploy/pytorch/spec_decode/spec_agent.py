@@ -314,6 +314,7 @@ class SpecModelAgent(BaseSpecModelAgent):
             # Reshape to 2D: [batch * num_tokens, vocab]
             flat_logits = target_logits.reshape(-1, vocab_size)
 
+            # TODO: guided decoding not supported yet for spec decoding
             # sampling_inputs is already expanded to batch_size * num_tokens
             logits_processor = FusedLogitsProcessor(
                 sampling_inputs,
