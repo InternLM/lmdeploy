@@ -115,6 +115,7 @@ class SubCliServe:
         cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
         cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
         prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
+        linear_prefix_cache_interval_blocks_act = ArgumentHelper.linear_prefix_cache_interval_blocks(pt_group)
         max_prefill_token_num_act = ArgumentHelper.max_prefill_token_num(pt_group)
         quant_policy = ArgumentHelper.quant_policy(pt_group)
         model_format = ArgumentHelper.model_format(pt_group)
@@ -140,6 +141,7 @@ class SubCliServe:
         tb_group._group_actions.append(cache_max_entry_act)
         tb_group._group_actions.append(cache_block_seq_len_act)
         tb_group._group_actions.append(prefix_caching_act)
+        tb_group._group_actions.append(linear_prefix_cache_interval_blocks_act)
         tb_group._group_actions.append(max_prefill_token_num_act)
         tb_group._group_actions.append(quant_policy)
         tb_group._group_actions.append(model_format)
@@ -208,12 +210,13 @@ class SubCliServe:
         """Serve LLMs with restful api using fastapi."""
         from lmdeploy.archs import autoget_backend
 
-        max_batch_size = args.max_batch_size if args.max_batch_size \
-            else get_max_batch_size(args.device)
         backend = args.backend
         if backend != 'pytorch':
             # set auto backend mode
             backend = autoget_backend(args.model_path)
+
+        max_batch_size = args.max_batch_size if args.max_batch_size \
+            else get_max_batch_size(args.device)
 
         if backend == 'pytorch':
             from lmdeploy.messages import PytorchEngineConfig
@@ -266,6 +269,7 @@ class SubCliServe:
                                                    cache_max_entry_count=args.cache_max_entry_count,
                                                    cache_block_seq_len=args.cache_block_seq_len,
                                                    enable_prefix_caching=args.enable_prefix_caching,
+                                                   linear_prefix_cache_interval_blocks=args.linear_prefix_cache_interval_blocks,
                                                    max_prefill_token_num=args.max_prefill_token_num,
                                                    num_tokens_per_iter=args.num_tokens_per_iter,
                                                    max_prefill_iters=args.max_prefill_iters,
