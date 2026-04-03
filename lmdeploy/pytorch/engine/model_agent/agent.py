@@ -167,6 +167,12 @@ def model_forward(
         )
 
         with ctx_mgr.context(context):
+            # initialize cache for ssm
+            # chunk_indices in gated delta kernel requires cuda synchronize
+            # so we have to init cache after build_context
+            if not inputs.is_decoding and not inputs.is_dummy and inputs.state_offsets is not None:
+                state_cache_engine.init_caches(inputs.state_offsets, inputs.history_lengths == 0)
+
             model_metas = model.update_model_metas(
                 past_key_values=cache_engine.gpu_cache,
                 context=context,
@@ -383,6 +389,10 @@ class BaseModelAgent:
         except ValueError as e:
             logger.warning(f'Failed to create GuidedManager for tokenizer {type(self.tokenizer)}: {e}')
             self.guided_decoding_manager = None
+
+        # update_params_ipc_buffer
+        self._update_params_ipc_tensor: torch.Tensor | None = None
+        self._update_params_ipc_event: torch.cuda.Event | None = None
 
         # microbatch
         self.enable_microbatch = self.dist_config.enable_microbatch
@@ -826,11 +836,6 @@ class BaseModelAgent:
                 await asyncio.sleep(0.01)
                 return
 
-        if not is_decoding:
-            # init state cache for first time prefill
-            # I don't know if this is necessary...
-            self.state_cache_engine.init_caches(inputs.state_offsets, inputs.history_lengths == 0)
-
         # swap caches
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
 
@@ -1165,12 +1170,42 @@ class BaseModelAgent:
         """Update params."""
 
         # modified from https://github.com/vllm-project/vllm/blob/v0.8.5/examples/offline_inference/rlhf_utils.py#L82
-        def _construct(item):
+        def _construct(item, require_clone: bool = True):
             func, args = item
             args = list(args)
             args[6] = torch.cuda.current_device()  # device id.
-            # clone() seems necessary otherwise the producer can not release the memory
-            return func(*args).clone()
+            ipc_tensor = func(*args)
+            return ipc_tensor.clone() if require_clone else ipc_tensor
+
+        def _deserialize_weights(serialized_data):
+            raw = ForkingPickler.loads(pybase64.b64decode(serialized_data))
+            if request.load_format == 'flattened_bucket':
+                metadata: list[FlattenedTensorMetadata] = raw['metadata']
+                if not metadata:
+                    return []
+                if 'flattened_tensor' in weights:
+                    # Determine if clone is required
+                    require_clone = weights.get('require_clone', True)
+                    if 'event_ipc_handle' in weights and not hasattr(torch.cuda.Event, 'from_ipc_handle'):
+                        # Force clone when IPC event is provided but cannot be used
+                        require_clone = True
+                    self._update_params_ipc_tensor = _construct(weights['flattened_tensor'],
+                                                                require_clone=require_clone)
+                elif self._update_params_ipc_tensor is None:
+                    raise ValueError(
+                        'flattened_tensor is not provided in weights and no cached ipc tensor is available. '
+                        'Please provide flattened_tensor on the first update_params call.')
+                if 'event_ipc_handle' in weights and hasattr(torch.cuda.Event, 'from_ipc_handle'):
+                    self._update_params_ipc_event = torch.cuda.Event.from_ipc_handle(
+                        device=torch.cuda.current_device(),
+                        handle=weights['event_ipc_handle'],
+                    )
+                flattened_tensor: torch.Tensor = self._update_params_ipc_tensor
+                if self._update_params_ipc_event is not None:
+                    self._update_params_ipc_event.wait()
+                bucket = FlattenedTensorBucket(flattened_tensor=flattened_tensor, metadata=metadata)
+                return list(bucket.reconstruct_tensors())
+            return [(k, _construct(v)) for k, v in raw]
 
         def _deserialize_weights(serialized_data):
             raw = ForkingPickler.loads(pybase64.b64decode(serialized_data))
@@ -1192,6 +1227,11 @@ class BaseModelAgent:
             return main, draft
 
         with self.all_context():
+            # After deserialization, weights is a dict with following keys:
+            # - metadata: List[FlattenedTensorMetadata]
+            # - flattened_tensor: the flattened tensor for weights, optional
+            # - event_ipc_handle: the ipc handle of the event
+            #   that used to sync stream across processes, optional
             serialized_data = request.serialized_named_tensors
             if isinstance(serialized_data, list):
                 serialized_data = serialized_data[self.dist_ctx.tp_group.rank]
@@ -1210,11 +1250,18 @@ class BaseModelAgent:
                 logger.info(f'Update_params: {tag}_num_tensors={len(w)}')
                 m.load_weights(iter(w))
 
+                if self._update_params_ipc_event is not None:
+                    self._update_params_ipc_event.record()
+
             if request.finished:
                 for m in filter(None, [model, spec_model]):
                     for _, mod in m.named_modules():
                         if hasattr(mod, 'update_weights'):
                             mod.update_weights()
+
+                    torch.cuda.synchronize()
+                    self._update_params_ipc_event = None
+                    self._update_params_ipc_tensor = None
 
             torch.cuda.empty_cache()
 
@@ -1236,6 +1283,9 @@ class BaseModelAgent:
             spec_model.to(device=device, non_blocking=True)
 
         torch.cuda.synchronize()
+        # force clean _update_params_ipc tensor and event after all gpu jobs done
+        self._update_params_ipc_tensor = None
+        self._update_params_ipc_event = None
         torch.cuda.empty_cache()
         self.state.to_sleep.clear()
 
@@ -1248,9 +1298,12 @@ class BaseModelAgent:
         if 'weights' in tags:
             device = next(self.patched_model.get_model().parameters()).device
             assert device.type in ['cpu', 'meta']
+            spec_model =  self.spec_agent.get_model()
 
             if device.type == 'cpu':
                 self.patched_model.get_model().to(torch.cuda.current_device())
+                if spec_model is not None:
+                    spec_model.to(torch.cuda.current_device())
             else:
                 # user should update weights after wakeup
                 old_empty_init = self.misc_config.empty_init
@@ -1258,13 +1311,6 @@ class BaseModelAgent:
                 self.build_model()
                 self.build_graph_runner()
                 self.misc_config.empty_init = old_empty_init
-
-            spec_model = self.spec_agent.get_model()
-            if spec_model is not None:
-                spec_device = next(spec_model.parameters()).device
-                assert spec_device.type in ['cpu', 'meta']
-                if spec_device.type == 'cpu':
-                    spec_model.to(torch.cuda.current_device())
 
         if 'kv_cache' in tags:
             self.build_cache_engine()

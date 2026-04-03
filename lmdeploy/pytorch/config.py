@@ -57,7 +57,13 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str, device_type: str = 'a
             torch_dtype = torch_dtype if torch_dtype in ['float16', 'bfloat16'] else 'float16'
         else:
             torch_dtype = dtype
-    config.dtype = eval(f'torch.{torch_dtype}')
+
+    resolved_dtype = getattr(torch, torch_dtype, None)
+    if not isinstance(resolved_dtype, torch.dtype):
+        raise ValueError(f'Invalid torch dtype "{torch_dtype}" resolved from model config; '
+                         'expected a torch.dtype attribute on torch.')
+    config.dtype = resolved_dtype
+
     return config
 
 
@@ -334,6 +340,9 @@ class ModelConfig:
     # added for qwen3_next
     # could used for any SSM model.
     states_shapes: list[tuple[tuple[int], torch.dtype]] = field(default_factory=list)
+    # flag to indicate that the model uses gated delta rule layers
+    # and requires prepare_chunk_indices during prefill
+    is_gated_delta: bool = False
 
     # check env for model-device combination
     check_env_func: Callable = _default_check_env
@@ -626,8 +635,11 @@ class QuantizationConfig:
         else:
             raise TypeError(f'Unsupported quant method: {quant_method}')
 
-        if quant_dtype is not None:
-            quant_dtype = eval(f'torch.{quant_dtype}')
+        resolved_quant_dtype = getattr(torch, quant_dtype, None)
+        if not isinstance(resolved_quant_dtype, torch.dtype):
+            raise ValueError(f'Invalid quant dtype "{quant_dtype}" resolved from model config; '
+                             'expected a torch.dtype attribute on torch.')
+        quant_dtype = resolved_quant_dtype
 
         ignored_layers = quant_config.get('ignored_layers', [])
         if not ignored_layers:

@@ -6,6 +6,7 @@ from collections.abc import Generator
 import pytest
 import shortuuid
 
+from lmdeploy.model import MODELS
 from lmdeploy.serve.openai.api_server import VariableInterface
 from lmdeploy.serve.openai.protocol import (
     ChatCompletionRequest,
@@ -261,3 +262,151 @@ def test_no_think_nonstream():
     first_message = resp.choices[0].message
     assert first_message.content == '你好呀！✨ 很高兴见到你！'
     assert first_message.reasoning_content is None
+
+
+def test_adjust_request_parses_assistant_tool_call_object_arguments():
+    parser = Qwen3CoderToolParser(tokenizer=DummyTokenizer())
+    request = ChatCompletionRequest(model='qwen3coder',
+                                    messages=[{
+                                        'role': 'user',
+                                        'content': 'hello'
+                                    }, {
+                                        'role': 'assistant',
+                                        'content': '',
+                                        'tool_calls': [{
+                                            'id': 'call_1',
+                                            'type': 'function',
+                                            'function': {
+                                                'name': 'get_weather',
+                                                'arguments': '{"city": "Paris", "units": "metric"}'
+                                            }
+                                        }]
+                                    }])
+
+    adjusted_request = parser.adjust_request(request)
+
+    assert adjusted_request is not request
+    assert adjusted_request.messages is not request.messages
+    assert adjusted_request.messages[1] is not request.messages[1]
+    assert adjusted_request.messages[1]['tool_calls'][0] is not request.messages[1]['tool_calls'][0]
+    assert adjusted_request.messages[1]['tool_calls'][0]['function']['arguments'] == {
+        'city': 'Paris',
+        'units': 'metric'
+    }
+    assert request.messages[1]['tool_calls'][0]['function']['arguments'] == '{"city": "Paris", "units": "metric"}'
+
+
+@pytest.mark.parametrize('arguments', ['[1, 2, 3]', '1', '{not valid json}'])
+def test_adjust_request_leaves_non_mapping_arguments_unchanged(arguments):
+    parser = Qwen3CoderToolParser(tokenizer=DummyTokenizer())
+    request = ChatCompletionRequest(model='qwen3coder',
+                                    messages=[{
+                                        'role': 'assistant',
+                                        'content': '',
+                                        'tool_calls': [{
+                                            'id': 'call_1',
+                                            'type': 'function',
+                                            'function': {
+                                                'name': 'fn',
+                                                'arguments': arguments
+                                            }
+                                        }]
+                                    }])
+
+    adjusted_request = parser.adjust_request(request)
+
+    assert adjusted_request is request
+
+
+def test_adjust_request_noops_for_string_messages():
+    parser = Qwen3CoderToolParser(tokenizer=DummyTokenizer())
+    request = ChatCompletionRequest(model='qwen3coder', messages='hello')
+
+    adjusted_request = parser.adjust_request(request)
+
+    assert adjusted_request is request
+
+
+def test_adjust_request_noops_without_assistant_tool_calls():
+    parser = Qwen3CoderToolParser(tokenizer=DummyTokenizer())
+    request = ChatCompletionRequest(model='qwen3coder',
+                                    messages=[{
+                                        'role': 'user',
+                                        'content': 'hello'
+                                    }, {
+                                        'role': 'assistant',
+                                        'content': 'plain text response'
+                                    }, {
+                                        'role': 'tool',
+                                        'content': '',
+                                        'tool_calls': [{
+                                            'id': 'call_1',
+                                            'type': 'function',
+                                            'function': {
+                                                'name': 'fn',
+                                                'arguments': '{"x": 1}'
+                                            }
+                                        }]
+                                    }])
+
+    adjusted_request = parser.adjust_request(request)
+
+    assert adjusted_request is request
+
+
+def test_adjust_request_noops_for_dict_arguments():
+    parser = Qwen3CoderToolParser(tokenizer=DummyTokenizer())
+    request = ChatCompletionRequest(model='qwen3coder',
+                                    messages=[{
+                                        'role': 'assistant',
+                                        'content': '',
+                                        'tool_calls': [{
+                                            'id': 'call_1',
+                                            'type': 'function',
+                                            'function': {
+                                                'name': 'fn',
+                                                'arguments': {
+                                                    'x': 1
+                                                }
+                                            }
+                                        }]
+                                    }])
+
+    adjusted_request = parser.adjust_request(request)
+
+    assert adjusted_request is request
+
+
+@pytest.mark.parametrize('model_path', ['Qwen/Qwen3.5-35B-A3B'])
+def test_adjust_request_renders_qwen_template_from_string_payload(model_path):
+    chat_template = MODELS.get('hf')(model_path)
+    parser = Qwen3CoderToolParser(tokenizer=DummyTokenizer())
+    request = ChatCompletionRequest(model='qwen3coder',
+                                    messages=[{
+                                        'role': 'user',
+                                        'content': 'What is the weather in Paris?'
+                                    }, {
+                                        'role': 'assistant',
+                                        'content': '',
+                                        'tool_calls': [{
+                                            'id': 'call_1',
+                                            'type': 'function',
+                                            'function': {
+                                                'name': 'get_weather',
+                                                'arguments': '{"city":"Paris","units":"metric"}'
+                                            }
+                                        }]
+                                    }])
+
+    adjusted_request = parser.adjust_request(request)
+    prompt = chat_template.messages2prompt(adjusted_request.messages)
+
+    assert adjusted_request is not request
+    assert adjusted_request.messages[1]['tool_calls'][0]['function']['arguments'] == {
+        'city': 'Paris',
+        'units': 'metric'
+    }
+    assert request.messages[1]['tool_calls'][0]['function']['arguments'] == '{"city":"Paris","units":"metric"}'
+    assert '<function=get_weather>' in prompt
+    assert '<parameter=city>\nParis\n</parameter>' in prompt
+    assert '<parameter=units>\nmetric\n</parameter>' in prompt
