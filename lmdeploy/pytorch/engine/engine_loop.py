@@ -160,6 +160,8 @@ class EngineLoop:
                       resp_type,
                       data=dict(token_ids=out.token_ids,
                                 logits=out.logits,
+                                ppl_loss=out.ppl_loss,
+                                ppl_count=out.ppl_count,
                                 cache_block_ids=out.cache_block_ids,
                                 req_metrics=out.req_metrics,
                                 routed_experts=out.routed_experts,
@@ -236,6 +238,11 @@ class EngineLoop:
             seq = running[0]
             seq.append_routed_experts(all_routed_experts)
             seq.append_logits(logits)
+            if batched_outputs.ppl_losses is not None:
+                prev_loss = getattr(seq, '_ppl_loss_acc', 0.0)
+                prev_count = getattr(seq, '_ppl_count_acc', 0)
+                seq._ppl_loss_acc = prev_loss + batched_outputs.ppl_losses[0]
+                seq._ppl_count_acc = prev_count + batched_outputs.ppl_counts[0]
             return dict()
 
         new_token_timestamp = batched_outputs.new_token_timestamp
@@ -296,6 +303,13 @@ class EngineLoop:
             if msg.return_logits:
                 logit = __get_logit(msg, logits, seq_length, idx)
                 outputs[session_id].logits = logit
+            if batched_outputs.ppl_losses is not None:
+                ppl_loss = batched_outputs.ppl_losses[idx]
+                ppl_count = batched_outputs.ppl_counts[idx]
+                ppl_loss += getattr(msg, '_ppl_loss_acc', 0.0)
+                ppl_count += getattr(msg, '_ppl_count_acc', 0)
+                outputs[session_id].ppl_loss = ppl_loss
+                outputs[session_id].ppl_count = ppl_count
         return outputs
 
     async def _main_loop_try_send_next_inputs(self):

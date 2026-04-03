@@ -271,6 +271,8 @@ class SamplingInputs:
     repetition_ngram_threshold: torch.Tensor | None = None
     max_repetition_ngram_size: int = 0
 
+    compute_ppl: bool = False
+
     def to_device(self, device: str, non_blocking: bool = False):
         """To device."""
         out_dict = dict()

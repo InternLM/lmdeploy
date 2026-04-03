@@ -196,6 +196,8 @@ class ARSamplingStrategy(SamplingStrategy):
             if repetition_ngram_same_n:
                 repetition_ngram_sizes = None
 
+        compute_ppl = any(seq.sampling_param.compute_ppl for seq in seqs)
+
         sampling_input = SamplingInputs(
             temperature=temperature,
             bad_words=bad_words,
@@ -219,6 +221,7 @@ class ARSamplingStrategy(SamplingStrategy):
             repetition_ngram_size=repetition_ngram_sizes,
             repetition_ngram_threshold=repetition_ngram_thresholds,
             max_repetition_ngram_size=max_repetition_ngram_size,
+            compute_ppl=compute_ppl,
         )
 
         pad_token_id = self.pad_token_id

@@ -60,6 +60,7 @@ class SamplingParam:
     logits_processors: None | list[LogitsProcessor] = None
     out_logits: bool = False
     out_last_hidden_states: bool = False
+    compute_ppl: bool = False
     num_logprobs: int = -1
     return_routed_experts: bool = False
 
@@ -146,6 +147,7 @@ class SamplingParam:
             min_new_tokens=min_new_tokens,
             logits_processors=gen_config.logits_processors,
             out_logits=(output_logits is not None),
+            compute_ppl=gen_config.output_ppl,
             num_logprobs=logprobs,
             return_routed_experts=gen_config.return_routed_experts,
             repetition_ngram_size=gen_config.repetition_ngram_size,

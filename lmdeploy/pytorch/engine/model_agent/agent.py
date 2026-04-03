@@ -38,6 +38,40 @@ from .profiler import AgentProfiler
 logger = get_logger('lmdeploy')
 
 
+def _compute_ppl_from_logits(logits: torch.Tensor, input_ids: torch.Tensor,
+                             seq_lengths: torch.Tensor) -> tuple[list[float], list[int]]:
+    """Compute per-sequence cross-entropy loss from packed logits and
+    input_ids.
+
+    Args:
+        logits: [total_tokens, vocab_size] packed logits for all sequences.
+        input_ids: [total_tokens] packed input token ids.
+        seq_lengths: [batch_size] length of each sequence.
+
+    Returns:
+        (losses, counts): per-sequence summed CE loss and target token count.
+    """
+    input_ids = input_ids.flatten()
+    losses = []
+    counts = []
+    offset = 0
+    for length in seq_lengths.tolist():
+        length = int(length)
+        if length <= 1:
+            losses.append(0.0)
+            counts.append(0)
+            offset += length
+            continue
+        seq_logits = logits[offset:offset + length - 1]
+        seq_targets = input_ids[offset + 1:offset + length]
+        loss = torch.nn.functional.cross_entropy(
+            seq_logits.float(), seq_targets, reduction='sum')
+        losses.append(loss.item())
+        counts.append(length - 1)
+        offset += length
+    return losses, counts
+
+
 @dataclass
 class SleepWakeupState:
     to_sleep: asyncio.Event = field(default_factory=asyncio.Event)
@@ -82,6 +116,8 @@ class BatchedOutputs:
     new_token_timestamp: int = 0
     extra_outputs: ExtraOutputs | None = None
     all_routed_experts: torch.Tensor | None = None
+    ppl_losses: list[float] | None = None
+    ppl_counts: list[int] | None = None
 
     def to_cpu(self):
         """To cpu."""
@@ -687,7 +723,9 @@ class BaseModelAgent:
                                             need_broadcast_next: bool,
                                             return_logits: bool = False,
                                             all_routed_experts: Any = None,
-                                            extra_inputs: ExtraInputs = None):
+                                            extra_inputs: ExtraInputs = None,
+                                            ppl_losses: list[float] = None,
+                                            ppl_counts: list[int] = None):
         """Step postprocess with output."""
         rank = self.rank
         logger.debug(f'<ForwardTask> rank[{rank}]: Sampling.')
@@ -730,7 +768,9 @@ class BaseModelAgent:
                            model_metas=model_metas,
                            logprobs=logprobs,
                            all_routed_experts=all_routed_experts,
-                           extra_outputs=extra_outputs))
+                           extra_outputs=extra_outputs,
+                           ppl_losses=ppl_losses,
+                           ppl_counts=ppl_counts))
 
         return inputs, extra_inputs, stopping_criteria, extra_outputs, next_token_ids
 
@@ -839,6 +879,10 @@ class BaseModelAgent:
         # swap caches
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
 
+        # PPL needs full logits for all positions, not just the last token
+        need_full_logits = (sampling_inputs.compute_ppl and not is_decoding)
+        forward_return_logits = return_logits or need_full_logits
+
         # inference
         logger.debug(f'<ForwardTask> rank[{rank}]: model forward. '
                      f'batch_size={inputs.seq_length.size(0)} '
@@ -846,7 +890,7 @@ class BaseModelAgent:
                      f'is_decoding={inputs.is_decoding}')
         output = await self._async_model_forward(
             inputs,
-            return_logits=return_logits,
+            return_logits=forward_return_logits,
         )
         # recovery is_decoding
         inputs.is_decoding = is_decoding
@@ -860,6 +904,12 @@ class BaseModelAgent:
         last_logits = self._slice_outs(logits, seq_length)  # [bs, 1, prob] -> [bs, prob]
         extra_inputs = self.agent_strategy.slice_extra_inputs(extra_inputs, inputs, output)
         model_metas = output.get('model_metas')
+
+        ppl_losses = None
+        ppl_counts = None
+        if sampling_inputs.compute_ppl and not inputs.is_decoding:
+            ppl_losses, ppl_counts = _compute_ppl_from_logits(
+                logits, inputs.input_ids, seq_length)
 
         if self.need_output:
             logger.debug(f'<ForwardTask> rank[{rank}]: Sampling.')
@@ -886,6 +936,8 @@ class BaseModelAgent:
                 return_logits=return_logits,
                 all_routed_experts=all_routed_experts,
                 extra_inputs=extra_inputs,
+                ppl_losses=ppl_losses,
+                ppl_counts=ppl_counts,
             )
         else:
             (

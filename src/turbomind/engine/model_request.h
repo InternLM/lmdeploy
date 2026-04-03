@@ -33,6 +33,8 @@ public:
 
         bool stream_output;
         bool enable_metrics;
+
+        std::function<void(void*, int, int, int, DataType)> logits_cb;
     };
 
     struct OutputParam {

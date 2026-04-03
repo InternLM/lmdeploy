@@ -51,6 +51,8 @@ class GenOut:
     logprobs: list[dict[int, float]] | None = None
     logits: Any = None
     last_hidden_state: Any = None
+    ppl_loss: float = None
+    ppl_count: int = None
     cache_block_ids: list[int] | None = None  # for disaggregation
     routed_experts: Any = None  # for RL router replay
 
@@ -68,6 +70,8 @@ class GenOut:
                         logprobs=self.logprobs,
                         last_hidden_state=self.last_hidden_state,
                         logits=self.logits,
+                        ppl_loss=self.ppl_loss,
+                        ppl_count=self.ppl_count,
                         routed_experts=self.routed_experts,
                         index=index)
 
@@ -490,6 +494,8 @@ class AsyncEngine:
                                  gen_len,
                                  finish_reason,
                                  token_ids=res,
+                                 ppl_loss=outputs.ppl_loss,
+                                 ppl_count=outputs.ppl_count,
                                  routed_experts=outputs.routed_experts,
                                  cache_block_ids=outputs.cache_block_ids)
                     if outputs.logprobs is not None:
@@ -542,6 +548,8 @@ class AsyncEngine:
                                  logprobs=logprobs,
                                  logits=logits,
                                  last_hidden_state=last_hidden_state,
+                                 ppl_loss=outputs.ppl_loss,
+                                 ppl_count=outputs.ppl_count,
                                  routed_experts=routed_experts,
                                  cache_block_ids=outputs.cache_block_ids)
                     # Note: We remove the session step update here. Let the caller(e.g., pipeline.chat) take care of it.
@@ -675,3 +683,49 @@ class AsyncEngine:
             for session in sessions:
                 self.session_mgr.remove(session)
         return logits
+
+    async def async_get_ppl(self,
+                            input_ids,
+                            sessions: list['Session'] | None = None,
+                            sequence_start: bool = True,
+                            sequence_end: bool = True) -> list[tuple[float, int]]:
+        """Compute per-sequence perplexity (loss, count) pairs.
+
+        The engine computes cross-entropy inline and only returns scalar loss/count, avoiding materialisation of the
+        full logits tensor.
+        """
+        assert input_ids and all(isinstance(_, list) for _ in input_ids)
+        assert sessions is None or (len(sessions) == len(input_ids))
+
+        results: list[tuple[float, int]] = [None] * len(input_ids)
+
+        async def _proc(session, i):
+            async with session.request_handle() as handle:
+                max_new_tokens = 1 if self.backend == 'turbomind' else 0
+                gen_config = GenerationConfig(
+                    max_new_tokens=max_new_tokens, output_ppl=True, top_k=1)
+                async with self.safe_run(handle,
+                                         session=session,
+                                         input_ids=input_ids[i],
+                                         gen_config=gen_config,
+                                         stream_output=False,
+                                         sequence_start=sequence_start,
+                                         sequence_end=sequence_end,
+                                         step=session.step) as gen:
+                    async for outputs in gen:
+                        pass
+                    results[i] = (outputs.ppl_loss, outputs.ppl_count)
+
+        create_sessions = False
+        if sessions is None:
+            create_sessions = True
+            sessions = [self.session_mgr.get() for _ in range(len(input_ids))]
+        tasks = [_proc(session, i) for i, session in enumerate(sessions)]
+        await asyncio.gather(*tasks)
+        if sequence_end and self.backend == 'pytorch':
+            for session in sessions:
+                await session.async_close()
+        if sequence_end and create_sessions:
+            for session in sessions:
+                self.session_mgr.remove(session)
+        return results
