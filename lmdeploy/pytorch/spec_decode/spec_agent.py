@@ -237,6 +237,4 @@ class SpecModelAgent(BaseSpecModelAgent):
 
     def get_model(self):
         """Get model."""
-        if self.is_enable() and self.proposer.model is not None:
-            return self.proposer.model
-        return None
+        return self.proposer.model.get_model()
