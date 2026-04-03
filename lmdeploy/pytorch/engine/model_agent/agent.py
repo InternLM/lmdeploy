@@ -1207,17 +1207,6 @@ class BaseModelAgent:
                 return list(bucket.reconstruct_tensors())
             return [(k, _construct(v)) for k, v in raw]
 
-        def _deserialize_weights(serialized_data):
-            raw = ForkingPickler.loads(pybase64.b64decode(serialized_data))
-            if request.load_format == 'flattened_bucket':
-                metadata: list[FlattenedTensorMetadata] = raw['metadata']
-                if not metadata:
-                    return []
-                flattened_tensor: torch.Tensor = _construct(raw['flattened_tensor'])
-                bucket = FlattenedTensorBucket(flattened_tensor=flattened_tensor, metadata=metadata)
-                return list(bucket.reconstruct_tensors())
-            return [(k, _construct(v)) for k, v in raw]
-
         def _split_main_and_draft(weights):
             # TODO, zhouxinyu, support split and update weights for other mtp methods
             if not self.spec_agent.is_enabled() or self.spec_agent.method != 'qwen3_5_mtp':
