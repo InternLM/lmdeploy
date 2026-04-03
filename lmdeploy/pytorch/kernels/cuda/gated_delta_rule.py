@@ -183,7 +183,7 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
 
             # state_idx
             if use_state_indices:
-                state_id = StateIndices[b_id]
+                state_id = T.cast(StateIndices[b_id], T.int64)
             else:
                 state_id = b_id
 

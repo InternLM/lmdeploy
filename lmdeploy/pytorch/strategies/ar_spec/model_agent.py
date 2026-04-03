@@ -110,7 +110,6 @@ class ARSpecStoppingCriteria(ARStoppingCriteria):
         if token_ids.ndim == 1:
             token_ids = token_ids.unsqueeze(-1)
         valid_tokens = token_ids > -1
-        mask = (self.num_appendable_ids.unsqueeze(-1) - valid_tokens.cumsum(dim=-1)) <= 0
         num_appendable_ids_exp = self.num_appendable_ids.unsqueeze(-1) - torch.arange(
             1, token_ids.size(1) + 1, device=token_ids.device)[None]
         mask = num_appendable_ids_exp <= 0

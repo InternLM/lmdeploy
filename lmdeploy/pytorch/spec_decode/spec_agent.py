@@ -425,7 +425,7 @@ class SpecModelAgent(BaseSpecModelAgent):
             if loop_count > 0:
                 inputs = self.proposer.update_inputs_decoding(inputs, extra_inputs, draft_token_ids.transpose(0, 1),
                                                               target_hidden_states, model_metas)
-               # set last_token_indices to None for decoding
+                # set last_token_indices to None for decoding
                 extra_inputs.last_token_indices = None
 
                 for loop_idx in range(loop_count):
