@@ -81,7 +81,9 @@ struct LlamaLinear::Impl {
             A = input;
         }
 
-        if (indices && A.dtype() == kFloat8_e4m3) {
+        // MoE gather: FP8 always. BF16/half when need_unfused_moe_gather (no idxs gather; e.g. SM100 grouped cuBLAS).
+        const bool need_unfused_moe_gather = (int)A.shape(0) != m && dense.epilogue != Epilogue::kGatedSilu;
+        if (indices && (A.dtype() == kFloat8_e4m3 || need_unfused_moe_gather)) {
             const auto [bsz, k] = A.shapes(0, 1);
             const int e         = indices.size() / bsz;
             Tensor    A_e       = {{m, k}, A.dtype(), kDEVICE};
