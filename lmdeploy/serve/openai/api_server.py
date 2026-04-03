@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
 
+    from lmdeploy.serve.parsers import ResponseParser
+
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
 from fastapi.encoders import jsonable_encoder
@@ -75,7 +77,6 @@ from lmdeploy.serve.openai.protocol import (
     UpdateParamsRequest,
     UsageInfo,
 )
-from lmdeploy.serve.openai.response_parser import ResponseParser
 from lmdeploy.serve.utils.server_utils import validate_json_request
 from lmdeploy.utils import get_logger
 
@@ -93,6 +94,7 @@ class VariableInterface:
     api_server_url: str | None = None
     allow_terminate_by_client: bool = False
     enable_abort_handling: bool = False
+    response_parser_cls: type[ResponseParser] | None = None
 
     @staticmethod
     def get_session(session_id: int) -> int:
@@ -1216,10 +1218,14 @@ class ConcurrencyLimitMiddleware(BaseHTTPMiddleware):
 
 
 def set_parsers(reasoning_parser_name: str | None = None, tool_parser_name: str | None = None, **kwargs):
-    """Set tool parser and reasoning parser types on
-    :class:`~lmdeploy.serve.openai.response_parser.ResponseParser`."""
-    ResponseParser.set_parsers(reasoning_parser_name=reasoning_parser_name, tool_parser_name=tool_parser_name)
-
+    from lmdeploy.serve.parsers import ResponseParserManager
+    name = 'default'
+    arch = VariableInterface.async_engine.arch
+    if arch == 'GptOssForCausalLM':
+        name = 'gpt-oss'
+    cls = ResponseParserManager.get(name)
+    cls.set_parsers(reasoning_parser_name=reasoning_parser_name, tool_parser_name=tool_parser_name)
+    VariableInterface.response_parser_cls = cls
 
 def mount_metrics(app: FastAPI, backend_config: PytorchEngineConfig | TurbomindEngineConfig):
     if not getattr(backend_config, 'enable_metrics', False):

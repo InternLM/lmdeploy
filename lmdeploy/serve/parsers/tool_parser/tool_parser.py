@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 
 import partial_json_parser
 import shortuuid
-from mmengine import Registry
 from partial_json_parser.core.options import Allow
 
 from lmdeploy.serve.openai.protocol import (
@@ -17,13 +16,9 @@ from lmdeploy.serve.openai.protocol import (
     FunctionCall,
     ToolCall,
 )
-from lmdeploy.utils import get_logger
 
 if TYPE_CHECKING:
     from lmdeploy.serve.openai.protocol import ChatCompletionRequest
-
-logger = get_logger('lmdeploy')
-ToolParserManager = Registry('tool_parser', locations=['lmdeploy.serve.openai.tool_parser'])
 
 
 class ToolParser:

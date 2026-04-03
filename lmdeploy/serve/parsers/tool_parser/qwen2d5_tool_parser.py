@@ -1,26 +1,29 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+
 from lmdeploy.serve.openai.protocol import (
     DeltaToolCall,
     ToolCall,
 )
 
-from .tool_parser import ToolParser, ToolParserManager
+from . import ToolParserManager
+from .tool_parser import ToolParser
 
 
-@ToolParserManager.register_module('llama3')
-class Llama3JsonToolParser(ToolParser):
-    """Tool parser for Llama3 JSON tool-call payloads."""
+@ToolParserManager.register_module(['qwen2d5'])
+class Qwen2d5ToolParser(ToolParser):
+    """Tool parser for Qwen2.5 JSON tool-call payloads."""
 
     def __init__(self, tokenizer: object):
         super().__init__(tokenizer)
-        self.bot_token = '<|python_tag|>'
+        self.tool_start_token = '<tool_call>'
+        self.tool_end_token = '</tool_call>'
 
     def get_tool_open_tag(self) -> str | None:
-        return self.bot_token
+        return self.tool_start_token
 
     def get_tool_close_tag(self) -> str | None:
-        return None
+        return self.tool_end_token
 
     def get_tool_payload_format(self) -> str:
         return 'json'

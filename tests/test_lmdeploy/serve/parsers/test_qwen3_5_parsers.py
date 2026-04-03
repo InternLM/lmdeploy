@@ -1,27 +1,24 @@
 import pytest
+from transformers import AutoTokenizer
 
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaToolCall
-from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParser
-from lmdeploy.serve.openai.response_parser import ResponseParser
-from lmdeploy.serve.openai.tool_parser.qwen3coder_tool_parser import Qwen3CoderToolParser
-from lmdeploy.tokenizer import HuggingFaceTokenizer
+from lmdeploy.serve.parsers import ResponseParserManager
+from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
+from lmdeploy.serve.parsers.tool_parser import ToolParserManager
 
 MODEL_ID = 'Qwen/Qwen3.5-35B-A3B'
 
 
 @pytest.fixture(scope='module')
 def tokenizer():
-    try:
-        return HuggingFaceTokenizer(MODEL_ID)
-    except Exception as exc:  # noqa: BLE001
-        pytest.skip(f'Could not load tokenizer for {MODEL_ID}: {exc}')
+    return AutoTokenizer.from_pretrained(MODEL_ID)
 
 
 @pytest.fixture()
 def response_parser(tokenizer):
-    # Configure ResponseParser to use unified reasoning parser and Qwen3.5 Coder tool parser.
-    ResponseParser.reasoning_parser_cls = ReasoningParser
-    ResponseParser.tool_parser_cls = Qwen3CoderToolParser
+    cls = ResponseParserManager.get('default')
+    cls.reasoning_parser_cls = ReasoningParserManager.get('default')
+    cls.tool_parser_cls = ToolParserManager.get('qwen3coder')
 
     request = ChatCompletionRequest(
         model=MODEL_ID,
@@ -30,7 +27,7 @@ def response_parser(tokenizer):
         tool_choice='auto',
         chat_template_kwargs={'enable_thinking': True},
     )
-    return ResponseParser(request=request, tokenizer=tokenizer)
+    return cls(request=request, tokenizer=tokenizer)
 
 
 REFERENCE_CHUNKS = [

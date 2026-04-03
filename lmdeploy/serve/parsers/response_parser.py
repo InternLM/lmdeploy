@@ -2,21 +2,40 @@
 """Unified profile-driven streaming parser for reasoning/content/tool calls."""
 from __future__ import annotations
 
+from abc import abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar
 
 from lmdeploy.serve.openai.protocol import DeltaMessage
 from lmdeploy.utils import get_logger
 
+from . import ResponseParserManager
+
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
 
     from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaToolCall, ToolCall
-    from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParser
-    from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParser
+
+    from .reasoning_parser import ReasoningParser
+    from .tool_parser import ToolParser
 
 logger = get_logger('lmdeploy')
 
+class ResponseParser:
+    @classmethod
+    def set_parsers(cls, reasoning_parser_name: str | None = None, tool_parser_name: str | None = None) -> None:
+        pass
+
+    def __init__(self, request: ChatCompletionRequest, tokenizer: PreTrainedTokenizerBase):
+        pass
+
+    @abstractmethod
+    def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs) -> tuple[DeltaMessage | None, bool]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def parse_complete(self, text: str, **kwargs) -> tuple[str, list | None, str | None]:
+        raise NotImplementedError
 
 @dataclass
 class ProtocolProfile:
@@ -48,8 +67,10 @@ class _QueuedDelta:
     tool_calls_emitted: bool = False
 
 
-class ResponseParser:
-    """Unified parser for streaming and complete assistant responses.
+@ResponseParserManager.register_module('default')
+class BaseResponseParser(ResponseParser):
+    """The default response parser for streaming and complete assistant
+    responses.
 
     It separates model output into:
     - plain assistant content
@@ -74,8 +95,8 @@ class ResponseParser:
         tool_parser_name: str | None = None,
     ) -> None:
         """Configure reasoning/tool parser classes by registry name."""
-        from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParserManager
-        from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParserManager
+        from .reasoning_parser import ReasoningParserManager
+        from .tool_parser import ToolParserManager
 
         legacy_reasoning_parser_names = ['qwen-qwq', 'intern-s1', 'deepseek-r1']
         if reasoning_parser_name in legacy_reasoning_parser_names:

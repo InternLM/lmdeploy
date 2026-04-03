@@ -3,12 +3,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from mmengine import Registry
-
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
 
-ReasoningParserManager = Registry('reasoning_parser', locations=['lmdeploy.serve.openai.reasoning_parser'])
+from . import ReasoningParserManager
 
 
 @ReasoningParserManager.register_module(name='default')

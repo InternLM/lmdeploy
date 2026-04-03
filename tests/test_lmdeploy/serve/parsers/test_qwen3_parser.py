@@ -1,10 +1,10 @@
 import pytest
+from transformers import AutoTokenizer
 
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaToolCall
-from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParser
-from lmdeploy.serve.openai.response_parser import ResponseParser
-from lmdeploy.serve.openai.tool_parser.qwen3_tool_parser import Qwen3ToolParser
-from lmdeploy.tokenizer import HuggingFaceTokenizer
+from lmdeploy.serve.parsers import ResponseParserManager
+from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
+from lmdeploy.serve.parsers.tool_parser import ToolParserManager
 
 MODEL_ID = 'Qwen/Qwen3-8B'
 
@@ -12,7 +12,7 @@ MODEL_ID = 'Qwen/Qwen3-8B'
 @pytest.fixture(scope='module')
 def tokenizer():
     try:
-        return HuggingFaceTokenizer(MODEL_ID)
+        return AutoTokenizer.from_pretrained(MODEL_ID)
     except Exception as exc:  # noqa: BLE001
         pytest.skip(f'Could not load tokenizer for {MODEL_ID}: {exc}')
 
@@ -20,8 +20,9 @@ def tokenizer():
 @pytest.fixture()
 def response_parser(tokenizer):
     # Configure ResponseParser to use unified reasoning parser and Qwen3 tool parser.
-    ResponseParser.reasoning_parser_cls = ReasoningParser
-    ResponseParser.tool_parser_cls = Qwen3ToolParser
+    cls = ResponseParserManager.get('default')
+    cls.reasoning_parser_cls = ReasoningParserManager.get('default')
+    cls.tool_parser_cls = ToolParserManager.get('qwen3')
 
     request = ChatCompletionRequest(
         model=MODEL_ID,
@@ -32,7 +33,7 @@ def response_parser(tokenizer):
         # Explicitly enable thinking mode to exercise reasoning parsing.
         chat_template_kwargs={'enable_thinking': True},
     )
-    return ResponseParser(request=request, tokenizer=tokenizer)
+    return cls(request=request, tokenizer=tokenizer)
 
 
 # Reference streaming sequence
@@ -169,7 +170,6 @@ class TestQwenResponseParserStreaming:
                 delta_text=delta_text,
                 delta_token_ids=delta_ids,
             )
-            print(f'delta_text: {delta_text!r}, delta_msg: {delta_msg}')
             if not exp_delta_msg:
                 assert delta_msg is None
                 continue
@@ -242,11 +242,12 @@ class TestQwenResponseParserStreaming:
         This proves the tool branch is reachable from plain mode after seeing the tool open tag, even with no reasoning
         parser configured.
         """
-        old_reasoning_cls = ResponseParser.reasoning_parser_cls
-        old_tool_cls = ResponseParser.tool_parser_cls
+        cls = ResponseParserManager.get('default')
+        old_reasoning_cls = cls.reasoning_parser_cls
+        old_tool_cls = cls.tool_parser_cls
         try:
-            ResponseParser.reasoning_parser_cls = None
-            ResponseParser.tool_parser_cls = Qwen3ToolParser
+            cls.reasoning_parser_cls = None
+            cls.tool_parser_cls = ToolParserManager.get('qwen3')
 
             request = ChatCompletionRequest(
                 model=MODEL_ID,
@@ -255,7 +256,7 @@ class TestQwenResponseParserStreaming:
                 tool_choice='auto',
                 chat_template_kwargs={'enable_thinking': False},
             )
-            parser = ResponseParser(request=request, tokenizer=tokenizer)
+            parser = cls(request=request, tokenizer=tokenizer)
 
             chunks = [
                 'prefix ',
@@ -283,8 +284,8 @@ class TestQwenResponseParserStreaming:
                     assert delta_msg.tool_calls[0].function.name == 'get_weather'
             assert tool_seen is True
         finally:
-            ResponseParser.reasoning_parser_cls = old_reasoning_cls
-            ResponseParser.tool_parser_cls = old_tool_cls
+            cls.reasoning_parser_cls = old_reasoning_cls
+            cls.tool_parser_cls = old_tool_cls
 
     def test_stream_chunk_reasoning_without_open_tag(self, tokenizer, response_parser):
         """Qwen thinking mode may omit ``<think>`` and start directly with
@@ -323,19 +324,20 @@ class TestQwenResponseParserStreaming:
         assert delta_msg.content == ' final answer'
         assert tool_emitted is False
 
-    def test_stream_chunk_preserves_content_reasoning_content_order(self, tokenizer, response_parser):
+    def test_stream_chunk_preserves_order(self, tokenizer, response_parser):
         """Mixed single chunk should preserve event order without content
         merge."""
-        class PlainStartQwenReasoningParser(ReasoningParser):
+        class PlainStartQwenReasoningParser(ReasoningParserManager.get('default')):
 
             def starts_in_reasoning_mode(self) -> bool:
                 return False
 
-        old_reasoning_cls = ResponseParser.reasoning_parser_cls
-        old_tool_cls = ResponseParser.tool_parser_cls
+        cls = ResponseParserManager.get('default')
+        old_reasoning_cls = cls.reasoning_parser_cls
+        old_tool_cls = cls.tool_parser_cls
         try:
-            ResponseParser.reasoning_parser_cls = PlainStartQwenReasoningParser
-            ResponseParser.tool_parser_cls = Qwen3ToolParser
+            cls.reasoning_parser_cls = PlainStartQwenReasoningParser
+            cls.tool_parser_cls = ToolParserManager.get('qwen3')
             request = ChatCompletionRequest(
                 model=MODEL_ID,
                 messages=[],
@@ -343,7 +345,7 @@ class TestQwenResponseParserStreaming:
                 tool_choice='auto',
                 chat_template_kwargs={'enable_thinking': True},
             )
-            parser = ResponseParser(request=request, tokenizer=tokenizer)
+            parser = cls(request=request, tokenizer=tokenizer)
 
             delta_text = 'content-xxx <think> reasoning-yyy </think> content-zzz <tool_call> '
             delta_ids = self._encode_ids(tokenizer, delta_text)
@@ -369,5 +371,5 @@ class TestQwenResponseParserStreaming:
             assert delta_msg.reasoning_content is None
             assert tool_emitted is False
         finally:
-            ResponseParser.reasoning_parser_cls = old_reasoning_cls
-            ResponseParser.tool_parser_cls = old_tool_cls
+            cls.reasoning_parser_cls = old_reasoning_cls
+            cls.tool_parser_cls = old_tool_cls

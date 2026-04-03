@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .tool_parser import ToolParser, ToolParserManager
+from . import ToolParserManager
+from .tool_parser import ToolParser
 
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
