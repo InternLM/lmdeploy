@@ -289,7 +289,10 @@ set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-relaxed-constexpr")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --std=c++${CXX_STD}")
 # Suppress nvcc warning 128 (loop not reachable) in fmt headers - nvcc false positive
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --diag-suppress=128")
+# Suppress nvcc warning 27 (character value out of range) from fmt/format.h's
+# fractional_part_rounding_thresholds which uses U32 string literals with values
+# exceeding 0x10FFFF - harmless, pending fix in fmtlib (PR #4719)
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --diag-suppress=128 --diag-suppress=27")
 
 string(REPLACE "-O2" "" CMAKE_CXX_FLAGS_RELEASE         "${CMAKE_CXX_FLAGS_RELEASE}")
 string(REPLACE "-O2" "" CMAKE_CUDA_FLAGS_RELEASE        "${CMAKE_CUDA_FLAGS_RELEASE}")

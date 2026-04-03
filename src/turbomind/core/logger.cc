@@ -298,7 +298,15 @@ AsyncLogWorker::AsyncLogWorker()
 
     const char* signals_env = std::getenv("TM_LOG_SIGNALS");
     if (signals_env == nullptr || std::string_view{signals_env} != "0") {
-        for (int sig : {SIGSEGV, SIGABRT, SIGFPE, SIGILL, SIGBUS}) {
+        for (int sig : {SIGSEGV,
+                        SIGABRT,
+                        SIGFPE,
+                        SIGILL
+#ifdef SIGBUS
+                        ,
+                        SIGBUS
+#endif
+             }) {
             ::signal(sig, OnFatalSignal);
         }
     }
