@@ -260,14 +260,10 @@ def calibrate(model: str,
         model.config.use_cache = False
         if dtype == 'float16':
             model.half()
-        elif dtype == 'bfloat16':
+        elif dtype == 'bfloat16' or (dtype == 'auto' and model.config.torch_dtype == torch.bfloat16):
             assert torch.cuda.is_bf16_supported(
             ), 'your device does not support bfloat16 please set --dtype float16'  # noqa
             model.to(torch.bfloat16)
-        elif dtype == 'auto' and model.config.torch_dtype == torch.bfloat16:
-            print('Warning: we cast model to float16 to prevent OOM. You'
-                  ' may enforce it bfloat16 by `--dtype bfloat16`')
-            model.half()
         model.eval()
 
     model_type = type(model).__name__
