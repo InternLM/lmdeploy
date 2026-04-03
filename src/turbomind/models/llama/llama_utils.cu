@@ -128,6 +128,7 @@ void Compare(T* ptr, size_t size, std::string key, CmpMode mode, cudaStream_t st
 template void Compare(int* ptr, size_t size, std::string key, CmpMode mode, cudaStream_t stream);
 template void Compare(float* ptr, size_t size, std::string key, CmpMode mode, cudaStream_t stream);
 template void Compare(half* ptr, size_t size, std::string key, CmpMode mode, cudaStream_t stream);
+template void Compare(int64_t* ptr, size_t size, std::string key, CmpMode mode, cudaStream_t stream);
 template void Compare(__nv_bfloat16* ptr, size_t size, std::string key, CmpMode mode, cudaStream_t stream);
 
 template void CheckNan(const float* ptr, size_t size, std::string key, cudaStream_t stream);
