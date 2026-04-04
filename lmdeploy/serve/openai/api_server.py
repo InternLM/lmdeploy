@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from __future__ import annotations
+
 # yapf: disable
 import asyncio
 import copy
@@ -10,7 +12,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from functools import partial
 from http import HTTPStatus
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
@@ -80,6 +82,9 @@ from lmdeploy.serve.utils.server_utils import validate_json_request
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
 
+if TYPE_CHECKING:
+    from lmdeploy.serve.managers import Session
+
 # yapf: enable
 
 logger = get_logger('lmdeploy')
@@ -100,12 +105,15 @@ class VariableInterface:
     enable_abort_handling: bool = False
 
     @staticmethod
-    def get_session(session_id: int) -> int:
+    def get_session(session_id: int) -> Session:
         session_mgr = VariableInterface.get_session_manager()
         if session_id == -1:
-            return session_mgr.get()
+            session = session_mgr.get()
         else:
-            return session_mgr.get(session_id)
+            session = session_mgr.get(session_id)
+        # Stamp epoch for ``stop_all_session`` / ``abort_all`` coordination in ``AsyncEngine.generate``.
+        session.epoch = VariableInterface.async_engine.epoch
+        return session
 
     @staticmethod
     def get_session_manager():
@@ -1175,7 +1183,9 @@ def update_params(request: UpdateParamsRequest, raw_request: Request = None):
 @router.post('/sleep', dependencies=[Depends(validate_json_request)])
 async def sleep(raw_request: Request = None):
     level = raw_request.query_params.get('level', '1')
-    VariableInterface.async_engine.sleep(int(level))
+    async_engine = VariableInterface.async_engine
+    await async_engine.stop_all_session()
+    async_engine.sleep(int(level))
     return Response(status_code=200)
 
 

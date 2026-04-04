@@ -201,6 +201,23 @@ class AsyncEngine:
             # set stats loggers of metrics processor
             metrics_processor.stat_loggers = self.stat_loggers
 
+    def _if_session_stale(self, session: Session,
+                                   input_token_len: int) -> GenOut | None:
+        """If session is stamped ``http_bind_epoch`` by api_server and
+        ``stop_all_session`` ran since then (epoch changed), drop the
+        session."""
+        epoch = session.epoch
+        if epoch is None or epoch == self.epoch:
+            return None
+        logger.info(
+            f'[generate] session {session.session_id} dropped (session.epoch={epoch}, epoch={self.epoch})')
+        return GenOut(response='',
+                      history_token_len=session.step,
+                      input_token_len=input_token_len,
+                      generate_token_len=0,
+                      finish_reason='abort',
+                      token_ids=[])
+
     def get_schedule_metrics(self):
         return self.engine.get_schedule_metrics()
 
@@ -212,7 +229,7 @@ class AsyncEngine:
 
     async def stop_all_session(self):
         """Stop all running sessions."""
-        logger.info('stop all sessions')
+        logger.info(f'stop all sessions, epoch {self.epoch} -> {self.epoch + 1}')
         self.epoch += 1
         await self.session_mgr.async_abort_all()
 
@@ -339,7 +356,8 @@ class AsyncEngine:
             do_preprocess (bool): whether pre-process the messages. Default to
                 True, which means chat_template will be applied.
         """
-        epoch = self.epoch
+        metrics_processor.increase_total_requests()
+
         if (messages is not None) ^ (input_ids is None):
             raise ValueError('You must specify exactly one of messages or input_ids')
         if isinstance(session_id, Session):
@@ -386,6 +404,7 @@ class AsyncEngine:
 
         if gen_config.max_new_tokens == 0:
             logger.info(f'run out of tokens. session={session_id}.')
+            metrics_processor.increase_failed_requests('error')
             yield GenOut(response='',
                          history_token_len=session.step,
                          input_token_len=len(input_ids),
@@ -400,6 +419,7 @@ class AsyncEngine:
                                                           or gen_config.output_logits == 'all'):
             errmsg = ('lmdeploy does not support outputting all token\'s logits or last_hidden_state '
                       'when prefix caching is ON')
+            metrics_processor.increase_failed_requests('error')
             yield GenOut(response=errmsg,
                          history_token_len=session.step,
                          input_token_len=len(input_ids),
@@ -421,10 +441,18 @@ class AsyncEngine:
         if not gen_config.ignore_eos:
             stop_ids = gen_config.stop_token_ids or []
 
-        metrics_processor.increase_total_requests()
+
+        stale = self._if_session_stale(session, len(prompt_input['input_ids']))
+        if stale is not None:
+            metrics_processor.increase_failed_requests('abort')
+            yield stale
+            if sequence_end:
+                self.session_mgr.remove(session)
+            return
         async with session.request_handle() as handle:
-            if epoch != self.epoch:
-                logger.info(f'[generate] session {session_id} got aborted before starting inference')
+            if session.epoch is not None and session.epoch != self.epoch:
+                logger.warning(f'[generate] session {session_id} got aborted before starting inference, '
+                               f'session.epoch={session.epoch}, epoch={self.epoch}')
                 metrics_processor.increase_failed_requests('abort')
                 yield GenOut(response='',
                              history_token_len=0,
