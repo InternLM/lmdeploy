@@ -1185,7 +1185,7 @@ async def sleep(raw_request: Request = None):
     level = raw_request.query_params.get('level', '1')
     async_engine = VariableInterface.async_engine
     await async_engine.stop_all_session()
-    async_engine.sleep(int(level))
+    await async_engine.sleep(int(level))
     return Response(status_code=200)
 
 
@@ -1193,7 +1193,7 @@ async def sleep(raw_request: Request = None):
 async def wakeup(raw_request: Request = None):
     tags = raw_request.query_params.getlist('tags')
     tags = tags or None
-    VariableInterface.async_engine.wakeup(tags)
+    await VariableInterface.async_engine.wakeup(tags)
     return Response(status_code=200)
 
 

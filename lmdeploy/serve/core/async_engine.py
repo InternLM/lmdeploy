@@ -233,7 +233,7 @@ class AsyncEngine:
         self.epoch += 1
         await self.session_mgr.async_abort_all()
 
-    def sleep(self, level: int = 1):
+    async def sleep(self, level: int = 1):
         """Sleep the model.
 
         Args:
@@ -241,11 +241,13 @@ class AsyncEngine:
                 weights and discard the kv cache. Level 2 sleep will
                 discard both the model weights and the kv cache.
         """
-        self.engine.sleep(level)
+        logger.info(f'[async_engine]sleep, level={level}')
+        await self.engine.sleep(level)
         self.sleeping_tags = {'weights', 'kv_cache'}
         self.is_sleeping = True
+        logger.info('[async_engine] sleep, done')
 
-    def wakeup(self, tags: list[str] | None = None):
+    async def wakeup(self, tags: list[str] | None = None):
         """Wake up the model.
 
         Args:
@@ -259,7 +261,7 @@ class AsyncEngine:
         if any(tag not in self.sleeping_tags for tag in tags):
             logger.warning(f'some tag in {tags} not in sleeping tags {self.sleeping_tags}')
             return
-        self.engine.wakeup(tags)
+        await self.engine.wakeup(tags)
         # for TM backend, sleep/wakeup will reset gateway, therefore we need to rebuild instances
         if self.backend == 'turbomind' and 'kv_cache' in tags:
             self.session_mgr.build_request_handle_pool(self.engine, self.backend_config.max_batch_size)

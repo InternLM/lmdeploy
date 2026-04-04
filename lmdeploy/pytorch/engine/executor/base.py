@@ -78,7 +78,7 @@ class ExecutorBase:
         """Sleep."""
         raise NotImplementedError('Not Implemented.')
 
-    def wakeup(self, tags: list[str] | None = None):
+    async def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
         raise NotImplementedError('Not Implemented.')
 
