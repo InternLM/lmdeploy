@@ -102,6 +102,13 @@ def get_func_config_list(backend: str,
             run_config['extra_params']['cache-max-entry-count'] = 0.9
             run_config['extra_params']['max-batch-size'] = 1024
 
+        if 'GLM-5' in run_config['model']:
+            run_config['extra_params']['cache-max-entry-count'] = 0.9
+            run_config['extra_params']['max-batch-size'] = 128
+
+        if 'Qwen3.5' in run_config['model']:
+            run_config['extra_params']['session-len'] = 128000
+
         if config.get('env_tag', '') in ['3090', '5080']:
             run_config['extra_params']['cache-max-entry-count'] = 0.5
 
@@ -127,6 +134,10 @@ def get_func_config_list(backend: str,
             if para_conf.get('dp', 0) == 16 and para_conf.get('ep', 0) == 16:
                 run_config['extra_params']['max-prefill-token-num'] = 1024
                 run_config['extra_params']['max-batch-size'] = 128
+
+        if ('openai/gpt-oss' in run_config['model'] and backend == 'turbomind'
+                and func_type in ('benchmark', 'longtext_benchmark')):
+            run_config['extra_params']['model-format'] = 'mxfp4'
 
     return run_configs
 
