@@ -83,6 +83,11 @@ class CalibrationContext:
 
     def _guess_num_heads(self, model):
 
+        if hasattr(model.config, 'text_config'):
+            model.config = model.config.text_config
+        if hasattr(model.config, 'llm_config'):
+            model.config = model.config.llm_config
+
         if hasattr(model.config, 'num_key_value_heads'):
             num_kv_heads = model.config.num_key_value_heads
         else:
