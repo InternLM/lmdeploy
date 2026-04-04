@@ -443,13 +443,13 @@ class Engine(EngineBase):
         """Update params."""
         self.executor.update_params(request)
 
-    def sleep(self, level: int = 1):
+    async def sleep(self, level: int = 1):
         """Sleep."""
-        self.executor.sleep(level)
+        await self.executor.sleep(level)
 
-    def wakeup(self, tags: list[str] | None = None):
+    async def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
-        self.executor.wakeup(tags)
+        await self.executor.wakeup(tags)
 
     async def async_loop(self):
         engine_loop = None

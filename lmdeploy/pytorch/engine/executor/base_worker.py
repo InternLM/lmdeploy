@@ -123,7 +123,7 @@ class WorkerWrapperBase:
         """Sleep."""
         await self.model_agent.sleep(level)
 
-    def wakeup(self, tags: list[str] | None = None):
+    async def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
         self.model_agent.wakeup(tags)
 

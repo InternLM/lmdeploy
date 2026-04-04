@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from __future__ import annotations
+
 # yapf: disable
 import asyncio
 import copy
@@ -10,7 +12,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from functools import partial
 from http import HTTPStatus
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
@@ -80,6 +82,9 @@ from lmdeploy.serve.utils.server_utils import validate_json_request
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
 
+if TYPE_CHECKING:
+    from lmdeploy.serve.managers import Session
+
 # yapf: enable
 
 logger = get_logger('lmdeploy')
@@ -100,12 +105,15 @@ class VariableInterface:
     enable_abort_handling: bool = False
 
     @staticmethod
-    def get_session(session_id: int) -> int:
+    def get_session(session_id: int) -> Session:
         session_mgr = VariableInterface.get_session_manager()
         if session_id == -1:
-            return session_mgr.get()
+            session = session_mgr.get()
         else:
-            return session_mgr.get(session_id)
+            session = session_mgr.get(session_id)
+        # Stamp epoch for ``stop_all_session`` / ``abort_all`` coordination in ``AsyncEngine.generate``.
+        session.epoch = VariableInterface.async_engine.epoch
+        return session
 
     @staticmethod
     def get_session_manager():
@@ -150,6 +158,19 @@ def create_error_response(status: HTTPStatus, message: str, error_type='invalid_
     """
     return JSONResponse(ErrorResponse(message=message, type=error_type, code=status.value).model_dump(),
                         status_code=status.value)
+
+
+def reject_if_engine_sleeping() -> JSONResponse | None:
+    """Return an error response when the engine is in sleep mode (see POST
+    /sleep, /wakeup)."""
+    eng = VariableInterface.async_engine
+    if eng is None or not eng.is_sleeping:
+        return None
+    return create_error_response(
+        HTTPStatus.SERVICE_UNAVAILABLE,
+        'Engine is sleeping; call POST /wakeup before inference (e.g. tags=weights&tags=kv_cache).',
+        error_type='engine_sleeping',
+    )
 
 
 def check_request(request) -> JSONResponse | None:
@@ -409,6 +430,9 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
+    sleeping_ret = reject_if_engine_sleeping()
+    if sleeping_ret is not None:
+        return sleeping_ret
     if VariableInterface.tool_parser is not None:
         request = VariableInterface.tool_parser.adjust_request(request)
     session = VariableInterface.get_session(request.session_id)
@@ -769,6 +793,9 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
+    sleeping_ret = reject_if_engine_sleeping()
+    if sleeping_ret is not None:
+        return sleeping_ret
 
     json_request = await raw_request.json()
     migration_request = json_request.pop('migration_request', None)
@@ -963,6 +990,9 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
     error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
+    sleeping_ret = reject_if_engine_sleeping()
+    if sleeping_ret is not None:
+        return sleeping_ret
     session = VariableInterface.get_session(request.session_id)
 
     prompt = request.prompt
@@ -1175,7 +1205,9 @@ def update_params(request: UpdateParamsRequest, raw_request: Request = None):
 @router.post('/sleep', dependencies=[Depends(validate_json_request)])
 async def sleep(raw_request: Request = None):
     level = raw_request.query_params.get('level', '1')
-    VariableInterface.async_engine.sleep(int(level))
+    async_engine = VariableInterface.async_engine
+    await async_engine.stop_all_session()
+    await async_engine.sleep(int(level))
     return Response(status_code=200)
 
 
@@ -1183,7 +1215,7 @@ async def sleep(raw_request: Request = None):
 async def wakeup(raw_request: Request = None):
     tags = raw_request.query_params.getlist('tags')
     tags = tags or None
-    VariableInterface.async_engine.wakeup(tags)
+    await VariableInterface.async_engine.wakeup(tags)
     return Response(status_code=200)
 
 
