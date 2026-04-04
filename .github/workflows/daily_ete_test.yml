@@ -60,7 +60,7 @@ jobs:
     if: ${{!cancelled() && (github.event_name == 'schedule' || !inputs.offline_mode)}}
     strategy:
       matrix:
-        pyver: [py310]
+        pyver: [py312]
     runs-on: ubuntu-latest
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
