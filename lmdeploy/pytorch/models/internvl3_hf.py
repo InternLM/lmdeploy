@@ -662,7 +662,7 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphM
         else:
             from lmdeploy.pytorch.adapter.adapter import load_lora_weights
 
-            return load_lora_weights(weights, adapter_id)
+            return load_lora_weights(self.model.language_model, weights, adapter_id)
 
     @classmethod
     def rename_weight(cls, name: str) -> str:
