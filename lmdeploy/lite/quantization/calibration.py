@@ -53,9 +53,9 @@ class CalibrationContext():
         self.norm_type = norm_type
         self.batch_size = batch_size
 
-        num_kv_heads, num_attn_heads = self._guess_num_heads(model)
+        num_kv_heads, num_attn_heads, text_config = self._guess_num_heads(model)
         self.num_kv_heads = num_kv_heads
-        self.head_dim = model.config.hidden_size // num_attn_heads
+        self.head_dim = text_config.hidden_size // num_attn_heads
         self.model = model
 
         self.tokenizer = tokenizer
@@ -81,18 +81,20 @@ class CalibrationContext():
     def _guess_num_heads(self, model):
 
         if hasattr(model.config, 'text_config'):
-            model.config = model.config.text_config
-        if hasattr(model.config, 'llm_config'):
-            model.config = model.config.llm_config
-
-        if hasattr(model.config, 'num_key_value_heads'):
-            num_kv_heads = model.config.num_key_value_heads
+            text_config = model.config.text_config
+        elif hasattr(model.config, 'llm_config'):
+            text_config = model.config.llm_config
         else:
-            num_kv_heads = model.config.num_attention_heads
+            text_config = model.config
 
-        num_attn_heads = model.config.num_attention_heads
+        if hasattr(text_config, 'num_key_value_heads'):
+            num_kv_heads = text_config.num_key_value_heads
+        else:
+            num_kv_heads = text_config.num_attention_heads
 
-        return num_kv_heads, num_attn_heads
+        num_attn_heads = text_config.num_attention_heads
+
+        return num_kv_heads, num_attn_heads, text_config
 
     def _init_input_observers(self, name2mod):
         """Initialize input observers for given modules."""

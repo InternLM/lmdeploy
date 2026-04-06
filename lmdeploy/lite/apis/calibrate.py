@@ -251,6 +251,8 @@ def calibrate(model: str,
         model = load_hf_from_pretrained(model, dtype=dtype, trust_remote_code=True)
         vl_model = None
     elif model_type == 'vlm':
+        from transformers import AutoConfig
+        original_torch_dtype = AutoConfig.from_pretrained(model, trust_remote_code=True).torch_dtype
         vl_model = load_vl_model(model, backend=None, with_llm=True).vl_model
         model = vl_model
         if hasattr(vl_model, 'language_model'):  # deepseek-vl, ...
@@ -258,9 +260,13 @@ def calibrate(model: str,
         if hasattr(vl_model, 'llm'):  # MiniCPMV, ...
             model = vl_model.llm
         model.config.use_cache = False
-        if dtype == 'float16':
+        if hasattr(model.config, 'text_config'):
+            model.config.text_config.use_cache = False
+        elif hasattr(model.config, 'llm_config'):
+            model.config.llm_config.use_cache = False
+        if dtype == 'float16' or (dtype == 'auto' and original_torch_dtype == torch.float16):
             model.half()
-        elif dtype == 'bfloat16' or (dtype == 'auto' and model.config.torch_dtype == torch.bfloat16):
+        elif dtype == 'bfloat16' or (dtype == 'auto' and original_torch_dtype == torch.bfloat16):
             assert torch.cuda.is_bf16_supported(
             ), 'your device does not support bfloat16 please set --dtype float16'  # noqa
             model.to(torch.bfloat16)
