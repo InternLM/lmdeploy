@@ -3,6 +3,8 @@ from typing import Any
 
 import torch
 from transformers import AutoProcessor
+from transformers.models.qwen3_omni_moe.processing_qwen3_omni_moe import Qwen3OmniMoeProcessorKwargs
+from transformers.models.whisper import WhisperFeatureExtractor
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.constants import Modality
@@ -42,9 +44,12 @@ class Qwen3OmniModel(VisionModel):
         self.audio_token = self.processor.audio_token
         self.audio_token_id = tokenizer.encode(self.audio_token)[-1]
 
-    def resolve_size_params(self, processor, mm_processor_kwargs: dict[str, Any] | None = None):
-        default_min = processor.size['shortest_edge']
-        default_max = processor.size['longest_edge']
+        # default kwargs for hf processor
+        self.default_mm_processor_kwargs = Qwen3OmniMoeProcessorKwargs._defaults
+
+    def resolve_size_params(self, default_size, mm_processor_kwargs: dict[str, Any] | None = None):
+        default_min = default_size['shortest_edge']
+        default_max = default_size['longest_edge']
 
         if not mm_processor_kwargs:
             return {'shortest_edge': default_min, 'longest_edge': default_max}
@@ -63,7 +68,8 @@ class Qwen3OmniModel(VisionModel):
                           params: dict[str, Any],
                           mm_processor_kwargs: dict[str, Any] | None = None) -> list[dict]:
 
-        size = self.resolve_size_params(self.processor.image_processor, mm_processor_kwargs)
+        default_image_size = self.processor.image_processor.size
+        size = self.resolve_size_params(default_image_size, mm_processor_kwargs)
         result = self.processor.image_processor(images=data, size=size, return_tensors='pt')
         merge_length = self.processor.image_processor.merge_size**2
         image_tokens = result['image_grid_thw'].prod(dim=1) // merge_length
@@ -79,7 +85,9 @@ class Qwen3OmniModel(VisionModel):
         if metadata.get('fps') is None or metadata['fps'] <= 0:
             logger.warning('Qwen3Omni: fps not found or invalid, fallback to 24.')
             metadata['fps'] = 24
-        size = self.resolve_size_params(self.processor.video_processor, mm_processor_kwargs)
+
+        defualt_video_kwargs = self.default_mm_processor_kwargs['videos_kwargs']
+        size = self.resolve_size_params(defualt_video_kwargs['size'], mm_processor_kwargs)
 
         # do_resize = True, we leave resize to hf processor
         # do_sample_frames = False, we already sample frames in video loader, avoid duplicates in hf processor
@@ -93,11 +101,11 @@ class Qwen3OmniModel(VisionModel):
 
         merge_length = self.processor.video_processor.merge_size**2
         video_grid_thw = result['video_grid_thw']
-        second_per_grid = self.processor.video_processor.temporal_patch_size / metadata.get('fps', 1.0)
-        frame_seqlen = video_grid_thw[0][1:].prod() // merge_length
-        video_tokens = video_grid_thw[0].prod() // merge_length  # T*H*W / merge^2
-        result.update(frame_seqlen=frame_seqlen,
-                      mm_token_num=video_tokens,
+        # TODO: custom fps
+        second_per_grid = self.processor.video_processor.temporal_patch_size / defualt_video_kwargs.get('fps', 1.0)
+        video_tokens = video_grid_thw[0].prod() // merge_length  # T * H * W / merge_size^2
+
+        result.update(mm_token_num=video_tokens,
                       second_per_grid=second_per_grid,
                       video_token_id=self.video_token_id)
         return result
@@ -116,16 +124,17 @@ class Qwen3OmniModel(VisionModel):
                           params: dict[str, Any],
                           mm_processor_kwargs: dict[str, Any] | None = None) -> list[dict]:
         audio, original_sr = data
-        # WhisperFeatureExtractor was trained using a fixed sampling rate of 16000
-        sr = self.processor.feature_extractor.sampling_rate
-        truncation = mm_processor_kwargs.get('truncation', False) if mm_processor_kwargs else False
+        defualt_audio_kwargs = self.default_mm_processor_kwargs['audios_kwargs']
+        feature_extractor = self.processor.feature_extractor
+        assert isinstance(feature_extractor, WhisperFeatureExtractor), \
+            'Qwen3Omni audio processor only support WhisperFeatureExtractor'
 
-        result = self.processor.feature_extractor(audio,
-                                                  sampling_rate=sr,
-                                                  padding=True,
-                                                  truncation=truncation,
-                                                  return_attention_mask=True,
-                                                  return_tensors='pt')
+        # truncation is explicitly set to False to avoid different hf processor behavior
+        # https://github.com/huggingface/transformers/pull/41473
+        result = feature_extractor(audio,
+                                   truncation=False,
+                                   return_tensors='pt',
+                                   **defualt_audio_kwargs)
 
         feature_attention_mask = result.get('attention_mask')
         audio_feature_lengths = torch.sum(feature_attention_mask, dim=1)

@@ -15,4 +15,5 @@ class Qwen3OmniModelConfigBuilder(AutoModelConfigBuilder):
         """build."""
         cfg = DefaultModelConfigBuilder.build(hf_config.thinker_config.text_config, model_path, **kwargs)
         cfg.hf_config = hf_config
+        cfg.use_mrope = True
         return cfg
