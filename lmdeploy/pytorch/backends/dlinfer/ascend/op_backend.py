@@ -386,7 +386,8 @@ class AscendOpsBackend(DlinferOpsBackend):
 
         is_gated_delta = step_context.model_config.is_gated_delta
         if is_gated_delta:
-            q_start_loc = step_context.q_start_loc
+            q_start_loc = step_context.q_start_loc.to(dtype=step_context.q_seqlens.dtype,
+                                                      device=step_context.q_seqlens.device)
             cu_seqlens = torch.cat((q_start_loc, step_context.q_seqlens.sum().unsqueeze(0))).int()
             if not step_context.is_decoding:
                 has_initial_state = ~(step_context.q_seqlens == step_context.kv_seqlens)
