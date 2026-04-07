@@ -21,7 +21,7 @@ from lmdeploy.pytorch.engine.logits_process import SamplingInputsDelta
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 
 from ..ar.model_inputs import get_model_inputs_next_decoding, merge_model_inputs
-from ..ar.step_inputs import _merge_sampling_delta, _reindex_sampling_delta, _step_sampling_delta
+from ..ar.step_inputs import merge_sampling_delta, reindex_sampling_delta, step_sampling_delta
 from ..base.model_agent import ExtraInputs, StoppingCriteria
 from ..base.step_inputs import StepInputs
 from .model_agent import ARSpecExtraInputs, ARSpecExtraOutputs
@@ -136,7 +136,7 @@ class ARSpecStepInputs(StepInputs):
 
         # advance sampling state
         stopping_criteria = stopping_criteria.clone()
-        sampling_delta = _step_sampling_delta(sampling_delta, next_token_ids)
+        sampling_delta = step_sampling_delta(sampling_delta, next_token_ids)
 
         if self.model_inputs is None:
             self.model_inputs = inputs
@@ -147,7 +147,7 @@ class ARSpecStepInputs(StepInputs):
             self.model_inputs = merge_model_inputs(self.model_inputs, inputs)
             self.extra_inputs = self.extra_inputs.merge(extra_inputs)
             self.stopping_criteria = self.stopping_criteria.merge(stopping_criteria)
-            self.sampling_delta = _merge_sampling_delta(
+            self.sampling_delta = merge_sampling_delta(
                 self.sampling_delta, sampling_delta, self._pad_token_id)
 
     def reindex(self, delta: ModelInputsDelta):
@@ -157,7 +157,7 @@ class ARSpecStepInputs(StepInputs):
         # reindex extra inputs (output_draft_token_ids, num_rejected_tokens)
         self.extra_inputs = self.extra_inputs.update(delta)
         self.stopping_criteria = self.stopping_criteria.update(delta)
-        self.sampling_delta = _reindex_sampling_delta(self.sampling_delta, delta)
+        self.sampling_delta = reindex_sampling_delta(self.sampling_delta, delta)
 
     @record_function('StepInputs.step_decode')
     def step_decode(
@@ -192,4 +192,4 @@ class ARSpecStepInputs(StepInputs):
 
         # advance sampling state
         self.stopping_criteria = stopping_criteria.clone()
-        self.sampling_delta = _step_sampling_delta(sampling_delta, next_token_ids)
+        self.sampling_delta = step_sampling_delta(sampling_delta, next_token_ids)

@@ -20,7 +20,7 @@ from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
 from lmdeploy.pytorch.engine.guided_process import GuidedDecodingManager
-from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs, SamplingInputsDelta
+from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, step_ctx_manager
 from lmdeploy.pytorch.models.patch import BuildModelContext, add_adapters, build_patched_model, update_custom_module_map
 from lmdeploy.pytorch.spec_decode import build_spec_agent
@@ -682,27 +682,6 @@ class BaseModelAgent:
     ):
         """Asyc forward task."""
 
-        @record_function('step_decode')
-        def __update_inputs(
-            inputs,
-            next_token_ids,
-            model_metas,
-            extra_inputs,
-            extra_outputs,
-            stopping_criteria,
-            sampling_delta: SamplingInputsDelta = None,
-        ):
-            """Update inputs."""
-            self.step_inputs.step_decode(
-                inputs,
-                extra_inputs,
-                stopping_criteria,
-                sampling_delta,
-                next_token_ids,
-                model_metas,
-                extra_outputs,
-            )
-
         dist_ctx = get_dist_manager().current_context()
         dist_config = dist_ctx.dist_config
         rank = self.rank
@@ -816,13 +795,15 @@ class BaseModelAgent:
 
         sampling_delta = sampling_inputs.get_delta()
         if need_update_inputs:
-            __update_inputs(inputs,
-                            next_token_ids,
-                            model_metas,
-                            extra_inputs,
-                            extra_outputs,
-                            stopping_criteria,
-                            sampling_delta=sampling_delta)
+            self.step_inputs.step_decode(
+                inputs,
+                extra_inputs,
+                stopping_criteria,
+                sampling_delta,
+                next_token_ids,
+                model_metas,
+                extra_outputs,
+            )
         elif inputs.is_chunk and not inputs.is_last_chunk:
             # _prev_chunk_output is used to update model metas
             self._prev_chunk_output = output

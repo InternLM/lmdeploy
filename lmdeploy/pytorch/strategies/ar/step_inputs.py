@@ -25,7 +25,7 @@ from ..base.step_inputs import StepInputs
 from .model_inputs import get_model_inputs_next_decoding, index_select_model_inputs, merge_model_inputs
 
 
-def _step_sampling_delta(sampling_delta: SamplingInputsDelta,
+def step_sampling_delta(sampling_delta: SamplingInputsDelta,
                          next_token_ids: torch.Tensor) -> SamplingInputsDelta:
     """Advance sampling delta for one decode step."""
     sampling_delta.num_ignore_eos = sampling_delta.num_ignore_eos - 1
@@ -37,7 +37,7 @@ def _step_sampling_delta(sampling_delta: SamplingInputsDelta,
     return sampling_delta
 
 
-def _merge_sampling_delta(
+def merge_sampling_delta(
     sampling_delta: SamplingInputsDelta,
     other: SamplingInputsDelta,
     pad_token_id: int,
@@ -73,7 +73,7 @@ def _merge_sampling_delta(
     )
 
 
-def _reindex_sampling_delta(
+def reindex_sampling_delta(
     sampling_delta: SamplingInputsDelta,
     delta: ModelInputsDelta,
 ) -> SamplingInputsDelta:
@@ -131,7 +131,7 @@ class ARStepInputs(StepInputs):
 
         # advance sampling state
         stopping_criteria = stopping_criteria.clone()
-        sampling_delta = _step_sampling_delta(sampling_delta, next_token_ids)
+        sampling_delta = step_sampling_delta(sampling_delta, next_token_ids)
 
         if self.model_inputs is None:
             self.model_inputs = inputs
@@ -142,7 +142,7 @@ class ARStepInputs(StepInputs):
             self.model_inputs = merge_model_inputs(self.model_inputs, inputs)
             self.extra_inputs = self.extra_inputs.merge(extra_inputs)
             self.stopping_criteria = self.stopping_criteria.merge(stopping_criteria)
-            self.sampling_delta = _merge_sampling_delta(
+            self.sampling_delta = merge_sampling_delta(
                 self.sampling_delta, sampling_delta, self._pad_token_id)
 
     def reindex(self, delta: ModelInputsDelta):
@@ -150,7 +150,7 @@ class ARStepInputs(StepInputs):
         self.model_inputs = _reindex_model_inputs(self.model_inputs, delta)
         # AR has no extra_inputs to reindex
         self.stopping_criteria = self.stopping_criteria.update(delta)
-        self.sampling_delta = _reindex_sampling_delta(self.sampling_delta, delta)
+        self.sampling_delta = reindex_sampling_delta(self.sampling_delta, delta)
 
     @record_function('StepInputs.step_decode')
     def step_decode(
@@ -172,4 +172,4 @@ class ARStepInputs(StepInputs):
 
         # advance sampling state
         self.stopping_criteria = stopping_criteria.clone()
-        self.sampling_delta = _step_sampling_delta(sampling_delta, next_token_ids)
+        self.sampling_delta = step_sampling_delta(sampling_delta, next_token_ids)
