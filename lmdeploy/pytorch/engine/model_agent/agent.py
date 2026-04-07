@@ -229,92 +229,6 @@ class DistGatherScalar:
 SwapMap = dict[int, int]
 
 
-@dataclass
-class StepInputs:
-    """Step inputs."""
-    model_inputs: ModelInputs = None
-    extra_inputs: ExtraInputs = None
-    stopping_criteria: StoppingCriteria = None
-    sampling_delta: SamplingInputsDelta = None
-
-    @record_function('StepInputs.merge')
-    def merge(
-        self,
-        inputs: ModelInputs,
-        extra_inputs: ExtraInputs,
-        stopping_criteria: StoppingCriteria,
-        sampling_delta: SamplingInputsDelta,
-        next_token_ids: torch.Tensor,
-        model_metas,
-        extra_outputs: ExtraOutputs,
-        model_agent: 'BaseModelAgent',
-    ):
-        """Merge prefill inputs."""
-        inputs, extra_inputs = model_agent.agent_strategy.update_prefill_for_next_step(
-            inputs,
-            extra_inputs,
-            next_token_ids,
-            model_metas,
-            extra_outputs,
-        )
-        stopping_criteria = stopping_criteria.clone()
-        sampling_delta = model_agent.sampling_strategy.step_sampling_delta(sampling_delta,
-                                                                           next_token_ids,
-                                                                           extra_inputs=extra_inputs)
-        if self.model_inputs is None:
-            self.model_inputs = inputs
-            self.extra_inputs = extra_inputs
-            self.stopping_criteria = stopping_criteria
-            self.sampling_delta = sampling_delta
-        else:
-            self.model_inputs = model_agent.inputs_strategy.merge(self.model_inputs, inputs)
-            self.extra_inputs = self.extra_inputs.merge(extra_inputs)
-            self.stopping_criteria = self.stopping_criteria.merge(stopping_criteria)
-            self.sampling_delta = model_agent.sampling_strategy.merge_sampling_delta(
-                self.sampling_delta, sampling_delta)
-
-    def update_delta(
-        self,
-        delta: ModelInputsDelta,
-        model_agent: 'BaseModelAgent',
-    ):
-        """Get inputs from delta."""
-        self.model_inputs = model_agent.inputs_strategy.update_inputs(self.model_inputs, delta)
-        self.extra_inputs = model_agent.agent_strategy.update_extra_inputs(self.extra_inputs, delta)
-        self.stopping_criteria = self.stopping_criteria.update(delta)
-        self.sampling_delta = model_agent.sampling_strategy.update_sampling_delta(self.sampling_delta, delta)
-
-    @record_function('StepInputs.step')
-    def step(
-        self,
-        model_inputs: ModelInputs,
-        extra_inputs: ExtraInputs,
-        stopping_criteria: StoppingCriteria,
-        sampling_delta: SamplingInputsDelta,
-        next_token_ids: torch.Tensor,
-        model_metas,
-        extra_outputs: ExtraOutputs,
-        model_agent: 'BaseModelAgent',
-    ):
-        """Update inputs."""
-        # dp might change is_decoding of decoding inputs
-        model_inputs.is_decoding = True
-        (
-            self.model_inputs,
-            self.extra_inputs,
-        ) = model_agent.agent_strategy.update_decoding_for_next_step(
-            model_inputs,
-            next_token_ids=next_token_ids,
-            model_metas=model_metas,
-            extra_inputs=extra_inputs,
-            extra_outputs=extra_outputs,
-        )
-        self.stopping_criteria = stopping_criteria.clone()
-        self.sampling_delta = model_agent.sampling_strategy.step_sampling_delta(sampling_delta,
-                                                                                next_token_ids,
-                                                                                extra_inputs=extra_inputs)
-
-
 class BaseModelAgent:
     """Base model agent.
 
@@ -421,7 +335,7 @@ class BaseModelAgent:
         self.state: SleepWakeupState = SleepWakeupState()
 
         # decoding inputs
-        self.step_inputs = StepInputs()
+        self.step_inputs = self.strategy_factory.build_step_inputs()
 
         # long context
         self._prev_chunk_output: dict = None
@@ -644,7 +558,7 @@ class BaseModelAgent:
         sampling_inputs: SamplingInputs,
     ):
         """Get inputs from delta."""
-        self.step_inputs.update_delta(delta, self)
+        self.step_inputs.reindex(delta)
         inputs = self.step_inputs.model_inputs
         extra_inputs = self.step_inputs.extra_inputs
         stopping_criteria = self.step_inputs.stopping_criteria
@@ -661,7 +575,7 @@ class BaseModelAgent:
         if delta is not None:
             # update decoding inputs with delta
             # for second round chat
-            self.step_inputs.update_delta(delta, self)
+            self.step_inputs.reindex(delta)
 
         if inputs.is_first_chunk:
             self._prev_chunk_output = None
@@ -779,8 +693,7 @@ class BaseModelAgent:
             sampling_delta: SamplingInputsDelta = None,
         ):
             """Update inputs."""
-            # dp might change is_decoding of decoding inputs
-            self.step_inputs.step(
+            self.step_inputs.step_decode(
                 inputs,
                 extra_inputs,
                 stopping_criteria,
@@ -788,7 +701,6 @@ class BaseModelAgent:
                 next_token_ids,
                 model_metas,
                 extra_outputs,
-                model_agent=self,
             )
 
         dist_ctx = get_dist_manager().current_context()
@@ -915,7 +827,7 @@ class BaseModelAgent:
             # _prev_chunk_output is used to update model metas
             self._prev_chunk_output = output
         elif self.cache_config.role != EngineRole.Prefill:
-            self.step_inputs.merge(
+            self.step_inputs.merge_prefill(
                 inputs,
                 extra_inputs,
                 stopping_criteria,
@@ -923,7 +835,6 @@ class BaseModelAgent:
                 next_token_ids,
                 model_metas,
                 extra_outputs,
-                model_agent=self,
             )
 
     async def _async_loop_background(self, forward_event: asyncio.Event = None):
