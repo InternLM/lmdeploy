@@ -451,14 +451,28 @@ class AscendOpsBackend(DlinferOpsBackend):
 
     @staticmethod
     def init():
-        """Initialize Ascend backend."""
+        """Initialize Ascend backend.
+
+        Note: triton device properties initialization is only required for models that use
+        linear attention (e.g. Qwen3.5 35B). If triton-ascend is not installed, a warning
+        is emitted but non-linear-attention models are unaffected.
+        """
+
         try:
-            from dlinfer.vendor.ascend.triton_ops.triton_utils import init_device_properties_triton
             from torch_npu.contrib import transfer_to_npu  # noqa: F401
-            init_device_properties_triton()
         except ImportError:
             logger.warning('Failed to import torch_npu. Please make sure torch_npu is installed correctly. '
                            'Ascend initialization skipped.')
+        except Exception as e:
+            logger.warning(f'Error during Ascend initialization: {str(e)}. '
+                           'Please check your Ascend environment configuration.')
+
+        try:
+            from dlinfer.vendor.ascend.triton_ops.triton_utils import init_device_properties_triton
+            init_device_properties_triton()
+        except ImportError:
+            logger.warning('triton-ascend is not installed. Only linear attention models (e.g. Qwen3.5 35B) '
+                           'require triton-ascend. Please install it with: pip install triton-ascend==3.2.0')
         except Exception as e:
             logger.warning(f'Error during Ascend initialization: {str(e)}. '
                            'Please check your Ascend environment configuration.')
