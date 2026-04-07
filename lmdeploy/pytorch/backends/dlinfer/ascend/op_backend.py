@@ -395,6 +395,8 @@ class AscendOpsBackend(DlinferOpsBackend):
         attn_metadata = attn_meta_cls(
             step_context.is_decoding,
             step_context.block_offsets,
+            # cu_seqlens is only used in GDN and is passed down via q_start_loc.
+            # Otherwise, q_start_loc is None.
             q_start_loc=cu_seqlens,
             q_seqlens=q_seqlens_cpu,
             # kv_seqlens_expanded is only expanded in paged prefill,
