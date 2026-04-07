@@ -4,7 +4,7 @@ from lmdeploy.pytorch.config import BackendConfig, CacheConfig, MiscConfig, Mode
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
 
-from .agent import BaseModelAgent, BatchedOutputs  # noqa: F401
+from .agent import BaseModelAgent, BatchedOutputs, CacheNotReadyError  # noqa: F401
 
 
 def build_model_agent(

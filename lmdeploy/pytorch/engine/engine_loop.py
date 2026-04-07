@@ -258,6 +258,16 @@ class EngineLoop:
             seq.append_logits(logits)
             return dict()
 
+        engine_error_msg = getattr(batched_outputs, 'engine_error_msg', None)
+        if engine_error_msg:
+            for msg in running:
+                if msg.status != MessageStatus.RUNNING:
+                    continue
+                response_reqs(self.req_manager, msg.resp, ResponseType.INTERNAL_ENGINE_ERROR,
+                              data=dict(token_ids=[]), err_msg=engine_error_msg)
+                msg.state.finish()
+            return dict()
+
         new_token_timestamp = batched_outputs.new_token_timestamp
         logprobs = batched_outputs.logprobs
 

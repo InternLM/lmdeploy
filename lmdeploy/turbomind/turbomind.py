@@ -285,19 +285,27 @@ class TurboMind:
         self._tm_model = tm_model
         return model_comm
 
-    def sleep(self, level: int = 1):
-        """Sleep the model."""
+    def _sleep_sync(self, level: int = 1):
+        """Synchronous sleep implementation (runs in worker thread)."""
         with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
             for _ in e.map(self.model_comm.sleep, range(self.gpu_count), [level] * self.gpu_count):
                 pass
 
-    def wakeup(self, tags: list[str] | None = None):
-        """Wakeup the model."""
+    async def sleep(self, level: int = 1):
+        """Sleep the model."""
+        await asyncio.to_thread(self._sleep_sync, level)
+
+    def _wakeup_sync(self, tags: list[str] | None = None):
+        """Synchronous wakeup implementation (runs in worker thread)."""
         if tags is None:
             tags = ['weights', 'kv_cache']
         with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
             for _ in e.map(self.model_comm.wakeup, range(self.gpu_count), [tags] * self.gpu_count):
                 pass
+
+    async def wakeup(self, tags: list[str] | None = None):
+        """Wakeup the model."""
+        await asyncio.to_thread(self._wakeup_sync, tags)
 
     def update_params(self, request: UpdateParamsRequest):
         """Update params.

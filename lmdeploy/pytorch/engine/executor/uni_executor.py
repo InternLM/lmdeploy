@@ -108,6 +108,14 @@ class UniExecutor(ExecutorBase):
         assert dp_rank == 0
         return await self.model_agent.get_output_async()
 
+    async def sleep(self, level: int = 1):
+        """Sleep."""
+        await self.model_agent.sleep(level)
+
+    async def wakeup(self, tags: list[str] | None = None):
+        """Wakeup on the event-loop thread (CUDA-safe; may block the loop)."""
+        self.model_agent.wakeup(tags)
+
     def get_input_processor(self):
         """Get input processor."""
         return self.model_agent.get_input_processor()

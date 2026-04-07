@@ -353,12 +353,18 @@ class RayExecutor(ExecutorBase):
         """Build cache engine."""
         self.collective_rpc('warmup')
 
-    def sleep(self, level: int = 1):
+    async def sleep(self, level: int = 1):
         """Sleep."""
+        await asyncio.to_thread(self._sleep_collective_rpc, level)
+
+    def _sleep_collective_rpc(self, level: int):
         self.collective_rpc('sleep', (level, ))
 
-    def wakeup(self, tags: list[str] | None = None):
+    async def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
+        await asyncio.to_thread(self._wakeup_collective_rpc, tags)
+
+    def _wakeup_collective_rpc(self, tags: list[str] | None):
         if tags is None or 'kv_cache' in tags:
             self.update_configs()
         self.collective_rpc('wakeup', (tags, ))

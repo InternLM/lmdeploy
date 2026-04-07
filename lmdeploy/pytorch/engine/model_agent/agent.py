@@ -38,6 +38,12 @@ from .profiler import AgentProfiler
 logger = get_logger('lmdeploy')
 
 
+class CacheNotReadyError(RuntimeError):
+    """Raised when a forward runs while KV/state cache engines are missing."""
+
+    pass
+
+
 @dataclass
 class SleepWakeupState:
     to_sleep: asyncio.Event = field(default_factory=asyncio.Event)
@@ -82,6 +88,7 @@ class BatchedOutputs:
     new_token_timestamp: int = 0
     extra_outputs: ExtraOutputs | None = None
     all_routed_experts: torch.Tensor | None = None
+    engine_error_msg: str | None = None
 
     def to_cpu(self):
         """To cpu."""
@@ -128,11 +135,15 @@ def msg_with_rank(rank: int, msg: str):
     return f'rank[{rank}] - {msg}'
 
 
-def cache_swapping(cache_engine: CacheEngine, swap_in_map: dict, swap_out_map: dict):
+def cache_swapping(cache_engine: CacheEngine | None, swap_in_map: dict, swap_out_map: dict):
     """Perform cache swapping."""
     issued_cache_op = False
     swap_in_map = swap_in_map or dict()
     swap_out_map = swap_out_map or dict()
+    if cache_engine is None and (len(swap_in_map) > 0 or len(swap_out_map) > 0):
+        raise CacheNotReadyError(
+            'KV cache is not available; cannot swap blocks. '
+            "Restore cache via wakeup with the 'kv_cache' tag before inference.")
     if len(swap_in_map) > 0:
         cache_engine.swap_in(swap_in_map)
         issued_cache_op = True
@@ -568,6 +579,27 @@ class BaseModelAgent:
         event.record()
         self._out_que.put_nowait((output, event))
 
+    def _batched_outputs_for_cache_error(self, forward_inputs: dict, err_msg: str) -> BatchedOutputs:
+        """Build a minimal batch for get_output_async pairing."""
+        inputs = forward_inputs.get('inputs')
+        delta = forward_inputs.get('delta')
+        device = self.device
+        if inputs is not None:
+            batch_size = int(inputs.seq_length.size(0))
+        elif delta is not None:
+            batch_size = int(delta.block_offsets.size(0))
+        else:
+            batch_size = 1
+        next_token_ids = torch.zeros((batch_size, 1), dtype=torch.long, device=device)
+        stopped = torch.ones(batch_size, dtype=torch.bool, device=device)
+        stop_pos = torch.zeros(batch_size, dtype=torch.long, device=device)
+        return BatchedOutputs(
+            next_token_ids=next_token_ids,
+            stopped=stopped,
+            stop_pos=stop_pos,
+            engine_error_msg=err_msg,
+        )
+
     @contextmanager
     def _broadcast_next_token(self, next_token_ids: torch.Tensor, extra_inputs: ExtraInputs, enable: bool = True):
         if not enable:
@@ -644,6 +676,10 @@ class BaseModelAgent:
         sampling_inputs: SamplingInputs,
     ):
         """Get inputs from delta."""
+        if self.step_inputs.model_inputs is None:
+            raise CacheNotReadyError(
+                'Decode step has no cached ModelInputs (e.g. after a KV-cache error or reset). '
+                "Call wakeup with the 'kv_cache' tag before continuing inference.")
         self.step_inputs.update_delta(delta, self)
         inputs = self.step_inputs.model_inputs
         extra_inputs = self.step_inputs.extra_inputs
@@ -661,6 +697,10 @@ class BaseModelAgent:
         if delta is not None:
             # update decoding inputs with delta
             # for second round chat
+            if self.step_inputs.model_inputs is None:
+                raise CacheNotReadyError(
+                    'Prefill with delta requires prior ModelInputs (e.g. after a KV-cache error). '
+                    "Call wakeup with the 'kv_cache' tag before continuing inference.")
             self.step_inputs.update_delta(delta, self)
 
         if inputs.is_first_chunk:
@@ -836,6 +876,11 @@ class BaseModelAgent:
                 await asyncio.sleep(0.01)
                 return
 
+        if self.cache_engine is None or self.state_cache_engine is None:
+            raise CacheNotReadyError(
+                'KV or state cache engine is not built (e.g. after sleep or partial wakeup). '
+                "Call wakeup with the 'kv_cache' tag before running inference.")
+
         # swap caches
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
 
@@ -936,7 +981,12 @@ class BaseModelAgent:
             while True:
                 forward_inputs = await input_maker.get()
 
-                await self._async_step(**forward_inputs, )
+                try:
+                    await self._async_step(**forward_inputs, )
+                except CacheNotReadyError as err:
+                    logger.warning('Forward skipped: %s', err)
+                    self.step_inputs = StepInputs()
+                    self._push_output(self._batched_outputs_for_cache_error(forward_inputs, str(err)))
                 if forward_event is not None:
                     forward_event.set()
 
