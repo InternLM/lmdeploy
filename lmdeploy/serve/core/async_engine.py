@@ -46,7 +46,7 @@ class GenOut:
     history_token_len: int
     input_token_len: int
     generate_token_len: int
-    finish_reason: Literal['stop', 'length', 'error'] | None = None
+    finish_reason: Literal['stop', 'length', 'error', 'abort'] | None = None
     token_ids: list[int] | None = None
     logprobs: list[dict[int, float]] | None = None
     logits: Any = None
@@ -203,9 +203,9 @@ class AsyncEngine:
 
     def _if_session_stale(self, session: Session,
                                    input_token_len: int) -> GenOut | None:
-        """If session is stamped ``http_bind_epoch`` by api_server and
-        ``stop_all_session`` ran since then (epoch changed), drop the
-        session."""
+        """If ``session.epoch`` was stamped by api_server and
+        ``stop_all_session`` ran since then (the engine epoch changed), drop
+        the session."""
         epoch = session.epoch
         if epoch is None or epoch == self.epoch:
             return None
@@ -451,7 +451,7 @@ class AsyncEngine:
             return
         async with session.request_handle() as handle:
             if session.epoch is not None and session.epoch != self.epoch:
-                logger.warning(f'[generate] session {session_id} got aborted before starting inference, '
+                logger.info(f'[generate] session {session_id} got aborted before starting inference, '
                                f'session.epoch={session.epoch}, epoch={self.epoch}')
                 metrics_processor.increase_failed_requests('abort')
                 yield GenOut(response='',
