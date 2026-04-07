@@ -91,6 +91,7 @@ class CUDASingleGraphRunner:
             use_fa3_decoding=model_config.model_paradigm == 'ar_spec',
             is_ssm=len(model_config.states_shapes) > 0,
             use_mrope=model_config.use_mrope,
+            block_size=model_config.block_size,
         )
         self.device = device
         self.max_batches = max_batches

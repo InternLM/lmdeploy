@@ -9,6 +9,7 @@ from torch.profiler import record_function
 
 from lmdeploy.pytorch.backends import OpType, get_backend
 from lmdeploy.pytorch.distributed import get_tp_world_rank
+from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader
 from lmdeploy.utils import get_logger
 
@@ -35,6 +36,11 @@ class GatedDeltaMeta:
         self.num_tokens = num_tokens
         self.is_decoding = attn_metadata.is_decoding
         self.cu_seqlens = attn_metadata.cu_seqlens_q
+        self.cache_seqlens = None
+        self.num_spec_tokens = get_step_ctx_manager().build_ctx.num_spec_tokens
+        self.spec_conv_offsets = None
+        self.spec_state_offsets = None
+
         device = self.cu_seqlens.device
 
         # get seq_idx (1, num_tokens)
@@ -46,7 +52,23 @@ class GatedDeltaMeta:
         # conv_idx
         range_idx = torch.arange(-conv_kernel_size, 0, device=device)
         self.conv_idx = self.cu_seqlens[1:, None] + range_idx[None]
+        # TODO: fix last chunk with less conv kernel tokens
         self.conv_idx = self.conv_idx.clamp_min(0)
+
+        # for spec decoding
+        if self.num_spec_tokens > 0:
+            self.cache_seqlens = (attn_metadata.kv_seqlens - attn_metadata.q_seqlens).to(torch.int32)
+            if not self.is_decoding:
+                state_len = conv_kernel_size + self.num_spec_tokens
+                read_conv_offsets = torch.remainder(self.cache_seqlens[:, None] + range_idx[1:][None],
+                                                    state_len)
+                write_conv_offsets = torch.remainder(attn_metadata.kv_seqlens[:, None] + range_idx[None],
+                                                     state_len)
+                self.spec_conv_offsets = (read_conv_offsets, write_conv_offsets)
+
+                read_state_offsets = torch.remainder(self.cache_seqlens, 1 + self.num_spec_tokens)
+                write_state_offsets = torch.remainder(attn_metadata.kv_seqlens, 1 + self.num_spec_tokens)
+                self.spec_state_offsets = (read_state_offsets, write_state_offsets)
 
         self.conv_state_indices = state_ids.to(torch.int32)
         # we assume 0 is dummy state, shared by all invalid states.
@@ -74,6 +96,7 @@ class CausalConv1dFunc:
         """
         seq_idx = gated_delta_meta.seq_idx
         conv_idx = gated_delta_meta.conv_idx
+        spec_conv_offsets = gated_delta_meta.spec_conv_offsets
         state_ids = gated_delta_meta.state_ids
 
         assert x.dim() == 3
@@ -81,13 +104,26 @@ class CausalConv1dFunc:
             assert weight.size(1) == 1
             weight = weight[:, 0]
 
-        # Load all initial conv states before overwriting.
-        # (num_seqs, dim, ks-1): last ks-1 raw input values per sequence.
-        all_inits = conv_state[state_ids, :, 1:]
-
         # Save conv state (last kernel_size input tokens per sequence).
         final_state = x[0, conv_idx].transpose(-2, -1)
-        conv_state = conv_state.index_copy_(0, state_ids, final_state)
+
+        # for prefill with spec tokens
+        if spec_conv_offsets is not None:
+            read_offsets, write_offsets = spec_conv_offsets
+            # Read directly: conv_state[state_ids[b], :, read_offsets[b, k]]
+            # read_offsets: (B, ks), skip first -> all_inits: (B, dim, ks-1)
+            all_inits = conv_state[state_ids[:, None, None],
+                                   torch.arange(conv_state.size(1), device=conv_state.device)[None, :, None],
+                                   read_offsets[:, None, :]]
+            # Write directly: conv_state[state_ids[b], :, write_offsets[b, k]] = final_state[b, :, k]
+            conv_state[state_ids[:, None, None],
+                       torch.arange(conv_state.size(1), device=conv_state.device)[None, :, None],
+                       write_offsets[:, None, :]] = final_state
+        else:
+            # Load all initial conv states before overwriting.
+            # (num_seqs, dim, ks-1): last ks-1 raw input values per sequence.
+            all_inits = conv_state[state_ids, :, 1:]
+            conv_state = conv_state.index_copy_(0, state_ids, final_state)
 
         x = x.transpose(-2, -1)
         out = self.causal_conv1d_fn(
@@ -110,16 +146,28 @@ class CausalConv1dFunc:
         bias: torch.Tensor,
         conv_state: torch.Tensor,
         conv_state_indices: torch.Tensor,
+        cache_seqlens: torch.Tensor | None = None,
     ):
         if weight.dim() == 3:
             assert weight.size(1) == 1
             weight = weight[:, 0]
-        out = self.causal_conv1d_update(x[0],
-                                        conv_state,
-                                        weight,
-                                        bias,
-                                        activation=self.activation,
-                                        conv_state_indices=conv_state_indices)
+        batch_size = conv_state_indices.size(0)
+        q_seqlen = x.size(1) // batch_size
+        is_spec_decoding = q_seqlen != 1
+        x = x.squeeze(0)
+        if is_spec_decoding:
+            x = x.unflatten(0, (batch_size, q_seqlen)).transpose(1, 2).contiguous()
+        out = self.causal_conv1d_update(
+            x,
+            conv_state,
+            weight,
+            bias,
+            activation=self.activation,
+            conv_state_indices=conv_state_indices,
+            cache_seqlens=cache_seqlens,
+        )
+        if is_spec_decoding:
+            out = out.transpose(1, 2).flatten(0, 1)
         return out[None], conv_state
 
     @record_function('causal_conv1d')
@@ -133,7 +181,12 @@ class CausalConv1dFunc:
     ):
         if gated_delta_meta.is_decoding:
             conv_state_indices = gated_delta_meta.conv_state_indices
-            return self.conv1d_update(x, weight, bias, conv_state, conv_state_indices)
+            return self.conv1d_update(x,
+                                      weight,
+                                      bias,
+                                      conv_state,
+                                      conv_state_indices,
+                                      cache_seqlens=gated_delta_meta.cache_seqlens)
         return self.conv1d_func(x, weight, bias, conv_state, gated_delta_meta=gated_delta_meta)
 
 
@@ -159,6 +212,8 @@ class GatedDelta:
         is_decoding = gated_delta_meta.is_decoding
         cu_seqlens = gated_delta_meta.cu_seqlens
         state_ids = gated_delta_meta.state_ids
+        spec_state_offsets = gated_delta_meta.spec_state_offsets
+        cache_seqlens = gated_delta_meta.cache_seqlens
 
         if not is_decoding:
             core_attn_out, last_recurrent_state = self.impl.chunk_gated_delta_rule(
@@ -172,22 +227,25 @@ class GatedDelta:
                 output_final_state=True,
                 use_qk_l2norm_in_kernel=self.use_qk_l2norm_in_kernel,
                 cu_seqlens=cu_seqlens,
+                spec_state_offsets=spec_state_offsets,
             )
         else:
-            # qkvgb (1, seqlen, ...) -> (seqlen, 1, ...)
+            # qkvgb (1, seqlen, ...) -> (B, seqlen, ...)
+            batch_size = state_ids.size(0)
             core_attn_out, last_recurrent_state = self.impl.fused_recurrent_gated_delta_rule(
-                query[0, :, None],
-                key[0, :, None],
-                value[0, :, None],
-                g=g[0, :, None],
-                beta=beta[0, :, None],
+                query[0].unflatten(0, (batch_size, -1)).contiguous(),
+                key[0].unflatten(0, (batch_size, -1)).contiguous(),
+                value[0].unflatten(0, (batch_size, -1)).contiguous(),
+                g=g[0].unflatten(0, (batch_size, -1)).contiguous(),
+                beta=beta[0].unflatten(0, (batch_size, -1)).contiguous(),
                 initial_state=recurrent_state,
                 output_final_state=True,
                 use_qk_l2norm_in_kernel=self.use_qk_l2norm_in_kernel,
                 state_indices=state_ids,
+                cache_seqlens=cache_seqlens,
             )
-            # out (seqlen, 1, ...) -> (1, seqlen, ...)
-            core_attn_out = core_attn_out[None, :, 0]
+            # out (seqlen, B, ...) -> (1, seqlen * B, ...)
+            core_attn_out = core_attn_out.flatten(0, 1).unsqueeze(0)
         return core_attn_out, last_recurrent_state
 
 

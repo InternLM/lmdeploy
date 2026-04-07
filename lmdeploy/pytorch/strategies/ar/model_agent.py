@@ -162,7 +162,7 @@ class ARModelAgentStrategy(ModelAgentStrategy):
         """Step next inputs."""
         model_inputs.model_metas = model_metas
         step_seqlens = model_inputs.seq_length
-        model_inputs.step(next_token_ids, step_seqlens)
+        model_inputs = model_inputs.step(next_token_ids, step_seqlens)
         return model_inputs, extra_inputs
 
     def post_sampling(self, inputs: 'ModelInputs', logits: torch.Tensor, next_token_ids: torch.LongTensor,

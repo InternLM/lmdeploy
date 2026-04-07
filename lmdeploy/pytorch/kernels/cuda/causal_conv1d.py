@@ -248,8 +248,8 @@ def causal_conv1d_update_fwd(hidden_size: int, seqlen: int, state_len: int, widt
             channel_id = bc * num_threads + tidx
 
             # load conv state index
-            conv_state_batch_coord = T.if_then_else(has_state_indices, Conv_state_indices[batch_id],
-                                                    T.cast(batch_id, T.int32))
+            conv_state_batch_coord = T.if_then_else(has_state_indices, T.cast(Conv_state_indices[batch_id], T.int64),
+                                                    T.cast(batch_id, T.int64))
 
             # get update_ids
             if is_circular_buffer:
