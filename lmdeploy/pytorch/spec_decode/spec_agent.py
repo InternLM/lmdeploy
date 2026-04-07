@@ -439,8 +439,6 @@ class SpecModelAgent(BaseSpecModelAgent):
                         inputs.target_hidden_states = target_hidden_states
                         if inputs.target_position_ids is not None:
                             inputs.target_position_ids += 1
-                        if inputs.mrope_pos_ids is not None:
-                            inputs.mrope_pos_ids += 1
 
             output_draft_ids = torch.cat(draft_tokens_li, dim=-1)
 
