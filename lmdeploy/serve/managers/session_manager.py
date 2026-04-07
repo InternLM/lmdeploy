@@ -209,7 +209,7 @@ class SessionManager:
             session.update(**kwargs)
             return session
         else:
-            logger.info(f'[SessionManager] session {session_id} not found. Creating...')
+            logger.debug(f'[SessionManager] session {session_id} not found. Creating...')
             session = Session(session_id, self, **kwargs)
             self.sessions[session_id] = session
             return session
