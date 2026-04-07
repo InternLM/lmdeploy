@@ -682,7 +682,7 @@ class BaseModelAgent:
     ):
         """Asyc forward task."""
 
-        @record_function('update_decoding_for_next_step')
+        @record_function('step_decode')
         def __update_inputs(
             inputs,
             next_token_ids,
