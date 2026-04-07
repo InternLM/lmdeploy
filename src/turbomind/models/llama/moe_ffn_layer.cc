@@ -165,7 +165,7 @@ void MoeFfnLayer::RouteTP(ForwardParam& p, Tensor_<float>& logits)
 
 void MoeFfnLayer::RouteEP(ForwardParam& p, Tensor_<float>& logits)
 {
-    TM_CHECK(ep_mode_ != comm::EpMode::kNull);
+    TM_CHECK(ep_mode_ == comm::EpMode::kNull);
 
     const int   tokens     = p.input.shape(0);
     const auto& moe        = *p.weights;

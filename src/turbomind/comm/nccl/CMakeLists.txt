@@ -21,18 +21,27 @@ message(STATUS "Detected NCCL version: ${NCCL_VERSION_STRING}")
 
 if(NOT NCCL_VERSION_STRING VERSION_LESS "2.29.7")
   set(DEEP_EP_SOURCE_FILES
-      deep_ep/deep_ep.cpp
-      deep_ep/gin_backend.cu
-      deep_ep/kernels/runtime.cu
-      deep_ep/kernels/layout.cu
-      deep_ep/kernels/intranode.cu
-      deep_ep/kernels/internode.cu
-      deep_ep/kernels/internode_ll.cu
+      ${CMAKE_SOURCE_DIR}/3rdparty/deep_ep/deep_ep.cpp
+      ${CMAKE_SOURCE_DIR}/3rdparty/deep_ep/gin_backend.cu
+      ${CMAKE_SOURCE_DIR}/3rdparty/deep_ep/kernels/runtime.cu
+      ${CMAKE_SOURCE_DIR}/3rdparty/deep_ep/kernels/layout.cu
+      ${CMAKE_SOURCE_DIR}/3rdparty/deep_ep/kernels/intranode.cu
+      ${CMAKE_SOURCE_DIR}/3rdparty/deep_ep/kernels/internode.cu
+      ${CMAKE_SOURCE_DIR}/3rdparty/deep_ep/kernels/internode_ll.cu
       nccl_ep.cu)
+
+  set(DEEP_CUDA_ARCHITECTURES "")
+  foreach(CUDA_ARCHITECTURE ${CMAKE_CUDA_ARCHITECTURES})
+    if(CUDA_ARCHITECTURE MATCHES "^([0-9]+)")
+      if(CMAKE_MATCH_1 GREATER_EQUAL 90)
+        list(APPEND DEEP_CUDA_ARCHITECTURES ${CUDA_ARCHITECTURE})
+      endif()
+    endif()
+  endforeach()
 
   add_library(deepep STATIC ${DEEP_EP_SOURCE_FILES})
   target_link_libraries(deepep PRIVATE ${NCCL_LIBRARIES} CUDA::cudart)
-  set_property(TARGET deepep PROPERTY CUDA_ARCHITECTURES 90)
+  set_property(TARGET deepep PROPERTY CUDA_ARCHITECTURES "${DEEP_CUDA_ARCHITECTURES}")
   target_include_directories(deepep PRIVATE ${NCCL_INCLUDE_DIRS})
   set_property(TARGET deepep PROPERTY POSITION_INDEPENDENT_CODE ON)
   set_property(TARGET deepep PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)

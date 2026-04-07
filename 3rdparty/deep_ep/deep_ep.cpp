@@ -1,4 +1,4 @@
-#include "src/turbomind/comm/nccl/deep_ep/deep_ep.hpp"
+#include "deep_ep.hpp"
 
 #include "kernels/api.cuh"
 #include "kernels/exception.cuh"

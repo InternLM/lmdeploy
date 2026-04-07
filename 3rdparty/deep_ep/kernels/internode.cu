@@ -12,7 +12,7 @@
 #include "utils.cuh"
 
 #include <nccl_device/gin/gin_device_api.h>
-#include "src/turbomind/comm/nccl/deep_ep/gin_backend.h"
+#include "../gin_backend.h"
 
 
 using namespace cooperative_groups;

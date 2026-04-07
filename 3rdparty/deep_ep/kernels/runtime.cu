@@ -1,10 +1,10 @@
 #include <cstring>
 #include <vector>
 
+#include "../gin_backend.h"
 #include "configs.cuh"
 #include "exception.cuh"
 #include "launch.cuh"
-#include "src/turbomind/comm/nccl/deep_ep/gin_backend.h"
 #include "src/turbomind/core/check.h"
 #include "utils.cuh"
 

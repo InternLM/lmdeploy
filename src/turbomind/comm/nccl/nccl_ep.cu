@@ -2,7 +2,7 @@
 
 #include "src/turbomind/comm/nccl/nccl_comm.h"
 
-#include "src/turbomind/comm/nccl/deep_ep/deep_ep.hpp"
+#include "3rdparty/deep_ep/deep_ep.hpp"
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/kernels/gemm/moe_ep_utils.h"

@@ -1,7 +1,7 @@
-#include "src/turbomind/comm/nccl/deep_ep/gin_backend.h"
+#include "gin_backend.h"
 
-#include "src/turbomind/comm/nccl/deep_ep/kernels/configs.cuh"
-#include "src/turbomind/comm/nccl/deep_ep/kernels/exception.cuh"
+#include "kernels/configs.cuh"
+#include "kernels/exception.cuh"
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/context.h"
 #include "src/turbomind/utils/logger.h"

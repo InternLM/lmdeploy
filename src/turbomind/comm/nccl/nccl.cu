@@ -9,7 +9,7 @@
 #include <dlfcn.h>
 
 #if NCCL_VERSION_CODE >= NCCL_VERSION(2, 29, 7)
-#include "src/turbomind/comm/nccl/deep_ep/deep_ep.hpp"
+#include "3rdparty/deep_ep/deep_ep.hpp"
 #endif
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/utils/cuda_utils.h"
