@@ -400,7 +400,7 @@ def is_bf16_supported(device_type: str = 'cuda'):
         device_type (str): the type of device
     """
 
-    if device_type == 'cuda':
+    if device_type in ['cuda', 'auto']:
         import torch
         device = torch.cuda.current_device()
 
@@ -469,9 +469,9 @@ def serialize_state_dict(state_dict: dict) -> str:
     from torch.multiprocessing.reductions import reduce_tensor
 
     # flattened_tensor
-    if 'metadata' in state_dict and 'flattened_tensor' in state_dict:
+    if 'metadata' in state_dict:
         data = state_dict
-        if isinstance(data['flattened_tensor'], torch.Tensor):
+        if 'flattened_tensor' in data and isinstance(data['flattened_tensor'], torch.Tensor):
             data['flattened_tensor'] = reduce_tensor(state_dict['flattened_tensor'])
     else:
         data = [(k, reduce_tensor(v)) for k, v in state_dict.items()]
@@ -526,6 +526,7 @@ class FlattenedTensorBucket:
             num_tensors = len(named_tensors)
             self.metadata = [None] * num_tensors
             self.flattened_tensor = [None] * num_tensors
+            flattened_tensor_list = [None] * num_tensors
             if num_tensors > 0:
                 if num_tensors > 1:
                     dtypes = [t.dtype for _, t in named_tensors]
@@ -534,7 +535,7 @@ class FlattenedTensorBucket:
 
                 current_idx = 0
                 for idx, (name, tensor) in enumerate(named_tensors):
-                    self.flattened_tensor[idx] = tensor.flatten()
+                    flattened_tensor_list[idx] = tensor.flatten()
                     numel = tensor.numel()
                     self.metadata[idx] = FlattenedTensorMetadata(name=name,
                                                                  shape=tensor.shape,
@@ -543,8 +544,32 @@ class FlattenedTensorBucket:
                                                                  end_idx=current_idx + numel,
                                                                  numel=numel)
                     current_idx += numel
-
-                self.flattened_tensor = torch.cat(self.flattened_tensor, dim=0)
+                if flattened_tensor is None:
+                    self.flattened_tensor = torch.cat(flattened_tensor_list, dim=0)
+                else:
+                    # Validate user-provided preallocated buffer
+                    if flattened_tensor.dim() != 1:
+                        raise ValueError(
+                            f'flattened_tensor must be a 1-D tensor, but got shape {tuple(flattened_tensor.shape)}')
+                    if flattened_tensor.numel() < current_idx:
+                        raise ValueError('Provided flattened tensor numel is smaller than required numel: '
+                                         f'{flattened_tensor.numel()} < {current_idx}')
+                    # Validate dtype and device compatibility with source tensors
+                    reference_tensor = named_tensors[0][1]
+                    if flattened_tensor.dtype != reference_tensor.dtype:
+                        raise ValueError(f'flattened_tensor dtype {flattened_tensor.dtype} does not match source '
+                                         f'tensors dtype {reference_tensor.dtype}')
+                    if flattened_tensor.device != reference_tensor.device:
+                        raise ValueError(f'flattened_tensor device {flattened_tensor.device} does not match source '
+                                         f'tensors device {reference_tensor.device}')
+                    if not flattened_tensor.is_contiguous():
+                        raise ValueError('flattened_tensor must be contiguous')
+                    total_numel = sum(t.numel() for t in flattened_tensor_list)
+                    if total_numel != current_idx:
+                        raise ValueError('Mismatch between computed and expected flattened size: '
+                                         f'{total_numel} != {current_idx}')
+                    torch.cat(flattened_tensor_list, dim=0, out=flattened_tensor[:current_idx])
+                    self.flattened_tensor = flattened_tensor
         else:
             if flattened_tensor is None or metadata is None:
                 raise ValueError('Must provide either named_tensors or both flattened_tensor and metadata')

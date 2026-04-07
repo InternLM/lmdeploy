@@ -27,7 +27,7 @@ class Qwen3VLModel(VisionModel):
 
     def build_preprocessor(self):
         check_transformers()
-        self.processor = AutoProcessor.from_pretrained(self.model_path)
+        self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=True)
 
         # image tokens
         self.image_token = self.processor.image_token
@@ -76,7 +76,7 @@ class Qwen3VLModel(VisionModel):
 
         metadata = params['video_metadata']
         if metadata.get('fps') is None or metadata['fps'] <= 0:
-            logger.warning('Qwen3VL: fps not found or invalid, fallback to 24.')
+            logger.warning('fps not found or invalid, fallback to 24.')
             metadata['fps'] = 24
         size = self.resolve_size_params(self.processor.video_processor, mm_processor_kwargs)
 

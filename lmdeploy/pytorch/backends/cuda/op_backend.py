@@ -139,7 +139,6 @@ class CudaOpsBackend(DefaultOpsBackend):
         from lmdeploy.pytorch.models.utils.cudagraph import _get_meta_flashattn
         batch_size = attn_metadata.q_seqlens.size(0)
         max_seqlen_q = step_context.input_ids.size(1) // batch_size
-        block_size = step_context.kv_caches[0][0].size(1)
         window_size = (step_context.model_config.sliding_window, ) * 2
         scheduler_metadata = _get_meta_flashattn(
             batch_size=batch_size,
@@ -150,7 +149,7 @@ class CudaOpsBackend(DefaultOpsBackend):
             headdim=step_context.model_config.head_dim,
             cache_seqlens=attn_metadata.kv_seqlens.to(torch.int32),
             qkv_dtype=step_context.model_config.dtype,
-            page_size=block_size,
+            page_size=step_context.model_config.block_size,
             window_size=window_size,
         )
         attn_metadata.scheduler_metadata = scheduler_metadata

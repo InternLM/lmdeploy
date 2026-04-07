@@ -99,6 +99,8 @@ class LongContextChunker:
         max_prefill_num = self.max_prefill_token_num
         mm = seq.get_input_multimodals()
         self.multimodals = defaultdict(list)
+
+        has_multimodal = False
         for key, value in mm.items():
             # sorted by start
             value = sorted(value, key=lambda x: x.start)
@@ -106,7 +108,10 @@ class LongContextChunker:
             max_mm_size = max([v.end - v.start for v in value], default=0)
             max_prefill_num = max(max_prefill_num, max_mm_size)
 
+            has_multimodal = has_multimodal or len(value) > 0
+
         self.max_prefill_num = max_prefill_num
+        self.has_multimodal = has_multimodal
 
     def multimodal_iter(self):
         """Multimodal iterator."""
@@ -165,6 +170,7 @@ class LongContextChunker:
         self.multimodals: MultiModalInputs = defaultdict(list)
         self.next_step: int = 0
         self.max_prefill_num: int = self.max_prefill_token_num
+        self.has_multimodal = False
 
     def update_step(self, inputs: ModelInputs):
         """Step chunker."""
@@ -459,10 +465,11 @@ class InputsMakerAsync:
         batch_size = len(self.running_seqs)
         assert batch_size > 0
         num_decode_tokens = self.engine_strategy.get_num_decode_tokens()
+        num_required_tokens = self.engine_strategy.get_num_required_tokens()
         max_q_seqlen = num_decode_tokens
         prealloc_size = self.engine_strategy.get_prealloc_size(True)
         valid_mask = self.scheduler.schedule_running(self.running_seqs,
-                                                     num_decode_tokens=num_decode_tokens,
+                                                     num_required_tokens=num_required_tokens,
                                                      prealloc_size=prealloc_size)
 
         valid_mask = np.array(valid_mask)
@@ -600,11 +607,14 @@ class InputsMakerAsync:
             running = [seq]
             if self.long_context_chunker.is_last_chunk():
                 inputs, delta, extra_inputs = __create_model_inputs(running)
+                inputs.is_chunk = True
+                inputs.is_last_chunk = True
                 self.long_context_chunker.clear()
             else:
                 inputs, extra_inputs = __create_inputs_chunk(running)
                 delta = None
             inputs.is_first_chunk = False
+            inputs.is_chunk_multimodal = self.long_context_chunker.has_multimodal
             return running, inputs, delta, extra_inputs
 
         def __create_inputs_prefill():
@@ -624,6 +634,8 @@ class InputsMakerAsync:
                 # set long context chunker
                 self.long_context_chunker.set_seq(running[0])
                 inputs, extra_inputs = __create_inputs_chunk(running)
+                inputs.is_first_chunk = True
+                inputs.is_chunk_multimodal = self.long_context_chunker.has_multimodal
             elif len(running) > 0:
                 # create inputs
                 inputs, delta, extra_inputs = __create_model_inputs(running)
