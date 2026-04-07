@@ -67,3 +67,7 @@ class BaseSpecModelAgent:
             # replace with aux
             output['hidden_states'] = output.pop('aux_hidden_states')
         return hidden_states, output
+
+    def get_model(self):
+        """Get model."""
+        return None

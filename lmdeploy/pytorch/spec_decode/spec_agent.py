@@ -506,6 +506,10 @@ class SpecModelAgent(BaseSpecModelAgent):
             self._forward_impl(inputs)
 
     def reset_graph_runner(self):
-        'reset graph runner'
+        """Reset graph runner."""
         if self.proposer.model is not None and hasattr(self.proposer.model, 'reset'):
             self.proposer.model.reset()
+
+    def get_model(self):
+        """Get model."""
+        return self.proposer.model.get_model()
