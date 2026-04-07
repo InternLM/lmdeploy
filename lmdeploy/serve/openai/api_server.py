@@ -78,7 +78,7 @@ from lmdeploy.serve.openai.protocol import (
 )
 from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParser, ReasoningParserManager
 from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParser, ToolParserManager
-from lmdeploy.serve.utils.server_utils import validate_json_request
+from lmdeploy.serve.utils.server_utils import AuthenticationMiddleware, EngineSleepingMiddleware, validate_json_request
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
 
@@ -186,19 +186,6 @@ def check_request(request) -> JSONResponse | None:
     if error_msg:
         return create_error_response(HTTPStatus.BAD_REQUEST, error_msg)
     return None
-
-
-def reject_if_engine_sleeping() -> JSONResponse | None:
-    """Return an error response when the engine is in sleep mode (see POST
-    /sleep, /wakeup)."""
-    eng = VariableInterface.async_engine
-    if eng is None or not eng.is_sleeping:
-        return None
-    return create_error_response(
-        HTTPStatus.SERVICE_UNAVAILABLE,
-        'Engine is sleeping; call POST /wakeup before inference (e.g. tags=weights&tags=kv_cache).',
-        error_type='engine_sleeping',
-    )
 
 
 def _create_completion_logprobs(tokenizer: Tokenizer,
@@ -430,9 +417,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
-    sleeping_ret = reject_if_engine_sleeping()
-    if sleeping_ret is not None:
-        return sleeping_ret
     if VariableInterface.tool_parser is not None:
         request = VariableInterface.tool_parser.adjust_request(request)
     session = VariableInterface.get_session(request.session_id)
@@ -793,9 +777,6 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
-    sleeping_ret = reject_if_engine_sleeping()
-    if sleeping_ret is not None:
-        return sleeping_ret
     json_request = await raw_request.json()
     migration_request = json_request.pop('migration_request', None)
     with_cache = json_request.pop('with_cache', False)
@@ -989,9 +970,6 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
     error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
-    sleeping_ret = reject_if_engine_sleeping()
-    if sleeping_ret is not None:
-        return sleeping_ret
 
     session = VariableInterface.get_session(request.session_id)
 
@@ -1558,9 +1536,12 @@ def serve(model_path: str,
         )
 
     if api_keys is not None and (tokens := [key for key in api_keys if key]):
-        from lmdeploy.serve.utils.server_utils import AuthenticationMiddleware
-
         app.add_middleware(AuthenticationMiddleware, tokens=tokens)
+
+    def is_engine_sleeping() -> bool:
+        eng = VariableInterface.async_engine
+        return eng is not None and eng.is_sleeping
+    app.add_middleware(EngineSleepingMiddleware, is_sleeping=is_engine_sleeping)
 
     # set the maximum number of concurrent requests
     if max_concurrent_requests is not None:
