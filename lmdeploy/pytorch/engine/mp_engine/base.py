@@ -65,9 +65,9 @@ class MPEngine(EngineBase):
         """Update params."""
         return self._collective_rpc('update_params', request)
 
-    def get_schedule_metrics(self):
+    async def get_schedule_metrics(self):
         """Get schedule metrics."""
-        return self._collective_rpc('get_schedule_metrics')
+        return await self._collective_rpc_async('get_schedule_metrics')
 
     def p2p_initialize(self, conn_request: DistServeInitRequest):
         """Init rdma link."""

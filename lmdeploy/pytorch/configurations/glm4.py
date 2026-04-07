@@ -23,7 +23,6 @@ class Glm4MoeLiteModelConfigBuilder(DeepseekV2ModelConfigBuilder):
                             is_draft_model=is_draft_model,
                             spec_method=spec_method,
                             **kwargs)
-        cfg.use_mrope = True
         return cfg
 
 
