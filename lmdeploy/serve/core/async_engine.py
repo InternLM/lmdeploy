@@ -209,8 +209,8 @@ class AsyncEngine:
         epoch = session.epoch
         if epoch is None or epoch == self.epoch:
             return None
-        logger.info(
-            f'[generate] session {session.session_id} dropped (session.epoch={epoch}, epoch={self.epoch})')
+        logger.info(f'[generate] drop stale session {session.session_id} '
+                    f'(session.epoch={epoch}, async_engine.epoch={self.epoch})')
         return GenOut(response='',
                       history_token_len=session.step,
                       input_token_len=input_token_len,
@@ -241,7 +241,7 @@ class AsyncEngine:
         self.sleeping_tags = {'weights', 'kv_cache'}
         self.is_sleeping = True
 
-    def sleep(self, level: int = 1):
+    async def sleep(self, level: int = 1):
         """Sleep the model.
 
         Args:
@@ -249,7 +249,7 @@ class AsyncEngine:
                 weights and discard the kv cache. Level 2 sleep will
                 discard both the model weights and the kv cache.
         """
-        self.engine.sleep(level)
+        await self.engine.sleep(level)
         self.sleeping_tags = {'weights', 'kv_cache'}
         self.is_sleeping = True
 
@@ -460,7 +460,7 @@ class AsyncEngine:
         async with session.request_handle() as handle:
             if session.epoch is not None and session.epoch != self.epoch:
                 logger.info(f'[generate] session {session_id} got aborted before starting inference, '
-                               f'session.epoch={session.epoch}, epoch={self.epoch}')
+                               f'session.epoch={session.epoch}, async_engine.epoch={self.epoch}')
                 metrics_processor.increase_failed_requests('abort')
                 yield GenOut(response='',
                              history_token_len=0,

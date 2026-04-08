@@ -321,6 +321,18 @@ class RayExecutor(ExecutorBase):
             kwargs = dict()
         return ray.get([getattr(worker, method).remote(*args, **kwargs) for worker in self.workers], timeout=timeout)
 
+    async def collective_rpc_async(self,
+                                   method: str,
+                                   args: tuple[Any] = None,
+                                   kwargs: dict[str, Any] = None):
+        """Collective async rpc."""
+        if args is None:
+            args = list()
+        if kwargs is None:
+            kwargs = dict()
+        tasks = [getattr(worker, method).remote(*args, **kwargs) for worker in self.workers]
+        return await asyncio.gather(*tasks)
+
     def build_model(self):
         """Build model."""
         self.collective_rpc('build_model')
@@ -353,9 +365,9 @@ class RayExecutor(ExecutorBase):
         """Build cache engine."""
         self.collective_rpc('warmup')
 
-    def sleep(self, level: int = 1):
+    async def sleep(self, level: int = 1):
         """Sleep."""
-        self.collective_rpc('sleep', (level, ))
+        await self.collective_rpc_async('sleep', (level, ))
 
     def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""

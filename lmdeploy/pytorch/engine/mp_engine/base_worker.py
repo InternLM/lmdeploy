@@ -100,9 +100,9 @@ class EngineWorkerBase:
         """
         return self.engine.p2p_drop_connect(drop_conn_request)
 
-    def sleep(self, level: int = 1):
+    async def sleep(self, level: int = 1):
         """sleep."""
-        return self.engine.sleep(level)
+        return await self.engine.sleep(level)
 
     def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""

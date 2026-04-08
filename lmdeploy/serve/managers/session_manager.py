@@ -105,7 +105,7 @@ class Session:
 
     async def async_abort(self):
         """Abort the session."""
-        logger.info(f'[session] Aborting session {self.session_id}, epoch={self.epoch}')
+        logger.debug(f'[session] Aborting session {self.session_id}, epoch={self.epoch}')
         if self._handle is not None:
             await self._handle.async_cancel(self.session_id)
 
@@ -216,6 +216,7 @@ class SessionManager:
 
     async def async_abort_all(self):
         """Abort all sessions."""
+        logger.info(f'[SessionManager] aborting all {len(self.sessions)} sessions')
         tasks = []
         for session in list(self.sessions.values()):
             tasks.append(session.async_abort())

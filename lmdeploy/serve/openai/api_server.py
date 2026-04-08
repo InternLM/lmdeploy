@@ -1192,7 +1192,7 @@ async def sleep(raw_request: Request = None):
     async_engine = VariableInterface.async_engine
     async_engine.prepare_sleep()
     await async_engine.stop_all_session()
-    async_engine.sleep(level)
+    await async_engine.sleep(level)
     return Response(status_code=200)
 
 

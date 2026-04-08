@@ -53,9 +53,9 @@ class MPEngine(EngineBase):
         """End session."""
         return self._collective_rpc('end_session', session_id)
 
-    def sleep(self, level: int):
+    async def sleep(self, level: int):
         """sleep."""
-        return self._collective_rpc('sleep', level)
+        return await self._collective_rpc_async('sleep', level)
 
     def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
