@@ -1178,6 +1178,44 @@ class BaseModelAgent:
             ipc_tensor = func(*args)
             return ipc_tensor.clone() if require_clone else ipc_tensor
 
+        def _deserialize_weights(serialized_data):
+            raw = ForkingPickler.loads(pybase64.b64decode(serialized_data))
+            if request.load_format == 'flattened_bucket':
+                metadata: list[FlattenedTensorMetadata] = raw['metadata']
+                if not metadata:
+                    return []
+                if 'flattened_tensor' in weights:
+                    # Determine if clone is required
+                    require_clone = weights.get('require_clone', True)
+                    if 'event_ipc_handle' in weights and not hasattr(torch.cuda.Event, 'from_ipc_handle'):
+                        # Force clone when IPC event is provided but cannot be used
+                        require_clone = True
+                    self._update_params_ipc_tensor = _construct(weights['flattened_tensor'],
+                                                                require_clone=require_clone)
+                elif self._update_params_ipc_tensor is None:
+                    raise ValueError(
+                        'flattened_tensor is not provided in weights and no cached ipc tensor is available. '
+                        'Please provide flattened_tensor on the first update_params call.')
+                if 'event_ipc_handle' in weights and hasattr(torch.cuda.Event, 'from_ipc_handle'):
+                    self._update_params_ipc_event = torch.cuda.Event.from_ipc_handle(
+                        device=torch.cuda.current_device(),
+                        handle=weights['event_ipc_handle'],
+                    )
+                flattened_tensor: torch.Tensor = self._update_params_ipc_tensor
+                if self._update_params_ipc_event is not None:
+                    self._update_params_ipc_event.wait()
+                bucket = FlattenedTensorBucket(flattened_tensor=flattened_tensor, metadata=metadata)
+                return list(bucket.reconstruct_tensors())
+            return [(k, _construct(v)) for k, v in raw]
+
+        def _split_main_and_draft(weights):
+            # TODO, zhouxinyu, support split and update weights for other mtp methods
+            if not self.spec_agent.is_enabled() or self.spec_agent.method != 'qwen3_5_mtp':
+                return weights, []
+            main = [(name, weight) for name, weight in weights if not name.startswith('mtp.')]
+            draft = [(name, weight) for name, weight in weights if name.startswith('mtp.')]
+            return main, draft
+
         with self.all_context():
             # After deserialization, weights is a dict with following keys:
             # - metadata: List[FlattenedTensorMetadata]
@@ -1187,52 +1225,33 @@ class BaseModelAgent:
             serialized_data = request.serialized_named_tensors
             if isinstance(serialized_data, list):
                 serialized_data = serialized_data[self.dist_ctx.tp_group.rank]
-            model = self.patched_model.get_model()
-            weights = ForkingPickler.loads(pybase64.b64decode(serialized_data))
-            if request.load_format == 'flattened_bucket':
-                metadata: list[FlattenedTensorMetadata] = weights['metadata']
-                if metadata:
-                    if 'flattened_tensor' in weights:
-                        # Determine if clone is required
-                        require_clone = weights.get('require_clone', True)
-                        if 'event_ipc_handle' in weights and not hasattr(torch.cuda.Event, 'from_ipc_handle'):
-                            # Force clone when IPC event is provided but cannot be used
-                            require_clone = True
-                        self._update_params_ipc_tensor = _construct(weights['flattened_tensor'],
-                                                                    require_clone=require_clone)
-                    elif self._update_params_ipc_tensor is None:
-                        raise ValueError(
-                            'flattened_tensor is not provided in weights and no cached ipc tensor is available. '
-                            'Please provide flattened_tensor on the first update_params call.')
-                    if 'event_ipc_handle' in weights and hasattr(torch.cuda.Event, 'from_ipc_handle'):
-                        self._update_params_ipc_event = torch.cuda.Event.from_ipc_handle(
-                            device=torch.cuda.current_device(),
-                            handle=weights['event_ipc_handle'],
-                        )
-                    flattened_tensor: torch.Tensor = self._update_params_ipc_tensor
-                    if self._update_params_ipc_event is not None:
-                        self._update_params_ipc_event.wait()
-                    bucket = FlattenedTensorBucket(flattened_tensor=flattened_tensor, metadata=metadata)
-                    weights = bucket.reconstruct_tensors()
-                else:
-                    # empty data
-                    weights = []
-            else:
-                weights = [(k, _construct(v)) for k, v in weights]
 
-            weights = ModelWeightLoader._rename_weights_iterator(weights, model)
-            model.load_weights(weights)
-            if self._update_params_ipc_event is not None:
-                self._update_params_ipc_event.record()
+            model = self.patched_model.get_model()
+            spec_model = self.spec_agent.get_model()
+
+            weights = _deserialize_weights(serialized_data)
+            main_weights, draft_weights = _split_main_and_draft(weights)
+
+            for m, w, tag in [(model, main_weights, 'main'), (spec_model, draft_weights, 'draft')]:
+                if m is None or not w:
+                    continue
+
+                w = list(ModelWeightLoader._rename_weights_iterator(w, m))
+                logger.info(f'Update_params: {tag}_num_tensors={len(w)}')
+                m.load_weights(iter(w))
+
+                if self._update_params_ipc_event is not None:
+                    self._update_params_ipc_event.record()
 
             if request.finished:
-                for _, mod in model.named_modules():
-                    if not hasattr(mod, 'update_weights'):
-                        continue
-                    mod.update_weights()
-                torch.cuda.synchronize()
-                self._update_params_ipc_event = None
-                self._update_params_ipc_tensor = None
+                for m in filter(None, [model, spec_model]):
+                    for _, mod in m.named_modules():
+                        if hasattr(mod, 'update_weights'):
+                            mod.update_weights()
+
+                    torch.cuda.synchronize()
+                    self._update_params_ipc_event = None
+                    self._update_params_ipc_tensor = None
 
             torch.cuda.empty_cache()
 
@@ -1242,11 +1261,17 @@ class BaseModelAgent:
         self.state.is_sleeping = True
         if self.dist_config.dp > 1:
             await self.state.to_sleep.wait()
+        device = 'cpu' if level == 1 else 'meta'
         self.cache_engine = None
         self.state_cache_engine = None
         self.reset_graph_runner()
-        device = 'cpu' if level == 1 else 'meta'
         self.patched_model.get_model().to(device=device, non_blocking=True)
+
+        spec_model = self.spec_agent.get_model()
+        if spec_model is not None:
+            self.spec_agent.cache_engine = None
+            spec_model.to(device=device, non_blocking=True)
+
         torch.cuda.synchronize()
         # force clean _update_params_ipc tensor and event after all gpu jobs done
         self._update_params_ipc_tensor = None
@@ -1259,11 +1284,16 @@ class BaseModelAgent:
         """Wakeup."""
         if tags is None:
             tags = ['weights', 'kv_cache']
+
         if 'weights' in tags:
             device = next(self.patched_model.get_model().parameters()).device
             assert device.type in ['cpu', 'meta']
+            spec_model =  self.spec_agent.get_model()
+
             if device.type == 'cpu':
                 self.patched_model.get_model().to(torch.cuda.current_device())
+                if spec_model is not None:
+                    spec_model.to(torch.cuda.current_device())
             else:
                 # user should update weights after wakeup
                 old_empty_init = self.misc_config.empty_init

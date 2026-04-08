@@ -451,6 +451,7 @@ class ModelConfig:
             is_draft_model=is_draft_model,
             spec_method=spec_method,
             num_spec_tokens=num_spec_tokens,
+            device_type=device_type,
         )
 
         if model_config.k_head_dim is None:
@@ -631,6 +632,9 @@ class QuantizationConfig:
         if quant_method == 'awq':
             bits = quant_config.get('bits', 4)
             group_size = quant_config.get('group_size', 128)
+            if quant_dtype is None:
+                # awq does not need a quant dtype, this is just a placeholder
+                quant_dtype = 'bfloat16'
         elif quant_method == 'smooth_quant':
             if quant_dtype is None:
                 quant_dtype = 'int8'

@@ -80,6 +80,8 @@ class DeployModelMixin:
         """Update quant config."""
         if quant_config is None:
             return
+        if getattr(quant_config, 'ignored_layers', None) is None:
+            return quant_config
         ignored_layers = [cls.rename_weight(name) for name in quant_config.ignored_layers]
 
         added_ignore_layers = set()
