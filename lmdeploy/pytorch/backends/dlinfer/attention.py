@@ -13,7 +13,7 @@ class DlinferAttentionMetadata(AttentionMetadata):
     kv_start_indices: Tensor | None = None
     block_size: int = 64
     attention_mask: Sequence[Tensor] = tuple()
-    is_unpaged_prefill: bool | None = None
+    is_prefill_no_cache: bool | None = None
     max_q_seq_len: int = 1
     max_kv_seq_len: int = 1
     quant_meta: dict = None
@@ -80,7 +80,7 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
         kv_start_indices = attn_metadata.kv_start_indices
         block_size = attn_metadata.block_size
         attn_mask = attn_metadata.attention_mask
-        is_unpaged_prefill = attn_metadata.is_unpaged_prefill
+        is_prefill_no_cache = attn_metadata.is_prefill_no_cache
         max_q_seq_len = attn_metadata.max_q_seq_len
         max_kv_seq_len = attn_metadata.max_kv_seq_len
         quant_bits = attn_metadata.quant_policy
@@ -139,7 +139,7 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
             v_head_size=self.v_head_size,
             attn_mask=attn_mask,
             softmax_scale=self.scale,
-            is_unpaged_prefill=is_unpaged_prefill,
+            is_prefill_no_cache=is_prefill_no_cache,
             kv_scales=kv_scales,
             kv_zeros=kv_zeros,
             quant_bits=quant_bits,
