@@ -9,93 +9,61 @@ from torch import Tensor
 
 _TURBOQUANT_CACHE = {}
 
-def _get_deterministic_signs(d: int, device: str = 'cuda'):
-    """Fixed deterministic ±1 signs for HD transform."""
-    cache_key = (d, device, 'deterministic_signs')
-    if cache_key not in _TURBOQUANT_CACHE:
-        idx = torch.arange(d, device=device)
-        signs = torch.where((idx & 1) == 0, 1.0, -1.0).to(torch.float32)
-        _TURBOQUANT_CACHE[cache_key] = signs
-    return _TURBOQUANT_CACHE[cache_key]
-
-def _hadamard_matrix(d: int, device: str = 'cuda'):
-    """Construct normalized Hadamard matrix H / sqrt(d)."""
-    if d & (d - 1) != 0:
-        raise ValueError(f'Hadamard matrix requires power-of-2 dimension, got d={d}')
-
-    cache_key = (d, device, 'hadamard_matrix')
-    if cache_key not in _TURBOQUANT_CACHE:
-        H = torch.tensor([[1.0]], dtype=torch.float32)
-        n = 1
-        while n < d:
-            H = torch.cat([
-                torch.cat([H,  H], dim=1),
-                torch.cat([H, -H], dim=1),
-            ], dim=0)
-            n *= 2
-        H = H.to(device=device, dtype=torch.float32) / math.sqrt(d)
-        _TURBOQUANT_CACHE[cache_key] = H
-    return _TURBOQUANT_CACHE[cache_key]
-
-def fwht(x: Tensor) -> Tensor:
-    """Normalized Fast Walsh-Hadamard Transform on the last dimension.
-
-    Input shape: (..., d), where d must be a power of 2.
-    """
-    d = x.shape[-1]
-    if d & (d - 1) != 0:
-        raise ValueError(f'FWHT requires power-of-2 dimension, got d={d}')
-
-    y = x.contiguous()
-    h = 1
-    while h < d:
-        y = y.reshape(*y.shape[:-1], d // (2 * h), 2, h)
-        a = y[..., 0, :]
-        b = y[..., 1, :]
-        y = torch.stack((a + b, a - b), dim=-2).reshape(*x.shape[:-1], d)
-        h *= 2
-    return y / math.sqrt(d)
-
-def ifwht(x: Tensor) -> Tensor:
-    """Inverse of normalized FWHT.
-
-    Since normalized FWHT is self-inverse, this equals fwht(x).
-    """
-    return fwht(x)
 
 def butterfly_rotate(x: Tensor) -> Tensor:
-    """
-    Deterministic orthogonal transform:
-        y = (H / sqrt(d)) @ (D @ x)
-    applied along the last dimension.
-    """
-    d = x.shape[-1]
-    if d & (d - 1) != 0:
-        raise ValueError(f'butterfly_rotate requires power-of-2 dimension, got d={d}')
-
-    signs = _get_deterministic_signs(d, device=x.device)
-    return fwht(x * signs)
+    """Deterministic orthogonal rotation: y = x @ Q.T"""
+    Q = _get_rotation_matrix(x.shape[-1], device=x.device, dtype=x.dtype)
+    return torch.matmul(x, Q.T)
 
 def butterfly_rotate_inv(x: Tensor) -> Tensor:
     """
     Inverse of butterfly_rotate:
-        x = D @ (H / sqrt(d)) @ y
+        x = y @ Q
+    Since Q is orthogonal: Q^{-1} = Q.T
     """
-    signs = _get_deterministic_signs(x.shape[-1], device=x.device)
-    return fwht(x) * signs
+    Q = _get_rotation_matrix(x.shape[-1], device=x.device, dtype=x.dtype)
+    return torch.matmul(x, Q)
 
-def _get_rotation_matrix(
-    d: int,
-    device: str = 'cuda',
-):
-    """Get orthogonal mixing matrix for testing."""
-    cache_key = (d, device, 'rotation_matrix')
+def _get_rotation_matrix(d: int, device: str = 'cuda', dtype=torch.float32):
+    """Get cached orthogonal rotation matrix Q = H @ diag(signs) / sqrt(d).
+
+    Q is orthogonal: Q @ Q.T = I, so Q^{-1} = Q.T.
+
+    Args:
+        d: head dimension (must be power of 2).
+        device: target device.
+        dtype: storage dtype for the matrix.
+
+    Returns:
+        Q: (d, d) tensor.
+    """
+    if d & (d - 1) != 0:
+        raise ValueError(
+            f'Rotation matrix requires power-of-2 dimension, got d={d}'
+        )
+
+    cache_key = (d, device, str(dtype), 'rotation_matrix')
     if cache_key in _TURBOQUANT_CACHE:
         return _TURBOQUANT_CACHE[cache_key]
 
-    H = _hadamard_matrix(d, device=device)
-    signs = _get_deterministic_signs(d, device=device)
-    Q = H * signs.unsqueeze(0)   # equivalent to H @ diag(signs)
+    # Build normalized Hadamard matrix
+    with torch.no_grad():
+        H = torch.tensor([[1.0]], dtype=torch.float32)
+        n = 1
+        while n < d:
+            H = torch.cat([
+                torch.cat([H, H], dim=1),
+                torch.cat([H, -H], dim=1),
+            ], dim=0)
+            n *= 2
+        H = H / math.sqrt(d)
+
+        # Deterministic diagonal signs
+        idx = torch.arange(d)
+        signs = torch.where((idx & 1) == 0, 1.0, -1.0)
+
+        # Q = H @ diag(signs)
+        Q = (H * signs.unsqueeze(0)).to(device=device, dtype=dtype)
 
     _TURBOQUANT_CACHE[cache_key] = Q
     return Q
