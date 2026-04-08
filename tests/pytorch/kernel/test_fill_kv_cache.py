@@ -1,15 +1,15 @@
+import math
 
 import pytest
 import torch
 
-from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import (
-    _get_lloyd_max_codebook,
-    _get_rotation_matrix,
+# Import common TurboQuant utilities from turboquant_utils
+from .turboquant_utils import (
+    _div_up,
+    dequantize_turboquant_qjl4,
+    quant_turboquant_mse,
+    quant_turboquant_qjl4,
 )
-
-
-def _div_up(a, b):
-    return (a + b - 1) // b
 
 
 def quant(kv: torch.Tensor, nbits: int = 8):
@@ -26,142 +26,6 @@ def quant(kv: torch.Tensor, nbits: int = 8):
         q_kv1, q_kv2, q_kv3, q_kv4 = q_kv.split(q_kv.shape[-1] // 4, -1)
         q_kv = q_kv1 + q_kv2 * 4 + q_kv3 * 16 + q_kv4 * 64
     return q_kv, torch.cat([scales, zeros], dim=-1)
-
-
-def quant_turboquant_mse(kv: torch.Tensor, nbits: int):
-    """TurboQuant MSE quantization (without QJL).
-
-    Args:
-        kv: input tensor of shape (..., head_dim)
-        nbits: number of bits (2 or 4)
-
-    Returns:
-        q_kv: bit-packed indices (uint8)
-        norms: L2 norms for dequantization, shape (...,)
-    """
-    head_dim = kv.shape[-1]
-    device = str(kv.device)
-
-    # Get rotation matrix
-    Pi = _get_rotation_matrix(head_dim, device=device)
-
-    # Get Lloyd-Max codebook
-    centroids, boundaries = _get_lloyd_max_codebook(head_dim, nbits, device=device)
-    # boundaries now contains n_levels - 1 boundaries directly
-    decision_boundaries = boundaries  # (n_levels - 1,)
-
-    # Compute L2 norms
-    norms = kv.norm(dim=-1, keepdim=True)
-
-    # Normalize to unit sphere
-    kv_unit = kv / (norms + 1e-10)
-
-    # Apply random rotation: y = kv_unit @ Pi^T
-    y = torch.matmul(kv_unit, Pi.T)
-
-    # Quantize: find nearest centroid via searchsorted
-    indices = torch.searchsorted(decision_boundaries, y.contiguous())
-    indices = indices.clamp(0, 2 ** nbits - 1)
-
-    # Bit-pack indices
-    if nbits == 4:
-        q_kv1, q_kv2 = indices.split(indices.shape[-1] // 2, -1)
-        q_kv = q_kv1 + q_kv2 * 16
-    elif nbits == 2:
-        q_kv1, q_kv2, q_kv3, q_kv4 = indices.split(indices.shape[-1] // 4, -1)
-        q_kv = q_kv1 + q_kv2 * 4 + q_kv3 * 16 + q_kv4 * 64
-    else:
-        q_kv = indices
-
-    return q_kv.to(torch.uint8), norms.squeeze(-1)
-
-
-def _unpack_indices(packed: torch.Tensor, nbits: int, original_dim: int) -> torch.Tensor:
-    """Unpack bit-packed indices back to integer tensor."""
-    # Save original shape
-    orig_shape = list(packed.shape)
-    batch_dims = orig_shape[:-1]
-    batch_size = 1
-    for d in batch_dims:
-        batch_size *= d
-
-    # Flatten all batch dims
-    packed_flat = packed.flatten()  # [batch_size * packed_last_dim]
-
-    if nbits == 4:
-        packed_d = ((original_dim + 1) // 2) * 2
-        required_packed = packed_d // 2
-        total_required = batch_size * required_packed
-        if packed_flat.shape[-1] < total_required:
-            packed_flat = torch.nn.functional.pad(packed_flat, (0, total_required - packed_flat.shape[-1]), value=0)
-    elif nbits == 2:
-        packed_d = ((original_dim + 3) // 4) * 4
-        required_packed = packed_d // 4
-        total_required = batch_size * required_packed
-        if packed_flat.shape[-1] < total_required:
-            packed_flat = torch.nn.functional.pad(packed_flat, (0, total_required - packed_flat.shape[-1]), value=0)
-
-    # Unpack
-    if nbits == 4:
-        low = (packed & 0x0F)          # (..., d/2) ->  indices[0 : d/2]
-        high = (packed >> 4) & 0x0F    # (..., d/2) ->  indices[d/2 : d]
-        indices = torch.cat([low, high], dim=-1)  # (..., d)
-
-    elif nbits == 2:
-        i0 = (packed & 0x03)            # (..., d/4) -> indices[0 : d/4]
-        i1 = ((packed >> 2) & 0x03)     # (..., d/4) -> indices[d/4 : d/2]
-        i2 = ((packed >> 4) & 0x03)     # (..., d/4) -> indices[d/2 : 3d/4]
-        i3 = ((packed >> 6) & 0x03)     # (..., d/4) -> indices[3d/4 : d]
-        indices = torch.cat([i0, i1, i2, i3], dim=-1)  # (..., d)
-
-    else:
-        indices = packed
-
-    # Trim to exact size and reshape
-    new_shape = batch_dims + [original_dim]
-    return indices[:, :original_dim].reshape(new_shape).long()
-
-
-def dequantize_turboquant_mse(q_kv: torch.Tensor, norms: torch.Tensor, nbits: int):
-    """TurboQuant MSE dequantization (without QJL).
-
-    Args:
-        q_kv: bit-packed indices (uint8)
-        norms: L2 norms for rescaling, shape (...,)
-        nbits: number of bits (2 or 4)
-
-    Returns:
-        reconstructed kv tensor
-    """
-    # Infer head_dim from packed shape
-    if nbits == 4:
-        head_dim = q_kv.shape[-1] * 2
-    elif nbits == 2:
-        head_dim = q_kv.shape[-1] * 4
-    else:
-        head_dim = q_kv.shape[-1]
-
-    device = str(q_kv.device)
-
-    # Get rotation matrix
-    Pi = _get_rotation_matrix(head_dim, device=device)
-
-    # Get Lloyd-Max codebook
-    centroids, _ = _get_lloyd_max_codebook(head_dim, nbits, device=device)
-
-    # Unpack indices
-    indices = _unpack_indices(q_kv, nbits, head_dim)
-
-    # Look up centroids
-    y_hat = centroids[indices]  # (..., head_dim)
-
-    # Rotate back: x_hat = y_hat @ Pi
-    x_hat = torch.matmul(y_hat, Pi)
-
-    # Rescale by original norms
-    x_hat = x_hat * norms.unsqueeze(-1)
-
-    return x_hat
 
 
 class TestFillKVCache:
@@ -256,6 +120,7 @@ class TestFillKVCache:
         v_caches = v_caches.clone()
         splited_k_states = k_states.split(seq_lens)
         splited_v_states = v_states.split(seq_lens)
+
         for bidx in range(batch_size):
             k_state = splited_k_states[bidx]
             v_state = splited_v_states[bidx]
@@ -271,6 +136,7 @@ class TestFillKVCache:
                 fill_end = fill_start + fill_size
                 k_caches[boff, fill_start:fill_end] = tmp_ks
                 v_caches[boff, fill_start:fill_end] = tmp_vs
+
                 k_state = k_state[fill_size:]
                 v_state = v_state[fill_size:]
                 block_id += 1
@@ -329,23 +195,30 @@ class TestFillKVCacheInt8(TestFillKVCache):
            k_scales_zeros, v_scales_zeros, nbits):
         k_states, k_states_sz = quant(k_states, nbits)
         v_states, v_states_sz = quant(v_states, nbits)
+
         batch_size = len(seq_lens)
         k_caches = k_caches.clone()
         v_caches = v_caches.clone()
+        k_scales_zeros = k_scales_zeros.clone()
+        v_scales_zeros = v_scales_zeros.clone()
+
         splited_k_states = k_states.split(seq_lens)
         splited_v_states = v_states.split(seq_lens)
         splited_k_states_sz = k_states_sz.split(seq_lens)
         splited_v_states_sz = v_states_sz.split(seq_lens)
+
         for bidx in range(batch_size):
             k_state = splited_k_states[bidx]
             v_state = splited_v_states[bidx]
             k_state_sz = splited_k_states_sz[bidx]
             v_state_sz = splited_v_states_sz[bidx]
+
             h_len = history_lens[bidx]
             b_offs = block_offsets[bidx]
             block_id = _div_up(h_len + 1, block_size) - 1
             fill_start = h_len % block_size
             fill_size = min(block_size - fill_start, k_state.size(0))
+
             while True:
                 boff = b_offs[block_id]
                 tmp_ks = k_state[:fill_size]
@@ -353,14 +226,17 @@ class TestFillKVCacheInt8(TestFillKVCache):
                 tmp_ks_sz = k_state_sz[:fill_size]
                 tmp_vs_sz = v_state_sz[:fill_size]
                 fill_end = fill_start + fill_size
+
                 k_caches[boff, fill_start:fill_end] = tmp_ks
                 v_caches[boff, fill_start:fill_end] = tmp_vs
                 k_scales_zeros[boff, fill_start:fill_end] = tmp_ks_sz
                 v_scales_zeros[boff, fill_start:fill_end] = tmp_vs_sz
+
                 k_state = k_state[fill_size:]
                 v_state = v_state[fill_size:]
                 k_state_sz = k_state_sz[fill_size:]
                 v_state_sz = v_state_sz[fill_size:]
+
                 block_id += 1
                 fill_start = 0
                 fill_size = min(block_size, k_state.size(0))
@@ -416,6 +292,266 @@ class TestFillKVCacheInt4(TestFillKVCacheInt8):
         torch.testing.assert_close(v_scales_zeros, gt[3])
         torch.testing.assert_close(k_caches, gt[0])
         torch.testing.assert_close(v_caches, gt[1])
+
+
+class TestFillKVCacheInt42(TestFillKVCacheInt4):
+    """quant_policy == 42:
+
+    - K: QJL4 = 3bit MSE + 1bit QJL
+    - V: TurboQuant MSE int2
+    """
+
+    @pytest.fixture
+    def head_dim(self, request):
+        yield request.param
+
+    @pytest.fixture
+    def k_caches(self, batch_size, max_num_blocks, block_size, num_heads, head_dim):
+        # K raw dim = head_dim, packed dim = head_dim // 2
+        shape = (batch_size * max_num_blocks, block_size, num_heads, head_dim // 2)
+        yield torch.full(shape, 0, dtype=torch.uint8).cuda()
+
+    @pytest.fixture
+    def v_caches(self, batch_size, max_num_blocks, block_size, num_heads, head_dim):
+        # V TurboQuant MSE int2 packed: raw dim = head_dim, packed dim = head_dim // 4
+        shape = (batch_size * max_num_blocks, block_size, num_heads, head_dim // 4)
+        yield torch.full(shape, 0, dtype=torch.uint8).cuda()
+
+    @pytest.fixture
+    def k_scales_zeros(self, batch_size, max_num_blocks, block_size, num_heads):
+        # K meta: [mse_norm, qjl_norm]
+        shape = (batch_size * max_num_blocks, block_size, num_heads, 2)
+        yield torch.full(shape, 0.0).cuda()
+
+    @pytest.fixture
+    def v_scales_zeros(self, batch_size, max_num_blocks, block_size, num_heads):
+        # V TurboQuant MSE int2: [norm]
+        shape = (batch_size * max_num_blocks, block_size, num_heads, 1)
+        yield torch.full(shape, 0.0).cuda()
+
+    @pytest.fixture
+    def gt(self, k_states, v_states, k_caches, v_caches, seq_lens, history_lens, block_offsets, block_size,
+           k_scales_zeros, v_scales_zeros):
+        k_states_q, k_meta = quant_turboquant_qjl4(k_states)
+        v_states_q, v_norm = quant_turboquant_mse(v_states, 2)
+        v_meta = v_norm.unsqueeze(-1)
+
+        batch_size = len(seq_lens)
+        k_caches = k_caches.clone()
+        v_caches = v_caches.clone()
+        k_scales_zeros = k_scales_zeros.clone()
+        v_scales_zeros = v_scales_zeros.clone()
+
+        splited_k_states = k_states_q.split(seq_lens)
+        splited_v_states = v_states_q.split(seq_lens)
+        splited_k_meta = k_meta.split(seq_lens)
+        splited_v_meta = v_meta.split(seq_lens)
+
+        for bidx in range(batch_size):
+            k_state = splited_k_states[bidx]
+            v_state = splited_v_states[bidx]
+            k_state_meta = splited_k_meta[bidx]
+            v_state_meta = splited_v_meta[bidx]
+
+            h_len = history_lens[bidx]
+            b_offs = block_offsets[bidx]
+            block_id = _div_up(h_len + 1, block_size) - 1
+            fill_start = h_len % block_size
+            fill_size = min(block_size - fill_start, k_state.size(0))
+
+            while True:
+                boff = b_offs[block_id]
+                fill_end = fill_start + fill_size
+
+                k_caches[boff, fill_start:fill_end] = k_state[:fill_size]
+                v_caches[boff, fill_start:fill_end] = v_state[:fill_size]
+                k_scales_zeros[boff, fill_start:fill_end] = k_state_meta[:fill_size]
+                v_scales_zeros[boff, fill_start:fill_end] = v_state_meta[:fill_size]
+
+                k_state = k_state[fill_size:]
+                v_state = v_state[fill_size:]
+                k_state_meta = k_state_meta[fill_size:]
+                v_state_meta = v_state_meta[fill_size:]
+
+                block_id += 1
+                fill_start = 0
+                fill_size = min(block_size, k_state.size(0))
+                if fill_size == 0:
+                    break
+
+        yield k_caches, v_caches, k_scales_zeros, v_scales_zeros
+
+    @pytest.mark.parametrize('head_dim', [128], indirect=True)
+    @pytest.mark.parametrize(['seq_lens', 'history_lens'], [
+        ((1, 1, 1, 1), (1, 16, 31, 24)),
+        ((1, 8, 16, 24), (1, 16, 31, 24)),
+    ],
+                             indirect=True)
+    def test_fill_kv_cache(self, k_states, v_states, k_caches, v_caches, k_scales_zeros, v_scales_zeros, block_offsets,
+                           q_start_loc, q_seq_length, kv_seq_length, max_q_seq_length, gt):
+        from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache
+
+        fill_kv_cache(
+            k_states,
+            v_states,
+            k_caches,
+            v_caches,
+            q_start_loc,
+            q_seq_length,
+            kv_seq_length,
+            max_q_seq_length,
+            block_offsets,
+            k_scales_zeros,
+            v_scales_zeros,
+            42,
+        )
+
+        torch.testing.assert_close(k_caches, gt[0])
+        torch.testing.assert_close(v_caches, gt[1])
+        torch.testing.assert_close(k_scales_zeros, gt[2], atol=1e-6, rtol=1e-6)
+        torch.testing.assert_close(v_scales_zeros, gt[3], atol=1e-6, rtol=1e-6)
+
+    @pytest.mark.parametrize('head_dim', [128], indirect=True)
+    def test_qjl4_reference_sanity(self, head_dim):
+        torch.manual_seed(42)
+        x = torch.randn(64, 4, head_dim).cuda()
+        q, meta = quant_turboquant_qjl4(x)
+        rec = dequantize_turboquant_qjl4(q, meta)
+
+        x_flat = x.flatten(0, -2)
+        rec_flat = rec.flatten(0, -2)
+        x_norm = x_flat / (x_flat.norm(dim=-1, keepdim=True) + 1e-10)
+        rec_norm = rec_flat / (rec_flat.norm(dim=-1, keepdim=True) + 1e-10)
+        cos = (x_norm * rec_norm).sum(dim=-1).mean().item()
+        assert cos > 0.80, f'QJL4 reference cosine too low: {cos}'
+
+    def test_fill_kv_cache_quant42_vs_python_reference(self):
+        """Test fill_kv_cache with quant_policy=42 against Python reference.
+
+        This test verifies that the fill_kv_cache kernel produces the same quantized output as the Python reference
+        implementation.
+
+        From debug.py: compares runtime fill_kv_cache output with Python reference quantization for the written tokens.
+        """
+        from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import (
+            _get_lloyd_max_codebook,
+            butterfly_rotate,
+            fill_kv_cache,
+        )
+
+        torch.manual_seed(123)
+        torch.cuda.manual_seed_all(123)
+
+        device = 'cuda'
+        dtype = torch.float16
+
+        batch = 1
+        q_len = 1
+        hist_len = 8
+        kv_len = hist_len + q_len
+        num_heads = 2
+        k_dim = 64
+        v_dim = 64
+        block_size = 16
+
+        # Generate test data
+        k = torch.rand(batch, kv_len, num_heads, k_dim, dtype=dtype, device=device)
+        v = torch.rand(batch, kv_len, num_heads, v_dim, dtype=dtype, device=device)
+
+        seq_lens = torch.tensor([q_len], device=device)
+        kv_seqlens = torch.tensor([kv_len], device=device)
+        q_start_loc = torch.tensor([0], device=device)
+
+        # Create block offsets
+        num_blocks = (kv_seqlens + block_size - 1) // block_size
+        block_offsets = torch.arange(num_blocks[0], device=device).unsqueeze(0)
+
+        packed_k_dim = k_dim // 2
+        packed_v_dim = v_dim // 4
+        max_blocks = num_blocks[0].item() + 1
+
+        # Initialize blocked caches
+        blocked_k = torch.zeros(max_blocks, block_size, num_heads, packed_k_dim, dtype=torch.uint8, device=device)
+        blocked_v = torch.zeros(max_blocks, block_size, num_heads, packed_v_dim, dtype=torch.uint8, device=device)
+        blocked_ksz = torch.zeros(max_blocks, block_size, num_heads, 2, dtype=dtype, device=device)
+        blocked_vsz = torch.zeros(max_blocks, block_size, num_heads, 1, dtype=dtype, device=device)
+
+        # Get the token to write (last position)
+        conti_k = k[:, hist_len:hist_len + q_len].reshape(-1, num_heads, k_dim)
+        conti_v = v[:, hist_len:hist_len + q_len].reshape(-1, num_heads, v_dim)
+
+        # Run fill_kv_cache
+        fill_kv_cache(
+            conti_k,
+            conti_v,
+            blocked_k,
+            blocked_v,
+            q_start_loc,
+            seq_lens,
+            kv_seqlens,
+            q_len,
+            block_offsets,
+            k_scales_zeros=blocked_ksz,
+            v_scales_zeros=blocked_vsz,
+            quant_policy=42,
+        )
+
+        # Python reference quantization - only for the last token (the one being written)
+        last_k = k[0, hist_len:hist_len + q_len]  # (heads, dim)
+        last_v = v[0, hist_len:hist_len + q_len]
+
+        # Quantize K using QJL4 - only for last token
+        head_dim = k_dim
+        centroids, boundaries = _get_lloyd_max_codebook(head_dim, 3, device=device)
+        mse_norm = last_k.float().norm(dim=-1, keepdim=True)
+        kv_unit = last_k.float() / (mse_norm + 1e-10)
+        y = butterfly_rotate(kv_unit)
+        idx3 = torch.searchsorted(boundaries, y.contiguous()).clamp(0, 7).long()
+        c = centroids[idx3]
+        residual = y - c
+        qjl_bit = (residual >= 0).long()
+        qjl_norm = residual.norm(dim=-1, keepdim=True) / math.sqrt(head_dim)
+        nibble = idx3 | (qjl_bit << 3)
+        q1, q2 = nibble.split(nibble.shape[-1] // 2, dim=-1)
+        ref_k_q = (q1 + (q2 << 4)).to(torch.uint8)
+        ref_k_meta = torch.cat([mse_norm, qjl_norm], dim=-1)
+
+        # Quantize V using MSE int2 - only for last token
+        _, boundaries_v = _get_lloyd_max_codebook(v_dim, 2, device=device)
+        v_norms = last_v.float().norm(dim=-1, keepdim=True)
+        v_unit = last_v.float() / (v_norms + 1e-10)
+        y_v = butterfly_rotate(v_unit)
+        indices_v = torch.searchsorted(boundaries_v, y_v.contiguous()).clamp(0, 3)
+        q1, q2, q3, q4 = indices_v.split(indices_v.shape[-1] // 4, dim=-1)
+        ref_v_q = (q1 + q2 * 4 + q3 * 16 + q4 * 64).to(torch.uint8)
+        ref_v_norm = v_norms.squeeze(-1)
+
+        # Compare the last token (the one we wrote)
+        runtime_k_last = blocked_k[0, hist_len:hist_len + 1]
+        runtime_v_last = blocked_v[0, hist_len:hist_len + 1]
+        runtime_k_meta_last = blocked_ksz[0, hist_len:hist_len + 1]
+        runtime_v_meta_last = blocked_vsz[0, hist_len:hist_len + 1, :, 0]
+
+        # Reference is already for the last token only
+        ref_k_last = ref_k_q
+        ref_v_last = ref_v_q
+        ref_v_meta_last = ref_v_norm
+
+        # Verify K packed data
+        torch.testing.assert_close(runtime_k_last, ref_k_last,
+                                   msg='K packed last-token runtime vs python mismatch')
+        # Verify V packed data
+        torch.testing.assert_close(runtime_v_last, ref_v_last,
+                                   msg='V packed last-token runtime vs python mismatch')
+        # Verify K meta (larger tolerance due to FP16 precision differences)
+        # Use only absolute tolerance to avoid issues with small relative values
+        torch.testing.assert_close(runtime_k_meta_last.float(), ref_k_meta.float(), atol=0.01, rtol=0,
+                                   msg='K meta last-token runtime vs python mismatch')
+        # Verify V meta
+        torch.testing.assert_close(runtime_v_meta_last.float(), ref_v_meta_last.float(), atol=0.01, rtol=0,
+                                   msg='V meta last-token runtime vs python mismatch')
+
+        print('fill_kv_cache quant42 vs Python reference: all checks passed')
 
 
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason='require device with cc>=9.0')
@@ -485,6 +621,7 @@ class TestFillKVCacheBlockedFP8(TestFillKVCache):
 
         k_states = k_states.flatten(0, -2)
         v_states = v_states.flatten(0, -2)
+
         quant_k, quant_ks = quant_fp8(k_states, group_size=group_size, dtype=quant_dtype, scale_fmt=scale_fmt)
         quant_v, quant_vs = quant_fp8(v_states, group_size=group_size, dtype=quant_dtype, scale_fmt=scale_fmt)
 
@@ -501,20 +638,25 @@ class TestFillKVCacheBlockedFP8(TestFillKVCache):
         out_ks = []
         out_v = []
         out_vs = []
+
         q_seqlens = cu_seqlen_q[1:] - cu_seqlen_q[:-1]
+
         for bidx in range(batch_size):
             seqlen = q_seqlens[bidx].item()
             kv_len = kv_seqlens[bidx].item()
             start = kv_len - seqlen
             end = kv_len
+
             k = k_caches[block_offsets[bidx]].reshape(-1, k_caches.size(-2), k_caches.size(-1))
             ks = ks_caches[block_offsets[bidx]].reshape(-1, ks_caches.size(-2), ks_caches.size(-1))
             v = v_caches[block_offsets[bidx]].reshape(-1, v_caches.size(-2), v_caches.size(-1))
             vs = vs_caches[block_offsets[bidx]].reshape(-1, vs_caches.size(-2), vs_caches.size(-1))
+
             out_k.append(k[start:end])
             out_ks.append(ks[start:end])
             out_v.append(v[start:end])
             out_vs.append(vs[start:end])
+
         out_k = torch.cat(out_k, dim=0)
         out_ks = torch.cat(out_ks, dim=0)
         out_v = torch.cat(out_v, dim=0)
@@ -530,6 +672,7 @@ class TestFillKVCacheBlockedFP8(TestFillKVCache):
     def test_fill_kv_cache(self, k_states, v_states, k_caches, v_caches, ks_caches, vs_caches, block_offsets,
                            cu_seqlen_q, kv_seq_length, max_q_seq_length, gt, group_size, scale_fmt):
         from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache_blocked_fp8
+
         fill_kv_cache_blocked_fp8(k_states,
                                   v_states,
                                   k_caches,
@@ -549,14 +692,15 @@ class TestFillKVCacheBlockedFP8(TestFillKVCache):
         out_k, out_ks, out_v, out_vs = self.uncache(k_caches, ks_caches, v_caches, vs_caches, cu_seqlen_q,
                                                     kv_seq_length, block_offsets)
 
-        out_k = out_k.float()
         out_k = out_k / out_k.max()
         gt_k = gt_k.float()
         gt_k = gt_k / gt_k.max()
+
         out_v = out_v.float()
         out_v = out_v / out_v.max()
         gt_v = gt_v.float()
         gt_v = gt_v / gt_v.max()
+
         torch.testing.assert_close(out_k, gt_k)
         torch.testing.assert_close(out_ks, gt_ks)
         torch.testing.assert_close(out_v, gt_v)

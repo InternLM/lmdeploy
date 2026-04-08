@@ -28,6 +28,8 @@ def _div_up(a, b):
 # TurboQuant MSE Quantization/Dequantization Functions
 # =============================================================================
 
+_TQ_TEST_CACHE = {}
+
 
 def quant_turboquant_mse(kv: torch.Tensor, nbits: int):
     """TurboQuant MSE quantization (without QJL).
@@ -77,6 +79,49 @@ def quant_turboquant_mse(kv: torch.Tensor, nbits: int):
     return q_kv.to(torch.uint8), norms.squeeze(-1)
 
 
+def quant_turboquant_qjl4(kv: torch.Tensor):
+    """TurboQuant 4bit reference: 3bit MSE + 1bit QJL.
+
+    Packed nibble layout for each coordinate:
+        low  3 bits: MSE code index in [0, 7]
+        high 1 bit : QJL residual sign
+
+    Returns:
+        q_kv: packed uint8 tensor, shape (..., D/2)
+        meta: tensor of shape (..., 2)
+              meta[..., 0] = mse_norm = ||x||
+              meta[..., 1] = qjl_norm = ||residual|| / sqrt(D)
+    """
+    head_dim = kv.shape[-1]
+    device = str(kv.device)
+
+    Pi = _get_rotation_matrix(head_dim, device=device)
+    centroids, boundaries = _get_lloyd_max_codebook(head_dim, bits=3,device=device)
+
+    mse_norm = kv.norm(dim=-1, keepdim=True)  # (..., 1)
+    kv_unit = kv / (mse_norm + 1e-10)
+    y = torch.matmul(kv_unit, Pi.T)  # (..., D)
+
+    idx3 = torch.searchsorted(boundaries, y.contiguous())
+    idx3 = idx3.clamp(0, 7).to(torch.long)
+
+    c = centroids[idx3]
+    residual = y - c
+    qjl_bit = (residual >= 0).to(torch.long)
+
+    # Test-side reference qjl norm
+    qjl_norm = residual.norm(dim=-1, keepdim=True) / math.sqrt(head_dim)
+
+    # Pack 4bit nibble = low 3 bits mse idx + high 1 bit qjl sign
+    nibble = idx3 | (qjl_bit << 3)
+
+    q1, q2 = nibble.split(nibble.shape[-1] // 2, dim=-1)
+    q_kv = q1 + (q2 << 4)
+
+    meta = torch.cat([mse_norm, qjl_norm], dim=-1)  # (..., 2)
+    return q_kv.to(torch.uint8), meta
+
+
 def _unpack_indices(packed: torch.Tensor, nbits: int, original_dim: int) -> torch.Tensor:
     """Unpack bit-packed indices back to integer tensor."""
     # Save original shape
@@ -123,6 +168,17 @@ def _unpack_indices(packed: torch.Tensor, nbits: int, original_dim: int) -> torc
     return indices[:, :original_dim].reshape(new_shape).long()
 
 
+def _unpack_qjl4_nibbles(packed: torch.Tensor, original_dim: int):
+    """Unpack 4bit qjl nibbles into:
+    - idx3: [0, 7]
+    - bit1: [0, 1]
+    """
+    nib = _unpack_indices(packed, 4, original_dim)
+    idx3 = nib & 0x7
+    bit1 = (nib >> 3) & 0x1
+    return idx3.long(), bit1.long()
+
+
 def dequantize_turboquant_mse(q_kv: torch.Tensor, norms: torch.Tensor, nbits: int):
     """TurboQuant MSE dequantization (without QJL).
 
@@ -163,6 +219,28 @@ def dequantize_turboquant_mse(q_kv: torch.Tensor, norms: torch.Tensor, nbits: in
     x_hat = x_hat * norms.unsqueeze(-1)
 
     return x_hat
+
+
+def dequantize_turboquant_qjl4(q_kv: torch.Tensor, meta: torch.Tensor):
+    """Dequantize test-side TurboQuant QJL4 (3bit MSE + 1bit QJL)."""
+    head_dim = q_kv.shape[-1] * 2
+    device = str(q_kv.device)
+
+    Pi = _get_rotation_matrix(head_dim, device=device)
+    centroids, _ = _get_lloyd_max_codebook(head_dim, bits=3, device=device)
+
+    idx3, bit1 = _unpack_qjl4_nibbles(q_kv, head_dim)
+    sign = bit1.to(torch.float32) * 2.0 - 1.0
+
+    mse_norm = meta[..., 0]
+    qjl_norm = meta[..., 1]
+
+    c = centroids[idx3]
+    y_hat = c + qjl_norm.unsqueeze(-1) * sign
+    x_hat = torch.matmul(y_hat, Pi)
+    x_hat = x_hat * mse_norm.unsqueeze(-1)
+    return x_hat
+
 
 class TestTurboQuantMSE:
     """Verify TurboQuant MSE quantization-dequantization correctness.
@@ -277,3 +355,89 @@ class TestTurboQuantMSE:
 
         torch.testing.assert_close(r1, r2)
         print('  determinism: OK')
+
+
+class TestTurboQuantQJL4:
+    """Verify 4bit TurboQuant reference with 3bit MSE + 1bit QJL."""
+
+    @pytest.fixture
+    def head_dim(self):
+        yield 128
+
+    @pytest.fixture
+    def n_vectors(self):
+        yield 100
+
+    def test_quant_dequant_roundtrip(self, head_dim, n_vectors):
+        torch.manual_seed(42)
+        x = torch.randn(n_vectors, head_dim).cuda()
+
+        q_x, meta = quant_turboquant_qjl4(x)
+
+        assert q_x.shape == (n_vectors, head_dim // 2)
+        assert meta.shape == (n_vectors, 2)
+
+        idx3, bit1 = _unpack_qjl4_nibbles(q_x, head_dim)
+        assert idx3.min().item() >= 0
+        assert idx3.max().item() <= 7
+        assert bit1.min().item() >= 0
+        assert bit1.max().item() <= 1
+
+        print(f'  qjl4: mse_norm range=[{meta[:,0].min():.3f}, {meta[:,0].max():.3f}]')
+        print(f'  qjl4: qjl_norm range=[{meta[:,1].min():.3f}, {meta[:,1].max():.3f}]')
+
+    def test_reconstruction_quality(self, head_dim, n_vectors):
+        torch.manual_seed(42)
+        x = torch.randn(n_vectors, head_dim).cuda()
+        x = x / torch.norm(x, dim=-1, keepdim=True)
+
+        q_x, meta = quant_turboquant_qjl4(x)
+        x_reconstructed = dequantize_turboquant_qjl4(q_x, meta)
+
+        x_norm = x / (x.norm(dim=-1, keepdim=True) + 1e-10)
+        recon_norm = x_reconstructed / (x_reconstructed.norm(dim=-1, keepdim=True) + 1e-10)
+        cos_sim = (x_norm * recon_norm).sum(dim=-1).mean().item()
+        mse = ((x - x_reconstructed)**2).mean().item()
+
+        print(f'  qjl4: mse={mse:.6f}, cos_sim={cos_sim:.4f}')
+
+        # This is a test-side reference construction, so use a moderate threshold first.
+        assert cos_sim > 0.86, f'QJL4 cosine similarity {cos_sim} too low'
+
+    def test_qjl4_not_worse_than_3bit_mse(self, head_dim, n_vectors):
+        torch.manual_seed(42)
+        x = torch.randn(n_vectors, head_dim).cuda()
+        x = x / torch.norm(x, dim=-1, keepdim=True)
+
+        # Pure 3bit MSE baseline
+        Pi = _get_rotation_matrix(head_dim, device=str(x.device))
+        centroids3, boundaries3 = _get_lloyd_max_codebook(head_dim, bits=3, device=str(x.device))
+        y = torch.matmul(x, Pi.T)
+        idx3 = torch.searchsorted(boundaries3, y.contiguous()).clamp(0, 7)
+        y3 = centroids3[idx3]
+        x3 = torch.matmul(y3, Pi)
+
+        mse_3bit = ((x - x3)**2).mean().item()
+
+        q_x, meta = quant_turboquant_qjl4(x)
+        x4 = dequantize_turboquant_qjl4(q_x, meta)
+        mse_qjl4 = ((x - x4)**2).mean().item()
+
+        print(f'  3bit_mse={mse_3bit:.6f}, qjl4={mse_qjl4:.6f}')
+        assert mse_qjl4 <= mse_3bit * 1.05, 'QJL4 should not be significantly worse than pure 3bit MSE'
+
+    def test_determinism(self, head_dim):
+        torch.manual_seed(42)
+        x = torch.randn(10, head_dim).cuda()
+
+        q1, m1 = quant_turboquant_qjl4(x)
+        q2, m2 = quant_turboquant_qjl4(x)
+
+        torch.testing.assert_close(q1, q2)
+        torch.testing.assert_close(m1, m2)
+
+        r1 = dequantize_turboquant_qjl4(q1, m1)
+        r2 = dequantize_turboquant_qjl4(q2, m2)
+
+        torch.testing.assert_close(r1, r2)
+        print('  qjl4 determinism: OK')
