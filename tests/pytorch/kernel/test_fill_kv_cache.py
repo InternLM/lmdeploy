@@ -3,6 +3,8 @@ import math
 import pytest
 import torch
 
+from lmdeploy.messages import QuantPolicy
+
 # Import common TurboQuant utilities from turboquant_utils
 from .turboquant_utils import (
     _div_up,
@@ -120,7 +122,6 @@ class TestFillKVCache:
         v_caches = v_caches.clone()
         splited_k_states = k_states.split(seq_lens)
         splited_v_states = v_states.split(seq_lens)
-
         for bidx in range(batch_size):
             k_state = splited_k_states[bidx]
             v_state = splited_v_states[bidx]
@@ -136,7 +137,6 @@ class TestFillKVCache:
                 fill_end = fill_start + fill_size
                 k_caches[boff, fill_start:fill_end] = tmp_ks
                 v_caches[boff, fill_start:fill_end] = tmp_vs
-
                 k_state = k_state[fill_size:]
                 v_state = v_state[fill_size:]
                 block_id += 1
@@ -195,30 +195,25 @@ class TestFillKVCacheInt8(TestFillKVCache):
            k_scales_zeros, v_scales_zeros, nbits):
         k_states, k_states_sz = quant(k_states, nbits)
         v_states, v_states_sz = quant(v_states, nbits)
-
         batch_size = len(seq_lens)
         k_caches = k_caches.clone()
         v_caches = v_caches.clone()
         k_scales_zeros = k_scales_zeros.clone()
         v_scales_zeros = v_scales_zeros.clone()
-
         splited_k_states = k_states.split(seq_lens)
         splited_v_states = v_states.split(seq_lens)
         splited_k_states_sz = k_states_sz.split(seq_lens)
         splited_v_states_sz = v_states_sz.split(seq_lens)
-
         for bidx in range(batch_size):
             k_state = splited_k_states[bidx]
             v_state = splited_v_states[bidx]
             k_state_sz = splited_k_states_sz[bidx]
             v_state_sz = splited_v_states_sz[bidx]
-
             h_len = history_lens[bidx]
             b_offs = block_offsets[bidx]
             block_id = _div_up(h_len + 1, block_size) - 1
             fill_start = h_len % block_size
             fill_size = min(block_size - fill_start, k_state.size(0))
-
             while True:
                 boff = b_offs[block_id]
                 tmp_ks = k_state[:fill_size]
@@ -226,17 +221,14 @@ class TestFillKVCacheInt8(TestFillKVCache):
                 tmp_ks_sz = k_state_sz[:fill_size]
                 tmp_vs_sz = v_state_sz[:fill_size]
                 fill_end = fill_start + fill_size
-
                 k_caches[boff, fill_start:fill_end] = tmp_ks
                 v_caches[boff, fill_start:fill_end] = tmp_vs
                 k_scales_zeros[boff, fill_start:fill_end] = tmp_ks_sz
                 v_scales_zeros[boff, fill_start:fill_end] = tmp_vs_sz
-
                 k_state = k_state[fill_size:]
                 v_state = v_state[fill_size:]
                 k_state_sz = k_state_sz[fill_size:]
                 v_state_sz = v_state_sz[fill_size:]
-
                 block_id += 1
                 fill_start = 0
                 fill_size = min(block_size, k_state.size(0))
@@ -295,7 +287,7 @@ class TestFillKVCacheInt4(TestFillKVCacheInt8):
 
 
 class TestFillKVCacheInt42(TestFillKVCacheInt4):
-    """quant_policy == 42:
+    """quant_policy == QuantPolicy.TURBO_QUANT:
 
     - K: QJL4 = 3bit MSE + 1bit QJL
     - V: TurboQuant MSE int2
@@ -426,7 +418,8 @@ class TestFillKVCacheInt42(TestFillKVCacheInt4):
         assert cos > 0.80, f'QJL4 reference cosine too low: {cos}'
 
     def test_fill_kv_cache_quant42_vs_python_reference(self):
-        """Test fill_kv_cache with quant_policy=42 against Python reference.
+        """Test fill_kv_cache with quant_policy=QuantPolicy.TURBO_QUANT against
+        Python reference.
 
         This test verifies that the fill_kv_cache kernel produces the same quantized output as the Python reference
         implementation.
@@ -434,9 +427,9 @@ class TestFillKVCacheInt42(TestFillKVCacheInt4):
         From debug.py: compares runtime fill_kv_cache output with Python reference quantization for the written tokens.
         """
         from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import (
-            _get_lloyd_max_codebook,
-            butterfly_rotate,
             fill_kv_cache,
+            get_lloyd_max_codebook,
+            hadamard_rotate,
         )
 
         torch.manual_seed(123)
@@ -493,7 +486,7 @@ class TestFillKVCacheInt42(TestFillKVCacheInt4):
             block_offsets,
             k_scales_zeros=blocked_ksz,
             v_scales_zeros=blocked_vsz,
-            quant_policy=42,
+            quant_policy=QuantPolicy.TURBO_QUANT,
         )
 
         # Python reference quantization - only for the last token (the one being written)
@@ -502,10 +495,10 @@ class TestFillKVCacheInt42(TestFillKVCacheInt4):
 
         # Quantize K using QJL4 - only for last token
         head_dim = k_dim
-        centroids, boundaries = _get_lloyd_max_codebook(head_dim, 3, device=device)
+        centroids, boundaries = get_lloyd_max_codebook(head_dim, 3, device=device)
         mse_norm = last_k.float().norm(dim=-1, keepdim=True)
         kv_unit = last_k.float() / (mse_norm + 1e-10)
-        y = butterfly_rotate(kv_unit)
+        y = hadamard_rotate(kv_unit)
         idx3 = torch.searchsorted(boundaries, y.contiguous()).clamp(0, 7).long()
         c = centroids[idx3]
         residual = y - c
@@ -517,10 +510,10 @@ class TestFillKVCacheInt42(TestFillKVCacheInt4):
         ref_k_meta = torch.cat([mse_norm, qjl_norm], dim=-1)
 
         # Quantize V using MSE int2 - only for last token
-        _, boundaries_v = _get_lloyd_max_codebook(v_dim, 2, device=device)
+        _, boundaries_v = get_lloyd_max_codebook(v_dim, 2, device=device)
         v_norms = last_v.float().norm(dim=-1, keepdim=True)
         v_unit = last_v.float() / (v_norms + 1e-10)
-        y_v = butterfly_rotate(v_unit)
+        y_v = hadamard_rotate(v_unit)
         indices_v = torch.searchsorted(boundaries_v, y_v.contiguous()).clamp(0, 3)
         q1, q2, q3, q4 = indices_v.split(indices_v.shape[-1] // 4, dim=-1)
         ref_v_q = (q1 + q2 * 4 + q3 * 16 + q4 * 64).to(torch.uint8)
@@ -621,7 +614,6 @@ class TestFillKVCacheBlockedFP8(TestFillKVCache):
 
         k_states = k_states.flatten(0, -2)
         v_states = v_states.flatten(0, -2)
-
         quant_k, quant_ks = quant_fp8(k_states, group_size=group_size, dtype=quant_dtype, scale_fmt=scale_fmt)
         quant_v, quant_vs = quant_fp8(v_states, group_size=group_size, dtype=quant_dtype, scale_fmt=scale_fmt)
 
@@ -638,25 +630,20 @@ class TestFillKVCacheBlockedFP8(TestFillKVCache):
         out_ks = []
         out_v = []
         out_vs = []
-
         q_seqlens = cu_seqlen_q[1:] - cu_seqlen_q[:-1]
-
         for bidx in range(batch_size):
             seqlen = q_seqlens[bidx].item()
             kv_len = kv_seqlens[bidx].item()
             start = kv_len - seqlen
             end = kv_len
-
             k = k_caches[block_offsets[bidx]].reshape(-1, k_caches.size(-2), k_caches.size(-1))
             ks = ks_caches[block_offsets[bidx]].reshape(-1, ks_caches.size(-2), ks_caches.size(-1))
             v = v_caches[block_offsets[bidx]].reshape(-1, v_caches.size(-2), v_caches.size(-1))
             vs = vs_caches[block_offsets[bidx]].reshape(-1, vs_caches.size(-2), vs_caches.size(-1))
-
             out_k.append(k[start:end])
             out_ks.append(ks[start:end])
             out_v.append(v[start:end])
             out_vs.append(vs[start:end])
-
         out_k = torch.cat(out_k, dim=0)
         out_ks = torch.cat(out_ks, dim=0)
         out_v = torch.cat(out_v, dim=0)
@@ -672,7 +659,6 @@ class TestFillKVCacheBlockedFP8(TestFillKVCache):
     def test_fill_kv_cache(self, k_states, v_states, k_caches, v_caches, ks_caches, vs_caches, block_offsets,
                            cu_seqlen_q, kv_seq_length, max_q_seq_length, gt, group_size, scale_fmt):
         from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache_blocked_fp8
-
         fill_kv_cache_blocked_fp8(k_states,
                                   v_states,
                                   k_caches,
@@ -685,22 +671,17 @@ class TestFillKVCacheBlockedFP8(TestFillKVCache):
                                   block_offsets=block_offsets,
                                   group_size=group_size,
                                   scale_fmt=scale_fmt)
-
         gt_k, gt_ks, gt_v, gt_vs = gt
-
         # uncache
         out_k, out_ks, out_v, out_vs = self.uncache(k_caches, ks_caches, v_caches, vs_caches, cu_seqlen_q,
                                                     kv_seq_length, block_offsets)
-
         out_k = out_k / out_k.max()
         gt_k = gt_k.float()
         gt_k = gt_k / gt_k.max()
-
         out_v = out_v.float()
         out_v = out_v / out_v.max()
         gt_v = gt_v.float()
         gt_v = gt_v / gt_v.max()
-
         torch.testing.assert_close(out_k, gt_k)
         torch.testing.assert_close(out_ks, gt_ks)
         torch.testing.assert_close(out_v, gt_v)

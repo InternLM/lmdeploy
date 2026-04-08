@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass, field, fields
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
@@ -9,6 +9,7 @@ from torch.profiler import record_function
 
 # from torch import distributed as dist
 import lmdeploy.pytorch.distributed as dist
+from lmdeploy.messages import QuantPolicy
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.config import CacheConfig, DLLMConfig, ModelConfig, QuantizationConfig
 from lmdeploy.pytorch.multimodal.data_type import MultiModalData
@@ -278,7 +279,7 @@ class StepContext:
     input_multimodals: list[MultiModalData] | None = None
     vision_inputs: VisionModelInputs | None = None
     attn_metadata: Any = None
-    kv_quant_policy: Literal[0, 4, 8, 42] = 0
+    kv_quant_policy: QuantPolicy = 0
     model_metas: list[dict[str, Any]] | None = None
     dp_meta: DPMeta | None = None
     enable_microbatch: bool = False
@@ -306,7 +307,7 @@ class StepContext:
         cache_config: CacheConfig,
         kv_caches: list | None = None,
         state_caches: list | None = None,
-        kv_quant_policy: Literal[0, 4, 8, 42] = 0,
+        kv_quant_policy: QuantPolicy = 0,
     ):
         """Build step context.
 
@@ -444,7 +445,7 @@ class StepContextManager(CtxMgrBase[StepContext]):
         cache_config: CacheConfig,
         kv_caches: list | None = None,
         state_caches: list | None = None,
-        kv_quant_policy: Literal[0, 4, 8, 42] = 0,
+        kv_quant_policy: QuantPolicy = 0,
     ):
         """Build context."""
         return StepContext.new(

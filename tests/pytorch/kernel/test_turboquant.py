@@ -1,7 +1,7 @@
-"""Tests for TurboQuant (quant_policy=42).
+"""Tests for TurboQuant (quant_policy=QuantPolicy.TURBO_QUANT).
 
 This module contains kernel-level tests for TurboQuant MSE quantization,
-which is used by quant_policy=42 (K=4bit, V=2bit mixed precision).
+which is used by quant_policy=QuantPolicy.TURBO_QUANT (K=4bit, V=2bit mixed precision).
 
 TurboQuant is a quantization method that:
 - Uses Lloyd-Max algorithm for optimal quantization
@@ -14,9 +14,9 @@ import math
 import pytest
 import torch
 
-from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import (
-    _get_lloyd_max_codebook,
-    _get_rotation_matrix,
+from lmdeploy.pytorch.kernels.cuda.turbo_quant import (
+    _get_hadamard_matrix,
+    get_lloyd_max_codebook,
 )
 
 
@@ -46,10 +46,10 @@ def quant_turboquant_mse(kv: torch.Tensor, nbits: int):
     device = str(kv.device)
 
     # Get rotation matrix
-    Pi = _get_rotation_matrix(head_dim, device=device)
+    Pi = _get_hadamard_matrix(head_dim, device=device)
 
     # Get Lloyd-Max codebook
-    centroids, boundaries = _get_lloyd_max_codebook(head_dim, nbits, device=device)
+    centroids, boundaries = get_lloyd_max_codebook(head_dim, nbits, device=device)
     # boundaries now contains n_levels - 1 boundaries directly
     decision_boundaries = boundaries  # (n_levels - 1,)
 
@@ -95,8 +95,8 @@ def quant_turboquant_qjl4(kv: torch.Tensor):
     head_dim = kv.shape[-1]
     device = str(kv.device)
 
-    Pi = _get_rotation_matrix(head_dim, device=device)
-    centroids, boundaries = _get_lloyd_max_codebook(head_dim, bits=3,device=device)
+    Pi = _get_hadamard_matrix(head_dim, device=device)
+    centroids, boundaries = get_lloyd_max_codebook(head_dim, bits=3,device=device)
 
     mse_norm = kv.norm(dim=-1, keepdim=True)  # (..., 1)
     kv_unit = kv / (mse_norm + 1e-10)
@@ -201,10 +201,10 @@ def dequantize_turboquant_mse(q_kv: torch.Tensor, norms: torch.Tensor, nbits: in
     device = str(q_kv.device)
 
     # Get rotation matrix
-    Pi = _get_rotation_matrix(head_dim, device=device)
+    Pi = _get_hadamard_matrix(head_dim, device=device)
 
     # Get Lloyd-Max codebook
-    centroids, _ = _get_lloyd_max_codebook(head_dim, nbits, device=device)
+    centroids, _ = get_lloyd_max_codebook(head_dim, nbits, device=device)
 
     # Unpack indices
     indices = _unpack_indices(q_kv, nbits, head_dim)
@@ -226,8 +226,8 @@ def dequantize_turboquant_qjl4(q_kv: torch.Tensor, meta: torch.Tensor):
     head_dim = q_kv.shape[-1] * 2
     device = str(q_kv.device)
 
-    Pi = _get_rotation_matrix(head_dim, device=device)
-    centroids, _ = _get_lloyd_max_codebook(head_dim, bits=3, device=device)
+    Pi = _get_hadamard_matrix(head_dim, device=device)
+    centroids, _ = get_lloyd_max_codebook(head_dim, bits=3, device=device)
 
     idx3, bit1 = _unpack_qjl4_nibbles(q_kv, head_dim)
     sign = bit1.to(torch.float32) * 2.0 - 1.0
@@ -245,7 +245,7 @@ def dequantize_turboquant_qjl4(q_kv: torch.Tensor, meta: torch.Tensor):
 class TestTurboQuantMSE:
     """Verify TurboQuant MSE quantization-dequantization correctness.
 
-    These tests verify the core TurboQuant MSE algorithm used by quant_policy=42.
+    These tests verify the core TurboQuant MSE algorithm used by quant_policy=QuantPolicy.TURBO_QUANT.
     """
 
     @pytest.fixture
@@ -410,8 +410,8 @@ class TestTurboQuantQJL4:
         x = x / torch.norm(x, dim=-1, keepdim=True)
 
         # Pure 3bit MSE baseline
-        Pi = _get_rotation_matrix(head_dim, device=str(x.device))
-        centroids3, boundaries3 = _get_lloyd_max_codebook(head_dim, bits=3, device=str(x.device))
+        Pi = _get_hadamard_matrix(head_dim, device=str(x.device))
+        centroids3, boundaries3 = get_lloyd_max_codebook(head_dim, bits=3, device=str(x.device))
         y = torch.matmul(x, Pi.T)
         idx3 = torch.searchsorted(boundaries3, y.contiguous()).clamp(0, 7)
         y3 = centroids3[idx3]

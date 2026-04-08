@@ -1,9 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass
-from typing import Literal
 
 import torch
 
+from lmdeploy.messages import QuantPolicy
 from lmdeploy.pytorch.backends.attention import AttentionImpl, AttentionMetadata
 from lmdeploy.utils import get_logger
 
@@ -40,7 +40,7 @@ class TritonAttentionMetadata(AttentionMetadata):
     q_seqlens: torch.Tensor = None
     kv_start_loc: torch.Tensor = None
     kv_seqlens: torch.Tensor = None
-    quant_policy: Literal[0, 4, 8, 42] = 0
+    quant_policy: QuantPolicy = 0
     kv_flatten_size: int = None
     # flash mla
     tile_scheduler_metadata: torch.Tensor = None
@@ -279,15 +279,15 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             flatten_kv_layout=kv_layout,
         )
 
-        # For quant_policy==42, flattened K/V are in rotated domain.
+        # For quant_policy==QuantPolicy.TURBO_QUANT, flattened K/V are in rotated domain.
         # Rotate Q to match, and inverse-rotate output afterwards.
-        if quant_policy == 42:
-            from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import (
-                butterfly_rotate,
-                butterfly_rotate_inv,
+        if quant_policy == QuantPolicy.TURBO_QUANT:
+            from lmdeploy.pytorch.kernels.cuda.turbo_quant import (
+                hadamard_rotate,
+                hadamard_rotate_inv,
             )
             orig_dtype = query.dtype
-            query = butterfly_rotate(query.float()).to(orig_dtype)
+            query = hadamard_rotate(query.float()).to(orig_dtype)
 
         attn_output = self.flash_attention_fwd(
             query,
@@ -309,8 +309,8 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         )
 
         # Inverse-rotate output back to original domain
-        if quant_policy == 42:
-            attn_output = butterfly_rotate_inv(
+        if quant_policy == QuantPolicy.TURBO_QUANT:
+            attn_output = hadamard_rotate_inv(
                 attn_output.float()
             ).to(orig_dtype)
 

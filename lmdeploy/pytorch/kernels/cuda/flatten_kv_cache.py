@@ -1,12 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Literal
 
 import torch
 import triton
 import triton.language as tl
 from torch import Tensor
 
-from .fill_kv_cache import _get_lloyd_max_codebook
+from lmdeploy.messages import QuantPolicy
+
+from .turbo_quant import get_lloyd_max_codebook
 
 
 @triton.jit
@@ -252,7 +253,7 @@ def flatten_kv_cache(k_caches: Tensor,
                      out_dtype: torch.dtype = None,
                      k_scales_zeros: Tensor = None,
                      v_scales_zeros: Tensor = None,
-                     quant_policy: Literal[0, 4, 8, 42] = 0,
+                     quant_policy: QuantPolicy = 0,
                      kv_layout: str = 'bshd',
                      flatten_kv_layout: str = 'hsd'):
     """Recovery paged kv cache to normal kv cache."""
@@ -349,9 +350,9 @@ def flatten_kv_cache(k_caches: Tensor,
     else:
         if quant_policy == 42:
             # K = QJL4 => 3bit centroid codebook
-            k_codebook, _ = _get_lloyd_max_codebook(k_head_dim, bits=3, device=k_caches.device)
+            k_codebook, _ = get_lloyd_max_codebook(k_head_dim, bits=3, device=k_caches.device)
             # V = TurboQuant MSE int2 => 2bit centroid codebook
-            v_codebook, _ = _get_lloyd_max_codebook(v_head_dim, bits=2, device=v_caches.device)
+            v_codebook, _ = get_lloyd_max_codebook(v_head_dim, bits=2, device=v_caches.device)
         else:
             k_codebook = torch.empty((1,), device=k_caches.device, dtype=torch.float32)
             v_codebook = torch.empty((1,), device=v_caches.device, dtype=torch.float32)

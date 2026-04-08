@@ -1,6 +1,8 @@
 import pytest
 import torch
 
+from lmdeploy.messages import QuantPolicy
+
 # Import common TurboQuant utilities from turboquant_utils
 from .turboquant_utils import (
     _div_up,
@@ -246,13 +248,14 @@ class TestFlattenKVCacheMLAFP8(TestFlattenKVCache):
 
 
 # =============================================================================
-# Tests for quant_policy=42 (TurboQuant) flatten_kv_cache
+# Tests for quant_policy=QuantPolicy.TURBO_QUANT (TurboQuant) flatten_kv_cache
 # =============================================================================
 
 class TestFlattenKVCacheQuant42:
-    """Test flatten_kv_cache with quant_policy=42 (TurboQuant).
+    """Test flatten_kv_cache with quant_policy=QuantPolicy.TURBO_QUANT
+    (TurboQuant).
 
-    quant_policy=42 uses:
+    quant_policy=QuantPolicy.TURBO_QUANT uses:
     - K: QJL4 (3bit MSE + 1bit QJL), stored in rotate domain
     - V: TurboQuant MSE int2, stored in rotate domain
 
@@ -352,20 +355,20 @@ class TestFlattenKVCacheQuant42:
 
     def test_flatten_kv_cache_quant42(self, k_caches, v_caches, kv_seqlens, block_offsets, k_scales_zeros,
                                        v_scales_zeros, out_dtype, head_dim, head_dim_v, num_heads):
-        """Test flatten_kv_cache with quant_policy=42.
+        """Test flatten_kv_cache with quant_policy=QuantPolicy.TURBO_QUANT.
 
         This test verifies that:
         1. The flatten function runs without error
         2. Output shape is correct
         3. Output is in the rotate domain (verified by dequantizing)
         """
-        from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import (
-            butterfly_rotate_inv,
-        )
         from lmdeploy.pytorch.kernels.cuda.flatten_kv_cache import flatten_kv_cache
+        from lmdeploy.pytorch.kernels.cuda.turbo_quant import (
+            hadamard_rotate_inv,
+        )
 
 
-        # Run flatten with quant_policy=42
+        # Run flatten with quant_policy=QuantPolicy.TURBO_QUANT
         k_states, v_states = flatten_kv_cache(
             k_caches,
             v_caches,
@@ -373,7 +376,7 @@ class TestFlattenKVCacheQuant42:
             block_offsets,
             k_scales_zeros=k_scales_zeros,
             v_scales_zeros=v_scales_zeros,
-            quant_policy=42,
+            quant_policy=QuantPolicy.TURBO_QUANT,
             kv_layout='bshd',
             flatten_kv_layout='shd',
             out_dtype=out_dtype,
@@ -388,8 +391,8 @@ class TestFlattenKVCacheQuant42:
 
         # Verify output is in rotate domain by checking that inverse rotation
         # produces reasonable values (not all zeros or NaNs)
-        k_orig = butterfly_rotate_inv(k_states.float())
-        v_orig = butterfly_rotate_inv(v_states.float())
+        k_orig = hadamard_rotate_inv(k_states.float())
+        v_orig = hadamard_rotate_inv(v_states.float())
 
         # Check that inverse rotation produces non-zero values
         assert k_orig.abs().max() > 1e-6, 'K inverse rotation produced all zeros'

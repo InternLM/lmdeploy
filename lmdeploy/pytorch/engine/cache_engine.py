@@ -4,7 +4,6 @@ import json
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal
 
 import torch
 
@@ -20,6 +19,7 @@ from lmdeploy.pytorch.disagg.messages import (
 )
 from lmdeploy.utils import get_logger
 
+from ...messages import QuantPolicy
 from ..config import CacheConfig, ModelConfig
 
 KVCache = tuple[torch.Tensor, torch.Tensor]
@@ -140,7 +140,7 @@ class CacheEngine:
                                   block_size: int,
                                   head_size: int,
                                   world_size: int = 1,
-                                  quant_policy: Literal[0, 4, 8, 42] = 0):
+                                  quant_policy: QuantPolicy = 0):
         """Get single block shape."""
         attn_backend = get_backend()
         dtype = model_config.dtype
@@ -155,7 +155,8 @@ class CacheEngine:
         if model_config.use_mla_fp8_cache:
             return (block_size, num_heads, MLA_FP8_HEAD_DIM)
 
-        if quant_policy == 4 or quant_policy == 42:  # pack head_dim to uint8 (4-bit)
+        # pack head_dim to uint8 (4-bit)
+        if quant_policy == QuantPolicy.INT4 or quant_policy == QuantPolicy.TURBO_QUANT:
             assert head_size % 2 == 0, \
                 f'head_size: {head_size}, quant_policy: {quant_policy}'
             head_size = head_size // 2
@@ -167,7 +168,7 @@ class CacheEngine:
                                     block_size: int,
                                     head_size: int,
                                     world_size: int = 1,
-                                    quant_policy: Literal[0, 4, 8, 42] = 0):
+                                    quant_policy: QuantPolicy = 0):
         """Get single block shape."""
         attn_backend = get_backend()
         dtype = model_config.dtype
@@ -183,11 +184,11 @@ class CacheEngine:
             # flash mla shared key and value
             return (block_size, num_heads, 0)
 
-        if quant_policy == 42:  # pack head_dim to uint8 (2-bit for V cache)
+        if quant_policy == QuantPolicy.TURBO_QUANT:  # pack head_dim to uint8 (2-bit for V cache)
             assert head_size % 4 == 0, \
                 f'head_size: {head_size}, quant_policy: {quant_policy}'
             head_size = head_size // 4
-        elif quant_policy == 4:  # pack head_dim to uint8 (4-bit)
+        elif quant_policy == QuantPolicy.INT4:  # pack head_dim to uint8 (4-bit)
             assert head_size % 2 == 0, \
                 f'head_size: {head_size}, quant_policy: {quant_policy}'
             head_size = head_size // 2
@@ -209,7 +210,7 @@ class CacheEngine:
         )
         shape = list(shape)
         dtype = _get_kv_cache_dtype(model_config)
-        if cache_config.quant_policy in (4, 8, 42):
+        if cache_config.quant_policy in (QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT):
             dtype = torch.uint8
         return CacheDesc(shape=shape, dtype=dtype)
 
@@ -228,7 +229,7 @@ class CacheEngine:
         )
         shape = list(shape)
         dtype = _get_kv_cache_dtype(model_config)
-        if cache_config.quant_policy in (4, 8, 42):
+        if cache_config.quant_policy in (QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT):
             dtype = torch.uint8
         return CacheDesc(shape=shape, dtype=dtype)
 
@@ -236,13 +237,13 @@ class CacheEngine:
     def get_quant_cache_descs(cls, k_cache_desc: CacheDesc, v_cache_desc: CacheDesc, model_config: ModelConfig,
                               cache_config: CacheConfig):
         """Get quant cache descs."""
-        if cache_config.quant_policy == 0:
+        if cache_config.quant_policy == QuantPolicy.NONE:
             return []
 
         dtype = model_config.dtype
-        # For quant_policy==42, K uses 4-bit quantization (has MSE norm and QJL norm),
+        # For quant_policy==QuantPolicy.TURBO_QUANT, K uses 4-bit quantization (has MSE norm and QJL norm),
         # V uses 2-bit quantization (only has MSE norm)
-        if cache_config.quant_policy == 42:
+        if cache_config.quant_policy == QuantPolicy.TURBO_QUANT:
             key_scale_zero_shape = k_cache_desc.shape[:-1] + [2]
             val_scale_zero_shape = v_cache_desc.shape[:-1] + [1]
         else:

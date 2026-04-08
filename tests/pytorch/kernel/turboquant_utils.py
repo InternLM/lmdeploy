@@ -1,11 +1,12 @@
-"""Common test utilities for TurboQuant (quant_policy=42) kernel tests.
+"""Common test utilities for TurboQuant (quant_policy=QuantPolicy.TURBO_QUANT)
+kernel tests.
 
 This module contains shared helper functions for testing TurboQuant quantization,
-which is used by quant_policy=42 (K=4bit, V=2bit mixed precision).
+which is used by quant_policy=QuantPolicy.TURBO_QUANT (K=4bit, V=2bit mixed precision).
 
 TurboQuant is a quantization method that:
 - Uses Lloyd-Max algorithm for optimal quantization
-- Applies random/butterfly rotation for better distribution
+- Applies Hadamard rotation for better distribution
 - Stores only L2 norms (not scales/zeros) for dequantization
 """
 
@@ -13,10 +14,10 @@ import math
 
 import torch
 
-from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import (
-    _get_lloyd_max_codebook,
-    butterfly_rotate,
-    butterfly_rotate_inv,
+from lmdeploy.pytorch.kernels.cuda.turbo_quant import (
+    get_lloyd_max_codebook,
+    hadamard_rotate,
+    hadamard_rotate_inv,
 )
 
 
@@ -69,18 +70,18 @@ def quant_turboquant_mse(kv: torch.Tensor, nbits: int):
     head_dim = kv.shape[-1]
     device = str(kv.device)
 
-    # Get rotation matrix (butterfly rotation)
-    y = butterfly_rotate(kv.float())
+    # Get Hadamard rotation matrix
+    y = hadamard_rotate(kv.float())
 
     # Get Lloyd-Max codebook
-    _, boundaries = _get_lloyd_max_codebook(head_dim, nbits, device=device)
+    _, boundaries = get_lloyd_max_codebook(head_dim, nbits, device=device)
 
     # Compute L2 norms
     norms = kv.float().norm(dim=-1, keepdim=True)
 
     # Normalize to unit sphere
     kv_unit = kv.float() / (norms + 1e-10)
-    y = butterfly_rotate(kv_unit)
+    y = hadamard_rotate(kv_unit)
 
     # Quantize: find nearest centroid via searchsorted
     indices = torch.searchsorted(boundaries, y.contiguous())
@@ -112,14 +113,14 @@ def quant_turboquant_qjl4(kv: torch.Tensor):
     device = str(kv.device)
 
     # Get Lloyd-Max codebook (3-bit)
-    centroids, boundaries = _get_lloyd_max_codebook(head_dim, 3, device=device)
+    centroids, boundaries = get_lloyd_max_codebook(head_dim, 3, device=device)
 
     # Compute MSE norm
     mse_norm = kv.float().norm(dim=-1, keepdim=True)
     kv_unit = kv.float() / (mse_norm + 1e-10)
 
-    # Apply butterfly rotation
-    y = butterfly_rotate(kv_unit)
+    # Apply hadamard rotation
+    y = hadamard_rotate(kv_unit)
 
     # Quantize: find nearest centroid
     idx3 = torch.searchsorted(boundaries, y.contiguous()).clamp(0, 7).long()
@@ -153,7 +154,7 @@ def dequantize_turboquant_mse(q_kv: torch.Tensor, norms: torch.Tensor, nbits: in
     # First dequantize to rotate domain
     y_hat = dequantize_turboquant_mse_rot(q_kv, norms, nbits)
     # Then inverse rotate to original domain
-    x_hat = butterfly_rotate_inv(y_hat)
+    x_hat = hadamard_rotate_inv(y_hat)
     return x_hat
 
 
@@ -179,7 +180,7 @@ def dequantize_turboquant_mse_rot(q_kv: torch.Tensor, norms: torch.Tensor, nbits
     device = str(q_kv.device)
 
     # Get Lloyd-Max codebook
-    centroids, _ = _get_lloyd_max_codebook(head_dim, nbits, device=device)
+    centroids, _ = get_lloyd_max_codebook(head_dim, nbits, device=device)
 
     # Unpack indices
     indices = _unpack_indices(q_kv, nbits, head_dim)
@@ -198,7 +199,7 @@ def dequantize_turboquant_qjl4(q_kv: torch.Tensor, meta: torch.Tensor):
     # First dequantize to rotate domain
     y_hat = dequantize_turboquant_qjl4_rot(q_kv, meta)
     # Then inverse rotate to original domain
-    x_hat = butterfly_rotate_inv(y_hat)
+    x_hat = hadamard_rotate_inv(y_hat)
     return x_hat
 
 
@@ -208,7 +209,7 @@ def dequantize_turboquant_qjl4_rot(q_kv: torch.Tensor, meta: torch.Tensor):
     device = str(q_kv.device)
 
     # Get Lloyd-Max codebook (3-bit)
-    centroids, _ = _get_lloyd_max_codebook(head_dim, 3, device=device)
+    centroids, _ = get_lloyd_max_codebook(head_dim, 3, device=device)
 
     # Unpack nibbles
     idx3, bit1 = _unpack_qjl4_nibbles(q_kv, head_dim)

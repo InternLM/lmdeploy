@@ -1,140 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import math
-from typing import Literal
 
 import torch
 import triton
 import triton.language as tl
 from torch import Tensor
 
-_TURBOQUANT_CACHE = {}
+from lmdeploy.messages import QuantPolicy
 
+from .turbo_quant import get_lloyd_max_codebook, hadamard_rotate
 
-def butterfly_rotate(x: Tensor) -> Tensor:
-    """Deterministic orthogonal rotation: y = x @ Q.T"""
-    Q = _get_rotation_matrix(x.shape[-1], device=x.device, dtype=x.dtype)
-    return torch.matmul(x, Q.T)
-
-def butterfly_rotate_inv(x: Tensor) -> Tensor:
-    """
-    Inverse of butterfly_rotate:
-        x = y @ Q
-    Since Q is orthogonal: Q^{-1} = Q.T
-    """
-    Q = _get_rotation_matrix(x.shape[-1], device=x.device, dtype=x.dtype)
-    return torch.matmul(x, Q)
-
-def _get_rotation_matrix(d: int, device: str = 'cuda', dtype=torch.float32):
-    """Get cached orthogonal rotation matrix Q = H @ diag(signs) / sqrt(d).
-
-    Q is orthogonal: Q @ Q.T = I, so Q^{-1} = Q.T.
-
-    Args:
-        d: head dimension (must be power of 2).
-        device: target device.
-        dtype: storage dtype for the matrix.
-
-    Returns:
-        Q: (d, d) tensor.
-    """
-    if d & (d - 1) != 0:
-        raise ValueError(
-            f'Rotation matrix requires power-of-2 dimension, got d={d}'
-        )
-
-    cache_key = (d, device, str(dtype), 'rotation_matrix')
-    if cache_key in _TURBOQUANT_CACHE:
-        return _TURBOQUANT_CACHE[cache_key]
-
-    # Build normalized Hadamard matrix
-    with torch.no_grad():
-        H = torch.tensor([[1.0]], dtype=torch.float32)
-        n = 1
-        while n < d:
-            H = torch.cat([
-                torch.cat([H, H], dim=1),
-                torch.cat([H, -H], dim=1),
-            ], dim=0)
-            n *= 2
-        H = H / math.sqrt(d)
-
-        # Deterministic diagonal signs
-        idx = torch.arange(d)
-        signs = torch.where((idx & 1) == 0, 1.0, -1.0)
-
-        # Q = H @ diag(signs)
-        Q = (H * signs.unsqueeze(0)).to(device=device, dtype=dtype)
-
-    _TURBOQUANT_CACHE[cache_key] = Q
-    return Q
-
-def _get_lloyd_max_codebook(d: int, bits: int, device: str = 'cuda'):
-    """Get precomputed Lloyd-Max codebook for 2-bit, 3-bit and 4-bit.
-
-    The table is baked from the same construction logic as the original
-    implementation under sigma=1, then scaled at runtime by sigma=1/sqrt(d).
-
-    Supported:
-        bits = 2, 3, 4
-    """
-    if bits not in (2, 3, 4):
-        raise NotImplementedError(
-            f'Only 2-bit, 3-bit and 4-bit precomputed codebooks are supported, got bits={bits}'
-        )
-
-    cache_key = (d, bits, device, 'codebook')
-    if cache_key in _TURBOQUANT_CACHE:
-        return _TURBOQUANT_CACHE[cache_key]
-
-    sigma = 1.0 / math.sqrt(d)
-
-    # Precomputed with the original implementation logic at sigma=1:
-    #   - range [-3, 3]
-    #   - uniform midpoint initialization
-    #   - 10 Lloyd-Max iterations
-    if bits == 2:
-        centroids_std = torch.tensor(
-            [-1.5104176, -0.4527808, 0.4527808, 1.5104176],
-            device=device, dtype=torch.float32
-        )
-        boundaries_std = torch.tensor(
-            [-0.9815992, 0.0, 0.9815992],
-            device=device, dtype=torch.float32
-        )
-    elif bits == 3:
-        centroids_std = torch.tensor(
-            [-2.1519456, -1.3439093, -0.7560052, -0.2450942,
-              0.2450942,  0.7560052,  1.3439093,  2.1519456],
-            device=device,
-            dtype=torch.float32,
-        )
-        boundaries_std = torch.tensor(
-            [-1.7479274, -1.0499573, -0.5005497, 0.0,
-              0.5005497,  1.0499573,  1.7479274],
-            device=device,
-            dtype=torch.float32,
-        )
-    else:  # bits == 4
-        centroids_std = torch.tensor(
-            [-2.4175594, -1.7094618, -1.2629677, -0.9265621,
-             -0.6470380, -0.4015197, -0.1756835,  0.0391761,
-              0.2508093,  0.4675656,  0.6996375,  0.9615010,
-              1.2788204,  1.7009784,  2.3481500,  3.0000000],
-            device=device, dtype=torch.float32
-        )
-        boundaries_std = torch.tensor(
-            [-2.0635107, -1.4862148, -1.0947649, -0.7868000,
-             -0.5242788, -0.2886016, -0.0682537,  0.1449927,
-              0.3591875,  0.5836016,  0.8305693,  1.1201607,
-              1.4898994,  2.0245643,  2.6740751],
-            device=device, dtype=torch.float32
-        )
-
-    centroids = centroids_std * sigma
-    boundaries = boundaries_std * sigma
-
-    _TURBOQUANT_CACHE[cache_key] = (centroids, boundaries)
-    return centroids, boundaries
 
 @triton.jit
 def _quant_int8(val):
@@ -780,7 +655,18 @@ def _fill_kv_cache_quant_kernel(
     BLOCK_D: tl.constexpr,
     BLOCK_DV: tl.constexpr,
 ):
-    """Fill kv cache kernel with quant fused."""
+    """Fill kv cache kernel with int4 and int8 quant fuzed.
+
+    Args:
+        stride_xss: stride of sequence length dim of key or value states
+        stride_xsh: stride of head_num dim of key or value states
+        stride_xsh: stride of head_size dim of key or value states
+        stride_xn: stride of page num dim
+        stride_xb: stride of block size dim
+        stride_xh: stride of head_num dim
+        stride_xh: stride of head_num dim
+        stride_xd: stride of head_size dim
+    """
     batch_id = tl.program_id(2)
     head_id = tl.program_id(0)
     block_id = tl.program_id(1)
@@ -875,7 +761,7 @@ def fill_kv_cache(k_states: Tensor,
                   block_offsets: Tensor,
                   k_scales_zeros: Tensor = None,
                   v_scales_zeros: Tensor = None,
-                  quant_policy: Literal[0, 4, 8, 42] = 0,
+                  quant_policy: QuantPolicy = 0,
                   kv_layout: str = 'bshd'):
     """Fill key/value state to cache for paged attention."""
     if kv_layout == 'bshd':
@@ -922,9 +808,9 @@ def fill_kv_cache(k_states: Tensor,
                 f' got raw={raw_k_dim}, packed={head_dim}'
             )
 
-        k_states = butterfly_rotate(k_states).contiguous()
+        k_states = hadamard_rotate(k_states).contiguous()
         BLOCK_D = triton.next_power_of_2(raw_k_dim)
-        k_centroids, k_boundaries = _get_lloyd_max_codebook(raw_k_dim, 3, device=k_states.device)
+        k_centroids, k_boundaries = get_lloyd_max_codebook(raw_k_dim, 3, device=k_states.device)
 
         if v_states.size(-1) > 0:
             raw_v_dim = v_states.size(-1)
@@ -935,9 +821,9 @@ def fill_kv_cache(k_states: Tensor,
                     'TurboQuant V expects v_cache last dim = raw_v_dim/4,'
                     f' got raw={raw_v_dim}, packed={head_dim_v}'
                 )
-            v_states = butterfly_rotate(v_states).contiguous()
+            v_states = hadamard_rotate(v_states).contiguous()
             BLOCK_DV = triton.next_power_of_2(raw_v_dim)
-            v_centroids, v_boundaries = _get_lloyd_max_codebook(raw_v_dim, 2, device=v_states.device)
+            v_centroids, v_boundaries = get_lloyd_max_codebook(raw_v_dim, 2, device=v_states.device)
         else:
             BLOCK_DV = 0
     else:

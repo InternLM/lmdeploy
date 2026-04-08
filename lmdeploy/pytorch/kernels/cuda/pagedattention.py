@@ -2,7 +2,6 @@
 # modify from: https://github.com/ModelTC/lightllm
 import math
 from collections.abc import Sequence
-from typing import Literal
 
 import torch
 import triton
@@ -10,9 +9,10 @@ import triton.language as tl
 from packaging import version
 from torch import Tensor
 
+from lmdeploy.messages import QuantPolicy
 from lmdeploy.utils import get_logger
 
-from .fill_kv_cache import _get_lloyd_max_codebook, butterfly_rotate, butterfly_rotate_inv
+from .turbo_quant import get_lloyd_max_codebook, hadamard_rotate, hadamard_rotate_inv
 from .utils import get_device_props
 
 logger = get_logger('lmdeploy')
@@ -646,7 +646,7 @@ def flash_attn_with_kvcache(
     alibi_slopes: Tensor = None,
     k_scales_zeros: Tensor = None,
     v_scales_zeros: Tensor = None,
-    quant_policy: Literal[0, 4, 8, 42] = 0,
+    quant_policy: QuantPolicy = 0,
     sinks: Tensor = None,
     kv_layout: str = 'bshd',
 ):
@@ -699,7 +699,7 @@ def flash_attn_with_kvcache(
     Lq, Lk, Lv = q.shape[-1], k_cache.shape[d_dim], v_cache.shape[d_dim]
     if quant_policy == 4 or quant_policy == 42:
         # K uses 4-bit: Lq == Lk * 2
-        # For quant_policy==42, V uses 2-bit: raw V dim == Lv * 4
+        # For quant_policy==QuantPolicy.TURBO_QUANT, V uses 2-bit: raw V dim == Lv * 4
         assert Lq == Lk * 2
         if quant_policy == 42:
             o = q.new_empty(q.shape[:-1] + (Lv * 4, ))
@@ -727,12 +727,12 @@ def flash_attn_with_kvcache(
             raise ValueError(f'TurboQuant requires power-of-2 V head dim, got {real_v_dim}')
 
         # K = QJL4 => 3bit centroid codebook
-        turbo_k_codebook, _ = _get_lloyd_max_codebook(real_k_dim, bits=3, device=q.device)
+        turbo_k_codebook, _ = get_lloyd_max_codebook(real_k_dim, bits=3, device=q.device)
         # V = TurboQuant MSE int2 => 2bit centroid codebook
-        turbo_v_codebook, _ = _get_lloyd_max_codebook(real_v_dim, bits=2, device=q.device)
+        turbo_v_codebook, _ = get_lloyd_max_codebook(real_v_dim, bits=2, device=q.device)
 
         # Rotate query into the same domain as quantized K/V
-        q = butterfly_rotate(q.float()).to(orig_q_dtype)
+        q = hadamard_rotate(q.float()).to(orig_q_dtype)
 
     if softmax_scale is None:
         softmax_scale = 1.0 / (Lq**0.5)
@@ -785,7 +785,7 @@ def flash_attn_with_kvcache(
     )
 
     if quant_policy > 0:
-        # For quant_policy==42:
+        # For quant_policy==QuantPolicy.TURBO_QUANT:
         #   k_scales_zeros[..., 0] = mse_norm, k_scales_zeros[..., 1] = qjl_norm
         #   v_scales_zeros[..., 0] = norm
         _fwd_grouped_split_quant_kernel[grid](q,
@@ -908,6 +908,6 @@ def flash_attn_with_kvcache(
                                num_stages=1)
 
     if quant_policy == 42:
-        o = butterfly_rotate_inv(o.float()).to(orig_q_dtype)
+        o = hadamard_rotate_inv(o.float()).to(orig_q_dtype)
 
     return o

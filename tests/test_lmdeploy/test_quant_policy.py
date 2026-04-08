@@ -1,9 +1,8 @@
-"""Test quant_policy=42 (K=4bit, V=2bit mixed precision) for PytorchEngine.
+"""Test quant_policy=QuantPolicy.TURBO_QUANT (K=4bit, V=2bit mixed precision)
+for PytorchEngine.
 
-This module tests both functional correctness and accuracy of quant_policy=42
-against a non-quantized (quant_policy=0) baseline.
-
-Model: Qwen/Qwen3-0.6B (smaller model to avoid OOM in CI environments)
+This module tests both functional correctness and accuracy of quant_policy=QuantPolicy.TURBO_QUANT against a non-
+quantized (quant_policy=QuantPolicy.NONE) baseline.
 """
 
 import gc
@@ -12,10 +11,11 @@ import pytest
 import torch
 
 from lmdeploy import GenerationConfig, PytorchEngineConfig, pipeline
-from lmdeploy.messages import Response
+from lmdeploy.messages import QuantPolicy, Response
 
-# Use smaller model to avoid OOM when running both quant_policy=0 and quant_policy=42
-MODEL_ID = 'Qwen/Qwen3-0.6B'
+# Use smaller model to avoid OOM when running both quant_policy=QuantPolicy.NONE
+# and quant_policy=QuantPolicy.TURBO_QUANT
+MODEL_ID = 'Qwen/Qwen3-8B'
 
 
 # =============================================================================
@@ -37,7 +37,7 @@ def pipe_no_quant(model_id):
     engine_config = PytorchEngineConfig(
         tp=1,
         cache_max_entry_count=0.05,
-        quant_policy=0,  # No quantization
+        quant_policy=QuantPolicy.NONE,  # No quantization
     )
     pipe = pipeline(model_id, backend_config=engine_config, log_level='INFO')
     yield pipe
@@ -51,14 +51,14 @@ def pipe_no_quant(model_id):
 
 @pytest.fixture(scope='session')
 def pipe_quant_42(model_id):
-    """Create pipeline with quant_policy=42.
+    """Create pipeline with quant_policy=QuantPolicy.TURBO_QUANT.
 
     This fixture has session scope to avoid reloading the model for each test. Caller is responsible for cleanup.
     """
     engine_config = PytorchEngineConfig(
         tp=1,
         cache_max_entry_count=0.05,
-        quant_policy=42,  # K=4bit, V=2bit mixed precision
+        quant_policy=QuantPolicy.TURBO_QUANT,  # K=4bit, V=2bit mixed precision
     )
     pipe = pipeline(model_id, backend_config=engine_config, log_level='INFO')
     yield pipe
@@ -71,11 +71,11 @@ def pipe_quant_42(model_id):
 
 
 # =============================================================================
-# Basic Functional Tests (quant_policy=42 only)
+# Basic Functional Tests (quant_policy=QuantPolicy.TURBO_QUANT only)
 # =============================================================================
 
 class TestQuantPolicy42Basic:
-    """Basic functional tests for quant_policy=42.
+    """Basic functional tests for quant_policy=QuantPolicy.TURBO_QUANT.
 
     These tests verify that the quantized model can perform basic inference without errors. They test single prompt,
     batch prompts, and generation config.
@@ -83,11 +83,11 @@ class TestQuantPolicy42Basic:
 
     @pytest.fixture(scope='class')
     def pipe(self):
-        """Create pipeline with quant_policy=42."""
+        """Create pipeline with quant_policy=QuantPolicy.TURBO_QUANT."""
         engine_config = PytorchEngineConfig(
             tp=1,
             cache_max_entry_count=0.1,
-            quant_policy=42,
+            quant_policy=QuantPolicy.TURBO_QUANT,
         )
         pipe = pipeline(MODEL_ID, backend_config=engine_config, log_level='INFO')
         yield pipe
@@ -98,7 +98,8 @@ class TestQuantPolicy42Basic:
             torch.cuda.empty_cache()
 
     def test_infer_single_prompt(self, pipe):
-        """Test single prompt inference with quant_policy=42."""
+        """Test single prompt inference with
+        quant_policy=QuantPolicy.TURBO_QUANT."""
         prompt = 'Hello, how are you?'
         response = pipe.infer(prompt, max_new_tokens=30)
 
@@ -108,7 +109,7 @@ class TestQuantPolicy42Basic:
         assert len(response.text.strip()) > 0
 
     def test_infer_batch_prompts(self, pipe):
-        """Test batch inference with quant_policy=42."""
+        """Test batch inference with quant_policy=QuantPolicy.TURBO_QUANT."""
         prompts = ['What is AI?', 'Hello!']
         responses = pipe.infer(prompts, max_new_tokens=20)
 
@@ -129,14 +130,15 @@ class TestQuantPolicy42Basic:
 
 
 # =============================================================================
-# Accuracy Tests (quant_policy=0 vs quant_policy=42)
+# Accuracy Tests (quant_policy=QuantPolicy.NONE vs quant_policy=QuantPolicy.TURBO_QUANT)
 # =============================================================================
 
 class TestQuantPolicy42Accuracy:
-    """Accuracy tests comparing quant_policy=42 against non-quantized baseline.
+    """Accuracy tests comparing quant_policy=QuantPolicy.TURBO_QUANT against
+    non-quantized baseline.
 
-    These tests verify the numerical accuracy/precision of quant_policy=42
-    (K=4bit, V=2bit mixed precision) by comparing against quant_policy=0.
+    These tests verify the numerical accuracy/precision of quant_policy=QuantPolicy.TURBO_QUANT
+    (K=4bit, V=2bit mixed precision) by comparing against quant_policy=QuantPolicy.NONE.
 
     Error thresholds are relaxed due to aggressive quantization:
     - MAE < 0.1 on logits
