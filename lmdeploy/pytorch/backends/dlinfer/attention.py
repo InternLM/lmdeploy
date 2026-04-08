@@ -18,6 +18,7 @@ class DlinferAttentionMetadata(AttentionMetadata):
     max_kv_seq_len: int = 1
     quant_meta: dict = None
     cu_seq_lens_kv: Tensor | None = None
+    has_initial_state: Tensor | None = None
 
 
 class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
