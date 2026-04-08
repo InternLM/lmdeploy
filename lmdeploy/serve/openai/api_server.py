@@ -1190,6 +1190,7 @@ async def sleep(raw_request: Request = None):
     if level not in (1, 2):
         return create_error_response(HTTPStatus.BAD_REQUEST, 'The "level" query parameter must be 1 or 2.')
     async_engine = VariableInterface.async_engine
+    async_engine.prepare_sleep()
     await async_engine.stop_all_session()
     async_engine.sleep(level)
     return Response(status_code=200)

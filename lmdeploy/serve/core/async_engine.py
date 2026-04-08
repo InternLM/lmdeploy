@@ -236,6 +236,11 @@ class AsyncEngine:
         self.epoch += 1
         await self.session_mgr.async_abort_all()
 
+    def prepare_sleep(self):
+        """Reject new inference requests before backend sleep starts."""
+        self.sleeping_tags = {'weights', 'kv_cache'}
+        self.is_sleeping = True
+
     def sleep(self, level: int = 1):
         """Sleep the model.
 
