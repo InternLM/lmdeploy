@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict, List, Optional
 
 import torch
 from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, AutoProcessor
@@ -13,9 +12,9 @@ logger = get_logger('lmdeploy')
 
 
 class InternVLImagesKwargs(ImagesKwargs, total=False):
-    crop_to_patches: Optional[bool]
-    min_patches: Optional[int]
-    max_patches: Optional[int]
+    crop_to_patches: bool | None
+    min_patches: int | None
+    max_patches: int | None
 
 
 class InternVLProcessorKwargs(ProcessingKwargs, total=False):
@@ -40,7 +39,7 @@ class InternVL3VisionModel(InternVLVisionModel):
     def __init__(self,
                  model_path: str,
                  with_llm: bool = False,
-                 max_memory: Dict[int, int] = None,
+                 max_memory: dict[int, int] = None,
                  hf_config: AutoConfig = None,
                  backend: str = ''):
         super().__init__(model_path, with_llm, max_memory, hf_config, backend)
@@ -83,7 +82,7 @@ class InternVL3VisionModel(InternVLVisionModel):
         # avoid randomness in inference.
         self.model = model.eval()
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refers to `super.preprocess() for spec."""
         from transformers.image_utils import make_flat_list_of_images
         output_kwargs = self.processor._merge_kwargs(
@@ -95,7 +94,7 @@ class InternVL3VisionModel(InternVLVisionModel):
             },
         )
         images = self.collect_multimodal_items(messages)
-        images = [image.convert('RGB') for modality, image, _ in images]
+        images = [image for modality, image, _ in images]
         num_image = len(images)
         images = make_flat_list_of_images(images)
         image_inputs = self.processor.image_processor(images, **output_kwargs['images_kwargs'])
@@ -116,12 +115,12 @@ class InternVL3VisionModel(InternVLVisionModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
-            messages(List[Dict]): the outputs of `preprocess`
+            messages(list[dict]): the outputs of `preprocess`
             max_batch_size(int): the max batch size when forwarding vision
                 model
         Return:

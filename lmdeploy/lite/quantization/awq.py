@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import List
 
 import torch
 
@@ -151,7 +150,7 @@ def get_weight_scale(weight, q_group_size=-1):
 
 @torch.no_grad()
 def smooth_ln_fcs(ln: torch.nn.Module,
-                  fcs: List[torch.nn.Module],
+                  fcs: list[torch.nn.Module],
                   act_scales: torch.Tensor,
                   group_size: int = -1,
                   alpha: float = 0.5) -> torch.Tensor:
@@ -204,7 +203,7 @@ def smooth_ln_fcs(ln: torch.nn.Module,
 
 @torch.no_grad()
 def smooth_fc_fcs(pre_fc: torch.nn.Module,
-                  fcs: List[torch.nn.Module],
+                  fcs: list[torch.nn.Module],
                   act_scales: torch.Tensor,
                   group_size: int = -1,
                   alpha: float = 0.5) -> torch.Tensor:

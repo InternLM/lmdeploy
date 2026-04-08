@@ -55,12 +55,7 @@ fi
 pip install /wheels/*.whl
 pip install dlblas==0.0.7 dlslime==0.0.2.post1
 
-# install pre-built flash attention 3 wheel
-TORCH_VER=$(python3 -c "import torch; print(''.join(torch.__version__.split('+')[0].split('.')))")
-
 pip install ninja einops packaging
-FA3_WHEELS_URL="https://windreamer.github.io/flash-attention3-wheels/${CUDA_VERSION_SHORT}_torch${TORCH_VER}"
-pip install --no-index flash_attn_3 --find-links ${FA3_WHEELS_URL}
 
 # install requirements/serve.txt dependencies such as timm
 if [ -f /tmp/requirements/serve.txt ]; then

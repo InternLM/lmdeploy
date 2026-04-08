@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Dict, List
 
 from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
 
@@ -24,12 +23,11 @@ class MllamaVLModel(VisionModel):
         self.processor = AutoProcessor.from_pretrained(self.model_path)
         self.image_token_id = 128256
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refer to the spec of `super().preprocess`"""
         images = self.collect_multimodal_items(messages)
         outputs = []
         for modality, image, params in images:
-            image = image.convert('RGB')
             results = self.processor.image_processor(images=image, return_tensors='pt')
             results.update(image_size=image.size, image_tokens=1, image_token_id=self.image_token_id)
             outputs.append(results)

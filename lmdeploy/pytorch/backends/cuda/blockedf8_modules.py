@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import List, Optional
 
 import torch
 
@@ -27,11 +26,11 @@ class TritonLinearBlockedF8Impl(LinearBlockedF8Impl):
                 x,
                 weight: torch.Tensor,
                 scale: torch.Tensor,
-                bias: Optional[torch.Tensor] = None,
+                bias: torch.Tensor | None = None,
                 all_reduce: bool = False,
-                group: Optional[dist.ProcessGroup] = None,
+                group: dist.ProcessGroup | None = None,
                 rank: int = 0,
-                scatter_size: List[int] = None):
+                scatter_size: list[int] = None):
         """forward."""
         x_shape = x.shape
         x = x.flatten(0, -2)
@@ -113,11 +112,11 @@ class DeepGemmLinearBlockedF8Impl(LinearBlockedF8Impl):
                 x,
                 weight: torch.Tensor,
                 scale: torch.Tensor,
-                bias: Optional[torch.Tensor] = None,
+                bias: torch.Tensor | None = None,
                 all_reduce: bool = False,
-                group: Optional[dist.ProcessGroup] = None,
+                group: dist.ProcessGroup | None = None,
                 rank: int = 0,
-                scatter_size: List[int] = None):
+                scatter_size: list[int] = None):
         """forward."""
         x_shape = x.shape
         x = x.flatten(0, -2)

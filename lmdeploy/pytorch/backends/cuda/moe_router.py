@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Tuple
 
 import torch
 
@@ -57,7 +56,7 @@ class TritonRouterNoauxTCImpl(DefaultRouterNoauxTCImpl):
 
         return True
 
-    def forward(self, logits: torch.Tensor, bias: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, logits: torch.Tensor, bias: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Router forward."""
         if self.enable_custom_kernel:
             return fused_noaux_tc_routing(

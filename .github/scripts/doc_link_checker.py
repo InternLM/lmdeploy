@@ -17,7 +17,7 @@ pattern = re.compile(r'\[.*?\]\(.*?\)')
 
 
 def analyze_doc(home, path):
-    print('analyze {}'.format(path))
+    print(f'analyze {path}')
     problem_list = []
     code_block = 0
     with open(path) as f:

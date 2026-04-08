@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import List
 
 import torch.cuda
 
@@ -8,7 +7,7 @@ def to_cuda(x: torch.Tensor, *args):
     return x.cuda()
 
 
-def get_u4_slices(x: torch.Tensor, dtype: torch.dtype) -> List[torch.Tensor]:
+def get_u4_slices(x: torch.Tensor, dtype: torch.dtype) -> list[torch.Tensor]:
     MAP = {torch.int32: 8, torch.uint8: 2}
     xs = []
     for _ in range(MAP[x.dtype]):

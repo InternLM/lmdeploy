@@ -2,11 +2,14 @@
 import asyncio
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, List, Optional
+from typing import Any
 
 from lmdeploy.messages import ResponseType
-from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
-                                                   DistServeInitRequest)
+from lmdeploy.pytorch.disagg.conn.protocol import (
+    DistServeConnectionRequest,
+    DistServeDropConnectionRequest,
+    DistServeInitRequest,
+)
 from lmdeploy.utils import get_logger
 
 from ..base import EngineBase, EngineInstanceBase
@@ -54,7 +57,7 @@ class MPEngine(EngineBase):
         """sleep."""
         return self._collective_rpc('sleep', level)
 
-    def wakeup(self, tags: Optional[List[str]] = None):
+    def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
         return self._collective_rpc('wakeup', tags)
 
@@ -62,9 +65,9 @@ class MPEngine(EngineBase):
         """Update params."""
         return self._collective_rpc('update_params', request)
 
-    def get_schedule_metrics(self):
+    async def get_schedule_metrics(self):
         """Get schedule metrics."""
-        return self._collective_rpc('get_schedule_metrics')
+        return await self._collective_rpc_async('get_schedule_metrics')
 
     def p2p_initialize(self, conn_request: DistServeInitRequest):
         """Init rdma link."""

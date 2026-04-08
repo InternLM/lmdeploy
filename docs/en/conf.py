@@ -25,7 +25,7 @@ from lmdeploy.serve.openai.api_server import router  # noqa: E402
 from lmdeploy.serve.proxy.proxy import app as proxy_server  # noqa: E402
 
 version_file = '../../lmdeploy/version.py'
-with open(version_file, 'r') as f:
+with open(version_file) as f:
     exec(compile(f.read(), version_file, 'exec'))
 __version__ = locals()['__version__']
 
@@ -164,7 +164,7 @@ html_theme_options = {
     #     {
     #         "name": "切换至简体中文",
     #         "url": "https://lmdeploy.readthedocs.io/en/latest",
-    #         "icon": "https://img.shields.io/badge/Doc-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-blue", # noqa: #501
+    #         "icon": "https://img.shields.io/badge/Doc-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-blue", # noqa: E501
     #         "type": "url",
     #     },
     # ],

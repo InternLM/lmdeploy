@@ -13,8 +13,42 @@ from .policy import get_input_policy
 from .source_model.base import INPUT_MODELS
 from .target_model.base import OUTPUT_MODELS, BaseOutputModel
 
-SUPPORTED_FORMATS = ['hf', 'awq', 'gptq', 'fp8', None]
+SUPPORTED_FORMATS = ['hf', 'awq', 'gptq', 'compressed-tensors', 'fp8', 'mxfp4', None]
 logger = get_logger('lmdeploy')
+
+_DEFAULT_GROUP_SIZES = {
+    'awq': 128,
+    'gptq': 128,
+    'compressed-tensors': 128,
+    'fp8': 128,
+    'mxfp4': 32,
+}
+
+_SUPPORTED_GROUP_SIZES = {
+    'awq': frozenset({128}),
+    'gptq': frozenset({128}),
+    'compressed-tensors': frozenset({32, 128}),
+    'fp8': frozenset({128}),
+    'mxfp4': frozenset({32}),
+}
+
+
+def _validate_quant_group_size(model_format: str | None, group_size: int | None) -> int | None:
+    """Normalize and validate quantized group sizes.
+
+    The low-level int4 kernels can be shared across formats, but we only expose the format/group-size combinations that
+    are verified end to end.
+    """
+    if group_size in (None, 0):
+        group_size = _DEFAULT_GROUP_SIZES.get(model_format, group_size)
+
+    supported_group_sizes = _SUPPORTED_GROUP_SIZES.get(model_format)
+    if supported_group_sizes is not None and group_size not in supported_group_sizes:
+        supported = ', '.join(map(str, sorted(supported_group_sizes)))
+        raise ValueError(f'Unsupported group_size={group_size} for model_format="{model_format}". '
+                         f'Supported group_size values: {supported}.')
+
+    return group_size
 
 
 def get_input_model_registered_name(model_path: str, model_format: str):
@@ -24,7 +58,7 @@ def get_input_model_registered_name(model_path: str, model_format: str):
     Args:
         model_path (str): the path of the input model
         model_format (str): the format of the model, which can be one of
-            ['hf', 'awq', 'gptq']
+            ['hf', 'awq', 'gptq', 'compressed-tensors', 'fp8', 'mxfp4']
     """
     arch = get_model_arch(model_path)[0]
     register_name = SUPPORTED_ARCHS[arch]
@@ -40,9 +74,9 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
     Args:
         model_path (str): the path of the input model
         model_format (str): the format of the model, which can be one of
-            ['hf', 'awq', 'gptq']
+            ['hf', 'awq', 'gptq', 'compressed-tensors', 'fp8', 'mxfp4']
         dtype (str): the data type of the model's weights and activations
-        group_size (int): the size of group used by awq model
+        group_size (int): the quantization group size used by grouped formats
         quantized_format (str): the quantized format of compressed-tensors model,
             which can be one of ['pack-quantized', 'float-quantized']
     """
@@ -77,6 +111,8 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
 
     session_len = _get_and_verify_max_len(model_config, None)
 
+    group_size = _validate_quant_group_size(model_format, group_size)
+
     if model_format in ['awq', 'gptq', 'compressed-tensors']:
         if model_format in ['awq', 'gptq']:
             weight_type = 'int4'
@@ -89,13 +125,10 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
             elif quantized_format == 'float-quantized':
                 weight_type = 'fp8'
                 model_format = 'fp8'
-        group_size = 128 if group_size == 0 else group_size
     elif model_format == 'fp8':
         weight_type = 'fp8'
-        group_size = 128
     elif model_format == 'mxfp4':
         weight_type = 'e2m1'
-        group_size = 32
 
     expert_weight_type = weight_type
 
@@ -175,7 +208,7 @@ def get_tm_model(model_path,
             the input model
         engine_config(TurbomindEngineConfig): user input engine config
         group_size(int): refers to the group_size if the input model
-            is a w4a16(awq or gptq) quantized model
+            is a grouped quantized model
         out_dir(str): the output directory where to save to turbomind model.
             If it is None, the turbomind model won't be saved
     """
@@ -225,13 +258,7 @@ def get_tm_model(model_path,
         quantized_format = _format if quant_method == 'compressed-tensors' else None
         group_size = _group_size
 
-    if engine_config.model_format in ['awq', 'gptq', 'compressed-tensors']:
-        # Compatible to awq models that are quantized by lmdeploy (<=v0.3.0)
-        if not group_size:
-            group_size = 128
-        assert group_size == 128, (f'model format is "{engine_config.model_format}" '
-                                   f'but group_size is {group_size}. Currently, only 128 '
-                                   'is supported')
+    group_size = _validate_quant_group_size(engine_config.model_format, group_size)
 
     input_model_name = get_input_model_registered_name(model_path, engine_config.model_format)
 

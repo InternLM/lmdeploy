@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
-from typing import Optional
 
 import torch
 import torch.distributed as dist
@@ -24,7 +23,7 @@ class DlinferLinearW8A8Impl(LinearW8A8Impl):
         self.out_dtype = out_dtype
         self.quant_dtype = quant_dtype
 
-    def update_weights(self, weight: torch.Tensor, scale: torch.Tensor, bias: Optional[torch.Tensor] = None):
+    def update_weights(self, weight: torch.Tensor, scale: torch.Tensor, bias: torch.Tensor | None = None):
         """Update weights."""
         if os.getenv('DLINFER_LINEAR_USE_NN_LAYOUT', '0') == '1':
             weight = weight.data.t().contiguous()
@@ -35,9 +34,9 @@ class DlinferLinearW8A8Impl(LinearW8A8Impl):
                 x,
                 weight: torch.Tensor,
                 scale: torch.Tensor,
-                bias: Optional[torch.Tensor] = None,
+                bias: torch.Tensor | None = None,
                 all_reduce: bool = False,
-                group: Optional[torch.distributed.ProcessGroup] = None):
+                group: torch.distributed.ProcessGroup | None = None):
         """forward."""
         if isinstance(x, torch.Tensor):
             input_quant, input_scale = dynamic_quant(x, self.quant_dtype)

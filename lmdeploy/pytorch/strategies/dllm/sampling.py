@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import List
 
 import numpy as np
 import torch
@@ -12,7 +11,7 @@ from lmdeploy.pytorch.model_inputs import ModelInputsDelta
 from ..ar.sampling import ARSamplingStrategy
 from .model_agent import DLLMExtraInputs
 
-SeqList = List[SchedulerSequence]
+SeqList = list[SchedulerSequence]
 
 
 class DLLMSamplingStrategy(ARSamplingStrategy):
@@ -43,11 +42,11 @@ class DLLMSamplingStrategy(ARSamplingStrategy):
             'random_offsets',
             'all_ids',
             'num_ignore_eos',
-            'ngram_size',
-            'ngram_threshold',
+            'repetition_ngram_size',
+            'repetition_ngram_threshold',
         ]
         for name in update_attr_names:
-            attr = getattr(out, name)
+            attr = getattr(out, name, None)
             if attr is None:
                 continue
             if attr.dim() == 1:

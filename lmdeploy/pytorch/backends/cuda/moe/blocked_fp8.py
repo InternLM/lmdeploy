@@ -1,11 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Callable, List
+from collections.abc import Callable
 
 import torch
 import torch.distributed as dist
 
-from lmdeploy.pytorch.backends.deepep_moe_checker import get_moe_backend
+from lmdeploy.pytorch.backends.deepep_state import get_deepep_state
 from lmdeploy.pytorch.backends.moe import FusedMoEBlockedF8Builder, FusedMoEBlockedF8Impl
 from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import fused_moe_blocked_fp8
@@ -53,7 +53,7 @@ class TritonFusedMoEBlockedF8Impl(FusedMoEBlockedF8Impl):
                 down_scale: torch.Tensor,
                 gate_up_bias: torch.Tensor = None,
                 down_bias: torch.Tensor = None,
-                expert_list: List[int] = None,
+                expert_list: list[int] = None,
                 act_func: Callable = None):
         """forward."""
         input_size = hidden_states.shape
@@ -116,7 +116,7 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
 
         try:
             from dlblas.layers.moe.token_dispatcher import DeepEPBuffer, DeepEPMode, use_deepep  # noqa: F401
-            get_moe_backend().set_deepep_moe_backend()
+            get_deepep_state().enable()
             if hasattr(DeepEPBuffer, 'set_explicitly_destroy'):
                 DeepEPBuffer.set_explicitly_destroy()
         except ImportError:
@@ -148,7 +148,7 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
                 down_scale: torch.Tensor,
                 gate_up_bias: torch.Tensor = None,
                 down_bias: torch.Tensor = None,
-                expert_list: List[int] = None,
+                expert_list: list[int] = None,
                 act_func: Callable = None,
                 **kwargs):
         """forward."""

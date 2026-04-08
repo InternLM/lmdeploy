@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
 import torch
 
@@ -8,7 +8,7 @@ class QParams(NamedTuple):
     """A class to hold the quantization parameters."""
 
     scales: torch.Tensor
-    zero_points: Optional[torch.Tensor]
+    zero_points: torch.Tensor | None
 
 
 @torch.no_grad()

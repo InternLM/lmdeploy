@@ -1,7 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/ModelTC/lightllm
 import math
-from typing import Literal, Sequence
+from collections.abc import Sequence
+from typing import Literal
 
 import torch
 import triton
@@ -151,7 +152,7 @@ def _fwd_grouped_split_kernel(
     block_offset_ptrs += start_block_id
     for start_n in range(loop_start, loop_end, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
-        b_offset = tl.load(block_offset_ptrs)
+        b_offset = tl.load(block_offset_ptrs).to(tl.int64)
         block_offset_ptrs += 1
 
         # -- compute qk ----
@@ -367,7 +368,7 @@ def _fwd_grouped_split_quant_kernel(
     loop_start = start_block_id * BLOCK_N
     for start_n in range(loop_start, loop_end, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
-        b_offset = tl.load(block_offset_ptrs + start_n // BLOCK_N)
+        b_offset = tl.load(block_offset_ptrs + start_n // BLOCK_N).to(tl.int64)
 
         # -- compute qk ----
         # k = tl.load(k_ptrs + b_offset * stride_kp)

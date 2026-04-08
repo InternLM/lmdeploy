@@ -13,8 +13,8 @@ MODEL_IDS = [
 ]
 
 BACKEND_FACTORIES = [
-    ('tm', lambda: TurbomindEngineConfig(max_batch_size=2, session_len=1024)),
-    ('pt', lambda: PytorchEngineConfig(max_batch_size=1, session_len=1024)),
+    ('tm', lambda: TurbomindEngineConfig(max_batch_size=2, session_len=1024, cache_max_entry_count=0.1)),
+    ('pt', lambda: PytorchEngineConfig(max_batch_size=1, session_len=1024, cache_max_entry_count=0.1)),
 ]
 
 SCHEMA_MAP = {

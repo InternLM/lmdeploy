@@ -1,80 +1,91 @@
-import copy
-
 import pytest
 
-from lmdeploy.vl import load_image
+from lmdeploy.vl import load_image, load_video
 from lmdeploy.vl.model.qwen3 import Qwen3VLModel
 
 QWEN3VL_MODELS = [
     'Qwen/Qwen3-VL-4B-Instruct',
 ]
 
-IMAGE_URL = ('https://raw.githubusercontent.com/open-mmlab/'
-             'mmdeploy/main/tests/data/tiger.jpeg')
+IMAGE_URL = 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg'
+VIDEO_URL = 'https://raw.githubusercontent.com/CUHKSZzxy/Online-Data/main/clip_3_removed.mp4'
 
 
 @pytest.fixture(scope='module', params=QWEN3VL_MODELS)
 def qwen3vl_model(request):
-    """Initialize Qwen3VLModel with a real model path."""
     model = Qwen3VLModel(model_path=request.param)
     model.build_preprocessor()
     return model
 
 
+@pytest.fixture(scope='module')
+def pil_image():
+    return load_image(IMAGE_URL)
+
+
+@pytest.fixture(scope='module')
+def video_data():
+    return load_video(VIDEO_URL, num_frames=16)
+
+
 @pytest.fixture
-def sample_messages():
-    """Create sample messages for preprocessing using image_url."""
-    pil_image = load_image(IMAGE_URL)
-    return [{
-        'role':
-        'user',
-        'content': [
-            {
-                'type': 'text',
-                'text': 'Can you describe this image?'
-            },
-            {
-                'type': 'image',
-                'data': pil_image
-            },
-        ]
-    }]
+def sample_messages(pil_image):
+    return [{'role': 'user', 'content': [{'type': 'image', 'data': pil_image}]}]
 
 
-def test_qwen3vl_preprocess_with_custom_pixels(qwen3vl_model, sample_messages):
-    """Test that mm_processor_kwargs with min/max pixels takes effect."""
+@pytest.fixture
+def sample_video_messages(video_data):
+    frames, metadata = video_data
+    return [{'role': 'user', 'content': [{'type': 'video', 'data': frames, 'video_metadata': metadata}]}]
 
-    # compression ratio for qwen3vl is 32 = patch_size * spatial_merge_size = 16 * 2
-    # qwen3vl_model.processor.image_processor.size['shortest_edge'] = 66536
-    # 65536 = 64 * 32 * 32, indicates 64 image token budget
-    # qwen3vl_model.processor.image_processor.size['longest_edge'] = 16777216
-    # 16777216 = 16384 * 32 * 32, indicates 16384 image token budget
 
-    # Default processing without custom arguments
-    default_processed_messages = qwen3vl_model.preprocess(messages=copy.deepcopy(sample_messages))
-    default_content = default_processed_messages[-1]['content']
-    default_shape = default_content[0]['pixel_values'].shape  # [280, 1536]
+def _preprocess(model, messages, **kwargs):
+    result = model.preprocess(messages=list(messages), **kwargs)
+    return result[-1]['content'][0]
 
-    # Processing with smaller pixel range
-    mm_processor_kwargs = {'min_pixels': 10 * 32 * 32, 'max_pixels': 20 * 32 * 32}
-    custom_processed_messages = qwen3vl_model.preprocess(messages=copy.deepcopy(sample_messages),
-                                                         mm_processor_kwargs=mm_processor_kwargs)
-    custom_content = custom_processed_messages[-1]['content']
-    custom_shape = custom_content[0]['pixel_values'].shape  # [60, 1536]
 
-    assert default_shape != custom_shape, \
-        'Default and custom processing should result in different shapes.'
-    assert default_shape[0] > custom_shape[0], \
-        'Custom processing with smaller pixel range should result in smaller image size.'
+def test_image_with_custom_pixels(qwen3vl_model, sample_messages):
+    """Test that mm_processor_kwargs min/max pixels affect image preprocessing.
 
-    # Processing with larger pixel range
-    mm_processor_kwargs = {'min_pixels': 100 * 32 * 32, 'max_pixels': 20000 * 32 * 32}
-    custom_processed_messages = qwen3vl_model.preprocess(messages=copy.deepcopy(sample_messages),
-                                                         mm_processor_kwargs=mm_processor_kwargs)
-    custom_content = custom_processed_messages[-1]['content']
-    custom_shape = custom_content[0]['pixel_values'].shape  # [468, 1536]
+    compression ratio for qwen3vl is 32 = patch_size * spatial_merge_size = 16 * 2,
+    image_processor.size['shortest_edge'] = 65536 = 64 * 32 * 32      (64 token budget),
+    image_processor.size['longest_edge'] = 16777216 = 16384 * 32 * 32 (16384 token budget),
+    """
 
-    assert default_shape != custom_shape, \
-        'Default and custom processing should result in different shapes.'
-    assert default_shape[0] < custom_shape[0], \
-        'Custom processing with larger pixel range should result in larger image size.'
+    # [280, 1536]
+    default_shape = _preprocess(qwen3vl_model, sample_messages)['pixel_values'].shape
+
+    # [60, 1536]
+    small_shape = _preprocess(qwen3vl_model, sample_messages,
+                              mm_processor_kwargs={'min_pixels': 10 * 32 * 32,
+                                                   'max_pixels': 20 * 32 * 32})['pixel_values'].shape
+
+    # [468, 1536]
+    large_shape = _preprocess(qwen3vl_model, sample_messages,
+                              mm_processor_kwargs={'min_pixels': 100 * 32 * 32,
+                                                   'max_pixels': 20000 * 32 * 32})['pixel_values'].shape
+
+    assert small_shape[0] < default_shape[0] < large_shape[0]
+
+
+def test_video_with_custom_pixels(qwen3vl_model, sample_video_messages):
+    """Test that mm_processor_kwargs min/max pixels affect video preprocessing.
+
+    Videos process at native resolution by default, so we compare two constrained ranges rather than comparing against
+    the default.
+    """
+
+    # [28160, 1536]
+    default_shape = _preprocess(qwen3vl_model, sample_video_messages)['pixel_values_videos'].shape
+
+    # [32, 1536]
+    small_shape = _preprocess(qwen3vl_model, sample_video_messages,
+                              mm_processor_kwargs={'min_pixels': 10 * 32 * 32,
+                                                   'max_pixels': 20 * 32 * 32})['pixel_values_videos'].shape
+
+    # [256, 1536]
+    medium_shape = _preprocess(qwen3vl_model, sample_video_messages,
+                               mm_processor_kwargs={'min_pixels': 50 * 32 * 32,
+                                                    'max_pixels': 200 * 32 * 32})['pixel_values_videos'].shape
+
+    assert small_shape[0] < medium_shape[0] <= default_shape[0]

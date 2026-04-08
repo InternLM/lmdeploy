@@ -1,8 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Literal, Optional
+from typing import Any, Literal
 
 import torch
 from pydantic.dataclasses import dataclass as pydantic_dataclass
@@ -50,10 +51,10 @@ class GenerationConfig:
         random_seed: Seed used when sampling a token
         stop_words: Words that stop generating further tokens
         bad_words: Words that the engine will never generate
-        stop_token_ids: List of tokens that stop the generation
+        stop_token_ids: list of tokens that stop the generation
             when they are generated. The returned output will not contain
             the stop tokens.
-        bad_token_ids: List of tokens that the engine will never
+        bad_token_ids: list of tokens that the engine will never
             generate.
         min_new_tokens: The minimum numbers of tokens to generate,
             ignoring the number of tokens in the prompt.
@@ -109,16 +110,16 @@ class GenerationConfig:
     repetition_penalty: float = 1.0
     ignore_eos: bool = False
     random_seed: int = None
-    stop_words: List[str] = None
-    bad_words: List[str] = None
-    stop_token_ids: List[int] = None
-    bad_token_ids: List[int] = None
+    stop_words: list[str] = None
+    bad_words: list[str] = None
+    stop_token_ids: list[int] = None
+    bad_token_ids: list[int] = None
     min_new_tokens: int = None
     skip_special_tokens: bool = True
     spaces_between_special_tokens: bool = True
     logprobs: int = None
-    response_format: Optional[Dict] = None
-    logits_processors: Optional[List[LogitsProcessor]] = None
+    response_format: dict | None = None
+    logits_processors: list[LogitsProcessor] | None = None
     output_logits: Literal['all', 'generation'] = None
     output_last_hidden_state: Literal['all', 'generation'] = None
     include_stop_str_in_output: bool = False
@@ -126,7 +127,7 @@ class GenerationConfig:
     # for disaggregation
     with_cache: bool = False
     preserve_cache: bool = False
-    migration_request: Optional[MigrationRequest] = None
+    migration_request: MigrationRequest | None = None
 
     # router replay
     return_routed_experts: bool = False
@@ -141,7 +142,7 @@ class GenerationConfig:
 
         def special_word_token_ids(words):
             if words is not None:
-                assert isinstance(words, List) and \
+                assert isinstance(words, list) and \
                     all(isinstance(elem, str) for elem in words), \
                     f'stop_words must be a list of str but got {type(words)}'
                 indexes = []
@@ -178,7 +179,7 @@ class GenerationConfig:
 
     def __post_init__(self):
         """Check input validation."""
-        assert type(self.n) == int and self.n > 0, 'n is not a positive integer'
+        assert type(self.n) is int and self.n > 0, 'n is not a positive integer'
         assert self.top_p >= 0 and self.top_p <= 1  # [0, 1]
         assert self.top_k >= 0, 'top_k can not be a negative integer'
         assert self.temperature >= 0 and self.temperature <= 2  # [0,2]
@@ -196,10 +197,15 @@ class TurbomindEngineConfig:
             The `auto` option will use FP16 precision for FP32 and FP16
             models, and BF16 precision for BF16 models.
         model_format: the layout of the deployed model. It can be one
-            of the following values [hf, awq, gptq],`hf` meaning
-            huggingface model(.bin, .safetensors), `awq` and `gptq` meaning
-            the quantized model by AWQ and GPTQ, respectively. If it is not
-            specified, i.e. None, it will be extracted from the input model
+            of the following values [hf, awq, gptq, compressed-tensors,
+            fp8, mxfp4]. `hf` means a Hugging Face model (.bin,
+            .safetensors), `awq` and `gptq` mean grouped 4-bit
+            weight-only checkpoints, `compressed-tensors` means
+            pack-quantized grouped int4 checkpoints and is usually
+            auto-detected from the input model config, `fp8` means
+            blocked fp8 checkpoints, and `mxfp4` means MXFP4 expert
+            weights. If it is not specified, i.e. None, it will be
+            extracted from the input model
         tp: the number of GPU cards used in tensor parallelism,
             default to 1
         session_len: the max session length of a sequence, default to
@@ -251,7 +257,7 @@ class TurbomindEngineConfig:
     """
 
     dtype: str = 'auto'
-    model_format: Optional[str] = None
+    model_format: str | None = None
     tp: int = 1
     dp: int = 1
     cp: int = 1
@@ -264,9 +270,9 @@ class TurbomindEngineConfig:
     outer_dp_size: int = None
     nnodes: int = 1
     node_rank: int = 0
-    dist_init_addr: Optional[str] = None
-    devices: List[int] = None
-    session_len: Optional[int] = None
+    dist_init_addr: str | None = None
+    devices: list[int] = None
+    session_len: int | None = None
     max_batch_size: int = None
     cache_max_entry_count: float = 0.8
     cache_chunk_size: int = -1
@@ -275,16 +281,16 @@ class TurbomindEngineConfig:
     quant_policy: int = 0
     rope_scaling_factor: float = 0.0
     use_logn_attn: bool = False
-    download_dir: Optional[str] = None
-    revision: Optional[str] = None
+    download_dir: str | None = None
+    revision: str | None = None
     max_prefill_token_num: int = 8192
     num_tokens_per_iter: int = 0
     max_prefill_iters: int = 1
     async_: int = 1
-    devices: Optional[List[int]] = None
+    devices: list[int] | None = None
     empty_init: bool = False
     communicator: str = 'nccl'
-    hf_overrides: Optional[Dict[str, Any]] = None
+    hf_overrides: dict[str, Any] | None = None
     enable_metrics: bool = True
 
     def __post_init__(self):
@@ -388,13 +394,13 @@ class PytorchEngineConfig:
     block_size: int = 64
     num_cpu_blocks: int = 0
     num_gpu_blocks: int = 0
-    adapters: Dict[str, str] = None
+    adapters: dict[str, str] = None
     max_prefill_token_num: int = 4096
     thread_safe: bool = False
     enable_prefix_caching: bool = False
     device_type: str = 'cuda'
     eager_mode: bool = False
-    custom_module_map: Dict[str, str] = None
+    custom_module_map: dict[str, str] = None
     download_dir: str = None
     revision: str = None
     quant_policy: Literal[0, 4, 8] = 0
@@ -406,7 +412,7 @@ class PytorchEngineConfig:
     mp_engine_backend: str = 'mp'
     model_format: str = None
     enable_metrics: bool = True
-    hf_overrides: Optional[Dict[str, Any]] = None
+    hf_overrides: dict[str, Any] | None = None
     disable_vision_encoder: bool = False
     logprobs_mode: str = None
     # router replay
@@ -474,23 +480,20 @@ class Response:
         generate_token_len: the response token length.
         input_token_len: the input prompt token length. Note that it may
             contains chat template part.
-        session_id: the id for running the session.
         finish_reason: the reason the model stopped
             generating tokens. This will be 'stop' if the model hit a natural
             stop point or a provided stop sequence, 'length' if the maximum
             number of tokens specified in the request was reached.
-        token_ids:: the output token ids.
-        logprobs:: the top logprobs for each output
-            position.
-        index: it refers to the position index of the input request
-            batch
+        token_ids: the output token ids.
+        logprobs: the top logprobs for each output position.
+        index: it refers to the position index of the input request batch.
     """
     text: str
     generate_token_len: int
     input_token_len: int
-    finish_reason: Optional[Literal['stop', 'length']] = None
-    token_ids: List[int] = field(default_factory=list)
-    logprobs: List[Dict[int, float]] = None
+    finish_reason: Literal['stop', 'length'] | None = None
+    token_ids: list[int] = field(default_factory=list)
+    logprobs: list[dict[int, float]] = None
     logits: torch.Tensor = None
     last_hidden_state: torch.Tensor = None
     index: int = 0
@@ -511,7 +514,7 @@ class Response:
         fields.append(f'logprobs={self.logprobs}')
 
         # Helper function to format tensor information
-        def _format_tensor(name: str, tensor: Optional[torch.Tensor]) -> List[str]:
+        def _format_tensor(name: str, tensor: torch.Tensor | None) -> list[str]:
             if tensor is None:
                 return [f'{name}=None']
             try:
@@ -580,7 +583,7 @@ class EngineEvent:
     timestamp: float
 
     @classmethod
-    def new_event(cls, event_type: EventType, timestamp: Optional[float] = None) -> 'EngineEvent':
+    def new_event(cls, event_type: EventType, timestamp: float | None = None) -> 'EngineEvent':
         # Timestamps MUST use wall-clock time (time.time()) to maintain consistency
         # between csrc(std::chrono::system_clock) and python
         timestamp = time.time() if timestamp is None else timestamp
@@ -604,11 +607,11 @@ class RequestMetrics:
 
     Attributes:
         token_timestamp: A wall-clock time when a token is generated.
-        engine_events: List of engine events during inference.
+        engine_events: list of engine events during inference.
     """
     token_timestamp: float = 0.0
-    engine_events: List[EngineEvent] = field(default_factory=list)
-    spec_info: Optional[Dict[str, Any]] = None
+    engine_events: list[EngineEvent] = field(default_factory=list)
+    spec_info: dict[str, Any] | None = None
 
 
 @dataclass
@@ -625,12 +628,12 @@ class EngineOutput:
         req_metrics: request metrics information
     """
     status: ResponseType
-    token_ids: List[int]
-    logprobs: List[Dict[int, float]] = None
+    token_ids: list[int]
+    logprobs: list[dict[int, float]] = None
     logits: torch.Tensor = None
     last_hidden_state: torch.Tensor = None
-    cache_block_ids: Optional[List[int]] = None
-    req_metrics: Optional[RequestMetrics] = None
+    cache_block_ids: list[int] | None = None
+    req_metrics: RequestMetrics | None = None
     routed_experts: torch.Tensor = None
 
 

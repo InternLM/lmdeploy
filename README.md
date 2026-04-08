@@ -26,6 +26,7 @@ ______________________________________________________________________
 <details open>
 <summary><b>2026</b></summary>
 
+- \[2026/04\] The LMDeploy project on PyPI has reached its storage quota, so pre-built wheels for new releases cannot be uploaded for the time being. You can download packages from the [GitHub Releases](https://github.com/InternLM/lmdeploy/releases) page or install from source instead. We will update this notice when wheel uploads to PyPI resume. Affected versions: >=0.12.2
 - \[2026/02\] Support [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35)
 - \[2026/02\] Support [vllm-project/llm-compressor](https://github.com/vllm-project/llm-compressor) 4bit symmetric/asymmetric quantization. Refer [here](./docs/en/quantization/llm_compressor.md) for detailed guide
 
@@ -218,22 +219,20 @@ They differ in the types of supported models and the inference data type. Please
 It is recommended installing lmdeploy using pip in a conda environment (python 3.10 - 3.13):
 
 ```shell
-conda create -n lmdeploy python=3.10 -y
+conda create -n lmdeploy python=3.12 -y
 conda activate lmdeploy
 pip install lmdeploy
 ```
 
-The default prebuilt package is compiled on **CUDA 12** since v0.3.0.
+Since v0.3.0, the default prebuilt package is compiled on **CUDA 12**. Starting from v0.10.2, LMDeploy no longer supports CUDA 11 series.
 
-For the GeForce RTX 50 series, please install the LMDeploy prebuilt package complied with **CUDA 12.8**
+If you are using a GeForce RTX 50 series graphics card, please install the LMDeploy prebuilt package compiled with **CUDA 12.8** as follows:
 
 ```shell
-export LMDEPLOY_VERSION=0.12.2
-export PYTHON_VERSION=310
+export LMDEPLOY_VERSION=0.12.3
+export PYTHON_VERSION=312
 pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu128-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu128
 ```
-
-For more information on installing on CUDA 11+ platform, or for instructions on building from source, please refer to the [installation guide](docs/en/get_started/installation.md).
 
 ## Offline Batch Inference
 
