@@ -1415,6 +1415,7 @@ def serve(model_path: str,
           max_log_len: int | None = None,
           disable_fastapi_docs: bool = False,
           max_concurrent_requests: int | None = None,
+          trust_remote_code: bool = False,
           reasoning_parser: str | None = None,
           tool_call_parser: str | None = None,
           allow_terminate_by_client: bool = False,
@@ -1487,7 +1488,7 @@ def serve(model_path: str,
         http_or_https = 'https'
 
     handle_torchrun()
-    _, pipeline_class = get_task(backend, model_path)
+    _, pipeline_class = get_task(backend, model_path, trust_remote_code=trust_remote_code)
     if isinstance(backend_config, PytorchEngineConfig):
         backend_config.enable_mp_engine = True
         # router replay
@@ -1499,6 +1500,7 @@ def serve(model_path: str,
                                                     backend_config=backend_config,
                                                     chat_template_config=chat_template_config,
                                                     max_log_len=max_log_len,
+                                                    trust_remote_code=trust_remote_code,
                                                     speculative_config=speculative_config,
                                                     **kwargs)
     # set reasoning parser and tool parser

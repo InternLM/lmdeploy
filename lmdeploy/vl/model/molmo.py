@@ -19,7 +19,7 @@ class MolmoVisionModel(VisionModel):
 
     def build_preprocessor(self):
         self.processor = AutoProcessor.from_pretrained(self.model_path,
-                                                       trust_remote_code=True,
+                                                       trust_remote_code=self.trust_remote_code,
                                                        torch_dtype=torch.half,
                                                        device_map='auto')
 
@@ -28,7 +28,7 @@ class MolmoVisionModel(VisionModel):
         load the whole VLM model when `self.with_llm==True`"""
         from accelerate import init_empty_weights, load_checkpoint_and_dispatch
         with init_empty_weights():
-            model = AutoModelForCausalLM.from_config(self.hf_config, trust_remote_code=True)
+            model = AutoModelForCausalLM.from_config(self.hf_config, trust_remote_code=self.trust_remote_code)
 
             self.vl_model = model
             if not self.with_llm:

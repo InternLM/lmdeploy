@@ -41,12 +41,13 @@ class InternVL3VisionModel(InternVLVisionModel):
                  with_llm: bool = False,
                  max_memory: dict[int, int] = None,
                  hf_config: AutoConfig = None,
-                 backend: str = ''):
-        super().__init__(model_path, with_llm, max_memory, hf_config, backend)
+                 backend: str = '',
+                 trust_remote_code: bool = False):
+        super().__init__(model_path, with_llm, max_memory, hf_config, backend, trust_remote_code=trust_remote_code)
         self.arch = self.hf_config.architectures[0]
 
     def build_preprocessor(self):
-        self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=True)
+        self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=self.trust_remote_code)
         tokenizer = self.processor.tokenizer
         self.image_token = self.processor.image_token
         self.image_token_id = tokenizer.context_image_token_id
@@ -59,11 +60,11 @@ class InternVL3VisionModel(InternVLVisionModel):
         from accelerate import init_empty_weights
         with init_empty_weights():
             if self.arch == 'InternVLForConditionalGeneration':
-                model = AutoModel.from_config(self.hf_config, trust_remote_code=True)
+                model = AutoModel.from_config(self.hf_config, trust_remote_code=self.trust_remote_code)
                 if not self.with_llm:
                     del model.language_model
             elif self.arch == 'InternS1ForConditionalGeneration':
-                model = AutoModelForCausalLM.from_config(self.hf_config, trust_remote_code=True)
+                model = AutoModelForCausalLM.from_config(self.hf_config, trust_remote_code=self.trust_remote_code)
                 if not self.with_llm:
                     del model.model.language_model
             else:

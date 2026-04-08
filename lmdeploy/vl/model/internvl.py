@@ -73,10 +73,13 @@ class InternVLVisionModel(VisionModel):
                  with_llm: bool = False,
                  max_memory: dict[int, int] = None,
                  hf_config: AutoConfig = None,
-                 backend: str = ''):
-        super().__init__(model_path, with_llm, max_memory, hf_config, backend)
+                 backend: str = '',
+                 trust_remote_code: bool = False):
+        super().__init__(model_path, with_llm, max_memory, hf_config, backend, trust_remote_code=trust_remote_code)
         self.image_token = '<IMG_CONTEXT>'
-        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True, use_fast=False)
+        tokenizer = AutoTokenizer.from_pretrained(model_path,
+                                                  trust_remote_code=self.trust_remote_code,
+                                                  use_fast=False)
         self.image_token_id = tokenizer.convert_tokens_to_ids(self.image_token)
 
     def build_preprocessor(self):
@@ -120,7 +123,7 @@ class InternVLVisionModel(VisionModel):
         with init_empty_weights():
             # transformers below 4.37.0 may raise error about flash_attn
             self.config.llm_config.attn_implementation = 'eager'
-            model = AutoModel.from_config(self.config, trust_remote_code=True)
+            model = AutoModel.from_config(self.config, trust_remote_code=self.trust_remote_code)
             self.vl_model = model
             if not self.with_llm:
                 del model.language_model

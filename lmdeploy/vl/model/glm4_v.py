@@ -39,7 +39,7 @@ class GLM4VisionModel(VisionModel):
             from transformers import AutoModelForCausalLM
             self.vl_model = AutoModelForCausalLM.from_pretrained(self.model_path,
                                                                  device_map='cpu',
-                                                                 trust_remote_code=True)
+                                                                 trust_remote_code=self.trust_remote_code)
         else:
             raise NotImplementedError('turbomind has not supported glm4v yet')
 

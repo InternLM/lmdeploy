@@ -13,7 +13,7 @@ class Phi3VisionModel(LlavaHfVisionModel):
     _arch = 'Phi3VForCausalLM'
 
     def build_preprocessor(self):
-        processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=True)
+        processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=self.trust_remote_code)
         if hasattr(processor, 'tokenizer'):
             del processor.tokenizer
             processor.tokenizer = None
@@ -24,7 +24,7 @@ class Phi3VisionModel(LlavaHfVisionModel):
             from transformers import AutoModelForCausalLM
             self.vl_model = AutoModelForCausalLM.from_pretrained(self.model_path,
                                                                  device_map='cpu',
-                                                                 trust_remote_code=True)
+                                                                 trust_remote_code=self.trust_remote_code)
         else:
             raise NotImplementedError('turbomind has not supported phi3v yet')
 

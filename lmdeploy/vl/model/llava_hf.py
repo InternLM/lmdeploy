@@ -18,7 +18,7 @@ class LlavaHfVisionModel(VisionModel):
     _arch = 'LlavaForConditionalGeneration'
 
     def build_preprocessor(self):
-        processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=True)
+        processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=self.trust_remote_code)
         if hasattr(processor, 'tokenizer'):
             del processor.tokenizer
             processor.prtokenizer = None

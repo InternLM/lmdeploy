@@ -63,6 +63,9 @@ class SubCliServe:
                             default=['*'],
                             help='A list of allowed http headers for cors')
         parser.add_argument('--proxy-url', type=str, default=None, help='The proxy url for api server.')
+        parser.add_argument('--trust-remote-code',
+                            action='store_true',
+                            help='Whether to trust remote code from model repositories.')
         parser.add_argument('--max-concurrent-requests',
                             type=int,
                             default=None,
@@ -303,6 +306,7 @@ class SubCliServe:
                 max_log_len=args.max_log_len,
                 disable_fastapi_docs=args.disable_fastapi_docs,
                 max_concurrent_requests=args.max_concurrent_requests,
+                trust_remote_code=args.trust_remote_code,
                 reasoning_parser=args.reasoning_parser,
                 tool_call_parser=args.tool_call_parser,
                 speculative_config=speculative_config,
@@ -334,6 +338,7 @@ class SubCliServe:
                 max_log_len=args.max_log_len,
                 disable_fastapi_docs=args.disable_fastapi_docs,
                 max_concurrent_requests=args.max_concurrent_requests,
+                trust_remote_code=args.trust_remote_code,
                 reasoning_parser=args.reasoning_parser,
                 tool_call_parser=args.tool_call_parser,
                 speculative_config=speculative_config,

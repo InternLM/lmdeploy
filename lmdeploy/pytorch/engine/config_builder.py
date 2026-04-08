@@ -98,7 +98,7 @@ class ConfigBuilder:
 
     @staticmethod
     def build_specdecode_config(target_model, speculative_config: SpeculativeConfig, engine_config: PytorchEngineConfig,
-                                cache_config: CacheConfig):
+                                cache_config: CacheConfig, trust_remote_code: bool = False):
         """Build spec decode config."""
         specdecode_config = None
         if speculative_config is not None:
@@ -113,5 +113,6 @@ class ConfigBuilder:
                 target_model=target_model,
                 target_cache_cfg=cache_config,
                 dtype=engine_config.dtype,
+                trust_remote_code=trust_remote_code,
             )
         return specdecode_config
