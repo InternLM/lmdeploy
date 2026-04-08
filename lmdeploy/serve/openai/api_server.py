@@ -1183,9 +1183,15 @@ def update_params(request: UpdateParamsRequest, raw_request: Request = None):
 @router.post('/sleep', dependencies=[Depends(validate_json_request)])
 async def sleep(raw_request: Request = None):
     level = raw_request.query_params.get('level', '1')
+    try:
+        level = int(level)
+    except (TypeError, ValueError):
+        return create_error_response(HTTPStatus.BAD_REQUEST, 'The "level" query parameter must be an integer.')
+    if level not in (1, 2):
+        return create_error_response(HTTPStatus.BAD_REQUEST, 'The "level" query parameter must be 1 or 2.')
     async_engine = VariableInterface.async_engine
     await async_engine.stop_all_session()
-    async_engine.sleep(int(level))
+    async_engine.sleep(level)
     return Response(status_code=200)
 
 
