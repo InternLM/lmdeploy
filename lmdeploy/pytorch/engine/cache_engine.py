@@ -240,10 +240,10 @@ class CacheEngine:
             return []
 
         dtype = model_config.dtype
-        # For quant_policy==42, K uses 4-bit quantization (only has norm/scale),
-        # V uses 2-bit quantization (only has norm/scale)
+        # For quant_policy==42, K uses 4-bit quantization (has MSE norm and QJL norm),
+        # V uses 2-bit quantization (only has MSE norm)
         if cache_config.quant_policy == 42:
-            key_scale_zero_shape = k_cache_desc.shape[:-1] + [1]
+            key_scale_zero_shape = k_cache_desc.shape[:-1] + [2]
             val_scale_zero_shape = v_cache_desc.shape[:-1] + [1]
         else:
             key_scale_zero_shape = k_cache_desc.shape[:-1] + [2]

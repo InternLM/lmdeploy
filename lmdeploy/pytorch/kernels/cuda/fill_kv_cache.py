@@ -81,8 +81,7 @@ def butterfly_rotate_inv(x: Tensor) -> Tensor:
     Inverse of butterfly_rotate:
         x = D @ (H / sqrt(d)) @ y
     """
-    d = x.shape[-1]
-    signs = _get_deterministic_signs(d, device=x.device)
+    signs = _get_deterministic_signs(x.shape[-1], device=x.device)
     return fwht(x) * signs
 
 def _get_rotation_matrix(
@@ -102,17 +101,17 @@ def _get_rotation_matrix(
     return Q
 
 def _get_lloyd_max_codebook(d: int, bits: int, device: str = 'cuda'):
-    """Get precomputed Lloyd-Max codebook for 2-bit and 4-bit only.
+    """Get precomputed Lloyd-Max codebook for 2-bit, 3-bit and 4-bit.
 
     The table is baked from the same construction logic as the original
     implementation under sigma=1, then scaled at runtime by sigma=1/sqrt(d).
 
     Supported:
-        bits = 2, 4
+        bits = 2, 3, 4
     """
-    if bits not in (2, 4):
+    if bits not in (2, 3, 4):
         raise NotImplementedError(
-            f'Only 2-bit and 4-bit precomputed codebooks are supported, got bits={bits}'
+            f'Only 2-bit, 3-bit and 4-bit precomputed codebooks are supported, got bits={bits}'
         )
 
     cache_key = (d, bits, device, 'codebook')
@@ -133,6 +132,19 @@ def _get_lloyd_max_codebook(d: int, bits: int, device: str = 'cuda'):
         boundaries_std = torch.tensor(
             [-0.9815992, 0.0, 0.9815992],
             device=device, dtype=torch.float32
+        )
+    elif bits == 3:
+        centroids_std = torch.tensor(
+            [-2.1519456, -1.3439093, -0.7560052, -0.2450942,
+              0.2450942,  0.7560052,  1.3439093,  2.1519456],
+            device=device,
+            dtype=torch.float32,
+        )
+        boundaries_std = torch.tensor(
+            [-1.7479274, -1.0499573, -0.5005497, 0.0,
+              0.5005497,  1.0499573,  1.7479274],
+            device=device,
+            dtype=torch.float32,
         )
     else:  # bits == 4
         centroids_std = torch.tensor(
@@ -434,11 +446,14 @@ def _fill_page_quant_int2(
     tl.store(scales_ptrs, scales[:, None], mask=kv_mask[:, None])
     tl.store(zeros_ptrs, zeros[:, None], mask=kv_mask[:, None])
 
+
 @triton.jit
-def _fill_page_quant_turbo_int4(
+def _fill_page_quant_turbo_qjl4(
     state_ptr,
     cache_ptr,
     scales_zeros_ptr,
+    centroids_ptr,
+    boundaries_ptr,
     block_off,
     head_id,
     page_offs,
@@ -458,66 +473,92 @@ def _fill_page_quant_turbo_int4(
     stride_szd: tl.constexpr,
     BLOCK_D: tl.constexpr,
 ):
-    """TurboQuant K path: raw dim = 2 * head_dim, packed to head_dim bytes."""
+    """TurboQuant QJL4 K path:
+    raw dim = 2 * head_dim, packed to head_dim bytes.
+
+    packed nibble per raw coordinate:
+        low  3 bits: 3bit MSE code
+        high 1 bit : QJL residual sign bit
+
+    K meta layout:
+        [..., 0] = mse_norm
+        [..., 1] = qjl_norm
+    """
     d_off = tl.arange(0, head_dim)
     mask_kc = kv_mask[:, None]
+
     state_ptr = state_ptr + head_id * stride_sh
     state0_ptrs = state_ptr + q_offs[:, None] * stride_ss + d_off[None, :] * stride_sd
     state1_ptrs = state0_ptrs + head_dim * stride_sd
+
     cache_ptr = cache_ptr + block_off * stride_cn + head_id * stride_ch
     cache_ptrs = cache_ptr + page_offs[:, None] * stride_cb + d_off[None, :] * stride_cd
+
     scales_zeros_ptr = scales_zeros_ptr + block_off * stride_szn + head_id * stride_szh
-    scales_ptrs = scales_zeros_ptr + page_offs[:, None] * stride_szb
+    mse_norm_ptrs = scales_zeros_ptr + page_offs[:, None] * stride_szb
+    qjl_norm_ptrs = mse_norm_ptrs + stride_szd
+
     x0 = tl.load(state0_ptrs, mask=mask_kc, other=0.0).to(tl.float32)
     x1 = tl.load(state1_ptrs, mask=mask_kc, other=0.0).to(tl.float32)
-    norm = tl.sqrt(tl.sum(x0 * x0 + x1 * x1, axis=1) + 1e-8)
-    sigma = 1.0 / math.sqrt(BLOCK_D)
-    u0 = x0 / norm[:, None]
-    u1 = x1 / norm[:, None]
+
+    mse_norm = tl.sqrt(tl.sum(x0 * x0 + x1 * x1, axis=1) + 1e-8)
+    u0 = x0 / mse_norm[:, None]
+    u1 = x1 / mse_norm[:, None]
+
+    b0 = tl.load(boundaries_ptr + 0)
+    b1 = tl.load(boundaries_ptr + 1)
+    b2 = tl.load(boundaries_ptr + 2)
+    b3 = tl.load(boundaries_ptr + 3)
+    b4 = tl.load(boundaries_ptr + 4)
+    b5 = tl.load(boundaries_ptr + 5)
+    b6 = tl.load(boundaries_ptr + 6)
+
     idx0 = tl.zeros_like(u0).to(tl.uint8)
-    idx0 += (u0 > (-2.0635107 * sigma))
-    idx0 += (u0 > (-1.4862148 * sigma))
-    idx0 += (u0 > (-1.0947649 * sigma))
-    idx0 += (u0 > (-0.7868000 * sigma))
-    idx0 += (u0 > (-0.5242788 * sigma))
-    idx0 += (u0 > (-0.2886016 * sigma))
-    idx0 += (u0 > (-0.0682537 * sigma))
-    idx0 += (u0 > (0.1449927 * sigma))
-    idx0 += (u0 > (0.3591875 * sigma))
-    idx0 += (u0 > (0.5836016 * sigma))
-    idx0 += (u0 > (0.8305693 * sigma))
-    idx0 += (u0 > (1.1201607 * sigma))
-    idx0 += (u0 > (1.4898994 * sigma))
-    idx0 += (u0 > (2.0245643 * sigma))
-    idx0 += (u0 > (2.6740751 * sigma))
+    idx0 += (u0 > b0)
+    idx0 += (u0 > b1)
+    idx0 += (u0 > b2)
+    idx0 += (u0 > b3)
+    idx0 += (u0 > b4)
+    idx0 += (u0 > b5)
+    idx0 += (u0 > b6)
     idx0 = idx0.to(tl.uint8)
+
     idx1 = tl.zeros_like(u1).to(tl.uint8)
-    idx1 += (u1 > (-2.0635107 * sigma))
-    idx1 += (u1 > (-1.4862148 * sigma))
-    idx1 += (u1 > (-1.0947649 * sigma))
-    idx1 += (u1 > (-0.7868000 * sigma))
-    idx1 += (u1 > (-0.5242788 * sigma))
-    idx1 += (u1 > (-0.2886016 * sigma))
-    idx1 += (u1 > (-0.0682537 * sigma))
-    idx1 += (u1 > (0.1449927 * sigma))
-    idx1 += (u1 > (0.3591875 * sigma))
-    idx1 += (u1 > (0.5836016 * sigma))
-    idx1 += (u1 > (0.8305693 * sigma))
-    idx1 += (u1 > (1.1201607 * sigma))
-    idx1 += (u1 > (1.4898994 * sigma))
-    idx1 += (u1 > (2.0245643 * sigma))
-    idx1 += (u1 > (2.6740751 * sigma))
+    idx1 += (u1 > b0)
+    idx1 += (u1 > b1)
+    idx1 += (u1 > b2)
+    idx1 += (u1 > b3)
+    idx1 += (u1 > b4)
+    idx1 += (u1 > b5)
+    idx1 += (u1 > b6)
     idx1 = idx1.to(tl.uint8)
-    packed = idx0 | (idx1 << 4)
+
+    c0 = tl.load(centroids_ptr + idx0.to(tl.int32))
+    c1 = tl.load(centroids_ptr + idx1.to(tl.int32))
+
+    r0 = u0 - c0
+    r1 = u1 - c1
+
+    qjl0 = (r0 >= 0).to(tl.uint8)
+    qjl1 = (r1 >= 0).to(tl.uint8)
+
+    qjl_norm = tl.sqrt(tl.sum(r0 * r0 + r1 * r1, axis=1) + 1e-8) / math.sqrt(2 * head_dim)
+
+    nib0 = idx0 | (qjl0 << 3)
+    nib1 = idx1 | (qjl1 << 3)
+    packed = nib0 | (nib1 << 4)
+
     tl.store(cache_ptrs, packed, mask=mask_kc)
-    # For quant_policy==42, K only has norm (scale), no zero
-    tl.store(scales_ptrs, norm[:, None], mask=kv_mask[:, None])
+    tl.store(mse_norm_ptrs, mse_norm[:, None], mask=kv_mask[:, None])
+    tl.store(qjl_norm_ptrs, qjl_norm[:, None], mask=kv_mask[:, None])
+
 
 @triton.jit
 def _fill_page_quant_turbo_int2(
     state_ptr,
     cache_ptr,
     scales_zeros_ptr,
+    boundaries_ptr,
     block_off,
     head_id,
     page_offs,
@@ -540,62 +581,93 @@ def _fill_page_quant_turbo_int2(
     """TurboQuant V path: raw dim = 4 * head_dim, packed to head_dim bytes."""
     d_off = tl.arange(0, head_dim)
     mask_kc = kv_mask[:, None]
+
     state_ptr = state_ptr + head_id * stride_sh
     state0_ptrs = state_ptr + q_offs[:, None] * stride_ss + d_off[None, :] * stride_sd
     state1_ptrs = state0_ptrs + head_dim * stride_sd
     state2_ptrs = state0_ptrs + 2 * head_dim * stride_sd
     state3_ptrs = state0_ptrs + 3 * head_dim * stride_sd
+
     cache_ptr = cache_ptr + block_off * stride_cn + head_id * stride_ch
     cache_ptrs = cache_ptr + page_offs[:, None] * stride_cb + d_off[None, :] * stride_cd
+
     scales_zeros_ptr = scales_zeros_ptr + block_off * stride_szn + head_id * stride_szh
     scales_ptrs = scales_zeros_ptr + page_offs[:, None] * stride_szb
+
     x0 = tl.load(state0_ptrs, mask=mask_kc, other=0.0).to(tl.float32)
     x1 = tl.load(state1_ptrs, mask=mask_kc, other=0.0).to(tl.float32)
     x2 = tl.load(state2_ptrs, mask=mask_kc, other=0.0).to(tl.float32)
     x3 = tl.load(state3_ptrs, mask=mask_kc, other=0.0).to(tl.float32)
+
     norm = tl.sqrt(tl.sum(x0 * x0 + x1 * x1 + x2 * x2 + x3 * x3, axis=1) + 1e-8)
-    sigma = 1.0 / math.sqrt(BLOCK_D)
     u0 = x0 / norm[:, None]
     u1 = x1 / norm[:, None]
     u2 = x2 / norm[:, None]
     u3 = x3 / norm[:, None]
+
+    b0 = tl.load(boundaries_ptr + 0)
+    b1 = tl.load(boundaries_ptr + 1)
+    b2 = tl.load(boundaries_ptr + 2)
+
     idx0 = tl.zeros_like(u0).to(tl.uint8)
-    idx0 += (u0 > (-0.9815992 * sigma))
-    idx0 += (u0 > (0.0 * sigma))
-    idx0 += (u0 > (0.9815992 * sigma))
+    idx0 += (u0 > b0)
+    idx0 += (u0 > b1)
+    idx0 += (u0 > b2)
     idx0 = idx0.to(tl.uint8)
+
     idx1 = tl.zeros_like(u1).to(tl.uint8)
-    idx1 += (u1 > (-0.9815992 * sigma))
-    idx1 += (u1 > (0.0 * sigma))
-    idx1 += (u1 > (0.9815992 * sigma))
+    idx1 += (u1 > b0)
+    idx1 += (u1 > b1)
+    idx1 += (u1 > b2)
     idx1 = idx1.to(tl.uint8)
+
     idx2 = tl.zeros_like(u2).to(tl.uint8)
-    idx2 += (u2 > (-0.9815992 * sigma))
-    idx2 += (u2 > (0.0 * sigma))
-    idx2 += (u2 > (0.9815992 * sigma))
+    idx2 += (u2 > b0)
+    idx2 += (u2 > b1)
+    idx2 += (u2 > b2)
     idx2 = idx2.to(tl.uint8)
+
     idx3 = tl.zeros_like(u3).to(tl.uint8)
-    idx3 += (u3 > (-0.9815992 * sigma))
-    idx3 += (u3 > (0.0 * sigma))
-    idx3 += (u3 > (0.9815992 * sigma))
+    idx3 += (u3 > b0)
+    idx3 += (u3 > b1)
+    idx3 += (u3 > b2)
     idx3 = idx3.to(tl.uint8)
+
     packed = idx0 | (idx1 << 2) | (idx2 << 4) | (idx3 << 6)
+
     tl.store(cache_ptrs, packed, mask=mask_kc)
-    # For quant_policy==42, V only has norm (scale), no zero
     tl.store(scales_ptrs, norm[:, None], mask=kv_mask[:, None])
 
-@triton.jit
-def _fill_page_quant(state_ptr, cache_ptr, scales_zeros_ptr, block_off, head_id, page_offs, q_offs, kv_mask,
-                     head_dim: tl.constexpr, stride_ss, stride_sh, stride_sd, stride_cn: tl.constexpr,
-                     stride_cb: tl.constexpr, stride_ch: tl.constexpr, stride_cd: tl.constexpr,
-                     stride_szn: tl.constexpr, stride_szb: tl.constexpr, stride_szh: tl.constexpr,
-                     stride_szd: tl.constexpr, BLOCK_D: tl.constexpr, quant_policy: tl.constexpr,
-                     is_value: tl.constexpr):
-    """Fill page.
 
-    Args:
-        is_value: If True, this is for V cache; if False, this is for K cache.
-    """
+@triton.jit
+def _fill_page_quant(
+    state_ptr,
+    cache_ptr,
+    scales_zeros_ptr,
+    centroids_ptr,
+    boundaries_ptr,
+    block_off,
+    head_id,
+    page_offs,
+    q_offs,
+    kv_mask,
+    head_dim: tl.constexpr,
+    stride_ss,
+    stride_sh,
+    stride_sd,
+    stride_cn: tl.constexpr,
+    stride_cb: tl.constexpr,
+    stride_ch: tl.constexpr,
+    stride_cd: tl.constexpr,
+    stride_szn: tl.constexpr,
+    stride_szb: tl.constexpr,
+    stride_szh: tl.constexpr,
+    stride_szd: tl.constexpr,
+    BLOCK_D: tl.constexpr,
+    quant_policy: tl.constexpr,
+    is_value: tl.constexpr,
+):
+    """Fill page."""
     if quant_policy == 8:
         return _fill_page_quant_int8(state_ptr,
                                      cache_ptr,
@@ -645,6 +717,7 @@ def _fill_page_quant(state_ptr, cache_ptr, scales_zeros_ptr, block_off, head_id,
             return _fill_page_quant_turbo_int2(state_ptr,
                                                cache_ptr,
                                                scales_zeros_ptr,
+                                               boundaries_ptr,
                                                block_off,
                                                head_id,
                                                page_offs,
@@ -664,9 +737,11 @@ def _fill_page_quant(state_ptr, cache_ptr, scales_zeros_ptr, block_off, head_id,
                                                stride_szd=stride_szd,
                                                BLOCK_D=BLOCK_D)
         else:
-            return _fill_page_quant_turbo_int4(state_ptr,
+            return _fill_page_quant_turbo_qjl4(state_ptr,
                                                cache_ptr,
                                                scales_zeros_ptr,
+                                               centroids_ptr,
+                                               boundaries_ptr,
                                                block_off,
                                                head_id,
                                                page_offs,
@@ -688,6 +763,7 @@ def _fill_page_quant(state_ptr, cache_ptr, scales_zeros_ptr, block_off, head_id,
     else:
         tl.static_assert(False, 'Unsupported quant policy')
 
+
 @triton.jit
 def _fill_kv_cache_quant_kernel(
     KStates,
@@ -696,6 +772,10 @@ def _fill_kv_cache_quant_kernel(
     VCaches,
     KScalesZeros,
     VScalesZeros,
+    KCentroids,
+    KBoundaries,
+    VCentroids,
+    VBoundaries,
     QStartLoc,
     QSeqLens,
     KVSeqLens,
@@ -732,17 +812,7 @@ def _fill_kv_cache_quant_kernel(
     BLOCK_D: tl.constexpr,
     BLOCK_DV: tl.constexpr,
 ):
-    """Fill kv cache kernel with int4 and int8 quant fuzed.
-
-    Args:
-        stride_xss: stride of sequence length dim of key or value states
-        stride_xsh: stride of head_num dim of key or value states
-        stride_xsh: stride of head_size dim of key or value states
-        stride_xn: stride of page num dim
-        stride_xb: stride of block size dim
-        stride_xh: stride of head_num dim
-        stride_xd: stride of head_size dim
-    """
+    """Fill kv cache kernel with quant fused."""
     batch_id = tl.program_id(2)
     head_id = tl.program_id(0)
     block_id = tl.program_id(1)
@@ -751,12 +821,10 @@ def _fill_kv_cache_quant_kernel(
     q_seqlen = tl.load(QSeqLens + batch_id)
     kv_seqlen = tl.load(KVSeqLens + batch_id)
     history_seqlen = kv_seqlen - q_seqlen
-
     kv_block_id = history_seqlen // BLOCK + block_id
 
     if kv_seqlen <= 0:
         return
-
     if kv_block_id * BLOCK >= kv_seqlen:
         return
 
@@ -777,6 +845,8 @@ def _fill_kv_cache_quant_kernel(
     _fill_page_quant(KStates,
                      KCaches,
                      KScalesZeros,
+                     KCentroids,
+                     KBoundaries,
                      block_off,
                      head_id,
                      page_offs,
@@ -802,6 +872,8 @@ def _fill_kv_cache_quant_kernel(
         _fill_page_quant(VStates,
                          VCaches,
                          VScalesZeros,
+                         VCentroids,
+                         VBoundaries,
                          block_off,
                          head_id,
                          page_offs,
@@ -844,6 +916,7 @@ def fill_kv_cache(k_states: Tensor,
         b_dim, s_dim, h_dim, d_dim = (0, 2, 1, 3)
     else:
         raise RuntimeError('Unsupported layout.')
+
     if v_states is None:
         v_states = k_states[..., :0]
     if v_caches is None:
@@ -855,34 +928,40 @@ def fill_kv_cache(k_states: Tensor,
     num_heads = k_caches.size(h_dim)
     head_dim = k_caches.size(d_dim)
     head_dim_v = v_caches.size(d_dim)
+
     if v_states.size(-1) == 0:
         head_dim_v = 0
+
     if max_q_seq_length == 1:
         max_num_blocks = 1
     else:
         max_num_blocks = triton.cdiv(max_q_seq_length, block_size) + 1
 
     BLOCK = block_size
+
+    k_centroids = torch.empty((1,), device=k_states.device, dtype=torch.float32)
+    k_boundaries = torch.empty((1,), device=k_states.device, dtype=torch.float32)
+    v_centroids = torch.empty((1,), device=k_states.device, dtype=torch.float32)
+    v_boundaries = torch.empty((1,), device=k_states.device, dtype=torch.float32)
+
     if quant_policy == 42:
-        # packed dims in cache; raw dims in state
         raw_k_dim = k_states.size(-1)
         if raw_k_dim & (raw_k_dim - 1) != 0:
-            raise ValueError(
-                f'TurboQuant K requires power-of-2 raw dim, got {raw_k_dim}'
-            )
+            raise ValueError(f'TurboQuant K requires power-of-2 raw dim, got {raw_k_dim}')
         if raw_k_dim != head_dim * 2:
             raise ValueError(
                 'TurboQuant K expects k_cache last dim = raw_k_dim/2,'
                 f' got raw={raw_k_dim}, packed={head_dim}'
             )
+
         k_states = butterfly_rotate(k_states).contiguous()
         BLOCK_D = triton.next_power_of_2(raw_k_dim)
+        k_centroids, k_boundaries = _get_lloyd_max_codebook(raw_k_dim, 3, device=k_states.device)
+
         if v_states.size(-1) > 0:
             raw_v_dim = v_states.size(-1)
             if raw_v_dim & (raw_v_dim - 1) != 0:
-                raise ValueError(
-                    f'TurboQuant V requires power-of-2 raw dim, got {raw_v_dim}'
-                )
+                raise ValueError(f'TurboQuant V requires power-of-2 raw dim, got {raw_v_dim}')
             if raw_v_dim != head_dim_v * 4:
                 raise ValueError(
                     'TurboQuant V expects v_cache last dim = raw_v_dim/4,'
@@ -890,6 +969,7 @@ def fill_kv_cache(k_states: Tensor,
                 )
             v_states = butterfly_rotate(v_states).contiguous()
             BLOCK_DV = triton.next_power_of_2(raw_v_dim)
+            v_centroids, v_boundaries = _get_lloyd_max_codebook(raw_v_dim, 2, device=v_states.device)
         else:
             BLOCK_DV = 0
     else:
@@ -897,8 +977,10 @@ def fill_kv_cache(k_states: Tensor,
         BLOCK_DV = triton.next_power_of_2(head_dim_v)
         if k_caches.data_ptr() == v_caches.data_ptr() and head_dim_v <= head_dim:
             BLOCK_DV = 0
+
     grid = (num_heads, max_num_blocks, batch_size)
     is_decoding = max_num_blocks == 1
+
     if quant_policy == 0:
         _fill_kv_cache_kernel[grid](
             k_states,
@@ -935,8 +1017,8 @@ def fill_kv_cache(k_states: Tensor,
         )
     else:
         if quant_policy == 42:
-            #   K = 4bit FWHT TurboQuant
-            #   V = 2bit FWHT TurboQuant
+            # K = QJL4 (3bit MSE + 1bit QJL)
+            # V = 2bit FWHT TurboQuant MSE
             k_quant_policy = 42
             v_quant_policy = 42
         else:
@@ -949,6 +1031,10 @@ def fill_kv_cache(k_states: Tensor,
             v_caches,
             k_scales_zeros,
             v_scales_zeros,
+            k_centroids,
+            k_boundaries,
+            v_centroids,
+            v_boundaries,
             q_start_loc,
             q_seq_length,
             kv_seq_length,
@@ -1152,7 +1238,7 @@ def _fill_kv_cache_blocked_fp8_kernel(
     if BLOCK_DV > 0:
         vc, vcs = _quant_blocked_fp8(v, fp8_min, fp8_max, VCaches.dtype.element_ty, GROUP_SIZE, ROUND_SCALE)
         tl.store(vc_ptrs, vc, mask=mask_vc)
-        tl.store(vsc_ptrs, vcs, mask=kv_mask[:, None] & (ds_off[None, :] < tl.cdiv(head_dim_v, GROUP_SIZE)))
+        tl.store(vsc_ptrs, vcs, mask=kv_mask[:, None] & (dvs_off[None, :] < tl.cdiv(head_dim_v, GROUP_SIZE)))
 
 
 def fill_kv_cache_blocked_fp8(k_states: Tensor,

@@ -406,7 +406,20 @@ def _fwd_grouped_split_quant_kernel(
         if quant_policy == 4 or quant_policy == 42:
             k = (k >> shift_kd) & 0x0F
 
-        if turbo_quant:
+        if turbo_quant and quant_policy == 42:
+            # K = QJL4:
+            #   low 3bit = mse idx
+            #   high 1bit = qjl sign
+            kmse_norm = tl.load(ksz_ptrs + b_offset * stride_kszp)
+            kqjl_norm = tl.load(ksz_ptrs + b_offset * stride_kszp + stride_kszd)
+
+            k_idx3 = k & 0x7
+            k_bit1 = (k >> 3) & 0x1
+            k_sign = k_bit1.to(tl.float32) * 2.0 - 1.0
+
+            k = tl.load(k_codebook_ptr + k_idx3.to(tl.int32))
+            k = (kmse_norm * (k + kqjl_norm * k_sign)).to(q.dtype)
+        elif turbo_quant:
             ks = tl.load(ksz_ptrs + b_offset * stride_kszp)
             k = tl.load(k_codebook_ptr + k.to(tl.int32))
             k = (k * ks).to(q.dtype)
@@ -419,7 +432,18 @@ def _fwd_grouped_split_quant_kernel(
             k1 = tl.load(k_ptr + off_k1 + b_offset * stride_kp)
             if quant_policy == 4 or quant_policy == 42:
                 k1 = (k1 >> shift_k1d) & 0x0F
-            if turbo_quant:
+
+            if turbo_quant and quant_policy == 42:
+                kmse_norm = tl.load(ksz_ptrs + b_offset * stride_kszp)
+                kqjl_norm = tl.load(ksz_ptrs + b_offset * stride_kszp + stride_kszd)
+
+                k1_idx3 = k1 & 0x7
+                k1_bit1 = (k1 >> 3) & 0x1
+                k1_sign = k1_bit1.to(tl.float32) * 2.0 - 1.0
+
+                k1 = tl.load(k_codebook_ptr + k1_idx3.to(tl.int32))
+                k1 = (kmse_norm * (k1 + kqjl_norm * k1_sign)).to(q.dtype)
+            elif turbo_quant:
                 k1 = tl.load(k_codebook_ptr + k1.to(tl.int32))
                 k1 = (k1 * ks).to(q.dtype)
             else:
@@ -652,6 +676,10 @@ def flash_attn_with_kvcache(
 
     shared_kv = k_cache.data_ptr() == v_cache.data_ptr()
 
+    # quant42 K/V have different semantics and meta shape, should not share buffer
+    if quant_policy == 42:
+        assert not shared_kv, 'quant_policy==42 does not support shared_kv'
+
     def _get_block_d(Lk):
         """Get block d."""
         BLOCK_DMODEL = triton.next_power_of_2(Lk)
@@ -682,12 +710,13 @@ def flash_attn_with_kvcache(
         o = q.new_empty(q.shape[:-1] + (Lv, ))
 
     # quant_policy == 42: interpret as
-    #   - K: 4bit FWHT TurboQuant
-    #   - V: 2bit FWHT TurboQuant
-    # Minimal-change implementation:
+    #   - K: QJL4 = 3bit MSE centroid + 1bit QJL sign
+    #   - V: TurboQuant MSE int2
+    # Implementation:
     #   - q rotated outside Triton
-    #   - k/v dequant by codebook * norm inside Triton
-    #   - output inverse-rotated outside Triton
+    #   - K dequant as mse_norm * (centroid[idx3] + qjl_norm * sign)
+    #   - V dequant as norm * centroid[idx2]
+    #   - output inverse-rotated because V is still rotated before caching
     if quant_policy == 42:
         turbo_quant = True
         real_k_dim = Lq
@@ -697,10 +726,12 @@ def flash_attn_with_kvcache(
         if real_v_dim & (real_v_dim - 1) != 0:
             raise ValueError(f'TurboQuant requires power-of-2 V head dim, got {real_v_dim}')
 
-        turbo_k_codebook, _ = _get_lloyd_max_codebook(real_k_dim, bits=4, device=q.device)
+        # K = QJL4 => 3bit centroid codebook
+        turbo_k_codebook, _ = _get_lloyd_max_codebook(real_k_dim, bits=3, device=q.device)
+        # V = TurboQuant MSE int2 => 2bit centroid codebook
         turbo_v_codebook, _ = _get_lloyd_max_codebook(real_v_dim, bits=2, device=q.device)
 
-        # rotate query into the same domain as quantized K/V
+        # Rotate query into the same domain as quantized K/V
         q = butterfly_rotate(q.float()).to(orig_q_dtype)
 
     if softmax_scale is None:
@@ -754,10 +785,9 @@ def flash_attn_with_kvcache(
     )
 
     if quant_policy > 0:
-        # For turbo_quant=True (currently quant_policy==42), k_scales_zeros/v_scales_zeros
-        # are interpreted minimally as:
-        #   [..., 0] = norm
-        #   [..., 1] = unused
+        # For quant_policy==42:
+        #   k_scales_zeros[..., 0] = mse_norm, k_scales_zeros[..., 1] = qjl_norm
+        #   v_scales_zeros[..., 0] = norm
         _fwd_grouped_split_quant_kernel[grid](q,
                                               k_cache,
                                               v_cache,

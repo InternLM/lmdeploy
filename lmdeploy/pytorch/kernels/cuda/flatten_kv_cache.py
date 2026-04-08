@@ -165,7 +165,8 @@ def _flatten_kv_cache_quant(
         offs_dk = tl.arange(0, BLOCK_DK) % HALF_HDK
         offs_dv = tl.arange(0, BLOCK_DV) % HALF_HDV
     elif quant_policy == 42:
-        # K is 4-bit (packed 2x), V is 2-bit (packed 4x)
+        # K is QJL4 packed in int4 => packed dim = HEAD_DIM_K // 2
+        # V is TurboQuant MSE int2 => packed dim = HEAD_DIM_V // 4
         HALF_HDK: tl.constexpr = HEAD_DIM_K // 2
         QUARTER_HDV: tl.constexpr = HEAD_DIM_V // 4
         offs_dk = tl.arange(0, BLOCK_DK) % HALF_HDK
@@ -192,33 +193,53 @@ def _flatten_kv_cache_quant(
     vo_ptrs = (vo_ptr + head_id * stride_voh + (start_loc + offs_obs[:, None]) * stride_vos +
                offs_dov[None, :] * stride_vod)
 
+    # -----------------------
+    # K path
+    # -----------------------
     kc = tl.load(kc_ptrs)
     if quant_policy == 4 or quant_policy == 42:
         kc = _dequant_int4(kc, HEAD_DIM_K, BLOCK_DK)
-    ks = tl.load(ksz_ptrs)
-    # For quant_policy==42, K only has norm (scale), no zero
+
     if quant_policy == 42:
-        kq = tl.load(k_codebook_ptr + kc.to(tl.int32))
-        kq = (kq * ks[:, None]).to(ko_ptr.dtype.element_ty)
+        # QJL4:
+        #   low 3bit = mse idx
+        #   high 1bit = qjl sign
+        kmse_norm = tl.load(ksz_ptrs)
+        kqjl_norm = tl.load(ksz_ptrs + stride_kszd)
+
+        k_idx3 = kc & 0x7
+        k_bit1 = (kc >> 3) & 0x1
+        k_sign = k_bit1.to(tl.float32) * 2.0 - 1.0
+
+        k_cent = tl.load(k_codebook_ptr + k_idx3.to(tl.int32))
+        kq = kmse_norm[:, None] * (k_cent + kqjl_norm[:, None] * k_sign)
+        kq = kq.to(ko_ptr.dtype.element_ty)
     else:
+        ks = tl.load(ksz_ptrs)
         kz = tl.load(ksz_ptrs + stride_kszd)
         ksz = ks * kz
         kq = (kc * ks[:, None] - ksz[:, None]).to(ko_ptr.dtype.element_ty)
     tl.store(ko_ptrs, kq, mask=mask_bs[:, None] & mask_dok[None, :])
+    # -----------------------
+    # V path
+    # -----------------------
     vc = tl.load(vc_ptrs)
     if quant_policy == 42:
         vc = _dequant_int2(vc, HEAD_DIM_V, BLOCK_DV)
     elif quant_policy == 4:
         vc = _dequant_int4(vc, HEAD_DIM_V, BLOCK_DV)
-    vs = tl.load(vsz_ptrs)
-    # For quant_policy==42, V only has norm (scale), no zero
+
     if quant_policy == 42:
+        # V is TurboQuant MSE int2, meta only stores norm
+        vs = tl.load(vsz_ptrs)
         vq = tl.load(v_codebook_ptr + vc.to(tl.int32))
         vq = (vq * vs[:, None]).to(vo_ptr.dtype.element_ty)
     else:
+        vs = tl.load(vsz_ptrs)
         vz = tl.load(vsz_ptrs + stride_vszd)
         vsz = vs * vz
         vq = (vc * vs[:, None] - vsz[:, None]).to(vo_ptr.dtype.element_ty)
+
     tl.store(vo_ptrs, vq, mask=mask_bs[:, None] & mask_dov[None, :])
 
 
@@ -259,8 +280,8 @@ def flatten_kv_cache(k_caches: Tensor,
         k_head_dim *= 2
         v_head_dim *= 2
     elif quant_policy == 42:
-        k_head_dim *= 2  # K is 4-bit
-        v_head_dim *= 4  # V is 2-bit
+        k_head_dim *= 2   # K packed int4 => raw dim *2
+        v_head_dim *= 4   # V packed int2 => raw dim *4
     BLOCK_DK = triton.next_power_of_2(k_head_dim)
     BLOCK_DV = triton.next_power_of_2(v_head_dim)
     BLOCK_BS = k_caches.size(s_dim)
@@ -324,11 +345,13 @@ def flatten_kv_cache(k_caches: Tensor,
         )
     else:
         if quant_policy == 42:
-            k_codebook, _ = _get_lloyd_max_codebook(k_head_dim, bits=4, device=k_caches.device)
+            # K = QJL4 => 3bit centroid codebook
+            k_codebook, _ = _get_lloyd_max_codebook(k_head_dim, bits=3, device=k_caches.device)
+            # V = TurboQuant MSE int2 => 2bit centroid codebook
             v_codebook, _ = _get_lloyd_max_codebook(v_head_dim, bits=2, device=v_caches.device)
         else:
-            k_codebook = torch.empty((1, ), device=k_caches.device, dtype=torch.float32)
-            v_codebook = torch.empty((1, ), device=v_caches.device, dtype=torch.float32)
+            k_codebook = torch.empty((1,), device=k_caches.device, dtype=torch.float32)
+            v_codebook = torch.empty((1,), device=v_caches.device, dtype=torch.float32)
         _flatten_kv_cache_quant[grid](
             k_caches,
             v_caches,
