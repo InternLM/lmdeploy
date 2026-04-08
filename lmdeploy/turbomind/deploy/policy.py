@@ -68,7 +68,7 @@ def process_fp8(x: torch.Tensor, kind: str):
         return x.to(dtype=torch.bfloat16)
 
 
-def process_compressed_tensor(x: torch.Tensor, kind: str):
+def process_compressed_packed_tensor(x: torch.Tensor, kind: str):
     x = x.cuda()
     if x.dtype == torch.int32:
         xs = get_u4_slices(x, torch.uint8)
@@ -79,7 +79,7 @@ def process_compressed_tensor(x: torch.Tensor, kind: str):
     return x
 
 
-def get_input_policy(model_format):
+def get_input_policy(model_format, quantized_format=None):
     if model_format == 'awq':
         return process_awq_gemm
     elif model_format == 'gptq':
@@ -89,6 +89,9 @@ def get_input_policy(model_format):
     elif model_format == 'fp8':
         return process_fp8
     elif model_format == 'compressed-tensors':
-        return process_compressed_tensor
+        if quantized_format == 'pack-quantized':
+            return process_compressed_packed_tensor
+        elif quantized_format == 'float-quantized':
+            return process_fp8
     else:
         return to_cuda
