@@ -238,8 +238,7 @@ def smooth_fc_fcs(pre_fc: torch.nn.Module,
     scales = (act_scales.pow(alpha) / w_scales_pow).clamp(min=1e-4).to(device).to(dtype)
     # prevent scales.max() * scales.min() == inf
     denom = (scales.max().float() * scales.min().float()).sqrt()
-    denom = denom.to(dtype=dtype)
-    scales = scales / denom
+    scales = (scales.float() / denom).to(dtype=dtype)
 
     # (for qwen&baichuan) pre_fc is packed QKV, only V needs to scale
     # phi3 fused qkv and gate_up
