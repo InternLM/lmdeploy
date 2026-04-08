@@ -264,7 +264,10 @@ def flatten_kv_cache(k_caches: Tensor,
         raise RuntimeError('Unsupported layout.')
 
     if out_dtype is None:
-        out_dtype = k_caches.dtype
+        if quant_policy == 42:
+            out_dtype = torch.float16
+        else:
+            out_dtype = k_caches.dtype
 
     if out_size is None or out_size <= 0:
         out_size = k_caches.size(b_dim) * k_caches.size(s_dim)

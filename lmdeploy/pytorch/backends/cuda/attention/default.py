@@ -279,6 +279,16 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             flatten_kv_layout=kv_layout,
         )
 
+        # For quant_policy==42, flattened K/V are in rotated domain.
+        # Rotate Q to match, and inverse-rotate output afterwards.
+        if quant_policy == 42:
+            from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import (
+                butterfly_rotate,
+                butterfly_rotate_inv,
+            )
+            orig_dtype = query.dtype
+            query = butterfly_rotate(query.float()).to(orig_dtype)
+
         attn_output = self.flash_attention_fwd(
             query,
             flatten_k,
@@ -297,6 +307,13 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             block_sparse_size=self.block_sparse_size,
             kv_layout=kv_layout,
         )
+
+        # Inverse-rotate output back to original domain
+        if quant_policy == 42:
+            attn_output = butterfly_rotate_inv(
+                attn_output.float()
+            ).to(orig_dtype)
+
         return attn_output
 
     def forward(
