@@ -38,6 +38,11 @@ on:
         description: 'regression functions'
         type: string
         default: "['quant', 'tools','restful','pipeline','benchmark','evaluation']"
+      docker_tag:
+        required: true
+        description: 'Docker tag'
+        type: string
+        default: 'nightly-cu12.8'
   schedule:
     - cron:  '00 14 * * 0-4'
 
@@ -54,13 +59,14 @@ env:
   OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
   DEEPSEEK_VL: /nvme/qa_test_models/offline_pkg/DeepSeek-VL
   RUN_ID: ${{ inputs.repo_ref || 'main' }}_${{ github.run_id }}
+  DOCKER_IMAGE: ${{ secrets.INNER_DOCKER_REGISTRY }}/ailab-puyu-puyu_gpu/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
 
 jobs:
   linux-build:
     if: ${{!cancelled() && (github.event_name == 'schedule' || !inputs.offline_mode)}}
     strategy:
       matrix:
-        pyver: [py310]
+        pyver: [py312]
     runs-on: ubuntu-latest
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
@@ -131,7 +137,7 @@ jobs:
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
         with:
-          name: my-artifact-${{ github.run_id }}-py310
+          name: my-artifact-${{ github.run_id }}-py312
       - name: Copy Artifacts
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl -f && cp lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
@@ -181,7 +187,7 @@ jobs:
           echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install auto_gptq matplotlib attrdict
+          python3 -m pip install matplotlib attrdict
           python3 -m pip install -r requirements/lite.txt
       - name: Install lmdeploy
         run: |

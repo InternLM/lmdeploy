@@ -76,7 +76,7 @@ jobs:
     needs: publish_docker_image
     env:
       INNER_REGISTRY: ${{ secrets.INNER_DOCKER_REGISTRY }}
-      INNER_TAG: "${{ secrets.INNER_DOCKER_REGISTRY }}/ailab-puyu-puyu_gpu/lmdeploy:nightly-cu12.8"
+      INNER_TAG: "${{ secrets.INNER_DOCKER_REGISTRY }}/ailab-puyu-puyu_gpu/lmdeploy:nightly-test-cu12.8"
     steps:
       - name: Pull and push to inner
         run: |
