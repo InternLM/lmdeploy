@@ -5,12 +5,27 @@ This module provides:
 - Hadamard transform (orthogonal rotation) for quant_policy==QuantPolicy.TURBO_QUANT
 - Lloyd-Max codebook for 2-bit, 3-bit, and 4-bit quantization
 """
+import logging
 import math
 
 import torch
 from torch import Tensor
 
+logger = logging.getLogger(__name__)
+
 _TURBOQUANT_CACHE = {}
+
+# Try to import fast_hadamard_transform for better performance
+try:
+    from fast_hadamard_transform import hadamard_transform as _fast_hadamard_transform
+
+    _USE_FAST_HADAMARD = True
+except ImportError:
+    _USE_FAST_HADAMARD = False
+    logger.info(
+        'fast_hadamard_transform not installed, falling back to matmul-based '
+        'Hadamard transform. Install it for better performance.'
+    )
 
 
 def hadamard_rotate(x: Tensor) -> Tensor:
@@ -19,14 +34,28 @@ def hadamard_rotate(x: Tensor) -> Tensor:
     Q is an orthogonal matrix (Q @ Q.T = I), so the transform is invertible
     via the transpose: x = y @ Q.
 
+    This function internally casts to float32 for computation to maintain
+    precision, then casts back to the original dtype.
+
     Args:
         x: Input tensor of shape (..., d) where d is head dimension.
 
     Returns:
-        Transformed tensor of same shape.
+        Transformed tensor of same shape, in original dtype.
     """
-    Q = _get_hadamard_matrix(x.shape[-1], device=x.device, dtype=x.dtype)
-    return torch.matmul(x, Q.T)
+    if _USE_FAST_HADAMARD:
+        d = x.shape[-1]
+        scale = 1.0 / math.sqrt(d)
+        return _fast_hadamard_transform(x, scale=scale)
+
+    # Fallback: use matmul with Walsh-Hadamard matrix
+    orig_dtype = x.dtype
+    x = x.float()
+    Q = _get_hadamard_matrix(
+        x.shape[-1], device=x.device, dtype=torch.float32
+    )
+    result = torch.matmul(x, Q.T)
+    return result.to(orig_dtype)
 
 
 def hadamard_rotate_inv(x: Tensor) -> Tensor:
@@ -34,19 +63,35 @@ def hadamard_rotate_inv(x: Tensor) -> Tensor:
 
     Since Q is orthogonal: Q^{-1} = Q.T
 
+    This function internally casts to float32 for computation to maintain
+    precision, then casts back to the original dtype.
+
     Args:
         x: Input tensor of shape (..., d) where d is head dimension.
 
     Returns:
-        Inverse-transformed tensor of same shape.
+        Inverse-transformed tensor of same shape, in original dtype.
     """
-    Q = _get_hadamard_matrix(x.shape[-1], device=x.device, dtype=x.dtype)
-    return torch.matmul(x, Q)
+    if _USE_FAST_HADAMARD:
+        # Hadamard is self-inverse (up to scaling)
+        d = x.shape[-1]
+        scale = 1.0 / math.sqrt(d)
+        return _fast_hadamard_transform(x, scale=scale)
+
+    # Fallback: use matmul with Walsh-Hadamard matrix
+    orig_dtype = x.dtype
+    x = x.float()
+    Q = _get_hadamard_matrix(
+        x.shape[-1], device=x.device, dtype=torch.float32
+    )
+    result = torch.matmul(x, Q)
+    return result.to(orig_dtype)
 
 
 def _get_hadamard_matrix(d: int, device: str = 'cuda', dtype=torch.float32) -> Tensor:
-    """Get cached orthogonal Hadamard matrix Q = H @ diag(signs) / sqrt(d).
+    """Get cached Walsh-Hadamard matrix Q = H / sqrt(d).
 
+    This is the standard Walsh-Hadamard matrix (same as fast_hadamard_transform).
     Q is orthogonal: Q @ Q.T = I, so Q^{-1} = Q.T.
 
     Args:
@@ -66,7 +111,7 @@ def _get_hadamard_matrix(d: int, device: str = 'cuda', dtype=torch.float32) -> T
     if cache_key in _TURBOQUANT_CACHE:
         return _TURBOQUANT_CACHE[cache_key]
 
-    # Build normalized Hadamard matrix
+    # Build normalized Walsh-Hadamard matrix
     with torch.no_grad():
         H = torch.tensor([[1.0]], dtype=torch.float32)
         n = 1
@@ -77,13 +122,7 @@ def _get_hadamard_matrix(d: int, device: str = 'cuda', dtype=torch.float32) -> T
             ], dim=0)
             n *= 2
         H = H / math.sqrt(d)
-
-        # Deterministic diagonal signs
-        idx = torch.arange(d)
-        signs = torch.where((idx & 1) == 0, 1.0, -1.0)
-
-        # Q = H @ diag(signs)
-        Q = (H * signs.unsqueeze(0)).to(device=device, dtype=dtype)
+        Q = H.to(device=device, dtype=dtype)
 
     _TURBOQUANT_CACHE[cache_key] = Q
     return Q

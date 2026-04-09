@@ -693,7 +693,6 @@ def flash_attn_with_kvcache(
     turbo_quant = False
     turbo_k_codebook = None
     turbo_v_codebook = None
-    orig_q_dtype = q.dtype
 
     # shape constraints
     Lq, Lk, Lv = q.shape[-1], k_cache.shape[d_dim], v_cache.shape[d_dim]
@@ -732,7 +731,7 @@ def flash_attn_with_kvcache(
         turbo_v_codebook, _ = get_lloyd_max_codebook(real_v_dim, bits=2, device=q.device)
 
         # Rotate query into the same domain as quantized K/V
-        q = hadamard_rotate(q.float()).to(orig_q_dtype)
+        q = hadamard_rotate(q)
 
     if softmax_scale is None:
         softmax_scale = 1.0 / (Lq**0.5)
@@ -908,6 +907,6 @@ def flash_attn_with_kvcache(
                                num_stages=1)
 
     if quant_policy == 42:
-        o = hadamard_rotate_inv(o.float()).to(orig_q_dtype)
+        o = hadamard_rotate_inv(o)
 
     return o

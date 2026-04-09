@@ -286,8 +286,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
                 hadamard_rotate,
                 hadamard_rotate_inv,
             )
-            orig_dtype = query.dtype
-            query = hadamard_rotate(query.float()).to(orig_dtype)
+            query = hadamard_rotate(query)
 
         attn_output = self.flash_attention_fwd(
             query,
@@ -310,9 +309,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
 
         # Inverse-rotate output back to original domain
         if quant_policy == QuantPolicy.TURBO_QUANT:
-            attn_output = hadamard_rotate_inv(
-                attn_output.float()
-            ).to(orig_dtype)
+            attn_output = hadamard_rotate_inv(attn_output)
 
         return attn_output
 
