@@ -70,9 +70,6 @@ def quant_turboquant_mse(kv: torch.Tensor, nbits: int):
     head_dim = kv.shape[-1]
     device = str(kv.device)
 
-    # Get Hadamard rotation matrix
-    y = hadamard_rotate(kv.float())
-
     # Get Lloyd-Max codebook
     _, boundaries = get_lloyd_max_codebook(head_dim, nbits, device=device)
 

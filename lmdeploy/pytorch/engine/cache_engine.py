@@ -140,7 +140,7 @@ class CacheEngine:
                                   block_size: int,
                                   head_size: int,
                                   world_size: int = 1,
-                                  quant_policy: QuantPolicy = 0):
+                                  quant_policy: QuantPolicy = QuantPolicy.NONE):
         """Get single block shape."""
         attn_backend = get_backend()
         dtype = model_config.dtype
@@ -168,7 +168,7 @@ class CacheEngine:
                                     block_size: int,
                                     head_size: int,
                                     world_size: int = 1,
-                                    quant_policy: QuantPolicy = 0):
+                                    quant_policy: QuantPolicy = QuantPolicy.NONE):
         """Get single block shape."""
         attn_backend = get_backend()
         dtype = model_config.dtype

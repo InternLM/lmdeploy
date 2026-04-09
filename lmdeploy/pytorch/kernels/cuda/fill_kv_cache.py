@@ -36,24 +36,6 @@ def _quant_int4(val1, val2):
 
 
 @triton.jit
-def _quant_int2(val1, val2, val3, val4):
-    val1 = val1.to(tl.float32)
-    val2 = val2.to(tl.float32)
-    val3 = val3.to(tl.float32)
-    val4 = val4.to(tl.float32)
-    val_min = tl.min(tl.minimum(tl.minimum(val1, val2), tl.minimum(val3, val4)), 1)
-    val_max = tl.max(tl.maximum(tl.maximum(val1, val2), tl.maximum(val3, val4)), 1)
-    scales = (val_max - val_min) / 3
-    zeros = -val_min / scales
-    q_val1 = (val1 / scales[:, None] + zeros[:, None] + 0.5).to(tl.uint8)
-    q_val2 = (val2 / scales[:, None] + zeros[:, None] + 0.5).to(tl.uint8)
-    q_val3 = (val3 / scales[:, None] + zeros[:, None] + 0.5).to(tl.uint8)
-    q_val4 = (val4 / scales[:, None] + zeros[:, None] + 0.5).to(tl.uint8)
-    q_val = q_val1 + q_val2 * 4 + q_val3 * 16 + q_val4 * 64
-    return q_val, scales, zeros
-
-
-@triton.jit
 def _fill_kv_cache_kernel(
     KStates,
     VStates,
@@ -228,62 +210,6 @@ def _fill_page_quant_int4(
     state0 = tl.load(state0_ptrs, mask=mask_kc)
     state1 = tl.load(state1_ptrs, mask=mask_kc)
     state, scales, zeros = _quant_int4(state0, state1)
-
-    tl.store(cache_ptrs, state, mask=mask_kc)
-    tl.store(scales_ptrs, scales[:, None], mask=kv_mask[:, None])
-    tl.store(zeros_ptrs, zeros[:, None], mask=kv_mask[:, None])
-
-
-@triton.jit
-def _fill_page_quant_int2(
-    state_ptr,
-    cache_ptr,
-    scales_zeros_ptr,
-    block_off,
-    head_id,
-    page_offs,
-    q_offs,
-    kv_mask,
-    head_dim: tl.constexpr,
-    stride_ss,
-    stride_sh,
-    stride_sd,
-    stride_cn: tl.constexpr,
-    stride_cb: tl.constexpr,
-    stride_ch: tl.constexpr,
-    stride_cd: tl.constexpr,
-    stride_szn: tl.constexpr,
-    stride_szb: tl.constexpr,
-    stride_szh: tl.constexpr,
-    stride_szd: tl.constexpr,
-    BLOCK_D: tl.constexpr,
-):
-    """Fill page int2.
-
-    head_dim means packed cache dim = original_head_dim // 4.
-    """
-    d_off = tl.arange(0, BLOCK_D)
-    mask_kc = kv_mask[:, None] & (d_off[None, :] < head_dim)
-
-    state_ptr = state_ptr + head_id * stride_sh
-    state0_ptrs = state_ptr + q_offs[:, None] * stride_ss + d_off[None, :] * stride_sd
-    state1_ptrs = state0_ptrs + head_dim * stride_sd
-    state2_ptrs = state0_ptrs + 2 * head_dim * stride_sd
-    state3_ptrs = state0_ptrs + 3 * head_dim * stride_sd
-
-    cache_ptr = cache_ptr + block_off * stride_cn + head_id * stride_ch
-    cache_ptrs = cache_ptr + page_offs[:, None] * stride_cb + d_off[None, :] * stride_cd
-
-    scales_zeros_ptr = scales_zeros_ptr + block_off * stride_szn + head_id * stride_szh
-    scales_ptrs = scales_zeros_ptr + page_offs[:, None] * stride_szb
-    zeros_ptrs = scales_ptrs + stride_szd
-
-    state0 = tl.load(state0_ptrs, mask=mask_kc)
-    state1 = tl.load(state1_ptrs, mask=mask_kc)
-    state2 = tl.load(state2_ptrs, mask=mask_kc)
-    state3 = tl.load(state3_ptrs, mask=mask_kc)
-
-    state, scales, zeros = _quant_int2(state0, state1, state2, state3)
 
     tl.store(cache_ptrs, state, mask=mask_kc)
     tl.store(scales_ptrs, scales[:, None], mask=kv_mask[:, None])
@@ -761,7 +687,7 @@ def fill_kv_cache(k_states: Tensor,
                   block_offsets: Tensor,
                   k_scales_zeros: Tensor = None,
                   v_scales_zeros: Tensor = None,
-                  quant_policy: QuantPolicy = 0,
+                  quant_policy: QuantPolicy = QuantPolicy.NONE,
                   kv_layout: str = 'bshd'):
     """Fill key/value state to cache for paged attention."""
     if kv_layout == 'bshd':

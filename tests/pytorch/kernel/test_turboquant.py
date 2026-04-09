@@ -131,22 +131,6 @@ def _unpack_indices(packed: torch.Tensor, nbits: int, original_dim: int) -> torc
     for d in batch_dims:
         batch_size *= d
 
-    # Flatten all batch dims
-    packed_flat = packed.flatten()  # [batch_size * packed_last_dim]
-
-    if nbits == 4:
-        packed_d = ((original_dim + 1) // 2) * 2
-        required_packed = packed_d // 2
-        total_required = batch_size * required_packed
-        if packed_flat.shape[-1] < total_required:
-            packed_flat = torch.nn.functional.pad(packed_flat, (0, total_required - packed_flat.shape[-1]), value=0)
-    elif nbits == 2:
-        packed_d = ((original_dim + 3) // 4) * 4
-        required_packed = packed_d // 4
-        total_required = batch_size * required_packed
-        if packed_flat.shape[-1] < total_required:
-            packed_flat = torch.nn.functional.pad(packed_flat, (0, total_required - packed_flat.shape[-1]), value=0)
-
     # Unpack
     if nbits == 4:
         low = (packed & 0x0F)          # (..., d/2) ->  indices[0 : d/2]

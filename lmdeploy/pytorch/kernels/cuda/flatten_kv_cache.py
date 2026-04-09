@@ -253,7 +253,7 @@ def flatten_kv_cache(k_caches: Tensor,
                      out_dtype: torch.dtype = None,
                      k_scales_zeros: Tensor = None,
                      v_scales_zeros: Tensor = None,
-                     quant_policy: QuantPolicy = 0,
+                     quant_policy: QuantPolicy = QuantPolicy.NONE,
                      kv_layout: str = 'bshd',
                      flatten_kv_layout: str = 'hsd'):
     """Recovery paged kv cache to normal kv cache."""

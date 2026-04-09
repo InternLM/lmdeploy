@@ -20,7 +20,7 @@ class AttentionMetadata:
     fill_seqlens: torch.Tensor = None
     cu_seqlens_q: torch.Tensor = None
     cu_seqlens_k: torch.Tensor = None
-    quant_policy: QuantPolicy = 0
+    quant_policy: QuantPolicy = QuantPolicy.NONE
 
 
 T = TypeVar('T', bound=AttentionMetadata)

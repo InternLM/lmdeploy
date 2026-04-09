@@ -40,7 +40,7 @@ class TritonAttentionMetadata(AttentionMetadata):
     q_seqlens: torch.Tensor = None
     kv_start_loc: torch.Tensor = None
     kv_seqlens: torch.Tensor = None
-    quant_policy: QuantPolicy = 0
+    quant_policy: QuantPolicy = QuantPolicy.NONE
     kv_flatten_size: int = None
     # flash mla
     tile_scheduler_metadata: torch.Tensor = None

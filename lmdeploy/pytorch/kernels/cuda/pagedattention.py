@@ -646,7 +646,7 @@ def flash_attn_with_kvcache(
     alibi_slopes: Tensor = None,
     k_scales_zeros: Tensor = None,
     v_scales_zeros: Tensor = None,
-    quant_policy: QuantPolicy = 0,
+    quant_policy: QuantPolicy = QuantPolicy.NONE,
     sinks: Tensor = None,
     kv_layout: str = 'bshd',
 ):
@@ -691,8 +691,11 @@ def flash_attn_with_kvcache(
         return BLOCK_DMODEL, BLOCK_DMODEL1, BLOCK_DV
 
     turbo_quant = False
-    turbo_k_codebook = None
-    turbo_v_codebook = None
+    # Triton still receives these arguments for quantized paths, so keep
+    # valid tensor-backed pointers even when turbo quant is not enabled.
+    # They will be overwritten with real codebooks when quant_policy == 42.
+    turbo_k_codebook = q.new_empty((1, ))
+    turbo_v_codebook = q.new_empty((1, ))
 
     # shape constraints
     Lq, Lk, Lv = q.shape[-1], k_cache.shape[d_dim], v_cache.shape[d_dim]
