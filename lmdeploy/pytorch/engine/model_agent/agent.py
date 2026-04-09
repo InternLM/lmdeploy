@@ -1179,9 +1179,9 @@ class BaseModelAgent:
             return ipc_tensor.clone() if require_clone else ipc_tensor
 
         def _deserialize_weights(serialized_data):
-            raw = ForkingPickler.loads(pybase64.b64decode(serialized_data))
+            weights = ForkingPickler.loads(pybase64.b64decode(serialized_data))
             if request.load_format == 'flattened_bucket':
-                metadata: list[FlattenedTensorMetadata] = raw['metadata']
+                metadata: list[FlattenedTensorMetadata] = weights['metadata']
                 if not metadata:
                     return []
                 if 'flattened_tensor' in weights:
@@ -1206,7 +1206,7 @@ class BaseModelAgent:
                     self._update_params_ipc_event.wait()
                 bucket = FlattenedTensorBucket(flattened_tensor=flattened_tensor, metadata=metadata)
                 return list(bucket.reconstruct_tensors())
-            return [(k, _construct(v)) for k, v in raw]
+            return [(k, _construct(v)) for k, v in weights]
 
         def _split_main_and_draft(weights):
             # TODO, zhouxinyu, support split and update weights for other mtp methods
