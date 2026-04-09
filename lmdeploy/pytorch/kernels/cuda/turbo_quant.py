@@ -182,7 +182,7 @@ def get_lloyd_max_codebook(d: int, bits: int, device: str = 'cuda') -> tuple[Ten
             device=device,
             dtype=torch.float32,
         )
-    else:  # bits == 4
+    elif bits == 4:
         centroids_std = torch.tensor(
             [-2.4175594, -1.7094618, -1.2629677, -0.9265621,
              -0.6470380, -0.4015197, -0.1756835,  0.0391761,
@@ -197,6 +197,8 @@ def get_lloyd_max_codebook(d: int, bits: int, device: str = 'cuda') -> tuple[Ten
               1.4898994,  2.0245643,  2.6740751],
             device=device, dtype=torch.float32
         )
+    else:
+        raise NotImplementedError
 
     centroids = centroids_std * sigma
     boundaries = boundaries_std * sigma

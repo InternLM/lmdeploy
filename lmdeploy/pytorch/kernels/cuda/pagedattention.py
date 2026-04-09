@@ -12,7 +12,7 @@ from torch import Tensor
 from lmdeploy.messages import QuantPolicy
 from lmdeploy.utils import get_logger
 
-from .turbo_quant import get_lloyd_max_codebook, hadamard_rotate, hadamard_rotate_inv
+from .turbo_quant import hadamard_rotate, hadamard_rotate_inv
 from .utils import get_device_props
 
 logger = get_logger('lmdeploy')
@@ -220,6 +220,46 @@ def _fwd_grouped_split_kernel(
     tl.store(acc_out_ptr + off_meta + 1, l_i, mask=mask_h)
 
 
+
+
+@triton.jit
+def _k4v2_k_centroid(idx3, head_size: tl.constexpr):
+    """QJL4 K centroid lookup: 8 entries, pure register."""
+    # Lloyd-Max 3-bit centroids at sigma=1
+    S0: tl.constexpr = -2.1519456
+    S1: tl.constexpr = -1.3439093
+    S2: tl.constexpr = -0.7560052
+    S3: tl.constexpr = -0.2450942
+    S4: tl.constexpr =  0.2450942
+    S5: tl.constexpr =  0.7560052
+    S6: tl.constexpr =  1.3439093
+    S7: tl.constexpr =  2.1519456
+    sigma: tl.constexpr = 1.0 / tl.math.sqrt(head_size * 2.0)
+    c = tl.where(idx3 < 4,
+            tl.where(idx3 < 2,
+                tl.where(idx3 == 0, S0, S1),
+                tl.where(idx3 == 2, S2, S3)),
+            tl.where(idx3 < 6,
+                tl.where(idx3 == 4, S4, S5),
+                tl.where(idx3 == 6, S6, S7)))
+    return c * sigma
+
+
+@triton.jit
+def _k4v2_v_centroid(idx2, head_size_v: tl.constexpr):
+    """MSE int2 V centroid lookup: 4 entries, pure register."""
+    # Lloyd-Max 2-bit centroids at sigma=1
+    S0: tl.constexpr = -1.5104176
+    S1: tl.constexpr = -0.4527808
+    S2: tl.constexpr =  0.4527808
+    S3: tl.constexpr =  1.5104176
+    sigma: tl.constexpr = 1.0 / tl.math.sqrt(head_size_v * 4.0)
+    c = tl.where(idx2 < 2,
+            tl.where(idx2 == 0, S0, S1),
+            tl.where(idx2 == 2, S2, S3))
+    return c * sigma
+
+
 @triton.jit
 def _fwd_grouped_split_quant_kernel(
     q_ptr,
@@ -227,8 +267,6 @@ def _fwd_grouped_split_quant_kernel(
     v_ptr,
     KScalesZeros,
     VScalesZeros,
-    k_codebook_ptr,
-    v_codebook_ptr,
     sm_scale,
     cache_seqlens_ptr,
     page_table_ptr,
@@ -254,7 +292,6 @@ def _fwd_grouped_split_quant_kernel(
     stride_vszh: tl.constexpr,
     stride_vszd: tl.constexpr,
     quant_policy: tl.constexpr,
-    turbo_quant: tl.constexpr,
     stride_ok: tl.constexpr,
     stride_obs: tl.constexpr,
     stride_oh: tl.constexpr,
@@ -406,23 +443,14 @@ def _fwd_grouped_split_quant_kernel(
         if quant_policy == 4 or quant_policy == 42:
             k = (k >> shift_kd) & 0x0F
 
-        if turbo_quant and quant_policy == 42:
-            # K = QJL4:
-            #   low 3bit = mse idx
-            #   high 1bit = qjl sign
+        if quant_policy == 42:
             kmse_norm = tl.load(ksz_ptrs + b_offset * stride_kszp)
             kqjl_norm = tl.load(ksz_ptrs + b_offset * stride_kszp + stride_kszd)
 
-            k_idx3 = k & 0x7
-            k_bit1 = (k >> 3) & 0x1
-            k_sign = k_bit1.to(tl.float32) * 2.0 - 1.0
-
-            k = tl.load(k_codebook_ptr + k_idx3.to(tl.int32))
-            k = (kmse_norm * (k + kqjl_norm * k_sign)).to(q.dtype)
-        elif turbo_quant:
-            ks = tl.load(ksz_ptrs + b_offset * stride_kszp)
-            k = tl.load(k_codebook_ptr + k.to(tl.int32))
-            k = (k * ks).to(q.dtype)
+            # k is 4-bit nibble: low 3 = mse_idx, high 1 = sign
+            k_cent = _k4v2_k_centroid((k & 0x7), head_size)
+            k_sign = ((k >> 3) & 0x1).to(tl.float32) * 2.0 - 1.0
+            k = (kmse_norm * (k_cent + kqjl_norm * k_sign)).to(q.dtype)
         else:
             ks = tl.load(ksz_ptrs + b_offset * stride_kszp)
             kz = tl.load(ksz_ptrs + b_offset * stride_kszp + 1)
@@ -433,19 +461,13 @@ def _fwd_grouped_split_quant_kernel(
             if quant_policy == 4 or quant_policy == 42:
                 k1 = (k1 >> shift_k1d) & 0x0F
 
-            if turbo_quant and quant_policy == 42:
+            if quant_policy == 42:
                 kmse_norm = tl.load(ksz_ptrs + b_offset * stride_kszp)
                 kqjl_norm = tl.load(ksz_ptrs + b_offset * stride_kszp + stride_kszd)
 
-                k1_idx3 = k1 & 0x7
-                k1_bit1 = (k1 >> 3) & 0x1
-                k1_sign = k1_bit1.to(tl.float32) * 2.0 - 1.0
-
-                k1 = tl.load(k_codebook_ptr + k1_idx3.to(tl.int32))
-                k1 = (kmse_norm * (k1 + kqjl_norm * k1_sign)).to(q.dtype)
-            elif turbo_quant:
-                k1 = tl.load(k_codebook_ptr + k1.to(tl.int32))
-                k1 = (k1 * ks).to(q.dtype)
+                k1_cent = _k4v2_k_centroid((k1 & 0x7), head_size)
+                k1_sign = ((k1 >> 3) & 0x1).to(tl.float32) * 2.0 - 1.0
+                k1 = (kmse_norm * (k1_cent + kqjl_norm * k1_sign)).to(q.dtype)
             else:
                 k1 = ((k1 - kz) * ks).to(q.dtype)
 
@@ -459,9 +481,9 @@ def _fwd_grouped_split_quant_kernel(
         else:
             v = tl.load(v_ptr + off_v + b_offset * stride_vp)
 
-        if turbo_quant:
+        if quant_policy == 42:
             vs = tl.load(vsz_ptrs + b_offset * stride_vszp)
-            v = tl.load(v_codebook_ptr + v.to(tl.int32))
+            v = _k4v2_v_centroid(v, head_size_v)
             v = (v * vs).to(q.dtype)
         else:
             vs = tl.load(vsz_ptrs + b_offset * stride_vszp)
@@ -690,12 +712,6 @@ def flash_attn_with_kvcache(
         BLOCK_DV = triton.next_power_of_2(Lv)
         return BLOCK_DMODEL, BLOCK_DMODEL1, BLOCK_DV
 
-    turbo_quant = False
-    # Triton still receives these arguments for quantized paths, so keep
-    # valid tensor-backed pointers even when turbo quant is not enabled.
-    # They will be overwritten with real codebooks when quant_policy == 42.
-    turbo_k_codebook = q.new_empty((1, ))
-    turbo_v_codebook = q.new_empty((1, ))
 
     # shape constraints
     Lq, Lk, Lv = q.shape[-1], k_cache.shape[d_dim], v_cache.shape[d_dim]
@@ -720,18 +736,12 @@ def flash_attn_with_kvcache(
     #   - V dequant as norm * centroid[idx2]
     #   - output inverse-rotated because V is still rotated before caching
     if quant_policy == 42:
-        turbo_quant = True
         real_k_dim = Lq
         real_v_dim = Lv * 4
         if real_k_dim & (real_k_dim - 1) != 0:
             raise ValueError(f'TurboQuant requires power-of-2 K/Q head dim, got {real_k_dim}')
         if real_v_dim & (real_v_dim - 1) != 0:
             raise ValueError(f'TurboQuant requires power-of-2 V head dim, got {real_v_dim}')
-
-        # K = QJL4 => 3bit centroid codebook
-        turbo_k_codebook, _ = get_lloyd_max_codebook(real_k_dim, bits=3, device=q.device)
-        # V = TurboQuant MSE int2 => 2bit centroid codebook
-        turbo_v_codebook, _ = get_lloyd_max_codebook(real_v_dim, bits=2, device=q.device)
 
         # Rotate query into the same domain as quantized K/V
         q = hadamard_rotate(q)
@@ -795,8 +805,6 @@ def flash_attn_with_kvcache(
                                               v_cache,
                                               k_scales_zeros,
                                               v_scales_zeros,
-                                              turbo_k_codebook,
-                                              turbo_v_codebook,
                                               softmax_scale,
                                               cache_seqlens,
                                               page_table,
@@ -822,7 +830,6 @@ def flash_attn_with_kvcache(
                                               stride_vszh=v_scales_zeros.stride(h_dim),
                                               stride_vszd=v_scales_zeros.stride(d_dim),
                                               quant_policy=quant_policy,
-                                              turbo_quant=turbo_quant,
                                               stride_ok=acc.stride(-2),
                                               stride_obs=acc.stride(-4),
                                               stride_oh=acc.stride(-3),
