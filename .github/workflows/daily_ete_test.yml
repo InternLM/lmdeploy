@@ -115,7 +115,7 @@ jobs:
     runs-on: [self-hosted, linux-a100]
     timeout-minutes: 50
     container:
-      image: openmmlab/lmdeploy:latest-cu12.8
+      image: openmmlab/lmdeploy:nightly-test-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/qa_test_models:/nvme/qa_test_models
@@ -168,7 +168,7 @@ jobs:
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
       TEST_ENV: ${{ matrix.transformers }}
     container:
-      image: openmmlab/lmdeploy:latest-cu12.8
+      image: openmmlab/lmdeploy:nightly-test-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -255,7 +255,7 @@ jobs:
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
       TEST_ENV: ${{ matrix.transformers }}
     container:
-      image: openmmlab/lmdeploy:latest-cu12.8
+      image: openmmlab/lmdeploy:nightly-test-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -430,7 +430,7 @@ jobs:
             extra: '--logprobs-mode raw_logprobs'
     timeout-minutes: 60
     container:
-      image: openmmlab/lmdeploy:latest-cu12.8
+      image: openmmlab/lmdeploy:nightly-test-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -547,7 +547,7 @@ jobs:
     needs: test_quantization
     timeout-minutes: 240
     container:
-      image: openmmlab/lmdeploy:latest-cu12.8
+      image: openmmlab/lmdeploy:nightly-test-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -610,7 +610,7 @@ jobs:
     needs: test_quantization
     timeout-minutes: 120
     container:
-      image: openmmlab/lmdeploy:latest-cu12.8
+      image: openmmlab/lmdeploy:nightly-test-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -676,7 +676,7 @@ jobs:
             generate_type: base
     timeout-minutes: 60
     container:
-      image: openmmlab/lmdeploy:latest-cu12.8
+      image: openmmlab/lmdeploy:nightly-test-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -794,7 +794,7 @@ jobs:
     needs: test_quantization
     timeout-minutes: 240
     container:
-      image: openmmlab/lmdeploy:latest-cu12.8
+      image: openmmlab/lmdeploy:nightly-test-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -857,7 +857,7 @@ jobs:
     needs: [test_tools, test_restful, test_pipeline, test_benchmark]
     timeout-minutes: 5
     container:
-      image: openmmlab/lmdeploy:latest-cu12.8
+      image: openmmlab/lmdeploy:nightly-test-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip

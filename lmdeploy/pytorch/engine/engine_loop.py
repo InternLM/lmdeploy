@@ -175,13 +175,10 @@ class EngineLoop:
             if out.resp.data is None:
                 out.resp.data = dict()
             out.resp.data.setdefault('logprobs', [])
-
             # logprobs to dict
-            vals = cur_logprobs[0]
-            indices = cur_logprobs[1]
-            cur_logprobs = dict(zip(indices, vals))
+            cur_logprobs = [dict(zip(indices, vals)) for vals, indices in cur_logprobs]
             logprobs = out.resp.data['logprobs']
-            logprobs.append(cur_logprobs)
+            logprobs.extend(cur_logprobs)
 
     def _send_resps(self, step_outputs: list[InferOutput]):
         """Send response callback."""
@@ -228,10 +225,33 @@ class EngineLoop:
 
             return logit
 
+        def __get_logprobs(batched_outputs: 'BatchedOutputs'):
+            """Get valid logprobs."""
+            batch_size = batched_outputs.stop_pos.size(0)
+            logprobs = batched_outputs.logprobs
+            if logprobs is None:
+                return [None for _ in range(batch_size)]
+            num_decode_tokens = logprobs.indices.shape[0] // batch_size
+            results = [[] for _ in range(batch_size)]
+            range_tensor = torch.arange(num_decode_tokens, device=logprobs.indices.device)
+
+            for idx in range(batch_size):
+                start = idx * num_decode_tokens
+                end = (idx + 1) * num_decode_tokens
+                mask = logprobs.indices[start:end][:, 0] >= 0
+                stop_pos = batched_outputs.stop_pos[idx]
+                # only apply when stopped
+                if stop_pos > -1:
+                    mask = mask & (stop_pos >= range_tensor)
+                indices = logprobs.indices[start:end][mask].tolist()
+                vals = logprobs.vals[start:end][mask].tolist()
+                results[idx] = list(zip(vals, indices))
+            return results
+
         logits = batched_outputs.logits
         all_routed_experts = batched_outputs.all_routed_experts
 
-        if model_inputs is not None and model_inputs.is_chunk:
+        if model_inputs is not None and (model_inputs.is_chunk and not model_inputs.is_last_chunk):
             # chunk long context does not need to update seqs and outputs
             seq = running[0]
             seq.append_routed_experts(all_routed_experts)
@@ -241,9 +261,7 @@ class EngineLoop:
         new_token_timestamp = batched_outputs.new_token_timestamp
         logprobs = batched_outputs.logprobs
 
-        if logprobs is not None:
-            logprobs.vals = logprobs.vals.tolist()
-            logprobs.indices = logprobs.indices.tolist()
+        all_logprobs = __get_logprobs(batched_outputs)
 
         seq_length = [seq.num_token_ids for seq in running]
         is_run = [seq.status == MessageStatus.RUNNING for seq in running]
@@ -275,7 +293,9 @@ class EngineLoop:
             num_logprobs = msg.sampling_param.num_logprobs
             cur_logprobs = None
             if logprobs is not None and num_logprobs > 0:
-                cur_logprobs = (logprobs.vals[idx][:num_logprobs + 1], logprobs.indices[idx][:num_logprobs + 1])
+                cur_logprobs = list([_dat[:num_logprobs + 1] for _dat in vals_indices]
+                                    for vals_indices in all_logprobs[idx])
+
             # get spec stats info
             spec_info = None
             num_draft_tokens = self.config.num_speculative_tokens

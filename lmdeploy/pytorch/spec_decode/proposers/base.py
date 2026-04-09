@@ -105,20 +105,38 @@ class BaseSpecProposer:
     def update_inputs_decoding(self, model_inputs: ModelInputs, extra_inputs: ExtraInputs, next_input_ids: torch.Tensor,
                                target_hidden_states: torch.Tensor, model_metas: list[Any]):
         """Update to decoding inputs."""
-        model_inputs.is_decoding = True
         batch_size = model_inputs.seq_length.size(0)
-        model_inputs.input_ids = next_input_ids
-        model_inputs.max_q_seqlen = 1
-        model_inputs.max_kv_seqlen += 1
-        model_inputs.sum_kv_seqlen += model_inputs.seq_length.numel()
-        model_inputs.history_lengths += model_inputs.seq_length
+        history_lengths = model_inputs.history_lengths + model_inputs.seq_length
         if extra_inputs.num_rejected_tokens is not None:
-            model_inputs.history_lengths -= extra_inputs.num_rejected_tokens
-        model_inputs.seq_length = model_inputs.seq_length.new_ones(batch_size)
-        model_inputs.target_position_ids = model_inputs.history_lengths.unsqueeze(0).clone()
-        model_inputs.model_metas = model_metas
-        model_inputs.target_hidden_states = target_hidden_states
-        return model_inputs
+            history_lengths = history_lengths - extra_inputs.num_rejected_tokens
+
+        mrope_pos_ids = None
+        if model_inputs.mrope_pos_ids is not None:
+            mrope_pos_ids = model_inputs.mrope_pos_ids[:, extra_inputs.last_token_indices] + 1
+
+        return model_inputs.clone(
+            input_ids=next_input_ids,
+            seq_length=model_inputs.seq_length.new_ones(batch_size),
+            history_lengths=history_lengths,
+            is_decoding=True,
+            num_ignored_history=model_inputs.num_ignored_history,
+            max_q_seqlen=1,
+            max_kv_seqlen=model_inputs.max_kv_seqlen + 1,
+            sum_kv_seqlen=model_inputs.sum_kv_seqlen + model_inputs.seq_length.numel(),
+            target_position_ids=history_lengths.unsqueeze(0).clone(),
+            target_inputs_embeds=None,
+            mrope_pos_ids=mrope_pos_ids,
+            target_hidden_states=target_hidden_states,
+            model_metas=model_metas,
+        )
+
+    def embed_input_ids(self, input_ids: torch.Tensor):
+        """embed_input_ids."""
+        if hasattr(self.model, 'get_input_embeddings'):
+            input_embeds = self.model.get_input_embeddings()(input_ids)
+        else:
+            input_embeds = self.target_model.get_input_embeddings()(input_ids)
+        return input_embeds
 
     @record_function('draft_get_logits')
     def get_logits(self, hidden_states: torch.Tensor):
