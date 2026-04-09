@@ -49,7 +49,6 @@ env:
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
   RUN_ID: ${{ inputs.repo_ref }}_${{ github.run_id }}
-  DOCKER_IMAGE: ${{ secrets.INNER_DOCKER_REGISTRY }}/ailab-puyu-puyu_gpu/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
 
 jobs:
   linux-build:
@@ -104,7 +103,7 @@ jobs:
     runs-on: [self-hosted, linux-a100]
     timeout-minutes: 50
     container:
-      image: ${{ env.DOCKER_IMAGE }}
+      image: registry.h.pjlab.org.cn/ailab-puyu-puyu_gpu/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/qa_test_models:/nvme/qa_test_models
@@ -164,7 +163,7 @@ jobs:
       TEST_ENV: ${{ matrix.transformers }}
     timeout-minutes: 480
     container:
-      image: ${{ env.DOCKER_IMAGE }}
+      image: registry.h.pjlab.org.cn/ailab-puyu-puyu_gpu/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip

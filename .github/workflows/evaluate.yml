@@ -47,7 +47,6 @@ on:
 env:
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
   COMPASS_DATA_CACHE: /nvme/qa_test_models/compass_data_cache
-  DOCKER_IMAGE: ${{ secrets.INNER_DOCKER_REGISTRY }}/ailab-puyu-puyu_gpu/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
 
 jobs:
   linux-build:
@@ -107,7 +106,7 @@ jobs:
       matrix:
         evaluate_type: ['base']
     container:
-      image: ${{ env.DOCKER_IMAGE }}
+      image: registry.h.pjlab.org.cn/ailab-puyu-puyu_gpu/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
