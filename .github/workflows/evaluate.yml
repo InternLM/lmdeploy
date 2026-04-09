@@ -38,10 +38,16 @@ on:
         description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
         type: boolean
         default: false
+      docker_tag:
+        required: true
+        description: 'Docker tag'
+        type: string
+        default: 'nightly-test-cu12.8'
 
 env:
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
   COMPASS_DATA_CACHE: /nvme/qa_test_models/compass_data_cache
+  DOCKER_IMAGE: ${{ secrets.INNER_DOCKER_REGISTRY }}/ailab-puyu-puyu_gpu/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
 
 jobs:
   linux-build:
@@ -101,7 +107,7 @@ jobs:
       matrix:
         evaluate_type: ['base']
     container:
-      image: openmmlab/lmdeploy:latest-cu12.8
+      image: ${{ env.DOCKER_IMAGE }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
