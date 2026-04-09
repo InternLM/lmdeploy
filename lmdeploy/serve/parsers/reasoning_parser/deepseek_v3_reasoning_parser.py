@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from . import ReasoningParserManager
-from .reasoning_parser import ReasoningParser
+from .reasoning_parser import ReasoningParser, ReasoningParserManager
 
 
 @ReasoningParserManager.register_module('deepseek-v3')

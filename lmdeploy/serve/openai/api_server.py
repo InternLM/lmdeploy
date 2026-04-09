@@ -1,5 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # yapf: disable
+from __future__ import annotations
+
 import asyncio
 import json
 import os
@@ -177,7 +179,7 @@ def check_request(request) -> JSONResponse | None:
     return None
 
 
-def _create_chat_completion_logprobs(tokenizer: 'PreTrainedTokenizerBase',
+def _create_chat_completion_logprobs(tokenizer: PreTrainedTokenizerBase,
                                      token_ids: list[int] | None = None,
                                      logprobs: list[dict[int, float]] | None = None):
     """Create openai LogProbs for chat.completion.
@@ -234,7 +236,7 @@ async def terminate():
 
 # modified from https://github.com/vllm-project/vllm/blob/v0.5.4/vllm/entrypoints/openai/logits_processors.py#L51  # noqa
 def logit_bias_logits_processor(logit_bias: dict[int, float] | dict[str, float],
-                                tokenizer: 'PreTrainedTokenizerBase') -> LogitsProcessor:
+                                tokenizer: PreTrainedTokenizerBase) -> LogitsProcessor:
     try:
         # Convert token_id to integer
         # Clamp the bias between -100 and 100 per OpenAI API spec
@@ -406,8 +408,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         with_cache=with_cache,
         preserve_cache=preserve_cache,
     )
-
-    response_parser = ResponseParser(request=request, tokenizer=tokenizer)
+    parser_cls = VariableInterface.response_parser_cls
+    response_parser = parser_cls(request=request, tokenizer=tokenizer)
     # request might be adjusted by tool parser
     request = response_parser.request
 
@@ -504,7 +506,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 if res.finish_reason == 'stop' and streaming_tools is True:
                     res.finish_reason = 'tool_calls'
             elif request.tool_choice != 'none' and request.tools is not None:
-                if ResponseParser.tool_parser_cls is None:
+                if parser_cls.tool_parser_cls is None:
                     logger.error('Please launch the api_server with --tool-call-parser if you want to use tool.')
 
             # The parser may intentionally suppress no-op chunks by returning
@@ -1224,6 +1226,9 @@ def set_parsers(reasoning_parser_name: str | None = None, tool_parser_name: str 
     if arch == 'GptOssForCausalLM':
         name = 'gpt-oss'
     cls = ResponseParserManager.get(name)
+    if cls is None:
+        raise ValueError(f'The response parser {name} is not in the parser list: '
+                         f'{ResponseParserManager.module_dict.keys()}')
     cls.set_parsers(reasoning_parser_name=reasoning_parser_name, tool_parser_name=tool_parser_name)
     VariableInterface.response_parser_cls = cls
 
@@ -1363,8 +1368,6 @@ def serve(model_path: str,
         ssl_certfile = os.environ['SSL_CERTFILE']
         http_or_https = 'https'
 
-    set_parsers(reasoning_parser, tool_call_parser)
-
     handle_torchrun()
     _, pipeline_class = get_task(backend, model_path)
     if isinstance(backend_config, PytorchEngineConfig):
@@ -1380,6 +1383,7 @@ def serve(model_path: str,
                                                     max_log_len=max_log_len,
                                                     speculative_config=speculative_config,
                                                     **kwargs)
+    set_parsers(reasoning_parser, tool_call_parser)
 
     # create FastAPI lifespan events
     lifespan = create_lifespan_handler(backend_config, VariableInterface.async_engine)

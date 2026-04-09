@@ -463,7 +463,7 @@ class ArgumentHelper:
     def reasoning_parser(parser):
         """Add reasoning parser to parser."""
         legacy_names = ['qwen-qwq', 'intern-s1', 'deepseek-r1']
-        from lmdeploy.serve.openai.reasoning_parser import ReasoningParserManager
+        from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
         return parser.add_argument(
             '--reasoning-parser',
             type=str,
@@ -475,7 +475,7 @@ class ArgumentHelper:
     @staticmethod
     def tool_call_parser(parser):
         """Add tool call parser to parser."""
-        from lmdeploy.serve.openai.tool_parser import ToolParserManager
+        from lmdeploy.serve.parsers.tool_parser import ToolParserManager
 
         return parser.add_argument(
             '--tool-call-parser',

@@ -1,8 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from mmengine import Registry
+# registers ResponseParser 'gpt-oss', None if openai_harmony unavailable
+from .gpt_oss_response_parser import GptOssResponseParser
+from .response_parser import ResponseParser, ResponseParserManager
 
-from .response_parser import ResponseParser
-
-ResponseParserManager = Registry('response_parser', locations=['lmdeploy.serve.parsers.response_parser'])
-
-__all__ = ['ResponseParser', 'ResponseParserManager']
+__all__ = ['ResponseParser', 'ResponseParserManager', 'GptOssResponseParser']

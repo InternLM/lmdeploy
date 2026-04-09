@@ -11,8 +11,7 @@ from lmdeploy.serve.openai.protocol import (
     ToolCall,
 )
 
-from . import ToolParserManager
-from .tool_parser import ToolParser
+from .tool_parser import ToolParser, ToolParserManager
 
 if TYPE_CHECKING:
     from lmdeploy.serve.openai.protocol import ChatCompletionRequest

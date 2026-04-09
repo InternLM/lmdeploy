@@ -69,8 +69,9 @@ REFERENCE_CHUNKS = [
     ('\n', False, None, None, False, None, None, None),
     ('</', False, None, None, False, None, None, None),
     ('parameter', False, None, None, False, None, None, None),
-    ('>', True, None, None, True, None, '{', None),
-    ('\n', True, None, None, True, None, '"location": "Beijing, China"', None),
+    # Tokenizer maps this `>` to a single id; Qwen3Coder may emit accumulated JSON args in one delta.
+    ('>', True, None, None, True, None, '{"location": "Beijing, China"', None),
+    ('\n', False, None, None, False, None, None, None),
     ('</', False, None, None, False, None, None, None),
     ('function', False, None, None, False, None, None, None),
     ('>', True, None, None, True, None, '}', None),

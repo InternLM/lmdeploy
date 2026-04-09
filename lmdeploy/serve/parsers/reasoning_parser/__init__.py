@@ -1,10 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from mmengine import Registry
-
 from .deepseek_v3_reasoning_parser import DeepSeekV3ReasoningParser
-from .reasoning_parser import ReasoningParser
-
-ReasoningParserManager = Registry('reasoning_parser', locations=['lmdeploy.serve.parsers.reasoning_parser'])
+from .reasoning_parser import ReasoningParser, ReasoningParserManager
 
 __all__ = [
     'ReasoningParser',

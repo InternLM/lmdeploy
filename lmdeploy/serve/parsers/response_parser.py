@@ -6,10 +6,10 @@ from abc import abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar
 
+from mmengine import Registry
+
 from lmdeploy.serve.openai.protocol import DeltaMessage
 from lmdeploy.utils import get_logger
-
-from . import ResponseParserManager
 
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
@@ -20,6 +20,9 @@ if TYPE_CHECKING:
     from .tool_parser import ToolParser
 
 logger = get_logger('lmdeploy')
+
+ResponseParserManager = Registry('response_parser', locations=['lmdeploy.serve.parsers.response_parser'])
+
 
 class ResponseParser:
     @classmethod

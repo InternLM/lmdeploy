@@ -5,8 +5,7 @@ from lmdeploy.serve.openai.protocol import (
     ToolCall,
 )
 
-from . import ToolParserManager
-from .tool_parser import ToolParser
+from .tool_parser import ToolParser, ToolParserManager
 
 
 @ToolParserManager.register_module(['qwen', 'qwen3'])
