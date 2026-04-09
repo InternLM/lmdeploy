@@ -8,12 +8,17 @@ on:
         description: 'Set branch or tag or commit id. Default is "main"'
         type: string
         default: 'main'
+      docker_tag:
+        required: false
+        description: 'Set Docker tag. Default is "cu12.8"'
+        type: string
+        default: 'cu12.8'
   schedule:
     - cron:  '00 8 * * 0-4'
 
 env:
-  TAG: "openmmlab/lmdeploy:nightly-cu12.8"
-  DEV_TAG: "openmmlab/lmdeploy:nightly-test-cu12.8"
+  TAG: "openmmlab/lmdeploy:nightly-${{inputs.docker_tag || 'cu12.8'}}"
+  DEV_TAG: "openmmlab/lmdeploy:nightly-test-${{inputs.docker_tag || 'cu12.8'}}"
 
 jobs:
   publish_docker_image:
@@ -76,7 +81,7 @@ jobs:
     needs: publish_docker_image
     env:
       INNER_REGISTRY: ${{ secrets.INNER_DOCKER_REGISTRY }}
-      INNER_TAG: "${{ secrets.INNER_DOCKER_REGISTRY }}/ailab-puyu-puyu_gpu/lmdeploy:nightly-test-cu12.8"
+      INNER_TAG: "${{ secrets.INNER_DOCKER_REGISTRY }}/ailab-puyu-puyu_gpu/lmdeploy:nightly-test-${{inputs.docker_tag || 'cu12.8'}}"
     steps:
       - name: Pull and push to inner
         run: |
