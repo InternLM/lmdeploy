@@ -605,31 +605,18 @@ def _make_blocked_cache_quant42(batched_k,
     batch_size = batched_k.shape[0]
     max_seq_len = batched_k.shape[1]
 
-    # Quantize full K
-    k_quant = torch.empty(
-        batch_size, max_seq_len, num_heads_k, packed_k_dim,
-        dtype=torch.uint8, device=batched_k.device)
-    k_meta = torch.empty(
-        batch_size, max_seq_len, num_heads_k, 2,
-        dtype=batched_k.dtype, device=batched_k.device)
-    for b in range(batch_size):
-        for s in range(max_seq_len):
-            k_q, k_m = quant_turboquant_qjl4(batched_k[b, s])  # (heads, packed_k), (heads, 2)
-            k_quant[b, s] = k_q
-            k_meta[b, s] = k_m
+    # Vectorized K quantization: reshape to (batch*seq, heads, dim) and quantize in one call
+    # Shape: (batch_size, max_seq_len, num_heads_k, feat_dim) -> (batch_size * max_seq_len, num_heads_k, feat_dim)
+    k_reshaped = batched_k.view(batch_size * max_seq_len, num_heads_k, feat_dim)
+    k_q_all, k_m_all = quant_turboquant_qjl4(k_reshaped)  # (batch*seq, heads, packed_k), (batch*seq, heads, 2)
+    k_quant = k_q_all.view(batch_size, max_seq_len, num_heads_k, packed_k_dim)
+    k_meta = k_m_all.view(batch_size, max_seq_len, num_heads_k, 2)
 
-    # Quantize full V
-    v_quant = torch.empty(
-        batch_size, max_seq_len, num_heads_k, packed_v_dim,
-        dtype=torch.uint8, device=batched_v.device)
-    v_norm = torch.empty(
-        batch_size, max_seq_len, num_heads_k,
-        dtype=batched_v.dtype, device=batched_v.device)
-    for b in range(batch_size):
-        for s in range(max_seq_len):
-            v_q, v_n = quant_turboquant_mse(batched_v[b, s], 2)  # (heads, packed_v), (heads,)
-            v_quant[b, s] = v_q
-            v_norm[b, s] = v_n
+    # Vectorized V quantization: reshape to (batch*seq, heads, dim) and quantize in one call
+    v_reshaped = batched_v.view(batch_size * max_seq_len, num_heads_k, feat_dim_v)
+    v_q_all, v_n_all = quant_turboquant_mse(v_reshaped, 2)  # (batch*seq, heads, packed_v), (batch*seq, heads)
+    v_quant = v_q_all.view(batch_size, max_seq_len, num_heads_k, packed_v_dim)
+    v_norm = v_n_all.view(batch_size, max_seq_len, num_heads_k)
 
     blocked_k = torch.zeros(
         max_blocks_nums, block_size, num_heads_k, packed_k_dim,
@@ -882,13 +869,6 @@ class TestPagedAttentionQuant42(TestPagedAttentionBase):
         # quant42 has quantization error, but kernel and reference should still
         # be close numerically.
         torch.testing.assert_close(out, conti_gt, atol=0.1, rtol=0.05)
-
-
-def _print_metrics(name: str, a: torch.Tensor, b: torch.Tensor):
-    """Print comparison metrics."""
-    m = compute_metrics(a, b)
-    print(f'{name}:')
-    print(f'  cosine={m["cosine"]:.6f}, nmse={m["nmse"]:.6f}, snr={m["snr_db"]:.3f} dB')
 
 
 class TestPagedAttentionFP16vsQuant42(TestPagedAttentionBase):

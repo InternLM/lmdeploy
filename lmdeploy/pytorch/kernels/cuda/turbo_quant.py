@@ -107,7 +107,7 @@ def get_hadamard_matrix(d: int, device: str = 'cuda', dtype=torch.float32) -> Te
             f'Hadamard matrix requires power-of-2 dimension, got d={d}'
         )
 
-    cache_key = (d, device, str(dtype), 'hadamard_matrix')
+    cache_key = (d, str(device), str(dtype), 'hadamard_matrix')
     if cache_key in _TURBOQUANT_CACHE:
         return _TURBOQUANT_CACHE[cache_key]
 
@@ -150,7 +150,7 @@ def get_lloyd_max_codebook(d: int, bits: int, device: str = 'cuda') -> tuple[Ten
             f'Only 2-bit and 3-bit precomputed codebooks are supported, got bits={bits}'
         )
 
-    cache_key = (d, bits, device, 'codebook')
+    cache_key = (d, bits, str(device), 'codebook')
     if cache_key in _TURBOQUANT_CACHE:
         return _TURBOQUANT_CACHE[cache_key]
 

@@ -2,7 +2,7 @@
 kernel tests.
 
 This module contains shared helper functions for testing TurboQuant quantization,
-which is used by quant_policy=QuantPolicy.TURBO_QUANT (K=3bit QJL4, V=2bit mixed precision).
+which is used by quant_policy=QuantPolicy.TURBO_QUANT (K=QJL4, V=2bit mixed precision).
 
 TurboQuant is a quantization method that:
 - Uses Lloyd-Max algorithm for optimal quantization

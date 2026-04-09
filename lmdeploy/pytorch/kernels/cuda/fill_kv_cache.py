@@ -10,6 +10,14 @@ from lmdeploy.messages import QuantPolicy
 
 from .turbo_quant import get_lloyd_max_codebook, hadamard_rotate
 
+# Triton-compatible quantization policy constants
+# Python Enum cannot be used in Triton kernels, so we define these as module-level
+# constants which Triton will inline at compile time.
+Q_POLICY_NONE = tl.constexpr(0)
+Q_POLICY_INT4 = tl.constexpr(4)
+Q_POLICY_INT8 = tl.constexpr(8)
+Q_POLICY_TURBO = tl.constexpr(42)
+
 
 @triton.jit
 def _quant_int8(val):
@@ -437,7 +445,7 @@ def _fill_page_quant(
     is_value: tl.constexpr,
 ):
     """Fill page."""
-    if quant_policy == 8:
+    if quant_policy == Q_POLICY_INT8:
         return _fill_page_quant_int8(state_ptr,
                                      cache_ptr,
                                      scales_zeros_ptr,
@@ -459,7 +467,7 @@ def _fill_page_quant(
                                      stride_szh=stride_szh,
                                      stride_szd=stride_szd,
                                      BLOCK_D=BLOCK_D)
-    elif quant_policy == 4:
+    elif quant_policy == Q_POLICY_INT4:
         return _fill_page_quant_int4(state_ptr,
                                      cache_ptr,
                                      scales_zeros_ptr,
@@ -481,7 +489,7 @@ def _fill_page_quant(
                                      stride_szh=stride_szh,
                                      stride_szd=stride_szd,
                                      BLOCK_D=BLOCK_D)
-    elif quant_policy == 42:
+    elif quant_policy == Q_POLICY_TURBO:
         if is_value:
             return _fill_page_quant_turbo_int2(state_ptr,
                                                cache_ptr,
@@ -574,8 +582,7 @@ def _fill_kv_cache_quant_kernel(
     stride_vszb: tl.constexpr,
     stride_vszh: tl.constexpr,
     stride_vszd: tl.constexpr,
-    k_quant_policy: tl.constexpr,
-    v_quant_policy: tl.constexpr,
+    quant_policy: tl.constexpr,
     stride_boff,
     BLOCK: tl.constexpr,
     BLOCK_D: tl.constexpr,
@@ -645,7 +652,7 @@ def _fill_kv_cache_quant_kernel(
                      stride_szh=stride_kszh,
                      stride_szd=stride_kszd,
                      BLOCK_D=BLOCK_D,
-                     quant_policy=k_quant_policy,
+                     quant_policy=quant_policy,
                      is_value=False)
 
     if BLOCK_DV > 0:
@@ -672,7 +679,7 @@ def _fill_kv_cache_quant_kernel(
                          stride_szh=stride_vszh,
                          stride_szd=stride_vszd,
                          BLOCK_D=BLOCK_DV,
-                         quant_policy=v_quant_policy,
+                         quant_policy=quant_policy,
                          is_value=True)
 
 
@@ -724,7 +731,7 @@ def fill_kv_cache(k_states: Tensor,
     v_centroids = torch.empty((1,), device=k_states.device, dtype=torch.float32)
     v_boundaries = torch.empty((1,), device=k_states.device, dtype=torch.float32)
 
-    if quant_policy == 42:
+    if quant_policy == QuantPolicy.TURBO_QUANT:
         raw_k_dim = k_states.size(-1)
         if raw_k_dim & (raw_k_dim - 1) != 0:
             raise ValueError(f'TurboQuant K requires power-of-2 raw dim, got {raw_k_dim}')
@@ -761,7 +768,7 @@ def fill_kv_cache(k_states: Tensor,
     grid = (num_heads, max_num_blocks, batch_size)
     is_decoding = max_num_blocks == 1
 
-    if quant_policy == 0:
+    if quant_policy == QuantPolicy.NONE:
         _fill_kv_cache_kernel[grid](
             k_states,
             v_states,
@@ -796,14 +803,6 @@ def fill_kv_cache(k_states: Tensor,
             num_stages=3,
         )
     else:
-        if quant_policy == 42:
-            # K = QJL4 (3bit MSE + 1bit QJL)
-            # V = 2bit FWHT TurboQuant MSE
-            k_quant_policy = 42
-            v_quant_policy = 42
-        else:
-            k_quant_policy = quant_policy
-            v_quant_policy = quant_policy
         _fill_kv_cache_quant_kernel[grid](
             k_states,
             v_states,
@@ -844,8 +843,7 @@ def fill_kv_cache(k_states: Tensor,
             stride_vszb=v_scales_zeros.stride(s_dim),
             stride_vszh=v_scales_zeros.stride(h_dim),
             stride_vszd=v_scales_zeros.stride(d_dim),
-            k_quant_policy=k_quant_policy,
-            v_quant_policy=v_quant_policy,
+            quant_policy=quant_policy,
             stride_boff=block_offsets.stride(0),
             BLOCK=BLOCK,
             BLOCK_D=BLOCK_D,
