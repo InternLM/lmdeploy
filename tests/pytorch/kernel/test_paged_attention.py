@@ -1048,11 +1048,3 @@ class TestPagedAttentionFP16vsQuant42(TestPagedAttentionBase):
         # Note: SNR is low due to scale differences between FP16 and quant42
         # (quant42 outputs in original domain after inverse rotation, but with different scale)
         # The important thing is that cosine similarity is high
-
-    def test_quant42_determinism(self, out_quant42):
-        """Test that quant42 produces deterministic results."""
-        # Run again with same inputs
-        # Note: This is a basic sanity check - the actual determinism test
-        # would require re-running the kernel, which is complex in pytest
-        # The main determinism is tested in test_turboquant.py
-        pass

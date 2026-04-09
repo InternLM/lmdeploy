@@ -3,7 +3,7 @@
 
 This module provides:
 - Hadamard transform (orthogonal rotation) for quant_policy==QuantPolicy.TURBO_QUANT
-- Lloyd-Max codebook for 2-bit, 3-bit, and 4-bit quantization
+- Lloyd-Max codebook for 2-bit (V cache) and 3-bit (K cache) quantization
 """
 import logging
 import math
@@ -51,7 +51,7 @@ def hadamard_rotate(x: Tensor) -> Tensor:
     # Fallback: use matmul with Walsh-Hadamard matrix
     orig_dtype = x.dtype
     x = x.float()
-    Q = _get_hadamard_matrix(
+    Q = get_hadamard_matrix(
         x.shape[-1], device=x.device, dtype=torch.float32
     )
     result = torch.matmul(x, Q.T)
@@ -81,14 +81,14 @@ def hadamard_rotate_inv(x: Tensor) -> Tensor:
     # Fallback: use matmul with Walsh-Hadamard matrix
     orig_dtype = x.dtype
     x = x.float()
-    Q = _get_hadamard_matrix(
+    Q = get_hadamard_matrix(
         x.shape[-1], device=x.device, dtype=torch.float32
     )
     result = torch.matmul(x, Q)
     return result.to(orig_dtype)
 
 
-def _get_hadamard_matrix(d: int, device: str = 'cuda', dtype=torch.float32) -> Tensor:
+def get_hadamard_matrix(d: int, device: str = 'cuda', dtype=torch.float32) -> Tensor:
     """Get cached Walsh-Hadamard matrix Q = H / sqrt(d).
 
     This is the standard Walsh-Hadamard matrix (same as fast_hadamard_transform).
@@ -129,25 +129,25 @@ def _get_hadamard_matrix(d: int, device: str = 'cuda', dtype=torch.float32) -> T
 
 
 def get_lloyd_max_codebook(d: int, bits: int, device: str = 'cuda') -> tuple[Tensor, Tensor]:
-    """Get precomputed Lloyd-Max codebook for 2-bit, 3-bit and 4-bit.
+    """Get precomputed Lloyd-Max codebook for 2-bit and 3-bit quantization.
 
     The table is baked from the same construction logic as the original
     implementation under sigma=1, then scaled at runtime by sigma=1/sqrt(d).
 
     Supported:
-        bits = 2, 3, 4
+        bits = 2 (V cache), 3 (K cache with QJL4)
 
     Args:
         d: head dimension.
-        bits: quantization bits (2, 3, or 4).
+        bits: quantization bits (2 or 3).
         device: target device.
 
     Returns:
         Tuple of (centroids, boundaries) tensors.
     """
-    if bits not in (2, 3, 4):
+    if bits not in (2, 3):
         raise NotImplementedError(
-            f'Only 2-bit, 3-bit and 4-bit precomputed codebooks are supported, got bits={bits}'
+            f'Only 2-bit and 3-bit precomputed codebooks are supported, got bits={bits}'
         )
 
     cache_key = (d, bits, device, 'codebook')
@@ -161,6 +161,7 @@ def get_lloyd_max_codebook(d: int, bits: int, device: str = 'cuda') -> tuple[Ten
     #   - uniform midpoint initialization
     #   - 10 Lloyd-Max iterations
     if bits == 2:
+        # 2-bit Lloyd-Max centroids (V cache)
         centroids_std = torch.tensor(
             [-1.5104176, -0.4527808, 0.4527808, 1.5104176],
             device=device, dtype=torch.float32
@@ -169,7 +170,8 @@ def get_lloyd_max_codebook(d: int, bits: int, device: str = 'cuda') -> tuple[Ten
             [-0.9815992, 0.0, 0.9815992],
             device=device, dtype=torch.float32
         )
-    elif bits == 3:
+    else:  # bits == 3
+        # 3-bit Lloyd-Max centroids (K cache with QJL4)
         centroids_std = torch.tensor(
             [-2.1519456, -1.3439093, -0.7560052, -0.2450942,
               0.2450942,  0.7560052,  1.3439093,  2.1519456],
@@ -182,23 +184,6 @@ def get_lloyd_max_codebook(d: int, bits: int, device: str = 'cuda') -> tuple[Ten
             device=device,
             dtype=torch.float32,
         )
-    elif bits == 4:
-        centroids_std = torch.tensor(
-            [-2.4175594, -1.7094618, -1.2629677, -0.9265621,
-             -0.6470380, -0.4015197, -0.1756835,  0.0391761,
-              0.2508093,  0.4675656,  0.6996375,  0.9615010,
-              1.2788204,  1.7009784,  2.3481500,  3.0000000],
-            device=device, dtype=torch.float32
-        )
-        boundaries_std = torch.tensor(
-            [-2.0635107, -1.4862148, -1.0947649, -0.7868000,
-             -0.5242788, -0.2886016, -0.0682537,  0.1449927,
-              0.3591875,  0.5836016,  0.8305693,  1.1201607,
-              1.4898994,  2.0245643,  2.6740751],
-            device=device, dtype=torch.float32
-        )
-    else:
-        raise NotImplementedError
 
     centroids = centroids_std * sigma
     boundaries = boundaries_std * sigma

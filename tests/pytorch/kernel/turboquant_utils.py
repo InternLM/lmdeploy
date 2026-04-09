@@ -2,7 +2,7 @@
 kernel tests.
 
 This module contains shared helper functions for testing TurboQuant quantization,
-which is used by quant_policy=QuantPolicy.TURBO_QUANT (K=4bit, V=2bit mixed precision).
+which is used by quant_policy=QuantPolicy.TURBO_QUANT (K=3bit QJL4, V=2bit mixed precision).
 
 TurboQuant is a quantization method that:
 - Uses Lloyd-Max algorithm for optimal quantization
@@ -28,16 +28,17 @@ def _div_up(a, b):
 
 def _unpack_indices(packed: torch.Tensor, nbits: int, original_dim: int) -> torch.Tensor:
     """Unpack bit-packed indices back to integer tensor."""
-    if nbits == 4:
-        low = (packed & 0x0F)
-        high = (packed >> 4) & 0x0F
-        indices = torch.cat([low, high], dim=-1)
-    elif nbits == 2:
+    if nbits == 2:
         i0 = (packed & 0x03)
         i1 = ((packed >> 2) & 0x03)
         i2 = ((packed >> 4) & 0x03)
         i3 = ((packed >> 6) & 0x03)
         indices = torch.cat([i0, i1, i2, i3], dim=-1)
+    elif nbits == 4:
+        # Unpack 2 nibbles per byte: low nibble and high nibble
+        i0 = (packed & 0x0F)
+        i1 = ((packed >> 4) & 0x0F)
+        indices = torch.cat([i0, i1], dim=-1)
     else:
         indices = packed
 
@@ -61,7 +62,7 @@ def quant_turboquant_mse(kv: torch.Tensor, nbits: int):
 
     Args:
         kv: input tensor of shape (..., head_dim)
-        nbits: number of bits (2 or 4)
+        nbits: number of bits (only 2 supported)
 
     Returns:
         q_kv: bit-packed indices (uint8)
@@ -84,11 +85,8 @@ def quant_turboquant_mse(kv: torch.Tensor, nbits: int):
     indices = torch.searchsorted(boundaries, y.contiguous())
     indices = indices.clamp(0, 2 ** nbits - 1)
 
-    # Bit-pack indices
-    if nbits == 4:
-        q_kv1, q_kv2 = indices.split(indices.shape[-1] // 2, -1)
-        q_kv = q_kv1 + q_kv2 * 16
-    elif nbits == 2:
+    # Bit-pack indices (2-bit: 4 values per byte)
+    if nbits == 2:
         q_kv1, q_kv2, q_kv3, q_kv4 = indices.split(indices.shape[-1] // 4, -1)
         q_kv = q_kv1 + q_kv2 * 4 + q_kv3 * 16 + q_kv4 * 64
     else:
@@ -143,7 +141,7 @@ def dequantize_turboquant_mse(q_kv: torch.Tensor, norms: torch.Tensor, nbits: in
     Args:
         q_kv: bit-packed indices (uint8)
         norms: L2 norms for rescaling, shape (...,)
-        nbits: number of bits (2 or 4)
+        nbits: number of bits (only 2 supported)
 
     Returns:
         reconstructed kv tensor in original domain
@@ -161,15 +159,13 @@ def dequantize_turboquant_mse_rot(q_kv: torch.Tensor, norms: torch.Tensor, nbits
     Args:
         q_kv: bit-packed indices (uint8)
         norms: L2 norms for rescaling, shape (...,)
-        nbits: number of bits (2 or 4)
+        nbits: number of bits (only 2 supported)
 
     Returns:
         reconstructed kv tensor in rotate domain
     """
     # Infer head_dim from packed shape
-    if nbits == 4:
-        head_dim = q_kv.shape[-1] * 2
-    elif nbits == 2:
+    if nbits == 2:
         head_dim = q_kv.shape[-1] * 4
     else:
         head_dim = q_kv.shape[-1]

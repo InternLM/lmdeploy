@@ -395,7 +395,7 @@ class TestFillKVCacheInt42(TestFillKVCacheInt4):
             block_offsets,
             k_scales_zeros,
             v_scales_zeros,
-            42,
+            QuantPolicy.TURBO_QUANT,
         )
 
         torch.testing.assert_close(k_caches, gt[0])
