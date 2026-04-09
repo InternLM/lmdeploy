@@ -451,6 +451,7 @@ class ModelConfig:
             is_draft_model=is_draft_model,
             spec_method=spec_method,
             num_spec_tokens=num_spec_tokens,
+            device_type=device_type,
         )
 
         if model_config.k_head_dim is None:

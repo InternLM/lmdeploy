@@ -58,7 +58,8 @@ class Qwen3_5ModelConfigBuilder(AutoModelConfigBuilder):
         else:
             recurrent_state_shape = (num_delta_layers, num_v_heads, head_k_dim, head_v_dim)
 
-        if is_bf16_supported():
+        device_type = kwargs.get('device_type', 'auto')
+        if is_bf16_supported(device_type):
             dtype = torch.bfloat16
         else:
             dtype = torch.float16
