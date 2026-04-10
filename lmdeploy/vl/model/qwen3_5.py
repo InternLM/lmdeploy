@@ -21,12 +21,14 @@ def check_transformers():
 class Qwen3_5Model(Qwen3VLModel):
     """Qwen3_5 model."""
 
-    _arch = ['Qwen3_5ForConditionalGeneration', 'Qwen3_5MoeForConditionalGeneration']
+    _arch = ['Qwen3_5ForConditionalGeneration',
+             'Qwen3_5MoeForConditionalGeneration',
+             'InternS2PreviewForConditionalGeneration']
 
     def build_preprocessor(self):
         check_transformers()
 
-        self.processor = AutoProcessor.from_pretrained(self.model_path)
+        self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=True)
 
         # image tokens
         self.image_token = self.processor.image_token

@@ -113,5 +113,6 @@ class ConfigBuilder:
                 target_model=target_model,
                 target_cache_cfg=cache_config,
                 dtype=engine_config.dtype,
+                hf_overrides=engine_config.hf_overrides,
             )
         return specdecode_config
