@@ -12,7 +12,7 @@ from torch import Tensor
 from lmdeploy.messages import QuantPolicy
 from lmdeploy.utils import get_logger
 
-from .turbo_quant import hadamard_rotate, hadamard_rotate_inv
+from .turbo_quant import hadamard_rotate
 from .utils import get_device_props
 
 logger = get_logger('lmdeploy')
@@ -659,6 +659,86 @@ def _get_split_k(device_idx: int, head_grid: int, batch_size: int, num_warps: in
     return SPLIT_K
 
 
+@triton.jit
+def _bar_sync():
+    """CTA-internal barrier (__syncthreads equivalent via PTX bar.sync 0)."""
+    tl.inline_asm_elementwise(
+        'bar.sync 0;', '=r', [], dtype=tl.int32, is_pure=False, pack=1
+    )
+
+
+@triton.jit
+def _fused_reduce_hadamard_kernel(
+    acc_ptr,
+    out_ptr,
+    sinks_ptr,
+    stride_ak,
+    stride_abs,
+    stride_ah,
+    stride_ad,
+    stride_obs,
+    stride_oh,
+    stride_od,
+    head_size_v: tl.constexpr,
+    SPLIT_K: tl.constexpr,
+    BLOCK_DV: tl.constexpr,
+    LOG2_DV: tl.constexpr,
+):
+    """Fused split-K reduce + inverse Hadamard transform for TURBO_QUANT.
+
+    Reuses acc_ptr[batch, head, 0, :BLOCK_DV] as float32 scratch for butterfly. Zero extra memory allocation.
+    """
+    cur_batch = tl.program_id(1)
+    cur_head = tl.program_id(0)
+    offs_dv = tl.arange(0, BLOCK_DV)
+    offs_k = tl.arange(0, SPLIT_K)
+    mask_dv = offs_dv < head_size_v
+
+    offs_acc = (cur_batch * stride_abs + cur_head * stride_ah
+                + offs_k[:, None] * stride_ak + offs_dv[None, :] * stride_ad)
+    offs_mi = (cur_batch * stride_abs + cur_head * stride_ah
+               + stride_ak * offs_k + head_size_v)
+
+    m_k = tl.load(acc_ptr + offs_mi)
+    l_k = tl.load(acc_ptr + offs_mi + 1)
+    acc_k = tl.load(acc_ptr + offs_acc,
+                    mask=mask_dv[None, :] & (m_k[:, None] > -float('inf')),
+                    other=0.0)
+
+    m_max = tl.max(m_k, 0)
+    alpha = tl_exp2(m_k - m_max)
+    acc_k = acc_k * alpha[:, None]
+    l_k = l_k * alpha
+    acc = tl.sum(acc_k, 0)
+    l_sum = tl.sum(l_k, 0)
+
+    if sinks_ptr is not None:
+        sink = tl.load(sinks_ptr + cur_head).to(l_sum.dtype)
+        l_sum = l_sum + tl.exp2(sink * tl_log2(math.e) - m_max)
+
+    acc = acc / l_sum
+
+    # Walsh-Hadamard butterfly via acc buffer as float32 scratch
+    scratch_base = cur_batch * stride_abs + cur_head * stride_ah
+    scratch_ptrs = acc_ptr + scratch_base + offs_dv * stride_ad
+
+    for s in tl.static_range(LOG2_DV):
+        tl.atomic_xchg(scratch_ptrs, acc, mask=mask_dv)
+        _bar_sync()
+        partner = offs_dv ^ (1 << s)
+        partner_ptrs = acc_ptr + scratch_base + partner * stride_ad
+        partner_val = tl.load(partner_ptrs, mask=mask_dv)
+        is_even = (offs_dv & (1 << s)) == 0
+        acc = tl.where(is_even, acc + partner_val, partner_val - acc)
+        _bar_sync()
+
+    INV_SQRT_D: tl.constexpr = 1.0 / (BLOCK_DV ** 0.5)
+    acc = acc * INV_SQRT_D
+
+    out_offs = cur_batch * stride_obs + cur_head * stride_oh + offs_dv * stride_od
+    tl.store(out_ptr + out_offs, acc, mask=mask_dv)
+
+
 def flash_attn_with_kvcache(
     q: Tensor,
     k_cache: Tensor,
@@ -905,23 +985,39 @@ def flash_attn_with_kvcache(
     elif quant_policy == QuantPolicy.TURBO_QUANT:
         Lv *= 4
         BLOCK_DV *= 4
-    _reduce_split_kernel[grid](acc,
-                               o,
-                               sinks,
-                               stride_ak=acc.stride(2),
-                               stride_abs=acc.stride(0),
-                               stride_ah=acc.stride(1),
-                               stride_ad=acc.stride(3),
-                               stride_obs=o.stride(0),
-                               stride_oh=o.stride(1),
-                               stride_od=o.stride(2),
-                               SPLIT_K=SPLIT_K,
-                               head_size_v=Lv,
-                               BLOCK_DV=BLOCK_DV,
-                               num_warps=num_warps,
-                               num_stages=1)
 
     if quant_policy == QuantPolicy.TURBO_QUANT:
-        o = hadamard_rotate_inv(o)
-
+        LOG2_DV = int(math.log2(BLOCK_DV))
+        _fused_reduce_hadamard_kernel[grid](acc,
+                                            o,
+                                            sinks,
+                                            stride_ak=acc.stride(2),
+                                            stride_abs=acc.stride(0),
+                                            stride_ah=acc.stride(1),
+                                            stride_ad=acc.stride(3),
+                                            stride_obs=o.stride(0),
+                                            stride_oh=o.stride(1),
+                                            stride_od=o.stride(2),
+                                            SPLIT_K=SPLIT_K,
+                                            head_size_v=Lv,
+                                            BLOCK_DV=BLOCK_DV,
+                                            LOG2_DV=LOG2_DV,
+                                            num_warps=num_warps,
+                                            num_stages=1)
+    else:
+        _reduce_split_kernel[grid](acc,
+                                   o,
+                                   sinks,
+                                   stride_ak=acc.stride(2),
+                                   stride_abs=acc.stride(0),
+                                   stride_ah=acc.stride(1),
+                                   stride_ad=acc.stride(3),
+                                   stride_obs=o.stride(0),
+                                   stride_oh=o.stride(1),
+                                   stride_od=o.stride(2),
+                                   SPLIT_K=SPLIT_K,
+                                   head_size_v=Lv,
+                                   BLOCK_DV=BLOCK_DV,
+                                   num_warps=num_warps,
+                                   num_stages=1)
     return o
