@@ -31,12 +31,10 @@ void syncAndCheck(const char* const file, int const line)
             cudaDeviceSynchronize();
             cudaError_t result = cudaGetLastError();
             if (result) {
-                TM_LOG_ERROR((std::string("CUDA runtime error: ") + (_cudaGetErrorEnum(result)) + " " + file + ":"
-                              + std::to_string(line))
-                                 .c_str());
+                TM_LOG_FATAL("CUDA runtime error: {} {}:{}", _cudaGetErrorEnum(result), file, line);
                 std::abort();
             }
-            TM_LOG_DEBUG(fmtstr("run syncAndCheck at %s:%d", file, line));
+            TM_LOG_DEBUG("run syncAndCheck at {}:{}", file, line);
         }
     }
 }

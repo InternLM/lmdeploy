@@ -257,7 +257,7 @@ static void safe_memcpy(void* dst, const void* src, size_t size)
     catch (...) {
         int device_id{-1};
         cudaGetDevice(&device_id);
-        TM_LOG_ERROR("cudaMemcpy failed: dst=(%d, %d, %p, %p), src=(%d, %d, %p, %p), size=%s, device=%d",
+        TM_LOG_ERROR("cudaMemcpy failed: dst=({}, {}, {}, {}), src=({}, {}, {}, {}), size={}, device={}",
                      (int)dat.type,
                      dat.device,
                      dat.devicePointer,
@@ -266,7 +266,7 @@ static void safe_memcpy(void* dst, const void* src, size_t size)
                      sat.device,
                      sat.devicePointer,
                      sat.hostPointer,
-                     std::to_string(size).c_str(),
+                     size,
                      device_id);
         throw;
     }

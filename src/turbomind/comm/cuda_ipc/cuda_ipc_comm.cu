@@ -17,8 +17,8 @@
 
 #include "src/turbomind/comm/cuda_ipc/semaphore.h"
 
+#include "src/turbomind/core/logger.h"
 #include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/utils/logger.h"
 
 namespace turbomind::comm {
 
@@ -156,7 +156,7 @@ CudaIpcCommImpl::~CudaIpcCommImpl()
     }
 
     for (const auto& a : allocation_) {
-        TM_LOG_WARNING("[COMM][%d] Allocation (%p, %lu) is not freed", global_rank_, a.uc_beg, a.size);
+        TM_LOG_WARN("Rank {}: Allocation ({}, {}) is not freed", global_rank_, a.uc_beg, a.size);
     }
 
     cudaStreamSynchronize(0);
@@ -220,7 +220,7 @@ void CudaIpcCommImpl::Free(void* ptr)
         allocation_.erase(it);
     }
     else {
-        TM_LOG_WARNING("[TM][COMM][%d] Freeing %p which is not allocated by this module", global_rank_, ptr);
+        TM_LOG_WARN("Rank {}: Freeing {} which is not allocated by this module", global_rank_, ptr);
     }
 }
 
@@ -230,7 +230,7 @@ void CudaIpcCommImpl::Register(void* ptr, size_t size)
     auto& symm = groups_.at(0).symmetric;
 
     if (symm.find(ptr) != symm.end()) {
-        TM_LOG_WARNING("[TM][COMM][%d] Duplicated registration on (%p, %lu)", global_rank_, ptr, size);
+        TM_LOG_WARN("Rank {}: Duplicated registration on ({}, {})", global_rank_, ptr, size);
         return;
     }
 
@@ -317,7 +317,7 @@ void CudaIpcCommImpl::Deregister(void* ptr)
             Deregister(s.extract(it).value());
         }
         else {
-            TM_LOG_WARNING("[TM][COMM][%d] Deregistering non-registered address %p", global_rank_, ptr);
+            TM_LOG_WARN("Rank {}: Deregistering non-registered address {}", global_rank_, ptr);
         }
     }
 }
