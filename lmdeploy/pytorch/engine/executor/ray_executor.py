@@ -506,8 +506,10 @@ class RayExecutor(ExecutorBase):
                     logger.warning(f'Free input ref failed: {e}')
 
         self._prev_inputs = ray.put(inputs)
-        # make sure in order
-        self._prev_out = self.dag.execute(self._prev_inputs)
+        # non-compiled dag would add input object ref, and the ref can not be released in python
+        self._prev_out = [
+            worker.forward_async.remote(self._prev_inputs) for worker in self.workers
+        ]
 
     async def get_output_async(self):
         """Get output async."""
