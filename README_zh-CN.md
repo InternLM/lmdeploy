@@ -26,6 +26,7 @@ ______________________________________________________________________
 <details open>
 <summary><b>2026</b></summary>
 
+- \[2026/04\] 由于 LMDeploy 在 PyPI 上的项目存储配额已满，新版本目前无法上传预编译安装包（wheels）。用户可以通过 [GitHub Releases](https://github.com/InternLM/lmdeploy/releases) 页面下载安装包，或者通过源码安装等方式使用最新版本；预编译包恢复上传后我们会另行通知。受影响版本：>=0.12.2
 - \[2026/02\] 支持 [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35)
 - \[2026/02\] 支持 [vllm-project/llm-compressor](https://github.com/vllm-project/llm-compressor) 4bit 对称和非对称量化。 具体操作指南详见[此处](./docs/zh_cn/quantization/llm_compressor.md)
 
@@ -230,7 +231,7 @@ pip install lmdeploy
 若使用 GeForce RTX 50 系列显卡，请按照如下方式安装基于 **CUDA 12.8** 编译的 LMDeploy 预编译包。
 
 ```shell
-export LMDEPLOY_VERSION=0.12.2
+export LMDEPLOY_VERSION=0.12.3
 export PYTHON_VERSION=312
 pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu128-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu128
 ```

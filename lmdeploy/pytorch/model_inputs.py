@@ -191,9 +191,11 @@ class ModelInputs:
     state_offsets: torch.Tensor | None = None
     target_hidden_states: torch.Tensor | None = None
     target_position_ids: torch.Tensor | None = None
+    target_inputs_embeds: torch.Tensor | None = None
     is_chunk: bool = False
-    is_first_chunk: bool = True
-
+    is_first_chunk: bool = False
+    is_last_chunk: bool = False
+    is_chunk_multimodal: bool = False
     # mrope, shape(3, sum_seqlens)
     mrope_pos_ids: torch.Tensor | None = None
 
@@ -202,16 +204,22 @@ class ModelInputs:
         assert self.is_decoding
         if step_seqlens is None:
             step_seqlens = self.seq_length
-        self.history_lengths += step_seqlens
-        self.max_kv_seqlen += self.max_q_seqlen
-        self.sum_kv_seqlen += self.max_q_seqlen * self.seq_length.numel()
+
         if input_ids.dim() == 1:
             input_ids = input_ids[None, :]
-        self.input_ids = input_ids
 
-        if self.mrope_pos_ids is not None:
-            self.mrope_pos_ids = self.mrope_pos_ids + step_seqlens[None]
-        return self
+        mrope_pos_ids = self.mrope_pos_ids
+        if mrope_pos_ids is not None:
+            mrope_pos_ids = mrope_pos_ids.unflatten(1, (-1, self.max_q_seqlen)) + step_seqlens[None, :, None]
+            mrope_pos_ids = mrope_pos_ids.flatten(1, 2)
+
+        return self.clone(
+            input_ids=input_ids,
+            history_lengths=self.history_lengths + step_seqlens,
+            max_kv_seqlen=self.max_kv_seqlen + self.max_q_seqlen,
+            sum_kv_seqlen=self.sum_kv_seqlen + self.max_q_seqlen * self.seq_length.numel(),
+            mrope_pos_ids=mrope_pos_ids,
+        )
 
     @torch.inference_mode()
     def to_device(self, device: str, non_blocking: bool = False):
@@ -237,6 +245,12 @@ class ModelInputs:
         ret = (f'num_tokens={self.input_ids.numel()}, batch_size={self.seq_length.numel()}'
                f', is_decoding={self.is_decoding}, has_vision={self.vision_inputs is not None}')
         return ret
+
+    def clone(self, **kwargs):
+        """Get new ModelInputs with updated fields."""
+        out_dict = {f.name: getattr(self, f.name) for f in fields(self)}
+        out_dict.update(kwargs)
+        return ModelInputs(**out_dict)
 
 
 @dataclass
@@ -270,6 +284,7 @@ class StepContext:
     enable_microbatch: bool = False
     # for draft model
     target_hidden_states: torch.Tensor | None = None
+    target_inputs_embeds: torch.Tensor | None = None
 
     # states for ssm
     state_caches: list | None = None
@@ -279,6 +294,9 @@ class StepContext:
     mrope_position_ids: torch.Tensor | None = None
 
     _outputs: dict = field(default_factory=dict)
+
+    # chunk with multimodal
+    is_chunk_multimodal: bool = False
 
     @classmethod
     def new(
@@ -343,7 +361,9 @@ class StepContext:
             state_caches=state_caches,
             state_offsets=inputs.state_offsets,
             target_hidden_states=inputs.target_hidden_states,
+            target_inputs_embeds=inputs.target_inputs_embeds,
             mrope_position_ids=inputs.mrope_pos_ids,
+            is_chunk_multimodal=inputs.is_chunk_multimodal,
         )
 
         ret = get_backend().update_step_context(ret)
@@ -372,6 +392,9 @@ class StepContext:
         # batch with same seqlens
         if max_q_seqlen * batch_size == num_tokens:
             attention_mask = None
+            if target_position_ids is not None:
+                return attention_mask, target_position_ids
+
             ranges = torch.arange(0, max_q_seqlen, device=device)
             position_ids = history_seqlens[:, None] + ranges[None, :]
             position_ids = position_ids.flatten()
@@ -403,6 +426,7 @@ class BuildModelContext:
     quant_config: QuantizationConfig = field(default_factory=QuantizationConfig)
     fp32_lm_head: bool = False
     tie_word_embeddings: bool = False
+    num_spec_tokens: int = 0
 
 
 class StepContextManager(CtxMgrBase[StepContext]):

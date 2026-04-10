@@ -53,9 +53,9 @@ class MPEngine(EngineBase):
         """End session."""
         return self._collective_rpc('end_session', session_id)
 
-    def sleep(self, level: int):
+    async def sleep(self, level: int):
         """sleep."""
-        return self._collective_rpc('sleep', level)
+        return await self._collective_rpc_async('sleep', level)
 
     def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
@@ -65,9 +65,9 @@ class MPEngine(EngineBase):
         """Update params."""
         return self._collective_rpc('update_params', request)
 
-    def get_schedule_metrics(self):
+    async def get_schedule_metrics(self):
         """Get schedule metrics."""
-        return self._collective_rpc('get_schedule_metrics')
+        return await self._collective_rpc_async('get_schedule_metrics')
 
     def p2p_initialize(self, conn_request: DistServeInitRequest):
         """Init rdma link."""
