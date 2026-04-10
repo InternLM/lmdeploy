@@ -1299,7 +1299,10 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
                             PRAGMA_UNROLL
                             for (int d = 0; d < D_CONV; ++d) {
                                 const int pos    = t_local_start - (D_CONV - 1) + tok + d;
-                                const int ring_d = (history_len + pos + 1) % D_CONV;
+                                int       ring_d = (history_len + pos + 1) % D_CONV;
+                                if (ring_d < 0) {
+                                    ring_d += D_CONV;
+                                }
                                 Store(capture_ptr + ring_d * conv_dim + c_base, vals[tok + d]);
                             }
                         }

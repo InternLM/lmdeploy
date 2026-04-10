@@ -229,10 +229,10 @@ bool GatedDeltaNetLayer::EnsurePrefixCaptureCapacity(Data& d, int capture_count)
     }
     catch (const std::exception& e) {
         if (!warned_prefix_capture_oom_) {
-            TM_LOG_WARNING("[GDN] failed to allocate hybrid prefix capture staging for %d slots: %s. "
-                           "This batch will run without storing new GDN prefix checkpoints.",
-                           capture_count,
-                           e.what());
+            TM_LOG_WARN("[GDN] failed to allocate hybrid prefix capture staging for {} slots: {}. "
+                        "This batch will run without storing new GDN prefix checkpoints.",
+                        capture_count,
+                        e.what());
             warned_prefix_capture_oom_ = true;
         }
         return false;
@@ -263,11 +263,11 @@ bool GatedDeltaNetLayer::CanAllocatePrefixCapture(int capture_count)
 
     if (requested_bytes > budget_bytes) {
         if (!warned_prefix_capture_budget_) {
-            TM_LOG_WARNING("[GDN] skipping hybrid prefix checkpoint capture for this batch: requested %.2f MB, "
-                           "budget %.2f MB. Prefix caching remains enabled, but this batch will not store new "
-                           "linear-attention checkpoints.",
-                           requested_bytes / (1024.0 * 1024.0),
-                           budget_bytes / (1024.0 * 1024.0));
+            TM_LOG_WARN("[GDN] skipping hybrid prefix checkpoint capture for this batch: requested {:.2f} MB, "
+                        "budget {:.2f} MB. Prefix caching remains enabled, but this batch will not store new "
+                        "linear-attention checkpoints.",
+                        requested_bytes / (1024.0 * 1024.0),
+                        budget_bytes / (1024.0 * 1024.0));
             warned_prefix_capture_budget_ = true;
         }
         return false;

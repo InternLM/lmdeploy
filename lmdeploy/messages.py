@@ -317,8 +317,8 @@ class TurbomindEngineConfig:
         assert self.dtype in ['auto', 'float16', 'bfloat16']
         assert self.tp >= 1, 'tp must be a positive integer'
         assert self.cache_max_entry_count > 0, 'invalid cache_max_entry_count'
-        assert self.linear_prefix_cache_interval_blocks >= 1, \
-            'invalid linear_prefix_cache_interval_blocks'
+        if self.linear_prefix_cache_interval_blocks < 1:
+            raise ValueError('invalid linear_prefix_cache_interval_blocks')
         assert self.quant_policy in (QuantPolicy.NONE, QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT), \
                'invalid quant_policy'
         assert self.rope_scaling_factor >= 0, 'invalid rope_scaling_factor'
