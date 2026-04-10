@@ -162,8 +162,8 @@ with set_envs():
     # repetition check
     repetition_window_size = env_to_int('LMDEPLOY_REPETITION_WINDOW_SIZE', 1024)
 
-    # qwen3.5 recurrent_state dtpye
-    fp32_mamba_ssm_dtype = os.getenv('LMDEPLOY_FP32_MAMBA_SSM_DTYPE', False)
+    # qwen3.5 recurrent_state dtype
+    fp32_mamba_ssm_dtype = env_to_bool('LMDEPLOY_FP32_MAMBA_SSM_DTYPE', False)
 
 
 
