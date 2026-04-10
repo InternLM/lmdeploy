@@ -1,6 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include "src/turbomind/models/llama/BlockTrie.h"
+#include "src/turbomind/core/logger.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
 
 namespace turbomind {
@@ -207,8 +208,8 @@ int BlockTrie::AcquireLinearStateSlot()
 {
     if (free_linear_state_slots_.empty()) {
         if (!warned_linear_state_pool_exhausted_) {
-            TM_LOG_WARNING("[BlockTrie] linear prefix checkpoint pool exhausted; deeper hybrid prefix checkpoints "
-                           "will be skipped until cached entries are evicted");
+            TM_LOG_WARN("[BlockTrie] linear prefix checkpoint pool exhausted; deeper hybrid prefix checkpoints "
+                        "will be skipped until cached entries are evicted");
             warned_linear_state_pool_exhausted_ = true;
         }
         return -1;
@@ -226,9 +227,9 @@ int BlockTrie::AcquireLinearStateSlot()
     catch (const std::exception& e) {
         free_linear_state_slots_.push_back(slot);
         if (!warned_linear_state_pool_oom_) {
-            TM_LOG_WARNING("[BlockTrie] failed to allocate hybrid prefix checkpoint state: %s. "
-                           "Further GDN prefix checkpoints will be skipped until memory is freed.",
-                           e.what());
+            TM_LOG_WARN("[BlockTrie] failed to allocate hybrid prefix checkpoint state: {}. "
+                        "Further GDN prefix checkpoints will be skipped until memory is freed.",
+                        e.what());
             warned_linear_state_pool_oom_ = true;
         }
         return -1;
@@ -239,8 +240,7 @@ int BlockTrie::AcquireLinearStateSlot()
 void BlockTrie::ReleaseLinearStateSlot(int slot)
 {
     if (slot >= 0) {
-        linear_conv_states_[slot]      = {};
-        linear_recurrent_states_[slot] = {};
+        // Keep tensors allocated so recycled slots avoid repeated GPU allocations.
         free_linear_state_slots_.push_back(slot);
     }
 }
