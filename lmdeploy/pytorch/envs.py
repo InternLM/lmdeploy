@@ -162,6 +162,10 @@ with set_envs():
     # repetition check
     repetition_window_size = env_to_int('LMDEPLOY_REPETITION_WINDOW_SIZE', 1024)
 
+    # qwen3.5 recurrent_state dtpye
+    fp32_mamba_ssm_dtype = os.getenv('LMDEPLOY_FP32_MAMBA_SSM_DTYPE', False)
+
+
 
 def get_all_envs():
     """Get all environment variables."""
