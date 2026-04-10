@@ -16,16 +16,10 @@ cmake_minimum_required(VERSION 3.11)
 
 find_package(CUDAToolkit REQUIRED)
 
-add_library(logger STATIC logger.cc)
-set_property(TARGET logger PROPERTY POSITION_INDEPENDENT_CODE  ON)
-set_property(TARGET logger PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(logger PUBLIC CUDA::cudart)
-
-
 add_library(cuda_utils STATIC cuda_utils.cc)
 set_property(TARGET cuda_utils PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET cuda_utils PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(cuda_utils PUBLIC logger CUDA::cudart CUDA::cuda_driver)
+target_link_libraries(cuda_utils PUBLIC fmt::fmt CUDA::cudart CUDA::cuda_driver)
 
 
 add_library(nvtx_utils STATIC nvtx_utils.cc)
@@ -40,12 +34,12 @@ endif()
 add_library(memory_utils STATIC memory_utils.cu)
 set_property(TARGET memory_utils PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET memory_utils PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(memory_utils PUBLIC cuda_utils logger)
+target_link_libraries(memory_utils PUBLIC cuda_utils)
 
 add_library(anomaly_handler STATIC anomaly_handler.cu)
 set_property(TARGET anomaly_handler PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET anomaly_handler PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(anomaly_handler PUBLIC cuda_utils logger)
+target_link_libraries(anomaly_handler PUBLIC cuda_utils)
 
 add_library(parser STATIC parser.cc)
 set_property(TARGET parser PROPERTY POSITION_INDEPENDENT_CODE  ON)
