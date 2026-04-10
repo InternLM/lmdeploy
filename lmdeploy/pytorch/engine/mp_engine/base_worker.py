@@ -151,12 +151,7 @@ class EngineOutputGather:
     def pop(self, stream_id, result):
         if not isinstance(result, EngineOutput):
             return result
-        output = self._output.pop(stream_id, None)
-        if output is not None:
-            result.token_ids = output.token_ids or []
-            result.logprobs = output.logprobs or None
+        output = self._output.pop(stream_id)
+        result.token_ids = output.token_ids or []
+        result.logprobs = output.logprobs or None
         return result
-
-    def clear(self, stream_id):
-        """Clear buffered output of the given stream."""
-        self._output.pop(stream_id, None)

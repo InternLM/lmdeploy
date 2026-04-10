@@ -36,19 +36,10 @@ class RayEngineWorker(EngineWorkerBase):
         self._stream_task = dict()
         self._engine_output_gather = EngineOutputGather()
 
-    def _cleanup_stream_task(self, stream_id: int, cancel: bool = False):
-        """Cleanup cached stream state and optionally cancel running task."""
-        self._stream_aiter.pop(stream_id, None)
-        task = self._stream_task.pop(stream_id, None)
-        if cancel and task is not None and not task.done():
-            task.cancel()
-        self._engine_output_gather.clear(stream_id)
-
     async def _stream_task_wrapper(self, stream_id: int, init_event: asyncio.Event, func: str, *args, **kwargs):
         """Create a stream task."""
         method = getattr(self, func)
         event = self._stream_aiter[stream_id][0]
-        result = None
         try:
             generator = method(*args, **kwargs)
             init_event.set()
@@ -57,10 +48,8 @@ class RayEngineWorker(EngineWorkerBase):
                 self._stream_aiter[stream_id][1] = (result, False)
                 event.set()
         finally:
-            stream_state = self._stream_aiter.get(stream_id)
-            if stream_state is not None:
-                stream_state[1] = (result, True)
-                event.set()
+            self._stream_aiter[stream_id][1] = (result, True)
+            event.set()
             init_event.set()
 
     async def create_stream_task(self, func, *args, **kwargs):
@@ -89,16 +78,9 @@ class RayEngineWorker(EngineWorkerBase):
         result = self._engine_output_gather.pop(stream_id, result)
 
         if stopped:
-            self._cleanup_stream_task(stream_id)
+            self._stream_aiter.pop(stream_id, None)
+            self._stream_task.pop(stream_id, None)
         return result, stopped
-
-    async def cancel_stream_task(self, stream_id: int):
-        """Cancel and cleanup a stream task.
-
-        This is used by caller-side generator finalization to avoid leaked references when stream consumption is
-        interrupted.
-        """
-        self._cleanup_stream_task(stream_id, cancel=True)
 
 
 def _update_runtime_envs(runtime_env: dict):
@@ -170,15 +152,10 @@ class RayMPEngine(MPEngine):
         # ray generator would try cache every result, which is too verbose.
         stream_id = await self._collective_rpc_async('create_stream_task', func, *args, **kwargs)
 
-        try:
-            stopped = False
-            while not stopped:
-                result, stopped = await self._collective_rpc_async('get_stream_task_result', stream_id)
-                yield result
-        finally:
-            # Ensure worker-side stream state is released even when caller
-            # stops iterating early (cancel/break/exception).
-            await self._collective_rpc_async('cancel_stream_task', stream_id)
+        stopped = False
+        while not stopped:
+            result, stopped = await self._collective_rpc_async('get_stream_task_result', stream_id)
+            yield result
 
     def close(self) -> None:
         """Close mp engine."""
