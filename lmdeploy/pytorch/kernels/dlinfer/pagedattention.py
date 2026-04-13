@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 import dlinfer.ops as ext_ops
 from torch import Tensor
@@ -23,14 +23,14 @@ def prefill_attention(
     num_q_heads: int,
     num_kv_heads: int,
     head_size_v: int,
-    attn_mask: Sequence[Optional[Tensor]],
-    softmax_scale: Optional[float],
-    is_unpaged_prefill: Optional[bool],
-    kv_scales: Optional[Tensor],
-    kv_zeros: Optional[Tensor],
-    quant_bits: Optional[int],
+    attn_mask: Sequence[Tensor | None],
+    softmax_scale: float | None,
+    is_prefill_no_cache: bool | None,
+    kv_scales: Tensor | None,
+    kv_zeros: Tensor | None,
+    quant_bits: int | None,
 ) -> Tensor:
-    if is_unpaged_prefill:
+    if is_prefill_no_cache:
         return ext_ops.prefill_attention(
             query_states,
             key_states,
@@ -79,6 +79,7 @@ def paged_token_attention(
     k_cache,
     v_cache,
     attn_output,
+    q_seqlens,
     kv_seq_len,
     max_kv_seq_len,
     block_offsets,
@@ -86,10 +87,10 @@ def paged_token_attention(
     num_q_heads,
     num_kv_heads,
     head_size_v,
-    softmax_scale: Optional[float],
-    kv_scales: Optional[Tensor],
-    kv_zeros: Optional[Tensor],
-    quant_bits: Optional[int],
+    softmax_scale: float | None,
+    kv_scales: Tensor | None,
+    kv_zeros: Tensor | None,
+    quant_bits: int | None,
 ):
     return ext_ops.paged_decode_attention(
         q,
@@ -97,6 +98,7 @@ def paged_token_attention(
         v_cache,
         block_offsets,
         block_size,
+        q_seqlens,
         kv_seq_len,
         max_kv_seq_len,
         num_q_heads,
@@ -129,12 +131,12 @@ def paged_attention_fwd(
     num_heads: int,
     num_kv_heads: int,
     v_head_size: int,
-    attn_mask: Sequence[Optional[Tensor]] = (),
-    softmax_scale: Optional[float] = None,
-    is_unpaged_prefill: Optional[bool] = None,
-    kv_scales: Optional[Tensor] = None,
-    kv_zeros: Optional[Tensor] = None,
-    quant_bits: Optional[int] = 0,
+    attn_mask: Sequence[Tensor | None] = (),
+    softmax_scale: float | None = None,
+    is_prefill_no_cache: bool | None = None,
+    kv_scales: Tensor | None = None,
+    kv_zeros: Tensor | None = None,
+    quant_bits: int | None = 0,
 ):
     if not is_decoding:
         return prefill_attention(
@@ -157,7 +159,7 @@ def paged_attention_fwd(
             v_head_size,
             attn_mask,
             softmax_scale,
-            is_unpaged_prefill,
+            is_prefill_no_cache,
             kv_scales=kv_scales,
             kv_zeros=kv_zeros,
             quant_bits=quant_bits,
@@ -168,6 +170,7 @@ def paged_attention_fwd(
             key_cache,
             value_cache,
             attn_output,
+            q_seqlens,
             kv_seqlens,
             max_kv_seq_len,
             block_offsets,

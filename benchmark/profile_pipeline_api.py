@@ -3,14 +3,14 @@ import argparse
 import json
 import os
 import random
-from typing import List, Optional, Tuple
 
 import numpy as np
 from tqdm import tqdm
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
-from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter
+from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter, get_speculative_config
+from lmdeploy.messages import SpeculativeConfig
 from lmdeploy.profiler import Profiler, Session
 from lmdeploy.utils import get_logger
 
@@ -21,8 +21,8 @@ def sample_sharegpt_requests(
     dataset_path: str,
     num_requests: int,
     tokenizer: PreTrainedTokenizerBase,
-    fixed_output_len: Optional[int] = None,
-) -> List[Tuple[str, int, int]]:
+    fixed_output_len: int | None = None,
+) -> list[tuple[str, int, int]]:
     if fixed_output_len is not None and fixed_output_len < 4:
         raise ValueError('output_len too small')
 
@@ -38,7 +38,7 @@ def sample_sharegpt_requests(
     random.shuffle(dataset)
 
     # Filter out sequences that are too long or too short
-    filtered_dataset: List[Tuple[str, int, int]] = []
+    filtered_dataset: list[tuple[str, int, int]] = []
     for i in range(len(dataset)):
         if len(filtered_dataset) == num_requests:
             break
@@ -70,7 +70,7 @@ def sample_random_requests(
     range_ratio: float,
     tokenizer: PreTrainedTokenizerBase,
     dataset_path: str,
-) -> List[Tuple[str, int, int]]:
+) -> list[tuple[str, int, int]]:
 
     input_lens = np.random.randint(
         max(int(input_len * range_ratio), 1),
@@ -101,7 +101,7 @@ def sample_random_requests(
         random.shuffle(dataset)
 
         # Filter out sequences that are too long or too short
-        input_requests: List[Tuple[str, int, int]] = []
+        input_requests: list[tuple[str, int, int]] = []
         for i in range(num_prompts):
             # Tokenize the prompts and completions.
             prompt = dataset[i][0]
@@ -131,8 +131,11 @@ def sample_random_requests(
 
 class Engine:
 
-    def __init__(self, model_path: str, engine_config, csv: str):
-        self.pipe = pipeline(model_path, backend_config=engine_config, log_level='ERROR')
+    def __init__(self, model_path: str, engine_config, csv: str, speculative_config: SpeculativeConfig | None = None):
+        self.pipe = pipeline(model_path,
+                             backend_config=engine_config,
+                             log_level='ERROR',
+                             speculative_config=speculative_config)
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
         self.return_routed_experts = getattr(self.pipe.backend_config, 'enable_return_routed_experts', False)
         self.csv = csv
@@ -150,7 +153,7 @@ class Engine:
                              max_new_tokens=output_len) for _, _, output_len in requests
         ]
 
-        sess: List[Session] = []
+        sess: list[Session] = []
         for _, input_len, output_len in requests:
             sess.append(profiler.new_session(input_len, output_len))
 
@@ -263,6 +266,9 @@ def parse_args():
     cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
     prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
 
+    # spec decode
+    ArgumentHelper.add_spec_group(parser)
+
     # turbomind engine args
     tb_group = parser.add_argument_group('TurboMind engine argument')
     tb_group._group_actions.append(tp_act)
@@ -312,7 +318,8 @@ def main():
             enable_return_routed_experts=args.enable_return_routed_experts,
         )
 
-    engine = Engine(args.model_path, engine_config, csv=args.csv)
+    speculative_config = get_speculative_config(args)
+    engine = Engine(args.model_path, engine_config, csv=args.csv, speculative_config=speculative_config)
 
     profiler = Profiler(args.stream_output, [50, 75, 95, 99])
 

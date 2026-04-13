@@ -9,6 +9,7 @@ mmengine-lite
 numpy
 openai
 openai_harmony
+opencv-python-headless
 partial_json_parser
 peft<=0.14.0
 pillow
@@ -22,7 +23,7 @@ safetensors
 sentencepiece
 shortuuid
 tiktoken
-tilelang
+tilelang; sys_platform == "linux" and "aarch64" not in platform_machine and "arm" not in platform_machine
 torch<=2.10.0,>=2.0.0
 torchvision<=0.25.0,>=0.15.0
 transformers>=4.52.0

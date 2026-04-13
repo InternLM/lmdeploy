@@ -40,5 +40,19 @@ target_link_libraries(models PUBLIC
         gpt_kernels
         memory_utils
         cuda_utils
-        logger
         anomaly_handler)
+target_compile_options(models PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-v --generate-line-info --threads 8>)
+
+if(BUILD_TEST)
+    add_executable(bench_gated_delta_net
+            llama/bench_gated_delta_net.cc)
+    target_link_libraries(bench_gated_delta_net PRIVATE
+            models
+            CUDA::cudart)
+
+    add_executable(bench_conv1d_silu
+            llama/bench_conv1d_silu.cc)
+    target_link_libraries(bench_conv1d_silu PRIVATE
+            models
+            CUDA::cudart)
+endif()

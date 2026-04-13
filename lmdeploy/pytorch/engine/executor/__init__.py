@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from logging import Logger
-from typing import Dict
 
 from lmdeploy.pytorch import envs
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
@@ -59,7 +58,7 @@ def build_executor(
     backend_config: BackendConfig,
     dist_config: DistConfig,
     misc_config: MiscConfig,
-    adapters: Dict[str, str] = None,
+    adapters: dict[str, str] = None,
     device_type: str = 'cuda',
     distributed_executor_backend: str = None,
     dtype: str = 'auto',
@@ -78,7 +77,10 @@ def build_executor(
         dist_config=dist_config,
         is_draft_model=False,
         spec_method=None if specdecode_config is None else specdecode_config.method,
+        num_spec_tokens=0 if specdecode_config is None else specdecode_config.num_speculative_tokens,
         model_format=misc_config.model_format,
+        device_type=device_type,
+        block_size=cache_config.block_size,
     )
 
     if distributed_executor_backend is None:

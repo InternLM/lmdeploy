@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Dict, List
+from typing import Any
 
 from lmdeploy.messages import EngineOutput, GenerationConfig
 from lmdeploy.utils import get_logger
@@ -11,7 +11,7 @@ from .request import RequestSender, RequestType, Response, ResponseType
 
 logger = get_logger('lmdeploy')
 
-InputMultiModalType = List[Dict[str, Any]]
+InputMultiModalType = list[dict[str, Any]]
 
 
 def _check_resp(resp: Response, state: ResponseType, warning_msg: str = None):
@@ -72,6 +72,47 @@ def cancel(req_sender: RequestSender, session_id: int):
                                f'Error: {resp.type}.'))
 
 
+class SharedStore:
+    def __init__(self):
+        self._data = {}
+
+    def put(self, data):
+        import ray
+        ref = ray.put(data)
+        key = ref.hex()
+        self._data[key] = ref
+        return key
+
+    def get(self, key):
+        import ray
+        ref = self._data.pop(key)
+        return ray.get(ref)
+
+    def clear(self):
+        import ray
+        all_data = list(self._data.values())
+        if len(all_data) > 0:
+            ray.internal.free(all_data, local_only=False)
+
+
+_SHARED_STORE = None
+
+
+def _lazy_create_ray_store():
+    global _SHARED_STORE
+    if _SHARED_STORE is None:
+        import ray
+        name = 'shared_store'
+        try:
+            _SHARED_STORE = ray.get_actor(name, namespace='lmdeploy')
+        except ValueError:
+            _SHARED_STORE = ray.remote(num_cpus=0,)(SharedStore).options(
+                name=name,
+                namespace='lmdeploy',
+                lifetime='detached',
+            ).remote()
+
+
 class EngineInstance(EngineInstanceBase):
     """Instance of TurboMind.
 
@@ -86,6 +127,8 @@ class EngineInstance(EngineInstanceBase):
         self.max_input_len = self.engine.max_session_len
         self._enable_transfer_obj_ref = engine.engine_config.enable_transfer_obj_ref and \
             engine.engine_config.distributed_executor_backend == 'ray'
+        if self._enable_transfer_obj_ref:
+            _lazy_create_ray_store()
 
     def __del__(self):
         """Destructor."""
@@ -97,12 +140,9 @@ class EngineInstance(EngineInstanceBase):
         routed_experts = resp.data.get('routed_experts', None) if resp.data else None
         if routed_experts is not None and resp.type in [ResponseType.FINISH, ResponseType.CANCEL]:
             if self._enable_transfer_obj_ref:
-                import pybase64
                 import ray
-
-                ref = ray.put(routed_experts)
-                data = ray.cloudpickle.dumps(ref)
-                outputs['routed_experts'] = pybase64.b64encode(data).decode('utf-8')
+                key = ray.get(_SHARED_STORE.put.remote(routed_experts))
+                outputs['routed_experts'] = key
             else:
                 outputs['routed_experts'] = routed_experts
         return outputs
@@ -125,7 +165,7 @@ class EngineInstance(EngineInstanceBase):
 
     async def async_stream_infer(self,
                                  session_id: int,
-                                 input_ids: List[int],
+                                 input_ids: list[int],
                                  gen_config: GenerationConfig = None,
                                  multimodal: InputMultiModalType = None,
                                  adapter_name: str = None,
@@ -134,13 +174,13 @@ class EngineInstance(EngineInstanceBase):
 
         Args:
             session_id (int): The session id.
-            input_ids (List[int]): The input token ids.
+            input_ids (list[int]): The input token ids.
             gen_config (GenerationConfig): The sampling parameters.
             adapter_name (str): The lora adapter name.
 
         Yields:
             int: Error flags. 0 if success.
-            List[int]: The streaming output tokens.
+            list[int]: The streaming output tokens.
             int: The number of the output tokens.
         """
         if len(input_ids) > self.max_input_len:
@@ -210,7 +250,7 @@ class EngineInstance(EngineInstanceBase):
 
     async def async_infer(self,
                           session_id: int,
-                          input_ids: List[int] = None,
+                          input_ids: list[int] = None,
                           multimodal: InputMultiModalType = None,
                           gen_config: GenerationConfig = None,
                           **kwargs):
@@ -218,12 +258,12 @@ class EngineInstance(EngineInstanceBase):
 
         Args:
             session_id (int): The session id.
-            input_ids (List[int]): The input token ids.
+            input_ids (list[int]): The input token ids.
             gen_config (GenerationConfig): The sampling parameters.
 
         Returns:
             int: Error flags. 0 if success.
-            List[int]: The streaming output tokens.
+            list[int]: The streaming output tokens.
             int: The number of the output tokens.
         """
         async for outputs in self.async_stream_infer(session_id,
@@ -239,7 +279,7 @@ class EngineInstance(EngineInstanceBase):
 
     def stream_infer(self,
                      session_id: int,
-                     input_ids: List[int],
+                     input_ids: list[int],
                      multimodal: InputMultiModalType = None,
                      gen_config: GenerationConfig = None,
                      adapter_name: str = None,
@@ -248,13 +288,13 @@ class EngineInstance(EngineInstanceBase):
 
         Args:
             session_id (int): The session id.
-            input_ids (List[int]): The input token ids.
+            input_ids (list[int]): The input token ids.
             gen_config (GenerationConfig): The sampling parameters.
             adapter_name (str): The lora adapter name.
 
         Yields:
             int: Error flags. 0 if success.
-            List[int]: The streaming output tokens.
+            list[int]: The streaming output tokens.
             int: The number of the output tokens.
         """
 
@@ -276,7 +316,7 @@ class EngineInstance(EngineInstanceBase):
 
     def infer(self,
               session_id: int,
-              input_ids: List[int] = None,
+              input_ids: list[int] = None,
               multimodal: InputMultiModalType = None,
               gen_config: GenerationConfig = None,
               **kwargs):
@@ -284,12 +324,12 @@ class EngineInstance(EngineInstanceBase):
 
         Args:
             session_id (int): The session id.
-            input_ids (List[int]): The input token ids.
+            input_ids (list[int]): The input token ids.
             gen_config (GenerationConfig): The sampling parameters.
 
         Returns:
             int: Error flags. 0 if success.
-            List[int]: The streaming output tokens.
+            list[int]: The streaming output tokens.
             int: The number of the output tokens.
         """
         return self.req_sender.run_until_complete(

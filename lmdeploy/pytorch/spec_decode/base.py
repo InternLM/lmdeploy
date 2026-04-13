@@ -1,10 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Dict
 
 import torch
 
-from ..config import CacheConfig, ModelConfig
+from ..config import CacheConfig, ModelConfig, SpecDecodeConfig
 from ..engine.logits_process import SamplingInputs
 from ..model_inputs import ModelInputs
 from ..strategies.base.model_agent import ExtraInputs
@@ -13,8 +12,10 @@ from ..strategies.base.model_agent import ExtraInputs
 class BaseSpecModelAgent:
     """Speculative model agent."""
 
-    def __init__(self, enable: bool = False):
+    def __init__(self, specdecode_config: SpecDecodeConfig | None, enable: bool = False):
         self._enabled = enable
+        self.specdecode_config = specdecode_config
+        self.num_spec_tokens = specdecode_config.num_speculative_tokens if specdecode_config is not None else 0
 
     def is_enabled(self):
         return self._enabled
@@ -52,7 +53,7 @@ class BaseSpecModelAgent:
         'reset graph runner'
         pass
 
-    def update_main_model_outputs(self, output: Dict[str, torch.Tensor], model_inputs: ModelInputs):
+    def update_main_model_outputs(self, output: dict[str, torch.Tensor], model_inputs: ModelInputs):
         """Update outputs of main model."""
         if not self.is_enabled():
             hidden_states = output.pop('hidden_states')
@@ -66,3 +67,7 @@ class BaseSpecModelAgent:
             # replace with aux
             output['hidden_states'] = output.pop('aux_hidden_states')
         return hidden_states, output
+
+    def get_model(self):
+        """Get model."""
+        return None

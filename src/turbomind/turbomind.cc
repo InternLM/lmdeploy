@@ -11,6 +11,7 @@
 #include "src/turbomind/core/context.h"
 #include "src/turbomind/core/core.h"
 
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/engine/engine.h"
 #include "src/turbomind/engine/gateway.h"
 #include "src/turbomind/engine/model_executor.h"
@@ -68,7 +69,7 @@ static void parse_default_rope_param(const YAML::Node& node, RopeParam& param)
     param.base = node["base"].as<float>();
     param.dim  = node["dim"].as<int>();
     if (param.base == 0.f || param.dim == 0) {
-        TM_LOG_ERROR("invalid rope param: base = %f, dim = %d", param.base, param.dim);
+        TM_LOG_ERROR("invalid rope param: base = {}, dim = {}", param.base, param.dim);
         FT_CHECK(0);
     }
 }
@@ -308,20 +309,19 @@ struct TurboMind::Impl {
     {
         if (!engine_param_.max_context_token_num) {
             engine_param_.max_context_token_num = engine_param_.session_len;
-            TM_LOG_WARNING("[TM] `max_context_token_num` is not set, default to %d.",
-                           (int)engine_param_.max_context_token_num);
+            TM_LOG_WARN("`max_context_token_num` is not set, default to {}.", (int)engine_param_.max_context_token_num);
         }
 
         if (engine_param_.max_context_token_num <= engine_param_.max_batch_size) {
             engine_param_.max_context_token_num *= engine_param_.session_len;
-            TM_LOG_WARNING("[TM] `max_context_token_num` = %d.", (int)engine_param_.max_context_token_num);
+            TM_LOG_WARN("`max_context_token_num` = {}.", (int)engine_param_.max_context_token_num);
         }
     }
 };
 
 TurboMind::Impl::~Impl()
 {
-    TM_LOG_INFO(__PRETTY_FUNCTION__);
+    TM_LOG_INFO("{}", __PRETTY_FUNCTION__);
     if (gateway_) {
         gateway_->shutdown();
     }
@@ -390,7 +390,7 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
                 model_param_.layer_types.push_back(0);
             }
             else {
-                TM_LOG_WARNING("[TM] Unknown layer_type '%s', treating as full_attention.", type_str.c_str());
+                TM_LOG_WARN("Unknown layer_type '{}', treating as full_attention.", type_str);
                 model_param_.layer_types.push_back(0);
             }
         }
@@ -403,6 +403,8 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     model_param_.linear_num_key_heads   = model["linear_num_key_heads"].as<int>(0);
     model_param_.linear_num_value_heads = model["linear_num_value_heads"].as<int>(0);
     model_param_.attn_output_gate       = model["attn_output_gate"].as<bool>(false);
+    model_param_.linear_state_dtype     = data_type_;
+
     if (auto uqel = model["unquantized_expert_layers"]) {
         for (auto it = uqel.begin(); it != uqel.end(); ++it) {
             model_param_.unquantized_expert_layers.insert(it->as<int>());
@@ -441,6 +443,10 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     engine_param_.cache_chunk_size      = engine["cache_chunk_size"].as<int>(0);
     engine_param_.enable_prefix_caching = engine["enable_prefix_caching"].as<bool>(false);
     engine_param_.enable_metrics        = engine["enable_metrics"].as<bool>(false);
+
+    if (engine_param_.enable_prefix_caching && HasLinearAttention(model_param_)) {
+        TM_CHECK(0) << "Prefix caching is unsupported when linear attention is present";
+    }
 
     engine_param_.num_tokens_per_iter = engine["num_tokens_per_iter"].as<int>(0);
     engine_param_.max_prefill_iters   = engine["max_prefill_iters"].as<int>(1);
@@ -658,7 +664,7 @@ void TurboMind::Impl::WarmUp(int index)
         std::ifstream ifs(str);
         const int     n_imported = linear.Import(ifs);
         if (index == 0) {
-            TM_LOG_INFO("[GEMM] %d records imported", n_imported);
+            TM_LOG_INFO("{} records imported", n_imported);
         }
         return;
     }
@@ -691,7 +697,7 @@ void TurboMind::Impl::WarmUp(int index)
         }
 
         auto str = Join(bss.begin(), bss.end(), ", ");
-        TM_LOG_INFO("[Engine] Warm-up lengths: %s", str.c_str());
+        TM_LOG_INFO("Warm-up lengths: {}", str);
 
         if (!bss.empty()) {
             const auto                         max_bs = *std::max_element(bss.begin(), bss.end());
@@ -706,7 +712,7 @@ void TurboMind::Impl::WarmUp(int index)
 
             for (auto token_num : bss) {
 
-                TM_LOG_INFO("[WarmUp] %d", token_num);
+                TM_LOG_INFO("{}", token_num);
 
                 auto r = CreateRequest();
 
@@ -739,13 +745,13 @@ void TurboMind::Impl::WarmUp(int index)
                 }
 
                 if (status != Request::kFinish) {
-                    TM_LOG_ERROR("[Engine] Warm-up for %d tokens failed with status %d", (int)token_num, (int)status);
+                    TM_LOG_ERROR("Warm-up for {} tokens failed with status {}", (int)token_num, (int)status);
                 }
             }
 
             auto tock = std::chrono::steady_clock::now();
 
-            TM_LOG_INFO("[WarmUp] Warm-up finished in %.2f seconds.",
+            TM_LOG_INFO("Warm-up finished in {:.2f} seconds.",
                         std::chrono::duration<float, std::ratio<1, 1>>(tock - tick).count());
         }
     }
@@ -759,7 +765,7 @@ void TurboMind::Impl::WarmUp(int index)
         if (auto path = std::getenv("TM_GEMM_EXPORT")) {
             std::ofstream ofs(path);
             const auto    n_records = linear.Export(ofs);
-            TM_LOG_INFO("[GEMM] %d records exported.", n_records);
+            TM_LOG_INFO("{} records exported.", n_records);
         }
 
         gateway_->set_threshold(1);

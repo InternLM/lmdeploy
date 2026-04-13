@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
-from typing import Dict, Iterator, Union
+from collections.abc import Iterator
 
 import torch
 from mmengine import Registry
@@ -14,7 +14,7 @@ class BaseReader(ABC):
     def __init__(self):
         pass
 
-    def transform(self, x: Union[torch.Tensor, None], kind: str) -> Union[torch.Tensor, None]:
+    def transform(self, x: torch.Tensor | None, kind: str) -> torch.Tensor | None:
         return None if x is None else self._transform(x, kind)
 
     @abstractmethod
@@ -37,7 +37,7 @@ class BaseInputModel(ABC):
         self.tokenizer_path = tokenizer_path
 
     @abstractmethod
-    def model_info(self) -> Dict:
+    def model_info(self) -> dict:
         """Read model info."""
         pass
 

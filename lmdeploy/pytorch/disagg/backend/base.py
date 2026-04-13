@@ -1,8 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import abstractmethod
 
-from lmdeploy.pytorch.disagg.conn.protocol import (DistServeInitRequest, DistServeKVTransferEndpointInfo,
-                                                   MigrationProtocol)
+from lmdeploy.pytorch.disagg.conn.protocol import (
+    DistServeInitRequest,
+    DistServeKVTransferEndpointInfo,
+    MigrationProtocol,
+)
 from lmdeploy.pytorch.disagg.messages import DistServeRegisterMRMessage, MigrationAssignment
 
 

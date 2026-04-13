@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import math
-from typing import Sequence
+from collections.abc import Sequence
 
 import torch
 import triton
@@ -89,7 +89,7 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs, loop_start
             qk = tl.where(
                 qk_mask,
                 qk,
-                float(-1e30),
+                (-1e30),
             )
             m_i_new = tl.maximum(m_i, tl.max(qk, 1))
             qk -= m_i_new[:, None]
@@ -101,7 +101,7 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs, loop_start
             qk = tl.where(
                 qk_mask,
                 qk,
-                float(-1e30),
+                (-1e30),
             )
             m_i_new = tl.maximum(m_i, tl.max(qk, 1))
             qk -= m_i_new[:, None]

@@ -8,7 +8,7 @@ import signal
 import struct
 from contextlib import asynccontextmanager, contextmanager
 from multiprocessing.context import SpawnContext
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import torch
 import torch.distributed as dist
@@ -224,7 +224,7 @@ class MPExecutor(ExecutorBase):
                  backend_config: BackendConfig,
                  dist_config: DistConfig,
                  misc_config: MiscConfig,
-                 adapters: Dict[str, str] = None,
+                 adapters: dict[str, str] = None,
                  specdecode_config: SpecDecodeConfig = None,
                  device_type: str = 'cuda'):
         """Initialize Executor."""
@@ -247,8 +247,8 @@ class MPExecutor(ExecutorBase):
         self.comm_buf_name = self.comm_buf.name()
 
         logger.info('Creating processes.')
-        self.procs: List[ExecutorProc] = []
-        self.ret_bufs: List[SharedBuffer] = []
+        self.procs: list[ExecutorProc] = []
+        self.ret_bufs: list[SharedBuffer] = []
         for proc_id in range(self.world_size):
             proc = ExecutorProc(proc_id=proc_id, mp_ctx=mp_ctx)
 
@@ -285,8 +285,8 @@ class MPExecutor(ExecutorBase):
 
     def collective_rpc(self,
                        method: str,
-                       args: Tuple[Any] = None,
-                       kwargs: Dict[str, Any] = None,
+                       args: tuple[Any] = None,
+                       kwargs: dict[str, Any] = None,
                        receiver_mask: int = 0xff,
                        return_mask: int = 0xff):
         """Collective rpc."""
@@ -314,8 +314,8 @@ class MPExecutor(ExecutorBase):
 
     async def collective_rpc_async(self,
                                    method: str,
-                                   args: Tuple[Any] = None,
-                                   kwargs: Dict[str, Any] = None,
+                                   args: tuple[Any] = None,
+                                   kwargs: dict[str, Any] = None,
                                    receiver_mask: int = 0xff,
                                    return_mask: int = 0xff):
         """Collective rpc."""
@@ -372,6 +372,14 @@ class MPExecutor(ExecutorBase):
     def warmup(self):
         """Build cache engine."""
         self.collective_rpc('warmup')
+
+    async def sleep(self, level: int = 1):
+        """Sleep."""
+        await self.collective_rpc_async('sleep', args=(level, ), return_mask=0)
+
+    def wakeup(self, tags: list[str] | None = None):
+        """Wakeup."""
+        self.collective_rpc('wakeup', args=(tags, ), return_mask=0)
 
     async def _prefetch_outputs(self):
         while True:
@@ -433,7 +441,7 @@ class MPWorkerWrapper(WorkerWrapperBase):
         dist_config: DistConfig,
         misc_config: MiscConfig,
         specdecode_config: SpecDecodeConfig = None,
-        adapters: Dict[str, str] = None,
+        adapters: dict[str, str] = None,
         device_type: str = 'cuda',
         log_level: int = 30,
     ):
@@ -496,7 +504,7 @@ class ExecutorProc:
         dist_config: DistConfig,
         misc_config: MiscConfig,
         specdecode_config: SpecDecodeConfig = None,
-        adapters: Dict[str, str] = None,
+        adapters: dict[str, str] = None,
         device_type: str = 'cuda',
         log_level: int = 30,
     ):
@@ -554,7 +562,7 @@ class ExecutorProc:
                 dist.destroy_process_group()
 
     @staticmethod
-    async def _task_wrapper(func, args: List, kwargs: Dict, need_return: bool, ret_buf: SharedBuffer):
+    async def _task_wrapper(func, args: list, kwargs: dict, need_return: bool, ret_buf: SharedBuffer):
         ret = await func(*args, **kwargs)
         if need_return:
             await ret_buf.send_async(ret)

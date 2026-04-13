@@ -30,9 +30,11 @@ if (BUILD_TEST)
         attention
         # flash_attention
         nvidia::cutlass::cutlass
-        Llama
+        models
         unfused_attention_kernels
-        logger
+        core
+        cuda_utils
+        fmt::fmt
         cublas)
 
     add_executable(test_quant test_quant.cu test_utils.cu)

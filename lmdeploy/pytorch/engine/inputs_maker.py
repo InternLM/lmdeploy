@@ -2,7 +2,7 @@
 import logging
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
@@ -54,10 +54,12 @@ class InputsMakerConfig:
     dp: int = 1
     spec_decoding: bool = False
     enable_chunked_prefill: bool = False
+    use_mrope: bool = False
 
     @staticmethod
     def from_engine(engine: 'Engine'):
         cache_config = engine.cache_config
+        model_config = engine.model_config
         return InputsMakerConfig(
             spec_decoding=engine.specdecode_config is not None,
             max_batches=cache_config.max_batches,
@@ -66,6 +68,7 @@ class InputsMakerConfig:
             is_ssm=len(cache_config.states_shapes) > 0,
             dp=engine.dist_config.dp,
             enable_chunked_prefill=engine.misc_config.enable_chunked_prefill,
+            use_mrope=model_config.use_mrope,
         )
 
 
@@ -96,6 +99,8 @@ class LongContextChunker:
         max_prefill_num = self.max_prefill_token_num
         mm = seq.get_input_multimodals()
         self.multimodals = defaultdict(list)
+
+        has_multimodal = False
         for key, value in mm.items():
             # sorted by start
             value = sorted(value, key=lambda x: x.start)
@@ -103,7 +108,10 @@ class LongContextChunker:
             max_mm_size = max([v.end - v.start for v in value], default=0)
             max_prefill_num = max(max_prefill_num, max_mm_size)
 
+            has_multimodal = has_multimodal or len(value) > 0
+
         self.max_prefill_num = max_prefill_num
+        self.has_multimodal = has_multimodal
 
     def multimodal_iter(self):
         """Multimodal iterator."""
@@ -131,7 +139,7 @@ class LongContextChunker:
 
         start = seq.num_history_ids
         end = start + llm_chunk_size
-        out_multimodals: 'MultiModalInputs' = defaultdict(list)
+        out_multimodals: MultiModalInputs = defaultdict(list)
         for modal_type, mm in self.multimodal_iter():
             assert mm.start >= start, 'multimodal data should be sorted by start'
             if mm.start >= end:
@@ -158,10 +166,11 @@ class LongContextChunker:
 
     def clear(self):
         """Clear."""
-        self.seq: 'SchedulerSequence' = None
+        self.seq: SchedulerSequence = None
         self.multimodals: MultiModalInputs = defaultdict(list)
         self.next_step: int = 0
         self.max_prefill_num: int = self.max_prefill_token_num
+        self.has_multimodal = False
 
     def update_step(self, inputs: ModelInputs):
         """Step chunker."""
@@ -205,6 +214,9 @@ class InputsMakerAsync:
         self.adapter_manager = adapter_manager
         self.config = config
         self.spec_decoding = config.spec_decoding
+        self.cache_config = scheduler.cache_config
+        self.kernel_blocks_per_kv = self.cache_config.block_size // self.cache_config.kernel_block_size
+        self.kernel_block_arange = torch.arange(self.kernel_blocks_per_kv, dtype=self.torch_int_dtype)
 
         # strategies
         self.engine_strategy = engine_strategy
@@ -219,8 +231,8 @@ class InputsMakerAsync:
 
         # running seqs
         # mark the seqs that have been sent to executor
-        self.running_seqs: List['SchedulerSequence'] = []
-        self.to_evict_seqs: List['SchedulerSequence'] = []
+        self.running_seqs: list[SchedulerSequence] = []
+        self.to_evict_seqs: list[SchedulerSequence] = []
 
         # long context chunker
         self.long_context_chunker = LongContextChunker(config.max_prefill_token_num)
@@ -313,6 +325,29 @@ class InputsMakerAsync:
         local_adapter_ids = model_inputs.seq_length.new_tensor(local_adapter_ids)
         model_inputs.local_adapter_ids = local_adapter_ids
 
+    def _map_to_kernel_block_offsets(self, block_offsets: torch.Tensor):
+        """Converts manager block_offsets to kernel block_offsets.
+
+        Example:
+
+            # block_manager block size: 32 tokens,
+            # Kernel block size: 16 tokens
+            # kernel_blocks_per_kv = 2
+            >>> block_manager block offsets = [0, 1, 3]
+            >>> Result kernel block offsets = [0, 1, 2, 3, 6, 7]
+
+            # Each block_manager block id maps to 2 kernel block id:
+            # block_manager block id 0 -> kernel block id [0, 1]
+            # block_manager block id 1 -> kernel block id [2, 3]
+            # block_manager block id 3 -> kernel block id [6, 7]
+        """
+        if self.kernel_blocks_per_kv == 1:
+            return block_offsets
+        batch_size = block_offsets.shape[0]
+        block_offsets = (block_offsets[:, :, None] * self.kernel_blocks_per_kv +
+                         self.kernel_block_arange[None, None, :]).reshape(batch_size, -1)
+        return block_offsets
+
     @torch.inference_mode()
     @record_function('create_model_inputs')
     def create_model_inputs(self, messages: 'SeqList', is_prefill: bool):
@@ -346,6 +381,7 @@ class InputsMakerAsync:
         # block offsets
         block_offsets = self.scheduler.get_block_tables(messages)
         block_offsets = _tensorlize_block_offsets(block_offsets, dtype=self.torch_int_dtype)
+        block_offsets = self._map_to_kernel_block_offsets(block_offsets)
 
         # num_ignored_history
         num_ignored_history = torch.tensor([msg.num_ignored_history for msg in messages])
@@ -379,6 +415,11 @@ class InputsMakerAsync:
             state_offsets = torch.tensor([msg.logical_state for msg in messages])
             model_inputs.state_offsets = state_offsets
 
+        if self.config.use_mrope:
+            mrope_pos_ids = [msg.mrope_pos_ids for msg in messages]
+            mrope_pos_ids = torch.as_tensor(np.concatenate(mrope_pos_ids)).T
+            model_inputs.mrope_pos_ids = mrope_pos_ids
+
         return model_inputs
 
     @torch.inference_mode()
@@ -386,7 +427,7 @@ class InputsMakerAsync:
     def create_model_inputs_long_context(self,
                                          seq: 'SchedulerSequence',
                                          chunk_size: int,
-                                         multimodals: Optional['MultiModalInputs'] = None):
+                                         multimodals: 'MultiModalInputs|None' = None):
         """Create model inputs for long context messages."""
         token_ids = seq.token_ids[:chunk_size]
         input_ids = torch.as_tensor(token_ids)[None]
@@ -396,6 +437,7 @@ class InputsMakerAsync:
         # block offsets
         block_offsets = self.scheduler.get_block_tables([seq])
         block_offsets = torch.as_tensor(block_offsets[0], dtype=self.torch_int_dtype)[None]
+        block_offsets = self._map_to_kernel_block_offsets(block_offsets)
 
         # num_ignored_history
         num_ignored_history = torch.tensor([seq.num_ignored_history])
@@ -436,6 +478,12 @@ class InputsMakerAsync:
         if self.config.is_ssm:
             model_inputs.state_offsets = torch.tensor([seq.logical_state])
 
+        # mrope
+        if self.config.use_mrope:
+            mrope_pos_ids = seq.mrope_pos_ids[:chunk_size]
+            mrope_pos_ids = torch.as_tensor(mrope_pos_ids).T
+            model_inputs.mrope_pos_ids = mrope_pos_ids
+
         return model_inputs
 
     @torch.inference_mode()
@@ -445,22 +493,24 @@ class InputsMakerAsync:
         batch_size = len(self.running_seqs)
         assert batch_size > 0
         num_decode_tokens = self.engine_strategy.get_num_decode_tokens()
+        num_required_tokens = self.engine_strategy.get_num_required_tokens()
         max_q_seqlen = num_decode_tokens
         prealloc_size = self.engine_strategy.get_prealloc_size(True)
         valid_mask = self.scheduler.schedule_running(self.running_seqs,
-                                                     num_decode_tokens=num_decode_tokens,
+                                                     num_required_tokens=num_required_tokens,
                                                      prealloc_size=prealloc_size)
 
         valid_mask = np.array(valid_mask)
         indices_cpu = np.arange(0, batch_size)[valid_mask]
-        valid_seqs: List['SchedulerSequence'] = [self.running_seqs[i] for i in indices_cpu]
-        invalid_seqs: List['SchedulerSequence'] = [self.running_seqs[i] for i in range(batch_size) if not valid_mask[i]]
+        valid_seqs: list[SchedulerSequence] = [self.running_seqs[i] for i in indices_cpu]
+        invalid_seqs: list[SchedulerSequence] = [self.running_seqs[i] for i in range(batch_size) if not valid_mask[i]]
         if len(valid_seqs) == 0:
             return None, valid_seqs, invalid_seqs
 
         # block offsets
         block_offsets = self.scheduler.get_block_tables(valid_seqs)
         block_offsets = _tensorlize_block_offsets(block_offsets, dtype=self.torch_int_dtype)
+        block_offsets = self._map_to_kernel_block_offsets(block_offsets)
 
         # sliding window
         if self.scheduler.cache_config.window_size > 0:
@@ -498,8 +548,8 @@ class InputsMakerAsync:
 
         valid_mask = np.array(valid_mask, dtype=bool)
         indices_cpu = np.arange(0, batch_size)[valid_mask]
-        valid_seqs: List['SchedulerSequence'] = [self.running_seqs[i] for i in indices_cpu]
-        invalid_seqs: List['SchedulerSequence'] = [self.running_seqs[i] for i in range(batch_size) if not valid_mask[i]]
+        valid_seqs: list[SchedulerSequence] = [self.running_seqs[i] for i in indices_cpu]
+        invalid_seqs: list[SchedulerSequence] = [self.running_seqs[i] for i in range(batch_size) if not valid_mask[i]]
 
         num_decode_tokens = self.engine_strategy.get_num_decode_tokens()
         max_q_seqlen = num_decode_tokens
@@ -523,7 +573,7 @@ class InputsMakerAsync:
 
         return output, valid_seqs, invalid_seqs
 
-    def update_running_seqs(self, running: 'SeqList', inputs: Optional[ModelInputs]):
+    def update_running_seqs(self, running: 'SeqList', inputs: 'ModelInputs|None'):
         """Update running seqs."""
         if self.config.role == EngineRole.Prefill:
             # p node will not update running seqs
@@ -586,11 +636,14 @@ class InputsMakerAsync:
             running = [seq]
             if self.long_context_chunker.is_last_chunk():
                 inputs, delta, extra_inputs = __create_model_inputs(running)
+                inputs.is_chunk = True
+                inputs.is_last_chunk = True
                 self.long_context_chunker.clear()
             else:
                 inputs, extra_inputs = __create_inputs_chunk(running)
                 delta = None
             inputs.is_first_chunk = False
+            inputs.is_chunk_multimodal = self.long_context_chunker.has_multimodal
             return running, inputs, delta, extra_inputs
 
         def __create_inputs_prefill():
@@ -610,6 +663,8 @@ class InputsMakerAsync:
                 # set long context chunker
                 self.long_context_chunker.set_seq(running[0])
                 inputs, extra_inputs = __create_inputs_chunk(running)
+                inputs.is_first_chunk = True
+                inputs.is_chunk_multimodal = self.long_context_chunker.has_multimodal
             elif len(running) > 0:
                 # create inputs
                 inputs, delta, extra_inputs = __create_model_inputs(running)

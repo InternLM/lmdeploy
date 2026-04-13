@@ -1,9 +1,11 @@
 #include "src/turbomind/models/llama/GatedDeltaNetLayer.h"
+#include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/data_type.h"
+#include "src/turbomind/core/logger.h"
+#include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/llama/gated_delta_net_kernels.h"
 #include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/utils/logger.h"
 
 namespace turbomind {
 
@@ -24,6 +26,7 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(const ModelParam&     model,
     conv_dim_(key_dim_ * 2 + value_dim_),
     norm_eps_(model.norm_eps),
     dtype_(model.data_type),
+    state_dtype_(model.linear_state_dtype),
     linear_(*ctx.linear)
 {
     layer_types_       = model.layer_types;
@@ -33,8 +36,8 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(const ModelParam&     model,
             ++num_linear_layers_;
     }
 
-    TM_LOG_INFO("GatedDeltaNetLayer: num_k=%d num_v=%d k_dim=%d v_dim=%d "
-                "conv_dim=%d d_conv=%d num_linear_layers=%d",
+    TM_LOG_INFO("GatedDeltaNetLayer: num_k={} num_v={} k_dim={} v_dim={} "
+                "conv_dim={} d_conv={} num_linear_layers={}",
                 num_k_heads_,
                 num_v_heads_,
                 key_dim_,
@@ -43,50 +46,91 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(const ModelParam&     model,
                 d_conv_,
                 num_linear_layers_);
 
-    for (int i = 0; i < phases; ++i) {
-        phase_data_.push_back(std::make_shared<PhaseData>());
+    if (num_linear_layers_ > 0) {
+        conv_state_ptrs_buf_      = {engine.max_batch_size, kCPUpinned};
+        recurrent_state_ptrs_buf_ = {engine.max_batch_size, kCPUpinned};
     }
+
+    for (int i = 0; i < phases; ++i) {
+        data_.emplace_back();
+        if (num_linear_layers_ > 0) {
+            data_.at(i).conv_state_ptrs      = empty_like(conv_state_ptrs_buf_, kDEVICE);
+            data_.at(i).recurrent_state_ptrs = empty_like(recurrent_state_ptrs_buf_, kDEVICE);
+        }
+    }
+
+    int device = 0;
+    cudaGetDevice(&device);
+    cudaDeviceGetAttribute(&sm_count_, cudaDevAttrMultiProcessorCount, device);
+    work_counter_ = {1, kDEVICE};
+
+    check_cuda_error(cudaStreamCreateWithPriority(&aux_stream_, cudaStreamNonBlocking, -1));
+    check_cuda_error(cudaEventCreateWithFlags(&ev_before_, cudaEventDisableTiming));
+    check_cuda_error(cudaEventCreateWithFlags(&ev_after_, cudaEventDisableTiming));
 }
 
-GatedDeltaNetLayer::~GatedDeltaNetLayer() = default;
+GatedDeltaNetLayer::~GatedDeltaNetLayer()
+{
+    cudaStreamDestroy(aux_stream_);
+    cudaEventDestroy(ev_before_);
+    cudaEventDestroy(ev_after_);
+}
 
 void GatedDeltaNetLayer::Run(BatchOp op, int phase, TensorMap& env)
 {
     if (op == BatchOp::kAdd) {
         Buffer_<RequestCache*> rc    = env.at("requests").buffer();
         const auto             dtype = dtype_;
-        for (int i = 0; i < rc.size(); ++i) {
-            auto& c = *rc[i];
-            if (num_linear_layers_ > 0) {
-                c.conv_states = Tensor{{num_linear_layers_, conv_dim_, d_conv_}, dtype, kDEVICE};
-                Clear(c.conv_states);
-                c.recurrent_states =
-                    Tensor{{num_linear_layers_, num_v_heads_, key_head_dim_, value_head_dim_}, dtype, kDEVICE};
-                Clear(c.recurrent_states);
-            }
-        }
+        for (int i = 0; i < rc.size(); ++i) {}
     }
     else if (op == BatchOp::kSetup) {
         Setup(phase, env);
     }
     else if (op == BatchOp::kPrepare) {
-        auto& d     = *phase_data_.at(phase);
+        auto& d     = data_.at(phase);
         d.q_offsets = env.at("q_offsets").buffer().borrow();
+        d.k_offsets = env.at("k_offsets").buffer().borrow();
     }
 }
 
 void GatedDeltaNetLayer::Setup(int phase, TensorMap& env)
 {
-    auto&       d     = *phase_data_.at(phase);
-    const auto& batch = *env.at("batch").data<BatchData*>()[0];
+    auto&       d = data_.at(phase);
+    const auto& b = *env.at("batch").data<BatchData*>()[0];
 
-    d.batch_size = batch.rc.size();
+    d.batch_size = b.rc.size();
     d.rc.resize(d.batch_size);
     d.input_lens.resize(d.batch_size);
+
+    d.conv_states.resize(d.batch_size);
+    d.recurrent_states.resize(d.batch_size);
+
     for (int i = 0; i < d.batch_size; ++i) {
-        d.rc[i]         = batch.rc[i].get();
-        d.input_lens[i] = batch.rc[i]->input_len;
+        d.rc[i]         = b.rc[i].get();
+        d.input_lens[i] = b.rc[i]->input_len;
+
+        auto& s = *b.rc[i]->seq;
+        TM_CHECK(s.conv_states && s.recurrent_states)
+            << "Linear-attention state slot is not bound for sequence " << s.id;
+        if (s.linear_states_need_reset) {
+            // Reset newly assigned pooled slot state on first use. Keep GPU-side
+            // state initialization out of SequenceManager.
+            Clear(s.conv_states);
+            Clear(s.recurrent_states);
+            s.linear_states_need_reset = false;
+        }
+
+        // Linear-attention requests are restricted to stateless execution, so
+        // the sequence-owned states can be passed directly here.
+        d.conv_states[i]      = s.conv_states;
+        d.recurrent_states[i] = s.recurrent_states;
+
+        conv_state_ptrs_buf_[i]      = d.conv_states[i].raw_data();
+        recurrent_state_ptrs_buf_[i] = d.recurrent_states[i].raw_data();
     }
+
+    Copy(conv_state_ptrs_buf_, d.batch_size, d.conv_state_ptrs);
+    Copy(recurrent_state_ptrs_buf_, d.batch_size, d.recurrent_state_ptrs);
 }
 
 static int linear_layer_index(int layer_id, const std::vector<int>& layer_types)
@@ -112,7 +156,7 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
     const auto  stream  = core::Context::stream().handle();
     const auto& weights = *p.weights;
 
-    auto& pd = *phase_data_.at(p.phase);
+    auto& pd = data_.at(p.phase);
 
     auto dispatch = [&](auto t) {
         using T = decltype(t);
@@ -126,8 +170,6 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
         Tensor    all_proj   = linear_.Forward(p.input, weights.in_proj_all);
         sync_check_cuda_error();
 
-        // Pointer-arithmetic slices — no copies, no allocations.
-        auto all_data = all_proj.data<T>();
         // Column offsets per token (all_proj is token-major, row-major):
         //   [0, conv_dim_)           -> mixed_qkv
         //   [conv_dim_, +value_dim_) -> z
@@ -142,154 +184,146 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
         //    Stride between tokens is all_col elements.
         // =================================================================
         const int bg_total = token_num * num_v_heads_;
+
         const int b_offset = conv_dim_ + value_dim_;  // column offset to b logits
         const int a_offset = b_offset + v_heads_tp;   // column offset to a logits
-        Tensor    beta{{token_num, num_v_heads_}, dtype, device};
-        Tensor    g_tensor{{token_num, num_v_heads_}, dtype, device};
 
-        // Gather b and a columns into contiguous buffers for the kernel.
-        // Each has shape (token_num, v_heads_tp) but is strided inside all_proj.
-        // Use the existing invokeComputeBetaG which needs contiguous b/a input.
-        // We copy the b/a columns compactly first.
-        Tensor b_contig{{token_num, v_heads_tp}, dtype, device};
-        Tensor a_contig{{token_num, v_heads_tp}, dtype, device};
-        check_cuda_error(cudaMemcpy2DAsync(b_contig.data<T>(),
-                                           v_heads_tp * sizeof(T),
-                                           all_data + b_offset,
-                                           all_col * sizeof(T),
-                                           v_heads_tp * sizeof(T),
-                                           token_num,
-                                           cudaMemcpyDeviceToDevice,
-                                           stream));
-        check_cuda_error(cudaMemcpy2DAsync(a_contig.data<T>(),
-                                           v_heads_tp * sizeof(T),
-                                           all_data + a_offset,
-                                           all_col * sizeof(T),
-                                           v_heads_tp * sizeof(T),
-                                           token_num,
-                                           cudaMemcpyDeviceToDevice,
-                                           stream));
+        Tensor beta{{token_num, num_v_heads_}, dtype, device};
+        Tensor g{{token_num, num_v_heads_}, dtype, device};
 
-        invokeComputeBetaG(beta.data<T>(),
-                           g_tensor.data<T>(),
-                           b_contig.data<T>(),
-                           a_contig.data<T>(),
-                           weights.A_log.data<T>(),
-                           weights.dt_bias.data<T>(),
-                           bg_total,
-                           num_v_heads_,
-                           stream);
-        sync_check_cuda_error();
+        auto b = all_proj.slice({0, b_offset}, {-1, v_heads_tp});
+        auto a = all_proj.slice({0, a_offset}, {-1, v_heads_tp});
+
+        ComputeBetaG_v2(beta, g, b, a, weights.A_log, weights.dt_bias, stream);
 
         // =================================================================
-        // 3. Process each request independently
+        // 3. Process all requests at once via batched kernel launches
         // =================================================================
         Tensor attn_out{{token_num, value_dim_}, dtype, device};
+        Tensor conv_out{{token_num, conv_dim_}, dtype, device};
 
-        int token_offset = 0;
-        for (int req = 0; req < pd.batch_size; ++req) {
-            auto&     rc      = *pd.rc[req];
-            const int seq_len = pd.input_lens[req];
-            if (seq_len == 0)
-                continue;
+        const int state_layer_idx              = linear_layer_index(p.layer_id, layer_types_);
+        const int conv_state_layer_offset      = state_layer_idx * (conv_dim_ * d_conv_);
+        const int recurrent_state_layer_offset = state_layer_idx * (num_v_heads_ * key_head_dim_ * value_head_dim_);
 
-            // Slice per-request portions from the fused projection output.
-            // qkv lives in columns [0, conv_dim_) of all_proj with row-stride all_col.
-            // z   lives in columns [conv_dim_, conv_dim_+value_dim_).
-            // b/a are already extracted into contiguous beta/g_tensor above.
-            T* qkv_row_ptr = all_data + token_offset * all_col;  // first token, col 0
-            T* z_row_ptr   = all_data + token_offset * all_col + conv_dim_;
-            T* beta_ptr    = beta.data<T>() + token_offset * num_v_heads_;
-            T* g_ptr       = g_tensor.data<T>() + token_offset * num_v_heads_;
-            T* out_ptr     = attn_out.data<T>() + token_offset * value_dim_;
+        // ----- 3a. Fused Causal Conv1d + SiLU (all requests) -----
+        // all_proj carries the non-contiguous qkv slice (stride = all_col);
+        // in_stride is derived from all_proj.stride(0) inside the launcher.
+        invokeFusedConv1dSiLU(conv_out,
+                              all_proj,
+                              weights.conv1d,
+                              Tensor{},
+                              pd.conv_state_ptrs,
+                              pd.q_offsets,
+                              pd.k_offsets,
+                              pd.batch_size,
+                              conv_state_layer_offset,
+                              sm_count_,
+                              work_counter_.data(),
+                              stream);
+        sync_check_cuda_error();
 
-            const int state_layer_idx = linear_layer_index(p.layer_id, layer_types_);
-
-            T* conv_state_ptr      = nullptr;
-            T* recurrent_state_ptr = nullptr;
-            if (rc.conv_states) {
-                conv_state_ptr = rc.conv_states.data<T>() + state_layer_idx * (conv_dim_ * d_conv_);
+        // ----- 3b. Gated Delta Rule -----
+        // Requests are sorted by input_len: decode (seq_len==1) first, prefill last.
+        // Find the split point and dispatch each half to its optimal kernel.
+        // When both are present, run them concurrently on separate streams.
+        {
+            int decode_count = 0;
+            for (int i = 0; i < pd.batch_size; ++i) {
+                if (pd.input_lens[i] <= 1)
+                    ++decode_count;
+                else
+                    break;
             }
-            if (rc.recurrent_states) {
-                recurrent_state_ptr =
-                    rc.recurrent_states.data<T>() + state_layer_idx * (num_v_heads_ * key_head_dim_ * value_head_dim_);
+            const int prefill_count = pd.batch_size - decode_count;
+
+            if (decode_count > 0 && prefill_count > 0) {
+                // Fork: aux_stream (high priority) waits for prior work on main stream
+                check_cuda_error(cudaEventRecord(ev_before_, stream));
+                check_cuda_error(cudaStreamWaitEvent(aux_stream_, ev_before_));
+
+                // Decode on main stream
+                auto dc_state = pd.recurrent_state_ptrs.slice(0, decode_count);
+                auto dc_q     = pd.q_offsets.slice(0, decode_count + 1);
+                invokeGatedDeltaRuleBatched_v3(attn_out,
+                                               conv_out,
+                                               beta,
+                                               g,
+                                               dc_state,
+                                               dc_q,
+                                               decode_count,
+                                               num_k_heads_,
+                                               recurrent_state_layer_offset,
+                                               state_dtype_,
+                                               sm_count_,
+                                               work_counter_.data(),
+                                               stream);
+
+                // Prefill on aux stream (higher priority)
+                auto pf_state = pd.recurrent_state_ptrs.slice(decode_count, prefill_count);
+                auto pf_q     = pd.q_offsets.slice(decode_count, prefill_count + 1);
+                invokeChunkedGatedDeltaRuleBatched(attn_out,
+                                                   conv_out,
+                                                   beta,
+                                                   g,
+                                                   pf_state,
+                                                   pf_q,
+                                                   prefill_count,
+                                                   num_k_heads_,
+                                                   recurrent_state_layer_offset,
+                                                   state_dtype_,
+                                                   sm_count_,
+                                                   work_counter_.data(),
+                                                   aux_stream_);
+
+                // Join: main stream waits for prefill to finish
+                check_cuda_error(cudaEventRecord(ev_after_, aux_stream_));
+                check_cuda_error(cudaStreamWaitEvent(stream, ev_after_));
             }
-
-            // ----- 3a. Fused Causal Conv1d + SiLU -----
-            // conv_out shape: (seq_len, conv_dim_) — packed [Q|K|V] per token.
-            // No transpose: the new delta-rule kernels read this row-major layout directly.
-            Tensor conv_out{{seq_len, conv_dim_}, dtype, device};
-            invokeFusedConv1dSiLU(conv_out.data<T>(),
-                                  qkv_row_ptr,
-                                  weights.conv1d.data<T>(),
-                                  (const T*)nullptr,
-                                  conv_state_ptr,
-                                  1,
-                                  conv_dim_,
-                                  seq_len,
-                                  d_conv_,
-                                  all_col,
-                                  stream);
-            sync_check_cuda_error();
-
-            // ----- 3b. Gated Delta Rule -----
-            // The kernels handle:
-            //   • Strided Q/K/V access directly from the packed conv_out buffer
-            //     (eliminates the three cudaMemcpy2DAsync strided-copy passes).
-            //   • In-kernel L2 normalization of Q and K
-            //     (eliminates two invokeL2Norm kernel launches).
-            //   • GQA: kh = h / (num_v_heads / num_k_heads) computed per-thread
-            //     (eliminates the invokeRepeatInterleave allocation).
-            const int k_dim_total = key_dim_;  // num_k_heads * key_head_dim (per TP)
-
-            if (seq_len == 1) {
-                // Decode: single-step recurrent update using persistent state.
-                invokeRecurrentGatedDeltaRule(out_ptr,
-                                              conv_out.data<T>(),
-                                              beta_ptr,
-                                              g_ptr,
-                                              recurrent_state_ptr,
-                                              1,  // batch_size = 1 per request
-                                              num_v_heads_,
-                                              num_k_heads_,
-                                              key_head_dim_,
-                                              value_head_dim_,
-                                              k_dim_total,
-                                              stream);
+            else if (decode_count > 0) {
+                auto state_slice = pd.recurrent_state_ptrs.slice(0, decode_count);
+                auto q_slice     = pd.q_offsets.slice(0, decode_count + 1);
+                invokeGatedDeltaRuleBatched_v3(attn_out,
+                                               conv_out,
+                                               beta,
+                                               g,
+                                               state_slice,
+                                               q_slice,
+                                               decode_count,
+                                               num_k_heads_,
+                                               recurrent_state_layer_offset,
+                                               state_dtype_,
+                                               sm_count_,
+                                               work_counter_.data(),
+                                               stream);
             }
-            else {
-                // Prefill: process all timesteps in a SINGLE kernel launch.
-                // (Previously: O(seq_len) kernel launches via host-side for-loop.)
-                invokeGatedDeltaRulePrefill(out_ptr,
-                                            conv_out.data<T>(),
-                                            beta_ptr,
-                                            g_ptr,
-                                            recurrent_state_ptr,
-                                            seq_len,
-                                            num_v_heads_,
-                                            num_k_heads_,
-                                            key_head_dim_,
-                                            value_head_dim_,
-                                            k_dim_total,
-                                            stream);
+            else if (prefill_count > 0) {
+                auto state_slice = pd.recurrent_state_ptrs.slice(decode_count, prefill_count);
+                auto q_slice     = pd.q_offsets.slice(decode_count, prefill_count + 1);
+                invokeChunkedGatedDeltaRuleBatched(attn_out,
+                                                   conv_out,
+                                                   beta,
+                                                   g,
+                                                   state_slice,
+                                                   q_slice,
+                                                   prefill_count,
+                                                   num_k_heads_,
+                                                   recurrent_state_layer_offset,
+                                                   state_dtype_,
+                                                   sm_count_,
+                                                   work_counter_.data(),
+                                                   stream);
+                // invokeChunkedGatedDeltaRuleBatched
             }
-            sync_check_cuda_error();
-
-            // ----- 3c. RMSNormGated -----
-            const int N = seq_len * num_v_heads_;
-            invokeRMSNormGated(out_ptr,
-                               z_row_ptr,
-                               weights.norm.data<T>(),
-                               norm_eps_,
-                               N,
-                               value_head_dim_,
-                               all_col,
-                               num_v_heads_,
-                               stream);
-            sync_check_cuda_error();
-
-            token_offset += seq_len;
         }
+        sync_check_cuda_error();
+
+        // ----- 3c. RMSNormGated (all tokens at once) -----
+        // Gate (z) lives at column conv_dim_ of all_proj with row-stride all_col.
+        Tensor gate        = all_proj.slice({0, conv_dim_}, {-1, value_dim_});
+        Tensor hidden_view = attn_out.view({token_num * num_v_heads_, value_head_dim_});
+        invokeRMSNormGated(hidden_view, gate, weights.norm, norm_eps_, stream);
+        sync_check_cuda_error();
 
         // =================================================================
         // 4. Output projection (all tokens at once)

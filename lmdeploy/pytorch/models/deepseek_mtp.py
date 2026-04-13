@@ -1,16 +1,29 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
+from typing import Any
 
 import torch
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding,
-                                 build_rotary_params)
-from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_down_linear, build_gateup_linear, build_o_proj,
-                                        build_rowwise_linear)
+from lmdeploy.pytorch.nn import (
+    ApplyRotaryEmb,
+    Attention,
+    RMSNorm,
+    RopeType,
+    SiluAndMul,
+    build_rotary_embedding,
+    build_rotary_params,
+)
+from lmdeploy.pytorch.nn.linear import (
+    build_colwise_linear,
+    build_down_linear,
+    build_gateup_linear,
+    build_o_proj,
+    build_rowwise_linear,
+)
 from lmdeploy.pytorch.nn.moe import build_fused_moe
 from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters, get_rope_theta
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
@@ -161,8 +174,8 @@ class DeepseekV2Attention(DeepseekV2Attention):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: tuple[torch.Tensor] | None = None,
         attn_metadata: Any = None,
     ):
         """Rewrite of LlamaAttention.forward."""
@@ -413,8 +426,8 @@ class DeepSeekMultiTokenPredictorLayer(nn.Module):
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
         previous_hidden_states: torch.Tensor,
-        past_key_value: List[List[torch.Tensor]],
-        inputs_embeds: Optional[torch.Tensor] = None,
+        past_key_value: list[list[torch.Tensor]],
+        inputs_embeds: torch.Tensor | None = None,
         attn_metadata: Any = None,
         spec_step_index: int = 0,
     ) -> torch.Tensor:
@@ -422,11 +435,8 @@ class DeepSeekMultiTokenPredictorLayer(nn.Module):
             inputs_embeds = self.embed_tokens(input_ids)
         assert inputs_embeds is not None
 
-        # masking inputs at position 0, as not needed by MTP
-        inputs_embeds[position_ids == 0] = 0
         inputs_embeds = self.enorm(inputs_embeds)
         previous_hidden_states = self.hnorm(previous_hidden_states)
-
         hidden_states = self.eh_proj(torch.cat([inputs_embeds, previous_hidden_states], dim=-1))
 
         # rotary emb
@@ -477,8 +487,8 @@ class DeepSeekMultiTokenPredictor(nn.Module):
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
         previous_hidden_states: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
-        inputs_embeds: Optional[torch.Tensor] = None,
+        past_key_values: list[list[torch.Tensor]],
+        inputs_embeds: torch.Tensor | None = None,
         attn_metadata: Any = None,
         spec_step_idx: int = 0,
     ) -> torch.Tensor:
@@ -541,9 +551,9 @@ class DeepseekMTPModel(nn.Module, CudaGraphMixin):
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
         target_hidden_states: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
-        inputs_embeds: Optional[torch.Tensor] = None,
+        inputs_embeds: torch.Tensor | None = None,
         spec_step_idx: int = 0,
     ) -> torch.Tensor:
         hidden_states = self.model(input_ids,
@@ -582,8 +592,8 @@ class DeepseekMTPModel(nn.Module, CudaGraphMixin):
 
     def prepare_inputs_for_generation(
         self,
-        past_key_values: List[List[torch.Tensor]],
-        inputs_embeds: Optional[torch.Tensor] = None,
+        past_key_values: list[list[torch.Tensor]],
+        inputs_embeds: torch.Tensor | None = None,
         context: StepContext = None,
     ):
         """Prepare input."""
@@ -600,8 +610,8 @@ class DeepseekMTPModel(nn.Module, CudaGraphMixin):
             target_hidden_states=target_hidden_states,
         )
 
-    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
-                             expert_params_mapping: List):
+    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
+                             expert_params_mapping: list):
         """Load weight experts."""
         for (param_name, weight_name, expert_id, shard_id) in expert_params_mapping:
             if weight_name not in name:
@@ -614,8 +624,8 @@ class DeepseekMTPModel(nn.Module, CudaGraphMixin):
             param = params_dict[name]
             load_weight(param, loaded_weight)
 
-    def _load_weight_attention(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
-                               update_pe_mapping: List):
+    def _load_weight_attention(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
+                               update_pe_mapping: list):
         """Load weight attention."""
         device = next(iter(params_dict.values())).device
 
@@ -707,7 +717,7 @@ class DeepseekMTPModel(nn.Module, CudaGraphMixin):
                 param = params_dict[name]
                 load_weight(param, loaded_weight)
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
 
         def __skip_nextn(name, nextn_keys):

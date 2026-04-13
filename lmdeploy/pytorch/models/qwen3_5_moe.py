@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Dict, Iterable, List, Tuple
+from collections.abc import Iterable
 
 import torch
 import torch.distributed as dist
@@ -15,10 +15,18 @@ from lmdeploy.pytorch.nn.moe import build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .patch import add_prefix, get_build_model_context
-from .qwen2_5_vl import Qwen2_5_VLInputProcessor as Qwen3_5MoeInputProcessor
-from .qwen3_5 import (Qwen3_5Attention, Qwen3_5DecoderLayer, Qwen3_5ForConditionalGeneration, Qwen3_5GatedDeltaNet,
-                      Qwen3_5MLP, Qwen3_5Model, Qwen3_5TextModel, Qwen3_5TextRotaryEmbedding)
+from .qwen3_5 import (
+    Qwen3_5Attention,
+    Qwen3_5DecoderLayer,
+    Qwen3_5ForConditionalGeneration,
+    Qwen3_5GatedDeltaNet,
+    Qwen3_5MLP,
+    Qwen3_5Model,
+    Qwen3_5TextModel,
+    Qwen3_5TextRotaryEmbedding,
+)
 from .qwen3_5 import Qwen3_5VisionModel as Qwen3_5MoeVisionModel
+from .qwen3_vl import Qwen3VLInputProcessor as Qwen3_5MoeInputProcessor
 
 
 class Qwen3_5MoeTopKRouter(nn.Module):
@@ -49,9 +57,9 @@ class Qwen3_5MoeSparseMoeBlock(nn.Module):
                  layer_idx: int,
                  dtype: torch.dtype | None = None,
                  device: torch.device | None = None,
-                 prefix: str = ''):
+                 prefix: str = '',
+                 is_tp: bool = True):
         super().__init__()
-        # TODO: zhouxinyu, determine modules_to_not_convert from config file
         quantization_config = getattr(config, 'quantization_config', None)
         self.layer_idx = layer_idx
         self.hidden_dim = config.hidden_size
@@ -80,7 +88,7 @@ class Qwen3_5MoeSparseMoeBlock(nn.Module):
             intermediate_size=config.shared_expert_intermediate_size,
             dtype=dtype,
             device=device,
-            is_tp=True,
+            is_tp=is_tp,
             all_reduce=False,
             prefix=add_prefix('shared_expert', prefix),
         )
@@ -264,25 +272,35 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
         # for router replay
         bm_ctx = get_build_model_context()
         self.enable_return_routed_experts = bm_ctx.enable_return_routed_experts
+        self.is_spec_decoding = get_build_model_context().num_spec_tokens > 0
 
-    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
-                             expert_params_mapping: List):
+    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter]):
         """Load weight experts."""
-        # this func is not used, but it has same layout with tranformers implementation
-        # so I will keep it for now.
-        # load fused weights
-        for (param_name, weight_name, expert_id, shard_id) in expert_params_mapping:
-            if weight_name not in name:
-                continue
-            name = name.replace(weight_name, param_name)
-            param = params_dict[name]
+        import re
+        # fused weights (bf16): experts.gate_up_proj / experts.down_proj
+        if any(k in name for k in ['experts.gate_up_proj', 'experts.down_proj']):
+            return self._load_weight_fused_experts(name, loaded_weight, params_dict)
+
+        # non-fused weights (fp8): experts.<id>.<gate|up|down>_proj.*
+        proj_map = {
+            'gate_proj': ('.experts.gate_up', 'gate'),
+            'up_proj': ('.experts.gate_up', 'up'),
+            'down_proj': ('.experts.down', 'down'),
+        }
+        m = re.search(r'\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)', name)
+        if m:
+            expert_id = int(m.group(1))
+            param_name, shard_id = proj_map[m.group(2)]
+            # e.g. .experts.42.gate_proj.weight -> .experts.gate_up.weight
+            suffix = name[m.end():]
+            param_key = name[:m.start()] + param_name + suffix
+            param = params_dict[param_key]
             load_weight(param, loaded_weight, expert_id=expert_id, shard_id=shard_id)
-            break
         else:
             param = params_dict[name]
             load_weight(param, loaded_weight)
 
-    def _load_weight_fused_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter]):
+    def _load_weight_fused_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter]):
         """Load weight of fused expert weights."""
         num_experts = self.config.text_config.num_experts
         fused_gateup_name = 'gate_up_proj'
@@ -305,7 +323,7 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
                 w2 = loaded_weight[expert_id]
                 load_weight(param, w2, expert_id=expert_id, shard_id='down')
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
 
         def __skip_layers(name):
@@ -326,19 +344,9 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
             ('.qkv_proj', '.v_proj', 'v'),
             ('.gate_up_proj', '.gate_proj', 0),
             ('.gate_up_proj', '.up_proj', 1),
-            ('.in_proj_zba', '.in_proj_z', 'z'),
-            ('.in_proj_zba', '.in_proj_b', 'b'),
-            ('.in_proj_zba', '.in_proj_a', 'a'),
+            ('.in_proj_ba', '.in_proj_b', 'b'),
+            ('.in_proj_ba', '.in_proj_a', 'a'),
         ]
-
-        # expert map
-        num_experts = self.config.text_config.num_experts
-        expert_params_mapping = []
-        for exp_id in range(num_experts):
-            gate_param = ('.experts.gate_up', f'.experts.{exp_id}.gate_proj', exp_id, 'gate')
-            up_param = ('.experts.gate_up', f'.experts.{exp_id}.up_proj', exp_id, 'up')
-            down_param = ('.experts.down', f'.experts.{exp_id}.down_proj', exp_id, 'down')
-            expert_params_mapping += [gate_param, up_param, down_param]
 
         rms_norm_keys = ['model.norm', '.input_layernorm', '.post_attention_layernorm', '.q_norm', '.k_norm']
 
@@ -358,7 +366,7 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
                 continue
 
             if '.experts' in name and '.shared_expert' not in name:
-                self._load_weight_fused_experts(name, loaded_weight, params_dict)
+                self._load_weight_experts(name, loaded_weight, params_dict)
             else:
                 for (param_name, weight_name, shard_id) in stacked_params_mapping:
                     if weight_name not in name:

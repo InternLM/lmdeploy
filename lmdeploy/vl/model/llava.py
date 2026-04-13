@@ -5,7 +5,6 @@ import ast
 import math
 import warnings
 from contextlib import contextmanager
-from typing import Dict, List
 
 import torch
 from PIL import Image
@@ -295,12 +294,11 @@ class LlavaVisionModel(LlavaHfVisionModel):
         image_features = self.mm_projector(image_features)
         return image_features
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refer to `super().preprocess() for spec."""
-        images = self.collect_images(messages)
+        images = self.collect_multimodal_items(messages)
         outputs = []
-        for image, params in images:
-            image = image.convert('RGB')
+        for modality, image, params in images:
             pixel_values = process_images([image], self.image_processor, self.config)
             outputs.append(
                 dict(pixel_values=pixel_values,
@@ -311,12 +309,12 @@ class LlavaVisionModel(LlavaHfVisionModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
-            messages(List[Dict]): the outputs of `preprocess`
+            messages(list[dict]): the outputs of `preprocess`
             max_batch_size(int): the max batch size when forwarding vision
                 model
         Return:

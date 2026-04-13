@@ -2,7 +2,7 @@ name: linux-x64-gpu
 on:
   push:
     paths:
-      - '.github/workflows/linux-x64-gpu.yml'
+      - '.github/workflows/linux_x64_gpu.yml'
       - 'src/**'
       - 'CMakeLists.txt'
       - 'cmake/**'
@@ -11,7 +11,7 @@ on:
       - 'tests/csrc/**'
   pull_request:
     paths:
-      - '.github/workflows/linux-x64-gpu.yml'
+      - '.github/workflows/linux_x64_gpu.yml'
       - 'src/**'
       - 'CMakeLists.txt'
       - 'cmake/**'
@@ -54,6 +54,7 @@ jobs:
             -w /work \
             openmmlab/lmdeploy-builder:cuda${{ matrix.cudaver }} \
             bash -c "
+              git config --global --add safe.directory /work && \
               source /opt/conda/bin/activate && \
               conda activate py310 && \
               pip install build && \

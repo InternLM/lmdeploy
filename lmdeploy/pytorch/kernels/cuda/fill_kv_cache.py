@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Literal, Optional
+from typing import Literal
 
 import torch
 import triton
@@ -93,6 +93,7 @@ def _fill_kv_cache_kernel(
         q_offs = token_off + page_offs
 
     block_off = tl.load(BlockOffsets + batch_id * stride_boff + kv_block_id)
+    block_off = block_off.to(tl.int64)
 
     d_off = tl.arange(0, BLOCK_D)
     mask_ks = kv_mask[:, None]
@@ -349,6 +350,7 @@ def _fill_kv_cache_quant_kernel(
         q_offs = token_off + page_offs
 
     block_off = tl.load(BlockOffsets + batch_id * stride_boff + kv_block_id)
+    block_off = block_off.to(tl.int64)
 
     _fill_page_quant(KStates,
                      KCaches,
@@ -399,9 +401,9 @@ def _fill_kv_cache_quant_kernel(
 
 
 def fill_kv_cache(k_states: Tensor,
-                  v_states: Optional[Tensor],
+                  v_states: Tensor | None,
                   k_caches: Tensor,
-                  v_caches: Optional[Tensor],
+                  v_caches: Tensor | None,
                   q_start_loc: Tensor,
                   q_seq_length: Tensor,
                   kv_seq_length: Tensor,
@@ -645,6 +647,7 @@ def _fill_kv_cache_blocked_fp8_kernel(
         q_offs = token_off + page_offs
 
     block_off = tl.load(BlockOffsets + batch_id * stride_boff + kv_block_id)
+    block_off = block_off.to(tl.int64)
 
     d_off = tl.arange(0, BLOCK_D)
     mask_ks = kv_mask[:, None]
@@ -690,32 +693,32 @@ def _fill_kv_cache_blocked_fp8_kernel(
 
 
 def fill_kv_cache_blocked_fp8(k_states: Tensor,
-                              v_states: Optional[Tensor],
+                              v_states: Tensor | None,
                               k_caches: Tensor,
-                              v_caches: Optional[Tensor],
+                              v_caches: Tensor | None,
                               ks_caches: Tensor,
-                              vs_caches: Optional[Tensor],
+                              vs_caches: Tensor | None,
                               cu_seqlen_q: Tensor,
                               kv_seqlens: Tensor,
                               max_q_seqlen: int,
                               block_offsets: Tensor,
                               group_size: int = 128,
                               kv_layout: str = 'bshd',
-                              scale_fmt: Optional[str] = None):
+                              scale_fmt: str | None = None):
     """Fill key/value state to cache for paged attention with fp8 quantization.
 
     Args:
         k_states (Tensor): Key states of shape
             (seq_length, num_heads, head_dim).
-        v_states (Optional[Tensor]): Value states of shape
+        v_states (Tensor | None): Value states of shape
             (seq_length, num_heads, head_dim_v). If None, no value states
             are processed.
         k_caches (Tensor): 4D k cache, shape depends on ``kv_layout``.
-        v_caches (Optional[Tensor]): 4D v cache, shape depends on
+        v_caches (Tensor | None): 4D v cache, shape depends on
             ``kv_layout``. If None, no value caches are processed.
         ks_caches (Tensor): 4D k scale cache, shape depends on
             ``kv_layout``.
-        vs_caches (Optional[Tensor]): 4D v scale cache, shape depends on
+        vs_caches (Tensor | None): 4D v scale cache, shape depends on
             ``kv_layout``. If None, no value scale caches are processed.
         cu_seqlen_q (Tensor): Cumulative sequence lengths of queries,
             shape (batch_size + 1, ).

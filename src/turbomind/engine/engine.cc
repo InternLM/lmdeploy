@@ -17,10 +17,10 @@
 #include "src/turbomind/engine/request.h"
 
 #include "src/turbomind/core/copy.h"
+#include "src/turbomind/core/logger.h"
 #include "src/turbomind/models/language_model.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/llama/llama_params.h"
-#include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/metrics.h"
 
 // #include "dbg.h"
@@ -163,7 +163,7 @@ struct Engine::Impl {
 
 Engine::Impl::~Impl()
 {
-    TM_LOG_INFO(__PRETTY_FUNCTION__);
+    TM_LOG_INFO("{}", __PRETTY_FUNCTION__);
     inbound_.close();
     outbound_.close();
     if (internal_thread_.joinable()) {
@@ -214,21 +214,7 @@ void Engine::Impl::CreateSequenceManager()
 {
     const auto cache_block_seq_len = model_.attn_param().cache_block_seq_len;
 
-    const int dbits = byte_size(dtype_, 8);
-
     const auto& model_param = model_.model_param();
-
-    const auto quant_policy = model_param.quant_policy;
-    const int  elem_bits    = quant_policy ? quant_policy : dbits;
-
-    SequenceManager::BlockConfig block_config{
-        (int)model_param.head_dim,
-        (int)model_param.kv_head_num / param_.attn_tp_size,
-        cache_block_seq_len,
-        elem_bits == dbits ? 0 : dbits,
-        elem_bits,
-        model_param.head_dim == 576,  // share kv
-    };
 
     const auto get_free_size = [&] {  //
         size_t free{}, total{};
@@ -236,8 +222,11 @@ void Engine::Impl::CreateSequenceManager()
         return AllReduce(tp_group_, free, comm::RedOp::kMin);
     };
 
-    seq_mgr_ = std::make_unique<SequenceManager>(model_param.layer_num,
-                                                 block_config,
+    seq_mgr_ = std::make_unique<SequenceManager>(model_param,
+                                                 dtype_,
+                                                 cache_block_seq_len,
+                                                 param_.attn_tp_size,
+                                                 param_.max_batch_size,
                                                  param_.cache_max_block_count,
                                                  param_.cache_chunk_size,
                                                  param_.enable_prefix_caching,
@@ -248,9 +237,9 @@ void Engine::Impl::CreateSequenceManager()
 
     const auto max_cached_tokens = seq_mgr_->max_block_count() * (size_t)cache_block_seq_len * param_.attn_cp_size;
     session_len_trunc_           = std::min(max_cached_tokens, (size_t)param_.session_len);
-    TM_LOG_INFO("max cached tokens: %lld", max_cached_tokens);
+    TM_LOG_INFO("max cached tokens: {}", max_cached_tokens);
     if (session_len_trunc_ != param_.session_len) {
-        TM_LOG_WARNING("`session_len` truncated to %d due to limited KV cache memory", session_len_trunc_);
+        TM_LOG_WARN("`session_len` truncated to {} due to limited KV cache memory", session_len_trunc_);
     }
 }
 
@@ -259,28 +248,37 @@ void Engine::Impl::Validate(Requests& infer_reqs, Requests& kill_reqs)
     std::pmr::monotonic_buffer_resource    mbr;
     std::pmr::unordered_map<uint64_t, int> occur(&mbr);
 
+    const bool has_linear_attention = HasLinearAttention(model_.model_param());
+
     auto count = [&occur](const auto& reqs) {
         for (const auto& r : reqs) {
             ++occur[r->id];
         }
     };
 
-    auto validate = [&](auto& reqs, const char* type) {
+    auto validate = [&](auto& reqs, const char* type, bool is_infer) {
         for (const auto& r : reqs) {
             if (occur[r->id] > 1) {
-                TM_LOG_ERROR("Skip conflicting %s request for ID %lu", type, r->id);
+                TM_LOG_ERROR("Skip conflicting {} request for ID {}", type, r->id);
                 r->ec = Request::kConflict;
+            }
+            if (!r->ec && is_infer && has_linear_attention && !r->session.end_flag) {
+                TM_LOG_ERROR("Skip inconsistent {} request for ID {}. Linear attention only supports stateless "
+                             "requests",
+                             type,
+                             r->id);
+                r->ec = Request::kInconsistency;
             }
             if (param_.enable_prefix_caching) {
                 if (r->session.step != 0) {
                     // Prefix caching is incompatible with interactive mode
-                    TM_LOG_ERROR("Skip inconsistent %s request for ID %lu step %d", type, r->id, r->session.step);
+                    TM_LOG_ERROR("Skip inconsistent {} request for ID {} step {}", type, r->id, r->session.step);
                     r->ec = Request::kInconsistency;
                 }
                 else if (r->gen_cfg.output_logits == GenerationConfig::kAll
                          || r->gen_cfg.output_last_hidden_state == GenerationConfig::kAll) {
                     // Prefix caching is incompatible with outputting all tokens' logits or last_hidden_state
-                    TM_LOG_ERROR("Skip inconsistent %s request for ID %lu. It cannot output logits or "
+                    TM_LOG_ERROR("Skip inconsistent {} request for ID {}. It cannot output logits or "
                                  "last_hidden_states for all tokens",
                                  type,
                                  r->id);
@@ -301,8 +299,8 @@ void Engine::Impl::Validate(Requests& infer_reqs, Requests& kill_reqs)
     count(kill_reqs);
     count(infer_reqs);
 
-    validate(kill_reqs, "kill");
-    validate(infer_reqs, "infer");
+    validate(kill_reqs, "kill", false);
+    validate(infer_reqs, "infer", true);
 
     // New requests that never get a chance to start
     for (auto& r : infer_reqs) {
@@ -351,7 +349,17 @@ void Engine::Impl::Interrupt(RequestCache& c)
         TM_CHECK(seq_mgr_->Erase(c.req->id));
     }
     else {
-        seq_mgr_->UpdateAndSetUnlock(s);
+        if (s.recurrent_states && c.seq_len != s.cache_len) {
+            TM_LOG_WARN(
+                "[Engine][Interrupt] Invalidating cache for ID {} due to linear-state/cache mismatch ({} vs {})",
+                s.id,
+                c.seq_len,
+                s.cache_len);
+            seq_mgr_->InvalidateStatesAndCache(s);
+        }
+        else {
+            seq_mgr_->UpdateAndSetUnlock(s);
+        }
     }
     c.seq = nullptr;
 }
@@ -405,7 +413,7 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
             }
             else if (s > ptr->tokens.size()) {
                 if (tp_rank_ == 0) {
-                    TM_LOG_WARNING("[ProcessInferRequests] Skipping invalid step (%d) setting for ID %lu", s, ptr->id);
+                    TM_LOG_WARN("Skipping invalid step ({}) setting for ID {}", s, ptr->id);
                 }
                 s = ptr->tokens.size();
             }
@@ -424,6 +432,14 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
         }
 
         auto& seq = *ptr;
+        seq_mgr_->AcquireLinearStateSlot(seq);
+
+        if (seq.recurrent_states) {
+            if (step != seq.cache_len) {
+                signals.push_back([r] { UpdateState(*r, Request::kInvalid, 0); });
+                continue;
+            }
+        }
 
         auto c = std::make_unique<RequestCache>(r, seq);
 
@@ -458,8 +474,8 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
             if (tp_rank_ == 0) {
                 const int trunc_output_len = max_seq_len - c->prompt_len;
                 // clang-format off
-                TM_LOG_WARNING("[ProcessInferRequests] [%ld] total sequence length (%d + %d) exceeds `session_len` (%d), `max_new_tokens` is truncated to %d",
-                    (long)seq.id, c->prompt_len, c->gen_cfg.max_new_tokens, session_len_trunc_, trunc_output_len);
+                TM_LOG_WARN("ID {}: total sequence length ({} + {}) exceeds `session_len` ({}), `max_new_tokens` is truncated to {}",
+                    seq.id, c->prompt_len, c->gen_cfg.max_new_tokens, session_len_trunc_, trunc_output_len);
                 // clang-format on
             }
         }
@@ -796,7 +812,7 @@ void Engine::Impl::InternalThreadEntry()
         }
 
         if (rs->abort) {
-            TM_LOG_INFO("[Engine] stop requested.");
+            TM_LOG_INFO("stop requested.");
             break;
         }
 

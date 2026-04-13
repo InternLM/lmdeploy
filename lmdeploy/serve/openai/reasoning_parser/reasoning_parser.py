@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modified from https://github.com/vllm-project/vllm/tree/v0.7.3/vllm/entrypoints/openai/reasoning_parsers
+from collections.abc import Sequence
 from functools import cached_property
-from typing import Dict, Optional, Sequence, Tuple, Union
 
 from mmengine import Registry
 
@@ -16,7 +16,7 @@ class ReasoningParser:
         self.model_tokenizer = tokenizer
 
     @cached_property
-    def vocab(self) -> Dict[str, int]:
+    def vocab(self) -> dict[str, int]:
         # NOTE: Only PreTrainedTokenizerFast is guaranteed to have .vocab
         # whereas all tokenizers have .get_vocab()
         return self.model_tokenizer.get_vocab()
@@ -30,7 +30,7 @@ class ReasoningParser:
         current_token_ids: Sequence[int],
         delta_token_ids: Sequence[int],
         **kwargs,
-    ) -> Union[DeltaMessage, None]:
+    ) -> DeltaMessage | None:
         """Instance method that should be implemented for extracting reasoning
         from an incomplete response; for use when handling reasoning calls and
         streaming.
@@ -42,7 +42,7 @@ class ReasoningParser:
                                   'has not been implemented!')
 
     def extract_reasoning_content(self, model_output: str, request: ChatCompletionRequest,
-                                  **kwargs) -> Tuple[Optional[str], Optional[str]]:
+                                  **kwargs) -> tuple[str | None, str | None]:
         """Extract reasoning content from a complete model-generated string.
 
         Used for non-streaming responses where we have the entire model response

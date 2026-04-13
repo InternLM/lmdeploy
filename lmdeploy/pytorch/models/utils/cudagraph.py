@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import torch
 from torch import Tensor
@@ -8,7 +8,7 @@ from torch.profiler import record_function
 
 from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
 
-BuffType = Dict[str, Tensor]
+BuffType = dict[str, Tensor]
 
 
 def _get_meta_flashattn(
@@ -21,9 +21,9 @@ def _get_meta_flashattn(
         cache_seqlens: torch.Tensor,
         qkv_dtype=torch.bfloat16,
         headdim_v=None,
-        cu_seqlens_q: Optional[torch.Tensor] = None,
-        cu_seqlens_k_new: Optional[torch.Tensor] = None,
-        page_size: Optional[int] = None,
+        cu_seqlens_q: torch.Tensor | None = None,
+        cu_seqlens_k_new: torch.Tensor | None = None,
+        page_size: int | None = None,
         causal=True,
         window_size=(-1, -1),  # -1 means infinite context window
         num_splits=0,
@@ -77,9 +77,12 @@ class CudaGraphMeta:
     vocab_size: int = 1
     use_mla_fp8_cache: bool = False
     use_flash_mla: bool = False
-    mla_index_topk: Optional[int] = None
+    mla_index_topk: int | None = None
     decode_query_len: int = 1
     use_fa3_decoding: bool = False
+    is_ssm: bool = False
+    use_mrope: bool = False
+    block_size: int = 64
 
 
 class CudaGraphMixin:
@@ -89,7 +92,7 @@ class CudaGraphMixin:
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
-        past_key_values: List[List[torch.Tensor]],
+        past_key_values: list[list[torch.Tensor]],
         attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
         **kwargs,
@@ -102,18 +105,16 @@ class CudaGraphMixin:
         if isinstance(output, torch.Tensor):
             output_buffers = dict(hidden_states=output)
         else:
-            assert isinstance(output, Dict)
+            assert isinstance(output, dict)
             output_buffers = output
         return output_buffers
 
-    def update_meta_flashattn(self, graph_meta: CudaGraphMeta, block_size: int, max_seqlen_k: int,
+    def update_meta_flashattn(self, batch_size: int, max_seqlen_q: int, block_size: int, max_seqlen_k: int,
                               cache_seqlens: torch.Tensor):
         """Update meta flashattn."""
         ctx_mgr = get_step_ctx_manager()
         step_ctx = ctx_mgr.current_context()
         model_config = step_ctx.model_config
-        batch_size = graph_meta.max_batchs
-        max_seqlen_q = graph_meta.decode_query_len
         sliding_window = model_config.sliding_window
         num_attention_heads = model_config.num_attention_heads
         num_key_value_heads = model_config.num_key_value_heads
@@ -123,6 +124,9 @@ class CudaGraphMixin:
             window_size = (-1, -1)
         elif isinstance(sliding_window, int):
             window_size = (sliding_window, sliding_window)
+        else:
+            window_size = sliding_window
+
         cache_seqlens = cache_seqlens.to(torch.int32)
         scheduler_metadata = _get_meta_flashattn(
             batch_size=batch_size,
@@ -138,7 +142,8 @@ class CudaGraphMixin:
         )
         return scheduler_metadata
 
-    def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, *args, past_key_values: List, **kwargs) -> BuffType:
+    def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, *args, past_key_values: list[list[torch.Tensor]],
+                               **kwargs) -> BuffType:
         """Make cudagraph buffers from forward inputs."""
         max_batches = graph_meta.max_batchs
         max_tokens = graph_meta.max_tokens
@@ -184,18 +189,27 @@ class CudaGraphMixin:
 
         # use fa3 decode kernel for spec decode
         elif graph_meta.use_fa3_decoding is True:
-            block_size = past_key_values[0][0].size(1)
-            input_buffers['scheduler_metadata'] = self.update_meta_flashattn(graph_meta,
-                                                                             block_size=block_size,
+            input_buffers['scheduler_metadata'] = self.update_meta_flashattn(graph_meta.max_batchs,
+                                                                             graph_meta.decode_query_len,
+                                                                             block_size=graph_meta.block_size,
                                                                              max_seqlen_k=decode_query_len,
                                                                              cache_seqlens=input_buffers['kv_seqlens'])
+
+        # mrope
+        if graph_meta.use_mrope:
+            input_buffers['mrope_position_ids'] = torch.zeros(3, max_tokens, dtype=torch.int64, device=device)
+
+        # ssm
+        if graph_meta.is_ssm:
+            state_ids = torch.full((max_batches, ), -1, dtype=torch.int64, device=device)
+            input_buffers['state_ids'] = state_ids
 
         return input_buffers
 
     @record_function('fill_buffers_cudagraph')
     def fill_buffers_cudagraph(self, graph_meta: CudaGraphMeta, input_ids: Tensor, position_ids: Tensor,
-                               past_key_values: List, attn_metadata: Any, inputs_embeds: Tensor,
-                               **kwargs) -> Dict[str, Tensor]:
+                               past_key_values: list[list[torch.Tensor]], attn_metadata: Any, inputs_embeds: Tensor,
+                               **kwargs) -> dict[str, Tensor]:
         """Fill cudagraph buffers from forward inputs."""
 
         block_offsets: Tensor = attn_metadata.block_offsets
@@ -254,21 +268,23 @@ class CudaGraphMixin:
 
         # use fa3 decode kernel for spec decode
         elif graph_meta.use_fa3_decoding is True:
-            block_size = past_key_values[0][0].size(1)
             scheduler_metadata = self.update_meta_flashattn(
-                graph_meta,
-                block_size=block_size,
+                new_batch_size,
+                decode_query_len,
+                block_size=graph_meta.block_size,
                 max_seqlen_k=attn_metadata.max_kv_seqlen,
                 cache_seqlens=input_buffers['kv_seqlens'],
             )
-            assert scheduler_metadata.shape == input_buffers['scheduler_metadata'].shape
-            input_buffers['scheduler_metadata'].copy_(scheduler_metadata)
-            attn_metadata.scheduler_metadata = input_buffers['scheduler_metadata']
+            num_meta = scheduler_metadata.size(0)
+            input_buffers['scheduler_metadata'][:num_meta] = scheduler_metadata
+            input_buffers['scheduler_metadata'][num_meta:] = 0
+            attn_metadata.scheduler_metadata = input_buffers['scheduler_metadata'][:num_meta]
 
         new_inputs = dict(
             past_key_values=past_key_values,
             attn_metadata=attn_metadata,
         )
+        new_inputs.update(kwargs)
 
         new_inputs['input_ids'] = input_buffers['input_ids']
         new_inputs['position_ids'] = input_buffers['position_ids']
@@ -276,7 +292,22 @@ class CudaGraphMixin:
         if inputs_embeds is not None:
             new_inputs['inputs_embeds'] = input_buffers['inputs_embeds']
 
-        new_inputs.update(kwargs)
+        # mrope
+        if graph_meta.use_mrope:
+            mrope_position_ids = kwargs.get('mrope_position_ids', None)
+            if mrope_position_ids is not None:
+                input_buffers['mrope_position_ids'][:, :num_tokens] = mrope_position_ids
+                new_inputs['mrope_position_ids'] = input_buffers['mrope_position_ids']
+            else:
+                raise ValueError('MROPE position ids is required for MROPE model.')
+
+        # ssm
+        if graph_meta.is_ssm:
+            state_ids = kwargs['state_ids']
+            input_buffers['state_ids'].fill_(-1)
+            input_buffers['state_ids'][:state_ids.size(0)].copy_(state_ids)
+            new_inputs['state_ids'] = input_buffers['state_ids']
+
         return new_inputs
 
     def update_context_cudagraph(self, graph_meta: CudaGraphMeta, context: StepContext):
@@ -293,7 +324,15 @@ class CudaGraphMixin:
         context.kv_seqlens = input_buffers['kv_seqlens']
         context.q_start_loc = input_buffers['q_start_loc']
 
-    def get_outputs_cudagraph(self, output_buffers: Dict[str, torch.Tensor], input_ids: Tensor, **kwargs):
+        # mrope
+        if graph_meta.use_mrope:
+            context.mrope_position_ids = input_buffers['mrope_position_ids']
+
+        # ssm
+        if graph_meta.is_ssm:
+            context.state_offsets = input_buffers['state_ids']
+
+    def get_outputs_cudagraph(self, output_buffers: dict[str, torch.Tensor], input_ids: Tensor, **kwargs):
         """Get outputs from buffers."""
         num_tokens = input_ids.size(-1)
         outputs = dict()

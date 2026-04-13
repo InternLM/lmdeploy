@@ -1,21 +1,21 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
 
-TypeModelMetas = Dict[str, Any]
+TypeModelMetas = dict[str, Any]
 
-InputMultiModalType = List[Dict[str, Any]]
+InputMultiModalType = list[dict[str, Any]]
 
 
 @dataclass
 class PreprocessInputResult:
     """Results of preprocess input."""
-    input_ids: List[int]
-    input_multimodals: Optional[MultiModalInputs] = None
-    model_metas: Optional[TypeModelMetas] = None
+    input_ids: list[int]
+    input_multimodals: MultiModalInputs | None = None
+    model_metas: TypeModelMetas | None = None
 
 
 class BaseModelInputProcessor(ABC):
@@ -23,7 +23,7 @@ class BaseModelInputProcessor(ABC):
 
     @abstractmethod
     def preprocess_input(self,
-                         input_ids: List[int],
+                         input_ids: list[int],
                          input_mms: InputMultiModalType = None,
                          **kwargs) -> PreprocessInputResult:
         """Preprocess input."""
@@ -34,7 +34,7 @@ class DefaultModelInputProcessor(BaseModelInputProcessor):
     """Default model input processor."""
 
     def preprocess_input(self,
-                         input_ids: List[int],
+                         input_ids: list[int],
                          input_mms: MultiModalInputs = None,
                          **kwargs) -> PreprocessInputResult:
         """Preprocess input."""

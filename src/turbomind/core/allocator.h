@@ -146,7 +146,7 @@ public:
             p = underlying_impl_->allocate(size);
         }
 
-        // TM_LOG_ERROR("allocate %p, %ld", p, size);
+        // TM_LOG_ERROR("allocate {}, {}", p, size);
 
         size_ += size;
         ++num_;
@@ -159,7 +159,7 @@ public:
     {
         size = round_up(size, kAlignment);
 
-        // TM_LOG_ERROR("deallocate %p, %p, %ld", p, cached_ptr_, size);
+        // TM_LOG_ERROR("deallocate {}, {}, {}", p, cached_ptr_, size);
 
         if ((char*)p + size == cached_ptr_) {
             cached_ptr_ -= size;

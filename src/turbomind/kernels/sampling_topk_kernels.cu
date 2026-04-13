@@ -30,6 +30,7 @@
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
 
 #include "src/turbomind/utils/constant.h"
+#include "src/turbomind/utils/string_utils.h"
 
 namespace turbomind {
 

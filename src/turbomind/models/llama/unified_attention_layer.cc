@@ -45,9 +45,9 @@
 #include "src/turbomind/models/llama/mla_utils.h"
 #include "src/turbomind/models/llama/unified_attention_layer.h"
 
+#include "src/turbomind/core/logger.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/utils/logger.h"
 
 // #include "dbg.h"
 
@@ -122,6 +122,17 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(const ModelParam&     model,
 
     init_rope_kernel_param(param_.rope, rope_param_);
 
+    // Skip other attention layer types
+    std::vector<int> layer_types = model_param_.layer_types;
+    layer_types.resize(model_param_.layer_num);
+    cache_layer_ids_.resize(layer_types.size(), -1);
+    int next_cache_id = 0;
+    for (size_t i = 0; i < layer_types.size(); ++i) {
+        if (layer_types[i] == 0) {
+            cache_layer_ids_[i] = next_cache_id++;
+        }
+    }
+
     Allocator alloc            = core::Context::device_alloc();
     ssize_t   workspace_tokens = kMaxWorkspaceTokens;
     if (engine_param_.attn_cp_size > 1) {
@@ -179,8 +190,8 @@ static void init_dynamic_ntk(RequestCache& cache, const RopeParam& rope)
             scaling_factor = scaling_factor * max_seq_len / max_pos_emb - (scaling_factor - 1);
             cache.rope_base *= powf(scaling_factor, rope.dim / (rope.dim - 2.f));
             // clang-format off
-            TM_LOG_INFO("[ProcessInferRequests] %ld rope_scaling_factor: %f, rope_theta = %f",
-                        (long)cache.req->id, scaling_factor, cache.rope_base);
+            TM_LOG_INFO("{} rope_scaling_factor: {}, rope_theta = {}",
+                        cache.req->id, scaling_factor, cache.rope_base);
             // clang-format on
         }
     }
@@ -288,7 +299,7 @@ void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
 
 void UnifiedAttentionLayer::Forward(ForwardParam p)
 {
-    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("{}", __PRETTY_FUNCTION__);
 
     /////////////////////////////////////////////
     /// parse inputs
@@ -390,6 +401,8 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
     Tensor tmp_kv{
         {(int)local_kv_head_num_, is_mla ? 1 : 2, d.prefill.k_sum + MAX_CTA_S, (int)size_per_head_}, dtype, device};
 
+    const int cache_layer_id = cache_layer_ids_[p.layer_id];
+
     auto CreateParams = [&](int offset, AttentionData::Stat stat, int max_kv_splits, cudaStream_t stream) {
         AttentionParams<T> params{};
 
@@ -429,7 +442,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         // decode only
         params.block_iter_params = BlockIteratorParams{(char**)d.block_ptrs.data(),  //
                                                        d.block_ptrs_offsets.data() + offset,
-                                                       p.layer_id,
+                                                       cache_layer_id,
                                                        (int)param_.cache_block_seq_len};
 
         // prefill only
@@ -455,7 +468,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         params.num_heads     = local_head_num_;
         params.num_kv_heads  = local_kv_head_num_;
         params.size_per_head = size_per_head_;
-        params.layer_id      = p.layer_id;
+        params.layer_id      = cache_layer_id;
 
         double scaling = 1.;
         if (param_.softmax_scale) {  // model predefined softmax scale

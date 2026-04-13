@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Optional
 
 import torch
 import triton
@@ -102,7 +101,7 @@ def _quant_fp8_kernel(
         s_ptr += m_id_stride * stride_sm
 
 
-def _quant_fp8_launcher(A: Tensor, group_size: int, out: Tensor, scales: Tensor, scale_fmt: Optional[str] = None):
+def _quant_fp8_launcher(A: Tensor, group_size: int, out: Tensor, scales: Tensor, scale_fmt: str | None = None):
     """Quant online."""
     assert scale_fmt in (None, 'ue8m0')
     round_scale = 1 if scale_fmt == 'ue8m0' else 0
@@ -160,7 +159,7 @@ def quant_fp8(A: Tensor,
               group_size: int,
               dtype: torch.dtype = torch.float8_e4m3fn,
               trans_scale: bool = False,
-              scale_fmt: Optional[str] = None):
+              scale_fmt: str | None = None):
     """Quant fp8."""
     assert A.dim() == 2
     M, K = A.shape
@@ -177,7 +176,7 @@ def quant_fp8(A: Tensor,
 def quant_fp8_tma(A: Tensor,
                   group_size: int,
                   dtype: torch.dtype = torch.float8_e4m3fn,
-                  scale_fmt: Optional[str] = None):
+                  scale_fmt: str | None = None):
     """Quant fp8 tma."""
     from lmdeploy.pytorch.third_party.deep_gemm import ceil_div, get_m_alignment_for_contiguous_layout
     assert A.dim() == 2

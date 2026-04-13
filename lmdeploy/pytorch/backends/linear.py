@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
-from typing import List, Optional
 
 import torch
 import torch.distributed as dist
@@ -9,7 +8,7 @@ import torch.distributed as dist
 class LinearImpl(ABC):
     """Linear implementation api."""
 
-    def update_weights(self, weight: torch.Tensor, bias: Optional[torch.Tensor] = None):
+    def update_weights(self, weight: torch.Tensor, bias: torch.Tensor | None = None):
         """Update weights."""
         return weight, bias
 
@@ -17,11 +16,11 @@ class LinearImpl(ABC):
     def forward(self,
                 x,
                 weight: torch.Tensor,
-                bias: Optional[torch.Tensor] = None,
+                bias: torch.Tensor | None = None,
                 all_reduce: bool = False,
                 group: dist.ProcessGroup = None,
                 rank: int = 0,
-                scatter_size: List[int] = None):
+                scatter_size: list[int] = None):
         """forward."""
         raise NotImplementedError
 

@@ -45,5 +45,4 @@ target_link_libraries(Llama PUBLIC CUDA::cudart
         gpt_kernels
         memory_utils
         cuda_utils
-        logger
         anomaly_handler)

@@ -1,15 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import contextlib
 import os
-from typing import Union
 
 
 def env_to_bool(
     env_var: str,
     default: bool = False,
     *,
-    true_values: Union[set, list] = {'true', '1', 'yes', 'on'},
-    false_values: Union[set, list] = {'false', '0', 'no', 'off'},
+    true_values: set | list = {'true', '1', 'yes', 'on'},
+    false_values: set | list = {'false', '0', 'no', 'off'},
 ):
     """Env to bool."""
     value = os.getenv(env_var)
@@ -80,7 +79,7 @@ def set_envs():
 
     def _patched_get_env(
         env_var: str,
-        default: Union[str, None] = None,
+        default: str | None = None,
     ):
         """Patched get_env."""
         if env_var in os.environ:
@@ -127,6 +126,9 @@ with set_envs():
     # only used when lmdeploy is initialized inside a Ray Actor with pg allocated
     ray_external_pg_bundles = env_to_list_int('LMDEPLOY_RAY_EXTERNAL_PG_BUNDLES', [])
 
+    # enable ray zero-copy tensors
+    os.getenv('RAY_ENABLE_ZERO_COPY_TORCH_TENSORS', '1')
+
     # dist
     dist_master_addr = os.getenv('LMDEPLOY_DIST_MASTER_ADDR', None)
     dist_master_port = os.getenv('LMDEPLOY_DIST_MASTER_PORT', None)
@@ -159,6 +161,9 @@ with set_envs():
 
     # repetition check
     repetition_window_size = env_to_int('LMDEPLOY_REPETITION_WINDOW_SIZE', 1024)
+
+    # qwen3.5 recurrent_state dtype
+    fp32_mamba_ssm_dtype = env_to_bool('LMDEPLOY_FP32_MAMBA_SSM_DTYPE', False)
 
 
 def get_all_envs():

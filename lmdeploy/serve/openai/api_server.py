@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from __future__ import annotations
+
 # yapf: disable
 import asyncio
 import copy
@@ -6,10 +8,11 @@ import json
 import os
 import re
 import time
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from functools import partial
 from http import HTTPStatus
-from typing import AsyncGenerator, Literal
+from typing import TYPE_CHECKING, Literal
 
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
@@ -21,31 +24,66 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.routing import Mount
 
 from lmdeploy.archs import get_task
-from lmdeploy.messages import (GenerationConfig, LogitsProcessor, PytorchEngineConfig, SpeculativeConfig,
-                               TurbomindEngineConfig)
+from lmdeploy.messages import (
+    GenerationConfig,
+    LogitsProcessor,
+    PytorchEngineConfig,
+    SpeculativeConfig,
+    TurbomindEngineConfig,
+)
 from lmdeploy.metrics.metrics_processor import metrics_processor
 from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.pytorch.disagg.config import DistServeEngineConfig
-from lmdeploy.pytorch.disagg.conn.protocol import (DistServeCacheFreeRequest, DistServeConnectionRequest,
-                                                   DistServeDropConnectionRequest, DistServeInitRequest,
-                                                   MigrationRequest)
+from lmdeploy.pytorch.disagg.conn.protocol import (
+    DistServeCacheFreeRequest,
+    DistServeConnectionRequest,
+    DistServeDropConnectionRequest,
+    DistServeInitRequest,
+    MigrationRequest,
+)
 from lmdeploy.serve.core import AsyncEngine
 from lmdeploy.serve.openai.harmony_utils import GptOssChatParser
-from lmdeploy.serve.openai.protocol import ChatCompletionResponse  # noqa: E501
-from lmdeploy.serve.openai.protocol import (AbortRequest, ChatCompletionRequest, ChatCompletionResponseChoice,
-                                            ChatCompletionResponseStreamChoice, ChatCompletionStreamResponse,
-                                            ChatCompletionTokenLogprob, ChatMessage, ChoiceLogprobs, CompletionRequest,
-                                            CompletionResponse, CompletionResponseChoice,
-                                            CompletionResponseStreamChoice, CompletionStreamResponse, DeltaMessage,
-                                            EmbeddingsRequest, EncodeRequest, EncodeResponse, ErrorResponse,
-                                            GenerateReqInput, GenerateReqMetaOutput, GenerateReqOutput, LogProbs,
-                                            ModelCard, ModelList, ModelPermission, PoolingRequest, PoolingResponse,
-                                            TopLogprob, UpdateParamsRequest, UsageInfo)
+from lmdeploy.serve.openai.protocol import (
+    AbortRequest,
+    ChatCompletionRequest,
+    ChatCompletionResponse,  # noqa: E501
+    ChatCompletionResponseChoice,
+    ChatCompletionResponseStreamChoice,
+    ChatCompletionStreamResponse,
+    ChatCompletionTokenLogprob,
+    ChatMessage,
+    ChoiceLogprobs,
+    CompletionRequest,
+    CompletionResponse,
+    CompletionResponseChoice,
+    CompletionResponseStreamChoice,
+    CompletionStreamResponse,
+    DeltaMessage,
+    EmbeddingsRequest,
+    EncodeRequest,
+    EncodeResponse,
+    ErrorResponse,
+    GenerateReqInput,
+    GenerateReqMetaOutput,
+    GenerateReqOutput,
+    LogProbs,
+    ModelCard,
+    ModelList,
+    ModelPermission,
+    PoolingRequest,
+    PoolingResponse,
+    TopLogprob,
+    UpdateParamsRequest,
+    UsageInfo,
+)
 from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParser, ReasoningParserManager
 from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParser, ToolParserManager
-from lmdeploy.serve.utils.server_utils import validate_json_request
+from lmdeploy.serve.utils.server_utils import AuthenticationMiddleware, EngineSleepingMiddleware, validate_json_request
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
+
+if TYPE_CHECKING:
+    from lmdeploy.serve.managers import Session
 
 # yapf: enable
 
@@ -67,12 +105,15 @@ class VariableInterface:
     enable_abort_handling: bool = False
 
     @staticmethod
-    def get_session(session_id: int) -> int:
+    def get_session(session_id: int) -> Session:
         session_mgr = VariableInterface.get_session_manager()
         if session_id == -1:
-            return session_mgr.get()
+            session = session_mgr.get()
         else:
-            return session_mgr.get(session_id)
+            session = session_mgr.get(session_id)
+        # Stamp epoch for ``stop_all_session`` / ``abort_all`` coordination in ``AsyncEngine.generate``.
+        session.epoch = VariableInterface.async_engine.epoch
+        return session
 
     @staticmethod
     def get_session_manager():
@@ -159,8 +200,8 @@ def _create_completion_logprobs(tokenizer: Tokenizer,
 
     Args:
         tokenizer (Tokenizer): tokenizer.
-        token_ids (List[int]): output token ids.
-        logprobs (List[Dict[int, float]]): the top logprobs for each output
+        token_ids (list[int]): output token ids.
+        logprobs (list[dict[int, float]]): the top logprobs for each output
             position.
         skip_special_tokens (bool): Whether or not to remove special tokens
             in the decoding. Default to be True.
@@ -213,8 +254,8 @@ def _create_chat_completion_logprobs(tokenizer: Tokenizer,
 
     Args:
         tokenizer (Tokenizer): tokenizer.
-        token_ids (List[int]): output token ids.
-        logprobs (List[Dict[int, float]]): the top logprobs for each output
+        token_ids (list[int]): output token ids.
+        logprobs (list[dict[int, float]]): the top logprobs for each output
             position.
     Returns:
         ChoiceLogprobs: logprob result.
@@ -318,7 +359,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
       Deprecated: Use max_completion_tokens instead.
     - **repetition_penalty** (float): The parameter for repetition penalty.
       1.0 means no penalty
-    - **stop** (str | List[str] | None): To stop generating further
+    - **stop** (str | list[str] | None): To stop generating further
       tokens. Only accept stop words that's encoded to one token idex.
     - **response_format** (dict | None): To generate response according to given
       schema. Examples:
@@ -376,6 +417,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
+    if VariableInterface.tool_parser is not None:
+        request = VariableInterface.tool_parser.adjust_request(request)
     session = VariableInterface.get_session(request.session_id)
 
     json_request = await raw_request.json()
@@ -482,6 +525,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         do_preprocess=do_preprocess,
         adapter_name=adapter_name,
         chat_template_kwargs=chat_template_kwargs or None,
+        media_io_kwargs=request.media_io_kwargs,
         mm_processor_kwargs=request.mm_processor_kwargs)
 
     def create_stream_response_json(index: int,
@@ -733,7 +777,6 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
-
     json_request = await raw_request.json()
     migration_request = json_request.pop('migration_request', None)
     with_cache = json_request.pop('with_cache', False)
@@ -927,6 +970,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
     error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
+
     session = VariableInterface.get_session(request.session_id)
 
     prompt = request.prompt
@@ -975,6 +1019,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         sequence_start=True,
         sequence_end=True,
         do_preprocess=False,
+        media_io_kwargs=request.media_io_kwargs,
         mm_processor_kwargs=request.mm_processor_kwargs)
 
     def create_generate_response_json(res, text, output_ids, logprobs, finish_reason, routed_experts=None):
@@ -1138,7 +1183,16 @@ def update_params(request: UpdateParamsRequest, raw_request: Request = None):
 @router.post('/sleep', dependencies=[Depends(validate_json_request)])
 async def sleep(raw_request: Request = None):
     level = raw_request.query_params.get('level', '1')
-    VariableInterface.async_engine.sleep(int(level))
+    try:
+        level = int(level)
+    except (TypeError, ValueError):
+        return create_error_response(HTTPStatus.BAD_REQUEST, 'The "level" query parameter must be an integer.')
+    if level not in (1, 2):
+        return create_error_response(HTTPStatus.BAD_REQUEST, 'The "level" query parameter must be 1 or 2.')
+    async_engine = VariableInterface.async_engine
+    async_engine.prepare_sleep()
+    await async_engine.stop_all_session()
+    await async_engine.sleep(level)
     return Response(status_code=200)
 
 
@@ -1344,7 +1398,7 @@ def create_lifespan_handler(backend_config: PytorchEngineConfig | TurbomindEngin
                         await asyncio.sleep(log_interval)
 
                         # periodically update schedule metrics, as they change less frequently than iteration stats
-                        schedule_metrics = async_engine.get_schedule_metrics()
+                        schedule_metrics = await async_engine.get_schedule_metrics()
                         await metrics_processor.update_schedule_stats(schedule_metrics)
 
                         await async_engine.do_log_stats()
@@ -1413,13 +1467,13 @@ def serve(model_path: str,
         server_name (str): host ip for serving
         server_port (int): server port
         tp (int): tensor parallel
-        allow_origins (List[str]): a list of allowed origins for CORS
+        allow_origins (list[str]): a list of allowed origins for CORS
         allow_credentials (bool): whether to allow credentials for CORS
-        allow_methods (List[str]): a list of allowed HTTP methods for CORS
-        allow_headers (List[str]): a list of allowed HTTP headers for CORS
+        allow_methods (list[str]): a list of allowed HTTP methods for CORS
+        allow_headers (list[str]): a list of allowed HTTP headers for CORS
         log_level(str): set log level whose value among [CRITICAL, ERROR,
             WARNING, INFO, DEBUG]
-        api_keys (List[str] | str | None): Optional list of API keys. Accepts
+        api_keys (list[str] | str | None): Optional list of API keys. Accepts
             string type as a single api_key. Default to None, which means no
             api key applied.
         ssl (bool): Enable SSL. Requires OS Environment variables
@@ -1450,7 +1504,7 @@ def serve(model_path: str,
         http_or_https = 'https'
 
     handle_torchrun()
-    _, pipeline_class = get_task(model_path)
+    _, pipeline_class = get_task(backend, model_path)
     if isinstance(backend_config, PytorchEngineConfig):
         backend_config.enable_mp_engine = True
         # router replay
@@ -1489,9 +1543,12 @@ def serve(model_path: str,
         )
 
     if api_keys is not None and (tokens := [key for key in api_keys if key]):
-        from lmdeploy.serve.utils.server_utils import AuthenticationMiddleware
-
         app.add_middleware(AuthenticationMiddleware, tokens=tokens)
+
+    def is_engine_sleeping() -> bool:
+        eng = VariableInterface.async_engine
+        return eng is not None and eng.is_sleeping
+    app.add_middleware(EngineSleepingMiddleware, is_sleeping=is_engine_sleeping)
 
     # set the maximum number of concurrent requests
     if max_concurrent_requests is not None:

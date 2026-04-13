@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Callable, Dict, Optional
+from collections.abc import Callable
 
 import torch
 
@@ -15,11 +15,11 @@ def build_fused_moe(
     top_k: int,
     bias: bool = False,
     renormalize: bool = False,
-    dtype: Optional[torch.dtype] = None,
-    device: Optional[torch.device] = None,
+    dtype: torch.dtype | None = None,
+    device: torch.device | None = None,
     all_reduce: bool = True,
     enable_ep: bool = False,
-    quant_config: Dict = None,
+    quant_config: dict = None,
     layer_idx: int = 0,
     act_func: Callable = None,
     prefix: str = '',

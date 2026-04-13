@@ -5,10 +5,10 @@
 #include <ctime>
 #include <numeric>
 
+#include "src/turbomind/core/logger.h"
 #include "src/turbomind/kernels/attention/block.h"
 #include "src/turbomind/models/llama/BlockManager.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
-#include "src/turbomind/utils/logger.h"
 
 // #include "dbg.h"
 
@@ -31,27 +31,112 @@ std::string vector2string(const std::vector<T>& data)
     return ss.str();
 }
 
-SequenceManager::SequenceManager(size_t             layer_num,
-                                 const BlockConfig& block_config,
-                                 double             block_count,
-                                 int                chunk_size,
-                                 bool               enable_prefix_caching,
-                                 int                rank,
-                                 int                attn_cp_size,
-                                 core::Allocator    allocator,
-                                 GetFreeMemSize     get_free_size):
-    block_seq_len_(block_config.block_len_), rank_(rank), attn_cp_size_(attn_cp_size)
+SequenceManager::SequenceManager(const ModelParam& model_param,
+                                 DataType          runtime_dtype,
+                                 int               cache_block_seq_len,
+                                 int               attn_tp_size,
+                                 int               max_batch_size,
+                                 double            block_count,
+                                 int               chunk_size,
+                                 bool              enable_prefix_caching,
+                                 int               rank,
+                                 int               attn_cp_size,
+                                 core::Allocator   allocator,
+                                 GetFreeMemSize    get_free_size):
+    block_seq_len_(cache_block_seq_len), rank_(rank), attn_cp_size_(attn_cp_size)
 {
+    TM_CHECK_GT(attn_tp_size, 0);
+    TM_CHECK_GT(cache_block_seq_len, 0);
+
+    int cache_layer_num   = model_param.layer_num;
+    int num_linear_layers = 0;
+    for (const auto& type : model_param.layer_types) {
+        if (type == 1) {
+            --cache_layer_num;
+            ++num_linear_layers;
+        }
+    }
+
+    const size_t free_before = (block_count < 1. && num_linear_layers > 0) ? get_free_size() : 0;
+
+    if (num_linear_layers > 0) {
+
+        const int key_head_dim =
+            model_param.linear_key_head_dim > 0 ? model_param.linear_key_head_dim : model_param.head_dim;
+        const int value_head_dim =
+            model_param.linear_value_head_dim > 0 ? model_param.linear_value_head_dim : model_param.head_dim;
+        const int d_conv      = model_param.linear_conv_kernel_dim > 0 ? model_param.linear_conv_kernel_dim : 4;
+        const int num_k_heads = model_param.linear_num_key_heads / attn_tp_size;
+        const int num_v_heads = model_param.linear_num_value_heads / attn_tp_size;
+        const int key_dim     = num_k_heads * key_head_dim;
+        const int value_dim   = num_v_heads * value_head_dim;
+        const int conv_dim    = key_dim * 2 + value_dim;
+
+        TM_CHECK_GT(max_batch_size, 0);
+        pooled_conv_states_ = {{max_batch_size, num_linear_layers, d_conv, conv_dim}, model_param.data_type, kDEVICE};
+        pooled_recurrent_states_ = {{max_batch_size, num_linear_layers, num_v_heads, key_head_dim, value_head_dim},
+                                    model_param.linear_state_dtype,
+                                    kDEVICE};
+
+        free_linear_state_slots_.reserve(max_batch_size);
+        for (int slot = max_batch_size - 1; slot >= 0; --slot) {
+            free_linear_state_slots_.push_back(slot);
+        }
+        TM_LOG_INFO("[SeqMgr] linear-state slot pool initialized: {} slots", max_batch_size);
+        const auto   conv_one      = pooled_conv_states_.slice(0, 1).squeeze(0);
+        const auto   recurrent_one = pooled_recurrent_states_.slice(0, 1).squeeze(0);
+        const double mb            = 1.0 / (1024.0 * 1024.0);
+        TM_LOG_INFO("[SeqMgr] linear-state per slot: conv {:.2f} MB + recurrent {:.2f} MB = {:.2f} MB",
+                    conv_one.byte_size() * mb,
+                    recurrent_one.byte_size() * mb,
+                    (conv_one.byte_size() + recurrent_one.byte_size()) * mb);
+        TM_LOG_INFO("[SeqMgr] linear-state combined total: {:.2f} MB",
+                    (pooled_conv_states_.byte_size() + pooled_recurrent_states_.byte_size()) * mb);
+    }
+
+    const int  dbits        = byte_size(runtime_dtype, 8);
+    const auto quant_policy = model_param.quant_policy;
+    const int  elem_bits    = quant_policy ? quant_policy : dbits;
+
+    BlockConfig block_config{
+        (int)model_param.head_dim,
+        (int)model_param.kv_head_num / attn_tp_size,
+        cache_block_seq_len,
+        elem_bits == dbits ? 0 : dbits,
+        elem_bits,
+        model_param.head_dim == 576,  // share kv
+    };
+
     block::Layout layout{block_config};
     // dump(layout);
 
-    size_t block_size = layout.block_size(layer_num);
+    size_t block_size = layout.block_size(cache_layer_num);
+
+    if (num_linear_layers > 0 && block_count < 1.) {
+        const size_t linear_bytes = pooled_conv_states_.byte_size() + pooled_recurrent_states_.byte_size();
+        const size_t target_bytes = static_cast<size_t>(free_before * block_count);
+        TM_LOG_INFO("[SeqMgr] Adjusting block_count: free_before {:.2f} MB, linear {:.2f} MB, target {:.2f} MB",
+                    free_before / (1024. * 1024.),
+                    linear_bytes / (1024. * 1024.),
+                    target_bytes / (1024. * 1024.));
+        if (target_bytes <= linear_bytes) {
+            TM_LOG_ERROR("[SeqMgr] Linear-state memory ({:.2f} MB) >= cache budget ({:.2f} MB). ",
+                         linear_bytes / (1024. * 1024.),
+                         target_bytes / (1024. * 1024.));
+            TM_CHECK(0)
+                << "Please decrease max_batch_size to reduce total linear state size or increase cache_max_entry_count.";
+        }
+        const size_t cache_bytes = target_bytes - linear_bytes;
+        block_count              = static_cast<double>(cache_bytes) / static_cast<double>(block_size);
+        TM_LOG_INFO("[SeqMgr] Adjusted block_count to {:.0f}", block_count);
+    }
 
     block_manager_ = std::make_shared<BlockManager>(block_size, block_count, chunk_size, allocator, get_free_size);
+
     if (enable_prefix_caching) {
         block_trie_ = std::make_shared<BlockTrie>(block_config.block_len_, block_manager_);
     }
-    TM_LOG_WARNING("[SegMgr] prefix caching is %s", enable_prefix_caching ? "enabled" : "disabled");
+    TM_LOG_WARN("prefix caching is {}", enable_prefix_caching ? "enabled" : "disabled");
 }
 
 const Sequence* SequenceManager::Create(uint64_t id)
@@ -60,13 +145,13 @@ const Sequence* SequenceManager::Create(uint64_t id)
     auto     it = sequences_.find(id);
     if (it != sequences_.end()) {
         if (rank_ == 0) {
-            TM_LOG_WARNING("[SeqMgr][Create] Removing conflicting ID %llu", id);
+            TM_LOG_WARN("Removing conflicting ID {}", id);
         }
         Erase(it);
     }
     it = sequences_.emplace_hint(it, id, std::move(sequence));
     if (rank_ == 0) {
-        TM_LOG_INFO("[SeqMgr][Create] ID %llu", id);
+        TM_LOG_INFO("ID {}", id);
     }
     return &it->second;
 }
@@ -98,6 +183,7 @@ void SequenceManager::Erase(std::map<uint64_t, Sequence>::iterator& it)
     if (!block_trie_) {
         freed_.insert(freed_.end(), seq.blocks.begin(), seq.blocks.end());
     }
+    ReleaseLinearStateSlot(seq);
     it = sequences_.erase(it);
 }
 
@@ -108,6 +194,71 @@ bool SequenceManager::Erase(uint64_t id)
         return true;
     }
     return false;
+}
+
+void SequenceManager::AcquireLinearStateSlot(const Sequence& sequence)
+{
+    if (!pooled_recurrent_states_) {
+        return;
+    }
+
+    auto& seq = const_cast<Sequence&>(sequence);
+
+    auto slot_it = seq_to_linear_state_slot_.find(seq.id);
+    if (slot_it != seq_to_linear_state_slot_.end()) {
+        const int slot       = slot_it->second;
+        seq.conv_states      = pooled_conv_states_.slice(slot).squeeze(0);
+        seq.recurrent_states = pooled_recurrent_states_.slice(slot).squeeze(0);
+        return;
+    }
+
+    TM_CHECK(!free_linear_state_slots_.empty()) << "No free linear-state slot for sequence " << seq.id
+                                                << ", max_batch_size=" << pooled_recurrent_states_.shape(0);
+
+    const int slot = free_linear_state_slots_.back();
+    free_linear_state_slots_.pop_back();
+    seq_to_linear_state_slot_.emplace(seq.id, slot);
+
+    seq.conv_states              = pooled_conv_states_.slice(slot).squeeze(0);
+    seq.recurrent_states         = pooled_recurrent_states_.slice(slot).squeeze(0);
+    seq.linear_states_need_reset = true;
+}
+
+void SequenceManager::ReleaseLinearStateSlot(const Sequence& sequence)
+{
+    if (!pooled_recurrent_states_) {
+        return;
+    }
+
+    auto& seq = const_cast<Sequence&>(sequence);
+
+    if (auto slot_it = seq_to_linear_state_slot_.find(seq.id); slot_it != seq_to_linear_state_slot_.end()) {
+        free_linear_state_slots_.push_back(slot_it->second);
+        seq_to_linear_state_slot_.erase(slot_it);
+    }
+    seq.conv_states              = {};
+    seq.recurrent_states         = {};
+    seq.linear_states_need_reset = false;
+}
+
+void SequenceManager::InvalidateStatesAndCache(const Sequence& sequence)
+{
+    InvalidateStatesAndCache(sequence, freed_);
+}
+
+void SequenceManager::InvalidateStatesAndCache(const Sequence& sequence, BlockIds& freed_blocks)
+{
+    auto& seq = const_cast<Sequence&>(sequence);
+    if (seq.status != Sequence::kCached) {
+        UpdateAndSetUnlock(seq);
+    }
+    freed_blocks.insert(freed_blocks.end(), seq.blocks.begin(), seq.blocks.end());
+
+    seq.blocks.clear();
+    seq.block_unique_ids.clear();
+    seq.input_length = 0;
+    seq.cache_len    = 0;
+    ReleaseLinearStateSlot(seq);
 }
 
 void SequenceManager::CachePrompt(const Sequences& sequences, int active_size)
@@ -121,10 +272,10 @@ void SequenceManager::CachePrompt(const Sequences& sequences, int active_size)
             const auto& [block_ids, unique_ids] = block_trie_->Cache(seq, seq.prompt);
             if (rank_ == 0) {
                 // clang-format off
-                TM_LOG_INFO("[SeqMgr][CachePrompt] ID %llu, cached blocks %d, tokens %d", seq.id,
+                TM_LOG_INFO("ID {}, cached blocks {}, tokens {}", seq.id,
                             (int)block_ids.size(), (int)seq.prompt.size());
-                TM_LOG_DEBUG("[SeqMgr][CachePrompt] ID %llu, cached block_ids %s, unique_ids %s", seq.id,
-                             vector2string(block_ids).c_str(), vector2string(unique_ids).c_str());
+                TM_LOG_DEBUG("ID {}, cached block_ids {}, unique_ids {}", seq.id,
+                             vector2string(block_ids), vector2string(unique_ids));
                 // clang-format on
             }
             if (seq.cache_len >= seq.prompt.size()) {
@@ -144,17 +295,18 @@ void SequenceManager::CacheGeneration(const Sequence& seq)
 
     if (rank_ == 0) {
         // clang-format off
-        TM_LOG_INFO("[SeqMgr][CacheGeneration] ID %llu, cached blocks %d, tokens %d",
+        TM_LOG_INFO("ID {}, cached blocks {}, tokens {}",
                     seq.id, (int)block_ids.size(), (int)seq.tokens.size());
-        TM_LOG_DEBUG("[SeqMgr][CacheGeneration] ID %llu, cached block_ids %s, unique_ids %s", seq.id,
-                     vector2string(block_ids).c_str(), vector2string(unique_ids).c_str());
+        TM_LOG_DEBUG("ID {}, cached block_ids {}, unique_ids {}", seq.id,
+                     vector2string(block_ids), vector2string(unique_ids));
         // clang-format on
     }
 }
 
 void SequenceManager::VerifyAndLockCached(const Sequences& sequences)
 {
-    BlockIds blocks;
+    BlockIds valid_blocks;
+    BlockIds freed_blocks;
     for (const auto& p : sequences) {
         auto& seq = const_cast<Sequence&>(*p);
         if (seq.status != Sequence::kCached) {
@@ -162,15 +314,29 @@ void SequenceManager::VerifyAndLockCached(const Sequences& sequences)
         }
         TM_CHECK_EQ(seq.blocks.size(), seq.block_unique_ids.size());
         // Verify cache blocks that may be invalidated
-        const int count = block_manager_->Verify(seq.blocks, seq.block_unique_ids);
+        const int original_count = seq.blocks.size();
+        const int count          = block_manager_->Verify(seq.blocks, seq.block_unique_ids);
         seq.blocks.resize(count);
         seq.block_unique_ids.resize(count);
 
-        blocks.insert(blocks.end(), seq.blocks.begin(), seq.blocks.end());
+        const bool has_linear_states = static_cast<bool>(seq.recurrent_states);
+        if (has_linear_states && count < original_count) {
+            InvalidateStatesAndCache(seq, freed_blocks);
+            // This request can still continue in the current scheduling round.
+            // Rebind a slot immediately so GatedDeltaNetLayer::Setup always sees
+            // valid linear-state views.
+            AcquireLinearStateSlot(seq);
+            continue;
+        }
+
+        valid_blocks.insert(valid_blocks.end(), seq.blocks.begin(), seq.blocks.end());
         seq.cache_len = std::min<int>(seq.cache_len, seq.blocks.size() * block_seq_len_);
         seq.status    = Sequence::kLocked;
     }
-    block_manager_->Lock(blocks);
+    if (!freed_blocks.empty()) {
+        block_manager_->Free(freed_blocks);
+    }
+    block_manager_->Lock(valid_blocks);
 }
 
 void SequenceManager::CommitUnlockAndFree()
@@ -429,9 +595,9 @@ void SequenceManager::PrefixMatch(Sequences& sequences, const std::vector<int>& 
 
         if (rank_ == 0) {
             // clang-format off
-            TM_LOG_INFO("[SeqMgr][match] ID %llu, hit blocks %d, cache_len %d", seq.id, (int)block_ids.size(), seq.cache_len);
-            TM_LOG_DEBUG("[SeqMgr][match] ID %llu, hit block_ids %s, unique_ids %s", seq.id,
-                         vector2string(block_ids).c_str(), vector2string(unique_ids).c_str());
+            TM_LOG_INFO("ID {}, hit blocks {}, cache_len {}", seq.id, (int)block_ids.size(), seq.cache_len);
+            TM_LOG_DEBUG("ID {}, hit block_ids {}, unique_ids {}", seq.id,
+                         vector2string(block_ids), vector2string(unique_ids));
             // clang-format on
         }
 
@@ -450,10 +616,10 @@ void SequenceManager::PrefixMatch(Sequences& sequences, const std::vector<int>& 
 
         if (rank_ == 0) {
             // clang-format off
-            TM_LOG_INFO("[SeqMgr][match] ID %llu, after matching, blocks %d, cache_len %d",
+            TM_LOG_INFO("ID {}, after matching, blocks {}, cache_len {}",
                         seq.id, seq.blocks.size(), seq.cache_len);
-            TM_LOG_DEBUG("[SeqMgr][match] ID %llu, after matching, block_ids %s, unique_ids %s", seq.id,
-                         vector2string(seq.blocks).c_str(), vector2string(seq.block_unique_ids).c_str());
+            TM_LOG_DEBUG("ID {}, after matching, block_ids {}, unique_ids {}", seq.id,
+                         vector2string(seq.blocks), vector2string(seq.block_unique_ids));
             // clang-format on
         }
     }
@@ -528,7 +694,7 @@ auto SequenceManager::Materialize(Sequences             sequences,
 
     // release preempted blocks -> cached
     if (!schedule.victims.empty()) {
-        TM_LOG_INFO("[SeqMgr] #victim: %d", (int)schedule.victims.size());
+        TM_LOG_WARN("#victim: {}", (int)schedule.victims.size());
         for (const auto& p : schedule.victims) {
             UpdateAndSetUnlock(*p);
         }
@@ -557,7 +723,7 @@ auto SequenceManager::Materialize(Sequences             sequences,
         }
     }
 
-    // TM_LOG_ERROR("active: %4d, cached: %4d, free: %4d",
+    // TM_LOG_ERROR("active: {:4}, cached: {:4}, free: {:4}",
     //              block_manager_->active_count(),
     //              block_manager_->cached_count(),
     //              block_manager_->free_count());
