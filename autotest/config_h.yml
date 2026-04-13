@@ -226,6 +226,8 @@ turbomind_quantization:
     no_kvint8:
         - deepseek-ai/DeepSeek-V2-Chat
         - Qwen/Qwen3-235B-A22B-Thinking-2507-FP8
+        - openai/gpt-oss-120b
+        - openai/gpt-oss-20b
 
 pytorch_quantization:
     awq:

@@ -136,7 +136,6 @@ def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_
     total_gpus = int(os.environ.get('TOTAL_GPU_COUNT', '8'))
     work_num = int(total_gpus / run_config.get('parallel_config', {}).get('tp', 1))
 
-    # Set max-num-workers to 8 for qwen3.5 models
     extra_config = {'max-num-workers': min(work_num * 16, 64)}
 
     case_name = get_case_str_by_config(run_config)
