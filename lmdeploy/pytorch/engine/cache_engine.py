@@ -263,6 +263,8 @@ class CacheEngine:
         """Allocate caches."""
 
         num_layers = model_config.num_layers
+        if cache_config.block_size < cache_config.kernel_block_size:
+            raise ValueError(f'block_size {cache_config.block_size} must be greater than or equal to kernel_block_size {cache_config.kernel_block_size}.')  # noqa
         kernel_blocks_per_kv = cache_config.block_size // cache_config.kernel_block_size
         num_blocks *= kernel_blocks_per_kv
 
