@@ -49,7 +49,7 @@ def get_func_config_list(backend: str,
         parallel_config: Parallel config for tensor parallel
         model_type: Model type, default: chat_model
         func_type: Test func type filter, default: func
-        extra: extra config to update in each run config dict
+        extra: extra config merged into each run config's extra_params.
     Returns:
         list[dict]: All valid run config dicts
     """
@@ -110,8 +110,9 @@ def get_func_config_list(backend: str,
             run_config['extra_params']['max-batch-size'] = 128
             run_config['extra_params']['model-format'] = 'fp8'
 
-        if 'Qwen3.5' in run_config['model']:
-            run_config['extra_params']['session-len'] = 128000
+        if (func_type == 'evaluate' and 'session_len' not in extra
+                and 'session-len' not in extra and 'Qwen3.5' not in run_config['model']):
+            run_config['extra_params']['session_len'] = 65536
 
         if config.get('env_tag', '') in ['3090', '5080']:
             run_config['extra_params']['cache-max-entry-count'] = 0.5
@@ -142,6 +143,14 @@ def get_func_config_list(backend: str,
         if ('openai/gpt-oss' in run_config['model'] and backend == 'turbomind'
                 and func_type in ('benchmark', 'longtext_benchmark')):
             run_config['extra_params']['model-format'] = 'mxfp4'
+
+        if func_type == 'mtp_evaluate' and 'Qwen3.5' in run_config['model']:
+            run_config['extra_params'].update({
+                'reasoning-parser': 'qwen-qwq',
+                'speculative-algorithm': 'qwen3_5_mtp',
+                'speculative-num-draft-tokens': 4,
+                'max-batch-size': 256,
+            })
 
     return run_configs
 

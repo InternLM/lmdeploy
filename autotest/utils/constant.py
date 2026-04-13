@@ -203,13 +203,6 @@ MLLM_EVAL_CONFIGS = {
 
 BACKEND_LIST = ['turbomind', 'pytorch']
 
-QWEN35_MTP_SERVER_EXTRA = {
-    'reasoning-parser': 'qwen-qwq',
-    'speculative-algorithm': 'qwen3_5_mtp',
-    'speculative-num-draft-tokens': 4,
-    'max-batch-size': 256,
-}
-
 RESTFUL_MODEL_LIST = [
     'Qwen/Qwen3-0.6B', 'Qwen/Qwen3-VL-2B-Instruct', 'Qwen/Qwen3-30B-A3B', 'internlm/Intern-S1',
     'internlm/internlm2_5-20b', 'Qwen/Qwen3-32B', 'OpenGVLab/InternVL3_5-30B-A3B', 'OpenGVLab/InternVL3-38B',
