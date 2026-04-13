@@ -107,9 +107,9 @@ models = [
 #######################################################################
 datasets = sum((v for k, v in locals().items() if k.endswith('_datasets')), [])
 
-needlebench_8k_summary_groups = needlebench_8k_summarizer["summary_groups"]
-needlebench_32k_summary_groups = needlebench_32k_summarizer["summary_groups"]
-needlebench_128k_summary_groups = needlebench_128k_summarizer["summary_groups"]
+needlebench_8k_summary_groups = needlebench_8k_summarizer['summary_groups']
+needlebench_32k_summary_groups = needlebench_32k_summarizer['summary_groups']
+needlebench_128k_summary_groups = needlebench_128k_summarizer['summary_groups']
 
 # LLM judge config: using LLM to evaluate predictions
 judge_cfg = dict(
@@ -145,14 +145,14 @@ for item in datasets:
 
 summarizer = dict(
     dataset_abbrs=[
-        ["ruler_8k", "naive_average"],
-        ["ruler_32k", "naive_average"],
-        ["ruler_64k", "naive_average"],
-        ["ruler_128k", "naive_average"],
-        ["ruler_256k", "naive_average"],
-        ["NeedleBench-Overall-Score-8K", "weighted_average"],
-        ["NeedleBench-Overall-Score-32K", "weighted_average"],
-        ["NeedleBench-Overall-Score-128K", "weighted_average"],
+        ['ruler_8k', 'naive_average'],
+        ['ruler_32k', 'naive_average'],
+        ['ruler_64k', 'naive_average'],
+        ['ruler_128k', 'naive_average'],
+        ['ruler_256k', 'naive_average'],
+        ['NeedleBench-Overall-Score-8K', 'weighted_average'],
+        ['NeedleBench-Overall-Score-32K', 'weighted_average'],
+        ['NeedleBench-Overall-Score-128K', 'weighted_average'],
         ['babilong_0k', 'naive_average'],
         ['babilong_4k', 'naive_average'],
         ['babilong_16k', 'naive_average'],
