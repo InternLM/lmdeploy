@@ -125,7 +125,9 @@ class MoEForwardDPTP:
 
         # When tp_sizes are non-uniform (multi-batch with different token counts per dp group),
         # dist.reduce_scatter requires all input tensors to be the same size. Pad to max size,
-        # perform reduce_scatter, then strip padding from the result via a handle wrapper.
+        # perform reduce_scatter synchronously, then strip the padding rows.
+        # The padded case is an edge case (only in eager-mode multi-batch decode), so losing
+        # the pipeline overlap for this step is acceptable and avoids async lifetime complexity.
         max_sz = max(tp_sizes)
         need_pad = max_sz > min(tp_sizes)
         if need_pad:
@@ -136,27 +138,14 @@ class MoEForwardDPTP:
             hidden_states_list = [item for item in hidden_states_list for _ in range(self.attn_tp)]
             recv = hidden_states_list[self.rank].clone()
             hidden_states_list[self.rank] = recv
-            handle = dist.reduce_scatter(recv, hidden_states_list, group=self.tp_group, async_op=True)
-            actual = tp_sizes[self.gather_rank]
+            dist.reduce_scatter(recv, hidden_states_list, group=self.tp_group, async_op=False)
+            out_states.copy_(recv.narrow(-2, 0, tp_sizes[self.gather_rank]))
 
-            class _PaddedHandle:
-                def __init__(self, inner, recv, out, actual):
-                    self._inner = inner
-                    self._recv = recv
-                    self._out = out
-                    self._actual = actual
-                    self._done = False
-
+            class _DoneHandle:
                 def wait(self):
-                    if not self._done:
-                        self._inner.wait()
-                        self._out.copy_(self._recv.narrow(-2, 0, self._actual))
-                        self._done = True
+                    pass
 
-                def is_completed(self):
-                    return self._inner.is_completed()
-
-            return out_states, _PaddedHandle(handle, recv, out_states, actual)
+            return out_states, _DoneHandle()
         else:
             hidden_states_list = [item for item in hidden_states_list for _ in range(self.attn_tp)]
             hidden_states_list[self.rank] = out_states
