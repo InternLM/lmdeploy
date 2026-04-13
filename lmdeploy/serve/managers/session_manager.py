@@ -196,13 +196,18 @@ class SessionManager:
         """Initialize the session manager."""
 
         self.sessions = {}
-        self.session_id_generator = itertools.count(1)
+        self.session_id_generator = itertools.count(0)
         self.request_handle_pool = None
         self.loop = None
 
-    def get(self, session_id: int | None = None, **kwargs) -> Session:
+    def get(self, session_id: int | None = None, create_if_not_exists: bool = True, **kwargs) -> Session | None:
         """Create a new session."""
-        session_id = session_id or next(self.session_id_generator)
+        if not create_if_not_exists:
+            return self.sessions.get(session_id, None)
+
+        if session_id is None:
+            session_id = next(self.session_id_generator)
+
         if session_id in self.sessions:
             logger.debug(f'[SessionManager] session {session_id} already exists. Updating...')
             session = self.sessions[session_id]
