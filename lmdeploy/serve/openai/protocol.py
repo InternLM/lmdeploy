@@ -141,6 +141,8 @@ class ChatCompletionRequest(BaseModel):
     # additional argument of lmdeploy
     do_preprocess: bool | None = True
     repetition_penalty: float | None = 1.0
+    repetition_ngram_size: int = 0
+    repetition_ngram_threshold: int = 0
     session_id: int | None = -1
     ignore_eos: bool | None = False
     skip_special_tokens: bool | None = True
@@ -314,6 +316,8 @@ class CompletionRequest(BaseModel):
     user: str | None = None
     # additional argument of lmdeploy
     repetition_penalty: float | None = 1.0
+    repetition_ngram_size: int = 0
+    repetition_ngram_threshold: int = 0
     session_id: int | None = -1
     ignore_eos: bool | None = False
     skip_special_tokens: bool | None = True
