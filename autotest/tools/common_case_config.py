@@ -349,6 +349,67 @@ BASE_SPECULATIVE_DECODING_PIPELINE_TEST_LLM = [{
             'model': 'yuhuili/EAGLE3-LLaMA3.1-Instruct-8B'
         }
     }
+}, {
+    'model': 'zai-org/GLM-4.7-Flash',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 2
+    },
+    'extra_params': {
+        'max_batch_size': 128,
+        'speculative_config': {
+            'method': 'deepseek_mtp',
+            'num_speculative_tokens': 3
+        }
+    }
+}, {
+    'model': 'Qwen/Qwen3.5-35B-A3B',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 2
+    },
+    'extra_params': {
+        'max_batch_size': 256,
+        'reasoning_parser': 'qwen-qwq',
+        'speculative_config': {
+            'method': 'qwen3_5_mtp',
+            'num_speculative_tokens': 4
+        }
+    }
+}, {
+    'model': 'Qwen/Qwen3.5-35B-A3B',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 2
+    },
+    'extra_params': {
+        'max_batch_size': 256,
+        'reasoning_parser': 'qwen-qwq',
+        'max_prefill_token_num': 1024,
+        'model_format': 'fp8',
+        'speculative_config': {
+            'method': 'qwen3_5_mtp',
+            'num_speculative_tokens': 4
+        }
+    }
+}, {
+    'model': 'Qwen/Qwen3.5-35B-A3B-FP8',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 1
+    },
+    'extra_params': {
+        'max_batch_size': 256,
+        'reasoning_parser': 'qwen-qwq',
+        'speculative_config': {
+            'method': 'qwen3_5_mtp',
+            'num_speculative_tokens': 4
+        }
+    }
 }]
 
 SPECULATIVE_DECODING_PIPELINE_TEST_LLM = [{
@@ -369,7 +430,7 @@ BASE_SPECULATIVE_DECODING_RESTFUL_TEST_LLM = [{
         'max-batch-size': 128
     }
 }, {
-    'model': 'deepseek/DeepSeek-V3',
+    'model': 'deepseek-ai/DeepSeek-V3',
     'communicator': 'nccl',
     'quant_policy': 0,
     'parallel_config': {
@@ -379,6 +440,59 @@ BASE_SPECULATIVE_DECODING_RESTFUL_TEST_LLM = [{
         'speculative-algorithm': 'deepseek_mtp',
         'speculative-num-draft-tokens': 3,
         'max-batch-size': 128
+    }
+}, {
+    'model': 'zai-org/GLM-4.7-Flash',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 2
+    },
+    'extra_params': {
+        'speculative-algorithm': 'deepseek_mtp',
+        'speculative-num-draft-tokens': 3,
+        'max-batch-size': 128
+    }
+}, {
+    'model': 'Qwen/Qwen3.5-35B-A3B',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 2
+    },
+    'extra_params': {
+        'reasoning-parser': 'qwen-qwq',
+        'speculative-algorithm': 'qwen3_5_mtp',
+        'speculative-num-draft-tokens': 4,
+        'max-batch-size': 256
+    }
+}, {
+    'model': 'Qwen/Qwen3.5-35B-A3B',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 2
+    },
+    'extra_params': {
+        'reasoning-parser': 'qwen-qwq',
+        'speculative-algorithm': 'qwen3_5_mtp',
+        'speculative-num-draft-tokens': 4,
+        'max-batch-size': 256,
+        'max-prefill-token-num': 1024,
+        'model-format': 'fp8'
+    }
+}, {
+    'model': 'Qwen/Qwen3.5-35B-A3B-FP8',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 1
+    },
+    'extra_params': {
+        'reasoning-parser': 'qwen-qwq',
+        'speculative-algorithm': 'qwen3_5_mtp',
+        'speculative-num-draft-tokens': 4,
+        'max-batch-size': 256
     }
 }]
 

@@ -12,14 +12,64 @@ from opencompass.utils.text_postprocessors import extract_non_reasoning_content
 #######################################################################
 with read_base():
     # Datasets
-    from opencompass.configs.datasets.aime2025.aime2025_llmjudge_academic import aime2025_datasets
-    from opencompass.configs.datasets.gpqa.gpqa_cascade_eval_academic import gpqa_datasets
-    from opencompass.configs.datasets.HLE.hle_llmverify_academic import hle_datasets
-    from opencompass.configs.datasets.IFEval.IFEval_gen_353ae7 import ifeval_datasets
-    from opencompass.configs.datasets.livecodebench.livecodebench_v6_academic import LCBCodeGeneration_dataset
-    from opencompass.configs.datasets.mmlu_pro.mmlu_pro_0shot_cot_gen_08c1de import mmlu_pro_datasets
+    from opencompass.configs.datasets.needlebench.needlebench_8k.needlebench_8k import (
+        needlebench_datasets as needlebench_8k_datasets,
+    )
+    from opencompass.configs.datasets.needlebench.needlebench_32k.needlebench_32k import (
+        needlebench_datasets as needlebench_32k_datasets,
+    )
+    from opencompass.configs.datasets.needlebench.needlebench_128k.needlebench_128k import (
+        needlebench_datasets as needlebench_128k_datasets,
+    )
+    from opencompass.configs.datasets.ruler.ruler_8k_gen import (
+        ruler_datasets as ruler_8k_datasets,
+    )
+    from opencompass.configs.datasets.ruler.ruler_32k_gen import (
+        ruler_datasets as ruler_32k_datasets,
+    )
+    from opencompass.configs.datasets.ruler.ruler_64k_gen import (
+        ruler_datasets as ruler_64k_datasets,
+    )
+    from opencompass.configs.datasets.ruler.ruler_128k_gen import (
+        ruler_datasets as ruler_128k_datasets,
+    )
+    from opencompass.configs.datasets.ruler.ruler_256k_gen import (
+        ruler_datasets as ruler_256k_datasets,
+    )
+    from opencompass.configs.datasets.babilong.babilong_0k_gen import (
+        babiLong_0k_datasets,
+    )
+    from opencompass.configs.datasets.babilong.babilong_4k_gen import (
+        babiLong_4k_datasets,
+    )
+    from opencompass.configs.datasets.babilong.babilong_16k_gen import (
+        babiLong_16k_datasets,
+    )
+    from opencompass.configs.datasets.babilong.babilong_32k_gen import (
+        babiLong_32k_datasets,
+    )
+    from opencompass.configs.datasets.babilong.babilong_128k_gen import (
+        babiLong_128k_datasets,
+    )
+    from opencompass.configs.datasets.babilong.babilong_256k_gen import (
+        babiLong_256k_datasets,
+    )
     # Summary Groups
-    from opencompass.configs.summarizers.groups.mmlu_pro import mmlu_pro_summary_groups
+    from opencompass.configs.summarizers.groups.babilong import (
+        babilong_summary_groups,
+    )
+    from opencompass.configs.summarizers.groups.ruler import (
+        ruler_summary_groups,
+    )
+    from opencompass.configs.summarizers.needlebench import (
+        needlebench_8k_summarizer,
+        needlebench_32k_summarizer,
+        needlebench_128k_summarizer,
+    )
+
+ruler_summary_groups = [
+    g for g in ruler_summary_groups if g.get('name') != 'ruler_512k'
+]
 
 #######################################################################
 #                         Model Configuration                         #
@@ -55,11 +105,11 @@ models = [
 #######################################################################
 #                          PART 1  Datasets List                      #
 #######################################################################
-# datasets list for evaluation
-mmlu_pro_datasets = [x for x in mmlu_pro_datasets if 'math' in x['abbr'] or 'other' in x['abbr']]
+datasets = sum((v for k, v in locals().items() if k.endswith('_datasets')), [])
 
-# Modify datasets list to exclude hle_datasets and LCBCodeGeneration_dataset
-datasets = sum((v for k, v in locals().items() if k.endswith('_datasets')), []) + [LCBCodeGeneration_dataset]
+needlebench_8k_summary_groups = needlebench_8k_summarizer['summary_groups']
+needlebench_32k_summary_groups = needlebench_32k_summarizer['summary_groups']
+needlebench_128k_summary_groups = needlebench_128k_summarizer['summary_groups']
 
 # LLM judge config: using LLM to evaluate predictions
 judge_cfg = dict(
@@ -93,36 +143,24 @@ for item in datasets:
 #                       PART 2  Dataset Summarizer                    #
 #######################################################################
 
-core_summary_groups = [
-    {
-        'name':
-        'core_average',
-        'subsets': [
-            ['IFEval', 'Prompt-level-strict-accuracy'],
-            ['hle_llmjudge', 'accuracy'],
-            ['aime2025_repeat_32', 'accuracy (32 runs average)'],
-            ['GPQA_diamond_repeat_4', 'accuracy (4 runs average)'],
-            ['mmlu_pro', 'naive_average'],
-            'mmlu_pro_math',
-            'mmlu_pro_other',
-            ['lcb_code_generation_repeat_6', 'pass@1 (6 runs average)'],
-        ],
-    },
-]
-
 summarizer = dict(
     dataset_abbrs=[
-        ['core_average', 'naive_average'],
-        ['IFEval', 'Prompt-level-strict-accuracy'],
-        ['hle_llmjudge', 'accuracy'],
-        ['GPQA_diamond_repeat_4', 'accuracy (4 runs average)'],
-        ['aime2025_repeat_32', 'accuracy (32 runs average)'],
-        ['mmlu_pro', 'naive_average'],
-        'mmlu_pro_math',
-        'mmlu_pro_other',
-        ['lcb_code_generation_repeat_6', 'pass@1 (6 runs average)'],
+        ['ruler_8k', 'naive_average'],
+        ['ruler_32k', 'naive_average'],
+        ['ruler_64k', 'naive_average'],
+        ['ruler_128k', 'naive_average'],
+        ['ruler_256k', 'naive_average'],
+        ['NeedleBench-Overall-Score-8K', 'weighted_average'],
+        ['NeedleBench-Overall-Score-32K', 'weighted_average'],
+        ['NeedleBench-Overall-Score-128K', 'weighted_average'],
+        ['babilong_0k', 'naive_average'],
+        ['babilong_4k', 'naive_average'],
+        ['babilong_16k', 'naive_average'],
+        ['babilong_32k', 'naive_average'],
+        ['babilong_128k', 'naive_average'],
+        ['babilong_256k', 'naive_average'],
     ],
-    summary_groups=sum([v for k, v in locals().items() if k.endswith('_summary_groups')], []) + core_summary_groups,
+    summary_groups=sum([v for k, v in locals().items() if k.endswith('_summary_groups')], []),
 )
 
 for item in datasets:
