@@ -19,6 +19,13 @@ EVAL_CONFIGS = {
         'batch_size': 500,
         'temperature': 0.6,
     },
+    'default-2batch': {
+        'query_per_second': 4,
+        'max_out_len': 64000,
+        'max_seq_len': 65536,
+        'batch_size': 2,
+        'temperature': 0.6,
+    },
     'gpt': {
         'query_per_second': 4,
         'max_out_len': 64000,
@@ -37,6 +44,97 @@ EVAL_CONFIGS = {
         'temperature': 0.6,
         'openai_extra_kwargs': {
             'reasoning_effort': 'high',
+        }
+    },
+    'gpt-2batch': {
+        'query_per_second': 4,
+        'max_out_len': 64000,
+        'max_seq_len': 65536,
+        'batch_size': 2,
+        'temperature': 0.6,
+        'openai_extra_kwargs': {
+            'reasoning_effort': 'high',
+        }
+    },
+    'sdar': {
+        'query_per_second': 4,
+        'max_out_len': 64000,
+        'max_seq_len': 65536,
+        'batch_size': 500,
+        'temperature': 1.0,
+        'openai_extra_kwargs': {
+            'top_p': 1.0,
+        },
+        'extra_body': {
+            'top_k': 0,
+        }
+    },
+    'sdar-32k': {
+        'query_per_second': 4,
+        'max_out_len': 32768,
+        'max_seq_len': 65536,
+        'batch_size': 500,
+        'temperature': 1.0,
+        'openai_extra_kwargs': {
+            'top_p': 1.0,
+        },
+        'extra_body': {
+            'top_k': 0,
+        }
+    },
+    'sdar-2batch': {
+        'query_per_second': 4,
+        'max_out_len': 64000,
+        'max_seq_len': 65536,
+        'batch_size': 2,
+        'temperature': 1.0,
+        'openai_extra_kwargs': {
+            'top_p': 1.0,
+        },
+        'extra_body': {
+            'top_k': 0,
+        }
+    },
+    'intern-s1-pro': {
+        'query_per_second': 4,
+        'max_out_len': 64000,
+        'max_seq_len': 65536,
+        'batch_size': 500,
+        'temperature': 0.8,
+        'openai_extra_kwargs': {
+            'top_p': 0.95,
+        },
+        'extra_body': {
+            'top_k': 50,
+            'min_p': 0.0,
+        }
+    },
+    'intern-s1-pro-32k': {
+        'query_per_second': 4,
+        'max_out_len': 32768,
+        'max_seq_len': 65536,
+        'batch_size': 500,
+        'temperature': 0.8,
+        'openai_extra_kwargs': {
+            'top_p': 0.95,
+        },
+        'extra_body': {
+            'top_k': 50,
+            'min_p': 0.0,
+        }
+    },
+    'intern-s1-pro-2batch': {
+        'query_per_second': 4,
+        'max_out_len': 64000,
+        'max_seq_len': 65536,
+        'batch_size': 2,
+        'temperature': 0.8,
+        'openai_extra_kwargs': {
+            'top_p': 0.95,
+        },
+        'extra_body': {
+            'top_k': 50,
+            'min_p': 0.0,
         }
     }
 }
