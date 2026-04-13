@@ -251,40 +251,32 @@ class VisionModel(ABC):
 
         return dict(prompt=None, input_ids=input_ids, multimodal=preps)
 
-    def to_pytorch_aux(self, messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start):
+    def to_pytorch_aux(self, messages, prompt, mm_placeholder, tokenizer, sequence_start):
         """Auxiliary function to pack the preprocessing results in a format
-        compatible with what is required by pytorch engine.
-
-        Args:
-            messages(list[dict]): the output of `preprocess`
-            prompt(str): the prompt after applying chat template
-            IMAGE_TOKEN(str): a placeholder where image tokens will be
-                inserted
-            tokenzer: the tokenizer model
-            sequence_start: starting flag of a sequence
-        """
-        # collect all preprocessing result from messages
-        preps = [x['content'] for x in messages if x['role'] == 'preprocess']
-        assert len(preps) == 1
-        preps = preps[0]
+        compatible with what is required by pytorch engine."""
+        # collect all multi-modal preprocessing result from messages, keyed by 'preprocess'
+        mm_items = [x['content'] for x in messages if x['role'] == 'preprocess']
+        assert len(mm_items) == 1
+        mm_items = mm_items[0]
 
         # split prompt into segments and validate data
-        segs = prompt.split(IMAGE_TOKEN)
-        assert len(segs) == len(preps) + 1, (f'the number of {IMAGE_TOKEN} is not equal '
-                                             f'to input images, {len(segs) - 1} vs {len(preps)}')
+        prompt_segments = prompt.split(mm_placeholder)
+        assert len(prompt_segments) == len(mm_items) + 1, (
+            f'the number of {mm_placeholder} is not equal '
+            f'to input multi modal items, {len(mm_items) - 1} vs {len(prompt_segments)}')
 
-        # calculate the image token offset for each image
+        # calculate the token offset for each multi modal item
         input_ids = []
-        for i, seg in enumerate(segs):
-            if i > 0 and i <= len(preps):
-                preps[i - 1].update(offset=len(input_ids))
-                image_tokens = preps[i - 1]['image_tokens']
-                assert self.image_token_id == preps[i - 1]['image_token_id']
-                input_ids.extend([self.image_token_id] * image_tokens)
+        mm_placeholder_id = tokenizer.encode(mm_placeholder, add_special_tokens=False)[-1]
+        for i, seg in enumerate(prompt_segments):
+            if i > 0 and i <= len(mm_items):
+                mm_items[i - 1].update(offset=len(input_ids))
+                mm_token_num = mm_items[i - 1]['mm_token_num']
+                input_ids.extend([mm_placeholder_id] * mm_token_num)
             token_ids = tokenizer.encode(seg, add_bos=((i == 0) and sequence_start))
             input_ids.extend(token_ids)
 
-        return dict(prompt=prompt, input_ids=input_ids, multimodal=preps)
+        return dict(prompt=prompt, input_ids=input_ids, multimodal=mm_items)
 
     def to_turbomind_aux(self, messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start):
         """Auxiliary function to pack the forwarding results in a format
