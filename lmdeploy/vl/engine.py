@@ -38,8 +38,12 @@ class ImageEncoder:
         backend: str,
         vision_config: VisionConfig = None,
         backend_config: TurbomindEngineConfig | PytorchEngineConfig | None = None,
+        trust_remote_code: bool = False,
     ):
-        self.model = load_vl_model(model_path, backend, backend_config=backend_config)
+        self.model = load_vl_model(model_path,
+                                   backend,
+                                   backend_config=backend_config,
+                                   trust_remote_code=trust_remote_code)
         if vision_config is None:
             vision_config = VisionConfig()
         self.vision_config = vision_config

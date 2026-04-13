@@ -219,10 +219,10 @@ def _stop_words(stop_words: list[int | str], tokenizer: object):
     return stop_words
 
 
-def get_hf_gen_cfg(path: str):
+def get_hf_gen_cfg(path: str, trust_remote_code: bool = False):
     from transformers import GenerationConfig
     try:
-        cfg = GenerationConfig.from_pretrained(path, trust_remote_code=True)
+        cfg = GenerationConfig.from_pretrained(path, trust_remote_code=trust_remote_code)
         return cfg.to_dict()
     except OSError:
         return {}

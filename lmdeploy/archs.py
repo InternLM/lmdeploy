@@ -128,14 +128,14 @@ def check_vl_llm(backend: str, config: dict) -> bool:
     return False
 
 
-def get_task(backend: str, model_path: str):
+def get_task(backend: str, model_path: str, trust_remote_code: bool = False):
     """Get pipeline type and pipeline class from model config."""
     from lmdeploy.serve.core import AsyncEngine
 
     if os.path.exists(os.path.join(model_path, 'triton_models', 'weights')):
         # workspace model
         return 'llm', AsyncEngine
-    _, config = get_model_arch(model_path)
+    _, config = get_model_arch(model_path, trust_remote_code=trust_remote_code)
     if check_vl_llm(backend, config.to_dict()):
         from lmdeploy.serve.core import VLAsyncEngine
         return 'vlm', VLAsyncEngine
@@ -144,17 +144,17 @@ def get_task(backend: str, model_path: str):
     return 'llm', AsyncEngine
 
 
-def get_model_arch(model_path: str):
+def get_model_arch(model_path: str, trust_remote_code: bool = False):
     """Get a model's architecture and configuration.
 
     Args:
         model_path(str): the model path
     """
     try:
-        cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=trust_remote_code)
     except Exception as e:  # noqa
         from transformers import PretrainedConfig
-        cfg = PretrainedConfig.from_pretrained(model_path, trust_remote_code=True)
+        cfg = PretrainedConfig.from_pretrained(model_path, trust_remote_code=trust_remote_code)
 
     _cfg = cfg.to_dict()
     if _cfg.get('architectures', None):

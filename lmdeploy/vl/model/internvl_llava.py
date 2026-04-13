@@ -89,7 +89,7 @@ class InternVLLlavaVisionModel(LlavaVisionModel):
                 disable_transformers_logging():
             warnings.simplefilter('ignore')
             self.config.quantization_config = {}  # disable vision part quantization
-            model = AutoModelForCausalLM.from_config(self.config, trust_remote_code=True)
+            model = AutoModelForCausalLM.from_config(self.config, trust_remote_code=self.trust_remote_code)
             self.vl_model = model
             if not self.with_llm:
                 del model.lm_head

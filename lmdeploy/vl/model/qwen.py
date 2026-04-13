@@ -36,7 +36,7 @@ class QwenVisionModel(VisionModel):
         with init_empty_weights():
             config = self.hf_config
             config.quantization_config = {}  # disable vision part quantization
-            model = AutoModelForCausalLM.from_config(config, trust_remote_code=True)
+            model = AutoModelForCausalLM.from_config(config, trust_remote_code=self.trust_remote_code)
             self.vl_model = model
             if not self.with_llm:
                 del model.lm_head

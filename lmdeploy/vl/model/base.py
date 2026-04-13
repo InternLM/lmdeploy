@@ -20,14 +20,16 @@ class VisionModel(ABC):
                  with_llm: bool = False,
                  max_memory: dict[int, int] = None,
                  hf_config: AutoConfig = None,
-                 backend: str = ''):
+                 backend: str = '',
+                 trust_remote_code: bool = False):
         """init."""
         self.model_path = model_path
         self.with_llm = with_llm
         self.max_memory = max_memory
         self.backend = backend
+        self.trust_remote_code = trust_remote_code
         if hf_config is None:
-            _, hf_config = get_model_arch(model_path)
+            _, hf_config = get_model_arch(model_path, trust_remote_code=trust_remote_code)
         self.hf_config = hf_config
         self.image_token_id = self.get_pad_token_id(model_path, hf_config) or 0
 
@@ -36,7 +38,7 @@ class VisionModel(ABC):
         pad_token_id = getattr(hf_config, 'pad_token_id', None)
         if pad_token_id is None:
             try:
-                tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+                tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=self.trust_remote_code)
                 pad_token_id = getattr(tokenizer, 'pad_token_id', None)
             except Exception as e:
                 print(e)
