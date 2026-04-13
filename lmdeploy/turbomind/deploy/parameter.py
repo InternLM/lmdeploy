@@ -97,7 +97,10 @@ class QuantWeightOnly(Parameter):
         scales = self._get(g, 'scales')
         f(i, scales, 'scales', to_half, apply_gs=['w2'])
         if self.compressed_tensors and not self.has_zero_point:
-            zeros = generate_zero_point(scales)
+            if scales is not None and all(s is not None for s in scales):
+                zeros = generate_zero_point(scales)
+            else:
+                zeros = scales
         else:
             zeros = self._get(g, 'qzeros')
         f(i, zeros, 'zeros', to_half, apply_gs=['w2'])
