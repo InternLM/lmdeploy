@@ -97,7 +97,9 @@ class GenerationConfig:
 
         logits_processors: Custom logit processors.
         repetition_ngram_size: The size of n-grams to consider for repetition early stop.
+            Must be non-negative; values below 0 are treated as 0.
         repetition_ngram_threshold: The number of times an n-gram must be repeated to trigger early stop.
+            Must be non-negative; values below 0 are treated as 0.
     """
 
     n: int = 1
@@ -185,6 +187,14 @@ class GenerationConfig:
         assert self.temperature >= 0 and self.temperature <= 2  # [0,2]
         assert 0 <= self.min_p <= 1, \
             f'min_p should be in range [0, 1], but found {self.min_p}'
+        if self.repetition_ngram_size < 0:
+            logger.warning('`repetition_ngram_size` must be >= 0, got %s; using 0.',
+                           self.repetition_ngram_size)
+            self.repetition_ngram_size = 0
+        if self.repetition_ngram_threshold < 0:
+            logger.warning('`repetition_ngram_threshold` must be >= 0, got %s; using 0.',
+                           self.repetition_ngram_threshold)
+            self.repetition_ngram_threshold = 0
 
 
 @pydantic_dataclass
