@@ -81,7 +81,9 @@ struct LlamaLinear::Impl {
             A = input;
         }
 
-        if (indices && A.dtype() == kFloat8_e4m3) {
+        // SM100+ grouped bf16/fp16: use chunk() weights so Activation() runs separately.
+        const bool is_cublas_grouped = offsets && getSMVersion() == 100 && dense.weight_type == kBfloat16;
+        if (indices && (A.dtype() == kFloat8_e4m3 || is_cublas_grouped)) {
             const auto [bsz, k] = A.shapes(0, 1);
             const int e         = indices.size() / bsz;
             Tensor    A_e       = {{m, k}, A.dtype(), kDEVICE};
