@@ -119,7 +119,7 @@ class ARSpecStoppingCriteria(ARStoppingCriteria):
             stop_words_rsp = stop_words.reshape(1, 1, -1)
             assert stop_words_rsp.ndim == token_ids_rsp.ndim == 3
             stop_mask = (token_ids_rsp == stop_words_rsp).any(-1)
-            mask = mask ^ stop_mask
+            mask = torch.logical_or(mask, stop_mask)
         # find the index of first `1`,  if not found, would be 0
         index = torch.argmax(mask.int(), dim=-1, keepdim=True)
         # update index of 0 to -1 if not found

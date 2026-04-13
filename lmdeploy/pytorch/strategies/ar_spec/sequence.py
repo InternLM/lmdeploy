@@ -44,6 +44,17 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
         return self._num_spec_ids
 
     @property
+    def routed_experts(self) -> np.ndarray:
+        if (not self.return_routed_experts) or self.all_routed_experts is None:
+            return None
+
+        end = max(0, self.num_valid_ids - 1)
+        if 0 < end <= len(self.all_routed_experts):
+            return self.all_routed_experts.get_real()[:end]
+        else:
+            return None
+
+    @property
     def generated_ids(self) -> np.ndarray:
         end = self.num_valid_ids
         start = end - self.num_new_tokens
@@ -59,6 +70,8 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
         self._num_spec_ids = 0
         self._num_new_valid = 0
         self.history_cache.resize(self.num_valid_ids)
+        if self.all_routed_experts is not None:
+            self.all_routed_experts.resize(self.num_valid_ids-1)
 
     def _update_token_ids_inputs(self, token_ids: np.ndarray):
         """Append tokens."""
