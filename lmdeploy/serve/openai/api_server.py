@@ -434,10 +434,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         adapter_name = model_name  # got a adapter name
     request_id = str(session.session_id)
     created_time = int(time.time())
-    gpt_oss_parser = None
-    if VariableInterface.async_engine.arch == 'GptOssForCausalLM':
-        gpt_oss_parser = GptOssChatParser()
-
     if isinstance(request.stop, str):
         request.stop = [request.stop]
 
@@ -447,6 +443,40 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     response_format = None
     if request.response_format and request.response_format.type != 'text':
         response_format = request.response_format.model_dump()
+
+    gpt_oss_parser = None
+    if VariableInterface.async_engine.arch == 'GptOssForCausalLM':
+        gpt_oss_parser = GptOssChatParser()
+        if response_format:
+            logger.info(f'[GPT-OSS:{request_id}] Structured output requested, converting to Harmony-native mode')
+            schema_json = json.dumps(response_format, ensure_ascii=False)
+            format_section = f'\n\n# Response Formats\n\n{schema_json}'
+            try:
+                if isinstance(request.messages, str):
+                    # For string prompts, append the format section directly to request.messages
+                    request.messages += format_section
+                else:
+                    messages = request.messages
+                    appended_to_system = False
+                    for msg in messages:
+                        if msg.get('role') == 'system':
+                            content = msg.get('content')
+                            if content is None:
+                                content = ''
+                            if isinstance(content, str):
+                                msg['content'] = content + format_section
+                                appended_to_system = True
+                                break
+                    if not appended_to_system:
+                        system_msg = {
+                            'role': 'system',
+                            'content': f'You must follow the specified response format.{format_section}'
+                        }
+                        messages.insert(0, system_msg)
+
+                response_format = None
+            except Exception as e:
+                logger.error(f'[GPT-OSS:{request_id}] Failed to convert response_format to Harmony mode: {str(e)}')
 
     if request.logit_bias is not None:
         try:
