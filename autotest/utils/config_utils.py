@@ -101,10 +101,14 @@ def get_func_config_list(backend: str,
         if 'Qwen3-235B-A22B-Thinking-2507' in run_config['model']:
             run_config['extra_params']['cache-max-entry-count'] = 0.9
             run_config['extra_params']['max-batch-size'] = 1024
+            para_conf = run_config.get('parallel_config', {})
+            if para_conf.get('dp', 0) == 8 and para_conf.get('ep', 0) == 8:
+                run_config['extra_params']['max-batch-size'] = 256
 
-        if 'GLM-5' in run_config['model']:
+        if 'GLM-5-FP8' in run_config['model']:
             run_config['extra_params']['cache-max-entry-count'] = 0.9
             run_config['extra_params']['max-batch-size'] = 128
+            run_config['extra_params']['model-format'] = 'fp8'
 
         if 'Qwen3.5' in run_config['model']:
             run_config['extra_params']['session-len'] = 128000

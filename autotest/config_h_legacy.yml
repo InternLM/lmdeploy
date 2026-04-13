@@ -12,28 +12,20 @@ device: cuda
 
 config:
     tp:
-        internlm/Intern-S1: 4
-        internlm/Intern-S1-Pro-FP8: 16
         JetLM/SDAR-30B-A3B-Sci: 2
         moonshotai/Kimi-K2-Instruct-0905: 16
 
     dp_ep:
-        internlm/Intern-S1-Pro-FP8:
-            dp: 16
-            ep: 16
         moonshotai/Kimi-K2-Instruct-0905:
             dp: 16
             ep: 16
 
 turbomind_chat_model:
     tp:
-        - internlm/Intern-S1
-        - internlm/Intern-S1-mini
+        - empty
 
 pytorch_chat_model:
     tp:
-        - internlm/Intern-S1
-        - internlm/Intern-S1-mini
         - JetLM/SDAR-30B-A3B-Sci
         - moonshotai/Kimi-K2-Instruct-0905
 
@@ -42,29 +34,27 @@ pytorch_chat_model:
 
 turbomind_vl_model:
     tp:
-        - internlm/Intern-S1
-        - internlm/Intern-S1-mini
+        - empty
 
 pytorch_vl_model:
     tp:
-        - internlm/Intern-S1
-        - internlm/Intern-S1-mini
+        - empty
 
 turbomind_base_model:
     tp:
+        - empty
 
 pytorch_base_model:
     tp:
+        - empty
 
 turbomind_quantization:
     no_awq:
-        - internlm/Intern-S1
-        - internlm/Intern-S1-mini
+        - empty
     gptq:
         - empty
     no_kvint4:
-        - internlm/Intern-S1
-        - internlm/Intern-S1-mini
+        - empty
     no_kvint8:
         - empty
 
@@ -74,21 +64,17 @@ pytorch_quantization:
     w8a8:
         - empty
     no_kvint4:
-        - internlm/Intern-S1
-        - internlm/Intern-S1-mini
         - JetLM/SDAR-30B-A3B-Sci
+        - moonshotai/Kimi-K2-Instruct-0905
     no_kvint8:
-        - empty
+        - moonshotai/Kimi-K2-Instruct-0905
 
 benchmark_model:
-    - internlm/Intern-S1
-    - internlm/Intern-S1-mini
+    - empty
 
 evaluate_model:
-    - internlm/Intern-S1-Pro-FP8
     - JetLM/SDAR-30B-A3B-Sci
     - moonshotai/Kimi-K2-Instruct-0905
 
 mllm_evaluate_model:
-    - internlm/Intern-S1
-    - internlm/Intern-S1-mini
+    - empty

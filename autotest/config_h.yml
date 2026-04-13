@@ -22,7 +22,7 @@ config:
         Qwen/Qwen3-235B-A22B-Thinking-2507: 8
         OpenGVLab/InternVL3_5-38B: 2
         Qwen/Qwen3-VL-30B-A3B-Instruct: 2
-        zai-org/GLM-5: 16
+        zai-org/GLM-5-FP8: 8
         Qwen/Qwen3.5-27B: 2
         Qwen/Qwen3.5-35B-A3B: 2
         Qwen/Qwen3.5-122B-A10B: 4
@@ -35,11 +35,16 @@ config:
         OpenGVLab/InternVL3_5-30B-A3B: 2
         zai-org/GLM-4.7-Flash: 2
         google/gemma-3-27b-it: 2
+        internlm/Intern-S1: 4
+        internlm/Intern-S1-Pro-FP8: 16
 
     dp_ep:
         Qwen/Qwen3-235B-A22B-Thinking-2507:
             dp: 8
             ep: 8
+        internlm/Intern-S1-Pro-FP8:
+            dp: 16
+            ep: 16
 
     cp_tp:
         Qwen/Qwen3-235B-A22B-Thinking-2507:
@@ -76,6 +81,8 @@ turbomind_chat_model:
         - THUDM/glm-4-9b-chat
         - openai/gpt-oss-120b
         - openai/gpt-oss-20b
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
 
     cp_tp:
         - Qwen/Qwen3-235B-A22B-Thinking-2507
@@ -110,17 +117,22 @@ pytorch_chat_model:
         - zai-org/GLM-4.7-Flash
         - microsoft/Phi-3.5-vision-instruct
         - microsoft/Phi-3-vision-128k-instruct
-        - zai-org/GLM-5
+        - zai-org/GLM-5-FP8
         - Qwen/Qwen3.5-27B
         - Qwen/Qwen3.5-35B-A3B
+        - Qwen/Qwen3.5-35B-A3B-FP8
         - Qwen/Qwen3.5-122B-A10B
         - deepseek-ai/DeepSeek-V3.1
         - unsloth/gpt-oss-20b-BF16
         - google/gemma-3-27b-it
         - OpenGVLab/InternVL3_5-38B
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
+        - internlm/Intern-S1-Pro-FP8
 
     dp_ep:
         - Qwen/Qwen3-235B-A22B-Thinking-2507
+        - internlm/Intern-S1-Pro-FP8
 
 turbomind_vl_model:
     tp:
@@ -130,6 +142,8 @@ turbomind_vl_model:
         - Qwen/Qwen2.5-VL-7B-Instruct
         - Qwen/Qwen2.5-VL-32B-Instruct
         - OpenGVLab/InternVL3_5-38B
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
 
 pytorch_vl_model:
     tp:
@@ -144,11 +158,10 @@ pytorch_vl_model:
         - microsoft/Phi-3.5-vision-instruct
         - Qwen/Qwen3.5-27B
         - Qwen/Qwen3.5-35B-A3B
+        - Qwen/Qwen3.5-35B-A3B-FP8
         - Qwen/Qwen3.5-122B-A10B
-        - OpenGVLab/InternVL3_5-38B
-        - Qwen/Qwen3.5-27B
-        - Qwen/Qwen3.5-35B-A3B
-        - Qwen/Qwen3.5-122B-A10B
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
 
 
 turbomind_base_model:
@@ -170,6 +183,7 @@ turbomind_quantization:
         - Qwen/Qwen3-235B-A22B-Thinking-2507-FP8
         - Qwen/Qwen3-32B-FP8
         - Qwen/Qwen3-30B-A3B-FP8
+        - Qwen/Qwen3.5-35B-A3B-FP8
         - Qwen/Qwen3-30B-A3B-Base
         - Qwen/Qwen1.5-MoE-A2.7B-Chat
         - Qwen/Qwen2.5-VL-7B-Instruct
@@ -181,6 +195,8 @@ turbomind_quantization:
         - microsoft/Phi-3-mini-4k-instruct
         - THUDM/glm-4v-9b
         - THUDM/glm-4-9b-chat
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
 
     gptq:
         - empty
@@ -194,6 +210,7 @@ turbomind_quantization:
         - Qwen/Qwen3-32B-FP8
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-30B-A3B-FP8
+        - Qwen/Qwen3.5-35B-A3B-FP8
         - Qwen/Qwen3-235B-A22B-Thinking-2507
         - Qwen/Qwen3-235B-A22B-Thinking-2507-FP8
         - Qwen/Qwen2.5-VL-7B-Instruct
@@ -204,6 +221,8 @@ turbomind_quantization:
         - deepseek-ai/DeepSeek-V2-Lite-Chat
         - openai/gpt-oss-120b
         - openai/gpt-oss-20b
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
     no_kvint8:
         - deepseek-ai/DeepSeek-V2-Chat
         - Qwen/Qwen3-235B-A22B-Thinking-2507-FP8
@@ -235,6 +254,7 @@ pytorch_quantization:
         - Qwen/Qwen3-32B-FP8
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-30B-A3B-FP8
+        - Qwen/Qwen3.5-35B-A3B-FP8
         - Qwen/Qwen3-235B-A22B-Thinking-2507
         - Qwen/Qwen3-235B-A22B-Thinking-2507-FP8
         - Qwen/Qwen3-VL-8B-Instruct
@@ -242,26 +262,32 @@ pytorch_quantization:
         - microsoft/Phi-3-vision-128k-instruct
         - microsoft/Phi-3.5-vision-instruct
         - zai-org/GLM-4.7-Flash
-        - zai-org/GLM-5
+        - zai-org/GLM-5-FP8
         - Qwen/Qwen3.5-27B
         - Qwen/Qwen3.5-35B-A3B
         - Qwen/Qwen3.5-122B-A10B
         - deepseek-ai/DeepSeek-V3.1
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
+        - internlm/Intern-S1-Pro-FP8
     no_kvint8:
         - zai-org/GLM-4.7-Flash
-        - zai-org/GLM-5
+        - zai-org/GLM-5-FP8
         - deepseek-ai/DeepSeek-V3.1
         - Qwen/Qwen3.5-27B
         - Qwen/Qwen3.5-35B-A3B
+        - Qwen/Qwen3.5-35B-A3B-FP8
         - Qwen/Qwen3.5-122B-A10B
         - Qwen/Qwen3-235B-A22B-Thinking-2507-FP8
+        - internlm/Intern-S1-Pro-FP8
 
 longtext_benchmark_model:
     - Qwen/Qwen3-30B-A3B
     - Qwen/Qwen3-235B-A22B-Thinking-2507
-    - zai-org/GLM-5
+    - zai-org/GLM-5-FP8
     - Qwen/Qwen3.5-27B
     - Qwen/Qwen3.5-35B-A3B
+    - Qwen/Qwen3.5-35B-A3B-FP8
     - Qwen/Qwen3.5-122B-A10B
 
 benchmark_model:
@@ -273,11 +299,14 @@ benchmark_model:
     - openai/gpt-oss-120b
     - openai/gpt-oss-20b
     - unsloth/gpt-oss-20b-BF16
-    - zai-org/GLM-5
+    - zai-org/GLM-5-FP8
     - Qwen/Qwen3.5-27B
     - Qwen/Qwen3.5-35B-A3B
+    - Qwen/Qwen3.5-35B-A3B-FP8
     - Qwen/Qwen3.5-122B-A10B
     - google/gemma-3-27b-it
+    - internlm/Intern-S1
+    - internlm/Intern-S1-mini
 
 evaluate_model:
     - Qwen/Qwen3-32B-FP8
@@ -287,14 +316,26 @@ evaluate_model:
     - Qwen/Qwen3-235B-A22B-Thinking-2507-FP8
     - openai/gpt-oss-120b
     - deepseek-ai/DeepSeek-V3.1
-    - zai-org/GLM-5
+    - zai-org/GLM-5-FP8
     - Qwen/Qwen3.5-27B
     - Qwen/Qwen3.5-35B-A3B
+    - Qwen/Qwen3.5-35B-A3B-FP8
     - Qwen/Qwen3.5-122B-A10B
+    - internlm/Intern-S1-Pro-FP8
+
+longtext_evaluate_model:
+    - Qwen/Qwen3.5-35B-A3B
+
+mtp_evaluate_model:
+    - Qwen/Qwen3.5-35B-A3B
+    - Qwen/Qwen3.5-35B-A3B-FP8
 
 mllm_evaluate_model:
     - OpenGVLab/InternVL3_5-38B
     - Qwen/Qwen3-VL-30B-A3B-Instruct
     - Qwen/Qwen3.5-27B
     - Qwen/Qwen3.5-35B-A3B
+    - Qwen/Qwen3.5-35B-A3B-FP8
     - Qwen/Qwen3.5-122B-A10B
+    - internlm/Intern-S1
+    - internlm/Intern-S1-mini

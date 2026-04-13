@@ -23,6 +23,12 @@ config:
         Qwen/Qwen3-VL-30B-A3B-Instruct: 4
         Qwen/Qwen3-VL-8B-Instruct: 2
         Qwen/Qwen3-VL-32B-Instruct: 4
+        internlm/Intern-S1-Pro-BF16: 64
+
+    dp_ep:
+        internlm/Intern-S1-Pro-BF16:
+            dp: 64
+            ep: 64
 
 pytorch_chat_model:
     tp:
@@ -31,6 +37,10 @@ pytorch_chat_model:
         - Qwen/Qwen3-32B
         - Qwen/Qwen3-8B
         - Qwen/Qwen3-0.6B
+        - internlm/Intern-S1-Pro-BF16
+
+    dp_ep:
+        - internlm/Intern-S1-Pro-BF16
 
 pytorch_vl_model:
     tp:
@@ -42,7 +52,6 @@ pytorch_vl_model:
         - Qwen/Qwen3-VL-30B-A3B-Instruct
         - Qwen/Qwen3-VL-8B-Instruct
         - Qwen/Qwen3-VL-32B-Instruct
-
 
 pytorch_base_model:
     tp:
@@ -67,6 +76,7 @@ pytorch_quantization:
         - Qwen/Qwen3-VL-30B-A3B-Instruct
         - Qwen/Qwen3-VL-8B-Instruct
         - Qwen/Qwen3-VL-32B-Instruct
+        - internlm/Intern-S1-Pro-BF16
     no_kvint8:
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-235B-A22B
@@ -81,6 +91,7 @@ pytorch_quantization:
         - Qwen/Qwen3-VL-30B-A3B-Instruct
         - Qwen/Qwen3-VL-8B-Instruct
         - Qwen/Qwen3-VL-32B-Instruct
+        - internlm/Intern-S1-Pro-BF16
 
 longtext_benchmark_model:
     - Qwen/Qwen3-30B-A3B
