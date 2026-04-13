@@ -5,6 +5,7 @@ from enum import Enum, auto
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.backends import OpType, get_backend
@@ -121,10 +122,46 @@ class MoEForwardDPTP:
         hidden_states_list = list(hidden_states.split(tp_sizes, -2))
         cur_out_states = hidden_states_list[self.gather_rank]
         out_states.copy_(cur_out_states)
-        hidden_states_list = [item for item in hidden_states_list for _ in range(self.attn_tp)]
-        hidden_states_list[self.rank] = out_states
-        handle = dist.reduce_scatter(out_states, hidden_states_list, group=self.tp_group, async_op=True)
-        return out_states, handle
+
+        # When tp_sizes are non-uniform (multi-batch with different token counts per dp group),
+        # dist.reduce_scatter requires all input tensors to be the same size. Pad to max size,
+        # perform reduce_scatter, then strip padding from the result via a handle wrapper.
+        max_sz = max(tp_sizes)
+        need_pad = max_sz > min(tp_sizes)
+        if need_pad:
+            hidden_states_list = [
+                F.pad(piece, (0, 0, 0, max_sz - piece.shape[-2])) if piece.shape[-2] < max_sz else piece
+                for piece in hidden_states_list
+            ]
+            hidden_states_list = [item for item in hidden_states_list for _ in range(self.attn_tp)]
+            recv = hidden_states_list[self.rank].clone()
+            hidden_states_list[self.rank] = recv
+            handle = dist.reduce_scatter(recv, hidden_states_list, group=self.tp_group, async_op=True)
+            actual = tp_sizes[self.gather_rank]
+
+            class _PaddedHandle:
+                def __init__(self, inner, recv, out, actual):
+                    self._inner = inner
+                    self._recv = recv
+                    self._out = out
+                    self._actual = actual
+                    self._done = False
+
+                def wait(self):
+                    if not self._done:
+                        self._inner.wait()
+                        self._out.copy_(self._recv.narrow(-2, 0, self._actual))
+                        self._done = True
+
+                def is_completed(self):
+                    return self._inner.is_completed()
+
+            return out_states, _PaddedHandle(handle, recv, out_states, actual)
+        else:
+            hidden_states_list = [item for item in hidden_states_list for _ in range(self.attn_tp)]
+            hidden_states_list[self.rank] = out_states
+            handle = dist.reduce_scatter(out_states, hidden_states_list, group=self.tp_group, async_op=True)
+            return out_states, handle
 
     def _gemm_and_reduce_scatter(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.Tensor,
                                  output_states: torch.Tensor, tp_sizes: list[int], handles: list[dist.Work]):
