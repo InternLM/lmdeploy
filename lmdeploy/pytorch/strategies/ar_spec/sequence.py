@@ -70,8 +70,10 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
         self._num_spec_ids = 0
         self._num_new_valid = 0
         self.history_cache.resize(self.num_valid_ids)
-        if self.all_routed_experts is not None:
+
+        if self.return_routed_experts and self.all_routed_experts is not None:
             self.all_routed_experts.resize(self.num_valid_ids-1)
+
 
     def _update_token_ids_inputs(self, token_ids: np.ndarray):
         """Append tokens."""
