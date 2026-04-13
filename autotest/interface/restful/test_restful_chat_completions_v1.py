@@ -534,7 +534,7 @@ class TestRestfulInterfaceChatCompletions:
             response += outputList[index].get('choices')[0].get('delta').get('content')
         length = api_client.encode(response, add_bos=False)[1]
         assert outputList[-1].get('choices')[0].get('finish_reason') == 'length'
-        assert length >= 98 and length <= 101
+        assert length >= 99 and length <= 101
 
     def __test_max_tokens_or_max_completion_tokens(
         self,
