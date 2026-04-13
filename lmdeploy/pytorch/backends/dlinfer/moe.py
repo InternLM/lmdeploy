@@ -65,11 +65,8 @@ class DlinferFusedMoEImpl(FusedMoEImpl):
 
     def update_weights(self, gate_up_weights: torch.Tensor, down_weights: torch.Tensor):
         """Update weights."""
-        device_type = gate_up_weights.device.type
-        if device_type in ['npu']:
-            if os.getenv('DLINFER_RESET_MOE_UPDATE_WEIGHTS', '0') == '1':
-                return gate_up_weights, down_weights
-            return gate_up_weights.transpose(-1, -2).contiguous(), down_weights.transpose(-1, -2).contiguous()
+        if os.getenv('DLINFER_RESET_MOE_UPDATE_WEIGHTS', '0') == '1':
+            return gate_up_weights, down_weights
         return gate_up_weights, down_weights
 
     def ep_expert_list(self, world_size: int, rank: int):
