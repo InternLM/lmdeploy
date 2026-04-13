@@ -62,10 +62,6 @@ class DlinferFusedMoEImpl(FusedMoEImpl):
                 device=torch.cuda.current_device(),
             )
 
-    def update_weights(self, gate_up_weights: torch.Tensor, down_weights: torch.Tensor):
-        """Update weights."""
-        return gate_up_weights, down_weights
-
     def ep_expert_list(self, world_size: int, rank: int):
         """Experts list of current rank."""
         num_experts = self.num_experts
