@@ -38,6 +38,11 @@ on:
         description: 'regression functions'
         type: string
         default: "['quant', 'tools','restful','pipeline','benchmark','evaluation']"
+      docker_tag:
+        required: true
+        description: 'Docker tag'
+        type: string
+        default: 'nightly-test-cu12.8'
   schedule:
     - cron:  '00 14 * * 0-4'
 
@@ -48,7 +53,7 @@ env:
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
   ROOT_DIR: /nvme/qa_test_models
   REPORT_DIR: /nvme/qa_test_models/test-reports/${{ inputs.repo_ref || 'main' }}_${{ github.run_id }}
-  COV_PARAM: --cov /opt/py3/lib/python3.10/site-packages/lmdeploy
+  COV_PARAM: --cov /opt/py3/lib/python3.12/site-packages/lmdeploy
   TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy/${{ inputs.repo_ref || 'main' }}_${{ github.run_id }}
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
   OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
@@ -60,7 +65,7 @@ jobs:
     if: ${{!cancelled() && (github.event_name == 'schedule' || !inputs.offline_mode)}}
     strategy:
       matrix:
-        pyver: [py310]
+        pyver: [py312]
     runs-on: ubuntu-latest
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
@@ -109,7 +114,7 @@ jobs:
     runs-on: [self-hosted, linux-a100]
     timeout-minutes: 50
     container:
-      image: openmmlab/lmdeploy:latest-cu12.8
+      image: registry.h.pjlab.org.cn/ailab-puyu-puyu_gpu/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/qa_test_models:/nvme/qa_test_models
@@ -131,7 +136,7 @@ jobs:
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
         with:
-          name: my-artifact-${{ github.run_id }}-py310
+          name: my-artifact-${{ github.run_id }}-py312
       - name: Copy Artifacts
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl -f && cp lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
@@ -140,9 +145,13 @@ jobs:
         run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl -f && cp ${{env.OFFLINE_CODE_PATH}}/lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
       - name: Mark as start
         run: |
-          chmod -R 777 ${{env.TEST_CODE_PATH}}
           mkdir ${{env.REPORT_DIR}} -p
           echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
+      - name: Clear workfile
+        if: always()
+        run: |
+          chmod -R 777 ${{env.TEST_CODE_PATH}}
+          chmod -R 777 ${{env.REPORT_DIR}}
 
   test_quantization:
     needs: download_pkgs
@@ -158,7 +167,7 @@ jobs:
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
       TEST_ENV: ${{ matrix.transformers }}
     container:
-      image: openmmlab/lmdeploy:latest-cu12.8
+      image: registry.h.pjlab.org.cn/ailab-puyu-puyu_gpu/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -177,7 +186,7 @@ jobs:
           echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install auto_gptq matplotlib attrdict
+          python3 -m pip install matplotlib attrdict
           python3 -m pip install -r requirements/lite.txt
       - name: Install lmdeploy
         run: |
@@ -210,7 +219,6 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 ${{env.ROOT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -246,7 +254,7 @@ jobs:
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
       TEST_ENV: ${{ matrix.transformers }}
     container:
-      image: openmmlab/lmdeploy:latest-cu12.8
+      image: registry.h.pjlab.org.cn/ailab-puyu-puyu_gpu/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -330,7 +338,6 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 ${{env.ROOT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -422,7 +429,7 @@ jobs:
             extra: '--logprobs-mode raw_logprobs'
     timeout-minutes: 60
     container:
-      image: openmmlab/lmdeploy:latest-cu12.8
+      image: registry.h.pjlab.org.cn/ailab-puyu-puyu_gpu/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -527,7 +534,6 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 ${{env.ROOT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -540,7 +546,7 @@ jobs:
     needs: test_quantization
     timeout-minutes: 240
     container:
-      image: openmmlab/lmdeploy:latest-cu12.8
+      image: registry.h.pjlab.org.cn/ailab-puyu-puyu_gpu/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -590,7 +596,6 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 ${{env.ROOT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -604,7 +609,7 @@ jobs:
     needs: test_quantization
     timeout-minutes: 120
     container:
-      image: openmmlab/lmdeploy:latest-cu12.8
+      image: registry.h.pjlab.org.cn/ailab-puyu-puyu_gpu/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -646,7 +651,6 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 ${{env.ROOT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -671,7 +675,7 @@ jobs:
             generate_type: base
     timeout-minutes: 60
     container:
-      image: openmmlab/lmdeploy:latest-cu12.8
+      image: registry.h.pjlab.org.cn/ailab-puyu-puyu_gpu/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -777,7 +781,6 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 ${{env.ROOT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -790,7 +793,7 @@ jobs:
     needs: test_quantization
     timeout-minutes: 240
     container:
-      image: openmmlab/lmdeploy:latest-cu12.8
+      image: registry.h.pjlab.org.cn/ailab-puyu-puyu_gpu/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -841,7 +844,6 @@ jobs:
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 ${{env.ROOT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -854,7 +856,7 @@ jobs:
     needs: [test_tools, test_restful, test_pipeline, test_benchmark]
     timeout-minutes: 5
     container:
-      image: openmmlab/lmdeploy:latest-cu12.8
+      image: registry.h.pjlab.org.cn/ailab-puyu-puyu_gpu/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -866,7 +868,6 @@ jobs:
         run: cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install lmdeploy
         run: |
-          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
       - name: Get coverage report
@@ -879,7 +880,7 @@ jobs:
       - name: Clear workfile
         if: always()
         run: |
-          chmod -R 777 ${{env.ROOT_DIR}}
+          chmod -R 777 ${{env.REPORT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir

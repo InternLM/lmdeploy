@@ -38,6 +38,11 @@ on:
         description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
         type: boolean
         default: false
+      docker_tag:
+        required: true
+        description: 'Docker tag'
+        type: string
+        default: 'nightly-test-cu12.8'
 
 env:
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
@@ -48,7 +53,7 @@ jobs:
     if: ${{github.event_name == 'schedule' || (!cancelled() && !inputs.offline_mode)}}
     strategy:
       matrix:
-        pyver: [py310]
+        pyver: [py312]
     runs-on: ubuntu-latest
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
@@ -101,7 +106,7 @@ jobs:
       matrix:
         evaluate_type: ['base']
     container:
-      image: openmmlab/lmdeploy:latest-cu12.8
+      image: registry.h.pjlab.org.cn/ailab-puyu-puyu_gpu/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -131,7 +136,7 @@ jobs:
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
         with:
-          name: my-artifact-${{ github.run_id }}-py310
+          name: my-artifact-${{ github.run_id }}-py312
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r /root/models/offline_pkg/requirements.txt
@@ -143,7 +148,7 @@ jobs:
       - name: Install lmdeploy - offline
         if: ${{inputs.offline_mode}}
         run: |
-          python3 -m pip install /root/models/offline_pkg/py310/lmdeploy-*.whl --no-deps
+          python3 -m pip install /root/models/offline_pkg/py312/lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
       - name: Install opencompass
         run: |

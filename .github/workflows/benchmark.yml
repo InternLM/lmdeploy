@@ -28,6 +28,16 @@ on:
         description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
         type: boolean
         default: false
+      docker_tag:
+        required: true
+        description: 'Docker tag'
+        type: string
+        default: 'nightly-test-cu12.8'
+      result_tag:
+        required: true
+        description: 'result_tag if is not none, benchmark results will be uploaded to feishu'
+        type: string
+        default: "default"
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
@@ -45,7 +55,7 @@ jobs:
     if: ${{github.event_name == 'schedule' || (!cancelled() && !inputs.offline_mode)}}
     strategy:
       matrix:
-        pyver: [py310]
+        pyver: [py312]
     runs-on: ubuntu-latest
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
@@ -93,7 +103,7 @@ jobs:
     runs-on: [self-hosted, linux-a100]
     timeout-minutes: 50
     container:
-      image: openmmlab/lmdeploy:latest-cu12.8
+      image: registry.h.pjlab.org.cn/ailab-puyu-puyu_gpu/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/qa_test_models:/nvme/qa_test_models
@@ -117,7 +127,7 @@ jobs:
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
         with:
-          name: my-artifact-${{ github.run_id }}-py310
+          name: my-artifact-${{ github.run_id }}-py312
       - name: Copy Artifacts
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl -f && cp lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
@@ -153,7 +163,7 @@ jobs:
       TEST_ENV: ${{ matrix.transformers }}
     timeout-minutes: 480
     container:
-      image: openmmlab/lmdeploy:latest-cu12.8
+      image: registry.h.pjlab.org.cn/ailab-puyu-puyu_gpu/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -197,11 +207,25 @@ jobs:
         if: contains(fromJson(github.event.inputs.backend), 'pytorch') && !contains(fromJson(github.event.inputs.backend), 'turbomind')
         run: |
             pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n ${{matrix.n}} -m '${{matrix.gpu_num}} and not pr_test and not function and pytorch' --alluredir=${{env.ALLURE_REPORT_DIR}}
+      - name: Generate result
+        if: always()
+        run: |
+            cd /nvme/qa_test_models/feishu_upload
+            python3 test_benchmark.py --root ${{env.REPORT_DIR}} --output ${{env.REPORT_DIR}}/${{inputs.result_tag}}.txt --hardware A100 --infer-version ${{inputs.result_tag}}
+      - name: Async result
+        if: always() && inputs.result_tag != 'default'
+        env:
+          FEISHU_APP_ID: ${{secrets.FEISHU_APP_ID}}
+          FEISHU_APP_SECRET: ${{secrets.FEISHU_APP_SECRET}}
+          FEISHU_TABLE_TOKEN: ${{secrets.FEISHU_TABLE_TOKEN}}
+          FEISHU_TABLE_ID: ${{secrets.BENCHMARK_FEISHU_TABLE_ID}}
+        run: |
+            cd /nvme/qa_test_models/feishu_upload
+            python3 main.py --skip-duplicates ${{env.REPORT_DIR}}/${{inputs.result_tag}}.txt --config config-benchmark.py
       - name: Clear workfile
         if: always()
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 $REPORT_DIR
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
