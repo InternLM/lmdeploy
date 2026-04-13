@@ -321,6 +321,18 @@ class RayExecutor(ExecutorBase):
             kwargs = dict()
         return ray.get([getattr(worker, method).remote(*args, **kwargs) for worker in self.workers], timeout=timeout)
 
+    async def collective_rpc_async(self,
+                                   method: str,
+                                   args: tuple[Any] = None,
+                                   kwargs: dict[str, Any] = None):
+        """Collective async rpc."""
+        if args is None:
+            args = list()
+        if kwargs is None:
+            kwargs = dict()
+        tasks = [getattr(worker, method).remote(*args, **kwargs) for worker in self.workers]
+        return await asyncio.gather(*tasks)
+
     def build_model(self):
         """Build model."""
         self.collective_rpc('build_model')
@@ -353,9 +365,9 @@ class RayExecutor(ExecutorBase):
         """Build cache engine."""
         self.collective_rpc('warmup')
 
-    def sleep(self, level: int = 1):
+    async def sleep(self, level: int = 1):
         """Sleep."""
-        self.collective_rpc('sleep', (level, ))
+        await self.collective_rpc_async('sleep', (level, ))
 
     def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
@@ -489,13 +501,15 @@ class RayExecutor(ExecutorBase):
             finally:
                 # free ray.put inputs
                 try:
-                    ray._private.internal_api.free(self._prev_inputs)
+                    ray.internal.free(self._prev_inputs, local_only=False)
                 except Exception as e:
                     logger.warning(f'Free input ref failed: {e}')
 
         self._prev_inputs = ray.put(inputs)
-        # make sure in order
-        self._prev_out = self.dag.execute(self._prev_inputs)
+        # non-compiled dag would add input object ref, and the ref can not be released in python
+        self._prev_out = [
+            worker.forward_async.remote(self._prev_inputs) for worker in self.workers
+        ]
 
     async def get_output_async(self):
         """Get output async."""
@@ -515,6 +529,18 @@ class RayExecutor(ExecutorBase):
         ray.get(self.workers[0].remote_log_end.remote(handle))
 
     def _sort_workers(self, driver_ip: str, workers: list[RayWorkerWrapper]):
+        """Sort workers."""
+        # External bundle handling is only applicable when lmdeploy does NOT own
+        # the placement group. If lmdeploy owns the PG, we should continue to
+        # sort workers even if external bundle indices are specified.
+        if (not _envs.ray_external_pg_bundles) or self.ray_ctx.owned_pg:
+            return self._sort_workers_by_driver_then_worker_ip(driver_ip, workers)
+        else:
+            # do not sort when external bundle indices are specified and the
+            # placement group is externally managed
+            return workers
+
+    def _sort_workers_by_driver_then_worker_ip(self, driver_ip: str, workers: list[RayWorkerWrapper]):
         """Sort workers by ip."""
         worker_ips = ray.get([worker.get_node_ip.remote() for worker in workers])
 
@@ -566,21 +592,33 @@ class RayExecutor(ExecutorBase):
         sorted_workers = [item[0] for item in sorted_worker_ip_map]
         return sorted_workers
 
-    def _valid_bundle_id(self, bundle_id: int):
-        """Check if a bundle is valid only when self.use_external_ray=True."""
-        if (not self.ray_ctx.owned_pg and _envs.ray_external_pg_bundles
-                and bundle_id not in _envs.ray_external_pg_bundles):
-            return False
-        return True
-
     def _init_workers_ray(self, placement_group: PlacementGroup, worker_kwargs: dict):
         """Init worker ray."""
         device_str = get_device_str()
         bundle_indices = []
-        for bundle_id, bundle in enumerate(placement_group.bundle_specs):
-            if bundle.get(device_str, 0) and self._valid_bundle_id(bundle_id):
-                bundle_indices.append(bundle_id)
+        if not _envs.ray_external_pg_bundles:
+            for bundle_id, bundle in enumerate(placement_group.bundle_specs):
+                if bundle.get(device_str, 0):
+                    bundle_indices.append(bundle_id)
+        else:
+            # use external specified bundle indices，keep the order as well
+            bundle_indices = _envs.ray_external_pg_bundles.copy()
+            # validate external bundle indices
+            num_bundles = len(placement_group.bundle_specs)
+            for bundle_id in bundle_indices:
+                if bundle_id < 0 or bundle_id >= num_bundles:
+                    raise ValueError(f'External bundle index {bundle_id} is out of range. '
+                                     f'Placement group has {num_bundles} bundles (valid indices: 0-{num_bundles - 1}).')
+                bundle = placement_group.bundle_specs[bundle_id]
+                if not bundle.get(device_str, 0):
+                    raise ValueError(
+                        f'External bundle index {bundle_id} does not have required resource: {device_str}. '
+                        f'Available resources in this bundle: {dict(bundle)}')
         attn_tp = self.dist_config.attn_tp
+        if len(bundle_indices) < attn_tp:
+            raise ValueError(f'Not enough bundle indices for attention tensor parallelism. '
+                             f'Required: {attn_tp}, Provided: {len(bundle_indices)} '
+                             f'(bundle_indices: {bundle_indices}).')
         bundle_indices = bundle_indices[:attn_tp]
 
         workers = list()

@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from __future__ import annotations
+
 # yapf: disable
 import asyncio
 import copy
@@ -10,7 +12,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from functools import partial
 from http import HTTPStatus
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
@@ -76,9 +78,12 @@ from lmdeploy.serve.openai.protocol import (
 )
 from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParser, ReasoningParserManager
 from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParser, ToolParserManager
-from lmdeploy.serve.utils.server_utils import validate_json_request
+from lmdeploy.serve.utils.server_utils import AuthenticationMiddleware, EngineSleepingMiddleware, validate_json_request
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
+
+if TYPE_CHECKING:
+    from lmdeploy.serve.managers import Session
 
 # yapf: enable
 
@@ -100,12 +105,15 @@ class VariableInterface:
     enable_abort_handling: bool = False
 
     @staticmethod
-    def get_session(session_id: int) -> int:
+    def get_session(session_id: int) -> Session:
         session_mgr = VariableInterface.get_session_manager()
         if session_id == -1:
-            return session_mgr.get()
+            session = session_mgr.get()
         else:
-            return session_mgr.get(session_id)
+            session = session_mgr.get(session_id)
+        # Stamp epoch for ``stop_all_session`` / ``abort_all`` coordination in ``AsyncEngine.generate``.
+        session.epoch = VariableInterface.async_engine.epoch
+        return session
 
     @staticmethod
     def get_session_manager():
@@ -409,6 +417,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
+    if VariableInterface.tool_parser is not None:
+        request = VariableInterface.tool_parser.adjust_request(request)
     session = VariableInterface.get_session(request.session_id)
 
     json_request = await raw_request.json()
@@ -767,7 +777,6 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
-
     json_request = await raw_request.json()
     migration_request = json_request.pop('migration_request', None)
     with_cache = json_request.pop('with_cache', False)
@@ -961,6 +970,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
     error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
+
     session = VariableInterface.get_session(request.session_id)
 
     prompt = request.prompt
@@ -1173,7 +1183,16 @@ def update_params(request: UpdateParamsRequest, raw_request: Request = None):
 @router.post('/sleep', dependencies=[Depends(validate_json_request)])
 async def sleep(raw_request: Request = None):
     level = raw_request.query_params.get('level', '1')
-    VariableInterface.async_engine.sleep(int(level))
+    try:
+        level = int(level)
+    except (TypeError, ValueError):
+        return create_error_response(HTTPStatus.BAD_REQUEST, 'The "level" query parameter must be an integer.')
+    if level not in (1, 2):
+        return create_error_response(HTTPStatus.BAD_REQUEST, 'The "level" query parameter must be 1 or 2.')
+    async_engine = VariableInterface.async_engine
+    async_engine.prepare_sleep()
+    await async_engine.stop_all_session()
+    await async_engine.sleep(level)
     return Response(status_code=200)
 
 
@@ -1379,7 +1398,7 @@ def create_lifespan_handler(backend_config: PytorchEngineConfig | TurbomindEngin
                         await asyncio.sleep(log_interval)
 
                         # periodically update schedule metrics, as they change less frequently than iteration stats
-                        schedule_metrics = async_engine.get_schedule_metrics()
+                        schedule_metrics = await async_engine.get_schedule_metrics()
                         await metrics_processor.update_schedule_stats(schedule_metrics)
 
                         await async_engine.do_log_stats()
@@ -1524,9 +1543,12 @@ def serve(model_path: str,
         )
 
     if api_keys is not None and (tokens := [key for key in api_keys if key]):
-        from lmdeploy.serve.utils.server_utils import AuthenticationMiddleware
-
         app.add_middleware(AuthenticationMiddleware, tokens=tokens)
+
+    def is_engine_sleeping() -> bool:
+        eng = VariableInterface.async_engine
+        return eng is not None and eng.is_sleeping
+    app.add_middleware(EngineSleepingMiddleware, is_sleeping=is_engine_sleeping)
 
     # set the maximum number of concurrent requests
     if max_concurrent_requests is not None:

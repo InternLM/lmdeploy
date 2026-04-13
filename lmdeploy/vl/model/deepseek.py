@@ -90,7 +90,6 @@ class DeepSeekVisionModel(VisionModel):
         images = self.collect_multimodal_items(messages)
         outputs = []
         for modality, image, _ in images:
-            image = image.convert('RGB')
             pixel_values = self.image_processor([image], return_tensors='pt').pixel_values
             outputs.append(
                 dict(

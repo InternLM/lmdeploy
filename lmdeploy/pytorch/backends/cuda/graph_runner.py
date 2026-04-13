@@ -5,7 +5,7 @@ from typing import Any
 import torch
 from torch.profiler import record_function
 
-from lmdeploy.pytorch.backends.deepep_moe_checker import get_moe_backend
+from lmdeploy.pytorch.backends.deepep_state import get_deepep_state
 from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
@@ -91,6 +91,7 @@ class CUDASingleGraphRunner:
             use_fa3_decoding=model_config.model_paradigm == 'ar_spec',
             is_ssm=len(model_config.states_shapes) > 0,
             use_mrope=model_config.use_mrope,
+            block_size=model_config.block_size,
         )
         self.device = device
         self.max_batches = max_batches
@@ -269,7 +270,7 @@ class CUDAGraphRunner(GraphRunner):
     ):
         """Prepare inputs."""
 
-        if get_moe_backend().use_deepep_moe_backend():
+        if get_deepep_state().enabled():
             from dlblas.layers.moe.token_dispatcher import DeepEPBuffer, DeepEPMode
             deepep_mode = DeepEPMode.LOW_LATENCY if context.is_decoding else DeepEPMode.NORMAL
             DeepEPBuffer.set_deepep_mode(deepep_mode)
@@ -283,7 +284,7 @@ class CUDAGraphRunner(GraphRunner):
     def reset(self):
         """Remove all graphs to prevent hanging on exit."""
         self._runner_map.clear()
-        if get_moe_backend().use_deepep_moe_backend():
+        if get_deepep_state().enabled():
             from dlblas.layers.moe.token_dispatcher import DeepEPBuffer
 
             if hasattr(DeepEPBuffer, 'destroy'):

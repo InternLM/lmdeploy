@@ -15,24 +15,24 @@ from .api_server import serve
 logger = get_logger('lmdeploy')
 
 
+def is_port_available(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind(('127.0.0.1', port))
+            return True
+        except Exception:
+            return False
+
+
 def find_available_ports(num: int) -> list[int]:
     """Find available port."""
-
-    def __is_port_ok(port: int):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            try:
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                s.bind(('127.0.0.1', port))
-                s.listen(1)
-                return True
-            except Exception:
-                return False
 
     ports = []
     test_port = 3000
     while len(ports) < num:
         test_port += random.randint(10, 500)
-        if __is_port_ok(test_port):
+        if is_port_available(test_port):
             ports.append(test_port)
 
     return ports
@@ -84,9 +84,9 @@ def launch_server(num_nodes: int,
                   model_path: str,
                   backend_config: PytorchEngineConfig | TurbomindEngineConfig,
                   proxy_url: str = None,
+                  server_port: int = 23333,
                   **kwargs):
     """Run multiple server processes in dp mode."""
-    assert proxy_url is not None, 'Please launch proxy server and pass proxy_url'
     log_level = kwargs.get('log_level', 'ERROR')
     logger.setLevel(log_level)
 
@@ -108,7 +108,13 @@ def launch_server(num_nodes: int,
     server_urls = []
     processes = []
 
-    server_port_li = find_available_ports(dp_per_node)
+    if proxy_url is not None:
+        server_port_li = find_available_ports(dp_per_node)
+    else:
+        server_port_li = [server_port + i for i in range(dp_per_node)]
+        for port in server_port_li:
+            if not is_port_available(port):
+                raise ValueError(f'Port {port} is not available')
 
     for idx in range(dp_per_node):
         backend_config_dp = copy.deepcopy(backend_config)

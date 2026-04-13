@@ -289,7 +289,7 @@ class DLLMModelAgentStrategy(ModelAgentStrategy):
         dllm_mask = extra_inputs.dllm_mask
 
         next_token_ids, dllm_mask, step_seqlens = self._update_dllm(next_token_ids, dllm_mask, model_inputs.seq_length)
-        model_inputs.step(next_token_ids, step_seqlens)
+        model_inputs = model_inputs.step(next_token_ids, step_seqlens)
 
         extra_inputs = DLLMExtraInputs(dllm_mask=dllm_mask)
         return model_inputs, extra_inputs

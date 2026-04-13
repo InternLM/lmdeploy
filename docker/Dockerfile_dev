@@ -29,16 +29,19 @@ RUN --mount=type=cache,target=/var/cache/apt \
 COPY . /opt/lmdeploy
 WORKDIR /opt/lmdeploy
 
+RUN mkdir -p /wheels
+
 # install lmdeploy and its dependencies
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install -r requirements_cuda.txt --extra-index-url https://download.pytorch.org/whl/cu128 && \
     uv pip install -e .
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    docker/prepare_wheel.sh
+    bash docker/prepare_3rdparty_wheel.sh
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    cp -r requirements /tmp/requirements && \
+    mkdir -p /tmp/requirements && \
+    cp requirements/serve.txt /tmp/requirements/ && \
     docker/install.sh
 
 # Clean up to reduce image size

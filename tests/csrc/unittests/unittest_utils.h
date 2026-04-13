@@ -44,7 +44,7 @@ public:
     explicit TestFailureError() = default;
     explicit TestFailureError(std::string name, std::string msg = "")
     {
-        msg_ = fmtstr("TEST FAIL [%s] %s", name.c_str(), msg.c_str());
+        msg_ = fmtstr("TEST FAIL [%s] %s", name, msg.c_str());
     }
     const char* what() const throw()
     {
@@ -55,7 +55,7 @@ public:
 #define EXPECT_TRUE(cond)                                                                                              \
     do {                                                                                                               \
         if (!(cond)) {                                                                                                 \
-            TM_LOG_ERROR("TEST FAIL [%s]: %s at %s:%d", __func__, #cond, __FILE__, __LINE__);                          \
+            TM_LOG_ERROR("TEST FAIL [{}]: {} at {}:{}", __func__, #cond, __FILE__, __LINE__);                          \
             throw TestFailureError(__func__);                                                                          \
         }                                                                                                              \
     } while (false)
@@ -63,7 +63,7 @@ public:
 #define EXPECT_FALSE(cond)                                                                                             \
     do {                                                                                                               \
         if (cond) {                                                                                                    \
-            TM_LOG_ERROR("TEST FAIL [%s]: %s at %s:%d", __func__, #cond, __FILE__, __LINE__);                          \
+            TM_LOG_ERROR("TEST FAIL [{}]: {} at {}:{}", __func__, #cond, __FILE__, __LINE__);                          \
             throw TestFailureError(__func__);                                                                          \
         }                                                                                                              \
     } while (false)
@@ -99,11 +99,11 @@ bool checkResult(std::string name, T* out, T* ref, size_t size, float atol, floa
         bool ok = almostEqual(a, b, atol, rtol);
         // Print the error.
         if (!ok && failures < 4) {
-            TM_LOG_ERROR(">> invalid result for i=%lu:", i);
-            TM_LOG_ERROR(">>    found......: %10.6f", a);
-            TM_LOG_ERROR(">>    expected...: %10.6f", b);
-            TM_LOG_ERROR(">>    error......: %.6f", fabsf(a - b));
-            TM_LOG_ERROR(">>    tol........: %.6f", atol + rtol * fabs(b));
+            TM_LOG_ERROR(">> invalid result for i={}:", i);
+            TM_LOG_ERROR(">>    found......: {:10.6f}", a);
+            TM_LOG_ERROR(">>    expected...: {:10.6f}", b);
+            TM_LOG_ERROR(">>    error......: {:.6f}", fabsf(a - b));
+            TM_LOG_ERROR(">>    tol........: {:.6f}", atol + rtol * fabs(b));
         }
         // Update the number of failures.
         failures += ok ? 0 : 1;
@@ -115,10 +115,10 @@ bool checkResult(std::string name, T* out, T* ref, size_t size, float atol, floa
 
     // Allow not matched up to 1% elements.
     size_t tol_failures = (size_t)(0.01 * size);
-    TM_LOG_INFO("check...%6s : %-50s (failures: %.2f%% atol: %.2e rtol: %.2e rel_gap: %.2e%%)",
+    TM_LOG_INFO("check...{:>6} : {:<50} (failures: {:.2f}% atol: {:.2e} rtol: {:.2e} rel_gap: {:.2e}%)",
                 failures <= tol_failures ? "....OK" : "FAILED",
-                name.c_str(),
-                100. * failures / size,
+                name,
+                (double)(100. * failures / size),
                 atol,
                 rtol,
                 100. * relative_gap);
