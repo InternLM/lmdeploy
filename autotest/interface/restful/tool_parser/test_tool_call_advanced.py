@@ -49,8 +49,16 @@ class TestToolCallMultipleTools(_ToolCallTestBase):
         )
 
         choice = response.choices[0]
-        if choice.message.tool_calls and len(choice.message.tool_calls) > 0:
-            assert choice.message.tool_calls[0].function.name == ('get_current_weather')
+        tool_calls = choice.message.tool_calls
+        assert choice.finish_reason == 'tool_calls', (
+            f'Expected finish_reason tool_calls for weather prompt with multi-tool list; '
+            f'got finish_reason={choice.finish_reason!r}, content={choice.message.content!r}')
+        assert tool_calls is not None and len(tool_calls) >= 1, (
+            f'Expected ≥1 tool call; got tool_calls={tool_calls!r}, '
+            f'finish_reason={choice.finish_reason!r}, content={choice.message.content!r}')
+        tc = tool_calls[0]
+        assert_tool_call_fields(tc)
+        assert tc.function.name == 'get_current_weather'
 
     def test_selects_calculator_tool(self, backend, model_case):
         client, model_name = self._get_client()
@@ -65,11 +73,18 @@ class TestToolCallMultipleTools(_ToolCallTestBase):
         )
 
         choice = response.choices[0]
-        if choice.message.tool_calls and len(choice.message.tool_calls) > 0:
-            tc = choice.message.tool_calls[0]
-            assert tc.function.name == 'calculate'
-            parsed = json.loads(tc.function.arguments)
-            assert 'expression' in parsed
+        tool_calls = choice.message.tool_calls
+        assert choice.finish_reason == 'tool_calls', (
+            f'Expected finish_reason tool_calls for math prompt with calculate in tool list; '
+            f'got finish_reason={choice.finish_reason!r}, content={choice.message.content!r}')
+        assert tool_calls is not None and len(tool_calls) >= 1, (
+            f'Expected ≥1 tool call; got tool_calls={tool_calls!r}, '
+            f'finish_reason={choice.finish_reason!r}, content={choice.message.content!r}')
+        tc = tool_calls[0]
+        assert_tool_call_fields(tc)
+        assert tc.function.name == 'calculate'
+        parsed = assert_arguments_parseable(tc.function.arguments)
+        assert 'expression' in parsed
 
     def test_no_tool_when_not_needed(self, backend, model_case):
         """Unrelated question + tool_choice=auto → prefer text."""
@@ -128,11 +143,17 @@ class TestToolCallMultipleTools(_ToolCallTestBase):
         )
 
         choice = response.choices[0]
-        if choice.message.tool_calls and len(choice.message.tool_calls) > 0:
-            tc = choice.message.tool_calls[0]
-            assert_tool_call_fields(tc)
-            assert_arguments_parseable(tc.function.arguments)
-            assert tc.function.name == 'get_current_weather', (f'Expected weather tool, got "{tc.function.name}"')
+        tool_calls = choice.message.tool_calls
+        assert choice.finish_reason == 'tool_calls', (
+            f'Expected finish_reason tool_calls for weather prompt among many dummy tools; '
+            f'got finish_reason={choice.finish_reason!r}, content={choice.message.content!r}')
+        assert tool_calls is not None and len(tool_calls) >= 1, (
+            f'Expected ≥1 tool call; got tool_calls={tool_calls!r}, '
+            f'finish_reason={choice.finish_reason!r}, content={choice.message.content!r}')
+        tc = tool_calls[0]
+        assert_tool_call_fields(tc)
+        assert_arguments_parseable(tc.function.arguments)
+        assert tc.function.name == 'get_current_weather', (f'Expected weather tool, got "{tc.function.name}"')
 
 
 # ===========================================================================
@@ -308,14 +329,18 @@ class TestToolCallMultilingual(_ToolCallTestBase):
 
         choice = response.choices[0]
         assert choice.message.role == 'assistant'
-
-        if choice.message.tool_calls and len(choice.message.tool_calls) > 0:
-            tc = choice.message.tool_calls[0]
-            assert_tool_call_fields(tc)
-            assert tc.function.name == 'get_current_weather'
-            parsed = assert_arguments_parseable(tc.function.arguments)
-            assert 'city' in parsed
-            assert isinstance(parsed['city'], str) and len(parsed['city']) > 0
+        tool_calls = choice.message.tool_calls
+        assert choice.finish_reason == 'tool_calls', (
+            f'Expected tool_calls for CN weather prompt; got finish_reason={choice.finish_reason!r}, '
+            f'content={choice.message.content!r}')
+        assert tool_calls is not None and len(tool_calls) >= 1, (
+            f'Expected ≥1 tool call; got tool_calls={tool_calls!r}')
+        tc = tool_calls[0]
+        assert_tool_call_fields(tc)
+        assert tc.function.name == 'get_current_weather'
+        parsed = assert_arguments_parseable(tc.function.arguments)
+        assert 'city' in parsed
+        assert isinstance(parsed['city'], str) and len(parsed['city']) > 0
 
     def test_chinese_description_streaming(self, backend, model_case):
         client, model_name = self._get_client()
@@ -331,11 +356,13 @@ class TestToolCallMultilingual(_ToolCallTestBase):
         )
 
         r = collect_stream_tool_call(stream)
-        if r['function_name'] is not None:
-            assert r['function_name'] == 'get_current_weather'
-            parsed = json.loads(r['args_str'])
-            assert isinstance(parsed, dict)
-            assert 'city' in parsed
+        assert r['finish_reason'] == 'tool_calls', (
+            f'Expected streaming finish_reason tool_calls; got {r["finish_reason"]!r}')
+        assert r['function_name'] is not None, 'Expected streamed function name for CN weather tool call'
+        assert r['function_name'] == 'get_current_weather'
+        parsed = assert_arguments_parseable(r['args_str'])
+        assert 'city' in parsed
+        assert isinstance(parsed['city'], str) and len(parsed['city']) > 0
 
     def test_mixed_language_tools(self, backend, model_case):
         """Pass Chinese + English tool definitions together."""
@@ -352,10 +379,18 @@ class TestToolCallMultilingual(_ToolCallTestBase):
 
         choice = response.choices[0]
         assert choice.message.role == 'assistant'
-        if choice.message.tool_calls and len(choice.message.tool_calls) > 0:
-            for tc in choice.message.tool_calls:
-                assert_tool_call_fields(tc)
-                assert_arguments_parseable(tc.function.arguments)
+        tool_calls = choice.message.tool_calls
+        assert choice.finish_reason == 'tool_calls', (
+            f'Expected tool_calls for CN weather with mixed tool defs; '
+            f'got finish_reason={choice.finish_reason!r}, content={choice.message.content!r}')
+        assert tool_calls is not None and len(tool_calls) >= 1, (
+            f'Expected ≥1 tool call; got tool_calls={tool_calls!r}')
+        names = {tc.function.name for tc in tool_calls}
+        assert 'get_current_weather' in names, (
+            f'Expected get_current_weather for Beijing weather question; got {names}')
+        for tc in tool_calls:
+            assert_tool_call_fields(tc)
+            assert_arguments_parseable(tc.function.arguments)
 
     def test_unicode_arguments(self, backend, model_case):
         """Chinese query → tool arguments with Unicode chars."""
@@ -382,10 +417,18 @@ class TestToolCallMultilingual(_ToolCallTestBase):
         )
 
         choice = response.choices[0]
-        if choice.message.tool_calls and len(choice.message.tool_calls) > 0:
-            tc = choice.message.tool_calls[0]
-            assert_tool_call_fields(tc)
-            assert_arguments_parseable(tc.function.arguments)
+        tool_calls = choice.message.tool_calls
+        assert choice.finish_reason == 'tool_calls', (
+            f'Expected tool_calls for CN search prompt; got finish_reason={choice.finish_reason!r}, '
+            f'content={choice.message.content!r}')
+        assert tool_calls is not None and len(tool_calls) >= 1, (
+            f'Expected ≥1 tool call; got tool_calls={tool_calls!r}')
+        tc = tool_calls[0]
+        assert_tool_call_fields(tc)
+        assert tc.function.name == 'web_search'
+        parsed = assert_arguments_parseable(tc.function.arguments)
+        assert 'query' in parsed
+        assert isinstance(parsed['query'], str) and len(parsed['query']) > 0
 
 
 # ===========================================================================
@@ -535,9 +578,14 @@ class TestToolCallResponseValidation(_ToolCallTestBase):
         assert response.usage.total_tokens > 0
 
         choice = response.choices[0]
-        if choice.message.tool_calls and len(choice.message.tool_calls) > 0:
-            assert response.usage.completion_tokens > 0
-            assert response.usage.total_tokens == (response.usage.prompt_tokens + response.usage.completion_tokens)
+        tool_calls = choice.message.tool_calls
+        assert choice.finish_reason == 'tool_calls', (
+            f'Expected tool_calls for weather prompt when checking usage; '
+            f'got finish_reason={choice.finish_reason!r}, content={choice.message.content!r}')
+        assert tool_calls is not None and len(tool_calls) >= 1, (
+            f'Expected ≥1 tool call; got tool_calls={tool_calls!r}')
+        assert response.usage.completion_tokens > 0
+        assert response.usage.total_tokens == (response.usage.prompt_tokens + response.usage.completion_tokens)
 
     def test_model_and_metadata_fields(self, backend, model_case):
         """Response must contain model, id, and created."""
@@ -621,10 +669,15 @@ class TestToolCallEdgeCases(_ToolCallTestBase):
 
         choice = response.choices[0]
         assert choice.message.role == 'assistant'
-        if choice.message.tool_calls and len(choice.message.tool_calls) > 0:
-            tc = choice.message.tool_calls[0]
-            assert_tool_call_fields(tc)
-            assert_arguments_parseable(tc.function.arguments)
+        tool_calls = choice.message.tool_calls
+        assert choice.finish_reason == 'tool_calls', (
+            f'Expected tool_calls for weather prompt; got finish_reason={choice.finish_reason!r}, '
+            f'content={choice.message.content!r}')
+        assert tool_calls is not None and len(tool_calls) >= 1, (
+            f'Expected ≥1 tool call; got tool_calls={tool_calls!r}')
+        tc = tool_calls[0]
+        assert_tool_call_fields(tc)
+        assert_arguments_parseable(tc.function.arguments)
 
     def test_tool_call_id_format(self, backend, model_case):
         """ID should be a non-empty string with no leading/trailing spaces."""
@@ -640,11 +693,16 @@ class TestToolCallEdgeCases(_ToolCallTestBase):
         )
 
         choice = response.choices[0]
-        if choice.message.tool_calls and len(choice.message.tool_calls) > 0:
-            tc = choice.message.tool_calls[0]
-            assert isinstance(tc.id, str)
-            assert len(tc.id) >= 1
-            assert tc.id.strip() == tc.id
+        tool_calls = choice.message.tool_calls
+        assert choice.finish_reason == 'tool_calls', (
+            f'Expected tool_calls for weather prompt; got finish_reason={choice.finish_reason!r}, '
+            f'content={choice.message.content!r}')
+        assert tool_calls is not None and len(tool_calls) >= 1, (
+            f'Expected ≥1 tool call; got tool_calls={tool_calls!r}')
+        tc = tool_calls[0]
+        assert isinstance(tc.id, str)
+        assert len(tc.id) >= 1
+        assert tc.id.strip() == tc.id
 
     def test_multi_turn_conversation(self, backend, model_case):
         """Tool call → result → follow-up question → possible second call."""
@@ -706,10 +764,15 @@ class TestToolCallEdgeCases(_ToolCallTestBase):
 
         choice = response.choices[0]
         assert choice.message.role == 'assistant'
-        if choice.message.tool_calls and len(choice.message.tool_calls) > 0:
-            tc = choice.message.tool_calls[0]
-            assert_tool_call_fields(tc)
-            parsed = assert_arguments_parseable(tc.function.arguments)
-            if 'query' in parsed:
-                assert isinstance(parsed['query'], str)
-                assert len(parsed['query']) > 0
+        tool_calls = choice.message.tool_calls
+        assert choice.finish_reason == 'tool_calls', (
+            f'Expected tool_calls for search prompt with special chars; '
+            f'got finish_reason={choice.finish_reason!r}, content={choice.message.content!r}')
+        assert tool_calls is not None and len(tool_calls) >= 1, (
+            f'Expected ≥1 tool call; got tool_calls={tool_calls!r}')
+        tc = tool_calls[0]
+        assert_tool_call_fields(tc)
+        assert tc.function.name == 'web_search'
+        parsed = assert_arguments_parseable(tc.function.arguments)
+        assert 'query' in parsed
+        assert isinstance(parsed['query'], str) and len(parsed['query']) > 0

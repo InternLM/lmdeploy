@@ -1,6 +1,7 @@
 import json
 
 import pytest
+from openai import BadRequestError
 from utils.tool_reasoning_definitions import (
     CALCULATOR_TOOL,
     SEARCH_TOOL,
@@ -31,6 +32,10 @@ from .conftest import (
     _ReasoningTestBase,
 )
 
+_EXTRA_BODY_THINKING_OFF = {
+    'chat_template_kwargs': {'enable_thinking': False},
+}
+
 # ===========================================================================
 # Basic reasoning: presence, quality, separation
 # ===========================================================================
@@ -42,7 +47,7 @@ class TestReasoningBasic(_ReasoningTestBase):
 
     def test_reasoning_content_present(self, backend, model_case, stream):
         """Model should populate reasoning_content for math questions."""
-        r = self._call_api(stream, MESSAGES_REASONING_BASIC)
+        r = self._call_api(stream, MESSAGES_REASONING_BASIC, max_completion_tokens=4096)
         assert r['finish_reason'] in ('stop', 'length')
         assert len(r['reasoning']) > 10, (f'reasoning too short ({len(r["reasoning"])} chars)')
         assert any(kw in r['reasoning'] for kw in ('37', '43', '1591', 'multiply', '*', '×'))
@@ -79,9 +84,9 @@ class TestReasoningStreamConsistency(_ReasoningTestBase):
         common_kwargs = dict(model=model_name,
                              messages=MESSAGES_REASONING_BASIC,
                              temperature=0,
-                             max_completion_tokens=1024,
+                             max_completion_tokens=4096,
                              logprobs=False,
-                             extra_body={'enable_thinking': True})
+                             extra_body={'chat_template_kwargs': {'enable_thinking': True}})
         ns_resp = client.chat.completions.create(**common_kwargs)
         ns_reasoning = get_reasoning_content(ns_resp.choices[0].message)
         ns_content = ns_resp.choices[0].message.content or ''
@@ -130,14 +135,14 @@ class TestReasoningWithTools(_ReasoningTestBase):
         """tool_choice='required': must produce tool call."""
         try:
             r = self._call_api(stream, MESSAGES_REASONING_WEATHER_TOOL, tools=[WEATHER_TOOL], tool_choice='required')
-            assert len(r['tool_calls']) >= 1
-            assert r['finish_reason'] == 'tool_calls'
-            tc = r['tool_calls'][0]
-            assert tc['name'] == 'get_current_weather'
-            parsed = json.loads(tc['args_str'])
-            assert 'city' in parsed
-        except Exception as e:
-            pytest.skip(f'tool_choice="required" not supported: {e}')
+        except BadRequestError as e:
+            pytest.skip(f'tool_choice="required" rejected by server (HTTP 400): {e}')
+        assert len(r['tool_calls']) >= 1
+        assert r['finish_reason'] == 'tool_calls'
+        tc = r['tool_calls'][0]
+        assert tc['name'] == 'get_current_weather'
+        parsed = json.loads(tc['args_str'])
+        assert 'city' in parsed
 
     def test_tool_choice_none(self, backend, model_case, stream):
         """tool_choice='none': no tool calls, text answer instead."""
@@ -179,13 +184,20 @@ class TestReasoningParallelToolCalls(_ReasoningTestBase):
     """Reasoning model calling multiple tools in parallel."""
 
     def test_parallel_tools(self, backend, model_case, stream):
+        """User asks for Dallas weather and 37*43: expect both tools in one
+        assistant turn."""
         r = self._call_api(stream, MESSAGES_REASONING_PARALLEL_TOOLS, tools=[WEATHER_TOOL, CALCULATOR_TOOL])
-        assert len(r['tool_calls']) >= 1
         assert r['finish_reason'] == 'tool_calls'
-        ids = [tc['id'] for tc in r['tool_calls'] if tc.get('id')]
+        tcs = r['tool_calls']
+        assert len(tcs) >= 2, (f'Expected >=2 parallel tool calls, got {len(tcs)}: '
+                               f'{[tc.get("name") for tc in tcs]}')
+        names = {tc['name'] for tc in tcs}
+        assert 'get_current_weather' in names and 'calculate' in names, (
+            f'Expected both get_current_weather and calculate, got {names}')
+        ids = [tc['id'] for tc in tcs if tc.get('id')]
         if len(ids) >= 2:
             assert len(set(ids)) == len(ids), f'IDs must be unique: {ids}'
-        for tc in r['tool_calls']:
+        for tc in tcs:
             assert tc['name'] in ('get_current_weather', 'calculate')
             parsed = json.loads(tc['args_str'])
             assert isinstance(parsed, dict)
@@ -229,10 +241,10 @@ class TestReasoningToolCallConsistency(_ReasoningTestBase):
         common_kwargs = dict(model=model_name,
                              messages=MESSAGES_REASONING_WEATHER_TOOL,
                              temperature=0,
-                             max_completion_tokens=1024,
+                             max_completion_tokens=4096,
                              tools=[WEATHER_TOOL, SEARCH_TOOL],
                              logprobs=False,
-                             extra_body={'enable_thinking': True})
+                             extra_body={'chat_template_kwargs': {'enable_thinking': True}})
 
         ns_resp = client.chat.completions.create(**common_kwargs)
         ns_choice = ns_resp.choices[0]
@@ -263,9 +275,9 @@ class TestReasoningToolCallConsistency(_ReasoningTestBase):
         stream = client.chat.completions.create(model=model_name,
                                                 messages=MESSAGES_REASONING_BASIC,
                                                 temperature=0,
-                                                max_completion_tokens=1024,
+                                                max_completion_tokens=4096,
                                                 logprobs=False,
-                                                extra_body={'enable_thinking': True},
+                                                extra_body={'chat_template_kwargs': {'enable_thinking': True}},
                                                 stream=True)
         result = collect_stream_reasoning(stream)
         assert result['role'] == 'assistant'
@@ -276,7 +288,7 @@ class TestReasoningToolCallConsistency(_ReasoningTestBase):
         stream = client.chat.completions.create(model=model_name,
                                                 messages=MESSAGES_REASONING_WEATHER_TOOL,
                                                 temperature=0,
-                                                max_completion_tokens=1024,
+                                                max_completion_tokens=4096,
                                                 tools=[WEATHER_TOOL],
                                                 tool_choice={
                                                     'type': 'function',
@@ -285,7 +297,7 @@ class TestReasoningToolCallConsistency(_ReasoningTestBase):
                                                     }
                                                 },
                                                 logprobs=False,
-                                                extra_body={'enable_thinking': True},
+                                                extra_body={'chat_template_kwargs': {'enable_thinking': True}},
                                                 stream=True)
         name_events = []
         for chunk in stream:
@@ -319,7 +331,7 @@ class TestReasoningToolResultConsistency(_ReasoningTestBase):
                              max_completion_tokens=256,
                              tools=[WEATHER_TOOL, SEARCH_TOOL],
                              logprobs=False,
-                             extra_body={'enable_thinking': True})
+                             extra_body={'chat_template_kwargs': {'enable_thinking': True}})
 
         ns_resp = client.chat.completions.create(**common_kwargs)
         ns_choice = ns_resp.choices[0]
@@ -350,7 +362,7 @@ class TestReasoningToolResultConsistency(_ReasoningTestBase):
                                                   max_completion_tokens=256,
                                                   tools=[WEATHER_TOOL],
                                                   logprobs=False,
-                                                  extra_body={'enable_thinking': True})
+                                                  extra_body={'chat_template_kwargs': {'enable_thinking': True}})
         content = response.choices[0].message.content or ''
         assert THINK_START_TOKEN not in content
         assert THINK_END_TOKEN not in content
@@ -364,7 +376,7 @@ class TestReasoningToolResultConsistency(_ReasoningTestBase):
                              max_completion_tokens=512,
                              tools=[WEATHER_TOOL],
                              logprobs=False,
-                             extra_body={'enable_thinking': True})
+                             extra_body={'chat_template_kwargs': {'enable_thinking': True}})
 
         ns_resp = client.chat.completions.create(**common_kwargs)
         ns_choice = ns_resp.choices[0]
@@ -449,9 +461,9 @@ class TestReasoningTokenAccounting(_ReasoningTestBase):
         response = client.chat.completions.create(model=model_name,
                                                   messages=MESSAGES_REASONING_BASIC,
                                                   temperature=0,
-                                                  max_completion_tokens=1024,
+                                                  max_completion_tokens=4096,
                                                   logprobs=False,
-                                                  extra_body={'enable_thinking': True})
+                                                  extra_body={'chat_template_kwargs': {'enable_thinking': True}})
         assert response.usage is not None
         assert response.usage.prompt_tokens > 0
         assert response.usage.completion_tokens > 0
@@ -465,7 +477,7 @@ class TestReasoningTokenAccounting(_ReasoningTestBase):
                                                   temperature=0,
                                                   max_completion_tokens=2048,
                                                   logprobs=False,
-                                                  extra_body={'enable_thinking': True})
+                                                  extra_body={'chat_template_kwargs': {'enable_thinking': True}})
         rt = get_reasoning_tokens(response)
         if rt is not None:
             assert rt >= 0
@@ -478,9 +490,9 @@ class TestReasoningTokenAccounting(_ReasoningTestBase):
         stream = client.chat.completions.create(model=model_name,
                                                 messages=MESSAGES_REASONING_BASIC,
                                                 temperature=0,
-                                                max_completion_tokens=1024,
+                                                max_completion_tokens=4096,
                                                 logprobs=False,
-                                                extra_body={'enable_thinking': True},
+                                                extra_body={'chat_template_kwargs': {'enable_thinking': True}},
                                                 stream=True,
                                                 stream_options={'include_usage': True})
         usage = None
@@ -500,7 +512,7 @@ class TestReasoningTokenAccounting(_ReasoningTestBase):
                                                 temperature=0,
                                                 max_completion_tokens=2048,
                                                 logprobs=False,
-                                                extra_body={'enable_thinking': True},
+                                                extra_body={'chat_template_kwargs': {'enable_thinking': True}},
                                                 stream=True,
                                                 stream_options={'include_usage': True})
         usage = None
@@ -590,9 +602,9 @@ class TestReasoningResponseValidation(_ReasoningTestBase):
         response = client.chat.completions.create(model=model_name,
                                                   messages=MESSAGES_REASONING_BASIC,
                                                   temperature=0,
-                                                  max_completion_tokens=1024,
+                                                  max_completion_tokens=4096,
                                                   logprobs=False,
-                                                  extra_body={'enable_thinking': True})
+                                                  extra_body={'chat_template_kwargs': {'enable_thinking': True}})
         assert response.model is not None and len(response.model) > 0
         assert response.id is not None and len(str(response.id)) > 0
         assert response.created is not None and response.created > 0
@@ -612,9 +624,9 @@ class TestReasoningResponseValidation(_ReasoningTestBase):
         stream = client.chat.completions.create(model=model_name,
                                                 messages=MESSAGES_REASONING_BASIC,
                                                 temperature=0,
-                                                max_completion_tokens=1024,
+                                                max_completion_tokens=4096,
                                                 logprobs=False,
-                                                extra_body={'enable_thinking': True},
+                                                extra_body={'chat_template_kwargs': {'enable_thinking': True}},
                                                 stream=True)
         first_chunk = None
         chunk_count = 0
@@ -667,7 +679,6 @@ class TestReasoningEdgeCases(_ReasoningTestBase):
 
     def test_empty_tools(self, backend, model_case, stream):
         """Empty tools list: no tool calls, pure reasoning + text."""
-        from openai import BadRequestError
         try:
             r = self._call_api(stream, MESSAGES_REASONING_BASIC, tools=[])
         except BadRequestError:
@@ -714,7 +725,7 @@ class TestReasoningDisableThinking(_ReasoningTestBase):
 
     def test_no_reasoning_content(self, backend, model_case, stream):
         """enable_thinking=False: reasoning_content should be absent."""
-        r = self._call_api(stream, MESSAGES_REASONING_BASIC, extra_body={'enable_thinking': False})
+        r = self._call_api(stream, MESSAGES_REASONING_BASIC, extra_body=_EXTRA_BODY_THINKING_OFF)
         assert r['finish_reason'] in ('stop', 'length')
         assert len(r['content'].strip()) > 0
         assert THINK_START_TOKEN not in r['content']
@@ -730,7 +741,7 @@ class TestReasoningDisableThinking(_ReasoningTestBase):
         r = self._call_api(stream,
                            MESSAGES_REASONING_WEATHER_TOOL,
                            tools=[WEATHER_TOOL],
-                           extra_body={'enable_thinking': False})
+                           extra_body=_EXTRA_BODY_THINKING_OFF)
         if len(r['tool_calls']) > 0:
             assert r['finish_reason'] == 'tool_calls'
             tc = r['tool_calls'][0]
@@ -743,7 +754,7 @@ class TestReasoningDisableThinking(_ReasoningTestBase):
     def test_content_quality(self, backend, model_case, stream):
         """enable_thinking=False: content should still contain correct
         answer."""
-        r = self._call_api(stream, MESSAGES_REASONING_BASIC, extra_body={'enable_thinking': False})
+        r = self._call_api(stream, MESSAGES_REASONING_BASIC, extra_body=_EXTRA_BODY_THINKING_OFF)
         assert len(r['content'].strip()) > 0
         assert '1591' in r['content'] or '1,591' in r['content'], \
             f"Expected '1591' or '1,591' in response, got: {r['content']!r}"

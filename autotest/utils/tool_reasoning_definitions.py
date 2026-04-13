@@ -9,42 +9,9 @@ BASE_HTTP_URL = f"http://{os.getenv('MASTER_ADDR', 'localhost')}"
 PORT = os.getenv('LMDEPLOY_PORT', str(DEFAULT_PORT))
 BASE_URL = f'{BASE_HTTP_URL}:{PORT}'
 
-#: Supported reasoning parser names (from lmdeploy ReasoningParserManager)
-REASONING_PARSER_NAMES = ['deepseek-r1', 'qwen-qwq', 'intern-s1']
-
 #: Think-tag delimiters used by DeepSeek-R1 and QwenQwQ parsers
 THINK_START_TOKEN = '<think>'
 THINK_END_TOKEN = '</think>'
-
-#: Supported tool parser names (from lmdeploy ToolParserManager)
-TOOL_PARSER_NAMES = ['qwen', 'qwen3', 'qwen2d5', 'internlm', 'intern-s1', 'llama3']
-
-#: Tool-call tag delimiters — Qwen family (qwen, qwen3, qwen2d5)
-TOOL_CALL_START_TOKEN = '<tool_call>'
-TOOL_CALL_END_TOKEN = '</tool_call>'
-
-#: Tool-call tag delimiters — InternLM family
-INTERNLM_ACTION_START = '<|action_start|><|plugin|>'
-INTERNLM_ACTION_END = '<|action_end|>'
-
-#: Llama 3 bot token
-LLAMA3_BOT_TOKEN = '<|python_tag|>'
-
-#: Mapping: --tool-call-parser / --reasoning-parser value -> pytest -m expression
-TOOL_PARSER_MARK_MAP = {
-    'qwen': 'qwen3_parser',
-    'qwen3': 'qwen3_parser',
-    'qwen2d5': 'qwen2d5_parser',
-    'internlm': 'internlm2_parser',
-    'intern-s1': 'internlm2_parser',
-    'llama3': 'llama3_parser',
-}
-
-REASONING_PARSER_MARK_MAP = {
-    'deepseek-r1': 'deepseek_r1_parser',
-    'qwen-qwq': 'qwenqwq_parser',
-    'intern-s1': 'qwenqwq_parser',
-}
 
 # -- Basic tools (English) --------------------------------------------------
 
@@ -408,19 +375,6 @@ def collect_stream_parallel_tool_calls(stream):
                         tool_calls_data[idx]['args_str'] += (stc.function.arguments)
 
     return tool_calls_data, finish_reason_count
-
-
-def collect_stream_content(stream):
-    """Consume a streaming response and return (chunks, finish_reason)."""
-    chunks = []
-    finish_reason = None
-    for chunk in stream:
-        delta = chunk.choices[0].delta
-        if delta.content:
-            chunks.append(delta.content)
-        if chunk.choices[0].finish_reason is not None:
-            finish_reason = chunk.choices[0].finish_reason
-    return chunks, finish_reason
 
 
 def collect_stream_reasoning(stream):

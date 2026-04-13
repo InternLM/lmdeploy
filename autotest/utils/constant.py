@@ -67,14 +67,20 @@ RESTFUL_MODEL_LIST = RESTFUL_MODEL_LIST_LEGACY if _IS_LEGACY else RESTFUL_MODEL_
 
 TOOL_REASONING_MODEL_LIST_LATEST = [
     'Qwen/Qwen3-8B-FP8',
+    'Qwen/Qwen3.5-35B-A3B',
+    'Qwen/Qwen3.5-35B-A3B-FP8',
+    'Qwen/Qwen3.5-122B-A10B',
     'meta-llama/Meta-Llama-3.1-70B-Instruct',
-    'deepseek-ai/DeepSeek-R1-Distill-Llama-8B',
     'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B',
+    'deepseek-ai/DeepSeek-V3',
+    'unsloth/gpt-oss-20b-BF16',
     'Qwen/Qwen2.5-7B-Instruct',
+    'internlm/Intern-S1-Pro-FP8',
 ]
 
 TOOL_REASONING_MODEL_LIST_LEGACY = [
-    'internlm/Intern-S1-Pro-FP8',
+    'moonshotai/Kimi-K2-Instruct-0905',
+    'internlm/internlm2_5-7b-chat',
 ]
 
 TOOL_REASONING_MODEL_LIST = TOOL_REASONING_MODEL_LIST_LEGACY if _IS_LEGACY else TOOL_REASONING_MODEL_LIST_LATEST

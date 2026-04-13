@@ -1,6 +1,7 @@
 import json
 
 import pytest
+from openai import BadRequestError
 from utils.tool_reasoning_definitions import (
     SEARCH_TOOL,
     WEATHER_TOOL,
@@ -214,9 +215,8 @@ class TestToolCallChoice(_ToolCallTestBase):
                 tool_choice='required',
                 logprobs=False,
             )
-        except Exception as e:
-            # Only skip if the server itself rejects the request
-            pytest.skip(f'tool_choice="required" not supported by server: {e}')
+        except BadRequestError as e:
+            pytest.skip(f'tool_choice="required" rejected by server (HTTP 400): {e}')
 
         # Validation MUST fail loudly — never skip on assertion errors
         choice = response.choices[0]
@@ -245,9 +245,9 @@ class TestToolCallChoice(_ToolCallTestBase):
                 logprobs=False,
                 stream=True,
             )
-            r = collect_stream_tool_call(stream)
-        except Exception as e:
-            pytest.skip(f'tool_choice="required" streaming not supported by server: {e}')
+        except BadRequestError as e:
+            pytest.skip(f'tool_choice="required" streaming rejected by server (HTTP 400): {e}')
+        r = collect_stream_tool_call(stream)
 
         # Validation MUST fail loudly
         assert r['function_name'] is not None, ('tool_choice="required" streaming but no function name received')
@@ -352,12 +352,19 @@ class TestToolCallArgumentsParsing(_ToolCallTestBase):
         )
 
         choice = response.choices[0]
-        if choice.message.tool_calls and len(choice.message.tool_calls) > 0:
-            tc = choice.message.tool_calls[0]
-            assert tc.function.name == 'web_search'
-            parsed = json.loads(tc.function.arguments)
-            assert 'query' in parsed
-            assert isinstance(parsed['query'], str) and len(parsed['query']) > 0
+        tool_calls = choice.message.tool_calls
+        assert choice.finish_reason == 'tool_calls', (
+            f'Expected finish_reason tool_calls for search prompt with web_search only; '
+            f'got finish_reason={choice.finish_reason!r}, content={choice.message.content!r}')
+        assert tool_calls is not None and len(tool_calls) >= 1, (
+            f'Expected ≥1 tool call; got tool_calls={tool_calls!r}, '
+            f'finish_reason={choice.finish_reason!r}, content={choice.message.content!r}')
+        tc = tool_calls[0]
+        assert_tool_call_fields(tc)
+        assert tc.function.name == 'web_search'
+        parsed = json.loads(tc.function.arguments)
+        assert 'query' in parsed
+        assert isinstance(parsed['query'], str) and len(parsed['query']) > 0
 
     def test_enum_parameter_constraint(self, backend, model_case):
         """Enum-constrained params should only return valid values."""

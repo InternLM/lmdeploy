@@ -1,7 +1,4 @@
 import json
-import sys
-from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 from utils.constant import BACKEND_LIST, TOOL_REASONING_MODEL_LIST
@@ -11,195 +8,6 @@ from utils.tool_reasoning_definitions import (  # isort: skip
     setup_log_file)
 
 # ---------------------------------------------------------------------------
-# sys.path manipulation (needed for lmdeploy imports in parser unit tests)
-# ---------------------------------------------------------------------------
-
-_LMDEPLOY_ROOT = str(Path(__file__).resolve().parents[4] / 'lmdeploy')
-_PROJECT_ROOT = str(Path(__file__).resolve().parents[4])
-for _p in (_PROJECT_ROOT, _LMDEPLOY_ROOT):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-
-# ---------------------------------------------------------------------------
-# Lazy imports – only used by parser unit-test classes
-# ---------------------------------------------------------------------------
-
-_deepseek_parser_cls = None
-_qwen_parser_cls = None
-_parser_manager = None
-
-
-def _get_deepseek_parser_cls():
-    global _deepseek_parser_cls
-    if _deepseek_parser_cls is None:
-        from lmdeploy.serve.openai.reasoning_parser import DeepSeekR1ReasoningParser
-        _deepseek_parser_cls = DeepSeekR1ReasoningParser
-    return _deepseek_parser_cls
-
-
-def _get_qwen_parser_cls():
-    global _qwen_parser_cls
-    if _qwen_parser_cls is None:
-        from lmdeploy.serve.openai.reasoning_parser import QwenQwQReasoningParser
-        _qwen_parser_cls = QwenQwQReasoningParser
-    return _qwen_parser_cls
-
-
-def _get_parser_manager():
-    global _parser_manager
-    if _parser_manager is None:
-        from lmdeploy.serve.openai.reasoning_parser import ReasoningParserManager
-        _parser_manager = ReasoningParserManager
-    return _parser_manager
-
-
-# ---------------------------------------------------------------------------
-# Mock helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_mock_tokenizer(vocab=None):
-    """Create a mock tokenizer with a configurable vocab dict."""
-    tok = MagicMock()
-    default_vocab = {
-        '<think>': 100,
-        '</think>': 101,
-    }
-    tok.get_vocab.return_value = vocab or default_vocab
-    return tok
-
-
-def _make_mock_request():
-    """Create a mock ChatCompletionRequest."""
-    req = MagicMock()
-    req.model = 'test-model'
-    return req
-
-
-# ---------------------------------------------------------------------------
-# Tokenization / streaming helpers
-# ---------------------------------------------------------------------------
-
-
-def _simple_tokenize(text, vocab):
-    """Tokenise *text* into a list of integer token IDs.
-
-    Known special tokens are mapped via *vocab*; every other character gets a deterministic ID > 200 so it never
-    collides with specials.
-    """
-    ids = []
-    i = 0
-    sorted_tokens = sorted(vocab.keys(), key=len, reverse=True)
-    while i < len(text):
-        matched = False
-        for tok_str in sorted_tokens:
-            if text[i:i + len(tok_str)] == tok_str:
-                ids.append(vocab[tok_str])
-                i += len(tok_str)
-                matched = True
-                break
-        if not matched:
-            ids.append(200 + ord(text[i]))
-            i += 1
-    return ids
-
-
-def _run_streaming_extraction(parser, deltas, vocab):
-    """Simulate streaming through *parser* with a list of text *deltas*.
-
-    Returns ``(reasoning_content, content)`` aggregated from all deltas.
-    """
-    reasoning_parts = []
-    content_parts = []
-    previous_text = ''
-    previous_token_ids = []
-
-    for d in deltas:
-        current_text = previous_text + d
-        current_token_ids = _simple_tokenize(current_text, vocab)
-        delta_token_ids = _simple_tokenize(d, vocab)
-
-        result = parser.extract_reasoning_content_streaming(
-            previous_text=previous_text,
-            current_text=current_text,
-            delta_text=d,
-            previous_token_ids=previous_token_ids,
-            current_token_ids=current_token_ids,
-            delta_token_ids=delta_token_ids,
-        )
-
-        if result is not None:
-            rc = getattr(result, 'reasoning_content', None)
-            ct = getattr(result, 'content', None)
-            if rc:
-                reasoning_parts.append(rc)
-            if ct:
-                content_parts.append(ct)
-
-        previous_text = current_text
-        previous_token_ids = current_token_ids
-
-    reasoning = ''.join(reasoning_parts) if reasoning_parts else None
-    content = ''.join(content_parts) if content_parts else None
-    return reasoning, content
-
-
-def _output_to_deltas(output, vocab):
-    """Split *output* into deltas at special-token boundaries.
-
-    Special tokens (keys of *vocab*) become individual deltas; all other text between them is collected into a single
-    delta.  Empty outputs produce an empty list.
-    """
-    deltas = []
-    i = 0
-    sorted_tokens = sorted(vocab.keys(), key=len, reverse=True)
-    current_chunk = ''
-    while i < len(output):
-        matched = False
-        for tok_str in sorted_tokens:
-            if output[i:i + len(tok_str)] == tok_str:
-                if current_chunk:
-                    deltas.append(current_chunk)
-                    current_chunk = ''
-                deltas.append(tok_str)
-                i += len(tok_str)
-                matched = True
-                break
-        if not matched:
-            current_chunk += output[i]
-            i += 1
-    if current_chunk:
-        deltas.append(current_chunk)
-    return deltas
-
-
-def _run_extraction(parser, output, streaming, vocab=None):
-    """Run extraction in either streaming or non-streaming mode.
-
-    Returns ``(reasoning, content)`` — the same shape for both modes.
-    """
-    if vocab is None:
-        vocab = _DEFAULT_VOCAB
-    if streaming:
-        deltas = _output_to_deltas(output, vocab)
-        return _run_streaming_extraction(parser, deltas, vocab)
-    else:
-        req = _make_mock_request()
-        return parser.extract_reasoning_content(output, req)
-
-
-# ---------------------------------------------------------------------------
-# Shared constants for parser unit tests
-# ---------------------------------------------------------------------------
-
-_DEFAULT_VOCAB = {'<think>': 100, '</think>': 101}
-
-_BOTH_PARSERS = pytest.mark.parametrize('parser_factory', [
-    pytest.param(_get_deepseek_parser_cls, id='deepseek'),
-    pytest.param(_get_qwen_parser_cls, id='qwen'),
-])
-
-# ---------------------------------------------------------------------------
 # Marks
 # ---------------------------------------------------------------------------
 
@@ -207,6 +15,8 @@ _CLASS_MARKS = [
     pytest.mark.order(9),
     pytest.mark.reasoning,
     pytest.mark.deepseek_r1_parser,
+    pytest.mark.deepseek_v3_parser,
+    pytest.mark.gpt_oss_parser,
     pytest.mark.qwenqwq_parser,
     pytest.mark.flaky(reruns=2),
     pytest.mark.parametrize('backend', BACKEND_LIST),
@@ -215,12 +25,6 @@ _CLASS_MARKS = [
 
 _CLASS_MARKS_STREAM = _CLASS_MARKS + [
     pytest.mark.parametrize('stream', [False, True], ids=['nonstream', 'stream']),
-]
-
-_PARSER_MARKS = [
-    pytest.mark.order(9),
-    pytest.mark.reasoning,
-    pytest.mark.reasoning_parser,
 ]
 
 
@@ -234,13 +38,6 @@ def _apply_marks(cls):
 def _apply_marks_stream(cls):
     """Apply API-level marks WITH stream parametrize to *cls*."""
     for m in _CLASS_MARKS_STREAM:
-        cls = m(cls)
-    return cls
-
-
-def _apply_parser_marks(cls):
-    """Apply lightweight marks to parser unit-test classes (no parametrize)."""
-    for m in _PARSER_MARKS:
         cls = m(cls)
     return cls
 
@@ -290,8 +87,14 @@ class _ReasoningTestBase:
         create_kwargs.setdefault('temperature', 0)
         create_kwargs.setdefault('max_completion_tokens', 1024)
         create_kwargs.setdefault('logprobs', False)
-        extra_body = create_kwargs.pop('extra_body', {})
-        extra_body.setdefault('enable_thinking', True)
+        extra_body = dict(create_kwargs.pop('extra_body', {}) or {})
+        legacy_et = extra_body.pop('enable_thinking', None)
+        ctk = dict(extra_body.pop('chat_template_kwargs', None) or {})
+        if legacy_et is not None and 'enable_thinking' not in ctk:
+            ctk['enable_thinking'] = legacy_et
+        if 'enable_thinking' not in ctk:
+            ctk['enable_thinking'] = True
+        extra_body['chat_template_kwargs'] = ctk
         create_kwargs['extra_body'] = extra_body
 
         if stream:
