@@ -561,10 +561,14 @@ __global__ void chunked_gated_delta_rule_kernel(T*         v_out,
                                                 const T*   g_in,
                                                 S* const*  state_ptrs,
                                                 const int* q_offsets,
+                                                const int* k_offsets,
                                                 int        num_v_heads,
                                                 int        num_k_heads,
                                                 int        k_dim_total,
-                                                int        state_layer_offset)
+                                                int        state_layer_offset,
+                                                S* const*  capture_state_ptrs,
+                                                int        capture_stride,
+                                                int        checkpoint_interval_tokens)
 {
     constexpr int C = kChunkSize;
     constexpr int D = kHeadDim;
@@ -588,13 +592,14 @@ __global__ void chunked_gated_delta_rule_kernel(T*         v_out,
     const float scale = rsqrtf((float)D);
 
     // ── State tiling (same as v2) ──
-    constexpr int tile_k    = 8;
-    constexpr int tile_v    = 8;
-    constexpr int k_tiles   = D / tile_k;                // 16
-    constexpr int k_threads = k_tiles;                   // 16
-    constexpr int v_threads = kBlockDim / k_threads;     // 16
-    constexpr int v_tiles   = D / tile_v;                // 16
-    constexpr int v_iters   = cdiv(v_tiles, v_threads);  // 1
+    constexpr int tile_k        = 8;
+    constexpr int tile_v        = 8;
+    constexpr int k_tiles       = D / tile_k;                // 16
+    constexpr int k_threads     = k_tiles;                   // 16
+    constexpr int v_threads     = kBlockDim / k_threads;     // 16
+    constexpr int v_tiles       = D / tile_v;                // 16
+    constexpr int v_iters       = cdiv(v_tiles, v_threads);  // 1
+    constexpr int kAccessCState = sizeof(uint4) / sizeof(S);
 
     const int offset_k = threadIdx.x % k_threads;
     const int offset_v = threadIdx.x / k_threads;
@@ -671,7 +676,9 @@ __global__ void chunked_gated_delta_rule_kernel(T*         v_out,
     const int     load_tok       = threadIdx.x / kThreadsPerTok;  // which token (0..C-1)
     const int     load_lane      = threadIdx.x % kThreadsPerTok;  // lane within token's warp
 
-    const int num_chunks = (seq_len + C - 1) / C;
+    const int num_chunks   = (seq_len + C - 1) / C;
+    const int history_len  = k_offsets ? ((__ldg(&k_offsets[b + 1]) - __ldg(&k_offsets[b])) - seq_len) : 0;
+    S* const  capture_base = capture_state_ptrs ? capture_state_ptrs[b] : nullptr;
 
     for (int ci = 0; ci < num_chunks; ++ci) {
         const int chunk_start = tok_off + ci * C;
@@ -795,6 +802,28 @@ __global__ void chunked_gated_delta_rule_kernel(T*         v_out,
                 if (offset_k == 0)
                     Store(&v_out[gt * v_dim + h * D + v_base], vec_O);
             }
+
+            if (capture_base && checkpoint_interval_tokens > 0) {
+                const int processed = history_len + ci * C + t + 1;
+                if (processed % checkpoint_interval_tokens == 0) {
+                    const int capture_idx =
+                        processed / checkpoint_interval_tokens - history_len / checkpoint_interval_tokens - 1;
+                    S* capture_ptr = capture_base + capture_idx * capture_stride + state_layer_offset + h * state_size;
+                    PRAGMA_UNROLL
+                    for (int vi = 0; vi < v_iters; ++vi) {
+                        PRAGMA_UNROLL
+                        for (int k = 0; k < tile_k; ++k) {
+                            PRAGMA_UNROLL
+                            for (int c = 0; c < tile_v / kAccessCState; ++c) {
+                                auto tmp = cast<S>((Array<float, kAccessCState>&)vec_S[vi][k][c * kAccessCState]);
+                                Store(capture_ptr + (offset_k * tile_k + k) * D + (offset_v + vi * v_threads) * tile_v
+                                          + c * kAccessCState,
+                                      tmp);
+                            }
+                        }
+                    }
+                }
+            }
         }
         __syncthreads();  // [sync 2] ensure all reads done before next chunk overwrites smem
     }                     // chunk loop
@@ -852,9 +881,46 @@ void invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out_,
                                         int                   num_k_heads,
                                         int                   state_layer_offset,
                                         DataType              state_dtype,
+                                        int                   sm_count,
+                                        int*                  work_counter,
+                                        cudaStream_t          stream)
+{
+    invokeChunkedGatedDeltaRuleBatched(v_out_,
+                                       qkv_in,
+                                       beta,
+                                       g,
+                                       state_ptrs,
+                                       q_offsets,
+                                       Buffer_<int>{},
+                                       batch_size,
+                                       num_k_heads,
+                                       state_layer_offset,
+                                       state_dtype,
+                                       sm_count,
+                                       work_counter,
+                                       stream,
+                                       Buffer_<void*>{},
+                                       0,
+                                       0);
+}
+
+void invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out_,
+                                        const Tensor&         qkv_in,
+                                        const Tensor&         beta,
+                                        const Tensor&         g,
+                                        const Buffer_<void*>& state_ptrs,
+                                        const Buffer_<int>&   q_offsets,
+                                        const Buffer_<int>&   k_offsets,
+                                        int                   batch_size,
+                                        int                   num_k_heads,
+                                        int                   state_layer_offset,
+                                        DataType              state_dtype,
                                         int /*sm_count*/,
                                         int* /*work_counter*/,
-                                        cudaStream_t stream)
+                                        cudaStream_t          stream,
+                                        const Buffer_<void*>& capture_state_ptrs,
+                                        int                   capture_stride,
+                                        int                   checkpoint_interval_tokens)
 {
     auto& v_out = v_out_.get();
 
@@ -895,16 +961,21 @@ void invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out_,
                 cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_sz);
             }
 
-            kernel<<<num_blocks, kBlockDim, smem_sz, stream>>>(v_out.data<T>(),
-                                                               qkv_in.data<T>(),
-                                                               beta.data<T>(),
-                                                               g.data<T>(),
-                                                               (S* const*)state_ptrs.data(),
-                                                               q_offsets.data(),
-                                                               num_v_heads,
-                                                               num_k_heads,
-                                                               k_dim_total,
-                                                               state_layer_offset);
+            kernel<<<num_blocks, kBlockDim, smem_sz, stream>>>(
+                v_out.data<T>(),
+                qkv_in.data<T>(),
+                beta.data<T>(),
+                g.data<T>(),
+                (S* const*)state_ptrs.data(),
+                q_offsets.data(),
+                k_offsets.data_or((const int*)nullptr),
+                num_v_heads,
+                num_k_heads,
+                k_dim_total,
+                state_layer_offset,
+                reinterpret_cast<S* const*>(capture_state_ptrs.data_or((void* const*)nullptr)),
+                capture_stride,
+                checkpoint_interval_tokens);
         };
         if (state_dtype == kFloat32) {
             launch(float{});
@@ -1077,7 +1148,10 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
                                                                             int          num_token_tiles,
                                                                             int          state_layer_offset,
                                                                             int          total_work,
-                                                                            int          num_ch_tiles)
+                                                                            int          num_ch_tiles,
+                                                                            void* const* capture_state_ptrs,
+                                                                            int          capture_stride,
+                                                                            int          checkpoint_interval_tokens)
 {
     static_assert(BLOCK_DIM * CHANNELS_PER_THREAD > 0);
 
@@ -1171,8 +1245,9 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
             n_tokens = min(NUM_TOKENS, seq_len - t_local_start);
         }
 
-        const int ring_start = (history_len + t_local_start + 1) % D_CONV;
-        T*        state_base = (T*)conv_state_ptrs[b] + state_layer_offset;
+        const int ring_start   = (history_len + t_local_start + 1) % D_CONV;
+        T*        state_base   = (T*)conv_state_ptrs[b] + state_layer_offset;
+        T*        capture_base = capture_state_ptrs ? (T*)capture_state_ptrs[b] : nullptr;
 
         if (ch_active) {
             constexpr int                 VALS_SIZE = NUM_TOKENS + D_CONV - 1;
@@ -1214,6 +1289,24 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
                     }
 
                     Store(out + (seq_off + t_local_start + tok) * conv_dim + c_base, out_vals);
+
+                    if (capture_base && checkpoint_interval_tokens > 0) {
+                        const int processed = history_len + t_local_start + tok + 1;
+                        if (processed % checkpoint_interval_tokens == 0) {
+                            const int capture_idx =
+                                processed / checkpoint_interval_tokens - history_len / checkpoint_interval_tokens - 1;
+                            T* capture_ptr = capture_base + capture_idx * capture_stride + state_layer_offset;
+                            PRAGMA_UNROLL
+                            for (int d = 0; d < D_CONV; ++d) {
+                                const int pos    = t_local_start - (D_CONV - 1) + tok + d;
+                                int       ring_d = (history_len + pos + 1) % D_CONV;
+                                if (ring_d < 0) {
+                                    ring_d += D_CONV;
+                                }
+                                Store(capture_ptr + ring_d * conv_dim + c_base, vals[tok + d]);
+                            }
+                        }
+                    }
                 }
             }
 
@@ -1243,6 +1336,39 @@ void invokeFusedConv1dSiLU(Ref<Tensor>           out_,
                            int                   sm_count,
                            int*                  work_counter,
                            cudaStream_t          stream)
+{
+    invokeFusedConv1dSiLU(out_,
+                          in,
+                          weight,
+                          bias,
+                          conv_state_ptrs,
+                          q_offsets,
+                          k_offsets,
+                          batch_size,
+                          state_layer_offset,
+                          sm_count,
+                          work_counter,
+                          stream,
+                          Buffer_<void*>{},
+                          0,
+                          0);
+}
+
+void invokeFusedConv1dSiLU(Ref<Tensor>           out_,
+                           const Tensor&         in,
+                           const Tensor&         weight,
+                           const Tensor&         bias,
+                           const Buffer_<void*>& conv_state_ptrs,
+                           const Buffer_<int>&   q_offsets,
+                           const Buffer_<int>&   k_offsets,
+                           int                   batch_size,
+                           int                   state_layer_offset,
+                           int                   sm_count,
+                           int*                  work_counter,
+                           cudaStream_t          stream,
+                           const Buffer_<void*>& capture_state_ptrs,
+                           int                   capture_stride,
+                           int                   checkpoint_interval_tokens)
 {
     auto& out = out_.get();
 
@@ -1287,7 +1413,10 @@ void invokeFusedConv1dSiLU(Ref<Tensor>           out_,
                                                      num_token_tiles,
                                                      state_layer_offset,
                                                      total_work,
-                                                     num_ch_tiles);
+                                                     num_ch_tiles,
+                                                     capture_state_ptrs.data_or((void* const*)nullptr),
+                                                     capture_stride,
+                                                     checkpoint_interval_tokens);
             };
 
             int avg_seq = total_tokens / batch_size;
