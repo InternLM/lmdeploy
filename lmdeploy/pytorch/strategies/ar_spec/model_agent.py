@@ -223,9 +223,6 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
         step_seqlens = model_inputs.seq_length
         batch_size = step_seqlens.size(0)
 
-        # update extra inputs
-        extra_inputs.output_token_ids = extra_outputs.draft_token_ids
-
         # update inputs
         step_seqlens = model_inputs.seq_length - extra_inputs.num_rejected_tokens
         input_ids = next_token_ids.new_empty((batch_size, self.num_spec_tokens + 1))

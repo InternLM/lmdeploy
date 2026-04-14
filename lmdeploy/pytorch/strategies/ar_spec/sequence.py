@@ -168,6 +168,28 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
 
         self._update_mrope_pos_ids()
 
+    def set_step(self, step: int):
+        """Set step."""
+        num_valid_ids = self.num_valid_ids
+        # update step for vlm
+        if len(self.history_embeddings) > 0:
+            new_step, self._num_history_images, self._num_images = \
+                self.history_embeddings.get_step(step)
+            assert 0 <= new_step <= step
+            step = new_step
+        self._num_history_ids = step
+        self._num_token_ids = num_valid_ids - step
+        self.num_ignored_history = min(step, self.num_ignored_history)
+        # reset for spec ids
+        self._num_spec_ids = 0
+        self._num_new_valid = 0
+        self.model_meta = None
+
+        if self.return_routed_experts:
+            # chunk long context might not have all routed experts
+            if len(self.all_routed_experts) > step:
+                self.all_routed_experts.resize(step)
+
 
 class ARSpecSequenceStrategy(ARSequenceStrategy):
 

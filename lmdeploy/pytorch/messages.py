@@ -721,7 +721,7 @@ class SchedulerSequence:
         if (not self.return_routed_experts) or self.all_routed_experts is None:
             return None
 
-        end = max(0, self.num_all_ids - 1)
+        end = max(0, self.num_valid_ids - 1)
         if 0 < end <= len(self.all_routed_experts):
             return self.all_routed_experts.get_real()[:end]
         else:
