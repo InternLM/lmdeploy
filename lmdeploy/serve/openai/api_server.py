@@ -460,7 +460,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         except Exception as e:
             return create_error_response(HTTPStatus.BAD_REQUEST, str(e))
 
-    random_seed = request.seed if request.seed else None
+    random_seed = request.seed if request.seed is not None else None
     max_new_tokens = (request.max_completion_tokens if request.max_completion_tokens else request.max_tokens)
 
     gen_config = GenerationConfig(
@@ -809,7 +809,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             sessions.append(VariableInterface.get_session(i + 1))
     if isinstance(request.stop, str):
         request.stop = [request.stop]
-    random_seed = request.seed if request.seed else None
+    random_seed = request.seed if request.seed is not None else None
     max_new_tokens = (request.max_completion_tokens if request.max_completion_tokens else request.max_tokens)
 
     gen_config = GenerationConfig(
