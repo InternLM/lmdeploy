@@ -364,7 +364,7 @@ class LlavaVisionModel(LlavaHfVisionModel):
                                 feat = unpad_image(feat, image_sizes[img_idx])
                                 feat = torch.cat((feat, self.model.image_newline[:, None, None].expand(
                                     *feat.shape[:-1], 1).to(feat.device)),
-                                                 dim=-1)
+                                    dim=-1)
                                 feat = feat.flatten(1, 2).transpose(0, 1)
                             else:
                                 feat = feat.permute(0, 2, 1, 3, 4).contiguous()

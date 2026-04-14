@@ -550,7 +550,7 @@ class Glm4MoeForCausalLM(nn.Module, CudaGraphMixin):
         if hasattr(self.config, 'num_nextn_predict_layers'):
             num_hidden_layers = self.config.num_hidden_layers
             num_nextn_predict_layers = self.config.num_nextn_predict_layers
-            mtp_param_list = [f'.layers.{num_hidden_layers+i}' for i in range(num_nextn_predict_layers)]
+            mtp_param_list = [f'.layers.{num_hidden_layers + i}' for i in range(num_nextn_predict_layers)]
 
         # expert map
         num_experts = self.config.n_routed_experts

@@ -133,7 +133,7 @@ llama2_meta_template = dict(round=[
     dict(role='HUMAN', begin='[INST] ', end=' [/INST]'),
     dict(role='BOT', begin='', end='', generate=True),
 ],
-                            eos_token_id=2)
+    eos_token_id=2)
 
 MAX_SESSION_LEN = 2048
 MAX_NEW_TOKENS = 1024

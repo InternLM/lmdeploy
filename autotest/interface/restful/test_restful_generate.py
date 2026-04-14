@@ -748,7 +748,7 @@ class TestGenerateComprehensive:
 
         success_rate = success_count / 20
         assert success_rate == 1.0, \
-            f'Stress test failed: success rate {success_rate*100}% < 80%'
+            f'Stress test failed: success rate {success_rate * 100}% < 80%'
 
         if success_count > 0:
             avg_latency = total_latency / success_count

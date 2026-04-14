@@ -451,16 +451,16 @@ class PytorchEngineConfig:
         assert self.quant_policy in (0, 4, 8), 'invalid quant_policy'
         assert self.device_type in ['cuda', 'ascend', 'maca', 'camb'], (f'invalid device_type: {self.device_type}')
         assert self.kernel_block_size >= 16 and \
-               (self.kernel_block_size & (self.kernel_block_size - 1)) == 0, \
-               f'kernel_block_size must be >= 16 and a power of 2, but got {self.kernel_block_size}'
+            (self.kernel_block_size & (self.kernel_block_size - 1)) == 0, \
+            f'kernel_block_size must be >= 16 and a power of 2, but got {self.kernel_block_size}'
         assert self.block_size >= self.kernel_block_size and \
-               self.block_size % self.kernel_block_size == 0, \
-               (f'block_size must be >= kernel_block_size and an integer multiple '
-                f'of kernel_block_size, but got block_size {self.block_size} '
-                f'and kernel_block_size {self.kernel_block_size}')
+            self.block_size % self.kernel_block_size == 0, \
+            (f'block_size must be >= kernel_block_size and an integer multiple '
+             f'of kernel_block_size, but got block_size {self.block_size} '
+             f'and kernel_block_size {self.kernel_block_size}')
         if self.quant_policy > 0 and self.device_type not in ['cuda', 'ascend']:
             assert False, \
-                   'kv cache quantization only works for CUDA and ASCEND.'
+                'kv cache quantization only works for CUDA and ASCEND.'
         if self.device_type == 'camb' and self.block_size != 16:
             self.block_size = 16
             logger.warning('Currently, camb device requires block size to be 16, \

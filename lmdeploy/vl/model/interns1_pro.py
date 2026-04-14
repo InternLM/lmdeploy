@@ -12,7 +12,6 @@ from lmdeploy.vl.model.qwen3 import Qwen3VLModel
 logger = get_logger('lmdeploy')
 
 
-
 @VISION_MODELS.register_module()
 class InternS1ProVisionModel(Qwen3VLModel):
     """InternS1Pro model.

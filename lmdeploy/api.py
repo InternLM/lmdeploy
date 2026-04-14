@@ -95,7 +95,7 @@ def serve(model_path: str,
         This function has been removed. Please use alternative methods.
 
     This will run the api_server in a subprocess.
-    """ # noqa E501
+    """  # noqa E501
     raise NotImplementedError("The 'serve' function is no longer available. "
                               'This function has been deprecated and removed.')
 

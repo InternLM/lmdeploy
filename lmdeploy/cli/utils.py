@@ -61,7 +61,7 @@ def get_lora_adapters(adapters: list[str]):
     else:
         for pair in adapters:
             assert '=' in pair, f'Multiple lora paths must in format of ' \
-                                 f'xxx=yyy. But given: {pair}'
+                f'xxx=yyy. But given: {pair}'
             name, path = pair.strip().split('=', 1)
             assert name not in output, f'Multiple lora paths with repeated lora name: {name}'
             output[name] = path
@@ -420,8 +420,7 @@ class ArgumentHelper:
             '--batch-size',
             type=int,
             default=1,
-            help=\
-            'The batch size for running the calib samples. Low GPU mem requires small batch_size. Large batch_size reduces the calibration time while costs more VRAM'  # noqa
+            help='The batch size for running the calib samples. Low GPU mem requires small batch_size. Large batch_size reduces the calibration time while costs more VRAM'  # noqa
         )
 
     @staticmethod
@@ -432,8 +431,7 @@ class ArgumentHelper:
             '--search-scale',
             action='store_true',
             default=False,
-            help=\
-            'Whether search scale ratio. Default to be disabled, which means only smooth quant with 0.5 ratio will be applied'  # noqa
+            help='Whether search scale ratio. Default to be disabled, which means only smooth quant with 0.5 ratio will be applied'  # noqa
         )
 
     @staticmethod
@@ -454,8 +452,7 @@ class ArgumentHelper:
             '--chat-template',
             type=str,
             default=None,
-            help=\
-            'A JSON file or string that specifies the chat template configuration. '  # noqa
+            help='A JSON file or string that specifies the chat template configuration. '  # noqa
             'Please refer to https://lmdeploy.readthedocs.io/en/latest/advance/chat_template.html for the specification'  # noqa
         )
 

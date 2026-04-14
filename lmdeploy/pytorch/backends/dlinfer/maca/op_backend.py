@@ -55,7 +55,7 @@ class MacaOpsBackend(DlinferOpsBackend):
         is_prefill_no_cache = False
         if not step_context.is_decoding:
             is_prefill_no_cache = \
-               all((step_context.q_seqlens ==
+                all((step_context.q_seqlens ==
                     step_context.kv_seqlens).tolist())
         q_start_loc = step_context.q_start_loc
         cu_seqlens = torch.cat((q_start_loc, step_context.q_seqlens.sum().unsqueeze(0))).int()
