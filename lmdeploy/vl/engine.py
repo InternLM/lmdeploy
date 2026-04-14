@@ -47,15 +47,27 @@ class ImageEncoder:
         self.executor = ThreadPoolExecutor(max_workers=1)
         torch.cuda.empty_cache()
 
+    def apply_chat_template(self, messages, chat_template, sequence_start, chat_template_kwargs=None):
+        return self.model.apply_chat_template(
+            messages, chat_template, sequence_start, chat_template_kwargs
+        )
+
     async def preprocess(self,
                          messages: list[dict],
+                         input_text: str,
                          mm_processor_kwargs: dict[str, Any] | None = None) -> list[dict]:
         """Preprocess multimodal data in the messages."""
         if _accepts_arg(self.model.preprocess, 'mm_processor_kwargs'):
-            future = asyncio.get_event_loop().run_in_executor(self.executor, self.model.preprocess, messages,
+            future = asyncio.get_event_loop().run_in_executor(self.executor,
+                                                              self.model.preprocess,
+                                                              messages,
+                                                              input_text,
                                                               mm_processor_kwargs)
         else:
-            future = asyncio.get_event_loop().run_in_executor(self.executor, self.model.preprocess, messages)
+            future = asyncio.get_event_loop().run_in_executor(self.executor,
+                                                              self.model.preprocess,
+                                                              messages,
+                                                              input_text)
         future.add_done_callback(_raise_exception_on_finish)
         outputs = await future
         return outputs
@@ -75,12 +87,14 @@ class ImageEncoder:
 
     async def wrap_for_pytorch(
         self,
-        messages: list[dict],
-        chat_template,
-        tokenizer,
-        sequence_start,
-        tools: list[object] | None = None,
-        chat_template_kwargs: dict | None = None,
+        input_ids: list[torch.Tensor] | None = None,
+        multimodal: list[dict] | None = None,
+        # messages: list[dict],
+        # chat_template,
+        # tokenizer,
+        # sequence_start,
+        # tools: list[object] | None = None,
+        # chat_template_kwargs: dict | None = None,
     ) -> list[dict]:
         """
         Args:
@@ -100,20 +114,26 @@ class ImageEncoder:
                         },
                     }
         """
-        has_input_ids = self.model.has_input_ids(messages)
+        # has_input_ids = self.model.has_input_ids(messages)
+        has_input_ids = False
+        result = {}
         if not has_input_ids:
-            result = self.model.to_pytorch(messages,
-                                           chat_template,
-                                           tokenizer,
-                                           sequence_start,
-                                           tools=tools,
-                                           chat_template_kwargs=chat_template_kwargs)
+            return dict(
+                input_ids=input_ids,
+                multimodal=multimodal,
+            )
+            # result = self.model.to_pytorch(messages,
+            #                                chat_template,
+            #                                tokenizer,
+            #                                sequence_start,
+            #                                tools=tools,
+            #                                chat_template_kwargs=chat_template_kwargs
+            #                                )
         else:
-            result = self.model.to_pytorch_with_input_ids(messages)
-        # clear data
-        for i, message in enumerate(messages):
-            if isinstance(message['content'], list):
-                messages[i]['preprocess'] = None
+            # TODO: support input_ids inputs
+            # result = self.model.to_pytorch_with_input_ids(messages)
+            pass
+
         return result
 
     async def wrap_for_turbomind(

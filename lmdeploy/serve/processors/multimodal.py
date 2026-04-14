@@ -112,6 +112,7 @@ class MultimodalProcessor:
             item_params = item.get(item_type, {}).copy()
             data_src = item_params.pop('url', None) or item_params.pop('data', None)
 
+            modality = None
             if item_type == 'image_data':
                 modality = Modality.IMAGE
                 data = data_src
@@ -131,7 +132,7 @@ class MultimodalProcessor:
             else:
                 raise NotImplementedError(f'unknown type: {item_type}')
 
-            out_message['content'].append({'type': modality, 'data': data, **item_params})
+            out_message['content'].append({'type': modality.value, 'data': data, **item_params})
 
         out_messages[i] = out_message
 
@@ -356,8 +357,13 @@ class MultimodalProcessor:
         engines."""
         chat_template = self.chat_template if do_preprocess else BaseChatTemplate()
         messages = await self.async_parse_multimodal_item(messages, media_io_kwargs)
-        results = await self.vl_encoder.preprocess(messages, mm_processor_kwargs)
+        input_text = self.vl_encoder.apply_chat_template(messages=messages,
+                                                         chat_template=chat_template,
+                                                         sequence_start=sequence_start,
+                                                         chat_template_kwargs=chat_template_kwargs)
+        input_ids, multimodal = await self.vl_encoder.preprocess(messages, input_text, mm_processor_kwargs)
 
+        results = {'input_ids': input_ids, 'multimodal': multimodal}
         if self.backend == 'turbomind':
             # for tm engine, this module perform vision embedding after image
             # preprocessing. It utilizes the hf model's vision embeddings
@@ -374,10 +380,6 @@ class MultimodalProcessor:
         elif self.backend == 'pytorch':
             # for pt engine, this module only conduct the image preprocessing
             # It leaves the vision embedding to the pt engine
-            results = await self.vl_encoder.wrap_for_pytorch(messages=results,
-                                                             chat_template=chat_template,
-                                                             tokenizer=self.tokenizer,
-                                                             sequence_start=sequence_start,
-                                                             tools=tools,
-                                                             chat_template_kwargs=chat_template_kwargs)
+            return results
+
         return results
