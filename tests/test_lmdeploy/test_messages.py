@@ -1,8 +1,25 @@
 
 import pytest
+from pydantic import ValidationError
 
 from lmdeploy import GenerationConfig, Tokenizer
+from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 from lmdeploy.utils import get_hf_gen_cfg
+
+
+def test_generation_config_repetition_ngram_clamped():
+    c = GenerationConfig(repetition_ngram_size=-1, repetition_ngram_threshold=-2)
+    assert c.repetition_ngram_size == 0
+    assert c.repetition_ngram_threshold == 0
+
+
+def test_chat_completion_request_repetition_ngram_ge_zero():
+    with pytest.raises(ValidationError):
+        ChatCompletionRequest(
+            model='m',
+            messages=[{'role': 'user', 'content': 'hi'}],
+            repetition_ngram_size=-1,
+        )
 
 
 def test_engine_generation_config():
