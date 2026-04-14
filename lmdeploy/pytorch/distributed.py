@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 import torch
+import torch.nn.functional as F
 from torch import distributed as dist
 from torch.distributed import ProcessGroup, ReduceOp, Work  # noqa: F401
 
@@ -431,7 +432,6 @@ def gather_by_tp_sizes(x: torch.Tensor,
 
 def reduce_scatter_by_tp_sizes(out: torch.Tensor, rank: int, tp_sizes: list[int], group: dist.ProcessGroup):
     """Reduce scatter."""
-    import torch.nn.functional as F
     attn_tp = get_dist_manager().current_config().attn_tp
     outs = list(out.split(tp_sizes, -2))
 
