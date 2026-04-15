@@ -46,7 +46,7 @@ class GenOut:
     history_token_len: int
     input_token_len: int
     generate_token_len: int
-    finish_reason: Literal['stop', 'length', 'error'] | None = None
+    finish_reason: Literal['stop', 'length', 'error', 'abort'] | None = None
     token_ids: list[int] | None = None
     logprobs: list[dict[int, float]] | None = None
     logits: Any = None
@@ -201,8 +201,28 @@ class AsyncEngine:
             # set stats loggers of metrics processor
             metrics_processor.stat_loggers = self.stat_loggers
 
-    def get_schedule_metrics(self):
-        return self.engine.get_schedule_metrics()
+    def _if_session_stale(self, session: Session,
+                                   input_token_len: int) -> GenOut | None:
+        """If ``session.epoch`` was stamped by api_server and
+        ``stop_all_session`` ran since then (the engine epoch changed), drop
+        the session."""
+        epoch = session.epoch
+        if epoch is None or epoch == self.epoch:
+            return None
+        logger.info(f'[generate] drop stale session {session.session_id} '
+                    f'(session.epoch={epoch}, async_engine.epoch={self.epoch})')
+        return GenOut(response='',
+                      history_token_len=session.step,
+                      input_token_len=input_token_len,
+                      generate_token_len=0,
+                      finish_reason='abort',
+                      token_ids=[])
+
+    async def get_schedule_metrics(self):
+        result = self.engine.get_schedule_metrics()
+        if asyncio.iscoroutine(result):
+            return await result
+        return result
 
     async def do_log_stats(self):
         """Loop through CLI logger and Prometheus logger and output the
@@ -212,11 +232,16 @@ class AsyncEngine:
 
     async def stop_all_session(self):
         """Stop all running sessions."""
-        logger.info('stop all sessions')
+        logger.info(f'stop all sessions, epoch {self.epoch} -> {self.epoch + 1}')
         self.epoch += 1
         await self.session_mgr.async_abort_all()
 
-    def sleep(self, level: int = 1):
+    def prepare_sleep(self):
+        """Reject new inference requests before backend sleep starts."""
+        self.sleeping_tags = {'weights', 'kv_cache'}
+        self.is_sleeping = True
+
+    async def sleep(self, level: int = 1):
         """Sleep the model.
 
         Args:
@@ -224,7 +249,7 @@ class AsyncEngine:
                 weights and discard the kv cache. Level 2 sleep will
                 discard both the model weights and the kv cache.
         """
-        self.engine.sleep(level)
+        await self.engine.sleep(level)
         self.sleeping_tags = {'weights', 'kv_cache'}
         self.is_sleeping = True
 
@@ -339,7 +364,8 @@ class AsyncEngine:
             do_preprocess (bool): whether pre-process the messages. Default to
                 True, which means chat_template will be applied.
         """
-        epoch = self.epoch
+        metrics_processor.increase_total_requests()
+
         if (messages is not None) ^ (input_ids is None):
             raise ValueError('You must specify exactly one of messages or input_ids')
         if isinstance(session_id, Session):
@@ -386,6 +412,7 @@ class AsyncEngine:
 
         if gen_config.max_new_tokens == 0:
             logger.info(f'run out of tokens. session={session_id}.')
+            metrics_processor.increase_failed_requests('error')
             yield GenOut(response='',
                          history_token_len=session.step,
                          input_token_len=len(input_ids),
@@ -400,6 +427,7 @@ class AsyncEngine:
                                                           or gen_config.output_logits == 'all'):
             errmsg = ('lmdeploy does not support outputting all token\'s logits or last_hidden_state '
                       'when prefix caching is ON')
+            metrics_processor.increase_failed_requests('error')
             yield GenOut(response=errmsg,
                          history_token_len=session.step,
                          input_token_len=len(input_ids),
@@ -421,10 +449,18 @@ class AsyncEngine:
         if not gen_config.ignore_eos:
             stop_ids = gen_config.stop_token_ids or []
 
-        metrics_processor.increase_total_requests()
+
+        stale = self._if_session_stale(session, len(prompt_input['input_ids']))
+        if stale is not None:
+            metrics_processor.increase_failed_requests('abort')
+            yield stale
+            if sequence_end:
+                self.session_mgr.remove(session)
+            return
         async with session.request_handle() as handle:
-            if epoch != self.epoch:
-                logger.info(f'[generate] session {session_id} got aborted before starting inference')
+            if session.epoch is not None and session.epoch != self.epoch:
+                logger.info(f'[generate] session {session_id} got aborted before starting inference, '
+                               f'session.epoch={session.epoch}, async_engine.epoch={self.epoch}')
                 metrics_processor.increase_failed_requests('abort')
                 yield GenOut(response='',
                              history_token_len=0,

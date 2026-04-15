@@ -28,7 +28,7 @@ from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader, load_weight
 from lmdeploy.vl.constants import Modality
 
-from .patch import add_prefix
+from .patch import add_prefix, get_build_model_context
 from .qwen2_5_vl import Qwen2_5_VisionRotaryEmbedding as Qwen3_5VisionRotaryEmbedding
 from .qwen2_5_vl import Qwen2_5_VLVisionAttention as Qwen3_5VisionAttention
 from .qwen3_vl import Qwen3VLInputProcessor as Qwen3_5InputProcessor
@@ -601,7 +601,8 @@ class Qwen3_5Attention(nn.Module):
                  layer_idx: int,
                  dtype: torch.dtype | None = None,
                  device: torch.device | None = None,
-                 prefix: str = ''):
+                 prefix: str = '',
+                 is_tp: bool = True):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         num_heads = config.num_attention_heads
@@ -614,9 +615,10 @@ class Qwen3_5Attention(nn.Module):
 
         # packed qkv
         # Qwen3 uses 'config.attention_bias = False' for q/k/o projections
+        self.attn_output_gate = getattr(config, 'attn_output_gate', False)
         self.qkv_proj = build_qkv_proj(
             hidden_size,
-            num_q_heads=num_heads * 2,
+            num_q_heads=num_heads * (1 + self.attn_output_gate),
             num_kv_heads=num_key_value_heads,
             head_size=head_dim,
             bias=config.attention_bias,
@@ -625,6 +627,7 @@ class Qwen3_5Attention(nn.Module):
             dtype=dtype,
             device=device,
             prefix=add_prefix('qkv_proj', prefix),
+            is_tp=is_tp,
         )
 
         # rotary embedding
@@ -639,16 +642,14 @@ class Qwen3_5Attention(nn.Module):
         )
 
         # o_proj
-        self.o_proj = build_o_proj(
-            num_heads * head_dim,
-            hidden_size,
-            bias=config.attention_bias,
-            quant_config=quantization_config,
-            dtype=dtype,
-            device=device,
-            is_tp=True,
-            prefix=add_prefix('o_proj', prefix),
-        )
+        self.o_proj = build_o_proj(num_heads * head_dim,
+                                   hidden_size,
+                                   bias=config.attention_bias,
+                                   quant_config=quantization_config,
+                                   dtype=dtype,
+                                   device=device,
+                                   prefix=add_prefix('o_proj', prefix),
+                                   is_tp=is_tp)
 
         # q, k norm
         self.q_norm = RMSNorm(
@@ -771,9 +772,9 @@ class Qwen3_5DecoderLayer(nn.Module):
         hidden_states: torch.Tensor,
         rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
         past_key_value: list[torch.FloatTensor],
-        residual: torch.Tensor | None,
-        attn_metadata: Any,
-        gated_delta_meta: GatedDeltaMeta,
+        residual: torch.Tensor | None = None,
+        attn_metadata: Any | None = None,
+        gated_delta_meta: GatedDeltaMeta | None = None,
         all_routed_experts: torch.Tensor | None = None,
     ):
 
@@ -1025,9 +1026,11 @@ class Qwen3_5Model(nn.Module):
         pos_embeds: torch.Tensor | None = None,
         grid_thw: torch.Tensor | None = None,
         all_routed_experts: torch.Tensor | None = None,
+        return_input_embeds: bool = False,
     ):
         """Model forward, return logits."""
 
+        output_inputs_embeds = None
         if inputs_embeds is None:
             inputs_embeds = self.get_input_embeddings()(input_ids)
 
@@ -1051,6 +1054,8 @@ class Qwen3_5Model(nn.Module):
                 expanded_image_mask = image_mask.unsqueeze(-1).expand_as(inputs_embeds)
                 inputs_embeds = inputs_embeds.masked_scatter(expanded_image_mask, image_embeds)
 
+        output_inputs_embeds = inputs_embeds if return_input_embeds else None
+
         hidden_states = self.language_model(
             input_ids=input_ids,
             position_ids=position_ids,
@@ -1061,7 +1066,7 @@ class Qwen3_5Model(nn.Module):
             mrope_position_ids=mrope_position_ids,
             all_routed_experts=all_routed_experts,
         )
-        return hidden_states
+        return hidden_states, output_inputs_embeds
 
     def get_input_embeddings(self):
         """Get input embeddings."""
@@ -1106,6 +1111,8 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
                                           device=device)
         # dense model
         self.enable_return_routed_experts = False
+        self.is_spec_decoding = get_build_model_context().num_spec_tokens > 0
+
 
     def forward(
         self,
@@ -1122,6 +1129,7 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         image_mask: torch.Tensor | None = None,
         pos_embeds: torch.Tensor | None = None,
         grid_thw: torch.Tensor | None = None,
+        return_input_embeds: bool = False,
         **kwargs,
     ):
         """Model forward, return logits."""
@@ -1132,7 +1140,7 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
             all_routed_experts = position_ids.new_empty(
                 (num_tokens, config.num_hidden_layers, config.num_experts_per_tok), dtype=torch.uint16)
 
-        hidden_states = self.model(
+        hidden_states, target_inputs_embeds = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
             past_key_values=past_key_values,
@@ -1147,10 +1155,11 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
             pos_embeds=pos_embeds,
             grid_thw=grid_thw,
             all_routed_experts=all_routed_experts,
+            return_input_embeds=return_input_embeds,
         )
-        if all_routed_experts is None:
-            return hidden_states
-        return dict(hidden_states=hidden_states, all_routed_experts=all_routed_experts)
+        return dict(hidden_states=hidden_states,
+                    all_routed_experts=all_routed_experts,
+                    target_inputs_embeds=target_inputs_embeds)
 
     def get_input_embeddings(self):
         """Get input embeddings."""
@@ -1219,6 +1228,9 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
                 inputs_embeds = self.get_input_embeddings()(input_ids)
             inputs_embeds[:, vision_embedding_indexing, :] = vision_embeddings.to(inputs_embeds)
 
+        # return input embeds for spec decoding
+        return_input_embeds = self.is_spec_decoding and (pixel_values is not None or context.is_chunk_multimodal)
+
         # inputs of forward
         return dict(
             input_ids=input_ids,
@@ -1235,6 +1247,7 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
             image_mask=image_mask,
             grid_thw=grid_thw,
             pos_embeds=pos_embeds,
+            return_input_embeds=return_input_embeds,
         )
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
