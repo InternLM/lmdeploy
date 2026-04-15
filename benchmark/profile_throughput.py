@@ -135,17 +135,20 @@ class Engine:
 
     def __init__(self, model_path: str,
                  engine_config: PytorchEngineConfig | TurbomindEngineConfig,
-                 speculative_config: SpeculativeConfig):
+                 speculative_config: SpeculativeConfig,
+                 trust_remote_code: bool = False):
         self.tokenizer = Tokenizer(model_path)
         if isinstance(engine_config, TurbomindEngineConfig):
             from lmdeploy.turbomind import TurboMind
-            tm_model = TurboMind.from_pretrained(model_path, engine_config=engine_config)
+            tm_model = TurboMind.from_pretrained(model_path, engine_config=engine_config,
+                                                 trust_remote_code=trust_remote_code)
             self.backend = 'turbomind'
         elif isinstance(engine_config, PytorchEngineConfig):
             from lmdeploy.pytorch.engine import Engine as PytorchEngine
             tm_model = PytorchEngine.from_pretrained(model_path,
                                                      engine_config=engine_config,
-                                                     speculative_config=speculative_config)
+                                                     speculative_config=speculative_config,
+                                                     trust_remote_code=trust_remote_code)
             self.backend = 'pytorch'
 
         self.tm_model = tm_model
@@ -294,6 +297,12 @@ def parse_args():
         default=0.0,
         help='Range of sampled ratio of input/output length, '
         'used only for random dataset.',
+    )
+    parser.add_argument(
+        '--trust-remote-code',
+        action='store_true',
+        default=False,
+        help='Trust remote code.',
     )
     # other args
     ArgumentHelper.top_p(parser)

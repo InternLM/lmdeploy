@@ -188,7 +188,8 @@ def get_tm_model(model_path,
                  chat_template_name,
                  engine_config: TurbomindEngineConfig,
                  group_size: int = None,
-                 out_dir: str = None) -> BaseOutputModel:
+                 out_dir: str = None,
+                 trust_remote_code: bool = False) -> BaseOutputModel:
     """Create turbomind model.
 
     Args:
@@ -204,7 +205,7 @@ def get_tm_model(model_path,
         out_dir(str): the output directory where to save to turbomind model.
             If it is None, the turbomind model won't be saved
     """
-    _, cfg = get_model_arch(model_path)
+    _, cfg = get_model_arch(model_path, trust_remote_code=trust_remote_code)
     quant_config = search_nested_config(cfg.to_dict(), 'quantization_config')
     mixed_awq = False
     if quant_config:

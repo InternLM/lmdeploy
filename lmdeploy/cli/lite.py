@@ -39,6 +39,7 @@ class SubCliLite:
                             type=int,
                             default=128,
                             help='Group size for weight quantization statistics')
+        parser.add_argument('--trust-remote-code', action='store_true', default=False, help='Trust remote code')
 
     @staticmethod
     def add_parser_auto_gptq():
@@ -61,6 +62,7 @@ class SubCliLite:
                             type=int,
                             default=128,
                             help='Group size for weight quantization statistics')
+        parser.add_argument('--trust-remote-code', action='store_true', default=False, help='Trust remote code')
 
     @staticmethod
     def add_parser_calibrate():
@@ -93,6 +95,7 @@ class SubCliLite:
                             default='./work_dir',
                             help='The working directory for outputs. defaults to "./work_dir"')
         parser.add_argument('--device', type=str, default='cuda', help='Device for weight quantization (cuda or npu)')
+        parser.add_argument('--trust-remote-code', action='store_true', default=False, help='Trust remote code')
         ArgumentHelper.calib_dataset(parser)
         ArgumentHelper.calib_samples(parser)
         ArgumentHelper.calib_seqlen(parser)

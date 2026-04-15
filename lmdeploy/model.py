@@ -68,16 +68,15 @@ class ChatTemplateConfig:
     capability: Literal['completion', 'infilling', 'chat', 'python'] | None = None
     stop_words: list[str] | None = None
 
-    @property
-    def chat_template(self):
+    def chat_template(self, trust_remote_code: bool = False):
         attrs = {key: value for key, value in dataclasses.asdict(self).items() if value is not None}
         attrs.pop('model_name', None)
         if self.model_name in MODELS.module_dict.keys():
-            model = MODELS.get(self.model_name)(**attrs)
+            model = MODELS.get(self.model_name)(**attrs, trust_remote_code=trust_remote_code)
         else:
             logger.warning(f'Could not find {self.model_name} in registered models. '
                            f'Register {self.model_name} using the BaseChatTemplate.')
-            model = BaseChatTemplate(**attrs)
+            model = BaseChatTemplate(**attrs, trust_remote_code=trust_remote_code)
         return model
 
     def to_json(self, file_path=None):
@@ -685,11 +684,11 @@ class HFChatTemplate(BaseChatTemplate):
     It MUST be at the end of @MODLES registry
     """
 
-    def __init__(self, model_path: str = '', **kwargs):
+    def __init__(self, model_path: str = '', trust_remote_code: bool = False, **kwargs):
         self.model_path = model_path
         try:
             from transformers import AutoTokenizer
-            self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+            self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=trust_remote_code)
             # Verify if the model can perform apply_chat_template with different roles.
             self.user_start, self.user_end, _, _ = self._user_instruction()
             self.assistant_start, self.assistant_end, _, _ = self._assistant_instruction()
@@ -798,21 +797,23 @@ class HFChatTemplate(BaseChatTemplate):
         return True
 
 
-def get_chat_template(model_path: str, config: ChatTemplateConfig | None = None) -> BaseChatTemplate:
+def get_chat_template(model_path: str, config: ChatTemplateConfig | None = None,
+                      trust_remote_code: bool = False) -> BaseChatTemplate:
     """Get the chat template for the model.
 
     Args:
         model_path (str): the model path.
         config (ChatTemplateConfig | None): the chat template config.
+        trust_remote_code (bool): whether to trust remote code.
     Returns:
         BaseChatTemplate: the chat template.
     """
     if config is not None:
-        return config.chat_template
+        return config.chat_template(trust_remote_code=trust_remote_code)
     chat_template_name = 'base'
     for name, model in MODELS.module_dict.items():
         if model.match(model_path):
             chat_template_name = name
             break
     config = ChatTemplateConfig(chat_template_name, model_path=model_path)
-    return config.chat_template
+    return config.chat_template(trust_remote_code=trust_remote_code)

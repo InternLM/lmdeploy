@@ -205,7 +205,8 @@ def calibrate(model: str,
               w_group_size: int = 128,
               search_scale: bool = False,
               dtype: Literal['float16', 'bfloat16', 'auto'] = 'auto',
-              batch_size: int = 1) -> None:
+              batch_size: int = 1,
+              trust_remote_code: bool = False) -> None:
     """The main function for loading the model and performing calibration on a
     given dataset.
 
@@ -245,10 +246,10 @@ def calibrate(model: str,
     make_compatible_internvl_config(model)
 
     # Load tokenizer and configuration
-    tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=trust_remote_code)
 
     if model_type == 'llm':
-        model = load_hf_from_pretrained(model, dtype=dtype, trust_remote_code=True)
+        model = load_hf_from_pretrained(model, dtype=dtype, trust_remote_code=trust_remote_code)
         vl_model = None
     elif model_type == 'vlm':
         vl_model = load_vl_model(model, backend=None, with_llm=True).vl_model
