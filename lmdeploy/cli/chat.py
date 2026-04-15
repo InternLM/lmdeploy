@@ -72,7 +72,7 @@ def get_adapter_name(adapters=None, **kwargs):
 def main(model_path, backend, trust_remote_code=False, **kwargs):
     if backend != 'pytorch':
         # set auto backend mode
-        backend = autoget_backend(model_path)
+        backend = autoget_backend(model_path, trust_remote_code=trust_remote_code)
     quit = False
     with build_pipe(model_path, backend, trust_remote_code=trust_remote_code, **kwargs) as pipe:
         gen_config = build_gen_config(**kwargs)

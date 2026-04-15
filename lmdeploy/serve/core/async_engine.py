@@ -189,15 +189,16 @@ class AsyncEngine:
     def _build_pytorch(self,
                        model_path: str,
                        backend_config: PytorchEngineConfig | None = None,
-                       trust_remote_code: bool = False,
                        speculative_config: SpeculativeConfig | None = None,
+                       trust_remote_code: bool = False,
                        **kwargs):
         """Inner build method for pytorch backend."""
         from lmdeploy.pytorch.engine import Engine
         return Engine.from_pretrained(model_path,
                                       engine_config=backend_config,
+                                      speculative_config=speculative_config,
                                       trust_remote_code=trust_remote_code,
-                                      speculative_config=speculative_config)
+                                      **kwargs)
 
     def _build_stat_loggers(self):
         self.stat_loggers = []
