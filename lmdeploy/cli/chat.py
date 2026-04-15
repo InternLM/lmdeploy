@@ -14,7 +14,7 @@ def input_prompt():
     return '\n'.join(iter(input, sentinel))
 
 
-def build_pipe(model_path, backend, **kwargs):
+def build_pipe(model_path, backend, trust_remote_code=False, **kwargs):
     engine_config = None
     if kwargs.get('enable_prefix_caching', False):
         print('interactive chat cannot be used when prefix caching is enabled')
@@ -48,6 +48,7 @@ def build_pipe(model_path, backend, **kwargs):
                     backend_config=engine_config,
                     chat_template_config=chat_template_config,
                     log_level='ERROR',
+                    trust_remote_code=trust_remote_code,
                     **kwargs)
     return pipe
 
@@ -68,12 +69,12 @@ def get_adapter_name(adapters=None, **kwargs):
     return list(adapters.keys())[0]
 
 
-def main(model_path, backend, **kwargs):
+def main(model_path, backend, trust_remote_code=False, **kwargs):
     if backend != 'pytorch':
         # set auto backend mode
         backend = autoget_backend(model_path)
     quit = False
-    with build_pipe(model_path, backend, **kwargs) as pipe:
+    with build_pipe(model_path, backend, trust_remote_code=trust_remote_code, **kwargs) as pipe:
         gen_config = build_gen_config(**kwargs)
         adapter_name = get_adapter_name(**kwargs)
         while not quit:

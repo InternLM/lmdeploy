@@ -752,6 +752,11 @@ class ArgumentHelper:
                                    choices=['uni', 'mp', 'ray'],
                                    help='The distributed executor backend for pytorch engine.')
 
+    @staticmethod
+    def trust_remote_code(parser):
+        """Add argument trust_remote_code to parser."""
+        return parser.add_argument('--trust-remote-code', action='store_true', default=False, help='Trust remote code')
+
 
 # adapted from https://github.com/vllm-project/vllm/blob/main/vllm/utils/__init__.py
 class FlexibleArgumentParser(argparse.ArgumentParser):

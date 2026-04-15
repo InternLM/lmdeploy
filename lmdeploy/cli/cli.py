@@ -46,6 +46,7 @@ class CLI:
         # model args
         ArgumentHelper.revision(parser)
         ArgumentHelper.download_dir(parser)
+        ArgumentHelper.trust_remote_code(parser)
 
         # pytorch engine args
         pt_group = parser.add_argument_group('PyTorch engine arguments')

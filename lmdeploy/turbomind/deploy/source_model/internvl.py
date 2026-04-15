@@ -75,7 +75,7 @@ class InternVLModel(LlamaModel):
     """InternVL model in hf format."""
 
     def __init__(self, model_path: str, tokenizer_path: str, trust_remote_code: bool = False, **kwargs):
-        super().__init__(model_path, tokenizer_path, **kwargs)
+        super().__init__(model_path, tokenizer_path, trust_remote_code=trust_remote_code, **kwargs)
         from transformers import AutoConfig
         config = AutoConfig.from_pretrained(model_path, trust_remote_code=trust_remote_code)
 

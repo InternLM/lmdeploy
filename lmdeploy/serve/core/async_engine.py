@@ -118,7 +118,7 @@ class AsyncEngine:
         backend_config = backend_config or (TurbomindEngineConfig()
                                             if backend == 'turbomind' else PytorchEngineConfig())
         self.model_name = model_name if model_name else model_path
-        self.chat_template = get_chat_template(model_path, chat_template_config)
+        self.chat_template = get_chat_template(model_path, chat_template_config, trust_remote_code=trust_remote_code)
         self.tokenizer = Tokenizer(model_path, trust_remote_code=trust_remote_code)
         self.prompt_processor = MultimodalProcessor(self.tokenizer, self.chat_template)
         self.hf_gen_cfg = get_hf_gen_cfg(model_path, trust_remote_code=trust_remote_code)

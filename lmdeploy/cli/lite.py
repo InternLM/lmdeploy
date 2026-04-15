@@ -32,6 +32,7 @@ class SubCliLite:
         ArgumentHelper.calib_batchsize(parser)
         ArgumentHelper.calib_search_scale(parser)
         ArgumentHelper.dtype(parser)
+        ArgumentHelper.trust_remote_code(parser)
         parser.add_argument('--device', type=str, default='cuda', help='Device for weight quantization (cuda or npu)')
         parser.add_argument('--w-bits', type=int, default=4, help='Bit number for weight quantization')
         parser.add_argument('--w-sym', action='store_true', help='Whether to do symmetric quantization')
@@ -39,7 +40,6 @@ class SubCliLite:
                             type=int,
                             default=128,
                             help='Group size for weight quantization statistics')
-        parser.add_argument('--trust-remote-code', action='store_true', default=False, help='Trust remote code')
 
     @staticmethod
     def add_parser_auto_gptq():
@@ -57,12 +57,12 @@ class SubCliLite:
         ArgumentHelper.calib_seqlen(parser)
         ArgumentHelper.calib_batchsize(parser)
         ArgumentHelper.dtype(parser)
+        ArgumentHelper.trust_remote_code(parser)
         parser.add_argument('--w-bits', type=int, default=4, help='Bit number for weight quantization')
         parser.add_argument('--w-group-size',
                             type=int,
                             default=128,
                             help='Group size for weight quantization statistics')
-        parser.add_argument('--trust-remote-code', action='store_true', default=False, help='Trust remote code')
 
     @staticmethod
     def add_parser_calibrate():
@@ -80,6 +80,7 @@ class SubCliLite:
         ArgumentHelper.calib_batchsize(parser)
         ArgumentHelper.calib_search_scale(parser)
         ArgumentHelper.dtype(parser)
+        ArgumentHelper.trust_remote_code(parser)
 
     @staticmethod
     def add_parser_smooth_quant():
@@ -95,7 +96,6 @@ class SubCliLite:
                             default='./work_dir',
                             help='The working directory for outputs. defaults to "./work_dir"')
         parser.add_argument('--device', type=str, default='cuda', help='Device for weight quantization (cuda or npu)')
-        parser.add_argument('--trust-remote-code', action='store_true', default=False, help='Trust remote code')
         ArgumentHelper.calib_dataset(parser)
         ArgumentHelper.calib_samples(parser)
         ArgumentHelper.calib_seqlen(parser)
@@ -105,6 +105,7 @@ class SubCliLite:
         ArgumentHelper.quant_dtype(parser)
         ArgumentHelper.revision(parser)
         ArgumentHelper.download_dir(parser)
+        ArgumentHelper.trust_remote_code(parser)
 
     @staticmethod
     def auto_awq(args):
