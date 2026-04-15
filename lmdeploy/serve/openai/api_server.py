@@ -582,7 +582,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         logger.error(f'Failed to parse {text}. Exception: {e}.')
         return create_error_response(HTTPStatus.BAD_REQUEST, 'Failed to parse fc related info to json format!')
     if request.tool_choice != 'none' and request.tools is not None:
-        if ResponseParser.tool_parser_cls is None:
+        parser_cls = VariableInterface.response_parser_cls
+        if parser_cls is None or parser_cls.tool_parser_cls is None:
             logger.error('Please launch the api_server with --tool-call-parser if you want to use tool.')
 
     message = ChatMessage(role='assistant',
