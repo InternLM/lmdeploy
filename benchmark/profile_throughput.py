@@ -391,7 +391,7 @@ def main():
         asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
     speculative_config = get_speculative_config(args)
-    engine = Engine(args.model_path, engine_config, speculative_config)
+    engine = Engine(args.model_path, engine_config, speculative_config, trust_remote_code=args.trust_remote_code)
 
     if args.dataset_name == 'sharegpt':
         assert args.random_input_len is None and args.random_output_len is None
