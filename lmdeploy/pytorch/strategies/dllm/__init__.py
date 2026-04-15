@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from lmdeploy.pytorch.strategies.base.model_agent import ModelAgentStrategy
     from lmdeploy.pytorch.strategies.base.model_inputs import ModelInputsStrategy
     from lmdeploy.pytorch.strategies.base.sampling import SamplingStrategy
+    from lmdeploy.pytorch.strategies.base.step_inputs import StepInputs
 
 from ..base import StrategyFactoryBase
 
@@ -82,3 +83,11 @@ class DLLMStrategyFactory(StrategyFactoryBase):
         from .sequence import DLLMSequenceStrategy
         return DLLMSequenceStrategy(block_size=self.dllm_block_length,
                                     dllm_mask_token=self.model_config.dllm_mask_token)
+
+    def build_step_inputs(self) -> 'StepInputs':
+        """Build step inputs for the decoding loop."""
+        from .step_inputs import DLLMStepInputs
+        return DLLMStepInputs(
+            _block_size=self.dllm_block_length,
+            _dllm_mask_token=self.model_config.dllm_mask_token,
+        )

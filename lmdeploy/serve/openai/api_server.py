@@ -408,6 +408,10 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
       0 and 1. Typical values are in the 0.01-0.2 range, comparably
       selective as setting `top_p` in the 0.99-0.8 range (use the
       opposite of normal `top_p` values)
+    - **repetition_ngram_size** (int): N-gram length for repetition early stop
+      (PyTorch engine). ``0`` disables.
+    - **repetition_ngram_threshold** (int): How many times that n-gram must
+      repeat to trigger early stop. ``0`` disables.
 
     Currently we do not support the following features:
 
@@ -456,7 +460,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         except Exception as e:
             return create_error_response(HTTPStatus.BAD_REQUEST, str(e))
 
-    random_seed = request.seed if request.seed else None
+    random_seed = request.seed if request.seed is not None else None
     max_new_tokens = (request.max_completion_tokens if request.max_completion_tokens else request.max_tokens)
 
     gen_config = GenerationConfig(
@@ -480,6 +484,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         migration_request=migration_request,
         with_cache=with_cache,
         preserve_cache=preserve_cache,
+        repetition_ngram_size=request.repetition_ngram_size,
+        repetition_ngram_threshold=request.repetition_ngram_threshold,
     )
 
     tools = None
@@ -767,6 +773,10 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
       0 and 1. Typical values are in the 0.01-0.2 range, comparably
       selective as setting `top_p` in the 0.99-0.8 range (use the
       opposite of normal `top_p` values)
+    - **repetition_ngram_size** (int): N-gram length for repetition early stop
+      (PyTorch engine). ``0`` disables.
+    - **repetition_ngram_threshold** (int): How many times that n-gram must
+      repeat to trigger early stop. ``0`` disables.
 
     Currently we do not support the following features:
 
@@ -799,7 +809,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             sessions.append(VariableInterface.get_session(i + 1))
     if isinstance(request.stop, str):
         request.stop = [request.stop]
-    random_seed = request.seed if request.seed else None
+    random_seed = request.seed if request.seed is not None else None
     max_new_tokens = (request.max_completion_tokens if request.max_completion_tokens else request.max_tokens)
 
     gen_config = GenerationConfig(
@@ -819,6 +829,8 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         migration_request=migration_request,
         with_cache=with_cache,
         preserve_cache=preserve_cache,
+        repetition_ngram_size=request.repetition_ngram_size,
+        repetition_ngram_threshold=request.repetition_ngram_threshold,
     )
     generators = []
     for prompt, session in zip(request.prompt, sessions):
