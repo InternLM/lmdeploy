@@ -2,11 +2,41 @@
 
 import numpy as np
 import torch
-from torch.profiler import record_function
 
-from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
+from lmdeploy.pytorch.model_inputs import ModelInputs
 
 from ..base.model_inputs import MakeDummyMeta, ModelInputsStrategy, make_dummy_inputs
+
+
+def get_model_inputs_next_decoding(inputs: ModelInputs, input_ids: torch.Tensor, max_q_seqlen: int,
+                                   model_metas) -> ModelInputs:
+    """Next decoding step."""
+    if input_ids.dim() == 1:
+        input_ids = input_ids[None, :]
+    state_offsets = inputs.state_offsets
+    if state_offsets is not None:
+        state_offsets = state_offsets.clone()
+
+    # mrope
+    mrope_pos_ids = inputs.mrope_pos_ids
+    if mrope_pos_ids is not None:
+        index = inputs.seq_length.cumsum(0) - 1
+        mrope_pos_ids = mrope_pos_ids[:, index] + 1
+    return ModelInputs(
+        input_ids=input_ids,
+        seq_length=torch.full_like(inputs.seq_length, max_q_seqlen),
+        history_lengths=inputs.history_lengths + inputs.seq_length,
+        block_offsets=inputs.block_offsets,
+        is_decoding=True,
+        num_ignored_history=inputs.num_ignored_history.clone(),
+        max_q_seqlen=max_q_seqlen,
+        max_kv_seqlen=inputs.max_kv_seqlen + max_q_seqlen,
+        sum_kv_seqlen=inputs.sum_kv_seqlen + inputs.seq_length.numel() * inputs.max_q_seqlen,
+        local_adapter_ids=inputs.local_adapter_ids,
+        model_metas=model_metas,
+        state_offsets=state_offsets,
+        mrope_pos_ids=mrope_pos_ids,
+    )
 
 
 def merge_model_inputs(inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
@@ -91,98 +121,78 @@ class ARModelInputsStrategy(ModelInputsStrategy):
                                  vocab_size=vocab_size,
                                  meta=meta)
 
-    @record_function('ModelInputs.merge')
-    def merge(self, inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
-        """Merge model inputs."""
-        return merge_model_inputs(inputs, other)
 
-    @staticmethod
-    def index_select(inputs: ModelInputs,
-                     indices: torch.Tensor,
-                     indice_cpu: np.ndarray = None,
-                     block_offsets: torch.Tensor = None,
-                     max_q_seqlen: int | None = None,
-                     max_kv_seqlen: int | None = None,
-                     sum_kv_seqlen: int | None = None,
-                     num_ignored_history: torch.Tensor | None = None):
-        """Index select."""
-        assert inputs.is_decoding, 'Only support index_select in decoding.'
+def index_select_model_inputs(inputs: ModelInputs,
+                              indices: torch.Tensor,
+                              indice_cpu: np.ndarray = None,
+                              block_offsets: torch.Tensor = None,
+                              max_q_seqlen: int | None = None,
+                              max_kv_seqlen: int | None = None,
+                              sum_kv_seqlen: int | None = None,
+                              num_ignored_history: torch.Tensor | None = None):
+    """Index select model inputs by indices."""
+    assert inputs.is_decoding, 'Only support index_select in decoding.'
 
-        if len(indices) == len(inputs.seq_length):
-            # we will not change the order of indices
-            # so same length means no change
-            indices = Ellipsis
+    if len(indices) == len(inputs.seq_length):
+        # we will not change the order of indices
+        # so same length means no change
+        indices = Ellipsis
 
-        # required inputs
-        input_ids = inputs.input_ids[..., indices]
-        seq_length = inputs.seq_length[indices]
-        history_lengths = inputs.history_lengths[indices]
-        if block_offsets is None:
-            block_offsets = inputs.block_offsets[indices]
-        if num_ignored_history is None:
-            num_ignored_history = inputs.num_ignored_history[indices]
-        max_q_seqlen = max_q_seqlen or inputs.max_q_seqlen
-        max_kv_seqlen = max_kv_seqlen or inputs.max_kv_seqlen
-        sum_kv_seqlen = sum_kv_seqlen or inputs.sum_kv_seqlen
+    # required inputs
+    input_ids = inputs.input_ids[..., indices]
+    seq_length = inputs.seq_length[indices]
+    history_lengths = inputs.history_lengths[indices]
+    if block_offsets is None:
+        block_offsets = inputs.block_offsets[indices]
+    if num_ignored_history is None:
+        num_ignored_history = inputs.num_ignored_history[indices]
+    max_q_seqlen = max_q_seqlen or inputs.max_q_seqlen
+    max_kv_seqlen = max_kv_seqlen or inputs.max_kv_seqlen
+    sum_kv_seqlen = sum_kv_seqlen or inputs.sum_kv_seqlen
 
-        # lora adapter ids
-        local_adapter_ids = inputs.local_adapter_ids
-        if local_adapter_ids is not None:
-            local_adapter_ids = local_adapter_ids[indices]
+    # lora adapter ids
+    local_adapter_ids = inputs.local_adapter_ids
+    if local_adapter_ids is not None:
+        local_adapter_ids = local_adapter_ids[indices]
 
-        # model metas for vl models
-        model_metas = inputs.model_metas
-        if model_metas is not None and indice_cpu is not None:
-            model_metas = [model_metas[i] for i in indice_cpu]
+    # model metas for vl models
+    model_metas = inputs.model_metas
+    if model_metas is not None and indice_cpu is not None:
+        model_metas = [model_metas[i] for i in indice_cpu]
 
-        # for ssm
-        state_offsets = inputs.state_offsets
-        if state_offsets is not None:
-            state_offsets = state_offsets[indices]
+    # for ssm
+    state_offsets = inputs.state_offsets
+    if state_offsets is not None:
+        state_offsets = state_offsets[indices]
 
-        # spec decoding
-        target_hidden_states = inputs.target_hidden_states
-        if target_hidden_states is not None:
-            target_hidden_states = target_hidden_states[indices]
-        target_position_ids = inputs.target_position_ids
-        if target_position_ids is not None:
-            target_position_ids = target_position_ids[indices]
+    # spec decoding
+    target_hidden_states = inputs.target_hidden_states
+    if target_hidden_states is not None:
+        target_hidden_states = target_hidden_states[indices]
+    target_position_ids = inputs.target_position_ids
+    if target_position_ids is not None:
+        target_position_ids = target_position_ids[indices]
 
-        # mrope
-        mrope_pos_ids = inputs.mrope_pos_ids
-        if mrope_pos_ids is not None:
-            mrope_pos_ids = mrope_pos_ids[:, indices]
+    # mrope
+    mrope_pos_ids = inputs.mrope_pos_ids
+    if mrope_pos_ids is not None:
+        mrope_pos_ids = mrope_pos_ids[:, indices]
 
-        # return new inputs
-        return ModelInputs(
-            input_ids=input_ids,
-            seq_length=seq_length,
-            history_lengths=history_lengths,
-            block_offsets=block_offsets,
-            is_decoding=inputs.is_decoding,
-            num_ignored_history=num_ignored_history,
-            max_q_seqlen=max_q_seqlen,
-            max_kv_seqlen=max_kv_seqlen,
-            sum_kv_seqlen=sum_kv_seqlen,
-            local_adapter_ids=local_adapter_ids,
-            model_metas=model_metas,
-            state_offsets=state_offsets,
-            target_hidden_states=target_hidden_states,
-            target_position_ids=target_position_ids,
-            mrope_pos_ids=mrope_pos_ids,
-        )
-
-    @record_function('ModelInputs.update_inputs')
-    def update_inputs(self, inputs: ModelInputs, delta: 'ModelInputsDelta') -> ModelInputs:
-        """Update model inputs with delta."""
-        assert inputs.is_decoding, 'Only support update_delta in decoding.'
-        return self.index_select(
-            inputs=inputs,
-            indices=delta.indices,
-            indice_cpu=delta.indice_cpu,
-            block_offsets=delta.block_offsets,
-            max_q_seqlen=delta.max_q_seqlen,
-            max_kv_seqlen=delta.max_kv_seqlen,
-            sum_kv_seqlen=delta.sum_kv_seqlen,
-            num_ignored_history=delta.num_ignored_history,
-        )
+    # return new inputs
+    return ModelInputs(
+        input_ids=input_ids,
+        seq_length=seq_length,
+        history_lengths=history_lengths,
+        block_offsets=block_offsets,
+        is_decoding=inputs.is_decoding,
+        num_ignored_history=num_ignored_history,
+        max_q_seqlen=max_q_seqlen,
+        max_kv_seqlen=max_kv_seqlen,
+        sum_kv_seqlen=sum_kv_seqlen,
+        local_adapter_ids=local_adapter_ids,
+        model_metas=model_metas,
+        state_offsets=state_offsets,
+        target_hidden_states=target_hidden_states,
+        target_position_ids=target_position_ids,
+        mrope_pos_ids=mrope_pos_ids,
+    )

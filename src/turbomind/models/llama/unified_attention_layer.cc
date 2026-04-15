@@ -45,9 +45,9 @@
 #include "src/turbomind/models/llama/mla_utils.h"
 #include "src/turbomind/models/llama/unified_attention_layer.h"
 
+#include "src/turbomind/core/logger.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/utils/logger.h"
 
 // #include "dbg.h"
 
@@ -190,8 +190,8 @@ static void init_dynamic_ntk(RequestCache& cache, const RopeParam& rope)
             scaling_factor = scaling_factor * max_seq_len / max_pos_emb - (scaling_factor - 1);
             cache.rope_base *= powf(scaling_factor, rope.dim / (rope.dim - 2.f));
             // clang-format off
-            TM_LOG_INFO("[ProcessInferRequests] %ld rope_scaling_factor: %f, rope_theta = %f",
-                        (long)cache.req->id, scaling_factor, cache.rope_base);
+            TM_LOG_INFO("{} rope_scaling_factor: {}, rope_theta = {}",
+                        cache.req->id, scaling_factor, cache.rope_base);
             // clang-format on
         }
     }
@@ -299,7 +299,7 @@ void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
 
 void UnifiedAttentionLayer::Forward(ForwardParam p)
 {
-    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("{}", __PRETTY_FUNCTION__);
 
     /////////////////////////////////////////////
     /// parse inputs
