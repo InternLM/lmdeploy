@@ -5,10 +5,9 @@ import time
 
 import pytest
 import requests
+from lmdeploy.serve.openai.api_client import APIClient
 from utils.constant import BACKEND_LIST, DEFAULT_PORT, DEFAULT_SERVER, RESTFUL_MODEL_LIST
 from utils.restful_return_check import assert_chat_completions_batch_return
-
-from lmdeploy.serve.openai.api_client import APIClient
 
 BASE_URL = f'http://{DEFAULT_SERVER}:{DEFAULT_PORT}'
 JSON_HEADERS = {'Content-Type': 'application/json'}

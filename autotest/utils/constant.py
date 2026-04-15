@@ -156,7 +156,6 @@ SLEEP_WAKEUP_MODEL_LIST = [
 ]
 
 SLEEP_WAKEUP_BACKENDS = ['pytorch', 'turbomind']
-SLEEP_WAKEUP_UPDATE_WEIGHTS_BACKENDS = ['pytorch', 'turbomind']
 
 BACKEND_LIST = ['turbomind', 'pytorch']
 

@@ -11,7 +11,6 @@ from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfi
 from lmdeploy.messages import Response
 from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.utils import is_bf16_supported
-
 from utils.config_utils import get_parallel_config
 from utils.constant import SLEEP_WAKEUP_BACKENDS, SLEEP_WAKEUP_MODEL_LIST
 from utils.sleep_utils import (
@@ -26,7 +25,6 @@ from utils.sleep_utils import (
     resolve_hf_checkpoint_dir,
 )
 
-
 _SLEEP_PIPELINE_BACKEND_CLASS = {
     'pytorch': PytorchEngineConfig,
     'turbomind': TurbomindEngineConfig,
@@ -38,7 +36,10 @@ def _pipeline_sleep_backend_classes():
     for name in SLEEP_WAKEUP_BACKENDS:
         cls = _SLEEP_PIPELINE_BACKEND_CLASS.get(name)
         if cls is None:
-            raise ValueError(f'unknown SLEEP_WAKEUP_BACKENDS entry {name!r}; expected one of {set(_SLEEP_PIPELINE_BACKEND_CLASS)}')
+            allowed = set(_SLEEP_PIPELINE_BACKEND_CLASS)
+            raise ValueError(
+                f'unknown SLEEP_WAKEUP_BACKENDS entry {name!r}; expected one of {allowed}',
+            )
         out.append(cls)
     return out
 

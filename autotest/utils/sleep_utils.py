@@ -9,10 +9,9 @@ from pathlib import Path
 from typing import Any
 
 import torch
+from lmdeploy.utils import serialize_state_dict
 from safetensors.torch import safe_open
 from transformers.utils import SAFE_WEIGHTS_INDEX_NAME, SAFE_WEIGHTS_NAME, WEIGHTS_INDEX_NAME, WEIGHTS_NAME
-
-from lmdeploy.utils import serialize_state_dict
 
 UPDATE_WEIGHTS_CUDA_DEVICE_ENV = 'LMDEPLOY_UPDATE_WEIGHTS_CUDA_DEVICE'
 
@@ -137,7 +136,8 @@ def _iterate_safetensors_turbomind_cpu_chunks(
     item_count: dict[int, int],
     map_key: Callable[[str], str],
 ) -> Iterator[dict[str, torch.Tensor]]:
-    """Yield CPU state dicts in the same order as ``SafetensorsLoader.items`` (one decoder layer or misc)."""
+    """Yield CPU state dicts in the same order as ``SafetensorsLoader.items``
+    (one decoder layer or misc)."""
     params: dict[int, dict[str, torch.Tensor]] = defaultdict(dict)
     for shard in shards:
         filename = shard.name
@@ -235,7 +235,8 @@ def apply_serialized_hf_segments_for_turbomind_level2_weights(
     model_dir: Path,
     emit_segment: Callable[[Any, bool], None],
 ) -> None:
-    """Upload HF weights in **layer-sized** chunks (TurboMind ``update_params`` / ``StateDictLoader``)."""
+    """Upload HF weights in **layer-sized** chunks (TurboMind ``update_params``
+    / ``StateDictLoader``)."""
     kind, shards = shard_paths(model_dir)
     if kind != 'safetensors':
         raise RuntimeError(

@@ -4,11 +4,12 @@ from pathlib import Path
 import pytest
 import requests
 import torch
+from lmdeploy.serve.openai.api_client import APIClient
 from utils.constant import (
     DEFAULT_PORT,
     DEFAULT_SERVER,
+    SLEEP_WAKEUP_BACKENDS,
     SLEEP_WAKEUP_MODEL_LIST,
-    SLEEP_WAKEUP_UPDATE_WEIGHTS_BACKENDS,
 )
 from utils.restful_return_check import assert_chat_completions_batch_return
 from utils.sleep_utils import (
@@ -23,8 +24,6 @@ from utils.sleep_utils import (
     level2_update_weights_request_dict,
     resolve_hf_checkpoint_dir,
 )
-
-from lmdeploy.serve.openai.api_client import APIClient
 
 BASE_URL = f'http://{DEFAULT_SERVER}:{DEFAULT_PORT}'
 JSON_HEADERS = {'Content-Type': 'application/json'}
@@ -339,7 +338,7 @@ class TestRestfulSleepWakeup:
         finally:
             _ensure_awake()
 
-    @pytest.mark.parametrize('backend', SLEEP_WAKEUP_UPDATE_WEIGHTS_BACKENDS)
+    @pytest.mark.parametrize('backend', SLEEP_WAKEUP_BACKENDS)
     def test_sleep_level_2_full_wakeup_and_chat(self, model_case, backend, config):
         try:
             _ensure_awake()
@@ -404,7 +403,8 @@ class TestRestfulSleepWakeup:
                 top_k=1,
             )
             assert_chat_completions_batch_return(after_full, model_name)
-            assert_chat_decode_unchanged(baseline, after_full, label='level2 REST infer after 2nd sleep cycle (staged wakeup)')
+            label2 = 'level2 REST infer after 2nd sleep cycle (staged wakeup)'
+            assert_chat_decode_unchanged(baseline, after_full, label=label2)
 
             output = None
             for output in api_client.chat_completions_v1(
