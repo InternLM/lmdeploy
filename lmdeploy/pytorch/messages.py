@@ -123,6 +123,16 @@ class SamplingParam:
                            'a int >=0 and <= `max_new_tokens`,'
                            f' but is {min_new_tokens}')
             min_new_tokens = 0
+        repetition_ngram_size = gen_config.repetition_ngram_size
+        repetition_ngram_threshold = gen_config.repetition_ngram_threshold
+        if repetition_ngram_size < 0:
+            logger.warning('`repetition_ngram_size` must be >= 0, got %s; using 0.',
+                           repetition_ngram_size)
+            repetition_ngram_size = 0
+        if repetition_ngram_threshold < 0:
+            logger.warning('`repetition_ngram_threshold` must be >= 0, got %s; using 0.',
+                           repetition_ngram_threshold)
+            repetition_ngram_threshold = 0
         logprobs = gen_config.logprobs
         if logprobs is None:
             logprobs = -1
@@ -148,8 +158,8 @@ class SamplingParam:
             out_logits=(output_logits is not None),
             num_logprobs=logprobs,
             return_routed_experts=gen_config.return_routed_experts,
-            repetition_ngram_size=gen_config.repetition_ngram_size,
-            repetition_ngram_threshold=gen_config.repetition_ngram_threshold,
+            repetition_ngram_size=repetition_ngram_size,
+            repetition_ngram_threshold=repetition_ngram_threshold,
         )
 
 
