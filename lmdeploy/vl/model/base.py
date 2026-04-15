@@ -68,6 +68,10 @@ class VisionModel(ABC):
             'pixel_values_videos': Modality.VIDEO,
             'second_per_grid_ts': Modality.VIDEO,
             'video_grid_thw': Modality.VIDEO,
+            # time series-related attributes
+            'ts_values': Modality.TIME_SERIES,
+            'ts_sr': Modality.TIME_SERIES,
+            'ts_lens': Modality.TIME_SERIES,
         }
 
         # name of the feature filed
@@ -76,6 +80,7 @@ class VisionModel(ABC):
             'pixel_values_videos',
             'audio_features',
             'input_features',
+            'ts_values',
         ]
 
     @staticmethod
@@ -134,13 +139,25 @@ class VisionModel(ABC):
 
             # non-bundled case
             if not is_bundled:
-                expanded_mm_items.append(
-                    dict(
-                        modality=modality,
-                        pixel_values=item['feature'],
-                        image_grid_thw=item['image_grid_thw'][0],
-                        offset=item['offset'][0],
-                        image_token_id=self.image_token_id
+                if modality == Modality.IMAGE:
+                    expanded_mm_items.append(
+                        dict(
+                            modality=modality,
+                            pixel_values=item['feature'],
+                            image_grid_thw=item['image_grid_thw'][0],
+                            offset=item['offset'][0],
+                            image_token_id=self.image_token_id
+                            )
+                        )
+                elif modality == Modality.TIME_SERIES:
+                    expanded_mm_items.append(
+                        dict(
+                            modality=modality,
+                            ts_values=item['feature'],
+                            ts_sr=item['ts_sr'],
+                            ts_lens=item['ts_lens'],
+                            offset=item['offset'][0],
+                            ts_token_id=self.ts_token_id
                         )
                     )
                 continue
@@ -253,36 +270,23 @@ class VisionModel(ABC):
 
         return expanded_mm_items
 
-    def _get_override_kwargs(self, processor, mm_processor_kwargs: dict[str, Any] | None = None):
+    def _get_override_size(self, processor, mm_processor_kwargs: dict[str, Any] | None = None):
+        default_min = processor.size['shortest_edge']
+        default_max = processor.size['longest_edge']
         if not mm_processor_kwargs:
-            return {}, {}
+            return {'shortest_edge': default_min, 'longest_edge': default_max}
 
-        def apply_override_size(sub_processor, kwargs):
-            if not kwargs or sub_processor is None or not hasattr(sub_processor, 'size'):
-                return
-            default_min = sub_processor.size['shortest_edge']
-            default_max = sub_processor.size['longest_edge']
-            override_min = kwargs.get('min_pixels', default_min)
-            override_max = kwargs.get('max_pixels', default_max)
-            if override_min > override_max:
-                logger.info(
-                    f'Overriding min_pixels {override_min} > max_pixels {override_max}, ' \
-                     'falling back to defaults.'
-                )
-                return
-            logger.info(f'Overriding processor size with min_pixels={override_min} and max_pixels={override_max}.')
-            kwargs.pop('min_pixels', None)
-            kwargs.pop('max_pixels', None)
-            kwargs['size'] = {'shortest_edge': override_min, 'longest_edge': override_max}
+        override_min = mm_processor_kwargs.get('min_pixels', default_min)
+        override_max = mm_processor_kwargs.get('max_pixels', default_max)
+        if override_min > override_max:
+            logger.info(
+                f'Overriding min_pixels {override_min} > max_pixels {override_max}, ' \
+                f'falling back to defaults, min_pixels={default_min} and max_pixels={default_max}.'
+            )
+            return {'shortest_edge': default_min, 'longest_edge': default_max}
 
-        image_processor = getattr(processor, 'image_processor', None)
-        video_processor = getattr(processor, 'video_processor', None)
-        image_processor_kwargs = mm_processor_kwargs.get('image', {})
-        video_processor_kwargs = mm_processor_kwargs.get('video', {})
-
-        apply_override_size(image_processor, image_processor_kwargs)
-        apply_override_size(video_processor, video_processor_kwargs)
-        return image_processor_kwargs, video_processor_kwargs
+        logger.info(f'Overriding processor size with min_pixels={override_min} and max_pixels={override_max}.')
+        return {'shortest_edge': override_min, 'longest_edge': override_max}
 
     def preprocess(self,
                    messages: list[dict],
@@ -292,37 +296,50 @@ class VisionModel(ABC):
 
         mm_items = self.collect_multimodal_items(messages)
 
-        raw_images, raw_videos, video_metadatas = [], [], []
+        raw_images = []
+        raw_videos, video_metadatas = [], []
+        raw_time_series, sampling_rates = [], []
         for modality, data, params in mm_items:
             if modality == Modality.IMAGE:
                 raw_images.append(data)
             elif modality == Modality.VIDEO:
                 raw_videos.append(data)
-                video_metadatas.append(params['video_metadata'])
+                video_metadatas.append(params.get('video_metadata', None))
+            elif modality == Modality.TIME_SERIES:
+                raw_time_series.append(data)
+                sampling_rates.append(params.get('sampling_rate', None))
             else:
                 raise ValueError(f'unsupported modality {modality}')
 
         # get kwrags for processor
         kwargs = {}
-        image_processor_kwargs, video_processor_kwargs = self._get_override_kwargs(self.processor, mm_processor_kwargs)
+        mm_processor_kwargs = mm_processor_kwargs or {}
         if raw_images:
             kwargs['images'] = raw_images
-            kwargs['images_kwargs'] = image_processor_kwargs
+            image_processor_kwargs = mm_processor_kwargs.get('image', None)
+            kwargs['size'] = self._get_override_size(self.processor.image_processor, image_processor_kwargs)
         if raw_videos:
             kwargs['videos'] = raw_videos
             kwargs['video_metadata'] = video_metadatas
+            video_processor_kwargs = mm_processor_kwargs.get('video', None)
+            kwargs['size'] = self._get_override_size(self.processor.video_processor, video_processor_kwargs)
             # leave resize to hf processor
             # sample frames is done in video loader, set False to avoid duplication
             kwargs['do_resize'] = True
             kwargs['do_sample_frames'] = False
-            kwargs['videos_kwargs'] = video_processor_kwargs
-        if raw_images and raw_videos and (image_processor_kwargs or video_processor_kwargs):
+        if raw_time_series:
+            assert hasattr(self, 'time_series_processor'), 'time series processor is not defined for time series input'
+            assert not raw_images and not raw_videos, 'time series is not compatible with image/video input'
+            self.tokenizer = self.processor.tokenizer
+            self.processor = self.time_series_processor
+            kwargs['time_series'] = raw_time_series
+            kwargs['sampling_rate'] = sampling_rates
+        if raw_images and raw_videos and kwargs.get('size', None) is not None:
             logger.warning(
                 'Overriding mm processor kwargs for mixed modality can be problematic, ' \
                 'skip kwargs setting for both processors to avoid potential issues.'
             )
-            kwargs.pop('images_kwargs', None)
-            kwargs.pop('videos_kwargs', None)
+            kwargs.pop('size', None)
 
         # process raw items with hf processor
         processor_outputs = self.processor(
@@ -560,10 +577,12 @@ class MultomodalSpecialTokens:
     image_token: str | list[str] | None = None
     video_token: str | list[str] | None = None
     audio_token: str | list[str] | None = None
+    ts_token: str | list[str] | None = None
 
     image_token_id: int | None = None
     video_token_id: int | None = None
     audio_token_id: int | None = None
+    ts_token_id: int | None = None
 
     def get_token_id_by_modality(self, modality: Modality) -> int | None:
         """Get token ID for a given modality."""
@@ -571,4 +590,5 @@ class MultomodalSpecialTokens:
             Modality.IMAGE: self.image_token_id,
             Modality.VIDEO: self.video_token_id,
             Modality.AUDIO: self.audio_token_id,
+            Modality.TIME_SERIES: self.ts_token_id,
         }.get(modality)
