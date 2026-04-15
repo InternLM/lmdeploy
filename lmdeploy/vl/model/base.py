@@ -10,9 +10,12 @@ from mmengine import Registry
 from transformers import AutoConfig, AutoTokenizer
 
 from lmdeploy.archs import get_model_arch
+from lmdeploy.utils import get_logger
 from lmdeploy.vl.constants import Modality
 
 VISION_MODELS = Registry('vision_model')
+
+logger = get_logger('lmdeploy')
 
 
 class VisionModel(ABC):
@@ -161,7 +164,7 @@ class VisionModel(ABC):
                 # expand each image into a separate item
                 for i in range(num_items):
                     start_idx, end_idx = slice_indices[i], slice_indices[i + 1]
-                    # TODO: may compute mm mask and remove mm token id inputs
+                    # TODO: zhouxinyu, compute mask and avoid passing token id
                     expanded_mm_items.append(
                         dict(
                             modality=modality,
@@ -232,12 +235,12 @@ class VisionModel(ABC):
                         frame_start_indices[video_idx + 1],
                     )
 
-                    # import pdb; pdb.set_trace()
-                    # expand each frame into a separate item, not sure good or no
+                    # expand each frame into a separate item
+                    # TODO: zhouxinyu, not sure per-frame split is good or not
+                    # TODO: zhouxinyu, grid_thw [1, h, w] is only for qwen3vl
                     t, h, w = video_grid_thw[video_idx].tolist()
                     for frame_idx in range(t):
                         video_feature = item['feature'][start:end]
-                        # FIXME: grid_thw [1, h, w] is only for qwen3vl
                         expanded_mm_items.append(
                             dict(
                                 modality=modality,
@@ -250,18 +253,45 @@ class VisionModel(ABC):
 
         return expanded_mm_items
 
+    def _get_override_kwargs(self, processor, mm_processor_kwargs: dict[str, Any] | None = None):
+        if not mm_processor_kwargs:
+            return {}, {}
+
+        def apply_override_size(sub_processor, kwargs):
+            if not kwargs or sub_processor is None or not hasattr(sub_processor, 'size'):
+                return
+            default_min = sub_processor.size['shortest_edge']
+            default_max = sub_processor.size['longest_edge']
+            override_min = kwargs.get('min_pixels', default_min)
+            override_max = kwargs.get('max_pixels', default_max)
+            if override_min > override_max:
+                logger.info(
+                    f'Overriding min_pixels {override_min} > max_pixels {override_max}, ' \
+                     'falling back to defaults.'
+                )
+                return
+            logger.info(f'Overriding processor size with min_pixels={override_min} and max_pixels={override_max}.')
+            kwargs.pop('min_pixels', None)
+            kwargs.pop('max_pixels', None)
+            kwargs['size'] = {'shortest_edge': override_min, 'longest_edge': override_max}
+
+        image_processor = getattr(processor, 'image_processor', None)
+        video_processor = getattr(processor, 'video_processor', None)
+        image_processor_kwargs = mm_processor_kwargs.get('image', {})
+        video_processor_kwargs = mm_processor_kwargs.get('video', {})
+
+        apply_override_size(image_processor, image_processor_kwargs)
+        apply_override_size(video_processor, video_processor_kwargs)
+        return image_processor_kwargs, video_processor_kwargs
+
     def preprocess(self,
                    messages: list[dict],
                    input_text: str,
                    mm_processor_kwargs: dict[str, Any] | None = None) -> list[dict]:
         """Refer to `super().preprocess()` for spec."""
 
-        kwargs = mm_processor_kwargs or {}
         mm_items = self.collect_multimodal_items(messages)
 
-        # TODO: get kwargs from params
-        # TODO: careful about mm processor kwargs, in mixed modality case
-        # may need to treat each modality differently
         raw_images, raw_videos, video_metadatas = [], [], []
         for modality, data, params in mm_items:
             if modality == Modality.IMAGE:
@@ -273,16 +303,26 @@ class VisionModel(ABC):
                 raise ValueError(f'unsupported modality {modality}')
 
         # get kwrags for processor
+        kwargs = {}
+        image_processor_kwargs, video_processor_kwargs = self._get_override_kwargs(self.processor, mm_processor_kwargs)
         if raw_images:
             kwargs['images'] = raw_images
+            kwargs['images_kwargs'] = image_processor_kwargs
         if raw_videos:
             kwargs['videos'] = raw_videos
             kwargs['video_metadata'] = video_metadatas
             # leave resize to hf processor
-            # sample frames is done in video loader, avoid duplication
+            # sample frames is done in video loader, set False to avoid duplication
             kwargs['do_resize'] = True
             kwargs['do_sample_frames'] = False
-            kwargs['return_metadata'] = True
+            kwargs['videos_kwargs'] = video_processor_kwargs
+        if raw_images and raw_videos and (image_processor_kwargs or video_processor_kwargs):
+            logger.warning(
+                'Overriding mm processor kwargs for mixed modality can be problematic, ' \
+                'skip kwargs setting for both processors to avoid potential issues.'
+            )
+            kwargs.pop('images_kwargs', None)
+            kwargs.pop('videos_kwargs', None)
 
         # process raw items with hf processor
         processor_outputs = self.processor(
@@ -321,7 +361,6 @@ class VisionModel(ABC):
         # expand bundled hf processor outputs into per-image/video entry
         expanded_mm_items = self._get_expanded_mm_items(collected_mm_items)
 
-        # import pdb; pdb.set_trace()
         return input_ids.tolist(), expanded_mm_items
 
     def has_input_ids(self, messages: list[dict]) -> bool:

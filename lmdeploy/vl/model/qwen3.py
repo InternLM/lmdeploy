@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any
 
 from transformers import AutoProcessor
 
@@ -46,22 +45,6 @@ class Qwen3VLModel(VisionModel):
             image_token_id=self.image_token_id,
             video_token_id=self.video_token_id,
         )
-
-    def resolve_size_params(self, processor, mm_processor_kwargs: dict[str, Any] | None = None):
-        default_min = processor.size['shortest_edge']
-        default_max = processor.size['longest_edge']
-
-        if not mm_processor_kwargs:
-            return {'shortest_edge': default_min, 'longest_edge': default_max}
-
-        min_pixels = mm_processor_kwargs.get('min_pixels', default_min)
-        max_pixels = mm_processor_kwargs.get('max_pixels', default_max)
-
-        if min_pixels > max_pixels:
-            logger.warning(f'min_pixels {min_pixels} > max_pixels {max_pixels}, falling back to defaults.')
-            return {'shortest_edge': default_min, 'longest_edge': default_max}
-
-        return {'shortest_edge': min_pixels, 'longest_edge': max_pixels}
 
     def apply_chat_template(self, messages, chat_template, sequence_start, chat_template_kwargs=None):
         """Apply chat template to get the prompt."""
