@@ -66,7 +66,11 @@ class ARSpecExtraInputs(ExtraInputs):
         indices = delta.indices
         output_draft_token_ids = self.output_draft_token_ids[indices]
         num_rejected_tokens = self.num_rejected_tokens[indices]
-        return ARSpecExtraInputs(output_draft_token_ids=output_draft_token_ids, num_rejected_tokens=num_rejected_tokens)
+        output_token_ids=self.output_token_ids[indices] if self.output_token_ids is not None else None
+        return ARSpecExtraInputs(output_draft_token_ids=output_draft_token_ids,
+                                 num_rejected_tokens=num_rejected_tokens,
+                                 output_token_ids=output_token_ids,
+                                 )
 
 
 @dataclass

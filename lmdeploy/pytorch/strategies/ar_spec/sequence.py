@@ -30,7 +30,6 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
     def __post_init__(self):
         """Post init."""
         super().__post_init__()
-        self._num_spec_ids: int = 0
         self._num_new_valid: int = 0
         self._num_valid_ids: int = len(self.history_cache)
         self._strategy: ARSpecSequenceStrategy = self._seq_meta.strategy
@@ -38,10 +37,6 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
     @property
     def num_valid_ids(self):
         return self._num_valid_ids
-
-    @property
-    def num_spec_ids(self):
-        return self._num_spec_ids
 
     @property
     def routed_experts(self) -> np.ndarray:
@@ -67,7 +62,6 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
         self._num_token_ids = 1
         self._num_history_ids -= val
 
-        self._num_spec_ids = 0
         self._num_new_valid = 0
         self.history_cache.resize(self.num_valid_ids)
 
@@ -82,14 +76,12 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
         self._num_valid_ids = self.num_history_ids + num_tokens
         self._num_token_ids = num_tokens
         self.num_new_tokens = 0
-        self._num_spec_ids = 0
         self._num_new_valid = 0
         self.history_cache.append(token_ids)
 
     def _update_token_ids_prefill(self, token_ids: np.ndarray, draft_token_ids: np.ndarray):
         """Update token ids for prefill."""
         num_valid = len(token_ids)
-        self._num_spec_ids = len(draft_token_ids)
         token_ids = np.concatenate([token_ids, draft_token_ids])
         num_tokens = len(token_ids)
         self._num_history_ids += self._num_token_ids
@@ -99,34 +91,23 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
         self._num_valid_ids = self.num_history_ids + num_valid
         self.history_cache.append(token_ids)
 
-    def _update_token_ids_decode(self, token_ids: np.ndarray, draft_token_ids: np.ndarray = None):
+    def _update_token_ids_decode(self, token_ids: np.ndarray, draft_token_ids: np.ndarray):
         """Update token ids for decode."""
+
         valid_ids = token_ids[token_ids > -1]
         num_valid = len(valid_ids)
-        self.num_new_tokens = self.num_new_tokens + num_valid
+        self.num_new_tokens += num_valid
 
         self._num_new_valid = num_valid
         self._num_valid_ids += num_valid
         self._num_history_ids = self.num_valid_ids - 1
 
-        # last step has spec ids
-        if self.num_spec_ids > 0:
-            token_ids = valid_ids[-1:]
-        else:
-            token_ids = valid_ids
-
+        # back to last valid position
+        self.history_cache.resize(self._num_history_ids)
+        # only append the last new valid token + new draft tokens
+        token_ids = np.concatenate([valid_ids[-1:], draft_token_ids])
         num_tokens = len(token_ids)
-
-        if draft_token_ids is not None:
-            num_tokens = 1 + len(draft_token_ids)
-            token_ids = np.concatenate([token_ids, draft_token_ids])
-            self._num_spec_ids = len(draft_token_ids)
-        else:
-            self._num_spec_ids = 0
-
         self._num_token_ids = num_tokens
-        if self.num_history_ids < len(self.history_cache):
-            self.history_cache.resize(self.num_history_ids)
         self.history_cache.append(token_ids)
 
     def update_token_ids(self,
@@ -181,8 +162,8 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
         self._num_token_ids = num_valid_ids - step
         self.num_ignored_history = min(step, self.num_ignored_history)
         # reset for spec ids
-        self._num_spec_ids = 0
         self._num_new_valid = 0
+        self.history_cache.resize(num_valid_ids)
         self.model_meta = None
 
         if self.return_routed_experts:
