@@ -4,7 +4,6 @@ from collections import OrderedDict
 from typing import Any
 
 import yaml
-
 from lmdeploy.utils import is_bf16_supported
 
 SUFFIX_INNER_AWQ = '-inner-4bits'

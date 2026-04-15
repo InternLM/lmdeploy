@@ -2,6 +2,8 @@ import multiprocessing as mp
 
 import pydantic
 import pytest
+from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
+from lmdeploy.utils import is_bf16_supported
 from utils.config_utils import set_device_env_variable, unset_device_env_variable
 from utils.pipeline_chat import (
     assert_pipeline_batch_return,
@@ -12,9 +14,6 @@ from utils.pipeline_chat import (
     save_pipeline_common_log,
 )
 from utils.restful_return_check import has_repeated_fragment
-
-from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
-from lmdeploy.utils import is_bf16_supported
 
 
 def init_pipeline(model_path, backend_config):

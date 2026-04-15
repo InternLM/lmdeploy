@@ -1,12 +1,19 @@
 import json
+import os
+import sys
+from typing import Any
 
-import fire
-import numpy as np
-from PIL import Image
+_autotest_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if _autotest_root not in sys.path:
+    sys.path.insert(0, _autotest_root)
 
-from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
-from lmdeploy.vl import encode_image_base64, load_image
-from lmdeploy.vl.constants import IMAGE_TOKEN
+import fire  # noqa: E402
+import numpy as np  # noqa: E402
+from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline  # noqa: E402
+from lmdeploy.vl import encode_image_base64, load_image, load_video  # noqa: E402
+from lmdeploy.vl.constants import IMAGE_TOKEN  # noqa: E402
+from PIL import Image  # noqa: E402
+from utils.constant import MM_DEMO_TOMB_USER_PROMPT  # noqa: E402
 
 gen_config = GenerationConfig(max_new_tokens=500, min_new_tokens=10)
 
@@ -18,6 +25,21 @@ PIC_REDPANDA = 'redpanda.jpg'
 PIC_PANDA = 'panda.jpg'
 DESC = 'What are the similarities and differences between these two images.'
 DESC_ZH = '两张图有什么相同和不同的地方.'
+
+DEFAULT_VIDEO_FILENAME = 'red-panda.mp4'
+VIDEO_QWEN3_DEMO_FILENAME = 'N1cdUjctpG8.mp4'
+
+
+def _numpy_video_to_pil_list(frames: np.ndarray) -> list[Image.Image]:
+    images: list[Image.Image] = []
+    for i in range(int(frames.shape[0])):
+        images.append(Image.fromarray(frames[i].astype('uint8')).convert('RGB'))
+    return images
+
+
+def load_video_sampled_pil(video_path: str, num_frames: int, **kwargs: Any) -> tuple[list[Image.Image], dict[str, Any]]:
+    frames, meta = load_video(video_path, num_frames=num_frames, **kwargs)
+    return _numpy_video_to_pil_list(frames), meta
 
 
 def run_pipeline_mllm_test(model_path, run_config, resource_path, is_pr_test: bool = False):
@@ -169,44 +191,9 @@ def internvl_vl_testcase(pipe, resource_path, lang='en'):
     print(f'[caseresult internvl-separate-images2-{lang} start]' + json.dumps(response.text, ensure_ascii=False) +
           f'[caseresult internvl-separate-images2-{lang} end]\n')
 
-    # video multi-round conversation
-    def get_index(bound, fps, max_frame, first_idx=0, num_segments=32):
-        if bound:
-            start, end = bound[0], bound[1]
-        else:
-            start, end = -100000, 100000
-        start_idx = max(first_idx, round(start * fps))
-        end_idx = min(round(end * fps), max_frame)
-        seg_size = float(end_idx - start_idx) / num_segments
-        frame_indices = np.array(
-            [int(start_idx + (seg_size / 2) + np.round(seg_size * idx)) for idx in range(num_segments)])
-        return frame_indices
-
-    def load_video(video_path, bound=None, num_segments=32):
-        import cv2
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            raise ValueError(f'Cannot open video file: {video_path}')
-
-        max_frame = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) - 1
-        fps = cap.get(cv2.CAP_PROP_FPS)
-
-        frame_indices = get_index(bound, fps, max_frame, first_idx=0, num_segments=num_segments)
-        imgs = []
-
-        for frame_index in frame_indices:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
-            ret, frame = cap.read()
-            if ret:
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                img = Image.fromarray(rgb_frame).convert('RGB')
-                imgs.append(img)
-
-        cap.release()
-        return imgs
-
-    video_path = resource_path + '/red-panda.mp4'
-    imgs = load_video(video_path, num_segments=8)
+    # video multi-round conversation (uniform ``num_frames`` via lmdeploy.vl.load_video)
+    video_path = f'{resource_path}/{DEFAULT_VIDEO_FILENAME}'
+    imgs, _ = load_video_sampled_pil(video_path, num_frames=8)
 
     question = ''
     for i in range(len(imgs)):
@@ -287,43 +274,11 @@ def MiniCPM_vl_testcase(pipe, resource_path):
     print('[caseresult minicpm-fewshot start]' + json.dumps(response.text, ensure_ascii=False) +
           '[caseresult minicpm-fewshot end]\n')
 
-    # Chat with video
-    MAX_NUM_FRAMES = 64  # if cuda OOM set a smaller number
-
-    def encode_video(video_path):
-
-        def uniform_sample(length, n):
-            gap = len(length) / n
-            idxs = [int(i * gap + gap / 2) for i in range(n)]
-            return [length[i] for i in idxs]
-
-        import cv2
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            raise ValueError(f'Cannot open video file: {video_path}')
-
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
-        sample_fps = round(fps / 1)  # FPS
-        frame_idx = [i for i in range(0, total_frames, sample_fps)]
-        if len(frame_idx) > MAX_NUM_FRAMES:
-            frame_idx = uniform_sample(frame_idx, MAX_NUM_FRAMES)
-
-        frames = []
-        for idx in frame_idx:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-            ret, frame = cap.read()
-            if ret:
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                frames.append(Image.fromarray(rgb_frame.astype('uint8')).convert('RGB'))
-
-        cap.release()
-        print('num frames:', len(frames))
-        return frames
-
-    video_path = resource_path + '/red-panda.mp4'
-    frames = encode_video(video_path)
+    # Chat with video (fixed frame budget; same decoder as REST ``video_url``)
+    max_video_frames = 32
+    video_path = f'{resource_path}/{DEFAULT_VIDEO_FILENAME}'
+    frames, video_meta = load_video_sampled_pil(video_path, num_frames=max_video_frames)
+    print('num frames:', len(frames), 'meta:', video_meta.get('frames_indices'))
     question = 'What animals are in the video, and what are they doing?'
 
     content = [dict(type='text', text=question)]
@@ -385,6 +340,53 @@ def Qwen_vl_testcase(pipe, resource_path):
     response = pipe(messages, gen_config=gen_config, log_level='INFO', max_log_len=10)
     print('[caseresult qwen-performance-images2 start]' + json.dumps(response.text, ensure_ascii=False) +
           '[caseresult qwen-performance-images2 end]\n')
+
+    # Qwen2.5/3-VL: native ``video`` + same knobs as REST ``extra_body`` (top_k / mm_processor_kwargs).
+    demo_path = os.path.join(resource_path, VIDEO_QWEN3_DEMO_FILENAME)
+    if not os.path.isfile(demo_path):
+        print('[caseresult qwen3-demo-video start]' +
+              json.dumps('SKIPPED_NO_DEMO_MP4', ensure_ascii=False) + '[caseresult qwen3-demo-video end]\n')
+    else:
+        try:
+            frames, vmeta = load_video(demo_path, num_frames=16, fps=2)
+            demo_q = MM_DEMO_TOMB_USER_PROMPT
+            vmsg = [{
+                'role':
+                'user',
+                'content': [
+                    {
+                        'type': 'video',
+                        'data': frames,
+                        'video_metadata': vmeta,
+                    },
+                    {
+                        'type': 'text',
+                        'text': demo_q,
+                    },
+                ],
+            }]
+            mm_gen_config = GenerationConfig(
+                max_new_tokens=24576,
+                min_new_tokens=10,
+                top_k=20,
+                temperature=0.3,
+                top_p=0.95,
+            )
+            response = pipe(
+                vmsg,
+                gen_config=mm_gen_config,
+                log_level='INFO',
+                max_log_len=10,
+                mm_processor_kwargs={
+                    'fps': 2,
+                    'do_sample_frames': True,
+                },
+            )
+            print('[caseresult qwen3-demo-video start]' + json.dumps(response.text, ensure_ascii=False) +
+                  '[caseresult qwen3-demo-video end]\n')
+        except Exception as exc:
+            err = json.dumps(f'PIPELINE_VIDEO_ERROR:{exc!s}', ensure_ascii=False)
+            print('[caseresult qwen3-demo-video start]' + err + '[caseresult qwen3-demo-video end]\n')
 
 
 if __name__ == '__main__':
