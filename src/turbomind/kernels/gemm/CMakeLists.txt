@@ -16,6 +16,7 @@ set(GEMM2_KERNELS_SM80
     kernel/sm80_16816_16.cu
 )
 set(GEMM2_KERNELS_SM90
+    tma.cu
     kernel/sm90_16816_4.cu
     kernel/sm90_16816_8.cu
     kernel/sm90_16816_16.cu
@@ -49,7 +50,6 @@ add_library(gemm2
         cast.cu
         unpack.cu
         context.cu
-        tma.cu
         tuner/cache_utils.cu
         tuner/measurer.cu
         tuner/sampler.cu
@@ -85,11 +85,8 @@ set_property(TARGET gemm2 PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET gemm2 PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 
 if(GEMM2_ARCH_90_ENABLED)
-    # SM90 kernels compile only for sm_90 (CUTLASS wgmma instructions).
-    # tma.cu is duplicated here (also in gemm2) so make_2d_tma_desc lives in the
-    # same archive as its only callers (kernel_impl_sm90.h), avoiding the undefined
-    # symbol from single-pass static-link ordering between two archives.
-    add_library(gemm2_sm90 STATIC ${GEMM2_KERNELS_SM90} tma.cu)
+    # SM90 kernels only compile for 90/90a; avoid building them for sm_100.
+    add_library(gemm2_sm90 STATIC ${GEMM2_KERNELS_SM90})
     set_target_properties(gemm2_sm90 PROPERTIES
         CUDA_ARCHITECTURES "${_sm90_archs}"
         POSITION_INDEPENDENT_CODE ON

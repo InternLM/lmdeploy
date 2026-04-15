@@ -89,11 +89,13 @@ struct LlamaLinear::Impl {
             Tensor    A_e       = {{m, k}, A.dtype(), kDEVICE};
             invokeMoeDispatch(A_e, A, indices.data(), e, st);
             sync_check_cuda_error();
-            Tensor U_e;
-            invokeMoeDispatchScales(U_e, U, indices.data(), e, st);
-            sync_check_cuda_error();
+            if (U) {
+                Tensor U_e;
+                invokeMoeDispatchScales(U_e, U, indices.data(), e, st);
+                sync_check_cuda_error();
+                U = U_e;
+            }
             A       = A_e;
-            U       = U_e;
             indices = {};  // indices already applied
         }
 
