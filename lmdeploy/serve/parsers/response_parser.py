@@ -281,10 +281,21 @@ class BaseResponseParser(ResponseParser):
                 earliest_idx = idx
                 earliest_tag = tag
 
-        # No protocol open tag found, treat the whole pending text as plain content.
+        # No protocol open tag found. Keep possible open-tag prefix suffix in
+        # buffer so split tags across chunks can still be recognized later.
+        # For example, intern-s1 tool parser's open tag <|action_start|><|plugin|>
+        # is generated in two chunks, so we need to keep the prefix suffix in
+        # buffer so split tags across chunks can still be recognized later.
         if earliest_idx < 0:
             if not self._pending:
                 return None, False
+            keep = self._longest_open_tag_prefix_suffix(self._pending, tags)
+            if keep > 0:
+                if keep >= len(self._pending):
+                    return None, False
+                out = self._pending[:-keep]
+                self._pending = self._pending[-keep:]
+                return (out if out else None), bool(out)
             out = self._pending
             self._pending = ''
             return out, True
@@ -499,3 +510,17 @@ class BaseResponseParser(ResponseParser):
                 best_idx = idx
                 best_tag = tag
         return best_idx, best_tag
+
+    @staticmethod
+    def _longest_open_tag_prefix_suffix(text: str, tags: list[str]) -> int:
+        """Return length of longest suffix of ``text`` that is a prefix of any
+        tag."""
+        best = 0
+        for tag in tags:
+            max_k = min(len(text), len(tag) - 1)
+            for k in range(max_k, 0, -1):
+                if text.endswith(tag[:k]):
+                    if k > best:
+                        best = k
+                    break
+        return best
