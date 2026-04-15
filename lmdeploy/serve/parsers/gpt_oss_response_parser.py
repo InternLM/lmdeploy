@@ -21,4 +21,4 @@ else:
 
 GptOssResponseParser = None  # type: ignore[misc, assignment]
 if _OPENAI_HARMONY_AVAILABLE:
-    pass  # type: ignore[import-untyped]
+    from ._openai_harmony import GptOssResponseParser  # noqa: F401
