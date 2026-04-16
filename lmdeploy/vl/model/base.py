@@ -372,7 +372,6 @@ class VisionModel(ABC):
                 continue
 
             current_modality = self.ATTR_NAME_TO_MODALITY.get(attr_name)
-
             if current_modality:
                 if current_modality not in collected_mm_items:
                     collected_mm_items[current_modality] = {}

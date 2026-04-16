@@ -601,27 +601,6 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         """Get input embeddings."""
         return self.language_model.get_input_embeddings()
 
-    def get_multimodal_mask(self, input_ids: torch.Tensor, mm_inputs: list[MultiModalData]) -> torch.Tensor:
-        """Get position masks for vision tokens."""
-        image_token_id = next((m.meta.get('image_token_id') for m in mm_inputs if m.modality == Modality.IMAGE), None)
-        video_token_id = next((m.meta.get('video_token_id') for m in mm_inputs if m.modality == Modality.VIDEO), None)
-
-        image_mask, video_mask = None, None
-        if image_token_id is not None:
-            image_mask = (input_ids == image_token_id)
-        if video_token_id is not None:
-            video_mask = (input_ids == video_token_id)
-
-        multimodal_mask = None
-        if image_mask is not None and video_mask is not None:
-            multimodal_mask = image_mask | video_mask
-        elif image_mask is not None:
-            multimodal_mask = image_mask
-        elif video_mask is not None:
-            multimodal_mask = video_mask
-
-        return multimodal_mask
-
     def prepare_inputs_for_generation(
         self,
         past_key_values: list[list[torch.Tensor]],

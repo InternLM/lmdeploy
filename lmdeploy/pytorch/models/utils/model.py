@@ -8,8 +8,10 @@ from lmdeploy.pytorch.config import QuantizationConfig
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, StepContext
 from lmdeploy.pytorch.models.patch import get_build_model_context
+from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.nn.embedding import ParallelEmbedding
 from lmdeploy.pytorch.nn.linear import build_rowwise_linear
+from lmdeploy.vl.constants import Modality
 
 
 class BaseModelMetaProcessor:
@@ -150,6 +152,31 @@ class DeployModelMixinV1(DeployModelMixin):
         )
         return lm_head
 
+    def get_multimodal_mask(self, input_ids: torch.Tensor, mm_inputs: list[MultiModalData]) -> torch.Tensor:
+        """Get position masks for vision tokens."""
+        image_token_id = next((m.meta.get('image_token_id') for m in mm_inputs if m.modality == Modality.IMAGE), None)
+        video_token_id = next((m.meta.get('video_token_id') for m in mm_inputs if m.modality == Modality.VIDEO), None)
+        ts_token_id = next((m.meta.get('ts_token_id') for m in mm_inputs if m.modality == Modality.TIME_SERIES), None)
+
+        image_mask, video_mask, ts_mask = None, None, None
+        if image_token_id is not None:
+            image_mask = (input_ids == image_token_id)
+        if video_token_id is not None:
+            video_mask = (input_ids == video_token_id)
+        if ts_token_id is not None:
+            ts_mask = (input_ids == ts_token_id)
+
+        multimodal_mask = None
+        if image_mask is not None and video_mask is not None:
+            multimodal_mask = image_mask | video_mask
+        elif image_mask is not None:
+            multimodal_mask = image_mask
+        elif video_mask is not None:
+            multimodal_mask = video_mask
+        elif ts_mask is not None:
+            multimodal_mask = ts_mask
+
+        return multimodal_mask
 
 def vlm_model(vlm_cls):
     if not issubclass(vlm_cls, torch.nn.Module):

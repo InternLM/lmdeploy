@@ -15,7 +15,6 @@ import lmdeploy.pytorch.nn.gated_delta as gated_delta_util
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, LayerNorm, RMSNorm, SiluAndMul
 from lmdeploy.pytorch.nn.gated_delta import CausalConv1d, GatedDelta, GatedDeltaMeta, build_rmsnorm_gated
 from lmdeploy.pytorch.nn.linear import (
@@ -27,7 +26,6 @@ from lmdeploy.pytorch.nn.linear import (
 )
 from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader, load_weight
-from lmdeploy.vl.constants import Modality
 
 from .patch import add_prefix, get_build_model_context
 from .qwen2_5_vl import Qwen2_5_VisionRotaryEmbedding as Qwen3_5VisionRotaryEmbedding
@@ -1165,27 +1163,6 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
     def get_input_embeddings(self):
         """Get input embeddings."""
         return self.model.get_input_embeddings()
-
-    def get_multimodal_mask(self, input_ids: torch.Tensor, mm_inputs: list[MultiModalData]) -> torch.Tensor:
-        """Get position masks for vision tokens."""
-        image_token_id = next((m.meta.get('image_token_id') for m in mm_inputs if m.modality == Modality.IMAGE), None)
-        video_token_id = next((m.meta.get('video_token_id') for m in mm_inputs if m.modality == Modality.VIDEO), None)
-
-        image_mask, video_mask = None, None
-        if image_token_id is not None:
-            image_mask = (input_ids == image_token_id)
-        if video_token_id is not None:
-            video_mask = (input_ids == video_token_id)
-
-        multimodal_mask = None
-        if image_mask is not None and video_mask is not None:
-            multimodal_mask = image_mask | video_mask
-        elif image_mask is not None:
-            multimodal_mask = image_mask
-        elif video_mask is not None:
-            multimodal_mask = video_mask
-
-        return multimodal_mask
 
     def prepare_inputs_for_generation(
         self,
