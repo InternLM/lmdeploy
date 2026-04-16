@@ -104,11 +104,11 @@ class ImageEncoder:
         has_input_ids = self.model.has_input_ids(messages)
         if not has_input_ids:
             result = self.model.to_pytorch(messages,
-                                        chat_template,
-                                        tokenizer,
-                                        sequence_start,
-                                        tools=tools,
-                                        chat_template_kwargs=chat_template_kwargs)
+                                           chat_template,
+                                           tokenizer,
+                                           sequence_start,
+                                           tools=tools,
+                                           chat_template_kwargs=chat_template_kwargs)
         else:
             result = self.model.to_pytorch_with_input_ids(messages)
         # clear data
