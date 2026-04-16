@@ -38,6 +38,10 @@ class MultimodalProcessor:
         self.chat_template = chat_template
         self.vl_encoder = vl_encoder
         self.backend = backend
+        self._uses_new_preprocess = (
+            vl_encoder is not None and
+            'mm_processor_kwargs' in inspect.signature(vl_encoder.model.preprocess).parameters
+        )
 
     @staticmethod
     def merge_message_content(msg: dict) -> dict:
@@ -113,7 +117,6 @@ class MultimodalProcessor:
             item_params = item.get(item_type, {}).copy()
             data_src = item_params.pop('url', None) or item_params.pop('data', None)
 
-            modality = None
             if item_type == 'image_data':
                 modality = Modality.IMAGE
                 data = data_src
@@ -359,11 +362,8 @@ class MultimodalProcessor:
         chat_template = self.chat_template if do_preprocess else BaseChatTemplate()
         messages = await self.async_parse_multimodal_item(messages, media_io_kwargs)
 
-        uses_new_preprocess = 'mm_processor_kwargs' in inspect.signature(
-            self.vl_encoder.model.preprocess).parameters
-
         if self.backend == 'turbomind':
-            results = await self.vl_encoder.preprocess(messages, None, mm_processor_kwargs)
+            results = await self.vl_encoder.preprocess(messages, mm_processor_kwargs)
             results = await self.vl_encoder.async_infer(results)
             results = await self.vl_encoder.wrap_for_turbomind(messages=results,
                                                                chat_template=chat_template,
@@ -372,7 +372,7 @@ class MultimodalProcessor:
                                                                tools=tools,
                                                                chat_template_kwargs=chat_template_kwargs)
         elif self.backend == 'pytorch':
-            if uses_new_preprocess:
+            if self._uses_new_preprocess:
                 if self.vl_encoder.model.has_input_ids(messages):
                     input_prompt = messages[0]['content'][0]['text']
                 else:

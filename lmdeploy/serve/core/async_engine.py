@@ -396,11 +396,9 @@ class AsyncEngine:
                                                                         media_io_kwargs=media_io_kwargs,
                                                                         mm_processor_kwargs=mm_processor_kwargs,
                                                                         **kwargs)
-            # prompt = prompt_input['prompt']
             input_ids = prompt_input['input_ids']
             self.request_logger.log_inputs(session,
-                                        #    prompt=prompt,
-                                           prompt='DEBUG!',
+                                           prompt=prompt_input.get('prompt'),
                                            prompt_token_ids=input_ids,
                                            gen_config=gen_config,
                                            adapter_name=adapter_name)

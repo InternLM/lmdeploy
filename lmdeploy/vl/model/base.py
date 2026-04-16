@@ -83,22 +83,6 @@ class VisionModel(ABC):
             'ts_values',
         ]
 
-    @staticmethod
-    def get_mm_items_offset(
-        input_ids: torch.Tensor, mm_token_id: int
-    ) -> list[tuple[int, int]]:
-        """
-        Get a set of range for mm_items from input_ids
-        Example:
-            input_ids = [1, 2, 3, 3, 3, 4, 3, 3]
-            mm_token_id = 3
-            return result = [(2,4),(6,7)]
-        """
-        mask = input_ids == mm_token_id
-        start_positions = (mask & ~torch.roll(mask, 1)).nonzero(as_tuple=True)[0]
-        end_positions = (mask & ~torch.roll(mask, -1)).nonzero(as_tuple=True)[0]
-        return list(zip(start_positions.tolist(), end_positions.tolist()))
-
     def get_pad_token_id(self, model_path, hf_config):
         """Get pad_token_id from hf_config or tokenizer."""
         pad_token_id = getattr(hf_config, 'pad_token_id', None)
@@ -127,6 +111,23 @@ class VisionModel(ABC):
         """
         if self.backend == 'turbomind' or self.with_llm:
             raise NotImplementedError()
+
+    @staticmethod
+    def get_mm_items_offset(
+        input_ids: torch.Tensor, mm_token_id: int
+    ) -> list[tuple[int, int]]:
+        """
+        Get a set of range for mm_items from input_ids
+        Example:
+            input_ids = [1, 2, 3, 3, 3, 4, 3, 3]
+            mm_token_id = 3
+            return result = [(2,4),(6,7)]
+        """
+        mask = input_ids == mm_token_id
+        start_positions = (mask & ~torch.roll(mask, 1)).nonzero(as_tuple=True)[0]
+        end_positions = (mask & ~torch.roll(mask, -1)).nonzero(as_tuple=True)[0]
+        end_positions += 1 # convert to exclusive end index, compatible with legacy pytorch implementation
+        return list(zip(start_positions.tolist(), end_positions.tolist()))
 
     def get_override_size(self, processor, mm_processor_kwargs: dict[str, Any] | None = None):
         default_min = processor.size['shortest_edge']
