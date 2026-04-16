@@ -143,7 +143,16 @@ def mllm_summary(case_name,
     write_to_summary(case_name, result, msg, metrics, result_dir)
 
 
-def eval_test(model_path, eval_path, case_name, port=DEFAULT_PORT, test_type='infer', extra_config={}, **kwargs):
+def eval_test(model_path,
+              eval_path,
+              case_name,
+              port=DEFAULT_PORT,
+              test_type='infer',
+              extra_config=None,
+              eval_config_name='default',
+              **kwargs):
+    if extra_config is None:
+        extra_config = {}
     work_dir = None
     try:
 
@@ -154,7 +163,13 @@ def eval_test(model_path, eval_path, case_name, port=DEFAULT_PORT, test_type='in
 
         current_dir = os.path.dirname(os.path.abspath(__file__))
         parent_dir = os.path.dirname(current_dir)
-        config_file = os.path.join(parent_dir, 'evaluate/eval_config_chat.py')
+
+        if eval_config_name == 'longtext-512k':
+            config_file = os.path.join(parent_dir, 'evaluate/eval_config_chat_512_longtext.py')
+        elif eval_config_name == 'longtext-256k':
+            config_file = os.path.join(parent_dir, 'evaluate/eval_config_chat_longtext.py')
+        else:
+            config_file = os.path.join(parent_dir, 'evaluate/eval_config_chat.py')
 
         print(f'Starting OpenCompass evaluation for model: {model_path}')
         print(f'Model path: {model_path}')
