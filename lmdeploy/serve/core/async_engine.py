@@ -235,11 +235,7 @@ class AsyncEngine:
         logger.info(f'stop all sessions, epoch {self.epoch} -> {self.epoch + 1}')
         self.epoch += 1
         await self.session_mgr.async_abort_all()
-
-    def prepare_sleep(self):
-        """Reject new inference requests before backend sleep starts."""
-        self.sleeping_tags = {'weights', 'kv_cache'}
-        self.is_sleeping = True
+        logger.info('stopped all sessions')
 
     async def sleep(self, level: int = 1):
         """Sleep the model.
@@ -249,9 +245,10 @@ class AsyncEngine:
                 weights and discard the kv cache. Level 2 sleep will
                 discard both the model weights and the kv cache.
         """
-        await self.engine.sleep(level)
-        self.sleeping_tags = {'weights', 'kv_cache'}
         self.is_sleeping = True
+        self.sleeping_tags = {'weights', 'kv_cache'}
+        await self.stop_all_session()
+        await self.engine.sleep(level)
 
     def wakeup(self, tags: list[str] | None = None):
         """Wake up the model.

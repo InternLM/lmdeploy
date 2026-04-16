@@ -103,8 +103,6 @@ class VariableInterface:
     tool_parser: ToolParser | None = None
     allow_terminate_by_client: bool = False
     enable_abort_handling: bool = False
-    # map user input session_id to inside session_id
-    user_session_id_map: dict[int, int] = {}
 
     @classmethod
     def create_session(cls, user_session_id: int | None = None) -> Session:
@@ -115,9 +113,8 @@ class VariableInterface:
         else:
             # find the inside session_id by user_session_id, create a new one
             # if it doesn't exist and update the user_session_id_map
-            session_id = cls.user_session_id_map.get(user_session_id, None)
-            session = session_mgr.get(session_id, create_if_not_exists=True)
-            cls.user_session_id_map[user_session_id] = session.session_id
+            session_id = session_mgr.map_user_session_id(user_session_id)
+            session = session_mgr.get(session_id)
         # Stamp epoch for ``stop_all_session`` / ``abort_all`` coordination in ``AsyncEngine.generate``.
         session.epoch = cls.async_engine.epoch
         return session
@@ -128,10 +125,11 @@ class VariableInterface:
 
         Users cannot access inner session_id directly.
         """
-        if user_session_id not in cls.user_session_id_map:
+        session_mgr = cls.get_session_manager()
+        session_id = session_mgr.user_session_id_map.get(user_session_id, None)
+        if session_id is None:
             return None
-        session_id = cls.user_session_id_map.get(user_session_id, None)
-        return cls.get_session_manager().get(session_id, create_if_not_exists=False)
+        return session_mgr.get(session_id, create_if_not_exists=False)
 
     @classmethod
     def get_session_manager(cls):
@@ -1208,8 +1206,6 @@ async def sleep(raw_request: Request = None):
     if level not in (1, 2):
         return create_error_response(HTTPStatus.BAD_REQUEST, 'The "level" query parameter must be 1 or 2.')
     async_engine = VariableInterface.async_engine
-    async_engine.prepare_sleep()
-    await async_engine.stop_all_session()
     await async_engine.sleep(level)
     return Response(status_code=200)
 
