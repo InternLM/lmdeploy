@@ -3,8 +3,9 @@ import os
 
 import numpy as np
 import pytest
-from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
 from utils.config_utils import set_device_env_variable, unset_device_env_variable
+
+from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
 
 SESSION_LEN = 198000
 SESSION_LEN_128K = 128000

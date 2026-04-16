@@ -7,10 +7,6 @@ from pathlib import Path
 
 import pytest
 import torch
-from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
-from lmdeploy.messages import Response
-from lmdeploy.serve.openai.protocol import UpdateParamsRequest
-from lmdeploy.utils import is_bf16_supported
 from utils.config_utils import get_parallel_config
 from utils.constant import SLEEP_WAKEUP_BACKENDS, SLEEP_WAKEUP_MODEL_LIST
 from utils.sleep_utils import (
@@ -24,6 +20,11 @@ from utils.sleep_utils import (
     level2_update_weights_request_dict,
     resolve_hf_checkpoint_dir,
 )
+
+from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
+from lmdeploy.messages import Response
+from lmdeploy.serve.openai.protocol import UpdateParamsRequest
+from lmdeploy.utils import is_bf16_supported
 
 _SLEEP_PIPELINE_BACKEND_CLASS = {
     'pytorch': PytorchEngineConfig,
