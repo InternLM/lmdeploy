@@ -24,11 +24,6 @@ def _raise_exception_on_finish(task: asyncio.Task) -> None:
         raise e
 
 
-def _accepts_arg(func, arg_name: str) -> bool:
-    """Check if a function accepts a specific keyword argument."""
-    return arg_name in inspect.signature(func).parameters
-
-
 class ImageEncoder:
     """Image encoder."""
 
@@ -54,20 +49,14 @@ class ImageEncoder:
 
     async def preprocess(self,
                          messages: list[dict],
-                         input_prompt: str | list[int],
+                         input_prompt: str | list[int] | None = None,
                          mm_processor_kwargs: dict[str, Any] | None = None) -> list[dict]:
         """Preprocess multimodal data in the messages."""
-        if _accepts_arg(self.model.preprocess, 'mm_processor_kwargs'):
-            future = asyncio.get_event_loop().run_in_executor(self.executor,
-                                                              self.model.preprocess,
-                                                              messages,
-                                                              input_prompt,
-                                                              mm_processor_kwargs)
-        else:
-            future = asyncio.get_event_loop().run_in_executor(self.executor,
-                                                              self.model.preprocess,
-                                                              messages,
-                                                              input_prompt)
+        sig_params = inspect.signature(self.model.preprocess).parameters
+        kwargs = {k: v for k, v in [('input_prompt', input_prompt), ('mm_processor_kwargs', mm_processor_kwargs)]
+                  if k in sig_params}
+        future = asyncio.get_event_loop().run_in_executor(
+            self.executor, lambda: self.model.preprocess(messages, **kwargs))
         future.add_done_callback(_raise_exception_on_finish)
         outputs = await future
         return outputs
@@ -123,3 +112,46 @@ class ImageEncoder:
                 messages[i]['preprocess'] = None
                 messages[i]['forward'] = None
         return result
+
+    async def wrap_for_pytorch(
+            self,
+            messages: list[dict],
+            chat_template,
+            tokenizer,
+            sequence_start,
+            tools: list[object] | None = None,
+            chat_template_kwargs: dict | None = None,
+        ) -> list[dict]:
+            """
+            Args:
+                messages (list[dict]): a list of message, which is supposed to be
+                    the output of `preprocess`
+
+            Returns:
+                list[dict]: a list of dicts passed to pytorch engine_instance's forward.
+                    Each dict has the following structure::
+
+                        {
+                            'prompt': 'the prompt after applying chat template',
+                            'input_ids': [],
+                            'multimodal': {
+                                'pixel_values': torch.Tensor,
+                                ...
+                            },
+                        }
+            """
+            has_input_ids = self.model.has_input_ids(messages)
+            if not has_input_ids:
+                result = self.model.to_pytorch(messages,
+                                            chat_template,
+                                            tokenizer,
+                                            sequence_start,
+                                            tools=tools,
+                                            chat_template_kwargs=chat_template_kwargs)
+            else:
+                result = self.model.to_pytorch_with_input_ids(messages)
+            # clear data
+            for i, message in enumerate(messages):
+                if isinstance(message['content'], list):
+                    messages[i]['preprocess'] = None
+            return result

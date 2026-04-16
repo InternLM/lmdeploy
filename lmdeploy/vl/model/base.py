@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import dataclasses
 from abc import ABC, abstractmethod
+from itertools import groupby
 from typing import Any
 
 import numpy as np
@@ -307,7 +308,11 @@ class VisionModel(ABC):
                    messages: list[dict],
                    input_prompt: str | list[int],
                    mm_processor_kwargs: dict[str, Any] | None = None) -> list[dict]:
-        """Refer to `super().preprocess()` for spec."""
+        """Preprocess multimodal data and return input_ids + multimodal
+        features.
+
+        New-style models inherit this implementation. Legacy models override with `def preprocess(self, messages)`.
+        """
 
         mm_items = self.collect_multimodal_items(messages)
 
@@ -400,6 +405,19 @@ class VisionModel(ABC):
 
         return dict(input_ids=input_ids.tolist(), multimodal=expanded_mm_items)
 
+    @staticmethod
+    def has_input_ids(messages: list[dict]) -> bool:
+        """Check whether the messages contain input_ids directly.
+
+        Args:
+            messages (list[dict]): a list of message, which is supposed to be
+                the output of `preprocess`
+        Returns:
+            bool: whether the messages contain input_ids directly
+        """
+        users = [x['content'] for x in messages if x['role'] == 'user']
+        return len(users) == 1 and isinstance(users[0], list) and isinstance(users[0][0].get('text', ''), list)
+
     def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
@@ -413,6 +431,22 @@ class VisionModel(ABC):
             determined by the derived classes
         """
         if self.backend == 'turbomind':
+            raise NotImplementedError()
+
+    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, chat_template_kwargs=None, **kwargs):
+        """Pack the preprocessing results in a format compatible with what is
+        required by pytorch engine. ONLY implement it when the backend is
+        pytorch engine.
+
+        Args:
+            messages(list[dict]): the output of `preprocess`
+            chat_template: the chat template defined in `lmdeploy/model.py`
+            tokenzer: the tokenizer model
+            sequence_start: starting flag of a sequence
+            chat_template_kwargs: additional arguments for chat template
+                processing, such as `add_vision_id` and `enable_thinking`
+        """
+        if self.backend == 'pytorch':
             raise NotImplementedError()
 
     def to_turbomind(self, messages, chat_template, tokenizer, sequence_start, chat_template_kwargs=None, **kwargs):
@@ -481,6 +515,78 @@ class VisionModel(ABC):
                 if any('<IMAGE_TOKEN>' in x for x in content):
                     return True
         return False
+
+    def to_pytorch_with_input_ids(self, messages):
+        """Pack the preprocessing results in a format compatible with what is
+        required by pytorch engine when input_ids are provided directly.
+
+        Args:
+            messages(list[dict]): the output of `preprocess`
+        """
+        # collect all preprocessing result from messages
+        preps = [x['content'] for x in messages if x['role'] == 'preprocess']
+        assert len(preps) == 1
+        preps = preps[0]
+
+        _input_ids = messages[0]['content'][0]['text']
+        segs = []
+        for k, g in groupby(_input_ids, lambda x: x == self.image_token_id):
+            if not k:
+                segs.append(list(g))
+            else:
+                segs.extend([[]] * (len(list(g)) - 1))
+        if _input_ids[0] == self.image_token_id:
+            segs = [[]] + segs
+        if _input_ids[-1] == self.image_token_id:
+            segs = segs + [[]]
+
+        assert self.image_token_id == preps[0]['image_token_id']
+        assert len(segs) == len(preps) + 1, (f'the number of image token id {self.image_token_id} is not equal '
+                                             f'to input images, {len(segs) - 1} vs {len(preps)}')
+        input_ids = []
+        for i, seg in enumerate(segs):
+            if i > 0 and i <= len(preps):
+                preps[i - 1].update(offset=len(input_ids))
+                image_tokens = preps[i - 1]['image_tokens']
+                input_ids.extend([self.image_token_id] * image_tokens)
+            input_ids.extend(seg)
+
+        return dict(prompt=None, input_ids=input_ids, multimodal=preps)
+
+    def to_pytorch_aux(self, messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start):
+        """Auxiliary function to pack the preprocessing results in a format
+        compatible with what is required by pytorch engine.
+
+        Args:
+            messages(list[dict]): the output of `preprocess`
+            prompt(str): the prompt after applying chat template
+            IMAGE_TOKEN(str): a placeholder where image tokens will be
+                inserted
+            tokenzer: the tokenizer model
+            sequence_start: starting flag of a sequence
+        """
+        # collect all preprocessing result from messages
+        preps = [x['content'] for x in messages if x['role'] == 'preprocess']
+        assert len(preps) == 1
+        preps = preps[0]
+
+        # split prompt into segments and validate data
+        segs = prompt.split(IMAGE_TOKEN)
+        assert len(segs) == len(preps) + 1, (f'the number of {IMAGE_TOKEN} is not equal '
+                                             f'to input images, {len(segs) - 1} vs {len(preps)}')
+
+        # calculate the image token offset for each image
+        input_ids = []
+        for i, seg in enumerate(segs):
+            if i > 0 and i <= len(preps):
+                preps[i - 1].update(offset=len(input_ids))
+                image_tokens = preps[i - 1]['image_tokens']
+                assert self.image_token_id == preps[i - 1]['image_token_id']
+                input_ids.extend([self.image_token_id] * image_tokens)
+            token_ids = tokenizer.encode(seg, add_bos=((i == 0) and sequence_start))
+            input_ids.extend(token_ids)
+
+        return dict(prompt=prompt, input_ids=input_ids, multimodal=preps)
 
     def to_turbomind_aux(self, messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start):
         """Auxiliary function to pack the forwarding results in a format
