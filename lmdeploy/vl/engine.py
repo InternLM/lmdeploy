@@ -75,47 +75,47 @@ class ImageEncoder:
         return outputs
 
     async def wrap_for_pytorch(
-            self,
-            messages: list[dict],
-            chat_template,
-            tokenizer,
-            sequence_start,
-            tools: list[object] | None = None,
-            chat_template_kwargs: dict | None = None,
-        ) -> list[dict]:
-            """
-            Args:
-                messages (list[dict]): a list of message, which is supposed to be
-                    the output of `preprocess`
+        self,
+        messages: list[dict],
+        chat_template,
+        tokenizer,
+        sequence_start,
+        tools: list[object] | None = None,
+        chat_template_kwargs: dict | None = None,
+    ) -> list[dict]:
+        """
+        Args:
+            messages (list[dict]): a list of message, which is supposed to be
+                the output of `preprocess`
 
-            Returns:
-                list[dict]: a list of dicts passed to pytorch engine_instance's forward.
-                    Each dict has the following structure::
+        Returns:
+            list[dict]: a list of dicts passed to pytorch engine_instance's forward.
+                Each dict has the following structure::
 
-                        {
-                            'prompt': 'the prompt after applying chat template',
-                            'input_ids': [],
-                            'multimodal': {
-                                'pixel_values': torch.Tensor,
-                                ...
-                            },
-                        }
-            """
-            has_input_ids = self.model.has_input_ids(messages)
-            if not has_input_ids:
-                result = self.model.to_pytorch(messages,
-                                            chat_template,
-                                            tokenizer,
-                                            sequence_start,
-                                            tools=tools,
-                                            chat_template_kwargs=chat_template_kwargs)
-            else:
-                result = self.model.to_pytorch_with_input_ids(messages)
-            # clear data
-            for i, message in enumerate(messages):
-                if isinstance(message['content'], list):
-                    messages[i]['preprocess'] = None
-            return result
+                    {
+                        'prompt': 'the prompt after applying chat template',
+                        'input_ids': [],
+                        'multimodal': {
+                            'pixel_values': torch.Tensor,
+                            ...
+                        },
+                    }
+        """
+        has_input_ids = self.model.has_input_ids(messages)
+        if not has_input_ids:
+            result = self.model.to_pytorch(messages,
+                                        chat_template,
+                                        tokenizer,
+                                        sequence_start,
+                                        tools=tools,
+                                        chat_template_kwargs=chat_template_kwargs)
+        else:
+            result = self.model.to_pytorch_with_input_ids(messages)
+        # clear data
+        for i, message in enumerate(messages):
+            if isinstance(message['content'], list):
+                messages[i]['preprocess'] = None
+        return result
 
     async def wrap_for_turbomind(
         self,
