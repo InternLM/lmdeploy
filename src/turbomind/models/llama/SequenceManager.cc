@@ -1,8 +1,10 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <ctime>
+#include <limits>
 #include <numeric>
 
 #include "src/turbomind/core/logger.h"
@@ -56,14 +58,25 @@ size_t GetHybridCheckpointSlotBytes(const std::vector<ssize_t>& conv_state_shape
            + GetShapeBytes(recurrent_state_shape, recurrent_state_dtype);
 }
 
-unsigned __int128 GetHybridCacheBytesForBlocks(size_t kv_block_count,
-                                               size_t kv_block_bytes,
-                                               size_t checkpoint_slot_bytes,
-                                               int    checkpoint_interval_blocks)
+uint64_t GetHybridCacheBytesForBlocks(size_t kv_block_count,
+                                      size_t kv_block_bytes,
+                                      size_t checkpoint_slot_bytes,
+                                      int    checkpoint_interval_blocks)
 {
     const size_t checkpoint_slots = checkpoint_interval_blocks > 0 ? kv_block_count / checkpoint_interval_blocks : 0;
-    return static_cast<unsigned __int128>(kv_block_count) * kv_block_bytes
-           + static_cast<unsigned __int128>(checkpoint_slots) * checkpoint_slot_bytes;
+
+    TM_CHECK(kv_block_count == 0 || kv_block_bytes <= std::numeric_limits<uint64_t>::max() / kv_block_count)
+        << "KV cache byte count exceeds uint64_t range.";
+    const uint64_t kv_bytes = static_cast<uint64_t>(kv_block_count) * static_cast<uint64_t>(kv_block_bytes);
+
+    TM_CHECK(checkpoint_slots == 0 || checkpoint_slot_bytes <= std::numeric_limits<uint64_t>::max() / checkpoint_slots)
+        << "Hybrid checkpoint byte count exceeds uint64_t range.";
+    const uint64_t checkpoint_bytes =
+        static_cast<uint64_t>(checkpoint_slots) * static_cast<uint64_t>(checkpoint_slot_bytes);
+
+    TM_CHECK(kv_bytes <= std::numeric_limits<uint64_t>::max() - checkpoint_bytes)
+        << "Total hybrid cache bytes exceed uint64_t range.";
+    return kv_bytes + checkpoint_bytes;
 }
 
 size_t SolveHybridKvBlockCount(size_t budget_bytes,
@@ -81,10 +94,10 @@ size_t SolveHybridKvBlockCount(size_t budget_bytes,
     size_t lo = 0;
     size_t hi = budget_bytes / kv_block_bytes;
     while (lo < hi) {
-        const size_t mid = lo + (hi - lo + 1) / 2;
-        const auto   required_bytes =
+        const size_t   mid = lo + (hi - lo + 1) / 2;
+        const uint64_t required_bytes =
             GetHybridCacheBytesForBlocks(mid, kv_block_bytes, checkpoint_slot_bytes, checkpoint_interval_blocks);
-        if (required_bytes <= budget_bytes) {
+        if (required_bytes <= static_cast<uint64_t>(budget_bytes)) {
             lo = mid;
         }
         else {
@@ -223,12 +236,18 @@ SequenceManager::SequenceManager(const ModelParam& model_param,
     }
     else if (num_linear_layers > 0 && block_count >= 1.) {
         const size_t requested_blocks = static_cast<size_t>(block_count);
-        const auto   requested_cache_bytes =
-            has_linear_prefix_checkpoints ? hybrid_prefix_budget::GetHybridCacheBytesForBlocks(
-                requested_blocks, block_size, linear_prefix_slot_bytes, linear_prefix_cache_interval_blocks_) :
-                                              static_cast<unsigned __int128>(requested_blocks) * block_size;
+        uint64_t     requested_cache_bytes{};
+        if (has_linear_prefix_checkpoints) {
+            requested_cache_bytes = hybrid_prefix_budget::GetHybridCacheBytesForBlocks(
+                requested_blocks, block_size, linear_prefix_slot_bytes, linear_prefix_cache_interval_blocks_);
+        }
+        else {
+            TM_CHECK(requested_blocks == 0 || block_size <= std::numeric_limits<uint64_t>::max() / requested_blocks)
+                << "Requested KV cache byte count exceeds uint64_t range.";
+            requested_cache_bytes = static_cast<uint64_t>(requested_blocks) * static_cast<uint64_t>(block_size);
+        }
         const size_t available_after_live = get_free_size();
-        TM_CHECK(requested_cache_bytes <= static_cast<unsigned __int128>(available_after_live))
+        TM_CHECK(requested_cache_bytes <= static_cast<uint64_t>(available_after_live))
             << "Insufficient memory for "
             << (has_linear_prefix_checkpoints ? "hybrid prefix cache blocks and checkpoints." : "KV cache blocks.");
     }
