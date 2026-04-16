@@ -6,6 +6,8 @@
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/kernels/gemm/moe_ep_utils.h"
+#include "src/turbomind/kernels/gpt_kernels.h"
+#include "src/turbomind/kernels/quantization.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 #include <cub/device/device_scan.cuh>
@@ -112,11 +114,33 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
         sync_check_cuda_error();
 
         auto Postprocess = [&](Tensor&                 recv_x,
+                               std::optional<Tensor>&  recv_x_scales,
                                Tensor&                 recv_topk_weights,
                                Tensor&                 recv_topk_idx,
                                const std::vector<int>& num_recv_tokens_per_expert_list,
                                Tensor&                 num_recv_tokens_per_expert) {
-            output.out_x            = recv_x;
+            if (input.use_fp8) {
+                auto&  scales_t = recv_x_scales.value();
+                Tensor x_scales = Tensor{{scales_t.shape(1), scales_t.shape(0)}, scales_t.dtype(), scales_t.device()};
+                if (scales_t.shape(0) > 0) {
+                    invokeTransposeAxis01(x_scales.data<float>(),
+                                          scales_t.data<float>(),
+                                          scales_t.shape(0),
+                                          scales_t.shape(1),
+                                          1,
+                                          core::Context::stream().handle());
+                }
+                if (input.output_scales) {
+                    output.out_x        = recv_x;
+                    output.out_x_scales = x_scales;
+                }
+                else {
+                    DequantizeSymm(output.out_x, recv_x, x_scales, core::Context::stream().handle());
+                }
+            }
+            else {
+                output.out_x = recv_x;
+            }
             output.out_topk_weights = recv_topk_weights;
             output.out_token_num    = recv_x.shape(0);
             output.out_expert_token_num =
@@ -159,6 +183,14 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
 
         if (buffer_->get_num_rdma_ranks() > 1) {
             // internode dispatch
+            Tensor                x = input.x;
+            std::optional<Tensor> x_scales;
+            if (input.use_fp8) {
+                x        = {};
+                x_scales = Tensor{};
+                QuantizeSymm(x, x_scales.value(), input.x, core::Context::stream().handle());
+                x_scales = x_scales->transpose(0, 1);
+            }
             auto config          = buffer_->get_dispatch_config();
             auto [recv_x,
                   recv_x_scales,
@@ -174,8 +206,8 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
                   recv_gbl_rank_prefix_sum,
                   recv_src_meta,
                   send_rdma_head,
-                  send_nvl_head] = buffer_->internode_dispatch(input.x,
-                                                               std::nullopt,
+                  send_nvl_head] = buffer_->internode_dispatch(x,
+                                                               x_scales,
                                                                input.topk_idx,
                                                                input.topk_weights,
                                                                num_tokens_per_rank,
@@ -206,6 +238,7 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
                              send_nvl_head.value()};
 
             Postprocess(recv_x,  //
+                        recv_x_scales,
                         recv_topk_weights.value(),
                         recv_topk_idx.value(),
                         num_recv_tokens_per_expert_list,
@@ -213,6 +246,14 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
         }
         else {
             // intranode dispatch
+            Tensor                x = input.x;
+            std::optional<Tensor> x_scales;
+            if (input.use_fp8) {
+                x        = {};
+                x_scales = Tensor{};
+                QuantizeSymm(x, x_scales.value(), input.x, core::Context::stream().handle());
+                x_scales = x_scales->transpose(0, 1);
+            }
             auto config      = buffer_->get_dispatch_config();
             auto [recv_x,
                   recv_x_scales,
@@ -224,8 +265,8 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
                   channel_prefix_matrix,
                   recv_channel_prefix_matrix,
                   recv_src_idx,
-                  send_head] = buffer_->intranode_dispatch(input.x,
-                                                           std::nullopt,
+                  send_head] = buffer_->intranode_dispatch(x,
+                                                           x_scales,
                                                            input.topk_idx,
                                                            input.topk_weights,
                                                            num_tokens_per_rank,
@@ -248,6 +289,7 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
                              send_head};
 
             Postprocess(recv_x,  //
+                        recv_x_scales,
                         recv_topk_weights.value(),
                         recv_topk_idx.value(),
                         num_recv_tokens_per_expert_list,

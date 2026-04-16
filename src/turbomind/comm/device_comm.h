@@ -33,10 +33,13 @@ struct EpDispatchInput {
     core::Tensor&           x;
     core::Tensor_<float>&   topk_weights;
     core::Tensor_<int64_t>& topk_idx;
+    bool                    use_fp8;
+    bool                    output_scales;
 };
 
 struct EpDispatchOutput {
     core::Tensor        out_x;
+    core::Tensor        out_x_scales;
     core::Tensor        out_topk_weights;
     core::Buffer_<int>& f2n;
     core::Buffer_<int>& f2E;

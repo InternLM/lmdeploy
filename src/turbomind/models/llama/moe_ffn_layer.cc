@@ -198,8 +198,14 @@ void MoeFfnLayer::RouteEP(ForwardParam& p, Tensor_<float>& logits)
 
     ep_mode_ = p.max_tokens_per_rank <= param_.ll_max_tokens_per_rank ? comm::EpMode::kLowLatency :
                                                                         comm::EpMode::kHighThroughput;
-    comm::EpDispatchInput  dispatch_input{ep_mode_, p.input, topk_weights, topk_idx};
-    comm::EpDispatchOutput dispatch_output{{}, {}, f2n_, f2E_, en2f_, offsets_, {}};
+
+    auto       input_type = p.weights->block.fused_gating_intermediate.input_type;
+    const bool use_fp8 =
+        ep_mode_ == comm::EpMode::kHighThroughput && (input_type == kFloat8_e4m3 || input_type == kBfloat16);
+    const bool output_scales = use_fp8 && input_type == kFloat8_e4m3;
+
+    comm::EpDispatchInput  dispatch_input{ep_mode_, p.input, topk_weights, topk_idx, use_fp8, output_scales};
+    comm::EpDispatchOutput dispatch_output{{}, {}, {}, f2n_, f2E_, en2f_, offsets_, {}};
     d_comm_->Dispatch(dispatch_input, dispatch_output, 0);
     sync_check_cuda_error();
 
@@ -320,7 +326,8 @@ void MoeFfnLayer::ForwardFused(ForwardParam& p)
     auto indices = f2n_.slice(0, temp_.shape(0));
     auto offsets = offsets_.slice(0, local_expert_num + 1);
 
-    Tensor inter = linear_.Forward(input_, block.fused_gating_intermediate, indices, offsets);
+    Tensor scales = dispatch_output_ ? dispatch_output_->out_x_scales : Tensor{};  // the ep dispatched scales
+    Tensor inter  = linear_.Forward(input_, scales, block.fused_gating_intermediate, indices, offsets);
     sync_check_cuda_error();
 
     if (!block.is_fused_silu) {
@@ -373,8 +380,11 @@ void MoeFfnLayer::CombineEP(ForwardParam& p)
     TM_CHECK(ep_mode_ != comm::EpMode::kNull);
     auto st = core::Context::stream().handle();
     // Local reduce
+    Tensor input = (input_.dtype() == kFloat8_e4m3 && ep_mode_ == comm::EpMode::kHighThroughput) ?
+                       Tensor{input_.layout(), temp_.dtype(), kDEVICE} :
+                       input_;
     if (ep_mode_ == comm::EpMode::kHighThroughput) {
-        invokeMoeLocalCombineEp(input_,
+        invokeMoeLocalCombineEp(input,
                                 temp_,
                                 p.weights->block.output.bias,
                                 dispatch_output_->out_topk_weights.data_or((float*)nullptr),
@@ -389,7 +399,7 @@ void MoeFfnLayer::CombineEP(ForwardParam& p)
     sync_check_cuda_error();
 
     // Moe Reduce
-    comm::EpCombineInput  combine_input{ep_mode_, input_, dispatch_output_->handle};
+    comm::EpCombineInput  combine_input{ep_mode_, input, dispatch_output_->handle};
     comm::EpCombineOutput combine_output{};
     if (ep_mode_ == comm::EpMode::kLowLatency) {
         combine_input.x            = temp_;

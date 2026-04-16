@@ -98,6 +98,9 @@ void QuantizeSymm(Tensor& out, Tensor& scale, const Tensor& src, cudaStream_t st
     }
 
     constexpr int block_dim = 512;
+    if (num == 0) {
+        return;
+    }
 
     quant_symm_row<vec_size, group_size><<<num, block_dim, 0, st>>>(out.data<Tout>(),  //
                                                                     out.stride(0),
@@ -151,6 +154,9 @@ void DequantizeSymm(Tensor& out, const Tensor& src, const Tensor& scale, cudaStr
     constexpr int vec_size   = 8;
 
     constexpr int block_dim = 512;
+    if (num == 0) {
+        return;
+    }
 
     dequant_symm_row<vec_size, group_size, Tout, Tscale, T><<<num, block_dim, 0, st>>>(out.data<Tout>(),  //
                                                                                        out.stride(0),
