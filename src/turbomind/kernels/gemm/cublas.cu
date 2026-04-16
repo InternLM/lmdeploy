@@ -374,8 +374,8 @@ public:
         std::vector<cublasOperation_t> transb_array(active_count, CUBLAS_OP_N);
         std::vector<int>               m_array(active_count, N);
         std::vector<int>               k_array(active_count, K);
-        std::vector<int>               ldb_array(active_count, K);
-        std::vector<int>               ldc_array(active_count, N);
+        std::vector<int>               ldb_array(active_count, Adesc.ld);
+        std::vector<int>               ldc_array(active_count, Ddesc.ld);
         std::vector<float>             alpha_array(active_count, alpha);
         std::vector<float>             beta_array(active_count, beta);
         std::vector<int>               group_size(active_count, 1);
