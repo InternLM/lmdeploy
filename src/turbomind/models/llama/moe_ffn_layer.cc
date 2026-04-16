@@ -287,7 +287,7 @@ void MoeFfnLayer::ForwardNative(ForwardParam& p)
     const int   tokens           = input_.shape(0);
     const int   local_expert_num = moe.experts.size();
 
-    invokeMoeDispatch(temp_, input_, f2n_.data(), param_.experts_per_token, st);
+    invokeMoeDispatch(temp_, input_, f2n_.data(), temp_.shape(0), st);
     sync_check_cuda_error();
 
     check_cuda_error(cudaMemcpyAsync(

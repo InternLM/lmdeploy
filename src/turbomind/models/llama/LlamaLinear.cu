@@ -82,13 +82,15 @@ struct LlamaLinear::Impl {
         }
 
         if (indices && A.dtype() == kFloat8_e4m3) {
-            const auto [bsz, k] = A.shapes(0, 1);
-            const int e         = indices.size() / bsz;
-            Tensor    A_e       = {{m, k}, A.dtype(), kDEVICE};
-            invokeMoeDispatch(A_e, A, indices.data(), e, st);
+            const int k   = A.shape(1);
+            const int m   = indices.size();
+            Tensor    A_e = {{m, k}, A.dtype(), kDEVICE};
+            // EP can route a token to a variable number of local experts, so the
+            // gathered fp8 rows must be driven by the exact mapping size.
+            invokeMoeDispatch(A_e, A, indices.data(), m, st);
             sync_check_cuda_error();
             Tensor U_e;
-            invokeMoeDispatchScales(U_e, U, indices.data(), e, st);
+            invokeMoeDispatchScales(U_e, U, indices.data(), m, st);
             sync_check_cuda_error();
             A       = A_e;
             U       = U_e;

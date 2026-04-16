@@ -897,16 +897,16 @@ __global__ void MoeGatherKernel(T*         dst,  // [e*n, d]
     }
 }
 
-void invokeMoeDispatch(Ref<Tensor> out_, const Tensor& src, const int* f2n, int expert_per_token, cudaStream_t st)
+void invokeMoeDispatch(Ref<Tensor> out_, const Tensor& src, const int* f2n, int num_expert_tokens, cudaStream_t st)
 {
     auto& out    = out_.get();
     auto  invoke = [&](auto t) {
         using T                = decltype(t);
-        auto [num, dim]        = src.shapes(0, 1);
+        const int dim          = src.shape(1);
         constexpr int threads  = 256;
         constexpr int vec_size = 16 / sizeof(T);
-        // std::cout << num * expert_per_token << " " << dim << "\n";
-        MoeGatherKernel<vec_size, threads><<<num * expert_per_token, threads, 0, st>>>(  //
+        TM_CHECK_EQ(out.shape(0), num_expert_tokens);
+        MoeGatherKernel<vec_size, threads><<<num_expert_tokens, threads, 0, st>>>(  //
             (T*)out.raw_data(),
             (const T*)src.raw_data(),
             f2n,
@@ -964,14 +964,14 @@ MoeDispatchScalesNonaligned(T* dst, const T* src, int dst_stride, int src_stride
     }
 }
 
-void invokeMoeDispatchScales(Ref<Tensor> out_, const Tensor& src, const int* f2n, int expert_per_token, cudaStream_t st)
+void invokeMoeDispatchScales(Ref<Tensor> out_, const Tensor& src, const int* f2n, int num_expert_tokens, cudaStream_t st)
 {
     using T                 = float;
     constexpr int alignment = 16 / sizeof(T);
 
-    auto [dim, num] = src.shapes(0, 1);
+    const int dim = src.shape(0);
 
-    const int size         = num * expert_per_token;
+    const int size         = num_expert_tokens;
     const int aligned_size = round_up<int>(size, alignment);
 
     auto& out = out_.get();
