@@ -330,6 +330,13 @@ def fused_moe_kernel_launcher(
 
 def _get_sorted_idx_triton(topk_ids: torch.Tensor, num_experts: int):
     """Get sorted idx with 2-phase Triton kernels (4 kernel launches total)."""
+    if topk_ids.dim() != 2:
+        raise ValueError(f'topk_ids must be a 2D tensor, but got dim={topk_ids.dim()}')
+    if topk_ids.size(1) > num_experts:
+        raise ValueError(
+            f'topk_ids.size(1) must be <= num_experts, but got topk={topk_ids.size(1)} '
+            f'and num_experts={num_experts}')
+
     topk_ids = topk_ids.flatten()
     N = topk_ids.numel()
 
