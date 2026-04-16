@@ -55,15 +55,16 @@ class InputsMakerConfig:
     spec_decoding: bool = False
     enable_chunked_prefill: bool = False
     use_mrope: bool = False
-    max_prefill_gap: int = 16
+    prefill_interval: int = 16
 
     @staticmethod
     def from_engine(engine: 'Engine'):
         cache_config = engine.cache_config
         model_config = engine.model_config
-        max_prefill_gap = engine.engine_config.prefill_interval
-        if max_prefill_gap is None or max_prefill_gap <= 0:
-            max_prefill_gap = 16
+        prefill_interval = engine.engine_config.prefill_interval
+        kwargs = dict()
+        if prefill_interval is not None and prefill_interval > 0:
+            kwargs['prefill_interval'] = prefill_interval
         return InputsMakerConfig(
             spec_decoding=engine.specdecode_config is not None,
             max_batches=cache_config.max_batches,
@@ -73,7 +74,7 @@ class InputsMakerConfig:
             dp=engine.dist_config.dp,
             enable_chunked_prefill=engine.misc_config.enable_chunked_prefill,
             use_mrope=model_config.use_mrope,
-            max_prefill_gap=max_prefill_gap,
+            **kwargs,
         )
 
 
@@ -701,8 +702,8 @@ class InputsMakerAsync:
                 swap_out_map,
             ) = __create_inputs_prefill()
 
-        # reset decode count only when prefill actually produced inputs
-        if prefill and inputs is not None:
+        # reset decode count when non-decoding inputs are produced
+        if inputs is not None and not inputs.is_decoding:
             self._decode_count = 0
 
         # try decoding
@@ -751,7 +752,7 @@ class InputsMakerAsync:
             return False
 
         # force prefill if too many consecutive decode rounds
-        if self._decode_count >= self.config.max_prefill_gap:
+        if self._decode_count >= self.config.prefill_interval:
             return True
 
         # do prefill if too much tokens
