@@ -6,7 +6,7 @@ import torch
 from torch import nn
 from transformers import AutoTokenizer
 
-from lmdeploy.archs import get_task
+from lmdeploy.archs import get_model_arch, get_task
 from lmdeploy.lite.quantization import CalibrationContext, CalibrationContextV2
 from lmdeploy.lite.utils import collect_target_modules, get_calib_loaders, load_hf_from_pretrained
 from lmdeploy.vl.model.builder import load_vl_model
@@ -205,7 +205,8 @@ def calibrate(model: str,
               w_group_size: int = 128,
               search_scale: bool = False,
               dtype: Literal['float16', 'bfloat16', 'auto'] = 'auto',
-              batch_size: int = 1) -> None:
+              batch_size: int = 1,
+              trust_remote_code: bool = False) -> None:
     """The main function for loading the model and performing calibration on a
     given dataset.
 
@@ -245,12 +246,13 @@ def calibrate(model: str,
     make_compatible_internvl_config(model)
 
     # Load tokenizer and configuration
-    tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=trust_remote_code)
 
     if model_type == 'llm':
-        model = load_hf_from_pretrained(model, dtype=dtype, trust_remote_code=True)
+        model = load_hf_from_pretrained(model, dtype=dtype, trust_remote_code=trust_remote_code)
         vl_model = None
     elif model_type == 'vlm':
+        _, original_config = get_model_arch(model)
         vl_model = load_vl_model(model, backend=None, with_llm=True).vl_model
         model = vl_model
         if hasattr(vl_model, 'language_model'):  # deepseek-vl, ...
@@ -258,16 +260,16 @@ def calibrate(model: str,
         if hasattr(vl_model, 'llm'):  # MiniCPMV, ...
             model = vl_model.llm
         model.config.use_cache = False
-        if dtype == 'float16':
+        if hasattr(model.config, 'text_config'):
+            model.config.text_config.use_cache = False
+        elif hasattr(model.config, 'llm_config'):
+            model.config.llm_config.use_cache = False
+        if dtype == 'float16' or (dtype == 'auto' and original_config.torch_dtype == torch.float16):
             model.half()
-        elif dtype == 'bfloat16':
+        elif dtype == 'bfloat16' or (dtype == 'auto' and original_config.torch_dtype == torch.bfloat16):
             assert torch.cuda.is_bf16_supported(
             ), 'your device does not support bfloat16 please set --dtype float16'  # noqa
             model.to(torch.bfloat16)
-        elif dtype == 'auto' and model.config.torch_dtype == torch.bfloat16:
-            print('Warning: we cast model to float16 to prevent OOM. You'
-                  ' may enforce it bfloat16 by `--dtype bfloat16`')
-            model.half()
         model.eval()
 
     model_type = type(model).__name__

@@ -268,13 +268,13 @@ protected:
                     for (auto& expt : expts) {
                         ss << " " << expt;
                     }
-                    TM_LOG_DEBUG("%s", ss.str().c_str());
+                    TM_LOG_DEBUG("{}", ss.str());
                 }
                 ++failures;
             }
         }
         TM_LOG_DEBUG(
-            "check...%6s : failures: %d / %d", failures == 0 ? "....OK" : "FAILED", failures, max_seq_len * batchxbeam);
+            "check...{:>6} : failures: {} / {}", failures == 0 ? "....OK" : "FAILED", failures, max_seq_len * batchxbeam);
         delete[] h_output_ids;
         return failures == 0;
     }
@@ -1135,7 +1135,7 @@ protected:
 
             dynamic_decode_layer->forward(&dynamic_decode_output_tensors, &dynamic_decode_input_tensors);
 
-            TM_LOG_DEBUG("Step %2d generated ids", step);
+            TM_LOG_DEBUG("Step {:2d} generated ids", step);
             cudaD2Hcpy(
                 h_output_ids,
                 dynamic_decode_output_tensors.at("output_ids").getPtrWithOffset<int>(step * (batch_size * beam_width)),
@@ -1145,12 +1145,12 @@ protected:
             for (size_t i = 0; i < batch_size * beam_width; ++i) {
                 int idx = i * vocab_size + h_output_ids[i];
                 expected_cum_log_probs[i] += (float)h_log_probs[idx];
-                TM_LOG_DEBUG("| step %2d batch %2d idx %7d id %6d | log-prob %9.4f (expt: %9.4f) "
-                             "| cum-log-prob %9.4f (expt: %9.4f) | prob %9.4e",
-                             (int)step,
-                             (int)i,
-                             (int)idx,
-                             (int)h_output_ids[i],
+                TM_LOG_DEBUG("| step {:2d} batch {:2d} idx {:7d} id {:6d} | log-prob {:9.4f} (expt: {:9.4f}) "
+                             "| cum-log-prob {:9.4f} (expt: {:9.4f}) | prob {:9.4e}",
+                             step,
+                             i,
+                             idx,
+                             h_output_ids[i],
                              h_output_log_probs[step * batch_size * beam_width + i],
                              (float)h_log_probs[idx],
                              h_cum_log_probs[i],

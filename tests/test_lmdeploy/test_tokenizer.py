@@ -15,7 +15,7 @@ from lmdeploy.tokenizer import DetokenizeState, HuggingFaceTokenizer, Tokenizer
 @pytest.mark.parametrize('add_special_tokens', [True, False])
 @pytest.mark.parametrize('skip_special_tokens', [True, False])
 def test_tokenizer(model_path, input, interval, add_special_tokens, skip_special_tokens):
-    tokenizer = Tokenizer(model_path).model
+    tokenizer = Tokenizer(model_path, trust_remote_code=True).model
     encoded = tokenizer.encode(input, False, add_special_tokens=add_special_tokens)
     output = ''
     input = tokenizer.decode(encoded, skip_special_tokens=skip_special_tokens)
@@ -37,14 +37,14 @@ def test_tokenizer(model_path, input, interval, add_special_tokens, skip_special
 ])
 @pytest.mark.parametrize('stop_words', ['.', ' ', '?', ''])
 def test_tokenizer_with_stop_words(model_path, stop_words):
-    tokenizer = HuggingFaceTokenizer(model_path)
+    tokenizer = HuggingFaceTokenizer(model_path, trust_remote_code=True)
     indexes = tokenizer.indexes_containing_token(stop_words)
     assert indexes is not None
 
 
 def test_qwen_vl_decode_special():
     from lmdeploy.tokenizer import Tokenizer
-    tok = Tokenizer('Qwen/Qwen-VL-Chat')
+    tok = Tokenizer('Qwen/Qwen-VL-Chat', trust_remote_code=True)
     try:
         tok.decode([151857])
         assert (0)
@@ -55,7 +55,7 @@ def test_qwen_vl_decode_special():
 def test_glm4_special_token():
     from lmdeploy.tokenizer import ChatGLM4Tokenizer, Tokenizer
     model_path = 'THUDM/glm-4-9b-chat'
-    tokenizer = Tokenizer(model_path)
+    tokenizer = Tokenizer(model_path, trust_remote_code=True)
     assert isinstance(tokenizer.model, ChatGLM4Tokenizer)
     special_tokens = [
         '<|endoftext|>', '[MASK]', '[gMASK]', '[sMASK]', '<sop>', '<eop>', '<|system|>', '<|user|>', '<|assistant|>',
@@ -71,5 +71,5 @@ def test_glm4_special_token():
 @pytest.mark.parametrize('model_path',
                          ['Qwen/Qwen2-7B-Instruct', 'deepseek-ai/deepseek-vl-1.3b-chat', 'OpenGVLab/InternVL2-1B'])
 def test_check_transformers_version(model_path):
-    tokenizer = HuggingFaceTokenizer(model_path)
+    tokenizer = HuggingFaceTokenizer(model_path, trust_remote_code=True)
     assert tokenizer is not None

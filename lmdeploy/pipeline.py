@@ -70,7 +70,8 @@ class Pipeline:
             speculative_config.model = get_model(speculative_config.model, download_dir)
 
         # Create inference engine
-        backend, backend_config = autoget_backend_config(model_path, backend_config)
+        backend, backend_config = autoget_backend_config(model_path, backend_config,
+                                                         trust_remote_code=trust_remote_code)
         _, pipeline_class = get_task(backend, model_path, trust_remote_code=trust_remote_code)
         self.async_engine = pipeline_class(model_path,
                                            backend=backend,

@@ -373,6 +373,14 @@ class MPExecutor(ExecutorBase):
         """Build cache engine."""
         self.collective_rpc('warmup')
 
+    async def sleep(self, level: int = 1):
+        """Sleep."""
+        await self.collective_rpc_async('sleep', args=(level, ), return_mask=0)
+
+    def wakeup(self, tags: list[str] | None = None):
+        """Wakeup."""
+        self.collective_rpc('wakeup', args=(tags, ), return_mask=0)
+
     async def _prefetch_outputs(self):
         while True:
             out = (await self.collective_rpc_async('get_outputs', receiver_mask=1, return_mask=1))[0]

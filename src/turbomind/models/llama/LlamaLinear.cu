@@ -169,7 +169,7 @@ struct LlamaLinear::Impl {
                             core::Context::stream().handle());
 
         if (ec) {
-            TM_LOG_ERROR("%s: %d", __PRETTY_FUNCTION__, ec);
+            TM_LOG_ERROR("{}: {}", __PRETTY_FUNCTION__, ec);
         }
     }
 
