@@ -111,6 +111,7 @@ def build_executor(
             adapters=adapters,
             device_type=device_type,
             specdecode_config=specdecode_config,
+            trust_remote_code=trust_remote_code
         )
     elif distributed_executor_backend == 'mp':
         from .mp_executor import MPExecutor
@@ -125,6 +126,7 @@ def build_executor(
             adapters=adapters,
             device_type=device_type,
             specdecode_config=specdecode_config,
+            trust_remote_code=trust_remote_code
         )
     elif distributed_executor_backend == 'ray':
         from .ray_executor import RayExecutor
@@ -139,6 +141,7 @@ def build_executor(
             device_type=device_type,
             dtype=dtype,
             specdecode_config=specdecode_config,
+            trust_remote_code=trust_remote_code
         )
     else:
         raise RuntimeError(f'Unsupported distributed_executor_backend: {distributed_executor_backend}.')

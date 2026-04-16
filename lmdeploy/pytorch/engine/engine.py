@@ -199,8 +199,8 @@ class Engine(EngineBase):
     def from_pretrained(cls,
                         pretrained_model_name_or_path: str,
                         engine_config: PytorchEngineConfig = None,
-                        trust_remote_code: bool = False,
                         speculative_config: SpeculativeConfig = None,
+                        trust_remote_code: bool = False,
                         **kwargs):
         """Lmdeploy python inference engine.
 
@@ -225,16 +225,16 @@ class Engine(EngineBase):
                 backend=backend,
                 model_path=pretrained_model_name_or_path,
                 engine_config=engine_config,
-                trust_remote_code=trust_remote_code,
                 speculative_config=speculative_config,
+                trust_remote_code=trust_remote_code
             )
         if len(kwargs) > 0:
             logger.debug(f'Get unexpected kwargs: {kwargs}')
         return cls(
             model_path=pretrained_model_name_or_path,
             engine_config=engine_config,
-            trust_remote_code=trust_remote_code,
             speculative_config=speculative_config,
+            trust_remote_code=trust_remote_code
         )
 
     def _download_adapters(self, adapters: dict[str, str], engine_config: PytorchEngineConfig):

@@ -73,7 +73,7 @@ def load_vl_model(model_path: str,
             if module.match(hf_config):
                 logger.info(f'matching vision model: {name}')
                 model = module(**kwargs)
-                model.build_preprocessor()
+                model.build_preprocessor(trust_remote_code=trust_remote_code)
                 # build the vision part of a VLM model when backend is
                 # turbomind, or load the whole VLM model when `with_llm==True`
                 if backend == 'turbomind' or with_llm:

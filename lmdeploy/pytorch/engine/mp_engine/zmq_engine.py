@@ -33,13 +33,15 @@ class ZMQMPEngine(MPEngine):
                  model_path: str,
                  engine_config: PytorchEngineConfig = None,
                  speculative_config: SpeculativeConfig = None,
+                 trust_remote_code: bool = False,
                  **kwargs) -> None:
         """Initialize mp engine."""
         from .zmq_rpc import AsyncRPCClient
         self.shared_dict = None
         self.port = None
         self.proc = None
-        self._start_mp_proc(model_path, engine_config, speculative_config=speculative_config, **kwargs)
+        self._start_mp_proc(model_path, engine_config, speculative_config=speculative_config,
+                            trust_remote_code=trust_remote_code, **kwargs)
 
         self.rpc_client = AsyncRPCClient(port=self.port)
 
