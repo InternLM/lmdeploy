@@ -74,45 +74,6 @@ class ImageEncoder:
         outputs = await future
         return outputs
 
-    async def wrap_for_turbomind(
-        self,
-        messages: list[dict],
-        chat_template,
-        tokenizer,
-        sequence_start,
-        tools: list[object] | None = None,
-        chat_template_kwargs: dict | None = None,
-    ) -> dict:
-        """
-        Args:
-            messages (list[dict]): a list of message, which is supposed to be
-                the output of `async_infer`
-
-        Returns:
-            dict: a dict passed to turbomind engine_instance's forward.
-                The dict has the following structure::
-
-                    {
-                        'prompt': 'the prompt after applying chat template',
-                        'input_ids': [],
-                        'input_embeddings': list[torch.Tensor],
-                        'input_embedding_ranges': list[torch.Tensor],
-                        ...
-                    }
-        """
-        result = self.model.to_turbomind(messages,
-                                         chat_template,
-                                         tokenizer,
-                                         sequence_start,
-                                         tools=tools,
-                                         chat_template_kwargs=chat_template_kwargs)
-        # clear data
-        for i, message in enumerate(messages):
-            if isinstance(message['content'], list):
-                messages[i]['preprocess'] = None
-                messages[i]['forward'] = None
-        return result
-
     async def wrap_for_pytorch(
             self,
             messages: list[dict],
@@ -155,3 +116,42 @@ class ImageEncoder:
                 if isinstance(message['content'], list):
                     messages[i]['preprocess'] = None
             return result
+
+    async def wrap_for_turbomind(
+        self,
+        messages: list[dict],
+        chat_template,
+        tokenizer,
+        sequence_start,
+        tools: list[object] | None = None,
+        chat_template_kwargs: dict | None = None,
+    ) -> dict:
+        """
+        Args:
+            messages (list[dict]): a list of message, which is supposed to be
+                the output of `async_infer`
+
+        Returns:
+            dict: a dict passed to turbomind engine_instance's forward.
+                The dict has the following structure::
+
+                    {
+                        'prompt': 'the prompt after applying chat template',
+                        'input_ids': [],
+                        'input_embeddings': list[torch.Tensor],
+                        'input_embedding_ranges': list[torch.Tensor],
+                        ...
+                    }
+        """
+        result = self.model.to_turbomind(messages,
+                                         chat_template,
+                                         tokenizer,
+                                         sequence_start,
+                                         tools=tools,
+                                         chat_template_kwargs=chat_template_kwargs)
+        # clear data
+        for i, message in enumerate(messages):
+            if isinstance(message['content'], list):
+                messages[i]['preprocess'] = None
+                messages[i]['forward'] = None
+        return result
