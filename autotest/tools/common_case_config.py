@@ -478,7 +478,6 @@ BASE_SPECULATIVE_DECODING_RESTFUL_TEST_LLM = [{
         'speculative-algorithm': 'qwen3_5_mtp',
         'speculative-num-draft-tokens': 4,
         'max-batch-size': 256,
-        'max-prefill-token-num': 1024,
         'model-format': 'fp8'
     }
 }, {

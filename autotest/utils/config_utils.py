@@ -108,7 +108,6 @@ def get_func_config_list(backend: str,
         if 'GLM-5-FP8' in run_config['model']:
             run_config['extra_params']['cache-max-entry-count'] = 0.9
             run_config['extra_params']['max-batch-size'] = 128
-            run_config['extra_params']['model-format'] = 'fp8'
 
         if (func_type == 'evaluate' and 'session_len' not in extra
                 and 'session-len' not in extra and 'Qwen3.5' not in run_config['model']):
