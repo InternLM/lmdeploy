@@ -267,11 +267,14 @@ class ArgumentHelper:
     def quant_policy(parser, default: int = 0):
         """Add argument quant_policy to parser."""
 
+        from lmdeploy.messages import QuantPolicy
+
         return parser.add_argument('--quant-policy',
                                    type=int,
                                    default=0,
-                                   choices=[0, 4, 8],
-                                   help='Quantize kv or not. 0: no quant; 4: 4bit kv; 8: 8bit kv')
+                                   choices=list(QuantPolicy),
+                                   help='KV cache quantization policy. '
+                                   '0: no quantization; 4: 4-bit; 8: 8-bit; 42: TurboQuant (K4V2)')
 
     @staticmethod
     def rope_scaling_factor(parser):
