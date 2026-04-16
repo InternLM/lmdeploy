@@ -591,14 +591,17 @@ def _fill_kv_cache_quant_kernel(
     """Fill kv cache kernel with int4 and int8 quant fuzed.
 
     Args:
-        stride_xss: stride of sequence length dim of key or value states
-        stride_xsh: stride of head_num dim of key or value states
-        stride_xsh: stride of head_size dim of key or value states
-        stride_xn: stride of page num dim
-        stride_xb: stride of block size dim
-        stride_xh: stride of head_num dim
-        stride_xh: stride of head_num dim
-        stride_xd: stride of head_size dim
+        stride_[kv]ss: stride of sequence length dim of key or value states
+        stride_[kv]sh: stride of head_num dim of key or value states
+        stride_[kv]sd: stride of head_size dim of key or value states
+        stride_[kv]cn: stride of page num dim of key or value cache
+        stride_[kv]cb: stride of block size dim of key or value cache
+        stride_[kv]ch: stride of head_num dim of key or value cache
+        stride_[kv]cd: stride of head_size dim of key or value cache
+        stride_[kv]szn: stride of page num dim of key or value scales/zeros
+        stride_[kv]szb: stride of block size dim of key or value scales/zeros
+        stride_[kv]szh: stride of head_num dim of key or value scales/zeros
+        stride_[kv]szd: stride of quantization group dim of key or value scales/zeros
     """
     batch_id = tl.program_id(2)
     head_id = tl.program_id(0)

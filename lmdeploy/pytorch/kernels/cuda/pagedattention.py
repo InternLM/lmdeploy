@@ -732,7 +732,7 @@ def _fused_reduce_hadamard_kernel(
         acc = tl.where(is_even, acc + partner_val, partner_val - acc)
         _bar_sync()
 
-    INV_SQRT_D: tl.constexpr = 1.0 / (BLOCK_DV ** 0.5)
+    INV_SQRT_D: tl.constexpr = 1.0 / (head_size_v ** 0.5)
     acc = acc * INV_SQRT_D
 
     out_offs = cur_batch * stride_obs + cur_head * stride_oh + offs_dv * stride_od
