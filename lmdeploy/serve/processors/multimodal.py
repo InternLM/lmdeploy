@@ -372,9 +372,8 @@ class MultimodalProcessor:
                                                                sequence_start=sequence_start,
                                                                chat_template_kwargs=chat_template_kwargs)
 
-        input_ids, multimodal = await self.vl_encoder.preprocess(messages, input_prompt, mm_processor_kwargs)
+        results = await self.vl_encoder.preprocess(messages, input_prompt, mm_processor_kwargs)
 
-        results = {'input_ids': input_ids, 'multimodal': multimodal}
         if self.backend == 'turbomind':
             # for tm engine, this module perform vision embedding after image
             # preprocessing. It utilizes the hf model's vision embeddings

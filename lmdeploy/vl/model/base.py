@@ -127,8 +127,42 @@ class VisionModel(ABC):
         if self.backend == 'turbomind' or self.with_llm:
             raise NotImplementedError()
 
+    def get_override_size(self, processor, mm_processor_kwargs: dict[str, Any] | None = None):
+        default_min = processor.size['shortest_edge']
+        default_max = processor.size['longest_edge']
+        if not mm_processor_kwargs:
+            return {'shortest_edge': default_min, 'longest_edge': default_max}
+
+        override_min = mm_processor_kwargs.get('min_pixels', default_min)
+        override_max = mm_processor_kwargs.get('max_pixels', default_max)
+        if override_min > override_max:
+            logger.info(
+                f'Overriding min_pixels {override_min} > max_pixels {override_max}, ' \
+                f'falling back to defaults, min_pixels={default_min} and max_pixels={default_max}.'
+            )
+            return {'shortest_edge': default_min, 'longest_edge': default_max}
+
+        logger.info(f'Overriding processor size with min_pixels={override_min} and max_pixels={override_max}.')
+        return {'shortest_edge': override_min, 'longest_edge': override_max}
+
+    def get_expanded_input_ids(self, input_prompt, collected_mm_items) -> torch.Tensor:
+        """Get input_ids with multimodal tokens expanded."""
+        image_grid_thw = collected_mm_items.get(Modality.IMAGE, {}).get('image_grid_thw', None)
+        merge_length = self.processor.image_processor.merge_size ** 2
+        image_index = 0
+        input_ids = []
+        for token in input_prompt:
+            if token == self.image_token_id:
+                image_tokens = image_grid_thw[image_index].prod() // merge_length
+                input_ids.extend([self.image_token_id] * image_tokens)
+                image_index += 1
+            else:
+                input_ids.append(token)
+        input_ids = torch.tensor(input_ids)
+        return input_ids
+
     # adapted from https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/managers/mm_utils.py
-    def _get_expanded_mm_items(self, collected_mm_items):
+    def get_expanded_mm_items(self, collected_mm_items):
         """Hf processor outputs produced bundled data for multiple
         images/videos we need to expand them into per-image/video entries for
         better cache locality and fine-grained scheduling."""
@@ -269,40 +303,6 @@ class VisionModel(ABC):
 
         return expanded_mm_items
 
-    def _get_override_size(self, processor, mm_processor_kwargs: dict[str, Any] | None = None):
-        default_min = processor.size['shortest_edge']
-        default_max = processor.size['longest_edge']
-        if not mm_processor_kwargs:
-            return {'shortest_edge': default_min, 'longest_edge': default_max}
-
-        override_min = mm_processor_kwargs.get('min_pixels', default_min)
-        override_max = mm_processor_kwargs.get('max_pixels', default_max)
-        if override_min > override_max:
-            logger.info(
-                f'Overriding min_pixels {override_min} > max_pixels {override_max}, ' \
-                f'falling back to defaults, min_pixels={default_min} and max_pixels={default_max}.'
-            )
-            return {'shortest_edge': default_min, 'longest_edge': default_max}
-
-        logger.info(f'Overriding processor size with min_pixels={override_min} and max_pixels={override_max}.')
-        return {'shortest_edge': override_min, 'longest_edge': override_max}
-
-    def _get_expanded_input_ids(self, input_prompt, collected_mm_items) -> torch.Tensor:
-        """Get input_ids with multimodal tokens expanded."""
-        image_grid_thw = collected_mm_items.get(Modality.IMAGE, {}).get('image_grid_thw', None)
-        merge_length = self.processor.image_processor.merge_size ** 2
-        image_index = 0
-        input_ids = []
-        for token in input_prompt:
-            if token == self.image_token_id:
-                image_tokens = image_grid_thw[image_index].prod() // merge_length
-                input_ids.extend([self.image_token_id] * image_tokens)
-                image_index += 1
-            else:
-                input_ids.append(token)
-        input_ids = torch.tensor(input_ids)
-        return input_ids
-
     def preprocess(self,
                    messages: list[dict],
                    input_prompt: str | list[int],
@@ -330,12 +330,12 @@ class VisionModel(ABC):
         mm_processor_kwargs = mm_processor_kwargs or {}
         if raw_images:
             kwargs['images'] = raw_images
-            kwargs['size'] = self._get_override_size(self.processor.image_processor,
+            kwargs['size'] = self.get_override_size(self.processor.image_processor,
                                                      mm_processor_kwargs.get('image', None))
         if raw_videos:
             kwargs['videos'] = raw_videos
             kwargs['video_metadata'] = video_metadatas
-            kwargs['size'] = self._get_override_size(self.processor.video_processor,
+            kwargs['size'] = self.get_override_size(self.processor.video_processor,
                                                      mm_processor_kwargs.get('video', None))
             # perform resize in hf processor, while sample frames has been done in video loader
             kwargs['do_resize'] = True
@@ -385,7 +385,7 @@ class VisionModel(ABC):
         if isinstance(input_prompt, str):
             input_ids = processor_outputs['input_ids'].flatten()
         else:
-            input_ids = self._get_expanded_input_ids(input_prompt, collected_mm_items)
+            input_ids = self.get_expanded_input_ids(input_prompt, collected_mm_items)
 
         # compute offsets for all items
         for modality, item in collected_mm_items.items():
@@ -396,9 +396,9 @@ class VisionModel(ABC):
             )
 
         # expand bundled hf processor outputs into per-image/video entry
-        expanded_mm_items = self._get_expanded_mm_items(collected_mm_items)
+        expanded_mm_items = self.get_expanded_mm_items(collected_mm_items)
 
-        return input_ids.tolist(), expanded_mm_items
+        return dict(input_ids=input_ids.tolist(), multimodal=expanded_mm_items)
 
     def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
