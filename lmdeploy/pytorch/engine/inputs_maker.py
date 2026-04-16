@@ -63,7 +63,10 @@ class InputsMakerConfig:
         model_config = engine.model_config
         prefill_interval = engine.engine_config.prefill_interval
         kwargs = dict()
-        if prefill_interval is not None and prefill_interval > 0:
+        if prefill_interval is not None:
+            if not isinstance(prefill_interval, int) or prefill_interval <= 0:
+                raise ValueError('engine.engine_config.prefill_interval must be a positive int '
+                                f'or None, but got {prefill_interval!r}')
             kwargs['prefill_interval'] = prefill_interval
         return InputsMakerConfig(
             spec_decoding=engine.specdecode_config is not None,
