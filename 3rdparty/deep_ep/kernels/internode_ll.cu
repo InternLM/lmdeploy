@@ -730,6 +730,7 @@ __global__ __launch_bounds__(1024, 1) void combine(void* combined_x,
                                                    size_t rdma_recv_flag_offset,
                                                    size_t rdma_send_x_offset,
                                                    const void* x,
+                                                   const int* expert_offsets,
                                                    const topk_idx_t* topk_idx,
                                                    const float* topk_weights,
                                                    const int* src_info,
@@ -809,7 +810,7 @@ __global__ __launch_bounds__(1024, 1) void combine(void* combined_x,
         const auto global_expert_idx = rank * num_local_experts + local_expert_idx;
         const auto layout = __ldg(layout_range + local_expert_idx * num_ranks + dst_rank);
         const auto local_x =
-            static_cast<const int4*>(x) + local_expert_idx * num_ranks * num_max_dispatch_tokens_per_rank * hidden_bf16_int4;
+            static_cast<const int4*>(x) + __ldg(expert_offsets + local_expert_idx) * hidden_bf16_int4;
         const auto local_src_info = src_info + local_expert_idx * num_ranks * num_max_dispatch_tokens_per_rank;
         const auto rdma_send_x_vec =
             static_cast<uint8_t*>(rdma_send_x) + local_expert_idx * num_ranks * num_max_dispatch_tokens_per_rank * num_bytes_per_slot;
@@ -1225,6 +1226,7 @@ void combine(void*             combined_x,
              size_t            rdma_recv_flag_offset,
              size_t            rdma_send_x_offset,
              const void*       x,
+             const int*        expert_offsets,
              const topk_idx_t* topk_idx,
              const float*      topk_weights,
              const int*        src_info,
@@ -1300,6 +1302,7 @@ void combine(void*             combined_x,
                       rdma_recv_flag_offset,                                                                           \
                       rdma_send_x_offset,                                                                              \
                       x,                                                                                               \
+                      expert_offsets,                                                                                  \
                       topk_idx,                                                                                        \
                       topk_weights,                                                                                    \
                       src_info,                                                                                        \

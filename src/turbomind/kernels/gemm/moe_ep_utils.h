@@ -58,6 +58,4 @@ void invokeMoeLLDispatchPostprocess(Tensor&       out,
                                     Tensor&       packed_recv_x,
                                     cudaStream_t  st);
 
-void invokeMoeLLCombinePreprocess(Tensor& out, const Tensor& src, const int* offsets, cudaStream_t st);
-
 }  // namespace turbomind

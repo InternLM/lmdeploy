@@ -206,6 +206,7 @@ public:
 
     std::tuple<Tensor>  //
     low_latency_combine(const Tensor&                x,
+                        const Tensor&                expert_offsets,
                         const Tensor&                topk_idx,
                         const Tensor&                topk_weights,
                         const Tensor&                src_info,

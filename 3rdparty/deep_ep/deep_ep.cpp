@@ -969,6 +969,7 @@ Buffer::low_latency_dispatch(const Tensor&                x,
 
 std::tuple<Tensor>  //
 Buffer::low_latency_combine(const Tensor&                x,
+                            const Tensor&                expert_offsets,
                             const Tensor&                topk_idx,
                             const Tensor&                topk_weights,
                             const Tensor&                src_info,
@@ -983,10 +984,10 @@ Buffer::low_latency_combine(const Tensor&                x,
     EP_HOST_ASSERT(low_latency_mode);
 
     // Tensor checks
-    EP_HOST_ASSERT(x.ndim() == 3 and x.is_contiguous() and x.dtype() == turbomind::kBfloat16);
-    EP_HOST_ASSERT(x.shape(0) == num_experts / num_ranks);
-    EP_HOST_ASSERT(x.shape(1) == num_ranks * num_max_dispatch_tokens_per_rank);
-    EP_HOST_ASSERT(x.shape(2) % sizeof(int4) == 0 and x.shape(2) % 128 == 0);
+    EP_HOST_ASSERT(x.ndim() == 2 and x.is_contiguous() and x.dtype() == turbomind::kBfloat16);
+    EP_HOST_ASSERT(x.shape(1) % sizeof(int4) == 0 and x.shape(1) % 128 == 0);
+    EP_HOST_ASSERT(expert_offsets.is_contiguous() and expert_offsets.dtype() == turbomind::kInt32);
+    EP_HOST_ASSERT(expert_offsets.shape(0) == num_experts / num_ranks + 1);
     EP_HOST_ASSERT(topk_idx.ndim() == 2 and topk_idx.is_contiguous());
     EP_HOST_ASSERT(topk_idx.shape(0) == topk_weights.shape(0) and topk_idx.shape(1) == topk_weights.shape(1));
     EP_HOST_ASSERT(topk_idx.dtype() == turbomind::kInt64);
@@ -994,7 +995,7 @@ Buffer::low_latency_combine(const Tensor&                x,
     EP_HOST_ASSERT(topk_weights.shape(0) <= num_max_dispatch_tokens_per_rank);
     EP_HOST_ASSERT(topk_weights.dtype() == turbomind::kFloat32);
     EP_HOST_ASSERT(src_info.ndim() == 2 and src_info.is_contiguous());
-    EP_HOST_ASSERT(src_info.dtype() == turbomind::kInt32 and x.shape(0) == src_info.shape(0));
+    EP_HOST_ASSERT(src_info.dtype() == turbomind::kInt32 /*and x.shape(0) == src_info.shape(0)*/);
     EP_HOST_ASSERT(layout_range.ndim() == 2 and layout_range.is_contiguous());
     EP_HOST_ASSERT(layout_range.dtype() == turbomind::kInt64);
     EP_HOST_ASSERT(layout_range.shape(0) == num_experts / num_ranks and layout_range.shape(1) == num_ranks);
@@ -1006,7 +1007,7 @@ Buffer::low_latency_combine(const Tensor&                x,
     //     EP_HOST_ASSERT(combine_wait_recv_cost_stats->shape(0) == num_ranks);
     // }
 
-    auto hidden              = static_cast<int>(x.shape(2));
+    auto hidden              = static_cast<int>(x.shape(1));
     auto num_topk            = static_cast<int>(topk_weights.shape(1));
     auto num_combined_tokens = static_cast<int>(topk_weights.shape(0));
 
@@ -1043,7 +1044,8 @@ Buffer::low_latency_combine(const Tensor&                x,
         reinterpret_cast<size_t>(buffer.combine_rdma_recv_data_buffer) - reinterpret_cast<size_t>(rdma_ll_buffer_ptr),
         reinterpret_cast<size_t>(buffer.combine_rdma_recv_flag_buffer) - reinterpret_cast<size_t>(rdma_ll_buffer_ptr),
         reinterpret_cast<size_t>(buffer.combine_rdma_send_buffer) - reinterpret_cast<size_t>(rdma_ll_buffer_ptr),
-        x.raw_data(),
+        x.data_or((void*)nullptr),
+        expert_offsets.data<int>(),
         topk_idx.data_or((topk_idx_t*)nullptr),
         topk_weights.data_or((float*)nullptr),
         src_info.data<int>(),

@@ -304,19 +304,12 @@ void NcclCommImpl::Combine(const EpCombineInput& input, EpCombineOutput& output,
     TM_CHECK(input.mode != EpMode::kNull);
 
     if (input.mode == EpMode::kLowLatency) {
-        const int   num_local_experts = ep_config_.num_experts / h_comm_->n_ranks();
-        const auto& offsets           = input.handle[2];
-        const int   num_max_tokens    = ep_config_.ll_max_tokens_per_rank * h_comm_->n_ranks();
-        auto        sparse_x = Tensor({num_local_experts, num_max_tokens, ep_config_.hidden}, input.x.dtype(), kDEVICE);
+        const auto& offsets                  = input.handle[2];
+        auto&       packed_recv_src_info     = input.handle[0];
+        auto&       packed_recv_layout_range = input.handle[1];
 
-        // convert dense input to sparse
-        auto st = core::Context::stream().handle();
-        invokeMoeLLCombinePreprocess(sparse_x, input.x, offsets.data<int>(), st);
-        sync_check_cuda_error();
-
-        auto& packed_recv_src_info     = input.handle[0];
-        auto& packed_recv_layout_range = input.handle[1];
-        auto [combined_x]              = buffer_->low_latency_combine(sparse_x,
+        auto [combined_x] = buffer_->low_latency_combine(input.x,
+                                                         offsets,
                                                          input.topk_idx.value(),
                                                          input.topk_weights.value(),
                                                          packed_recv_src_info,
