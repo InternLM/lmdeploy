@@ -162,6 +162,7 @@ def get_cli_common_param(run_config: dict[str, Any]) -> str:
 
     # Extra params
     cli_params.append(get_cli_str(extra_params))
+    cli_params.append('--trust-remote-code')
 
     return ' '.join(cli_params).strip()
 
