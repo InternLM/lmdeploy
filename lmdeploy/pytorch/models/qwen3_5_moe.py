@@ -69,10 +69,16 @@ class Qwen3_5MoeSparseMoeBlock(nn.Module):
 
         self.gate = Qwen3_5MoeTopKRouter(config, dtype=dtype, device=device)
 
+        # get all reduce flags
         dist_ctx = get_dist_manager().current_context()
         dp = dist_ctx.dist_config.dp
         world_size = dist_ctx.dist_config.moe_tp
         attn_tp = dist_ctx.dist_config.attn_tp or 1
+        if dp == 1 and world_size > 1:
+            self._all_reduce = True
+        else:
+            self._all_reduce = False
+        shared_expert_all_reduce = (attn_tp > 1 and not self._all_reduce)
 
         self.experts = build_fused_moe(
             self.hidden_dim,
@@ -87,18 +93,6 @@ class Qwen3_5MoeSparseMoeBlock(nn.Module):
             layer_idx=layer_idx,
             prefix=add_prefix('experts', prefix),
         )
-
-        # get all reduce flags
-        # _all_reduce: block-level all_reduce at end of forward (pure moe_tp mode, e.g. tp8)
-        # shared_expert_all_reduce: needed when attn_tp > 1 but block-level all_reduce won't cover it
-        #   - tp8: _all_reduce=True handles everything; shared_expert should NOT all_reduce independently
-        #   - dp2*tp2: _all_reduce=False, attn_tp=2>1 → shared_expert must all_reduce
-        #   - tp2ep2: _all_reduce=False, attn_tp=2>1 → shared_expert must all_reduce
-        if dp == 1 and world_size > 1:
-            self._all_reduce = True
-        else:
-            self._all_reduce = False
-        shared_expert_all_reduce = (attn_tp > 1 and not self._all_reduce)
 
         self.shared_expert = Qwen3_5MLP(
             config=config,

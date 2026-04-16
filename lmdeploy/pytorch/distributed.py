@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 import torch
-import torch.nn.functional as F
 from torch import distributed as dist
 from torch.distributed import ProcessGroup, ReduceOp, Work  # noqa: F401
 
@@ -434,23 +433,7 @@ def reduce_scatter_by_tp_sizes(out: torch.Tensor, rank: int, tp_sizes: list[int]
     """Reduce scatter."""
     attn_tp = get_dist_manager().current_config().attn_tp
     outs = list(out.split(tp_sizes, -2))
-
-    # When tp_sizes are non-uniform (multi-batch with different token counts per dp group),
-    # dist.reduce_scatter requires all input tensors to be the same size. Pad to max size,
-    # perform reduce_scatter, then strip padding from the result.
-    max_sz = max(tp_sizes)
-    need_pad = max_sz > min(tp_sizes)
-    if need_pad:
-        outs = [
-            F.pad(piece, (0, 0, 0, max_sz - piece.shape[-2])) if piece.shape[-2] < max_sz else piece
-            for piece in outs
-        ]
-
     outs = [item for item in outs for _ in range(attn_tp)]
-    recv = outs[rank]
-    dist.reduce_scatter(recv, outs, group=group)
-
-    if need_pad:
-        actual = tp_sizes[rank // attn_tp]
-        recv = recv.narrow(-2, 0, actual)
-    return recv
+    out = outs[rank]
+    dist.reduce_scatter(out, outs, group=group)
+    return out
