@@ -114,6 +114,7 @@ class VariableInterface:
             # find the inside session_id by user_session_id, create a new one
             # if it doesn't exist and update the user_session_id_map
             session_id = session_mgr.map_user_session_id(user_session_id)
+            logger.info(f'created session {session_id} for user_session_id {user_session_id}')
             session = session_mgr.get(session_id)
         # Stamp epoch for ``stop_all_session`` / ``abort_all`` coordination in ``AsyncEngine.generate``.
         session.epoch = cls.async_engine.epoch
