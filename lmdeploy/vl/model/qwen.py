@@ -17,7 +17,7 @@ class QwenVisionModel(VisionModel):
 
     _arch = 'QWenLMHeadModel'
 
-    def build_preprocessor(self):
+    def build_preprocessor(self, trust_remote_code: bool = False):
         from torchvision import transforms
         from torchvision.transforms import InterpolationMode
         mean = (0.48145466, 0.4578275, 0.40821073)
@@ -29,14 +29,14 @@ class QwenVisionModel(VisionModel):
             transforms.Normalize(mean=mean, std=std),
         ])
 
-    def build_model(self):
+    def build_model(self, trust_remote_code: bool = False):
         """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         from accelerate import init_empty_weights
         with init_empty_weights():
             config = self.hf_config
             config.quantization_config = {}  # disable vision part quantization
-            model = AutoModelForCausalLM.from_config(config, trust_remote_code=self.trust_remote_code)
+            model = AutoModelForCausalLM.from_config(config, trust_remote_code=trust_remote_code)
             self.vl_model = model
             if not self.with_llm:
                 del model.lm_head

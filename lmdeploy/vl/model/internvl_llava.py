@@ -70,16 +70,16 @@ class InternVLLlavaVisionModel(LlavaVisionModel):
                 return True
         return False
 
-    def build_preprocessor(self):
-        return super().build_preprocessor()
+    def build_preprocessor(self, trust_remote_code: bool = False):
+        return super().build_preprocessor(trust_remote_code=trust_remote_code)
 
-    def build_model(self):
+    def build_model(self, trust_remote_code: bool = False):
         """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         check_llava_install()
         # currently, only support llava llama
         from llava.model.language_model.llava_llama import LlavaConfig, LlavaLlamaForCausalLM  # noqa
-        self.config = LlavaConfig.from_pretrained(self.model_path)
+        self.config = LlavaConfig.from_pretrained(self.model_path, trust_remote_code=trust_remote_code)
         assert self.config.model_type in ['llava', 'llava_llama'], \
             'currently, only support llava llama'
 
@@ -89,7 +89,7 @@ class InternVLLlavaVisionModel(LlavaVisionModel):
                 disable_transformers_logging():
             warnings.simplefilter('ignore')
             self.config.quantization_config = {}  # disable vision part quantization
-            model = AutoModelForCausalLM.from_config(self.config, trust_remote_code=self.trust_remote_code)
+            model = AutoModelForCausalLM.from_config(self.config, trust_remote_code=trust_remote_code)
             self.vl_model = model
             if not self.with_llm:
                 del model.lm_head

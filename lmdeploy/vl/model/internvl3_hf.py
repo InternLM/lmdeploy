@@ -46,25 +46,25 @@ class InternVL3VisionModel(InternVLVisionModel):
         super().__init__(model_path, with_llm, max_memory, hf_config, backend, trust_remote_code=trust_remote_code)
         self.arch = self.hf_config.architectures[0]
 
-    def build_preprocessor(self):
-        self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=self.trust_remote_code)
+    def build_preprocessor(self, trust_remote_code: bool = False):
+        self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=trust_remote_code)
         tokenizer = self.processor.tokenizer
         self.image_token = self.processor.image_token
         self.image_token_id = tokenizer.context_image_token_id
         self.image_tokens_per_patch = self.processor.image_seq_length
         self.tokenizer_init_kwargs = tokenizer.init_kwargs
 
-    def build_model(self):
+    def build_model(self, trust_remote_code: bool = False):
         """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         from accelerate import init_empty_weights
         with init_empty_weights():
             if self.arch == 'InternVLForConditionalGeneration':
-                model = AutoModel.from_config(self.hf_config, trust_remote_code=self.trust_remote_code)
+                model = AutoModel.from_config(self.hf_config, trust_remote_code=trust_remote_code)
                 if not self.with_llm:
                     del model.language_model
             elif self.arch == 'InternS1ForConditionalGeneration':
-                model = AutoModelForCausalLM.from_config(self.hf_config, trust_remote_code=self.trust_remote_code)
+                model = AutoModelForCausalLM.from_config(self.hf_config, trust_remote_code=trust_remote_code)
                 if not self.with_llm:
                     del model.model.language_model
             else:

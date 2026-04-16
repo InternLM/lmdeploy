@@ -17,8 +17,8 @@ class LlavaHfVisionModel(VisionModel):
 
     _arch = 'LlavaForConditionalGeneration'
 
-    def build_preprocessor(self):
-        processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=self.trust_remote_code)
+    def build_preprocessor(self, trust_remote_code: bool = False):
+        processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=trust_remote_code)
         if hasattr(processor, 'tokenizer'):
             del processor.tokenizer
             processor.prtokenizer = None
@@ -29,7 +29,7 @@ class LlavaHfVisionModel(VisionModel):
         if self.hf_config.vision_feature_select_strategy == 'full':
             self.n_token_per_image += 1
 
-    def build_model(self):
+    def build_model(self, trust_remote_code: bool = False):
         """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         from accelerate import init_empty_weights, load_checkpoint_and_dispatch
@@ -37,7 +37,7 @@ class LlavaHfVisionModel(VisionModel):
         with init_empty_weights(), warnings.catch_warnings():
             warnings.simplefilter('ignore')
             from transformers import LlavaForConditionalGeneration
-            model = LlavaForConditionalGeneration._from_config(self.hf_config)
+            model = LlavaForConditionalGeneration._from_config(self.hf_config, trust_remote_code=trust_remote_code)
             self.vl_model = model
             if not self.with_llm:
                 del model.language_model

@@ -77,7 +77,7 @@ def load_vl_model(model_path: str,
                 # build the vision part of a VLM model when backend is
                 # turbomind, or load the whole VLM model when `with_llm==True`
                 if backend == 'turbomind' or with_llm:
-                    model.build_model()
+                    model.build_model(trust_remote_code=trust_remote_code)
                 return model
         except Exception as e:
             logger.error(f'build vision model {name} failed, {e}')
