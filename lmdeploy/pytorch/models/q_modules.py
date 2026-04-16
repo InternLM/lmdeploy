@@ -52,7 +52,7 @@ class QRMSNorm(nn.Module):
         `initialization = True` for real init. `initialization = False` for dummy init.
         """
         hidden_size = mod.weight.shape[0]
-        eps = mod.variance_epsilon
+        eps = getattr(mod, 'variance_epsilon', None) or getattr(mod, 'eps', 1e-6)
         q_mod = cls(hidden_size, eps, quant_dtype=quant_dtype)
         if initialization:
             q_mod.weight = nn.Parameter(mod.weight.detach())
