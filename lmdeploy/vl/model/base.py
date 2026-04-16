@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import dataclasses
 from abc import ABC, abstractmethod
-from itertools import groupby
 from typing import Any
 
 import numpy as np
@@ -288,16 +287,31 @@ class VisionModel(ABC):
         logger.info(f'Overriding processor size with min_pixels={override_min} and max_pixels={override_max}.')
         return {'shortest_edge': override_min, 'longest_edge': override_max}
 
+    def _get_expanded_input_ids(self, input_prompt, collected_mm_items) -> torch.Tensor:
+        """Get input_ids with multimodal tokens expanded."""
+        image_grid_thw = collected_mm_items.get(Modality.IMAGE, {}).get('image_grid_thw', None)
+        merge_length = self.processor.image_processor.merge_size ** 2
+        image_index = 0
+        input_ids = []
+        for token in input_prompt:
+            if token == self.image_token_id:
+                image_tokens = image_grid_thw[image_index].prod() // merge_length
+                input_ids.extend([self.image_token_id] * image_tokens)
+                image_index += 1
+            else:
+                input_ids.append(token)
+        input_ids = torch.tensor(input_ids)
+        return input_ids
+
     def preprocess(self,
                    messages: list[dict],
-                   input_text: str,
+                   input_prompt: str | list[int],
                    mm_processor_kwargs: dict[str, Any] | None = None) -> list[dict]:
         """Refer to `super().preprocess()` for spec."""
 
         mm_items = self.collect_multimodal_items(messages)
 
-        raw_images = []
-        raw_videos, video_metadatas = [], []
+        raw_images, raw_videos, video_metadatas = [], [], []
         raw_time_series, sampling_rates = [], []
         for modality, data, params in mm_items:
             if modality == Modality.IMAGE:
@@ -316,39 +330,40 @@ class VisionModel(ABC):
         mm_processor_kwargs = mm_processor_kwargs or {}
         if raw_images:
             kwargs['images'] = raw_images
-            image_processor_kwargs = mm_processor_kwargs.get('image', None)
-            kwargs['size'] = self._get_override_size(self.processor.image_processor, image_processor_kwargs)
+            kwargs['size'] = self._get_override_size(self.processor.image_processor,
+                                                     mm_processor_kwargs.get('image', None))
         if raw_videos:
             kwargs['videos'] = raw_videos
             kwargs['video_metadata'] = video_metadatas
-            video_processor_kwargs = mm_processor_kwargs.get('video', None)
-            kwargs['size'] = self._get_override_size(self.processor.video_processor, video_processor_kwargs)
-            # leave resize to hf processor
-            # sample frames is done in video loader, set False to avoid duplication
+            kwargs['size'] = self._get_override_size(self.processor.video_processor,
+                                                     mm_processor_kwargs.get('video', None))
+            # perform resize in hf processor, while sample frames has been done in video loader
             kwargs['do_resize'] = True
             kwargs['do_sample_frames'] = False
+        if raw_images and raw_videos and kwargs.get('size', None) is not None:
+            logger.warning(
+                'Overriding mm processor kwargs for mixed modality can be problematic, '
+                'skip kwargs setting for both processors to avoid potential issues.'
+            )
+            kwargs.pop('size')
         if raw_time_series:
-            assert hasattr(self, 'time_series_processor'), 'time series processor is not defined for time series input'
-            assert not raw_images and not raw_videos, 'time series is not compatible with image/video input'
+            assert hasattr(self, 'time_series_processor'), \
+                'time series processor is not defined for time series input'
+            assert not raw_images and not raw_videos, \
+                'time series is not compatible with image/video input'
             self.tokenizer = self.processor.tokenizer
             self.processor = self.time_series_processor
             kwargs['time_series'] = raw_time_series
             kwargs['sampling_rate'] = sampling_rates
-        if raw_images and raw_videos and kwargs.get('size', None) is not None:
-            logger.warning(
-                'Overriding mm processor kwargs for mixed modality can be problematic, ' \
-                'skip kwargs setting for both processors to avoid potential issues.'
-            )
-            kwargs.pop('size', None)
 
         # process raw items with hf processor
+        input_text = input_prompt if isinstance(input_prompt, str) else ''
         processor_outputs = self.processor(
             text=[input_text],
             padding=True,
             return_tensors='pt',
             **kwargs,
         )
-        input_ids = processor_outputs['input_ids'].flatten()
 
         # collect from processor outputs and categorized by modality
         collected_mm_items: dict[Modality, dict[str, Any]] = {}
@@ -367,6 +382,12 @@ class VisionModel(ABC):
 
                 collected_mm_items[current_modality][attr_name] = value
 
+        # get input_ids
+        if isinstance(input_prompt, str):
+            input_ids = processor_outputs['input_ids'].flatten()
+        else:
+            input_ids = self._get_expanded_input_ids(input_prompt, collected_mm_items)
+
         # compute offsets for all items
         for modality, item in collected_mm_items.items():
             mm_token_id = self.mm_tokens.get_token_id_by_modality(modality)
@@ -379,18 +400,6 @@ class VisionModel(ABC):
         expanded_mm_items = self._get_expanded_mm_items(collected_mm_items)
 
         return input_ids.tolist(), expanded_mm_items
-
-    def has_input_ids(self, messages: list[dict]) -> bool:
-        """Check whether the messages contain input_ids directly.
-
-        Args:
-            messages (list[dict]): a list of message, which is supposed to be
-                the output of `preprocess`
-        Returns:
-            bool: whether the messages contain input_ids directly
-        """
-        users = [x['content'] for x in messages if x['role'] == 'user']
-        return len(users) == 1 and isinstance(users[0], list) and isinstance(users[0][0].get('text', ''), list)
 
     def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
@@ -406,22 +415,6 @@ class VisionModel(ABC):
         """
         if self.backend == 'turbomind':
             raise NotImplementedError()
-
-    # def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, chat_template_kwargs=None, **kwargs):
-    #     """Pack the preprocessing results in a format compatible with what is
-    #     required by pytorch engine. ONLY implement it when the backend is
-    #     pytorch engine.
-
-    #     Args:
-    #         messages(list[dict]): the output of `preprocess`
-    #         chat_template: the chat template defined in `lmdeploy/model.py`
-    #         tokenzer: the tokenizer model
-    #         sequence_start: starting flag of a sequence
-    #         chat_template_kwargs: additional arguments for chat template
-    #             processing, such as `add_vision_id` and `enable_thinking`
-    #     """
-    #     if self.backend == 'pytorch':
-    #         raise NotImplementedError()
 
     def to_turbomind(self, messages, chat_template, tokenizer, sequence_start, chat_template_kwargs=None, **kwargs):
         """Pack the forwarding results in a format compatible with what is
@@ -490,43 +483,6 @@ class VisionModel(ABC):
                     return True
         return False
 
-    def to_pytorch_with_input_ids(self, messages):
-        """Pack the preprocessing results in a format compatible with what is
-        required by pytorch engine when input_ids are provided directly.
-
-        Args:
-            messages(list[dict]): the output of `preprocess`
-        """
-        # collect all preprocessing result from messages
-        preps = [x['content'] for x in messages if x['role'] == 'preprocess']
-        assert len(preps) == 1
-        preps = preps[0]
-
-        _input_ids = messages[0]['content'][0]['text']
-        segs = []
-        for k, g in groupby(_input_ids, lambda x: x == self.image_token_id):
-            if not k:
-                segs.append(list(g))
-            else:
-                segs.extend([[]] * (len(list(g)) - 1))
-        if _input_ids[0] == self.image_token_id:
-            segs = [[]] + segs
-        if _input_ids[-1] == self.image_token_id:
-            segs = segs + [[]]
-
-        assert self.image_token_id == preps[0]['image_token_id']
-        assert len(segs) == len(preps) + 1, (f'the number of image token id {self.image_token_id} is not equal '
-                                             f'to input images, {len(segs) - 1} vs {len(preps)}')
-        input_ids = []
-        for i, seg in enumerate(segs):
-            if i > 0 and i <= len(preps):
-                preps[i - 1].update(offset=len(input_ids))
-                image_tokens = preps[i - 1]['image_tokens']
-                input_ids.extend([self.image_token_id] * image_tokens)
-            input_ids.extend(seg)
-
-        return dict(prompt=None, input_ids=input_ids, multimodal=preps)
-
     def to_turbomind_aux(self, messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start):
         """Auxiliary function to pack the forwarding results in a format
         compatible with what is required by turbomind engine.
@@ -573,7 +529,7 @@ class VisionModel(ABC):
 
 
 @dataclasses.dataclass
-class MultomodalSpecialTokens:
+class MultimodalSpecialTokens:
     image_token: str | list[str] | None = None
     video_token: str | list[str] | None = None
     audio_token: str | list[str] | None = None

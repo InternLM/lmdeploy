@@ -6,7 +6,7 @@ import torch
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.constants import Modality
-from lmdeploy.vl.model.base import VISION_MODELS, MultomodalSpecialTokens, VisionModel
+from lmdeploy.vl.model.base import VISION_MODELS, MultimodalSpecialTokens, VisionModel
 from lmdeploy.vl.model.qwen3 import Qwen3VLModel
 
 logger = get_logger('lmdeploy')
@@ -32,7 +32,7 @@ class InternS1ProVisionModel(Qwen3VLModel):
         self.ts_end_token = getattr(self.processor, 'ts_end_token', None)
 
         # special tokens
-        self.mm_tokens = MultomodalSpecialTokens(
+        self.mm_tokens = MultimodalSpecialTokens(
             image_token=self.image_token,
             video_token=self.video_token,
             ts_token=self.ts_token,

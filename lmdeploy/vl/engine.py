@@ -85,57 +85,6 @@ class ImageEncoder:
         outputs = await future
         return outputs
 
-    async def wrap_for_pytorch(
-        self,
-        input_ids: list[torch.Tensor] | None = None,
-        multimodal: list[dict] | None = None,
-        # messages: list[dict],
-        # chat_template,
-        # tokenizer,
-        # sequence_start,
-        # tools: list[object] | None = None,
-        # chat_template_kwargs: dict | None = None,
-    ) -> list[dict]:
-        """
-        Args:
-            messages (list[dict]): a list of message, which is supposed to be
-                the output of `preprocess`
-
-        Returns:
-            list[dict]: a list of dicts passed to pytorch engine_instance's forward.
-                Each dict has the following structure::
-
-                    {
-                        'prompt': 'the prompt after applying chat template',
-                        'input_ids': [],
-                        'multimodal': {
-                            'pixel_values': torch.Tensor,
-                            ...
-                        },
-                    }
-        """
-        # has_input_ids = self.model.has_input_ids(messages)
-        has_input_ids = False
-        result = {}
-        if not has_input_ids:
-            return dict(
-                input_ids=input_ids,
-                multimodal=multimodal,
-            )
-            # result = self.model.to_pytorch(messages,
-            #                                chat_template,
-            #                                tokenizer,
-            #                                sequence_start,
-            #                                tools=tools,
-            #                                chat_template_kwargs=chat_template_kwargs
-            #                                )
-        else:
-            # TODO: support input_ids inputs
-            # result = self.model.to_pytorch_with_input_ids(messages)
-            pass
-
-        return result
-
     async def wrap_for_turbomind(
         self,
         messages: list[dict],

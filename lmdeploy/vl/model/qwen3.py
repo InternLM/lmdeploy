@@ -3,7 +3,7 @@
 from transformers import AutoProcessor
 
 from lmdeploy.utils import get_logger
-from lmdeploy.vl.model.base import VISION_MODELS, MultomodalSpecialTokens, VisionModel
+from lmdeploy.vl.model.base import VISION_MODELS, MultimodalSpecialTokens, VisionModel
 
 logger = get_logger('lmdeploy')
 
@@ -39,7 +39,7 @@ class Qwen3VLModel(VisionModel):
         self.vision_end_token = self.processor.vision_end_token
 
         # special tokens
-        self.mm_tokens = MultomodalSpecialTokens(
+        self.mm_tokens = MultimodalSpecialTokens(
             image_token=self.image_token,
             video_token=self.video_token,
             image_token_id=self.image_token_id,

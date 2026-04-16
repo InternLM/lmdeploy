@@ -310,6 +310,11 @@ class MultimodalProcessor:
             isinstance(message.get('content'), list) and any(
                 item.get('type') in multimodal_types for item in message['content']) for message in messages)
 
+    def _has_input_ids_input(self, messages: list[dict]) -> bool:
+        """Check whether the messages contain input_ids directly."""
+        users = [x['content'] for x in messages if x['role'] == 'user']
+        return len(users) == 1 and isinstance(users[0], list) and isinstance(users[0][0].get('text', ''), list)
+
     async def _get_text_prompt_input(self,
                                      prompt: str | list[dict],
                                      do_preprocess: bool,
@@ -357,11 +362,17 @@ class MultimodalProcessor:
         engines."""
         chat_template = self.chat_template if do_preprocess else BaseChatTemplate()
         messages = await self.async_parse_multimodal_item(messages, media_io_kwargs)
-        input_text = self.vl_encoder.apply_chat_template(messages=messages,
-                                                         chat_template=chat_template,
-                                                         sequence_start=sequence_start,
-                                                         chat_template_kwargs=chat_template_kwargs)
-        input_ids, multimodal = await self.vl_encoder.preprocess(messages, input_text, mm_processor_kwargs)
+
+        # get input prompt as either text or input ids list
+        if self._has_input_ids_input(messages):
+            input_prompt = messages[0]['content'][0]['text']
+        else:
+            input_prompt = self.vl_encoder.apply_chat_template(messages=messages,
+                                                               chat_template=chat_template,
+                                                               sequence_start=sequence_start,
+                                                               chat_template_kwargs=chat_template_kwargs)
+
+        input_ids, multimodal = await self.vl_encoder.preprocess(messages, input_prompt, mm_processor_kwargs)
 
         results = {'input_ids': input_ids, 'multimodal': multimodal}
         if self.backend == 'turbomind':
