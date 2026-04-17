@@ -217,7 +217,7 @@ class SubCliServe:
         backend = args.backend
         if backend != 'pytorch':
             # set auto backend mode
-            backend = autoget_backend(args.model_path)
+            backend = autoget_backend(args.model_path, trust_remote_code=args.trust_remote_code)
 
         if backend == 'pytorch':
             from lmdeploy.messages import PytorchEngineConfig
