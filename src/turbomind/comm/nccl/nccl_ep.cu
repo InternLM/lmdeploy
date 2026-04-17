@@ -103,10 +103,12 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
                                        st);
         sync_check_cuda_error();
 
+        const int num_expert_tokens = *buffer_->moe_recv_counter;
+
         // Expose the sparse buffer as a flat 2D view; downstream linear gathers via f2n.
         const int num_max_tokens = packed_recv_x.shape(1);
         const int hidden         = packed_recv_x.shape(2);
-        output.out_x             = packed_recv_x.view({num_local_experts * num_max_tokens, hidden});
+        Tensor    sparse_out_x   = packed_recv_x.view({num_local_experts * num_max_tokens, hidden});
 
         // Reorder sparse scales into [H/128, E*max_T] sparse layout, writing only the
         // valid prefix of each expert; gaps stay uninitialized and are never read.
@@ -115,12 +117,23 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
             Tensor    out_scales{{num_groups, num_local_experts * num_max_tokens}, kFloat32, kDEVICE};
             invokeMoeLLDispatchScalesLayoutConvert(out_scales, packed_recv_x_scales.value(), packed_recv_count, st);
             sync_check_cuda_error();
-            output.out_x_scales = out_scales;
+            if (input.output_scales) {
+                output.out_x        = sparse_out_x;
+                output.out_x_scales = out_scales;
+            }
+            else {
+                Tensor indices{output.f2n.slice(0, num_expert_tokens)};
+                DequantizeSymm(output.out_x, sparse_out_x, out_scales, indices, st);
+                sync_check_cuda_error();
+            }
+        }
+        else {
+            output.out_x = sparse_out_x;
         }
 
         // Generate output
         output.handle        = {packed_recv_src_info, packed_recv_layout_range, output.offsets};
-        output.out_token_num = output.out_expert_token_num = *buffer_->moe_recv_counter;
+        output.out_token_num = output.out_expert_token_num = num_expert_tokens;
     }
     else {
         auto [num_tokens_per_rank, num_tokens_per_rdma_rank, num_tokens_per_expert, is_token_in_rank] =

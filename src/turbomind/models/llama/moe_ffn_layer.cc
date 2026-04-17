@@ -199,10 +199,8 @@ void MoeFfnLayer::RouteEP(ForwardParam& p, Tensor_<float>& logits)
     ep_mode_ = p.max_tokens_per_rank <= param_.ll_max_tokens_per_rank ? comm::EpMode::kLowLatency :
                                                                         comm::EpMode::kHighThroughput;
 
-    auto       input_type = p.weights->block.fused_gating_intermediate.input_type;
-    const bool use_fp8 =
-        (ep_mode_ == comm::EpMode::kHighThroughput && (input_type == kFloat8_e4m3 || input_type == kBfloat16))
-        || (ep_mode_ == comm::EpMode::kLowLatency && input_type == kFloat8_e4m3);
+    auto       input_type    = p.weights->block.fused_gating_intermediate.input_type;
+    const bool use_fp8       = input_type == kFloat8_e4m3 || input_type == kBfloat16;
     const bool output_scales = use_fp8 && input_type == kFloat8_e4m3;
 
     comm::EpDispatchInput  dispatch_input{ep_mode_, p.input, topk_weights, topk_idx, use_fp8, output_scales};
