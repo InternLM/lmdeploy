@@ -196,13 +196,34 @@ class SessionManager:
         """Initialize the session manager."""
 
         self.sessions = {}
-        self.session_id_generator = itertools.count(1)
+        self.session_id_generator = itertools.count(0)
         self.request_handle_pool = None
         self.loop = None
+        # user_session_id->session_id. If user specifies
+        # a session_id when visiting the api_server's endpoint,
+        # we map the user_session_id to the session_id to keep
+        # session's id globally identical across different requests.
+        self.user_session_id_map = {}
+        # session_id->user_session_id map.
+        self.session_id_map = {}
 
-    def get(self, session_id: int | None = None, **kwargs) -> Session:
-        """Create a new session."""
-        session_id = session_id or next(self.session_id_generator)
+    def map_user_session_id(self, user_session_id: int) -> int:
+        """Map a user_session_id to a session_id."""
+        if user_session_id in self.user_session_id_map:
+            raise ValueError(f'User session id {user_session_id} already exists')
+        session_id = next(self.session_id_generator)
+        self.user_session_id_map[user_session_id] = session_id
+        self.session_id_map[session_id] = user_session_id
+        return session_id
+
+    def get(self, session_id: int | None = None, create_if_not_exists: bool = True, **kwargs) -> Session | None:
+        """Get or create a session."""
+        if not create_if_not_exists:
+            return self.sessions.get(session_id, None)
+
+        if session_id is None:
+            session_id = next(self.session_id_generator)
+
         if session_id in self.sessions:
             logger.debug(f'[SessionManager] session {session_id} already exists. Updating...')
             session = self.sessions[session_id]
@@ -224,17 +245,24 @@ class SessionManager:
         # "abort all" is designed for async RL. The aborted sessions will be no longer used,
         # so we clear the sessions here.
         self.sessions.clear()
+        self.user_session_id_map.clear()
+        self.session_id_map.clear()
 
     def has(self, session_id):
         return session_id in self.sessions
 
     def remove(self, session: Session):
         self.sessions.pop(session.session_id, None)
+        user_session_id = self.session_id_map.pop(session.session_id, None)
+        if user_session_id is not None:
+            self.user_session_id_map.pop(user_session_id, None)
 
     def clear(self):
         self.sessions.clear()
+        self.user_session_id_map.clear()
+        self.session_id_map.clear()
         # reset the session id generator
-        self.session_id_generator = itertools.count(1)
+        self.session_id_generator = itertools.count(0)
 
     def attach_event_loop(self, loop):
         self.loop = loop
