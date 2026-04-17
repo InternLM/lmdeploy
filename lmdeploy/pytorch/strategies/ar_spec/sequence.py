@@ -30,7 +30,6 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
     def __post_init__(self):
         """Post init."""
         super().__post_init__()
-        self._num_new_valid: int = 0
         self._num_valid_ids: int = len(self.history_cache)
         self._strategy: ARSpecSequenceStrategy = self._seq_meta.strategy
 
