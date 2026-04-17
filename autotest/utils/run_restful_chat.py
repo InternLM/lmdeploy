@@ -7,7 +7,6 @@ import time
 import allure
 import psutil
 import requests
-from lmdeploy.serve.openai.api_client import APIClient
 from openai import APIStatusError, BadRequestError, OpenAI
 from pytest_assume.plugin import assume
 from utils.config_utils import (
@@ -20,6 +19,8 @@ from utils.config_utils import (
 from utils.constant import DEFAULT_PORT, DEFAULT_SERVER, MM_DEMO_TOMB_USER_PROMPT
 from utils.restful_return_check import assert_chat_completions_batch_return
 from utils.rule_condition_assert import assert_result
+
+from lmdeploy.serve.openai.api_client import APIClient
 
 BASE_HTTP_URL = f'http://{DEFAULT_SERVER}'
 

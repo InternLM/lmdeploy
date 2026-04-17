@@ -4,7 +4,6 @@ from pathlib import Path
 import pytest
 import requests
 import torch
-from lmdeploy.serve.openai.api_client import APIClient
 from utils.constant import (
     DEFAULT_PORT,
     DEFAULT_SERVER,
@@ -24,6 +23,8 @@ from utils.sleep_utils import (
     level2_update_weights_request_dict,
     resolve_hf_checkpoint_dir,
 )
+
+from lmdeploy.serve.openai.api_client import APIClient
 
 BASE_URL = f'http://{DEFAULT_SERVER}:{DEFAULT_PORT}'
 JSON_HEADERS = {'Content-Type': 'application/json'}

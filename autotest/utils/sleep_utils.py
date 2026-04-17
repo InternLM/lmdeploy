@@ -8,9 +8,10 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from lmdeploy.utils import serialize_state_dict
 from safetensors.torch import safe_open
 from transformers.utils import SAFE_WEIGHTS_INDEX_NAME, SAFE_WEIGHTS_NAME, WEIGHTS_INDEX_NAME, WEIGHTS_NAME
+
+from lmdeploy.utils import serialize_state_dict
 
 UPDATE_WEIGHTS_CUDA_DEVICE_ENV = 'LMDEPLOY_UPDATE_WEIGHTS_CUDA_DEVICE'
 

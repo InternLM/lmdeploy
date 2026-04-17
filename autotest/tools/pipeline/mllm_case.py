@@ -4,10 +4,11 @@ from typing import Any
 
 import fire  # noqa: E402
 import numpy as np  # noqa: E402
+from PIL import Image  # noqa: E402
+
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline  # noqa: E402
 from lmdeploy.vl import encode_image_base64, load_image, load_video  # noqa: E402
 from lmdeploy.vl.constants import IMAGE_TOKEN  # noqa: E402
-from PIL import Image  # noqa: E402
 
 gen_config = GenerationConfig(max_new_tokens=500, min_new_tokens=10)
 
