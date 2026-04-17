@@ -36,4 +36,4 @@ class GLM4_1_VisionModel(VisionModel):
 
     def apply_chat_template(self, messages, chat_template, sequence_start, chat_template_kwargs=None):
         """Apply chat template to get the prompt."""
-        return chat_template.messages2prompt(messages, sequence_start, **chat_template_kwargs)
+        return chat_template.messages2prompt(messages, sequence_start, **(chat_template_kwargs or {}))

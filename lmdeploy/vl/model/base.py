@@ -149,7 +149,7 @@ class VisionModel(ABC):
                 f'falling back to defaults, min_pixels={default_min} and max_pixels={default_max}.'
             )
             return None
-        logger.warning(f'{tag}Overriding processor size with min_pixels={override_min} and max_pixels={override_max}.')
+        logger.info(f'{tag}Overriding processor size with min_pixels={override_min} and max_pixels={override_max}.')
         return {'shortest_edge': override_min, 'longest_edge': override_max}
 
     def get_expanded_input_ids(self, input_prompt, collected_mm_items) -> torch.Tensor:
@@ -313,9 +313,9 @@ class VisionModel(ABC):
     def preprocess(self,
                    messages: list[dict],
                    input_prompt: str | list[int],
-                   mm_processor_kwargs: dict[str, Any] | None = None) -> list[dict]:
-        """Preprocess multimodal data and return input_ids + multimodal
-        features.
+                   mm_processor_kwargs: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Preprocess multimodal data and return a dict with ``input_ids`` and
+        multimodal features.
 
         New-style models inherit this implementation. Legacy models override with `def preprocess(self, messages)`.
         """
@@ -369,13 +369,13 @@ class VisionModel(ABC):
             assert not raw_images and not raw_videos, \
                 'time series is not compatible with image/video input'
             self.tokenizer = self.processor.tokenizer
-            self.processor = self.time_series_processor
+            time_series_processor = self.time_series_processor
             kwargs['time_series'] = raw_time_series
             kwargs['sampling_rate'] = sampling_rates
 
         # process raw items with hf processor
         input_text = input_prompt if isinstance(input_prompt, str) else ''
-        processor_outputs = self.processor(
+        processor_outputs = (time_series_processor if raw_time_series else self.processor)(
             text=[input_text],
             padding=True,
             return_tensors='pt',
