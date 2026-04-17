@@ -1,3 +1,4 @@
+import copy
 import os
 import time
 
@@ -6,6 +7,11 @@ import utils.constant as constant
 from utils.common_utils import execute_command_with_logging
 from utils.config_utils import get_case_str_by_config, get_cli_common_param, get_cuda_prefix_by_workerid, get_workerid
 from utils.run_restful_chat import health_check, start_openai_service, terminate_restful_api
+
+SERVE_ONLY_PARAMS = {  # yapf: disable
+    'max-batch-size', 'max-prefill-token-num', 'server-name',
+    'enable-prefix-caching', 'session-len',
+}
 
 
 def throughput_test(config, run_config, worker_id: str = '', is_smoke: bool = False):
@@ -26,7 +32,12 @@ def throughput_test(config, run_config, worker_id: str = '', is_smoke: bool = Fa
 
     cuda_prefix = get_cuda_prefix_by_workerid(worker_id, run_config.get('parallel_config'))
 
-    command = f'{cuda_prefix} python3 benchmark/profile_throughput.py {dataset_path} {model_path} {get_cli_common_param(run_config)}'  # noqa
+    bench_config = copy.deepcopy(run_config)
+    bench_config['extra_params'] = {
+        k: v
+        for k, v in bench_config.get('extra_params', {}).items() if k not in SERVE_ONLY_PARAMS
+    }
+    command = f'{cuda_prefix} python3 benchmark/profile_throughput.py {dataset_path} {model_path} {get_cli_common_param(bench_config)}'  # noqa
 
     if is_smoke:
         num_prompts = '--num-prompts 100'
@@ -72,7 +83,12 @@ def longtext_throughput_test(config, run_config, worker_id: str = ''):
 
     cuda_prefix = get_cuda_prefix_by_workerid(worker_id, run_config.get('parallel_config'))
 
-    command = f'{cuda_prefix} python3 benchmark/profile_pipeline_api.py {dataset_path} {model_path} {get_cli_common_param(run_config)}'  # noqa
+    bench_config = copy.deepcopy(run_config)
+    bench_config['extra_params'] = {
+        k: v
+        for k, v in bench_config.get('extra_params', {}).items() if k not in SERVE_ONLY_PARAMS
+    }
+    command = f'{cuda_prefix} python3 benchmark/profile_pipeline_api.py {dataset_path} {model_path} {get_cli_common_param(bench_config)}'  # noqa
 
     env = os.environ.copy()
     env.update(run_config.get('env', {}))
@@ -210,10 +226,11 @@ def prefixcache_throughput_test(config, run_config, worker_id: str = '', is_smok
 
     cuda_prefix = get_cuda_prefix_by_workerid(worker_id, run_config.get('parallel_config'))
 
-    run_config_new = run_config.copy()
-    if 'extra_params' not in run_config_new:
-        run_config_new['extra_params'] = {}
-    run_config_new['extra_params'].pop('enable-prefix-caching', None)
+    run_config_new = copy.deepcopy(run_config)
+    run_config_new['extra_params'] = {
+        k: v
+        for k, v in run_config_new.get('extra_params', {}).items() if k not in SERVE_ONLY_PARAMS
+    }
     run_config_new['extra_params']['session-len'] = 32768
     command = f'{cuda_prefix} python3 benchmark/profile_pipeline_api.py {dataset_path} {model_path} {get_cli_common_param(run_config_new)}'  # noqa
 

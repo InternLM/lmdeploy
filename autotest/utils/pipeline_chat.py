@@ -179,7 +179,7 @@ def get_response_from_output_by_prompt(output_text, case, prompt):
 def assert_pipeline_single_return(output, logprobs_num: int = 0):
     result = assert_pipeline_single_element(output, is_last=True, logprobs_num=logprobs_num)
     if not result:
-        return result, 'single_stream_element is wrong'
+        return result, f'single_stream_element is wrong {output}'
     return result & (len(output.token_ids) == output.generate_token_len
                      or len(output.token_ids) == output.generate_token_len - 1), 'token_is len is not correct'
 

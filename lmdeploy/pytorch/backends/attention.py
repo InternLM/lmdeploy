@@ -2,9 +2,11 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Generic, Literal, TypeVar
+from typing import Generic, TypeVar
 
 import torch
+
+from lmdeploy.messages import QuantPolicy
 
 
 @dataclass
@@ -18,7 +20,7 @@ class AttentionMetadata:
     fill_seqlens: torch.Tensor = None
     cu_seqlens_q: torch.Tensor = None
     cu_seqlens_k: torch.Tensor = None
-    quant_policy: Literal[0, 4, 8] = 0
+    quant_policy: QuantPolicy = QuantPolicy.NONE
 
 
 T = TypeVar('T', bound=AttentionMetadata)

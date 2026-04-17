@@ -12,27 +12,33 @@ device: cuda
 
 config:
     tp:
-        Qwen/Qwen3-235B-A22B-FP8: 4
-        internlm/Intern-S1: 4
-        Qwen/Qwen3-235B-A22B-Thinking-2507-FP8: 4
         Qwen/Qwen3-30B-A3B: 2
-        Qwen/Qwen3-32B: 2
-        openai/gpt-oss-120b: 2
-        openai/gpt-oss-120b-BF16: 4
-        openai/gpt-oss-20b-BF16: 2
-        deepseek/DeepSeek-V3.1: 8
-        Qwen/Qwen3-30B-A3B-Base: 2
-        JetLM/SDAR-30B-A3B-Sci: 2
-        moonshotai/Kimi-K2-Instruct-0905: 16
         Qwen/Qwen3-235B-A22B-Thinking-2507: 8
-        OpenGVLab/InternVL3_5-38B: 2
+        Qwen/Qwen3-235B-A22B-Thinking-2507-FP8: 4
         Qwen/Qwen3-VL-30B-A3B-Instruct: 2
+        Qwen/Qwen2.5-VL-32B-Instruct: 2
+        Qwen/Qwen3.5-27B: 2
+        Qwen/Qwen3.5-35B-A3B: 2
+        Qwen/Qwen3.5-122B-A10B: 4
+        Qwen/Qwen3-30B-A3B-Base: 2
+        meta-llama/Llama-4-Scout-17B-16E-Instruct: 4
+        meta-llama/Meta-Llama-3.1-70B-Instruct: 4
+        internlm/Intern-S1: 4
         internlm/Intern-S1-Pro-FP8: 16
+        OpenGVLab/InternVL3-38B: 2
+        OpenGVLab/InternVL3_5-30B-A3B: 2
+        OpenGVLab/InternVL3_5-38B: 2
+        deepseek-ai/DeepSeek-V3.1: 8
+        deepseek-ai/DeepSeek-V2-Lite-Chat: 2
+        mistralai/Mixtral-8x7B-Instruct-v0.1: 2
+        zai-org/GLM-4.7-Flash: 2
+        zai-org/GLM-5-FP8: 8
+        google/gemma-3-27b-it: 2
+        openai/gpt-oss-120b: 2
+        openai/gpt-oss-20b: 2
+        unsloth/gpt-oss-20b-BF16: 2
 
     dp_ep:
-        moonshotai/Kimi-K2-Instruct-0905:
-            dp: 16
-            ep: 16
         Qwen/Qwen3-235B-A22B-Thinking-2507:
             dp: 8
             ep: 8
@@ -48,64 +54,124 @@ config:
 
 turbomind_chat_model:
     tp:
-        - Qwen/Qwen3-0.6B-FP8
-        - Qwen/Qwen3-1.7B-FP8
-        - Qwen/Qwen3-4B-FP8
-        - Qwen/Qwen3-8B-FP8
-        - Qwen/Qwen3-14B-FP8
-        - Qwen/Qwen3-235B-A22B-Thinking-2507-FP8
-        - Qwen/Qwen3-235B-A22B-Thinking-2507
+        - meta-llama/Llama-3.2-1B-Instruct
+        - meta-llama/Llama-3.2-3B-Instruct
+        - meta-llama/Meta-Llama-3.1-8B-Instruct
+        - meta-llama/Meta-Llama-3.1-70B-Instruct
+        - meta-llama/Meta-Llama-3-8B-Instruct
+        - internlm/internlm3-8b-instruct
+        - internlm/internlm3-8b-instruct-awq
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
+        - OpenGVLab/InternVL3-8B
+        - OpenGVLab/InternVL3-38B
+        - OpenGVLab/InternVL3_5-30B-A3B
+        - OpenGVLab/InternVL3_5-38B
+        - Qwen/Qwen3-0.6B
+        - Qwen/Qwen3-4B
+        - Qwen/Qwen3-8B
+        - Qwen/Qwen3-32B-FP8
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-30B-A3B-FP8
-        - Qwen/Qwen3-32B
-        - Qwen/Qwen3-32B-FP8
-        - OpenGVLab/InternVL3_5-38B
+        - Qwen/Qwen3-235B-A22B-Thinking-2507
+        - Qwen/Qwen3-235B-A22B-Thinking-2507-FP8
+        - Qwen/Qwen3.5-27B
+        - Qwen/Qwen3.5-35B-A3B
+        - Qwen/Qwen3.5-35B-A3B-FP8
+        - Qwen/Qwen3.5-122B-A10B
+        - Qwen/Qwen2.5-VL-7B-Instruct
+        - Qwen/Qwen2.5-VL-32B-Instruct
+        - Qwen/Qwen1.5-MoE-A2.7B-Chat
+        - mistralai/Mixtral-8x7B-Instruct-v0.1
+        - deepseek-ai/DeepSeek-V2-Lite-Chat
+        - THUDM/glm-4-9b-chat
         - openai/gpt-oss-120b
         - openai/gpt-oss-20b
 
     cp_tp:
         - Qwen/Qwen3-235B-A22B-Thinking-2507
 
+
 pytorch_chat_model:
     tp:
-        - Qwen/Qwen3-0.6B-FP8
-        - Qwen/Qwen3-1.7B-FP8
-        - Qwen/Qwen3-4B-FP8
-        - Qwen/Qwen3-8B-FP8
-        - Qwen/Qwen3-14B-FP8
-        - Qwen/Qwen3-235B-A22B-Thinking-2507
-        - Qwen/Qwen3-235B-A22B-Thinking-2507-FP8
+        - meta-llama/Llama-4-Scout-17B-16E-Instruct
+        - meta-llama/Llama-3.2-1B-Instruct
+        - meta-llama/Llama-3.2-3B-Instruct
+        - meta-llama/Meta-Llama-3.1-8B-Instruct
+        - meta-llama/Meta-Llama-3.1-70B-Instruct
+        - meta-llama/Meta-Llama-3-8B-Instruct
+        - internlm/internlm3-8b-instruct
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
+        - internlm/Intern-S1-Pro-FP8
+        - OpenGVLab/InternVL3-8B
+        - OpenGVLab/InternVL3-38B
+        - OpenGVLab/InternVL3_5-30B-A3B
+        - OpenGVLab/InternVL3_5-38B
+        - Qwen/Qwen3-0.6B
+        - Qwen/Qwen3-4B
+        - Qwen/Qwen3-8B
+        - Qwen/Qwen3-32B-FP8
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-30B-A3B-FP8
-        - Qwen/Qwen3-32B
-        - Qwen/Qwen3-32B-FP8
+        - Qwen/Qwen3-235B-A22B-Thinking-2507
+        - Qwen/Qwen3-235B-A22B-Thinking-2507-FP8
+        - Qwen/Qwen3-VL-8B-Instruct
         - Qwen/Qwen3-VL-30B-A3B-Instruct
-        - OpenGVLab/InternVL3_5-38B
-        - unsloth/gpt-oss-120b-BF16
+        - Qwen/Qwen3.5-27B
+        - Qwen/Qwen3.5-35B-A3B
+        - Qwen/Qwen3.5-35B-A3B-FP8
+        - Qwen/Qwen3.5-122B-A10B
+        - THUDM/cogvlm-chat-hf
+        - THUDM/cogvlm2-llama3-chinese-chat-19B
+        - THUDM/glm-4v-9b
+        - THUDM/glm-4-9b-chat
+        - microsoft/Phi-3.5-vision-instruct
+        - microsoft/Phi-3-vision-128k-instruct
+        - zai-org/GLM-4.7-Flash
+        - zai-org/GLM-5-FP8
+        - deepseek-ai/DeepSeek-V3.1
+        - google/gemma-3-27b-it
         - unsloth/gpt-oss-20b-BF16
-        - deepseek/DeepSeek-V3.1
-        - moonshotai/Kimi-K2-Instruct-0905
-        - internlm/Intern-S1-Pro-FP8
-        - JetLM/SDAR-30B-A3B-Sci
+
     dp_ep:
-        - moonshotai/Kimi-K2-Instruct-0905
         - Qwen/Qwen3-235B-A22B-Thinking-2507
         - internlm/Intern-S1-Pro-FP8
 
 turbomind_vl_model:
     tp:
+        - OpenGVLab/InternVL3-8B
+        - OpenGVLab/InternVL3-38B
+        - OpenGVLab/InternVL3_5-30B-A3B
         - OpenGVLab/InternVL3_5-38B
-
+        - Qwen/Qwen2.5-VL-7B-Instruct
+        - Qwen/Qwen2.5-VL-32B-Instruct
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
 
 pytorch_vl_model:
     tp:
-        - OpenGVLab/InternVL3_5-38B
+        - OpenGVLab/InternVL3-8B
+        - OpenGVLab/InternVL3_5-30B-A3B
+        - Qwen/Qwen3-VL-8B-Instruct
         - Qwen/Qwen3-VL-30B-A3B-Instruct
+        - Qwen/Qwen3.5-27B
+        - Qwen/Qwen3.5-35B-A3B
+        - Qwen/Qwen3.5-35B-A3B-FP8
+        - Qwen/Qwen3.5-122B-A10B
+        - THUDM/cogvlm-chat-hf
+        - THUDM/cogvlm2-llama3-chinese-chat-19B
+        - THUDM/glm-4v-9b
+        - microsoft/Phi-3-vision-128k-instruct
+        - microsoft/Phi-3.5-vision-instruct
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
+
 
 turbomind_base_model:
     tp:
-        - Qwen/Qwen3-4B-FP8
-        - openai/gpt-oss-20b
+        - Qwen/Qwen3-8B-Base
+        - Qwen/Qwen3-30B-A3B-Base
 
 pytorch_base_model:
     tp:
@@ -114,95 +180,175 @@ pytorch_base_model:
 
 turbomind_quantization:
     no_awq:
-        - Qwen/Qwen3-0.6B-FP8
-        - Qwen/Qwen3-1.7B-FP8
-        - Qwen/Qwen3-4B-FP8
-        - Qwen/Qwen3-8B-FP8
-        - Qwen/Qwen3-14B-FP8
-        - Qwen/Qwen3-235B-A22B-Thinking-2507-FP8
+        - meta-llama/Meta-Llama-3.1-70B-Instruct
+        - internlm/internlm3-8b-instruct
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
+        - OpenGVLab/InternVL3_5-30B-A3B
         - Qwen/Qwen3-30B-A3B
-        - Qwen/Qwen3-30B-A3B-FP8
-        - Qwen/Qwen3-32B
+        - Qwen/Qwen3-235B-A22B-Thinking-2507
+        - Qwen/Qwen3-235B-A22B-Thinking-2507-FP8
         - Qwen/Qwen3-32B-FP8
+        - Qwen/Qwen3-30B-A3B-FP8
+        - Qwen/Qwen3.5-35B-A3B-FP8
+        - Qwen/Qwen3-30B-A3B-Base
+        - Qwen/Qwen1.5-MoE-A2.7B-Chat
+        - Qwen/Qwen2.5-VL-7B-Instruct
+        - Qwen/Qwen2.5-VL-32B-Instruct
+        - deepseek-ai/DeepSeek-V2-Lite-Chat
+        - THUDM/glm-4v-9b
+        - THUDM/glm-4-9b-chat
+        - microsoft/Phi-3-mini-4k-instruct
         - openai/gpt-oss-120b
         - openai/gpt-oss-20b
-        - Qwen/Qwen3-235B-A22B-Thinking-2507
+
     gptq:
         - empty
     no_kvint4:
-        - Qwen/Qwen3-0.6B-FP8
-        - Qwen/Qwen3-1.7B-FP8
-        - Qwen/Qwen3-4B-FP8
-        - Qwen/Qwen3-8B-FP8
-        - Qwen/Qwen3-14B-FP8
-        - Qwen/Qwen3-235B-A22B-Thinking-2507-FP8
+        - meta-llama/Llama-3.2-1B-Instruct
+        - OpenGVLab/InternVL3-2B
+        - OpenGVLab/InternVL3-8B
+        - Qwen/Qwen3-0.6B
+        - Qwen/Qwen3-4B
+        - Qwen/Qwen3-8B
+        - Qwen/Qwen3-32B-FP8
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-30B-A3B-FP8
-        - Qwen/Qwen3-32B
-        - Qwen/Qwen3-32B-FP8
+        - Qwen/Qwen3-235B-A22B-Thinking-2507
+        - Qwen/Qwen3-235B-A22B-Thinking-2507-FP8
+        - Qwen/Qwen2.5-VL-7B-Instruct
+        - Qwen/Qwen2.5-VL-32B-Instruct
+        - Qwen/Qwen1.5-MoE-A2.7B-Chat
+        - Qwen/Qwen3-8B-Base
+        - Qwen/Qwen3-30B-A3B-Base
+        - Qwen/Qwen3.5-27B
+        - Qwen/Qwen3.5-35B-A3B
+        - Qwen/Qwen3.5-35B-A3B-FP8
+        - Qwen/Qwen3.5-122B-A10B
+        - deepseek-ai/DeepSeek-V2-Lite-Chat
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
         - openai/gpt-oss-120b
         - openai/gpt-oss-20b
-        - Qwen/Qwen3-235B-A22B-Thinking-2507
     no_kvint8:
-        - Qwen/Qwen3-235B-A22B-Thinking-2507
+        - deepseek-ai/DeepSeek-V2-Chat
+        - Qwen/Qwen3-235B-A22B-Thinking-2507-FP8
+        - Qwen/Qwen3.5-27B
+        - Qwen/Qwen3.5-35B-A3B
+        - Qwen/Qwen3.5-35B-A3B-FP8
+        - Qwen/Qwen3.5-122B-A10B
+        - openai/gpt-oss-120b
+        - openai/gpt-oss-20b
 
 pytorch_quantization:
     awq:
-        - empty
+        - meta-llama/Llama-3.2-3B-Instruct
+        - meta-llama/Meta-Llama-3-8B-Instruct
+        - meta-llama/Meta-Llama-3.1-8B-Instruct
+        - internlm/internlm3-8b-instruct
+        - Qwen/Qwen3-0.6B
+        - Qwen/Qwen3-4B
+        - Qwen/Qwen3-8B
     w8a8:
-        - empty
+        - meta-llama/Llama-3.2-1B-Instruct
+        - meta-llama/Meta-Llama-3-8B-Instruct
+        - meta-llama/Meta-Llama-3.1-8B-Instruct
+        - internlm/internlm3-8b-instruct
+        - microsoft/Phi-3-mini-4k-instruct
     no_kvint4:
-        - Qwen/Qwen3-8B-Base
-        - Qwen/Qwen3-0.6B-FP8
-        - Qwen/Qwen3-1.7B-FP8
-        - Qwen/Qwen3-4B-FP8
-        - Qwen/Qwen3-8B-FP8
-        - Qwen/Qwen3-14B-FP8
-        - Qwen/Qwen3-235B-A22B-Thinking-2507-FP8
+        - meta-llama/Llama-3.2-1B-Instruct
+        - OpenGVLab/InternVL3-2B
+        - OpenGVLab/InternVL3-8B
+        - Qwen/Qwen3-0.6B
+        - Qwen/Qwen3-4B
+        - Qwen/Qwen3-8B
+        - Qwen/Qwen3-32B-FP8
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-30B-A3B-FP8
-        - Qwen/Qwen3-32B
-        - Qwen/Qwen3-32B-FP8
-        - moonshotai/Kimi-K2-Instruct-0905
         - Qwen/Qwen3-235B-A22B-Thinking-2507
+        - Qwen/Qwen3-235B-A22B-Thinking-2507-FP8
+        - Qwen/Qwen3-VL-8B-Instruct
+        - Qwen/Qwen3-VL-30B-A3B-Instruct
+        - Qwen/Qwen3-8B-Base
+        - Qwen/Qwen3-30B-A3B-Base
+        - Qwen/Qwen3.5-27B
+        - Qwen/Qwen3.5-35B-A3B
+        - Qwen/Qwen3.5-35B-A3B-FP8
+        - Qwen/Qwen3.5-122B-A10B
+        - microsoft/Phi-3-vision-128k-instruct
+        - microsoft/Phi-3.5-vision-instruct
+        - zai-org/GLM-4.7-Flash
+        - zai-org/GLM-5-FP8
+        - deepseek-ai/DeepSeek-V3.1
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
         - internlm/Intern-S1-Pro-FP8
-        - JetLM/SDAR-30B-A3B-Sci
-        - deepseek/DeepSeek-V3.1
     no_kvint8:
-        - Qwen/Qwen3-235B-A22B-Thinking-2507
+        - zai-org/GLM-4.7-Flash
+        - zai-org/GLM-5-FP8
+        - deepseek-ai/DeepSeek-V3.1
+        - Qwen/Qwen3.5-27B
+        - Qwen/Qwen3.5-35B-A3B
+        - Qwen/Qwen3.5-35B-A3B-FP8
+        - Qwen/Qwen3.5-122B-A10B
+        - Qwen/Qwen3-235B-A22B-Thinking-2507-FP8
         - internlm/Intern-S1-Pro-FP8
-        - deepseek/DeepSeek-V3.1
 
-longtext_model:
+longtext_benchmark_model:
     - Qwen/Qwen3-30B-A3B
     - Qwen/Qwen3-235B-A22B-Thinking-2507
+    - Qwen/Qwen3.5-27B
+    - Qwen/Qwen3.5-35B-A3B
+    - Qwen/Qwen3.5-35B-A3B-FP8
+    - Qwen/Qwen3.5-122B-A10B
+    - zai-org/GLM-5-FP8
 
 benchmark_model:
-    - meta-llama/Meta-Llama-3-1-8B-Instruct
-    - meta-llama/Meta-Llama-3-1-70B-Instruct
-    - Qwen/Qwen3-32B
+    - meta-llama/Meta-Llama-3.1-8B-Instruct
+    - meta-llama/Meta-Llama-3.1-70B-Instruct
     - Qwen/Qwen3-30B-A3B
     - Qwen/Qwen3-235B-A22B-Thinking-2507
     - Qwen/Qwen2.5-72B-Instruct
+    - Qwen/Qwen3.5-27B
+    - Qwen/Qwen3.5-35B-A3B
+    - Qwen/Qwen3.5-35B-A3B-FP8
+    - Qwen/Qwen3.5-122B-A10B
     - openai/gpt-oss-120b
     - openai/gpt-oss-20b
     - unsloth/gpt-oss-20b-BF16
-    - unsloth/gpt-oss-120b-BF16
+    - zai-org/GLM-5-FP8
+    - google/gemma-3-27b-it
+    - internlm/Intern-S1
+    - internlm/Intern-S1-mini
 
 evaluate_model:
-    - Qwen/Qwen3-32B
     - Qwen/Qwen3-32B-FP8
     - Qwen/Qwen3-30B-A3B
     - Qwen/Qwen3-30B-A3B-FP8
     - Qwen/Qwen3-235B-A22B-Thinking-2507
     - Qwen/Qwen3-235B-A22B-Thinking-2507-FP8
+    - Qwen/Qwen3.5-27B
+    - Qwen/Qwen3.5-35B-A3B
+    - Qwen/Qwen3.5-35B-A3B-FP8
+    - Qwen/Qwen3.5-122B-A10B
     - openai/gpt-oss-120b
-    - unsloth/gpt-oss-120b-BF16
-    - deepseek/DeepSeek-V3.1
-    - moonshotai/Kimi-K2-Instruct-0905
+    - deepseek-ai/DeepSeek-V3.1
+    - zai-org/GLM-5-FP8
     - internlm/Intern-S1-Pro-FP8
-    - JetLM/SDAR-30B-A3B-Sci
+
+longtext_evaluate_model:
+    - Qwen/Qwen3.5-35B-A3B
+
+mtp_evaluate_model:
+    - Qwen/Qwen3.5-35B-A3B
+    - Qwen/Qwen3.5-35B-A3B-FP8
 
 mllm_evaluate_model:
     - OpenGVLab/InternVL3_5-38B
     - Qwen/Qwen3-VL-30B-A3B-Instruct
+    - Qwen/Qwen3.5-27B
+    - Qwen/Qwen3.5-35B-A3B
+    - Qwen/Qwen3.5-35B-A3B-FP8
+    - Qwen/Qwen3.5-122B-A10B
+    - internlm/Intern-S1
+    - internlm/Intern-S1-mini
