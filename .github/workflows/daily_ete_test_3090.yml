@@ -42,7 +42,7 @@ on:
         required: true
         description: 'Docker tag'
         type: string
-        default: 'nightly-test-cu12.8'
+        default: 'latest-cu12.8'
   schedule:
     - cron:  '00 14 * * 0-4'
 
@@ -113,7 +113,7 @@ jobs:
     runs-on: [self-hosted, 3090-r1]
     timeout-minutes: 50
     container:
-      image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
+      image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'latest-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/qa_test_models:/nvme/qa_test_models
@@ -159,7 +159,7 @@ jobs:
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
       TEST_ENV: 3090_legacy
     container:
-      image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
+      image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'latest-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -237,7 +237,7 @@ jobs:
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
       TEST_ENV: ${{matrix.transformers}}
     container:
-      image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
+      image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'latest-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -322,7 +322,7 @@ jobs:
             generate_type: base
     timeout-minutes: 60
     container:
-      image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
+      image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'latest-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -411,7 +411,7 @@ jobs:
     needs: [test_tools, test_restful]
     timeout-minutes: 5
     container:
-      image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
+      image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'latest-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
