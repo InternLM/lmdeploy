@@ -165,3 +165,88 @@ Johnson
             'last_name': 'Johnson',
             'zip': '77004',
         }
+
+    def test_parse_tool_call_complete_coerces_types_by_schema(self):
+        parser = Qwen3CoderToolParser(tokenizer=None)
+        request = ChatCompletionRequest(
+            model=MODEL_ID,
+            messages=[],
+            tools=[{
+                'type': 'function',
+                'function': {
+                    'name': 'typed_tool',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'name': {
+                                'type': 'string'
+                            },
+                            'age': {
+                                'type': 'integer'
+                            },
+                            'height': {
+                                'type': 'number'
+                            },
+                            'active': {
+                                'type': 'boolean'
+                            },
+                            'meta': {
+                                'type': 'object'
+                            },
+                            'scores': {
+                                'type': 'array'
+                            },
+                            'misc': {
+                                'type': 'null'
+                            },
+                        },
+                    },
+                },
+            }],
+            tool_choice='auto',
+        )
+        parser.adjust_request(request)
+
+        payload = """
+<tool_call>
+<function=typed_tool>
+<parameter=name>
+Chen
+</parameter>
+<parameter=age>
+29
+</parameter>
+<parameter=height>
+1.75
+</parameter>
+<parameter=active>
+true
+</parameter>
+<parameter=meta>
+{"city":"Houston"}
+</parameter>
+<parameter=scores>
+[98,87]
+</parameter>
+<parameter=misc>
+null
+</parameter>
+</function>
+</tool_call>
+""".strip()
+
+        tool_call = parser.parse_tool_call_complete(payload)
+
+        assert tool_call is not None
+        assert tool_call.function.name == 'typed_tool'
+        assert json.loads(tool_call.function.arguments) == {
+            'name': 'Chen',
+            'age': 29,
+            'height': 1.75,
+            'active': True,
+            'meta': {
+                'city': 'Houston'
+            },
+            'scores': [98, 87],
+            'misc': None,
+        }
