@@ -243,6 +243,7 @@ class RayExecutor(ExecutorBase):
         device_type: str = 'cuda',
         dtype: str = 'auto',
         specdecode_config: SpecDecodeConfig = None,
+        trust_remote_code: bool = False,
     ):
         """Initialize Executor."""
         super().__init__(
@@ -255,6 +256,7 @@ class RayExecutor(ExecutorBase):
             adapters=adapters,
             device_type=device_type,
             specdecode_config=specdecode_config,
+            trust_remote_code=trust_remote_code,
         )
 
         device_ctx = DeviceContext(device_type)
@@ -287,6 +289,7 @@ class RayExecutor(ExecutorBase):
                 dtype=dtype,
                 log_level=logger.level,
                 specdecode_config=specdecode_config,
+                trust_remote_code=trust_remote_code
             )
 
             logger.info('Init ray workers.')

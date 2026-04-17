@@ -14,7 +14,8 @@ def get_model_and_chat_template(model_path, trust_remote_code=False):
     else:
         from huggingface_hub import snapshot_download
     model_path = snapshot_download(model_path, allow_patterns=['*.json', '*.py', '*.txt', '*.model', '*.jinja'])
-    model = load_vl_model(model_path=model_path, with_llm=False, backend='pytorch')
+    model = load_vl_model(model_path=model_path, with_llm=False, backend='pytorch',
+                          trust_remote_code=trust_remote_code)
     chat_template = MODELS.module_dict['hf'](model_path=model_path, trust_remote_code=trust_remote_code)
     return model, chat_template
 
