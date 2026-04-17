@@ -615,18 +615,15 @@ void invokeMoeLLDispatchPostprocess(int*          f2n,
 // max_T for each expert. Target is [H/128, E*max_T] contiguous, with valid
 // scales at positions [e*max_T, e*max_T+count_e). Gap slots are not written —
 // downstream gathers via f2n which only indexes valid positions.
-__global__ void MoeLLDispatchScalesLayoutConvertKernel(float*       target,
-                                                       const float* src,
-                                                       const int* __restrict__ packed_recv_count,
-                                                       int num_groups,
-                                                       int num_max_tokens)
+__global__ void MoeLLDispatchScalesLayoutConvertKernel(
+    float* target, const float* src, const int* __restrict__ packed_recv_count, int num_groups, int num_max_tokens)
 {
-    const int hi           = blockIdx.x;
-    const int ei           = blockIdx.y;
-    const int num_experts  = gridDim.y;
-    const int count_e      = packed_recv_count[ei];
-    const float* src_block = src + (ei * num_groups + hi) * num_max_tokens;
-    float*       dst_block = target + hi * (num_experts * num_max_tokens) + ei * num_max_tokens;
+    const int    hi          = blockIdx.x;
+    const int    ei          = blockIdx.y;
+    const int    num_experts = gridDim.y;
+    const int    count_e     = packed_recv_count[ei];
+    const float* src_block   = src + (ei * num_groups + hi) * num_max_tokens;
+    float*       dst_block   = target + hi * (num_experts * num_max_tokens) + ei * num_max_tokens;
 
     for (int t = threadIdx.x; t < count_e; t += blockDim.x) {
         dst_block[t] = src_block[t];

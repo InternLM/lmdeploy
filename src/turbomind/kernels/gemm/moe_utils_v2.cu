@@ -902,7 +902,7 @@ void invokeMoeDispatch(Ref<Tensor> out_, const Tensor& src, const int* f2n, int 
     auto& out    = out_.get();
     auto  invoke = [&](auto t) {
         using T                = decltype(t);
-        const int dim          = src.shape(1);
+        const int     dim      = src.shape(1);
         constexpr int threads  = 256;
         constexpr int vec_size = 16 / sizeof(T);
         TM_CHECK_EQ(out.shape(0), num_expert_tokens);
@@ -964,7 +964,8 @@ MoeDispatchScalesNonaligned(T* dst, const T* src, int dst_stride, int src_stride
     }
 }
 
-void invokeMoeDispatchScales(Ref<Tensor> out_, const Tensor& src, const int* f2n, int num_expert_tokens, cudaStream_t st)
+void invokeMoeDispatchScales(
+    Ref<Tensor> out_, const Tensor& src, const int* f2n, int num_expert_tokens, cudaStream_t st)
 {
     using T                 = float;
     constexpr int alignment = 16 / sizeof(T);
