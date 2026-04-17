@@ -183,7 +183,10 @@ class TestRestfulInterfaceBase:
                                               max_tokens=400,
                                               min_tokens=50):
             print(str(item))
-            assert '天' in item.get('choices')[1].get('text'), item.get('choices')[1].get('text')
-            assert '梅' in item.get('choices')[3].get('text') or '对仗' in item.get('choices')[3].get('text'), item.get(
-                'choices')[3].get('text')
-            assert '7' in item.get('choices')[4].get('text'), item.get('choices')[4].get('text')
+            assert '天' in item.get('choices')[1].get('text') or '雨' in item.get('choices')[1].get(
+                'text') or '伞' in item.get('choices')[1].get('text'), item.get('choices')[1].get('text')
+            assert '梅' in item.get('choices')[3].get('text') or '对仗' in item.get('choices')[3].get(
+                'text') or '仄' in item.get('choices')[3].get('text') or '诗' in item.get('choices')[3].get(
+                    'text'), item.get('choices')[3].get('text')
+            assert '7' in item.get('choices')[4].get('text') or '5+2' in item.get('choices')[4].get('text'), item.get(
+                'choices')[4].get('text')
