@@ -146,8 +146,8 @@ class NodeManager:
                     node_url: node_status.model_dump_json()
                     for node_url, node_status in nodes.items()
                 },
-                          config_file,
-                          indent=2)
+                    config_file,
+                    indent=2)
 
     def add(self, node_url: str, status: Status | None = None):
         """Add a node to the manager.

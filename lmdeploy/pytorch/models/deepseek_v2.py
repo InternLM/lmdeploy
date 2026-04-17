@@ -1345,7 +1345,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         num_hidden_layers = self.config.num_hidden_layers
 
         num_nextn_predict_layers = getattr(self.config, 'num_nextn_predict_layers', 1)
-        nextn_keys = [f'.layers.{num_hidden_layers+i}' for i in range(num_nextn_predict_layers)]
+        nextn_keys = [f'.layers.{num_hidden_layers + i}' for i in range(num_nextn_predict_layers)]
 
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
