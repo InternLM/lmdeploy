@@ -447,10 +447,11 @@ class BaseModelAgent:
         origin_inputs = inputs
         ret = await self.async_forward(inputs)
 
-        # For 'all' mode hidden states, save the full hidden states before postprocessing
+        # For 'all' mode hidden states without return_logits, save the full hidden
+        # states before _postprocess_forward_output slices them to last position.
+        pre_postprocess_full_hs = None
         if return_hidden_states and hidden_states_all_mode and not return_logits:
-            full_hs = ret['hidden_states'][0]  # [total_tokens, hidden_dim]
-            seq_length = ret.get('seq_length', inputs.seq_length)
+            pre_postprocess_full_hs = ret['hidden_states'][0]  # [total_tokens, hidden_dim]
 
         if not return_logits:
             ret = self._postprocess_forward_output(ret, origin_inputs)
@@ -460,19 +461,20 @@ class BaseModelAgent:
         if return_hidden_states:
             # Extract hidden states to return to the user
             hs = ret['hidden_states']
+            seq_length = ret.get('seq_length', inputs.seq_length)
             if hidden_states_all_mode:
                 if return_logits:
-                    # Full hidden states available; split by sequence
-                    seq_length = ret.get('seq_length', inputs.seq_length)
+                    # Full hidden states still available (postprocessing was skipped)
                     full_hs = hs[0]  # [total_tokens, hidden_dim]
-                # else: full_hs was saved before _postprocess_forward_output above
+                else:
+                    # Use the saved full hidden states from before postprocessing
+                    full_hs = pre_postprocess_full_hs
                 ret['last_hidden_states'] = full_hs
                 ret['hidden_states_seq_length'] = seq_length
             else:
                 # 'generation' mode: last-position hidden state per sequence
                 if return_logits:
                     # hidden_states is full sequence, need to slice to last position
-                    seq_length = ret.get('seq_length', inputs.seq_length)
                     last_hs = self._slice_outs(hs[0], seq_length)
                 else:
                     # _postprocess_forward_output already sliced to last position

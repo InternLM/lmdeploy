@@ -597,6 +597,7 @@ class HistoryHiddenStates(_HistoryDataBase):
         return ret
 
 
+class HistoryMropePosIds(_HistoryDataBase):
     """History mrope position ids."""
     ALLOC_SIZE = 64
 
