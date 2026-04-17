@@ -12,7 +12,7 @@ from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 from lmdeploy.vl.constants import Modality
 
-from .interns1_pro_ts import InternS1ProTimeSeriesModel
+from .interns1_pro_time_series import InternS1ProTimeSeriesModel
 from .patch import add_prefix, get_build_model_context
 from .qwen3_moe import Qwen3MoeModel
 from .qwen3_vl import Qwen3VLVisionModel
