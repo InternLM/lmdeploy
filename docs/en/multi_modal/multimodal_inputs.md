@@ -134,7 +134,7 @@ ______________________________________________________________________
 
 ## Single Video
 
-> **Note:** Native video input is currently supported for **Qwen3-VL**, **Qwen3.5-VL**, and **InternS1-Pro** models only.
+> **Note:** Native video input is currently supported for **Qwen3-VL**, **Qwen3.5**, and **InternS1-Pro** models only.
 
 <details>
 <summary>Complete example</summary>
@@ -177,7 +177,7 @@ ______________________________________________________________________
 
 ## Multiple Videos
 
-> **Note:** Native video input is currently supported for **Qwen3-VL**, **Qwen3.5-VL**, and **InternS1-Pro** models only.
+> **Note:** Native video input is currently supported for **Qwen3-VL**, **Qwen3.5**, and **InternS1-Pro** models only.
 
 <details>
 <summary>Complete example</summary>
@@ -298,7 +298,7 @@ ______________________________________________________________________
 
 ## Mixed Image and Video
 
-> **Note:** Native video input is currently supported for **Qwen3-VL**, **Qwen3.5-VL**, and **InternS1-Pro** models only.
+> **Note:** Native video input is currently supported for **Qwen3-VL**, **Qwen3.5**, and **InternS1-Pro** models only.
 
 <details>
 <summary>Complete example</summary>
