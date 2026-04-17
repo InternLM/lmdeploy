@@ -69,17 +69,6 @@ class Qwen3_5MoeSparseMoeBlock(nn.Module):
 
         self.gate = Qwen3_5MoeTopKRouter(config, dtype=dtype, device=device)
 
-        # get all reduce flags
-        dist_ctx = get_dist_manager().current_context()
-        dp = dist_ctx.dist_config.dp
-        world_size = dist_ctx.dist_config.moe_tp
-        attn_tp = dist_ctx.dist_config.attn_tp or 1
-        if dp == 1 and world_size > 1:
-            self._all_reduce = True
-        else:
-            self._all_reduce = False
-        shared_expert_all_reduce = (attn_tp > 1 and not self._all_reduce)
-
         self.experts = build_fused_moe(
             self.hidden_dim,
             self.ffn_dim,
@@ -94,13 +83,23 @@ class Qwen3_5MoeSparseMoeBlock(nn.Module):
             prefix=add_prefix('experts', prefix),
         )
 
+        # get all reduce
+        dist_ctx = get_dist_manager().current_context()
+        dp = dist_ctx.dist_config.dp
+        world_size = dist_ctx.dist_config.moe_tp
+        if dp == 1 and world_size > 1:
+            self._all_reduce = True
+        else:
+            self._all_reduce = False
+            is_tp = False
+
         self.shared_expert = Qwen3_5MLP(
             config=config,
             intermediate_size=config.shared_expert_intermediate_size,
             dtype=dtype,
             device=device,
             is_tp=is_tp,
-            all_reduce=shared_expert_all_reduce,
+            all_reduce=False,
             prefix=add_prefix('shared_expert', prefix),
         )
         self.shared_expert_gate = torch.nn.Linear(config.hidden_size, 1, bias=False, device=device, dtype=dtype)
