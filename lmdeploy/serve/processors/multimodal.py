@@ -38,10 +38,8 @@ class MultimodalProcessor:
         self.chat_template = chat_template
         self.vl_encoder = vl_encoder
         self.backend = backend
-        self._uses_new_preprocess = (
-            vl_encoder is not None and
-            'mm_processor_kwargs' in inspect.signature(vl_encoder.model.preprocess).parameters
-        )
+        _sig = inspect.signature(vl_encoder.model.preprocess).parameters if vl_encoder else {}
+        self._uses_new_preprocess = 'input_prompt' in _sig and 'mm_processor_kwargs' in _sig
 
     @staticmethod
     def merge_message_content(msg: dict) -> dict:
@@ -373,13 +371,10 @@ class MultimodalProcessor:
                                                                chat_template_kwargs=chat_template_kwargs)
         elif self.backend == 'pytorch':
             if self._uses_new_preprocess:
-                if self.vl_encoder.model.has_input_ids(messages):
-                    input_prompt = messages[0]['content'][0]['text']
-                else:
-                    input_prompt = self.vl_encoder.apply_chat_template(messages=messages,
-                                                                       chat_template=chat_template,
-                                                                       sequence_start=sequence_start,
-                                                                       chat_template_kwargs=chat_template_kwargs)
+                input_prompt = self.vl_encoder.apply_chat_template(messages=messages,
+                                                                   chat_template=chat_template,
+                                                                   sequence_start=sequence_start,
+                                                                   chat_template_kwargs=chat_template_kwargs)
                 results = await self.vl_encoder.preprocess(messages, input_prompt, mm_processor_kwargs)
             else:
                 results = await self.vl_encoder.preprocess(messages, mm_processor_kwargs)

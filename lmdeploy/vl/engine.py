@@ -43,6 +43,8 @@ class ImageEncoder:
         torch.cuda.empty_cache()
 
     def apply_chat_template(self, messages, chat_template, sequence_start, chat_template_kwargs=None):
+        if self.model.has_input_ids(messages):
+            return messages[0]['content'][0]['text']
         return self.model.apply_chat_template(
             messages, chat_template, sequence_start, chat_template_kwargs
         )
