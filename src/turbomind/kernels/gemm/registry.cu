@@ -8,9 +8,12 @@ namespace turbomind::gemm {
 Registry::Registry(std::shared_ptr<cudaDeviceProp> device_prop):
     device_prop_{std::move(device_prop)}, arch_{device_prop_->major * 100 + device_prop_->minor * 10}
 {
+#if defined(GEMM2_ARCH_90_ENABLED)
     sm90_16816_4();
     sm90_16816_8();
     sm90_16816_16();
+    sm90_64n32_8();
+#endif
 
     sm80_16816_4();
     sm80_16816_8();
@@ -24,9 +27,13 @@ Registry::Registry(std::shared_ptr<cudaDeviceProp> device_prop):
     sm70_884_8();
     sm70_884_16();
 
-    sm90_64n32_8();
-
     cublas_float();
+
+#if defined(ENABLE_CUBLAS_GROUPED)
+    if (Sm100::is_compatible(arch_)) {
+        sm100_cublas_grouped_float();
+    }
+#endif
 }
 
 bool Registry::Add(std::unique_ptr<Kernel> kernel)
