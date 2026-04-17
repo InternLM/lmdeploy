@@ -23,10 +23,10 @@ class Qwen3_5Model(Qwen3VLModel):
 
     _arch = ['Qwen3_5ForConditionalGeneration', 'Qwen3_5MoeForConditionalGeneration']
 
-    def build_preprocessor(self):
+    def build_preprocessor(self, trust_remote_code: bool = False):
         check_transformers()
 
-        self.processor = AutoProcessor.from_pretrained(self.model_path)
+        self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=trust_remote_code)
 
         # image tokens
         self.image_token = self.processor.image_token
