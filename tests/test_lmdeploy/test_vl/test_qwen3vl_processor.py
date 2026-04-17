@@ -39,9 +39,17 @@ def sample_video_messages(video_data):
     return [{'role': 'user', 'content': [{'type': 'video', 'data': frames, 'video_metadata': metadata}]}]
 
 
-def _preprocess(model, messages, **kwargs):
-    result = model.preprocess(messages=list(messages), **kwargs)
-    return result[-1]['content'][0]
+def _preprocess(model, messages, mm_processor_kwargs=None):
+    """Call model.preprocess following the same flow as the engine:
+
+    apply_chat_template → input_prompt → preprocess.
+    """
+    from lmdeploy.model import MODELS
+    chat_template = MODELS.module_dict['hf'](model_path=model.model_path)
+    input_prompt = model.apply_chat_template(messages, chat_template, sequence_start=True)
+    result = model.preprocess(messages=list(messages), input_prompt=input_prompt,
+                              mm_processor_kwargs=mm_processor_kwargs)
+    return result['multimodal'][0]
 
 
 def test_image_with_custom_pixels(qwen3vl_model, sample_messages):
@@ -56,14 +64,14 @@ def test_image_with_custom_pixels(qwen3vl_model, sample_messages):
     default_shape = _preprocess(qwen3vl_model, sample_messages)['pixel_values'].shape
 
     # [60, 1536]
+    small_kwargs = {'image': {'min_pixels': 10 * 32 * 32, 'max_pixels': 20 * 32 * 32}}
     small_shape = _preprocess(qwen3vl_model, sample_messages,
-                              mm_processor_kwargs={'min_pixels': 10 * 32 * 32,
-                                                   'max_pixels': 20 * 32 * 32})['pixel_values'].shape
+                              mm_processor_kwargs=small_kwargs)['pixel_values'].shape
 
     # [468, 1536]
+    large_kwargs = {'image': {'min_pixels': 100 * 32 * 32, 'max_pixels': 20000 * 32 * 32}}
     large_shape = _preprocess(qwen3vl_model, sample_messages,
-                              mm_processor_kwargs={'min_pixels': 100 * 32 * 32,
-                                                   'max_pixels': 20000 * 32 * 32})['pixel_values'].shape
+                              mm_processor_kwargs=large_kwargs)['pixel_values'].shape
 
     assert small_shape[0] < default_shape[0] < large_shape[0]
 
@@ -72,20 +80,20 @@ def test_video_with_custom_pixels(qwen3vl_model, sample_video_messages):
     """Test that mm_processor_kwargs min/max pixels affect video preprocessing.
 
     Videos process at native resolution by default, so we compare two constrained ranges rather than comparing against
-    the default.
+    the default. Per-frame shapes are compared (each multimodal item is one frame).
     """
 
     # [28160, 1536]
     default_shape = _preprocess(qwen3vl_model, sample_video_messages)['pixel_values_videos'].shape
 
-    # [32, 1536]
+    # [4, 1536]
+    small_kwargs = {'video': {'min_pixels': 10 * 32 * 32, 'max_pixels': 20 * 32 * 32}}
     small_shape = _preprocess(qwen3vl_model, sample_video_messages,
-                              mm_processor_kwargs={'min_pixels': 10 * 32 * 32,
-                                                   'max_pixels': 20 * 32 * 32})['pixel_values_videos'].shape
+                              mm_processor_kwargs=small_kwargs)['pixel_values_videos'].shape
 
-    # [256, 1536]
+    # [32, 1536]
+    medium_kwargs = {'video': {'min_pixels': 50 * 32 * 32, 'max_pixels': 200 * 32 * 32}}
     medium_shape = _preprocess(qwen3vl_model, sample_video_messages,
-                               mm_processor_kwargs={'min_pixels': 50 * 32 * 32,
-                                                    'max_pixels': 200 * 32 * 32})['pixel_values_videos'].shape
+                               mm_processor_kwargs=medium_kwargs)['pixel_values_videos'].shape
 
     assert small_shape[0] < medium_shape[0] <= default_shape[0]
