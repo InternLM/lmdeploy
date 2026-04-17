@@ -9,12 +9,11 @@ if _autotest_root not in sys.path:
 
 import fire  # noqa: E402
 import numpy as np  # noqa: E402
-from PIL import Image  # noqa: E402
-from utils.constant import MM_DEMO_TOMB_USER_PROMPT  # noqa: E402
-
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline  # noqa: E402
 from lmdeploy.vl import encode_image_base64, load_image, load_video  # noqa: E402
 from lmdeploy.vl.constants import IMAGE_TOKEN  # noqa: E402
+from PIL import Image  # noqa: E402
+from utils.constant import MM_DEMO_TOMB_USER_PROMPT  # noqa: E402
 
 gen_config = GenerationConfig(max_new_tokens=500, min_new_tokens=10)
 
@@ -388,6 +387,50 @@ def Qwen_vl_testcase(pipe, resource_path):
         except Exception as exc:
             err = json.dumps(f'PIPELINE_VIDEO_ERROR:{exc!s}', ensure_ascii=False)
             print('[caseresult qwen3-demo-video start]' + err + '[caseresult qwen3-demo-video end]\n')
+
+    rp_video = os.path.join(resource_path, DEFAULT_VIDEO_FILENAME)
+    if not os.path.isfile(rp_video):
+        print('[caseresult qwen-mixed-image-text-video start]' +
+              json.dumps('SKIPPED_NO_RED_PANDA_MP4', ensure_ascii=False) +
+              '[caseresult qwen-mixed-image-text-video end]\n')
+    else:
+        try:
+            frames_pil, _vmeta_m = load_video_sampled_pil(rp_video, num_frames=6, fps=1)
+            mixed_content = [
+                {
+                    'type':
+                    'text',
+                    'text': (
+                        'You are given one still image, then several frames from a short video in order. '
+                        'In 2-4 sentences: name one thing in the still image, and what animal or activity '
+                        'you see in the video frames.'),
+                },
+                {
+                    'type': 'image_url',
+                    'image_url': {
+                        'url': f'{resource_path}/{PIC1}',
+                    },
+                },
+            ]
+            for frame in frames_pil:
+                mixed_content.append(
+                    dict(
+                        type='image_url',
+                        image_url=dict(url=f'data:image/jpeg;base64,{encode_image_base64(frame)}'),
+                    ))
+            mixed_msg = [{'role': 'user', 'content': mixed_content}]
+            response = pipe(
+                mixed_msg,
+                gen_config=gen_config,
+                log_level='INFO',
+                max_log_len=10,
+            )
+            print('[caseresult qwen-mixed-image-text-video start]' +
+                  json.dumps(response.text, ensure_ascii=False) + '[caseresult qwen-mixed-image-text-video end]\n')
+        except Exception as exc:
+            err = json.dumps(f'PIPELINE_MIXED_MM_ERROR:{exc!s}', ensure_ascii=False)
+            print('[caseresult qwen-mixed-image-text-video start]' + err +
+                  '[caseresult qwen-mixed-image-text-video end]\n')
 
 
 if __name__ == '__main__':

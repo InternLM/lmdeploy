@@ -7,6 +7,7 @@ import time
 import allure
 import psutil
 import requests
+from lmdeploy.serve.openai.api_client import APIClient
 from openai import APIStatusError, BadRequestError, OpenAI
 from pytest_assume.plugin import assume
 from utils.config_utils import (
@@ -19,8 +20,6 @@ from utils.config_utils import (
 from utils.constant import DEFAULT_PORT, DEFAULT_SERVER, MM_DEMO_TOMB_USER_PROMPT
 from utils.restful_return_check import assert_chat_completions_batch_return
 from utils.rule_condition_assert import assert_result
-
-from lmdeploy.serve.openai.api_client import APIClient
 
 BASE_HTTP_URL = f'http://{DEFAULT_SERVER}'
 
@@ -272,6 +271,15 @@ def _vl_video_stream_finish_assert(finish: str | None, text: str) -> bool:
     return True
 
 
+def _vl_openai_http_error_skippable(exc: BaseException) -> bool:
+    if isinstance(exc, BadRequestError):
+        return True
+    if isinstance(exc, APIStatusError):
+        code = getattr(exc, 'status_code', None)
+        return isinstance(code, int) and code < 500
+    return False
+
+
 _REDACTED_THINKING_END = '</think>'
 
 
@@ -473,6 +481,8 @@ def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
                 },
             )
         except (BadRequestError, APIStatusError) as exc:
+            if not _vl_openai_http_error_skippable(exc):
+                raise
             file.writelines(f'[video testcase skipped] model/server rejected video_url: {exc!r}\n')
         else:
             file.writelines('[video non-stream] ' + str(v_resp).lower() + '\n')
@@ -636,6 +646,8 @@ def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
                 },
             )
         except (BadRequestError, APIStatusError) as exc:
+            if not _vl_openai_http_error_skippable(exc):
+                raise
             file.writelines(f'[video mm_processor demo skipped] {exc!r}\n')
         else:
             file.writelines('[video mm_processor non-stream] ' + str(mm_resp).lower() + '\n')
@@ -706,6 +718,62 @@ def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
             mm_one_text = (mm_one.choices[0].message.content or '').strip()
             assert mm_one_text and _mm_demo_single_frame_scene_assert(mm_one_text), mm_one_text
             assert _mm_demo_thinking_wrapper_shape_assert(mm_one_text), mm_one_text
+
+    mixed_messages = [{
+        'role':
+        'user',
+        'content': [
+            {
+                'type':
+                'text',
+                'text': (
+                    'You receive one still image and one video clip in this message. In 2-4 short sentences: '
+                    '(1) name one clear subject from the image; '
+                    '(2) name the animal or main scene in the video.'),
+            },
+            {
+                'type': 'image_url',
+                'image_url': {
+                    'url': f'{resource_path}/{PIC}',
+                },
+            },
+            {
+                'type': 'video_url',
+                'video_url': {
+                    'url': video_path,
+                },
+            },
+        ],
+    }]
+    if not os.path.isfile(video_path):
+        file.writelines('[mixed image+text+video skipped] missing video file (same as video testcase)\n')
+    else:
+        try:
+            mix_resp = client.chat.completions.create(
+                model=model_name,
+                messages=mixed_messages,
+                temperature=0.3,
+                max_tokens=512,
+                extra_body={
+                    'media_io_kwargs': {
+                        'video': {
+                            'num_frames': 6,
+                        },
+                    },
+                },
+            )
+        except (BadRequestError, APIStatusError) as exc:
+            if not _vl_openai_http_error_skippable(exc):
+                raise
+            file.writelines(f'[mixed image+text+video skipped] server rejected: {exc!r}\n')
+        else:
+            file.writelines('[mixed image+text+video] ' + str(mix_resp).lower() + '\n')
+            mix_content = (mix_resp.choices[0].message.content or '').strip()
+            assert mix_content, mix_resp
+            assert ('tiger' in mix_content.lower() or '虎' in mix_content or 'ski' in mix_content.lower()
+                    or '滑雪' in mix_content), mix_resp
+            assert _vl_video_stream_finish_assert(
+                getattr(mix_resp.choices[0], 'finish_reason', None), mix_content), mix_resp
 
     file.close()
 

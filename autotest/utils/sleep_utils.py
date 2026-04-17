@@ -2,22 +2,17 @@ from __future__ import annotations
 
 import json
 import os
-import re
-from collections import Counter, defaultdict
-from collections.abc import Callable, Iterator
+from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import torch
+from lmdeploy.utils import serialize_state_dict
 from safetensors.torch import safe_open
 from transformers.utils import SAFE_WEIGHTS_INDEX_NAME, SAFE_WEIGHTS_NAME, WEIGHTS_INDEX_NAME, WEIGHTS_NAME
 
-from lmdeploy.utils import serialize_state_dict
-
 UPDATE_WEIGHTS_CUDA_DEVICE_ENV = 'LMDEPLOY_UPDATE_WEIGHTS_CUDA_DEVICE'
-
-# Same layer id regex as ``Qwen3_5ReaderMixin.attn_layer_pattern`` (turbomind deploy).
-QWEN_TURBOMIND_LAYER_PATTERN = r'(?:model\.language_model\.|model\.)layers\.([0-9]+)\.'
 
 LEVEL2_GREEDY_MESSAGES = [{'role': 'user', 'content': '424242'}]
 LEVEL2_MAX_TOKENS = 64
@@ -62,104 +57,6 @@ def shard_paths(model_dir: Path) -> tuple[str, list[Path]]:
         paths = sorted(set(index['weight_map'].values()))
         return 'pytorch', [model_dir / p for p in paths]
     raise FileNotFoundError(f'No HF weights under {model_dir}')
-
-
-def _safetensors_weight_index(model_dir: Path, shards: list[Path]) -> dict[str, str]:
-    """``weight_name -> shard_basename`` like ``SafetensorsLoader``."""
-    if (model_dir / SAFE_WEIGHTS_INDEX_NAME).is_file():
-        with open(model_dir / SAFE_WEIGHTS_INDEX_NAME, encoding='utf-8') as f:
-            return dict(json.load(f)['weight_map'])
-    index: dict[str, str] = {}
-    for shard in shards:
-        fn = shard.name
-        with safe_open(str(shard), framework='pt') as f:
-            for k in f.keys():
-                index[k] = fn
-    return index
-
-
-def _qwen35_moe_map_packed_key(name: str) -> str:
-    return re.sub(r'(mlp\.experts\.(?:gate_up|down)_proj)$', r'\1.weight', name)
-
-
-def _qwen35_moe_name_mapper(index: dict[str, str]) -> Callable[[str], str] | None:
-    keys = index.keys()
-    if any('mlp.experts.gate_up_proj' in x for x in keys) and any('mlp.experts.down_proj' in x for x in keys):
-        return _qwen35_moe_map_packed_key
-    return None
-
-
-def _turbomind_layer_param_counts(index: dict[str, str], pattern: str) -> dict[int, int]:
-    counts: dict[int, int] = defaultdict(int)
-    for k in index.keys():
-        m = re.findall(pattern, k)
-        if m:
-            counts[int(m[0])] += 1
-    return dict(counts)
-
-
-def _count_safetensors_turbomind_chunks(
-    shards: list[Path],
-    index: dict[str, str],
-    pattern: str,
-    item_count: dict[int, int],
-) -> int:
-    n = 0
-    params: dict[int, int] = defaultdict(int)
-    for shard in shards:
-        filename = shard.name
-        with safe_open(str(shard), framework='pt') as f:
-            misc_keys: list[str] = []
-            for k in f.keys():
-                if k not in index or index[k] != filename:
-                    continue
-                m = re.findall(pattern, k)
-                if not m:
-                    misc_keys.append(k)
-                else:
-                    idx = int(m[0])
-                    params[idx] += 1
-                    if params[idx] == item_count[idx]:
-                        n += 1
-                        del params[idx]
-            if misc_keys:
-                n += 1
-    if params:
-        raise RuntimeError(
-            f'turbomind weight packing (dry-run): incomplete layers {sorted(params.keys())}')
-    return n
-
-
-def _iterate_safetensors_turbomind_cpu_chunks(
-    shards: list[Path],
-    index: dict[str, str],
-    pattern: str,
-    item_count: dict[int, int],
-    map_key: Callable[[str], str],
-) -> Iterator[dict[str, torch.Tensor]]:
-    """Yield CPU state dicts in the same order as ``SafetensorsLoader.items``
-    (one decoder layer or misc)."""
-    params: dict[int, dict[str, torch.Tensor]] = defaultdict(dict)
-    for shard in shards:
-        filename = shard.name
-        with safe_open(str(shard), framework='pt') as f:
-            misc_keys: list[str] = []
-            for k in f.keys():
-                if k not in index or index[k] != filename:
-                    continue
-                m = re.findall(pattern, k)
-                if not m:
-                    misc_keys.append(k)
-                else:
-                    idx = int(m[0])
-                    bucket = params[idx]
-                    bucket[map_key(k)] = f.get_tensor(k)
-                    if len(bucket) == item_count[idx]:
-                        yield dict(params.pop(idx))
-            if misc_keys:
-                yield {k: f.get_tensor(k) for k in misc_keys}
-    if params:
-        raise RuntimeError(f'turbomind weight packing: incomplete layers {sorted(params.keys())}')
 
 
 def load_shard_tensors(kind: str, path: Path) -> dict[str, torch.Tensor]:
@@ -236,30 +133,43 @@ def apply_serialized_hf_segments_for_turbomind_level2_weights(
     model_dir: Path,
     emit_segment: Callable[[Any, bool], None],
 ) -> None:
-    """Upload HF weights in **layer-sized** chunks (TurboMind ``update_params``
-    / ``StateDictLoader``)."""
-    kind, shards = shard_paths(model_dir)
-    if kind != 'safetensors':
+    from lmdeploy.turbomind.deploy.converter import get_input_model_registered_name
+    from lmdeploy.turbomind.deploy.source_model.base import INPUT_MODELS
+
+    root = str(model_dir.resolve())
+    try:
+        input_model_name = get_input_model_registered_name(root, 'hf')
+        if input_model_name == 'qwen3_5-moe':
+            raise RuntimeError(
+                'turbomind update_weights is unsupported for qwen3_5-moe in the current server build: '
+                'server-side StateDictLoader has no `index`, but Qwen3_5MoeModel.readers() accesses loader.index')
+        input_model_cls = INPUT_MODELS.get(input_model_name)
+        input_model = input_model_cls(model_path=root, tokenizer_path=root)
+    except Exception as e:
         raise RuntimeError(
-            f'turbomind update_weights packing is only implemented for safetensors checkpoints (got {kind!r})')
-    index = _safetensors_weight_index(model_dir, shards)
-    mapper = _qwen35_moe_name_mapper(index)
-    map_key: Callable[[str], str] = mapper if mapper is not None else (lambda x: x)
-    item_count = _turbomind_layer_param_counts(index, QWEN_TURBOMIND_LAYER_PATTERN)
-    n = _count_safetensors_turbomind_chunks(shards, index, QWEN_TURBOMIND_LAYER_PATTERN, item_count)
-    if n <= 0:
-        raise RuntimeError(f'no turbomind weight chunks to emit under {model_dir}')
+            f'turbomind update_weights: failed to build input_model readers for {model_dir}: {e}') from e
+
     dev_idx = resolve_update_weights_cuda_device_index()
     device = torch.device('cuda', dev_idx)
-    seg_i = 0
     with torch.cuda.device(dev_idx):
-        for cpu_dict in _iterate_safetensors_turbomind_cpu_chunks(
-                shards, index, QWEN_TURBOMIND_LAYER_PATTERN, item_count, map_key):
-            seg_gpu = {k: v.to(device, non_blocking=True) for k, v in cpu_dict.items()}
-            del cpu_dict
-            serialized_data = serialize_state_dict(seg_gpu)
+        it = iter(dict(reader.params) for _, reader in input_model.readers())
+        try:
+            chunk = next(it)
+        except StopIteration:
+            raise RuntimeError(f'no turbomind weight chunks to emit under {model_dir}') from None
+
+        for cpu_dict_next in it:
+            seg_gpu = {k: v.to(device, non_blocking=True) for k, v in chunk.items()}
+            try:
+                emit_segment(serialize_state_dict(seg_gpu), False)
+            finally:
+                del seg_gpu
+                torch.cuda.empty_cache()
+            chunk = cpu_dict_next
+
+        seg_gpu = {k: v.to(device, non_blocking=True) for k, v in chunk.items()}
+        try:
+            emit_segment(serialize_state_dict(seg_gpu), True)
+        finally:
             del seg_gpu
             torch.cuda.empty_cache()
-            emit_segment(serialized_data, seg_i == n - 1)
-            seg_i += 1
-    assert seg_i == n, f'chunk count mismatch: emitted={seg_i} expected={n}'

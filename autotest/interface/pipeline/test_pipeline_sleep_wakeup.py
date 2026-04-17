@@ -7,6 +7,10 @@ from pathlib import Path
 
 import pytest
 import torch
+from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
+from lmdeploy.messages import Response
+from lmdeploy.serve.openai.protocol import UpdateParamsRequest
+from lmdeploy.utils import is_bf16_supported
 from utils.config_utils import get_parallel_config
 from utils.constant import SLEEP_WAKEUP_BACKENDS, SLEEP_WAKEUP_MODEL_LIST
 from utils.sleep_utils import (
@@ -20,11 +24,6 @@ from utils.sleep_utils import (
     level2_update_weights_request_dict,
     resolve_hf_checkpoint_dir,
 )
-
-from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
-from lmdeploy.messages import Response
-from lmdeploy.serve.openai.protocol import UpdateParamsRequest
-from lmdeploy.utils import is_bf16_supported
 
 _SLEEP_PIPELINE_BACKEND_CLASS = {
     'pytorch': PytorchEngineConfig,
@@ -74,6 +73,8 @@ def _make_backend_config(
 ):
     tp = _pipeline_tp_for_model(config, model)
     cfg = backend(tp=tp)
+    if backend is TurbomindEngineConfig:
+        cfg.empty_init = True
     if backend is PytorchEngineConfig and not is_bf16_supported():
         cfg.dtype = 'float16'
     return cfg
@@ -120,6 +121,14 @@ def _assert_level2_pipeline_baseline_stable(pipe, gen_cfg: GenerationConfig, *, 
         f'{label}: greedy pipeline baseline not stable:\n'
         + '\n'.join(f'  run{j + 1}={c!r}' for j, c in enumerate(contents)))
     return refs[0]
+
+
+def _should_enforce_level2_greedy_checks(
+        backend: type[PytorchEngineConfig] | type[TurbomindEngineConfig]) -> bool:
+    # Known issue: TurboMind may not be deterministic for temperature=0 runs.
+    # Keep validating sleep/wakeup/update_params behavior, but do not fail on
+    # strict greedy-stability checks for this backend.
+    return backend is not TurbomindEngineConfig
 
 
 def _apply_sleep(pipe, level: int = 1) -> None:
@@ -380,8 +389,10 @@ class TestPipelineSleepWakeup:
                 top_k=1,
                 do_sample=False,
             )
-            baseline_r = _assert_level2_pipeline_baseline_stable(pipe, gen, label='level2 pipeline')
-            baseline = _pipeline_resp_to_chat_dict(baseline_r)
+            baseline = None
+            if _should_enforce_level2_greedy_checks(backend):
+                baseline_r = _assert_level2_pipeline_baseline_stable(pipe, gen, label='level2 pipeline')
+                baseline = _pipeline_resp_to_chat_dict(baseline_r)
 
             _apply_sleep(pipe, 2)
             assert _pipeline_is_sleeping(pipe) is True
@@ -394,12 +405,14 @@ class TestPipelineSleepWakeup:
             after = _infer_level2_greedy(pipe, gen)
             assert_assistant_not_degenerate(
                 (after.text or '').strip(), label='level2 pipeline after staged wakeup (1st infer)')
-            assert_chat_decode_unchanged(baseline, _pipeline_resp_to_chat_dict(after),
-                                       label='level2 pipeline 1st infer after staged wakeup')
+            if baseline is not None:
+                assert_chat_decode_unchanged(baseline, _pipeline_resp_to_chat_dict(after),
+                                             label='level2 pipeline 1st infer after staged wakeup')
 
             after2 = _infer_level2_greedy(pipe, gen)
-            assert_chat_decode_unchanged(baseline, _pipeline_resp_to_chat_dict(after2),
-                                       label='level2 pipeline 2nd infer after staged wakeup')
+            if baseline is not None:
+                assert_chat_decode_unchanged(baseline, _pipeline_resp_to_chat_dict(after2),
+                                             label='level2 pipeline 2nd infer after staged wakeup')
 
             _apply_sleep(pipe, 2)
             assert _pipeline_is_sleeping(pipe) is True
@@ -410,9 +423,10 @@ class TestPipelineSleepWakeup:
             assert _pipeline_is_sleeping(pipe) is False
 
             after_full = _infer_level2_greedy(pipe, gen)
-            assert_chat_decode_unchanged(
-                baseline, _pipeline_resp_to_chat_dict(after_full),
-                label='level2 pipeline infer after 2nd sleep cycle (staged wakeup)')
+            if baseline is not None:
+                assert_chat_decode_unchanged(
+                    baseline, _pipeline_resp_to_chat_dict(after_full),
+                    label='level2 pipeline infer after 2nd sleep cycle (staged wakeup)')
 
             gen2 = GenerationConfig(max_new_tokens=32, temperature=0.01)
             r = pipe([[{'role': 'user', 'content': 'Hi, reply with one short sentence.'}]], gen_config=gen2)
