@@ -145,7 +145,7 @@ from openai import OpenAI
 client = OpenAI(api_key='EMPTY', base_url='http://localhost:23333/v1')
 model_name = client.models.list().data[0].id
 
-video_url = 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4'
+video_url = 'https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2-VL/space_woaudio.mp4'
 
 response = client.chat.completions.create(
     model=model_name,
@@ -188,8 +188,8 @@ from openai import OpenAI
 client = OpenAI(api_key='EMPTY', base_url='http://localhost:23333/v1')
 model_name = client.models.list().data[0].id
 
-video_url_1 = 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4'
-video_url_2 = 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4'
+video_url_1 = 'https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2-VL/space_woaudio.mp4'
+video_url_2 = 'https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2-VL/space_woaudio.mp4'
 
 response = client.chat.completions.create(
     model=model_name,
@@ -240,7 +240,7 @@ response = client.chat.completions.create(
             {
                 'type': 'audio_url',
                 'audio_url': {
-                    'url': 'https://upload.wikimedia.org/wikipedia/commons/4/4e/BWV_543-fugue.ogg',
+                    'url': 'https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen3-Omni/demo/cough.wav',
                 },
             },
             {
@@ -270,8 +270,8 @@ from openai import OpenAI
 client = OpenAI(api_key='EMPTY', base_url='http://localhost:23333/v1')
 model_name = client.models.list().data[0].id
 
-audio_url_1 = 'https://upload.wikimedia.org/wikipedia/commons/4/4e/BWV_543-fugue.ogg'
-audio_url_2 = 'https://upload.wikimedia.org/wikipedia/commons/4/4e/BWV_543-fugue.ogg'
+audio_url_1 = 'https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen3-Omni/demo/cough.wav'
+audio_url_2 = 'https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen3-Omni/demo/cough.wav'
 
 response = client.chat.completions.create(
     model=model_name,
@@ -310,7 +310,7 @@ client = OpenAI(api_key='EMPTY', base_url='http://localhost:23333/v1')
 model_name = client.models.list().data[0].id
 
 image_url = 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg'
-video_url = 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4'
+video_url = 'https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2-VL/space_woaudio.mp4'
 
 response = client.chat.completions.create(
     model=model_name,
@@ -542,7 +542,7 @@ from openai import OpenAI
 client = OpenAI(api_key='EMPTY', base_url='http://localhost:23333/v1')
 model_name = client.models.list().data[0].id
 
-video_url = 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4'
+video_url = 'https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2-VL/space_woaudio.mp4'
 
 response = client.chat.completions.create(
     model=model_name,
@@ -556,10 +556,6 @@ response = client.chat.completions.create(
     max_completion_tokens=256,
     extra_body={
         'mm_processor_kwargs': {
-            'image': {
-                'min_pixels': 128 * 32 * 32,
-                'max_pixels': 256 * 32 * 32,
-            },
             'video': {
                 'min_pixels': 4 * 32 * 32,
                 'max_pixels': 256 * 32 * 32,
@@ -586,7 +582,7 @@ from lmdeploy import pipeline, PytorchEngineConfig
 
 pipe = pipeline('<model_path>', backend_config=PytorchEngineConfig(tp=1))
 
-video_url = 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4'
+video_url = 'https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2-VL/space_woaudio.mp4'
 
 messages = [{
     'role': 'user',
@@ -599,10 +595,6 @@ messages = [{
 response = pipe(
     messages,
     mm_processor_kwargs={
-        'image': {
-            'min_pixels': 128 * 32 * 32,
-            'max_pixels': 256 * 32 * 32,
-        },
         'video': {
             'min_pixels': 4 * 32 * 32,
             'max_pixels': 256 * 32 * 32,
