@@ -129,22 +129,27 @@ class VisionModel(ABC):
         end_positions += 1 # convert to exclusive end index, compatible with legacy pytorch implementation
         return list(zip(start_positions.tolist(), end_positions.tolist()))
 
-    def get_override_size(self, processor, mm_processor_kwargs: dict[str, Any] | None = None):
-        default_min = processor.size['shortest_edge']
-        default_max = processor.size['longest_edge']
+    def get_override_size(self, processor, mm_processor_kwargs: dict[str, Any] | None = None, modality: str = ''):
         if not mm_processor_kwargs:
-            return {'shortest_edge': default_min, 'longest_edge': default_max}
-
+            return None
+        try:
+            default_min = processor.size['shortest_edge']
+            default_max = processor.size['longest_edge']
+        except (AttributeError, KeyError, TypeError):
+            tag = f'[{modality}] ' if modality else ''
+            logger.warning(f'{tag}processor does not expose size[shortest_edge/longest_edge], '
+                           f'mm_processor_kwargs size override will be skipped.')
+            return None
         override_min = mm_processor_kwargs.get('min_pixels', default_min)
         override_max = mm_processor_kwargs.get('max_pixels', default_max)
+        tag = f'[{modality}] ' if modality else ''
         if override_min > override_max:
-            logger.info(
-                f'Overriding min_pixels {override_min} > max_pixels {override_max}, ' \
+            logger.warning(
+                f'{tag}Overriding min_pixels {override_min} > max_pixels {override_max}, ' \
                 f'falling back to defaults, min_pixels={default_min} and max_pixels={default_max}.'
             )
-            return {'shortest_edge': default_min, 'longest_edge': default_max}
-
-        logger.info(f'Overriding processor size with min_pixels={override_min} and max_pixels={override_max}.')
+            return None
+        logger.warning(f'{tag}Overriding processor size with min_pixels={override_min} and max_pixels={override_max}.')
         return {'shortest_edge': override_min, 'longest_edge': override_max}
 
     def get_expanded_input_ids(self, input_prompt, collected_mm_items) -> torch.Tensor:
@@ -331,27 +336,33 @@ class VisionModel(ABC):
             else:
                 raise ValueError(f'unsupported modality {modality}')
 
-        # get kwrags for processor
+        # get kwargs for processor
         kwargs = {}
+        images_kwargs = {}
+        videos_kwargs = {}
         mm_processor_kwargs = mm_processor_kwargs or {}
         if raw_images:
             kwargs['images'] = raw_images
-            kwargs['size'] = self.get_override_size(self.processor.image_processor,
-                                                     mm_processor_kwargs.get('image', None))
+            image_size = self.get_override_size(self.processor.image_processor,
+                                                 mm_processor_kwargs.get('image'),
+                                                 modality='image')
+            if image_size is not None:
+                images_kwargs['size'] = image_size
         if raw_videos:
             kwargs['videos'] = raw_videos
-            kwargs['video_metadata'] = video_metadatas
-            kwargs['size'] = self.get_override_size(self.processor.video_processor,
-                                                     mm_processor_kwargs.get('video', None))
+            videos_kwargs['video_metadata'] = video_metadatas
             # perform resize in hf processor, while sample frames has been done in video loader
-            kwargs['do_resize'] = True
-            kwargs['do_sample_frames'] = False
-        if raw_images and raw_videos and kwargs.get('size', None) is not None:
-            logger.warning(
-                'Overriding mm processor kwargs for mixed modality can be problematic, '
-                'skip kwargs setting for both processors to avoid potential issues.'
-            )
-            kwargs.pop('size')
+            videos_kwargs['do_resize'] = True
+            videos_kwargs['do_sample_frames'] = False
+            video_size = self.get_override_size(self.processor.video_processor,
+                                                 mm_processor_kwargs.get('video'),
+                                                 modality='video')
+            if video_size is not None:
+                videos_kwargs['size'] = video_size
+        if images_kwargs:
+            kwargs['images_kwargs'] = images_kwargs
+        if videos_kwargs:
+            kwargs['videos_kwargs'] = videos_kwargs
         if raw_time_series:
             assert hasattr(self, 'time_series_processor'), \
                 'time series processor is not defined for time series input'
