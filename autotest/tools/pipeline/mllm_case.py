@@ -1,11 +1,6 @@
 import json
 import os
-import sys
 from typing import Any
-
-_autotest_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-if _autotest_root not in sys.path:
-    sys.path.insert(0, _autotest_root)
 
 import fire  # noqa: E402
 import numpy as np  # noqa: E402
@@ -13,7 +8,6 @@ from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfi
 from lmdeploy.vl import encode_image_base64, load_image, load_video  # noqa: E402
 from lmdeploy.vl.constants import IMAGE_TOKEN  # noqa: E402
 from PIL import Image  # noqa: E402
-from utils.constant import MM_DEMO_TOMB_USER_PROMPT  # noqa: E402
 
 gen_config = GenerationConfig(max_new_tokens=500, min_new_tokens=10)
 
@@ -25,6 +19,20 @@ PIC_REDPANDA = 'redpanda.jpg'
 PIC_PANDA = 'panda.jpg'
 DESC = 'What are the similarities and differences between these two images.'
 DESC_ZH = '两张图有什么相同和不同的地方.'
+_MM_DEMO_TOMB_MCQ_JSON_BLOCK = """{
+  "question": "How many porcelain jars were discovered in the niches located in the primary chamber of the tomb?",
+  "options": [
+    "A. 4.",
+    "B. 9.",
+    "C. 5.",
+    "D. 13."
+  ]
+}"""
+MM_DEMO_TOMB_USER_PROMPT = (
+    'You are given a multiple-choice problem as JSON (question and options only; there is no answer field). '
+    'Watch the entire video, pick the best option from what you see, then reply briefly with the letter '
+    '(A, B, C, or D) first and at most one short sentence. Do not output long step-by-step reasoning; '
+    'keep the final reply concise.\n\n' + _MM_DEMO_TOMB_MCQ_JSON_BLOCK)
 
 DEFAULT_VIDEO_FILENAME = 'red-panda.mp4'
 VIDEO_QWEN3_DEMO_FILENAME = 'N1cdUjctpG8.mp4'

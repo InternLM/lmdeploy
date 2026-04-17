@@ -5,10 +5,9 @@ import time
 
 import pytest
 import requests
+from lmdeploy.serve.openai.api_client import APIClient
 from utils.constant import BACKEND_LIST, DEFAULT_PORT, DEFAULT_SERVER, RESTFUL_MODEL_LIST
 from utils.restful_return_check import assert_chat_completions_batch_return
-
-from lmdeploy.serve.openai.api_client import APIClient
 
 BASE_URL = f'http://{DEFAULT_SERVER}:{DEFAULT_PORT}'
 JSON_HEADERS = {'Content-Type': 'application/json'}
@@ -18,6 +17,7 @@ _SESSION_RETRY = 25
 _SESSION_RETRY_INTERVAL = 0.3
 _NONSTREAM_ABORT_LEAD_S = 2.0
 _THREAD_JOIN_EXTRA_S = 30
+_POST_ABORT_LOGPROBS_NUM = 10
 
 
 def _post_abort_request(payload: dict) -> requests.Response:
@@ -29,18 +29,29 @@ def _post_abort_request(payload: dict) -> requests.Response:
     )
 
 
-def _chat_non_stream(model_name: str, session_id: int, *, max_tokens: int = 32) -> requests.Response:
+def _chat_non_stream(
+        model_name: str,
+        session_id: int,
+        *,
+        max_tokens: int = 32,
+        logprobs: bool = False,
+        top_logprobs: int = _POST_ABORT_LOGPROBS_NUM,
+) -> requests.Response:
+    body: dict = {
+        'model': model_name,
+        'messages': [{'role': 'user', 'content': 'Say OK in one word.'}],
+        'max_tokens': max_tokens,
+        'temperature': 0.01,
+        'stream': False,
+        'session_id': session_id,
+    }
+    if logprobs:
+        body['logprobs'] = True
+        body['top_logprobs'] = top_logprobs
     return requests.post(
         f'{BASE_URL}/v1/chat/completions',
         headers=JSON_HEADERS,
-        json={
-            'model': model_name,
-            'messages': [{'role': 'user', 'content': 'Say OK in one word.'}],
-            'max_tokens': max_tokens,
-            'temperature': 0.01,
-            'stream': False,
-            'session_id': session_id,
-        },
+        json=body,
         timeout=_REQUEST_TIMEOUT,
     )
 
@@ -79,11 +90,22 @@ def _post_abort_all_or_skip() -> None:
 def _assert_session_reusable_after_abort(model_name: str, session_id: int) -> None:
     last = None
     for _ in range(_SESSION_RETRY):
-        last = _chat_non_stream(model_name, session_id, max_tokens=16)
+        last = _chat_non_stream(
+            model_name,
+            session_id,
+            max_tokens=16,
+            logprobs=True,
+            top_logprobs=_POST_ABORT_LOGPROBS_NUM,
+        )
         if last.status_code == 200:
             data = last.json()
             assert 'choices' in data and data['choices'], last.text
-            assert_chat_completions_batch_return(data, model_name)
+            assert_chat_completions_batch_return(
+                data,
+                model_name,
+                check_logprobs=True,
+                logprobs_num=_POST_ABORT_LOGPROBS_NUM,
+            )
             return
         if last.status_code == 400 and 'occupied' in (last.text or '').lower():
             time.sleep(_SESSION_RETRY_INTERVAL)
