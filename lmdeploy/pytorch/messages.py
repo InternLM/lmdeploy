@@ -557,7 +557,13 @@ class HistoryLogits(_HistoryDataBase):
 
 
 class HistoryHiddenStates(_HistoryDataBase):
-    """History hidden states."""
+    """History hidden states.
+
+    Hidden states are stored as int16 numpy arrays (same bit-level storage
+    as HistoryLogits), reinterpreting float16/bfloat16 tensors byte-for-byte.
+    _create_empty_array returns None so that the shape (hidden_dim) is inferred
+    dynamically from the first append call, matching the HistoryLogits pattern.
+    """
     ALLOC_SIZE = 64
     COPY_ON_RESIZE = True
 
@@ -566,10 +572,7 @@ class HistoryHiddenStates(_HistoryDataBase):
         self._torch_dtype = None
 
     def _create_empty_array(self, dtype):
-        """Create empty array.
-
-        Override in subclass for different shapes.
-        """
+        """Return None; shape is determined on first append (see HistoryLogits)."""
         return None
 
     def _get_pad_width(self, reserve_size: int):
