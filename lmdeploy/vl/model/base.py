@@ -344,8 +344,8 @@ class VisionModel(ABC):
         if raw_images:
             kwargs['images'] = raw_images
             image_size = self.get_override_size(self.processor.image_processor,
-                                                 mm_processor_kwargs.get('image'),
-                                                 modality='image')
+                                                mm_processor_kwargs.get('image'),
+                                                modality='image')
             if image_size is not None:
                 images_kwargs['size'] = image_size
         if raw_videos:
@@ -355,8 +355,8 @@ class VisionModel(ABC):
             videos_kwargs['do_resize'] = True
             videos_kwargs['do_sample_frames'] = False
             video_size = self.get_override_size(self.processor.video_processor,
-                                                 mm_processor_kwargs.get('video'),
-                                                 modality='video')
+                                                mm_processor_kwargs.get('video'),
+                                                modality='video')
             if video_size is not None:
                 videos_kwargs['size'] = video_size
         if images_kwargs:
