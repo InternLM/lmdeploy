@@ -887,8 +887,10 @@ Buffer::low_latency_dispatch(const Tensor&                x,
     auto next_buffer = layout.buffers[low_latency_buffer_idx ^= 1];
 
     // Allocate packed tensors
-    auto packed_recv_x = Tensor(
-        {num_local_experts, num_ranks * num_max_dispatch_tokens_per_rank, hidden}, x.dtype(), turbomind::kDEVICE);
+    auto packed_recv_x = Tensor({num_local_experts, num_ranks * num_max_dispatch_tokens_per_rank, hidden},
+                                use_fp8 ? turbomind::kFloat8_e4m3 : x.dtype(),
+                                turbomind::kDEVICE);
+
     auto packed_recv_src_info = Tensor(
         {num_local_experts, num_ranks * num_max_dispatch_tokens_per_rank}, turbomind::kInt32, turbomind::kDEVICE);
     auto packed_recv_layout_range = Tensor({num_local_experts, num_ranks}, turbomind::kInt64, turbomind::kDEVICE);

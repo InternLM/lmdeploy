@@ -609,4 +609,52 @@ void invokeMoeLLDispatchPostprocess(int*          f2n,
     while (*moe_recv_counter < 0) {};
 }
 
+// Reorder deep_ep's sparse LL dispatch scales into the layout expected by the
+// downstream grouped-GEMM gather. Source storage is [E, H/128, max_T] contiguous
+// (max_T innermost), with valid scales packed at positions [0, count_e) along
+// max_T for each expert. Target is [H/128, E*max_T] contiguous, with valid
+// scales at positions [e*max_T, e*max_T+count_e). Gap slots are not written —
+// downstream gathers via f2n which only indexes valid positions.
+__global__ void MoeLLDispatchScalesLayoutConvertKernel(float*       target,
+                                                       const float* src,
+                                                       const int* __restrict__ packed_recv_count,
+                                                       int num_groups,
+                                                       int num_max_tokens)
+{
+    const int hi           = blockIdx.x;
+    const int ei           = blockIdx.y;
+    const int num_experts  = gridDim.y;
+    const int count_e      = packed_recv_count[ei];
+    const float* src_block = src + (ei * num_groups + hi) * num_max_tokens;
+    float*       dst_block = target + hi * (num_experts * num_max_tokens) + ei * num_max_tokens;
+
+    for (int t = threadIdx.x; t < count_e; t += blockDim.x) {
+        dst_block[t] = src_block[t];
+    }
+}
+
+void invokeMoeLLDispatchScalesLayoutConvert(Tensor&       target,
+                                            const Tensor& packed_recv_x_scales,
+                                            const Tensor& packed_recv_count,
+                                            cudaStream_t  st)
+{
+    // packed_recv_x_scales: logical [E, max_T, H/128], underlying [E, H/128, max_T] contiguous
+    const int num_local_experts = packed_recv_x_scales.shape(0);
+    const int num_max_tokens    = packed_recv_x_scales.shape(1);
+    const int num_groups        = packed_recv_x_scales.shape(2);
+    TM_CHECK_EQ(target.shape(0), num_groups);
+    TM_CHECK_EQ(target.shape(1), num_local_experts * num_max_tokens);
+    TM_CHECK_EQ(target.dtype(), kFloat32);
+    TM_CHECK_EQ(packed_recv_x_scales.dtype(), kFloat32);
+
+    const dim3 grid(num_groups, num_local_experts);
+    const int  threads = 128;
+    MoeLLDispatchScalesLayoutConvertKernel<<<grid, threads, 0, st>>>(  //
+        target.data<float>(),
+        packed_recv_x_scales.data<float>(),
+        packed_recv_count.data<int>(),
+        num_groups,
+        num_max_tokens);
+}
+
 }  // namespace turbomind

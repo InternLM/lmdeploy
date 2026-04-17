@@ -67,7 +67,7 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
                                           std::nullopt,
                                           ep_config_.ll_max_tokens_per_rank,
                                           ep_config_.num_experts,
-                                          false,
+                                          input.use_fp8,
                                           false,
                                           false);
         sync_check_cuda_error();
@@ -107,6 +107,16 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
         const int num_max_tokens = packed_recv_x.shape(1);
         const int hidden         = packed_recv_x.shape(2);
         output.out_x             = packed_recv_x.view({num_local_experts * num_max_tokens, hidden});
+
+        // Reorder sparse scales into [H/128, E*max_T] sparse layout, writing only the
+        // valid prefix of each expert; gaps stay uninitialized and are never read.
+        if (input.use_fp8) {
+            const int num_groups = packed_recv_x_scales->shape(2);
+            Tensor    out_scales{{num_groups, num_local_experts * num_max_tokens}, kFloat32, kDEVICE};
+            invokeMoeLLDispatchScalesLayoutConvert(out_scales, packed_recv_x_scales.value(), packed_recv_count, st);
+            sync_check_cuda_error();
+            output.out_x_scales = out_scales;
+        }
 
         // Generate output
         output.handle        = {packed_recv_src_info, packed_recv_layout_range, output.offsets};

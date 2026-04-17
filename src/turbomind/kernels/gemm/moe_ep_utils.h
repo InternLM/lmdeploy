@@ -57,4 +57,13 @@ void invokeMoeLLDispatchPostprocess(int*          f2n,
                                     const Tensor& packed_recv_x,
                                     cudaStream_t  st);
 
+// Reorder sparse LL dispatch scales from [E, H/128, max_T] contiguous (deep_ep
+// layout) to [H/128, E*max_T] contiguous (the layout expected by
+// invokeMoeDispatchScales). Only the valid [0, count_e) prefix of each expert
+// is written; gap slots are untouched.
+void invokeMoeLLDispatchScalesLayoutConvert(Tensor&       target,
+                                            const Tensor& packed_recv_x_scales,
+                                            const Tensor& packed_recv_count,
+                                            cudaStream_t  st);
+
 }  // namespace turbomind
