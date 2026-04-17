@@ -136,7 +136,7 @@ class TestQwenVLChatTemplate:
 
     def test_proc_messages(self, models, mock_messages):
         for model, chat_template in models:
-            model.build_preprocessor()
+            model.build_preprocessor(trust_remote_code=False)
             reference = model.processor.apply_chat_template(mock_messages,
                                                             add_generation_prompt=True,
                                                             tokenize=False,
@@ -146,7 +146,7 @@ class TestQwenVLChatTemplate:
 
     def test_pure_img_messages(self, models, mock_pure_img_messages):
         for model, chat_template in models:
-            model.build_preprocessor()
+            model.build_preprocessor(trust_remote_code=False)
             reference = model.processor.apply_chat_template(mock_pure_img_messages,
                                                             add_generation_prompt=True,
                                                             tokenize=False,
@@ -156,7 +156,7 @@ class TestQwenVLChatTemplate:
 
     def test_pure_text_messages(self, models, mock_pure_text_messages):
         for model, chat_template in models:
-            model.build_preprocessor()
+            model.build_preprocessor(trust_remote_code=False)
             reference = model.processor.apply_chat_template(mock_pure_text_messages,
                                                             add_generation_prompt=True,
                                                             tokenize=False,

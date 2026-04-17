@@ -168,6 +168,7 @@ class RayWorkerWrapper(WorkerWrapperBase):
         dtype: str = 'auto',
         log_level: int = 30,
         specdecode_config: SpecDecodeConfig = None,
+        trust_remote_code: bool = False
     ):
         init_backend(device_type)
         try_import_deeplink(device_type)
@@ -183,6 +184,7 @@ class RayWorkerWrapper(WorkerWrapperBase):
             device_type=device_type,
             log_level=log_level,
             specdecode_config=specdecode_config,
+            trust_remote_code=trust_remote_code
         )
         self.node_ip = ray.util.get_node_ip_address()
         self._remote_logger = RemoteLogger()

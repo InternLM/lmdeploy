@@ -22,8 +22,8 @@ class InternS1ProVisionModel(Qwen3VLModel):
 
     _arch = ['InternS1_1_ForConditionalGeneration', 'InternS1ProForConditionalGeneration']
 
-    def build_preprocessor(self):
-        super().build_preprocessor()
+    def build_preprocessor(self, trust_remote_code: bool = False):
+        super().build_preprocessor(trust_remote_code=trust_remote_code)
 
         # time series tokens
         self.ts_token = getattr(self.processor, 'ts_token', None)

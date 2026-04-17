@@ -252,7 +252,7 @@ class BaseModelAgent:
         device_ctx: DeviceContext,
         adapters: dict[str, str] = None,
         specdecode_config: SpecDecodeConfig = None,
-        trust_remote_code: bool = False,
+        trust_remote_code: bool = False
     ):
 
         self.model_config = model_config
