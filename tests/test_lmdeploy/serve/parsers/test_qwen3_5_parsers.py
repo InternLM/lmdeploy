@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from transformers import AutoTokenizer
 
@@ -5,6 +7,7 @@ from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaToolCall
 from lmdeploy.serve.parsers import ResponseParserManager
 from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
 from lmdeploy.serve.parsers.tool_parser import ToolParserManager
+from lmdeploy.serve.parsers.tool_parser.qwen3coder_tool_parser import Qwen3CoderToolParser
 
 MODEL_ID = 'Qwen/Qwen3.5-35B-A3B'
 
@@ -134,3 +137,31 @@ class TestQwen3_5ResponseParserStreaming:
                 assert call.function is not None
                 assert call.function.name == exp_function_name
                 assert call.function.arguments == exp_function_arguments
+
+    def test_parse_tool_call_complete_treats_params_as_strings(self):
+        parser = Qwen3CoderToolParser(tokenizer=None)
+        payload = """
+<tool_call>
+<function=find_user_id_by_name_zip>
+<parameter=first_name>
+Chen
+</parameter>
+<parameter=last_name>
+Johnson
+</parameter>
+<parameter=zip>
+77004
+</parameter>
+</function>
+</tool_call>
+""".strip()
+
+        tool_call = parser.parse_tool_call_complete(payload)
+
+        assert tool_call is not None
+        assert tool_call.function.name == 'find_user_id_by_name_zip'
+        assert json.loads(tool_call.function.arguments) == {
+            'first_name': 'Chen',
+            'last_name': 'Johnson',
+            'zip': '77004',
+        }

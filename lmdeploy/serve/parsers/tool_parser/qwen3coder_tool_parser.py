@@ -204,17 +204,14 @@ class Qwen3CoderToolParser(ToolParser):
 
             param_val_str = content[val_start:val_end].strip()
 
-            if param_val_str.lower() == 'null':
-                val = None
-            elif param_val_str.lower() == 'true':
-                val = True
-            elif param_val_str.lower() == 'false':
-                val = False
-            else:
-                try:
-                    val = json.loads(param_val_str)
-                except json.JSONDecodeError:
-                    val = param_val_str
+            # Qwen3Coder XML payloads do not carry explicit type metadata.
+            # Keep parameter values as strings to avoid implicit type coercion
+            # (e.g., zip codes like 77004 being parsed into integers).
+            try:
+                parsed_val = json.loads(param_val_str)
+                val = parsed_val if isinstance(parsed_val, str) else param_val_str
+            except json.JSONDecodeError:
+                val = param_val_str
             args_dict[param_name] = val
             search_idx = val_end + len(self.param_end_token)
 
