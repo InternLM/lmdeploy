@@ -24,11 +24,6 @@ def _raise_exception_on_finish(task: asyncio.Task) -> None:
         raise e
 
 
-def _accepts_arg(func, arg_name: str) -> bool:
-    """Check if a function accepts a specific keyword argument."""
-    return arg_name in inspect.signature(func).parameters
-
-
 class ImageEncoder:
     """Image encoder."""
 
@@ -47,15 +42,23 @@ class ImageEncoder:
         self.executor = ThreadPoolExecutor(max_workers=1)
         torch.cuda.empty_cache()
 
+    def apply_chat_template(self, messages, chat_template, sequence_start, chat_template_kwargs=None):
+        if self.model.has_input_ids(messages):
+            return messages[0]['content'][0]['text']
+        return self.model.apply_chat_template(
+            messages, chat_template, sequence_start, chat_template_kwargs
+        )
+
     async def preprocess(self,
                          messages: list[dict],
+                         input_prompt: str | list[int] | None = None,
                          mm_processor_kwargs: dict[str, Any] | None = None) -> list[dict]:
         """Preprocess multimodal data in the messages."""
-        if _accepts_arg(self.model.preprocess, 'mm_processor_kwargs'):
-            future = asyncio.get_event_loop().run_in_executor(self.executor, self.model.preprocess, messages,
-                                                              mm_processor_kwargs)
-        else:
-            future = asyncio.get_event_loop().run_in_executor(self.executor, self.model.preprocess, messages)
+        sig_params = inspect.signature(self.model.preprocess).parameters
+        kwargs = {k: v for k, v in [('input_prompt', input_prompt), ('mm_processor_kwargs', mm_processor_kwargs)]
+                  if k in sig_params}
+        future = asyncio.get_event_loop().run_in_executor(
+            self.executor, lambda: self.model.preprocess(messages, **kwargs))
         future.add_done_callback(_raise_exception_on_finish)
         outputs = await future
         return outputs

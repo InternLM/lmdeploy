@@ -146,7 +146,7 @@ class Qwen3VLMoeForConditionalGeneration(Qwen3VLForConditionalGeneration):
         pixel_values: torch.Tensor = None,
         vis_cu_seqlens: torch.Tensor = None,
         vis_pos_emb: torch.Tensor = None,
-        image_mask: torch.Tensor = None,
+        multimodal_mask: torch.Tensor = None,
         pos_embeds: torch.Tensor = None,
         grid_thw: torch.Tensor = None,
         **kwargs,
@@ -175,10 +175,9 @@ class Qwen3VLMoeForConditionalGeneration(Qwen3VLForConditionalGeneration):
                 image_embeds = torch.cat(image_embeds, dim=0).to(inputs_embeds.device, dtype)
 
                 # mask and scatter to create final input embeddings
-                expanded_image_mask = image_mask.unsqueeze(-1).expand_as(inputs_embeds)
-                inputs_embeds = inputs_embeds.masked_scatter(expanded_image_mask, image_embeds)
-
-                visual_pos_masks = expanded_image_mask
+                multimodal_mask = multimodal_mask.unsqueeze(-1).expand_as(inputs_embeds)
+                inputs_embeds = inputs_embeds.masked_scatter(multimodal_mask, image_embeds)
+                visual_pos_masks = multimodal_mask
 
         # router replay
         all_routed_experts = None

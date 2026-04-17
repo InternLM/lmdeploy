@@ -1,14 +1,21 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import dataclasses
 from abc import ABC, abstractmethod
 from itertools import groupby
+from typing import Any
 
 import numpy as np
+import torch
 from mmengine import Registry
 from transformers import AutoConfig, AutoTokenizer
 
 from lmdeploy.archs import get_model_arch
+from lmdeploy.utils import get_logger
+from lmdeploy.vl.constants import Modality
 
 VISION_MODELS = Registry('vision_model')
+
+logger = get_logger('lmdeploy')
 
 
 class VisionModel(ABC):
@@ -30,6 +37,51 @@ class VisionModel(ABC):
             _, hf_config = get_model_arch(model_path)
         self.hf_config = hf_config
         self.image_token_id = self.get_pad_token_id(model_path, hf_config) or 0
+
+        # mapping from attribute names to modality types
+        self.ATTR_NAME_TO_MODALITY = {
+            # image-related attributes
+            'pixel_values': Modality.IMAGE,
+            'image_sizes': Modality.IMAGE,
+            'image_grid_thw': Modality.IMAGE,
+            'image_attention_mask': Modality.IMAGE,
+            'image_emb_mask': Modality.IMAGE,
+            'images_spatial_crop': Modality.IMAGE,
+            'images_crop': Modality.IMAGE,
+            'has_local_crops': Modality.IMAGE,
+            'has_images': Modality.IMAGE,
+            'tgt_size': Modality.IMAGE,
+            'image_grid_hws': Modality.IMAGE,
+            'aspect_ratio_ids': Modality.IMAGE,
+            'aspect_ratio_mask': Modality.IMAGE,
+            'num_patches': Modality.IMAGE,
+            'patch_pixel_values': Modality.IMAGE,
+            'block_sizes': Modality.IMAGE,
+            # audio-related attributes
+            'audio_features': Modality.AUDIO,
+            'audio_feature_lens': Modality.AUDIO,
+            'input_features': Modality.AUDIO,
+            'input_features_mask': Modality.AUDIO,
+            'audio_attention_mask': Modality.AUDIO,
+            'feature_attention_mask': Modality.AUDIO,
+            # video-related attributes
+            'pixel_values_videos': Modality.VIDEO,
+            'second_per_grid_ts': Modality.VIDEO,
+            'video_grid_thw': Modality.VIDEO,
+            # time series-related attributes
+            'ts_values': Modality.TIME_SERIES,
+            'ts_sr': Modality.TIME_SERIES,
+            'ts_lens': Modality.TIME_SERIES,
+        }
+
+        # name of the feature filed
+        self.FEATURE_NAMES = [
+            'pixel_values',
+            'pixel_values_videos',
+            'audio_features',
+            'input_features',
+            'ts_values',
+        ]
 
     def get_pad_token_id(self, model_path, hf_config):
         """Get pad_token_id from hf_config or tokenizer."""
@@ -60,51 +112,313 @@ class VisionModel(ABC):
         if self.backend == 'turbomind' or self.with_llm:
             raise NotImplementedError()
 
-    @abstractmethod
-    def preprocess(self, messages: list[dict]) -> list[dict]:
-        """Preprocess multimodal data in the messages.
+    @staticmethod
+    def get_mm_items_offset(
+        input_ids: torch.Tensor, mm_token_id: int
+    ) -> list[tuple[int, int]]:
+        """
+        Get a set of range for mm_items from input_ids
+        Example:
+            input_ids = [1, 2, 3, 3, 3, 4, 3, 3]
+            mm_token_id = 3
+            return result = [(2,4),(6,7)]
+        """
+        mask = input_ids == mm_token_id
+        start_positions = (mask & ~torch.roll(mask, 1)).nonzero(as_tuple=True)[0]
+        end_positions = (mask & ~torch.roll(mask, -1)).nonzero(as_tuple=True)[0]
+        end_positions += 1 # convert to exclusive end index, compatible with legacy pytorch implementation
+        return list(zip(start_positions.tolist(), end_positions.tolist()))
 
-        The derived class,
-        i.e., a specific vision model, takes the charge of image preprocessing
-        and the result management.
-        It can integrate the result into the messages list, or insert it to
-        the individual image item.
-        Args:
-            message(dict): multimodal data in a dict, which is as follows:
-            [
-                {'role': 'user', 'content': 'user prompt'},
-                {'role': 'assisant', 'content': 'AI reponse'},
-                {
-                    'role': 'user',
-                    'content': [
-                        {
-                            'type': 'text',
-                            'text': 'string',
-                        },
-                        {
-                            'type': 'image',
-                            'image': pillow.Image,
-                            'key1': value1,
-                            ...
-                        },
-                        {
-                            'type': 'image',
-                            'image': pillow.Image,
-                            'key1': value1,
-                            ...
-                        },
-                        ...
-                    ]
-                }
-                {....}
-            ]
-        Returns:
-            the message list with preprocessing results included, which is
-            determined by the derived classes
-        """  # noqa
-        raise NotImplementedError()
+    def get_override_size(self, processor, mm_processor_kwargs: dict[str, Any] | None = None, modality: str = ''):
+        if not mm_processor_kwargs:
+            return None
+        try:
+            default_min = processor.size['shortest_edge']
+            default_max = processor.size['longest_edge']
+        except (AttributeError, KeyError, TypeError):
+            tag = f'[{modality}] ' if modality else ''
+            logger.warning(f'{tag}processor does not expose size[shortest_edge/longest_edge], '
+                           f'mm_processor_kwargs size override will be skipped.')
+            return None
+        override_min = mm_processor_kwargs.get('min_pixels', default_min)
+        override_max = mm_processor_kwargs.get('max_pixels', default_max)
+        tag = f'[{modality}] ' if modality else ''
+        if override_min > override_max:
+            logger.warning(
+                f'{tag}Overriding min_pixels {override_min} > max_pixels {override_max}, ' \
+                f'falling back to defaults, min_pixels={default_min} and max_pixels={default_max}.'
+            )
+            return None
+        logger.info(f'{tag}Overriding processor size with min_pixels={override_min} and max_pixels={override_max}.')
+        return {'shortest_edge': override_min, 'longest_edge': override_max}
 
-    def has_input_ids(self, messages: list[dict]) -> bool:
+    def get_expanded_input_ids(self, input_prompt, collected_mm_items) -> torch.Tensor:
+        """Get input_ids with multimodal tokens expanded."""
+        image_grid_thw = collected_mm_items.get(Modality.IMAGE, {}).get('image_grid_thw', None)
+        merge_length = self.processor.image_processor.merge_size ** 2
+        image_index = 0
+        input_ids = []
+        for token in input_prompt:
+            if token == self.image_token_id:
+                image_tokens = image_grid_thw[image_index].prod() // merge_length
+                input_ids.extend([self.image_token_id] * image_tokens)
+                image_index += 1
+            else:
+                input_ids.append(token)
+        input_ids = torch.tensor(input_ids)
+        return input_ids
+
+    # adapted from https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/managers/mm_utils.py
+    def get_expanded_mm_items(self, collected_mm_items):
+        """Hf processor outputs produced bundled data for multiple
+        images/videos we need to expand them into per-image/video entries for
+        better cache locality and fine-grained scheduling."""
+        expanded_mm_items = []
+        for modality, item in collected_mm_items.items():
+            is_bundled = item.get('offset', None) is not None and len(item['offset']) > 1
+
+            # non-bundled case
+            if not is_bundled:
+                if modality == Modality.IMAGE:
+                    expanded_mm_items.append(
+                        dict(
+                            modality=modality,
+                            pixel_values=item['feature'],
+                            image_grid_thw=item['image_grid_thw'][0],
+                            offset=item['offset'][0],
+                            image_token_id=self.image_token_id
+                            )
+                        )
+                elif modality == Modality.TIME_SERIES:
+                    expanded_mm_items.append(
+                        dict(
+                            modality=modality,
+                            ts_values=item['feature'],
+                            ts_sr=item['ts_sr'],
+                            ts_lens=item['ts_lens'],
+                            offset=item['offset'][0],
+                            ts_token_id=self.ts_token_id
+                        )
+                    )
+                continue
+
+            # bundled case
+            num_items = len(item['offset'])
+            if modality == Modality.IMAGE:
+                image_grid_thw = item['image_grid_thw']
+                grid_len = image_grid_thw.shape[0]
+
+                patches_per_item = []
+                for grid in image_grid_thw:
+                    grid_tensor = torch.as_tensor(grid, dtype=torch.long)
+                    patches_per_item.append(int(torch.prod(grid_tensor).item()))
+
+                cumulative = torch.cumsum(
+                    torch.tensor(patches_per_item, dtype=torch.long), dim=0
+                )
+                slice_indices = [0] + cumulative.tolist()
+
+                # expand each image into a separate item
+                for i in range(num_items):
+                    start_idx, end_idx = slice_indices[i], slice_indices[i + 1]
+                    # TODO: zhouxinyu, compute mask and avoid passing token id
+                    expanded_mm_items.append(
+                        dict(
+                            modality=modality,
+                            pixel_values=item['feature'][start_idx:end_idx],
+                            image_grid_thw=image_grid_thw[i],
+                            offset=item['offset'][i],
+                            image_token_id=self.image_token_id,
+                        )
+                    )
+            elif modality == Modality.VIDEO:
+                video_grid_thw = item['video_grid_thw']
+
+                # video_grid_thw shape: [num_videos, 3] where each row is [T, H, W]
+                # When T > 1, item.offsets contains frames (num_items = total frames)
+                # grid_len = num_videos, num_items = sum(T for each video) = total frames
+                grid_len = video_grid_thw.shape[0]
+                num_videos = grid_len
+
+                # calculate total frames and frames per video
+                frames_per_video = []
+                total_frames = 0
+                for i in range(num_videos):
+                    grid = video_grid_thw[i]
+                    if isinstance(grid, torch.Tensor):
+                        T = int(grid[0].item())  # T is the first element [T, H, W]
+                    else:
+                        grid_tensor = torch.as_tensor(grid, dtype=torch.long)
+                        T = int(grid_tensor[0].item())
+                    frames_per_video.append(T)
+                    total_frames += T
+
+                # num_items should equal total_frames when T > 1
+                if num_items != total_frames:
+                    expanded_mm_items.append(item)
+                    continue
+
+                # calculate patches per video: T * H * W for each video
+                patches_per_video = []
+                for i in range(num_videos):
+                    grid = video_grid_thw[i]
+                    if isinstance(grid, torch.Tensor):
+                        patches_per_video.append(int(torch.prod(grid).item()))
+                    else:
+                        grid_tensor = torch.as_tensor(grid, dtype=torch.long)
+                        patches_per_video.append(int(torch.prod(grid_tensor).item()))
+
+                # calculate cumulative patches to get slice indices for each video
+                cumulative = torch.cumsum(
+                    torch.tensor(patches_per_video, dtype=torch.long), dim=0
+                )
+                slice_indices = [0] + cumulative.tolist()
+
+                # group frames by video, calculate frame indices for each video
+                frame_start_indices = [0]
+                for i in range(num_videos):
+                    frame_start_indices.append(
+                        frame_start_indices[-1] + frames_per_video[i]
+                    )
+
+                # expand each video into a separate item
+                for video_idx in range(num_videos):
+                    start, end = (
+                        slice_indices[video_idx],
+                        slice_indices[video_idx + 1],
+                    )
+                    frame_start, frame_end = (
+                        frame_start_indices[video_idx],
+                        frame_start_indices[video_idx + 1],
+                    )
+
+                    # expand each frame into a separate item
+                    # TODO: zhouxinyu, not sure per-frame split is good or not
+                    # TODO: zhouxinyu, grid_thw [1, h, w] is only for qwen3vl
+                    t, h, w = video_grid_thw[video_idx].tolist()
+                    for frame_idx in range(t):
+                        video_feature = item['feature'][start:end]
+                        expanded_mm_items.append(
+                            dict(
+                                modality=modality,
+                                pixel_values_videos=video_feature[frame_idx * h * w:(frame_idx + 1) * h * w],
+                                video_grid_thw=torch.tensor([1, h, w]),
+                                offset=item['offset'][frame_start:frame_end][frame_idx],
+                                video_token_id=self.video_token_id,
+                            )
+                        )
+
+        return expanded_mm_items
+
+    def preprocess(self,
+                   messages: list[dict],
+                   input_prompt: str | list[int],
+                   mm_processor_kwargs: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Preprocess multimodal data and return a dict with ``input_ids`` and
+        multimodal features.
+
+        New-style models inherit this implementation. Legacy models override with `def preprocess(self, messages)`.
+        """
+
+        mm_items = self.collect_multimodal_items(messages)
+
+        raw_images, raw_videos, video_metadatas = [], [], []
+        raw_time_series, sampling_rates = [], []
+        for modality, data, params in mm_items:
+            if modality == Modality.IMAGE:
+                raw_images.append(data)
+            elif modality == Modality.VIDEO:
+                raw_videos.append(data)
+                video_metadatas.append(params.get('video_metadata', None))
+            elif modality == Modality.TIME_SERIES:
+                raw_time_series.append(data)
+                sampling_rates.append(params.get('sampling_rate', None))
+            else:
+                raise ValueError(f'unsupported modality {modality}')
+
+        # get kwargs for processor
+        kwargs = {}
+        images_kwargs = {}
+        videos_kwargs = {}
+        mm_processor_kwargs = mm_processor_kwargs or {}
+        if raw_images:
+            kwargs['images'] = raw_images
+            image_size = self.get_override_size(self.processor.image_processor,
+                                                mm_processor_kwargs.get('image'),
+                                                modality='image')
+            if image_size is not None:
+                images_kwargs['size'] = image_size
+        if raw_videos:
+            kwargs['videos'] = raw_videos
+            videos_kwargs['video_metadata'] = video_metadatas
+            # perform resize in hf processor, while sample frames has been done in video loader
+            videos_kwargs['do_resize'] = True
+            videos_kwargs['do_sample_frames'] = False
+            video_size = self.get_override_size(self.processor.video_processor,
+                                                mm_processor_kwargs.get('video'),
+                                                modality='video')
+            if video_size is not None:
+                videos_kwargs['size'] = video_size
+        if images_kwargs:
+            kwargs['images_kwargs'] = images_kwargs
+        if videos_kwargs:
+            kwargs['videos_kwargs'] = videos_kwargs
+        if raw_time_series:
+            assert hasattr(self, 'time_series_processor'), \
+                'time series processor is not defined for time series input'
+            assert not raw_images and not raw_videos, \
+                'time series is not compatible with image/video input'
+            self.tokenizer = self.processor.tokenizer
+            time_series_processor = self.time_series_processor
+            kwargs['time_series'] = raw_time_series
+            kwargs['sampling_rate'] = sampling_rates
+
+        # process raw items with hf processor
+        input_text = input_prompt if isinstance(input_prompt, str) else ''
+        processor_outputs = (time_series_processor if raw_time_series else self.processor)(
+            text=[input_text],
+            padding=True,
+            return_tensors='pt',
+            **kwargs,
+        )
+
+        # collect from processor outputs and categorized by modality
+        collected_mm_items: dict[Modality, dict[str, Any]] = {}
+        for attr_name, value in processor_outputs.items():
+            if attr_name == 'input_ids':
+                continue
+
+            current_modality = self.ATTR_NAME_TO_MODALITY.get(attr_name)
+            if current_modality:
+                if current_modality not in collected_mm_items:
+                    collected_mm_items[current_modality] = {}
+
+                if attr_name in self.FEATURE_NAMES:
+                    attr_name = 'feature'
+
+                collected_mm_items[current_modality][attr_name] = value
+
+        # get input_ids
+        if isinstance(input_prompt, str):
+            input_ids = processor_outputs['input_ids'].flatten()
+        else:
+            input_ids = self.get_expanded_input_ids(input_prompt, collected_mm_items)
+
+        # compute offsets for all items
+        for modality, item in collected_mm_items.items():
+            mm_token_id = self.mm_tokens.get_token_id_by_modality(modality)
+            item['offset'] = self.get_mm_items_offset(
+                input_ids=input_ids,
+                mm_token_id=mm_token_id,
+            )
+
+        # expand bundled hf processor outputs into per-image/video entry
+        expanded_mm_items = self.get_expanded_mm_items(collected_mm_items)
+
+        return dict(input_ids=input_ids.tolist(), multimodal=expanded_mm_items)
+
+    @staticmethod
+    def has_input_ids(messages: list[dict]) -> bool:
         """Check whether the messages contain input_ids directly.
 
         Args:
@@ -329,3 +643,25 @@ class VisionModel(ABC):
         if arch and (arch == cls._arch or arch in cls._arch):
             return True
         return False
+
+
+@dataclasses.dataclass
+class MultimodalSpecialTokens:
+    image_token: str | list[str] | None = None
+    video_token: str | list[str] | None = None
+    audio_token: str | list[str] | None = None
+    ts_token: str | list[str] | None = None
+
+    image_token_id: int | None = None
+    video_token_id: int | None = None
+    audio_token_id: int | None = None
+    ts_token_id: int | None = None
+
+    def get_token_id_by_modality(self, modality: Modality) -> int | None:
+        """Get token ID for a given modality."""
+        return {
+            Modality.IMAGE: self.image_token_id,
+            Modality.VIDEO: self.video_token_id,
+            Modality.AUDIO: self.audio_token_id,
+            Modality.TIME_SERIES: self.ts_token_id,
+        }.get(modality)

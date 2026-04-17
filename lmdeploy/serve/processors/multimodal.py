@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import inspect
 from typing import Any, Literal
 
 import PIL
@@ -37,6 +38,8 @@ class MultimodalProcessor:
         self.chat_template = chat_template
         self.vl_encoder = vl_encoder
         self.backend = backend
+        _sig = inspect.signature(vl_encoder.model.preprocess).parameters if vl_encoder else {}
+        self._uses_new_preprocess = 'input_prompt' in _sig and 'mm_processor_kwargs' in _sig
 
     @staticmethod
     def merge_message_content(msg: dict) -> dict:
@@ -131,7 +134,7 @@ class MultimodalProcessor:
             else:
                 raise NotImplementedError(f'unknown type: {item_type}')
 
-            out_message['content'].append({'type': modality, 'data': data, **item_params})
+            out_message['content'].append({'type': modality.value, 'data': data, **item_params})
 
         out_messages[i] = out_message
 
@@ -356,14 +359,9 @@ class MultimodalProcessor:
         engines."""
         chat_template = self.chat_template if do_preprocess else BaseChatTemplate()
         messages = await self.async_parse_multimodal_item(messages, media_io_kwargs)
-        results = await self.vl_encoder.preprocess(messages, mm_processor_kwargs)
 
         if self.backend == 'turbomind':
-            # for tm engine, this module perform vision embedding after image
-            # preprocessing. It utilizes the hf model's vision embeddings
-            # functions and returns the input_ids, input_embeddings,
-            # embedding_ranges and so on. All the returned values are passed
-            # to tm engine for token generation
+            results = await self.vl_encoder.preprocess(messages, mm_processor_kwargs)
             results = await self.vl_encoder.async_infer(results)
             results = await self.vl_encoder.wrap_for_turbomind(messages=results,
                                                                chat_template=chat_template,
@@ -372,12 +370,19 @@ class MultimodalProcessor:
                                                                tools=tools,
                                                                chat_template_kwargs=chat_template_kwargs)
         elif self.backend == 'pytorch':
-            # for pt engine, this module only conduct the image preprocessing
-            # It leaves the vision embedding to the pt engine
-            results = await self.vl_encoder.wrap_for_pytorch(messages=results,
-                                                             chat_template=chat_template,
-                                                             tokenizer=self.tokenizer,
-                                                             sequence_start=sequence_start,
-                                                             tools=tools,
-                                                             chat_template_kwargs=chat_template_kwargs)
+            if self._uses_new_preprocess:
+                input_prompt = self.vl_encoder.apply_chat_template(messages=messages,
+                                                                   chat_template=chat_template,
+                                                                   sequence_start=sequence_start,
+                                                                   chat_template_kwargs=chat_template_kwargs)
+                results = await self.vl_encoder.preprocess(messages, input_prompt, mm_processor_kwargs)
+            else:
+                results = await self.vl_encoder.preprocess(messages, mm_processor_kwargs)
+                results = await self.vl_encoder.wrap_for_pytorch(messages=results,
+                                                                 chat_template=chat_template,
+                                                                 tokenizer=self.tokenizer,
+                                                                 sequence_start=sequence_start,
+                                                                 tools=tools,
+                                                                 chat_template_kwargs=chat_template_kwargs)
+
         return results

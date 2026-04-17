@@ -6,7 +6,7 @@ import torch
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.constants import Modality
-from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
+from lmdeploy.vl.model.base import VISION_MODELS, MultimodalSpecialTokens, VisionModel
 from lmdeploy.vl.model.qwen3 import Qwen3VLModel
 
 logger = get_logger('lmdeploy')
@@ -28,14 +28,27 @@ class InternS1ProVisionModel(Qwen3VLModel):
         # time series tokens
         self.ts_token = getattr(self.processor, 'ts_token', None)
         self.ts_token_id = getattr(self.processor, 'ts_token_id', None)
+        self.ts_start_token = getattr(self.processor, 'ts_start_token', None)
+        self.ts_end_token = getattr(self.processor, 'ts_end_token', None)
 
-    def _preprocess_time_series(self,
-                                data: list[Any],
-                                params: dict[str, Any],
-                                mm_processor_kwargs: dict[str, Any] | None = None) -> list[dict]:
+        # special tokens
+        self.mm_tokens = MultimodalSpecialTokens(
+            image_token=self.image_token,
+            video_token=self.video_token,
+            ts_token=self.ts_token,
+            image_token_id=self.image_token_id,
+            video_token_id=self.video_token_id,
+            ts_token_id=self.ts_token_id
+        )
 
-        ts_input = data
-        sr = params.get('sampling_rate') if params is not None else None
+    def time_series_processor(self,
+                              text: str,
+                              time_series: list[Any],
+                              sampling_rate: float | None = None,
+                              **kwargs):
+
+        ts_input = time_series[0] if isinstance(time_series, list) else time_series
+        sampling_rate = sampling_rate[0] if isinstance(sampling_rate, list) else sampling_rate
 
         if not isinstance(ts_input, np.ndarray):
             ts_input = np.array(ts_input, dtype=np.float32)
@@ -55,46 +68,37 @@ class InternS1ProVisionModel(Qwen3VLModel):
         ts_len = ts_input.shape[0]
 
         # set the default value to ts_len / 4 if sr is not provided or invalid
-        if sr is None or sr <= 0:
-            sr = max(ts_len / 4, 1.0)
+        if sampling_rate is None or sampling_rate <= 0:
+            sampling_rate = max(ts_len / 4, 1.0)
 
         # compute num ts tokens
-        stride = np.floor(160 / ((1 + np.exp(-sr / 100))**6))
+        stride = np.floor(160 / ((1 + np.exp(-sampling_rate / 100))**6))
         patch_size = stride * 2
         embed_length = (np.ceil((ts_len - patch_size) / stride) + 1)
         ts_tokens = int((embed_length // 2 + 1) // 2)
 
-        return dict(ts_values=[ts_input],
-                    ts_sr=[sr],
-                    ts_lens=[ts_len],
-                    ts_tokens=[ts_tokens],
+        # generate text with ts tokens
+        for i in range(len(text)):
+            if f'{self.ts_start_token}{self.ts_token}{self.ts_end_token}' in text[i]:
+                ts_placeholder = self.ts_start_token + self.ts_token * ts_tokens + self.ts_end_token
+                text[i] = text[i].replace(
+                        f'{self.ts_start_token}{self.ts_token}{self.ts_end_token}', ts_placeholder, 1
+                    )
+            elif self.ts_token in text[i]:
+                text[i] = text[i].replace(self.ts_token, self.ts_token * ts_tokens)
+
+        input_ids = self.tokenizer(text, add_special_tokens=False, **kwargs)['input_ids']
+
+        ts_input = torch.from_numpy(np.array([ts_input])).to(dtype=torch.bfloat16)
+        ts_sr = torch.tensor([sampling_rate])
+        ts_lens = torch.tensor([ts_len])
+        return dict(input_ids=input_ids,
+                    ts_values=ts_input,
+                    ts_sr=ts_sr,
+                    ts_lens=ts_lens,
                     ts_token_id=self.ts_token_id)
 
-    def preprocess(self, messages: list[dict], mm_processor_kwargs: dict[str, Any] | None = None) -> list[dict]:
-        """Refer to `super().preprocess()` for spec."""
-        outputs = []
-        self.contains_video_input = False
-        self.contains_ts_input = False
-
-        mm_items = self.collect_multimodal_items(messages)
-        for modality, data, params in mm_items:
-            result = {}
-            if modality == Modality.IMAGE:
-                result = self._preprocess_image(data, params, mm_processor_kwargs)
-            elif modality == Modality.VIDEO:
-                self.contains_video_input = True
-                result = self._preprocess_video(data, params, mm_processor_kwargs)
-            elif modality == Modality.TIME_SERIES:
-                self.contains_ts_input = True
-                result = self._preprocess_time_series(data, params, mm_processor_kwargs)
-
-            result.update(modality=modality)
-            outputs.append(result)
-
-        messages.append(dict(role='preprocess', content=outputs))
-        return messages
-
-    def proc_messages(self,
+    def apply_chat_template(self,
                       messages,
                       chat_template,
                       sequence_start,
@@ -119,65 +123,9 @@ class InternS1ProVisionModel(Qwen3VLModel):
         else:
             prompt_messages = messages
 
-        # time series input requires enabling_thinking = False
-        if self.contains_ts_input:
+        # time series requires enabling_thinking = False
+        if any(m == Modality.TIME_SERIES for m, _, _ in self.collect_multimodal_items(messages)):
             chat_template_kwargs['enable_thinking'] = False
 
         prompt = chat_template.messages2prompt(prompt_messages, sequence_start, tools=tools, **chat_template_kwargs)
-        return prompt, None
-
-    def to_pytorch_aux_ts(self, messages, prompt, TS_TOKEN, tokenizer, sequence_start):
-        """Pack the time series input to the compatible format with pytorch
-        engine."""
-        # collect all preprocessing result from messages
-        preps = [x['content'] for x in messages if x['role'] == 'preprocess']
-        assert len(preps) == 1
-        preps = preps[0]
-
-        # split prompt into segments and validate data
-        segs = prompt.split(TS_TOKEN)
-        assert len(segs) == len(preps) + 1, (f'the number of {TS_TOKEN} is not equal '
-                                             f'to input time series data, {len(segs) - 1} vs {len(preps)}')
-
-        input_ids = []
-        for i, seg in enumerate(segs):
-            if i > 0 and i <= len(preps):
-                preps[i - 1].update(offset=len(input_ids))
-                ts_tokens = preps[i - 1]['ts_tokens']
-
-                ts_tokens = ts_tokens[0]
-                ts_array = np.array(preps[i - 1]['ts_values'])
-
-                preps[i - 1].update(ts_tokens=ts_tokens)
-                preps[i - 1].update(ts_values=torch.from_numpy(ts_array).to(dtype=torch.bfloat16))
-                preps[i - 1].update(ts_lens=torch.tensor(preps[i - 1]['ts_lens']))
-                preps[i - 1].update(ts_sr=torch.tensor(preps[i - 1]['ts_sr']))
-
-                assert self.ts_token_id == preps[i - 1]['ts_token_id']
-                input_ids.extend([self.ts_token_id] * ts_tokens)
-            token_ids = tokenizer.encode(seg, add_bos=((i == 0) and sequence_start))
-            input_ids.extend(token_ids)
-
-        return dict(prompt=prompt, input_ids=input_ids, multimodal=preps)
-
-    def to_pytorch(self,
-                   messages,
-                   chat_template,
-                   tokenizer,
-                   sequence_start,
-                   tools: list[object] | None = None,
-                   chat_template_kwargs: dict | None = None,
-                   **kwargs):
-        """Return to the information needed by pytorch engine."""
-        prompt, _ = self.proc_messages(messages,
-                                       chat_template,
-                                       sequence_start,
-                                       tools=tools,
-                                       chat_template_kwargs=chat_template_kwargs)
-
-        if self.contains_video_input:
-            return self.to_pytorch_aux_video(messages, prompt, self.video_token, tokenizer, sequence_start)
-        elif self.contains_ts_input:
-            return self.to_pytorch_aux_ts(messages, prompt, self.ts_token, tokenizer, sequence_start)
-        else:
-            return self.to_pytorch_aux(messages, prompt, self.image_token, tokenizer, sequence_start)
+        return prompt
