@@ -93,9 +93,8 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
                                       st);
         sync_check_cuda_error();
 
-        // Compute f2n, f2E
-        invokeMoeLLDispatchPostprocess(output.out_x,
-                                       output.f2n.data(),
+        // Compute f2n, f2E (f2n points into the flattened sparse packed_recv_x)
+        invokeMoeLLDispatchPostprocess(output.f2n.data(),
                                        output.f2E.data(),
                                        output.offsets.data(),
                                        buffer_->moe_recv_counter,
@@ -103,6 +102,11 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
                                        packed_recv_x,
                                        st);
         sync_check_cuda_error();
+
+        // Expose the sparse buffer as a flat 2D view; downstream linear gathers via f2n.
+        const int num_max_tokens = packed_recv_x.shape(1);
+        const int hidden         = packed_recv_x.shape(2);
+        output.out_x             = packed_recv_x.view({num_local_experts * num_max_tokens, hidden});
 
         // Generate output
         output.handle        = {packed_recv_src_info, packed_recv_layout_range, output.offsets};

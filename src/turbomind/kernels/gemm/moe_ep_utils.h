@@ -49,13 +49,12 @@ void invokeMoeLocalCombineEp(Ref<Tensor>   out,
 void invokeMoeCombineOutputEp(
     Ref<Tensor> output, const Tensor& src, const float* shared_scales, float scale, cudaStream_t st);
 
-void invokeMoeLLDispatchPostprocess(Tensor&       out,
-                                    int*          f2n,
+void invokeMoeLLDispatchPostprocess(int*          f2n,
                                     int*          f2E,
                                     const int*    offsets,
                                     volatile int* moe_recv_counter,
                                     int*          moe_recv_counter_mapped,
-                                    Tensor&       packed_recv_x,
+                                    const Tensor& packed_recv_x,
                                     cudaStream_t  st);
 
 }  // namespace turbomind

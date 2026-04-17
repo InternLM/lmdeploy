@@ -268,7 +268,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
         RouteEP(p, logits);
     }
 
-    if (input_.shape(0) == 0) {
+    if (temp_.shape(0) == 0) {
         // pass
     }
     else if (param_.method == MoeParam::kNaive) {
@@ -314,7 +314,7 @@ void MoeFfnLayer::ForwardNative(ForwardParam& p)
 
 void MoeFfnLayer::ForwardFused(ForwardParam& p)
 {
-    TM_CHECK_GT(input_.shape(0), 0);
+    TM_CHECK_GT(temp_.shape(0), 0);
 
     const auto& moe              = *p.weights;
     const auto  st               = core::Context::stream().handle();

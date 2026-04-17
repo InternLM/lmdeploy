@@ -572,7 +572,8 @@ void invokeMoeCombineOutputEp(
 __global__ void MoeLLDispatchRoutingMapKernel(int* moe_recv_counter_mapped,  //
                                               int* f2n,
                                               int* f2E,
-                                              const int* __restrict__ offsets)
+                                              const int* __restrict__ offsets,
+                                              int num_max_tokens)
 {
     const int ei    = blockIdx.x;
     const int begin = offsets[ei];
@@ -583,71 +584,29 @@ __global__ void MoeLLDispatchRoutingMapKernel(int* moe_recv_counter_mapped,  //
     }
 
     for (int idx = begin + threadIdx.x; idx < end; idx += blockDim.x) {
-        f2n[idx] = idx;
+        f2n[idx] = ei * num_max_tokens + (idx - begin);
         f2E[idx] = ei;
     }
 }
 
-__global__ void MoeLLDispatchCopyKernel(int4* out,
-                                        const int4* __restrict__ x,
-                                        int hidden_int4,
-                                        const int* __restrict__ offsets,
-                                        int num_max_tokens,
-                                        int num_local_experts)
-{
-    int row = blockIdx.x;
-
-    int lo = 0;
-    int hi = num_local_experts;
-    while (lo + 1 < hi) {
-        const int mid = (lo + hi) >> 1;
-        if (offsets[mid] <= row) {
-            lo = mid;
-        }
-        else {
-            hi = mid;
-        }
-    }
-
-    const int   src_row = row - offsets[lo];
-    const int4* src     = x + (lo * num_max_tokens + src_row) * hidden_int4;
-    int4*       dst     = out + row * hidden_int4;
-    for (int i = threadIdx.x; i < hidden_int4; i += blockDim.x) {
-        __stcg(dst + i, __ldcg(src + i));
-    }
-}
-
-void invokeMoeLLDispatchPostprocess(Tensor&       out,  //
-                                    int*          f2n,
+void invokeMoeLLDispatchPostprocess(int*          f2n,
                                     int*          f2E,
                                     const int*    offsets,
                                     volatile int* moe_recv_counter,
                                     int*          moe_recv_counter_mapped,
-                                    Tensor&       packed_recv_x,
+                                    const Tensor& packed_recv_x,
                                     cudaStream_t  st)
 {
     const int num_local_experts = packed_recv_x.shape(0);
     const int num_max_tokens    = packed_recv_x.shape(1);
-    const int hidden            = packed_recv_x.shape(2);
     const int threads           = 256;
 
     *moe_recv_counter = -1;
-    MoeLLDispatchRoutingMapKernel<<<num_local_experts, threads, 0, st>>>(moe_recv_counter_mapped, f2n, f2E, offsets);
+    MoeLLDispatchRoutingMapKernel<<<num_local_experts, threads, 0, st>>>(
+        moe_recv_counter_mapped, f2n, f2E, offsets, num_max_tokens);
     sync_check_cuda_error();
-    core::Context::stream().Sync();
 
     while (*moe_recv_counter < 0) {};
-    out = Tensor({*moe_recv_counter, hidden}, packed_recv_x.dtype(), packed_recv_x.device());
-    TM_CHECK_EQ(hidden * byte_size(packed_recv_x.dtype()) % sizeof(int4), 0LL);
-    const int hidden_int4 = hidden * byte_size(packed_recv_x.dtype()) / sizeof(int4);
-    if (*moe_recv_counter > 0) {
-        MoeLLDispatchCopyKernel<<<*moe_recv_counter, threads, 0, st>>>((int4*)out.raw_data(),
-                                                                       (const int4*)packed_recv_x.raw_data(),
-                                                                       hidden_int4,
-                                                                       offsets,
-                                                                       num_max_tokens,
-                                                                       num_local_experts);
-    }
 }
 
 }  // namespace turbomind
