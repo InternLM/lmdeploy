@@ -20,7 +20,7 @@ namespace turbomind::comm {
 
 void NcclCommImpl::InitializeEp(const EpConfig& config)
 {
-    TM_LOG_DEBUG("[NCCLEP][%d] Initialize", h_comm_->rank());
+    TM_LOG_DEBUG("[NCCLEP][{}] Initialize", h_comm_->rank());
 
     // Check NCCL version
     int version{};

@@ -68,7 +68,6 @@ class LlavaNextVisionModel(LlavaHfVisionModel):
         images = self.collect_multimodal_items(messages)
         outputs = []
         for modality, image, params in images:
-            image = image.convert('RGB')
             result = self.processor(image, return_tensors='pt', input_data_format='channels_last')
             # ! infer image_num_patches from image_sizes
             image_num_patches = [

@@ -2,11 +2,11 @@
 import enum
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any
 
 import torch
 
-from lmdeploy.messages import PytorchEngineConfig
+from lmdeploy.messages import PytorchEngineConfig, QuantPolicy
 from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
 from lmdeploy.pytorch.utils import maybe_register_config_serialize_by_value
 from lmdeploy.utils import get_logger, is_bf16_supported
@@ -57,7 +57,13 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str, device_type: str = 'a
             torch_dtype = torch_dtype if torch_dtype in ['float16', 'bfloat16'] else 'float16'
         else:
             torch_dtype = dtype
-    config.dtype = eval(f'torch.{torch_dtype}')
+
+    resolved_dtype = getattr(torch, torch_dtype, None)
+    if not isinstance(resolved_dtype, torch.dtype):
+        raise ValueError(f'Invalid torch dtype "{torch_dtype}" resolved from model config; '
+                         'expected a torch.dtype attribute on torch.')
+    config.dtype = resolved_dtype
+
     return config
 
 
@@ -88,11 +94,12 @@ class CacheConfig:
     block_size: int
     num_cpu_blocks: int
     num_gpu_blocks: int
+    kernel_block_size: int = -1
     window_size: int = -1
     cache_max_entry_count: float = 0.8
     max_prefill_token_num: int = 4096
     enable_prefix_caching: bool = False
-    quant_policy: Literal[0, 4, 8] = 0
+    quant_policy: QuantPolicy = QuantPolicy.NONE
     device_type: str = 'cuda'
     num_state_caches: int = None
     states_shapes: list[tuple] = field(default_factory=list)
@@ -109,6 +116,8 @@ class CacheConfig:
         if self.window_size > 1 and self.enable_prefix_caching:
             logger.warning('Prefix caching is not available for window attention.')
             self.enable_prefix_caching = False
+        if self.kernel_block_size == -1:
+            self.kernel_block_size = self.block_size
 
 
 class TPMode(enum.Enum):
@@ -365,8 +374,10 @@ class ModelConfig:
         hf_overrides: dict[str, Any] = None,
         is_draft_model: bool = False,
         spec_method: str = None,
+        num_spec_tokens: int = 0,
         model_format: str = None,
         device_type: str = 'auto',
+        block_size: int = 64,
     ):
         """Instantiate one of the configuration classes of the library from a
         pretrained model configuration.
@@ -397,6 +408,7 @@ class ModelConfig:
             dist_config=dist_config,
             is_draft_model=is_draft_model,
             spec_method=spec_method,
+            num_spec_tokens=num_spec_tokens,
             device_type=device_type,
         )
         fp32_lm_head = False
@@ -414,6 +426,7 @@ class ModelConfig:
 
         # add quant_config
         model_config.quant_config = QuantizationConfig.from_config(hf_config)
+        model_config.block_size = block_size
         return model_config
 
     @classmethod
@@ -426,6 +439,7 @@ class ModelConfig:
         is_draft_model: bool = False,
         spec_method: str = None,
         device_type: str = 'auto',
+        num_spec_tokens: int = 0,
     ):
         """From huggingface config."""
         from lmdeploy.pytorch.configurations import AutoModelConfigBuilder
@@ -433,11 +447,15 @@ class ModelConfig:
             dist_config = DistConfig()
         tp = dist_config.attn_tp
 
-        model_config = AutoModelConfigBuilder.build(hf_config,
-                                                    model_path,
-                                                    tp=tp,
-                                                    is_draft_model=is_draft_model,
-                                                    spec_method=spec_method)
+        model_config = AutoModelConfigBuilder.build(
+            hf_config,
+            model_path,
+            tp=tp,
+            is_draft_model=is_draft_model,
+            spec_method=spec_method,
+            num_spec_tokens=num_spec_tokens,
+            device_type=device_type,
+        )
 
         if model_config.k_head_dim is None:
             assert model_config.head_dim is not None
@@ -554,7 +572,9 @@ class SpecDecodeConfig:
                                                    trust_remote_code=True,
                                                    dtype=dtype,
                                                    is_draft_model=True,
-                                                   spec_method=method)
+                                                   spec_method=method,
+                                                   block_size=target_cache_cfg.block_size,
+                                                   )
         cache_config = None
         # include medusa
         no_caches = ['medusa']
@@ -615,6 +635,9 @@ class QuantizationConfig:
         if quant_method == 'awq':
             bits = quant_config.get('bits', 4)
             group_size = quant_config.get('group_size', 128)
+            if quant_dtype is None:
+                # awq does not need a quant dtype, this is just a placeholder
+                quant_dtype = 'bfloat16'
         elif quant_method == 'smooth_quant':
             if quant_dtype is None:
                 quant_dtype = 'int8'
@@ -629,8 +652,11 @@ class QuantizationConfig:
         else:
             raise TypeError(f'Unsupported quant method: {quant_method}')
 
-        if quant_dtype is not None:
-            quant_dtype = eval(f'torch.{quant_dtype}')
+        resolved_quant_dtype = getattr(torch, quant_dtype, None)
+        if not isinstance(resolved_quant_dtype, torch.dtype):
+            raise ValueError(f'Invalid quant dtype "{quant_dtype}" resolved from model config; '
+                             'expected a torch.dtype attribute on torch.')
+        quant_dtype = resolved_quant_dtype
 
         ignored_layers = quant_config.get('ignored_layers', [])
         if not ignored_layers:

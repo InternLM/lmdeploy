@@ -106,6 +106,7 @@ class SubCliServe:
         ArgumentHelper.dllm_confidence_threshold(pt_group)
         ArgumentHelper.enable_return_routed_experts(pt_group)
         ArgumentHelper.distributed_executor_backend(pt_group)
+        ArgumentHelper.kernel_block_size(pt_group)
 
         # common engine args
         dtype_act = ArgumentHelper.dtype(pt_group)
@@ -227,6 +228,7 @@ class SubCliServe:
                 max_batch_size=max_batch_size,
                 cache_max_entry_count=args.cache_max_entry_count,
                 block_size=args.cache_block_seq_len,
+                kernel_block_size=args.kernel_block_size,
                 session_len=args.session_len,
                 adapters=adapters,
                 enable_prefix_caching=args.enable_prefix_caching,

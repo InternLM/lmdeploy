@@ -267,11 +267,14 @@ class ArgumentHelper:
     def quant_policy(parser, default: int = 0):
         """Add argument quant_policy to parser."""
 
+        from lmdeploy.messages import QuantPolicy
+
         return parser.add_argument('--quant-policy',
                                    type=int,
                                    default=0,
-                                   choices=[0, 4, 8],
-                                   help='Quantize kv or not. 0: no quant; 4: 4bit kv; 8: 8bit kv')
+                                   choices=list(QuantPolicy),
+                                   help='KV cache quantization policy. '
+                                   '0: no quantization; 4: 4-bit; 8: 8-bit; 42: TurboQuant (K4V2)')
 
     @staticmethod
     def rope_scaling_factor(parser):
@@ -547,6 +550,19 @@ class ArgumentHelper:
                                    'be ignored')
 
     @staticmethod
+    def kernel_block_size(parser):
+        """Add argument kernel_block_size to parser."""
+
+        return parser.add_argument('--kernel-block-size',
+                                   type=int,
+                                   default=-1,
+                                   help='The length of the token sequence in a k/v block for kernels. '
+                                   'Only supported by Pytorch Engine. '
+                                   'When set to a different value than --cache-block-seq-len, '
+                                   'memory allocators and prefix cache use --cache-block-seq-len '
+                                   'as the block size, while kernels use --kernel-block-size.')
+
+    @staticmethod
     def enable_prefix_caching(parser):
         """Add argument enable_prefix_caching to parser."""
 
@@ -728,7 +744,7 @@ class ArgumentHelper:
         spec_group.add_argument('--speculative-algorithm',
                                 type=str,
                                 default=None,
-                                choices=['eagle', 'eagle3', 'deepseek_mtp'],
+                                choices=['eagle', 'eagle3', 'deepseek_mtp', 'qwen3_5_mtp'],
                                 help='The speculative algorithm to use. `None` means speculative decoding is disabled')
 
         spec_group.add_argument('--speculative-draft-model',

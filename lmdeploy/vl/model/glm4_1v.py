@@ -38,8 +38,6 @@ class GLM4_1_VisionModel(VisionModel):
         optional_keys = {'resized_height', 'resized_width', 'min_pixels', 'max_pixels'}
         outputs = []
         for modality, image, params in images:
-            image = image.convert('RGB')
-
             item = dict(type='image', image=image)
             item.update({key: params[key] for key in params.keys() if key in optional_keys})
             result = self.processor.image_processor(images=image, videos=None, return_tensors='pt')

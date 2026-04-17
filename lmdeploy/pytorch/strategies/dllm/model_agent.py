@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any
 
 import numpy as np
 import torch
@@ -19,28 +18,6 @@ from ..base.model_agent import ExtraInputs, ExtraOutputs, ModelAgentStrategy, St
 from .unmasking import UnmaskingProcessor
 
 SeqList = list[SchedulerSequence]
-
-
-def get_model_inputs_next_decoding(inputs: ModelInputs, input_ids: torch.Tensor, max_q_seqlen,
-                                   step_seqlens: torch.Tensor, model_metas) -> ModelInputs:
-    """Next decoding step."""
-    if input_ids.dim() == 1:
-        input_ids = input_ids[None, :]
-    step_seqlens = torch.where(step_seqlens > 0, step_seqlens, inputs.seq_length - max_q_seqlen)
-    return ModelInputs(
-        input_ids=input_ids,
-        seq_length=torch.full_like(inputs.seq_length, max_q_seqlen),
-        history_lengths=inputs.history_lengths + step_seqlens,
-        block_offsets=inputs.block_offsets,
-        is_decoding=True,
-        num_ignored_history=inputs.num_ignored_history,
-        max_q_seqlen=max_q_seqlen,
-        max_kv_seqlen=inputs.max_kv_seqlen + max_q_seqlen,
-        sum_kv_seqlen=inputs.sum_kv_seqlen + inputs.seq_length.numel() * inputs.max_q_seqlen,
-        local_adapter_ids=inputs.local_adapter_ids,
-        model_metas=model_metas,
-        state_offsets=inputs.state_offsets,
-    )
 
 
 @dataclass
@@ -163,25 +140,6 @@ class DLLMModelAgentStrategy(ModelAgentStrategy):
 
         self.unmasking_processor = UnmaskingProcessor(dllm_config=dllm_config)
 
-    def _update_dllm(self, next_token_ids: torch.Tensor, dllm_mask: torch.Tensor, seqlens: torch.Tensor):
-        """Update token_ids and dllm_mask."""
-        dllm_mask_token = self.dllm_mask_token
-        dllm_block_length = self.block_size
-
-        # reshape to (batch, dllm_block_length)
-        next_token_ids = next_token_ids.view(-1, dllm_block_length).clone()
-        dllm_mask = dllm_mask.view(-1, dllm_block_length).clone()
-
-        # flags
-        is_cached = (dllm_mask == consts.DLLM_CACHED).all(dim=1)
-
-        is_masked = (dllm_mask == consts.DLLM_MASKED)
-        next_token_ids[is_cached[:, None] | is_masked] = dllm_mask_token
-        dllm_mask[is_cached] = consts.DLLM_MASKED
-        seqlens = torch.where(is_cached.view(-1), seqlens, seqlens.new_zeros((1, )))
-
-        return next_token_ids.flatten(), dllm_mask.flatten(), seqlens
-
     def slice_outputs(self, inputs: torch.Tensor, seq_length: torch.LongTensor) -> torch.Tensor:
         """Slice outputs."""
         block_length = self.block_size
@@ -247,52 +205,10 @@ class DLLMModelAgentStrategy(ModelAgentStrategy):
         dllm_masks = torch.as_tensor(np.concatenate(dllm_masks))
         return DLLMExtraInputs(dllm_mask=dllm_masks)
 
-    def update_extra_inputs(self, extra_inputs: DLLMExtraInputs, delta: 'ModelInputsDelta') -> DLLMExtraInputs:
-        """Update extra inputs with model inputs delta."""
-        dllm_mask = extra_inputs.dllm_mask
-        dllm_mask = dllm_mask.reshape(-1, self.block_size)
-
-        indices = delta.indices
-        dllm_mask = dllm_mask[indices].flatten()
-
-        return DLLMExtraInputs(dllm_mask=dllm_mask)
-
     def make_extra_outputs(self, extra_inputs: DLLMExtraInputs) -> DLLMExtraOutputs:
         """Create extra outputs."""
         dllm_mask = extra_inputs.dllm_mask
         return DLLMExtraOutputs(dllm_mask=dllm_mask)
-
-    def update_prefill_for_next_step(
-        self,
-        model_inputs: 'ModelInputs',
-        extra_inputs: DLLMExtraInputs,
-        next_token_ids: torch.Tensor,
-        model_metas: Any,
-        extra_outputs: DLLMExtraOutputs,
-    ) -> tuple['ModelInputs', DLLMExtraInputs]:
-        """Step next decoding."""
-        dllm_mask = extra_outputs.dllm_mask
-        next_token_ids, dllm_mask, step_seqlens = self._update_dllm(next_token_ids, dllm_mask, model_inputs.seq_length)
-
-        inputs = get_model_inputs_next_decoding(model_inputs,
-                                                next_token_ids,
-                                                model_metas=model_metas,
-                                                max_q_seqlen=self.block_size,
-                                                step_seqlens=step_seqlens)
-        extra_inputs = DLLMExtraInputs(dllm_mask=dllm_mask)
-        return inputs, extra_inputs
-
-    def update_decoding_for_next_step(self, model_inputs: 'ModelInputs', next_token_ids: torch.Tensor, model_metas: Any,
-                                      extra_inputs: DLLMExtraInputs, **kwargs):
-        """Step next inputs."""
-        model_inputs.model_metas = model_metas
-        dllm_mask = extra_inputs.dllm_mask
-
-        next_token_ids, dllm_mask, step_seqlens = self._update_dllm(next_token_ids, dllm_mask, model_inputs.seq_length)
-        model_inputs.step(next_token_ids, step_seqlens)
-
-        extra_inputs = DLLMExtraInputs(dllm_mask=dllm_mask)
-        return model_inputs, extra_inputs
 
     def post_sampling(self, inputs: 'ModelInputs', logits: torch.Tensor, next_token_ids: torch.LongTensor,
                       extra_inputs: DLLMExtraInputs):

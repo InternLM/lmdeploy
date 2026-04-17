@@ -12,15 +12,15 @@
 #include "3rdparty/deep_ep/deep_ep.hpp"
 #endif
 #include "src/turbomind/core/check.h"
+#include "src/turbomind/core/logger.h"
 #include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/string_utils.h"
 
 #include "src/turbomind/kernels/norm/rms_norm.h"
 
 #define NCCLCHECK(e)                                                                                                   \
     if (auto ec = e; ec != ncclSuccess) {                                                                              \
-        auto msg = fmtstr("NCCL error %s:%d '%s'", __FILE__, __LINE__, ncclGetErrorString(ec));                        \
+        auto msg = fmt::format("NCCL error {}:{} '{}'", __FILE__, __LINE__, ncclGetErrorString(ec));                   \
         throw std::runtime_error(msg.c_str());                                                                         \
     }
 
@@ -75,16 +75,15 @@ static NcclApis& nccl_apis()
         };
         if (version >= NCCL_VERSION(2, 27, 0)) {
             if (version < NCCL_VERSION(2, 28, 0)) {
-                TM_LOG_WARNING(
-                    "[NCCL] Window registration may cause memory leaks in NCCL 2.27, use NCCL 2.28+ or disable the feature by setting NCCL_WIN_ENABLE=0.");
+                TM_LOG_WARN(
+                    "Window registration may cause memory leaks in NCCL 2.27, use NCCL 2.28+ or disable the feature by setting NCCL_WIN_ENABLE=0.");
             }
             load_symbol(apis.ncclCommWindowRegister, "ncclCommWindowRegister");
             load_symbol(apis.ncclCommWindowDeregister, "ncclCommWindowDeregister");
         }
         else {
-            TM_LOG_WARNING(
-                "[NCCL] Window registration is not supported by NCCL %d, use NCCL 2.28+ for better performance.",
-                version);
+            TM_LOG_WARN("Window registration is not supported by NCCL {}, use NCCL 2.28+ for better performance.",
+                        version);
         }
         if (version >= NCCL_VERSION(2, 19, 0)) {
             load_symbol(apis.ncclMemAlloc, "ncclMemAlloc");
@@ -96,8 +95,7 @@ static NcclApis& nccl_apis()
             load_symbol(apis.ncclCommSplit, "ncclCommSplit");
         }
         else {
-            TM_LOG_WARNING("[NCCL] Splitting communicators is not supported by NCCL %d, use NCCL 2.18+ if needed.",
-                           version);
+            TM_LOG_WARN("Splitting communicators is not supported by NCCL {}, use NCCL 2.18+ if needed.", version);
         }
         return apis;
     }();
@@ -113,16 +111,16 @@ NcclCommImpl::NcclCommImpl(ncclComm_t comm, int n_ranks, int rank, HostComm h_co
 NcclCommImpl::~NcclCommImpl()
 {
     for (const auto& [ptr, _] : handles_.at(0)) {
-        TM_LOG_WARNING("[NCCL][%d] Buffer %p is not deregistered", global_rank_, ptr);
+        TM_LOG_WARN("Rank {}: Buffer {} is not deregistered", global_rank_, ptr);
     }
 
     for (const auto& [ptr, size] : buffers_) {
-        TM_LOG_WARNING("[NCCL][%d] Allocation (%p, %lu) is not freed", global_rank_, ptr, size);
+        TM_LOG_WARN("Rank {}: Allocation ({}, {}) is not freed", global_rank_, ptr, size);
     }
 
     for (auto& c : groups_) {
         if (auto ec = ncclCommDestroy(c); ec != ncclSuccess) {
-            TM_LOG_ERROR("[NCCL][%d] Failed to destroy communicator: %s", global_rank_, ncclGetErrorString(ec));
+            TM_LOG_ERROR("Rank {}: Failed to destroy communicator: {}", global_rank_, ncclGetErrorString(ec));
         }
     }
 #if NCCL_VERSION_CODE >= NCCL_VERSION(2, 29, 7)
@@ -171,7 +169,7 @@ void NcclCommImpl::Free(void* ptr)
         buffers_.erase(ptr);
     }
     else {
-        TM_LOG_WARNING("[NCCL][%d] Freeing %p which is not allocated by NcclComm", global_rank_, ptr);
+        TM_LOG_WARN("Rank {}: Freeing {} which is not allocated by NcclComm", global_rank_, ptr);
     }
 }
 
@@ -183,7 +181,7 @@ void NcclCommImpl::Register(void* ptr, size_t size)
         }
     }
     else {
-        TM_LOG_WARNING("[NCCL][%d] Duplicated registration on (%p, %lu)", global_rank_, ptr, size);
+        TM_LOG_WARN("Rank {}: Duplicated registration on ({}, {})", global_rank_, ptr, size);
     }
 }
 
@@ -195,7 +193,7 @@ void NcclCommImpl::Deregister(void* ptr)
         }
     }
     else {
-        TM_LOG_WARNING("[NCCL][%d] Deregistering non-registered address %p", global_rank_, ptr);
+        TM_LOG_WARN("Rank {}: Deregistering non-registered address {}", global_rank_, ptr);
     }
 }
 

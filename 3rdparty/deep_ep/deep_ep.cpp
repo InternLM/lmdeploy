@@ -373,7 +373,7 @@ int Buffer::get_local_device_id() const
 
 void Buffer::destroy()
 {
-    TM_LOG_DEBUG("[NCCLEP][%d] Destroying buffer", rank);
+    TM_LOG_DEBUG("[NCCLEP][{}] Destroying buffer", rank);
     EP_HOST_ASSERT(not destroyed);
 
     // Synchronize

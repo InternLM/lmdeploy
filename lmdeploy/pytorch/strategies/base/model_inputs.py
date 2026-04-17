@@ -6,7 +6,7 @@ import torch
 from torch.profiler import record_function
 
 from lmdeploy.pytorch.config import ModelConfig
-from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
+from lmdeploy.pytorch.model_inputs import ModelInputs
 
 
 @dataclass
@@ -83,14 +83,4 @@ class ModelInputsStrategy(ABC):
                    vocab_size: int = 1,
                    meta: MakeDummyMeta | None = None) -> ModelInputs:
         """Create dummy model inputs."""
-        pass
-
-    @abstractmethod
-    def merge(self, inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
-        """Merge model inputs."""
-        pass
-
-    @abstractmethod
-    def update_inputs(self, inputs: ModelInputs, delta: 'ModelInputsDelta') -> ModelInputs:
-        """Update model inputs with delta."""
         pass

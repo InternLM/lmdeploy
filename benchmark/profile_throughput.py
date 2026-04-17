@@ -10,8 +10,8 @@ import numpy as np
 from tqdm import tqdm
 from transformers import PreTrainedTokenizerBase
 
-from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter
-from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig
+from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter, get_speculative_config
+from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, SpeculativeConfig, TurbomindEngineConfig
 from lmdeploy.profiler import Profiler, Session
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
@@ -133,7 +133,9 @@ def sample_random_requests(
 
 class Engine:
 
-    def __init__(self, model_path: str, engine_config: PytorchEngineConfig | TurbomindEngineConfig):
+    def __init__(self, model_path: str,
+                 engine_config: PytorchEngineConfig | TurbomindEngineConfig,
+                 speculative_config: SpeculativeConfig):
         self.tokenizer = Tokenizer(model_path)
         if isinstance(engine_config, TurbomindEngineConfig):
             from lmdeploy.turbomind import TurboMind
@@ -141,7 +143,9 @@ class Engine:
             self.backend = 'turbomind'
         elif isinstance(engine_config, PytorchEngineConfig):
             from lmdeploy.pytorch.engine import Engine as PytorchEngine
-            tm_model = PytorchEngine.from_pretrained(model_path, engine_config=engine_config)
+            tm_model = PytorchEngine.from_pretrained(model_path,
+                                                     engine_config=engine_config,
+                                                     speculative_config=speculative_config)
             self.backend = 'pytorch'
 
         self.tm_model = tm_model
@@ -305,6 +309,9 @@ def parse_args():
     ArgumentHelper.dllm_denoising_steps(pt_group)
     ArgumentHelper.dllm_confidence_threshold(pt_group)
 
+    # spec decode
+    ArgumentHelper.add_spec_group(parser)
+
     tp_act = ArgumentHelper.tp(pt_group)
     cache_count_act = ArgumentHelper.cache_max_entry_count(pt_group)
     cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
@@ -374,7 +381,8 @@ def main():
         import uvloop
         asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
-    engine = Engine(args.model_path, engine_config)
+    speculative_config = get_speculative_config(args)
+    engine = Engine(args.model_path, engine_config, speculative_config)
 
     if args.dataset_name == 'sharegpt':
         assert args.random_input_len is None and args.random_output_len is None

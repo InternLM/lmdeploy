@@ -1,10 +1,22 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Literal
+import math
 
 import torch
 import triton
 import triton.language as tl
 from torch import Tensor
+
+from lmdeploy.messages import QuantPolicy
+
+from .turbo_quant import get_lloyd_max_codebook, hadamard_rotate
+
+# Triton-compatible quantization policy constants
+# Python Enum cannot be used in Triton kernels, so we define these as module-level
+# constants which Triton will inline at compile time.
+Q_POLICY_NONE = tl.constexpr(0)
+Q_POLICY_INT4 = tl.constexpr(4)
+Q_POLICY_INT8 = tl.constexpr(8)
+Q_POLICY_TURBO = tl.constexpr(42)
 
 
 @triton.jit
@@ -93,6 +105,7 @@ def _fill_kv_cache_kernel(
         q_offs = token_off + page_offs
 
     block_off = tl.load(BlockOffsets + batch_id * stride_boff + kv_block_id)
+    block_off = block_off.to(tl.int64)
 
     d_off = tl.arange(0, BLOCK_D)
     mask_ks = kv_mask[:, None]
@@ -212,13 +225,227 @@ def _fill_page_quant_int4(
 
 
 @triton.jit
-def _fill_page_quant(state_ptr, cache_ptr, scales_zeros_ptr, block_off, head_id, page_offs, q_offs, kv_mask,
-                     head_dim: tl.constexpr, stride_ss, stride_sh, stride_sd, stride_cn: tl.constexpr,
-                     stride_cb: tl.constexpr, stride_ch: tl.constexpr, stride_cd: tl.constexpr,
-                     stride_szn: tl.constexpr, stride_szb: tl.constexpr, stride_szh: tl.constexpr,
-                     stride_szd: tl.constexpr, BLOCK_D: tl.constexpr, quant_policy: tl.constexpr):
+def _fill_page_quant_turbo_qjl4(
+    state_ptr,
+    cache_ptr,
+    scales_zeros_ptr,
+    centroids_ptr,
+    boundaries_ptr,
+    block_off,
+    head_id,
+    page_offs,
+    q_offs,
+    kv_mask,
+    head_dim: tl.constexpr,        # packed dim
+    stride_ss,
+    stride_sh,
+    stride_sd,
+    stride_cn: tl.constexpr,
+    stride_cb: tl.constexpr,
+    stride_ch: tl.constexpr,
+    stride_cd: tl.constexpr,
+    stride_szn: tl.constexpr,
+    stride_szb: tl.constexpr,
+    stride_szh: tl.constexpr,
+    stride_szd: tl.constexpr,
+    BLOCK_D: tl.constexpr,
+):
+    """TurboQuant QJL4 K path:
+    raw dim = 2 * head_dim, packed to head_dim bytes.
+
+    packed nibble per raw coordinate:
+        low  3 bits: 3bit MSE code
+        high 1 bit : QJL residual sign bit
+
+    K meta layout:
+        [..., 0] = mse_norm
+        [..., 1] = qjl_norm
+    """
+    d_off = tl.arange(0, head_dim)
+    mask_kc = kv_mask[:, None]
+
+    state_ptr = state_ptr + head_id * stride_sh
+    state0_ptrs = state_ptr + q_offs[:, None] * stride_ss + d_off[None, :] * stride_sd
+    state1_ptrs = state0_ptrs + head_dim * stride_sd
+
+    cache_ptr = cache_ptr + block_off * stride_cn + head_id * stride_ch
+    cache_ptrs = cache_ptr + page_offs[:, None] * stride_cb + d_off[None, :] * stride_cd
+
+    scales_zeros_ptr = scales_zeros_ptr + block_off * stride_szn + head_id * stride_szh
+    mse_norm_ptrs = scales_zeros_ptr + page_offs[:, None] * stride_szb
+    qjl_norm_ptrs = mse_norm_ptrs + stride_szd
+
+    x0 = tl.load(state0_ptrs, mask=mask_kc, other=0.0).to(tl.float32)
+    x1 = tl.load(state1_ptrs, mask=mask_kc, other=0.0).to(tl.float32)
+
+    mse_norm = tl.sqrt(tl.sum(x0 * x0 + x1 * x1, axis=1) + 1e-8)
+    u0 = x0 / mse_norm[:, None]
+    u1 = x1 / mse_norm[:, None]
+
+    b0 = tl.load(boundaries_ptr + 0)
+    b1 = tl.load(boundaries_ptr + 1)
+    b2 = tl.load(boundaries_ptr + 2)
+    b3 = tl.load(boundaries_ptr + 3)
+    b4 = tl.load(boundaries_ptr + 4)
+    b5 = tl.load(boundaries_ptr + 5)
+    b6 = tl.load(boundaries_ptr + 6)
+
+    idx0 = tl.zeros_like(u0).to(tl.uint8)
+    idx0 += (u0 > b0)
+    idx0 += (u0 > b1)
+    idx0 += (u0 > b2)
+    idx0 += (u0 > b3)
+    idx0 += (u0 > b4)
+    idx0 += (u0 > b5)
+    idx0 += (u0 > b6)
+    idx0 = idx0.to(tl.uint8)
+
+    idx1 = tl.zeros_like(u1).to(tl.uint8)
+    idx1 += (u1 > b0)
+    idx1 += (u1 > b1)
+    idx1 += (u1 > b2)
+    idx1 += (u1 > b3)
+    idx1 += (u1 > b4)
+    idx1 += (u1 > b5)
+    idx1 += (u1 > b6)
+    idx1 = idx1.to(tl.uint8)
+
+    c0 = tl.load(centroids_ptr + idx0.to(tl.int32))
+    c1 = tl.load(centroids_ptr + idx1.to(tl.int32))
+
+    r0 = u0 - c0
+    r1 = u1 - c1
+
+    qjl0 = (r0 >= 0).to(tl.uint8)
+    qjl1 = (r1 >= 0).to(tl.uint8)
+
+    qjl_norm = tl.sqrt(tl.sum(r0 * r0 + r1 * r1, axis=1) + 1e-8) / math.sqrt(2 * head_dim)
+
+    nib0 = idx0 | (qjl0 << 3)
+    nib1 = idx1 | (qjl1 << 3)
+    packed = nib0 | (nib1 << 4)
+
+    tl.store(cache_ptrs, packed, mask=mask_kc)
+    tl.store(mse_norm_ptrs, mse_norm[:, None], mask=kv_mask[:, None])
+    tl.store(qjl_norm_ptrs, qjl_norm[:, None], mask=kv_mask[:, None])
+
+
+@triton.jit
+def _fill_page_quant_turbo_int2(
+    state_ptr,
+    cache_ptr,
+    scales_zeros_ptr,
+    boundaries_ptr,
+    block_off,
+    head_id,
+    page_offs,
+    q_offs,
+    kv_mask,
+    head_dim: tl.constexpr,        # packed dim
+    stride_ss,
+    stride_sh,
+    stride_sd,
+    stride_cn: tl.constexpr,
+    stride_cb: tl.constexpr,
+    stride_ch: tl.constexpr,
+    stride_cd: tl.constexpr,
+    stride_szn: tl.constexpr,
+    stride_szb: tl.constexpr,
+    stride_szh: tl.constexpr,
+    stride_szd: tl.constexpr,
+    BLOCK_D: tl.constexpr,
+):
+    """TurboQuant V path: raw dim = 4 * head_dim, packed to head_dim bytes."""
+    d_off = tl.arange(0, head_dim)
+    mask_kc = kv_mask[:, None]
+
+    state_ptr = state_ptr + head_id * stride_sh
+    state0_ptrs = state_ptr + q_offs[:, None] * stride_ss + d_off[None, :] * stride_sd
+    state1_ptrs = state0_ptrs + head_dim * stride_sd
+    state2_ptrs = state0_ptrs + 2 * head_dim * stride_sd
+    state3_ptrs = state0_ptrs + 3 * head_dim * stride_sd
+
+    cache_ptr = cache_ptr + block_off * stride_cn + head_id * stride_ch
+    cache_ptrs = cache_ptr + page_offs[:, None] * stride_cb + d_off[None, :] * stride_cd
+
+    scales_zeros_ptr = scales_zeros_ptr + block_off * stride_szn + head_id * stride_szh
+    scales_ptrs = scales_zeros_ptr + page_offs[:, None] * stride_szb
+
+    x0 = tl.load(state0_ptrs, mask=mask_kc, other=0.0).to(tl.float32)
+    x1 = tl.load(state1_ptrs, mask=mask_kc, other=0.0).to(tl.float32)
+    x2 = tl.load(state2_ptrs, mask=mask_kc, other=0.0).to(tl.float32)
+    x3 = tl.load(state3_ptrs, mask=mask_kc, other=0.0).to(tl.float32)
+
+    norm = tl.sqrt(tl.sum(x0 * x0 + x1 * x1 + x2 * x2 + x3 * x3, axis=1) + 1e-8)
+    u0 = x0 / norm[:, None]
+    u1 = x1 / norm[:, None]
+    u2 = x2 / norm[:, None]
+    u3 = x3 / norm[:, None]
+
+    b0 = tl.load(boundaries_ptr + 0)
+    b1 = tl.load(boundaries_ptr + 1)
+    b2 = tl.load(boundaries_ptr + 2)
+
+    idx0 = tl.zeros_like(u0).to(tl.uint8)
+    idx0 += (u0 > b0)
+    idx0 += (u0 > b1)
+    idx0 += (u0 > b2)
+    idx0 = idx0.to(tl.uint8)
+
+    idx1 = tl.zeros_like(u1).to(tl.uint8)
+    idx1 += (u1 > b0)
+    idx1 += (u1 > b1)
+    idx1 += (u1 > b2)
+    idx1 = idx1.to(tl.uint8)
+
+    idx2 = tl.zeros_like(u2).to(tl.uint8)
+    idx2 += (u2 > b0)
+    idx2 += (u2 > b1)
+    idx2 += (u2 > b2)
+    idx2 = idx2.to(tl.uint8)
+
+    idx3 = tl.zeros_like(u3).to(tl.uint8)
+    idx3 += (u3 > b0)
+    idx3 += (u3 > b1)
+    idx3 += (u3 > b2)
+    idx3 = idx3.to(tl.uint8)
+
+    packed = idx0 | (idx1 << 2) | (idx2 << 4) | (idx3 << 6)
+
+    tl.store(cache_ptrs, packed, mask=mask_kc)
+    tl.store(scales_ptrs, norm[:, None], mask=kv_mask[:, None])
+
+
+@triton.jit
+def _fill_page_quant(
+    state_ptr,
+    cache_ptr,
+    scales_zeros_ptr,
+    centroids_ptr,
+    boundaries_ptr,
+    block_off,
+    head_id,
+    page_offs,
+    q_offs,
+    kv_mask,
+    head_dim: tl.constexpr,
+    stride_ss,
+    stride_sh,
+    stride_sd,
+    stride_cn: tl.constexpr,
+    stride_cb: tl.constexpr,
+    stride_ch: tl.constexpr,
+    stride_cd: tl.constexpr,
+    stride_szn: tl.constexpr,
+    stride_szb: tl.constexpr,
+    stride_szh: tl.constexpr,
+    stride_szd: tl.constexpr,
+    BLOCK_D: tl.constexpr,
+    quant_policy: tl.constexpr,
+    is_value: tl.constexpr,
+):
     """Fill page."""
-    if quant_policy == 8:
+    if quant_policy == Q_POLICY_INT8:
         return _fill_page_quant_int8(state_ptr,
                                      cache_ptr,
                                      scales_zeros_ptr,
@@ -240,7 +467,7 @@ def _fill_page_quant(state_ptr, cache_ptr, scales_zeros_ptr, block_off, head_id,
                                      stride_szh=stride_szh,
                                      stride_szd=stride_szd,
                                      BLOCK_D=BLOCK_D)
-    elif quant_policy == 4:
+    elif quant_policy == Q_POLICY_INT4:
         return _fill_page_quant_int4(state_ptr,
                                      cache_ptr,
                                      scales_zeros_ptr,
@@ -262,6 +489,54 @@ def _fill_page_quant(state_ptr, cache_ptr, scales_zeros_ptr, block_off, head_id,
                                      stride_szh=stride_szh,
                                      stride_szd=stride_szd,
                                      BLOCK_D=BLOCK_D)
+    elif quant_policy == Q_POLICY_TURBO:
+        if is_value:
+            return _fill_page_quant_turbo_int2(state_ptr,
+                                               cache_ptr,
+                                               scales_zeros_ptr,
+                                               boundaries_ptr,
+                                               block_off,
+                                               head_id,
+                                               page_offs,
+                                               q_offs,
+                                               kv_mask,
+                                               head_dim=head_dim,
+                                               stride_ss=stride_ss,
+                                               stride_sh=stride_sh,
+                                               stride_sd=stride_sd,
+                                               stride_cn=stride_cn,
+                                               stride_cb=stride_cb,
+                                               stride_ch=stride_ch,
+                                               stride_cd=stride_cd,
+                                               stride_szn=stride_szn,
+                                               stride_szb=stride_szb,
+                                               stride_szh=stride_szh,
+                                               stride_szd=stride_szd,
+                                               BLOCK_D=BLOCK_D)
+        else:
+            return _fill_page_quant_turbo_qjl4(state_ptr,
+                                               cache_ptr,
+                                               scales_zeros_ptr,
+                                               centroids_ptr,
+                                               boundaries_ptr,
+                                               block_off,
+                                               head_id,
+                                               page_offs,
+                                               q_offs,
+                                               kv_mask,
+                                               head_dim=head_dim,
+                                               stride_ss=stride_ss,
+                                               stride_sh=stride_sh,
+                                               stride_sd=stride_sd,
+                                               stride_cn=stride_cn,
+                                               stride_cb=stride_cb,
+                                               stride_ch=stride_ch,
+                                               stride_cd=stride_cd,
+                                               stride_szn=stride_szn,
+                                               stride_szb=stride_szb,
+                                               stride_szh=stride_szh,
+                                               stride_szd=stride_szd,
+                                               BLOCK_D=BLOCK_D)
     else:
         tl.static_assert(False, 'Unsupported quant policy')
 
@@ -274,6 +549,10 @@ def _fill_kv_cache_quant_kernel(
     VCaches,
     KScalesZeros,
     VScalesZeros,
+    KCentroids,
+    KBoundaries,
+    VCentroids,
+    VBoundaries,
     QStartLoc,
     QSeqLens,
     KVSeqLens,
@@ -312,13 +591,17 @@ def _fill_kv_cache_quant_kernel(
     """Fill kv cache kernel with int4 and int8 quant fuzed.
 
     Args:
-        stride_xss: stride of sequence length dim of key or value states
-        stride_xsh: stride of head_num dim of key or value states
-        stride_xsh: stride of head_size dim of key or value states
-        stride_xn: stride of page num dim
-        stride_xb: stride of block size dim
-        stride_xh: stride of head_num dim
-        stride_xd: stride of head_size dim
+        stride_[kv]ss: stride of sequence length dim of key or value states
+        stride_[kv]sh: stride of head_num dim of key or value states
+        stride_[kv]sd: stride of head_size dim of key or value states
+        stride_[kv]cn: stride of page num dim of key or value cache
+        stride_[kv]cb: stride of block size dim of key or value cache
+        stride_[kv]ch: stride of head_num dim of key or value cache
+        stride_[kv]cd: stride of head_size dim of key or value cache
+        stride_[kv]szn: stride of page num dim of key or value scales/zeros
+        stride_[kv]szb: stride of block size dim of key or value scales/zeros
+        stride_[kv]szh: stride of head_num dim of key or value scales/zeros
+        stride_[kv]szd: stride of quantization group dim of key or value scales/zeros
     """
     batch_id = tl.program_id(2)
     head_id = tl.program_id(0)
@@ -328,12 +611,10 @@ def _fill_kv_cache_quant_kernel(
     q_seqlen = tl.load(QSeqLens + batch_id)
     kv_seqlen = tl.load(KVSeqLens + batch_id)
     history_seqlen = kv_seqlen - q_seqlen
-
     kv_block_id = history_seqlen // BLOCK + block_id
 
     if kv_seqlen <= 0:
         return
-
     if kv_block_id * BLOCK >= kv_seqlen:
         return
 
@@ -349,10 +630,13 @@ def _fill_kv_cache_quant_kernel(
         q_offs = token_off + page_offs
 
     block_off = tl.load(BlockOffsets + batch_id * stride_boff + kv_block_id)
+    block_off = block_off.to(tl.int64)
 
     _fill_page_quant(KStates,
                      KCaches,
                      KScalesZeros,
+                     KCentroids,
+                     KBoundaries,
                      block_off,
                      head_id,
                      page_offs,
@@ -371,12 +655,15 @@ def _fill_kv_cache_quant_kernel(
                      stride_szh=stride_kszh,
                      stride_szd=stride_kszd,
                      BLOCK_D=BLOCK_D,
-                     quant_policy=quant_policy)
+                     quant_policy=quant_policy,
+                     is_value=False)
 
     if BLOCK_DV > 0:
         _fill_page_quant(VStates,
                          VCaches,
                          VScalesZeros,
+                         VCentroids,
+                         VBoundaries,
                          block_off,
                          head_id,
                          page_offs,
@@ -395,7 +682,8 @@ def _fill_kv_cache_quant_kernel(
                          stride_szh=stride_vszh,
                          stride_szd=stride_vszd,
                          BLOCK_D=BLOCK_DV,
-                         quant_policy=quant_policy)
+                         quant_policy=quant_policy,
+                         is_value=True)
 
 
 def fill_kv_cache(k_states: Tensor,
@@ -409,7 +697,7 @@ def fill_kv_cache(k_states: Tensor,
                   block_offsets: Tensor,
                   k_scales_zeros: Tensor = None,
                   v_scales_zeros: Tensor = None,
-                  quant_policy: Literal[0, 4, 8] = 0,
+                  quant_policy: QuantPolicy = QuantPolicy.NONE,
                   kv_layout: str = 'bshd'):
     """Fill key/value state to cache for paged attention."""
     if kv_layout == 'bshd':
@@ -418,6 +706,7 @@ def fill_kv_cache(k_states: Tensor,
         b_dim, s_dim, h_dim, d_dim = (0, 2, 1, 3)
     else:
         raise RuntimeError('Unsupported layout.')
+
     if v_states is None:
         v_states = k_states[..., :0]
     if v_caches is None:
@@ -429,21 +718,60 @@ def fill_kv_cache(k_states: Tensor,
     num_heads = k_caches.size(h_dim)
     head_dim = k_caches.size(d_dim)
     head_dim_v = v_caches.size(d_dim)
+
     if v_states.size(-1) == 0:
         head_dim_v = 0
+
     if max_q_seq_length == 1:
         max_num_blocks = 1
     else:
         max_num_blocks = triton.cdiv(max_q_seq_length, block_size) + 1
 
     BLOCK = block_size
-    BLOCK_D = triton.next_power_of_2(head_dim)
-    BLOCK_DV = triton.next_power_of_2(head_dim_v)
-    if k_caches.data_ptr() == v_caches.data_ptr() and head_dim_v <= head_dim:
-        BLOCK_DV = 0
+
+    k_centroids = torch.empty((1,), device=k_states.device, dtype=torch.float32)
+    k_boundaries = torch.empty((1,), device=k_states.device, dtype=torch.float32)
+    v_centroids = torch.empty((1,), device=k_states.device, dtype=torch.float32)
+    v_boundaries = torch.empty((1,), device=k_states.device, dtype=torch.float32)
+
+    if quant_policy == QuantPolicy.TURBO_QUANT:
+        raw_k_dim = k_states.size(-1)
+        if raw_k_dim & (raw_k_dim - 1) != 0:
+            raise ValueError(f'TurboQuant K requires power-of-2 raw dim, got {raw_k_dim}')
+        if raw_k_dim != head_dim * 2:
+            raise ValueError(
+                'TurboQuant K expects k_cache last dim = raw_k_dim/2,'
+                f' got raw={raw_k_dim}, packed={head_dim}'
+            )
+
+        k_states = hadamard_rotate(k_states).contiguous()
+        BLOCK_D = triton.next_power_of_2(raw_k_dim)
+        k_centroids, k_boundaries = get_lloyd_max_codebook(raw_k_dim, 3, device=k_states.device)
+
+        if v_states.size(-1) > 0:
+            raw_v_dim = v_states.size(-1)
+            if raw_v_dim & (raw_v_dim - 1) != 0:
+                raise ValueError(f'TurboQuant V requires power-of-2 raw dim, got {raw_v_dim}')
+            if raw_v_dim != head_dim_v * 4:
+                raise ValueError(
+                    'TurboQuant V expects v_cache last dim = raw_v_dim/4,'
+                    f' got raw={raw_v_dim}, packed={head_dim_v}'
+                )
+            v_states = hadamard_rotate(v_states).contiguous()
+            BLOCK_DV = triton.next_power_of_2(raw_v_dim)
+            v_centroids, v_boundaries = get_lloyd_max_codebook(raw_v_dim, 2, device=v_states.device)
+        else:
+            BLOCK_DV = 0
+    else:
+        BLOCK_D = triton.next_power_of_2(head_dim)
+        BLOCK_DV = triton.next_power_of_2(head_dim_v)
+        if k_caches.data_ptr() == v_caches.data_ptr() and head_dim_v <= head_dim:
+            BLOCK_DV = 0
+
     grid = (num_heads, max_num_blocks, batch_size)
     is_decoding = max_num_blocks == 1
-    if quant_policy == 0:
+
+    if quant_policy == QuantPolicy.NONE:
         _fill_kv_cache_kernel[grid](
             k_states,
             v_states,
@@ -485,6 +813,10 @@ def fill_kv_cache(k_states: Tensor,
             v_caches,
             k_scales_zeros,
             v_scales_zeros,
+            k_centroids,
+            k_boundaries,
+            v_centroids,
+            v_boundaries,
             q_start_loc,
             q_seq_length,
             kv_seq_length,
@@ -645,6 +977,7 @@ def _fill_kv_cache_blocked_fp8_kernel(
         q_offs = token_off + page_offs
 
     block_off = tl.load(BlockOffsets + batch_id * stride_boff + kv_block_id)
+    block_off = block_off.to(tl.int64)
 
     d_off = tl.arange(0, BLOCK_D)
     mask_ks = kv_mask[:, None]
@@ -686,7 +1019,7 @@ def _fill_kv_cache_blocked_fp8_kernel(
     if BLOCK_DV > 0:
         vc, vcs = _quant_blocked_fp8(v, fp8_min, fp8_max, VCaches.dtype.element_ty, GROUP_SIZE, ROUND_SCALE)
         tl.store(vc_ptrs, vc, mask=mask_vc)
-        tl.store(vsc_ptrs, vcs, mask=kv_mask[:, None] & (ds_off[None, :] < tl.cdiv(head_dim_v, GROUP_SIZE)))
+        tl.store(vsc_ptrs, vcs, mask=kv_mask[:, None] & (dvs_off[None, :] < tl.cdiv(head_dim_v, GROUP_SIZE)))
 
 
 def fill_kv_cache_blocked_fp8(k_states: Tensor,

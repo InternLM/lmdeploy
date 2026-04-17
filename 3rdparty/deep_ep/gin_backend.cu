@@ -4,7 +4,7 @@
 #include "kernels/exception.cuh"
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/context.h"
-#include "src/turbomind/utils/logger.h"
+#include "src/turbomind/core/logger.h"
 
 #include <cstring>
 
@@ -59,7 +59,7 @@ int NCCLGINBackend::init(
         // Print NCCL version from the actually loaded library
         int nccl_version;
         NCCL_CHECK(ncclGetVersion(&nccl_version));
-        TM_LOG_DEBUG("[NCCLEP] NCCL version: %d.%d.%d (loaded library)",
+        TM_LOG_DEBUG("[NCCLEP] NCCL version: {}.{}.{} (loaded library)",
                      nccl_version / 10000,
                      (nccl_version % 10000) / 100,
                      nccl_version % 100);
@@ -107,14 +107,14 @@ int NCCLGINBackend::init(
 
     initialized_ = true;
     TM_LOG_DEBUG(
-        "[NCCLEP] Initialized global rank %d/%d (comm rank %d/%d)", rank_, num_ranks_, comm_rank_, comm_nranks_);
+        "[NCCLEP] Initialized global rank {}/{} (comm rank {}/{})", rank_, num_ranks_, comm_rank_, comm_nranks_);
 
     return rank_;
 }
 
 void NCCLGINBackend::finalize()
 {
-    TM_LOG_DEBUG("[NCCLEP][%d] Finalizing", rank_);
+    TM_LOG_DEBUG("[NCCLEP][{}] Finalizing", rank_);
     if (!initialized_) {
         return;
     }
@@ -123,9 +123,9 @@ void NCCLGINBackend::finalize()
     auto DestroyDevComm = [&](ncclDevComm_t& comm, std::string_view key) {
         ncclResult_t res = ncclDevCommDestroy(nccl_comm_, &comm);
         if (res != ncclSuccess) {
-            TM_LOG_ERROR("[NCCLEP][%d] Failed to destroy device communication %s: %s",
+            TM_LOG_ERROR("[NCCLEP][{}] Failed to destroy device communication {}: {}",
                          rank_,
-                         key.data(),
+                         key,
                          ncclGetErrorString(res));
         }
     };
@@ -133,10 +133,10 @@ void NCCLGINBackend::finalize()
     DestroyDevComm(dev_ht_comm_, "high throughput mode");
 
     for (auto& [ptr, win] : wins_) {
-        TM_LOG_WARNING("[NCCLEP][%d] Memory %p is not deregistered", rank_, ptr);
+        TM_LOG_WARN("[NCCLEP][{}] Memory {} is not deregistered", rank_, ptr);
     }
     for (auto& [ptr, size] : buffers_) {
-        TM_LOG_WARNING("[NCCLEP][%d] Allocation (%p, %lu) is not freed", rank_, ptr, size);
+        TM_LOG_WARN("[NCCLEP][{}] Allocation ({}, {}) is not freed", rank_, ptr, size);
     }
 
     // Free barrier dummy variable
@@ -148,7 +148,7 @@ void NCCLGINBackend::finalize()
     ncclCommFinalize(nccl_comm_);
     ncclCommDestroy(nccl_comm_);
 
-    TM_LOG_DEBUG("[NCCLEP][%d] Destroyed NCCL communicator", rank_);
+    TM_LOG_DEBUG("[NCCLEP][{}] Destroyed NCCL communicator", rank_);
     initialized_ = false;
 }
 
