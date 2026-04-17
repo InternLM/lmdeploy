@@ -446,7 +446,7 @@ void NcclCommImpl::Broadcast(const void*  sendbuff,  //
                              int          group,
                              cudaStream_t stream)
 {
-    NCCLCHECK(ncclBroadcast(recvbuff, recvbuff, count, to_nccl_dtype(type), root, groups_.at(group), stream));
+    NCCLCHECK(ncclBroadcast(sendbuff, recvbuff, count, to_nccl_dtype(type), root, groups_.at(group), stream));
 }
 
 DeviceComm CreateNcclCommunicator(int n_ranks, int rank, HostComm h_comm)
