@@ -1080,12 +1080,16 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
                 return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
             text += res.response or ''
             output_ids.extend(res.token_ids or [])
-            if res.logprobs:
-                for tok, tok_logprobs in zip(res.token_ids, res.logprobs):
-                    logprobs.append((tok_logprobs[tok], tok))
+            logprobs.extend(res.logprobs or [])
+
+        output_token_logprobs = []
+        if len(logprobs) and len(output_ids):
+            for tok, tok_logprobs in zip(output_ids, logprobs):
+                output_token_logprobs.append((tok_logprobs[tok], tok))
+
         nonlocal response
         meta = GenerateReqMetaOutput(finish_reason=dict(type=res.finish_reason) if res.finish_reason else None,
-                                     output_token_logprobs=logprobs or None,
+                                     output_token_logprobs=output_token_logprobs or None,
                                      prompt_tokens=res.input_token_len,
                                      routed_experts=res.routed_experts,
                                      completion_tokens=res.generate_token_len)

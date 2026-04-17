@@ -151,10 +151,11 @@ class EngineLoop:
     def _send_resp(self, out: InferOutput):
         """Send response."""
         # skip cancelled response
-        if out.resp.is_done:
-            return
-        resp_type = (ResponseType.FINISH if out.finish else ResponseType.SUCCESS)
         logprobs = None if out.resp.data is None else out.resp.data.get('logprobs', None)
+        if out.resp.is_done:
+            resp_type = ResponseType.CANCEL
+        else:
+            resp_type = (ResponseType.FINISH if out.finish else ResponseType.SUCCESS)
         response_reqs(self.req_manager,
                       out.resp,
                       resp_type,
@@ -242,7 +243,7 @@ class EngineLoop:
                 stop_pos = batched_outputs.stop_pos[idx]
                 # only apply when stopped
                 if stop_pos > -1:
-                    mask = mask & (stop_pos >= range_tensor)
+                    mask = torch.logical_and(mask, stop_pos >= range_tensor)
                 indices = logprobs.indices[start:end][mask].tolist()
                 vals = logprobs.vals[start:end][mask].tolist()
                 results[idx] = list(zip(vals, indices))
