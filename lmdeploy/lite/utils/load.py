@@ -67,9 +67,7 @@ def load_hf_from_pretrained(pretrained_model_name_or_path, dtype: Literal['float
     elif dtype == 'float16':
         torch_dtype = torch.float16
     elif dtype == 'auto' and torch_dtype == torch.bfloat16:
-        print('Warning: we cast model to float16 to prevent OOM. '
-              'You may enforce it bfloat16 by `--dtype bfloat16`')
-        torch_dtype = torch.float16
+        assert torch.cuda.is_bf16_supported(), 'your device does not support bfloat16 please set --dtype float16'
 
     with LoadNoInit():
         # Load model

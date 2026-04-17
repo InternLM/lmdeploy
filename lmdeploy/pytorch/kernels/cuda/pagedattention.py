@@ -2,7 +2,6 @@
 # modify from: https://github.com/ModelTC/lightllm
 import math
 from collections.abc import Sequence
-from typing import Literal
 
 import torch
 import triton
@@ -10,11 +9,21 @@ import triton.language as tl
 from packaging import version
 from torch import Tensor
 
+from lmdeploy.messages import QuantPolicy
 from lmdeploy.utils import get_logger
 
+from .turbo_quant import hadamard_rotate
 from .utils import get_device_props
 
 logger = get_logger('lmdeploy')
+
+# Triton-compatible quantization policy constants
+# Python Enum cannot be used in Triton kernels, so we define these as module-level
+# constants which Triton will inline at compile time.
+Q_POLICY_NONE = tl.constexpr(0)
+Q_POLICY_INT4 = tl.constexpr(4)
+Q_POLICY_INT8 = tl.constexpr(8)
+Q_POLICY_TURBO = tl.constexpr(42)
 
 TRITON_VERSION = version.parse(triton.__version__)
 VERSION_300 = version.parse('3.0.0')
@@ -219,6 +228,46 @@ def _fwd_grouped_split_kernel(
     tl.store(acc_out_ptr + off_meta + 1, l_i, mask=mask_h)
 
 
+
+
+@triton.jit
+def _k4v2_k_centroid(idx3, head_size: tl.constexpr):
+    """QJL4 K centroid lookup: 8 entries, pure register."""
+    # Lloyd-Max 3-bit centroids at sigma=1
+    S0: tl.constexpr = -2.1519456
+    S1: tl.constexpr = -1.3439093
+    S2: tl.constexpr = -0.7560052
+    S3: tl.constexpr = -0.2450942
+    S4: tl.constexpr =  0.2450942
+    S5: tl.constexpr =  0.7560052
+    S6: tl.constexpr =  1.3439093
+    S7: tl.constexpr =  2.1519456
+    sigma: tl.constexpr = 1.0 / tl.math.sqrt(head_size * 2.0)
+    c = tl.where(idx3 < 4,
+            tl.where(idx3 < 2,
+                tl.where(idx3 == 0, S0, S1),
+                tl.where(idx3 == 2, S2, S3)),
+            tl.where(idx3 < 6,
+                tl.where(idx3 == 4, S4, S5),
+                tl.where(idx3 == 6, S6, S7)))
+    return c * sigma
+
+
+@triton.jit
+def _k4v2_v_centroid(idx2, head_size_v: tl.constexpr):
+    """MSE int2 V centroid lookup: 4 entries, pure register."""
+    # Lloyd-Max 2-bit centroids at sigma=1
+    S0: tl.constexpr = -1.5104176
+    S1: tl.constexpr = -0.4527808
+    S2: tl.constexpr =  0.4527808
+    S3: tl.constexpr =  1.5104176
+    sigma: tl.constexpr = 1.0 / tl.math.sqrt(head_size_v * 4.0)
+    c = tl.where(idx2 < 2,
+            tl.where(idx2 == 0, S0, S1),
+            tl.where(idx2 == 2, S2, S3))
+    return c * sigma
+
+
 @triton.jit
 def _fwd_grouped_split_quant_kernel(
     q_ptr,
@@ -334,21 +383,47 @@ def _fwd_grouped_split_quant_kernel(
     # initialize pointer to m and l
     m_i = tl.zeros([BLOCK_H], dtype=tl.float32) - float('inf')
     l_i = tl.zeros([BLOCK_H], dtype=tl.float32)
-    if quant_policy == 4:
+    if quant_policy == Q_POLICY_INT4 or quant_policy == Q_POLICY_TURBO:
+        packed_k_dim: tl.constexpr = head_size // 2
+
+        # K: raw dim -> packed dim (two halves packed into one byte)
+        raw_offs_dk = tl.arange(0, BLOCK_DMODEL)
+        packed_offs_dk = raw_offs_dk % packed_k_dim
+        shift_kd = (raw_offs_dk // packed_k_dim * 4)[:, None]
+        off_k = (cur_kv_head * stride_kh
+                + packed_offs_dk[:, None] * stride_kd
+                + offs_n[None, :] * stride_kbs)
+
         if BLOCK_DMODEL1 != 0:
-            offs_d1 = BLOCK_DMODEL // 2 + tl.arange(0, BLOCK_DMODEL1)
-            shift_k1d = (offs_d1 // (head_size // 2) * 4)[:, None]
-            offs_d1 = offs_d1 % (head_size // 2)
-            off_k1 = (cur_kv_head * stride_kh + offs_d1[:, None] * stride_kd + offs_n[None, :] * stride_kbs)
-        offs_d = tl.arange(0, BLOCK_DMODEL) % (head_size // 2)
-        shift_kd = (tl.arange(0, BLOCK_DMODEL) // (head_size // 2) * 4)[:, None]
-        off_k = (cur_kv_head * stride_kh + offs_d[:, None] * stride_kd + offs_n[None, :] * stride_kbs)
-        offs_dv = tl.arange(0, BLOCK_DV * 2) % head_size_v
-        shift_vd = (tl.arange(0, BLOCK_DV * 2) // head_size_v * 4)
-        off_v = (cur_kv_head * stride_vh + offs_dv[None, :] * stride_vd + offs_n[:, None] * stride_vbs)
-        acc = tl.zeros([BLOCK_H, BLOCK_DV * 2], dtype=tl.float32)  # v head_dim packed
-        mask_dv = tl.arange(0, BLOCK_DV * 2) < (head_size_v * 2)
-        offs_dv = tl.arange(0, BLOCK_DV * 2) % (head_size_v * 2)
+            raw_offs_dk1 = BLOCK_DMODEL + tl.arange(0, BLOCK_DMODEL1)
+            packed_offs_dk1 = raw_offs_dk1 % packed_k_dim
+            shift_k1d = (raw_offs_dk1 // packed_k_dim * 4)[:, None]
+            off_k1 = (cur_kv_head * stride_kh
+                    + packed_offs_dk1[:, None] * stride_kd
+                    + offs_n[None, :] * stride_kbs)
+
+        if quant_policy == Q_POLICY_TURBO:
+            # V: packed dim = head_size_v, raw dim = head_size_v * 4
+            raw_offs_dv = tl.arange(0, BLOCK_DV * 4)
+            packed_offs_dv = raw_offs_dv % head_size_v
+            shift_vd = (raw_offs_dv // head_size_v) * 2
+            off_v = (cur_kv_head * stride_vh
+                    + packed_offs_dv[None, :] * stride_vd
+                    + offs_n[:, None] * stride_vbs)
+            mask_dv = raw_offs_dv < (head_size_v * 4)
+            offs_dv = raw_offs_dv
+            acc = tl.zeros([BLOCK_H, BLOCK_DV * 4], dtype=tl.float32)
+        else:
+            # quant_policy == Q_POLICY_INT4, V is 4-bit, packed dim = head_size_v, raw dim = head_size_v * 2
+            raw_offs_dv = tl.arange(0, BLOCK_DV * 2)
+            packed_offs_dv = raw_offs_dv % head_size_v
+            shift_vd = (raw_offs_dv // head_size_v) * 4
+            off_v = (cur_kv_head * stride_vh
+                    + packed_offs_dv[None, :] * stride_vd
+                    + offs_n[:, None] * stride_vbs)
+            mask_dv = raw_offs_dv < (head_size_v * 2)
+            offs_dv = raw_offs_dv
+            acc = tl.zeros([BLOCK_H, BLOCK_DV * 2], dtype=tl.float32)
     else:
         acc = tl.zeros([BLOCK_H, BLOCK_DV], dtype=tl.float32)
 
@@ -373,26 +448,57 @@ def _fwd_grouped_split_quant_kernel(
         # -- compute qk ----
         # k = tl.load(k_ptrs + b_offset * stride_kp)
         k = tl.load(k_ptr + off_k + b_offset * stride_kp)
-        if quant_policy == 4:
+        if quant_policy == Q_POLICY_INT4 or quant_policy == Q_POLICY_TURBO:
             k = (k >> shift_kd) & 0x0F
-        ks = tl.load(ksz_ptrs + b_offset * stride_kszp)
-        kz = tl.load(ksz_ptrs + b_offset * stride_kszp + 1)
+
+        if quant_policy == Q_POLICY_TURBO:
+            kmse_norm = tl.load(ksz_ptrs + b_offset * stride_kszp)
+            kqjl_norm = tl.load(ksz_ptrs + b_offset * stride_kszp + stride_kszd)
+
+            # k is 4-bit nibble: low 3 = mse_idx, high 1 = sign
+            k_cent = _k4v2_k_centroid((k & 0x7), head_size)
+            k_sign = ((k >> 3) & 0x1).to(tl.float32) * 2.0 - 1.0
+            k = (kmse_norm * (k_cent + kqjl_norm * k_sign)).to(q.dtype)
+        else:
+            ks = tl.load(ksz_ptrs + b_offset * stride_kszp)
+            kz = tl.load(ksz_ptrs + b_offset * stride_kszp + 1)
+            k = ((k - kz) * ks).to(q.dtype)
+
         if BLOCK_DMODEL1 != 0:
             k1 = tl.load(k_ptr + off_k1 + b_offset * stride_kp)
-            if quant_policy == 4:
+            if quant_policy == Q_POLICY_INT4 or quant_policy == Q_POLICY_TURBO:
                 k1 = (k1 >> shift_k1d) & 0x0F
-            k1 = ((k1 - kz) * ks).to(q.dtype)
 
-        if quant_policy == 4:
+            if quant_policy == Q_POLICY_TURBO:
+                kmse_norm = tl.load(ksz_ptrs + b_offset * stride_kszp)
+                kqjl_norm = tl.load(ksz_ptrs + b_offset * stride_kszp + stride_kszd)
+
+                k1_cent = _k4v2_k_centroid((k1 & 0x7), head_size)
+                k1_sign = ((k1 >> 3) & 0x1).to(tl.float32) * 2.0 - 1.0
+                k1 = (kmse_norm * (k1_cent + kqjl_norm * k1_sign)).to(q.dtype)
+            else:
+                k1 = ((k1 - kz) * ks).to(q.dtype)
+
+        # -- load / dequant v ----
+        if quant_policy == Q_POLICY_TURBO:
             v = tl.load(v_ptr + off_v + b_offset * stride_vp)
-            v = (v >> shift_vd) & 0x0F
+            v = (v >> shift_vd[None, :]) & 0x03
+        elif quant_policy == Q_POLICY_INT4:
+            v = tl.load(v_ptr + off_v + b_offset * stride_vp)
+            v = (v >> shift_vd[None, :]) & 0x0F
         else:
             v = tl.load(v_ptr + off_v + b_offset * stride_vp)
-        vs = tl.load(vsz_ptrs + b_offset * stride_vszp)
-        vz = tl.load(vsz_ptrs + b_offset * stride_vszp + 1)
 
-        k = ((k - kz) * ks).to(q.dtype)
-        v = ((v - vz) * vs).to(q.dtype)
+        if quant_policy == Q_POLICY_TURBO:
+            vs = tl.load(vsz_ptrs + b_offset * stride_vszp)
+            v = _k4v2_v_centroid(v, head_size_v)
+            v = (v * vs).to(q.dtype)
+        else:
+            vs = tl.load(vsz_ptrs + b_offset * stride_vszp)
+            vz = tl.load(vsz_ptrs + b_offset * stride_vszp + 1)
+            v = ((v - vz) * vs).to(q.dtype)
+
+        # -- compute qk ----
         qk = tl.zeros([BLOCK_H, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
         if BLOCK_DMODEL1 != 0:
@@ -442,8 +548,10 @@ def _fwd_grouped_split_quant_kernel(
                    offs_dv[None, :] * stride_od)
         tl.store(acc_out_ptr + off_acc, acc, mask=mask_h[:, None] & mask_dv[None, :])
 
-    if quant_policy == 4:
+    if quant_policy == Q_POLICY_INT4:
         off_meta = (cur_batch * stride_obs + split_k_id * stride_ok + cur_head * stride_oh + head_size_v * 2)
+    elif quant_policy == Q_POLICY_TURBO:
+        off_meta = (cur_batch * stride_obs + split_k_id * stride_ok + cur_head * stride_oh + head_size_v * 4)
     else:
         off_meta = (cur_batch * stride_obs + split_k_id * stride_ok + cur_head * stride_oh + head_size_v)
     tl.store(acc_out_ptr + off_meta, m_i, mask=mask_h)
@@ -551,6 +659,86 @@ def _get_split_k(device_idx: int, head_grid: int, batch_size: int, num_warps: in
     return SPLIT_K
 
 
+@triton.jit
+def _bar_sync():
+    """CTA-internal barrier (__syncthreads equivalent via PTX bar.sync 0)."""
+    tl.inline_asm_elementwise(
+        'bar.sync 0;', '=r', [], dtype=tl.int32, is_pure=False, pack=1
+    )
+
+
+@triton.jit
+def _fused_reduce_hadamard_kernel(
+    acc_ptr,
+    out_ptr,
+    sinks_ptr,
+    stride_ak,
+    stride_abs,
+    stride_ah,
+    stride_ad,
+    stride_obs,
+    stride_oh,
+    stride_od,
+    head_size_v: tl.constexpr,
+    SPLIT_K: tl.constexpr,
+    BLOCK_DV: tl.constexpr,
+    LOG2_DV: tl.constexpr,
+):
+    """Fused split-K reduce + inverse Hadamard transform for TURBO_QUANT.
+
+    Reuses acc_ptr[batch, head, 0, :BLOCK_DV] as float32 scratch for butterfly. Zero extra memory allocation.
+    """
+    cur_batch = tl.program_id(1)
+    cur_head = tl.program_id(0)
+    offs_dv = tl.arange(0, BLOCK_DV)
+    offs_k = tl.arange(0, SPLIT_K)
+    mask_dv = offs_dv < head_size_v
+
+    offs_acc = (cur_batch * stride_abs + cur_head * stride_ah
+                + offs_k[:, None] * stride_ak + offs_dv[None, :] * stride_ad)
+    offs_mi = (cur_batch * stride_abs + cur_head * stride_ah
+               + stride_ak * offs_k + head_size_v)
+
+    m_k = tl.load(acc_ptr + offs_mi)
+    l_k = tl.load(acc_ptr + offs_mi + 1)
+    acc_k = tl.load(acc_ptr + offs_acc,
+                    mask=mask_dv[None, :] & (m_k[:, None] > -float('inf')),
+                    other=0.0)
+
+    m_max = tl.max(m_k, 0)
+    alpha = tl_exp2(m_k - m_max)
+    acc_k = acc_k * alpha[:, None]
+    l_k = l_k * alpha
+    acc = tl.sum(acc_k, 0)
+    l_sum = tl.sum(l_k, 0)
+
+    if sinks_ptr is not None:
+        sink = tl.load(sinks_ptr + cur_head).to(l_sum.dtype)
+        l_sum = l_sum + tl.exp2(sink * tl_log2(math.e) - m_max)
+
+    acc = acc / l_sum
+
+    # Walsh-Hadamard butterfly via acc buffer as float32 scratch
+    scratch_base = cur_batch * stride_abs + cur_head * stride_ah
+    scratch_ptrs = acc_ptr + scratch_base + offs_dv * stride_ad
+
+    for s in tl.static_range(LOG2_DV):
+        tl.atomic_xchg(scratch_ptrs, acc, mask=mask_dv)
+        _bar_sync()
+        partner = offs_dv ^ (1 << s)
+        partner_ptrs = acc_ptr + scratch_base + partner * stride_ad
+        partner_val = tl.load(partner_ptrs, mask=mask_dv)
+        is_even = (offs_dv & (1 << s)) == 0
+        acc = tl.where(is_even, acc + partner_val, partner_val - acc)
+        _bar_sync()
+
+    INV_SQRT_D: tl.constexpr = 1.0 / (head_size_v ** 0.5)
+    acc = acc * INV_SQRT_D
+
+    out_offs = cur_batch * stride_obs + cur_head * stride_oh + offs_dv * stride_od
+    tl.store(out_ptr + out_offs, acc, mask=mask_dv)
+
+
 def flash_attn_with_kvcache(
     q: Tensor,
     k_cache: Tensor,
@@ -568,7 +756,7 @@ def flash_attn_with_kvcache(
     alibi_slopes: Tensor = None,
     k_scales_zeros: Tensor = None,
     v_scales_zeros: Tensor = None,
-    quant_policy: Literal[0, 4, 8] = 0,
+    quant_policy: QuantPolicy = QuantPolicy.NONE,
     sinks: Tensor = None,
     kv_layout: str = 'bshd',
 ):
@@ -598,6 +786,10 @@ def flash_attn_with_kvcache(
 
     shared_kv = k_cache.data_ptr() == v_cache.data_ptr()
 
+    # quant42 K/V have different semantics and meta shape, should not share buffer
+    if quant_policy == QuantPolicy.TURBO_QUANT:
+        assert not shared_kv, 'quant_policy==42 does not support shared_kv'
+
     def _get_block_d(Lk):
         """Get block d."""
         BLOCK_DMODEL = triton.next_power_of_2(Lk)
@@ -608,14 +800,39 @@ def flash_attn_with_kvcache(
         BLOCK_DV = triton.next_power_of_2(Lv)
         return BLOCK_DMODEL, BLOCK_DMODEL1, BLOCK_DV
 
+
     # shape constraints
     Lq, Lk, Lv = q.shape[-1], k_cache.shape[d_dim], v_cache.shape[d_dim]
-    if quant_policy == 4:
+    if quant_policy == QuantPolicy.INT4 or quant_policy == QuantPolicy.TURBO_QUANT:
+        # K uses 4-bit: Lq == Lk * 2
+        # For quant_policy==QuantPolicy.TURBO_QUANT, V uses 2-bit: raw V dim == Lv * 4
         assert Lq == Lk * 2
-        o = q.new_empty(q.shape[:-1] + (Lv * 2, ))
+        if quant_policy == QuantPolicy.TURBO_QUANT:
+            o = q.new_empty(q.shape[:-1] + (Lv * 4, ))
+        else:
+            o = q.new_empty(q.shape[:-1] + (Lv * 2, ))
     else:
         assert Lq == Lk
         o = q.new_empty(q.shape[:-1] + (Lv, ))
+
+    # quant_policy == QuantPolicy.TURBO_QUANT: interpret as
+    #   - K: QJL4 = 3bit MSE centroid + 1bit QJL sign
+    #   - V: TurboQuant MSE int2
+    # Implementation:
+    #   - q rotated outside Triton
+    #   - K dequant as mse_norm * (centroid[idx3] + qjl_norm * sign)
+    #   - V dequant as norm * centroid[idx2]
+    #   - output inverse-rotated because V is still rotated before caching
+    if quant_policy == QuantPolicy.TURBO_QUANT:
+        real_k_dim = Lq
+        real_v_dim = Lv * 4
+        if real_k_dim & (real_k_dim - 1) != 0:
+            raise ValueError(f'TurboQuant requires power-of-2 K/Q head dim, got {real_k_dim}')
+        if real_v_dim & (real_v_dim - 1) != 0:
+            raise ValueError(f'TurboQuant requires power-of-2 V head dim, got {real_v_dim}')
+
+        # Rotate query into the same domain as quantized K/V
+        q = hadamard_rotate(q)
 
     if softmax_scale is None:
         softmax_scale = 1.0 / (Lq**0.5)
@@ -656,10 +873,10 @@ def flash_attn_with_kvcache(
 
     SPLIT_K = _get_split_k(q.device.index, grid_1, batch, num_warps)
 
-    if quant_policy != 4:
-        acc = q.new_empty(num_tokens, head, SPLIT_K, Lv + 2, dtype=torch.float32)
-    else:
+    if quant_policy == QuantPolicy.INT4 or quant_policy == QuantPolicy.TURBO_QUANT:
         acc = q.new_empty(num_tokens, head, SPLIT_K, o.shape[-1] + 2, dtype=torch.float32)
+    else:
+        acc = q.new_empty(num_tokens, head, SPLIT_K, Lv + 2, dtype=torch.float32)
 
     grid = (
         grid_1,
@@ -667,7 +884,7 @@ def flash_attn_with_kvcache(
         batch,
     )
 
-    if quant_policy > 0:
+    if quant_policy != QuantPolicy.NONE:
         _fwd_grouped_split_quant_kernel[grid](q,
                                               k_cache,
                                               v_cache,
@@ -762,22 +979,45 @@ def flash_attn_with_kvcache(
 
     num_warps = 2
     grid = (head, num_tokens)
-    if quant_policy == 4:
+    if quant_policy == QuantPolicy.INT4:
         Lv *= 2
         BLOCK_DV *= 2
-    _reduce_split_kernel[grid](acc,
-                               o,
-                               sinks,
-                               stride_ak=acc.stride(2),
-                               stride_abs=acc.stride(0),
-                               stride_ah=acc.stride(1),
-                               stride_ad=acc.stride(3),
-                               stride_obs=o.stride(0),
-                               stride_oh=o.stride(1),
-                               stride_od=o.stride(2),
-                               SPLIT_K=SPLIT_K,
-                               head_size_v=Lv,
-                               BLOCK_DV=BLOCK_DV,
-                               num_warps=num_warps,
-                               num_stages=1)
+    elif quant_policy == QuantPolicy.TURBO_QUANT:
+        Lv *= 4
+        BLOCK_DV *= 4
+
+    if quant_policy == QuantPolicy.TURBO_QUANT:
+        LOG2_DV = int(math.log2(BLOCK_DV))
+        _fused_reduce_hadamard_kernel[grid](acc,
+                                            o,
+                                            sinks,
+                                            stride_ak=acc.stride(2),
+                                            stride_abs=acc.stride(0),
+                                            stride_ah=acc.stride(1),
+                                            stride_ad=acc.stride(3),
+                                            stride_obs=o.stride(0),
+                                            stride_oh=o.stride(1),
+                                            stride_od=o.stride(2),
+                                            SPLIT_K=SPLIT_K,
+                                            head_size_v=Lv,
+                                            BLOCK_DV=BLOCK_DV,
+                                            LOG2_DV=LOG2_DV,
+                                            num_warps=num_warps,
+                                            num_stages=1)
+    else:
+        _reduce_split_kernel[grid](acc,
+                                   o,
+                                   sinks,
+                                   stride_ak=acc.stride(2),
+                                   stride_abs=acc.stride(0),
+                                   stride_ah=acc.stride(1),
+                                   stride_ad=acc.stride(3),
+                                   stride_obs=o.stride(0),
+                                   stride_oh=o.stride(1),
+                                   stride_od=o.stride(2),
+                                   SPLIT_K=SPLIT_K,
+                                   head_size_v=Lv,
+                                   BLOCK_DV=BLOCK_DV,
+                                   num_warps=num_warps,
+                                   num_stages=1)
     return o
