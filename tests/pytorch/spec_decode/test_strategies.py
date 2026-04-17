@@ -303,8 +303,8 @@ class TestDecodeStopPos:
                     seq._update_token_ids_decode(accepted, draft_token_ids=drafts, stop_pos=pos)
                     s = _state(seq)
                     assert s['cache_len'] == s['num_history_ids'] + s['num_token_ids'], (
-                        f"Invariant broken: num_accepted={num_accepted}, pos={pos}, "
-                        f"num_new_draft={num_new_draft}, state={s}"
+                        f'Invariant broken: num_accepted={num_accepted}, pos={pos}, '
+                        f'num_new_draft={num_new_draft}, state={s}'
                     )
 
     def test_no_spec_tokens_stop(self):
@@ -448,6 +448,50 @@ class TestRoutedExpertsPrefill:
         )
         assert len(seq.all_routed_experts) == before
 
+    def test_expert_after_evict(self):
+        """set_step(0) evicts all cached experts; reprefill over all valid ids
+        re-accumulates them.
+
+        Evict only happens when the sequence is still running (not stopped), so prefill always has draft tokens and
+        decode always attaches new drafts.
+        """
+        seq = _make_seq_with_experts([1, 2, 3])   # 3 input tokens
+
+        # prefill: main model generates token 10, draft model produces 2 draft tokens
+        # → num_valid_ids = 4, num_token_ids = 3 (1 + 2 drafts)
+        seq._update_token_ids_prefill(
+            np.array([10], dtype=np.int64),
+            draft_token_ids=np.array([100, 101], dtype=np.int64),
+            routed_experts=_experts(3),
+        )
+        assert len(seq.all_routed_experts) == 3
+
+        # decode: both draft tokens accepted + 1 bonus, 2 new drafts attached
+        # → num_valid_ids = 7, len(experts) = 1 + 3 = 4
+        seq._update_token_ids_decode(
+            np.array([100, 101, 50]),
+            draft_token_ids=np.array([200, 201], dtype=np.int64),
+            routed_experts=_experts(3),
+        )
+        assert len(seq.all_routed_experts) == 6
+
+        num_valid = seq.num_valid_ids   # == 7
+
+        # evict: set_step(0) clears all cached experts
+        seq.set_step(0)
+        assert len(seq.all_routed_experts) == 0
+        assert seq.routed_experts is None
+
+        new_routed_experts = _experts(num_valid)
+        # reprefill: all num_valid tokens reprocessed, draft tokens re-attached
+        seq._update_token_ids_prefill(
+            np.array([60]),
+            draft_token_ids=np.array([300, 301], dtype=np.int64),
+            routed_experts=new_routed_experts,   # one row per valid token
+        )
+        assert seq.routed_experts is not None
+        assert len(seq.routed_experts) == num_valid
+        assert np.array_equal(seq.all_routed_experts, new_routed_experts)
 
 # ---------------------------------------------------------------------------
 # Tests for _update_token_ids_inputs across multiple turns
