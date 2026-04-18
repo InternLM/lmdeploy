@@ -39,6 +39,7 @@ class Pipeline:
                  chat_template_config: ChatTemplateConfig | None = None,
                  log_level: str = 'WARNING',
                  max_log_len: int | None = None,
+                 trust_remote_code: bool = False,
                  speculative_config: SpeculativeConfig | None = None,
                  **kwargs):
         """Initialize Pipeline.
@@ -49,6 +50,7 @@ class Pipeline:
             chat_template_config: Chat template configuration.
             log_level: Log level.
             max_log_len: Max number of prompt characters or prompt tokens being printed in log.
+            trust_remote_code: whether to trust remote code from model repositories.
             speculative_config: Speculative decoding configuration.
             **kwargs: Additional keyword arguments.
         """
@@ -68,13 +70,15 @@ class Pipeline:
             speculative_config.model = get_model(speculative_config.model, download_dir)
 
         # Create inference engine
-        backend, backend_config = autoget_backend_config(model_path, backend_config)
-        _, pipeline_class = get_task(backend, model_path)
+        backend, backend_config = autoget_backend_config(model_path, backend_config,
+                                                         trust_remote_code=trust_remote_code)
+        _, pipeline_class = get_task(backend, model_path, trust_remote_code=trust_remote_code)
         self.async_engine = pipeline_class(model_path,
                                            backend=backend,
                                            backend_config=backend_config,
                                            chat_template_config=chat_template_config,
                                            max_log_len=max_log_len,
+                                           trust_remote_code=trust_remote_code,
                                            speculative_config=speculative_config,
                                            **kwargs)
         self.internal_thread = _EventLoopThread(daemon=True)

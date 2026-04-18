@@ -25,7 +25,8 @@ class ExecutorBase:
                  misc_config: MiscConfig,
                  adapters: dict[str, str] = None,
                  specdecode_config: SpecDecodeConfig = None,
-                 device_type: str = 'cuda'):
+                 device_type: str = 'cuda',
+                 trust_remote_code: bool = False):
         """Initialize Executor."""
         cache_config.window_size = model_config.sliding_window
         if cache_config.window_size is not None and cache_config.window_size > 0:

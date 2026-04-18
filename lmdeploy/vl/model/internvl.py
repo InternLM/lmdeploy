@@ -73,18 +73,21 @@ class InternVLVisionModel(VisionModel):
                  with_llm: bool = False,
                  max_memory: dict[int, int] = None,
                  hf_config: AutoConfig = None,
-                 backend: str = ''):
-        super().__init__(model_path, with_llm, max_memory, hf_config, backend)
+                 backend: str = '',
+                 trust_remote_code: bool = False):
+        super().__init__(model_path, with_llm, max_memory, hf_config, backend, trust_remote_code=trust_remote_code)
         self.image_token = '<IMG_CONTEXT>'
-        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True, use_fast=False)
+        tokenizer = AutoTokenizer.from_pretrained(model_path,
+                                                  trust_remote_code=trust_remote_code,
+                                                  use_fast=False)
         self.image_token_id = tokenizer.convert_tokens_to_ids(self.image_token)
 
-    def build_preprocessor(self):
+    def build_preprocessor(self, trust_remote_code: bool = False):
         self.config = self.hf_config
         dynamic_image_size = getattr(self.config, 'dynamic_image_size', False)
         image_processor = None
         try:
-            image_processor = CLIPImageProcessor.from_pretrained(self.model_path)
+            image_processor = CLIPImageProcessor.from_pretrained(self.model_path, trust_remote_code=trust_remote_code)
         except OSError:
             pass
 
@@ -113,14 +116,14 @@ class InternVLVisionModel(VisionModel):
         downsample_ratio = self.hf_config.downsample_ratio
         self.image_tokens_per_patch = int((force_image_size // patch_size)**2 * (downsample_ratio**2))
 
-    def build_model(self):
+    def build_model(self, trust_remote_code: bool = False):
         """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         from accelerate import init_empty_weights
         with init_empty_weights():
             # transformers below 4.37.0 may raise error about flash_attn
             self.config.llm_config.attn_implementation = 'eager'
-            model = AutoModel.from_config(self.config, trust_remote_code=True)
+            model = AutoModel.from_config(self.config, trust_remote_code=trust_remote_code)
             self.vl_model = model
             if not self.with_llm:
                 del model.language_model

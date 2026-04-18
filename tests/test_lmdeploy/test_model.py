@@ -14,8 +14,8 @@ HF_MODELS_WITH_CHAT_TEMPLATES = [
     'internlm/internlm2-chat-7b',
     'internlm/internlm2_5-7b-chat',
     'internlm/internlm3-8b-instruct',
-    # 'internlm/Intern-S1',
-    # 'internlm/Intern-S1-mini',
+    'internlm/Intern-S1',
+    'internlm/Intern-S1-mini',
     'OpenGVLab/InternVL-Chat-V1-2',
     'OpenGVLab/InternVL-Chat-V1-5',
     'OpenGVLab/Mini-InternVL-Chat-2B-V1-5',
@@ -59,7 +59,7 @@ HF_MODELS_WITH_CHAT_TEMPLATES = [
 
 @pytest.mark.parametrize('model_path', HF_MODELS_WITH_CHAT_TEMPLATES)
 def test_HFChatTemplate_get_prompt_sequence_start_True(model_path):
-    model = MODELS.get('hf')(model_path=model_path)
+    model = MODELS.get('hf')(model_path=model_path, trust_remote_code=True)
     prompt = 'How to apply chat template using transformers?'
     messages = [{'role': 'user', 'content': prompt}]
 
@@ -71,7 +71,7 @@ def test_HFChatTemplate_get_prompt_sequence_start_True(model_path):
 
 @pytest.mark.parametrize('model_path', HF_MODELS_WITH_CHAT_TEMPLATES)
 def test_HFChatTemplate_message2prompt_sequence_start_True(model_path):
-    model = MODELS.get('hf')(model_path=model_path)
+    model = MODELS.get('hf')(model_path=model_path, trust_remote_code=True)
     prompt = 'How to apply chat template using transformers?'
     messages = [{'role': 'user', 'content': prompt}]
 

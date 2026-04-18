@@ -226,7 +226,8 @@ class MPExecutor(ExecutorBase):
                  misc_config: MiscConfig,
                  adapters: dict[str, str] = None,
                  specdecode_config: SpecDecodeConfig = None,
-                 device_type: str = 'cuda'):
+                 device_type: str = 'cuda',
+                 trust_remote_code: bool = False):
         """Initialize Executor."""
         super().__init__(model_path=model_path,
                          model_config=model_config,
@@ -236,7 +237,8 @@ class MPExecutor(ExecutorBase):
                          misc_config=misc_config,
                          specdecode_config=specdecode_config,
                          adapters=adapters,
-                         device_type=device_type)
+                         device_type=device_type,
+                         trust_remote_code=trust_remote_code)
 
         # initialize processes.
         self.setup_master_addr()
@@ -269,7 +271,8 @@ class MPExecutor(ExecutorBase):
                        specdecode_config=specdecode_config,
                        adapters=adapters,
                        device_type=device_type,
-                       log_level=logger.level)
+                       log_level=logger.level,
+                       trust_remote_code=trust_remote_code)
             self.procs.append(proc)
 
         self._prefetch_task: asyncio.Task = None
@@ -444,6 +447,7 @@ class MPWorkerWrapper(WorkerWrapperBase):
         adapters: dict[str, str] = None,
         device_type: str = 'cuda',
         log_level: int = 30,
+        trust_remote_code: bool = False,
     ):
         super().__init__(
             model_path=model_path,
@@ -456,6 +460,7 @@ class MPWorkerWrapper(WorkerWrapperBase):
             adapters=adapters,
             device_type=device_type,
             log_level=log_level,
+            trust_remote_code=trust_remote_code
         )
 
 
@@ -507,6 +512,7 @@ class ExecutorProc:
         adapters: dict[str, str] = None,
         device_type: str = 'cuda',
         log_level: int = 30,
+        trust_remote_code: bool = False,
     ):
         """Main loop."""
         init_backend(device_type)
@@ -528,7 +534,8 @@ class ExecutorProc:
                                  specdecode_config=specdecode_config,
                                  adapters=adapters,
                                  device_type=device_type,
-                                 log_level=log_level)
+                                 log_level=log_level,
+                                 trust_remote_code=trust_remote_code)
         try_import_deeplink(device_type)
         worker.init_process_group(proc_id)
         comm_buf = SharedBuffer(proc_id, notifier=comm_notifier, name=comm_buf_name)

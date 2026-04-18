@@ -63,6 +63,7 @@ def build_executor(
     distributed_executor_backend: str = None,
     dtype: str = 'auto',
     specdecode_config: SpecDecodeConfig = None,
+    trust_remote_code: bool = False,
 ) -> ExecutorBase:
     """Build model agent executor."""
     logger = get_logger('lmdeploy')
@@ -71,7 +72,7 @@ def build_executor(
 
     model_config = ModelConfig.from_pretrained(
         model_path,
-        trust_remote_code=True,
+        trust_remote_code=trust_remote_code,
         dtype=dtype,
         hf_overrides=misc_config.hf_overrides,
         dist_config=dist_config,
@@ -110,6 +111,7 @@ def build_executor(
             adapters=adapters,
             device_type=device_type,
             specdecode_config=specdecode_config,
+            trust_remote_code=trust_remote_code
         )
     elif distributed_executor_backend == 'mp':
         from .mp_executor import MPExecutor
@@ -124,6 +126,7 @@ def build_executor(
             adapters=adapters,
             device_type=device_type,
             specdecode_config=specdecode_config,
+            trust_remote_code=trust_remote_code
         )
     elif distributed_executor_backend == 'ray':
         from .ray_executor import RayExecutor
@@ -138,6 +141,7 @@ def build_executor(
             device_type=device_type,
             dtype=dtype,
             specdecode_config=specdecode_config,
+            trust_remote_code=trust_remote_code
         )
     else:
         raise RuntimeError(f'Unsupported distributed_executor_backend: {distributed_executor_backend}.')

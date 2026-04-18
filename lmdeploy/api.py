@@ -17,6 +17,7 @@ def pipeline(model_path: str,
              chat_template_config: ChatTemplateConfig | None = None,
              log_level: str = 'WARNING',
              max_log_len: int | None = None,
+             trust_remote_code: bool = False,
              speculative_config: SpeculativeConfig | None = None,
              **kwargs):
     """Create a pipeline for inference.
@@ -41,6 +42,7 @@ def pipeline(model_path: str,
             ``WARNING``, ``INFO``, ``DEBUG``]
         max_log_len: Max number of prompt characters or prompt tokens
             being printed in log.
+        trust_remote_code: whether to trust remote code from model repositories.
         speculative_config: speculative decoding configuration.
         **kwargs: additional keyword arguments passed to the pipeline.
 
@@ -73,6 +75,7 @@ def pipeline(model_path: str,
                     chat_template_config=chat_template_config,
                     log_level=log_level,
                     max_log_len=max_log_len,
+                    trust_remote_code=trust_remote_code,
                     speculative_config=speculative_config,
                     **kwargs)
 

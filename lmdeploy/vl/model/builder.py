@@ -39,7 +39,8 @@ logger = get_logger('lmdeploy')
 def load_vl_model(model_path: str,
                   backend: str,
                   with_llm: bool = False,
-                  backend_config: TurbomindEngineConfig | PytorchEngineConfig | None = None):
+                  backend_config: TurbomindEngineConfig | PytorchEngineConfig | None = None,
+                  trust_remote_code: bool = False):
     """Load visual model.
 
     Args:
@@ -59,19 +60,24 @@ def load_vl_model(model_path: str,
         tp = getattr(backend_config, 'tp', 1)
         max_memory = {i: torch.cuda.mem_get_info(i)[0] for i in range(tp)} if backend == 'turbomind' else None
 
-    _, hf_config = get_model_arch(model_path)
-    kwargs = dict(model_path=model_path, with_llm=with_llm, max_memory=max_memory, hf_config=hf_config, backend=backend)
+    _, hf_config = get_model_arch(model_path, trust_remote_code=trust_remote_code)
+    kwargs = dict(model_path=model_path,
+                  with_llm=with_llm,
+                  max_memory=max_memory,
+                  hf_config=hf_config,
+                  backend=backend,
+                  trust_remote_code=trust_remote_code)
 
     for name, module in VISION_MODELS.module_dict.items():
         try:
             if module.match(hf_config):
                 logger.info(f'matching vision model: {name}')
                 model = module(**kwargs)
-                model.build_preprocessor()
+                model.build_preprocessor(trust_remote_code=trust_remote_code)
                 # build the vision part of a VLM model when backend is
                 # turbomind, or load the whole VLM model when `with_llm==True`
                 if backend == 'turbomind' or with_llm:
-                    model.build_model()
+                    model.build_model(trust_remote_code=trust_remote_code)
                 return model
         except Exception as e:
             logger.error(f'build vision model {name} failed, {e}')

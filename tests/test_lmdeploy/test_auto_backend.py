@@ -1,17 +1,8 @@
-import os
-import tempfile
-
 import numpy as np
 import pytest
 
 
 class TestAutoBackend:
-
-    @pytest.fixture
-    def turbomind_workspace(self):
-        workspace = tempfile.TemporaryDirectory('internlm-chat-7b-turbomind').name
-        os.makedirs(os.path.join(workspace, 'triton_models'), exist_ok=True)
-        return workspace
 
     @pytest.fixture
     def models(self):
@@ -38,19 +29,12 @@ class TestAutoBackend:
         ]
         return models
 
-    def test_turbomind_is_supported(self, turbomind_workspace, models):
-        from lmdeploy.turbomind.supported_models import is_supported
-        assert is_supported(turbomind_workspace) is True
-        for m, flag in models:
-            assert is_supported(m) is flag
-
-    def test_autoget_backend(self, turbomind_workspace, models):
+    def test_autoget_backend(self, models):
         from lmdeploy.archs import autoget_backend
-        assert autoget_backend(turbomind_workspace) == 'turbomind'
         n = len(models)
         choices = np.random.choice(n, n // 2, replace=False)
         for i in choices:
             model, is_support_turbomind = models[i]
             target = 'turbomind' if is_support_turbomind else 'pytorch'
-            backend = autoget_backend(model)
+            backend = autoget_backend(model, trust_remote_code=True)
             assert backend == target

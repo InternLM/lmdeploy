@@ -10,7 +10,7 @@ from .utils import get_logger
 logger = get_logger('lmdeploy')
 
 
-def autoget_backend(model_path: str) -> Literal['turbomind', 'pytorch']:
+def autoget_backend(model_path: str, trust_remote_code: bool = False):
     """Get backend type in auto backend mode.
 
     Args:
@@ -36,7 +36,7 @@ def autoget_backend(model_path: str) -> Literal['turbomind', 'pytorch']:
     is_turbomind_installed = True
     try:
         from lmdeploy.turbomind.supported_models import is_supported as is_supported_turbomind
-        turbomind_has = is_supported_turbomind(model_path)
+        turbomind_has = is_supported_turbomind(model_path, trust_remote_code=trust_remote_code)
     except ImportError:
         is_turbomind_installed = False
 
@@ -57,7 +57,8 @@ def autoget_backend(model_path: str) -> Literal['turbomind', 'pytorch']:
 
 def autoget_backend_config(
     model_path: str,
-    backend_config: PytorchEngineConfig | TurbomindEngineConfig | None = None
+    backend_config: PytorchEngineConfig | TurbomindEngineConfig | None = None,
+    trust_remote_code: bool = False
 ) -> tuple[Literal['turbomind', 'pytorch'], PytorchEngineConfig | TurbomindEngineConfig]:
     """Get backend config automatically.
 
@@ -75,7 +76,7 @@ def autoget_backend_config(
     if isinstance(backend_config, PytorchEngineConfig):
         return 'pytorch', backend_config
 
-    backend = autoget_backend(model_path)
+    backend = autoget_backend(model_path, trust_remote_code=trust_remote_code)
     config = PytorchEngineConfig() if backend == 'pytorch' else TurbomindEngineConfig()
     if backend_config is not None:
         if type(backend_config) is type(config):
@@ -128,14 +129,14 @@ def check_vl_llm(backend: str, config: dict) -> bool:
     return False
 
 
-def get_task(backend: str, model_path: str):
+def get_task(backend: str, model_path: str, trust_remote_code: bool = False):
     """Get pipeline type and pipeline class from model config."""
     from lmdeploy.serve.core import AsyncEngine
 
     if os.path.exists(os.path.join(model_path, 'triton_models', 'weights')):
         # workspace model
         return 'llm', AsyncEngine
-    _, config = get_model_arch(model_path)
+    _, config = get_model_arch(model_path, trust_remote_code=trust_remote_code)
     if check_vl_llm(backend, config.to_dict()):
         from lmdeploy.serve.core import VLAsyncEngine
         return 'vlm', VLAsyncEngine
@@ -144,17 +145,17 @@ def get_task(backend: str, model_path: str):
     return 'llm', AsyncEngine
 
 
-def get_model_arch(model_path: str):
+def get_model_arch(model_path: str, trust_remote_code: bool = False):
     """Get a model's architecture and configuration.
 
     Args:
         model_path(str): the model path
     """
     try:
-        cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=trust_remote_code)
     except Exception as e:  # noqa
         from transformers import PretrainedConfig
-        cfg = PretrainedConfig.from_pretrained(model_path, trust_remote_code=True)
+        cfg = PretrainedConfig.from_pretrained(model_path, trust_remote_code=trust_remote_code)
 
     _cfg = cfg.to_dict()
     if _cfg.get('architectures', None):
