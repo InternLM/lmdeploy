@@ -66,7 +66,7 @@ def get_input_model_registered_name(model_path: str, model_format: str):
 
 
 def get_output_model_registered_name_and_config(model_path: str, model_format: str, dtype: str, group_size: int,
-                                                quantized_format: str):
+                                                quantized_format: str | None):
     """Get the registered name of the turbomind model and its configuration
     according to the input model path, format and user-input config. The name
     will be used to access the OUTPUT_MODELS registry.
@@ -77,7 +77,7 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
             ['hf', 'awq', 'gptq', 'compressed-tensors', 'fp8', 'mxfp4']
         dtype (str): the data type of the model's weights and activations
         group_size (int): the quantization group size used by grouped formats
-        quantized_format (str): the quantized format of compressed-tensors model,
+        quantized_format (str | None): the quantized format of compressed-tensors model,
             which can be one of ['pack-quantized', 'float-quantized']
     """
     register_name = 'tm'
@@ -118,6 +118,9 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
             weight_type = 'int4'
             dtype = 'float16'  # force float16 for int4 quantized weights
         elif model_format == 'compressed-tensors':
+            assert quantized_format in ['pack-quantized', 'float-quantized'], (
+                f'compressed-tensors format must be specified as "pack-quantized" or "float-quantized", '
+                f'but got "{quantized_format}"')
             if quantized_format == 'pack-quantized':
                 weight_type = 'int4'
                 model_format = 'awq'
@@ -240,17 +243,14 @@ def get_tm_model(model_path,
         elif quant_method == 'compressed-tensors':
             _format = quant_config['config_groups']['group_0']['format']
             assert _format in ['pack-quantized', 'float-quantized'
-                               ], ('compressed-tennsors only supports pack-quantized/float-quantized format, '
+                               ], ('compressed-tensors only supports pack-quantized/float-quantized format, '
                                    f'but got {_format}')
             _weights = quant_config['config_groups']['group_0']['weights']
             _group_size = _weights['group_size']
             _num_bits = _weights['num_bits']
             _type = _weights['type']
             assert (_num_bits == 4 and _type == 'int') or (_num_bits == 8 and _type == 'float'), (
-                'pack-quantized requires 4-bit int, '
-                f'but got {_num_bits}-bit {_type}. '
-                'or float-quantized requires 8-bit float, '
-                f'but got {_num_bits}-bit {_type}')
+                f'pack-quantized requires int4 or fp8, but got type {_type} and {_num_bits} bits')
         else:
             assert 0, f'unsupported quant_config: {quant_config}'
 

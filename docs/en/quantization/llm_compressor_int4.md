@@ -1,10 +1,10 @@
-# llm-compressor Support
+# llm-compressor-int4 Support
 
 This guide aims to introduce how to use LMDeploy's TurboMind inference engine to run models quantized by the [vllm-project/llm-compressor](https://github.com/vllm-project/llm-compressor) tool.
 
-Currently supported `llm-compressor` quantization types include:
+Currently supported `llm-compressor-int4` quantization types include:
 
-- int4 quantization (e.g., AWQ, GPTQ)
+- AWQ、GPTQ
 
 These quantized models can run via the TurboMind engine on the following NVIDIA GPU architectures:
 
@@ -20,7 +20,7 @@ These quantized models can run via the TurboMind engine on the following NVIDIA 
 | 9.0                | Hopper             | H20, H200, H100, GH200          |
 | 12.0               | Blackwell          | GeForce RTX 50 series           |
 
-LMDeploy will continue to follow up and expand support for the `llm-compressor` project.
+LMDeploy will continue to follow up and expand support for the `llm-compressor-int4` project.
 
 The remainder of this document consists of the following sections:
 
@@ -34,9 +34,9 @@ The remainder of this document consists of the following sections:
 
 ## Model Quantization
 
-`llm-compressor` provides a wealth of model quantization [examples](https://github.com/vllm-project/llm-compressor/tree/main/examples). Please refer to its tutorials to select a quantization algorithm supported by LMDeploy to complete your model quantization work.
+`llm-compressor-int4` provides a wealth of model quantization [examples](https://github.com/vllm-project/llm-compressor/tree/main/examples). Please refer to its tutorials to select a quantization algorithm supported by LMDeploy to complete your model quantization work.
 
-LMDeploy also provides a built-in [script](https://github.com/InternLM/lmdeploy/blob/main/examples/lite/qwen3_30b_a3b_awq.py) for AWQ quantization of **Qwen3-30B-A3B** using `llm-compressor` for your reference:
+LMDeploy also provides a built-in [script](https://github.com/InternLM/lmdeploy/blob/main/examples/lite/int4/qwen3_30b_a3b_awq.py) for AWQ quantization of **Qwen3-30B-A3B** using `llm-compressor-int4` for your reference:
 
 ```shell
 # Create conda environment
@@ -49,7 +49,8 @@ pip install llmcompressor
 # Clone lmdeploy source code and run the quantization example
 git clone https://github.com/InternLM/lmdeploy
 cd lmdeploy
-python examples/lite/qwen3_30b_a3b_awq.py --work-dir ./qwen3_30b_a3b_awq
+python examples/lite/int4/qwen3_30b_a3b_awq.py --work-dir ./qwen3_30b_a3b_awq
+
 ```
 
 In the following sections, we will use this quantized model as an example to introduce model deployment and accuracy evaluation methods.
@@ -62,7 +63,6 @@ With the quantized model, offline batch processing can be implemented with just 
 
 ```python
 from lmdeploy import pipeline, TurbomindEngineConfig
-
 engine_config = TurbomindEngineConfig()
 with pipeline("./qwen3_30b_a3b_4bit", backend_config=engine_config) as pipe:
     response = pipe(["Hi, pls intro yourself", "Shanghai is"])
@@ -83,7 +83,7 @@ The default service port is 23333. After the server starts, you can access the s
 
 ## Accuracy Evaluation
 
-Aftering deploying AWQ symmetric/asymmetric quantized models of Qwen3-8B (Dense) and Qwen3-30B-A3B (MoE) as services via LMDeploy, we evaluated their accuracy on several academic datasets using [opencompass](https://github.com/open-compass/opencompass). Results indicate that, for Qwen3-8B, asymmetric quantization generally outperforms symmetric quantization, while Qwen3-30B-A3B shows no substantial difference between symmetric and asymmetric quantization. Compared with BF16, Qwen3-8B shows a smaller accuracy gap under both symmetric and asymmetric quantization than Qwen3-30B-A3B. Compared with BF16, accuracy drops significantly on long-output datasets such as aime2025 (avg 17,635 tokens) and LCB (avg 14,157 tokens), while on medium/short-output datasets like ifeval (avg 1,885 tokens) and mmlu_pro (avg 2,826 tokens), the accuracy is as expected.
+We deployed AWQ symmetric/asymmetric quantized models of Qwen3-8B (Dense) and Qwen3-30B-A3B (MoE) as services via LMDeploy, and evaluated their accuracy on several academic datasets using [opencompass](https://github.com/open-compass/opencompass). Results indicate that, for Qwen3-8B, asymmetric quantization generally outperforms symmetric quantization, while Qwen3-30B-A3B shows no substantial difference between symmetric and asymmetric quantization. Compared with BF16, Qwen3-8B shows a smaller accuracy gap under both symmetric and asymmetric quantization than Qwen3-30B-A3B. Compared with BF16, accuracy drops significantly on long-output datasets such as aime2025 (avg 17,635 tokens) and LCB (avg 14,157 tokens), while on medium/short-output datasets like ifeval (avg 1,885 tokens) and mmlu_pro (avg 2,826 tokens), the accuracy is as expected.
 
 | dataset           | Qwen3-8B |         |          | Qwen3-30B-A3B |         |          |
 | ----------------- | -------- | ------- | -------- | ------------- | ------- | -------- |
