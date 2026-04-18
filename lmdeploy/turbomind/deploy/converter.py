@@ -65,7 +65,8 @@ def get_input_model_registered_name(model_path: str, model_format: str):
     return register_name
 
 
-def get_output_model_registered_name_and_config(model_path: str, model_format: str, dtype: str, group_size: int):
+def get_output_model_registered_name_and_config(model_path: str, model_format: str, dtype: str, group_size: int,
+                                                quantized_format: str | None):
     """Get the registered name of the turbomind model and its configuration
     according to the input model path, format and user-input config. The name
     will be used to access the OUTPUT_MODELS registry.
@@ -76,6 +77,8 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
             ['hf', 'awq', 'gptq', 'compressed-tensors', 'fp8', 'mxfp4']
         dtype (str): the data type of the model's weights and activations
         group_size (int): the quantization group size used by grouped formats
+        quantized_format (str | None): the quantized format of compressed-tensors model,
+            which can be one of ['pack-quantized', 'float-quantized']
     """
     register_name = 'tm'
 
@@ -111,12 +114,20 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
     group_size = _validate_quant_group_size(model_format, group_size)
 
     if model_format in ['awq', 'gptq', 'compressed-tensors']:
-        weight_type = 'int4'
-        dtype = 'float16'  # force float16 for int4 quantized weights
-        if model_format == 'compressed-tensors':
-            # TurboMind reuses the AWQ int4 export path for pack-quantized
-            # compressed-tensors weights after the format-specific checks above.
-            model_format = 'awq'
+        if model_format in ['awq', 'gptq']:
+            weight_type = 'int4'
+            dtype = 'float16'  # force float16 for int4 quantized weights
+        elif model_format == 'compressed-tensors':
+            assert quantized_format in ['pack-quantized', 'float-quantized'], (
+                f'compressed-tensors format must be specified as "pack-quantized" or "float-quantized", '
+                f'but got "{quantized_format}"')
+            if quantized_format == 'pack-quantized':
+                weight_type = 'int4'
+                model_format = 'awq'
+                dtype = 'float16'  # force float16 for int4 quantized weights
+            elif quantized_format == 'float-quantized':
+                weight_type = 'fp8'
+                model_format = 'fp8'
     elif model_format == 'fp8':
         weight_type = 'fp8'
     elif model_format == 'mxfp4':
@@ -231,18 +242,20 @@ def get_tm_model(model_path,
             _group_size = 32
         elif quant_method == 'compressed-tensors':
             _format = quant_config['config_groups']['group_0']['format']
-            assert _format == 'pack-quantized', ('compressed-tennsors only supports pack-quantized format, '
-                                                 f'but got {_format}')
+            assert _format in ['pack-quantized', 'float-quantized'
+                               ], ('compressed-tensors only supports pack-quantized/float-quantized format, '
+                                   f'but got {_format}')
             _weights = quant_config['config_groups']['group_0']['weights']
             _group_size = _weights['group_size']
             _num_bits = _weights['num_bits']
             _type = _weights['type']
-            assert _num_bits == 4 and _type == 'int', ('pack-quantized requires 4-bit int, '
-                                                       f'but got {_num_bits}-bit {_type}')
+            assert (_num_bits == 4 and _type == 'int') or (_num_bits == 8 and _type == 'float'), (
+                f'pack-quantized requires int4 or fp8, but got type {_type} and {_num_bits} bits')
         else:
             assert 0, f'unsupported quant_config: {quant_config}'
 
         engine_config.model_format = quant_method
+        quantized_format = _format if quant_method == 'compressed-tensors' else None
         group_size = _group_size
 
     group_size = _validate_quant_group_size(engine_config.model_format, group_size)
@@ -250,16 +263,19 @@ def get_tm_model(model_path,
     input_model_name = get_input_model_registered_name(model_path, engine_config.model_format)
 
     fp8_quant = (engine_config.model_format == 'fp8' and not quant_config)
-    input_policy = get_input_policy(engine_config.model_format)
+    input_policy = get_input_policy(engine_config.model_format,
+                                    quantized_format=quantized_format if quant_config else None)
     input_model = INPUT_MODELS.get(input_model_name)(model_path=model_path,
                                                      tokenizer_path=model_path,
                                                      input_policy=input_policy,
                                                      fp8_quant=fp8_quant)
 
-    output_model_name, tm_cfg = get_output_model_registered_name_and_config(model_path=model_path,
-                                                                            model_format=engine_config.model_format,
-                                                                            dtype=engine_config.dtype,
-                                                                            group_size=group_size)
+    output_model_name, tm_cfg = get_output_model_registered_name_and_config(
+        model_path=model_path,
+        model_format=engine_config.model_format,
+        dtype=engine_config.dtype,
+        group_size=group_size,
+        quantized_format=quantized_format if quant_config else None)
 
     if mixed_awq:
         # Mixed-precision AWQ: attention weights are fp16 (not quantized),
