@@ -19,6 +19,8 @@ class DlinferAttentionMetadata(AttentionMetadata):
     quant_meta: dict = None
     cu_seq_lens_kv: Tensor | None = None
     has_initial_state: Tensor | None = None
+    is_multi_token_decoding: bool = False
+    actual_seq_lengths_q: Tensor | None = None
 
 
 class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
@@ -143,6 +145,8 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
             kv_scales=kv_scales,
             kv_zeros=kv_zeros,
             quant_bits=quant_bits,
+            is_multi_token_decoding=attn_metadata.is_multi_token_decoding,
+            actual_seq_lengths_q=attn_metadata.actual_seq_lengths_q,
         )
 
         return attn_output

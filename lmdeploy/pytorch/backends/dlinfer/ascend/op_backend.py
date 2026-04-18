@@ -156,8 +156,16 @@ class AscendOpsBackend(DlinferOpsBackend):
 
         block_num, block_size, *_ = step_context.kv_caches[0][0].shape
         is_prefill_no_cache = False
+        is_multi_token_decoding = False
+        actual_seq_lengths_q = None
         if not step_context.is_decoding:
             is_prefill_no_cache = all((step_context.q_seqlens == step_context.kv_seqlens).tolist())
+        else:
+            # Speculative decoding: main model decodes multiple tokens per sequence
+            is_multi_token_decoding = torch.max(step_context.q_seqlens).item() > 1
+        effective_is_decoding = step_context.is_decoding and not is_multi_token_decoding
+        if is_multi_token_decoding:
+            actual_seq_lengths_q = step_context.q_seqlens.cpu().cumsum(0).to(torch.int32)
         if step_context.block_offsets.dtype != torch.int32:
             step_context.block_offsets = step_context.block_offsets.to(torch.int32)
         if step_context.kv_seqlens.dtype != torch.int32:
@@ -173,18 +181,19 @@ class AscendOpsBackend(DlinferOpsBackend):
                 cls.total_slots = cls.total_slots.view(block_num, block_size)
             return cls.total_slots
 
-        def get_cpu_seqlens(is_decoding, is_prefill_no_cache):
+        def get_cpu_seqlens(is_decoding, is_prefill_no_cache, is_multi_token_decoding):
             """Get sequence lengths on CPU.
 
             Returns:
                 q_seqlens_cpu: query sequence lengths (per sequence).
                 kv_seqlens_cpu: kv sequence lengths (per sequence), used for
                     list/max seqlens calculation.
-                kv_seqlens_expanded: kv sequence lengths expanded per token via
-                    repeat_interleave, used for attention metadata.
             """
-            if is_decoding:
+            if is_decoding and not is_multi_token_decoding:
                 q_seqlens_cpu = None
+                kv_seqlens_cpu = step_context.kv_seqlens.cpu()
+            elif is_multi_token_decoding:
+                q_seqlens_cpu = step_context.q_seqlens.cpu()
                 kv_seqlens_cpu = step_context.kv_seqlens.cpu()
             elif is_prefill_no_cache:
                 q_seqlens_cpu = step_context.q_seqlens.cpu()
@@ -353,16 +362,17 @@ class AscendOpsBackend(DlinferOpsBackend):
             group_name = backend.get_hccl_comm_name(local_rank)
             return group_name
 
-        q_seqlens_cpu, kv_seqlens_cpu = get_cpu_seqlens(step_context.is_decoding, is_prefill_no_cache)
-        q_seqlens_list, kv_seqlens_list = get_list_seqlens(step_context.is_decoding, is_prefill_no_cache, q_seqlens_cpu,
+        q_seqlens_cpu, kv_seqlens_cpu = get_cpu_seqlens(effective_is_decoding, is_prefill_no_cache,
+                                                        is_multi_token_decoding)
+        q_seqlens_list, kv_seqlens_list = get_list_seqlens(effective_is_decoding, is_prefill_no_cache, q_seqlens_cpu,
                                                            kv_seqlens_cpu)
-        max_q_seq_len, max_kv_seq_len = get_max_seqlens(step_context.is_decoding, is_prefill_no_cache, q_seqlens_list,
+        max_q_seq_len, max_kv_seq_len = get_max_seqlens(effective_is_decoding, is_prefill_no_cache, q_seqlens_list,
                                                         kv_seqlens_list)
-        kv_start_indices, attention_mask = get_kv_start_indices_and_attention_mask(step_context.is_decoding,
+        kv_start_indices, attention_mask = get_kv_start_indices_and_attention_mask(effective_is_decoding,
                                                                                    is_prefill_no_cache, q_seqlens_list,
                                                                                    kv_seqlens_list, max_q_seq_len,
                                                                                    max_kv_seq_len)
-        q_seqlens_cpu = update_q_seqlens(step_context.is_decoding, is_prefill_no_cache, q_seqlens_cpu)
+        q_seqlens_cpu = update_q_seqlens(effective_is_decoding, is_prefill_no_cache, q_seqlens_cpu)
 
         if not cls.enable_graph and step_context.kv_quant_policy == 8:
             record_file = os.getenv('ASCEND_QUANT_RECORD_FILE')
@@ -385,12 +395,12 @@ class AscendOpsBackend(DlinferOpsBackend):
             q_start_loc = step_context.q_start_loc.to(dtype=step_context.q_seqlens.dtype,
                                                       device=step_context.q_seqlens.device)
             cu_seqlens = torch.cat((q_start_loc, step_context.q_seqlens.sum().unsqueeze(0))).int()
-            if not step_context.is_decoding:
+            if not effective_is_decoding:
                 has_initial_state = ~(step_context.q_seqlens == step_context.kv_seqlens)
 
         attn_meta_cls = cls.get_attention_metadata_cls()
         attn_metadata = attn_meta_cls(
-            step_context.is_decoding,
+            effective_is_decoding,
             step_context.block_offsets,
             # cu_seqlens is only used in GDN and is passed down via q_start_loc.
             # Otherwise, q_start_loc is None.
@@ -406,6 +416,8 @@ class AscendOpsBackend(DlinferOpsBackend):
             quant_policy=step_context.kv_quant_policy,
             quant_meta=AscendKVQuantMeta.quant_meta,
             has_initial_state=has_initial_state,
+            is_multi_token_decoding=is_multi_token_decoding,
+            actual_seq_lengths_q=actual_seq_lengths_q,
         )
         step_context.attn_metadata = attn_metadata
 
@@ -461,6 +473,12 @@ class AscendOpsBackend(DlinferOpsBackend):
         except Exception as e:
             logger.warning(f'Error during Ascend initialization: {str(e)}. '
                            'Please check your Ascend environment configuration.')
+
+        try:
+            import dlinfer.framework.lmdeploy_ext.device  # noqa: F401 — triggers vendor_device_init()
+        except ImportError:
+            logger.warning('dlinfer framework extensions not found. '
+                           'Ascend-specific model patches will not be applied.')
 
         try:
             from dlinfer.vendor.ascend.triton_ops.triton_utils import init_device_properties_triton
