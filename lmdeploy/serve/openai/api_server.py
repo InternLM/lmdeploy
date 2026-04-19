@@ -41,6 +41,7 @@ from lmdeploy.pytorch.disagg.conn.protocol import (
     DistServeInitRequest,
     MigrationRequest,
 )
+from lmdeploy.serve.anthropic import create_anthropic_router
 from lmdeploy.serve.core import AsyncEngine
 from lmdeploy.serve.openai.harmony_utils import GptOssChatParser
 from lmdeploy.serve.openai.protocol import (
@@ -1542,6 +1543,7 @@ def serve(model_path: str,
         app = FastAPI(docs_url='/', lifespan=lifespan)
 
     app.include_router(router)
+    app.include_router(create_anthropic_router(VariableInterface))
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
     mount_metrics(app, backend_config)
 
