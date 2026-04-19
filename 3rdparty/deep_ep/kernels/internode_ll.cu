@@ -729,6 +729,7 @@ __global__ __launch_bounds__(1024, 1) void combine(void* combined_x,
                                                    size_t rdma_recv_x_offset,
                                                    size_t rdma_recv_flag_offset,
                                                    size_t rdma_send_x_offset,
+                                                   size_t x_offset,
                                                    const void* x,
                                                    const int* expert_offsets,
                                                    const topk_idx_t* topk_idx,
@@ -870,8 +871,10 @@ __global__ __launch_bounds__(1024, 1) void combine(void* combined_x,
                 int num_send_bytes = hidden * sizeof(nv_bfloat16);
 
                 if (not zero_copy or dst_p2p_ptr != 0) {
-                    // Read from `cpy_src_int4_ptr` and copy into `cpy_dst_int4_ptr`
-                    const auto cpy_src_int4_ptr = zero_copy ? reinterpret_cast<int4*>(buf_ptr) : x_int4;
+                    // Read from `cpy_src_int4_ptr` and copy into `cpy_dst_int4_ptr`.
+                    // For zero-copy the source `x` is the combine send buffer in a dense
+                    // (E_local, ranks*max_T, hidden) layout — read straight from `x_int4`.
+                    const auto cpy_src_int4_ptr = x_int4;
                     const auto cpy_dst_int4_ptr =
                         dst_p2p_ptr == 0 ? reinterpret_cast<int4*>(buf_ptr) : reinterpret_cast<int4*>(dst_p2p_ptr);
 
@@ -931,9 +934,12 @@ __global__ __launch_bounds__(1024, 1) void combine(void* combined_x,
                 // Issue RDMA
                 // NOTES: for zero-copy mode, we assume the data is already in the send buffer
                 if (dst_p2p_ptr == 0) {
-                    const auto expected_buf_offset = rdma_send_x_offset +
-                        (local_expert_idx * num_ranks * num_max_dispatch_tokens_per_rank * num_bytes_per_slot) +
-                        token_idx * num_bytes_per_slot;
+                    const auto expected_buf_offset = zero_copy
+                        ? (x_offset +
+                           (static_cast<size_t>(__ldg(expert_offsets + local_expert_idx)) + token_idx) * hidden * sizeof(nv_bfloat16))
+                        : (rdma_send_x_offset +
+                           (local_expert_idx * num_ranks * num_max_dispatch_tokens_per_rank * num_bytes_per_slot) +
+                           token_idx * num_bytes_per_slot);
 
                     ncclGin net(dev_comm, local_expert_idx);
                     ncclTeam world = ncclTeamWorld(dev_comm);
@@ -1225,6 +1231,7 @@ void combine(void*             combined_x,
              size_t            rdma_recv_x_offset,
              size_t            rdma_recv_flag_offset,
              size_t            rdma_send_x_offset,
+             size_t            x_offset,
              const void*       x,
              const int*        expert_offsets,
              const topk_idx_t* topk_idx,
@@ -1301,6 +1308,7 @@ void combine(void*             combined_x,
                       rdma_recv_x_offset,                                                                              \
                       rdma_recv_flag_offset,                                                                           \
                       rdma_send_x_offset,                                                                              \
+                      x_offset,                                                                                        \
                       x,                                                                                               \
                       expert_offsets,                                                                                  \
                       topk_idx,                                                                                        \

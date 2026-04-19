@@ -35,6 +35,7 @@ struct EpDispatchInput {
     core::Tensor_<int64_t>& topk_idx;
     bool                    use_fp8;
     bool                    output_scales;
+    bool                    zero_copy{false};
 };
 
 struct EpDispatchOutput {
@@ -50,6 +51,8 @@ struct EpDispatchOutput {
 
     int out_token_num;
     int out_expert_token_num;
+
+    core::Tensor rdma;  // used for low-latency
 };
 
 struct EpCombineInput {
@@ -58,6 +61,7 @@ struct EpCombineInput {
     std::vector<core::Tensor>&  handle;
     std::optional<core::Tensor> topk_weights;
     std::optional<core::Tensor> topk_idx;
+    bool                        zero_copy{false};
 };
 
 struct EpCombineOutput {

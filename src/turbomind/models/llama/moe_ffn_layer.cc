@@ -202,14 +202,24 @@ void MoeFfnLayer::RouteEP(ForwardParam& p, Tensor_<float>& logits)
     auto       input_type    = p.weights->block.fused_gating_intermediate.input_type;
     const bool use_fp8       = input_type == kFloat8_e4m3 || input_type == kBfloat16;
     const bool output_scales = use_fp8 && input_type == kFloat8_e4m3;
+    const bool zero_copy     = ep_mode_ == comm::EpMode::kLowLatency;
 
-    comm::EpDispatchInput  dispatch_input{ep_mode_, p.input, topk_weights, topk_idx, use_fp8, output_scales};
+    comm::EpDispatchInput  dispatch_input{ep_mode_, p.input, topk_weights, topk_idx, use_fp8, output_scales, zero_copy};
     comm::EpDispatchOutput dispatch_output{{}, {}, {}, f2n_, f2E_, en2f_, offsets_, {}};
     d_comm_->Dispatch(dispatch_input, dispatch_output, 0);
     sync_check_cuda_error();
 
     input_ = dispatch_output.out_x;
-    temp_  = Tensor{{dispatch_output.out_expert_token_num, hidden_dim_}, p.input.dtype(), p.input.device()};
+    if (dispatch_output.rdma) {
+        // Zero-copy low-latency: point temp_ at the deep_ep combine send buffer so the
+        // down-proj writes land directly in the RDMA window. Flatten the
+        // (E_local, ranks*max_T, hidden) view to 2D and slice to the packed output size.
+        auto flat = dispatch_output.rdma.view({-1, hidden_dim_});
+        temp_     = flat.slice({0, 0}, {dispatch_output.out_expert_token_num, -1});
+    }
+    else {
+        temp_ = Tensor{{dispatch_output.out_expert_token_num, hidden_dim_}, p.input.dtype(), p.input.device()};
+    }
 
     // keep dispatch_output for combine
     dispatch_output_ = std::make_unique<comm::EpDispatchOutput>(dispatch_output);
@@ -404,6 +414,7 @@ void MoeFfnLayer::CombineEP(ForwardParam& p)
         combine_input.x            = temp_;
         combine_input.topk_idx     = Tensor{topk_idx_, {p.input.shape(0), param_.experts_per_token}};
         combine_input.topk_weights = Tensor{topk_weights_, {p.input.shape(0), param_.experts_per_token}};
+        combine_input.zero_copy    = static_cast<bool>(dispatch_output_->rdma);
     }
     d_comm_->Combine(combine_input, combine_output, 0);
     sync_check_cuda_error();

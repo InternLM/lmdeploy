@@ -268,6 +268,8 @@ public:
     Config get_dispatch_config();
 
     Config get_combine_config();
+
+    Tensor get_next_low_latency_combine_buffer(int num_max_dispatch_tokens_per_rank, int hidden, int num_experts) const;
 };
 
 };  // namespace deep_ep

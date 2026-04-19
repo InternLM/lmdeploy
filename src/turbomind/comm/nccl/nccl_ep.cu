@@ -134,6 +134,11 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
         // Generate output
         output.handle        = {packed_recv_src_info, packed_recv_layout_range, output.offsets};
         output.out_token_num = output.out_expert_token_num = num_expert_tokens;
+
+        if (input.zero_copy) {
+            output.rdma = buffer_->get_next_low_latency_combine_buffer(
+                ep_config_.ll_max_tokens_per_rank, ep_config_.hidden, ep_config_.num_experts);
+        }
     }
     else {
         auto [num_tokens_per_rank, num_tokens_per_rdma_rank, num_tokens_per_expert, is_token_in_rank] =
@@ -345,7 +350,7 @@ void NcclCommImpl::Combine(const EpCombineInput& input, EpCombineOutput& output,
                                                          ep_config_.ll_max_tokens_per_rank,
                                                          ep_config_.num_experts,
                                                          false,
-                                                         false,
+                                                         input.zero_copy,
                                                          std::nullopt);
         sync_check_cuda_error();
 

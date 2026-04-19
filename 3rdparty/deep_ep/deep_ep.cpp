@@ -1038,6 +1038,10 @@ Buffer::low_latency_combine(const Tensor&                x,
     auto      nccl_win        = comm->get_device_nccl_window(rdma_ll_buffer_ptr);
     auto      signals_base    = comm->get_signals_base(low_latency_buffer_idx, true);
 
+    const size_t x_offset = zero_copy ? reinterpret_cast<size_t>(buffer.combine_rdma_send_buffer_data_start)
+                                            - reinterpret_cast<size_t>(rdma_ll_buffer_ptr) :
+                                        0;
+
     internode_ll::combine(
         combined_x.data_or((void*)nullptr),
         buffer.combine_rdma_recv_data_buffer,
@@ -1046,6 +1050,7 @@ Buffer::low_latency_combine(const Tensor&                x,
         reinterpret_cast<size_t>(buffer.combine_rdma_recv_data_buffer) - reinterpret_cast<size_t>(rdma_ll_buffer_ptr),
         reinterpret_cast<size_t>(buffer.combine_rdma_recv_flag_buffer) - reinterpret_cast<size_t>(rdma_ll_buffer_ptr),
         reinterpret_cast<size_t>(buffer.combine_rdma_send_buffer) - reinterpret_cast<size_t>(rdma_ll_buffer_ptr),
+        x_offset,
         x.data_or((void*)nullptr),
         expert_offsets.data<int>(),
         topk_idx.data_or((topk_idx_t*)nullptr),
@@ -1603,6 +1608,22 @@ Config Buffer::get_combine_config()
     const auto it = config_map.find(num_ranks);
     TM_CHECK(it != config_map.end());
     return it->second;
+}
+
+Tensor
+Buffer::get_next_low_latency_combine_buffer(int num_max_dispatch_tokens_per_rank, int hidden, int num_experts) const
+{
+    LowLatencyLayout layout(rdma_ll_buffer_ptr, num_max_dispatch_tokens_per_rank, hidden, num_ranks, num_experts);
+
+    auto buffer = layout.buffers[low_latency_buffer_idx];
+    auto dtype  = turbomind::kBfloat16;
+
+    // Return a contiguous (E_local, ranks*max_T, hidden) view over the combine send buffer.
+    // The per-slot scales/metadata region is not addressed here; it is unused for non-LogFMT combine.
+    return Tensor(buffer.combine_rdma_send_buffer_data_start,
+                  {num_experts / num_ranks, num_ranks * num_max_dispatch_tokens_per_rank, hidden},
+                  dtype,
+                  turbomind::kDEVICE);
 }
 
 };  // namespace deep_ep
