@@ -556,6 +556,8 @@ MoeFfnWeight::MoeFfnWeight(int             layer_id,
                            int             group_size,
                            int             tp_size,
                            int             tp_rank,
+                           int             ep_size,
+                           int             ep_rank,
                            ActivationType  act_type,
                            bool            fuse_silu_act)
 {
@@ -584,8 +586,10 @@ MoeFfnWeight::MoeFfnWeight(int             layer_id,
         fuse_silu_act = false;
     }
 
-    experts.reserve(expert_num);
-    for (int i = 0; i < expert_num; ++i) {
+    const int local_expert_num = expert_num / ep_size;
+    const int expert_offset    = ep_rank * local_expert_num;
+    experts.reserve(local_expert_num);
+    for (int i = 0; i < local_expert_num; ++i) {
         experts.emplace_back(new LlamaFfnWeight{hidden_dim,
                                                 param.inter_size,
                                                 mlp_bias,
@@ -596,7 +600,7 @@ MoeFfnWeight::MoeFfnWeight(int             layer_id,
                                                 group_size,
                                                 act_type,
                                                 fuse_silu_act});
-        register_module("experts", *experts.back(), i);
+        register_module("experts", *experts.back(), i + expert_offset);
     }
 
     if (param.shared_gate) {

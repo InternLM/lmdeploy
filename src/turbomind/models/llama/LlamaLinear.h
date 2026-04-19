@@ -24,6 +24,13 @@ public:
                    const Buffer_<int>&     offsets,
                    std::optional<Tensor>   output = {});
 
+    Tensor Forward(const Tensor&                input,
+                   const std::optional<Tensor>& scales,
+                   const LlamaDenseWeight&      weight,
+                   const Buffer_<int>&          indices,
+                   const Buffer_<int>&          offsets,
+                   std::optional<Tensor>        output = {});
+
     void set_measure(bool measure);
 
     [[maybe_unused]] int Export(std::ostream& os);
