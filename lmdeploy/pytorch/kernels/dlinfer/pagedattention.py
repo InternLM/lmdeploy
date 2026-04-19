@@ -141,6 +141,14 @@ def paged_attention_fwd(
     actual_seq_lengths_q: Tensor | None = None,
 ):
     if is_multi_token_decoding:
+        if actual_seq_lengths_q is None:
+            raise ValueError('MTP multi-token decode requires actual_seq_lengths_q for TND attention.')
+        if actual_seq_lengths_q.dim() != 1 or kv_seqlens.dim() != 1:
+            raise ValueError('TND attention expects 1D q/kv length tensors.')
+        if block_offsets.size(0) != actual_seq_lengths_q.numel():
+            raise ValueError('TND attention expects per-sequence block tables.')
+        if kv_seqlens.numel() != actual_seq_lengths_q.numel():
+            raise ValueError('TND attention expects kv lengths per sequence.')
         # MTP verify is semantically a "mini-prefill": multiple tokens per
         # sequence with TND layout, sparse_mode=3 and causal mask.
         # Reuse paged_prefill_attention, passing cumulative q lengths.

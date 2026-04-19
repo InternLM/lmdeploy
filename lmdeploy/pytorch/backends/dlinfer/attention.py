@@ -21,6 +21,8 @@ class DlinferAttentionMetadata(AttentionMetadata):
     has_initial_state: Tensor | None = None
     is_multi_token_decoding: bool = False
     actual_seq_lengths_q: Tensor | None = None
+    num_accepted_tokens: Tensor | None = None
+    kv_seqlens_device: Tensor | None = None
 
 
 class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):

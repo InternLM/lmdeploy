@@ -158,14 +158,29 @@ class AscendOpsBackend(DlinferOpsBackend):
         is_prefill_no_cache = False
         is_multi_token_decoding = False
         actual_seq_lengths_q = None
+        num_accepted_tokens = None
+        # Pre-compute CPU q_seqlens for decode path (reused in get_cpu_seqlens)
+        q_seqlens_cpu_early = None
         if not step_context.is_decoding:
             is_prefill_no_cache = all((step_context.q_seqlens == step_context.kv_seqlens).tolist())
         else:
-            # Speculative decoding: main model decodes multiple tokens per sequence
-            is_multi_token_decoding = torch.max(step_context.q_seqlens).item() > 1
+            q_seqlens_cpu_early = step_context.q_seqlens.cpu()
+            is_multi_token_decoding = q_seqlens_cpu_early.max().item() > 1
         effective_is_decoding = step_context.is_decoding and not is_multi_token_decoding
         if is_multi_token_decoding:
-            actual_seq_lengths_q = step_context.q_seqlens.cpu().cumsum(0).to(torch.int32)
+            actual_seq_lengths_q = q_seqlens_cpu_early.cumsum(0).to(torch.int32)
+        if step_context.is_decoding and step_context.model_metas is not None:
+            accepted = []
+            for model_meta in step_context.model_metas:
+                if isinstance(model_meta, dict):
+                    accepted.append(int(model_meta.get('num_accepted_tokens', 1)))
+                else:
+                    accepted.append(1)
+            num_accepted_tokens = torch.tensor(
+                accepted,
+                dtype=torch.int32,
+                device=step_context.block_offsets.device,
+            )
         if step_context.block_offsets.dtype != torch.int32:
             step_context.block_offsets = step_context.block_offsets.to(torch.int32)
         if step_context.kv_seqlens.dtype != torch.int32:
@@ -181,7 +196,8 @@ class AscendOpsBackend(DlinferOpsBackend):
                 cls.total_slots = cls.total_slots.view(block_num, block_size)
             return cls.total_slots
 
-        def get_cpu_seqlens(is_decoding, is_prefill_no_cache, is_multi_token_decoding):
+        def get_cpu_seqlens(is_decoding, is_prefill_no_cache, is_multi_token_decoding,
+                            _q_seqlens_cpu_early=None):
             """Get sequence lengths on CPU.
 
             Returns:
@@ -193,7 +209,7 @@ class AscendOpsBackend(DlinferOpsBackend):
                 q_seqlens_cpu = None
                 kv_seqlens_cpu = step_context.kv_seqlens.cpu()
             elif is_multi_token_decoding:
-                q_seqlens_cpu = step_context.q_seqlens.cpu()
+                q_seqlens_cpu = _q_seqlens_cpu_early
                 kv_seqlens_cpu = step_context.kv_seqlens.cpu()
             elif is_prefill_no_cache:
                 q_seqlens_cpu = step_context.q_seqlens.cpu()
@@ -257,9 +273,14 @@ class AscendOpsBackend(DlinferOpsBackend):
                                               device=step_context.block_offsets.device),
                                    diagonal=max_kv_seq_len - max_q_seq_len + 1))
                 else:
+                    mask_width = 2048
+                    causal_width = min(max_kv_seq_len, mask_width)
                     attention_mask.append(
-                        torch.triu(torch.ones(2048, 2048, dtype=torch.bool, device=step_context.block_offsets.device),
-                                   diagonal=1))
+                        torch.triu(torch.ones(mask_width,
+                                              mask_width,
+                                              dtype=torch.bool,
+                                              device=step_context.block_offsets.device),
+                                   diagonal=causal_width - max_q_seq_len + 1))
 
                 kv_start_indices = torch.cat(kv_start_indices)
 
@@ -286,7 +307,7 @@ class AscendOpsBackend(DlinferOpsBackend):
             if ep_size <= 1:
                 return 0, 0, 0
             # get padded_tokens_current_rank
-            is_graph = cls.enable_graph and step_context.is_decoding
+            is_graph = cls.enable_graph and effective_is_decoding
             if is_graph:
                 from dlinfer.framework.lmdeploy_ext.cudagraph.ascend_cudagraph import get_ascend_compatible_size
                 actual_tokens_current_rank = step_context.q_seqlens.shape[0]
@@ -320,7 +341,7 @@ class AscendOpsBackend(DlinferOpsBackend):
             if ep_size <= 1:
                 return DlinferMoECommType.ALLGATHER
             mc2_token_capacity = init_mc2_token_capacity(tp_size)
-            is_graph = cls.enable_graph and step_context.is_decoding
+            is_graph = cls.enable_graph and effective_is_decoding
             if is_graph:
                 max_tokens_across_dp = math.ceil(max_tokens_across_dp / tp_size) * tp_size
             if SocVersion.is_A2():
@@ -363,7 +384,7 @@ class AscendOpsBackend(DlinferOpsBackend):
             return group_name
 
         q_seqlens_cpu, kv_seqlens_cpu = get_cpu_seqlens(effective_is_decoding, is_prefill_no_cache,
-                                                        is_multi_token_decoding)
+                                                        is_multi_token_decoding, q_seqlens_cpu_early)
         q_seqlens_list, kv_seqlens_list = get_list_seqlens(effective_is_decoding, is_prefill_no_cache, q_seqlens_cpu,
                                                            kv_seqlens_cpu)
         max_q_seq_len, max_kv_seq_len = get_max_seqlens(effective_is_decoding, is_prefill_no_cache, q_seqlens_list,
@@ -418,6 +439,8 @@ class AscendOpsBackend(DlinferOpsBackend):
             has_initial_state=has_initial_state,
             is_multi_token_decoding=is_multi_token_decoding,
             actual_seq_lengths_q=actual_seq_lengths_q,
+            num_accepted_tokens=num_accepted_tokens,
+            kv_seqlens_device=step_context.kv_seqlens,
         )
         step_context.attn_metadata = attn_metadata
 
