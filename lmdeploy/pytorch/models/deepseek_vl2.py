@@ -130,8 +130,8 @@ class DeepseekVLV2ForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
         if self.tile_tag == '2D':
             # <|view_separator|>, <|\n|>
             self.image_newline = nn.Parameter(torch.randn(projector_config.n_embed) * embed_std)
-            # fix the typo: view_seperater
-            self.view_seperator = nn.Parameter(torch.randn(projector_config.n_embed) * embed_std)
+            # fix the upstream typo: view_seperater -> view_separator
+            self.view_separator = nn.Parameter(torch.randn(projector_config.n_embed) * embed_std)
         elif self.tile_tag == '1D':
             # <|tile_x|>, <|tile_global|>
             candidate_resolutions = config.candidate_resolutions
@@ -277,10 +277,10 @@ class DeepseekVLV2ForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
                     # ----------------- merge global and local tiles -----------------
                     if self.global_view_pos == 'head':
                         global_local_features = torch.cat(
-                            [global_features, self.view_seperator[None, :], local_features], dim=0)
+                            [global_features, self.view_separator[None, :], local_features], dim=0)
                     else:
                         global_local_features = torch.cat(
-                            [local_features, self.view_seperator[None, :], global_features], dim=0)
+                            [local_features, self.view_separator[None, :], global_features], dim=0)
 
                 else:
                     # abandoned，will not step into this logic
