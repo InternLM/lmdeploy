@@ -613,6 +613,14 @@ class InputsMakerAsync:
                 return True
             return any(seq.return_logits for seq in seqs)
 
+        def __need_hidden_states(seqs: 'SeqList'):
+            """Need hidden states."""
+            return any(seq.return_hidden_states for seq in seqs)
+
+        def __hidden_states_all_mode(seqs: 'SeqList'):
+            """Check if any sequence uses hidden states 'all' mode."""
+            return any(seq.return_hidden_states and not seq.hidden_states_generation_mode for seq in seqs)
+
         def __need_routed_experts(seqs: 'SeqList'):
             """Need routed experts."""
             return any(seq.return_routed_experts for seq in seqs)
@@ -711,6 +719,8 @@ class InputsMakerAsync:
             stopping_criteria = None
 
         return_logits = __need_logits(running)
+        return_hidden_states = __need_hidden_states(running)
+        hidden_states_all_mode = __hidden_states_all_mode(running)
         return_routed_experts = __need_routed_experts(running)
 
         return dict(
@@ -722,6 +732,8 @@ class InputsMakerAsync:
             sampling_inputs=sampling_inputs,
             stopping_criteria=stopping_criteria,
             return_logits=return_logits,
+            return_hidden_states=return_hidden_states,
+            hidden_states_all_mode=hidden_states_all_mode,
             extra_inputs=extra_inputs,
             return_routed_experts=return_routed_experts,
         )
