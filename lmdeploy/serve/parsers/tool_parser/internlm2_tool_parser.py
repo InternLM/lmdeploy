@@ -27,7 +27,7 @@ class Internlm2ToolParser(ToolParser):
             # tokens to indicated the start and end of the tool calls
             # information.
             request.skip_special_tokens = False
-        return request
+        return super().adjust_request(request)
 
     def get_tool_open_tag(self) -> str | None:
         return '<|action_start|><|plugin|>'

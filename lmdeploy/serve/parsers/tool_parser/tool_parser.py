@@ -43,15 +43,16 @@ class ToolParser:
 
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         """Adjust request payload before rendering, if needed."""
-        if request.tools is not None and request.tool_choice != 'none':
-            if not isinstance(request.tool_choice, str):
-                request.tools = [
-                    item.function.model_dump() for item in request.tools
-                    if item.function.name == request.tool_choice.function.name
-                ]
-            else:
-                request.tools = [item.function.model_dump() for item in request.tools]
-        return request
+        if request.tools is None or request.tool_choice == 'none':
+            return request.model_copy(update={'tools': None})
+        if not isinstance(request.tool_choice, str):
+            tools = [
+                item.function.model_dump() for item in request.tools
+                if item.function.name == request.tool_choice.function.name
+            ]
+        else:
+            tools = [item.function.model_dump() for item in request.tools]
+        return request.model_copy(update={'tools': tools})
 
     def get_tool_open_tag(self) -> str | None:
         """Return tool opening tag string, or None if unsupported."""

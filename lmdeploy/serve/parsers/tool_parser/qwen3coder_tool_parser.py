@@ -167,12 +167,12 @@ class Qwen3CoderToolParser(ToolParser):
         self._function_param_schemas = self._build_function_param_schemas(request)
         messages = request.messages
         if not isinstance(messages, list):
-            return request
+            return super().adjust_request(request)
 
         normalized_messages = self._normalize_request_messages(messages)
         if normalized_messages is None:
-            return request
-        return request.model_copy(update={'messages': normalized_messages})
+            return super().adjust_request(request)
+        return super().adjust_request(request.model_copy(update={'messages': normalized_messages}))
 
     def _build_function_param_schemas(self, request: ChatCompletionRequest) -> dict[str, dict[str, dict[str, Any]]]:
         """Build function->parameter schema map from request tools."""

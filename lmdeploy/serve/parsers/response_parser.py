@@ -30,7 +30,7 @@ class ResponseParser:
         pass
 
     def __init__(self, request: ChatCompletionRequest, tokenizer: PreTrainedTokenizerBase):
-        pass
+        self.request = request
 
     @abstractmethod
     def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs) -> tuple[DeltaMessage | None, bool]:
