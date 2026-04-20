@@ -279,7 +279,12 @@ class EngineLoop:
 
         all_logprobs = __get_logprobs(batched_outputs)
 
-        seq_length = [seq.num_token_ids for seq in running]
+        if model_inputs is not None:
+            seq_length = model_inputs.seq_length.tolist()
+        elif delta is not None:
+            seq_length = delta.seq_length.tolist()
+        else:
+            seq_length = [seq.num_token_ids for seq in running]
         is_run = [seq.status == MessageStatus.RUNNING for seq in running]
         self.seq_strategy.update_running(running=running,
                                          batched_outputs=batched_outputs,

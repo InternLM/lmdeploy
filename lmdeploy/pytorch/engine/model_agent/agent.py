@@ -460,7 +460,7 @@ class BaseModelAgent:
 
         if return_hidden_states:
             # Extract hidden states to return to the user
-            hs = ret['hidden_states']
+            hs = hidden_states
             seq_length = ret.get('seq_length', inputs.seq_length)
             if hidden_states_all_mode:
                 if return_logits:
