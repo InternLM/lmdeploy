@@ -396,6 +396,12 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     response_format = None
     if request.response_format and request.response_format.type != 'text':
         response_format = request.response_format.model_dump()
+
+    parser_cls = VariableInterface.response_parser_cls
+    response_parser = parser_cls(request=request, tokenizer=tokenizer)
+    # request might be adjusted by tool parser
+    request = response_parser.request
+
     gen_config = GenerationConfig(
         max_new_tokens=max_new_tokens,
         do_sample=True,
@@ -420,12 +426,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         repetition_ngram_size=request.repetition_ngram_size,
         repetition_ngram_threshold=request.repetition_ngram_threshold,
     )
-    parser_cls = VariableInterface.response_parser_cls
-    response_parser = parser_cls(request=request, tokenizer=tokenizer)
-    # request might be adjusted by tool parser
-    request = response_parser.request
-
-    tools = request.tools
 
     # text completion for string input
     do_preprocess = False if isinstance(request.messages, str) else request.do_preprocess
@@ -442,7 +442,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         request.messages,
         session,
         gen_config=gen_config,
-        tools=tools,
+        tools=request.tools,
         reasoning_effort=request.reasoning_effort,
         stream_response=True,  # always use stream to enable batching
         sequence_start=True,
