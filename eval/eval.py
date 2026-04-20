@@ -118,7 +118,7 @@ def update_datasets(config, datasets):
 def get_model_name_from_server(server: str, tag: str) -> str:
     from openai import OpenAI
     try:
-        client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{server}/v1')
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{server}/v1', timeout=60.0, max_retries=3)
         model_name = client.models.list().data[0].id
         return model_name
     except Exception as e:
