@@ -2,6 +2,7 @@
 """Unified profile-driven streaming parser for reasoning/content/tool calls."""
 from __future__ import annotations
 
+import json
 from abc import abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar
@@ -380,7 +381,13 @@ class BaseResponseParser(ResponseParser):
                 return [], False
             emit = self._pending
             self._pending = ''
-            return self.tool_parser.decode_tool_incremental(added_text=emit, final=False), True
+            out = self.tool_parser.decode_tool_incremental(added_text=emit, final=False)
+            if (self.profile.tool_payload_format == 'json'
+                and self._is_complete_json_object(self.tool_parser._tool_payload)):
+                out.extend(self.tool_parser.decode_tool_incremental(added_text='', final=True))
+                self.tool_parser.finish_tool_call()
+                self._mode = self.MODE_PLAIN
+            return out, True
 
         idx = self._pending.find(close_tag)
 
@@ -417,8 +424,6 @@ class BaseResponseParser(ResponseParser):
             profile.tool_payload_format = tparser.get_tool_payload_format()
             if not profile.tool_open_tag:
                 raise RuntimeError(f'Tool parser {tparser.__class__.__name__} must provide a tool start tag')
-            if not profile.tool_close_tag:
-                raise RuntimeError(f'Tool parser {tparser.__class__.__name__} must provide a tool end tag')
         return profile
 
     def parse_complete(
@@ -485,16 +490,23 @@ class BaseResponseParser(ResponseParser):
 
             # tool block
             close_tag = self.profile.tool_close_tag
-            close_idx = text.find(close_tag, open_idx + len(open_tag)) if close_tag else -1
-            if close_idx < 0:
-                # Unterminated tool block: keep as plain text.
-                content_parts.append(text[open_idx:])
-                break
-            tool_payload = text[open_idx + len(open_tag):close_idx].strip()
+            if close_tag:
+                close_idx = text.find(close_tag, open_idx + len(open_tag))
+                if close_idx < 0:
+                    # Unterminated tool block: keep as plain text.
+                    content_parts.append(text[open_idx:])
+                    break
+                tool_payload = text[open_idx + len(open_tag):close_idx].strip()
+            else:
+                close_idx = n
+                tool_payload = text[open_idx + len(open_tag):].strip()
             parsed_call = self.tool_parser.parse_tool_call_complete(tool_payload) if self.tool_parser else None
             if parsed_call is not None:
                 tool_calls.append(parsed_call)
-            pos = close_idx + len(close_tag)
+                pos = close_idx + len(close_tag) if close_tag else n
+            else:
+                content_parts.append(text[open_idx:])
+                break
 
         content = ''.join(content_parts)
         reasoning_content = ''.join(reasoning_parts) if reasoning_parts else None
@@ -524,3 +536,15 @@ class BaseResponseParser(ResponseParser):
                         best = k
                     break
         return best
+
+    @staticmethod
+    def _is_complete_json_object(payload: str) -> bool:
+        payload = payload.strip()
+        if not payload:
+            return False
+        decoder = json.JSONDecoder()
+        try:
+            obj, end = decoder.raw_decode(payload)
+        except json.JSONDecodeError:
+            return False
+        return isinstance(obj, dict) and end == len(payload)

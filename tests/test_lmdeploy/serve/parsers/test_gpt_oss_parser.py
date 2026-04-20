@@ -4,6 +4,7 @@ import pytest
 
 pytest.importorskip('openai_harmony')
 
+from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 from lmdeploy.serve.parsers import _openai_harmony as openai_harmony_mod
 from lmdeploy.serve.parsers import gpt_oss_response_parser as gpt_oss_mod
 
@@ -116,6 +117,70 @@ class TestGptOssResponseParser:
         assert delta.tool_calls[3].function.name == 'get_time'
         assert delta.tool_calls[4].function is not None
         assert delta.tool_calls[4].function.arguments == '{"tz":"UTC"}'
+
+    def test_adjust_request_converts_tools_to_wrapper_dicts(self, monkeypatch):
+        monkeypatch.setattr(
+            openai_harmony_mod,
+            'StreamableParser',
+            lambda *args, **kwargs: _FakeStreamableParser({}),
+        )
+        request = ChatCompletionRequest(
+            model='openai/gpt-oss-20b',
+            messages=[],
+            tools=[
+                {
+                    'type': 'function',
+                    'function': {
+                        'name': 'get_weather',
+                        'parameters': {
+                            'type': 'object',
+                            'properties': {
+                                'city': {
+                                    'type': 'string'
+                                }
+                            }
+                        },
+                    },
+                },
+                {
+                    'type': 'function',
+                    'function': {
+                        'name': 'get_time',
+                        'parameters': {
+                            'type': 'object',
+                            'properties': {
+                                'tz': {
+                                    'type': 'string'
+                                }
+                            }
+                        },
+                    },
+                },
+            ],
+            tool_choice={
+                'type': 'function',
+                'function': {
+                    'name': 'get_time'
+                },
+            },
+        )
+        parser = gpt_oss_mod.GptOssResponseParser(request=request, tokenizer=object())
+
+        assert parser.request.tools == [{
+            'type': 'function',
+            'function': {
+                'name': 'get_time',
+                'parameters': {
+                    'type': 'object',
+                    'properties': {
+                        'tz': {
+                            'type': 'string'
+                        }
+                    },
+                },
+                'description': None,
+            },
+        }]
 
     def test_parse_complete_full_sequence(self, monkeypatch):
         monkeypatch.setattr(

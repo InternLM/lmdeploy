@@ -39,7 +39,21 @@ class GptOssResponseParser(ResponseParser):
     """Harmony stream parser for GPT-OSS (assistant role)."""
 
     def __init__(self, request: ChatCompletionRequest, tokenizer: PreTrainedTokenizerBase):
-        self.request = request
+        if hasattr(request, 'tools') and hasattr(request, 'tool_choice'):
+            # GPT-OSS templates expect full tool wrappers.
+            if request.tools is None or request.tool_choice == 'none':
+                rendered_tools = None
+            elif not isinstance(request.tool_choice, str):
+                rendered_tools = [
+                    item.model_dump() for item in request.tools
+                    if item.function.name == request.tool_choice.function.name
+                ]
+            else:
+                rendered_tools = [item.model_dump() for item in request.tools]
+            self.request = request.model_copy(update={'tools': rendered_tools})
+        else:
+            # Unit tests may inject a lightweight sentinel request object.
+            self.request = request
         self.model_tokenizer = tokenizer
         self.parser = StreamableParser(get_encoding(), role=Role.ASSISTANT)
         self._seen_any = False
