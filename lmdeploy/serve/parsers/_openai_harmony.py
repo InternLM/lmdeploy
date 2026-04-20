@@ -37,6 +37,7 @@ def get_encoding():
 @ResponseParserManager.register_module('gpt-oss')
 class GptOssResponseParser(ResponseParser):
     """Harmony stream parser for GPT-OSS (assistant role)."""
+    tool_parser_cls = object()  # API server checks `is not None` for tool support.
 
     def __init__(self, request: ChatCompletionRequest, tokenizer: PreTrainedTokenizerBase):
         if hasattr(request, 'tools') and hasattr(request, 'tool_choice'):
