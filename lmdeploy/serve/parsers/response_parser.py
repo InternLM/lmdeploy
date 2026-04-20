@@ -38,7 +38,9 @@ class ResponseParser:
         raise NotImplementedError
 
     @abstractmethod
-    def parse_complete(self, text: str, **kwargs) -> tuple[str, list | None, str | None]:
+    def parse_complete(self,
+                       text: str,
+                       token_ids: list[int] | None = None, **kwargs) -> tuple[str, list | None, str | None]:
         raise NotImplementedError
 
 @dataclass
@@ -429,6 +431,7 @@ class BaseResponseParser(ResponseParser):
     def parse_complete(
         self,
         text: str,
+        token_ids: list[int] | None = None,
         **kwargs,
     ) -> tuple[str, list | None, str | None]:
         """Parse the final non-streaming text output.

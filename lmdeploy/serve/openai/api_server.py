@@ -554,7 +554,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
     try:
         text, tool_calls, reasoning_content = response_parser.parse_complete(
-            text)
+            text, final_token_ids)
         if isinstance(tool_calls, list) and len(tool_calls):
             if final_res.finish_reason == 'stop':
                 final_res.finish_reason = 'tool_calls'

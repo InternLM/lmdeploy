@@ -85,47 +85,34 @@ class GptOssResponseParser(ResponseParser):
         reasoning = ''
         tool_deltas: list[DeltaToolCall] = []
 
-        for token in delta_token_ids:
-            prev_recipient = self.parser.current_recipient
-            self.parser.process(token)
-            cur_channel = self.parser.current_channel
-            cur_recipient = self.parser.current_recipient
-            token_delta = self.parser.last_content_delta or ''
-
-            tool_name = self._extract_tool_name(cur_recipient)
-            prev_tool_name = self._extract_tool_name(prev_recipient)
-            is_tool_channel = cur_channel in ('commentary', 'analysis')
-
-            if is_tool_channel and tool_name:
-                # Start of a new tool call.
-                if tool_name != prev_tool_name:
-                    self._active_tool_id = f'chatcmpl-tool-{shortuuid.random()}'
-                    self._active_tool_index = self._next_tool_index
-                    self._active_tool_name = tool_name
-                    self._next_tool_index += 1
-                    tool_deltas.append(
-                        DeltaToolCall(
-                            id=self._active_tool_id,
-                            index=self._active_tool_index,
-                            type='function',
-                            function=DeltaFunctionCall(name=tool_name),
-                        ))
-
-                if token_delta and self._active_tool_id is not None and self._active_tool_index is not None:
+        for event_kind, event_value in self._iter_harmony_events(delta_token_ids):
+            if event_kind == 'tool_start':
+                self._active_tool_id = f'chatcmpl-tool-{shortuuid.random()}'
+                self._active_tool_index = self._next_tool_index
+                self._active_tool_name = event_value
+                self._next_tool_index += 1
+                tool_deltas.append(
+                    DeltaToolCall(
+                        id=self._active_tool_id,
+                        index=self._active_tool_index,
+                        type='function',
+                        function=DeltaFunctionCall(name=event_value),
+                    ))
+                continue
+            if event_kind == 'tool_arguments':
+                if self._active_tool_id is not None and self._active_tool_index is not None:
                     tool_deltas.append(
                         DeltaToolCall(
                             id=self._active_tool_id,
                             index=self._active_tool_index,
                             type=None,
-                            function=DeltaFunctionCall(arguments=token_delta),
+                            function=DeltaFunctionCall(arguments=event_value),
                         ))
                 continue
-
-            # Normal textual channels.
-            if cur_channel == 'final':
-                content += token_delta
-            elif cur_channel == 'analysis':
-                reasoning += token_delta
+            if event_kind == 'content':
+                content += event_value
+            elif event_kind == 'reasoning':
+                reasoning += event_value
 
         if not content and not reasoning and not tool_deltas:
             return None, False
@@ -137,11 +124,11 @@ class GptOssResponseParser(ResponseParser):
             tool_calls=tool_deltas or None,
         ), bool(tool_deltas)
 
-    def parse_complete(self, text: str, **kwargs) -> tuple[str, list | None, str | None]:
-        token_ids = kwargs.get('token_ids') or []
+    def parse_complete(self, text: str, token_ids: list[int] | None = None, **kwargs) -> tuple:
         if not token_ids:
-            # Non-streaming path may not always pass token ids yet.
-            return text if text else None, None, None
+            # Keep non-streaming behavior consistent with other parsers:
+            # when token ids are unavailable, return raw text as assistant content.
+            return text or None, None, None
 
         content = ''
         reasoning = ''
@@ -149,38 +136,29 @@ class GptOssResponseParser(ResponseParser):
         calls: list[dict] = []
         active: dict | None = None
 
-        for token in token_ids:
-            prev_recipient = self.parser.current_recipient
-            self.parser.process(token)
-            cur_channel = self.parser.current_channel
-            cur_recipient = self.parser.current_recipient
-            token_delta = self.parser.last_content_delta or ''
+        for event_kind, event_value in self._iter_harmony_events(token_ids or []):
+            if event_kind == 'tool_start':
+                if active is not None:
+                    calls.append(active)
+                active = {
+                    'id': f'chatcmpl-tool-{shortuuid.random()}',
+                    'name': event_value,
+                    'arguments': '',
+                }
+                continue
 
-            tool_name = self._extract_tool_name(cur_recipient)
-            prev_tool_name = self._extract_tool_name(prev_recipient)
-            is_tool_channel = cur_channel in ('commentary', 'analysis')
-
-            if is_tool_channel and tool_name:
-                if tool_name != prev_tool_name:
-                    if active is not None:
-                        calls.append(active)
-                    active = {
-                        'id': f'chatcmpl-tool-{shortuuid.random()}',
-                        'name': tool_name,
-                        'arguments': '',
-                    }
-                if token_delta and active is not None:
-                    active['arguments'] += token_delta
+            if event_kind == 'tool_arguments':
+                if active is not None:
+                    active['arguments'] += event_value
                 continue
 
             if active is not None:
                 calls.append(active)
                 active = None
-
-            if cur_channel == 'final':
-                content += token_delta
-            elif cur_channel == 'analysis':
-                reasoning += token_delta
+            if event_kind == 'content':
+                content += event_value
+            elif event_kind == 'reasoning':
+                reasoning += event_value
 
         if active is not None:
             calls.append(active)
@@ -194,6 +172,38 @@ class GptOssResponseParser(ResponseParser):
         ] or None
 
         return content or None, tool_calls, reasoning or None
+
+    def _iter_harmony_events(self, token_ids: list[int]):
+        """Yield parsed harmony events from token ids.
+
+        Event kinds:
+        - ``tool_start``: tool-call channel switched to a new function.
+        - ``tool_arguments``: incremental tool-arguments fragment.
+        - ``content``: assistant final-channel content fragment.
+        - ``reasoning``: assistant analysis-channel reasoning fragment.
+        """
+        for token in token_ids:
+            prev_recipient = self.parser.current_recipient
+            self.parser.process(token)
+            cur_channel = self.parser.current_channel
+            cur_recipient = self.parser.current_recipient
+            token_delta = self.parser.last_content_delta or ''
+
+            tool_name = self._extract_tool_name(cur_recipient)
+            prev_tool_name = self._extract_tool_name(prev_recipient)
+            is_tool_channel = cur_channel in ('commentary', 'analysis')
+
+            if is_tool_channel and tool_name:
+                if tool_name != prev_tool_name:
+                    yield 'tool_start', tool_name
+                if token_delta:
+                    yield 'tool_arguments', token_delta
+                continue
+
+            if cur_channel == 'final' and token_delta:
+                yield 'content', token_delta
+            elif cur_channel == 'analysis' and token_delta:
+                yield 'reasoning', token_delta
 
     @staticmethod
     def _extract_tool_name(recipient: str | None) -> str | None:
