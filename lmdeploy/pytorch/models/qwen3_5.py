@@ -1027,6 +1027,11 @@ class Qwen3_5Model(nn.Module):
         grid_thw: torch.Tensor | None = None,
         all_routed_experts: torch.Tensor | None = None,
         return_input_embeds: bool = False,
+        # for time series
+        ts_values: torch.Tensor = None,
+        ts_lens: torch.Tensor = None,
+        ts_sr: torch.Tensor = None,
+        ts_mask: torch.Tensor = None,
     ):
         """Model forward, return logits."""
 
@@ -1053,6 +1058,9 @@ class Qwen3_5Model(nn.Module):
                 # mask and scatter to create final input embeddings
                 expanded_image_mask = image_mask.unsqueeze(-1).expand_as(inputs_embeds)
                 inputs_embeds = inputs_embeds.masked_scatter(expanded_image_mask, image_embeds)
+            elif ts_values is not None:
+                ts_embeds = self.time_series(ts_values, ts_lens, ts_sr)  # [B, T, C]
+                inputs_embeds = inputs_embeds.masked_scatter_(ts_mask[..., None], ts_embeds)
 
         output_inputs_embeds = inputs_embeds if return_input_embeds else None
 
@@ -1130,6 +1138,11 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         pos_embeds: torch.Tensor | None = None,
         grid_thw: torch.Tensor | None = None,
         return_input_embeds: bool = False,
+        # for time series
+        ts_values: torch.Tensor = None,
+        ts_lens: torch.Tensor = None,
+        ts_sr: torch.Tensor = None,
+        ts_mask: torch.Tensor = None,
         **kwargs,
     ):
         """Model forward, return logits."""
@@ -1156,6 +1169,11 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
             grid_thw=grid_thw,
             all_routed_experts=all_routed_experts,
             return_input_embeds=return_input_embeds,
+            # for time series
+            ts_values=ts_values,
+            ts_lens=ts_lens,
+            ts_sr=ts_sr,
+            ts_mask=ts_mask,
         )
         return dict(hidden_states=hidden_states,
                     all_routed_experts=all_routed_experts,
@@ -1195,6 +1213,11 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         image_mask = None
         grid_thw = None
         pos_embeds = None
+        # for time series
+        ts_values = None
+        ts_lens = None
+        ts_sr = None
+        ts_mask = None
         if context.input_multimodals is not None:
             mm_inputs = [input_mm.get('mm_data', []) for input_mm in context.input_multimodals]
             # flatten batch
@@ -1202,21 +1225,29 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
 
             if len(mm_inputs) > 0:
                 modality = mm_inputs[0].modality
-                pixel_values = torch.cat([inp.data for inp in mm_inputs])
-
                 image_token_id = mm_inputs[0].meta.get('image_token_id')
                 video_token_id = mm_inputs[0].meta.get('video_token_id')
-                mm_token_id = image_token_id if modality == Modality.IMAGE else video_token_id
-                image_mask = (input_ids == mm_token_id)
+                ts_token_id = mm_inputs[0].meta.get('ts_token_id')
 
-                grid_thw = torch.cat([data.meta['grid_thw'] for data in mm_inputs]).cpu()
-                vis_pos_emb = self.model.visual.rot_pos_emb(grid_thw)
-                pos_embeds = self.model.visual.fast_pos_embed_interpolate(grid_thw)
-                vis_cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2],
-                                                         grid_thw[:, 0]).to(pixel_values.device)
-                vis_cu_seqlens = vis_cu_seqlens.cumsum(dim=0, dtype=torch.int32)
-                vis_pos_emb = vis_pos_emb.repeat(1, 2)
-                vis_pos_emb = (vis_pos_emb.cos(), vis_pos_emb.sin())
+                if modality == Modality.TIME_SERIES:
+                    ts_values = torch.cat([inp.data for inp in mm_inputs])
+                    ts_mask = input_ids == ts_token_id
+
+                    ts_lens = mm_inputs[0].meta['ts_lens']
+                    ts_sr = mm_inputs[0].meta['ts_sr']
+                else:
+                    pixel_values = torch.cat([inp.data for inp in mm_inputs])
+                    mm_token_id = image_token_id if modality == Modality.IMAGE else video_token_id
+                    image_mask = (input_ids == mm_token_id)
+
+                    grid_thw = torch.cat([data.meta['grid_thw'] for data in mm_inputs]).cpu()
+                    vis_pos_emb = self.model.visual.rot_pos_emb(grid_thw)
+                    pos_embeds = self.model.visual.fast_pos_embed_interpolate(grid_thw)
+                    vis_cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2],
+                                                            grid_thw[:, 0]).to(pixel_values.device)
+                    vis_cu_seqlens = vis_cu_seqlens.cumsum(dim=0, dtype=torch.int32)
+                    vis_pos_emb = vis_pos_emb.repeat(1, 2)
+                    vis_pos_emb = (vis_pos_emb.cos(), vis_pos_emb.sin())
 
         mrope_position_ids = getattr(context, 'mrope_position_ids', None)
 
@@ -1248,6 +1279,11 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
             grid_thw=grid_thw,
             pos_embeds=pos_embeds,
             return_input_embeds=return_input_embeds,
+            # for time series
+            ts_values=ts_values,
+            ts_lens=ts_lens,
+            ts_sr=ts_sr,
+            ts_mask=ts_mask,
         )
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
