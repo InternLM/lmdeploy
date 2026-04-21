@@ -137,13 +137,19 @@ class EngineInstance(EngineInstanceBase):
         """Destructor."""
         self.engine.req_manager.senders.pop(self.req_sender.sender_id)
 
-    def _get_extra_outputs(self, resp: Response):
+    def _get_extra_outputs(self, resp: Response, num_all_ids: int):
         """Get extra outputs."""
         outputs = dict(routed_experts=None)
         routed_experts = resp.data.get('routed_experts', None) if resp.data else None
         if routed_experts is not None and resp.type in [ResponseType.FINISH, ResponseType.CANCEL]:
             if self._enable_transfer_obj_ref:
                 import ray
+                # validate experts
+                num_expected_experts = num_all_ids - 1
+                if routed_experts.shape[0] != num_expected_experts:
+                    logger.warning(f'Expected number of routed_experts: {num_expected_experts}, '
+                                   f'but got {routed_experts.shape[0]}')
+                    routed_experts = routed_experts[:num_expected_experts]
                 key = ray.get(_SHARED_STORE.put.remote(routed_experts))
                 outputs['routed_experts'] = key
             else:
@@ -211,6 +217,7 @@ class EngineInstance(EngineInstanceBase):
             notify_add_msg_func()
 
         output_offset = 0
+        prompt_ids_len = len(input_ids)
 
         while True:
             resp = await self.req_sender.async_recv(resp, wait_main=True)
@@ -218,8 +225,6 @@ class EngineInstance(EngineInstanceBase):
             cache_block_ids = resp.data.get('cache_block_ids', None) if resp.data else None
             req_metrics = resp.data.get('req_metrics', None) if resp.data else None
             logprobs = resp.data.pop('logprobs', None) if resp.data else None
-            extra_outputs = self._get_extra_outputs(resp)
-            routed_experts = extra_outputs.get('routed_experts', None)
 
             if resp.type == ResponseType.SUCCESS:
                 token_ids = resp.data['token_ids']
@@ -229,19 +234,24 @@ class EngineInstance(EngineInstanceBase):
                                    token_ids[output_offset:].tolist(),
                                    cache_block_ids=cache_block_ids,
                                    req_metrics=req_metrics,
-                                   routed_experts=routed_experts,
                                    logprobs=logprobs)
                 output_offset = len(token_ids)
             elif resp.type in (ResponseType.FINISH, ResponseType.CANCEL):
                 resp_data = resp.data
-                if resp_data is None:
+                token_ids = []
+                logits = None
+                if resp_data is not None:
                     # request might be cancelled before any output
-                    token_ids = []
-                    logits = None
-                else:
-                    token_ids = resp_data['token_ids'][output_offset:].tolist()
                     logits = resp_data.get('logits', None)
+                    gen_token_ids = resp_data.get('token_ids', None)
+                    if gen_token_ids is not None:
+                        token_ids = gen_token_ids[output_offset:].tolist()
+
                 num_ids = len(token_ids)
+                num_all_ids = prompt_ids_len + output_offset + num_ids
+                extra_outputs = self._get_extra_outputs(resp, num_all_ids)
+                routed_experts = extra_outputs.get('routed_experts', None)
+
                 logger.debug(f'session[{session_id}] finish: num_out_ids={num_ids}.')
                 yield EngineOutput(resp.type,
                                    token_ids,

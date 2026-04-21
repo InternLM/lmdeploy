@@ -29,6 +29,7 @@ class MPEngine(EngineBase):
         """Initialize mp engine."""
         self.session_states = defaultdict(SessionState)
         self.engine_config = self._collective_rpc('get_engine_config')
+        self.pending_cancel_sessions = set()
 
     def _collective_rpc(self, func, *args, **kwargs):
         """Collective rpc call."""
@@ -101,19 +102,22 @@ class MPEngineInstance(EngineInstanceBase):
     async def async_end(self, session_id: int):
         """End the given session."""
         if session_id not in self.session_states:
+            self.engine.pending_cancel_sessions.discard(session_id)
             logger.warning(f'Session {session_id} not found when end session.')
             return ResponseType.SESSION_NOT_EXIST
         await self.session_states[session_id].is_exists.wait()
         ret = await self.engine._collective_rpc_async('instance_async_end', session_id)
         self.session_states.pop(session_id)
+        self.engine.pending_cancel_sessions.discard(session_id)
         return ret
 
     async def async_cancel(self, session_id: int):
         """Stop current streaming inference."""
         if session_id not in self.session_states:
-            logger.warning(f'Session {session_id} not found when cancel session.')
+            logger.debug(f'Session {session_id} not found when cancel session.')
             return ResponseType.SESSION_NOT_EXIST
         state = self.session_states[session_id]
+        self.engine.pending_cancel_sessions.add(session_id)
         if not state.is_exists.is_set():
             logger.debug(f'Session {session_id} not started yet, recording pending cancel.')
             state.cancelled = True
@@ -123,9 +127,9 @@ class MPEngineInstance(EngineInstanceBase):
     async def async_stream_infer(self, session_id: int, *args, **kwargs):
         """Send stream inference request."""
         state = self.session_states[session_id]
-        if state.cancelled:
+        if state.cancelled or session_id in self.engine.pending_cancel_sessions:
             state.is_exists.set()
-            logger.debug(f'Session {session_id} is cancelled before start.')
+            logger.debug(f'Session {session_id} canceld, async_stream_infer')
             yield EngineOutput(ResponseType.CANCEL, [])
             return
         kwargs['session_id'] = session_id
