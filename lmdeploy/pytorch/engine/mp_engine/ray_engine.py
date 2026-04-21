@@ -46,7 +46,7 @@ class RayEngineWorker(EngineWorkerBase):
             nonlocal init_event
             init_event.set()
 
-        if func == 'async_stream_infer':
+        if func == 'instance_async_stream_infer':
             kwargs['notify_add_msg_func'] = _notify_add_msg
 
         result = EngineOutput(ResponseType.INTERNAL_ENGINE_ERROR, [])
