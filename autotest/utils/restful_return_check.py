@@ -14,8 +14,15 @@ def assert_chat_completions_batch_return(output, model_name, check_logprobs: boo
         assert len(message.get('message').get('content')) > 0
         assert message.get('message').get('role') == 'assistant'
         if check_logprobs:
-            len(message.get('logprobs').get('content')) == output.get('usage').get('completion_tokens')
-            for logprob in message.get('logprobs').get('content'):
+            lp = message.get('logprobs')
+            assert lp is not None, output
+            content_lp = lp.get('content')
+            assert content_lp is not None, output
+            n_tok = output.get('usage', {}).get('completion_tokens')
+            assert len(content_lp) == n_tok, (
+                f'logprobs.content len {len(content_lp)} != completion_tokens {n_tok!r}'
+            )
+            for logprob in content_lp:
                 assert_logprobs(logprob, logprobs_num)
 
 
@@ -31,8 +38,15 @@ def assert_completions_batch_return(output, model_name, check_logprobs: bool = F
         assert message.get('index') == 0
         assert len(message.get('text')) > 0
         if check_logprobs:
-            len(message.get('logprobs').get('content')) == output.get('usage').get('completion_tokens')
-            for logprob in message.get('logprobs').get('content'):
+            lp = message.get('logprobs')
+            assert lp is not None, output
+            content_lp = lp.get('content')
+            assert content_lp is not None, output
+            n_tok = output.get('usage', {}).get('completion_tokens')
+            assert len(content_lp) == n_tok, (
+                f'logprobs.content len {len(content_lp)} != completion_tokens {n_tok!r}'
+            )
+            for logprob in content_lp:
                 assert_logprobs(logprob, logprobs_num)
 
 
