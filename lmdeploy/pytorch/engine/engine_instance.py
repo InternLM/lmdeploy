@@ -106,11 +106,14 @@ def _lazy_create_ray_store():
         try:
             _SHARED_STORE = ray.get_actor(name, namespace='lmdeploy')
         except ValueError:
-            _SHARED_STORE = ray.remote(num_cpus=0,)(SharedStore).options(
-                name=name,
-                namespace='lmdeploy',
-                lifetime='detached',
-            ).remote()
+            try:
+                _SHARED_STORE = ray.remote(num_cpus=0,)(SharedStore).options(
+                    name=name,
+                    namespace='lmdeploy',
+                    lifetime='detached',
+                ).remote()
+            except ray.exceptions.ActorAlreadyExistsError:
+                _SHARED_STORE = ray.get_actor(name, namespace='lmdeploy')
 
 
 class EngineInstance(EngineInstanceBase):
@@ -169,6 +172,7 @@ class EngineInstance(EngineInstanceBase):
                                  gen_config: GenerationConfig = None,
                                  multimodal: InputMultiModalType = None,
                                  adapter_name: str = None,
+                                 notify_add_msg_func = None,
                                  **kwargs):
         """Send stream inference request.
 
@@ -202,6 +206,10 @@ class EngineInstance(EngineInstanceBase):
         )
         logger.debug(f'session[{session_id}] add message: num_input_ids={len(input_ids)}.')
         resp = self.req_sender.send_async(RequestType.ADD_MESSAGE, msg)
+        # notify add msg
+        if notify_add_msg_func is not None:
+            notify_add_msg_func()
+
         output_offset = 0
 
         while True:
