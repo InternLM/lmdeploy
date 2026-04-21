@@ -241,7 +241,7 @@ class EngineInstance(EngineInstanceBase):
                 else:
                     token_ids = resp_data['token_ids'][output_offset:].tolist()
                     logits = resp_data.get('logits', None)
-                num_ids = len(token_ids) - output_offset
+                num_ids = len(token_ids)
                 logger.debug(f'session[{session_id}] finish: num_out_ids={num_ids}.')
                 yield EngineOutput(resp.type,
                                    token_ids,

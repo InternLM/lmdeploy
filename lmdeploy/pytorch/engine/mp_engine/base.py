@@ -4,7 +4,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
-from lmdeploy.messages import ResponseType
+from lmdeploy.messages import EngineOutput, ResponseType
 from lmdeploy.pytorch.disagg.conn.protocol import (
     DistServeConnectionRequest,
     DistServeDropConnectionRequest,
@@ -20,6 +20,7 @@ logger = get_logger('lmdeploy')
 @dataclass
 class SessionState:
     is_exists: asyncio.Event = field(default_factory=asyncio.Event)
+    cancelled: bool = False
 
 
 class MPEngine(EngineBase):
@@ -112,12 +113,21 @@ class MPEngineInstance(EngineInstanceBase):
         if session_id not in self.session_states:
             logger.warning(f'Session {session_id} not found when cancel session.')
             return ResponseType.SESSION_NOT_EXIST
-        await self.session_states[session_id].is_exists.wait()
+        state = self.session_states[session_id]
+        if not state.is_exists.is_set():
+            logger.debug(f'Session {session_id} not started yet, recording pending cancel.')
+            state.cancelled = True
+            return ResponseType.SUCCESS
         return await self.engine._collective_rpc_async('instance_async_cancel', session_id)
 
     async def async_stream_infer(self, session_id: int, *args, **kwargs):
         """Send stream inference request."""
         state = self.session_states[session_id]
+        if state.cancelled:
+            state.is_exists.set()
+            logger.debug(f'Session {session_id} is cancelled before start.')
+            yield EngineOutput(ResponseType.CANCEL, [])
+            return
         kwargs['session_id'] = session_id
         generator = self.engine._collective_rpc_streaming_async('instance_async_stream_infer',
                                                                 state.is_exists,
