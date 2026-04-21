@@ -129,6 +129,18 @@ class EngineLoop:
         self.forward_event = CounterEvent()
         self.migration_event = asyncio.Event()
         self.has_runable_event = RunableEventAsync(self.scheduler)
+        # Sleep uses a small handshake with the scheduling loops:
+        # 1. sleep() sets _sleep_requested and waits for main/migration drain events.
+        # 2. main_loop and migration_loop reach safe boundaries, acknowledge
+        #    drain, then wait on _sleep_resume_event.
+        # 3. wakeup() sets _sleep_resume_event so scheduling can continue.
+        self._sleep_requested = False
+        self._main_sleep_drain_event = asyncio.Event()
+        self._main_sleep_drain_event.set()
+        self._migration_sleep_drain_event = asyncio.Event()
+        self._migration_sleep_drain_event.set()
+        self._sleep_resume_event = asyncio.Event()
+        self._sleep_resume_event.set()
 
         # check init
         if self.config.role != EngineRole.Hybrid:
@@ -139,6 +151,39 @@ class EngineLoop:
         while not self.stop_event.is_set():
             await self.req_manager.step()
             self.has_runable_event.set()
+
+    async def drain_for_sleep(self):
+        """Pause scheduling after the current forward step drains."""
+        if self._sleep_requested:
+            logger.info('EngineLoop sleep drain already requested; waiting for drain point.')
+            await self._main_sleep_drain_event.wait()
+            return
+        logger.info('EngineLoop sleep drain requested.')
+        self._sleep_requested = True
+        self._main_sleep_drain_event.clear()
+        if self.config.role != EngineRole.Hybrid:
+            self._migration_sleep_drain_event.clear()
+        self._sleep_resume_event.clear()
+        # Wake main_loop if it is idle waiting for runnable work, so it can
+        # observe _sleep_requested and acknowledge the drain.
+        self.has_runable_event.event.set()
+        # Wake migration_loop if it is idle on migration_event; it has its own
+        # drain acknowledgement because migration can also touch KV resources.
+        if self.config.role != EngineRole.Hybrid:
+            self.migration_event.set()
+        await self._main_sleep_drain_event.wait()
+        if self.config.role != EngineRole.Hybrid:
+            await self._migration_sleep_drain_event.wait()
+        logger.info('EngineLoop reached sleep drain point.')
+
+    def resume_from_sleep(self):
+        """Resume scheduling after wakeup restores engine resources."""
+        logger.info('EngineLoop resumes scheduling after wakeup.')
+        self._sleep_requested = False
+        self._sleep_resume_event.set()
+        # On resume, respect scheduler state instead of forcing the runnable
+        # event. If sleep ended every session, this should remain cleared.
+        self.has_runable_event.set()
 
     @staticmethod
     def _log_resps(outputs: list[InferOutput]):
@@ -323,6 +368,8 @@ class EngineLoop:
         scheduler = self.scheduler
         if not scheduler.has_unfinished():
             await self.has_runable_event.wait()
+        if self._sleep_requested:
+            return None, None
 
         scheduler.collect_migration_done()
         return await self.inputs_maker.send_next_inputs()
@@ -370,9 +417,23 @@ class EngineLoop:
             await asyncio.sleep(0.1)
 
         while not self.stop_event.is_set():
+            if self._sleep_requested:
+                # Drop prefetched work from before sleep. Sleep ends scheduler
+                # sessions and releases KV cache, so any saved next batch is
+                # stale after the drain point.
+                forward_inputs = None
+                next_running = None
+                # Acknowledge that no new forward input will be scheduled until
+                # wakeup resumes this loop.
+                self._main_sleep_drain_event.set()
+                await self._sleep_resume_event.wait()
+                continue
+
             if next_running is None:
                 forward_inputs, next_running = await self._main_loop_try_send_next_inputs()
                 if next_running is None:
+                    if self._sleep_requested:
+                        continue
                     await __no_running_warning()
                     continue
 
@@ -462,6 +523,12 @@ class EngineLoop:
     async def migration_loop(self):
         """Async loop migration."""
         while not self.stop_event.is_set():
+            if self._sleep_requested:
+                self.migration_event.clear()
+                self._migration_sleep_drain_event.set()
+                await self._sleep_resume_event.wait()
+                continue
+
             migration_ready = self.scheduler._schedule_migration()
             if not migration_ready and not self.scheduler.has_migration_waiting():
                 await self.migration_event.wait()
