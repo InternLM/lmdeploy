@@ -325,7 +325,10 @@ class FusedMoEBase(nn.Module):
 
         This is only used when dp==1 and tp>1, and fused moe module does not perform all_reduce
         """
-        return MoEAllReduce(not self.all_reduce, self.tp, self.tp_mode)
+        dist_ctx = get_dist_manager().current_context()
+        dp = dist_ctx.dist_config.dp
+        enable = (dp == 1) and (not self.all_reduce)
+        return MoEAllReduce(enable, self.tp, self.tp_mode)
 
 
 class MoEAllReduce(nn.Module):
@@ -344,6 +347,12 @@ class MoEAllReduce(nn.Module):
             self._enable_shared_tp = False
             self._all_reduce = False
 
+        if self._all_reduce:
+            dist_ctx = get_dist_manager().current_context()
+            self.group = dist_ctx.moe_tp_group.gpu_group
+        else:
+            self.group = None
+
     def enable_shared_tp(self):
         """Shared tp."""
         return self._enable_shared_tp
@@ -351,5 +360,5 @@ class MoEAllReduce(nn.Module):
     def forward(self, x: torch.Tensor):
         """forward."""
         if self._all_reduce:
-            dist.all_reduce(x)
+            dist.all_reduce(x, group=self.group)
         return x

@@ -716,7 +716,7 @@ def _fused_reduce_hadamard_kernel(
         sink = tl.load(sinks_ptr + cur_head).to(l_sum.dtype)
         l_sum = l_sum + tl.exp2(sink * tl_log2(math.e) - m_max)
 
-    acc = acc / l_sum
+    acc = acc / (l_sum + 1e-10)
 
     # Walsh-Hadamard butterfly via acc buffer as float32 scratch
     scratch_base = cur_batch * stride_abs + cur_head * stride_ah
