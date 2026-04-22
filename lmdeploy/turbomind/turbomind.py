@@ -823,7 +823,7 @@ class TurboMindInstance:
         if cfg.logprobs:
             if cfg.logprobs > MAX_LOGPROBS:
                 cfg.logprobs = MAX_LOGPROBS
-                logger.warning(f'logprobs shoudd be in range [1, {MAX_LOGPROBS}]'
+                logger.warning(f'logprobs should be in range [1, {MAX_LOGPROBS}]'
                                f'update logprobs={cfg.logprobs}')
             c.output_logprobs = cfg.logprobs
         if cfg.random_seed is not None:
