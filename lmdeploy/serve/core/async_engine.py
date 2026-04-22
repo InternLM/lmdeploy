@@ -681,6 +681,7 @@ class AsyncEngine:
 
         async def _proc(session, i):
             async with session.request_handle() as handle:
+                await handle.async_start_session(session.session_id)
                 input_len = len(input_ids[i])
                 # TODO(lvhan): Fix the ugly code later on
                 max_new_tokens = 1 if self.backend == 'turbomind' else 0
