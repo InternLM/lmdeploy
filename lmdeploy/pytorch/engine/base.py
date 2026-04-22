@@ -42,6 +42,10 @@ class EngineBase:
 
 class EngineInstanceBase:
 
+    async def async_start_session(self, session_id: int):
+        """Ensure session exists before streaming starts."""
+        raise NotImplementedError('This method is not implemented.')
+
     async def async_end(self, session_id: int):
         """End the given session."""
         raise NotImplementedError('This method is not implemented.')

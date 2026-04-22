@@ -27,6 +27,9 @@ class Session:
         # Set by api_server to AsyncEngine.epoch when a request binds a session;
         # generate() drops work if stop_all_session() bumped epoch after bind.
         self.epoch: int | None = None
+        # Serialize per-session lifecycle operations (generate startup, abort, close)
+        # without affecting cross-session concurrency.
+        self._lifecycle_lock = asyncio.Lock()
         # event to wait for the session to be active
         self._active: asyncio.Event | None = None
         self._handle = None  # inference instance
@@ -105,23 +108,31 @@ class Session:
 
     async def async_abort(self):
         """Abort the session."""
-        logger.debug(f'[session] Aborting session {self.session_id}, epoch={self.epoch}')
-        if self._handle is not None:
-            await self._handle.async_cancel(self.session_id)
+        async with self._lifecycle_lock:
+            logger.debug(f'[session] Aborting session {self.session_id}, epoch={self.epoch}')
+            # Session already closed/reset; treat as a benign no-op.
+            if self._session_mgr is None:
+                return
+            if self._handle is not None:
+                await self._handle.async_cancel(self.session_id)
 
     async def async_close(self):
         """End the session."""
-        logger.info(f'[session] Ending session {self.session_id}')
-        if self._handle is None and self.step == 0:
-            return
-        if self._handle is not None:
-            await self._active.wait()
-        async with self.request_handle() as handle:
-            try:
-                await handle.async_end(self.session_id)
-            except (Exception, asyncio.CancelledError, GeneratorExit) as e:
-                logger.exception(f'[async_close] exception caught: {e}')
-        self.reset()
+        async with self._lifecycle_lock:
+            logger.info(f'[session] Ending session {self.session_id}')
+            # Already closed/reset; keep end idempotent.
+            if self._session_mgr is None:
+                return
+            if self._handle is None and self.step == 0:
+                return
+            if self._handle is not None:
+                await self._active.wait()
+            async with self.request_handle() as handle:
+                try:
+                    await handle.async_end(self.session_id)
+                except (Exception, asyncio.CancelledError, GeneratorExit) as e:
+                    logger.exception(f'[async_close] exception caught: {e}')
+            self.reset()
 
     def abort(self):
         """Abort the session in sync mode."""

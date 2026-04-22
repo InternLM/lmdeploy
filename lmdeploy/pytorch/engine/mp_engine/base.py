@@ -97,6 +97,15 @@ class MPEngineInstance(EngineInstanceBase):
         self.engine = engine
         self.session_states = engine.session_states
 
+    async def async_start_session(self, session_id: int):
+        """Ensure session exists on all workers before streaming."""
+        # Lazily create local session state at startup.
+        # Before API split, this side effect happened in async_stream_infer.
+        state = self.session_states[session_id]
+        ret = await self.engine._collective_rpc_async('instance_async_start_session', session_id)
+        state.is_exists.set()
+        return ret
+
     async def async_end(self, session_id: int):
         """End the given session."""
         if session_id not in self.session_states:
@@ -117,12 +126,9 @@ class MPEngineInstance(EngineInstanceBase):
 
     async def async_stream_infer(self, session_id: int, *args, **kwargs):
         """Send stream inference request."""
-        state = self.session_states[session_id]
         kwargs['session_id'] = session_id
         kwargs['notify_add_msg'] = True
         generator = self.engine._collective_rpc_streaming_async('instance_async_stream_infer', *args, **kwargs)
-        # session should have been added
-        state.is_exists.set()
 
         async for result in generator:
             yield result

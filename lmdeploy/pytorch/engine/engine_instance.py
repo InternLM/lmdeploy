@@ -163,6 +163,10 @@ class EngineInstance(EngineInstanceBase):
         """
         return try_add_session(self.req_sender, session_id)
 
+    async def async_start_session(self, session_id: int):
+        """Ensure the session exists before request streaming."""
+        await self._async_try_add_session(session_id)
+
     async def async_stream_infer(self,
                                  session_id: int,
                                  input_ids: list[int],
@@ -188,8 +192,6 @@ class EngineInstance(EngineInstanceBase):
             return
         gen_config = gen_config or GenerationConfig()
         sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
-        logger.debug(f'session[{session_id}] try add session.')
-        self.req_sender.send_async(RequestType.ADD_SESSION, dict(session_id=session_id, response=False))
         msg = dict(
             token_ids=input_ids,
             session_id=session_id,

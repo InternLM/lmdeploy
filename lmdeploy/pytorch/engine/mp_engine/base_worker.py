@@ -52,6 +52,11 @@ class EngineInstancePool:
         async with self.instance() as instance:
             return await instance.async_end(session_id)
 
+    async def async_start_session(self, session_id: int):
+        """Ensure session exists before streaming."""
+        async with self.instance() as instance:
+            return await instance.async_start_session(session_id)
+
     async def async_cancel(self, session_id: int):
         """Stop current streaming inference."""
         async with self.instance() as instance:
@@ -119,6 +124,10 @@ class EngineWorkerBase:
     async def instance_async_end(self, session_id: int):
         """End the given session."""
         return await self.instance_pool.async_end(session_id)
+
+    async def instance_async_start_session(self, session_id: int):
+        """Ensure session exists before streaming."""
+        return await self.instance_pool.async_start_session(session_id)
 
     async def instance_async_cancel(self, session_id: int):
         """Stop current streaming inference."""

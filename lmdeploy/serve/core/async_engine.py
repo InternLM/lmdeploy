@@ -458,17 +458,21 @@ class AsyncEngine:
                 self.session_mgr.remove(session)
             return
         async with session.request_handle() as handle:
-            if session.epoch is not None and session.epoch != self.epoch:
-                logger.info(f'[generate] session {session_id} got aborted before starting inference, '
-                               f'session.epoch={session.epoch}, async_engine.epoch={self.epoch}')
-                metrics_processor.increase_failed_requests('abort')
-                yield GenOut(response='',
-                             history_token_len=0,
-                             input_token_len=len(input_ids),
-                             generate_token_len=0,
-                             finish_reason='abort',
-                             token_ids=[])
-                return
+            # Serialize same-session lifecycle operations during startup only.
+            # Once request startup is complete, decode streaming remains lock-free.
+            async with session._lifecycle_lock:
+                if session.epoch is not None and session.epoch != self.epoch:
+                    logger.info(f'[generate] session {session_id} got aborted before starting inference, '
+                                f'session.epoch={session.epoch}, async_engine.epoch={self.epoch}')
+                    metrics_processor.increase_failed_requests('abort')
+                    yield GenOut(response='',
+                                 history_token_len=0,
+                                 input_token_len=len(input_ids),
+                                 generate_token_len=0,
+                                 finish_reason='abort',
+                                 token_ids=[])
+                    return
+                await handle.async_start_session(session.session_id)
             token_ids = input_ids.copy()
             history_len = session.step
             input_len = len(input_ids)
@@ -600,12 +604,9 @@ class AsyncEngine:
                     # until the session is finished, i.e., session.request_handle() context exits.
                     await handle.async_end(session.session_id)
                 self.session_mgr.remove(session)
-        # if sequence_end:
-        #     if self.backend == 'pytorch':
-        #         # manually end pytorch session. session cannot be ended until session.request_handle()
-        #         # context exits
-        #         await session.async_close()
-        #     self.session_mgr.remove(session)
+        # We cannot call end session after with session.request_handle(), because session.async_close()
+        # will try to request another free handle, which might be blocked if other sessions are waiting
+        # for the same request_handle_pool.
 
     def start_loop(self, loop, use_async_api=False):
         """Start engine loop.
