@@ -9,7 +9,6 @@ LMDeploy 使用 OpenAI 消息格式处理所有模态。消息中的每个内容
 | 文本     | `text`            | —                     |
 | 图像     | `image_url`       | `image_url.url`       |
 | 视频     | `video_url`       | `video_url.url`       |
-| 音频     | `audio_url`       | `audio_url.url`       |
 | 时序数据 | `time_series_url` | `time_series_url.url` |
 
 以下示例均面向 lmdeploy 兼容 OpenAI 的 API 服务。启动服务：
@@ -213,81 +212,6 @@ response = client.chat.completions.create(
     temperature=0.8,
     top_p=0.8,
     max_completion_tokens=256,
-)
-print(response.choices[0].message.content)
-```
-
-</details>
-
-______________________________________________________________________
-
-## 单个音频
-
-<details>
-<summary>完整示例</summary>
-
-```python
-from openai import OpenAI
-
-client = OpenAI(api_key='EMPTY', base_url='http://localhost:23333/v1')
-model_name = client.models.list().data[0].id
-
-response = client.chat.completions.create(
-    model=model_name,
-    messages=[{
-        'role': 'user',
-        'content': [
-            {
-                'type': 'audio_url',
-                'audio_url': {
-                    'url': 'https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen3-Omni/demo/cough.wav',
-                },
-            },
-            {
-                'type': 'text',
-                'text': '描述这段音频。',
-            },
-        ],
-    }],
-    temperature=0.8,
-    top_p=0.8,
-)
-print(response.choices[0].message.content)
-```
-
-</details>
-
-______________________________________________________________________
-
-## 多个音频
-
-<details>
-<summary>完整示例</summary>
-
-```python
-from openai import OpenAI
-
-client = OpenAI(api_key='EMPTY', base_url='http://localhost:23333/v1')
-model_name = client.models.list().data[0].id
-
-audio_url_1 = 'https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen3-Omni/demo/cough.wav'
-audio_url_2 = 'https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen3-Omni/demo/cough.wav'
-
-response = client.chat.completions.create(
-    model=model_name,
-    messages=[{
-        'role': 'user',
-        'content': [
-            {'type': 'audio_url', 'audio_url': {'url': audio_url_1}},
-            {'type': 'audio_url', 'audio_url': {'url': audio_url_2}},
-            {
-                'type': 'text',
-                'text': '比较这两段音频，有哪些相似点和不同点？',
-            },
-        ],
-    }],
-    temperature=0.8,
-    top_p=0.8,
 )
 print(response.choices[0].message.content)
 ```

@@ -9,7 +9,6 @@ LMDeploy uses the OpenAI message format for all modalities. Each content item in
 | Text        | `text`            | —                     |
 | Image       | `image_url`       | `image_url.url`       |
 | Video       | `video_url`       | `video_url.url`       |
-| Audio       | `audio_url`       | `audio_url.url`       |
 | Time Series | `time_series_url` | `time_series_url.url` |
 
 All examples below target the lmdeploy OpenAI-compatible API server. Start it with:
@@ -213,81 +212,6 @@ response = client.chat.completions.create(
     temperature=0.8,
     top_p=0.8,
     max_completion_tokens=256,
-)
-print(response.choices[0].message.content)
-```
-
-</details>
-
-______________________________________________________________________
-
-## Single Audio
-
-<details>
-<summary>Complete example</summary>
-
-```python
-from openai import OpenAI
-
-client = OpenAI(api_key='EMPTY', base_url='http://localhost:23333/v1')
-model_name = client.models.list().data[0].id
-
-response = client.chat.completions.create(
-    model=model_name,
-    messages=[{
-        'role': 'user',
-        'content': [
-            {
-                'type': 'audio_url',
-                'audio_url': {
-                    'url': 'https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen3-Omni/demo/cough.wav',
-                },
-            },
-            {
-                'type': 'text',
-                'text': 'Describe this audio.',
-            },
-        ],
-    }],
-    temperature=0.8,
-    top_p=0.8,
-)
-print(response.choices[0].message.content)
-```
-
-</details>
-
-______________________________________________________________________
-
-## Multiple Audios
-
-<details>
-<summary>Complete example</summary>
-
-```python
-from openai import OpenAI
-
-client = OpenAI(api_key='EMPTY', base_url='http://localhost:23333/v1')
-model_name = client.models.list().data[0].id
-
-audio_url_1 = 'https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen3-Omni/demo/cough.wav'
-audio_url_2 = 'https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen3-Omni/demo/cough.wav'
-
-response = client.chat.completions.create(
-    model=model_name,
-    messages=[{
-        'role': 'user',
-        'content': [
-            {'type': 'audio_url', 'audio_url': {'url': audio_url_1}},
-            {'type': 'audio_url', 'audio_url': {'url': audio_url_2}},
-            {
-                'type': 'text',
-                'text': 'Compare these two audios. What are the similarities and differences?',
-            },
-        ],
-    }],
-    temperature=0.8,
-    top_p=0.8,
 )
 print(response.choices[0].message.content)
 ```
