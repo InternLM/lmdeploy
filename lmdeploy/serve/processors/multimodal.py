@@ -17,6 +17,13 @@ from lmdeploy.vl.media.video import VideoMediaIO
 logger = get_logger('lmdeploy')
 
 
+def _is_new_preprocess_api(model) -> bool:
+    """New-style preprocess takes `input_prompt` + `mm_processor_kwargs`,
+    legacy takes only `messages`."""
+    sig = inspect.signature(model.preprocess).parameters
+    return 'input_prompt' in sig and 'mm_processor_kwargs' in sig
+
+
 class MultimodalProcessor:
     """Processor for handling prompt preprocessing, message content merging,
     and multimodal processing."""
@@ -38,8 +45,7 @@ class MultimodalProcessor:
         self.chat_template = chat_template
         self.vl_encoder = vl_encoder
         self.backend = backend
-        _sig = inspect.signature(vl_encoder.model.preprocess).parameters if vl_encoder else {}
-        self._uses_new_preprocess = 'input_prompt' in _sig and 'mm_processor_kwargs' in _sig
+        self._uses_new_preprocess = _is_new_preprocess_api(vl_encoder.model) if vl_encoder else False
 
     @staticmethod
     def merge_message_content(msg: dict) -> dict:
