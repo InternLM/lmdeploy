@@ -73,6 +73,12 @@ MoeFfnLayer::MoeFfnLayer(const ModelParam& model, const MoeParam& param, const E
         topk_weights_ = {max_token_num * param_.experts_per_token, kDEVICE};
         topk_idx_     = {max_token_num * param_.experts_per_token, kDEVICE};
         Clear(offsets_);
+
+        const int max_ll_recv_tokens = max_local_expert_num * param_.ll_max_tokens_per_rank * d_comm_->n_ranks(0);
+        if (f2n_.size() < max_ll_recv_tokens) {
+            f2n_ = {max_ll_recv_tokens, kDEVICE};
+            f2E_ = {max_ll_recv_tokens, kDEVICE};
+        }
     }
 }
 
@@ -199,12 +205,16 @@ void MoeFfnLayer::RouteEP(ForwardParam& p, Tensor_<float>& logits)
     ep_mode_ = p.max_tokens_per_rank <= param_.ll_max_tokens_per_rank ? comm::EpMode::kLowLatency :
                                                                         comm::EpMode::kHighThroughput;
 
-    auto       input_type    = p.weights->block.fused_gating_intermediate.input_type;
-    const bool use_fp8       = input_type == kFloat8_e4m3 || input_type == kBfloat16;
+    const int num_worst_tokens = ep_mode_ == comm::EpMode::kLowLatency ? param_.ll_max_tokens_per_rank * expert_num :
+                                                                         p.max_tokens_per_rank * d_comm_->n_ranks(0);
+
+    const auto input_type    = p.weights->block.fused_gating_intermediate.input_type;
+    const bool use_fp8       = false;  // input_type == kFloat8_e4m3 || input_type == kBfloat16;
     const bool output_scales = use_fp8 && input_type == kFloat8_e4m3;
     const bool zero_copy     = ep_mode_ == comm::EpMode::kLowLatency;
 
-    comm::EpDispatchInput  dispatch_input{ep_mode_, p.input, topk_weights, topk_idx, use_fp8, output_scales, zero_copy};
+    comm::EpDispatchInput dispatch_input{
+        ep_mode_, p.input, topk_weights, topk_idx, num_worst_tokens, use_fp8, output_scales, zero_copy};
     comm::EpDispatchOutput dispatch_output{{}, {}, {}, f2n_, f2E_, en2f_, offsets_, {}};
     d_comm_->Dispatch(dispatch_input, dispatch_output, 0);
     sync_check_cuda_error();
@@ -335,12 +345,15 @@ void MoeFfnLayer::ForwardFused(ForwardParam& p)
     auto indices = f2n_.slice(0, temp_.shape(0));
     auto offsets = offsets_.slice(0, local_expert_num + 1);
 
+    const int* total_tokens_ptr =
+        (dispatch_output_ && ep_mode_ == comm::EpMode::kLowLatency) ? offsets_.data() + local_expert_num : nullptr;
+
     Tensor scales = dispatch_output_ ? dispatch_output_->out_x_scales : Tensor{};  // the ep dispatched scales
     Tensor inter  = linear_.Forward(input_, scales, block.fused_gating_intermediate, indices, offsets);
     sync_check_cuda_error();
 
     if (!block.is_fused_silu) {
-        Activation(inter, block.fused_gating_intermediate.bias, f2E_, moe.block.act_type, st);
+        Activation(inter, block.fused_gating_intermediate.bias, f2E_, moe.block.act_type, total_tokens_ptr, st);
         sync_check_cuda_error();
     }
 
@@ -403,7 +416,9 @@ void MoeFfnLayer::CombineEP(ForwardParam& p)
                                 st);
     }
     else {
-        invokeMoeAddBias(temp_, p.weights->block.output.bias, f2E_.data(), st);
+        const int  local_expert_num = p.weights->experts.size();
+        const int* total_tokens_ptr = offsets_.data() + local_expert_num;
+        invokeMoeAddBias(temp_, p.weights->block.output.bias, f2E_.data(), total_tokens_ptr, st);
     }
     sync_check_cuda_error();
 

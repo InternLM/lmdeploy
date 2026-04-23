@@ -5,6 +5,10 @@
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
 
+#include "src/turbomind/utils/cuda_utils.h"
+
+#include <algorithm>
+
 namespace turbomind {
 
 template<class T>
@@ -26,12 +30,18 @@ struct Silu {
 };
 
 template<int vec_size, class Activation, class T>
-__global__ void ActivationKernel(
-    T* gate_buf, const T* __restrict__ up_buf, Activation activation, int64_t stride, int token_num, int dim)
+__global__ void ActivationKernel(T* gate_buf,
+                                 const T* __restrict__ up_buf,
+                                 Activation activation,
+                                 int64_t    stride,
+                                 const int* __restrict__ total_tokens_ptr,
+                                 int token_num,
+                                 int dim)
 {
     if constexpr (TURBOMIND_ARCH_DTYPE_GUARD(data_type_v<T>)) {
+        const int total = total_tokens_ptr ? __ldg(total_tokens_ptr) : token_num;
+
         const int di = threadIdx.x + blockIdx.y * blockDim.x;
-        const int ti = blockIdx.x;
 
         dim /= vec_size;
 
@@ -41,25 +51,28 @@ __global__ void ActivationKernel(
 
         using Vec = Array<T, vec_size>;
 
-        auto p_gate = reinterpret_cast<Vec*>(gate_buf + ti * stride);
-        auto p_up   = reinterpret_cast<const Vec*>(up_buf + ti * stride);
+        for (int ti = blockIdx.x; ti < total; ti += gridDim.x) {
+            auto p_gate = reinterpret_cast<Vec*>(gate_buf + ti * stride);
+            auto p_up   = reinterpret_cast<const Vec*>(up_buf + ti * stride);
 
-        Vec gate;
-        Load(gate, (const T*)&p_gate[di]);
+            Vec gate;
+            Load(gate, (const T*)&p_gate[di]);
 
-        Vec up;
-        Ldg(up, (T*)&p_up[di]);
+            Vec up;
+            Ldg(up, (T*)&p_up[di]);
 
-        PRAGMA_UNROLL
-        for (int i = 0; i < vec_size; ++i) {
-            gate[i] = activation(gate[i], up[i]);
+            PRAGMA_UNROLL
+            for (int i = 0; i < vec_size; ++i) {
+                gate[i] = activation(gate[i], up[i]);
+            }
+
+            Store((T*)&p_gate[di], gate);
         }
-
-        Store((T*)&p_gate[di], gate);
     }
 }
 
-void Activation(Ref<Tensor> gate_, const Tensor& up, ActivationType type, cudaStream_t stream)
+void Activation(
+    Ref<Tensor> gate_, const Tensor& up, ActivationType type, const int* total_tokens_ptr, cudaStream_t stream)
 {
     auto& gate = gate_.get();
 
@@ -74,12 +87,15 @@ void Activation(Ref<Tensor> gate_, const Tensor& up, ActivationType type, cudaSt
         constexpr int vec_size = 4;
         constexpr int threads  = 512;
 
-        const dim3 blocks(num, cdiv(dim, threads * vec_size));
+        static const int sm_count = getSMCount();
+        const int        grid_x   = std::min<int>(num, sm_count * 4);
+        const dim3       blocks(grid_x, cdiv(dim, threads * vec_size));
 
         ActivationKernel<vec_size><<<blocks, threads, 0, stream>>>(gate.data<T>(),  //
                                                                    up.data<T>(),
                                                                    act,
                                                                    gate.stride(0),
+                                                                   total_tokens_ptr,
                                                                    num,
                                                                    dim);
     };
@@ -101,13 +117,19 @@ void Activation(Ref<Tensor> gate_, const Tensor& up, ActivationType type, cudaSt
 }
 
 template<int vec_size, class Activation, class T>
-__global__ void ActivationKernel(
-    T* gate_up, const T* bias, const int* group_ids, int64_t stride, Activation activation, int token_num, int dim)
+__global__ void ActivationKernel(T*         gate_up,
+                                 const T*   bias,
+                                 const int* group_ids,
+                                 int64_t    stride,
+                                 Activation activation,
+                                 const int* __restrict__ total_tokens_ptr,
+                                 int token_num,
+                                 int dim)
 {
     if constexpr (TURBOMIND_ARCH_DTYPE_GUARD(data_type_v<T>)) {
+        const int total = total_tokens_ptr ? __ldg(total_tokens_ptr) : token_num;
+
         const int di = (threadIdx.x + blockIdx.y * blockDim.x) * vec_size;
-        const int ti = blockIdx.x;
-        const int gi = group_ids ? group_ids[ti] : 0;
 
         if (di >= dim) {
             return;
@@ -115,26 +137,30 @@ __global__ void ActivationKernel(
 
         using Vec = Array<T, vec_size>;
 
-        Vec gate_bias{}, up_bias{};
-        Ldg(gate_bias, &bias[gi * stride + di]);
-        Ldg(up_bias, &bias[gi * stride + dim + di]);
+        for (int ti = blockIdx.x; ti < total; ti += gridDim.x) {
+            const int gi = group_ids ? group_ids[ti] : 0;
 
-        Vec gate, up;
-        Load(gate, &gate_up[ti * stride + di]);
-        Load(up, &gate_up[ti * stride + dim + di]);
+            Vec gate_bias{}, up_bias{};
+            Ldg(gate_bias, &bias[gi * stride + di]);
+            Ldg(up_bias, &bias[gi * stride + dim + di]);
 
-        {
-            using namespace ops;
-            gate = gate + gate_bias;
-            up   = up + up_bias;
+            Vec gate, up;
+            Load(gate, &gate_up[ti * stride + di]);
+            Load(up, &gate_up[ti * stride + dim + di]);
+
+            {
+                using namespace ops;
+                gate = gate + gate_bias;
+                up   = up + up_bias;
+            }
+
+            PRAGMA_UNROLL
+            for (int i = 0; i < vec_size; ++i) {
+                gate[i] = activation(gate[i], up[i]);
+            }
+
+            Store(&gate_up[ti * stride + di], gate);
         }
-
-        PRAGMA_UNROLL
-        for (int i = 0; i < vec_size; ++i) {
-            gate[i] = activation(gate[i], up[i]);
-        }
-
-        Store(&gate_up[ti * stride + di], gate);
     }
 }
 
@@ -142,6 +168,7 @@ void Activation(Tensor&             gate_up,  //
                 const Tensor&       bias,
                 const Buffer_<int>& group_ids,
                 ActivationType      type,
+                const int*          total_tokens_ptr,
                 cudaStream_t        stream)
 {
     const int num = gate_up.shape(0);
@@ -151,6 +178,7 @@ void Activation(Tensor&             gate_up,  //
         Activation(gate_up.slice({0, 0}, {-1, dim}),  //
                    gate_up.slice({0, dim}, {-1, -1}),
                    type,
+                   total_tokens_ptr,
                    stream);
         return;
     }
@@ -163,13 +191,16 @@ void Activation(Tensor&             gate_up,  //
         constexpr int vec_size = 4;
         constexpr int threads  = 512;
 
-        const dim3 blocks(num, cdiv(dim, threads * vec_size));
+        static const int sm_count = getSMCount();
+        const int        grid_x   = std::min<int>(num, sm_count * 4);
+        const dim3       blocks(grid_x, cdiv(dim, threads * vec_size));
 
         ActivationKernel<vec_size><<<blocks, threads, 0, stream>>>(gate_up.data<T>(),  //
                                                                    bias.data_or((T*)nullptr),
                                                                    group_ids.data_or(nullptr),
                                                                    gate_up.stride(0),
                                                                    act,
+                                                                   total_tokens_ptr,
                                                                    num,
                                                                    dim);
     };

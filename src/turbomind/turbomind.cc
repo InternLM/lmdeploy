@@ -494,7 +494,7 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     for (auto it = expert_num.begin(); it != expert_num.end(); ++it) {
         moe_param_.expert_num.push_back(it->as<int>());
     }
-    moe_param_.ll_max_tokens_per_rank = model["ll_max_tokens_per_rank"].as<int>(128);  // -1 means not use low latency
+    moe_param_.ll_max_tokens_per_rank = model["ll_max_tokens_per_rank"].as<int>(256);  // -1 means not use low latency
 
     HandleMissingParams();
 

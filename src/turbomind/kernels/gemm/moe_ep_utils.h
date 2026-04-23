@@ -31,7 +31,8 @@ void invokeMoeRoutingMapEp(int*           f2n,
                            cudaStream_t   stream);
 
 // Add expert-specific bias to received expert outputs in-place for low latency combine.
-void invokeMoeAddBias(Ref<Tensor> out, const Tensor& bias, const int* f2E, cudaStream_t st);
+void invokeMoeAddBias(
+    Ref<Tensor> out, const Tensor& bias, const int* f2E, const int* total_tokens_ptr, cudaStream_t st);
 
 // Local reduce experts outputs before combine in EP mode(High throughput).
 void invokeMoeLocalCombineEp(Ref<Tensor>   out,
@@ -49,13 +50,9 @@ void invokeMoeLocalCombineEp(Ref<Tensor>   out,
 void invokeMoeCombineOutputEp(
     Ref<Tensor> output, const Tensor& src, const float* shared_scales, float scale, cudaStream_t st);
 
-void invokeMoeLLDispatchPostprocess(int*          f2n,
-                                    int*          f2E,
-                                    const int*    offsets,
-                                    volatile int* moe_recv_counter,
-                                    int*          moe_recv_counter_mapped,
-                                    const Tensor& packed_recv_x,
-                                    cudaStream_t  st);
+// Build `f2n` and `f2E` mappings from device-side `offsets`.
+void invokeMoeLLDispatchPostprocess(
+    int* f2n, int* f2E, const int* offsets, const Tensor& packed_recv_x, cudaStream_t st);
 
 // Reorder sparse LL dispatch scales from [E, H/128, max_T] contiguous (deep_ep
 // layout) to [H/128, E*max_T] contiguous (the layout expected by

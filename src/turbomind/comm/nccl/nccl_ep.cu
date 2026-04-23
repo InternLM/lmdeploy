@@ -94,27 +94,18 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
         sync_check_cuda_error();
 
         // Compute f2n, f2E (f2n points into the flattened sparse packed_recv_x)
-        invokeMoeLLDispatchPostprocess(output.f2n.data(),
-                                       output.f2E.data(),
-                                       output.offsets.data(),
-                                       buffer_->moe_recv_counter,
-                                       buffer_->moe_recv_counter_mapped,
-                                       packed_recv_x,
-                                       st);
+        invokeMoeLLDispatchPostprocess(output.f2n.data(), output.f2E.data(), output.offsets.data(), packed_recv_x, st);
         sync_check_cuda_error();
 
-        const int num_expert_tokens = *buffer_->moe_recv_counter;
-
         // Expose the sparse buffer as a flat 2D view; downstream linear gathers via f2n.
-        const int num_max_tokens = packed_recv_x.shape(1);
-        const int hidden         = packed_recv_x.shape(2);
-        Tensor    sparse_out_x   = packed_recv_x.view({num_local_experts * num_max_tokens, hidden});
+        Tensor sparse_out_x = packed_recv_x.view({-1, packed_recv_x.shape().back()});
+        TM_CHECK_EQ(sparse_out_x.shape(0), input.num_worst_tokens);
 
         // Reorder sparse scales into [H/128, E*max_T] sparse layout, writing only the
         // valid prefix of each expert; gaps stay uninitialized and are never read.
         if (input.use_fp8) {
             const int num_groups = packed_recv_x_scales->shape(2);
-            Tensor    out_scales{{num_groups, num_local_experts * num_max_tokens}, kFloat32, kDEVICE};
+            Tensor    out_scales{{num_groups, input.num_worst_tokens}, kFloat32, kDEVICE};
             invokeMoeLLDispatchScalesLayoutConvert(out_scales, packed_recv_x_scales.value(), packed_recv_count, st);
             sync_check_cuda_error();
             if (input.output_scales) {
@@ -122,8 +113,9 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
                 output.out_x_scales = out_scales;
             }
             else {
-                Tensor indices{output.f2n.slice(0, num_expert_tokens)};
-                DequantizeSymm(output.out_x, sparse_out_x, out_scales, indices, st);
+                const int* total_ptr = output.offsets.data() + num_local_experts;
+                Tensor     indices{output.f2n.slice(0, input.num_worst_tokens)};
+                DequantizeSymm(output.out_x, sparse_out_x, out_scales, indices, total_ptr, st);
                 sync_check_cuda_error();
             }
         }
@@ -132,8 +124,8 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
         }
 
         // Generate output
-        output.handle        = {packed_recv_src_info, packed_recv_layout_range, output.offsets};
-        output.out_token_num = output.out_expert_token_num = num_expert_tokens;
+        output.handle               = {packed_recv_src_info, packed_recv_layout_range, output.offsets};
+        output.out_expert_token_num = input.num_worst_tokens;
 
         if (input.zero_copy) {
             output.rdma = buffer_->get_next_low_latency_combine_buffer(
@@ -174,7 +166,6 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
                 output.out_x = recv_x;
             }
             output.out_topk_weights = recv_topk_weights;
-            output.out_token_num    = recv_x.shape(0);
             output.out_expert_token_num =
                 std::accumulate(num_recv_tokens_per_expert_list.begin(), num_recv_tokens_per_expert_list.end(), 0);
 

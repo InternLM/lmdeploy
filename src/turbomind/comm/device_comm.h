@@ -33,6 +33,7 @@ struct EpDispatchInput {
     core::Tensor&           x;
     core::Tensor_<float>&   topk_weights;
     core::Tensor_<int64_t>& topk_idx;
+    int                     num_worst_tokens;
     bool                    use_fp8;
     bool                    output_scales;
     bool                    zero_copy{false};
@@ -49,7 +50,6 @@ struct EpDispatchOutput {
 
     std::vector<core::Tensor> handle;
 
-    int out_token_num;
     int out_expert_token_num;
 
     core::Tensor rdma;  // used for low-latency

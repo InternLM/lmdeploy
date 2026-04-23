@@ -8,6 +8,12 @@ void DequantizeSymm(Tensor& out, const Tensor& src, const Tensor& scale, cudaStr
 
 void DequantizeSymm(Tensor& out, const Tensor& src, const Tensor& scale, const Tensor& indices, cudaStream_t st);
 
+// Device-size variant: `indices` is oversized up to an upper bound; `num_ptr` points to a device
+// int scalar that holds the real number of valid rows. Blocks beyond that limit early-exit via a
+// single cached load.
+void DequantizeSymm(
+    Tensor& out, const Tensor& src, const Tensor& scale, const Tensor& indices, const int* num_ptr, cudaStream_t st);
+
 void QuantizeSymmBlock(Ref<Tensor> out_, Ref<Tensor> scale_, const Tensor& src, cudaStream_t st);
 
 void DequantizeSymmBlock(Ref<Tensor> out_, Ref<Tensor> src_, const Tensor& scale, cudaStream_t st);

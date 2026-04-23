@@ -11,6 +11,8 @@
 
 #include <cub/block/block_scan.cuh>
 
+#include <algorithm>
+
 namespace turbomind {
 
 template<int max_expert_num, int max_top_k, int items_per_thread, int block_dim, int access_size>
@@ -308,31 +310,35 @@ void invokeMoeRoutingMapEp(int*           f2n,
 }
 
 template<int vec_size, int block_dim, class T>
-__global__ void MoeAddBiasKernel(T* dst, const T* bias, const int* f2E, int dim)
+__global__ void
+MoeAddBiasKernel(T* dst, const T* bias, const int* f2E, const int* __restrict__ total_tokens_ptr, int tokens, int dim)
 {
     if constexpr (TURBOMIND_ARCH_DTYPE_GUARD(data_type_v<T>)) {
-        const int ti = blockIdx.x;
-
-        dst += (int64_t)dim * ti;
-        bias += (int64_t)dim * __ldg(&f2E[ti]);
+        const int total = total_tokens_ptr ? __ldg(total_tokens_ptr) : tokens;
 
         using Vec = Array<T, vec_size>;
 
-        for (int i = threadIdx.x * vec_size; i < dim; i += block_dim * vec_size) {
-            Vec x;
-            Vec b;
-            Load(x, dst + i);
-            Load(b, bias + i);
-            PRAGMA_UNROLL
-            for (int j = 0; j < vec_size; ++j) {
-                x[j] = (T)((float)x[j] + (float)b[j]);
+        for (int ti = blockIdx.x; ti < total; ti += gridDim.x) {
+            T*       dst_row  = dst + (int64_t)dim * ti;
+            const T* bias_row = bias + (int64_t)dim * __ldg(&f2E[ti]);
+
+            for (int i = threadIdx.x * vec_size; i < dim; i += block_dim * vec_size) {
+                Vec x;
+                Vec b;
+                Load(x, dst_row + i);
+                Load(b, bias_row + i);
+                PRAGMA_UNROLL
+                for (int j = 0; j < vec_size; ++j) {
+                    x[j] = (T)((float)x[j] + (float)b[j]);
+                }
+                Store(dst_row + i, x);
             }
-            Store(dst + i, x);
         }
     }
 }
 
-void invokeMoeAddBias(Ref<Tensor> out_, const Tensor& bias, const int* f2E, cudaStream_t st)
+void invokeMoeAddBias(
+    Ref<Tensor> out_, const Tensor& bias, const int* f2E, const int* total_tokens_ptr, cudaStream_t st)
 {
     auto& out = out_.get();
 
@@ -354,7 +360,11 @@ void invokeMoeAddBias(Ref<Tensor> out_, const Tensor& bias, const int* f2E, cuda
 
         TM_CHECK_EQ(dim % vec_size, 0);
 
-        MoeAddBiasKernel<vec_size, threads><<<tokens, threads, 0, st>>>(out.data<T>(), bias.data<T>(), f2E, dim);
+        static const int sm_count = getSMCount();
+        const int        grid     = std::min<int>(tokens, sm_count * 8);
+
+        MoeAddBiasKernel<vec_size, threads>
+            <<<grid, threads, 0, st>>>(out.data<T>(), bias.data<T>(), f2E, total_tokens_ptr, tokens, dim);
         sync_check_cuda_error();
     };
 
@@ -569,19 +579,11 @@ void invokeMoeCombineOutputEp(
     TM_DISPATCH_PRIMARY_DTYPES(src.dtype(), dispatch);
 }
 
-__global__ void MoeLLDispatchRoutingMapKernel(int* moe_recv_counter_mapped,  //
-                                              int* f2n,
-                                              int* f2E,
-                                              const int* __restrict__ offsets,
-                                              int num_max_tokens)
+__global__ void MoeLLDispatchRoutingMapKernel(int* f2n, int* f2E, const int* __restrict__ offsets, int num_max_tokens)
 {
     const int ei    = blockIdx.x;
     const int begin = offsets[ei];
     const int end   = offsets[ei + 1];
-
-    if (ei == gridDim.x - 1 && threadIdx.x == 0) {
-        *moe_recv_counter_mapped = end;
-    }
 
     for (int idx = begin + threadIdx.x; idx < end; idx += blockDim.x) {
         f2n[idx] = ei * num_max_tokens + (idx - begin);
@@ -589,24 +591,15 @@ __global__ void MoeLLDispatchRoutingMapKernel(int* moe_recv_counter_mapped,  //
     }
 }
 
-void invokeMoeLLDispatchPostprocess(int*          f2n,
-                                    int*          f2E,
-                                    const int*    offsets,
-                                    volatile int* moe_recv_counter,
-                                    int*          moe_recv_counter_mapped,
-                                    const Tensor& packed_recv_x,
-                                    cudaStream_t  st)
+void invokeMoeLLDispatchPostprocess(
+    int* f2n, int* f2E, const int* offsets, const Tensor& packed_recv_x, cudaStream_t st)
 {
     const int num_local_experts = packed_recv_x.shape(0);
     const int num_max_tokens    = packed_recv_x.shape(1);
     const int threads           = 256;
 
-    *moe_recv_counter = -1;
-    MoeLLDispatchRoutingMapKernel<<<num_local_experts, threads, 0, st>>>(
-        moe_recv_counter_mapped, f2n, f2E, offsets, num_max_tokens);
+    MoeLLDispatchRoutingMapKernel<<<num_local_experts, threads, 0, st>>>(f2n, f2E, offsets, num_max_tokens);
     sync_check_cuda_error();
-
-    while (*moe_recv_counter < 0) {};
 }
 
 // Reorder deep_ep's sparse LL dispatch scales into the layout expected by the
