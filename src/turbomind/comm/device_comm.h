@@ -48,11 +48,10 @@ struct EpDispatchOutput {
     core::Buffer_<int>& en2f;
     core::Buffer_<int>& offsets;
 
+    const int*   num_distinct_tokens_ptr{};  // used for high-throughput
+    core::Tensor rdma;                       // used for low-latency
+
     std::vector<core::Tensor> handle;
-
-    int out_expert_token_num;
-
-    core::Tensor rdma;  // used for low-latency
 };
 
 struct EpCombineInput {

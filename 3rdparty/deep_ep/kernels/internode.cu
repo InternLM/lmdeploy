@@ -340,11 +340,11 @@ __global__ void notify_dispatch(const int* num_tokens_per_rank,
             for (int i = 0; i < NUM_MAX_NVL_PEERS; ++i)
                 sum += nvl_recv_num_tokens_per_expert.buffer(i)[thread_id];
             sum = (sum + expert_alignment - 1) / expert_alignment * expert_alignment;
+            moe_recv_expert_counter_ten[thread_id] = sum;
             if (num_worst_tokens == 0) {
                 while (ld_volatile_global(moe_recv_expert_counter_mapped + thread_id) != -1)
                     ;
                 moe_recv_expert_counter_mapped[thread_id] = sum;
-                moe_recv_expert_counter_ten[thread_id] = sum;
             }
         }
 

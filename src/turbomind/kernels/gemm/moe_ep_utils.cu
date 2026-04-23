@@ -242,9 +242,17 @@ void invokeMoeGateEp(float*       topk_weights,
 
 // Kernel: compute f2n, f2E, en2f from recv_topk_idx after EP dispatch.
 // One CTA per local expert. Each CTA scans all received tokens in chunks,
+// bounded by the real total (via `total_tokens_ptr`) when supplied so that
+// padding rows past the real count cost no BlockScan iterations.
 template<int block_dim>
-__global__ void MoeEpRoutingMapKernel(
-    int* f2n, int* f2E, int* en2f, const int* offsets, const int64_t* recv_topk_idx, int num_tokens, int topk)
+__global__ void MoeEpRoutingMapKernel(int*           f2n,
+                                      int*           f2E,
+                                      int*           en2f,
+                                      const int*     offsets,
+                                      const int64_t* recv_topk_idx,
+                                      const int* __restrict__ total_tokens_ptr,
+                                      int num_tokens,
+                                      int topk)
 {
     using BlockScan = cub::BlockScan<int, block_dim>;
     __shared__ typename BlockScan::TempStorage temp_storage;
@@ -253,15 +261,17 @@ __global__ void MoeEpRoutingMapKernel(
 
     int write_offset = offsets[local_eid];
 
+    const int total = total_tokens_ptr ? __ldg(total_tokens_ptr) : num_tokens;
+
     // All threads iterate the same number of chunks (base is thread-independent).
-    // Threads with ti >= num_tokens contribute flag=0 to BlockScan.
-    const int num_chunks = ceil_div(num_tokens, block_dim);
+    // Threads with ti >= total contribute flag=0 to BlockScan.
+    const int num_chunks = ceil_div(total, block_dim);
     for (int chunk = 0; chunk < num_chunks; ++chunk) {
         const int ti = chunk * block_dim + threadIdx.x;
 
         // Check if this token is assigned to this expert
         int match_k = -1;
-        if (ti < num_tokens) {
+        if (ti < total) {
             for (int k = 0; k < topk; ++k) {
                 if (static_cast<int>(recv_topk_idx[ti * topk + k]) == local_eid) {
                     match_k = k;
@@ -292,6 +302,7 @@ void invokeMoeRoutingMapEp(int*           f2n,
                            int*           en2f,
                            int*           offsets,
                            const int64_t* recv_topk_idx,
+                           const int*     total_tokens_ptr,
                            int            num_tokens,
                            int            topk,
                            int            num_local_experts,
@@ -304,8 +315,8 @@ void invokeMoeRoutingMapEp(int*           f2n,
     constexpr int block = 256;
     check_cuda_error(cudaMemsetAsync(en2f, -1, sizeof(int) * num_tokens * topk, stream));
     // One CTA per local expert
-    MoeEpRoutingMapKernel<block>
-        <<<num_local_experts, block, 0, stream>>>(f2n, f2E, en2f, offsets, recv_topk_idx, num_tokens, topk);
+    MoeEpRoutingMapKernel<block><<<num_local_experts, block, 0, stream>>>(
+        f2n, f2E, en2f, offsets, recv_topk_idx, total_tokens_ptr, num_tokens, topk);
     sync_check_cuda_error();
 }
 
@@ -371,7 +382,7 @@ void invokeMoeAddBias(
     TM_DISPATCH_PRIMARY_DTYPES(out.dtype(), dispatch);
 }
 
-// Combine kernel for EP mode: one CTA per received token.
+// Combine kernel for EP mode: one CTA per received token via grid-stride loop.
 // For each token, gather expert outputs weighted by topk_weights and sum them.
 // en2f[k * tokens + ti] gives the flat index in src for token ti's k-th expert slot,
 // or -1 if no local expert matched that slot.
@@ -383,54 +394,57 @@ __global__ void MoeCombineKernel(T*           dst,           // [num_tokens, dim
                                  const int*   en2f,          // [topk, num_tokens]
                                  const int*   f2E,           // [expert_token_num]
                                  int          dim,
-                                 int          tokens)
+                                 const int* __restrict__ total_tokens_ptr,
+                                 int tokens)
 {
     if constexpr (TURBOMIND_ARCH_DTYPE_GUARD(data_type_v<T>)) {
-        const int ti = blockIdx.x;
+        const int total = total_tokens_ptr ? __ldg(total_tokens_ptr) : tokens;
 
-        dst += (int64_t)dim * ti;
+        for (int ti = blockIdx.x; ti < total; ti += gridDim.x) {
+            T* dst_row = dst + (int64_t)dim * ti;
 
-        // Gather source pointers and weights for this token's expert slots
-        const T* src_[exp_k]{};
-        const T* bias_[exp_k]{};
-        float    weight[exp_k]{};
+            // Gather source pointers and weights for this token's expert slots
+            const T* src_[exp_k]{};
+            const T* bias_[exp_k]{};
+            float    weight[exp_k]{};
 
-        PRAGMA_UNROLL
-        for (int e = 0; e < exp_k; ++e) {
-            const int fid = __ldg(&en2f[e * tokens + ti]);
-            if (fid >= 0) {
-                src_[e]   = src + (int64_t)dim * fid;
-                weight[e] = __ldg(&topk_weights[ti * exp_k + e]);
-                if constexpr (has_bias) {
-                    bias_[e] = bias + (int64_t)dim * __ldg(&f2E[fid]);
-                }
-            }
-        }
-
-        using Vec = Array<T, vec_size>;
-
-        for (int i = threadIdx.x * vec_size; i < dim; i += block_dim * vec_size) {
-            Array<float, vec_size> accum{};
             PRAGMA_UNROLL
             for (int e = 0; e < exp_k; ++e) {
-                if (src_[e] == nullptr) {
-                    continue;
-                }
-                Vec v;
-                Load(v, src_[e] + i);
-                if constexpr (has_bias) {
-                    Vec b;
-                    Load(b, bias_[e] + i);
-                    PRAGMA_UNROLL
-                    for (int j = 0; j < vec_size; ++j) {
-                        v[j] = (T)((float)v[j] + (float)b[j]);
+                const int fid = __ldg(&en2f[e * tokens + ti]);
+                if (fid >= 0) {
+                    src_[e]   = src + (int64_t)dim * fid;
+                    weight[e] = __ldg(&topk_weights[ti * exp_k + e]);
+                    if constexpr (has_bias) {
+                        bias_[e] = bias + (int64_t)dim * __ldg(&f2E[fid]);
                     }
                 }
-                using namespace ops;
-                const auto x = cast<float>(v) * weight[e];
-                accum        = accum + x;
             }
-            Store(&dst[i], cast<T>(accum));
+
+            using Vec = Array<T, vec_size>;
+
+            for (int i = threadIdx.x * vec_size; i < dim; i += block_dim * vec_size) {
+                Array<float, vec_size> accum{};
+                PRAGMA_UNROLL
+                for (int e = 0; e < exp_k; ++e) {
+                    if (src_[e] == nullptr) {
+                        continue;
+                    }
+                    Vec v;
+                    Load(v, src_[e] + i);
+                    if constexpr (has_bias) {
+                        Vec b;
+                        Load(b, bias_[e] + i);
+                        PRAGMA_UNROLL
+                        for (int j = 0; j < vec_size; ++j) {
+                            v[j] = (T)((float)v[j] + (float)b[j]);
+                        }
+                    }
+                    using namespace ops;
+                    const auto x = cast<float>(v) * weight[e];
+                    accum        = accum + x;
+                }
+                Store(&dst_row[i], cast<T>(accum));
+            }
         }
     }
 }
@@ -442,6 +456,7 @@ void invokeMoeLocalCombineEp(Ref<Tensor>   out_,
                              const int*    en2f,
                              const int*    f2E,
                              int           experts_per_token,
+                             const int*    total_tokens_ptr,
                              cudaStream_t  st)
 {
     auto& out = out_.get();
@@ -460,7 +475,11 @@ void invokeMoeLocalCombineEp(Ref<Tensor>   out_,
         constexpr int  vsize       = 16 / sizeof(T);
         constexpr int  exp_per_tok = decltype(e)::value;
         constexpr bool has_bias    = decltype(has_bias_)::value;
-        MoeCombineKernel<vsize, exp_per_tok, has_bias, threads><<<tokens, threads, 0, st>>>(  //
+
+        static const int sm_count = getSMCount();
+        const int        grid     = std::min<int>(tokens, sm_count * 4);
+
+        MoeCombineKernel<vsize, exp_per_tok, has_bias, threads><<<grid, threads, 0, st>>>(  //
             out.data<T>(),
             src.data<T>(),
             bias.data_or((T*)nullptr),
@@ -468,6 +487,7 @@ void invokeMoeLocalCombineEp(Ref<Tensor>   out_,
             en2f,
             f2E,
             dim,
+            total_tokens_ptr,
             tokens);
         sync_check_cuda_error();
     };

@@ -25,6 +25,7 @@ void invokeMoeRoutingMapEp(int*           f2n,
                            int*           en2f,
                            int*           offsets,
                            const int64_t* recv_topk_idx,
+                           const int*     total_tokens_ptr,
                            int            num_tokens,
                            int            topk,
                            int            num_local_experts,
@@ -35,6 +36,9 @@ void invokeMoeAddBias(
     Ref<Tensor> out, const Tensor& bias, const int* f2E, const int* total_tokens_ptr, cudaStream_t st);
 
 // Local reduce experts outputs before combine in EP mode(High throughput).
+// `out.shape(0)` is an upper bound on received tokens; when `total_tokens_ptr` is
+// non-null the kernel caps its grid-stride loop at the real total, so padding
+// rows cost no per-token work.
 void invokeMoeLocalCombineEp(Ref<Tensor>   out,
                              const Tensor& src,
                              const Tensor& bias,
@@ -42,6 +46,7 @@ void invokeMoeLocalCombineEp(Ref<Tensor>   out,
                              const int*    en2f,
                              const int*    f2E,
                              int           experts_per_token,
+                             const int*    total_tokens_ptr,
                              cudaStream_t  st);
 
 // Combine EP expert reduce result with shared expert output.

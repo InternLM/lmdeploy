@@ -205,8 +205,14 @@ void MoeFfnLayer::RouteEP(ForwardParam& p, Tensor_<float>& logits)
     ep_mode_ = p.max_tokens_per_rank <= param_.ll_max_tokens_per_rank ? comm::EpMode::kLowLatency :
                                                                         comm::EpMode::kHighThroughput;
 
+    // HT `num_worst_tokens` is the upper bound on distinct tokens received by this rank after dispatch.
     const int num_worst_tokens = ep_mode_ == comm::EpMode::kLowLatency ? param_.ll_max_tokens_per_rank * expert_num :
                                                                          p.max_tokens_per_rank * d_comm_->n_ranks(0);
+    const int num_worst_flat_tokens =
+        ep_mode_ == comm::EpMode::kLowLatency ? num_worst_tokens : num_worst_tokens * param_.experts_per_token;
+    TM_CHECK_LE(num_worst_flat_tokens, f2n_.size());
+    TM_CHECK_LE(num_worst_flat_tokens, f2E_.size());
+    TM_CHECK_LE(p.max_tokens_per_rank * d_comm_->n_ranks(0) * param_.experts_per_token, en2f_.size());
 
     const auto input_type    = p.weights->block.fused_gating_intermediate.input_type;
     const bool use_fp8       = false;  // input_type == kFloat8_e4m3 || input_type == kBfloat16;
@@ -221,14 +227,10 @@ void MoeFfnLayer::RouteEP(ForwardParam& p, Tensor_<float>& logits)
 
     input_ = dispatch_output.out_x;
     if (dispatch_output.rdma) {
-        // Zero-copy low-latency: point temp_ at the deep_ep combine send buffer so the
-        // down-proj writes land directly in the RDMA window. Flatten the
-        // (E_local, ranks*max_T, hidden) view to 2D and slice to the packed output size.
-        auto flat = dispatch_output.rdma.view({-1, hidden_dim_});
-        temp_     = flat.slice({0, 0}, {dispatch_output.out_expert_token_num, -1});
+        temp_ = dispatch_output.rdma.view({-1, hidden_dim_});
     }
     else {
-        temp_ = Tensor{{dispatch_output.out_expert_token_num, hidden_dim_}, p.input.dtype(), p.input.device()};
+        temp_ = Tensor{{num_worst_flat_tokens, hidden_dim_}, p.input.dtype(), p.input.device()};
     }
 
     // keep dispatch_output for combine
@@ -345,15 +347,14 @@ void MoeFfnLayer::ForwardFused(ForwardParam& p)
     auto indices = f2n_.slice(0, temp_.shape(0));
     auto offsets = offsets_.slice(0, local_expert_num + 1);
 
-    const int* total_tokens_ptr =
-        (dispatch_output_ && ep_mode_ == comm::EpMode::kLowLatency) ? offsets_.data() + local_expert_num : nullptr;
+    const int* num_flat_tok_ptr = (ep_mode_ != comm::EpMode::kNull) ? offsets_.data() + local_expert_num : nullptr;
 
     Tensor scales = dispatch_output_ ? dispatch_output_->out_x_scales : Tensor{};  // the ep dispatched scales
     Tensor inter  = linear_.Forward(input_, scales, block.fused_gating_intermediate, indices, offsets);
     sync_check_cuda_error();
 
     if (!block.is_fused_silu) {
-        Activation(inter, block.fused_gating_intermediate.bias, f2E_, moe.block.act_type, total_tokens_ptr, st);
+        Activation(inter, block.fused_gating_intermediate.bias, f2E_, moe.block.act_type, num_flat_tok_ptr, st);
         sync_check_cuda_error();
     }
 
@@ -413,12 +414,13 @@ void MoeFfnLayer::CombineEP(ForwardParam& p)
                                 en2f_.data(),
                                 f2E_.data(),
                                 param_.experts_per_token,
+                                dispatch_output_->num_distinct_tokens_ptr,
                                 st);
     }
     else {
         const int  local_expert_num = p.weights->experts.size();
-        const int* total_tokens_ptr = offsets_.data() + local_expert_num;
-        invokeMoeAddBias(temp_, p.weights->block.output.bias, f2E_.data(), total_tokens_ptr, st);
+        const int* num_flat_tok_ptr = (ep_mode_ != comm::EpMode::kNull) ? offsets_.data() + local_expert_num : nullptr;
+        invokeMoeAddBias(temp_, p.weights->block.output.bias, f2E_.data(), num_flat_tok_ptr, st);
     }
     sync_check_cuda_error();
 

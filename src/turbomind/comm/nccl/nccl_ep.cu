@@ -14,7 +14,6 @@
 
 #include <algorithm>
 #include <cstdio>
-#include <numeric>
 
 namespace turbomind::comm {
 
@@ -52,12 +51,19 @@ void NcclCommImpl::InitializeEp(const EpConfig& config)
         false,
         qps_per_rank,
         h_comm_);
+
+    temp_storage_bytes_ = 0;
+    cub::DeviceScan::InclusiveSum(nullptr, temp_storage_bytes_, (int*)nullptr, (int*)nullptr, num_local_experts, 0);
+    temp_storage_ = core::Buffer_<uint8_t>(temp_storage_bytes_, kDEVICE);
 }
 
 void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& output, int group)
 {
     TM_CHECK_EQ(group, 0);
     TM_CHECK(input.mode != EpMode::kNull);
+
+    const int num_local_experts = ep_config_.num_experts / h_comm_->n_ranks();
+    auto      st                = core::Context::stream().handle();
 
     if (input.mode == EpMode::kLowLatency) {
         auto [packed_recv_x, packed_recv_x_scales, packed_recv_count, packed_recv_src_info, packed_recv_layout_range] =
@@ -71,22 +77,9 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
                                           false,
                                           false);
         sync_check_cuda_error();
-
-        const int num_local_experts = ep_config_.num_experts / h_comm_->n_ranks();
-
-        auto st = core::Context::stream().handle();
-
         // Compute offsets
-        size_t temp_storage_bytes = 0;
-        cub::DeviceScan::InclusiveSum(nullptr,
-                                      temp_storage_bytes,
-                                      packed_recv_count.data<int>(),
-                                      output.offsets.data() + 1,
-                                      num_local_experts,
-                                      st);
-        Buffer_<uint8_t> temp_storage(temp_storage_bytes, kDEVICE);
-        cub::DeviceScan::InclusiveSum(temp_storage.raw_data(),
-                                      temp_storage_bytes,
+        cub::DeviceScan::InclusiveSum(temp_storage_.raw_data(),
+                                      temp_storage_bytes_,
                                       packed_recv_count.data<int>(),
                                       output.offsets.data() + 1,
                                       num_local_experts,
@@ -124,8 +117,7 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
         }
 
         // Generate output
-        output.handle               = {packed_recv_src_info, packed_recv_layout_range, output.offsets};
-        output.out_expert_token_num = input.num_worst_tokens;
+        output.handle = {packed_recv_src_info, packed_recv_layout_range, output.offsets};
 
         if (input.zero_copy) {
             output.rdma = buffer_->get_next_low_latency_combine_buffer(
@@ -137,67 +129,55 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
             buffer_->get_dispatch_layout(input.topk_idx, ep_config_.num_experts);
         sync_check_cuda_error();
 
-        auto Postprocess = [&](Tensor&                 recv_x,
-                               std::optional<Tensor>&  recv_x_scales,
-                               Tensor&                 recv_topk_weights,
-                               Tensor&                 recv_topk_idx,
-                               const std::vector<int>& num_recv_tokens_per_expert_list,
-                               Tensor&                 num_recv_tokens_per_expert) {
-            if (input.use_fp8) {
-                auto&  scales_t = recv_x_scales.value();
-                Tensor x_scales = Tensor{{scales_t.shape(1), scales_t.shape(0)}, scales_t.dtype(), scales_t.device()};
-                if (scales_t.shape(0) > 0) {
-                    invokeTransposeAxis01(x_scales.data<float>(),
-                                          scales_t.data<float>(),
-                                          scales_t.shape(0),
-                                          scales_t.shape(1),
-                                          1,
-                                          core::Context::stream().handle());
-                }
-                if (input.output_scales) {
-                    output.out_x        = recv_x;
-                    output.out_x_scales = x_scales;
-                }
-                else {
-                    DequantizeSymm(output.out_x, recv_x, x_scales, core::Context::stream().handle());
-                }
-            }
-            else {
-                output.out_x = recv_x;
-            }
-            output.out_topk_weights = recv_topk_weights;
-            output.out_expert_token_num =
-                std::accumulate(num_recv_tokens_per_expert_list.begin(), num_recv_tokens_per_expert_list.end(), 0);
-
-            const int num_local_experts = num_recv_tokens_per_expert_list.size();
-            const int topk              = input.topk_idx.shape(1);
-            const int num_recv_tokens   = recv_x.shape(0);
-            auto      st                = core::Context::stream().handle();
-
+        auto Postprocess = [&](Tensor&                recv_x,
+                               std::optional<Tensor>& recv_x_scales,
+                               Tensor&                recv_topk_weights,
+                               Tensor&                recv_topk_idx,
+                               Tensor&                num_recv_tokens_per_expert,
+                               const int*             recv_token_num_ptr) {
             // Compute offsets
-            size_t temp_storage_bytes = 0;
-            cub::DeviceScan::InclusiveSum(nullptr,
-                                          temp_storage_bytes,
-                                          num_recv_tokens_per_expert.data<int>(),
-                                          output.offsets.data() + 1,
-                                          num_local_experts,
-                                          st);
-            Buffer_<uint8_t> temp_storage(temp_storage_bytes, kDEVICE);
-            cub::DeviceScan::InclusiveSum(temp_storage.raw_data(),
-                                          temp_storage_bytes,
+            cub::DeviceScan::InclusiveSum(temp_storage_.raw_data(),
+                                          temp_storage_bytes_,
                                           num_recv_tokens_per_expert.data<int>(),
                                           output.offsets.data() + 1,
                                           num_local_experts,
                                           st);
             sync_check_cuda_error();
 
-            // Compute f2n, f2E, en2f
+            if (input.use_fp8) {
+                auto&  scales_t = recv_x_scales.value();
+                Tensor x_scales = Tensor{{scales_t.shape(1), scales_t.shape(0)}, scales_t.dtype(), scales_t.device()};
+                if (scales_t.shape(0) > 0) {
+                    invokeTransposeAxis01(
+                        x_scales.data<float>(), scales_t.data<float>(), scales_t.shape(0), scales_t.shape(1), 1, st);
+                }
+                if (input.output_scales) {
+                    output.out_x        = recv_x;
+                    output.out_x_scales = x_scales;
+                }
+                else {
+                    DequantizeSymm(output.out_x, recv_x, x_scales, Tensor{}, recv_token_num_ptr, st);
+                }
+            }
+            else {
+                output.out_x = recv_x;
+            }
+            const int topk = input.topk_idx.shape(1);
+
+            output.out_topk_weights        = recv_topk_weights;
+            output.num_distinct_tokens_ptr = recv_token_num_ptr;
+
+            // Build the recv-token -> expert-token routing map. The device-side limit here
+            // must be the real recv-token count, because `recv_topk_idx` is token-major.
+            // `offsets.back()` is the real flattened expert-token total, not the distinct
+            // received-token total in `recv_x/recv_topk_*`.
             turbomind::invokeMoeRoutingMapEp(output.f2n.data(),
                                              output.f2E.data(),
                                              output.en2f.data(),
                                              output.offsets.data(),
                                              recv_topk_idx.data_or((int64_t*)nullptr),
-                                             num_recv_tokens,
+                                             recv_token_num_ptr,
+                                             recv_x.shape(0),
                                              topk,
                                              num_local_experts,
                                              st);
@@ -244,7 +224,7 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
                                                                std::nullopt,
                                                                std::nullopt,
                                                                1,
-                                                               0,
+                                                               input.num_worst_tokens,
                                                                config);
             sync_check_cuda_error();
 
@@ -260,12 +240,13 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
                              send_rdma_head.value(),
                              send_nvl_head.value()};
 
+            const int* recv_token_num_ptr = recv_gbl_rank_prefix_sum.data<int>() + h_comm_->n_ranks() - 1;
             Postprocess(recv_x,  //
                         recv_x_scales,
                         recv_topk_weights.value(),
                         recv_topk_idx.value(),
-                        num_recv_tokens_per_expert_list,
-                        num_recv_tokens_per_expert);
+                        num_recv_tokens_per_expert,
+                        recv_token_num_ptr);
         }
         else {
             // intranode dispatch
@@ -299,7 +280,7 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
                                                            std::nullopt,
                                                            std::nullopt,
                                                            1,
-                                                           0,
+                                                           input.num_worst_tokens,
                                                            config);
             sync_check_cuda_error();
 
@@ -311,12 +292,15 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
                              is_token_in_rank,
                              send_head};
 
+            const int  nranks             = h_comm_->n_ranks();
+            const int  rank               = h_comm_->rank();
+            const int* recv_token_num_ptr = rank_prefix_matrix.data<int>() + (nranks - 1) * nranks + rank;
             Postprocess(recv_x,  //
                         recv_x_scales,
                         recv_topk_weights.value(),
                         recv_topk_idx.value(),
-                        num_recv_tokens_per_expert_list,
-                        num_recv_tokens_per_expert);
+                        num_recv_tokens_per_expert,
+                        recv_token_num_ptr);
         }
     }
 }
@@ -362,7 +346,7 @@ void NcclCommImpl::Combine(const EpCombineInput& input, EpCombineOutput& output,
             auto combined_nvl_head          = input.handle[9];
 
             auto [combined_x, combined_topk_weights] = buffer_->internode_combine(input.x,
-                                                                                  input.topk_weights,
+                                                                                  std::nullopt,
                                                                                   std::nullopt,
                                                                                   std::nullopt,
                                                                                   src_meta,
@@ -386,7 +370,7 @@ void NcclCommImpl::Combine(const EpCombineInput& input, EpCombineOutput& output,
             auto send_head             = input.handle[5];
 
             auto [recv_x, recv_topk_weights] = buffer_->intranode_combine(input.x,
-                                                                          input.topk_weights,
+                                                                          std::nullopt,
                                                                           std::nullopt,
                                                                           std::nullopt,
                                                                           src_idx,

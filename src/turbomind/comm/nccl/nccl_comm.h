@@ -111,6 +111,8 @@ private:
 
 #if NCCL_VERSION_CODE >= NCCL_VERSION(2, 29, 7)
     std::unique_ptr<deep_ep::Buffer> buffer_;
+    size_t                           temp_storage_bytes_;
+    core::Buffer_<uint8_t>           temp_storage_;
 #endif
     EpConfig ep_config_;
 };
