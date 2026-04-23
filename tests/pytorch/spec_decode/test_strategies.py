@@ -493,6 +493,15 @@ class TestRoutedExpertsPrefill:
         assert len(seq.routed_experts) == num_valid
         assert np.array_equal(seq.all_routed_experts, new_routed_experts)
 
+    def test_set_step_keeps_transition_aligned_experts(self):
+        """set_step(step) keeps routed experts aligned to step transitions."""
+        seq = _make_seq_with_experts([1, 2, 3, 4, 5, 6])
+        seq.append_routed_experts(_experts(6))
+
+        seq.set_step(5)
+
+        assert len(seq.all_routed_experts) == 5
+
 # ---------------------------------------------------------------------------
 # Tests for _update_token_ids_inputs across multiple turns
 # ---------------------------------------------------------------------------
