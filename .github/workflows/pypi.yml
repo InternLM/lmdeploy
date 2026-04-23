@@ -18,8 +18,8 @@ jobs:
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
       PLAT_NAME: manylinux2014_x86_64
-      DOCKER_TAG: cuda12.4
-      OUTPUT_FOLDER: cuda12_dist
+      DOCKER_TAG: cuda12.8
+      OUTPUT_FOLDER: cuda12.8_dist
     steps:
       - name: Free disk space
         uses: jlumbroso/free-disk-space@main
@@ -75,11 +75,11 @@ jobs:
         shell: pwsh
         run: ./builder/windows/setup_cuda.ps1
         env:
-            INPUT_CUDA_VERSION: '12.6.2'
+            INPUT_CUDA_VERSION: '12.8.1'
       - name: Build wheel
         run: |
           python -m build --wheel -o build/wheel
-          Get-ChildItem -Path "build" -Filter "*.whl" | ForEach-Object { change_wheel_version $_.FullName --local-version cu121 --delete-old-wheel }
+          Get-ChildItem -Path "build" -Filter "*.whl" | ForEach-Object { change_wheel_version $_.FullName --local-version cu128 --delete-old-wheel }
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
