@@ -161,7 +161,7 @@ class BaseResponseParser(ResponseParser):
         if self.tool_parser is not None:
             self.request = self.tool_parser.adjust_request(request)
         else:
-            self.request = request
+            self.request = self.dump_tools(request)
         self._accumulated_text = ''
 
         self.profile = self._build_profile()
@@ -248,6 +248,20 @@ class BaseResponseParser(ResponseParser):
             return None, False
         queued = self._queued_deltas.pop(0)
         return queued.delta, queued.tool_calls_emitted
+
+    @staticmethod
+    def dump_tools(request: ChatCompletionRequest) -> ChatCompletionRequest:
+        """Dump tools to a list of dicts to fit jinja chat template."""
+        if not request.tools:
+            return request.model_copy(update={'tools': None})
+        if not isinstance(request.tool_choice, str):
+            tools = [
+                item.function.model_dump() for item in request.tools
+                if item.function.name == request.tool_choice.function.name
+            ]
+        else:
+            tools = [item.function.model_dump() for item in request.tools]
+        return request.model_copy(update={'tools': tools})
 
     def _consume_plain(self) -> tuple[str | None, bool]:
         """Consume buffered text while in plain mode.

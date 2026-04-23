@@ -2,27 +2,18 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
 
 from lmdeploy.serve.openai.protocol import (
-    DeltaFunctionCall,
-    DeltaToolCall,
     FunctionCall,
     ToolCall,
 )
 
-from .tool_parser import ToolParser, ToolParserManager
-
-if TYPE_CHECKING:
-    from transformers import PreTrainedTokenizerBase
-
-    from lmdeploy.serve.openai.protocol import (
-        ChatCompletionRequest,
-    )
+from .tool_parser import ToolParserManager
+from .xml_tool_parser import XmlToolParser  # type: ignore[reportMissingImports]
 
 
 @ToolParserManager.register_module(['glm47'])
-class Glm47ToolParser(ToolParser):
+class Glm47ToolParser(XmlToolParser):
     """Tool parser for GLM-4.7 XML-like tool-call payloads.
 
     Expected format inside ``<tool_call>...</tool_call>``:
@@ -36,19 +27,6 @@ class Glm47ToolParser(ToolParser):
     arg_value_start_token = '<arg_value>'
     arg_value_end_token = '</arg_value>'
 
-    def __init__(self, tokenizer: PreTrainedTokenizerBase):
-        super().__init__(tokenizer)
-        self._function_param_schemas: dict[str, dict[str, dict[str, Any]]] = {}
-
-    def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
-        self._function_param_schemas = self._build_function_param_schemas(request)
-        # Preserve tool-call tags in decoded text so ResponseParser can detect
-        # tool blocks and hand them to this parser.
-        if request.tools and request.tool_choice != 'none':
-            request.skip_special_tokens = False
-        request.spaces_between_special_tokens = False
-        return super().adjust_request(request)
-
     def get_tool_open_tag(self) -> str | None:
         return self.tool_start_token
 
@@ -58,45 +36,18 @@ class Glm47ToolParser(ToolParser):
     def get_tool_payload_format(self) -> str:
         return 'xml'
 
-    def decode_tool_incremental(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:
-        self._tool_payload += added_text
-        func_name, raw_args_dict = self._parse_payload(self._tool_payload)
-        args_dict = self._coerce_args_by_schema(func_name, raw_args_dict)
-
-        out: list[DeltaToolCall] = []
-        if func_name and not self._name_emitted:
-            out.append(
-                DeltaToolCall(
-                    id=self._active_tool_call_id,
-                    index=self._active_tool_index,
-                    type='function',
-                    function=DeltaFunctionCall(name=func_name),
-                ))
-            self._name_emitted = True
-
-        if not final:
-            return out
-
-        args_json = json.dumps(args_dict, ensure_ascii=False)
-        if len(args_json) > self._args_emitted_len:
-            out.append(
-                DeltaToolCall(
-                    id=self._active_tool_call_id,
-                    index=self._active_tool_index,
-                    type=None,
-                    function=DeltaFunctionCall(arguments=args_json[self._args_emitted_len:]),
-                ))
-            self._args_emitted_len = len(args_json)
-        return out
+    def _extract_incremental_state(self, payload: str, final: bool = False) -> tuple[str | None, dict[str, str], bool]:
+        func_name, args_dict = self._parse_payload(payload, final=final)
+        return func_name, args_dict, False
 
     def parse_tool_call_complete(self, payload: str) -> ToolCall | None:
-        func_name, raw_args_dict = self._parse_payload(payload)
+        func_name, raw_args_dict = self._parse_payload(payload, final=True)
         if not func_name:
             return None
         args_dict = self._coerce_args_by_schema(func_name, raw_args_dict)
         return ToolCall(function=FunctionCall(name=func_name, arguments=json.dumps(args_dict, ensure_ascii=False)))
 
-    def _parse_payload(self, payload: str) -> tuple[str | None, dict[str, str]]:
+    def _parse_payload(self, payload: str, *, final: bool = False) -> tuple[str | None, dict[str, str]]:
         payload = payload.strip()
         if not payload:
             return None, {}
@@ -106,6 +57,10 @@ class Glm47ToolParser(ToolParser):
             func_name = payload[:args_start_idx].strip()
             args_text = payload[args_start_idx:]
         else:
+            # Do not treat a growing prefix as the callee until ``<arg_key>`` or
+            # end-of-payload (``final``); the latter covers zero-argument tools.
+            if not final:
+                return None, {}
             func_name = payload.strip()
             args_text = ''
         if not func_name:

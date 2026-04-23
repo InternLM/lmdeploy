@@ -6,10 +6,12 @@ from .qwen2d5_tool_parser import Qwen2d5ToolParser
 from .qwen3_tool_parser import Qwen3ToolParser
 from .qwen3coder_tool_parser import Qwen3CoderToolParser
 from .tool_parser import ToolParser, ToolParserManager
+from .xml_tool_parser import XmlToolParser
 
 __all__ = [
     'ToolParser',
     'ToolParserManager',
+    'XmlToolParser',
     'Glm47ToolParser',
     'Internlm2ToolParser',
     'Llama3JsonToolParser',

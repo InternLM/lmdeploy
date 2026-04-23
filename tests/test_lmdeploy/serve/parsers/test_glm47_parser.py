@@ -56,12 +56,12 @@ def response_parser_with_reasoning(tokenizer):
 REFERENCE_CHUNKS = [
     # (delta_text, emitted_delta_msg, content, tool_emitted, function_name, function_arguments, tool_call_type)
     ('prefix ', True, 'prefix ', False, None, None, None),
-    ('<tool_', False, None, False, None, None, None),
-    ('call>', False, None, False, None, None, None),
-    ('get_weather', True, None, True, 'get_weather', None, 'function'),
-    ('<arg_key>location</arg_key>', False, None, False, None, None, None),
-    ('<arg_value>Beijing</arg_value>', False, None, False, None, None, None),
-    ('</tool_call>', True, None, True, None, '{"location": "Beijing"}', None),
+    ('<tool_call>', False, None, False, None, None, None),
+    # Name is deferred until the first ``<arg_key>`` appears in the payload.
+    ('get_weather', False, None, False, None, None, None),
+    ('<arg_key>location</arg_key>', True, None, True, 'get_weather', None, 'function'),
+    ('<arg_value>Beijing</arg_value>', True, None, True, None, '{"location": "Beijing"', None),
+    ('</tool_call>', True, None, True, None, '}', None),
 ]
 
 
@@ -88,26 +88,30 @@ class TestGlm47ResponseParserStreaming:
                 assert call.function.name == exp_function_name
                 assert call.function.arguments == exp_function_arguments
 
-    def test_stream_chunk_handles_split_open_tag_and_zero_args(self, response_parser):
-        chunks = ['prefix ', '<tool_', 'call>', 'get_weather', '</tool_call>']
-        seen_name = False
-        seen_args = False
-        leaked_tag_text = []
+    def test_stream_chunk_function_name_split_before_arg_key(self, response_parser):
+        """Callee name streamed in many deltas before ``<arg_key>`` must not
+        freeze early."""
+        chunks = [
+            '<tool_call>',
+            'get',
+            '_current',
+            '_temperature',
+            '<arg_key>location</arg_key><arg_value>北京</arg_value>',
+            '</tool_call>',
+        ]
+        emitted_name = None
+        emitted_args = ''
         for chunk in chunks:
             delta, tool_emitted = response_parser.stream_chunk(delta_text=chunk, delta_token_ids=[])
-            if delta is None:
+            if not tool_emitted or delta is None or not delta.tool_calls:
                 continue
-            if delta.content:
-                leaked_tag_text.append(delta.content)
-            if tool_emitted and delta.tool_calls:
-                for call in delta.tool_calls:
-                    if call.function and call.function.name == 'get_weather':
-                        seen_name = True
-                    if call.function and call.function.arguments == '{}':
-                        seen_args = True
-        assert seen_name
-        assert seen_args
-        assert '<tool_call>' not in ''.join(leaked_tag_text)
+            for call in delta.tool_calls:
+                if call.function and call.function.name:
+                    emitted_name = call.function.name
+                if call.function and call.function.arguments:
+                    emitted_args += call.function.arguments
+        assert emitted_name == 'get_current_temperature'
+        assert json.loads(emitted_args) == {'location': '北京'}
 
     def test_stream_chunk_mixed_default_reasoning_and_glm47_tool(self, response_parser_with_reasoning):
         chunks = [
@@ -121,7 +125,7 @@ class TestGlm47ResponseParserStreaming:
         reasoning_seen = []
         content_seen = []
         emitted_name = None
-        emitted_args = None
+        emitted_args = ''
 
         for chunk in chunks:
             delta, tool_emitted = response_parser_with_reasoning.stream_chunk(delta_text=chunk, delta_token_ids=[])
@@ -135,7 +139,7 @@ class TestGlm47ResponseParserStreaming:
                     if call.function and call.function.name:
                         emitted_name = call.function.name
                     if call.function and call.function.arguments:
-                        emitted_args = call.function.arguments
+                        emitted_args += call.function.arguments
 
         for _ in range(3):
             delta, tool_emitted = response_parser_with_reasoning.stream_chunk(delta_text='', delta_token_ids=[])
@@ -149,7 +153,7 @@ class TestGlm47ResponseParserStreaming:
                     if call.function and call.function.name:
                         emitted_name = call.function.name
                     if call.function and call.function.arguments:
-                        emitted_args = call.function.arguments
+                        emitted_args += call.function.arguments
 
         assert ''.join(reasoning_seen) == 'first reason'
         assert ''.join(content_seen) == '\nAnswer: '
@@ -165,7 +169,7 @@ class TestGlm47ResponseParserStreaming:
             '</tool_call>',
         ]
         emitted_name = None
-        emitted_args = None
+        emitted_args = ''
         for chunk in chunks:
             delta, tool_emitted = response_parser.stream_chunk(delta_text=chunk, delta_token_ids=[])
             if not tool_emitted or delta is None or not delta.tool_calls:
@@ -174,7 +178,7 @@ class TestGlm47ResponseParserStreaming:
                 if call.function and call.function.name:
                     emitted_name = call.function.name
                 if call.function and call.function.arguments:
-                    emitted_args = call.function.arguments
+                    emitted_args += call.function.arguments
         assert emitted_name == 'no_schema_tool'
         assert emitted_args == '{"zip": "77004", "active": "true"}'
 
