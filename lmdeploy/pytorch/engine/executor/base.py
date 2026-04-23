@@ -305,6 +305,8 @@ class ExecutorBase:
         if self.cache_config.num_gpu_blocks != 0:
             # User supplied an explicit block count. Do not resize it from the
             # current free-memory snapshot.
+            if spec_cache_config is not None:
+                spec_cache_config.num_gpu_blocks = self.cache_config.num_gpu_blocks
             return
 
         available_mems = [int(free_mem * self.cache_config.cache_max_entry_count) for free_mem in free_mems]
