@@ -201,7 +201,10 @@ conda activate lmdeploy
 pip install lmdeploy
 ```
 
-v0.3.0から、デフォルトの事前構築済みパッケージはCUDA 12でコンパイルされています。
+**v0.13.0** 以降、**PyPI** に公開される既定の事前構築wheelは **CUDA 12.8** 向けにビルドされています。v0.10.2以降、LMDeployはCUDA 11系をサポートしません。
+
+GeForce RTX 50シリーズを含む一般的な用途でも、上記の `pip install lmdeploy` で問題ありません。
+
 CUDA 11+プラットフォームでのインストールに関する情報、またはソースからのビルド手順については、[インストールガイドを](docs/en/get_started/installation.md)参照してください。
 
 ## オフラインバッチ推論

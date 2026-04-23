@@ -224,15 +224,7 @@ conda activate lmdeploy
 pip install lmdeploy
 ```
 
-Since v0.3.0, the default prebuilt package is compiled on **CUDA 12**. Starting from v0.10.2, LMDeploy no longer supports CUDA 11 series.
-
-If you are using a GeForce RTX 50 series graphics card, please install the LMDeploy prebuilt package compiled with **CUDA 12.8** as follows:
-
-```shell
-export LMDEPLOY_VERSION=0.12.3
-export PYTHON_VERSION=312
-pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu128-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu128
-```
+Starting from **v0.13.0**, the default prebuilt wheels published on **PyPI** are built against **CUDA 12.8**, so `pip install lmdeploy` is sufficient for typical setups including GeForce RTX 50 series.
 
 ## Offline Batch Inference
 
