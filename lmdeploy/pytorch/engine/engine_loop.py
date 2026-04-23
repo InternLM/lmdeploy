@@ -207,6 +207,7 @@ class EngineLoop:
                       resp_type,
                       data=dict(token_ids=out.token_ids,
                                 logits=out.logits,
+                                last_hidden_states=out.last_hidden_states,
                                 cache_block_ids=out.cache_block_ids,
                                 req_metrics=out.req_metrics,
                                 routed_experts=out.routed_experts,
@@ -297,6 +298,7 @@ class EngineLoop:
 
         logits = batched_outputs.logits
         all_routed_experts = batched_outputs.all_routed_experts
+        all_hidden_states = batched_outputs.last_hidden_states
 
         if model_inputs is not None and (model_inputs.is_chunk and not model_inputs.is_last_chunk):
             # chunk long context does not need to update seqs and outputs
@@ -363,6 +365,9 @@ class EngineLoop:
             if msg.return_logits:
                 logit = __get_logit(msg, logits, seq_length, idx)
                 outputs[session_id].logits = logit
+
+            if msg.return_last_hidden_states and all_hidden_states is not None:
+                outputs[session_id].last_hidden_states = all_hidden_states[idx]
         return outputs
 
     async def _main_loop_try_send_next_inputs(self):

@@ -60,6 +60,7 @@ class SamplingParam:
     logits_processors: None | list[LogitsProcessor] = None
     out_logits: bool = False
     out_last_hidden_states: bool = False
+    output_last_hidden_state: str = None
     num_logprobs: int = -1
     return_routed_experts: bool = False
 
@@ -92,8 +93,10 @@ class SamplingParam:
                 output_logits = None
                 logger.warning('Pytorch Engine only support output_logits="all"'
                                ' with max_new_tokens=0')
-        if gen_config.output_last_hidden_state is not None:
-            logger.warning('Pytorch Engine does not support output last hidden states.')
+        output_last_hidden_state = gen_config.output_last_hidden_state
+        if output_last_hidden_state and output_last_hidden_state != 'all':
+            logger.warning('Pytorch Engine only supports output_last_hidden_state="all"')
+            output_last_hidden_state = None
         if top_p < 0 or top_p > 1.0:
             logger.warning('`top_p` has to be a float > 0 and < 1'
                            f' but is {top_p}')
@@ -156,6 +159,7 @@ class SamplingParam:
             min_new_tokens=min_new_tokens,
             logits_processors=gen_config.logits_processors,
             out_logits=(output_logits is not None),
+            output_last_hidden_state=output_last_hidden_state,
             num_logprobs=logprobs,
             return_routed_experts=gen_config.return_routed_experts,
             repetition_ngram_size=repetition_ngram_size,
@@ -789,6 +793,10 @@ class SchedulerSequence:
     @property
     def return_logits(self):
         return self.sampling_param.out_logits
+
+    @property
+    def return_last_hidden_states(self):
+        return self.sampling_param.output_last_hidden_state is not None
 
     @property
     def logits(self):

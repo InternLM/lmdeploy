@@ -240,22 +240,24 @@ class EngineInstance(EngineInstanceBase):
                 resp_data = resp.data
                 token_ids = []
                 logits = None
+                last_hidden_states = None
                 if resp_data is not None:
                     # request might be cancelled before any output
                     logits = resp_data.get('logits', None)
                     gen_token_ids = resp_data.get('token_ids', None)
                     if gen_token_ids is not None:
                         token_ids = gen_token_ids[output_offset:].tolist()
+                    last_hidden_states = resp_data.get('last_hidden_states', None)
 
                 num_ids = len(token_ids)
                 num_all_ids = prompt_ids_len + output_offset + num_ids
                 extra_outputs = self._get_extra_outputs(resp, num_all_ids)
                 routed_experts = extra_outputs.get('routed_experts', None)
-
                 logger.debug(f'session[{session_id}] finish: num_out_ids={num_ids}.')
                 yield EngineOutput(resp.type,
                                    token_ids,
                                    logits=logits,
+                                   last_hidden_state=last_hidden_states,
                                    cache_block_ids=cache_block_ids,
                                    req_metrics=req_metrics,
                                    routed_experts=routed_experts,

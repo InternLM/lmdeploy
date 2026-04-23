@@ -370,6 +370,7 @@ class EmbeddingsRequest(BaseModel):
     """Embedding request."""
     model: str = None
     input: str | list[str]
+    encoding_format: Literal['float', 'base64'] = 'float'
     user: str | None = None
 
 
