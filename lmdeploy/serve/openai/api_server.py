@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import re
+import struct
 import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -63,6 +65,7 @@ from lmdeploy.serve.openai.protocol import (
     CompletionStreamResponse,
     DeltaMessage,
     EmbeddingsRequest,
+    EmbeddingsResponse,
     EncodeRequest,
     EncodeResponse,
     ErrorResponse,
@@ -966,10 +969,68 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
     return response
 
 
-@router.post('/v1/embeddings', tags=['unsupported'])
+@router.post('/v1/embeddings', dependencies=[Depends(validate_json_request)])
 async def create_embeddings(request: EmbeddingsRequest, raw_request: Request = None):
     """Creates embeddings for the text."""
-    return create_error_response(HTTPStatus.BAD_REQUEST, 'Unsupported by turbomind.')
+    if isinstance(request.input, str):
+        inputs = [request.input]
+    else:
+        inputs = request.input
+
+    if not inputs:
+        return create_error_response(HTTPStatus.BAD_REQUEST, 'Input must not be empty.')
+
+    embedding_data = []
+    for idx, text in enumerate(inputs):
+        if not text:
+            return create_error_response(HTTPStatus.BAD_REQUEST, 'Input text must not be empty.')
+
+        session = VariableInterface.get_session(-1)
+        gen_config = GenerationConfig(
+            max_new_tokens=1,
+            output_last_hidden_state='all',
+        )
+        result_generator = VariableInterface.async_engine.generate(
+            messages=text,
+            session_id=session.session_id,
+            gen_config=gen_config,
+            stream_response=True,
+            sequence_start=True,
+            sequence_end=True,
+        )
+
+        last_hidden_state = None
+        prompt_tokens = 0
+        async for res in result_generator:
+            if res.last_hidden_state is not None:
+                last_hidden_state = res.last_hidden_state
+            prompt_tokens = res.input_token_len
+
+        if last_hidden_state is None:
+            return create_error_response(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                'Model does not support hidden states output for embeddings.',
+            )
+
+        # Convert to list (hidden states are already mean-pooled per sequence)
+        if last_hidden_state.dim() > 1:
+            # multi-token: mean pool across sequence dimension
+            emb_list = last_hidden_state.mean(dim=0).tolist()
+        else:
+            emb_list = last_hidden_state.tolist()
+
+        if request.encoding_format == 'base64':
+            packed = struct.pack(f'{len(emb_list)}f', *emb_list)
+            encoded = base64.b64encode(packed).decode('utf-8')
+            embedding_data.append({'object': 'embedding', 'embedding': encoded, 'index': idx})
+        else:
+            embedding_data.append({'object': 'embedding', 'embedding': emb_list, 'index': idx})
+
+    return EmbeddingsResponse(
+        data=embedding_data,
+        model=request.model or '',
+        usage=UsageInfo(prompt_tokens=prompt_tokens, total_tokens=prompt_tokens, completion_tokens=0),
+    )
 
 
 @router.post('/v1/encode', dependencies=[Depends(validate_json_request)])

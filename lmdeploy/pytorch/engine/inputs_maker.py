@@ -617,6 +617,10 @@ class InputsMakerAsync:
             """Need routed experts."""
             return any(seq.return_routed_experts for seq in seqs)
 
+        def __need_hidden_states(seqs: 'SeqList'):
+            """Need last hidden states."""
+            return any(seq.return_last_hidden_states for seq in seqs)
+
         def __create_model_inputs(seqs):
             """Createe model inputs."""
             inputs = self.create_model_inputs(seqs, True)
@@ -712,6 +716,7 @@ class InputsMakerAsync:
 
         return_logits = __need_logits(running)
         return_routed_experts = __need_routed_experts(running)
+        return_last_hidden_states = __need_hidden_states(running)
 
         return dict(
             running=running,
@@ -724,6 +729,7 @@ class InputsMakerAsync:
             return_logits=return_logits,
             extra_inputs=extra_inputs,
             return_routed_experts=return_routed_experts,
+            return_last_hidden_states=return_last_hidden_states,
         )
 
     def do_prefill_pnode(self):

@@ -82,6 +82,7 @@ class BatchedOutputs:
     new_token_timestamp: int = 0
     extra_outputs: ExtraOutputs | None = None
     all_routed_experts: torch.Tensor | None = None
+    last_hidden_states: torch.Tensor | None = None
 
     def to_cpu(self):
         """To cpu."""
@@ -439,10 +440,26 @@ class BaseModelAgent:
         self,
         inputs: ModelInputs,
         return_logits: bool,
+        return_last_hidden_states: bool = False,
     ):
         """Model forward."""
         origin_inputs = inputs
         ret = await self.async_forward(inputs)
+
+        # capture full hidden states before postprocessing slices to last token
+        full_hidden_states = None
+        if return_last_hidden_states:
+            raw_hidden = ret['hidden_states']
+            raw_seq_length = ret.get('seq_length', inputs.seq_length)
+            # raw_hidden shape: [1, total_tokens, hidden_dim] or [total_tokens, hidden_dim]
+            if raw_hidden.dim() == 3:
+                raw_hidden = raw_hidden[0]  # [total_tokens, hidden_dim]
+            # slice per-sequence and mean pool
+            if raw_seq_length.numel() == 1:
+                full_hidden_states = raw_hidden.mean(dim=0, keepdim=True)  # [1, hidden_dim]
+            else:
+                parts = raw_hidden.split(raw_seq_length.tolist(), dim=0)
+                full_hidden_states = torch.stack([p.mean(dim=0) for p in parts], dim=0)  # [bs, hidden_dim]
 
         if not return_logits:
             ret = self._postprocess_forward_output(ret, origin_inputs)
@@ -451,6 +468,8 @@ class BaseModelAgent:
 
         logits = self.get_logits(hidden_states)
         ret['logits'] = logits
+        ret['_hidden_states'] = hidden_states
+        ret['_full_hidden_states'] = full_hidden_states
         return ret
 
     async def async_sampling_logits(self, logits: torch.Tensor, sampling_inputs: SamplingInputs):
@@ -602,6 +621,7 @@ class BaseModelAgent:
                                             need_broadcast_next: bool,
                                             return_logits: bool = False,
                                             all_routed_experts: Any = None,
+                                            last_hidden_states: torch.Tensor = None,
                                             extra_inputs: ExtraInputs = None):
         """Step postprocess with output."""
         rank = self.rank
@@ -644,6 +664,7 @@ class BaseModelAgent:
                            model_metas=model_metas,
                            logprobs=logprobs,
                            all_routed_experts=all_routed_experts,
+                           last_hidden_states=last_hidden_states,
                            extra_outputs=extra_outputs))
 
         return inputs, extra_inputs, stopping_criteria, extra_outputs, next_token_ids
@@ -678,6 +699,7 @@ class BaseModelAgent:
         stopping_criteria: StoppingCriteria = None,
         return_logits: bool = False,
         return_routed_experts: bool = False,
+        return_last_hidden_states: bool = False,
         extra_inputs: ExtraInputs = None,
     ):
         """Asyc forward task."""
@@ -738,6 +760,7 @@ class BaseModelAgent:
         output = await self._async_model_forward(
             inputs,
             return_logits=return_logits,
+            return_last_hidden_states=return_last_hidden_states,
         )
         # recovery is_decoding
         inputs.is_decoding = is_decoding
@@ -745,6 +768,9 @@ class BaseModelAgent:
         if inputs.is_dummy:
             # skip dummy forward output
             return
+
+        # get pre-pooled hidden states for embeddings
+        last_hidden_states = output.get('_full_hidden_states', None)
 
         logits = output['logits'][0]  # [bs, seq, prob] -> [seq, prob]
         seq_length = output.get('seq_length', inputs.seq_length)
@@ -777,6 +803,7 @@ class BaseModelAgent:
                     need_broadcast_next,
                     return_logits=return_logits,
                     all_routed_experts=all_routed_experts,
+                    last_hidden_states=last_hidden_states,
                     extra_inputs=extra_inputs,
                 ))
         else:
