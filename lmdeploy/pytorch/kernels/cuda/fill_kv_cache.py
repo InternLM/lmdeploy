@@ -16,6 +16,7 @@ from .turbo_quant import get_lloyd_max_codebook, hadamard_rotate
 Q_POLICY_NONE = tl.constexpr(0)
 Q_POLICY_INT4 = tl.constexpr(4)
 Q_POLICY_INT8 = tl.constexpr(8)
+Q_POLICY_FP8 = tl.constexpr(16)
 Q_POLICY_TURBO = tl.constexpr(42)
 
 
@@ -804,6 +805,23 @@ def fill_kv_cache(k_states: Tensor,
             BLOCK_DV=BLOCK_DV,
             num_warps=4,
             num_stages=3,
+        )
+    elif quant_policy == QuantPolicy.FP8:
+        last = q_start_loc[-1:] + q_seq_length[-1:]
+        cu_seqlen_q = torch.cat([q_start_loc, last])
+        fill_kv_cache_blocked_fp8(
+            k_states,
+            v_states,
+            k_caches,
+            v_caches,
+            k_scales_zeros,
+            v_scales_zeros,
+            cu_seqlen_q,
+            kv_seq_length,
+            max_q_seq_length,
+            block_offsets,
+            group_size=k_caches.shape[d_dim],  # per-token scale: group_size == head_dim
+            kv_layout=kv_layout,
         )
     else:
         _fill_kv_cache_quant_kernel[grid](

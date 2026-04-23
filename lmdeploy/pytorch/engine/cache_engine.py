@@ -91,7 +91,9 @@ class CacheEngine:
         if self.model_config.use_mla_fp8_cache:
             cache_config.quant_policy = 0
 
-        if cache_config.quant_policy > 0:
+        if cache_config.quant_policy == QuantPolicy.FP8:
+            self.kv_cache_dtype = torch.float8_e4m3fn
+        elif cache_config.quant_policy > 0:
             if self.cache_config.device_type in ['cuda']:
                 self.kv_cache_dtype = torch.uint8
             elif self.cache_config.device_type in ['ascend', 'npu']:
@@ -210,7 +212,9 @@ class CacheEngine:
         )
         shape = list(shape)
         dtype = _get_kv_cache_dtype(model_config)
-        if cache_config.quant_policy in (QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT):
+        if cache_config.quant_policy == QuantPolicy.FP8:
+            dtype = torch.float8_e4m3fn
+        elif cache_config.quant_policy in (QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT):
             dtype = torch.uint8
         return CacheDesc(shape=shape, dtype=dtype)
 
@@ -229,7 +233,9 @@ class CacheEngine:
         )
         shape = list(shape)
         dtype = _get_kv_cache_dtype(model_config)
-        if cache_config.quant_policy in (QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT):
+        if cache_config.quant_policy == QuantPolicy.FP8:
+            dtype = torch.float8_e4m3fn
+        elif cache_config.quant_policy in (QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT):
             dtype = torch.uint8
         return CacheDesc(shape=shape, dtype=dtype)
 
@@ -243,7 +249,11 @@ class CacheEngine:
         dtype = model_config.dtype
         # For quant_policy==QuantPolicy.TURBO_QUANT, K uses 4-bit quantization (has MSE norm and QJL norm),
         # V uses 2-bit quantization (only has MSE norm)
-        if cache_config.quant_policy == QuantPolicy.TURBO_QUANT:
+        if cache_config.quant_policy == QuantPolicy.FP8:
+            # per-token symmetric scale only, no zero point
+            key_scale_zero_shape = k_cache_desc.shape[:-1] + [1]
+            val_scale_zero_shape = v_cache_desc.shape[:-1] + [1]
+        elif cache_config.quant_policy == QuantPolicy.TURBO_QUANT:
             key_scale_zero_shape = k_cache_desc.shape[:-1] + [2]
             val_scale_zero_shape = v_cache_desc.shape[:-1] + [1]
         else:

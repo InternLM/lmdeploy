@@ -15,6 +15,7 @@ from .turbo_quant import get_lloyd_max_codebook
 Q_POLICY_NONE = tl.constexpr(0)
 Q_POLICY_INT4 = tl.constexpr(4)
 Q_POLICY_INT8 = tl.constexpr(8)
+Q_POLICY_FP8 = tl.constexpr(16)
 Q_POLICY_TURBO = tl.constexpr(42)
 
 
@@ -223,6 +224,10 @@ def _flatten_kv_cache_quant(
         k_cent = tl.load(k_codebook_ptr + k_idx3.to(tl.int32))
         kq = kmse_norm[:, None] * (k_cent + kqjl_norm[:, None] * k_sign)
         kq = kq.to(ko_ptr.dtype.element_ty)
+    elif quant_policy == Q_POLICY_FP8:
+        # per-token symmetric: scale only, no zero point
+        ks = tl.load(ksz_ptrs)
+        kq = (kc.to(tl.float32) * ks[:, None]).to(ko_ptr.dtype.element_ty)
     else:
         ks = tl.load(ksz_ptrs)
         kz = tl.load(ksz_ptrs + stride_kszd)
@@ -243,6 +248,10 @@ def _flatten_kv_cache_quant(
         vs = tl.load(vsz_ptrs)
         vq = tl.load(v_codebook_ptr + vc.to(tl.int32))
         vq = (vq * vs[:, None]).to(vo_ptr.dtype.element_ty)
+    elif quant_policy == Q_POLICY_FP8:
+        # per-token symmetric: scale only, no zero point
+        vs = tl.load(vsz_ptrs)
+        vq = (vc.to(tl.float32) * vs[:, None]).to(vo_ptr.dtype.element_ty)
     else:
         vs = tl.load(vsz_ptrs)
         vz = tl.load(vsz_ptrs + stride_vszd)
@@ -273,7 +282,7 @@ def flatten_kv_cache(k_caches: Tensor,
         raise RuntimeError('Unsupported layout.')
 
     if out_dtype is None:
-        if quant_policy == QuantPolicy.TURBO_QUANT:
+        if quant_policy in (QuantPolicy.TURBO_QUANT, QuantPolicy.FP8):
             out_dtype = torch.float16
         else:
             out_dtype = k_caches.dtype

@@ -23,6 +23,7 @@ logger = get_logger('lmdeploy')
 Q_POLICY_NONE = tl.constexpr(0)
 Q_POLICY_INT4 = tl.constexpr(4)
 Q_POLICY_INT8 = tl.constexpr(8)
+Q_POLICY_FP8 = tl.constexpr(16)
 Q_POLICY_TURBO = tl.constexpr(42)
 
 TRITON_VERSION = version.parse(triton.__version__)
@@ -459,6 +460,9 @@ def _fwd_grouped_split_quant_kernel(
             k_cent = _k4v2_k_centroid((k & 0x7), head_size)
             k_sign = ((k >> 3) & 0x1).to(tl.float32) * 2.0 - 1.0
             k = (kmse_norm * (k_cent + kqjl_norm * k_sign)).to(q.dtype)
+        elif quant_policy == Q_POLICY_FP8:
+            ks = tl.load(ksz_ptrs + b_offset * stride_kszp)
+            k = (k.to(tl.float32) * ks).to(q.dtype)
         else:
             ks = tl.load(ksz_ptrs + b_offset * stride_kszp)
             kz = tl.load(ksz_ptrs + b_offset * stride_kszp + 1)
@@ -476,6 +480,8 @@ def _fwd_grouped_split_quant_kernel(
                 k1_cent = _k4v2_k_centroid((k1 & 0x7), head_size)
                 k1_sign = ((k1 >> 3) & 0x1).to(tl.float32) * 2.0 - 1.0
                 k1 = (kmse_norm * (k1_cent + kqjl_norm * k1_sign)).to(q.dtype)
+            elif quant_policy == Q_POLICY_FP8:
+                k1 = (k1.to(tl.float32) * ks).to(q.dtype)
             else:
                 k1 = ((k1 - kz) * ks).to(q.dtype)
 
@@ -493,6 +499,9 @@ def _fwd_grouped_split_quant_kernel(
             vs = tl.load(vsz_ptrs + b_offset * stride_vszp)
             v = _k4v2_v_centroid(v, head_size_v)
             v = (v * vs).to(q.dtype)
+        elif quant_policy == Q_POLICY_FP8:
+            vs = tl.load(vsz_ptrs + b_offset * stride_vszp)
+            v = (v.to(tl.float32) * vs).to(q.dtype)
         else:
             vs = tl.load(vsz_ptrs + b_offset * stride_vszp)
             vz = tl.load(vsz_ptrs + b_offset * stride_vszp + 1)

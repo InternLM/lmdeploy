@@ -675,6 +675,7 @@ class TestFillKVCacheBlockedFP8(TestFillKVCache):
         # uncache
         out_k, out_ks, out_v, out_vs = self.uncache(k_caches, ks_caches, v_caches, vs_caches, cu_seqlen_q,
                                                     kv_seq_length, block_offsets)
+        out_k = out_k.float()
         out_k = out_k / out_k.max()
         gt_k = gt_k.float()
         gt_k = gt_k / gt_k.max()
@@ -686,3 +687,143 @@ class TestFillKVCacheBlockedFP8(TestFillKVCache):
         torch.testing.assert_close(out_ks, gt_ks)
         torch.testing.assert_close(out_v, gt_v)
         torch.testing.assert_close(out_vs, gt_vs)
+
+
+def _quant_fp8_per_token(x: torch.Tensor):
+    """Per-token symmetric FP8 quantization (float8_e4m3fn)."""
+    fp8_max = torch.finfo(torch.float8_e4m3fn).max
+    amax = x.abs().amax(dim=-1, keepdim=True).clamp(min=1e-12)
+    scale = amax / fp8_max
+    q = (x / scale).clamp(-fp8_max, fp8_max).to(torch.float8_e4m3fn)
+    return q, scale
+
+
+class TestFillKVCacheFP8(TestFillKVCache):
+    """Tests for fill_kv_cache with QuantPolicy.FP8.
+
+    FP8 KV cache: float8_e4m3fn dtype, per-token symmetric scale, no zero point.
+    Scale shape: [num_blocks, block_size, num_heads, 1].
+    """
+
+    @pytest.fixture
+    def head_dim(self, request):
+        yield request.param
+
+    @pytest.fixture
+    def k_caches(self, batch_size, max_num_blocks, block_size, num_heads, head_dim):
+        # FP8: no bit-packing, same head_dim as raw
+        shape = (batch_size * max_num_blocks, block_size, num_heads, head_dim)
+        yield torch.zeros(shape, dtype=torch.float8_e4m3fn).cuda()
+
+    @pytest.fixture
+    def v_caches(self, batch_size, max_num_blocks, block_size, num_heads, head_dim):
+        shape = (batch_size * max_num_blocks, block_size, num_heads, head_dim)
+        yield torch.zeros(shape, dtype=torch.float8_e4m3fn).cuda()
+
+    @pytest.fixture
+    def k_scales_zeros(self, batch_size, max_num_blocks, block_size, num_heads):
+        # FP8: per-token scale only, no zero point => last dim = 1
+        shape = (batch_size * max_num_blocks, block_size, num_heads, 1)
+        yield torch.zeros(shape, dtype=torch.float32).cuda()
+
+    @pytest.fixture
+    def v_scales_zeros(self, batch_size, max_num_blocks, block_size, num_heads):
+        shape = (batch_size * max_num_blocks, block_size, num_heads, 1)
+        yield torch.zeros(shape, dtype=torch.float32).cuda()
+
+    @pytest.fixture
+    def gt(self, k_states, v_states, k_caches, v_caches, seq_lens, history_lens, block_offsets, block_size,
+           k_scales_zeros, v_scales_zeros):
+        k_states_q, k_scales = _quant_fp8_per_token(k_states)
+        v_states_q, v_scales = _quant_fp8_per_token(v_states)
+        # scale shape per token: [tokens, heads, 1]
+        batch_size = len(seq_lens)
+        k_caches = k_caches.clone()
+        v_caches = v_caches.clone()
+        k_scales_zeros = k_scales_zeros.clone()
+        v_scales_zeros = v_scales_zeros.clone()
+
+        splited_k_states = k_states_q.split(seq_lens)
+        splited_v_states = v_states_q.split(seq_lens)
+        splited_k_scales = k_scales.split(seq_lens)
+        splited_v_scales = v_scales.split(seq_lens)
+
+        for bidx in range(batch_size):
+            k_state = splited_k_states[bidx]
+            v_state = splited_v_states[bidx]
+            k_sc = splited_k_scales[bidx]
+            v_sc = splited_v_scales[bidx]
+            h_len = history_lens[bidx]
+            b_offs = block_offsets[bidx]
+            block_id = _div_up(h_len + 1, block_size) - 1
+            fill_start = h_len % block_size
+            fill_size = min(block_size - fill_start, k_state.size(0))
+            while True:
+                boff = b_offs[block_id]
+                fill_end = fill_start + fill_size
+                k_caches[boff, fill_start:fill_end] = k_state[:fill_size]
+                v_caches[boff, fill_start:fill_end] = v_state[:fill_size]
+                k_scales_zeros[boff, fill_start:fill_end] = k_sc[:fill_size]
+                v_scales_zeros[boff, fill_start:fill_end] = v_sc[:fill_size]
+                k_state = k_state[fill_size:]
+                v_state = v_state[fill_size:]
+                k_sc = k_sc[fill_size:]
+                v_sc = v_sc[fill_size:]
+                block_id += 1
+                fill_start = 0
+                fill_size = min(block_size, k_state.size(0))
+                if fill_size == 0:
+                    break
+
+        yield k_caches, v_caches, k_scales_zeros, v_scales_zeros
+
+    @pytest.mark.parametrize('head_dim', [128], indirect=True)
+    @pytest.mark.parametrize(['seq_lens', 'history_lens'], [
+        ((1, 1, 1, 1), (1, 16, 31, 24)),
+        ((1, 8, 16, 24), (1, 16, 31, 24)),
+    ],
+                             indirect=True)
+    def test_fill_kv_cache(self, k_states, v_states, k_caches, v_caches, k_scales_zeros, v_scales_zeros, block_offsets,
+                           q_start_loc, q_seq_length, kv_seq_length, max_q_seq_length, gt):
+        from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache
+        fill_kv_cache(
+            k_states,
+            v_states,
+            k_caches,
+            v_caches,
+            q_start_loc,
+            q_seq_length,
+            kv_seq_length,
+            max_q_seq_length,
+            block_offsets,
+            k_scales_zeros,
+            v_scales_zeros,
+            QuantPolicy.FP8,
+        )
+        gt_k, gt_v, gt_ks, gt_vs = gt
+        # Compare fp8 values via float conversion
+        torch.testing.assert_close(k_caches.to(torch.float32), gt_k.to(torch.float32))
+        torch.testing.assert_close(v_caches.to(torch.float32), gt_v.to(torch.float32))
+        torch.testing.assert_close(k_scales_zeros, gt_ks, atol=1e-6, rtol=1e-6)
+        torch.testing.assert_close(v_scales_zeros, gt_vs, atol=1e-6, rtol=1e-6)
+
+    @pytest.mark.parametrize('head_dim', [128], indirect=True)
+    @pytest.mark.parametrize(['seq_lens', 'history_lens'], [
+        ((1, 1, 1, 1), (1, 16, 31, 24)),
+    ],
+                             indirect=True)
+    def test_scale_values_fp8(self, head_dim, num_heads, batch_size, max_num_blocks, block_size,
+                              k_scales_zeros, v_scales_zeros, k_states, v_states, k_caches, v_caches,
+                              q_start_loc, q_seq_length, kv_seq_length, max_q_seq_length, block_offsets):
+        from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache
+        fill_kv_cache(
+            k_states, v_states, k_caches, v_caches,
+            q_start_loc, q_seq_length, kv_seq_length,
+            max_q_seq_length, block_offsets,
+            k_scales_zeros, v_scales_zeros,
+            QuantPolicy.FP8,
+        )
+        assert k_scales_zeros.isfinite().all(), 'K scales contain non-finite values'
+        assert v_scales_zeros.isfinite().all(), 'V scales contain non-finite values'
+        assert (k_scales_zeros >= 0).all(), 'K scales should be non-negative'
+        assert (v_scales_zeros >= 0).all(), 'V scales should be non-negative'
