@@ -3,7 +3,8 @@
 from transformers import AutoConfig
 
 from lmdeploy.utils import get_logger
-from lmdeploy.vl.model.base import VISION_MODELS, MultimodalSpecialTokens, VisionModel
+from lmdeploy.vl.constants import MultimodalSpecialTokens
+from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
 
 logger = get_logger('lmdeploy')
 

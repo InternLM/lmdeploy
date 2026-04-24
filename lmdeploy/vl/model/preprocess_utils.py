@@ -4,7 +4,7 @@ from typing import Any
 import torch
 
 from lmdeploy.utils import get_logger
-from lmdeploy.vl.constants import Modality
+from lmdeploy.vl.constants import Modality, MultimodalSpecialTokens
 
 logger = get_logger('lmdeploy')
 
@@ -49,7 +49,8 @@ def get_override_size(processor, mm_processor_kwargs: dict[str, Any] | None = No
     return {'shortest_edge': override_min, 'longest_edge': override_max}
 
 
-def get_expanded_input_ids(input_prompt, collected_mm_items, processor, mm_tokens) -> torch.Tensor:
+def get_expanded_input_ids(input_prompt, collected_mm_items, processor,
+                           mm_tokens: MultimodalSpecialTokens) -> torch.Tensor:
     """Return input_ids with each image placeholder expanded to its actual
     token count."""
     image_token_id = mm_tokens.image_token_id
@@ -68,7 +69,7 @@ def get_expanded_input_ids(input_prompt, collected_mm_items, processor, mm_token
 
 
 # adapted from https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/managers/mm_utils.py
-def get_expanded_mm_items(collected_mm_items, mm_tokens):
+def get_expanded_mm_items(collected_mm_items, mm_tokens: MultimodalSpecialTokens):
     """Expand bundled hf processor outputs into per-image/video entries for
     cache locality and scheduling."""
     expanded_mm_items = []
