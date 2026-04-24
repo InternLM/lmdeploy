@@ -9,7 +9,6 @@ from mmengine import Registry
 from transformers import AutoConfig, AutoTokenizer
 
 from lmdeploy.archs import get_model_arch
-from lmdeploy.utils import get_logger
 from lmdeploy.vl.constants import Modality
 from lmdeploy.vl.model.preprocess_utils import (
     get_expanded_input_ids,
@@ -19,8 +18,6 @@ from lmdeploy.vl.model.preprocess_utils import (
 )
 
 VISION_MODELS = Registry('vision_model')
-
-logger = get_logger('lmdeploy')
 
 
 class VisionModel(ABC):
