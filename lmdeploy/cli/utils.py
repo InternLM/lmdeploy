@@ -270,7 +270,6 @@ class ArgumentHelper:
         from lmdeploy.messages import QuantPolicy
 
         _aliases = {p.name.lower(): p.value for p in QuantPolicy}  # none/int4/int8/fp8/turbo_quant
-        _aliases['turboquant'] = QuantPolicy.TURBO_QUANT.value     # friendlier alias
 
         def _parse(x):
             key = x.lower()
