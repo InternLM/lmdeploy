@@ -269,12 +269,22 @@ class ArgumentHelper:
 
         from lmdeploy.messages import QuantPolicy
 
+        _aliases = {p.name.lower(): p.value for p in QuantPolicy}  # none/int4/int8/fp8/turbo_quant
+        _aliases['turboquant'] = QuantPolicy.TURBO_QUANT.value     # friendlier alias
+
+        def _parse(x):
+            key = x.lower()
+            if key in _aliases:
+                return _aliases[key]
+            v = int(x)
+            if v not in list(QuantPolicy):
+                raise ValueError(f'invalid quant_policy: {x!r}')
+            return v
+
         return parser.add_argument('--quant-policy',
-                                   type=int,
+                                   type=_parse,
                                    default=0,
-                                   choices=list(QuantPolicy),
-                                   help='KV cache quantization policy. '
-                                   '0: no quantization; 4: 4-bit; 8: 8-bit; 42: TurboQuant (K4V2)')
+                                   help='KV cache quant policy: none/int4/int8/fp8/turbo_quant (or 0/4/8/16/42)')
 
     @staticmethod
     def rope_scaling_factor(parser):
