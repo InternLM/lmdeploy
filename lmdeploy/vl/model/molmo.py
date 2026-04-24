@@ -17,18 +17,18 @@ class MolmoVisionModel(VisionModel):
 
     _arch = 'MolmoForCausalLM'
 
-    def build_preprocessor(self):
+    def build_preprocessor(self, trust_remote_code: bool = False):
         self.processor = AutoProcessor.from_pretrained(self.model_path,
-                                                       trust_remote_code=True,
+                                                       trust_remote_code=trust_remote_code,
                                                        torch_dtype=torch.half,
                                                        device_map='auto')
 
-    def build_model(self):
+    def build_model(self, trust_remote_code: bool = False):
         """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         from accelerate import init_empty_weights, load_checkpoint_and_dispatch
         with init_empty_weights():
-            model = AutoModelForCausalLM.from_config(self.hf_config, trust_remote_code=True)
+            model = AutoModelForCausalLM.from_config(self.hf_config, trust_remote_code=trust_remote_code)
 
             self.vl_model = model
             if not self.with_llm:

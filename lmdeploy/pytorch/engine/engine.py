@@ -94,7 +94,7 @@ class Engine(EngineBase):
         self,
         model_path: str,
         engine_config: PytorchEngineConfig = None,
-        trust_remote_code: bool = True,
+        trust_remote_code: bool = False,
         speculative_config: SpeculativeConfig = None,
     ) -> None:
         # make sure engine config exist
@@ -133,7 +133,7 @@ class Engine(EngineBase):
         misc_config = ConfigBuilder.build_misc_config(engine_config)
         # spec decode
         self.specdecode_config = ConfigBuilder.build_specdecode_config(model_path, speculative_config, engine_config,
-                                                                       cache_config)
+                                                                       cache_config, trust_remote_code)
 
         # build model agent
         self.executor = build_executor(
@@ -147,6 +147,7 @@ class Engine(EngineBase):
             distributed_executor_backend=engine_config.distributed_executor_backend,
             dtype=engine_config.dtype,
             specdecode_config=self.specdecode_config,
+            trust_remote_code=trust_remote_code,
         )
         self.executor.init()
 
@@ -198,8 +199,8 @@ class Engine(EngineBase):
     def from_pretrained(cls,
                         pretrained_model_name_or_path: str,
                         engine_config: PytorchEngineConfig = None,
-                        trust_remote_code: bool = True,
                         speculative_config: SpeculativeConfig = None,
+                        trust_remote_code: bool = False,
                         **kwargs):
         """Lmdeploy python inference engine.
 
@@ -224,16 +225,16 @@ class Engine(EngineBase):
                 backend=backend,
                 model_path=pretrained_model_name_or_path,
                 engine_config=engine_config,
-                trust_remote_code=trust_remote_code,
                 speculative_config=speculative_config,
+                trust_remote_code=trust_remote_code
             )
         if len(kwargs) > 0:
             logger.debug(f'Get unexpected kwargs: {kwargs}')
         return cls(
             model_path=pretrained_model_name_or_path,
             engine_config=engine_config,
-            trust_remote_code=trust_remote_code,
             speculative_config=speculative_config,
+            trust_remote_code=trust_remote_code
         )
 
     def _download_adapters(self, adapters: dict[str, str], engine_config: PytorchEngineConfig):

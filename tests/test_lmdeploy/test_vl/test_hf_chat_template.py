@@ -6,7 +6,7 @@ from lmdeploy.model import MODELS
 from lmdeploy.vl.model.builder import load_vl_model
 
 
-def get_model_and_chat_template(model_path):
+def get_model_and_chat_template(model_path, trust_remote_code=False):
     if os.getenv('LMDEPLOY_USE_MODELSCOPE', 'False').lower() == 'true':
         from modelscope import snapshot_download
     elif os.getenv('LMDEPLOY_USE_OPENMIND_HUB', 'False').lower() == 'true':
@@ -14,8 +14,9 @@ def get_model_and_chat_template(model_path):
     else:
         from huggingface_hub import snapshot_download
     model_path = snapshot_download(model_path, allow_patterns=['*.json', '*.py', '*.txt', '*.model', '*.jinja'])
-    model = load_vl_model(model_path=model_path, with_llm=False, backend='pytorch')
-    chat_template = MODELS.module_dict['hf'](model_path=model_path)
+    model = load_vl_model(model_path=model_path, with_llm=False, backend='pytorch',
+                          trust_remote_code=trust_remote_code)
+    chat_template = MODELS.module_dict['hf'](model_path=model_path, trust_remote_code=trust_remote_code)
     return model, chat_template
 
 
@@ -67,12 +68,12 @@ class TestInternVLHFChatTemplate:
             'OpenGVLab/InternVL3_5-30B-A3B-HF',
             'OpenGVLab/InternVL3_5-241B-A28B-HF',
         ]
-        models = [get_model_and_chat_template(model_path) for model_path in model_list]
+        models = [get_model_and_chat_template(model_path, trust_remote_code=True) for model_path in model_list]
         return models
 
     def test_proc_messages(self, models, mock_messages):
         for model, chat_template in models:
-            model.build_preprocessor()
+            model.build_preprocessor(trust_remote_code=True)
             reference = model.processor.apply_chat_template(mock_messages,
                                                             add_generation_prompt=True,
                                                             tokenize=False,
@@ -84,7 +85,7 @@ class TestInternVLHFChatTemplate:
 
     def test_proc_pure_img_messages(self, models, mock_pure_img_messages):
         for model, chat_template in models:
-            model.build_preprocessor()
+            model.build_preprocessor(trust_remote_code=True)
             reference = model.processor.apply_chat_template(mock_pure_img_messages,
                                                             add_generation_prompt=True,
                                                             tokenize=False,
@@ -96,7 +97,7 @@ class TestInternVLHFChatTemplate:
 
     def test_proc_pure_text_messages(self, models, mock_pure_text_messages):
         for model, chat_template in models:
-            model.build_preprocessor()
+            model.build_preprocessor(trust_remote_code=True)
             reference = model.processor.apply_chat_template(mock_pure_text_messages,
                                                             add_generation_prompt=True,
                                                             tokenize=False,
@@ -135,7 +136,7 @@ class TestQwenVLChatTemplate:
 
     def test_proc_messages(self, models, mock_messages):
         for model, chat_template in models:
-            model.build_preprocessor()
+            model.build_preprocessor(trust_remote_code=False)
             reference = model.processor.apply_chat_template(mock_messages,
                                                             add_generation_prompt=True,
                                                             tokenize=False,
@@ -145,7 +146,7 @@ class TestQwenVLChatTemplate:
 
     def test_pure_img_messages(self, models, mock_pure_img_messages):
         for model, chat_template in models:
-            model.build_preprocessor()
+            model.build_preprocessor(trust_remote_code=False)
             reference = model.processor.apply_chat_template(mock_pure_img_messages,
                                                             add_generation_prompt=True,
                                                             tokenize=False,
@@ -155,7 +156,7 @@ class TestQwenVLChatTemplate:
 
     def test_pure_text_messages(self, models, mock_pure_text_messages):
         for model, chat_template in models:
-            model.build_preprocessor()
+            model.build_preprocessor(trust_remote_code=False)
             reference = model.processor.apply_chat_template(mock_pure_text_messages,
                                                             add_generation_prompt=True,
                                                             tokenize=False,

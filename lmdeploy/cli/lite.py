@@ -32,6 +32,7 @@ class SubCliLite:
         ArgumentHelper.calib_batchsize(parser)
         ArgumentHelper.calib_search_scale(parser)
         ArgumentHelper.dtype(parser)
+        ArgumentHelper.trust_remote_code(parser)
         parser.add_argument('--device', type=str, default='cuda', help='Device for weight quantization (cuda or npu)')
         parser.add_argument('--w-bits', type=int, default=4, help='Bit number for weight quantization')
         parser.add_argument('--w-sym', action='store_true', help='Whether to do symmetric quantization')
@@ -56,6 +57,7 @@ class SubCliLite:
         ArgumentHelper.calib_seqlen(parser)
         ArgumentHelper.calib_batchsize(parser)
         ArgumentHelper.dtype(parser)
+        ArgumentHelper.trust_remote_code(parser)
         parser.add_argument('--w-bits', type=int, default=4, help='Bit number for weight quantization')
         parser.add_argument('--w-group-size',
                             type=int,
@@ -78,6 +80,7 @@ class SubCliLite:
         ArgumentHelper.calib_batchsize(parser)
         ArgumentHelper.calib_search_scale(parser)
         ArgumentHelper.dtype(parser)
+        ArgumentHelper.trust_remote_code(parser)
 
     @staticmethod
     def add_parser_smooth_quant():
@@ -102,6 +105,7 @@ class SubCliLite:
         ArgumentHelper.quant_dtype(parser)
         ArgumentHelper.revision(parser)
         ArgumentHelper.download_dir(parser)
+        ArgumentHelper.trust_remote_code(parser)
 
     @staticmethod
     def auto_awq(args):

@@ -25,9 +25,9 @@ class Qwen3VLModel(VisionModel):
 
     _arch = ['Qwen3VLForConditionalGeneration', 'Qwen3VLMoeForConditionalGeneration']
 
-    def build_preprocessor(self):
+    def build_preprocessor(self, trust_remote_code: bool = False):
         check_transformers()
-        self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=True)
+        self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=trust_remote_code)
 
         # image tokens
         self.image_token = self.processor.image_token
@@ -227,7 +227,7 @@ class Qwen3VLModel(VisionModel):
         else:
             return self.to_pytorch_aux(messages, prompt, self.image_token, tokenizer, sequence_start)
 
-    def build_model(self):
+    def build_model(self, trust_remote_code: bool = False):
         # TODO: implement for turbomind
         pass
 

@@ -20,23 +20,24 @@ class VisionModel(ABC):
                  with_llm: bool = False,
                  max_memory: dict[int, int] = None,
                  hf_config: AutoConfig = None,
-                 backend: str = ''):
+                 backend: str = '',
+                 trust_remote_code: bool = False):
         """init."""
         self.model_path = model_path
         self.with_llm = with_llm
         self.max_memory = max_memory
         self.backend = backend
         if hf_config is None:
-            _, hf_config = get_model_arch(model_path)
+            _, hf_config = get_model_arch(model_path, trust_remote_code=trust_remote_code)
         self.hf_config = hf_config
-        self.image_token_id = self.get_pad_token_id(model_path, hf_config) or 0
+        self.image_token_id = self.get_pad_token_id(model_path, hf_config, trust_remote_code=trust_remote_code) or 0
 
-    def get_pad_token_id(self, model_path, hf_config):
+    def get_pad_token_id(self, model_path, hf_config, trust_remote_code: bool = False):
         """Get pad_token_id from hf_config or tokenizer."""
         pad_token_id = getattr(hf_config, 'pad_token_id', None)
         if pad_token_id is None:
             try:
-                tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+                tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=trust_remote_code)
                 pad_token_id = getattr(tokenizer, 'pad_token_id', None)
             except Exception as e:
                 print(e)
@@ -44,7 +45,7 @@ class VisionModel(ABC):
         return pad_token_id
 
     @abstractmethod
-    def build_preprocessor(self, ):
+    def build_preprocessor(self, trust_remote_code: bool = False):
         """Build the preprocessor.
 
         NOTE: When the derived class implements this method, try not to
@@ -52,7 +53,7 @@ class VisionModel(ABC):
         """
         raise NotImplementedError()
 
-    def build_model(self, ):
+    def build_model(self, trust_remote_code: bool = False):
         """Build the vision part of a VLM model when backend is turbomind.
 
         But when `with_llm=True`, load the whole VLM model

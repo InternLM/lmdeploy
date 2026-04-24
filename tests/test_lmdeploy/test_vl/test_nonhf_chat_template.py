@@ -6,7 +6,7 @@ from lmdeploy.model import MODELS
 from lmdeploy.vl.model.builder import load_vl_model
 
 
-def get_model_and_chat_template(model_path):
+def get_model_and_chat_template(model_path, trust_remote_code=False):
     if os.getenv('LMDEPLOY_USE_MODELSCOPE', 'False').lower() == 'true':
         from modelscope import snapshot_download
     elif os.getenv('LMDEPLOY_USE_OPENMIND_HUB', 'False').lower() == 'true':
@@ -14,8 +14,9 @@ def get_model_and_chat_template(model_path):
     else:
         from huggingface_hub import snapshot_download
     model_path = snapshot_download(model_path, allow_patterns=['*.json', '*.py', '*.txt', '*.model', '*.jinja'])
-    model = load_vl_model(model_path=model_path, with_llm=False, backend='pytorch')
-    chat_template = MODELS.module_dict['hf'](model_path=model_path)
+    model = load_vl_model(model_path=model_path, with_llm=False, backend='pytorch',
+                          trust_remote_code=trust_remote_code)
+    chat_template = MODELS.module_dict['hf'](model_path=model_path, trust_remote_code=trust_remote_code)
     return model, chat_template
 
 
@@ -33,7 +34,7 @@ class TestInternVLChatTemplate:
             'OpenGVLab/InternVL3_5-2B',
             'OpenGVLab/InternVL3_5-1B',
         ]
-        models = [get_model_and_chat_template(model_path) for model_path in model_list]
+        models = [get_model_and_chat_template(model_path, trust_remote_code=True) for model_path in model_list]
         return models
 
     @pytest.fixture(scope='module')
@@ -47,7 +48,7 @@ class TestInternVLChatTemplate:
             'OpenGVLab/InternVL3-2B',
             'OpenGVLab/InternVL3-1B',
         ]
-        models = [get_model_and_chat_template(model_path) for model_path in model_list]
+        models = [get_model_and_chat_template(model_path, trust_remote_code=True) for model_path in model_list]
         return models
 
     @pytest.fixture(scope='module')
@@ -61,7 +62,7 @@ class TestInternVLChatTemplate:
             # "OpenGVLab/InternVL2_5-2B",  # <s>
             'OpenGVLab/InternVL2_5-1B',
         ]
-        models = [get_model_and_chat_template(model_path) for model_path in model_list]
+        models = [get_model_and_chat_template(model_path, trust_remote_code=True) for model_path in model_list]
         return models
 
     @pytest.fixture(scope='module')
@@ -75,7 +76,7 @@ class TestInternVLChatTemplate:
             'OpenGVLab/InternVL2-2B',
             'OpenGVLab/InternVL2-1B',
         ]
-        models = [get_model_and_chat_template(model_path) for model_path in model_list]
+        models = [get_model_and_chat_template(model_path, trust_remote_code=True) for model_path in model_list]
         return models
 
     @pytest.fixture(scope='module')

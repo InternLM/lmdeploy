@@ -94,13 +94,15 @@ def _update_runtime_envs(runtime_env: dict):
 
 class RayMPEngine(MPEngine):
 
-    def __init__(self, model_path: str, engine_config: PytorchEngineConfig = None, **kwargs) -> None:
+    def __init__(self, model_path: str, engine_config: PytorchEngineConfig = None,
+                 trust_remote_code: bool = False, **kwargs) -> None:
         """Initialize mp engine."""
         self.ray_ctx = self._init_ray(engine_config)
         placement_group = self.ray_ctx.get_placement_group()
         self.placement_group = placement_group
 
-        self.worker = self._create_worker(model_path, engine_config, log_level=logger.level, **kwargs)
+        self.worker = self._create_worker(model_path, engine_config, log_level=logger.level,
+                                          trust_remote_code=trust_remote_code, **kwargs)
         super().__init__()
 
     def _init_ray(self, engine_config: PytorchEngineConfig = None):

@@ -68,16 +68,15 @@ class ChatTemplateConfig:
     capability: Literal['completion', 'infilling', 'chat', 'python'] | None = None
     stop_words: list[str] | None = None
 
-    @property
-    def chat_template(self):
+    def chat_template(self, trust_remote_code: bool = False):
         attrs = {key: value for key, value in dataclasses.asdict(self).items() if value is not None}
         attrs.pop('model_name', None)
         if self.model_name in MODELS.module_dict.keys():
-            model = MODELS.get(self.model_name)(**attrs)
+            model = MODELS.get(self.model_name)(**attrs, trust_remote_code=trust_remote_code)
         else:
             logger.warning(f'Could not find {self.model_name} in registered models. '
                            f'Register {self.model_name} using the BaseChatTemplate.')
-            model = BaseChatTemplate(**attrs)
+            model = BaseChatTemplate(**attrs, trust_remote_code=trust_remote_code)
         return model
 
     def to_json(self, file_path=None):
@@ -194,7 +193,7 @@ class BaseChatTemplate:
         return ret
 
     @classmethod
-    def match(cls, model_path: str) -> str | None:
+    def match(cls, model_path: str, **kwargs) -> str | None:
         """Return the model_name that was registered to MODELS.
 
         Args:
@@ -228,7 +227,7 @@ class CogVLM(BaseChatTemplate):
                          **kwargs)
 
     @classmethod
-    def match(cls, model_path: str) -> str | None:
+    def match(cls, model_path: str, **kwargs) -> str | None:
         """Return the model_name that was registered to MODELS.
 
         Args:
@@ -273,7 +272,7 @@ class Vicuna(BaseChatTemplate):
         return super().messages2prompt(messages, sequence_start, **kwargs)[:-1]
 
     @classmethod
-    def match(cls, model_path: str) -> str | None:
+    def match(cls, model_path: str, **kwargs) -> str | None:
         """Return the model_name that was registered to MODELS.
 
         Args:
@@ -297,7 +296,7 @@ class Llavav1(Vicuna):
         super().__init__(meta_instruction=meta_instruction, **kwargs)
 
     @classmethod
-    def match(cls, model_path: str) -> str | None:
+    def match(cls, model_path: str, **kwargs) -> str | None:
         """Return the model_name that was registered to MODELS.
 
         Args:
@@ -342,7 +341,7 @@ class InternLMChat7B(BaseChatTemplate):
                          **kwargs)
 
     @classmethod
-    def match(cls, model_path: str) -> str | None:
+    def match(cls, model_path: str, **kwargs) -> str | None:
         """Return the model_name that was registered to MODELS.
 
         Args:
@@ -363,7 +362,7 @@ class Baichuan2(BaseChatTemplate):
         super().__init__(user=user, assistant=assistant, **kwargs)
 
     @classmethod
-    def match(cls, model_path: str) -> str | None:
+    def match(cls, model_path: str, **kwargs) -> str | None:
         """Return the model_name that was registered to MODELS.
 
         Args:
@@ -401,7 +400,7 @@ If a question does not make any sense, or is not factually coherent, explain why
                          **kwargs)
 
     @classmethod
-    def match(cls, model_path: str) -> str | None:
+    def match(cls, model_path: str, **kwargs) -> str | None:
         """Return the model_name that was registered to MODELS.
 
         Args:
@@ -446,7 +445,7 @@ class CodeLlama(Llama2):
         return prompt
 
     @classmethod
-    def match(cls, model_path: str) -> str | None:
+    def match(cls, model_path: str, **kwargs) -> str | None:
         """Return the model_name that was registered to MODELS.
 
         Args:
@@ -497,7 +496,7 @@ class ChatGLM2(BaseChatTemplate):
         return ret
 
     @classmethod
-    def match(cls, model_path: str) -> str | None:
+    def match(cls, model_path: str, **kwargs) -> str | None:
         """Return the model_name that was registered to MODELS.
 
         Args:
@@ -520,7 +519,7 @@ class MistralChat(BaseChatTemplate):
         super().__init__(user=user, eoh=eoh, eoa=eoa, **kwargs)
 
     @classmethod
-    def match(cls, model_path: str) -> str | None:
+    def match(cls, model_path: str, **kwargs) -> str | None:
         """Return the model_name that was registered to MODELS.
 
         Args:
@@ -551,7 +550,7 @@ class InternVLZH(BaseChatTemplate):
         return super().messages2prompt(messages, sequence_start, **kwargs)[:-1]
 
     @classmethod
-    def match(cls, model_path: str) -> str | None:
+    def match(cls, model_path: str, **kwargs) -> str | None:
         """Return the model_name that was registered to MODELS.
 
         Args:
@@ -593,7 +592,7 @@ class DeepseekVL(BaseChatTemplate):
         return super().messages2prompt(messages, sequence_start, **kwargs)[:-1]
 
     @classmethod
-    def match(cls, model_path: str) -> str | None:
+    def match(cls, model_path: str, **kwargs) -> str | None:
         """Return the model_name that was registered to MODELS.
 
         Args:
@@ -632,7 +631,7 @@ class DeepseekVL2(BaseChatTemplate):
         return super().messages2prompt(messages, sequence_start, **kwargs)[:-1]
 
     @classmethod
-    def match(cls, model_path: str) -> str | None:
+    def match(cls, model_path: str, **kwargs) -> str | None:
         """Return the model_name that was registered to MODELS.
 
         Args:
@@ -667,7 +666,7 @@ class ChatmlDirect(BaseChatTemplate):
                          **kwargs)
 
     @classmethod
-    def match(cls, model_path: str) -> str | None:
+    def match(cls, model_path: str, **kwargs) -> str | None:
         """Return the model_name that was registered to MODELS.
 
         Args:
@@ -685,11 +684,11 @@ class HFChatTemplate(BaseChatTemplate):
     It MUST be at the end of @MODELS registry
     """
 
-    def __init__(self, model_path: str = '', **kwargs):
+    def __init__(self, model_path: str = '', trust_remote_code: bool = False, **kwargs):
         self.model_path = model_path
         try:
             from transformers import AutoTokenizer
-            self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+            self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=trust_remote_code)
             # Verify if the model can perform apply_chat_template with different roles.
             self.user_start, self.user_end, _, _ = self._user_instruction()
             self.assistant_start, self.assistant_end, _, _ = self._assistant_instruction()
@@ -790,29 +789,31 @@ class HFChatTemplate(BaseChatTemplate):
             return None, None, [], self.tokenizer.bos_token or ''
 
     @classmethod
-    def match(cls, model_path: str) -> str | None:
+    def match(cls, model_path: str, trust_remote_code: bool = False) -> str | None:
         try:
-            cls(model_path)
+            cls(model_path, trust_remote_code=trust_remote_code)
         except Exception:
             return False
         return True
 
 
-def get_chat_template(model_path: str, config: ChatTemplateConfig | None = None) -> BaseChatTemplate:
+def get_chat_template(model_path: str, config: ChatTemplateConfig | None = None,
+                      trust_remote_code: bool = False) -> BaseChatTemplate:
     """Get the chat template for the model.
 
     Args:
         model_path (str): the model path.
         config (ChatTemplateConfig | None): the chat template config.
+        trust_remote_code (bool): whether to trust remote code.
     Returns:
         BaseChatTemplate: the chat template.
     """
     if config is not None:
-        return config.chat_template
+        return config.chat_template(trust_remote_code=trust_remote_code)
     chat_template_name = 'base'
     for name, model in MODELS.module_dict.items():
-        if model.match(model_path):
+        if model.match(model_path, trust_remote_code=trust_remote_code):
             chat_template_name = name
             break
     config = ChatTemplateConfig(chat_template_name, model_path=model_path)
-    return config.chat_template
+    return config.chat_template(trust_remote_code=trust_remote_code)

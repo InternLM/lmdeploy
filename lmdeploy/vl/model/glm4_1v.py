@@ -22,14 +22,14 @@ class GLM4_1_VisionModel(VisionModel):
             return True
         return False
 
-    def build_preprocessor(self):
+    def build_preprocessor(self, trust_remote_code: bool = False):
         from transformers import AutoProcessor
-        self.processor = AutoProcessor.from_pretrained(self.model_path)
+        self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=trust_remote_code)
         tokenizer = self.processor.tokenizer
         image_token = self.processor.image_token
         self.image_token_id = tokenizer.encode(image_token)[-1]
 
-    def build_model(self):
+    def build_model(self, trust_remote_code: bool = False):
         raise NotImplementedError('turbomind has not supported glm4v yet')
 
     def preprocess(self, messages: list[dict]) -> list[dict]:
