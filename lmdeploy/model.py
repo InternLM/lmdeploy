@@ -643,6 +643,73 @@ class DeepseekVL2(BaseChatTemplate):
             return 'deepseek-vl2'
 
 
+@MODELS.register_module(name=['deepseek-v4'])
+class DeepseekV4ChatTemplate(BaseChatTemplate):
+    """Chat template for DeepSeek-V4.
+
+    Produces prompts that match the official DeepSeek-V4 encoding format:
+    - <｜begin▁of▁sentence｜> (BOS)
+    - <｜User｜> (user role prefix)
+    - content
+    - <｜Assistant｜> (assistant role prefix)
+    - <think> (thinking token - no content for user messages in chat mode)
+    - <｜end▁of▁sentence｜> (EOS)
+    """
+
+    def __init__(
+            self,
+            meta_instruction='',
+            eosys='',
+            user='<｜User｜>',
+            eoh='',
+            assistant='<｜Assistant｜>',
+            eoa='<｜end▁of▁sentence｜>',
+            **kwargs):
+        super().__init__(meta_instruction=meta_instruction,
+                         eosys=eosys,
+                         user=user,
+                         eoh=eoh,
+                         assistant=assistant,
+                         eoa=eoa,
+                         **kwargs)
+
+    def messages2prompt(self, messages, sequence_start=True, **kwargs):
+        if isinstance(messages, str):
+            messages = [{'role': 'user', 'content': messages}]
+
+        # Build prompt following official encoding format
+        prompt = '<｜begin▁of▁sentence｜>'
+
+        for msg in messages:
+            role = msg.get('role')
+            content = msg.get('content', '')
+
+            if role == 'user':
+                prompt += '<｜User｜>'
+                prompt += content
+                prompt += '<｜Assistant｜>'
+                prompt += ''  # thinking token closes user turn
+            elif role == 'assistant':
+                # Assistant message: content + EOS
+                prompt += content
+                prompt += '<｜end▁of▁sentence｜>'
+            elif role == 'system':
+                prompt += content
+
+        return prompt
+
+    def get_prompt(self, prompt, sequence_start=True, **kwargs):
+        return self.messages2prompt([{'role': 'user', 'content': prompt}], sequence_start, **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> str | None:
+        """Return the model_name that was registered to MODELS."""
+        path = model_path.lower()
+        if 'deepseek' in path and 'v4' in path.lower():
+            return 'deepseek-v4'
+        return None
+
+
 @MODELS.register_module(name=['llava-chatml'])
 class ChatmlDirect(BaseChatTemplate):
 
