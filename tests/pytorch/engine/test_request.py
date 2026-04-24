@@ -61,7 +61,6 @@ class TestRequestHander:
         # cleanup, cancel main task
         task_to_cancel = manager._loop_task
         manager.stop_loop()
-        asyncio.run
         event_loop.run_until_complete(asyncio.gather(task_to_cancel, return_exceptions=True))
 
     def test_blocked_add_requests_are_cancelled_immediately(self, manager):

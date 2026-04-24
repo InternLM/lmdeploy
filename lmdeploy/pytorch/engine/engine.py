@@ -502,7 +502,7 @@ class Engine(EngineBase):
             self._sleeping_tags.clear()
         else:
             self._sleeping_tags.difference_update(wakeup_tags)
-        # The engine would resume only when all sleep tags has been cleared.
+        # The engine would resume only when all sleep tags have been cleared.
         if not self._sleeping_tags:
             # enable ADD_MESSAGE and ADD_SESSION
             self._unblock_new_inputs()

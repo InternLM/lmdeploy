@@ -157,6 +157,8 @@ class EngineLoop:
         if self._sleep_requested:
             logger.info('EngineLoop sleep drain already requested; waiting for drain point.')
             await self._main_sleep_drain_event.wait()
+            if self.config.role != EngineRole.Hybrid:
+                await self._migration_sleep_drain_event.wait()
             return
         logger.info('EngineLoop sleep drain requested.')
         self._sleep_requested = True

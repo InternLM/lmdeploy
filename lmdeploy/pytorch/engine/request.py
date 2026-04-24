@@ -323,7 +323,7 @@ class RequestManager:
         """Reject request and wake sender."""
         if req_type is not None:
             reason = reason or 'request rejected'
-            logger.info(f'Reject {req_type.name} request from sender {resp.sender_id}: {reason}')
+            logger.debug(f'Reject {req_type.name} request from sender {resp.sender_id}: {reason}')
         elif reason:
             logger.debug(f'Reject response from sender {resp.sender_id}: {reason}')
         resp.type = ResponseType.CANCEL

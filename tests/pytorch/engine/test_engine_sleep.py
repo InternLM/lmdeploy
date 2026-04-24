@@ -75,7 +75,15 @@ def event_loop():
         asyncio.set_event_loop(new_loop)
         yield new_loop
     finally:
+        pending = asyncio.all_tasks(new_loop)
+        for task in pending:
+            task.cancel()
+        if pending:
+            new_loop.run_until_complete(
+                asyncio.gather(*pending, return_exceptions=True))
+        new_loop.run_until_complete(new_loop.shutdown_asyncgens())
         new_loop.stop()
+        new_loop.close()
         asyncio.set_event_loop(old_loop)
 
 
