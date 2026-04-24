@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import dataclasses
 from abc import ABC, abstractmethod
 from itertools import groupby
 from typing import Any
@@ -26,6 +27,51 @@ class VisionModel(ABC):
     """Visual model which extract image feature."""
     _arch: str | list[str] = None
 
+    # mapping from processor output attribute names to modality types
+    ATTR_NAME_TO_MODALITY = {
+        # image-related attributes
+        'pixel_values': Modality.IMAGE,
+        'image_sizes': Modality.IMAGE,
+        'image_grid_thw': Modality.IMAGE,
+        'image_attention_mask': Modality.IMAGE,
+        'image_emb_mask': Modality.IMAGE,
+        'images_spatial_crop': Modality.IMAGE,
+        'images_crop': Modality.IMAGE,
+        'has_local_crops': Modality.IMAGE,
+        'has_images': Modality.IMAGE,
+        'tgt_size': Modality.IMAGE,
+        'image_grid_hws': Modality.IMAGE,
+        'aspect_ratio_ids': Modality.IMAGE,
+        'aspect_ratio_mask': Modality.IMAGE,
+        'num_patches': Modality.IMAGE,
+        'patch_pixel_values': Modality.IMAGE,
+        'block_sizes': Modality.IMAGE,
+        # audio-related attributes
+        'audio_features': Modality.AUDIO,
+        'audio_feature_lens': Modality.AUDIO,
+        'input_features': Modality.AUDIO,
+        'input_features_mask': Modality.AUDIO,
+        'audio_attention_mask': Modality.AUDIO,
+        'feature_attention_mask': Modality.AUDIO,
+        # video-related attributes
+        'pixel_values_videos': Modality.VIDEO,
+        'second_per_grid_ts': Modality.VIDEO,
+        'video_grid_thw': Modality.VIDEO,
+        # time series-related attributes
+        'ts_values': Modality.TIME_SERIES,
+        'ts_sr': Modality.TIME_SERIES,
+        'ts_lens': Modality.TIME_SERIES,
+    }
+
+    # processor output attributes that carry the main feature tensor
+    FEATURE_NAMES = [
+        'pixel_values',
+        'pixel_values_videos',
+        'audio_features',
+        'input_features',
+        'ts_values',
+    ]
+
     def __init__(self,
                  model_path: str,
                  with_llm: bool = False,
@@ -41,51 +87,6 @@ class VisionModel(ABC):
             _, hf_config = get_model_arch(model_path)
         self.hf_config = hf_config
         self.image_token_id = self.get_pad_token_id(model_path, hf_config) or 0
-
-        # mapping from attribute names to modality types
-        self.ATTR_NAME_TO_MODALITY = {
-            # image-related attributes
-            'pixel_values': Modality.IMAGE,
-            'image_sizes': Modality.IMAGE,
-            'image_grid_thw': Modality.IMAGE,
-            'image_attention_mask': Modality.IMAGE,
-            'image_emb_mask': Modality.IMAGE,
-            'images_spatial_crop': Modality.IMAGE,
-            'images_crop': Modality.IMAGE,
-            'has_local_crops': Modality.IMAGE,
-            'has_images': Modality.IMAGE,
-            'tgt_size': Modality.IMAGE,
-            'image_grid_hws': Modality.IMAGE,
-            'aspect_ratio_ids': Modality.IMAGE,
-            'aspect_ratio_mask': Modality.IMAGE,
-            'num_patches': Modality.IMAGE,
-            'patch_pixel_values': Modality.IMAGE,
-            'block_sizes': Modality.IMAGE,
-            # audio-related attributes
-            'audio_features': Modality.AUDIO,
-            'audio_feature_lens': Modality.AUDIO,
-            'input_features': Modality.AUDIO,
-            'input_features_mask': Modality.AUDIO,
-            'audio_attention_mask': Modality.AUDIO,
-            'feature_attention_mask': Modality.AUDIO,
-            # video-related attributes
-            'pixel_values_videos': Modality.VIDEO,
-            'second_per_grid_ts': Modality.VIDEO,
-            'video_grid_thw': Modality.VIDEO,
-            # time series-related attributes
-            'ts_values': Modality.TIME_SERIES,
-            'ts_sr': Modality.TIME_SERIES,
-            'ts_lens': Modality.TIME_SERIES,
-        }
-
-        # name of the feature filed
-        self.FEATURE_NAMES = [
-            'pixel_values',
-            'pixel_values_videos',
-            'audio_features',
-            'input_features',
-            'ts_values',
-        ]
 
     def get_pad_token_id(self, model_path, hf_config):
         """Get pad_token_id from hf_config or tokenizer."""
@@ -446,3 +447,24 @@ class VisionModel(ABC):
         if arch and (arch == cls._arch or arch in cls._arch):
             return True
         return False
+
+@dataclasses.dataclass
+class MultimodalSpecialTokens:
+    image_token: str | list[str] | None = None
+    video_token: str | list[str] | None = None
+    audio_token: str | list[str] | None = None
+    ts_token: str | list[str] | None = None
+
+    image_token_id: int | None = None
+    video_token_id: int | None = None
+    audio_token_id: int | None = None
+    ts_token_id: int | None = None
+
+    def get_token_id_by_modality(self, modality: Modality) -> int | None:
+        """Get token ID for a given modality."""
+        return {
+            Modality.IMAGE: self.image_token_id,
+            Modality.VIDEO: self.video_token_id,
+            Modality.AUDIO: self.audio_token_id,
+            Modality.TIME_SERIES: self.ts_token_id,
+        }.get(modality)

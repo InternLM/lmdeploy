@@ -5,8 +5,8 @@ import numpy as np
 import torch
 
 from lmdeploy.utils import get_logger
-from lmdeploy.vl.constants import Modality, MultimodalSpecialTokens
-from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
+from lmdeploy.vl.constants import Modality
+from lmdeploy.vl.model.base import VISION_MODELS, MultimodalSpecialTokens, VisionModel
 from lmdeploy.vl.model.qwen3 import Qwen3VLModel
 
 logger = get_logger('lmdeploy')

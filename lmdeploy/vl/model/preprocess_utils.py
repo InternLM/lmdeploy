@@ -1,10 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 
 from lmdeploy.utils import get_logger
-from lmdeploy.vl.constants import Modality, MultimodalSpecialTokens
+from lmdeploy.vl.constants import Modality
+
+if TYPE_CHECKING:
+    from lmdeploy.vl.model.base import MultimodalSpecialTokens
 
 logger = get_logger('lmdeploy')
 
@@ -50,7 +53,7 @@ def get_override_size(processor, mm_processor_kwargs: dict[str, Any] | None = No
 
 
 def get_expanded_input_ids(input_prompt, collected_mm_items, processor,
-                           mm_tokens: MultimodalSpecialTokens) -> torch.Tensor:
+                           mm_tokens: 'MultimodalSpecialTokens') -> torch.Tensor:
     """Return input_ids with each image placeholder expanded to its actual
     token count."""
     image_token_id = mm_tokens.image_token_id
@@ -69,7 +72,7 @@ def get_expanded_input_ids(input_prompt, collected_mm_items, processor,
 
 
 # adapted from https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/managers/mm_utils.py
-def get_expanded_mm_items(collected_mm_items, mm_tokens: MultimodalSpecialTokens):
+def get_expanded_mm_items(collected_mm_items, mm_tokens: 'MultimodalSpecialTokens'):
     """Expand bundled hf processor outputs into per-image/video entries for
     cache locality and scheduling."""
     expanded_mm_items = []
