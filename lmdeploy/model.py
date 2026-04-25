@@ -688,7 +688,7 @@ class DeepseekV4ChatTemplate(BaseChatTemplate):
                 prompt += '<｜User｜>'
                 prompt += content
                 prompt += '<｜Assistant｜>'
-                prompt += ''  # thinking token closes user turn
+                prompt += '</think>'  # Official encoding closes user turn with thinking token
             elif role == 'assistant':
                 # Assistant message: content + EOS
                 prompt += content

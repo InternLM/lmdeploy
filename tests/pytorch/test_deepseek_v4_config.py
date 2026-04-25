@@ -288,3 +288,47 @@ def test_deepseek_v4_dequantize_wo_a_shard_matches_official_convert():
     assert shard.shape == (256, 256)
     assert shard.dtype == torch.bfloat16
     assert torch.all(shard == torch.tensor(2.0, dtype=torch.bfloat16))
+
+
+def test_deepseek_v4_builder_declares_named_cache_specs():
+    from lmdeploy.hf_configs.configuration_deepseek_v4 import DeepseekV4Config
+    from lmdeploy.pytorch.configurations.deepseek_v4 import DeepseekV4ModelConfigBuilder
+
+    cfg = DeepseekV4Config()
+    model_config = DeepseekV4ModelConfigBuilder.build(cfg)
+
+    # Must restore real layer count / head_dim and disable standard kv cache
+    assert model_config.num_layers == cfg.num_hidden_layers
+    assert model_config.head_dim == cfg.head_dim
+    assert model_config.use_standard_kv_cache is False
+
+    # block_cache_specs must be declared
+    assert len(model_config.block_cache_specs) >= 1
+    spec_names = {s.name for s in model_config.block_cache_specs}
+    assert 'v4_raw_kv' in spec_names
+
+    # backward-compat bridge: states_shapes must be derived from state_cache_specs
+    assert len(model_config.states_shapes) == len(model_config.state_cache_specs)
+
+
+def test_deepseek_v4_cache_engine_allocates_named_block_caches():
+    from lmdeploy.hf_configs.configuration_deepseek_v4 import DeepseekV4Config
+    from lmdeploy.pytorch.config import CacheConfig
+    from lmdeploy.pytorch.configurations.deepseek_v4 import DeepseekV4ModelConfigBuilder
+    from lmdeploy.pytorch.engine.cache_engine import CacheEngine
+
+    cfg = DeepseekV4Config()
+    model_config = DeepseekV4ModelConfigBuilder.build(cfg)
+    cache_config = CacheConfig(
+        max_batches=2,
+        block_size=64,
+        num_cpu_blocks=0,
+        num_gpu_blocks=10,
+        num_state_caches=0,
+    )
+    engine = CacheEngine(cache_config, model_config, world_size=1)
+
+    assert 'v4_raw_kv' in engine.block_caches
+    raw_kv = engine.block_caches['v4_raw_kv']
+    assert raw_kv.shape == (model_config.num_layers, 10, 64, model_config.head_dim)
+    assert raw_kv.dtype == torch.bfloat16

@@ -13,7 +13,6 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from torch import nn
 
-from lmdeploy.pytorch.engine.compressed_cache_engine import CompressedCacheEngine
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 from lmdeploy.utils import get_logger
@@ -447,15 +446,7 @@ class Compressor(nn.Module):
         self.wkv = QuantLinear(self.dim, coff * self.head_dim, kernel_mod, dtype=torch.float32, device=device)
         self.wgate = QuantLinear(self.dim, coff * self.head_dim, kernel_mod, dtype=torch.float32, device=device)
         self.norm = RMSNorm(self.head_dim, args.norm_eps, device=device)
-        self.cache = CompressedCacheEngine(args.window_size,
-                                           compress_ratio,
-                                           self.head_dim,
-                                           self.overlap,
-                                           state_dim=coff * self.head_dim)
         self.freqs_cis = None
-
-    def reset_slot(self, slot: int):
-        self.cache.reset_slot(slot)
 
     def _overlap_transform(self, tensor: torch.Tensor, value=0):
         ratio, d = self.compress_ratio, self.head_dim
@@ -464,7 +455,7 @@ class Compressor(nn.Module):
         new_tensor[:, 1:, :ratio] = tensor[:, :-1, :, :d]
         return new_tensor
 
-    def forward(self, x: torch.Tensor, start_pos: int, slot: int):
+    def forward(self, x: torch.Tensor, start_pos: int, compress_state: torch.Tensor):
         bsz, seqlen, _ = x.size()
         assert bsz == 1
         ratio = self.compress_ratio
@@ -474,8 +465,13 @@ class Compressor(nn.Module):
         kv = self.wkv(x)
         score = self.wgate(x)
         rows = (2 if self.overlap else 1) * ratio
-        self.cache.ensure_states(slot, rows, x.device, x.dtype)
-        kv_state, score_state = self.cache.get_states(slot)
+
+        # compress_state shape: (rows, state_dim) where state_dim == coff * head_dim
+        kv_state = compress_state[:rows]
+        score_state = compress_state[rows:2 * rows]
+
+        if start_pos == 0:
+            score_state.fill_(float('-inf'))
 
         should_compress = False
         compressed = None
@@ -529,7 +525,6 @@ class Compressor(nn.Module):
             self.kernel_mod.fp4_act_quant(compressed, 32, True)
         else:
             self.kernel_mod.act_quant(compressed[..., :-rd], 64, 'ue8m0', torch.float8_e8m0fnu, True)
-        self.cache.append_compressed(slot, compressed[0])
         return compressed
 
 
@@ -570,18 +565,21 @@ class Indexer(nn.Module):
                                         world_size=world_size,
                                         rank=rank)
         self.compressor = Compressor(args, kernel_mod, compress_ratio, self.head_dim, device=device, rotate=True)
-        self.cache = CompressedCacheEngine(args.window_size, compress_ratio, self.head_dim)
         self.freqs_cis = None
 
-    def reset_slot(self, slot: int):
-        self.cache.reset_slot(slot)
-        self.compressor.reset_slot(slot)
-
-    def forward(self, x: torch.Tensor, qr: torch.Tensor, start_pos: int, offset: int, slot: int):
+    def forward(self,
+                x: torch.Tensor,
+                qr: torch.Tensor,
+                start_pos: int,
+                offset: int,
+                compress_state: torch.Tensor,
+                index_kv_cache: torch.Tensor,
+                block_offsets: torch.Tensor,
+                seq_idx: int,
+                block_size: int,
+                layer_id: int):
         bsz, seqlen, _ = x.size()
         assert bsz == 1
-        if start_pos == 0:
-            self.reset_slot(slot)
         freqs_cis = self.freqs_cis[start_pos:start_pos + seqlen]
         ratio = self.compress_ratio
         rd = self.rope_head_dim
@@ -590,10 +588,35 @@ class Indexer(nn.Module):
         apply_rotary_emb(q[..., -rd:], freqs_cis)
         q = rotate_activation(q)
         self.kernel_mod.fp4_act_quant(q, 32, True)
-        new_kv = self.compressor(x, start_pos, slot)
+        new_kv = self.compressor(x, start_pos, compress_state)
+
+        # gather existing index entries from block cache
+        total_len = start_pos + seqlen
+        num_index = total_len // ratio
+        if num_index > 0:
+            index_tokens = []
+            for pos in range(num_index):
+                bidx = pos // block_size
+                boff = pos % block_size
+                pblock = block_offsets[seq_idx, bidx]
+                index_tokens.append(index_kv_cache[layer_id, pblock, boff])
+            index_cache = torch.stack(index_tokens)
+        else:
+            index_cache = None
+
         if new_kv is not None:
-            self.cache.append_index(slot, new_kv[0])
-        index_cache = self.cache.get_index(slot)
+            # write new index entries into block cache
+            for i, entry in enumerate(new_kv[0]):
+                abs_pos = (start_pos // ratio) + i
+                bidx = abs_pos // block_size
+                boff = abs_pos % block_size
+                pblock = block_offsets[seq_idx, bidx]
+                index_kv_cache[layer_id, pblock, boff] = entry
+            if index_cache is None:
+                index_cache = new_kv[0]
+            else:
+                index_cache = torch.cat([index_cache, new_kv[0]], dim=0)
+
         if index_cache is None or index_cache.size(0) == 0:
             return get_compress_topk_idxs(ratio, bsz, seqlen, start_pos, offset, x.device)
         weights = self.weights_proj(x) * (self.head_dim**-0.5 * self.n_heads**-0.5)
@@ -662,7 +685,6 @@ class Attention(nn.Module):
                                 world_size=world_size,
                                 rank=rank)
         self.softmax_scale = self.head_dim**-0.5
-        self.cache = CompressedCacheEngine(args.window_size, self.compress_ratio, self.head_dim)
         self.compressor = None
         self.indexer = None
         if self.compress_ratio:
@@ -680,11 +702,60 @@ class Attention(nn.Module):
     def _attn_sink_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
         _load_vector_shard(param, loaded_weight, self.world_size, self.rank)
 
-    def forward(self, x: torch.Tensor, start_pos: int, slot: int):
+    @staticmethod
+    def _gather_window(raw_kv_cache: torch.Tensor, block_offsets: torch.Tensor, seq_idx: int, block_size: int,
+                       window_start: int, total_len: int, layer_id: int):
+        """Gather window tokens from block cache in ring layout.
+
+        The returned tensor is arranged in the same ring order that get_window_topk_idxs() expects for decode.
+        """
+        window_size = total_len - window_start
+        tokens = []
+        for pos in range(window_start, total_len):
+            bidx = pos // block_size
+            boff = pos % block_size
+            pblock = block_offsets[seq_idx, bidx]
+            tokens.append(raw_kv_cache[layer_id, pblock, boff])
+        window = torch.stack(tokens)
+        if window_size < total_len:
+            # Re-arrange into ring layout to match get_window_topk_idxs
+            cutoff = total_len % window_size
+            if cutoff == 0:
+                return window
+            ring = window.new_empty(window_size, window.size(-1))
+            ring[cutoff:window_size] = window[:window_size - cutoff]
+            ring[:cutoff] = window[window_size - cutoff:]
+            return ring
+        return window
+
+    @staticmethod
+    def _gather_compressed(compressed_kv_cache: torch.Tensor, block_offsets: torch.Tensor, seq_idx: int,
+                           block_size: int, num_compressed: int, layer_id: int):
+        """Gather compressed entries from block cache."""
+        if num_compressed == 0:
+            return None
+        tokens = []
+        for pos in range(num_compressed):
+            bidx = pos // block_size
+            boff = pos % block_size
+            pblock = block_offsets[seq_idx, bidx]
+            tokens.append(compressed_kv_cache[layer_id, pblock, boff])
+        return torch.stack(tokens)
+
+    @staticmethod
+    def _write_to_block_cache(cache: torch.Tensor, block_offsets: torch.Tensor, seq_idx: int, block_size: int,
+                              data: torch.Tensor, start_pos: int, layer_id: int):
+        """Write a sequence of entries into a block cache."""
+        for i, entry in enumerate(data):
+            abs_pos = start_pos + i
+            bidx = abs_pos // block_size
+            boff = abs_pos % block_size
+            pblock = block_offsets[seq_idx, bidx]
+            cache[layer_id, pblock, boff] = entry
+
+    def forward(self, x: torch.Tensor, start_pos: int, slot: int, context: StepContext, seq_idx: int):
         bsz, seqlen, _ = x.size()
         assert bsz == 1
-        if start_pos == 0:
-            self.cache.reset_slot(slot)
         freqs_cis = self.freqs_cis[start_pos:start_pos + seqlen]
         rd = self.rope_head_dim
         qr = q = self.q_norm(self.wq_a(x))
@@ -697,45 +768,74 @@ class Attention(nn.Module):
         apply_rotary_emb(kv[..., -rd:], freqs_cis)
         self.kernel_mod.act_quant(kv[..., :-rd], 64, 'ue8m0', torch.float8_e8m0fnu, True)
 
+        block_caches = context.block_caches
+        named_state_caches = context.named_state_caches
+        block_offsets = context.block_offsets
+        block_size = context.cache_config.kernel_block_size
+        raw_kv_cache = block_caches['v4_raw_kv']
+
+        # ---- write raw kv ----
+        if start_pos == 0:
+            self._write_to_block_cache(raw_kv_cache, block_offsets, seq_idx, block_size, kv[0], 0, self.layer_id)
+        else:
+            abs_pos = start_pos
+            bidx = abs_pos // block_size
+            boff = abs_pos % block_size
+            pblock = block_offsets[seq_idx, bidx]
+            raw_kv_cache[self.layer_id, pblock, boff] = kv[0, 0]
+
+        # ---- gather window ----
+        total_len = start_pos + seqlen
+        if start_pos == 0:
+            # prefill: use the full kv directly (topk indices are absolute positions)
+            window_kv = kv[0]
+        else:
+            window_start = max(0, total_len - self.window_size)
+            window_kv = self._gather_window(raw_kv_cache, block_offsets, seq_idx, block_size, window_start, total_len,
+                                            self.layer_id)
+
         topk_idxs = get_window_topk_idxs(self.window_size, bsz, seqlen, start_pos, x.device)
-        window_cache = self.cache.get_window(slot)
-        compressed_cache = self.cache.get_compressed(slot)
+        compressed_kv = None
+        offset = window_kv.size(0) + (0 if start_pos > 0 else kv.size(1))
+
         if self.compress_ratio:
-            offset = (0 if window_cache is None else window_cache.size(0)) + (0 if start_pos > 0 else kv.size(1))
+            # ---- compressed / index ----
+            if self.compress_ratio == 4:
+                compressed_kv_cache = block_caches['v4_compressed_kv_r4']
+                compress_state = named_state_caches['v4_compress_state_r4'][slot]
+            else:
+                compressed_kv_cache = block_caches['v4_compressed_kv_r128']
+                compress_state = named_state_caches['v4_compress_state_r128'][slot]
+
+            # call compressor
+            self.compressor.freqs_cis = self.freqs_cis
+            compressed = self.compressor(x, start_pos, compress_state)
+            if compressed is not None:
+                self._write_to_block_cache(compressed_kv_cache, block_offsets, seq_idx, block_size, compressed[0],
+                                           start_pos // self.compress_ratio, self.layer_id)
+
+            # gather compressed
+            num_compressed = total_len // self.compress_ratio
+            compressed_kv = self._gather_compressed(compressed_kv_cache, block_offsets, seq_idx, block_size,
+                                                    num_compressed, self.layer_id)
+
+            # indexer
             if self.indexer is not None:
                 self.indexer.freqs_cis = self.freqs_cis
-                compress_topk_idxs = self.indexer(x, qr, start_pos, offset, slot)
+                index_kv_cache = block_caches['v4_index_kv_r4']
+                compress_state_idx = named_state_caches['v4_compress_state_r4_idx'][slot]
+                compress_topk_idxs = self.indexer(x, qr, start_pos, offset, compress_state_idx, index_kv_cache,
+                                                  block_offsets, seq_idx, block_size, self.layer_id)
             else:
                 compress_topk_idxs = get_compress_topk_idxs(self.compress_ratio, bsz, seqlen, start_pos, offset,
                                                             x.device)
             topk_idxs = torch.cat([topk_idxs, compress_topk_idxs], dim=-1)
 
-        if start_pos == 0:
-            self.cache.set_window(slot, kv[0])
-            if self.compressor is not None:
-                self.compressor.freqs_cis = self.freqs_cis
-                compressed = self.compressor(x, start_pos, slot)
-                if compressed is not None:
-                    compressed_cache = self.compressor.cache.get_compressed(slot)
-            pieces = [kv[0]]
-            if compressed_cache is not None and compressed_cache.numel() > 0:
-                pieces.append(compressed_cache)
-            full_kv = torch.cat(pieces, dim=0)
-        else:
-            window_cache = self.cache.get_window(slot)
-            if window_cache is None or window_cache.size(0) < self.window_size:
-                self.cache.append_window(slot, kv[0])
-            else:
-                self.cache.update_window(slot, start_pos % self.window_size, kv[0, 0])
-            if self.compressor is not None:
-                self.compressor.freqs_cis = self.freqs_cis
-                self.compressor(x, start_pos, slot)
-                compressed_cache = self.compressor.cache.get_compressed(slot)
-            window_cache = self.cache.get_window(slot)
-            pieces = [window_cache]
-            if compressed_cache is not None and compressed_cache.numel() > 0:
-                pieces.append(compressed_cache)
-            full_kv = torch.cat(pieces, dim=0)
+        # ---- build full_kv ----
+        pieces = [window_kv]
+        if compressed_kv is not None and compressed_kv.numel() > 0:
+            pieces.append(compressed_kv)
+        full_kv = torch.cat(pieces, dim=0)
 
         out = self.kernel_mod.sparse_attn(q, full_kv.unsqueeze(0), self.attn_sink, topk_idxs.int(), self.softmax_scale)
         apply_rotary_emb(out[..., -rd:], freqs_cis, True)
@@ -905,11 +1005,12 @@ class Block(nn.Module):
         y = post.unsqueeze(-1) * x.unsqueeze(-2) + torch.sum(comb.unsqueeze(-1) * residual.unsqueeze(-2), dim=2)
         return y.type_as(x)
 
-    def forward(self, x: torch.Tensor, start_pos: int, input_ids: torch.Tensor, slot: int):
+    def forward(self, x: torch.Tensor, start_pos: int, input_ids: torch.Tensor, slot: int, context: StepContext,
+                seq_idx: int):
         residual = x
         x, post, comb = self._hc_pre(x, self.hc_attn_fn, self.hc_attn_scale, self.hc_attn_base)
         x = self.attn_norm(x)
-        x = self.attn(x, start_pos, slot)
+        x = self.attn(x, start_pos, slot, context, seq_idx)
         x = self._hc_post(x, residual, post, comb)
 
         residual = x
@@ -1051,13 +1152,15 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixin, CudaGraphMixin):
         flat_input_ids = input_ids.flatten()
         outputs = []
         offset = 0
-        for seqlen, history_len, slot in zip(q_seqlens.tolist(), history_lengths.tolist(), state_ids.tolist()):
+        context = self.ctx_mgr.current_context()
+        for seq_idx, (seqlen, history_len, slot) in enumerate(
+                zip(q_seqlens.tolist(), history_lengths.tolist(), state_ids.tolist())):
             seq_input_ids = flat_input_ids[offset:offset + seqlen].unsqueeze(0)
             offset += seqlen
             h = self.embed(seq_input_ids)
             h = h.unsqueeze(2).repeat(1, 1, self.config.hc_mult, 1)
             for layer in self.layers:
-                h = layer(h, history_len, seq_input_ids, int(slot))
+                h = layer(h, history_len, seq_input_ids, int(slot), context, seq_idx)
             outputs.append(h)
         return torch.cat(outputs, dim=1) if outputs else self.embed(input_ids).unsqueeze(2)
 
