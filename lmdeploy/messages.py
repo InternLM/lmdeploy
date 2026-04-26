@@ -577,6 +577,10 @@ class Response:
             self.logprobs = self.logprobs or []
             self.logprobs += other.logprobs
         self.routed_experts = other.routed_experts
+        if other.logits is not None:
+            self.logits = other.logits
+        if other.last_hidden_state is not None:
+            self.last_hidden_state = other.last_hidden_state
         return self
 
 
