@@ -10,7 +10,7 @@ from lmdeploy.serve.openai.protocol import (
 )
 
 from .tool_parser import ToolParserManager
-from .xml_tool_parser import XmlToolParser  # type: ignore[reportMissingImports]
+from .xml_tool_parser import XmlToolParser
 
 if TYPE_CHECKING:
     from lmdeploy.serve.openai.protocol import ChatCompletionRequest

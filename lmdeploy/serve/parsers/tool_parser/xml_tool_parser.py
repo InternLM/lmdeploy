@@ -130,6 +130,7 @@ class XmlToolParser(ToolParser):
 
     @staticmethod
     def _coerce_value(raw_value: str, schema_type: str | None) -> Any:
+        raw_value = raw_value.strip()
         if schema_type is None or schema_type == 'string':
             try:
                 parsed_val = json.loads(raw_value)
