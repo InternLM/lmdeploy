@@ -3,9 +3,11 @@ import torch
 
 from lmdeploy.archs import get_model_arch
 from lmdeploy.hf_configs import config_from_pretrained
+from lmdeploy.pytorch.backends.attention import V4AttentionMetadata
 from lmdeploy.pytorch.backends.cuda.moe.v4_fp4 import _slice_local_topk, _v4_swiglu
 from lmdeploy.pytorch.config import DistConfig, ModelConfig
 from lmdeploy.pytorch.models.deepseek_v4 import (
+    Attention,
     DeepseekV4ForCausalLM,
     MoE,
     ParallelEmbedding,
@@ -458,15 +460,13 @@ def test_deepseek_v4_cuda_graph_support_is_decode_q1_only():
     model.layers = [type('Layer', (), {'ffn': type('FFN', (), {'use_fused_experts': True})()})()]
     model.ctx_mgr = type('CtxMgr', (), {'current_context': lambda self: None})()
     attn_metadata = type('Meta', (), {'is_decoding': True, 'q_seqlens': torch.ones(4, dtype=torch.int32)})()
-    assert model.support_cuda_graph(torch.zeros((1, 4), dtype=torch.long), None, None, attn_metadata=attn_metadata)
-    attn_metadata.is_decoding = False
     assert model.support_cuda_graph(torch.zeros((1, 4), dtype=torch.long), None, None, attn_metadata=attn_metadata) is False    # noqa: E501
 
 
-def test_deepseek_v4_graph_key_extends_with_history_bucket():
+def test_deepseek_v4_graph_key_keeps_base_shape():
     model = object.__new__(DeepseekV4ForCausalLM)
     graph_key = model.get_graph_key_cudagraph((8, True, False, 1), history_lengths=torch.tensor([3, 9, 4]))
-    assert graph_key == (8, True, False, 1, 16)
+    assert graph_key == (8, True, False, 1)
 
 
 def test_deepseek_v4_get_logits_preserves_batch_dim():
@@ -505,6 +505,27 @@ def test_deepseek_v4_decode_position_helpers():
 
     topk = _build_topk_range(torch.tensor([1, 3]), 4, offset=8)
     assert torch.equal(topk, torch.tensor([[[8, -1, -1, -1]], [[8, 9, 10, -1]]]))
+
+
+def test_deepseek_v4_build_decode_attention_metadata_uses_fixed_width_scratch():
+    attn = object.__new__(Attention)
+    attn.window_size = 4
+    attn.compress_ratio = 4
+
+    decode_scratch = {
+        'selected_compressed_kv_r4': torch.empty((2, 8, 16), dtype=torch.bfloat16),
+    }
+    meta = Attention._build_decode_attention_metadata(attn,
+                                                      block_offsets=torch.tensor([[0, 1], [0, 1]], dtype=torch.int32),
+                                                      total_lens=torch.tensor([3, 9], dtype=torch.long),
+                                                      slot=torch.tensor([0, 1], dtype=torch.long),
+                                                      valid_mask=torch.tensor([True, True]),
+                                                      topk_indices=torch.zeros((2, 1, 4), dtype=torch.long),
+                                                      decode_scratch=decode_scratch)
+    assert isinstance(meta, V4AttentionMetadata)
+    assert meta.window_positions.shape == (2, 4)
+    assert meta.compressed_positions.shape == (2, 8)
+    assert meta.compressed_valid_mask.shape == (2, 8)
 
 
 def test_deepseek_v4_next_power_of_2():

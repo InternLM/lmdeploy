@@ -14,7 +14,9 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from torch import nn
 
+from lmdeploy.pytorch.backends.attention import V4AttentionMetadata
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
+from lmdeploy.pytorch.nn import V4Attention as NativeV4Attention
 from lmdeploy.pytorch.nn.moe import FusedMoEV4
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 from lmdeploy.utils import get_logger
@@ -887,6 +889,11 @@ class Attention(nn.Module):
                                 world_size=world_size,
                                 rank=rank)
         self.softmax_scale = self.head_dim**-0.5
+        self.attn_fwd = NativeV4Attention(head_size=self.head_dim,
+                                          scale=self.softmax_scale,
+                                          window_size=self.window_size,
+                                          compress_ratio=self.compress_ratio,
+                                          kernel_mod=kernel_mod)
         self.compressor = None
         self.indexer = None
         if self.compress_ratio:
@@ -944,6 +951,41 @@ class Attention(nn.Module):
         values = values.to(target.dtype)
         blend_mask = write_mask.view(-1, *([1] * (values.dim() - 1)))
         cache[phys_blocks, block_off] = torch.where(blend_mask, values, target)
+
+    def _build_decode_attention_metadata(self,
+                                         block_offsets: torch.Tensor,
+                                         total_lens: torch.Tensor,
+                                         slot: torch.Tensor,
+                                         valid_mask: torch.Tensor,
+                                         topk_indices: torch.Tensor,
+                                         decode_scratch: dict[str, torch.Tensor] | None = None):
+        window_positions, window_lens, _ = _build_window_positions(total_lens.long(), self.window_size)
+
+        compressed_positions = None
+        compressed_valid_mask = None
+        if self.compress_ratio:
+            num_compressed = torch.div(total_lens, self.compress_ratio, rounding_mode='floor').long()
+            if decode_scratch is not None:
+                if self.compress_ratio == 4:
+                    max_width = decode_scratch['selected_compressed_kv_r4'].size(1)
+                else:
+                    max_width = decode_scratch['selected_compressed_kv_r128'].size(1)
+            else:
+                max_width = int(num_compressed.max().item()) if num_compressed.numel() > 0 else 0
+            compressed_positions, compressed_valid_mask = _build_prefix_positions(num_compressed, max_width)
+
+        return V4AttentionMetadata(is_decoding=True,
+                                   block_offsets=block_offsets,
+                                   q_seqlens=torch.ones_like(total_lens),
+                                   kv_seqlens=total_lens,
+                                   state_ids=slot.long(),
+                                   topk_indices=topk_indices,
+                                   window_positions=window_positions,
+                                   window_lens=window_lens,
+                                   valid_mask=valid_mask,
+                                   compress_ratio=self.compress_ratio,
+                                   compressed_positions=compressed_positions,
+                                   compressed_valid_mask=compressed_valid_mask)
 
     def forward(self, x: torch.Tensor, start_pos: int, slot: int, context: StepContext, seq_idx: int):
         bsz, seqlen, _ = x.size()
@@ -1089,23 +1131,19 @@ class Attention(nn.Module):
             max_total_len = int(total_lens.max().item())
             decode_scratch = self._alloc_decode_scratch(bsz, max_total_len, x.device)
 
-        window_kv = decode_scratch['selected_window_kv'][:bsz]
         window_positions, window_lens, _ = _build_window_positions(total_lens.long(), self.window_size)
-        window_kv.copy_(self._gather_cache_entries(cache_layer, block_offsets, window_positions, block_size))
         window_topk = _build_topk_range(window_lens.long(), self.window_size, offset=0)
         offset = self.window_size
 
-        compressed_kv = None
+        compressed_cache = None
         topk_parts = [window_topk]
         if self.compress_ratio:
             if self.compress_ratio == 4:
                 compressed_cache = block_caches['v4_compressed_kv_r4'][self.layer_id]
                 compress_state = named_state_caches['v4_compress_state_r4'][slot.long()]
-                compressed_scratch = decode_scratch['selected_compressed_kv_r4'][:bsz]
             else:
                 compressed_cache = block_caches['v4_compressed_kv_r128'][self.layer_id]
                 compress_state = named_state_caches['v4_compress_state_r128'][slot.long()]
-                compressed_scratch = decode_scratch['selected_compressed_kv_r128'][:bsz]
 
             self.compressor.freqs_cis = self.freqs_cis
             new_compressed, emit_mask = self.compressor.forward_decode(x,
@@ -1119,12 +1157,6 @@ class Attention(nn.Module):
                                       new_compressed,
                                       block_size,
                                       write_mask=emit_mask)
-
-            num_compressed = torch.div(total_lens, self.compress_ratio, rounding_mode='floor').long()
-            comp_positions, _ = _build_prefix_positions(num_compressed, compressed_scratch.size(1))
-            compressed_scratch.copy_(self._gather_cache_entries(compressed_cache, block_offsets, comp_positions,
-                                                                block_size))
-            compressed_kv = compressed_scratch
 
             if self.indexer is not None:
                 index_cache = block_caches['v4_index_kv_r4']
@@ -1142,21 +1174,28 @@ class Attention(nn.Module):
                                                             index_scratch,
                                                             valid_mask)
             else:
-                compress_topk = _build_topk_range(num_compressed, compressed_scratch.size(1), offset=offset)
+                num_compressed = torch.div(total_lens, self.compress_ratio, rounding_mode='floor').long()
+                if self.compress_ratio == 4:
+                    comp_width = decode_scratch['selected_compressed_kv_r4'].size(1)
+                else:
+                    comp_width = decode_scratch['selected_compressed_kv_r128'].size(1)
+                compress_topk = _build_topk_range(num_compressed, comp_width, offset=offset)
             topk_parts.append(compress_topk)
 
         topk_idxs = torch.cat(topk_parts, dim=-1)
-        if compressed_kv is None:
-            full_kv = window_kv
-        else:
-            if self.compress_ratio == 4:
-                full_kv = decode_scratch['selected_full_kv_r4'][:bsz]
-            else:
-                full_kv = decode_scratch['selected_full_kv_r128'][:bsz]
-            full_kv[:, :self.window_size] = window_kv
-            full_kv[:, self.window_size:self.window_size + compressed_kv.size(1)] = compressed_kv
-
-        out = self.kernel_mod.sparse_attn(q, full_kv, self.attn_sink, topk_idxs.int(), self.softmax_scale)
+        attn_meta = self._build_decode_attention_metadata(block_offsets,
+                                                          total_lens.long(),
+                                                          slot,
+                                                          valid_mask,
+                                                          topk_idxs,
+                                                          decode_scratch)
+        out = self.attn_fwd.forward_decode(q,
+                                           cache_layer,
+                                           self.attn_sink,
+                                           attn_meta,
+                                           block_size,
+                                           compressed_kv_cache=compressed_cache,
+                                           decode_scratch=decode_scratch)
         apply_rotary_emb(out[..., -rd:], freqs_cis, True)
         out = out.view(bsz, seqlen, self.n_local_groups, -1)
         wo_a = self.wo_a.weight.view(self.n_local_groups, -1, out.size(-1)).to(out.dtype)
@@ -1504,30 +1543,19 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixin, CudaGraphMixin):
         inputs_embeds: torch.Tensor | None = None,
         **kwargs,
     ):
-        ctx_mgr = getattr(self, 'ctx_mgr', None)
-        context = None if ctx_mgr is None else ctx_mgr.current_context()
-        has_multimodal = context is not None and (context.input_multimodals is not None or context.input_embeddings
-                                                  is not None)
-        if has_multimodal or not self.layers[0].ffn.use_fused_experts:
-            return False
-        if attn_metadata is None or not attn_metadata.is_decoding:
-            return False
-        batch_size = attn_metadata.q_seqlens.size(0)
-        return input_ids.size(-1) == batch_size
+        # The V4 decode path has been refactored to use a backend wrapper,
+        # but the cache-aware graph-safe contract is not complete yet.
+        # Keep cudagraph disabled until raw/compressed/index retrieval is
+        # fully handled inside the backend without dense fallback scratch.
+        return False
 
     def get_graph_key_cudagraph(self, graph_key: tuple, history_lengths: torch.Tensor | None = None, **kwargs):
-        if history_lengths is None:
-            return graph_key
-        max_total_len = int((history_lengths.max() + 1).item())
-        return (*graph_key, _next_power_of_2(max_total_len))
+        return graph_key
 
     def make_buffers_cudagraph(self, graph_meta, history_lengths: torch.Tensor | None = None, **kwargs):
         input_buffers = super().make_buffers_cudagraph(graph_meta, history_lengths=history_lengths, **kwargs)
-        if history_lengths is not None:
-            max_total_len = int((history_lengths.max() + 1).item())
-            self._decode_graph_scratch = self._alloc_decode_scratch(graph_meta.max_batchs,
-                                                                    _next_power_of_2(max_total_len),
-                                                                    graph_meta.device)
+        max_total_len = graph_meta.num_blocks * graph_meta.block_size
+        self._decode_graph_scratch = self._alloc_decode_scratch(graph_meta.max_batchs, max_total_len, graph_meta.device)
         return input_buffers
 
     def fill_buffers_cudagraph(self, graph_meta, input_ids: torch.Tensor, **kwargs):
@@ -1549,7 +1577,10 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixin, CudaGraphMixin):
         if q_seqlens is None:
             q_seqlens = attn_metadata.q_seqlens
         if history_lengths is None:
-            history_lengths = position_ids[0].to(torch.long)
+            if attn_metadata is not None:
+                history_lengths = attn_metadata.kv_seqlens.to(torch.long) - q_seqlens.to(torch.long)
+            else:
+                history_lengths = position_ids[0].to(torch.long)
         if state_ids is None:
             raise RuntimeError('DeepSeek-V4 requires state_ids to provide stable cache slots.')
 
@@ -1601,7 +1632,7 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixin, CudaGraphMixin):
         valid_mask = state_ids >= 0
         safe_state_ids = torch.where(valid_mask, state_ids, state_ids.new_zeros(()))
         if decode_scratch is None:
-            max_total_len = int((history_lengths.max() + 1).item())
+            max_total_len = context.block_offsets.size(1) * context.cache_config.kernel_block_size
             decode_scratch = self._alloc_decode_scratch(bsz, max_total_len, input_ids.device)
         flat_input_ids = input_ids.flatten()[:bsz]
         seq_input_ids = flat_input_ids.unsqueeze(1)

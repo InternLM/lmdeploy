@@ -73,6 +73,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.NSAIndexFP8:
             from .nsa import TritonNSAIndexFP8Builder
             return TritonNSAIndexFP8Builder
+        elif layer_type == OpType.V4Attention:
+            from .attention import TritonV4AttentionBuilder
+            return TritonV4AttentionBuilder
         elif layer_type == OpType.RouterNoauxTC:
             from .moe_router import TritonRouterNoauxTCBuilder
             return TritonRouterNoauxTCBuilder

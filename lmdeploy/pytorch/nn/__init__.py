@@ -13,3 +13,4 @@ from .rotary_embedding import (
     build_rotary_embedding_from_config,  # noqa: F401
     build_rotary_params,  # noqa: F401
 )
+from .v4_attention import V4Attention  # noqa: F401
