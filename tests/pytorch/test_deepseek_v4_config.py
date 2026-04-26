@@ -11,9 +11,13 @@ from lmdeploy.pytorch.models.deepseek_v4 import (
     ParallelEmbedding,
     QuantLinear,
     V4Args,
+    _build_prefix_positions,
+    _build_topk_range,
+    _build_window_positions,
     _dequantize_wo_a_shard,
     _load_vector_shard,
     _map_v4_expert_param_name,
+    _next_power_of_2,
     get_compress_topk_idxs,
     get_window_topk_idxs,
 )
@@ -448,10 +452,21 @@ def test_deepseek_v4_has_cudagraph_interface():
     assert hasattr(DeepseekV4ForCausalLM, 'fill_buffers_cudagraph')
 
 
-def test_deepseek_v4_cuda_graph_disabled():
+def test_deepseek_v4_cuda_graph_support_is_decode_q1_only():
     assert DeepseekV4ForCausalLM.support_cuda_graph is not None
     model = object.__new__(DeepseekV4ForCausalLM)
-    assert model.support_cuda_graph(None, None, None, attn_metadata=None) is False
+    model.layers = [type('Layer', (), {'ffn': type('FFN', (), {'use_fused_experts': True})()})()]
+    model.ctx_mgr = type('CtxMgr', (), {'current_context': lambda self: None})()
+    attn_metadata = type('Meta', (), {'is_decoding': True, 'q_seqlens': torch.ones(4, dtype=torch.int32)})()
+    assert model.support_cuda_graph(torch.zeros((1, 4), dtype=torch.long), None, None, attn_metadata=attn_metadata)
+    attn_metadata.is_decoding = False
+    assert model.support_cuda_graph(torch.zeros((1, 4), dtype=torch.long), None, None, attn_metadata=attn_metadata) is False    # noqa: E501
+
+
+def test_deepseek_v4_graph_key_extends_with_history_bucket():
+    model = object.__new__(DeepseekV4ForCausalLM)
+    graph_key = model.get_graph_key_cudagraph((8, True, False, 1), history_lengths=torch.tensor([3, 9, 4]))
+    assert graph_key == (8, True, False, 1, 16)
 
 
 def test_deepseek_v4_get_logits_preserves_batch_dim():
@@ -476,6 +491,26 @@ def test_deepseek_v4_topk_indices_are_3d():
     compressed = get_compress_topk_idxs(ratio=4, bsz=1, seqlen=1, start_pos=5, offset=8, device='cpu')
     assert window.ndim == 3
     assert compressed.ndim == 3
+
+
+def test_deepseek_v4_decode_position_helpers():
+    positions, mask = _build_prefix_positions(torch.tensor([0, 2, 4]), 4)
+    assert torch.equal(positions, torch.tensor([[-1, -1, -1, -1], [0, 1, -1, -1], [0, 1, 2, 3]]))
+    assert torch.equal(mask, positions >= 0)
+
+    window_positions, window_lens, window_mask = _build_window_positions(torch.tensor([1, 3, 6]), 4)
+    assert torch.equal(window_lens, torch.tensor([1, 3, 4]))
+    assert torch.equal(window_positions, torch.tensor([[0, -1, -1, -1], [0, 1, 2, -1], [2, 3, 4, 5]]))
+    assert torch.equal(window_mask, window_positions >= 0)
+
+    topk = _build_topk_range(torch.tensor([1, 3]), 4, offset=8)
+    assert torch.equal(topk, torch.tensor([[[8, -1, -1, -1]], [[8, 9, 10, -1]]]))
+
+
+def test_deepseek_v4_next_power_of_2():
+    assert _next_power_of_2(1) == 1
+    assert _next_power_of_2(3) == 4
+    assert _next_power_of_2(9) == 16
 
 
 def test_deepseek_v4_compressor_rotate_path_quantizes():

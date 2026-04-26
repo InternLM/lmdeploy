@@ -83,6 +83,18 @@ def _maybe_to_dtype(weight: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
     return weight.to(dtype)
 
 
+def _next_power_of_2(n: int) -> int:
+    n = max(1, int(n))
+    n -= 1
+    n |= n >> 1
+    n |= n >> 2
+    n |= n >> 4
+    n |= n >> 8
+    n |= n >> 16
+    n |= n >> 32
+    return n + 1
+
+
 def _load_vector_shard(param: nn.Parameter, loaded_weight: torch.Tensor, world_size: int, rank: int):
     if world_size > 1:
         loaded_weight = loaded_weight.chunk(world_size, dim=0)[rank].contiguous()
@@ -358,9 +370,19 @@ def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor, inverse: bool = F
     if inverse:
         freqs_cis = freqs_cis.conj()
     if x.ndim == 3:
-        freqs_cis = freqs_cis.view(1, x.size(1), x.size(-1))
+        if freqs_cis.ndim == 3:
+            freqs_cis = freqs_cis.view(x.size(0), x.size(1), x.size(-1))
+        elif freqs_cis.ndim == 2 and freqs_cis.size(0) == x.size(0):
+            freqs_cis = freqs_cis.view(x.size(0), x.size(1), x.size(-1))
+        else:
+            freqs_cis = freqs_cis.view(1, x.size(1), x.size(-1))
     else:
-        freqs_cis = freqs_cis.view(1, x.size(1), 1, x.size(-1))
+        if freqs_cis.ndim == 4:
+            freqs_cis = freqs_cis.view(x.size(0), x.size(1), 1, x.size(-1))
+        elif freqs_cis.ndim == 3 and freqs_cis.size(0) == x.size(0):
+            freqs_cis = freqs_cis.view(x.size(0), x.size(1), 1, x.size(-1))
+        else:
+            freqs_cis = freqs_cis.view(1, x.size(1), 1, x.size(-1))
     x = torch.view_as_real(x * freqs_cis).flatten(-2)
     y.copy_(x)
     return y
@@ -399,6 +421,41 @@ def get_compress_topk_idxs(ratio: int, bsz: int, seqlen: int, start_pos: int, of
         mask = matrix >= torch.arange(1, seqlen + 1, device=device).unsqueeze(1) // ratio
         matrix = torch.where(mask, -1, matrix + offset)
     return matrix.unsqueeze(0).expand(bsz, -1, -1)
+
+
+def _build_prefix_positions(lengths: torch.Tensor, max_len: int):
+    """Build `[0, ..., len-1]` positions padded with `-1`."""
+    device = lengths.device
+    if max_len == 0:
+        empty = torch.empty((lengths.numel(), 0), dtype=torch.long, device=device)
+        return empty, empty.bool()
+    arange = torch.arange(max_len, device=device).unsqueeze(0)
+    mask = arange < lengths.unsqueeze(1)
+    positions = torch.where(mask, arange, arange.new_full((), -1))
+    return positions, mask
+
+
+def _build_window_positions(total_lens: torch.Tensor, window_size: int):
+    """Build chronologically ordered trailing window positions padded with
+    `-1`."""
+    device = total_lens.device
+    if window_size == 0:
+        empty = torch.empty((total_lens.numel(), 0), dtype=torch.long, device=device)
+        return empty, total_lens.new_zeros((total_lens.numel(), )), empty.bool()
+    arange = torch.arange(window_size, device=device).unsqueeze(0)
+    window_lens = total_lens.clamp(max=window_size)
+    starts = total_lens - window_lens
+    mask = arange < window_lens.unsqueeze(1)
+    positions = starts.unsqueeze(1) + arange
+    positions = torch.where(mask, positions, positions.new_full((), -1))
+    return positions, window_lens, mask
+
+
+def _build_topk_range(lengths: torch.Tensor, width: int, offset: int = 0):
+    """Build `[offset, ..., offset+len-1]` padded with `-1`."""
+    positions, mask = _build_prefix_positions(lengths, width)
+    positions = torch.where(mask, positions + offset, positions)
+    return positions.unsqueeze(1)
 
 
 @dataclass
@@ -548,6 +605,73 @@ class Compressor(nn.Module):
             self.kernel_mod.act_quant(compressed[..., :-rd], 64, 'ue8m0', torch.float8_e8m0fnu, True)
         return compressed
 
+    def forward_decode(self,
+                       x: torch.Tensor,
+                       start_pos: torch.Tensor,
+                       compress_state: torch.Tensor,
+                       valid_mask: torch.Tensor):
+        """Tensorized decode path for `q_len == 1`.
+
+        Returns:
+            compressed: `[bsz, head_dim]` with valid rows filled.
+            emit_mask: `[bsz]`, whether the current token emits one compressed entry.
+        """
+        bsz, seqlen, _ = x.size()
+        assert seqlen == 1
+        ratio = self.compress_ratio
+        rd = self.rope_head_dim
+        dtype = x.dtype
+        x = x.float()
+        kv = self.wkv(x).squeeze(1)
+        score = self.wgate(x).squeeze(1)
+        safe_start_pos = torch.where(valid_mask, start_pos, start_pos.new_zeros(()))
+        rows = (2 if self.overlap else 1) * ratio
+        kv_state = compress_state[:, :rows]
+        score_state = compress_state[:, rows:2 * rows]
+        score_state.masked_fill_((valid_mask & (safe_start_pos == 0)).view(-1, 1, 1), float('-inf'))
+
+        emit_mask = valid_mask & (torch.remainder(safe_start_pos + 1, ratio) == 0)
+        pos = torch.remainder(safe_start_pos, ratio)
+        score = score + self.ape[pos]
+
+        batch_idx = torch.arange(bsz, device=x.device)
+        compressed = x.new_zeros((bsz, self.head_dim))
+
+        if self.overlap:
+            write_pos = ratio + pos
+            prev_kv = kv_state[batch_idx, write_pos]
+            prev_score = score_state[batch_idx, write_pos]
+            kv_state[batch_idx, write_pos] = torch.where(valid_mask.view(-1, 1), kv, prev_kv)
+            score_state[batch_idx, write_pos] = torch.where(valid_mask.view(-1, 1), score, prev_score)
+            merged_kv = torch.cat([kv_state[:, :ratio, :self.head_dim], kv_state[:, ratio:, self.head_dim:]], dim=1)
+            merged_score = torch.cat([score_state[:, :ratio, :self.head_dim], score_state[:, ratio:, self.head_dim:]],
+                                     dim=1)
+            active_compressed = (merged_kv * merged_score.softmax(dim=1)).sum(dim=1)
+            kv_state[:, :ratio] = torch.where(emit_mask.view(-1, 1, 1), kv_state[:, ratio:], kv_state[:, :ratio])
+            score_state[:, :ratio] = torch.where(emit_mask.view(-1, 1, 1), score_state[:, ratio:],
+                                                 score_state[:, :ratio])
+        else:
+            prev_kv = kv_state[batch_idx, pos]
+            prev_score = score_state[batch_idx, pos]
+            kv_state[batch_idx, pos] = torch.where(valid_mask.view(-1, 1), kv, prev_kv)
+            score_state[batch_idx, pos] = torch.where(valid_mask.view(-1, 1), score, prev_score)
+            active_compressed = (kv_state * score_state.softmax(dim=1)).sum(dim=1)
+
+        active_compressed = self.norm(active_compressed.to(dtype))
+        active_freqs = self.freqs_cis[(safe_start_pos + 1 - ratio).clamp(min=0)].unsqueeze(1)
+        active_view = active_compressed.unsqueeze(1)
+        apply_rotary_emb(active_view[..., -rd:], active_freqs)
+        active_compressed = active_view.squeeze(1)
+
+        if self.rotate:
+            active_compressed = rotate_activation(active_compressed)
+            self.kernel_mod.fp4_act_quant(active_compressed, 32, True)
+        else:
+            self.kernel_mod.act_quant(active_compressed[..., :-rd], 64, 'ue8m0', torch.float8_e8m0fnu, True)
+
+        compressed = torch.where(emit_mask.view(-1, 1), active_compressed, compressed)
+        return compressed, emit_mask
+
 
 class Indexer(nn.Module):
 
@@ -648,6 +772,63 @@ class Indexer(nn.Module):
         topk = score.topk(min(self.index_topk, index_cache.size(0)), dim=-1)[1]
         return topk + offset
 
+    def forward_decode(self,
+                       x: torch.Tensor,
+                       qr: torch.Tensor,
+                       start_pos: torch.Tensor,
+                       offset: int,
+                       compress_state: torch.Tensor,
+                       index_kv_cache: torch.Tensor,
+                       block_offsets: torch.Tensor,
+                       block_size: int,
+                       layer_id: int,
+                       index_scratch: torch.Tensor,
+                       valid_mask: torch.Tensor):
+        bsz, seqlen, _ = x.size()
+        assert seqlen == 1
+        rd = self.rope_head_dim
+        self.compressor.freqs_cis = self.freqs_cis
+        safe_start_pos = torch.where(valid_mask, start_pos, start_pos.new_zeros(()))
+        freqs_cis = self.freqs_cis[safe_start_pos].unsqueeze(1)
+
+        q = self.wq_b(qr).unflatten(-1, (self.n_local_heads, self.head_dim))
+        apply_rotary_emb(q[..., -rd:], freqs_cis)
+        q = rotate_activation(q)
+        self.kernel_mod.fp4_act_quant(q, 32, True)
+
+        new_kv, emit_mask = self.compressor.forward_decode(x, safe_start_pos, compress_state, valid_mask)
+        batch_idx = torch.arange(bsz, device=x.device)
+        abs_pos = torch.div(safe_start_pos, self.compress_ratio, rounding_mode='floor')
+        Attention._write_cache_entries(index_kv_cache[layer_id],
+                                       block_offsets,
+                                       batch_idx,
+                                       abs_pos,
+                                       new_kv,
+                                       block_size,
+                                       write_mask=emit_mask)
+
+        num_index = torch.where(valid_mask, torch.div(safe_start_pos + 1, self.compress_ratio, rounding_mode='floor'),
+                                start_pos.new_zeros(()))
+        max_index = index_scratch.size(1)
+        if max_index == 0:
+            return x.new_empty((bsz, 1, 0), dtype=torch.long)
+        positions, valid_mask = _build_prefix_positions(num_index, max_index)
+        gathered = Attention._gather_cache_entries(index_kv_cache[layer_id], block_offsets, positions, block_size)
+        index_scratch.copy_(gathered)
+
+        weights = self.weights_proj(x) * (self.head_dim**-0.5 * self.n_heads**-0.5)
+        score = torch.einsum('bshd,btd->bsht', q, index_scratch)
+        score = (score.relu_() * weights.unsqueeze(-1)).sum(dim=2)
+        score = score.masked_fill(~valid_mask.unsqueeze(1), float('-inf'))
+        if self.world_size > 1:
+            dist.all_reduce(score)
+
+        topk_width = min(self.index_topk, max_index)
+        topk = score.topk(topk_width, dim=-1)[1]
+        valid_topk = torch.arange(topk_width, device=x.device).view(1, 1, -1) < num_index.clamp(max=topk_width).view(
+            -1, 1, 1)
+        return torch.where(valid_topk, topk + offset, topk.new_full((), -1))
+
 
 class Attention(nn.Module):
 
@@ -724,55 +905,45 @@ class Attention(nn.Module):
         _load_vector_shard(param, loaded_weight, self.world_size, self.rank)
 
     @staticmethod
-    def _gather_window(raw_kv_cache: torch.Tensor, block_offsets: torch.Tensor, seq_idx: int, block_size: int,
-                       window_start: int, total_len: int, layer_id: int):
-        """Gather window tokens from block cache in ring layout.
-
-        The returned tensor is arranged in the same ring order that get_window_topk_idxs() expects for decode.
-        """
-        window_size = total_len - window_start
-        tokens = []
-        for pos in range(window_start, total_len):
-            bidx = pos // block_size
-            boff = pos % block_size
-            pblock = block_offsets[seq_idx, bidx]
-            tokens.append(raw_kv_cache[layer_id, pblock, boff])
-        window = torch.stack(tokens)
-        if window_size < total_len:
-            # Re-arrange into ring layout to match get_window_topk_idxs
-            cutoff = total_len % window_size
-            if cutoff == 0:
-                return window
-            ring = window.new_empty(window_size, window.size(-1))
-            ring[cutoff:window_size] = window[:window_size - cutoff]
-            ring[:cutoff] = window[window_size - cutoff:]
-            return ring
-        return window
+    def _gather_cache_entries(cache: torch.Tensor, block_offsets: torch.Tensor, positions: torch.Tensor,
+                              block_size: int):
+        """Gather entries from a named block cache with `-1` padded
+        positions."""
+        if positions.numel() == 0:
+            return cache.new_empty((*positions.shape, cache.size(-1)))
+        safe_positions = positions.clamp(min=0)
+        block_idx = torch.div(safe_positions, block_size, rounding_mode='floor').long()
+        max_block_idx = block_offsets.size(1)
+        valid = (positions >= 0) & (block_idx < max_block_idx)
+        safe_block_idx = block_idx.clamp(max=max_block_idx - 1)
+        block_off = torch.remainder(safe_positions, block_size).long()
+        phys_blocks = block_offsets.gather(1, safe_block_idx).long()
+        gathered = cache[phys_blocks, block_off]
+        return torch.where(valid.unsqueeze(-1), gathered, gathered.new_zeros(()))
 
     @staticmethod
-    def _gather_compressed(compressed_kv_cache: torch.Tensor, block_offsets: torch.Tensor, seq_idx: int,
-                           block_size: int, num_compressed: int, layer_id: int):
-        """Gather compressed entries from block cache."""
-        if num_compressed == 0:
-            return None
-        tokens = []
-        for pos in range(num_compressed):
-            bidx = pos // block_size
-            boff = pos % block_size
-            pblock = block_offsets[seq_idx, bidx]
-            tokens.append(compressed_kv_cache[layer_id, pblock, boff])
-        return torch.stack(tokens)
-
-    @staticmethod
-    def _write_to_block_cache(cache: torch.Tensor, block_offsets: torch.Tensor, seq_idx: int, block_size: int,
-                              data: torch.Tensor, start_pos: int, layer_id: int):
-        """Write a sequence of entries into a block cache."""
-        for i, entry in enumerate(data):
-            abs_pos = start_pos + i
-            bidx = abs_pos // block_size
-            boff = abs_pos % block_size
-            pblock = block_offsets[seq_idx, bidx]
-            cache[layer_id, pblock, boff] = entry
+    def _write_cache_entries(cache: torch.Tensor, block_offsets: torch.Tensor, batch_idx: torch.Tensor,
+                             positions: torch.Tensor, values: torch.Tensor, block_size: int,
+                             write_mask: torch.Tensor | None = None):
+        """Write one entry per batch item into a named block cache."""
+        if positions.numel() == 0:
+            return
+        block_idx = torch.div(positions, block_size, rounding_mode='floor').long()
+        valid = (positions >= 0) & (block_idx < block_offsets.size(1))
+        safe_block_idx = block_idx.clamp(max=block_offsets.size(1) - 1)
+        block_off = torch.remainder(positions, block_size).long()
+        phys_blocks = block_offsets[batch_idx, safe_block_idx].long()
+        if write_mask is None:
+            write_mask = valid
+        else:
+            write_mask = write_mask & valid
+        if write_mask is None:
+            cache[phys_blocks, block_off] = values.to(cache.dtype)
+            return
+        target = cache[phys_blocks, block_off]
+        values = values.to(target.dtype)
+        blend_mask = write_mask.view(-1, *([1] * (values.dim() - 1)))
+        cache[phys_blocks, block_off] = torch.where(blend_mask, values, target)
 
     def forward(self, x: torch.Tensor, start_pos: int, slot: int, context: StepContext, seq_idx: int):
         bsz, seqlen, _ = x.size()
@@ -793,17 +964,12 @@ class Attention(nn.Module):
         named_state_caches = context.named_state_caches
         block_offsets = context.block_offsets
         block_size = context.cache_config.kernel_block_size
-        raw_kv_cache = block_caches['v4_raw_kv']
+        raw_kv_cache = block_caches['v4_raw_kv'][self.layer_id]
 
         # ---- write raw kv ----
-        if start_pos == 0:
-            self._write_to_block_cache(raw_kv_cache, block_offsets, seq_idx, block_size, kv[0], 0, self.layer_id)
-        else:
-            abs_pos = start_pos
-            bidx = abs_pos // block_size
-            boff = abs_pos % block_size
-            pblock = block_offsets[seq_idx, bidx]
-            raw_kv_cache[self.layer_id, pblock, boff] = kv[0, 0]
+        raw_positions = torch.arange(start_pos, start_pos + seqlen, device=x.device, dtype=torch.long)
+        raw_batch_idx = torch.full_like(raw_positions, seq_idx)
+        self._write_cache_entries(raw_kv_cache, block_offsets, raw_batch_idx, raw_positions, kv[0], block_size)
 
         # ---- gather window ----
         total_len = start_pos + seqlen
@@ -812,8 +978,9 @@ class Attention(nn.Module):
             window_kv = kv[0]
         else:
             window_start = max(0, total_len - self.window_size)
-            window_kv = self._gather_window(raw_kv_cache, block_offsets, seq_idx, block_size, window_start, total_len,
-                                            self.layer_id)
+            window_positions = torch.arange(window_start, total_len, device=x.device, dtype=torch.long).unsqueeze(0)
+            window_kv = self._gather_cache_entries(raw_kv_cache, block_offsets[seq_idx:seq_idx + 1], window_positions,
+                                                   block_size)[0]
 
         topk_idxs = get_window_topk_idxs(self.window_size, bsz, seqlen, start_pos, x.device)
         compressed_kv = None
@@ -822,23 +989,35 @@ class Attention(nn.Module):
         if self.compress_ratio:
             # ---- compressed / index ----
             if self.compress_ratio == 4:
-                compressed_kv_cache = block_caches['v4_compressed_kv_r4']
+                compressed_kv_cache = block_caches['v4_compressed_kv_r4'][self.layer_id]
                 compress_state = named_state_caches['v4_compress_state_r4'][slot]
             else:
-                compressed_kv_cache = block_caches['v4_compressed_kv_r128']
+                compressed_kv_cache = block_caches['v4_compressed_kv_r128'][self.layer_id]
                 compress_state = named_state_caches['v4_compress_state_r128'][slot]
 
             # call compressor
             self.compressor.freqs_cis = self.freqs_cis
             compressed = self.compressor(x, start_pos, compress_state)
             if compressed is not None:
-                self._write_to_block_cache(compressed_kv_cache, block_offsets, seq_idx, block_size, compressed[0],
-                                           start_pos // self.compress_ratio, self.layer_id)
+                compressed_positions = torch.arange(start_pos // self.compress_ratio,
+                                                    start_pos // self.compress_ratio + compressed.size(1),
+                                                    device=x.device,
+                                                    dtype=torch.long)
+                compressed_batch_idx = torch.full_like(compressed_positions, seq_idx)
+                self._write_cache_entries(compressed_kv_cache,
+                                          block_offsets,
+                                          compressed_batch_idx,
+                                          compressed_positions,
+                                          compressed[0],
+                                          block_size)
 
             # gather compressed
             num_compressed = total_len // self.compress_ratio
-            compressed_kv = self._gather_compressed(compressed_kv_cache, block_offsets, seq_idx, block_size,
-                                                    num_compressed, self.layer_id)
+            compressed_positions = torch.arange(num_compressed, device=x.device, dtype=torch.long).unsqueeze(0)
+            compressed_kv = self._gather_cache_entries(compressed_kv_cache,
+                                                       block_offsets[seq_idx:seq_idx + 1],
+                                                       compressed_positions,
+                                                       block_size)[0]
 
             # indexer
             if self.indexer is not None:
@@ -864,6 +1043,150 @@ class Attention(nn.Module):
         wo_a = self.wo_a.weight.view(self.n_local_groups, -1, out.size(-1)).to(out.dtype)
         out = torch.einsum('bsgd,grd->bsgr', out, wo_a)
         return self.wo_b(out.flatten(2))
+
+    def forward_decode(self,
+                       x: torch.Tensor,
+                       start_pos: torch.Tensor,
+                       slot: torch.Tensor,
+                       context: StepContext,
+                       decode_scratch: dict[str, torch.Tensor] | None = None,
+                       valid_mask: torch.Tensor | None = None):
+        bsz, seqlen, _ = x.size()
+        assert seqlen == 1
+        if valid_mask is None:
+            valid_mask = torch.ones((bsz, ), dtype=torch.bool, device=x.device)
+        rd = self.rope_head_dim
+        safe_start_pos = torch.where(valid_mask, start_pos, start_pos.new_zeros(()))
+        freqs_cis = self.freqs_cis[safe_start_pos].unsqueeze(1)
+        qr = q = self.q_norm(self.wq_a(x))
+        q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim))
+        q *= torch.rsqrt(q.square().mean(-1, keepdim=True) + self.eps)
+        apply_rotary_emb(q[..., -rd:], freqs_cis)
+
+        kv = self.wkv(x)
+        kv = self.kv_norm(kv)
+        apply_rotary_emb(kv[..., -rd:], freqs_cis)
+        self.kernel_mod.act_quant(kv[..., :-rd], 64, 'ue8m0', torch.float8_e8m0fnu, True)
+
+        block_caches = context.block_caches
+        named_state_caches = context.named_state_caches
+        block_offsets = context.block_offsets.long()
+        block_size = context.cache_config.kernel_block_size
+        raw_kv_cache = block_caches['v4_raw_kv']
+        cache_layer = raw_kv_cache[self.layer_id]
+
+        batch_idx = torch.arange(bsz, device=x.device)
+        total_lens = torch.where(valid_mask, safe_start_pos + 1, start_pos.new_zeros(()))
+        self._write_cache_entries(cache_layer,
+                                  block_offsets,
+                                  batch_idx,
+                                  safe_start_pos.long(),
+                                  kv[:, 0],
+                                  block_size,
+                                  write_mask=valid_mask)
+
+        if decode_scratch is None:
+            max_total_len = int(total_lens.max().item())
+            decode_scratch = self._alloc_decode_scratch(bsz, max_total_len, x.device)
+
+        window_kv = decode_scratch['selected_window_kv'][:bsz]
+        window_positions, window_lens, _ = _build_window_positions(total_lens.long(), self.window_size)
+        window_kv.copy_(self._gather_cache_entries(cache_layer, block_offsets, window_positions, block_size))
+        window_topk = _build_topk_range(window_lens.long(), self.window_size, offset=0)
+        offset = self.window_size
+
+        compressed_kv = None
+        topk_parts = [window_topk]
+        if self.compress_ratio:
+            if self.compress_ratio == 4:
+                compressed_cache = block_caches['v4_compressed_kv_r4'][self.layer_id]
+                compress_state = named_state_caches['v4_compress_state_r4'][slot.long()]
+                compressed_scratch = decode_scratch['selected_compressed_kv_r4'][:bsz]
+            else:
+                compressed_cache = block_caches['v4_compressed_kv_r128'][self.layer_id]
+                compress_state = named_state_caches['v4_compress_state_r128'][slot.long()]
+                compressed_scratch = decode_scratch['selected_compressed_kv_r128'][:bsz]
+
+            self.compressor.freqs_cis = self.freqs_cis
+            new_compressed, emit_mask = self.compressor.forward_decode(x,
+                                                                       safe_start_pos.long(),
+                                                                       compress_state,
+                                                                       valid_mask)
+            self._write_cache_entries(compressed_cache,
+                                      block_offsets,
+                                      batch_idx,
+                                      torch.div(safe_start_pos, self.compress_ratio, rounding_mode='floor').long(),
+                                      new_compressed,
+                                      block_size,
+                                      write_mask=emit_mask)
+
+            num_compressed = torch.div(total_lens, self.compress_ratio, rounding_mode='floor').long()
+            comp_positions, _ = _build_prefix_positions(num_compressed, compressed_scratch.size(1))
+            compressed_scratch.copy_(self._gather_cache_entries(compressed_cache, block_offsets, comp_positions,
+                                                                block_size))
+            compressed_kv = compressed_scratch
+
+            if self.indexer is not None:
+                index_cache = block_caches['v4_index_kv_r4']
+                index_state = named_state_caches['v4_compress_state_r4_idx'][slot.long()]
+                index_scratch = decode_scratch['selected_index_kv_r4'][:bsz]
+                compress_topk = self.indexer.forward_decode(x,
+                                                            qr,
+                                                            safe_start_pos.long(),
+                                                            offset,
+                                                            index_state,
+                                                            index_cache,
+                                                            block_offsets,
+                                                            block_size,
+                                                            self.layer_id,
+                                                            index_scratch,
+                                                            valid_mask)
+            else:
+                compress_topk = _build_topk_range(num_compressed, compressed_scratch.size(1), offset=offset)
+            topk_parts.append(compress_topk)
+
+        topk_idxs = torch.cat(topk_parts, dim=-1)
+        if compressed_kv is None:
+            full_kv = window_kv
+        else:
+            if self.compress_ratio == 4:
+                full_kv = decode_scratch['selected_full_kv_r4'][:bsz]
+            else:
+                full_kv = decode_scratch['selected_full_kv_r128'][:bsz]
+            full_kv[:, :self.window_size] = window_kv
+            full_kv[:, self.window_size:self.window_size + compressed_kv.size(1)] = compressed_kv
+
+        out = self.kernel_mod.sparse_attn(q, full_kv, self.attn_sink, topk_idxs.int(), self.softmax_scale)
+        apply_rotary_emb(out[..., -rd:], freqs_cis, True)
+        out = out.view(bsz, seqlen, self.n_local_groups, -1)
+        wo_a = self.wo_a.weight.view(self.n_local_groups, -1, out.size(-1)).to(out.dtype)
+        out = torch.einsum('bsgd,grd->bsgr', out, wo_a)
+        return self.wo_b(out.flatten(2))
+
+    def _alloc_decode_scratch(self, batch_size: int, max_total_len: int, device: torch.device):
+        max_comp_r4 = max_total_len // 4
+        max_comp_r128 = max_total_len // 128
+        return {
+            'selected_window_kv': torch.empty((batch_size, self.window_size, self.head_dim),
+                                              dtype=torch.bfloat16,
+                                              device=device),
+            'selected_compressed_kv_r4': torch.empty((batch_size, max_comp_r4, self.head_dim),
+                                                     dtype=torch.bfloat16,
+                                                     device=device),
+            'selected_compressed_kv_r128': torch.empty((batch_size, max_comp_r128, self.head_dim),
+                                                       dtype=torch.bfloat16,
+                                                       device=device),
+            'selected_index_kv_r4': torch.empty((batch_size, max_comp_r4, self.indexer.head_dim),
+                                                dtype=torch.bfloat16,
+                                                device=device) if self.indexer is not None else torch.empty(
+                                                    (batch_size, 0, 0), dtype=torch.bfloat16, device=device),
+            'selected_full_kv_r4': torch.empty((batch_size, self.window_size + max_comp_r4, self.head_dim),
+                                               dtype=torch.bfloat16,
+                                               device=device),
+            'selected_full_kv_r128': torch.empty((batch_size, self.window_size + max_comp_r128, self.head_dim),
+                                                 dtype=torch.bfloat16,
+                                                 device=device),
+        }
 
 
 class Gate(nn.Module):
@@ -1055,12 +1378,33 @@ class Block(nn.Module):
         x = self._hc_post(x, residual, post, comb)
         return x
 
+    def forward_decode(self,
+                       x: torch.Tensor,
+                       start_pos: torch.Tensor,
+                       input_ids: torch.Tensor,
+                       slot: torch.Tensor,
+                       context: StepContext,
+                       decode_scratch: dict[str, torch.Tensor] | None = None,
+                       valid_mask: torch.Tensor | None = None):
+        residual = x
+        x, post, comb = self._hc_pre(x, self.hc_attn_fn, self.hc_attn_scale, self.hc_attn_base)
+        x = self.attn_norm(x)
+        x = self.attn.forward_decode(x, start_pos, slot, context, decode_scratch, valid_mask=valid_mask)
+        x = self._hc_post(x, residual, post, comb)
+
+        residual = x
+        x, post, comb = self._hc_pre(x, self.hc_ffn_fn, self.hc_ffn_scale, self.hc_ffn_base)
+        x = self.ffn_norm(x)
+        x = self.ffn(x, input_ids)
+        x = self._hc_post(x, residual, post, comb)
+        return x
+
 
 class DeepseekV4ForCausalLM(nn.Module, DeployModelMixin, CudaGraphMixin):
     """DeepSeek-V4 bring-up model.
 
-    The current integration uses dedicated per-sequence compressed caches
-    indexed by lmdeploy `state_offsets`, instead of the generic paged KV cache.
+    Decode uses lmdeploy named block/state caches as the primary history storage. The older per-sequence compressed-
+    cache path is kept only as an eager fallback/debug path while tensorized decode is being stabilized.
     """
 
     def __init__(self,
@@ -1135,6 +1479,7 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixin, CudaGraphMixin):
                                            requires_grad=False)
             self.hc_head_base = nn.Parameter(torch.empty(config.hc_mult, device=self.device), requires_grad=False)
             self.hc_head_scale = nn.Parameter(torch.empty(1, device=self.device), requires_grad=False)
+        self._decode_graph_scratch: dict[str, torch.Tensor] | None = None
 
     def _hc_head(self, x: torch.Tensor):
         shape, dtype = x.size(), x.dtype
@@ -1159,13 +1504,36 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixin, CudaGraphMixin):
         inputs_embeds: torch.Tensor | None = None,
         **kwargs,
     ):
-        """DeepSeek-V4 is not graph-safe yet.
+        ctx_mgr = getattr(self, 'ctx_mgr', None)
+        context = None if ctx_mgr is None else ctx_mgr.current_context()
+        has_multimodal = context is not None and (context.input_multimodals is not None or context.input_embeddings
+                                                  is not None)
+        if has_multimodal or not self.layers[0].ffn.use_fused_experts:
+            return False
+        if attn_metadata is None or not attn_metadata.is_decoding:
+            return False
+        batch_size = attn_metadata.q_seqlens.size(0)
+        return input_ids.size(-1) == batch_size
 
-        The current bring-up path performs host-side tensor value materialization
-        (`tolist`) and mutates Python-managed compressed caches during decode.
-        Those operations are incompatible with CUDA graph capture.
-        """
-        return False
+    def get_graph_key_cudagraph(self, graph_key: tuple, history_lengths: torch.Tensor | None = None, **kwargs):
+        if history_lengths is None:
+            return graph_key
+        max_total_len = int((history_lengths.max() + 1).item())
+        return (*graph_key, _next_power_of_2(max_total_len))
+
+    def make_buffers_cudagraph(self, graph_meta, history_lengths: torch.Tensor | None = None, **kwargs):
+        input_buffers = super().make_buffers_cudagraph(graph_meta, history_lengths=history_lengths, **kwargs)
+        if history_lengths is not None:
+            max_total_len = int((history_lengths.max() + 1).item())
+            self._decode_graph_scratch = self._alloc_decode_scratch(graph_meta.max_batchs,
+                                                                    _next_power_of_2(max_total_len),
+                                                                    graph_meta.device)
+        return input_buffers
+
+    def fill_buffers_cudagraph(self, graph_meta, input_ids: torch.Tensor, **kwargs):
+        new_inputs = super().fill_buffers_cudagraph(graph_meta, input_ids=input_ids, **kwargs)
+        new_inputs['decode_scratch'] = self._decode_graph_scratch
+        return new_inputs
 
     def forward(self,
                 input_ids: torch.Tensor,
@@ -1176,6 +1544,7 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixin, CudaGraphMixin):
                 q_seqlens: torch.Tensor | None = None,
                 history_lengths: torch.Tensor | None = None,
                 state_ids: torch.Tensor | None = None,
+                decode_scratch: dict[str, torch.Tensor] | None = None,
                 **kwargs):
         if q_seqlens is None:
             q_seqlens = attn_metadata.q_seqlens
@@ -1184,6 +1553,19 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixin, CudaGraphMixin):
         if state_ids is None:
             raise RuntimeError('DeepSeek-V4 requires state_ids to provide stable cache slots.')
 
+        if attn_metadata is not None and attn_metadata.is_decoding and input_ids.size(-1) == q_seqlens.size(0):
+            return self._forward_decode_batch(input_ids,
+                                              history_lengths.to(torch.long),
+                                              state_ids.to(torch.long),
+                                              decode_scratch)
+
+        return self._forward_eager_loop(input_ids, q_seqlens, history_lengths, state_ids)
+
+    def _forward_eager_loop(self,
+                            input_ids: torch.Tensor,
+                            q_seqlens: torch.Tensor,
+                            history_lengths: torch.Tensor,
+                            state_ids: torch.Tensor):
         flat_input_ids = input_ids.flatten()
         outputs = []
         offset = 0
@@ -1198,6 +1580,46 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixin, CudaGraphMixin):
                 h = layer(h, history_len, seq_input_ids, int(slot), context, seq_idx)
             outputs.append(h)
         return torch.cat(outputs, dim=1) if outputs else self.embed(input_ids).unsqueeze(2)
+
+    def _alloc_decode_scratch(self, batch_size: int, max_total_len: int, device: torch.device):
+        scratch: dict[str, torch.Tensor] = {}
+        for layer in self.layers:
+            attn_scratch = layer.attn._alloc_decode_scratch(batch_size, max_total_len, device)
+            for name, tensor in attn_scratch.items():
+                if name not in scratch or any(a < b for a, b in zip(scratch[name].shape, tensor.shape)):
+                    scratch[name] = tensor
+        scratch['selected_valid_lens'] = torch.empty((batch_size, 3), dtype=torch.int32, device=device)
+        return scratch
+
+    def _forward_decode_batch(self,
+                              input_ids: torch.Tensor,
+                              history_lengths: torch.Tensor,
+                              state_ids: torch.Tensor,
+                              decode_scratch: dict[str, torch.Tensor] | None = None):
+        context = self.ctx_mgr.current_context()
+        bsz = history_lengths.numel()
+        valid_mask = state_ids >= 0
+        safe_state_ids = torch.where(valid_mask, state_ids, state_ids.new_zeros(()))
+        if decode_scratch is None:
+            max_total_len = int((history_lengths.max() + 1).item())
+            decode_scratch = self._alloc_decode_scratch(bsz, max_total_len, input_ids.device)
+        flat_input_ids = input_ids.flatten()[:bsz]
+        seq_input_ids = flat_input_ids.unsqueeze(1)
+        h = self.embed(seq_input_ids)
+        h = h.masked_fill(~valid_mask.view(-1, 1, 1), 0)
+        h = h.unsqueeze(2).repeat(1, 1, self.config.hc_mult, 1)
+        for layer in self.layers:
+            h = layer.forward_decode(h,
+                                     history_lengths,
+                                     seq_input_ids,
+                                     safe_state_ids,
+                                     context,
+                                     decode_scratch,
+                                     valid_mask=valid_mask)
+            h = h.masked_fill(~valid_mask.view(-1, 1, 1, 1), 0)
+        # Align with lmdeploy agent expectations: hidden states are laid out as
+        # [1, total_seq, hc_mult, hidden] before `_slice_outs()` runs.
+        return h.transpose(0, 1)
 
     def prepare_inputs_for_generation(self,
                                       past_key_values: list[list[torch.Tensor]],
