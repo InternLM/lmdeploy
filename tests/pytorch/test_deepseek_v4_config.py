@@ -3,18 +3,29 @@ import torch
 
 from lmdeploy.archs import get_model_arch
 from lmdeploy.hf_configs import config_from_pretrained
+from lmdeploy.pytorch.backends.cuda.moe.v4_fp4 import _slice_local_topk, _v4_swiglu
 from lmdeploy.pytorch.config import DistConfig, ModelConfig
 from lmdeploy.pytorch.models.deepseek_v4 import (
     DeepseekV4ForCausalLM,
+    MoE,
     ParallelEmbedding,
     QuantLinear,
     V4Args,
     _dequantize_wo_a_shard,
     _load_vector_shard,
+    _map_v4_expert_param_name,
     get_compress_topk_idxs,
     get_window_topk_idxs,
 )
 from lmdeploy.pytorch.models.module_map import MODULE_MAP
+from lmdeploy.pytorch.nn.moe.v4_fp4 import (
+    FusedMoEV4,
+    V4ExpertTPWeights,
+    _convert_fp4_to_blocked_fp8,
+    _dequantize_fp4_weight,
+    _get_v4_moe_runtime_kind,
+)
+from lmdeploy.pytorch.nn.quant_utils import quant_blocked_fp8
 
 MODEL_PATH = '/nvme1/yaoqian/space/tmp/lmdeploy_test/develop/dsv4/DeepSeek-V4-Flash'
 
@@ -110,6 +121,154 @@ def test_deepseek_v4_quant_linear_casts_fp8_input_to_bf16():
     assert out.shape == (2, 8)
 
 
+def test_deepseek_v4_moe_runtime_kind_prefers_fp8_on_cpu():
+    assert _get_v4_moe_runtime_kind(torch.device('cpu')) == 'fp8'
+
+
+def test_deepseek_v4_moe_runtime_kind_dispatches_by_arch(monkeypatch):
+    monkeypatch.setattr(torch.cuda, 'is_available', lambda: True)
+    monkeypatch.setattr(torch.cuda, 'get_device_capability', lambda device=None: (9, 0))
+    assert _get_v4_moe_runtime_kind(torch.device('cuda')) == 'fp8'
+    monkeypatch.setattr(torch.cuda, 'get_device_capability', lambda device=None: (10, 0))
+    assert _get_v4_moe_runtime_kind(torch.device('cuda')) == 'fp4'
+
+
+def test_deepseek_v4_fp4_to_blocked_fp8_conversion_matches_blocked_quantization():
+    weight = torch.randint(0, 255, (128, 64), dtype=torch.uint8).view(torch.int8)
+    raw_scale = torch.pow(2, torch.randint(0, 8, (128, 4), dtype=torch.int32)).to(torch.float32)
+    scale = raw_scale.to(torch.float8_e8m0fnu)
+
+    dense_weight = _dequantize_fp4_weight(weight, scale)
+    ref_weight, ref_scale = quant_blocked_fp8(dense_weight, torch.float8_e4m3fn, 128, scale_fmt='ue8m0')
+
+    batched_weight, batched_scale = _convert_fp4_to_blocked_fp8(weight.unsqueeze(0), scale.unsqueeze(0))
+    assert torch.equal(batched_weight[0], ref_weight)
+    assert torch.equal(batched_scale[0], ref_scale)
+
+
+def test_deepseek_v4_expert_param_mapping_for_fused_and_legacy():
+    fused_gate = _map_v4_expert_param_name('model.layers.0.ffn.experts.3.w1.weight', True)
+    fused_up = _map_v4_expert_param_name('model.layers.0.ffn.experts.3.w3.scale', True)
+    fused_down = _map_v4_expert_param_name('model.layers.0.ffn.experts.3.w2.weight', True)
+    legacy_gate = _map_v4_expert_param_name('model.layers.0.ffn.experts.3.w1.weight', False)
+
+    assert fused_gate == ('model.layers.0.ffn.experts.ckpt_gate_up.weight', 'gate')
+    assert fused_up == ('model.layers.0.ffn.experts.ckpt_gate_up.scale', 'up')
+    assert fused_down == ('model.layers.0.ffn.experts.ckpt_down.weight', 'down')
+    assert legacy_gate == ('model.layers.0.ffn.experts.3.w1.weight', 'gate')
+
+
+def test_deepseek_v4_tp_weights_shard_intermediate_dim(monkeypatch):
+    monkeypatch.setattr('lmdeploy.pytorch.nn.moe.v4_fp4.get_tp_world_rank', lambda name='moe': (3, 2))
+    mod = V4ExpertTPWeights(num_experts=4, hidden_dim=256, ffn_dim=640, weight_type='gate_up', device='cpu')
+
+    loaded_gate = torch.arange(640 * 128, dtype=torch.int8).view(640, 128)
+    mod.weight_loader(mod.weight, loaded_gate, expert_id=1, shard_id='gate')
+    ref_gate = loaded_gate.split([256, 256, 128], dim=0)[2]
+    assert torch.equal(mod.weight.data[1, :128], ref_gate)
+
+    mod_down = V4ExpertTPWeights(num_experts=4, hidden_dim=256, ffn_dim=640, weight_type='down', device='cpu')
+    loaded_down = torch.arange(256 * 320, dtype=torch.int8).view(256, 320)
+    mod_down.weight_loader(mod_down.weight, loaded_down, expert_id=1, shard_id='down')
+    ref_down = loaded_down.split([128, 128, 64], dim=1)[2]
+    assert torch.equal(mod_down.weight.data[1], ref_down)
+
+
+def test_deepseek_v4_fused_moe_owns_nested_update_weights(monkeypatch):
+
+    class _FakeImpl(torch.nn.Module):
+
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+            self.block_size = 128
+            self.calls = 0
+            self.gate_up = type('GateUp', (), {'update_weight': lambda self, w, s: None})()
+            self.down = type('Down', (), {'update_weight': lambda self, w, s: None})()
+
+        def update_weights(self):
+            self.calls += 1
+
+        def forward(self, hidden_states, topk_weights, topk_ids):
+            return hidden_states
+
+    monkeypatch.setattr('lmdeploy.pytorch.nn.moe.v4_fp4._get_v4_moe_runtime_kind', lambda device: 'fp8')
+    monkeypatch.setattr('lmdeploy.pytorch.nn.moe.v4_fp4.FusedMoEBlockedF8', _FakeImpl)
+    monkeypatch.setattr('lmdeploy.pytorch.nn.moe.v4_fp4._convert_fp4_to_blocked_fp8',
+                        lambda weight, scale, block_size=128: (
+                            torch.zeros((weight.size(0), weight.size(1), weight.size(2) * 2),
+                                        dtype=torch.float8_e4m3fn),
+                            torch.zeros((weight.size(0), 1, (weight.size(2) * 2) // block_size),
+                                        dtype=torch.float32),
+                        ))
+
+    moe = FusedMoEV4(hidden_dim=256, ffn_dim=256, num_experts=4, top_k=2, device=torch.device('cpu'))
+    nested_update = moe.impl.update_weights
+    moe.update_weights()
+    assert moe._impl_update_weights is not None
+    assert moe.impl.calls == 1
+    nested_update()
+    assert moe.impl.calls == 1
+
+
+def test_deepseek_v4_legacy_expert_loader_ignores_expert_kwargs(monkeypatch):
+    calls = []
+
+    def _fake_load_weight(param, loaded_weight, **kwargs):
+        calls.append(kwargs)
+
+    model = object.__new__(DeepseekV4ForCausalLM)
+    model.world_size = 1
+    model.rank = 0
+    model.layers = [type('Layer', (), {'ffn': type('FFN', (), {'use_fused_experts': False})()})()]
+
+    legacy_param = torch.nn.Parameter(torch.empty(2, 2))
+    model.named_parameters = lambda: [('layers.0.ffn.experts.3.w1.weight', legacy_param)]
+
+    monkeypatch.setattr('lmdeploy.pytorch.models.deepseek_v4.load_weight', _fake_load_weight)
+    model.load_weights([('layers.0.ffn.experts.3.w1.weight', torch.ones(2, 2))])
+
+    assert calls == [{}]
+
+
+def test_deepseek_v4_moe_swiglu_matches_v4_clamp_rules():
+    x = torch.tensor([[12.0, -20.0, 30.0, -30.0]], dtype=torch.bfloat16)
+    out = _v4_swiglu(x, swiglu_limit=10.0)
+    gate = torch.tensor([[10.0, -20.0]], dtype=torch.float32)
+    up = torch.tensor([[10.0, -10.0]], dtype=torch.float32)
+    ref = (torch.nn.functional.silu(gate) * up).to(torch.bfloat16)
+    assert out.shape == (1, 2)
+    assert out.dtype == torch.bfloat16
+    assert torch.allclose(out, ref)
+
+
+def test_deepseek_v4_local_topk_sanitizes_invalid_ids_for_blocked_fp8():
+    topk_ids = torch.tensor([[3, 70, 5], [90, 6, 2]], dtype=torch.int64)
+    topk_weights = torch.tensor([[0.3, 0.4, 0.3], [0.2, 0.5, 0.3]], dtype=torch.float32)
+    local_ids, local_weights, local_mask = _slice_local_topk(topk_ids,
+                                                             topk_weights,
+                                                             expert_offset=0,
+                                                             num_experts=8,
+                                                             invalid_expert=0)
+    assert local_ids.min().item() >= 0
+    assert torch.equal(local_mask,
+                       torch.tensor([[True, False, True], [False, True, True]]))
+    assert torch.equal(local_weights,
+                       torch.tensor([[0.3, 0.0, 0.3], [0.0, 0.5, 0.3]], dtype=torch.float32))
+
+
+def test_deepseek_v4_local_topk_keeps_negative_sentinel_for_fp4_grouped():
+    topk_ids = torch.tensor([[32, 35], [40, 31]], dtype=torch.int64)
+    topk_weights = torch.ones((2, 2), dtype=torch.float32)
+    local_ids, local_weights, local_mask = _slice_local_topk(topk_ids,
+                                                             topk_weights,
+                                                             expert_offset=32,
+                                                             num_experts=4,
+                                                             invalid_expert=-1)
+    assert torch.equal(local_ids, torch.tensor([[0, 3], [-1, -1]], dtype=torch.int64))
+    assert torch.equal(local_weights, torch.tensor([[1.0, 1.0], [0.0, 0.0]], dtype=torch.float32))
+    assert torch.equal(local_mask, torch.tensor([[True, True], [False, False]]))
+
+
 def test_deepseek_v4_quant_linear_uses_bf16_default_dtype_for_fp8_gemm():
 
     class _Kernel:
@@ -161,6 +320,126 @@ def test_deepseek_v4_quant_linear_uses_bf16_default_dtype_for_fp4_gemm():
 def test_deepseek_v4_parallel_embedding_uses_model_dtype():
     emb = ParallelEmbedding(16, 4, world_size=1, rank=0, device='cpu', dtype=torch.bfloat16)
     assert emb.weight.dtype == torch.bfloat16
+
+
+def test_deepseek_v4_shared_expert_uses_checkpoint_quant_dtype():
+    from lmdeploy.pytorch.models.deepseek_v4 import Expert
+
+    class _Kernel:
+        pass
+
+    expert = Expert(16, 8, _Kernel(), dtype=torch.float8_e4m3fn, device='cpu')
+    assert expert.w1.weight.dtype == torch.float8_e4m3fn
+    assert expert.w2.weight.dtype == torch.float8_e4m3fn
+    assert expert.w3.weight.dtype == torch.float8_e4m3fn
+
+
+def test_deepseek_v4_moe_defaults_to_fused_experts(monkeypatch):
+    class _Kernel:
+
+        @staticmethod
+        def act_quant(x, *args, **kwargs):
+            return x, torch.ones((1, 1), dtype=torch.float8_e8m0fnu)
+
+        @staticmethod
+        def fp8_gemm(qx, scale, weight, weight_scale, scale_dtype):
+            return torch.zeros((*qx.shape[:-1], weight.shape[0]), dtype=torch.bfloat16)
+
+        @staticmethod
+        def fp4_gemm(qx, scale, weight, weight_scale, scale_dtype):
+            return torch.zeros((*qx.shape[:-1], weight.shape[0]), dtype=torch.bfloat16)
+
+    monkeypatch.delenv('LMDEPLOY_DSV4_EXPERIMENTAL_FUSED_MOE', raising=False)
+    monkeypatch.setattr('lmdeploy.pytorch.models.deepseek_v4.FusedMoEV4',
+                        lambda *args, **kwargs: torch.nn.Identity())
+    args = V4Args(dim=16,
+                  n_heads=2,
+                  vocab_size=32,
+                  moe_inter_dim=8,
+                  n_layers=1,
+                  n_hash_layers=0,
+                  n_routed_experts=4,
+                  n_shared_experts=1,
+                  n_activated_experts=2,
+                  score_func='sigmoid',
+                  route_scale=1.0,
+                  swiglu_limit=0.0,
+                  q_lora_rank=8,
+                  head_dim=8,
+                  rope_head_dim=4,
+                  norm_eps=1e-5,
+                  o_groups=2,
+                  o_lora_rank=4,
+                  window_size=16,
+                  compress_ratios=(0,),
+                  compress_rope_theta=10000.0,
+                  original_seq_len=1024,
+                  rope_theta=10000.0,
+                  rope_factor=1.0,
+                  beta_fast=32,
+                  beta_slow=1,
+                  index_n_heads=2,
+                  index_head_dim=8,
+                  index_topk=2,
+                  hc_mult=1,
+                  hc_sinkhorn_iters=1,
+                  hc_eps=1e-6)
+    moe = MoE(layer_id=0, args=args, kernel_mod=_Kernel(), world_size=1, rank=0, device='cpu')
+    assert moe.use_fused_experts is True
+    assert isinstance(moe.experts, torch.nn.Identity)
+
+
+def test_deepseek_v4_moe_env_can_force_legacy_experts(monkeypatch):
+    class _Kernel:
+
+        @staticmethod
+        def act_quant(x, *args, **kwargs):
+            return x, torch.ones((1, 1), dtype=torch.float8_e8m0fnu)
+
+        @staticmethod
+        def fp8_gemm(qx, scale, weight, weight_scale, scale_dtype):
+            return torch.zeros((*qx.shape[:-1], weight.shape[0]), dtype=torch.bfloat16)
+
+        @staticmethod
+        def fp4_gemm(qx, scale, weight, weight_scale, scale_dtype):
+            return torch.zeros((*qx.shape[:-1], weight.shape[0]), dtype=torch.bfloat16)
+
+    monkeypatch.setenv('LMDEPLOY_DSV4_EXPERIMENTAL_FUSED_MOE', '0')
+    args = V4Args(dim=16,
+                  n_heads=2,
+                  vocab_size=32,
+                  moe_inter_dim=8,
+                  n_layers=1,
+                  n_hash_layers=0,
+                  n_routed_experts=4,
+                  n_shared_experts=1,
+                  n_activated_experts=2,
+                  score_func='sigmoid',
+                  route_scale=1.0,
+                  swiglu_limit=0.0,
+                  q_lora_rank=8,
+                  head_dim=8,
+                  rope_head_dim=4,
+                  norm_eps=1e-5,
+                  o_groups=2,
+                  o_lora_rank=4,
+                  window_size=16,
+                  compress_ratios=(0,),
+                  compress_rope_theta=10000.0,
+                  original_seq_len=1024,
+                  rope_theta=10000.0,
+                  rope_factor=1.0,
+                  beta_fast=32,
+                  beta_slow=1,
+                  index_n_heads=2,
+                  index_head_dim=8,
+                  index_topk=2,
+                  hc_mult=1,
+                  hc_sinkhorn_iters=1,
+                  hc_eps=1e-6)
+    moe = MoE(layer_id=0, args=args, kernel_mod=_Kernel(), world_size=1, rank=0, device='cpu')
+    assert moe.use_fused_experts is False
+    assert isinstance(moe.experts, torch.nn.ModuleDict)
 
 
 def test_deepseek_v4_has_cudagraph_interface():

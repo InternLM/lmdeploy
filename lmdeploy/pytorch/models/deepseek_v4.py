@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import importlib.util
 import math
+import os
 import os.path as osp
 import re
 from collections.abc import Iterable
@@ -14,6 +15,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
+from lmdeploy.pytorch.nn.moe import FusedMoEV4
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 from lmdeploy.utils import get_logger
 
@@ -101,6 +103,25 @@ def _dequantize_wo_a_shard(weight: torch.Tensor, scale: torch.Tensor, world_size
     weight = weight.unflatten(0, (-1, 128)).unflatten(-1, (-1, 128)).float()
     weight = weight * scale[:, None, :, None].float()
     return weight.flatten(2, 3).flatten(0, 1).bfloat16()
+
+
+def _map_v4_expert_param_name(name: str, use_fused_experts: bool) -> tuple[str, str] | None:
+    expert_match = re.search(r'\.ffn\.experts\.(\d+)\.(w[123])\.(weight|scale)$', name)
+    if expert_match is None:
+        return None
+    proj = expert_match.group(2)
+    suffix = expert_match.group(3)
+    if use_fused_experts:
+        if proj == 'w1':
+            return name[:expert_match.start()] + f'.ffn.experts.ckpt_gate_up.{suffix}', 'gate'
+        if proj == 'w3':
+            return name[:expert_match.start()] + f'.ffn.experts.ckpt_gate_up.{suffix}', 'up'
+        return name[:expert_match.start()] + f'.ffn.experts.ckpt_down.{suffix}', 'down'
+    if proj == 'w1':
+        return name, 'gate'
+    if proj == 'w3':
+        return name, 'up'
+    return name, 'down'
 
 
 class QuantLinear(nn.Module):
@@ -926,17 +947,28 @@ class MoE(nn.Module):
         self.experts_per_rank = args.n_routed_experts // world_size
         self.start = rank * self.experts_per_rank
         self.end = self.start + self.experts_per_rank
+        # Fused routed-expert MoE is now the default product path for V4 on H800.
+        # Keep the env flag so we can force the legacy expert loop for A/B checks.
+        self.use_fused_experts = os.getenv('LMDEPLOY_DSV4_EXPERIMENTAL_FUSED_MOE', '1') == '1'
         self.gate = Gate(layer_id, args, device=device)
-        expert_dtype = torch.float4_e2m1fn_x2
-        self.experts = nn.ModuleDict({
-            str(i): Expert(args.dim,
-                           args.moe_inter_dim,
-                           kernel_mod,
-                           dtype=expert_dtype,
-                           swiglu_limit=args.swiglu_limit,
-                           device=device)
-            for i in range(self.start, self.end)
-        })
+        if self.use_fused_experts:
+            self.experts = FusedMoEV4(args.dim,
+                                      args.moe_inter_dim,
+                                      args.n_routed_experts,
+                                      args.n_activated_experts,
+                                      swiglu_limit=args.swiglu_limit,
+                                      device=device)
+        else:
+            expert_dtype = torch.float4_e2m1fn_x2
+            self.experts = nn.ModuleDict({
+                str(i): Expert(args.dim,
+                               args.moe_inter_dim,
+                               kernel_mod,
+                               dtype=expert_dtype,
+                               swiglu_limit=args.swiglu_limit,
+                               device=device)
+                for i in range(self.start, self.end)
+            })
         self.shared_experts = Expert(args.dim,
                                      args.moe_inter_dim,
                                      kernel_mod,
@@ -948,15 +980,18 @@ class MoE(nn.Module):
         shape = x.shape
         x = x.view(-1, self.dim)
         weights, indices = self.gate(x, input_ids.flatten())
-        y = torch.zeros_like(x, dtype=torch.float32)
-        counts = torch.bincount(indices.flatten(), minlength=self.end).tolist()
-        for i in range(self.start, self.end):
-            if i >= len(counts) or counts[i] == 0:
-                continue
-            idx, top = torch.where(indices == i)
-            y[idx] += self.experts[str(i)](x[idx], weights[idx, top, None])
-        if self.world_size > 1:
-            dist.all_reduce(y)
+        if self.use_fused_experts:
+            y = self.experts(x, weights, indices).float()
+        else:
+            y = torch.zeros_like(x, dtype=torch.float32)
+            counts = torch.bincount(indices.flatten(), minlength=self.end).tolist()
+            for i in range(self.start, self.end):
+                if i >= len(counts) or counts[i] == 0:
+                    continue
+                idx, top = torch.where(indices == i)
+                y[idx] += self.experts[str(i)](x[idx], weights[idx, top, None])
+            if self.world_size > 1:
+                dist.all_reduce(y)
         y += self.shared_experts(x)
         return y.type_as(x).view(shape)
 
@@ -1210,14 +1245,23 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixin, CudaGraphMixin):
                 continue
             if name.endswith('tie2eid'):
                 name = name.replace('tie2eid', 'tid2eid')
-            if '.experts.' in name and '.shared_experts.' not in name:
-                match = re.search(r'\.experts\.(\d+)\.', name)
-                if match is not None:
-                    expert_id = int(match.group(1))
-                    start = self.rank * (self.config.n_routed_experts // self.world_size)
-                    end = start + (self.config.n_routed_experts // self.world_size)
-                    if expert_id < start or expert_id >= end:
+            expert_match = re.search(r'\.ffn\.experts\.(\d+)\.(w[123])\.(weight|scale)$', name)
+            if expert_match is not None:
+                if not self.layers[0].ffn.use_fused_experts:
+                    if name in params_dict:
+                        load_weight(params_dict[name], loaded_weight)
                         continue
+                    logger.debug(f'Skip unknown DeepSeek-V4 legacy expert weight: {name}')
+                    continue
+                expert_id = int(expert_match.group(1))
+                mapped = _map_v4_expert_param_name(name, True)
+                assert mapped is not None
+                param_name, shard_id = mapped
+                if param_name in params_dict:
+                    load_weight(params_dict[param_name], loaded_weight, expert_id=expert_id, shard_id=shard_id)
+                    continue
+                logger.debug(f'Skip unknown DeepSeek-V4 expert weight: {name} -> {param_name}')
+                continue
             if name.endswith('wo_a.weight'):
                 pending_wo_a_weight[name] = loaded_weight
                 _maybe_load_wo_a(name[:-len('.weight')])
