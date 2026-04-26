@@ -263,6 +263,7 @@ public:
                       const Tensor&                gbl_channel_prefix_matrix,
                       Tensor&                      combined_rdma_head,
                       Tensor&                      combined_nvl_head,
+                      const int*                   num_recv_tokens_ptr,
                       const Config&                config);
 
     Config get_dispatch_config();

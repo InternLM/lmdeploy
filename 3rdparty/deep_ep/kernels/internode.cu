@@ -1901,6 +1901,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1) combine(int4* co
                                                                         const int* rdma_channel_prefix_matrix,
                                                                         const int* rdma_rank_prefix_sum,
                                                                         const int* gbl_channel_prefix_matrix,
+                                                                        const int* num_recv_tokens_ptr,
                                                                         int num_tokens,
                                                                         int num_combined_tokens,
                                                                         int hidden,
@@ -2005,7 +2006,12 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * 32, 1) combine(int4* co
         if (lane_id < kNumRDMARanks) {
             int prefix_idx = (lane_id * NUM_MAX_NVL_PEERS + dst_nvl_rank) * num_channels + channel_id;
             token_start_idx = gbl_channel_prefix_matrix[prefix_idx];
-            token_end_idx = (prefix_idx == num_channels * num_ranks - 1) ? num_tokens : gbl_channel_prefix_matrix[prefix_idx + 1];
+            // The last `(rdma, nvl, channel)` slot has no `+1` neighbor, so its upper bound has to come
+            // from the real recv-token total. When `num_recv_tokens_ptr` is supplied (HT dispatch with
+            // `num_worst_tokens > 0` pads `x` to the worst-case size), read the device-side total to
+            // avoid sending into the padding region. Otherwise fall back to the input shape.
+            const int real_num_tokens = num_recv_tokens_ptr != nullptr ? __ldg(num_recv_tokens_ptr) : num_tokens;
+            token_end_idx = (prefix_idx == num_channels * num_ranks - 1) ? real_num_tokens : gbl_channel_prefix_matrix[prefix_idx + 1];
         }
         __syncwarp();
 
@@ -2513,6 +2519,7 @@ void combine(cudaDataType_t type,
              const int* rdma_channel_prefix_matrix,
              const int* rdma_rank_prefix_sum,
              const int* gbl_channel_prefix_matrix,
+             const int* num_recv_tokens_ptr,
              int num_tokens,
              int num_combined_tokens,
              int hidden,
@@ -2568,6 +2575,7 @@ void combine(cudaDataType_t type,
                       rdma_channel_prefix_matrix,                                     \
                       rdma_rank_prefix_sum,                                           \
                       gbl_channel_prefix_matrix,                                      \
+                      num_recv_tokens_ptr,                                            \
                       num_tokens,                                                     \
                       num_combined_tokens,                                            \
                       hidden,                                                         \

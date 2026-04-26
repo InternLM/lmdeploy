@@ -345,6 +345,14 @@ void NcclCommImpl::Combine(const EpCombineInput& input, EpCombineOutput& output,
             auto combined_rdma_head         = input.handle[8];
             auto combined_nvl_head          = input.handle[9];
 
+            // Real recv-token total lives at the last slot of `recv_gbl_rank_prefix_sum`. The
+            // internode combine kernel needs it to bound the very last (rdma, nvl, channel)
+            // task range when HT dispatch was called with `num_worst_tokens > 0` (which pads
+            // `input.x` past the real total).
+            auto       recv_gbl_rank_prefix_sum = input.handle[6];
+            const int* num_recv_tokens_ptr =
+                recv_gbl_rank_prefix_sum.data<int>() + recv_gbl_rank_prefix_sum.shape(0) - 1;
+
             auto [combined_x, combined_topk_weights] = buffer_->internode_combine(input.x,
                                                                                   std::nullopt,
                                                                                   std::nullopt,
@@ -356,6 +364,7 @@ void NcclCommImpl::Combine(const EpCombineInput& input, EpCombineOutput& output,
                                                                                   gbl_channel_prefix_matrix,
                                                                                   combined_rdma_head,
                                                                                   combined_nvl_head,
+                                                                                  num_recv_tokens_ptr,
                                                                                   config);
             sync_check_cuda_error();
             output.out_x = combined_x;

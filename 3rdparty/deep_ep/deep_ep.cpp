@@ -1428,6 +1428,7 @@ Buffer::internode_combine(const Tensor&                x,
                           const Tensor&                gbl_channel_prefix_matrix,
                           Tensor&                      combined_rdma_head,
                           Tensor&                      combined_nvl_head,
+                          const int*                   num_recv_tokens_ptr,
                           const Config&                config)
 {
     const int num_channels = config.num_sms / 2;
@@ -1545,6 +1546,7 @@ Buffer::internode_combine(const Tensor&                x,
                        rdma_channel_prefix_matrix.data<int>(),
                        rdma_rank_prefix_sum.data<int>(),
                        gbl_channel_prefix_matrix.data<int>(),
+                       num_recv_tokens_ptr,
                        num_tokens,
                        num_combined_tokens,
                        hidden,
