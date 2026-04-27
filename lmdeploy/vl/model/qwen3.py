@@ -45,26 +45,3 @@ class Qwen3VLModel(VisionModel):
             image_token_id=self.image_token_id,
             video_token_id=self.video_token_id,
         )
-
-    def apply_chat_template(self, messages, chat_template, sequence_start, chat_template_kwargs=None):
-        """Apply chat template to get the prompt."""
-        chat_template_kwargs = chat_template_kwargs or {}
-        prompt_messages = []
-        IMAGE_TOKEN = '<IMAGE_TOKEN>'
-        messages = [x for x in messages if x['role'] not in ['preprocess', 'forward']]
-        if VisionModel.IMAGE_TOKEN_included(messages):
-            # backward compatibility
-            for message in messages:
-                role, content = message['role'], message['content']
-                if role != 'user' or isinstance(content, str):
-                    prompt_messages.append(message)
-                    continue
-                content = [x['text'] for x in content if x['type'] == 'text']
-                prompt = ''.join(content)
-                prompt = prompt.replace(IMAGE_TOKEN, f'<|vision_start|>{self.image_token}<|vision_end|>')
-                prompt_messages.append(dict(role='user', content=prompt))
-        else:
-            prompt_messages = messages
-
-        prompt = chat_template.messages2prompt(prompt_messages, sequence_start, **chat_template_kwargs)
-        return prompt

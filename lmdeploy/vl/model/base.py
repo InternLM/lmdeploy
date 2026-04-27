@@ -186,12 +186,9 @@ class VisionModel(ABC):
             **kwargs,
         )
 
-        # collect from processor outputs and categorized by modality
+        # collect items from hf processor outputs and categorized by modality for lmdeploy to consume
         collected_mm_items: dict[Modality, dict[str, Any]] = {}
         for attr_name, value in processor_outputs.items():
-            if attr_name == 'input_ids':
-                continue
-
             current_modality = self.ATTR_NAME_TO_MODALITY.get(attr_name)
             if current_modality:
                 if current_modality not in collected_mm_items:
@@ -202,7 +199,7 @@ class VisionModel(ABC):
 
                 collected_mm_items[current_modality][attr_name] = value
 
-        # get input_ids
+        # get input_ids, expand multimodal tokens only when we receive input ids from /generate endpoint
         if isinstance(input_prompt, str):
             input_ids = processor_outputs['input_ids'].flatten()
         else:
@@ -213,7 +210,7 @@ class VisionModel(ABC):
             mm_token_id = self.mm_tokens.get_token_id_by_modality(modality)
             item['offset'] = get_mm_items_offset(input_ids=input_ids, mm_token_id=mm_token_id)
 
-        # expand bundled hf processor outputs into per-image/video entry
+        # expand bundled hf processor outputs into per-image/video entry for lmdeploy to consume
         expanded_mm_items = get_expanded_mm_items(collected_mm_items, self.mm_tokens)
 
         return dict(input_ids=input_ids.tolist(), multimodal=expanded_mm_items)
@@ -222,14 +219,47 @@ class VisionModel(ABC):
     def has_input_ids(messages: list[dict]) -> bool:
         """Check whether the messages contain input_ids directly.
 
+        This is True when the first (and only) user message content is a list
+        whose first item carries a ``text`` field that is itself a list of
+        token ids (i.e. the output of the ``/generate`` endpoint rather than a
+        plain text prompt).
+
         Args:
             messages (list[dict]): a list of message, which is supposed to be
                 the output of `preprocess`
         Returns:
             bool: whether the messages contain input_ids directly
         """
-        users = [x['content'] for x in messages if x['role'] == 'user']
-        return len(users) == 1 and isinstance(users[0], list) and isinstance(users[0][0].get('text', ''), list)
+        user_contents = [x['content'] for x in messages if x['role'] == 'user']
+        if len(user_contents) != 1:
+            return False
+        content = user_contents[0]
+        if not isinstance(content, list) or not content:
+            return False
+        first_item = content[0]
+        return isinstance(first_item, dict) and isinstance(first_item.get('text'), list)
+
+    @staticmethod
+    def get_input_prompt(messages: list[dict], chat_template, sequence_start: bool,
+                         chat_template_kwargs: dict | None = None) -> str | list[int]:
+        """Return the input prompt for the preprocessor.
+
+        When the messages already carry embedded token ids (from the
+        ``/generate`` endpoint), extract and return them directly.
+        Otherwise, render the messages through *chat_template* to produce a
+        plain-text prompt string.
+
+        Args:
+            messages: Preprocessed message list.
+            chat_template: Chat template used to render a text prompt.
+            sequence_start: Whether this is the start of a new sequence.
+            chat_template_kwargs: Extra kwargs forwarded to ``messages2prompt``.
+        Returns:
+            A list of token ids when input_ids are embedded, otherwise a str.
+        """
+        if VisionModel.has_input_ids(messages):
+            return messages[0]['content'][0]['text']
+        return chat_template.messages2prompt(messages, sequence_start, **(chat_template_kwargs or {}))
 
     def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
@@ -447,10 +477,10 @@ class VisionModel(ABC):
 
 @dataclasses.dataclass
 class MultimodalSpecialTokens:
-    image_token: str | list[str] | None = None
-    video_token: str | list[str] | None = None
-    audio_token: str | list[str] | None = None
-    ts_token: str | list[str] | None = None
+    image_token: str | None = None
+    video_token: str | None = None
+    audio_token: str | None = None
+    ts_token: str | None = None
 
     image_token_id: int | None = None
     video_token_id: int | None = None

@@ -40,25 +40,29 @@ class ImageEncoder:
         self.vision_config = vision_config
         self.max_batch_size = vision_config.max_batch_size
         self.executor = ThreadPoolExecutor(max_workers=1)
+        self._uses_new_preprocess = self._is_new_preprocess_api(self.model)
         torch.cuda.empty_cache()
 
-    def apply_chat_template(self, messages, chat_template, sequence_start, chat_template_kwargs=None):
-        if self.model.has_input_ids(messages):
-            return messages[0]['content'][0]['text']
-        return self.model.apply_chat_template(
-            messages, chat_template, sequence_start, chat_template_kwargs
-        )
+    @staticmethod
+    def _is_new_preprocess_api(model) -> bool:
+        """New-style preprocess takes `input_prompt` + `mm_processor_kwargs`,
+        legacy takes only `messages`."""
+        if model is None:
+            return False
+        sig = inspect.signature(model.preprocess).parameters
+        return 'input_prompt' in sig and 'mm_processor_kwargs' in sig
 
     async def preprocess(self,
                          messages: list[dict],
                          input_prompt: str | list[int] | None = None,
                          mm_processor_kwargs: dict[str, Any] | None = None) -> list[dict]:
         """Preprocess multimodal data in the messages."""
-        sig_params = inspect.signature(self.model.preprocess).parameters
-        kwargs = {k: v for k, v in [('input_prompt', input_prompt), ('mm_processor_kwargs', mm_processor_kwargs)]
-                  if k in sig_params}
-        future = asyncio.get_event_loop().run_in_executor(
-            self.executor, lambda: self.model.preprocess(messages, **kwargs))
+        if self._uses_new_preprocess:
+            future = asyncio.get_event_loop().run_in_executor(
+                self.executor, self.model.preprocess, messages, input_prompt, mm_processor_kwargs)
+        else:
+            future = asyncio.get_event_loop().run_in_executor(
+                self.executor, self.model.preprocess, messages)
         future.add_done_callback(_raise_exception_on_finish)
         outputs = await future
         return outputs

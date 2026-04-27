@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-import inspect
 from typing import Any, Literal
 
 import PIL
@@ -38,16 +37,6 @@ class MultimodalProcessor:
         self.chat_template = chat_template
         self.vl_encoder = vl_encoder
         self.backend = backend
-        self._uses_new_preprocess = self._is_new_preprocess_api(vl_encoder)
-
-    @staticmethod
-    def _is_new_preprocess_api(vl_encoder) -> bool:
-        """New-style preprocess takes `input_prompt` + `mm_processor_kwargs`,
-        legacy takes only `messages`."""
-        if vl_encoder is None:
-            return False
-        sig = inspect.signature(vl_encoder.model.preprocess).parameters
-        return 'input_prompt' in sig and 'mm_processor_kwargs' in sig
 
     @staticmethod
     def merge_message_content(msg: dict) -> dict:
@@ -378,11 +367,11 @@ class MultimodalProcessor:
                                                                tools=tools,
                                                                chat_template_kwargs=chat_template_kwargs)
         elif self.backend == 'pytorch':
-            if self._uses_new_preprocess:
-                input_prompt = self.vl_encoder.apply_chat_template(messages=messages,
-                                                                   chat_template=chat_template,
-                                                                   sequence_start=sequence_start,
-                                                                   chat_template_kwargs=chat_template_kwargs)
+            if self.vl_encoder._uses_new_preprocess:
+                input_prompt = self.vl_encoder.model.get_input_prompt(messages=messages,
+                                                                      chat_template=chat_template,
+                                                                      sequence_start=sequence_start,
+                                                                      chat_template_kwargs=chat_template_kwargs)
                 results = await self.vl_encoder.preprocess(messages, input_prompt, mm_processor_kwargs)
             else:
                 results = await self.vl_encoder.preprocess(messages, mm_processor_kwargs)

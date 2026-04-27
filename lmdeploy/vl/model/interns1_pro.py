@@ -5,8 +5,7 @@ import numpy as np
 import torch
 
 from lmdeploy.utils import get_logger
-from lmdeploy.vl.constants import Modality
-from lmdeploy.vl.model.base import VISION_MODELS, MultimodalSpecialTokens, VisionModel
+from lmdeploy.vl.model.base import VISION_MODELS, MultimodalSpecialTokens
 from lmdeploy.vl.model.qwen3 import Qwen3VLModel
 
 logger = get_logger('lmdeploy')
@@ -97,35 +96,3 @@ class InternS1ProVisionModel(Qwen3VLModel):
                     ts_sr=ts_sr,
                     ts_lens=ts_lens,
                     ts_token_id=self.ts_token_id)
-
-    def apply_chat_template(self,
-                      messages,
-                      chat_template,
-                      sequence_start,
-                      tools: list[object] | None = None,
-                      chat_template_kwargs=None):
-        """Apply chat template to get the prompt."""
-        chat_template_kwargs = chat_template_kwargs or {}
-        prompt_messages = []
-        IMAGE_TOKEN = '<IMAGE_TOKEN>'
-        messages = [x for x in messages if x['role'] not in ['preprocess', 'forward']]
-        if VisionModel.IMAGE_TOKEN_included(messages):
-            # backward compatibility
-            for message in messages:
-                role, content = message['role'], message['content']
-                if role != 'user' or isinstance(content, str):
-                    prompt_messages.append(message)
-                    continue
-                content = [x['text'] for x in content if x['type'] == 'text']
-                prompt = ''.join(content)
-                prompt = prompt.replace(IMAGE_TOKEN, f'<|vision_start|>{self.image_token}<|vision_end|>')
-                prompt_messages.append(dict(role='user', content=prompt))
-        else:
-            prompt_messages = messages
-
-        # time series requires enabling_thinking = False
-        if any(m == Modality.TIME_SERIES for m, _, _ in self.collect_multimodal_items(messages)):
-            chat_template_kwargs['enable_thinking'] = False
-
-        prompt = chat_template.messages2prompt(prompt_messages, sequence_start, tools=tools, **chat_template_kwargs)
-        return prompt
