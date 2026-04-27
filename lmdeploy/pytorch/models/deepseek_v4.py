@@ -1214,28 +1214,13 @@ class MoE(nn.Module):
         self.experts_per_rank = args.n_routed_experts // world_size
         self.start = rank * self.experts_per_rank
         self.end = self.start + self.experts_per_rank
-        # Fused routed-expert MoE is now the default product path for V4 on H800.
-        # Keep the env flag so we can force the legacy expert loop for A/B checks.
-        self.use_fused_experts = os.getenv('LMDEPLOY_DSV4_EXPERIMENTAL_FUSED_MOE', '1') == '1'
         self.gate = Gate(layer_id, args, device=device)
-        if self.use_fused_experts:
-            self.experts = FusedMoEV4(args.dim,
-                                      args.moe_inter_dim,
-                                      args.n_routed_experts,
-                                      args.n_activated_experts,
-                                      swiglu_limit=args.swiglu_limit,
-                                      device=device)
-        else:
-            expert_dtype = torch.float4_e2m1fn_x2
-            self.experts = nn.ModuleDict({
-                str(i): Expert(args.dim,
-                               args.moe_inter_dim,
-                               kernel_mod,
-                               dtype=expert_dtype,
-                               swiglu_limit=args.swiglu_limit,
-                               device=device)
-                for i in range(self.start, self.end)
-            })
+        self.experts = FusedMoEV4(args.dim,
+                                    args.moe_inter_dim,
+                                    args.n_routed_experts,
+                                    args.n_activated_experts,
+                                    swiglu_limit=args.swiglu_limit,
+                                    device=device)
         self.shared_experts = Expert(args.dim,
                                      args.moe_inter_dim,
                                      kernel_mod,
@@ -1247,18 +1232,7 @@ class MoE(nn.Module):
         shape = x.shape
         x = x.view(-1, self.dim)
         weights, indices = self.gate(x, input_ids.flatten())
-        if self.use_fused_experts:
-            y = self.experts(x, weights, indices).float()
-        else:
-            y = torch.zeros_like(x, dtype=torch.float32)
-            counts = torch.bincount(indices.flatten(), minlength=self.end).tolist()
-            for i in range(self.start, self.end):
-                if i >= len(counts) or counts[i] == 0:
-                    continue
-                idx, top = torch.where(indices == i)
-                y[idx] += self.experts[str(i)](x[idx], weights[idx, top, None])
-            if self.world_size > 1:
-                dist.all_reduce(y)
+        y = self.experts(x, weights, indices).float()
         y += self.shared_experts(x)
         return y.type_as(x).view(shape)
 
