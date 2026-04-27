@@ -1,5 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import torch
 from torch.profiler import record_function
 
@@ -16,6 +20,11 @@ from ..strategies.base.model_agent import ExtraInputs
 from .base import BaseSpecModelAgent
 from .proposers.base import build_specdecode_proposer
 from .reject_sampler import RejectionSampler
+
+if TYPE_CHECKING:
+    import xgrammar as xgr
+
+    from ..engine.guided_process import GuidedDecodingManager
 
 logger = get_logger('lmdeploy')
 
@@ -36,6 +45,10 @@ def _expand_sampling_inputs(sampling_inputs: SamplingInputs, num_tokens: int) ->
 
     from dataclasses import fields
     out_dict = {}
+    _SCALAR_FIELDS = {
+        'max_top_k', 'min_top_p', 'max_num_logprobs',
+        'max_repetition_ngram_size',
+    }
     for f in fields(sampling_inputs):
         k = f.name
         v = getattr(sampling_inputs, k)
@@ -46,6 +59,12 @@ def _expand_sampling_inputs(sampling_inputs: SamplingInputs, num_tokens: int) ->
                 # reproducible but distinct random sampling
                 arange = torch.arange(num_tokens, device=v.device)
                 v = v + arange.repeat(sampling_inputs.batch_size)
+        elif k in _SCALAR_FIELDS:
+            pass
+        elif k == 'batch_size':
+            v = sampling_inputs.batch_size * num_tokens
+        elif isinstance(v, (list, tuple)) and v is not None:
+            v = type(v)(_item for elem in v for _item in [elem] * num_tokens)
         out_dict[k] = v
 
     out_dict['batch_size'] = sampling_inputs.batch_size * num_tokens
@@ -76,6 +95,11 @@ def _slice_sampling_inputs(sampling_inputs: SamplingInputs, num_tokens: int, is_
 
     from dataclasses import fields
 
+    _SCALAR_FIELDS = {
+        'max_top_k', 'min_top_p', 'max_num_logprobs',
+        'max_repetition_ngram_size',
+    }
+
     batch_size = sampling_inputs.batch_size // num_tokens
     out_dict = {}
     for f in fields(sampling_inputs):
@@ -88,6 +112,21 @@ def _slice_sampling_inputs(sampling_inputs: SamplingInputs, num_tokens: int, is_
                 shape = v.shape
                 v = v.view(batch_size, num_tokens, *shape[1:])
                 v = v[:, :-1].reshape(batch_size * (num_tokens - 1), *shape[1:])
+        elif k in _SCALAR_FIELDS:
+            pass
+        elif isinstance(v, (list, tuple)) and v is not None:
+            # Skip if length doesn't match the expanded batch size (e.g.
+            # empty defaults or fields that were not per-batch).
+            if len(v) == sampling_inputs.batch_size:
+                if is_last:
+                    indices = list(range(num_tokens - 1, len(v), num_tokens))
+                    v = type(v)(v[i] for i in indices)
+                else:
+                    indices = []
+                    for b in range(batch_size):
+                        start = b * num_tokens
+                        indices.extend(range(start, start + num_tokens - 1))
+                    v = type(v)(v[i] for i in indices)
         out_dict[k] = v
 
     if is_last:
@@ -122,6 +161,9 @@ class SpecModelAgent(BaseSpecModelAgent):
         self.method = specdecode_config.method
         self.model_config = specdecode_config.model_config
         self.cache_config = specdecode_config.cache_config
+
+        # Guided decoding — set by ModelAgent after construction
+        self.guided_decoding_manager = None
 
         # make dummy meta
         self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(self.model_config)
@@ -293,7 +335,7 @@ class SpecModelAgent(BaseSpecModelAgent):
             self._prev_chunk_last.pop(key, None)
         return torch.cat([saved, tensor], dim=1)
 
-    async def _rejection_sampling(self, model_inputs: 'ModelInputs', extra_inputs: ARSpecExtraInputs,
+    async def _rejection_sampling(self, model_inputs: ModelInputs, extra_inputs: ARSpecExtraInputs,
                                   sampling_inputs: SamplingInputs):
         """Do rejection sampling."""
 
@@ -316,7 +358,6 @@ class SpecModelAgent(BaseSpecModelAgent):
             )
             return output_logprobs
 
-        # Process target_logits via FusedLogitsProcessor for BOTH prefill and decoding
         target_logits = extra_inputs.target_logits
         batch_size = model_inputs.seq_length.size(0)
 
@@ -324,22 +365,40 @@ class SpecModelAgent(BaseSpecModelAgent):
         expanded_sampling_inputs = _expand_sampling_inputs(sampling_inputs, num_expand_sampling)
         num_rejected_tokens = torch.zeros_like(model_inputs.seq_length)
         last_token_indices = model_inputs.seq_length.cumsum(0) - 1
-        logits_processor = FusedLogitsProcessor(
-            expanded_sampling_inputs,
-            logprobs_mode=self.misc_config.logprobs_mode,
-        )
+
+        guided_processors = {}
+        guided_manager = self.guided_decoding_manager
+        if guided_manager and sampling_inputs.session_ctx is not None:
+            guided_processors = guided_manager.get_processors(
+                sampling_inputs.session_ctx, sampling_inputs.response_formats)
+
         if model_inputs.is_decoding:
-            # TODO: guided decoding not supported yet for spec decoding
-            processed_logits, raw_logprobs = await logits_processor(target_logits)
-            # Slice bonus (last) position logits for each batch element
+            if guided_processors:
+                # Position-serial grammar mask via forked matchers;
+                # original matchers are NOT modified.
+                processed_logits, raw_logprobs = await self._guided_spec_logits_process(
+                    target_logits, expanded_sampling_inputs, guided_manager,
+                    guided_processors, batch_size, num_expand_sampling)
+            else:
+                logits_processor = FusedLogitsProcessor(
+                    expanded_sampling_inputs,
+                    logprobs_mode=self.misc_config.logprobs_mode,
+                )
+                processed_logits, raw_logprobs = await logits_processor(target_logits)
+
+            # Bonus logits already have grammar mask applied in guided path
             bonus_logits = processed_logits[num_expand_sampling - 1::num_expand_sampling]  # [batch_size, vocab]
-            # Create a per-batch processor for bonus token sampling
-            # by slicing the expanded sampling_inputs back to batch_size
+
             bonus_sampling_inputs = _slice_sampling_inputs(expanded_sampling_inputs, num_expand_sampling)
+
+            logits_processor = FusedLogitsProcessor(
+                bonus_sampling_inputs,
+                logprobs_mode=self.misc_config.logprobs_mode,
+            )
             logits_processor.sampling_inputs = bonus_sampling_inputs
-            # Sample next token from bonus position
+
             next_token_ids = logits_processor.sampling(bonus_logits)  # [batch_size]
-            # Reshape back to 3D
+
             processed_logits = processed_logits.view(batch_size, num_expand_sampling, -1)
             # Rejection sampling on processed logits (exclude bonus position)
             target_draft_logits = processed_logits[:, :-1].contiguous()  # [batch, num_spec, vocab]
@@ -350,9 +409,28 @@ class SpecModelAgent(BaseSpecModelAgent):
                 next_token_ids,
                 sampling_inputs=draft_sampling_inputs,
             )
-            # update last token indices
             last_token_indices = last_token_indices - num_rejected_tokens
+
+            # Guided: accept final tokens on original matchers.
+            # Forked matchers were used during processing, so originals are still
+            # at pre-step state.  Accept rejection-sampled output + bonus token
+            # to bring originals to the correct state for the next step.
+            if guided_processors:
+                for idx, processor in guided_processors.items():
+                    n_rejected = num_rejected_tokens[idx].item()
+                    n_valid_draft = self.num_spec_tokens - n_rejected
+                    for pos in range(n_valid_draft):
+                        tid = output_token_ids[idx, pos].item()
+                        if tid >= 0:
+                            guided_manager.accept_token(processor, tid)
+                    guided_manager.accept_token(processor, next_token_ids[idx].item())
         else:
+            # Prefill path — standard FusedLogitsProcessor handles guided decoding
+            logits_processor = FusedLogitsProcessor(
+                expanded_sampling_inputs,
+                logprobs_mode=self.misc_config.logprobs_mode,
+                guided_decoding_manager=guided_manager if guided_processors else None,
+            )
             if model_inputs.is_chunk and not model_inputs.is_last_chunk:
                 # dummy output, no need to sampling or compute logprobs for non-last chunk
                 next_token_ids = num_rejected_tokens
@@ -360,7 +438,6 @@ class SpecModelAgent(BaseSpecModelAgent):
                 raw_logprobs = None
             else:
                 bonus_logits, raw_logprobs = await logits_processor(target_logits)
-                # Sample next token from bonus position
                 next_token_ids = logits_processor.sampling(bonus_logits)  # [batch_size]
                 output_token_ids = next_token_ids.unsqueeze(-1)
 
@@ -375,6 +452,75 @@ class SpecModelAgent(BaseSpecModelAgent):
             logprobs=logprobs,
         )
         return new_extra_inputs
+
+    async def _guided_spec_logits_process(
+        self,
+        target_logits: torch.Tensor,
+        expanded_sampling_inputs: SamplingInputs,
+        guided_manager: GuidedDecodingManager,
+        guided_processors: dict[int, xgr.GrammarMatcher],
+        batch_size: int,
+        num_expand: int,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """Apply position-serial grammar mask to target logits for spec decode.
+
+        Uses forked GrammarMatchers so that the original matchers are NOT
+        modified.  The caller is responsible for accepting the final tokens
+        on the original matchers after rejection sampling.
+
+        All ``num_expand`` positions (including the bonus position) are masked.
+
+        Args:
+            target_logits: [batch_size * num_expand, vocab_size]
+            expanded_sampling_inputs: Expanded sampling inputs.
+            guided_manager: The GuidedDecodingManager instance.
+            guided_processors: {orig_batch_idx: GrammarMatcher} for guided seqs.
+            batch_size: Number of sequences.
+            num_expand: num_spec_tokens + 1.
+
+        Returns:
+            (processed_logits, raw_logprobs) — same shapes as FusedLogitsProcessor.
+        """
+        # Step 1: Non-grammar logits processing (temperature, penalties, etc.)
+        # FusedLogitsProcessor is created WITHOUT guided_decoding_manager so it
+        # skips grammar mask — we apply it ourselves below.
+        logits_processor = FusedLogitsProcessor(
+            expanded_sampling_inputs,
+            logprobs_mode=self.misc_config.logprobs_mode,
+        )
+        scores, raw_logprobs = await logits_processor(target_logits)
+
+        if not guided_processors:
+            return scores, raw_logprobs
+
+        # Step 2: Position-serial grammar mask via forked matchers.
+        scores_3d = scores.view(batch_size, num_expand, -1)
+
+        # One fork per guided sequence; each fork is advanced in-place so
+        # subsequent positions get the correct mask.
+        forked = {idx: proc.fork() for idx, proc in guided_processors.items()}
+
+        for pos in range(num_expand):
+            guided_bitmask = guided_manager.allocate_batched_bitmap(batch_size)
+
+            for idx, fork_proc in forked.items():
+                guided_manager.fill_bitmap(fork_proc, guided_bitmask, idx)
+
+            pos_logits = scores_3d[:, pos, :]
+            guided_manager.apply_batched_bitmap(pos_logits, guided_bitmask)
+            scores_3d[:, pos, :] = pos_logits
+
+            # Argmax as a greedy approximation to advance the forked matcher.
+            # The actual sampled token may differ, but rejection sampling
+            # ensures only accepted tokens are fed to original matchers.
+            pos_token_ids = pos_logits.argmax(dim=-1)
+
+            for idx, fork_proc in forked.items():
+                guided_manager.accept_token(fork_proc, pos_token_ids[idx].item())
+
+        # Forked matchers go out of scope — originals untouched.
+        scores = scores_3d.view(batch_size * num_expand, -1)
+        return scores, raw_logprobs
 
     def _forward_impl(self, inputs: ModelInputs):
         """Forward impl."""
@@ -393,9 +539,22 @@ class SpecModelAgent(BaseSpecModelAgent):
             # create dummy draft tokens
             output_draft_ids = inputs.input_ids.new_zeros(1, self.num_spec_tokens)
         else:
+            # Fork guided processors for the draft model.  Forked matchers
+            # are advanced in-place by get_outputs() at each step so
+            # subsequent positions get the correct grammar mask.
+            # Original matchers remain untouched.
+            draft_guided_processors = {}
+            guided_manager = self.guided_decoding_manager
+            if guided_manager and sampling_inputs.session_ctx is not None:
+                orig_processors = guided_manager.get_processors(
+                    sampling_inputs.session_ctx, sampling_inputs.response_formats)
+                draft_guided_processors = {idx: proc.fork()
+                                           for idx, proc in orig_processors.items()}
+
             loop_count = self.num_spec_tokens - 1
             draft_token_ids, model_metas, target_hidden_states = self.proposer.get_outputs(
-                outputs, inputs, extra_inputs)
+                outputs, inputs, extra_inputs,
+                guided_processors=draft_guided_processors or None)
             draft_tokens_li = [draft_token_ids]
             if loop_count > 0:
                 inputs = self.proposer.update_inputs_decoding(inputs, extra_inputs, draft_token_ids.transpose(0, 1),
@@ -405,7 +564,9 @@ class SpecModelAgent(BaseSpecModelAgent):
 
                 for loop_idx in range(loop_count):
                     outputs = self._forward_impl(inputs)
-                    draft_token_ids, model_metas, target_hidden_states = self.proposer.get_outputs(outputs, inputs)
+                    draft_token_ids, model_metas, target_hidden_states = self.proposer.get_outputs(
+                        outputs, inputs,
+                        guided_processors=draft_guided_processors or None)
                     draft_tokens_li.append(draft_token_ids)
                     if loop_idx < loop_count - 1:
                         step_seqlens = inputs.seq_length.new_ones(inputs.seq_length.size(0))
