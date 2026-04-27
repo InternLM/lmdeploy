@@ -1361,9 +1361,6 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         # fully handled inside the backend without dense fallback scratch.
         return False
 
-    def get_graph_key_cudagraph(self, graph_key: tuple, history_lengths: torch.Tensor | None = None, **kwargs):
-        return graph_key
-
     def make_buffers_cudagraph(self, graph_meta, history_lengths: torch.Tensor | None = None, **kwargs):
         input_buffers = super().make_buffers_cudagraph(graph_meta, history_lengths=history_lengths, **kwargs)
         max_total_len = graph_meta.num_blocks * graph_meta.block_size

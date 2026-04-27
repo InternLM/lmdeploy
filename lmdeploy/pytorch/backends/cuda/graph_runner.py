@@ -204,17 +204,7 @@ class CUDAGraphRunner(GraphRunner):
             batch_size = self._get_capture_tokens(batch_size)
         else:
             batch_size = self._get_capture_tokens(meta.padding_batch_size)
-        graph_key = (batch_size, is_decoding, enable_microbatch, query_len)
-        get_graph_key = getattr(self.model, 'get_graph_key_cudagraph', None)
-        if get_graph_key is not None:
-            graph_key = get_graph_key(graph_key=graph_key,
-                                      input_ids=input_ids,
-                                      position_ids=position_ids,
-                                      past_key_values=past_key_values,
-                                      attn_metadata=attn_metadata,
-                                      inputs_embeds=inputs_embeds,
-                                      **kwargs)
-        return graph_key
+        return (batch_size, is_decoding, enable_microbatch, query_len)
 
     def _prepare_inputs(self, **kwargs):
         """Prepare inputs."""
