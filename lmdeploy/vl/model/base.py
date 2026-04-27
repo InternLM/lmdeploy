@@ -28,31 +28,9 @@ class VisionModel(ABC):
     ATTR_NAME_TO_MODALITY = {
         # image-related attributes
         'pixel_values': Modality.IMAGE,
-        'image_sizes': Modality.IMAGE,
         'image_grid_thw': Modality.IMAGE,
-        'image_attention_mask': Modality.IMAGE,
-        'image_emb_mask': Modality.IMAGE,
-        'images_spatial_crop': Modality.IMAGE,
-        'images_crop': Modality.IMAGE,
-        'has_local_crops': Modality.IMAGE,
-        'has_images': Modality.IMAGE,
-        'tgt_size': Modality.IMAGE,
-        'image_grid_hws': Modality.IMAGE,
-        'aspect_ratio_ids': Modality.IMAGE,
-        'aspect_ratio_mask': Modality.IMAGE,
-        'num_patches': Modality.IMAGE,
-        'patch_pixel_values': Modality.IMAGE,
-        'block_sizes': Modality.IMAGE,
-        # audio-related attributes
-        'audio_features': Modality.AUDIO,
-        'audio_feature_lens': Modality.AUDIO,
-        'input_features': Modality.AUDIO,
-        'input_features_mask': Modality.AUDIO,
-        'audio_attention_mask': Modality.AUDIO,
-        'feature_attention_mask': Modality.AUDIO,
         # video-related attributes
         'pixel_values_videos': Modality.VIDEO,
-        'second_per_grid_ts': Modality.VIDEO,
         'video_grid_thw': Modality.VIDEO,
         # time series-related attributes
         'ts_values': Modality.TIME_SERIES,
@@ -64,8 +42,6 @@ class VisionModel(ABC):
     FEATURE_NAMES = [
         'pixel_values',
         'pixel_values_videos',
-        'audio_features',
-        'input_features',
         'ts_values',
     ]
 
