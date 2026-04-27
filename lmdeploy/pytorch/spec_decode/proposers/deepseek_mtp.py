@@ -17,7 +17,8 @@ class DeepseekMTP(BaseSpecProposer):
     def get_outputs(self,
                     model_outputs: dict[str, torch.Tensor],
                     model_inputs: ModelInputs,
-                    extra_inputs: ARSpecExtraInputs = None):
+                    extra_inputs: ARSpecExtraInputs = None,
+                    guided_processors: dict | None = None):
         """Get outputs."""
         hidden_states = model_outputs['hidden_states']
         model_metas = model_outputs['model_metas']
@@ -30,5 +31,19 @@ class DeepseekMTP(BaseSpecProposer):
             target_hidden_states = hidden_states
 
         logits = self.get_logits(hidden_states)[0]
+
+        if guided_processors and self.guided_decoding_manager is not None:
+            guided_manager = self.guided_decoding_manager
+            guided_bitmask = guided_manager.allocate_batched_bitmap(logits.size(0))
+            for idx, processor in guided_processors.items():
+                guided_manager.fill_bitmap(processor, guided_bitmask, idx)
+            guided_manager.apply_batched_bitmap(logits, guided_bitmask)
+
         draft_token_ids = logits.argmax(dim=-1, keepdim=True)
+
+        if guided_processors and self.guided_decoding_manager is not None:
+            guided_manager = self.guided_decoding_manager
+            for idx, processor in guided_processors.items():
+                guided_manager.accept_token(processor, draft_token_ids[idx, 0].item())
+
         return draft_token_ids, model_metas, target_hidden_states
