@@ -119,7 +119,7 @@ class MPEngineInstance(EngineInstanceBase):
         state = self.session_states[session_id]
         self.engine.pending_cancel_sessions.add(session_id)
         if not state.is_exists.is_set():
-            logger.debug(f'Session {session_id} not started yet, recording pending cancel.')
+            logger.warning(f'Session {session_id} not started yet, recording pending cancel.')
             state.cancelled = True
             return ResponseType.SUCCESS
         return await self.engine._collective_rpc_async('instance_async_cancel', session_id)
@@ -129,7 +129,7 @@ class MPEngineInstance(EngineInstanceBase):
         state = self.session_states[session_id]
         if state.cancelled or session_id in self.engine.pending_cancel_sessions:
             state.is_exists.set()
-            logger.debug(f'Session {session_id} canceld, async_stream_infer')
+            logger.warning(f'Session {session_id} canceld, async_stream_infer')
             yield EngineOutput(ResponseType.CANCEL, [])
             return
         kwargs['session_id'] = session_id
