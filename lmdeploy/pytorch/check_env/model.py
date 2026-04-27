@@ -19,7 +19,7 @@ class ModelChecker(BaseChecker):
         model_path = self.model_path
         trust_remote_code = self.trust_remote_code
         try:
-            from lmdeploy.pytorch.transformers import config_from_pretrained
+            from lmdeploy.hf_configs import config_from_pretrained
             config = config_from_pretrained(model_path, trust_remote_code=trust_remote_code)
         except Exception as e:
             message = (f'Load model config with transformers=={trans_version}'

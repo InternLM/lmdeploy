@@ -30,7 +30,11 @@ class OpType(Enum):
     FusedMoEW8A8 = auto()
     LinearBlockedF8 = auto()
     FusedMoEBlockedF8 = auto()
+    FusedMoEV4BlockedF8 = auto()
+    FusedMoEV4FP4 = auto()
     NSAIndexFP8 = auto()
+    V4Attention = auto()
+    V4Indexer = auto()
     Embedding = auto()
 
     # MoE router

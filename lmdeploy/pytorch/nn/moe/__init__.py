@@ -6,6 +6,7 @@ import torch
 from lmdeploy.pytorch.models.patch import get_build_model_context
 
 from .base import MoeType, SoftmaxTopK  # noqa: F401
+from .v4_fp4 import FusedMoEV4, FusedMoEV4FP4  # noqa: F401
 
 
 def build_fused_moe(

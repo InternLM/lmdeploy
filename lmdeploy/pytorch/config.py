@@ -307,6 +307,26 @@ def _patch_quantization_config(hf_config: Any, model_format: str = None):
 
 
 @dataclass
+class BlockCacheSpec:
+    """Spec for a named block-scoped cache (e.g. compressed KV)."""
+    name: str
+    layer_ids: list[int]
+    shape: tuple[int, ...]
+    dtype: torch.dtype
+    alignment: int = 256
+
+
+@dataclass
+class StateCacheSpec:
+    """Spec for a named sequence-scoped state cache (e.g. compressor
+    scratch)."""
+    name: str
+    shape: tuple[int, ...]
+    dtype: torch.dtype
+    alignment: int = 256
+
+
+@dataclass
 class ModelConfig:
     """Config of model."""
 
@@ -346,6 +366,12 @@ class ModelConfig:
     # flag to indicate that the model uses gated delta rule layers
     # and requires prepare_chunk_indices during prefill
     is_gated_delta: bool = False
+
+    # Named cache specs for models that need multiple block/state caches.
+    # V4 uses these instead of cache_shapes/states_shapes for formal resource declaration.
+    block_cache_specs: list[BlockCacheSpec] = field(default_factory=list)
+    state_cache_specs: list[StateCacheSpec] = field(default_factory=list)
+    use_standard_kv_cache: bool = True
 
     # check env for model-device combination
     check_env_func: Callable = _default_check_env
@@ -392,7 +418,7 @@ class ModelConfig:
         """
         from transformers import AutoConfig
 
-        from lmdeploy.pytorch.transformers import config_from_pretrained
+        from lmdeploy.hf_configs import config_from_pretrained
         hf_config = config_from_pretrained(pretrained_model_name_or_path, trust_remote_code=trust_remote_code)
         if getattr(hf_config, 'model_type', None) in ['phi3']:
             # phi3 + trust_remote_code leads to error when tp.

@@ -291,6 +291,10 @@ class StepContext:
     state_caches: list | None = None
     state_offsets: torch.LongTensor | None = None
 
+    # named cache views for models with block_cache_specs / state_cache_specs
+    block_caches: dict[str, torch.Tensor] | None = None
+    named_state_caches: dict[str, torch.Tensor] | None = None
+
     # mrope
     mrope_position_ids: torch.Tensor | None = None
 
