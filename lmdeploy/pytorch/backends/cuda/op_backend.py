@@ -76,6 +76,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.V4Attention:
             from .attention import TritonV4AttentionBuilder
             return TritonV4AttentionBuilder
+        elif layer_type == OpType.V4Indexer:
+            from .v4_indexer import TritonV4IndexerBuilder
+            return TritonV4IndexerBuilder
         elif layer_type == OpType.RouterNoauxTC:
             from .moe_router import TritonRouterNoauxTCBuilder
             return TritonRouterNoauxTCBuilder

@@ -42,7 +42,9 @@ class TritonV4AttentionImpl:
         else:
             key = 'selected_compressed_kv_r128'
         if decode_scratch is not None and key in decode_scratch:
-            return decode_scratch[key][:batch_size]
+            buffer = decode_scratch[key]
+            if buffer.size(0) >= batch_size and buffer.size(1) == max_width:
+                return buffer[:batch_size]
         return torch.empty((batch_size, max_width, self.head_size), dtype=torch.bfloat16, device=device)
 
     def _get_full_scratch(self, decode_scratch: dict[str, torch.Tensor] | None, batch_size: int, total_width: int,
@@ -52,7 +54,9 @@ class TritonV4AttentionImpl:
         else:
             key = 'selected_full_kv_r128'
         if decode_scratch is not None and key in decode_scratch:
-            return decode_scratch[key][:batch_size]
+            buffer = decode_scratch[key]
+            if buffer.size(0) >= batch_size and buffer.size(1) == total_width:
+                return buffer[:batch_size]
         return torch.empty((batch_size, total_width, self.head_size), dtype=torch.bfloat16, device=device)
 
     def forward_decode(self,

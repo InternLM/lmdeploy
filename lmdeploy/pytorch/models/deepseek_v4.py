@@ -15,14 +15,17 @@ import torch.nn.functional as F
 from torch import nn
 
 from lmdeploy.pytorch.backends.attention import V4AttentionMetadata
+from lmdeploy.pytorch.backends.indexer import V4IndexerMetadata
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
+from lmdeploy.pytorch.nn import RMSNorm
 from lmdeploy.pytorch.nn import V4Attention as NativeV4Attention
+from lmdeploy.pytorch.nn import V4Indexer as NativeV4Indexer
 from lmdeploy.pytorch.nn.moe import FusedMoEV4
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 from lmdeploy.utils import get_logger
 
 from .utils.cudagraph import CudaGraphMixin
-from .utils.model import DeployModelMixin
+from .utils.model import DeployModelMixinV1, build_embedding
 
 logger = get_logger('lmdeploy')
 
@@ -83,19 +86,6 @@ def _maybe_to_dtype(weight: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
     if dtype == torch.float4_e2m1fn_x2 and weight.dtype == torch.int8:
         return weight.view(dtype)
     return weight.to(dtype)
-
-
-def _next_power_of_2(n: int) -> int:
-    n = max(1, int(n))
-    n -= 1
-    n |= n >> 1
-    n |= n >> 2
-    n |= n >> 4
-    n |= n >> 8
-    n |= n >> 16
-    n |= n >> 32
-    return n + 1
-
 
 def _load_vector_shard(param: nn.Parameter, loaded_weight: torch.Tensor, world_size: int, rank: int):
     if world_size > 1:
@@ -254,90 +244,6 @@ class QuantLinear(nn.Module):
             dist.all_reduce(y)
             y = y.to(input_dtype)
         return y
-
-
-class ParallelEmbedding(nn.Module):
-
-    def __init__(self,
-                 vocab_size: int,
-                 dim: int,
-                 world_size: int,
-                 rank: int,
-                 device: torch.device | str | None = None,
-                 dtype: torch.dtype | None = None):
-        super().__init__()
-        device = _resolve_device(device)
-        dtype = dtype or torch.bfloat16
-        assert vocab_size % world_size == 0
-        self.part_vocab_size = vocab_size // world_size
-        self.vocab_start_idx = rank * self.part_vocab_size
-        self.vocab_end_idx = self.vocab_start_idx + self.part_vocab_size
-        self.weight = nn.Parameter(torch.empty(self.part_vocab_size, dim, dtype=dtype, device=device),
-                                   requires_grad=False)
-        self.world_size = world_size
-        self.rank = rank
-        self.weight.weight_loader = self._weight_loader
-
-    def _weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
-        if self.world_size > 1:
-            loaded_weight = loaded_weight.chunk(self.world_size, dim=0)[self.rank].contiguous()
-        param.data.copy_(loaded_weight.to(param.dtype))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if self.world_size > 1:
-            mask = (x < self.vocab_start_idx) | (x >= self.vocab_end_idx)
-            x = x - self.vocab_start_idx
-            x = x.masked_fill(mask, 0)
-            y = F.embedding(x, self.weight)
-            y = y.masked_fill(mask.unsqueeze(-1), 0)
-            dist.all_reduce(y)
-            return y
-        return F.embedding(x, self.weight)
-
-
-class ParallelHead(nn.Module):
-
-    def __init__(self, vocab_size: int, dim: int, world_size: int, rank: int, device: torch.device | str | None = None):
-        super().__init__()
-        device = _resolve_device(device)
-        assert vocab_size % world_size == 0
-        self.part_vocab_size = vocab_size // world_size
-        self.weight = nn.Parameter(torch.empty(self.part_vocab_size, dim, dtype=torch.float32, device=device),
-                                   requires_grad=False)
-        self.world_size = world_size
-        self.rank = rank
-        self.weight.weight_loader = self._weight_loader
-
-    def _weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
-        if self.world_size > 1:
-            loaded_weight = loaded_weight.chunk(self.world_size, dim=0)[self.rank].contiguous()
-        param.data.copy_(loaded_weight.to(param.dtype))
-
-    def get_logits(self, x: torch.Tensor):
-        logits = F.linear(x.float(), self.weight)
-        if self.world_size > 1:
-            gathered = [torch.empty_like(logits) for _ in range(self.world_size)]
-            dist.all_gather(gathered, logits)
-            logits = torch.cat(gathered, dim=-1)
-        return logits
-
-
-class RMSNorm(nn.Module):
-
-    def __init__(self, dim: int, eps: float = 1e-6, device: torch.device | str | None = None):
-        super().__init__()
-        device = _resolve_device(device)
-        self.dim = dim
-        self.eps = eps
-        self.weight = nn.Parameter(torch.ones(dim, dtype=torch.float32, device=device), requires_grad=False)
-
-    def forward(self, x: torch.Tensor):
-        dtype = x.dtype
-        x = x.float()
-        var = x.square().mean(-1, keepdim=True)
-        x = x * torch.rsqrt(var + self.eps)
-        return (self.weight * x).to(dtype)
-
 
 @lru_cache(2)
 def precompute_freqs_cis(dim, seqlen, original_seq_len, base, factor, beta_fast, beta_slow):
@@ -713,6 +619,9 @@ class Indexer(nn.Module):
                                         rank=rank)
         self.compressor = Compressor(args, kernel_mod, compress_ratio, self.head_dim, device=device, rotate=True)
         self.freqs_cis = None
+        self.indexer_fwd = NativeV4Indexer(index_topk=self.index_topk,
+                                           compress_ratio=self.compress_ratio,
+                                           world_size=world_size)
 
     def forward(self,
                 x: torch.Tensor,
@@ -799,37 +708,23 @@ class Indexer(nn.Module):
         self.kernel_mod.fp4_act_quant(q, 32, True)
 
         new_kv, emit_mask = self.compressor.forward_decode(x, safe_start_pos, compress_state, valid_mask)
-        batch_idx = torch.arange(bsz, device=x.device)
-        abs_pos = torch.div(safe_start_pos, self.compress_ratio, rounding_mode='floor')
-        Attention._write_cache_entries(index_kv_cache[layer_id],
-                                       block_offsets,
-                                       batch_idx,
-                                       abs_pos,
-                                       new_kv,
-                                       block_size,
-                                       write_mask=emit_mask)
-
-        num_index = torch.where(valid_mask, torch.div(safe_start_pos + 1, self.compress_ratio, rounding_mode='floor'),
-                                start_pos.new_zeros(()))
-        max_index = index_scratch.size(1)
-        if max_index == 0:
-            return x.new_empty((bsz, 1, 0), dtype=torch.long)
-        positions, valid_mask = _build_prefix_positions(num_index, max_index)
-        gathered = Attention._gather_cache_entries(index_kv_cache[layer_id], block_offsets, positions, block_size)
-        index_scratch.copy_(gathered)
-
         weights = self.weights_proj(x) * (self.head_dim**-0.5 * self.n_heads**-0.5)
-        score = torch.einsum('bshd,btd->bsht', q, index_scratch)
-        score = (score.relu_() * weights.unsqueeze(-1)).sum(dim=2)
-        score = score.masked_fill(~valid_mask.unsqueeze(1), float('-inf'))
-        if self.world_size > 1:
-            dist.all_reduce(score)
-
-        topk_width = min(self.index_topk, max_index)
-        topk = score.topk(topk_width, dim=-1)[1]
-        valid_topk = torch.arange(topk_width, device=x.device).view(1, 1, -1) < num_index.clamp(max=topk_width).view(
-            -1, 1, 1)
-        return torch.where(valid_topk, topk + offset, topk.new_full((), -1))
+        meta = V4IndexerMetadata(block_offsets=block_offsets,
+                                 start_pos=safe_start_pos,
+                                 valid_mask=valid_mask,
+                                 state_ids=start_pos.new_zeros(start_pos.shape),
+                                 compress_ratio=self.compress_ratio)
+        topk = self.indexer_fwd.forward_decode(q,
+                                               weights,
+                                               new_kv,
+                                               emit_mask,
+                                               index_kv_cache,
+                                               meta,
+                                               block_size,
+                                               layer_id,
+                                               index_scratch)
+        valid = topk >= 0
+        return torch.where(valid, topk + offset, topk)
 
 
 class Attention(nn.Module):
@@ -958,12 +853,14 @@ class Attention(nn.Module):
                                          slot: torch.Tensor,
                                          valid_mask: torch.Tensor,
                                          topk_indices: torch.Tensor,
+                                         compressed_positions: torch.Tensor | None = None,
                                          decode_scratch: dict[str, torch.Tensor] | None = None):
         window_positions, window_lens, _ = _build_window_positions(total_lens.long(), self.window_size)
 
-        compressed_positions = None
         compressed_valid_mask = None
-        if self.compress_ratio:
+        if compressed_positions is not None:
+            compressed_valid_mask = compressed_positions >= 0
+        elif self.compress_ratio:
             num_compressed = torch.div(total_lens, self.compress_ratio, rounding_mode='floor').long()
             if decode_scratch is not None:
                 if self.compress_ratio == 4:
@@ -1137,6 +1034,7 @@ class Attention(nn.Module):
 
         compressed_cache = None
         topk_parts = [window_topk]
+        compressed_positions = None
         if self.compress_ratio:
             if self.compress_ratio == 4:
                 compressed_cache = block_caches['v4_compressed_kv_r4'][self.layer_id]
@@ -1173,6 +1071,12 @@ class Attention(nn.Module):
                                                             self.layer_id,
                                                             index_scratch,
                                                             valid_mask)
+                compressed_positions = torch.where(compress_topk >= 0, compress_topk - offset, compress_topk)
+                compressed_positions = compressed_positions.squeeze(1)
+                compact_topk = torch.arange(compressed_positions.size(-1), device=x.device, dtype=torch.long)
+                compact_topk = compact_topk.view(1, 1, -1).expand_as(compress_topk)
+                compress_topk = torch.where(compress_topk >= 0, compact_topk + offset,
+                                            compact_topk.new_full((), -1))
             else:
                 num_compressed = torch.div(total_lens, self.compress_ratio, rounding_mode='floor').long()
                 if self.compress_ratio == 4:
@@ -1188,6 +1092,7 @@ class Attention(nn.Module):
                                                           slot,
                                                           valid_mask,
                                                           topk_idxs,
+                                                          compressed_positions,
                                                           decode_scratch)
         out = self.attn_fwd.forward_decode(q,
                                            cache_layer,
@@ -1205,11 +1110,12 @@ class Attention(nn.Module):
     def _alloc_decode_scratch(self, batch_size: int, max_total_len: int, device: torch.device):
         max_comp_r4 = max_total_len // 4
         max_comp_r128 = max_total_len // 128
+        selected_comp_r4 = self.indexer.index_topk if self.indexer is not None else max_comp_r4
         return {
             'selected_window_kv': torch.empty((batch_size, self.window_size, self.head_dim),
                                               dtype=torch.bfloat16,
                                               device=device),
-            'selected_compressed_kv_r4': torch.empty((batch_size, max_comp_r4, self.head_dim),
+            'selected_compressed_kv_r4': torch.empty((batch_size, selected_comp_r4, self.head_dim),
                                                      dtype=torch.bfloat16,
                                                      device=device),
             'selected_compressed_kv_r128': torch.empty((batch_size, max_comp_r128, self.head_dim),
@@ -1219,7 +1125,7 @@ class Attention(nn.Module):
                                                 dtype=torch.bfloat16,
                                                 device=device) if self.indexer is not None else torch.empty(
                                                     (batch_size, 0, 0), dtype=torch.bfloat16, device=device),
-            'selected_full_kv_r4': torch.empty((batch_size, self.window_size + max_comp_r4, self.head_dim),
+            'selected_full_kv_r4': torch.empty((batch_size, self.window_size + selected_comp_r4, self.head_dim),
                                                dtype=torch.bfloat16,
                                                device=device),
             'selected_full_kv_r128': torch.empty((batch_size, self.window_size + max_comp_r128, self.head_dim),
@@ -1299,10 +1205,9 @@ class MoE(nn.Module):
                  layer_id: int,
                  args: V4Args,
                  kernel_mod,
-                 world_size: int,
-                 rank: int,
                  device: torch.device | str | None):
         super().__init__()
+        world_size, rank = _get_world_size_rank()
         self.dim = args.dim
         self.world_size = world_size
         self.rank = rank
@@ -1364,16 +1269,16 @@ class Block(nn.Module):
                  layer_id: int,
                  args: V4Args,
                  kernel_mod,
-                 world_size: int,
-                 rank: int,
+                 dtype: torch.dtype,
                  device: torch.device | str | None):
         super().__init__()
+        world_size, rank = _get_world_size_rank()
         device = _resolve_device(device)
         self.norm_eps = args.norm_eps
         self.attn = Attention(layer_id, args, kernel_mod, world_size, rank, device=device)
-        self.ffn = MoE(layer_id, args, kernel_mod, world_size, rank, device=device)
-        self.attn_norm = RMSNorm(args.dim, args.norm_eps, device=device)
-        self.ffn_norm = RMSNorm(args.dim, args.norm_eps, device=device)
+        self.ffn = MoE(layer_id, args, kernel_mod, device=device)
+        self.attn_norm = RMSNorm(args.dim, args.norm_eps, dtype=dtype, device=device)
+        self.ffn_norm = RMSNorm(args.dim, args.norm_eps, dtype=dtype, device=device)
         self.hc_mult = args.hc_mult
         self.hc_sinkhorn_iters = args.hc_sinkhorn_iters
         self.hc_eps = args.hc_eps
@@ -1439,7 +1344,7 @@ class Block(nn.Module):
         return x
 
 
-class DeepseekV4ForCausalLM(nn.Module, DeployModelMixin, CudaGraphMixin):
+class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
     """DeepSeek-V4 bring-up model.
 
     Decode uses lmdeploy named block/state caches as the primary history storage. The older per-sequence compressed-
@@ -1495,32 +1400,34 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixin, CudaGraphMixin):
             hc_sinkhorn_iters=config.hc_sinkhorn_iters,
             hc_eps=config.hc_eps,
         )
-
-        self.embed = ParallelEmbedding(config.vocab_size,
+        self.embed = build_embedding(config.vocab_size,
                                        config.hidden_size,
-                                       self.world_size,
-                                       self.rank,
+                                       None,
                                        device=self.device,
-                                       dtype=self.dtype)
+                                       dtype=self.dtype,
+                                       is_tp=True,)
         self.layers = nn.ModuleList([
-            Block(layer_idx, self.args, self.kernel_mod, self.world_size, self.rank, device=self.device)
+            Block(layer_idx, self.args, self.kernel_mod, dtype=self.dtype, device=self.device)
             for layer_idx in range(config.num_hidden_layers)
         ])
-        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, device=self.device)
-        self.head = ParallelHead(config.vocab_size,
-                                 config.hidden_size,
-                                 self.world_size,
-                                 self.rank,
-                                 device=self.device)
+        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=self.dtype, device=self.device)
+        self.head = self.build_lm_head(
+                            config.hidden_size,
+                            config.vocab_size,
+                            bias=False,
+                            dtype=dtype,
+                            device=self.device)
         hc_dim = config.hc_mult * config.hidden_size
         with _set_default_dtype(torch.float32):
             self.hc_head_fn = nn.Parameter(torch.empty(config.hc_mult, hc_dim, device=self.device),
                                            requires_grad=False)
             self.hc_head_base = nn.Parameter(torch.empty(config.hc_mult, device=self.device), requires_grad=False)
             self.hc_head_scale = nn.Parameter(torch.empty(1, device=self.device), requires_grad=False)
+        # TODO: remove this shit!
         self._decode_graph_scratch: dict[str, torch.Tensor] | None = None
 
     def _hc_head(self, x: torch.Tensor):
+        # TODO: try fuse this head
         shape, dtype = x.size(), x.dtype
         x = x.flatten(2).float()
         rsqrt = torch.rsqrt(x.square().mean(-1, keepdim=True) + self.config.rms_norm_eps)
@@ -1532,7 +1439,7 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixin, CudaGraphMixin):
     def get_logits(self, hidden_states: torch.Tensor):
         hidden_states = self._hc_head(hidden_states)
         hidden_states = self.norm(hidden_states)
-        return self.head.get_logits(hidden_states)
+        return self.head(hidden_states)
 
     def support_cuda_graph(
         self,

@@ -528,6 +528,24 @@ def test_deepseek_v4_build_decode_attention_metadata_uses_fixed_width_scratch():
     assert meta.compressed_valid_mask.shape == (2, 8)
 
 
+def test_deepseek_v4_build_decode_attention_metadata_keeps_compact_positions():
+    attn = object.__new__(Attention)
+    attn.window_size = 4
+    attn.compress_ratio = 4
+
+    compact_positions = torch.tensor([[1, 4, -1], [2, 5, 6]], dtype=torch.long)
+    meta = Attention._build_decode_attention_metadata(attn,
+                                                      block_offsets=torch.tensor([[0, 1], [0, 1]], dtype=torch.int32),
+                                                      total_lens=torch.tensor([9, 13], dtype=torch.long),
+                                                      slot=torch.tensor([0, 1], dtype=torch.long),
+                                                      valid_mask=torch.tensor([True, True]),
+                                                      topk_indices=torch.zeros((2, 1, 4), dtype=torch.long),
+                                                      compressed_positions=compact_positions,
+                                                      decode_scratch=None)
+    assert torch.equal(meta.compressed_positions, compact_positions)
+    assert torch.equal(meta.compressed_valid_mask, compact_positions >= 0)
+
+
 def test_deepseek_v4_next_power_of_2():
     assert _next_power_of_2(1) == 1
     assert _next_power_of_2(3) == 4
