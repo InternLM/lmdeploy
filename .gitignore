@@ -84,3 +84,6 @@ work_dir*/
 
 !CMakeLists.txt
 proxy_config.yml
+
+# Claude Code local config
+CLAUDE.local.md
