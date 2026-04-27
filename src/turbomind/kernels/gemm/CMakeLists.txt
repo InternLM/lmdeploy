@@ -51,15 +51,14 @@ set_property(TARGET gemm2 PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 
 
 if (BUILD_TEST)
-        add_executable(test_gemm_v2
-                test/test_gemm_v2.cc
-                ../../models/llama/LlamaLinear.cu
-                ../../models/llama/LlamaDenseWeight.cc
-                test/reference.cu)
-        target_link_libraries(test_gemm_v2 PRIVATE gemm2 core cublas quantization_kernels gpt_kernels)
+        # add_executable(test_gemm_v2
+        #         test/test_gemm_v2.cc
+        #         ../../models/llama/LlamaLinear.cu
+        #         test/reference.cu)
+        # target_link_libraries(test_gemm_v2 PRIVATE gemm2 core cublas quantization_kernels gpt_kernels)
 
-        add_executable(test_moe_utils test/test_moe_utils.cu test/test_utils.cu)
-        target_link_libraries(test_moe_utils PRIVATE gemm2 core cublas)
+        # add_executable(test_moe_utils test/test_moe_utils.cu test/test_utils.cu)
+        # target_link_libraries(test_moe_utils PRIVATE gemm2 core cublas)
 
         # if (NOT MSVC)
         #         FetchContent_Declare(

@@ -38,6 +38,7 @@ def autoget_backend(model_path: str) -> Literal['turbomind', 'pytorch']:
         from lmdeploy.turbomind.supported_models import is_supported as is_supported_turbomind
         turbomind_has = is_supported_turbomind(model_path)
     except ImportError:
+        raise
         is_turbomind_installed = False
 
     if is_turbomind_installed:

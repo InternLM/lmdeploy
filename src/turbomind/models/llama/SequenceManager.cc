@@ -31,26 +31,36 @@ std::string vector2string(const std::vector<T>& data)
     return ss.str();
 }
 
-SequenceManager::SequenceManager(const ModelParam& model_param,
-                                 DataType          runtime_dtype,
-                                 int               cache_block_seq_len,
-                                 int               attn_tp_size,
-                                 int               max_batch_size,
-                                 double            block_count,
-                                 int               chunk_size,
-                                 bool              enable_prefix_caching,
-                                 int               rank,
-                                 int               attn_cp_size,
-                                 core::Allocator   allocator,
-                                 GetFreeMemSize    get_free_size):
+SequenceManager::SequenceManager(int                     head_dim,
+                                 int                     kv_head_num,
+                                 int                     num_layer,
+                                 const std::vector<int>& layer_types,
+                                 int                     quant_policy,
+                                 DataType                data_type,
+                                 DataType                runtime_dtype,
+                                 int                     linear_key_head_dim,
+                                 int                     linear_value_head_dim,
+                                 int                     linear_conv_kernel_dim,
+                                 int                     linear_num_key_heads,
+                                 int                     linear_num_value_heads,
+                                 int                     cache_block_seq_len,
+                                 int                     attn_tp_size,
+                                 int                     max_batch_size,
+                                 double                  block_count,
+                                 int                     chunk_size,
+                                 bool                    enable_prefix_caching,
+                                 int                     rank,
+                                 int                     attn_cp_size,
+                                 core::Allocator         allocator,
+                                 GetFreeMemSize          get_free_size):
     block_seq_len_(cache_block_seq_len), rank_(rank), attn_cp_size_(attn_cp_size)
 {
     TM_CHECK_GT(attn_tp_size, 0);
     TM_CHECK_GT(cache_block_seq_len, 0);
 
-    int cache_layer_num   = model_param.layer_num;
+    int cache_layer_num   = num_layer;
     int num_linear_layers = 0;
-    for (const auto& type : model_param.layer_types) {
+    for (const auto& type : layer_types) {
         if (type == 1) {
             --cache_layer_num;
             ++num_linear_layers;
@@ -61,22 +71,19 @@ SequenceManager::SequenceManager(const ModelParam& model_param,
 
     if (num_linear_layers > 0) {
 
-        const int key_head_dim =
-            model_param.linear_key_head_dim > 0 ? model_param.linear_key_head_dim : model_param.head_dim;
-        const int value_head_dim =
-            model_param.linear_value_head_dim > 0 ? model_param.linear_value_head_dim : model_param.head_dim;
-        const int d_conv      = model_param.linear_conv_kernel_dim > 0 ? model_param.linear_conv_kernel_dim : 4;
-        const int num_k_heads = model_param.linear_num_key_heads / attn_tp_size;
-        const int num_v_heads = model_param.linear_num_value_heads / attn_tp_size;
-        const int key_dim     = num_k_heads * key_head_dim;
-        const int value_dim   = num_v_heads * value_head_dim;
-        const int conv_dim    = key_dim * 2 + value_dim;
+        const int key_head_dim   = linear_key_head_dim > 0 ? linear_key_head_dim : head_dim;
+        const int value_head_dim = linear_value_head_dim > 0 ? linear_value_head_dim : head_dim;
+        const int d_conv         = linear_conv_kernel_dim > 0 ? linear_conv_kernel_dim : 4;
+        const int num_k_heads    = linear_num_key_heads / attn_tp_size;
+        const int num_v_heads    = linear_num_value_heads / attn_tp_size;
+        const int key_dim        = num_k_heads * key_head_dim;
+        const int value_dim      = num_v_heads * value_head_dim;
+        const int conv_dim       = key_dim * 2 + value_dim;
 
         TM_CHECK_GT(max_batch_size, 0);
-        pooled_conv_states_ = {{max_batch_size, num_linear_layers, d_conv, conv_dim}, model_param.data_type, kDEVICE};
-        pooled_recurrent_states_ = {{max_batch_size, num_linear_layers, num_v_heads, key_head_dim, value_head_dim},
-                                    model_param.linear_state_dtype,
-                                    kDEVICE};
+        pooled_conv_states_      = {{max_batch_size, num_linear_layers, d_conv, conv_dim}, data_type, kDEVICE};
+        pooled_recurrent_states_ = {
+            {max_batch_size, num_linear_layers, num_v_heads, key_head_dim, value_head_dim}, data_type, kDEVICE};
 
         free_linear_state_slots_.reserve(max_batch_size);
         for (int slot = max_batch_size - 1; slot >= 0; --slot) {
@@ -94,17 +101,16 @@ SequenceManager::SequenceManager(const ModelParam& model_param,
                     (pooled_conv_states_.byte_size() + pooled_recurrent_states_.byte_size()) * mb);
     }
 
-    const int  dbits        = byte_size(runtime_dtype, 8);
-    const auto quant_policy = model_param.quant_policy;
-    const int  elem_bits    = quant_policy ? quant_policy : dbits;
+    const int dbits     = byte_size(runtime_dtype, 8);
+    const int elem_bits = quant_policy ? quant_policy : dbits;
 
     BlockConfig block_config{
-        (int)model_param.head_dim,
-        (int)model_param.kv_head_num / attn_tp_size,
+        head_dim,
+        kv_head_num,
         cache_block_seq_len,
         elem_bits == dbits ? 0 : dbits,
         elem_bits,
-        model_param.head_dim == 576,  // share kv
+        head_dim == 576,  // share kv
     };
 
     block::Layout layout{block_config};

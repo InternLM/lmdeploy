@@ -14,7 +14,7 @@ using std::vector;
 
 struct InputProcessor::Impl {
 public:
-    Impl(const EngineParam& engine, const ModelParam& model, int phases):
+    Impl(const EngineParam& engine, int hidden_units, DataType data_type, int phases):
         max_batch_size_{engine.max_batch_size}, max_forward_token_num_{engine.max_forward_token_num}
     {
         input_ids_buf_         = {max_forward_token_num_, kCPUpinned};
@@ -31,7 +31,7 @@ public:
             d.autoreg_ids_pos = {max_batch_size_, kCPU};  // ! CPU buffer
 
             /// TODO: initialize only when required
-            d.input_embeds_buf = {{max_forward_token_num_, (int)model.hidden_units}, model.data_type, kCPUpinned};
+            d.input_embeds_buf = {{max_forward_token_num_, hidden_units}, data_type, kCPUpinned};
         }
     }
 
@@ -241,8 +241,8 @@ private:
 
 InputProcessor::~InputProcessor() = default;
 
-InputProcessor::InputProcessor(const EngineParam& engine, const ModelParam& model, int phases):
-    impl_{std::make_unique<Impl>(engine, model, phases)}
+InputProcessor::InputProcessor(const EngineParam& engine, int hidden_units, DataType data_type, int phases):
+    impl_{std::make_unique<Impl>(engine, hidden_units, data_type, phases)}
 {
 }
 

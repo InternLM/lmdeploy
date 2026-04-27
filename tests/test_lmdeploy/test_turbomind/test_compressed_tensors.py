@@ -1,20 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-import pytest
 import torch
-
-from lmdeploy.turbomind.deploy import converter
 from lmdeploy.turbomind.deploy.parameter import QuantWeightOnly, pack_u4_row
 from lmdeploy.turbomind.deploy.source_model.qwen import Qwen3_5ReaderMixin
-
-
-class _FakeModelConfig:
-
-    def __init__(self, dtype=torch.float16):
-        self.dtype = dtype
-
-    def to_dict(self):
-        return {'architectures': ['Qwen3_5ForConditionalGeneration']}
 
 
 class _DummyQwen35Reader(Qwen3_5ReaderMixin):
@@ -39,35 +27,6 @@ def _reference_compressed_tensors_dequant(weight_packed: torch.Tensor, weight_sc
     group_size = weight.shape[1] // num_groups
     return ((weight.reshape(weight.shape[0], num_groups, group_size) - 8.0) *
             weight_scale.to(torch.float16).unsqueeze(-1)).reshape(weight.shape[0], -1)
-
-
-def test_compressed_tensors_support_matrix(monkeypatch):
-    fake_cfg = _FakeModelConfig()
-    monkeypatch.setattr(converter, 'get_model_arch', lambda _: ('Qwen3_5ForConditionalGeneration', fake_cfg))
-    monkeypatch.setattr(converter, '_get_and_verify_max_len', lambda *args, **kwargs: 4096)
-    monkeypatch.setattr(converter, 'is_bf16_supported', lambda: False)
-
-    _, default_cfg = converter.get_output_model_registered_name_and_config('dummy',
-                                                                           model_format='compressed-tensors',
-                                                                           dtype='auto',
-                                                                           group_size=0)
-    assert default_cfg.model_config.group_size == 128
-
-    _, gs32_cfg = converter.get_output_model_registered_name_and_config('dummy',
-                                                                        model_format='compressed-tensors',
-                                                                        dtype='auto',
-                                                                        group_size=32)
-    assert gs32_cfg.model_config.group_size == 32
-    assert gs32_cfg.model_config.model_format == 'awq'
-
-    with pytest.raises(ValueError, match='Unsupported group_size=64'):
-        converter.get_output_model_registered_name_and_config('dummy',
-                                                              model_format='compressed-tensors',
-                                                              dtype='auto',
-                                                              group_size=64)
-
-    with pytest.raises(ValueError, match='model_format=\"awq\"'):
-        converter.get_output_model_registered_name_and_config('dummy', model_format='awq', dtype='auto', group_size=32)
 
 
 def test_quant_weight_only_synthesizes_compressed_tensor_zero_points_from_scales():

@@ -14,6 +14,12 @@ endif()
 
 pybind11_add_module(${PROJECT_NAME} bind.cpp)
 target_link_libraries(${PROJECT_NAME} PRIVATE turbomind xgrammar)
+# Force-link all objects from static libraries that contain self-registration
+# globals (module type registrars).  Without --whole-archive, the linker
+# strips registrar objects because nobody references them directly.
+set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_OPTIONS
+    "-Wl,--whole-archive" "$<TARGET_FILE:models>" "$<TARGET_FILE:turbomind>" "-Wl,--no-whole-archive")
+target_link_libraries(${PROJECT_NAME} PRIVATE models)
 
 pybind11_add_module(_xgrammar xgrammar_bind.cpp)
 target_link_libraries(_xgrammar PRIVATE core xgrammar)
