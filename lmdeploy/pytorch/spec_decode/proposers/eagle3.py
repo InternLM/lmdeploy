@@ -33,7 +33,8 @@ class Eagle3(DeepseekMTP):
     def get_outputs(self,
                     model_outputs: dict[str, torch.Tensor],
                     model_inputs: ModelInputs,
-                    extra_inputs: ExtraInputs = None):
+                    extra_inputs: ExtraInputs = None,
+                    guided_processors: dict | None = None):
         """Get outputs."""
         hidden_states = model_outputs['hidden_states']
         hidden_states_prenorm = model_outputs['hidden_states_prenorm']
@@ -49,7 +50,17 @@ class Eagle3(DeepseekMTP):
                 hidden_states_prenorm = hidden_states_prenorm[:, last_token_loc]
 
         logits = self.get_logits(hidden_states)[0]
+
         draft_token_ids = logits.argmax(dim=-1, keepdim=True)
-        # token mapping
         draft_token_ids = self.draft_id_to_target_id[draft_token_ids]
+
+        # Eagle3 draft vocab may differ from target vocab, so we cannot apply
+        # a target-vocab grammar mask to draft-vocab logits.  We accept the
+        # mapped (target-vocab) token ID and rely on rejection sampling to
+        # enforce grammar constraints on the target side.
+        if guided_processors and self.guided_decoding_manager is not None:
+            guided_manager = self.guided_decoding_manager
+            for idx, processor in guided_processors.items():
+                guided_manager.accept_token(processor, draft_token_ids[idx, 0].item())
+
         return draft_token_ids, model_metas, hidden_states_prenorm
