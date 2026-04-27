@@ -2,6 +2,7 @@
 from typing import TYPE_CHECKING, Any
 
 import torch
+import torch.nn.functional as F
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.constants import Modality
@@ -17,12 +18,14 @@ def get_mm_items_offset(input_ids: torch.Tensor, mm_token_id: int) -> list[tuple
 
     Example:
         input_ids = [1, 2, 3, 3, 3, 4, 3, 3], mm_token_id = 3
-        returns [(2, 5), (6, 8)]
+        returns [(2, 6), (6, 9)]
+        end_positions + 1 to turn it into exclusive end index for pytorch engine
     """
-    mask = input_ids == mm_token_id
-    start_positions = (mask & ~torch.roll(mask, 1)).nonzero(as_tuple=True)[0]
-    end_positions = (mask & ~torch.roll(mask, -1)).nonzero(as_tuple=True)[0]
-    end_positions += 1  # convert to exclusive end index
+    mask = (input_ids == mm_token_id)
+    prev_is_false = ~F.pad(mask[:-1], (1, 0), value=False)  # [True] + ~mask[:-1]
+    next_is_false = ~F.pad(mask[1:], (0, 1), value=False)   # ~mask[1:] + [True]
+    start_positions = (mask & prev_is_false).nonzero(as_tuple=True)[0]
+    end_positions = (mask & next_is_false).nonzero(as_tuple=True)[0] + 1
     return list(zip(start_positions.tolist(), end_positions.tolist()))
 
 

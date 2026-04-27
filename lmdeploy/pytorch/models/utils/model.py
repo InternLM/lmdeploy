@@ -166,15 +166,8 @@ class DeployModelMixinV1(DeployModelMixin):
         if ts_token_id is not None:
             ts_mask = (input_ids == ts_token_id)
 
-        multimodal_mask = None
-        if image_mask is not None and video_mask is not None:
-            multimodal_mask = image_mask | video_mask
-        elif image_mask is not None:
-            multimodal_mask = image_mask
-        elif video_mask is not None:
-            multimodal_mask = video_mask
-        elif ts_mask is not None:
-            multimodal_mask = ts_mask
+        masks = [m for m in (image_mask, video_mask, ts_mask) if m is not None]
+        multimodal_mask = None if not masks else torch.stack(masks, dim=0).any(dim=0)
 
         return multimodal_mask
 
