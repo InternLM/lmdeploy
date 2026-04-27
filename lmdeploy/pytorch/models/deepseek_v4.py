@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import importlib.util
 import math
-import os
 import os.path as osp
 import re
 from collections.abc import Iterable
@@ -56,12 +55,6 @@ def _get_world_size_rank():
     if dist.is_initialized():
         return dist.get_world_size(), dist.get_rank()
     return 1, 0
-
-
-def _resolve_device(device: torch.device | str | None) -> torch.device:
-    if device is None:
-        return torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    return torch.device(device)
 
 
 @contextmanager
@@ -142,7 +135,6 @@ class QuantLinear(nn.Module):
                  world_size: int = 1,
                  rank: int = 0):
         super().__init__()
-        device = _resolve_device(device)
         self.in_features = in_features
         self.out_features = out_features
         self.kernel_mod = kernel_mod
@@ -303,7 +295,6 @@ def rotate_activation(x: torch.Tensor) -> torch.Tensor:
 
 
 def get_window_topk_idxs(window_size: int, bsz: int, seqlen: int, start_pos: int, device: torch.device | str):
-    device = _resolve_device(device)
     if start_pos >= window_size - 1:
         start_pos %= window_size
         matrix = torch.cat([
@@ -321,7 +312,6 @@ def get_window_topk_idxs(window_size: int, bsz: int, seqlen: int, start_pos: int
 
 
 def get_compress_topk_idxs(ratio: int, bsz: int, seqlen: int, start_pos: int, offset: int, device: torch.device | str):
-    device = _resolve_device(device)
     if start_pos > 0:
         matrix = torch.arange(0, (start_pos + 1) // ratio, device=device) + offset
     else:
@@ -418,7 +408,6 @@ class Compressor(nn.Module):
                  device: torch.device | str | None,
                  rotate: bool = False):
         super().__init__()
-        device = _resolve_device(device)
         self.kernel_mod = kernel_mod
         self.dim = args.dim
         self.head_dim = head_dim
@@ -591,7 +580,6 @@ class Indexer(nn.Module):
                  rank: int,
                  device: torch.device | str | None):
         super().__init__()
-        device = _resolve_device(device)
         self.kernel_mod = kernel_mod
         self.n_heads = args.index_n_heads
         self.n_local_heads = args.index_n_heads // world_size
@@ -733,11 +721,9 @@ class Attention(nn.Module):
                  layer_id: int,
                  args: V4Args,
                  kernel_mod,
-                 world_size: int,
-                 rank: int,
                  device: torch.device | str | None):
         super().__init__()
-        device = _resolve_device(device)
+        world_size, rank = _get_world_size_rank()
         self.kernel_mod = kernel_mod
         self.layer_id = layer_id
         self.world_size = world_size
@@ -1138,7 +1124,6 @@ class Gate(nn.Module):
 
     def __init__(self, layer_id: int, args: V4Args, device: torch.device | str | None):
         super().__init__()
-        device = _resolve_device(device)
         self.topk = args.n_activated_experts
         self.score_func = args.score_func
         self.route_scale = args.route_scale
@@ -1207,13 +1192,7 @@ class MoE(nn.Module):
                  kernel_mod,
                  device: torch.device | str | None):
         super().__init__()
-        world_size, rank = _get_world_size_rank()
         self.dim = args.dim
-        self.world_size = world_size
-        self.rank = rank
-        self.experts_per_rank = args.n_routed_experts // world_size
-        self.start = rank * self.experts_per_rank
-        self.end = self.start + self.experts_per_rank
         self.gate = Gate(layer_id, args, device=device)
         self.experts = FusedMoEV4(args.dim,
                                     args.moe_inter_dim,
@@ -1246,10 +1225,8 @@ class Block(nn.Module):
                  dtype: torch.dtype,
                  device: torch.device | str | None):
         super().__init__()
-        world_size, rank = _get_world_size_rank()
-        device = _resolve_device(device)
         self.norm_eps = args.norm_eps
-        self.attn = Attention(layer_id, args, kernel_mod, world_size, rank, device=device)
+        self.attn = Attention(layer_id, args, kernel_mod, device=device)
         self.ffn = MoE(layer_id, args, kernel_mod, device=device)
         self.attn_norm = RMSNorm(args.dim, args.norm_eps, dtype=dtype, device=device)
         self.ffn_norm = RMSNorm(args.dim, args.norm_eps, dtype=dtype, device=device)
@@ -1339,7 +1316,9 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         self.kernel_mod = _load_v4_kernel_module(self.model_path)
         self.world_size, self.rank = _get_world_size_rank()
         self.dtype = dtype or torch.bfloat16
-        self.device = _resolve_device(device)
+        if isinstance(device, str):
+            device = torch.device(device)
+        self.device = device
         self.args = V4Args(
             dim=config.hidden_size,
             n_heads=config.num_attention_heads,
@@ -1555,6 +1534,15 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         return context.model_metas
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
+
+        def __skip_layers():
+            """We might change the number of layers so we can debug the model
+            with less gpus."""
+            import re
+            matches = re.findall(r'\.layers\.(\d+)\.', name)
+            layer_id = int(matches[0])
+            return layer_id >= self.config.num_hidden_layers
+
         params_dict = dict(self.named_parameters())
         pending_wo_a_weight: dict[str, torch.Tensor] = {}
         pending_wo_a_scale: dict[str, torch.Tensor] = {}
@@ -1575,18 +1563,15 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             params_dict[weight_name].data.copy_(dequantized.to(params_dict[weight_name].dtype))
 
         for name, loaded_weight in weights:
+            if '.layers' in name:
+                if __skip_layers():
+                    continue
             if name.startswith('mtp.'):
                 continue
             if name.endswith('tie2eid'):
                 name = name.replace('tie2eid', 'tid2eid')
             expert_match = re.search(r'\.ffn\.experts\.(\d+)\.(w[123])\.(weight|scale)$', name)
             if expert_match is not None:
-                if not self.layers[0].ffn.use_fused_experts:
-                    if name in params_dict:
-                        load_weight(params_dict[name], loaded_weight)
-                        continue
-                    logger.debug(f'Skip unknown DeepSeek-V4 legacy expert weight: {name}')
-                    continue
                 expert_id = int(expert_match.group(1))
                 mapped = _map_v4_expert_param_name(name, True)
                 assert mapped is not None

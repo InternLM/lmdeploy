@@ -5,9 +5,9 @@ import torch
 
 from lmdeploy.pytorch.backends.attention import AttentionBuilder
 from lmdeploy.utils import get_logger
-from .v4 import TritonV4AttentionBuilder    # noqa: F401
 
 from .default import TritonAttentionImpl, TritonAttentionMetadata
+from .v4 import TritonV4AttentionBuilder  # noqa: F401
 
 logger = get_logger('lmdeploy')
 
