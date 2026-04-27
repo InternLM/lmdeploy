@@ -15,10 +15,12 @@ from torch import nn
 
 from lmdeploy.pytorch.backends.attention import V4AttentionMetadata
 from lmdeploy.pytorch.backends.indexer import V4IndexerMetadata
+from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import RMSNorm
+from lmdeploy.pytorch.nn import RMSNorm, SiluAndMul
 from lmdeploy.pytorch.nn import V4Attention as NativeV4Attention
 from lmdeploy.pytorch.nn import V4Indexer as NativeV4Indexer
+from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_down_linear, build_gateup_linear, build_o_proj
 from lmdeploy.pytorch.nn.moe import FusedMoEV4
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 from lmdeploy.utils import get_logger
@@ -52,9 +54,7 @@ def _load_v4_kernel_module(model_path: str):
 
 
 def _get_world_size_rank():
-    if dist.is_initialized():
-        return dist.get_world_size(), dist.get_rank()
-    return 1, 0
+    return get_tp_world_rank('attn')
 
 
 @contextmanager
@@ -66,25 +66,10 @@ def _set_default_dtype(dtype: torch.dtype):
     finally:
         torch.set_default_dtype(prev)
 
-
-def _scalar_int(value) -> int:
-    if isinstance(value, torch.Tensor):
-        return int(value.item())
-    return int(value)
-
-
-def _maybe_to_dtype(weight: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
-    if weight.dtype == dtype:
-        return weight
-    if dtype == torch.float4_e2m1fn_x2 and weight.dtype == torch.int8:
-        return weight.view(dtype)
-    return weight.to(dtype)
-
 def _load_vector_shard(param: nn.Parameter, loaded_weight: torch.Tensor, world_size: int, rank: int):
     if world_size > 1:
-        loaded_weight = loaded_weight.chunk(world_size, dim=0)[rank].contiguous()
-    loaded_weight = loaded_weight.to(param.dtype)
-    param.data.copy_(loaded_weight)
+        loaded_weight = loaded_weight.chunk(world_size, dim=0)[rank]
+    param.copy_(loaded_weight)
 
 
 def _dequantize_wo_a_shard(weight: torch.Tensor, scale: torch.Tensor, world_size: int, rank: int) -> torch.Tensor:
@@ -119,123 +104,6 @@ def _map_v4_expert_param_name(name: str, use_fused_experts: bool) -> tuple[str, 
     if proj == 'w3':
         return name, 'up'
     return name, 'down'
-
-
-class QuantLinear(nn.Module):
-    """FP8 / FP4 / BF16 linear used by the official DeepSeek-V4 checkpoint."""
-
-    def __init__(self,
-                 in_features: int,
-                 out_features: int,
-                 kernel_mod,
-                 bias: bool = False,
-                 dtype: torch.dtype | None = None,
-                 device: torch.device | str | None = None,
-                 shard_dim: int | None = None,
-                 world_size: int = 1,
-                 rank: int = 0):
-        super().__init__()
-        self.in_features = in_features
-        self.out_features = out_features
-        self.kernel_mod = kernel_mod
-        self.shard_dim = shard_dim
-        self.world_size = world_size
-        self.rank = rank
-        dtype = dtype or torch.bfloat16
-        self.scale = None
-
-        local_in = in_features
-        local_out = out_features
-        if shard_dim == 0:
-            assert out_features % world_size == 0
-            local_out = out_features // world_size
-        elif shard_dim == 1:
-            assert in_features % world_size == 0
-            local_in = in_features // world_size
-
-        if dtype == torch.float4_e2m1fn_x2:
-            self.weight = nn.Parameter(torch.empty(local_out, local_in // 2, dtype=dtype, device=device),
-                                       requires_grad=False)
-            self.scale = nn.Parameter(torch.empty(local_out, local_in // 32,
-                                                  dtype=torch.float8_e8m0fnu,
-                                                  device=device),
-                                      requires_grad=False)
-        elif dtype == torch.float8_e4m3fn:
-            self.weight = nn.Parameter(
-                torch.empty(local_out, local_in, dtype=dtype, device=device), requires_grad=False
-                )
-            self.scale = nn.Parameter(torch.empty((local_out + 127) // 128, (local_in + 127) // 128,
-                                                  dtype=torch.float8_e8m0fnu,
-                                                  device=device),
-                                      requires_grad=False)
-        else:
-            self.weight = nn.Parameter(
-                torch.empty(local_out, local_in, dtype=dtype, device=device), requires_grad=False
-            )
-        if bias:
-            self.bias = nn.Parameter(torch.empty(local_out, dtype=torch.float32, device=device), requires_grad=False)
-        else:
-            self.register_parameter('bias', None)
-
-        self.weight.weight_loader = self._weight_loader
-        if self.scale is not None:
-            self.scale.weight_loader = self._scale_loader
-        if self.bias is not None:
-            self.bias.weight_loader = self._bias_loader
-
-    def _chunk_weight(self, loaded_weight: torch.Tensor, shard_dim: int | None):
-        if shard_dim is None or self.world_size == 1:
-            return loaded_weight
-        return loaded_weight.chunk(self.world_size, dim=shard_dim)[self.rank].contiguous()
-
-    def _weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
-        loaded_weight = self._chunk_weight(loaded_weight, self.shard_dim)
-        loaded_weight = _maybe_to_dtype(loaded_weight, param.dtype)
-        if loaded_weight.numel() == param.numel() and loaded_weight.shape != param.shape:
-            loaded_weight = loaded_weight.view_as(param)
-        param.data.copy_(loaded_weight)
-
-    def _scale_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
-        scale_shard_dim = self.shard_dim
-        loaded_weight = self._chunk_weight(loaded_weight, scale_shard_dim)
-        loaded_weight = _maybe_to_dtype(loaded_weight, param.dtype)
-        if loaded_weight.numel() == param.numel() and loaded_weight.shape != param.shape:
-            loaded_weight = loaded_weight.view_as(param)
-        param.data.copy_(loaded_weight)
-
-    def _bias_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
-        if self.world_size > 1 and self.shard_dim == 0:
-            loaded_weight = loaded_weight.chunk(self.world_size, dim=0)[self.rank].contiguous()
-        elif self.world_size > 1 and self.shard_dim == 1 and self.rank != 0:
-            loaded_weight = torch.zeros_like(param)
-        loaded_weight = loaded_weight.to(param.dtype)
-        param.data.copy_(loaded_weight)
-
-    def forward(self, x: torch.Tensor):
-        assert self.bias is None, 'DeepSeek-V4 linear path does not expect bias.'
-        input_dtype = x.dtype
-        act_quant = self.kernel_mod.act_quant
-        fp8_gemm = self.kernel_mod.fp8_gemm
-        fp4_gemm = self.kernel_mod.fp4_gemm
-        if self.weight.dtype == torch.float4_e2m1fn_x2:
-            if x.dtype != torch.bfloat16:
-                x = x.to(torch.bfloat16)
-            qx, scale = act_quant(x, 128, 'ue8m0', torch.float8_e8m0fnu)
-            with _set_default_dtype(torch.bfloat16):
-                y = fp4_gemm(qx, scale, self.weight, self.scale, torch.float8_e8m0fnu)
-        elif self.weight.dtype == torch.float8_e4m3fn:
-            if x.dtype != torch.bfloat16:
-                x = x.to(torch.bfloat16)
-            qx, scale = act_quant(x, 128, 'ue8m0', torch.float8_e8m0fnu)
-            with _set_default_dtype(torch.bfloat16):
-                y = fp8_gemm(qx, scale, self.weight, self.scale, torch.float8_e8m0fnu)
-        else:
-            y = F.linear(x, self.weight)
-        if self.shard_dim == 1 and self.world_size > 1:
-            y = y.float()
-            dist.all_reduce(y)
-            y = y.to(input_dtype)
-        return y
 
 @lru_cache(2)
 def precompute_freqs_cis(dim, seqlen, original_seq_len, base, factor, beta_fast, beta_slow):
@@ -405,6 +273,7 @@ class Compressor(nn.Module):
                  kernel_mod,
                  compress_ratio: int,
                  head_dim: int,
+                 dtype: torch.dtype,
                  device: torch.device | str | None,
                  rotate: bool = False):
         super().__init__()
@@ -418,9 +287,9 @@ class Compressor(nn.Module):
         coff = 1 + self.overlap
         self.ape = nn.Parameter(torch.empty(compress_ratio, coff * self.head_dim, dtype=torch.float32, device=device),
                                 requires_grad=False)
-        self.wkv = QuantLinear(self.dim, coff * self.head_dim, kernel_mod, dtype=torch.float32, device=device)
-        self.wgate = QuantLinear(self.dim, coff * self.head_dim, kernel_mod, dtype=torch.float32, device=device)
-        self.norm = RMSNorm(self.head_dim, args.norm_eps, device=device)
+        self.wkv = build_colwise_linear(self.dim, coff * self.head_dim, False, dtype=dtype, device=device)
+        self.wgate = build_colwise_linear(self.dim, coff * self.head_dim, False, dtype=dtype, device=device)
+        self.norm = RMSNorm(self.head_dim, args.norm_eps, dtype=dtype, device=device)
         self.freqs_cis = None
 
     def _overlap_transform(self, tensor: torch.Tensor, value=0):
@@ -436,7 +305,6 @@ class Compressor(nn.Module):
         ratio = self.compress_ratio
         rd = self.rope_head_dim
         dtype = x.dtype
-        x = x.float()
         kv = self.wkv(x)
         score = self.wgate(x)
         rows = (2 if self.overlap else 1) * ratio
@@ -518,7 +386,6 @@ class Compressor(nn.Module):
         ratio = self.compress_ratio
         rd = self.rope_head_dim
         dtype = x.dtype
-        x = x.float()
         kv = self.wkv(x).squeeze(1)
         score = self.wgate(x).squeeze(1)
         safe_start_pos = torch.where(valid_mask, start_pos, start_pos.new_zeros(()))
@@ -573,11 +440,13 @@ class Compressor(nn.Module):
 class Indexer(nn.Module):
 
     def __init__(self,
+                 config,
                  args: V4Args,
                  kernel_mod,
                  compress_ratio: int,
                  world_size: int,
                  rank: int,
+                 dtype: torch.dtype,
                  device: torch.device | str | None):
         super().__init__()
         self.kernel_mod = kernel_mod
@@ -589,23 +458,27 @@ class Indexer(nn.Module):
         self.compress_ratio = compress_ratio
         self.world_size = world_size
         self.rank = rank
-        self.wq_b = QuantLinear(args.q_lora_rank,
-                                self.n_heads * self.head_dim,
-                                kernel_mod,
-                                dtype=torch.float8_e4m3fn,
-                                device=device,
-                                shard_dim=0,
-                                world_size=world_size,
-                                rank=rank)
-        self.weights_proj = QuantLinear(args.dim,
-                                        self.n_heads,
-                                        kernel_mod,
-                                        dtype=torch.bfloat16,
-                                        device=device,
-                                        shard_dim=0,
-                                        world_size=world_size,
-                                        rank=rank)
-        self.compressor = Compressor(args, kernel_mod, compress_ratio, self.head_dim, device=device, rotate=True)
+
+        quantization_config = getattr(config, 'quantization_config', None)
+        self.wq_b = build_colwise_linear(
+            args.q_lora_rank,
+            self.n_heads * self.head_dim,
+            bias=config.attention_bias,
+            dtype=dtype,
+            device=device,
+            is_tp=True,
+            quant_config=quantization_config
+        )
+        self.weights_proj = build_colwise_linear(
+            args.dim,
+            self.n_heads,
+            bias=config.attention_bias,
+            dtype=dtype,
+            device=device,
+            is_tp=True,
+        )
+        self.compressor = Compressor(args, kernel_mod, compress_ratio, self.head_dim,
+                                     dtype=dtype, device=device, rotate=True)
         self.freqs_cis = None
         self.indexer_fwd = NativeV4Indexer(index_topk=self.index_topk,
                                            compress_ratio=self.compress_ratio,
@@ -714,20 +587,59 @@ class Indexer(nn.Module):
         valid = topk >= 0
         return torch.where(valid, topk + offset, topk)
 
+class DeepseekV4BMM(nn.Module):
+    """Wrapped bmm."""
+
+    def __init__(self, batch: int, in_features: int, out_features: int, dtype: torch.dtype, device: torch.device):
+        super().__init__()
+        batch = self._update_batch(batch)
+
+        weight = self.create_weight(batch, in_features, out_features, dtype=dtype, device=device)
+        weight = torch.nn.Parameter(weight, requires_grad=False)
+        self.register_parameter('weight', weight)
+        weight.weight_loader = self.weight_loader
+
+        self.batch = batch
+        self.in_features = in_features
+        self.out_features = out_features
+        self.dtype = dtype
+        self.device = device
+
+    def _update_batch(self, batch: int):
+        """Update out features."""
+        world_size, _ = get_tp_world_rank('attn')
+        batch = batch // world_size
+        return batch
+
+    def create_weight(self, batch: int, in_features: int, out_features: int, dtype: torch.dtype, device: torch.device):
+        """Create weight."""
+        return torch.empty((batch, in_features, out_features), dtype=dtype, device=device)
+
+    def weight_loader(self, param: nn.Parameter, weight: torch.Tensor):
+        """Weight loader."""
+        world_size, rank = get_tp_world_rank('attn')
+        weight = weight.chunk(world_size, 0)[rank]
+        param.data.copy_(weight)
+
+    def forward(self, x: torch.Tensor, output: torch.Tensor):
+        """forward."""
+        torch.bmm(x.transpose(0, 1), self.weight, out=output.transpose(0, 1))
+
 
 class Attention(nn.Module):
 
     def __init__(self,
+                 config,
                  layer_id: int,
                  args: V4Args,
                  kernel_mod,
+                 dtype: torch.dtype,
                  device: torch.device | str | None):
         super().__init__()
+        quantization_config = getattr(config, 'quantization_config', None)
         world_size, rank = _get_world_size_rank()
         self.kernel_mod = kernel_mod
         self.layer_id = layer_id
-        self.world_size = world_size
-        self.rank = rank
         self.n_heads = args.n_heads
         self.n_local_heads = args.n_heads // world_size
         self.head_dim = args.head_dim
@@ -737,38 +649,55 @@ class Attention(nn.Module):
         self.window_size = args.window_size
         self.compress_ratio = args.compress_ratios[layer_id]
         self.eps = args.norm_eps
+        self.o_lora_rank = args.o_lora_rank
 
         self.attn_sink = nn.Parameter(torch.empty(self.n_local_heads, dtype=torch.float32, device=device),
                                       requires_grad=False)
         self.attn_sink.weight_loader = self._attn_sink_loader
-        self.wq_a = QuantLinear(args.dim, args.q_lora_rank, kernel_mod, dtype=torch.float8_e4m3fn, device=device)
+
+        self.wq_a = build_colwise_linear(
+            args.dim, args.q_lora_rank,
+            bias=config.attention_bias,
+            dtype=dtype,
+            device=device,
+            is_tp=False,
+            quant_config=quantization_config,
+            )
         self.q_norm = RMSNorm(args.q_lora_rank, self.eps, device=device)
-        self.wq_b = QuantLinear(args.q_lora_rank,
-                                args.n_heads * args.head_dim,
-                                kernel_mod,
-                                dtype=torch.float8_e4m3fn,
-                                device=device,
-                                shard_dim=0,
-                                world_size=world_size,
-                                rank=rank)
-        self.wkv = QuantLinear(args.dim, args.head_dim, kernel_mod, dtype=torch.float8_e4m3fn, device=device)
+        self.wq_b = build_colwise_linear(
+            args.q_lora_rank,
+            args.n_heads * args.head_dim,
+            bias=config.attention_bias,
+            dtype=dtype,
+            device=device,
+            is_tp=True,
+            quant_config=quantization_config,
+            dp_disable_tp=True,
+        )
+        self.wkv = build_colwise_linear(
+            args.dim, self.head_dim,
+            bias=config.attention_bias,
+            dtype=dtype,
+            device=device,
+            is_tp=False,
+            quant_config=quantization_config,
+        )
         self.kv_norm = RMSNorm(args.head_dim, self.eps, device=device)
-        self.wo_a = QuantLinear(args.n_heads * args.head_dim // self.n_groups,
-                                self.n_groups * args.o_lora_rank,
-                                kernel_mod,
-                                dtype=torch.bfloat16,
-                                device=device,
-                                shard_dim=0,
-                                world_size=world_size,
-                                rank=rank)
-        self.wo_b = QuantLinear(args.n_groups * args.o_lora_rank,
-                                args.dim,
-                                kernel_mod,
-                                dtype=torch.float8_e4m3fn,
-                                device=device,
-                                shard_dim=1,
-                                world_size=world_size,
-                                rank=rank)
+        self.wo_a = DeepseekV4BMM(
+            self.n_groups,
+            args.n_heads * args.head_dim // self.n_groups,
+            args.o_lora_rank,
+            dtype=dtype,
+            device=device)
+        self.wo_b = build_o_proj(
+            args.n_groups * args.o_lora_rank,
+            args.dim,
+            bias=config.attention_bias,
+            dtype=dtype,
+            device=device,
+            is_tp=True,
+            quant_config=quantization_config,
+        )
         self.softmax_scale = self.head_dim**-0.5
         self.attn_fwd = NativeV4Attention(head_size=self.head_dim,
                                           scale=self.softmax_scale,
@@ -778,9 +707,12 @@ class Attention(nn.Module):
         self.compressor = None
         self.indexer = None
         if self.compress_ratio:
-            self.compressor = Compressor(args, kernel_mod, self.compress_ratio, self.head_dim, device=device)
+            self.compressor = Compressor(args, kernel_mod, self.compress_ratio, self.head_dim,
+                                         dtype=dtype, device=device)
             if self.compress_ratio == 4:
-                self.indexer = Indexer(args, kernel_mod, self.compress_ratio, world_size, rank, device=device)
+                world_size, rank = get_tp_world_rank('attn')
+                self.indexer = Indexer(config, args, kernel_mod, self.compress_ratio,
+                                       world_size, rank, dtype=dtype, device=device)
 
         if self.compress_ratio:
             original_seq_len, rope_theta = args.original_seq_len, args.compress_rope_theta
@@ -790,7 +722,8 @@ class Attention(nn.Module):
                                               args.rope_factor, args.beta_fast, args.beta_slow).to(device)
 
     def _attn_sink_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
-        _load_vector_shard(param, loaded_weight, self.world_size, self.rank)
+        world_size, rank = get_tp_world_rank('attn')
+        _load_vector_shard(param, loaded_weight, world_size, rank)
 
     @staticmethod
     def _gather_cache_entries(cache: torch.Tensor, block_offsets: torch.Tensor, positions: torch.Tensor,
@@ -965,9 +898,10 @@ class Attention(nn.Module):
         out = self.kernel_mod.sparse_attn(q, full_kv.unsqueeze(0), self.attn_sink, topk_idxs.int(), self.softmax_scale)
         apply_rotary_emb(out[..., -rd:], freqs_cis, True)
         out = out.view(bsz, seqlen, self.n_local_groups, -1)
-        wo_a = self.wo_a.weight.view(self.n_local_groups, -1, out.size(-1)).to(out.dtype)
-        out = torch.einsum('bsgd,grd->bsgr', out, wo_a)
-        return self.wo_b(out.flatten(2))
+        old_out = out.flatten(0, 1)
+        out = old_out.new_empty(*old_out.shape[:-1], self.o_lora_rank)
+        self.wo_a(old_out, out)
+        return self.wo_b(out.flatten(-2, -1).unflatten(0, (bsz, seqlen)))
 
     def forward_decode(self,
                        x: torch.Tensor,
@@ -1089,9 +1023,10 @@ class Attention(nn.Module):
                                            decode_scratch=decode_scratch)
         apply_rotary_emb(out[..., -rd:], freqs_cis, True)
         out = out.view(bsz, seqlen, self.n_local_groups, -1)
-        wo_a = self.wo_a.weight.view(self.n_local_groups, -1, out.size(-1)).to(out.dtype)
-        out = torch.einsum('bsgd,grd->bsgr', out, wo_a)
-        return self.wo_b(out.flatten(2))
+        old_out = out.flatten(0, 1)
+        out = old_out.new_empty(*old_out.shape[:-1], self.o_lora_rank)
+        self.wo_a(old_out, out)
+        return self.wo_b(out.flatten(-2, -1).unflatten(0, (bsz, seqlen)))
 
     def _alloc_decode_scratch(self, batch_size: int, max_total_len: int, device: torch.device):
         max_comp_r4 = max_total_len // 4
@@ -1164,32 +1099,42 @@ class Gate(nn.Module):
 
 class Expert(nn.Module):
 
-    def __init__(self, dim: int, inter_dim: int, kernel_mod, dtype=None, swiglu_limit=0.0, device=None):
+    def __init__(self, config, dim: int, inter_dim: int, kernel_mod, dtype=None, swiglu_limit=0.0, device=None):
         super().__init__()
-        self.w1 = QuantLinear(dim, inter_dim, kernel_mod, dtype=dtype, device=device)
-        self.w2 = QuantLinear(inter_dim, dim, kernel_mod, dtype=dtype, device=device)
-        self.w3 = QuantLinear(dim, inter_dim, kernel_mod, dtype=dtype, device=device)
+        quantization_config = getattr(config, 'quantization_config', None)
+        self.w13 = build_gateup_linear(dim, [inter_dim, inter_dim], bias=False, dtype=dtype, device=device,
+                                      quant_config=quantization_config,
+                                      is_tp=False)
+        self.w2 = build_down_linear(inter_dim, dim, bias=False, quant_config=quantization_config,
+                                      is_tp=False, dtype=dtype, device=device)
         self.swiglu_limit = swiglu_limit
+        self.act_fn = SiluAndMul(inplace=True)
 
     def forward(self, x: torch.Tensor, weights: torch.Tensor | None = None):
         dtype = x.dtype
-        gate = self.w1(x).float()
-        up = self.w3(x).float()
+        gate_up = self.w13(x)
         if self.swiglu_limit > 0:
+            gate, up = gate_up.chunk(2, dim=-1)
             up = torch.clamp(up, min=-self.swiglu_limit, max=self.swiglu_limit)
             gate = torch.clamp(gate, max=self.swiglu_limit)
-        x = F.silu(gate) * up
+            x = F.silu(gate) * up
+        else:
+            x = self.act_fn(gate_up)
+
         if weights is not None:
-            x = weights * x
-        return self.w2(x.to(dtype))
+            x = weights * x.float()
+            x = x.to(dtype)
+        return self.w2(x)
 
 
 class MoE(nn.Module):
 
     def __init__(self,
+                 config,
                  layer_id: int,
                  args: V4Args,
                  kernel_mod,
+                 dtype: torch.dtype,
                  device: torch.device | str | None):
         super().__init__()
         self.dim = args.dim
@@ -1200,18 +1145,20 @@ class MoE(nn.Module):
                                     args.n_activated_experts,
                                     swiglu_limit=args.swiglu_limit,
                                     device=device)
-        self.shared_experts = Expert(args.dim,
-                                     args.moe_inter_dim,
-                                     kernel_mod,
-                                     dtype=torch.float8_e4m3fn,
-                                     swiglu_limit=0.0,
-                                     device=device)
+        self.shared_experts = Expert(
+            config,
+            args.dim,
+            args.moe_inter_dim,
+            kernel_mod,
+            dtype=dtype,
+            swiglu_limit=0.0,
+            device=device)
 
     def forward(self, x: torch.Tensor, input_ids: torch.Tensor):
         shape = x.shape
         x = x.view(-1, self.dim)
         weights, indices = self.gate(x, input_ids.flatten())
-        y = self.experts(x, weights, indices).float()
+        y = self.experts(x, weights, indices)
         y += self.shared_experts(x)
         return y.type_as(x).view(shape)
 
@@ -1219,6 +1166,7 @@ class MoE(nn.Module):
 class Block(nn.Module):
 
     def __init__(self,
+                 config,
                  layer_id: int,
                  args: V4Args,
                  kernel_mod,
@@ -1226,8 +1174,8 @@ class Block(nn.Module):
                  device: torch.device | str | None):
         super().__init__()
         self.norm_eps = args.norm_eps
-        self.attn = Attention(layer_id, args, kernel_mod, device=device)
-        self.ffn = MoE(layer_id, args, kernel_mod, device=device)
+        self.attn = Attention(config, layer_id, args, kernel_mod, dtype=dtype, device=device)
+        self.ffn = MoE(config, layer_id, args, kernel_mod, dtype=dtype, device=device)
         self.attn_norm = RMSNorm(args.dim, args.norm_eps, dtype=dtype, device=device)
         self.ffn_norm = RMSNorm(args.dim, args.norm_eps, dtype=dtype, device=device)
         self.hc_mult = args.hc_mult
@@ -1360,7 +1308,7 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
                                        dtype=self.dtype,
                                        is_tp=True,)
         self.layers = nn.ModuleList([
-            Block(layer_idx, self.args, self.kernel_mod, dtype=self.dtype, device=self.device)
+            Block(config, layer_idx, self.args, self.kernel_mod, dtype=self.dtype, device=self.device)
             for layer_idx in range(config.num_hidden_layers)
         ])
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=self.dtype, device=self.device)
@@ -1376,6 +1324,10 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
                                            requires_grad=False)
             self.hc_head_base = nn.Parameter(torch.empty(config.hc_mult, device=self.device), requires_grad=False)
             self.hc_head_scale = nn.Parameter(torch.empty(1, device=self.device), requires_grad=False)
+
+        # buffer to load weight
+        self._load_buffers = dict()
+
         # TODO: remove this shit!
         self._decode_graph_scratch: dict[str, torch.Tensor] | None = None
 
@@ -1527,73 +1479,86 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             state_ids=context.state_offsets,
         )
 
-    def update_model_metas(self,
-                           past_key_values: list[list[torch.Tensor]],
-                           inputs_embeds: torch.Tensor | None = None,
-                           context: StepContext = None):
-        return context.model_metas
+    def _load_weights_attn(self, name: str, weight: torch.Tensor, params_dict: dict[str, nn.Parameter]):
+        def _maybe_load_wo_a(weight_name, scale_name):
+            if weight_name not in self._load_buffers or scale_name not in self._load_buffers: # type: ignore
+                return
+            dequantized = _dequantize_wo_a_shard(self._load_buffers.pop(weight_name),
+                                                 self._load_buffers.pop(scale_name), 1, 0)
+            o_groups = self.config.o_groups
+            dequantized = dequantized.view(o_groups, -1, dequantized.size(-1))
+            dequantized = dequantized.transpose(-1, -2)
+            param = params_dict[weight_name]
+            load_weight(param, dequantized)
+
+        if '.wo_a' in name:
+            if name.endswith('.weight'):
+                weight_name = name
+                scale_name = name.replace('.weight', '.scale')
+                self._load_buffers[name] = weight
+            elif name.endswith('.scale'):
+                scale_name = name
+                weight_name = name.replace('.scale', '.weight')
+                self._load_buffers[name] = weight
+            else:
+                raise RuntimeError(f'Unexpected wo_a param name: {name}')
+            _maybe_load_wo_a(weight_name, scale_name)
+            return
+        elif '.scale' in name:
+            name = name.replace('.scale', '.weight_scale_inv')
+        load_weight(params_dict[name], weight)
+
+    def _load_expert(self, name: str, weight: torch.Tensor, params_dict: dict[str, nn.Parameter]):
+        stacked_params_mapping = [
+            # (param_name, shard_name, shard_id)
+            ('.w13', '.w1', 0),
+            ('.w13', '.w3', 1),
+        ]
+        if '.shared_experts.' in name:
+            if name.endswith('.scale'):
+                name = name.replace('.scale', '.weight_scale_inv')
+            for param_name, shard_name, shard_id in stacked_params_mapping:
+                if shard_name not in name:
+                    continue
+                name = name.replace(shard_name, param_name)
+                param = params_dict[name]
+                load_weight(param, weight, shard_id=shard_id)
+                break
+            else:
+                load_weight(params_dict[name], weight)
+            return
+
+        # load other
+        loaded_weight = weight
+        expert_match = re.search(r'\.ffn\.experts\.(\d+)\.(w[123])\.(weight|scale)$', name)
+        if expert_match is not None:
+            expert_id = int(expert_match.group(1))
+            mapped = _map_v4_expert_param_name(name, True)
+            assert mapped is not None
+            param_name, shard_id = mapped
+            if param_name in params_dict:
+                load_weight(params_dict[param_name], loaded_weight, expert_id=expert_id, shard_id=shard_id)
+            logger.debug(f'Skip unknown DeepSeek-V4 expert weight: {name} -> {param_name}')
+        else:
+            load_weight(params_dict[name], weight)
+
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
-
-        def __skip_layers():
-            """We might change the number of layers so we can debug the model
-            with less gpus."""
-            import re
-            matches = re.findall(r'\.layers\.(\d+)\.', name)
-            layer_id = int(matches[0])
-            return layer_id >= self.config.num_hidden_layers
-
         params_dict = dict(self.named_parameters())
-        pending_wo_a_weight: dict[str, torch.Tensor] = {}
-        pending_wo_a_scale: dict[str, torch.Tensor] = {}
-
-        def _maybe_load_wo_a(base_name: str):
-            weight_name = f'{base_name}.weight'
-            scale_name = f'{base_name}.scale'
-            if weight_name not in pending_wo_a_weight or scale_name not in pending_wo_a_scale:
-                return
-            if weight_name not in params_dict:
-                pending_wo_a_weight.pop(weight_name, None)
-                pending_wo_a_scale.pop(scale_name, None)
-                return
-            dequantized = _dequantize_wo_a_shard(pending_wo_a_weight.pop(weight_name),
-                                                 pending_wo_a_scale.pop(scale_name),
-                                                 self.world_size,
-                                                 self.rank)
-            params_dict[weight_name].data.copy_(dequantized.to(params_dict[weight_name].dtype))
 
         for name, loaded_weight in weights:
-            if '.layers' in name:
-                if __skip_layers():
-                    continue
             if name.startswith('mtp.'):
                 continue
+
             if name.endswith('tie2eid'):
                 name = name.replace('tie2eid', 'tid2eid')
-            expert_match = re.search(r'\.ffn\.experts\.(\d+)\.(w[123])\.(weight|scale)$', name)
-            if expert_match is not None:
-                expert_id = int(expert_match.group(1))
-                mapped = _map_v4_expert_param_name(name, True)
-                assert mapped is not None
-                param_name, shard_id = mapped
-                if param_name in params_dict:
-                    load_weight(params_dict[param_name], loaded_weight, expert_id=expert_id, shard_id=shard_id)
-                    continue
-                logger.debug(f'Skip unknown DeepSeek-V4 expert weight: {name} -> {param_name}')
+            if '.ffn.' in name:
+                self._load_expert(name, loaded_weight, params_dict)
                 continue
-            if name.endswith('wo_a.weight'):
-                pending_wo_a_weight[name] = loaded_weight
-                _maybe_load_wo_a(name[:-len('.weight')])
-                continue
-            if name.endswith('wo_a.scale'):
-                pending_wo_a_scale[name] = loaded_weight
-                _maybe_load_wo_a(name[:-len('.scale')])
+            if '.attn.' in name:
+                self._load_weights_attn(name, loaded_weight, params_dict)
                 continue
             if name not in params_dict:
-                logger.debug(f'Skip unknown DeepSeek-V4 weight: {name}')
+                logger.warning(f'Skip unknown DeepSeek-V4 weight: {name}')
                 continue
             load_weight(params_dict[name], loaded_weight)
-
-        if pending_wo_a_weight or pending_wo_a_scale:
-            unresolved = sorted(set(pending_wo_a_weight) | set(pending_wo_a_scale))
-            raise RuntimeError(f'Unresolved DeepSeek-V4 wo_a weight/scale pairs: {unresolved[:4]}')
