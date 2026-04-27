@@ -173,14 +173,14 @@ class TestQwen3VLChatTemplate:
         models = [get_model_and_chat_template(model_path) for model_path in model_list]
         return models
 
-    def test_apply_chat_template(self, models, mock_messages):
+    def test_get_input_prompt(self, models, mock_messages):
         for model, chat_template in models:
             model.build_preprocessor()
             reference = model.processor.apply_chat_template(mock_messages,
                                                             add_generation_prompt=True,
                                                             tokenize=False,
                                                             return_dict=True)
-            prompt = model.apply_chat_template(mock_messages, chat_template, sequence_start=True)
+            prompt = model.get_input_prompt(mock_messages, chat_template, sequence_start=True)
             assert prompt == reference
 
     def test_pure_img_messages(self, models, mock_pure_img_messages):
@@ -190,7 +190,7 @@ class TestQwen3VLChatTemplate:
                                                             add_generation_prompt=True,
                                                             tokenize=False,
                                                             return_dict=True)
-            prompt = model.apply_chat_template(mock_pure_img_messages, chat_template, sequence_start=True)
+            prompt = model.get_input_prompt(mock_pure_img_messages, chat_template, sequence_start=True)
             assert prompt == reference
 
     def test_pure_text_messages(self, models, mock_pure_text_messages):
@@ -200,5 +200,5 @@ class TestQwen3VLChatTemplate:
                                                             add_generation_prompt=True,
                                                             tokenize=False,
                                                             return_dict=True)
-            prompt = model.apply_chat_template(mock_pure_text_messages, chat_template, sequence_start=True)
+            prompt = model.get_input_prompt(mock_pure_text_messages, chat_template, sequence_start=True)
             assert prompt == reference

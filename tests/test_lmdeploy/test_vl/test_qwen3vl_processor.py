@@ -43,11 +43,11 @@ def sample_video_messages(video_data):
 def _preprocess(model, messages, mm_processor_kwargs=None):
     """Call model.preprocess following the same flow as the engine:
 
-    apply_chat_template → input_prompt → preprocess.
+    get_input_prompt → preprocess.
     """
     from lmdeploy.model import MODELS
     chat_template = MODELS.module_dict['hf'](model_path=model.model_path)
-    input_prompt = model.apply_chat_template(messages, chat_template, sequence_start=True)
+    input_prompt = model.get_input_prompt(messages, chat_template, sequence_start=True)
     result = model.preprocess(messages=list(messages), input_prompt=input_prompt,
                               mm_processor_kwargs=mm_processor_kwargs)
     return result['multimodal'][0]
@@ -117,7 +117,7 @@ def _preprocess_by_modality(model, messages, mm_processor_kwargs=None):
     modality."""
     from lmdeploy.model import MODELS
     chat_template = MODELS.module_dict['hf'](model_path=model.model_path)
-    input_prompt = model.apply_chat_template(messages, chat_template, sequence_start=True)
+    input_prompt = model.get_input_prompt(messages, chat_template, sequence_start=True)
     result = model.preprocess(messages=list(messages), input_prompt=input_prompt,
                               mm_processor_kwargs=mm_processor_kwargs)
     by_modality = {}
