@@ -1538,7 +1538,6 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             param_name, shard_id = mapped
             if param_name in params_dict:
                 load_weight(params_dict[param_name], loaded_weight, expert_id=expert_id, shard_id=shard_id)
-            logger.debug(f'Skip unknown DeepSeek-V4 expert weight: {name} -> {param_name}')
         else:
             load_weight(params_dict[name], weight)
 
