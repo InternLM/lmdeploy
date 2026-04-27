@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Qwen3 TextModelSpec for the new pipeline.
+"""Qwen3 TextModel for the new pipeline.
 
 Qwen3 is a standard Llama-like model with QK norm and optional MoE. No shared expert in the MoE variant, no linear
 attention, no zero-centered norm.
@@ -19,7 +19,7 @@ from ..builders import (
     TextModelBuilder,
     _act_type_id,
 )
-from ..spec import TextModelSpec
+from ..text_model import TextModel
 from .base import INPUT_MODELS
 from .utils import layer_progress, reorder_rotary_emb
 
@@ -28,8 +28,8 @@ _LAYER_PATTERN = r'model\.layers\.([0-9]+).'
 
 @INPUT_MODELS.register_module(name='qwen3-moe')
 @INPUT_MODELS.register_module(name='qwen3')
-class Qwen3TextSpec(TextModelSpec):
-    """Weight spec for Qwen3 (dense) and Qwen3-MoE."""
+class Qwen3TextModel(TextModel):
+    """Weight model for Qwen3 (dense) and Qwen3-MoE."""
 
     _layer_pattern = _LAYER_PATTERN
 
@@ -211,3 +211,6 @@ class Qwen3TextSpec(TextModelSpec):
 
     def num_experts(self, layer: int) -> int:
         return self._n_experts
+
+    def qk_norm(self, weight, *, head_dim, rope_dim):
+        return self.norm(reorder_rotary_emb(weight, head_dim, rope_dim))

@@ -45,6 +45,7 @@ htmlcov/
 .coverage.*
 .cache
 *build*/
+!lmdeploy/turbomind/builders
 !builder/
 lmdeploy/lib/
 lmdeploy/bin/

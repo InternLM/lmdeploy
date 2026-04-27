@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import torch
 
-from ..linear import Linear
-from ._base import Builder, SplitSide, _ensure_compatible_formats
+from ..linear import Linear, concat_out_dim, dequant_mixed
+from ._base import Builder, SplitSide
 
 
 def tp_interleave_tensor(t: torch.Tensor, tp: int, d: int) -> torch.Tensor:
@@ -54,7 +54,7 @@ def fuse_gdn(q: Linear, k: Linear, v: Linear,
     components = [q, k, v, z, b, a]
 
     if tp <= 1:
-        return Linear.concat_out_dim(components)
+        return concat_out_dim(components)
 
     first = components[0]
     fused_tensors: dict[str, torch.Tensor] = {}
@@ -115,15 +115,12 @@ class DeltaNetBuilder(Builder):
                               qkv_split):
         """Fuse GDN input projections via pipeline, commit all linears.
 
-        Pipeline: split_qkv -> ensure_compatible_formats -> fuse_gdn -> commit.
+        Pipeline: split_qkv -> dequant_mixed -> fuse_gdn -> commit.
         """
         q, k, v = split_qkv(in_proj_qkv, qkv_split)
-        group = _ensure_compatible_formats(
-            {'q': q, 'k': k, 'v': v, 'z': in_proj_z, 'b': in_proj_b, 'a': in_proj_a},
-            data_type=self.config.data_type)
-        fused = fuse_gdn(group['q'], group['k'], group['v'],
-                         group['z'], group['b'], group['a'],
-                         tp=self._tp)
+        q, k, v, z, b, a = dequant_mixed(q, k, v, in_proj_z, in_proj_b, in_proj_a,
+                                           data_type=self.config.data_type)
+        fused = fuse_gdn(q, k, v, z, b, a, tp=self._tp)
         self._add_linear('in_proj_all', fused, SplitSide.OUTPUT)
         if out_proj is not None:
             self._add_linear('out_proj', out_proj, SplitSide.INPUT)

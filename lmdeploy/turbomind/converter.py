@@ -99,7 +99,7 @@ def _validate_quant_group_size(model_format: str | None, group_size: int | None)
     return group_size
 
 
-def get_spec_registered_name(model_path: str, model_format: str):
+def get_registered_name(model_path: str, model_format: str):
     """Get the registered name of a model. The name will be used to access the
     INPUT_MODELS registry.
 
@@ -140,10 +140,10 @@ def get_tm_config(model_path,
                   engine_config: TurbomindEngineConfig,
                   group_size: int = None):
     """Resolve dtype/model_format/group_size/session_len, mutate engine_config
-    in place, build the spec.
+    in place, build the text model.
 
     Returns:
-        tuple: (spec, model_path)
+        tuple: (text_model, model_path)
     """
     # 1. Load HF config once; reused for quant_config, dtype, and session_len.
     _, hf_model_cfg = get_model_arch(model_path)
@@ -218,13 +218,13 @@ def get_tm_config(model_path,
     engine_config.attn_cp_size = engine_config.attn_cp_size or 1
     engine_config.mlp_tp_size = engine_config.mlp_tp_size or 1
 
-    # 6. Build spec (hf_overrides handling unchanged).
+    # 6. Build text model (hf_overrides handling unchanged).
     hf_cfg = load_model_config(model_path)
     if engine_config.hf_overrides:
         logger.warning(f'Overriding HF config with {engine_config.hf_overrides}')
         _deep_merge(hf_cfg, engine_config.hf_overrides)
-    spec_name = get_spec_registered_name(model_path, engine_config.model_format)
-    spec_cls = INPUT_MODELS.get(spec_name)
-    spec = spec_cls(hf_cfg, engine_config, resolver=resolver)
+    registered_name = get_registered_name(model_path, engine_config.model_format)
+    model_cls = INPUT_MODELS.get(registered_name)
+    text_model = model_cls(hf_cfg, engine_config, resolver=resolver)
 
-    return spec, model_path
+    return text_model, model_path

@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Qwen3.5 TextModelSpec for the new pipeline."""
+"""Qwen3.5 TextModel for the new pipeline."""
 from __future__ import annotations
 
 import re
@@ -19,7 +19,7 @@ from ..builders import (
     _act_type_id,
 )
 from ..builders.attention import split_output_gate
-from ..spec import TextModelSpec
+from ..text_model import TextModel
 from .base import INPUT_MODELS
 from .utils import layer_progress, read_packed_moe_expert, reorder_rotary_emb
 
@@ -33,8 +33,8 @@ def map_packed_qwen35_experts(name: str) -> str:
 
 @INPUT_MODELS.register_module(name='qwen3_5-moe')
 @INPUT_MODELS.register_module(name='qwen3_5')
-class Qwen3_5Spec(TextModelSpec):
-    """Weight spec for Qwen3.5 (dense + linear-attn + optional MoE)."""
+class Qwen3_5Model(TextModel):
+    """Weight model for Qwen3.5 (dense + linear-attn + optional MoE)."""
 
     _layer_pattern = _LAYER_PATTERN
     _loader_mappings = [map_packed_qwen35_experts]
@@ -177,6 +177,9 @@ class Qwen3_5Spec(TextModelSpec):
         if w is not None:
             return w.float() + 1.0
         return None
+
+    def qk_norm(self, weight, *, head_dim, rope_dim):
+        return self.norm(reorder_rotary_emb(weight, head_dim, rope_dim))
 
     # ------------------------------------------------------------------
     # Attention / linear-attention factories

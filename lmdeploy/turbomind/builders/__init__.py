@@ -2,7 +2,8 @@
 """Builder sub-package — spec-driven module loading for TurboMind."""
 from __future__ import annotations
 
-from ._base import Builder, BuiltModule, SplitSide, TextModelBuilder, _act_type_id, _cpp_dtype, _torch_dtype_to_cpp
+from ._base import Builder, BuiltModule, SplitSide, _act_type_id, _cpp_dtype, _torch_dtype_to_cpp
+from .text_model import TextModelBuilder
 from .attention import AttentionBuilder
 from .decoder_layer import DecoderLayerBuilder, DecoderLayerConfig
 from .deltanet import DeltaNetBuilder

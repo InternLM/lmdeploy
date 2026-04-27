@@ -9,7 +9,7 @@ import torch
 
 from lmdeploy.archs import get_model_arch
 
-from ..builders._base import _dequant_linear
+from ..linear import _dequant_linear
 from ..linear import Linear
 
 
@@ -250,7 +250,7 @@ def _pad_kv_head(kv_head_num: int, attn_tp: int) -> int:
 
 
 def layer_progress(num_layers: int):
-    """Tqdm iterable for spec.layers() per-layer conversion loops.
+    """Tqdm iterable for model.layers() per-layer conversion loops.
 
     Yields the layer indices 0..num_layers-1, displaying a single-line
     progress bar on stderr. ``leave=False`` clears the bar when the loop

@@ -12,8 +12,8 @@ import math
 
 import torch
 
-from ..linear import Linear, pad_in_dim, pad_out_dim
-from ._base import Builder, SplitSide, transform_input_dim, transform_output_dim
+from ..linear import Linear, pad_in_dim, pad_out_dim, transform_input_dim, transform_output_dim
+from ._base import Builder, SplitSide
 
 __all__ = [
     'FfnBuilder',

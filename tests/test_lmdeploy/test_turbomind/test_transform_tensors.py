@@ -93,8 +93,8 @@ _load_module_from_file('lmdeploy.turbomind.weight_format', _wf_path)
 # Load builder/_base.py
 _base_path = os.path.join(_repo_root, 'lmdeploy', 'turbomind', 'builders', '_base.py')
 _base_mod = _load_module_from_file('lmdeploy.turbomind.builders._base', _base_path)
-transform_output_dim = _base_mod.transform_output_dim
-transform_input_dim = _base_mod.transform_input_dim
+transform_output_dim = _linear_mod.transform_output_dim
+transform_input_dim = _linear_mod.transform_input_dim
 
 # Register builder sub-package
 _builder_pkg = sys.modules.get('lmdeploy.turbomind.builders')

@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""TextModelSpec — per-architecture spec owning HF parsing and C++ configs."""
+"""TextModel — per-architecture model owning HF parsing and C++ configs."""
 from __future__ import annotations
 
 from abc import ABC
@@ -10,7 +10,7 @@ import torch
 from lmdeploy.utils import get_logger
 
 from .builders import NormBuilder, make_norm_config
-from .models.utils import parse_rope_param, reorder_rotary_emb, rope_type_to_int
+from .models.utils import parse_rope_param, rope_type_to_int
 
 if TYPE_CHECKING:
     from lmdeploy.messages import TurbomindEngineConfig
@@ -18,8 +18,8 @@ if TYPE_CHECKING:
 logger = get_logger('lmdeploy')
 
 
-class TextModelSpec(ABC):
-    """Text model spec: HF config -> C++ configs + weight commits.
+class TextModel(ABC):
+    """Text model: HF config -> C++ configs + weight commits.
 
     Subclass contract:
       - __init__ takes (hf_cfg, engine_cfg), calls super().__init__, then
@@ -153,14 +153,14 @@ class TextModelSpec(ABC):
             rope_cfg.mrope_section = self._rope.mrope_section
 
     # ------------------------------------------------------------------
-    # Norm factories (shared across all specs)
+    # Norm factories (shared across all models)
     # ------------------------------------------------------------------
 
     def norm(self, weight, *, dim=None, data_type=None):
-        """Build a NormBuilder for *weight* under this spec's contexts.
+        """Build a NormBuilder for *weight* under this model's contexts.
 
         ``dim`` defaults to ``weight.shape[-1]``. ``data_type`` defaults to
-        the spec's compute dtype.
+        the model's compute dtype.
         """
         cfg = make_norm_config(
             dim=dim if dim is not None else weight.shape[-1],
@@ -171,10 +171,3 @@ class TextModelSpec(ABC):
         m.set_weight(weight)
         return m.build()
 
-    def qk_norm(self, weight, *, head_dim, rope_dim):
-        """Build a per-head NormBuilder that follows the Q/K RoPE layout.
-
-        ``head_dim`` and ``rope_dim`` match the values passed to
-        ``reorder_rotary_emb`` on the sibling Q/K projections.
-        """
-        return self.norm(reorder_rotary_emb(weight, head_dim, rope_dim))

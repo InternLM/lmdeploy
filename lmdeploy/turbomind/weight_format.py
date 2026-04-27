@@ -117,7 +117,7 @@ class WeightFormat(ABC):
 
     Equality / hashing: two WeightFormats are equal iff they share class
     and block sizes. This matters for the set-based uniformity checks in
-    ``Linear.concat_out_dim``.
+    ``concat_out_dim``.
     """
 
     name:           ClassVar[str]

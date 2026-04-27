@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""GLM-4 MoE Lite (GLM-4.7-Flash) TextModelSpec for the new pipeline."""
+"""GLM-4 MoE Lite (GLM-4.7-Flash) TextModel for the new pipeline."""
 from __future__ import annotations
 
 import _turbomind as _tm
@@ -15,7 +15,7 @@ from ..builders import (
     TextModelBuilder,
     _act_type_id,
 )
-from ..spec import TextModelSpec
+from ..text_model import TextModel
 from .base import INPUT_MODELS
 from .utils import get_yarn_params, layer_progress, parse_rope_param
 
@@ -23,8 +23,8 @@ _LAYER_PATTERN = r'model\.layers\.([0-9]+).'
 
 
 @INPUT_MODELS.register_module(name='glm4-moe-lite')
-class Glm4MoeLiteSpec(TextModelSpec):
-    """Weight spec for GLM-4 MoE Lite (e.g. GLM-4.7-Flash)."""
+class Glm4MoeLiteModel(TextModel):
+    """Weight model for GLM-4 MoE Lite (e.g. GLM-4.7-Flash)."""
 
     _layer_pattern = _LAYER_PATTERN
 

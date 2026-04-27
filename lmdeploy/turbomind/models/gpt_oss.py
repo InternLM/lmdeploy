@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Gpt-oss TextModelSpec for the new pipeline."""
+"""Gpt-oss TextModel for the new pipeline."""
 from __future__ import annotations
 
 import re
@@ -17,7 +17,7 @@ from ..builders import (
     TextModelBuilder,
     _act_type_id,
 )
-from ..spec import TextModelSpec
+from ..text_model import TextModel
 from .base import INPUT_MODELS
 from .utils import layer_progress, read_packed_moe_expert, reorder_rotary_emb
 
@@ -33,8 +33,8 @@ def map_experts(s: str) -> str:
 
 
 @INPUT_MODELS.register_module(name='gpt-oss')
-class GptOssSpec(TextModelSpec):
-    """Weight spec for gpt-oss (MoE with packed experts)."""
+class GptOssModel(TextModel):
+    """Weight model for gpt-oss (MoE with packed experts)."""
 
     _layer_pattern = _LAYER_PATTERN
     _loader_mappings = [map_experts]

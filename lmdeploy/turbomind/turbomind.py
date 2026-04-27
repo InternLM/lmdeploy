@@ -219,9 +219,9 @@ class TurboMind:
         from .converter import get_tm_config
         from .model_loader import ModelLoader
 
-        spec, model_path = get_tm_config(model_path, engine_config)
+        text_model, model_path = get_tm_config(model_path, engine_config)
 
-        self._vocab_size = spec._vocab_size
+        self._vocab_size = text_model._vocab_size
         self.engine_config = engine_config
 
         dtype_map = {
@@ -264,7 +264,7 @@ class TurboMind:
         self._create_weight(model_comm)
 
         self._model_loader = ModelLoader(
-            spec=spec,
+            model=text_model,
             model_comm=model_comm,
             gpu_count=self.gpu_count,
             model_path=model_path)

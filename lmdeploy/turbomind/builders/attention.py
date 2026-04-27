@@ -11,30 +11,12 @@ from __future__ import annotations
 
 import torch
 
-from ..linear import Linear
-from ._base import Builder, SplitSide, _dequant_linear, transform_output_dim
+from ..linear import Linear, dequant_mixed, transform_output_dim
+from ._base import Builder, SplitSide
 
 # ---------------------------------------------------------------------------
 # New pipeline functions (replacing merge_qkv_linear)
 # ---------------------------------------------------------------------------
-
-
-def dequant_mixed(*linears: Linear, data_type) -> tuple[Linear, ...]:
-    """Dequantize to trivial if any arg is in trivial format.
-
-    When any Linear has trivial weight format (e.g. from RoPE reordering), dequantize all non-trivial args so formats
-    match for fusion. None args pass through unchanged.
-    """
-    has_trivial = any(
-        l is not None
-        and l.weight_format is not None
-        and l.weight_format.name == 'trivial'
-        for l in linears
-    )
-    if not has_trivial:
-        return linears
-    return tuple(_dequant_linear(l, data_type=data_type) if l is not None else l
-                 for l in linears)
 
 
 def _infer_heads(linear: Linear, head_dim: int) -> int:
