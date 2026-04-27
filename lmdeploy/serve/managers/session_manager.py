@@ -221,9 +221,6 @@ class SessionManager:
         for session in list(self.sessions.values()):
             tasks.append(session.async_abort())
         await asyncio.gather(*tasks, return_exceptions=True)
-        # "abort all" is designed for async RL. The aborted sessions will be no longer used,
-        # so we clear the sessions here.
-        self.sessions.clear()
 
     def has(self, session_id):
         return session_id in self.sessions
