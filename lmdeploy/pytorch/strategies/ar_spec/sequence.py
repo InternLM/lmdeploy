@@ -30,8 +30,6 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
     def __post_init__(self):
         """Post init."""
         super().__post_init__()
-        self._num_spec_ids: int = 0
-        self._num_new_valid: int = 0
         self._num_valid_ids: int = len(self.history_cache)
         self._strategy: ARSpecSequenceStrategy = self._seq_meta.strategy
 
@@ -40,8 +38,15 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
         return self._num_valid_ids
 
     @property
-    def num_spec_ids(self):
-        return self._num_spec_ids
+    def routed_experts(self) -> np.ndarray:
+        if (not self.return_routed_experts) or self.all_routed_experts is None:
+            return None
+
+        end = max(0, self.num_valid_ids - 1)
+        if 0 < end <= len(self.all_routed_experts):
+            return self.all_routed_experts.get_real()[:end]
+        else:
+            return None
 
     @property
     def generated_ids(self) -> np.ndarray:
@@ -49,70 +54,57 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
         start = end - self.num_new_tokens
         return self.history_cache[start:end]
 
-    def set_stop_pos(self, pos: int):
-        val = self._num_new_valid - pos - 1
-        self._num_valid_ids -= val
-        self.num_new_tokens -= val
-        self._num_token_ids = 1
-        self._num_history_ids -= val
-
-        self._num_spec_ids = 0
-        self._num_new_valid = 0
-        self.history_cache.resize(self.num_valid_ids)
-
     def _update_token_ids_inputs(self, token_ids: np.ndarray):
         """Append tokens."""
         num_tokens = len(token_ids)
         self.output_start_pos = self.num_valid_ids + num_tokens
-        self._num_valid_ids = self.num_history_ids + num_tokens
+        self._num_valid_ids = self._num_valid_ids + num_tokens
         self._num_token_ids = num_tokens
         self.num_new_tokens = 0
-        self._num_spec_ids = 0
-        self._num_new_valid = 0
         self.history_cache.append(token_ids)
 
-    def _update_token_ids_prefill(self, token_ids: np.ndarray, draft_token_ids: np.ndarray):
+    def _update_token_ids_prefill(self, token_ids: np.ndarray, draft_token_ids: np.ndarray,
+                                  stop_pos: int = -1, routed_experts: np.ndarray = None):
         """Update token ids for prefill."""
         num_valid = len(token_ids)
-        self._num_spec_ids = len(draft_token_ids)
-        token_ids = np.concatenate([token_ids, draft_token_ids])
-        num_tokens = len(token_ids)
-        self._num_history_ids += self._num_token_ids
-        self._num_token_ids = num_tokens
-        self.num_new_tokens += num_valid
-        self._num_new_valid = num_valid
-        self._num_valid_ids = self.num_history_ids + num_valid
         self.history_cache.append(token_ids)
+        self.append_routed_experts(routed_experts)
+        self._num_history_ids += self._num_token_ids
+        self.num_new_tokens += num_valid
+        self._num_valid_ids = self.num_history_ids + num_valid
+        self._num_token_ids = num_valid
+        if stop_pos == -1:
+            # not stopping, add drafted tokens
+            self._num_token_ids += len(draft_token_ids)
+            self.history_cache.append(draft_token_ids)
 
-    def _update_token_ids_decode(self, token_ids: np.ndarray, draft_token_ids: np.ndarray = None):
+    def _update_token_ids_decode(self, token_ids: np.ndarray, draft_token_ids: np.ndarray,
+                                 stop_pos: int = -1, routed_experts: np.ndarray = None):
         """Update token ids for decode."""
-        valid_ids = token_ids[token_ids > -1]
-        num_valid = len(valid_ids)
-        self.num_new_tokens = self.num_new_tokens + num_valid
+        # back to last valid position
+        self.history_cache.resize(self.num_valid_ids)
 
-        self._num_new_valid = num_valid
+        valid_ids = token_ids[token_ids > -1]
+        if stop_pos > -1:
+            valid_ids = valid_ids[:stop_pos+1]
+
+        num_valid = len(valid_ids)
+        self.num_new_tokens += num_valid
         self._num_valid_ids += num_valid
         self._num_history_ids = self.num_valid_ids - 1
+        # append the last accepted tokens
+        self.history_cache.append(valid_ids)
+        # append valid experts
+        if routed_experts is not None:
+            routed_experts = routed_experts[:num_valid]
+            self.append_routed_experts(routed_experts)
 
-        # last step has spec ids
-        if self.num_spec_ids > 0:
-            token_ids = valid_ids[-1:]
+        if stop_pos > -1:
+            self._num_token_ids = 1
         else:
-            token_ids = valid_ids
-
-        num_tokens = len(token_ids)
-
-        if draft_token_ids is not None:
-            num_tokens = 1 + len(draft_token_ids)
-            token_ids = np.concatenate([token_ids, draft_token_ids])
-            self._num_spec_ids = len(draft_token_ids)
-        else:
-            self._num_spec_ids = 0
-
-        self._num_token_ids = num_tokens
-        if self.num_history_ids < len(self.history_cache):
-            self.history_cache.resize(self.num_history_ids)
-        self.history_cache.append(token_ids)
+            # add new draft tokens if not stopped
+            self.history_cache.append(draft_token_ids)
+            self._num_token_ids = 1 + len(draft_token_ids)
 
     def update_token_ids(self,
                          token_ids: Tensor,
@@ -122,6 +114,7 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
                          draft_token_ids: Tensor = None,
                          mode: UpdateTokenMode = UpdateTokenMode.INPUTS,
                          routed_experts: np.ndarray = None,
+                         stop_pos: int = -1,
                          **kwargs):
         """Update token ids, old token ids will be added to history."""
         # update history image nums
@@ -134,24 +127,41 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
 
         token_ids: np.ndarray = _to_ndarray(token_ids)
 
-        # record cached expert ids
-        if routed_experts is not None:
-            num_reject_tokens = (token_ids == -1).sum().item()
-            routed_experts = routed_experts[:routed_experts.shape[0] - num_reject_tokens]
-            self.append_routed_experts(routed_experts)
-
         if draft_token_ids is not None:
             draft_token_ids = _to_ndarray(draft_token_ids)
         if mode == UpdateTokenMode.INPUTS:
             self._update_token_ids_inputs(token_ids)
         elif mode == UpdateTokenMode.PREFILL:
-            self._update_token_ids_prefill(token_ids, draft_token_ids)
+            self._update_token_ids_prefill(token_ids, draft_token_ids,
+                                           stop_pos=stop_pos, routed_experts=routed_experts)
         else:
-            self._update_token_ids_decode(token_ids, draft_token_ids)
+            self._update_token_ids_decode(token_ids, draft_token_ids,
+                                          stop_pos=stop_pos, routed_experts=routed_experts)
         if model_meta is not None:
             self.model_meta = model_meta
 
         self._update_mrope_pos_ids()
+
+    def set_step(self, step: int):
+        """Set step."""
+        num_valid_ids = self.num_valid_ids
+        # update step for vlm
+        if len(self.history_embeddings) > 0:
+            new_step, self._num_history_images, self._num_images = \
+                self.history_embeddings.get_step(step)
+            assert 0 <= new_step <= step
+            step = new_step
+        self._num_history_ids = step
+        self._num_token_ids = num_valid_ids - step
+        self.num_ignored_history = min(step, self.num_ignored_history)
+
+        self.history_cache.resize(num_valid_ids)
+        self.model_meta = None
+
+        if self.return_routed_experts:
+            # chunk long context might not have all routed experts
+            if len(self.all_routed_experts) > step:
+                self.all_routed_experts.resize(step)
 
 
 class ARSpecSequenceStrategy(ARSequenceStrategy):
@@ -219,7 +229,7 @@ class ARSpecSequenceStrategy(ARSequenceStrategy):
                                  draft_token_ids=cur_draft_tokens,
                                  model_meta=model_meta,
                                  mode=update_mode,
-                                 routed_experts=routed_experts)
+                                 routed_experts=routed_experts,
+                                 stop_pos=stop_pos[idx])
             if stop:
-                msg.set_stop_pos(stop_pos[idx])
                 msg.state.finish()

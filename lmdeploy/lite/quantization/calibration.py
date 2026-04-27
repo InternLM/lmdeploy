@@ -265,7 +265,9 @@ def auto_scale_block(module, module_kwargs, w_bit, w_group_size, input_feat, mod
         module_kwargs.pop('use_cache')
 
     # find the best scale ratio
-    def _search_module_scale(block, linears2scale: list, x, kwargs={}):
+    def _search_module_scale(block, linears2scale: list, x, kwargs=None):
+        if kwargs is None:
+            kwargs = {}
         x = x.to(next(block.parameters()).device)
         with torch.no_grad():
             org_out = block(x, **kwargs)
@@ -313,7 +315,9 @@ def auto_scale_block(module, module_kwargs, w_bit, w_group_size, input_feat, mod
             raise Exception
         return best_ratio
 
-    def _auto_get_scale(layers, inp, module2inspect=None, kwargs={}):
+    def _auto_get_scale(layers, inp, module2inspect=None, kwargs=None):
+        if kwargs is None:
+            kwargs = {}
         # module2inspect: if given, we will check the output diff of
         #  this module instead of layers
         if module2inspect is None:
