@@ -1,9 +1,9 @@
-# llm-compressor 支持
+# llm-compressor-int4 支持
 
-本指南旨在介绍如何使用 LMDeploy 的 TurboMind 推理引擎，运行经由 [vllm-project/llm-compressor](https://github.com/vllm-project/llm-compressor)工具量化后的模型。
-目前支持的 `llm-compressor` 量化模型包括：
+本指南旨在介绍如何使用 LMDeploy 的 TurboMind 推理引擎，运行经由 [vllm-project/llm-compressor](https://github.com/vllm-project/llm-compressor)工具进行int4量化后的模型。
+目前支持的 `llm-compressor-int4` 量化模型包括：
 
-- int4 量化（例如 AWQ、GPTQ）
+- AWQ、GPTQ
 
 上述量化模型通过 TurboMind 引擎可以在以下 NVIDIA GPU 架构上运行：
 
@@ -19,7 +19,7 @@
 | 9.0                | Hopper             | H20, H200, H100, GH200          |
 | 12.0               | Blackwell          | GeForce RTX 50 series           |
 
-LMDeploy 将持续跟进并扩展对 `llm-compressor` 项目的支持。
+LMDeploy 将持续跟进并扩展对 `llm-compressor-int4` 项目的支持。
 
 本文的其余部分由以下章节组成：
 
@@ -33,8 +33,8 @@ LMDeploy 将持续跟进并扩展对 `llm-compressor` 项目的支持。
 
 ## 模型量化
 
-`llm-compressor` 提供了丰富的模型量化[用例](https://github.com/vllm-project/llm-compressor/tree/main/examples)，请参考其教程选择 LMDeploy 支持的量化算法，完成模型量化工作。
-LMDeploy 也内置了通过 `llm-compressor` 对 Qwen3-30B-A3B 进行 AWQ 量化的[脚本](https://github.com/InternLM/lmdeploy/blob/main/examples/lite/qwen3_30b_a3b_awq.py)，供大家进行参考：
+`llm-compressor-int4` 提供了丰富的模型量化[用例](https://github.com/vllm-project/llm-compressor/tree/main/examples)，请参考其教程选择 LMDeploy 支持的量化算法，完成模型量化工作。
+LMDeploy 也内置了通过 `llm-compressor-int4` 对 Qwen3-30B-A3B 进行 AWQ 量化的[脚本](https://github.com/InternLM/lmdeploy/blob/main/examples/lite/int4/qwen3_30b_a3b_awq.py)，供大家进行参考：
 
 ```shell
 # 创建 conda 环境
@@ -47,7 +47,7 @@ pip install llmcompressor
 # 下载 lmdeploy 源码，运行量化用用例
 git clone https://github.com/InternLM/lmdeploy
 cd lmdeploy
-python examples/lite/qwen3_30b_a3b_awq.py --work-dir ./qwen3_30b_a3b_awq
+python examples/lite/int4/qwen3_30b_a3b_awq.py --work-dir ./qwen3_30b_a3b_awq
 
 ```
 
