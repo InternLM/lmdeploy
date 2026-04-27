@@ -3,11 +3,23 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from lmdeploy.messages import GenerationConfig
+from lmdeploy.serve.openai.protocol import Tool, ToolChoice, ToolChoiceFuncName
 
-from .protocol import CountTokensRequest, MessagesRequest, TextContentBlockParam
+from .protocol import (
+    CountTokensRequest,
+    MessagesRequest,
+    MessageTextBlock,
+    MessageThinkingBlock,
+    MessageToolUseBlock,
+    TextContentBlockParam,
+    ToolChoiceParam,
+    ToolChoiceToolParam,
+    ToolParam,
+)
 
 
 def get_model_list(server_context) -> list[str]:
@@ -26,6 +38,76 @@ def ensure_tools_not_requested(request: MessagesRequest | CountTokensRequest) ->
         raise NotImplementedError('Anthropic tool fields are temporarily unsupported.')
     if getattr(request, 'tool_choice', None) is not None:
         raise NotImplementedError('Anthropic tool_choice is temporarily unsupported.')
+
+
+def to_openai_tools(tools: list[ToolParam] | None) -> list[Tool] | None:
+    """Convert Anthropic tools into OpenAI protocol tool entries."""
+
+    if not tools:
+        return None
+    return [
+        Tool(
+            type='function',
+            function=dict(
+                name=tool.name,
+                description=tool.description,
+                parameters=tool.input_schema,
+            ),
+        ) for tool in tools
+    ]
+
+
+def normalize_tool_choice(tool_choice: ToolChoiceParam | str | None) -> ToolChoice | str:
+    """Map Anthropic tool choice values to OpenAI-compatible values."""
+
+    if tool_choice is None:
+        return 'auto'
+    if isinstance(tool_choice, str):
+        if tool_choice == 'any':
+            return 'required'
+        return tool_choice
+    if isinstance(tool_choice, ToolChoiceToolParam):
+        return ToolChoice(function=ToolChoiceFuncName(name=tool_choice.name))
+    if tool_choice.type == 'any':
+        return 'required'
+    return 'auto'
+
+
+def _safe_parse_tool_input(arguments: str | None) -> dict[str, Any]:
+    if not arguments:
+        return {}
+    try:
+        parsed = json.loads(arguments)
+    except json.JSONDecodeError:
+        return dict(raw_arguments=arguments)
+    if isinstance(parsed, dict):
+        return parsed
+    return dict(value=parsed)
+
+
+def build_message_content_blocks(
+    text: str | None,
+    tool_calls: list[Any] | None,
+    reasoning_content: str | None,
+) -> list[MessageTextBlock | MessageThinkingBlock | MessageToolUseBlock]:
+    """Build Anthropic message content blocks from parser outputs."""
+
+    blocks: list[MessageTextBlock | MessageThinkingBlock | MessageToolUseBlock] = []
+    if reasoning_content:
+        blocks.append(MessageThinkingBlock(thinking=reasoning_content))
+    if text:
+        blocks.append(MessageTextBlock(text=text))
+    if tool_calls:
+        for tool_call in tool_calls:
+            if getattr(tool_call, 'type', None) != 'function' or not getattr(tool_call, 'function', None):
+                continue
+            blocks.append(
+                MessageToolUseBlock(
+                    id=tool_call.id,
+                    name=tool_call.function.name,
+                    input=_safe_parse_tool_input(tool_call.function.arguments),
+                ))
+    return blocks
 
 
 def _text_from_blocks(blocks: list[TextContentBlockParam | dict[str, Any]], field_name: str) -> str:
@@ -98,7 +180,7 @@ def map_finish_reason(reason: str | None) -> str:
     mapping = {
         'stop': 'end_turn',
         'length': 'max_tokens',
-        'tool_calls': 'stop_sequence',
+        'tool_calls': 'tool_use',
         'abort': 'stop_sequence',
         'error': 'stop_sequence',
     }

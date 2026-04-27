@@ -38,6 +38,36 @@ class MessageParam(BaseModel):
     content: str | list[TextContentBlockParam]
 
 
+class ToolParam(BaseModel):
+    """Anthropic tool definition in request body."""
+
+    name: str
+    description: str | None = None
+    input_schema: dict[str, Any]
+
+
+class ToolChoiceAutoParam(BaseModel):
+    """Let model decide whether to call tools."""
+
+    type: Literal['auto'] = 'auto'
+
+
+class ToolChoiceAnyParam(BaseModel):
+    """Require model to call at least one tool."""
+
+    type: Literal['any'] = 'any'
+
+
+class ToolChoiceToolParam(BaseModel):
+    """Require one concrete tool by name."""
+
+    type: Literal['tool'] = 'tool'
+    name: str
+
+
+ToolChoiceParam = ToolChoiceAutoParam | ToolChoiceAnyParam | ToolChoiceToolParam
+
+
 class MessagesRequest(BaseModel):
     """Request body for ``POST /v1/messages``."""
 
@@ -51,8 +81,8 @@ class MessagesRequest(BaseModel):
     top_p: float | None = None
     top_k: int | None = None
     metadata: dict[str, Any] | None = None
-    tools: list[dict[str, Any]] | None = None
-    tool_choice: str | dict[str, Any] | None = None
+    tools: list[ToolParam] | None = None
+    tool_choice: ToolChoiceParam | Literal['auto', 'any'] | None = None
     service_tier: Literal['auto', 'standard_only'] | None = None
 
 
@@ -61,6 +91,22 @@ class MessageTextBlock(BaseModel):
 
     type: Literal['text'] = 'text'
     text: str
+
+
+class MessageThinkingBlock(BaseModel):
+    """Output thinking content block."""
+
+    type: Literal['thinking'] = 'thinking'
+    thinking: str
+
+
+class MessageToolUseBlock(BaseModel):
+    """Output tool use content block."""
+
+    type: Literal['tool_use'] = 'tool_use'
+    id: str
+    name: str
+    input: dict[str, Any]
 
 
 class MessageUsage(BaseModel):
@@ -76,9 +122,9 @@ class MessagesResponse(BaseModel):
     id: str = Field(default_factory=lambda: f'msg_{shortuuid.random()}')
     type: Literal['message'] = 'message'
     role: Literal['assistant'] = 'assistant'
-    content: list[MessageTextBlock]
+    content: list[MessageTextBlock | MessageThinkingBlock | MessageToolUseBlock]
     model: str
-    stop_reason: Literal['end_turn', 'max_tokens', 'stop_sequence'] | None = None
+    stop_reason: Literal['end_turn', 'max_tokens', 'stop_sequence', 'tool_use'] | None = None
     stop_sequence: str | None = None
     usage: MessageUsage
 
@@ -89,7 +135,7 @@ class CountTokensRequest(BaseModel):
     model: str
     messages: list[MessageParam]
     system: str | list[TextContentBlockParam] | None = None
-    tools: list[dict[str, Any]] | None = None
+    tools: list[ToolParam] | None = None
 
 
 class CountTokensResponse(BaseModel):
@@ -114,3 +160,32 @@ class AnthropicModelList(BaseModel):
     has_more: bool = False
     first_id: str | None = None
     last_id: str | None = None
+
+
+class TextDelta(BaseModel):
+    """Delta payload for text content blocks."""
+
+    type: Literal['text_delta'] = 'text_delta'
+    text: str
+
+
+class ThinkingDelta(BaseModel):
+    """Delta payload for thinking content blocks."""
+
+    type: Literal['thinking_delta'] = 'thinking_delta'
+    thinking: str
+
+
+class InputJsonDelta(BaseModel):
+    """Delta payload for tool_use input JSON fragments."""
+
+    type: Literal['input_json_delta'] = 'input_json_delta'
+    partial_json: str
+
+
+class ContentBlockDeltaEvent(BaseModel):
+    """SSE content block delta event payload."""
+
+    type: Literal['content_block_delta'] = 'content_block_delta'
+    index: int
+    delta: TextDelta | ThinkingDelta | InputJsonDelta
