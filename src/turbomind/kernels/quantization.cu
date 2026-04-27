@@ -66,9 +66,9 @@ void QuantizeSymm(Tensor& out, Tensor& scale, const Tensor& src, cudaStream_t st
     TM_CHECK_EQ(src.ndim(), 2);
     TM_CHECK_EQ(src.stride(1), 1);  // row-major
 
-    const auto [num, dim] = src.shapes(0, 1);
+    const auto num = src.shape(0);
+    const auto dim = src.shape(1);
 
-    using T      = bfloat16_t;
     using Tout   = fp8_e4m3_t;
     using Tscale = float;
 
@@ -99,15 +99,20 @@ void QuantizeSymm(Tensor& out, Tensor& scale, const Tensor& src, cudaStream_t st
 
     constexpr int block_dim = 512;
 
-    quant_symm_row<vec_size, group_size><<<num, block_dim, 0, st>>>(out.data<Tout>(),  //
-                                                                    out.stride(0),
-                                                                    scale.data<Tscale>(),
-                                                                    scale.stride(0),
-                                                                    src.data<T>(),
-                                                                    src.stride(0),
-                                                                    num,
-                                                                    dim,
-                                                                    448.f);
+    auto invoke = [&](auto t) {
+        using T = decltype(t);
+        quant_symm_row<vec_size, group_size><<<num, block_dim, 0, st>>>(out.data<Tout>(),  //
+                                                                        out.stride(0),
+                                                                        scale.data<Tscale>(),
+                                                                        scale.stride(0),
+                                                                        src.data<T>(),
+                                                                        src.stride(0),
+                                                                        num,
+                                                                        dim,
+                                                                        448.f);
+    };
+
+    TM_DISPATCH_PRIMARY_DTYPES(src.dtype(), invoke);
 }
 
 template<int vec_size, int group_size, class Tout, class Tscale, class T>

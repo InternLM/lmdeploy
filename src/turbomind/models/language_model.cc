@@ -15,11 +15,11 @@
 #include "src/turbomind/generation/generation.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
 #include "src/turbomind/models/input_processor.h"
-#include "src/turbomind/models/llama/LlamaWeight.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/unified_decoder.h"
+#include "src/turbomind/models/model_weight.h"
 #include "src/turbomind/models/output_processor.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -33,11 +33,8 @@ using std::unique_ptr;
 using std::shared_ptr;
 
 struct LanguageModel::Impl {
-    const DataType       dtype_;
-    const ModelParam     param_;
-    const AttentionParam attn_param_;
     const Communicators& comm_;
-    const LlamaWeight&   weights_;
+    const ModelWeight&   weights_;
     LlamaLinear&         linear_;
 
     const int  tp_size_;
@@ -102,14 +99,7 @@ struct LanguageModel::Impl {
         }
     }
 
-    Impl(DataType              dtype,
-         const ModelParam&     model,
-         const EngineParam&    engine,
-         const AttentionParam& attn,
-         const MoeParam&       moe,
-         const Context&        ctx,
-         const LlamaWeight&    weights,
-         int                   phases);
+    Impl(const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases);
 
     Tensor LookupEmbedding(const Buffer_<int>& input_ids, Buffer symm_buf);
     Tensor PostEmbedding(const Tensor& features, Buffer symm_buf);
@@ -121,17 +111,7 @@ struct LanguageModel::Impl {
     void Fetch(int phase, TensorMap& env);
 };
 
-LanguageModel::Impl::Impl(DataType              dtype,
-                          const ModelParam&     model,
-                          const EngineParam&    engine,
-                          const AttentionParam& attn,
-                          const MoeParam&       moe,
-                          const Context&        ctx,
-                          const LlamaWeight&    weights,
-                          int                   phases):
-    dtype_{dtype},
-    param_{model},
-    attn_param_{attn},
+LanguageModel::Impl::Impl(const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases):
     comm_{ctx.comm},
     weights_{weights},
     linear_{*ctx.linear},
@@ -161,19 +141,15 @@ LanguageModel::Impl::Impl(DataType              dtype,
         d.generating      = {engine.max_batch_size, kCPU};
     }
 
-    input_processor_.emplace(engine, param_, phases);
+    input_processor_.emplace(engine, weights_.hidden_units, weights_.data_type, phases);
 
-    unified_decoder_ = std::make_unique<UnifiedDecoder>(model, engine, attn, moe, ctx, phases);
+    unified_decoder_ = std::make_unique<UnifiedDecoder>(engine, ctx, phases, weights_);
 
-    generation_ = std::make_unique<Generation>(kFloat32,
-                                               engine.max_batch_size,
-                                               engine.session_len,
-                                               model.vocab_size,
-                                               weights.post_decoder_embedding.output_dim * tp_size_,
-                                               comm_.h_tp_group,
-                                               phases);
+    const int vocab_size = weights_.output->output_dim * tp_size_;
 
-    const int     vocab_size     = weights_.post_decoder_embedding.output_dim * tp_size_;
+    generation_ = std::make_unique<Generation>(
+        kFloat32, engine.max_batch_size, engine.session_len, weights_.vocab_size, vocab_size, comm_.h_tp_group, phases);
+
     const ssize_t max_fwd_tokens = engine.max_forward_token_num;
 
     if (ctx.comm.d_comm) {
@@ -182,18 +158,19 @@ LanguageModel::Impl::Impl(DataType              dtype,
         TM_CHECK(engine.max_forward_token_num % tp_size_ == 0);
 
         ssize_t bytes{};
-        bytes = std::max(bytes, byte_size(dtype_, max_fwd_tokens * engine.attn_dp_size * model.hidden_units));
-        bytes = std::max(bytes, byte_size(dtype_, engine.max_batch_size * vocab_size));
+        bytes = std::max(bytes,
+                         byte_size(weights_.data_type, max_fwd_tokens * engine.attn_dp_size * weights_.hidden_units));
+        bytes = std::max(bytes, byte_size(weights_.data_type, engine.max_batch_size * vocab_size));
 
         symm_buf_ = {bytes, symm_alloc};
         // Compute max logits length based on symm buffer size
-        max_logits_len_ = symm_buf_.view(dtype_).size() / vocab_size;
+        max_logits_len_ = symm_buf_.view(weights_.data_type).size() / vocab_size;
     }
     else {
-        max_logits_len_ = std::max<int>(max_fwd_tokens * model.hidden_units / vocab_size, engine.max_batch_size);
+        max_logits_len_ = std::max<int>(max_fwd_tokens * weights_.hidden_units / vocab_size, engine.max_batch_size);
     }
 
-    output_processor_.emplace(param_, max_logits_len_, tp_rank_, phases, [this](const Tensor& hstate) {
+    output_processor_.emplace(weights_.vocab_size, max_logits_len_, tp_rank_, phases, [this](const Tensor& hstate) {
         return PostEmbedding(hstate, symm_buf_);
     });
 }
@@ -202,14 +179,14 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
 {
     const auto st = core::Context::stream().handle();
 
-    const int hidden_units = param_.hidden_units;
+    const int hidden_units = weights_.hidden_units;
 
-    const auto& embedding_table = weights_.pre_decoder_embedding.weight;
+    const auto& embedding_table = weights_.tok_embeddings;
     TM_CHECK_EQ(embedding_table.shape(1) * tp_size_, hidden_units);
 
     const int token_num = input_ids.size();
 
-    Tensor input_embeds{{token_num, hidden_units}, dtype_, kDEVICE};
+    Tensor input_embeds{{token_num, hidden_units}, weights_.data_type, kDEVICE};
 
     if (token_num == 0) {
         return input_embeds;
@@ -222,7 +199,7 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
     else if (use_ag2d_) {
         const auto local_hidden_units = embedding_table.shape(1);
 
-        Tensor temp{symm_buf.view(dtype_), {token_num, tp_size_, local_hidden_units}};
+        Tensor temp{symm_buf.view(weights_.data_type), {token_num, tp_size_, local_hidden_units}};
         Tensor local{temp.slice({0, tp_rank_, 0}, {-1, 1, -1}).squeeze(1)};
 
         invokeEmbeddingLookup(local, input_ids, embedding_table, st);
@@ -245,13 +222,14 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
     else {
         const auto local_hidden_units = embedding_table.shape(1);
 
-        Tensor temp{symm_buf.view(dtype_), {tp_size_, token_num, local_hidden_units}};
+        Tensor temp{symm_buf.view(weights_.data_type), {tp_size_, token_num, local_hidden_units}};
         Tensor local{temp.slice(tp_rank_).squeeze(0)};
 
         invokeEmbeddingLookup(local, input_ids, embedding_table, st);
         sync_check_cuda_error();
 
-        comm_.d_comm->AllGather(local.raw_data(), temp.raw_data(), local.size(), dtype_, comm_.d_tp_group, st);
+        comm_.d_comm->AllGather(
+            local.raw_data(), temp.raw_data(), local.size(), weights_.data_type, comm_.d_tp_group, st);
         sync_check_cuda_error();
 
         invokeInPlaceTranspose102((uint16_t*)input_embeds.raw_data(),
@@ -274,24 +252,24 @@ Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer symm_bu
     const auto st = core::Context::stream().handle();
 
     const int bsz              = features.shape(0);
-    const int local_vocab_size = weights_.post_decoder_embedding.output_dim;
+    const int local_vocab_size = weights_.output->output_dim;
     const int vocab_size       = local_vocab_size * tp_size_;
 
     if (bsz == 0) {
-        return Tensor{{0, vocab_size}, dtype_, kDEVICE};
+        return Tensor{{0, vocab_size}, weights_.data_type, kDEVICE};
     }
 
     if (tp_size_ == 1) {
-        Tensor logits{{bsz, vocab_size}, dtype_, kDEVICE};
-        linear_.Forward(features, weights_.post_decoder_embedding, logits);
+        Tensor logits{{bsz, vocab_size}, weights_.data_type, kDEVICE};
+        linear_.Forward(features, *weights_.output, logits);
         sync_check_cuda_error();
         TM_DEBUG_TENSOR(logits, "logits", 1);
         return logits;
     }
     else if (use_ag2d_) {
-        Tensor logits{symm_buf.view(dtype_), {bsz, tp_size_, local_vocab_size}};
+        Tensor logits{symm_buf.view(weights_.data_type), {bsz, tp_size_, local_vocab_size}};
         Tensor local = logits.slice({0, tp_rank_, 0}, {-1, 1, -1});
-        linear_.Forward(features, weights_.post_decoder_embedding, local.squeeze(1));
+        linear_.Forward(features, *weights_.output, local.squeeze(1));
         sync_check_cuda_error();
         comm_.d_comm->AllGather2D(local.raw_data(),
                                   logits.raw_data(),
@@ -307,9 +285,9 @@ Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer symm_bu
         return logits.view({bsz, -1});
     }
     else {
-        Tensor logits{symm_buf.view(dtype_), {tp_size_, bsz, local_vocab_size}};
+        Tensor logits{symm_buf.view(weights_.data_type), {tp_size_, bsz, local_vocab_size}};
         Tensor local = logits.slice({tp_rank_, 0, 0}, {1, -1, -1});
-        linear_.Forward(features, weights_.post_decoder_embedding, local.squeeze(0));
+        linear_.Forward(features, *weights_.output, local.squeeze(0));
         sync_check_cuda_error();
         comm_.d_comm->AllGather(local.raw_data(), logits.raw_data(), local.size(), local.dtype(), comm_.d_tp_group, st);
         sync_check_cuda_error();
@@ -439,9 +417,9 @@ void LanguageModel::Impl::Forward(int phase, TensorMap& env)
         env.produce("symm_buf", symm_buf_);
     }
 
-    env.produce("output_norm_weight", weights_.output_norm_weight);
+    env.produce("output_norm_weight", weights_.norm->weight);
 
-    unified_decoder_->Forward(phase, env, weights_.decoder_layer_weights);
+    unified_decoder_->Forward(phase, env, weights_.layers_list());
 
     // env.at("batch").data<BatchData*>()[0]->Notify();
 
@@ -491,31 +469,14 @@ LanguageModel::~LanguageModel() = default;
 
 LanguageModel::LanguageModel(LanguageModel&&) noexcept = default;
 
-LanguageModel::LanguageModel(DataType              dtype,
-                             const ModelParam&     model,
-                             const EngineParam&    engine,
-                             const AttentionParam& attn,
-                             const MoeParam&       moe,
-                             const Context&        ctx,
-                             const LlamaWeight&    weights,
-                             int                   phases)
+LanguageModel::LanguageModel(const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases)
 {
-    impl_ = std::make_unique<Impl>(dtype, model, engine, attn, moe, ctx, weights, phases);
+    impl_ = std::make_unique<Impl>(engine, ctx, weights, phases);
 }
 
 void LanguageModel::Run(BatchOp op, int phase, TensorMap& env)
 {
     return TM_CHECK_NOTNULL(impl_)->Run(op, phase, env);
-}
-
-const ModelParam& LanguageModel::model_param() const noexcept
-{
-    return TM_CHECK_NOTNULL(impl_)->param_;
-}
-
-const AttentionParam& LanguageModel::attn_param() const noexcept
-{
-    return TM_CHECK_NOTNULL(impl_)->attn_param_;
 }
 
 }  // namespace turbomind

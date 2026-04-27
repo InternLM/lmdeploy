@@ -31,7 +31,7 @@ void LlamaFfnLayer::forward(ForwardParam param)
     const auto& mlp = *param.weights;
 
     const int token_num  = param.input.shape(0);
-    const int inter_size = mlp.inter_size;
+    const int inter_size = mlp.inter_size();
     const int layer_id   = param.layer_id;
 
     const auto stream = core::Context::stream().handle();
@@ -39,35 +39,40 @@ void LlamaFfnLayer::forward(ForwardParam param)
     Tensor gating;
     Tensor inter;
 
-    if (mlp.fused_gating_intermediate.weight) {
-        auto mix = linear_.Forward(param.input, mlp.fused_gating_intermediate);
+    auto* fused     = mlp.w1w3.get();
+    bool  use_fused = fused && fused->weight;
+
+    if (use_fused) {
+        auto mix = linear_.Forward(param.input, *fused);
         sync_check_cuda_error();
 
         gating = mix.slice({0, 0}, {(int)token_num, inter_size});
-        if (!mlp.is_fused_silu) {
+        if (!mlp.is_fused_silu()) {
             inter = mix.slice({0, inter_size}, {(ssize_t)token_num, inter_size});
         }
     }
     else {
-        gating = linear_.Forward(param.input, mlp.gating);
+        gating = linear_.Forward(param.input, *mlp.w1);
         sync_check_cuda_error();
         TM_DEBUG_TENSOR(gating, Concat("w1", layer_id), 3);
 
-        inter = linear_.Forward(param.input, mlp.intermediate);
+        inter = linear_.Forward(param.input, *mlp.w3);
         sync_check_cuda_error();
         TM_DEBUG_TENSOR(inter, Concat("w3", layer_id), 3);
     }
 
-    if (!mlp.is_fused_silu) {
+    // When using the fused kernel (w1w3 + fused silu), activation is already applied.
+    // Otherwise (separate w1/w3 or non-fused), apply activation explicitly.
+    if (!use_fused || !mlp.is_fused_silu()) {
         // gate' = silu(gate) * up
-        Activation(gating, inter, mlp.act_type, stream);
+        Activation(gating, inter, mlp.act_type(), stream);
         sync_check_cuda_error();
         TM_DEBUG_TENSOR(gating, Concat("act", layer_id), 3);
     }
 
     {  // w2(x)
         NvtxScope scope("w2");
-        linear_.Forward(gating, mlp.output, param.output);
+        linear_.Forward(gating, *mlp.w2, param.output);
         sync_check_cuda_error();
     }
 }

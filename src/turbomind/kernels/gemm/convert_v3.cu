@@ -112,7 +112,7 @@ std::array<const LayoutConverter*, 2> GetConverters(DataType data_type,
             // clang-format on
         }
         else {
-            return {};  //  trivial case: dense floating point
+            return {};  //  trivial case: no quantization
         }
     }
 

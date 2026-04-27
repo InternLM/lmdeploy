@@ -9,7 +9,6 @@ import os.path as osp
 import sys
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict
 from functools import partial
 from multiprocessing.reduction import ForkingPickler
 from queue import Queue
@@ -17,7 +16,6 @@ from typing import Any
 
 import pybase64
 import torch
-import yaml
 
 import lmdeploy
 from lmdeploy.messages import EngineOutput, GenerationConfig, ResponseType, ScheduleMetrics, TurbomindEngineConfig
@@ -25,7 +23,6 @@ from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
 
-from .deploy.config import TurbomindModelConfig
 from .supported_models import is_supported
 
 # TODO: find another way import _turbomind
@@ -172,23 +169,12 @@ class TurboMind:
             self._process_weights()
             self._create_engine()
 
-        self.session_len = self.config.session_len
-
-    def _check_unloaded_tm_params(self):
-        tm_params = self._tm_model.tm_params
-        if len(tm_params) > 0:
-            uninitialized = list(tm_params.keys())
-            logger.warning('the model may not be loaded successfully '
-                           f'with {len(tm_params)} uninitialized params:\n{uninitialized}')
+        self.session_len = _engine_config.session_len
 
     def _load_weights(self):
         """Load weights."""
-        self._get_model_params()
-
         with torch.cuda.device(self.devices[0]):
-            self._tm_model.export()
-
-        self._check_unloaded_tm_params()
+            self._model_loader.export()
 
     def _process_weights(self):
         """Process weight."""
@@ -204,11 +190,18 @@ class TurboMind:
         self._engine_created = True
 
     def _create_weight(self, model_comm):
-        """Allocate weight buffer, load params if from_workspace."""
+        """Create per-GPU Context + empty ModelRoot sentinel.
 
-        # create weight
+        Runs both C++ init steps sequentially per device, inside a
+        ThreadPoolExecutor so all ranks enter ``create_context``
+        concurrently and hit its ``h_global->Sync()`` barriers together.
+        ``create_root`` itself has no collectives, so it can follow
+        synchronously on each thread.
+        """
+
         def _create_weight_func(device_id):
-            model_comm.create_weights(device_id)
+            model_comm.create_context(device_id)
+            model_comm.create_root(device_id)
 
         with ThreadPoolExecutor(max_workers=self.gpu_count) as executor:
             futures = []
@@ -217,72 +210,64 @@ class TurboMind:
             for future in futures:
                 future.result()
 
-    def _get_model_params(self):
-        """Get turbomind model params when loading from hf."""
-
-        model_comm = self.model_comm
-        tm_params = self._tm_model.tm_params
-        tm_params.clear()
-
-        def _get_params(device_id, que):
-            out = model_comm.get_weights(device_id)
-            que.put(out)
-
-        que = Queue()
-        with ThreadPoolExecutor(max_workers=self.gpu_count) as executor:
-            futures = []
-            for device_id in range(self.gpu_count):
-                futures.append(executor.submit(_get_params, device_id, que))
-            for future in futures:
-                future.result()
-
-        for _ in range(self.gpu_count):
-            tensor_map = que.get()
-            for k, v in tensor_map.items():
-                if k not in tm_params:
-                    tm_params[k] = [v]
-                else:
-                    tm_params[k].append(v)
-        logger.warning(f'get {len(tm_params)} model params')
-
-    def _postprocess_config(self, tm_config: TurbomindModelConfig, engine_config: TurbomindEngineConfig):
-        """Postprocess turbomind config by."""
-        import copy
-        self.config = copy.deepcopy(tm_config)
-        # Update the attribute values in `self.config` with the valid values
-        # from the corresponding attributes in `engine_config`, such as
-        # `session_len`, `quant_policy`, `rope_scaling_factor`, etc.
-        self.config.update_from_engine_config(engine_config)
-
-        # update some attributes of `engine_config` which depends on
-        # `session_len`
-        self.engine_config = engine_config
-
-        # pack `self.config` and `self.engine_config` into a dict
-        self.config_dict = self.config.to_dict()
-        self.config_dict.update(dict(engine_config=asdict(self.engine_config)))
-        logger.info(f'turbomind model config:\n\n'
-                    f'{json.dumps(self.config_dict, indent=2)}')
-
     def _from_hf(self, model_path: str, engine_config: TurbomindEngineConfig):
         """Load model which is in hf format."""
-        assert is_supported(model_path), (f'turbomind does not support {model_path}. '
-                                          'Plz try pytorch engine instead.')
+        assert is_supported(model_path), (
+            f'turbomind does not support {model_path}. '
+            'Plz try pytorch engine instead.')
 
-        # convert transformers model into turbomind model
-        from .deploy.converter import get_tm_model
-        tm_model = get_tm_model(model_path, self.model_name, self.chat_template_name, engine_config)
+        from .converter import get_tm_config
+        from .model_loader import ModelLoader
 
-        self._postprocess_config(tm_model.tm_config, engine_config)
+        spec, model_path = get_tm_config(model_path, engine_config)
 
-        model_comm = _tm.TurboMind.create(model_dir='',
-                                          config=yaml.safe_dump(self.config_dict),
-                                          weight_type=self.config.model_config.weight_type)
+        self._vocab_size = spec._vocab_size
+        self.engine_config = engine_config
 
-        # create empty weight
+        dtype_map = {
+            'bfloat16': _tm.DataType.TYPE_BF16,
+            'float16': _tm.DataType.TYPE_FP16,
+        }
+        ec = _tm.EngineConfig()
+        ec.data_type = dtype_map[engine_config.dtype]
+        ec.cache_block_seq_len = engine_config.cache_block_seq_len
+        ec.quant_policy = engine_config.quant_policy
+        ec.max_batch_size = engine_config.max_batch_size
+        ec.max_prefill_token_num = engine_config.max_prefill_token_num
+        ec.session_len = engine_config.session_len
+        ec.cache_max_block_count = engine_config.cache_max_entry_count
+        ec.cache_chunk_size = engine_config.cache_chunk_size
+        ec.enable_prefix_caching = engine_config.enable_prefix_caching
+        ec.enable_metrics = engine_config.enable_metrics
+        ec.num_tokens_per_iter = engine_config.num_tokens_per_iter
+        ec.max_prefill_iters = engine_config.max_prefill_iters
+        ec.async_ = engine_config.async_
+        ec.outer_dp_size = engine_config.outer_dp_size
+        ec.attn_dp_size = engine_config.attn_dp_size
+        ec.attn_tp_size = engine_config.attn_tp_size
+        ec.attn_cp_size = engine_config.attn_cp_size
+        ec.mlp_tp_size = engine_config.mlp_tp_size
+        ec.devices = engine_config.devices
+        ec.nnodes = engine_config.nnodes
+        ec.node_rank = engine_config.node_rank
+        ec.communicator = engine_config.communicator
+
+        logger.info(f'turbomind engine config:\n\n'
+                    f'dtype={engine_config.dtype}, session_len={engine_config.session_len}, '
+                    f'max_batch_size={engine_config.max_batch_size}, '
+                    f'devices={engine_config.devices}, '
+                    f'tp={engine_config.attn_tp_size}, '
+                    f'dp={engine_config.attn_dp_size}, '
+                    f'cp={engine_config.attn_cp_size}')
+
+        model_comm = _tm.TurboMind.create(model_dir='', engine_config=ec)
         self._create_weight(model_comm)
-        # output model
-        self._tm_model = tm_model
+
+        self._model_loader = ModelLoader(
+            spec=spec,
+            model_comm=model_comm,
+            gpu_count=self.gpu_count,
+            model_path=model_path)
         return model_comm
 
     async def sleep(self, level: int = 1):
@@ -319,12 +304,11 @@ class TurboMind:
             return func(*args).clone()
 
         if not hasattr(self, '_export_iter'):
-            self._get_model_params()
             que = Queue()
-            tm_model = self._tm_model
-            tm_model.input_model.model_path = que
+            ml = self._model_loader
+            ml.model_path = que
             self._update_params_que = que
-            self._export_iter = tm_model.export_iter()
+            self._export_iter = ml.export_iter()
 
         with torch.cuda.device(self.devices[0]):
             if isinstance(request.serialized_named_tensors, str):
@@ -336,7 +320,6 @@ class TurboMind:
             next(self._export_iter)
 
         if request.finished:
-            self._check_unloaded_tm_params()
             self._process_weights()
             if self._engine_created is False:
                 self._create_engine()
@@ -374,9 +357,6 @@ class TurboMind:
                    **kwargs)
 
     def close(self):
-        if hasattr(self, '_tm_model'):
-            # close immediately after init engine with empty_init=True
-            self._tm_model.tm_params.clear()
         if hasattr(self, '_export_iter'):
             del self._export_iter
         if self.model_comm is not None:
@@ -393,7 +373,7 @@ class TurboMind:
         Returns:
             TurboMindInstance: an instance of turbomind
         """
-        return TurboMindInstance(self, self.config, cuda_stream_id)
+        return TurboMindInstance(self, cuda_stream_id)
 
     def get_schedule_metrics(self):
         # TODO: support dp
@@ -525,15 +505,14 @@ class TurboMindInstance:
         cuda_stream_id(int): identity of a cuda stream
     """
 
-    def __init__(self, tm_model: TurboMind, config: TurbomindModelConfig, cuda_stream_id: int = 0):
+    def __init__(self, tm_model: 'TurboMind', cuda_stream_id: int = 0):
         self.tm_model = tm_model
         self.cuda_stream_id = cuda_stream_id
 
         # create model instances
-        lazy_init = self.tm_model.config_dict['engine_config'].get('empty_init', False)
+        lazy_init = self.tm_model.engine_config.empty_init
         self._model_inst = None if lazy_init else self._create_model_instance()
 
-        self.config = config
         self.lock = None
         # error code map from csrc (refer to `struct Request` in src/turbomind/engine/request.h)
         # to lmdeploy.messages.ResponseType
@@ -593,7 +572,7 @@ class TurboMindInstance:
         length = sum([x.shape[0] for x in input_embeddings])
 
         _MAP = dict(bfloat16=torch.bfloat16, float16=torch.float16)
-        dtype = _MAP[self.tm_model.config.model_config.data_type]
+        dtype = _MAP[self.tm_model.engine_config.dtype]
 
         values = torch.empty((length, input_embeddings[0].shape[-1]), dtype=dtype, device='cpu')
         ranges = torch.tensor(input_embedding_ranges, dtype=torch.int32, device='cpu')
@@ -695,7 +674,7 @@ class TurboMindInstance:
 
         if gen_config.response_format is not None:
             tokenizer = self.tm_model.tokenizer
-            vocab_size = self.tm_model.config.model_config.vocab_size
+            vocab_size = self.tm_model._vocab_size
 
             try:
                 tokenizer_info = TokenizerInfo.from_huggingface(tokenizer.model.model, vocab_size=vocab_size)
