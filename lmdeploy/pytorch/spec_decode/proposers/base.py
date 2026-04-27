@@ -64,6 +64,8 @@ class BaseSpecProposer:
         self.lm_head = None
         self.num_speculative_tokens = specdecode_config.num_speculative_tokens
         self.target_model = None
+        # Set by SpecModelAgent after construction
+        self.guided_decoding_manager = None
 
     def build_model(self, empty_init: bool, target_model: torch.nn.Module = None, build_model_ctx=None):
         if self.specdecode_config is None:
@@ -88,7 +90,8 @@ class BaseSpecProposer:
     def get_outputs(self,
                     model_outputs: dict[str, torch.Tensor],
                     model_inputs: ModelInputs,
-                    extra_inputs: ExtraInputs = None):
+                    extra_inputs: ExtraInputs = None,
+                    guided_processors: dict | None = None):
         """Get outputs."""
         raise NotImplementedError()
 
