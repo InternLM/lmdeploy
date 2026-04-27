@@ -1,28 +1,28 @@
-# Anthropic-Compatible Endpoints
+# Anthropic 兼容接口
 
-LMDeploy provides a lightweight Anthropic-compatible surface for easier integration with Anthropic-style clients and gateways.
+LMDeploy 提供了轻量级的 Anthropic 兼容接口，方便接入 Anthropic 风格的客户端和网关。
 
-## Supported Endpoints
+## 支持的接口
 
 - `POST /v1/messages`
 - `POST /v1/messages/count_tokens`
 - `GET /anthropic/v1/models`
 
-## Required Headers
+## 必要请求头
 
-For Anthropic `POST` endpoints, include:
+对于 Anthropic 的 `POST` 接口，请包含：
 
 - `content-type: application/json`
-- `anthropic-version: 2023-06-01` (or another accepted version string)
+- `anthropic-version: 2023-06-01`（或其他可接受的版本字符串）
 
-## Notes and Current Limits
+## 说明与当前限制
 
-- `POST /v1/messages` supports text output, reasoning output (`thinking` blocks), and tool-use output (`tool_use` blocks).
-- Tool use requires launching API server with a configured tool parser (`--tool-call-parser ...`).
-- Reasoning block extraction depends on parser configuration (same parser stack used by OpenAI-compatible chat endpoint).
-- `count_tokens` is tokenizer/chat-template based and is intended for practical estimation.
+- `POST /v1/messages` 支持文本输出、推理输出（`thinking` block）和工具调用输出（`tool_use` block）。
+- 工具调用需要在启动 API Server 时配置工具解析器（`--tool-call-parser ...`）。
+- 推理内容 block 的提取依赖解析器配置（与 OpenAI 兼容 chat 接口使用同一套解析器）。
+- `count_tokens` 基于 tokenizer 和 chat template 计算，适合用于实用估算。
 
-## Example: `/v1/messages`
+## 示例：`/v1/messages`
 
 ```bash
 curl http://{server_ip}:{server_port}/v1/messages \
@@ -35,7 +35,7 @@ curl http://{server_ip}:{server_port}/v1/messages \
   }'
 ```
 
-## Example: `/v1/messages` with tools
+## 示例：带 tools 的 `/v1/messages`
 
 ```bash
 curl http://{server_ip}:{server_port}/v1/messages \
@@ -60,18 +60,18 @@ curl http://{server_ip}:{server_port}/v1/messages \
   }'
 ```
 
-## Streaming Events (SSE)
+## 流式事件（SSE）
 
-When `stream=true`, the endpoint returns `text/event-stream` events such as:
+当 `stream=true` 时，接口会返回 `text/event-stream` 事件流，常见事件包括：
 
 - `message_start`
 - `content_block_start`
-- `content_block_delta` (`text_delta`, `thinking_delta`, `input_json_delta`)
+- `content_block_delta`（`text_delta`、`thinking_delta`、`input_json_delta`）
 - `content_block_stop`
 - `message_delta`
 - `message_stop`
 
-## Example: `/v1/messages/count_tokens`
+## 示例：`/v1/messages/count_tokens`
 
 ```bash
 curl http://{server_ip}:{server_port}/v1/messages/count_tokens \
