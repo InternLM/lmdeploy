@@ -324,6 +324,10 @@ def _get_and_verify_max_len(
     for key in llm_keys:
         hf_config = getattr(hf_config, key, hf_config)
 
+    # for qwen3-omni thinker
+    if hasattr(hf_config, 'thinker_config'):
+        hf_config = hf_config.thinker_config.text_config
+
     logger = get_logger('lmdeploy')
     derived_max_model_len = float('inf')
     possible_keys = [

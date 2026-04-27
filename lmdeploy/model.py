@@ -688,8 +688,19 @@ class HFChatTemplate(BaseChatTemplate):
     def __init__(self, model_path: str = '', **kwargs):
         self.model_path = model_path
         try:
-            from transformers import AutoTokenizer
+            from transformers import AutoProcessor, AutoTokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+
+            # Some tokenizers do not have chat_template, in this case try to get chat_template from processor
+            # If this still does not work, fallback to BaseChatTemplate.
+            if getattr(self.tokenizer, 'chat_template', None) is None:
+                try:
+                    processor = AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
+                    self.tokenizer.chat_template = getattr(processor, 'chat_template', None)
+                except Exception as e:
+                    logger.warning(f'Failed to load processor from {model_path} for chat template. '
+                                   f'Fallback to tokenizer only. Error: {e}')
+
             # Verify if the model can perform apply_chat_template with different roles.
             self.user_start, self.user_end, _, _ = self._user_instruction()
             self.assistant_start, self.assistant_end, _, _ = self._assistant_instruction()
