@@ -582,7 +582,7 @@ class HistoryMultiModals:
         for modal_type, modal_datas in self.multimodals.items():
             data = []
             for modal_data in modal_datas:
-                if (modal_data.start not in test_range and modal_data.end - 1 not in test_range):
+                if (modal_data.start not in test_range or modal_data.end - 1 not in test_range):
                     continue
                 data.append(modal_data)
             if len(data) > 0:
