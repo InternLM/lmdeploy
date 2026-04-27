@@ -432,13 +432,12 @@ class Qwen3_5GatedDeltaNet(nn.Module):
                                               quant_config=quantization_config)
 
         self.in_proj_ba = build_merged_colwise_linear(self.hidden_size,
-                                              [self.num_v_heads, self.num_v_heads],
-                                              bias=False,
-                                              dtype=dtype,
-                                              device=device,
-                                              is_tp=True,
-                                              out_names=['b', 'a'])
-
+                                                      [self.num_v_heads, self.num_v_heads],
+                                                      bias=False,
+                                                      dtype=dtype,
+                                                      device=device,
+                                                      is_tp=True,
+                                                      out_names=['b', 'a'])
 
         # time step projection (discretization)
         # instantiate once and copy inv_dt in init_weights of PretrainedModel
@@ -1111,7 +1110,6 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         # dense model
         self.enable_return_routed_experts = False
         self.is_spec_decoding = get_build_model_context().num_spec_tokens > 0
-
 
     def forward(
         self,

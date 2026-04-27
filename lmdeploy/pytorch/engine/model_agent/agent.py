@@ -1180,7 +1180,7 @@ class BaseModelAgent:
         if 'weights' in tags:
             device = next(self.patched_model.get_model().parameters()).device
             assert device.type in ['cpu', 'meta']
-            spec_model =  self.spec_agent.get_model()
+            spec_model = self.spec_agent.get_model()
 
             if device.type == 'cpu':
                 self.patched_model.get_model().to(torch.cuda.current_device())

@@ -720,7 +720,7 @@ class TurboMindInstance:
                     grammar = compiler.compile_json_schema(decode_grammar)
                 else:
                     assert False, f'Decode grammar type {decode_grammar_type} should be in ' \
-                                   '["json_schema", "regex_schema", "json_object"]'
+                        '["json_schema", "regex_schema", "json_object"]'
 
                 self.model_inst.set_grammar(grammar)
             except ValueError as e:

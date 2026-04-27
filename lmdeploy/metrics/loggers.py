@@ -116,10 +116,10 @@ class LoggingStatLogger(StatLoggerBase):
                    f'{scheduler_stats.num_api_routed_reqs} / {scheduler_stats.num_api_waiting_reqs}, '
                    f'Engine (running/waiting): '
                    f'{scheduler_stats.num_running_reqs} / {scheduler_stats.num_waiting_reqs}, '
-                   f'KV cache: {scheduler_stats.gpu_cache_usage * 100 :.1f}%, ')
+                   f'KV cache: {scheduler_stats.gpu_cache_usage * 100:.1f}%, ')
 
         if scheduler_stats.prefix_cache_hit_rate != 0:
-            log_msg += f'Prefix cache hit rate: {scheduler_stats.prefix_cache_hit_rate * 100 :.1f}%, '
+            log_msg += f'Prefix cache hit rate: {scheduler_stats.prefix_cache_hit_rate * 100:.1f}%, '
 
         if spec_msg is not None:
             log_msg += spec_msg

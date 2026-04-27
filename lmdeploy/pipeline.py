@@ -122,7 +122,8 @@ class Pipeline:
                     res = res.extend(out) if res else out
                 outputs.append(res)
         finally:
-            if pbar: pbar.close()  # noqa
+            if pbar:
+                pbar.close()  # noqa
         if is_single:
             return outputs[0]
         return outputs

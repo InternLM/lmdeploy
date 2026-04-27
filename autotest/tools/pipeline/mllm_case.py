@@ -210,7 +210,7 @@ def internvl_vl_testcase(pipe, resource_path, lang='en'):
 
     question = ''
     for i in range(len(imgs)):
-        question = question + f'Frame{i+1}: {IMAGE_TOKEN}\n'
+        question = question + f'Frame{i + 1}: {IMAGE_TOKEN}\n'
 
     if lang == 'cn':
         question += '视频里有什么动物，它在做什么？'
