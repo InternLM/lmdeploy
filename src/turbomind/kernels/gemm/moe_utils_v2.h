@@ -32,13 +32,13 @@ void invokeMoeGate_V2(int*         f2n,
 void invokeMoeDispatch(Ref<Tensor>   out_,  //
                        const Tensor& src,
                        const int*    f2n,
-                       int           expert_per_token,
+                       int           num_expert_tokens,
                        cudaStream_t  st);
 
 void invokeMoeDispatchScales(Ref<Tensor>   out_,  //
                              const Tensor& src,
                              const int*    f2n,
-                             int           expert_per_token,
+                             int           num_expert_tokens,
                              cudaStream_t  st);
 
 void invokeMoeCombine(Ref<Tensor>   out_,
