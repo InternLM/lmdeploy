@@ -18,7 +18,7 @@ def get_mm_items_offset(input_ids: torch.Tensor, mm_token_id: int) -> list[tuple
 
     Example:
         input_ids = [1, 2, 3, 3, 3, 4, 3, 3], mm_token_id = 3
-        returns [(2, 6), (6, 9)]
+        returns [(2, 5), (6, 8)]
         end_positions + 1 to turn it into exclusive end index for pytorch engine
     """
     mask = (input_ids == mm_token_id)
