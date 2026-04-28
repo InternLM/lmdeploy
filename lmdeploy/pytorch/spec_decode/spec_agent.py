@@ -539,13 +539,11 @@ class SpecModelAgent(BaseSpecModelAgent):
             # create dummy draft tokens
             output_draft_ids = inputs.input_ids.new_zeros(1, self.num_spec_tokens)
         else:
-            # Fork guided processors for the draft model.  Forked matchers
-            # are advanced in-place by get_outputs() at each step so
-            # subsequent positions get the correct grammar mask.
-            # Original matchers remain untouched.
-            draft_guided_processors = {}
+            # Fork guided processors when the proposer supports grammar masking.
+            draft_guided_processors = None
             guided_manager = self.guided_decoding_manager
-            if guided_manager and sampling_inputs.session_ctx is not None:
+            if (guided_manager and sampling_inputs.session_ctx is not None
+                    and self.proposer.supports_grammar_mask):
                 orig_processors = guided_manager.get_processors(
                     sampling_inputs.session_ctx, sampling_inputs.response_formats)
                 draft_guided_processors = {idx: proc.fork()
@@ -554,7 +552,7 @@ class SpecModelAgent(BaseSpecModelAgent):
             loop_count = self.num_spec_tokens - 1
             draft_token_ids, model_metas, target_hidden_states = self.proposer.get_outputs(
                 outputs, inputs, extra_inputs,
-                guided_processors=draft_guided_processors or None)
+                guided_processors=draft_guided_processors)
             draft_tokens_li = [draft_token_ids]
             if loop_count > 0:
                 inputs = self.proposer.update_inputs_decoding(inputs, extra_inputs, draft_token_ids.transpose(0, 1),
@@ -566,7 +564,7 @@ class SpecModelAgent(BaseSpecModelAgent):
                     outputs = self._forward_impl(inputs)
                     draft_token_ids, model_metas, target_hidden_states = self.proposer.get_outputs(
                         outputs, inputs,
-                        guided_processors=draft_guided_processors or None)
+                        guided_processors=draft_guided_processors)
                     draft_tokens_li.append(draft_token_ids)
                     if loop_idx < loop_count - 1:
                         step_seqlens = inputs.seq_length.new_ones(inputs.seq_length.size(0))
