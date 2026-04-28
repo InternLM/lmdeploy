@@ -86,7 +86,7 @@ class RotaryEmbeddingImpl(RotaryEmbeddingImpl, nn.Module):
         self.scaling_factor = scaling_factor
         self.dim = dim
         self.base = base
-        inv_freq = 1.0 / (self.base**(torch.arange(0, self.dim, 2, dtype=torch.int64).float() / self.dim))
+        inv_freq = 1.0 / (self.base**(torch.arange(0, self.dim, 2, dtype=torch.int64, device='cpu').float() / self.dim))
         self.register_buffer('inv_freq', inv_freq, persistent=False)
 
     def forward(self, x: torch.Tensor, position_ids: torch.Tensor):

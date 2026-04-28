@@ -1037,8 +1037,25 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
             routed_experts = res.routed_experts
             logprobs = []
             if res.logprobs:
+                if len(res.token_ids) != len(res.logprobs):
+                    logger.error(
+                        f'[stream] logprobs mismatch: '
+                        f'len(token_ids)={len(res.token_ids)}, '
+                        f'len(logprobs)={len(res.logprobs)}, '
+                        f'token_ids={res.token_ids[:10]}, '
+                        f'logprob_keys={[list(lp.keys())[:3] for lp in res.logprobs[:10]]}'
+                    )
                 for tok, tok_logprobs in zip(res.token_ids, res.logprobs):
-                    logprobs.append((tok_logprobs[tok], tok))
+                    if tok not in tok_logprobs:
+                        logger.error(
+                            f'[stream] logprobs KeyError debug: '
+                            f'tok={tok}, '
+                            f'logprob_keys={list(tok_logprobs.keys())}, '
+                            f'all_token_ids={res.token_ids[:20]}, '
+                            f'num_logprobs={len(res.logprobs)}, '
+                            f'num_token_ids={len(res.token_ids)}'
+                        )
+                    logprobs.append((tok_logprobs.get(tok, 0.0), tok))
             response_json = create_generate_response_json(res,
                                                           text,
                                                           output_ids,
@@ -1073,6 +1090,26 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
             for tok, tok_logprobs in zip(output_ids, logprobs):
                 output_token_logprobs.append((tok_logprobs[tok], tok))
 
+            # if res.logprobs:
+            #     if len(res.token_ids) != len(res.logprobs):
+            #         logger.error(
+            #             f'logprobs mismatch: '
+            #             f'len(token_ids)={len(res.token_ids)}, '
+            #             f'len(logprobs)={len(res.logprobs)}, '
+            #             f'token_ids={res.token_ids[:10]}, '
+            #             f'logprob_keys={[list(lp.keys())[:3] for lp in res.logprobs[:10]]}'
+            #         )
+            #     for tok, tok_logprobs in zip(res.token_ids, res.logprobs):
+            #         if tok not in tok_logprobs:
+            #             logger.error(
+            #                 f'logprobs KeyError debug: '
+            #                 f'tok={tok}, '
+            #                 f'logprob_keys={list(tok_logprobs.keys())}, '
+            #                 f'all_token_ids={res.token_ids[:20]}, '
+            #                 f'num_logprobs={len(res.logprobs)}, '
+            #                 f'num_token_ids={len(res.token_ids)}'
+            #             )
+            #         logprobs.append((tok_logprobs.get(tok, 0.0), tok))
         nonlocal response
         meta = GenerateReqMetaOutput(finish_reason=dict(type=res.finish_reason) if res.finish_reason else None,
                                      output_token_logprobs=output_token_logprobs or None,
