@@ -57,8 +57,6 @@ def draft_model_forward(
 
 class BaseSpecProposer:
 
-    supports_grammar_mask: bool = True
-
     def __init__(self, specdecode_config: SpecDecodeConfig, device: torch.device = None):
         self.specdecode_config = specdecode_config
         self.model = None
