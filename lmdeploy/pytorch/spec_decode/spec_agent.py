@@ -63,7 +63,7 @@ def _expand_sampling_inputs(sampling_inputs: SamplingInputs, num_tokens: int) ->
             pass
         elif k == 'batch_size':
             v = sampling_inputs.batch_size * num_tokens
-        elif isinstance(v, (list, tuple)) and v is not None:
+        elif isinstance(v, (list, tuple)) and len(v) == sampling_inputs.batch_size:
             v = type(v)(_item for elem in v for _item in [elem] * num_tokens)
         out_dict[k] = v
 
@@ -506,8 +506,8 @@ class SpecModelAgent(BaseSpecModelAgent):
         # subsequent positions get the correct mask.
         forked = {idx: proc.fork() for idx, proc in guided_processors.items()}
 
+        guided_bitmask = guided_manager.allocate_batched_bitmap(batch_size)
         for pos in range(num_expand):
-            guided_bitmask = guided_manager.allocate_batched_bitmap(batch_size)
 
             for idx, fork_proc in forked.items():
                 guided_manager.fill_bitmap(fork_proc, guided_bitmask, idx)

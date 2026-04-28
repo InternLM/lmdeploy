@@ -58,7 +58,7 @@ class Eagle3(DeepseekMTP):
         bits_to_set = draft_valid << draft_bits
         n_draft_words = (draft_valid.size(1) + 31) // 32
         out = target_bitmask.new_zeros(target_bitmask.size(0), n_draft_words)
-        out.scatter_add_(1, draft_words.unsqueeze(0).expand(target_bitmask.size(0), -1),
+        out.scatter_add_(1, draft_words.to(torch.int64).unsqueeze(0).expand(target_bitmask.size(0), -1),
                          bits_to_set)
         return out
 
