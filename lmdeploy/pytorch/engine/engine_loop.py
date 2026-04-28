@@ -207,6 +207,7 @@ class EngineLoop:
                       resp_type,
                       data=dict(token_ids=out.token_ids,
                                 logits=out.logits,
+                                last_hidden_state=out.last_hidden_state,
                                 cache_block_ids=out.cache_block_ids,
                                 req_metrics=out.req_metrics,
                                 routed_experts=out.routed_experts,
@@ -272,6 +273,16 @@ class EngineLoop:
 
             return logit
 
+        def __get_hidden_state(msg, hidden_states: torch.Tensor, seq_length: list[int], idx: int):
+            hs = hidden_states.split(seq_length)[idx]
+            if len(msg.all_hidden_states) > 0:
+                # for chunked long context
+                msg.append_hidden_states(hs)
+                hs = msg.hidden_states
+                msg.all_hidden_states.resize(0)
+
+            return hs
+
         def __get_logprobs(batched_outputs: 'BatchedOutputs'):
             """Get valid logprobs."""
             batch_size = batched_outputs.stop_pos.size(0)
@@ -296,13 +307,18 @@ class EngineLoop:
             return results
 
         logits = batched_outputs.logits
+        hidden_states = batched_outputs.hidden_states
         all_routed_experts = batched_outputs.all_routed_experts
 
         if model_inputs is not None and (model_inputs.is_chunk and not model_inputs.is_last_chunk):
             # chunk long context does not need to update seqs and outputs
             seq = running[0]
             seq.append_routed_experts(all_routed_experts)
-            seq.append_logits(logits)
+            # For 'all' mode, accumulate chunk logits/hidden_states; for 'generation' mode skip
+            if seq.return_logits and not seq.logits_generation_mode:
+                seq.append_logits(logits)
+            if seq.return_hidden_states and not seq.hidden_states_generation_mode:
+                seq.append_hidden_states(hidden_states)
             return dict()
 
         new_token_timestamp = batched_outputs.new_token_timestamp
@@ -310,7 +326,12 @@ class EngineLoop:
 
         all_logprobs = __get_logprobs(batched_outputs)
 
-        seq_length = [seq.num_token_ids for seq in running]
+        if model_inputs is not None:
+            seq_length = model_inputs.seq_length.tolist()
+        elif delta is not None:
+            seq_length = delta.seq_length.tolist()
+        else:
+            seq_length = [seq.num_token_ids for seq in running]
         is_run = [seq.status == MessageStatus.RUNNING for seq in running]
         self.seq_strategy.update_running(running=running,
                                          batched_outputs=batched_outputs,
@@ -361,9 +382,36 @@ class EngineLoop:
             outputs[session_id] = out
 
             if msg.return_logits:
-                logit = __get_logit(msg, logits, seq_length, idx)
-                outputs[session_id].logits = logit
+                if msg.logits_generation_mode:
+                    # Accumulate last-position logit for each generation step
+                    if logits is not None:
+                        last_logit = logits.split(seq_length)[idx][-1:].detach().cpu()
+                        msg.append_logits(last_logit)
+                    if finish:
+                        outputs[session_id].logits = msg.logits
+                        msg.all_logits.resize(0)
+                else:
+                    # 'all' mode: return full sequence logits (existing behavior)
+                    logit = __get_logit(msg, logits, seq_length, idx)
+                    outputs[session_id].logits = logit
+
+            if msg.return_hidden_states:
+                if msg.hidden_states_generation_mode:
+                    # 'generation' mode: accumulate last-position hidden state at each step
+                    if hidden_states is not None:
+                        last_hs = hidden_states[idx:idx + 1].detach().cpu()
+                        msg.append_hidden_states(last_hs)
+                    if finish:
+                        outputs[session_id].last_hidden_state = msg.hidden_states
+                        msg.all_hidden_states.resize(0)
+                else:
+                    # 'all' mode: return full sequence hidden states
+                    if hidden_states is not None:
+                        hs = __get_hidden_state(msg, hidden_states, seq_length, idx)
+                        outputs[session_id].last_hidden_state = hs
+
         return outputs
+
 
     async def _main_loop_try_send_next_inputs(self):
         """Try send next inputs."""

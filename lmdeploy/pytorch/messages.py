@@ -59,7 +59,9 @@ class SamplingParam:
     response_format: None | str = None
     logits_processors: None | list[LogitsProcessor] = None
     out_logits: bool = False
+    out_logits_mode: str = None
     out_last_hidden_states: bool = False
+    out_last_hidden_states_mode: str = None
     num_logprobs: int = -1
     return_routed_experts: bool = False
 
@@ -87,13 +89,15 @@ class SamplingParam:
         response_format = gen_config.response_format
 
         output_logits = gen_config.output_logits
-        if output_logits:
-            if (output_logits != 'all' or gen_config.max_new_tokens > 0):
-                output_logits = None
-                logger.warning('Pytorch Engine only support output_logits="all"'
-                               ' with max_new_tokens=0')
-        if gen_config.output_last_hidden_state is not None:
-            logger.warning('Pytorch Engine does not support output last hidden states.')
+        if output_logits == 'all' and gen_config.max_new_tokens > 0:
+            output_logits = None
+            logger.warning('Pytorch Engine only support output_logits="all"'
+                           ' with max_new_tokens=0')
+        output_last_hidden_state = gen_config.output_last_hidden_state
+        if output_last_hidden_state == 'all' and gen_config.max_new_tokens > 0:
+            output_last_hidden_state = None
+            logger.warning('Pytorch Engine only support output_last_hidden_state="all"'
+                           ' with max_new_tokens=0')
         if top_p < 0 or top_p > 1.0:
             logger.warning('`top_p` has to be a float > 0 and < 1'
                            f' but is {top_p}')
@@ -156,6 +160,9 @@ class SamplingParam:
             min_new_tokens=min_new_tokens,
             logits_processors=gen_config.logits_processors,
             out_logits=(output_logits is not None),
+            out_logits_mode=output_logits,
+            out_last_hidden_states=(output_last_hidden_state is not None),
+            out_last_hidden_states_mode=output_last_hidden_state,
             num_logprobs=logprobs,
             return_routed_experts=gen_config.return_routed_experts,
             repetition_ngram_size=repetition_ngram_size,
@@ -549,6 +556,50 @@ class HistoryLogits(_HistoryDataBase):
         return ret
 
 
+class HistoryHiddenStates(_HistoryDataBase):
+    """History hidden states.
+
+    Hidden states are stored as int16 numpy arrays (same bit-level storage as HistoryLogits), reinterpreting
+    float16/bfloat16 tensors byte-for-byte. _create_empty_array returns None so that the shape (hidden_dim) is inferred
+    dynamically from the first append call, matching the HistoryLogits pattern.
+    """
+    ALLOC_SIZE = 64
+    COPY_ON_RESIZE = True
+
+    def __init__(self, hidden_states: np.ndarray = None, dtype: np.dtype = np.int16):
+        super().__init__(hidden_states, dtype)
+        self._torch_dtype = None
+
+    def _create_empty_array(self, dtype):
+        """Return None; shape is determined on first append (see
+        HistoryLogits)."""
+        return None
+
+    def _get_pad_width(self, reserve_size: int):
+        """Get pad width for multi-dimensional array."""
+        return ((0, reserve_size), (0, 0))
+
+    def set_torch_dtype(self, torch_dtype):
+        """Set torch dtype."""
+        self._torch_dtype = torch_dtype
+
+    def get_hidden_states(self):
+        """Get hidden states as torch tensor."""
+        if self._data is None:
+            return None
+        if self._torch_dtype is None:
+            return None
+
+        hs_np = self.get_real()
+        return torch.frombuffer(hs_np, dtype=self._torch_dtype).view(hs_np.shape)
+
+    def clone(self):
+        """clone."""
+        ret = super().clone()
+        ret.set_torch_dtype(self._torch_dtype)
+        return ret
+
+
 class HistoryMropePosIds(_HistoryDataBase):
     """History mrope position ids."""
     ALLOC_SIZE = 64
@@ -652,6 +703,9 @@ class SchedulerSequence:
 
     # logits
     all_logits: HistoryLogits = field(default_factory=HistoryLogits)
+
+    # hidden states
+    all_hidden_states: HistoryHiddenStates = field(default_factory=HistoryHiddenStates)
 
     # mrope
     history_mrope_pos_ids: HistoryMropePosIds = field(default_factory=HistoryMropePosIds)
@@ -791,9 +845,28 @@ class SchedulerSequence:
         return self.sampling_param.out_logits
 
     @property
+    def logits_generation_mode(self):
+        """Check if logits are in generation mode."""
+        return self.sampling_param.out_logits_mode == 'generation'
+
+    @property
     def logits(self):
         """Get logits."""
         return self.all_logits.get_logits()
+
+    @property
+    def return_hidden_states(self):
+        return self.sampling_param.out_last_hidden_states
+
+    @property
+    def hidden_states_generation_mode(self):
+        """Check if hidden states are in generation mode."""
+        return self.sampling_param.out_last_hidden_states_mode == 'generation'
+
+    @property
+    def hidden_states(self):
+        """Get hidden states."""
+        return self.all_hidden_states.get_hidden_states()
 
     @property
     def mrope_pos_ids(self):
@@ -812,6 +885,17 @@ class SchedulerSequence:
             self.all_logits.set_torch_dtype(logits.dtype)
             logits = logits.view(torch.int16).numpy()
         self.all_logits.append(logits)
+
+    def append_hidden_states(self, hidden_states: Tensor | np.ndarray):
+        """Append hidden states."""
+        if not self.return_hidden_states:
+            return
+        if hidden_states is None:
+            return
+        if isinstance(hidden_states, Tensor):
+            self.all_hidden_states.set_torch_dtype(hidden_states.dtype)
+            hidden_states = hidden_states.view(torch.int16).numpy()
+        self.all_hidden_states.append(hidden_states)
 
     def get_input_multimodals(self):
         """Get input multimodals."""

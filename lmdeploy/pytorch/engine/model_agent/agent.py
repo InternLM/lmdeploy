@@ -77,6 +77,7 @@ class BatchedOutputs:
     stopped: torch.Tensor
     stop_pos: torch.Tensor | None = None
     logits: torch.Tensor | None = None
+    hidden_states: torch.Tensor | None = None
     model_metas: list[dict[str, Any]] = None
     logprobs: BatchedLogProbs | None = None
     new_token_timestamp: int = 0
@@ -439,15 +440,46 @@ class BaseModelAgent:
         self,
         inputs: ModelInputs,
         return_logits: bool,
+        return_hidden_states: bool = False,
+        hidden_states_all_mode: bool = False,
     ):
         """Model forward."""
         origin_inputs = inputs
         ret = await self.async_forward(inputs)
 
+        # For 'all' mode hidden states without return_logits, save the full hidden
+        # states before _postprocess_forward_output slices them to last position.
+        pre_postprocess_full_hs = None
+        if return_hidden_states and hidden_states_all_mode and not return_logits:
+            pre_postprocess_full_hs = ret['hidden_states'][0]  # [total_tokens, hidden_dim]
+
         if not return_logits:
             ret = self._postprocess_forward_output(ret, origin_inputs)
 
         hidden_states, ret = self.spec_agent.update_main_model_outputs(ret, origin_inputs)
+
+        if return_hidden_states:
+            # Extract hidden states to return to the user
+            hs = hidden_states
+            seq_length = ret.get('seq_length', inputs.seq_length)
+            if hidden_states_all_mode:
+                if return_logits:
+                    # Full hidden states still available (postprocessing was skipped)
+                    full_hs = hs[0]  # [total_tokens, hidden_dim]
+                else:
+                    # Use the saved full hidden states from before postprocessing
+                    full_hs = pre_postprocess_full_hs
+                ret['last_hidden_states'] = full_hs
+                ret['hidden_states_seq_length'] = seq_length
+            else:
+                # 'generation' mode: last-position hidden state per sequence
+                if return_logits:
+                    # hidden_states is full sequence, need to slice to last position
+                    last_hs = self._slice_outs(hs[0], seq_length)
+                else:
+                    # _postprocess_forward_output already sliced to last position
+                    last_hs = hs[0]
+                ret['last_hidden_states'] = last_hs
 
         logits = self.get_logits(hidden_states)
         ret['logits'] = logits
@@ -601,6 +633,8 @@ class BaseModelAgent:
                                             model_metas: Any,
                                             need_broadcast_next: bool,
                                             return_logits: bool = False,
+                                            return_hidden_states: bool = False,
+                                            last_hidden_states: torch.Tensor = None,
                                             all_routed_experts: Any = None,
                                             extra_inputs: ExtraInputs = None):
         """Step postprocess with output."""
@@ -639,6 +673,7 @@ class BaseModelAgent:
         self._push_output(
             BatchedOutputs(next_token_ids=output_token_ids,
                            logits=logits if return_logits else None,
+                           hidden_states=last_hidden_states if return_hidden_states else None,
                            stopped=stopped,
                            stop_pos=stop_pos,
                            model_metas=model_metas,
@@ -677,6 +712,8 @@ class BaseModelAgent:
         sampling_inputs: SamplingInputs = None,
         stopping_criteria: StoppingCriteria = None,
         return_logits: bool = False,
+        return_hidden_states: bool = False,
+        hidden_states_all_mode: bool = False,
         return_routed_experts: bool = False,
         extra_inputs: ExtraInputs = None,
     ):
@@ -738,6 +775,8 @@ class BaseModelAgent:
         output = await self._async_model_forward(
             inputs,
             return_logits=return_logits,
+            return_hidden_states=return_hidden_states,
+            hidden_states_all_mode=hidden_states_all_mode,
         )
         # recovery is_decoding
         inputs.is_decoding = is_decoding
@@ -751,6 +790,7 @@ class BaseModelAgent:
         last_logits = self._slice_outs(logits, seq_length)  # [bs, 1, prob] -> [bs, prob]
         extra_inputs = self.agent_strategy.slice_extra_inputs(extra_inputs, inputs, output)
         model_metas = output.get('model_metas')
+        last_hidden_states = output.get('last_hidden_states', None)
 
         if self.need_output:
             logger.debug(f'<ForwardTask> rank[{rank}]: Sampling.')
@@ -776,6 +816,8 @@ class BaseModelAgent:
                     model_metas,
                     need_broadcast_next,
                     return_logits=return_logits,
+                    return_hidden_states=return_hidden_states,
+                    last_hidden_states=last_hidden_states,
                     all_routed_experts=all_routed_experts,
                     extra_inputs=extra_inputs,
                 ))

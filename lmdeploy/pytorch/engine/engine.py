@@ -46,6 +46,7 @@ class InferOutput:
     meta: Any = None
     finish: bool = False
     logits: torch.Tensor = None
+    last_hidden_state: torch.Tensor = None
     logprobs: torch.Tensor = None
 
     # send cache blocks back for migration in Disaggregated LLM Serving
