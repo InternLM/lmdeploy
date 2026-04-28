@@ -462,7 +462,7 @@ def _fwd_grouped_split_quant_kernel(
             k = (kmse_norm * (k_cent + kqjl_norm * k_sign)).to(q.dtype)
         elif quant_policy == Q_POLICY_FP8:
             ks = tl.load(ksz_ptrs + b_offset * stride_kszp)
-            k = (k.to(tl.float32) * ks).to(q.dtype)
+            k = k.to(q.dtype)
         else:
             ks = tl.load(ksz_ptrs + b_offset * stride_kszp)
             kz = tl.load(ksz_ptrs + b_offset * stride_kszp + 1)
@@ -481,7 +481,7 @@ def _fwd_grouped_split_quant_kernel(
                 k1_sign = ((k1 >> 3) & 0x1).to(tl.float32) * 2.0 - 1.0
                 k1 = (kmse_norm * (k1_cent + kqjl_norm * k1_sign)).to(q.dtype)
             elif quant_policy == Q_POLICY_FP8:
-                k1 = (k1.to(tl.float32) * ks).to(q.dtype)
+                k1 = k1.to(q.dtype)
             else:
                 k1 = ((k1 - kz) * ks).to(q.dtype)
 
@@ -501,7 +501,7 @@ def _fwd_grouped_split_quant_kernel(
             v = (v * vs).to(q.dtype)
         elif quant_policy == Q_POLICY_FP8:
             vs = tl.load(vsz_ptrs + b_offset * stride_vszp)
-            v = (v.to(tl.float32) * vs).to(q.dtype)
+            v = v.to(q.dtype)
         else:
             vs = tl.load(vsz_ptrs + b_offset * stride_vszp)
             vz = tl.load(vsz_ptrs + b_offset * stride_vszp + 1)
@@ -512,6 +512,8 @@ def _fwd_grouped_split_quant_kernel(
         qk += tl.dot(q, k)
         if BLOCK_DMODEL1 != 0:
             qk += tl.dot(q1, k1)
+        if quant_policy == Q_POLICY_FP8:
+            qk *= ks
         qk *= sm_scale
         if logit_softcapping > 0.0:
             qk = qk / logit_softcapping
@@ -545,6 +547,8 @@ def _fwd_grouped_split_quant_kernel(
         acc = acc * alpha[:, None]
 
         # update acc
+        if quant_policy == Q_POLICY_FP8:
+            p = p * tl.trans(vs)
         p, v = _convert_pv(p, v)
         acc += tl.dot(p, v)
         # update m_i and l_i

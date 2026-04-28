@@ -807,8 +807,6 @@ def fill_kv_cache(k_states: Tensor,
             num_stages=3,
         )
     elif quant_policy == QuantPolicy.FP8:
-        last = q_start_loc[-1:] + q_seq_length[-1:]
-        cu_seqlen_q = torch.cat([q_start_loc, last])
         fill_kv_cache_blocked_fp8(
             k_states,
             v_states,
@@ -816,10 +814,11 @@ def fill_kv_cache(k_states: Tensor,
             v_caches,
             k_scales_zeros,
             v_scales_zeros,
-            cu_seqlen_q,
+            q_start_loc,
             kv_seq_length,
             max_q_seq_length,
             block_offsets,
+            q_seq_lens=q_seq_length,
             group_size=k_caches.shape[d_dim],  # per-token scale: group_size == head_dim
             kv_layout=kv_layout,
         )
@@ -928,7 +927,8 @@ def _fill_kv_cache_blocked_fp8_kernel(
     VCaches,
     KSCaches,
     VSCaches,
-    cu_seqlen_q_ptr,
+    QStartLoc,
+    QSeqLens,
     KVSeqLens,
     BlockOffsets,
     fp8_min: tl.constexpr,
@@ -960,6 +960,7 @@ def _fill_kv_cache_blocked_fp8_kernel(
     stride_vscd: tl.constexpr,
     stride_boff,
     ROUND_SCALE: tl.constexpr,
+    USE_CU_SEQLEN: tl.constexpr,
     GROUP_SIZE: tl.constexpr,
     BLOCK: tl.constexpr,
     BLOCK_D: tl.constexpr,
@@ -970,8 +971,11 @@ def _fill_kv_cache_blocked_fp8_kernel(
     head_id = tl.program_id(0)
     block_id = tl.program_id(1)
 
-    q_startloc = tl.load(cu_seqlen_q_ptr + batch_id)
-    q_seqlen = tl.load(cu_seqlen_q_ptr + batch_id + 1) - q_startloc
+    q_startloc = tl.load(QStartLoc + batch_id)
+    if USE_CU_SEQLEN:
+        q_seqlen = tl.load(QStartLoc + batch_id + 1) - q_startloc
+    else:
+        q_seqlen = tl.load(QSeqLens + batch_id)
     kv_seqlen = tl.load(KVSeqLens + batch_id)
     history_seqlen = kv_seqlen - q_seqlen
 
@@ -1050,6 +1054,7 @@ def fill_kv_cache_blocked_fp8(k_states: Tensor,
                               kv_seqlens: Tensor,
                               max_q_seqlen: int,
                               block_offsets: Tensor,
+                              q_seq_lens: Tensor | None = None,
                               group_size: int = 128,
                               kv_layout: str = 'bshd',
                               scale_fmt: str | None = None):
@@ -1069,12 +1074,16 @@ def fill_kv_cache_blocked_fp8(k_states: Tensor,
         vs_caches (Tensor | None): 4D v scale cache, shape depends on
             ``kv_layout``. If None, no value scale caches are processed.
         cu_seqlen_q (Tensor): Cumulative sequence lengths of queries,
-            shape (batch_size + 1, ).
+            shape (batch_size + 1, ). When ``q_seq_lens`` is provided, this
+            is interpreted as query start locations of shape (batch_size, ).
         kv_seqlens (Tensor): Sequence lengths of key/values, shape
             (batch_size, ).
         max_q_seqlen (int): Maximum sequence length of queries.
         block_offsets (Tensor): Block offsets for each batch, shape
             (batch_size, ).
+        q_seq_lens (Tensor | None, optional): Query sequence lengths. When
+            provided, avoids building cumulative sequence lengths before
+            launching the kernel.
         group_size (int, optional): Group size for fp8 quantization. Default
             is 128.
         kv_layout (str, optional): Layout of key/value caches. Valid values
@@ -1126,6 +1135,9 @@ def fill_kv_cache_blocked_fp8(k_states: Tensor,
     grid = (num_heads, max_num_blocks, batch_size)
     ROUND_SCALE = 1 if scale_fmt == 'ue8m0' else 0
     is_decoding = max_q_seqlen == 1
+    use_cu_seqlen = q_seq_lens is None
+    if q_seq_lens is None:
+        q_seq_lens = cu_seqlen_q
     _fill_kv_cache_blocked_fp8_kernel[grid](
         k_states,
         v_states,
@@ -1134,6 +1146,7 @@ def fill_kv_cache_blocked_fp8(k_states: Tensor,
         ks_caches,
         vs_caches,
         cu_seqlen_q,
+        q_seq_lens,
         kv_seqlens,
         block_offsets,
         fp8_min=fmin,
@@ -1165,6 +1178,7 @@ def fill_kv_cache_blocked_fp8(k_states: Tensor,
         stride_vscd=vs_caches.stride(d_dim),
         stride_boff=block_offsets.stride(0),
         ROUND_SCALE=ROUND_SCALE,
+        USE_CU_SEQLEN=use_cu_seqlen,
         GROUP_SIZE=group_size,
         BLOCK=BLOCK,
         BLOCK_D=BLOCK_D,
