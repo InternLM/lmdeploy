@@ -9,8 +9,63 @@
 #include <cuda_runtime.h>
 
 #include "src/turbomind/comm/host_comm.h"
+#include "src/turbomind/core/buffer.h"
+#include "src/turbomind/core/tensor.h"
 
 namespace turbomind::comm {
+
+struct EpConfig {
+    int num_nodes;
+    int num_experts;
+    int hidden;
+    int ll_max_tokens_per_rank;
+};
+
+enum class EpMode
+{
+    kNull,
+    kHighThroughput,
+    kLowLatency,
+};
+
+struct EpDispatchInput {
+    EpMode&                 mode;
+    core::Tensor&           x;
+    core::Tensor_<float>&   topk_weights;
+    core::Tensor_<int64_t>& topk_idx;
+    int                     num_worst_tokens;
+    bool                    use_fp8;
+    bool                    output_scales;
+    bool                    zero_copy{false};
+};
+
+struct EpDispatchOutput {
+    core::Tensor        out_x;
+    core::Tensor        out_x_scales;
+    core::Tensor        out_topk_weights;
+    core::Buffer_<int>& f2n;
+    core::Buffer_<int>& f2E;
+    core::Buffer_<int>& en2f;
+    core::Buffer_<int>& offsets;
+
+    const int*   num_distinct_tokens_ptr{};  // used for high-throughput
+    core::Tensor rdma;                       // used for low-latency
+
+    std::vector<core::Tensor> handle;
+};
+
+struct EpCombineInput {
+    EpMode&                     mode;
+    core::Tensor&               x;
+    std::vector<core::Tensor>&  handle;
+    std::optional<core::Tensor> topk_weights;
+    std::optional<core::Tensor> topk_idx;
+    bool                        zero_copy{false};
+};
+
+struct EpCombineOutput {
+    core::Tensor out_x;
+};
 
 enum QueryAttr
 {
@@ -114,6 +169,41 @@ public:
                            int          root,
                            int          group,
                            cudaStream_t stream)
+    {
+        throw std::runtime_error("not implemented");
+    }
+
+    virtual void ReduceScatterV(const void*   sendbuff,  //
+                                void*         recvbuff,
+                                const size_t* counts,
+                                DataType      type,
+                                int           group,
+                                cudaStream_t  stream)
+    {
+        throw std::runtime_error("not implemented");
+    }
+
+    virtual void AllGatherV(const void*   sendbuff,  //
+                            void*         recvbuff,
+                            const size_t* counts,
+                            DataType      type,
+                            int           group,
+                            cudaStream_t  stream)
+    {
+        throw std::runtime_error("not implemented");
+    }
+
+    virtual void InitializeEp(const EpConfig& config)
+    {
+        throw std::runtime_error("ep not implemented");
+    }
+
+    virtual void Dispatch(const EpDispatchInput& input, EpDispatchOutput& output, int group)
+    {
+        throw std::runtime_error("not implemented");
+    }
+
+    virtual void Combine(const EpCombineInput& input, EpCombineOutput& output, int group)
     {
         throw std::runtime_error("not implemented");
     }

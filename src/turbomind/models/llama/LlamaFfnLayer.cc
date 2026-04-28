@@ -60,7 +60,7 @@ void LlamaFfnLayer::forward(ForwardParam param)
 
     if (!mlp.is_fused_silu) {
         // gate' = silu(gate) * up
-        Activation(gating, inter, mlp.act_type, stream);
+        Activation(gating, inter, mlp.act_type, nullptr, stream);
         sync_check_cuda_error();
         TM_DEBUG_TENSOR(gating, Concat("act", layer_id), 3);
     }

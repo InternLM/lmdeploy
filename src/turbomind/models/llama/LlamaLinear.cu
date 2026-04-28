@@ -62,8 +62,11 @@ struct LlamaLinear::Impl {
         return {B, desc_B, V, desc_V};
     }
 
-    std::tuple<Tensor, MatrixLayout, Tensor, MatrixLayout>
-    GetOperandA(const LlamaDenseWeight& dense, const Tensor& input, Buffer_<int> indices, const Buffer_<int>& offsets)
+    std::tuple<Tensor, MatrixLayout, Tensor, MatrixLayout> GetOperandA(const LlamaDenseWeight& dense,
+                                                                       const Tensor&           input,
+                                                                       const Tensor&           input_scales,
+                                                                       Buffer_<int>            indices,
+                                                                       const Buffer_<int>&     offsets)
     {
         auto st = core::Context::stream().handle();
 
@@ -73,7 +76,11 @@ struct LlamaLinear::Impl {
         const int m = indices ? indices.size() : input.shape(0);
 
         // Currently, FP8 only; INT8 may be added later
-        if (input.dtype() != dense.input_type) {
+        if (input.dtype() == kFloat8_e4m3 && input.dtype() == dense.input_type) {
+            A = input;
+            U = input_scales;
+        }
+        else if (input.dtype() != dense.input_type) {
             QuantizeSymm(A, U, input, st);
             sync_check_cuda_error();
         }
@@ -82,13 +89,15 @@ struct LlamaLinear::Impl {
         }
 
         if (indices && A.dtype() == kFloat8_e4m3) {
-            const auto [bsz, k] = A.shapes(0, 1);
-            const int e         = indices.size() / bsz;
-            Tensor    A_e       = {{m, k}, A.dtype(), kDEVICE};
-            invokeMoeDispatch(A_e, A, indices.data(), e, st);
+            const int k   = A.shape(1);
+            const int m   = indices.size();
+            Tensor    A_e = {{m, k}, A.dtype(), kDEVICE};
+            // EP can route a token to a variable number of local experts, so the
+            // gathered fp8 rows must be driven by the exact mapping size.
+            invokeMoeDispatch(A_e, A, indices.data(), m, st);
             sync_check_cuda_error();
             Tensor U_e;
-            invokeMoeDispatchScales(U_e, U, indices.data(), e, st);
+            invokeMoeDispatchScales(U_e, U, indices.data(), m, st);
             sync_check_cuda_error();
             A       = A_e;
             U       = U_e;
@@ -113,6 +122,7 @@ struct LlamaLinear::Impl {
 
     void Forward(Tensor&                 output,
                  const Tensor&           input,  //
+                 const Tensor&           scales,
                  const LlamaDenseWeight& dense,
                  const Buffer_<int>&     indices,
                  const Buffer_<int>&     offsets)
@@ -126,7 +136,7 @@ struct LlamaLinear::Impl {
         op.quant_b   = dense.weight_quant;
         op.batch_dim = 0;
 
-        auto&& [A, desc_A, U, desc_U] = GetOperandA(dense, input, indices, offsets);
+        auto&& [A, desc_A, U, desc_U] = GetOperandA(dense, input, scales, indices, offsets);
         auto&& [B, desc_B, V, desc_V] = GetOperandB(dense);
 
         Tensor& D = output;
@@ -194,14 +204,29 @@ Tensor LlamaLinear::Forward(const Tensor&           input,  //
                             const Buffer_<int>&     offsets,
                             std::optional<Tensor>   output)
 {
+    return Forward(input, {}, weight, indices, offsets, output);
+}
+
+Tensor LlamaLinear::Forward(const Tensor&                input,
+                            const std::optional<Tensor>& scales,
+                            const LlamaDenseWeight&      weight,
+                            const Buffer_<int>&          indices,
+                            const Buffer_<int>&          offsets,
+                            std::optional<Tensor>        output)
+{
     Tensor in = input.view({-1, input.shape(-1)});
+    Tensor in_scales;
     Tensor out;
 
     if (output) {
         out = output->view({-1, output->shape(-1)});
     }
 
-    impl_->Forward(out, in, weight, indices, offsets);
+    if (scales) {
+        in_scales = scales.value();
+    }
+
+    impl_->Forward(out, in, in_scales, weight, indices, offsets);
 
     return out;
 }

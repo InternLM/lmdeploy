@@ -25,6 +25,10 @@
 
 #include "src/turbomind/kernels/attention/quantization.h"
 
+#include "src/turbomind/utils/cuda_utils.h"
+
+#include <algorithm>
+
 namespace turbomind {
 
 template<int vec_size, int group_size, class Tout, class Tscale, class T>
@@ -98,6 +102,9 @@ void QuantizeSymm(Tensor& out, Tensor& scale, const Tensor& src, cudaStream_t st
     }
 
     constexpr int block_dim = 512;
+    if (num == 0) {
+        return;
+    }
 
     quant_symm_row<vec_size, group_size><<<num, block_dim, 0, st>>>(out.data<Tout>(),  //
                                                                     out.stride(0),
@@ -111,12 +118,22 @@ void QuantizeSymm(Tensor& out, Tensor& scale, const Tensor& src, cudaStream_t st
 }
 
 template<int vec_size, int group_size, class Tout, class Tscale, class T>
-__global__ void
-dequant_symm_row(Tout* out, int out_ld, const T* src, int src_ld, const Tscale* scales, int scales_ld, int num, int dim)
+__global__ void dequant_symm_row(Tout*         out,
+                                 int           out_ld,
+                                 const T*      src,
+                                 int           src_ld,
+                                 const Tscale* scales,
+                                 int           scales_ld,
+                                 const int*    indices,
+                                 const int* __restrict__ num_ptr,
+                                 int num,
+                                 int dim)
 {
 #if TURBOMIND_ARCH_SM90
     static_assert(group_size % vec_size == 0);
-    for (int ti = blockIdx.x; ti < num; ti += gridDim.x) {
+    num = num_ptr ? __ldg(num_ptr) : num;
+    for (int bi = blockIdx.x; bi < num; bi += gridDim.x) {
+        const int ti = indices ? __ldg(&indices[bi]) : bi;
         for (int di = threadIdx.x * vec_size; di < dim; di += blockDim.x * vec_size) {
             Array<T, vec_size> vec;
             Ldg(vec, src + ti * src_ld + di);
@@ -134,6 +151,17 @@ dequant_symm_row(Tout* out, int out_ld, const T* src, int src_ld, const Tscale* 
 
 void DequantizeSymm(Tensor& out, const Tensor& src, const Tensor& scale, cudaStream_t st)
 {
+    DequantizeSymm(out, src, scale, {}, st);
+}
+
+void DequantizeSymm(Tensor& out, const Tensor& src, const Tensor& scale, const Tensor& indices, cudaStream_t st)
+{
+    DequantizeSymm(out, src, scale, indices, nullptr, st);
+}
+
+void DequantizeSymm(
+    Tensor& out, const Tensor& src, const Tensor& scale, const Tensor& indices, const int* num_ptr, cudaStream_t st)
+{
     using T      = fp8_e4m3_t;
     using Tout   = bfloat16_t;
     using Tscale = float;
@@ -147,19 +175,36 @@ void DequantizeSymm(Tensor& out, const Tensor& src, const Tensor& scale, cudaStr
 
     auto [num, dim] = src.shapes(0, 1);
 
+    const int* idx_ptr = nullptr;
+    if (indices) {
+        TM_CHECK_EQ(indices.dtype(), kInt32);
+        TM_CHECK_EQ(indices.ndim(), 1);
+        TM_CHECK_LE(indices.shape(0), src.shape(0));
+        idx_ptr = indices.data<int>();
+        num     = indices.shape(0);
+    }
+    if (num == 0) {
+        return;
+    }
+
     constexpr int group_size = 128;
     constexpr int vec_size   = 8;
 
     constexpr int block_dim = 512;
 
-    dequant_symm_row<vec_size, group_size, Tout, Tscale, T><<<num, block_dim, 0, st>>>(out.data<Tout>(),  //
-                                                                                       out.stride(0),
-                                                                                       src.data<T>(),
-                                                                                       src.stride(0),
-                                                                                       scale.data<Tscale>(),
-                                                                                       scale.stride(0),
-                                                                                       num,
-                                                                                       dim);
+    static const int sm_count = getSMCount();
+    const int        grid     = std::min<int>(num, sm_count * 4);
+
+    dequant_symm_row<vec_size, group_size, Tout, Tscale, T><<<grid, block_dim, 0, st>>>(out.data<Tout>(),  //
+                                                                                        out.stride(0),
+                                                                                        src.data<T>(),
+                                                                                        src.stride(0),
+                                                                                        scale.data<Tscale>(),
+                                                                                        scale.stride(0),
+                                                                                        idx_ptr,
+                                                                                        num_ptr,
+                                                                                        num,
+                                                                                        dim);
 }
 
 template<int vec_size, int cta_size, int block_size, class Tout, class Tscale, class T>
