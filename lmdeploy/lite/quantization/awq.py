@@ -32,6 +32,10 @@ NORM_FCS_MAP = {
         'input_layernorm': ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
         'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
     },
+    'Qwen3MoeDecoderLayer': {
+        'input_layernorm': ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
+        'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
+    },
     'DecoderLayer': {
         'input_layernorm': ['self_attn.W_pack'],
         'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
@@ -121,14 +125,26 @@ FC_FCS_MAP = {
     }
 }
 
-SKIPPED_MODULE = ['lora', 'block_sparse_moe.gate']
+SKIPPED_MODULE = ['lora', 'block_sparse_moe.gate', 'mlp.gate']
 
+def match_builtin_skkiped_pattern(name: str, pattern: str):
+    if pattern  == 'lora':
+        return pattern in name
+    return name == pattern or name.endswith(f'.{pattern}') or f'.{pattern}.' in name
 
-def skipped_module(name: str):
-    """Whether the module should be skipped from quantization."""
-    for m in SKIPPED_MODULE:
-        if m in name:
-            return True
+def skipped_module(name: str, extra_patterns=None):
+    """Whether the module should be skipped from quantization.
+
+    Args:
+        name: The fully-qualified module name.
+        extra_patterns: Optional iterable of additional substring patterns
+            (e.g. user-provided ``mod_skip_quant``). Merged with the
+            built-in ``SKIPPED_MODULE`` list.
+    """
+    if any(match_builtin_skkiped_pattern(name, pattern) for pattern in SKIPPED_MODULE):
+        return True
+    if extra_patterns and any(pattern in name for pattern in extra_patterns):
+        return True
     return False
 
 
@@ -294,7 +310,7 @@ def check_awq_supported(layer_type):
         raise NotImplementedError
 
 
-def quant_weights(model, fcs, bits, symmetry, group_size=-1, device='cuda'):
+def quant_weights(model, fcs, bits, symmetry, group_size=-1, device='cuda', mod_skip_quant=None):
     """Quantize the weights of the target model's linear layers."""
     from lmdeploy.lite.quantization import WeightQuantizer
     from lmdeploy.lite.quantization.modules import WeightOnlyQLinear
@@ -304,7 +320,7 @@ def quant_weights(model, fcs, bits, symmetry, group_size=-1, device='cuda'):
         parent_name, _, child_name = name.rpartition('.')
         parent = model.get_submodule(parent_name)
         pack_or_skip = 'packed'
-        if skipped_module(name):
+        if skipped_module(name, mod_skip_quant):
             q_linear = fc
             pack_or_skip = 'skipped'
         else:

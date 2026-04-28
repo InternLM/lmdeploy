@@ -39,6 +39,18 @@ class SubCliLite:
                             type=int,
                             default=128,
                             help='Group size for weight quantization statistics')
+        parser.add_argument('--no-calib-ds-req',
+                            dest='calib_ds_req',
+                            action='store_false',
+                            default=True,
+                            help='Require calibration dataset before quantizing weights. '
+                                 'Default to True. Set to False to skip calibration and directly quantize weights')
+        parser.add_argument('--mod-skip-quant',
+                            dest='mod_skip_quant',
+                            nargs='+',
+                            metavar='PATTERN',
+                            default=None,
+                            help='Module name patterns to skip during quantization')
 
     @staticmethod
     def add_parser_auto_gptq():
