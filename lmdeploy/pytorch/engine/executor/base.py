@@ -174,7 +174,9 @@ class ExecutorBase:
             num_state_caches = int(cache_config.max_batches + 1)
             cache_config.num_state_caches = num_state_caches
 
-        mems = StateCacheEngine.get_cache_state_size(cache_config.states_shapes)
+        mems = StateCacheEngine.get_cache_state_size(cache_config.states_shapes,
+                                                     state_specs=self.model_config.state_cache_specs,
+                                                     num_layers=self.model_config.num_layers)
         mems *= num_state_caches
 
         if cache_config.enable_prefix_caching:

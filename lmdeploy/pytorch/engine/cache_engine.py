@@ -20,7 +20,7 @@ from lmdeploy.pytorch.disagg.messages import (
 from lmdeploy.utils import get_logger
 
 from ...messages import QuantPolicy
-from ..config import CacheConfig, ModelConfig
+from ..config import CacheConfig, ModelConfig, StateCacheSpec
 
 KVCache = tuple[torch.Tensor, torch.Tensor]
 
@@ -540,20 +540,38 @@ class CacheEngine:
 class StateCacheEngine:
     """Cache engine for state cache."""
 
-    def __init__(self, cache_config: CacheConfig):
+    def __init__(self, cache_config: CacheConfig, model_config: ModelConfig | None = None):
         self.cache_config = cache_config
+        self.model_config = model_config
+        state_specs = None
+        if model_config is not None and len(model_config.state_cache_specs) > 0:
+            state_specs = model_config.state_cache_specs
         self.mem_pool, self._state_caches = self.allocate_caches(num_caches=cache_config.num_state_caches,
                                                                  state_shapes=cache_config.states_shapes,
+                                                                 state_specs=state_specs,
+                                                                 num_layers=getattr(model_config, 'num_layers', None),
                                                                  device='cuda')
 
     @staticmethod
-    def allocate_caches(num_caches: int, state_shapes: list[tuple[tuple[int], torch.dtype]], device: torch.device):
+    def allocate_caches(num_caches: int,
+                        state_shapes: list[tuple[tuple[int], torch.dtype]],
+                        device: torch.device,
+                        state_specs: list[StateCacheSpec] | None = None,
+                        num_layers: int | None = None):
         """Allocate cache implement."""
 
         if len(state_shapes) == 0 or num_caches == 0:
             return torch.empty((0, 0), dtype=torch.uint8, device=device), []
 
-        cache_descs = [CacheDesc(shape, dtype) for shape, dtype in state_shapes]
+        state_specs = state_specs or []
+        cache_descs = []
+        for idx, (shape, dtype) in enumerate(state_shapes):
+            spec = state_specs[idx] if idx < len(state_specs) else None
+            layered = spec is not None and spec.layer_ids
+            if layered:
+                assert num_layers is not None, 'num_layers is required for layer-scoped state caches'
+                shape = (num_layers, *shape)
+            cache_descs.append(CacheDesc(shape, dtype))
 
         # get mempool size
         mem_pool_size = 0
@@ -566,14 +584,21 @@ class StateCacheEngine:
         # slice caches
         caches = []
         remain_pool = mem_pool
-        for desc in cache_descs:
+        for idx, desc in enumerate(cache_descs):
+            spec = state_specs[idx] if idx < len(state_specs) else None
+            layered = spec is not None and spec.layer_ids
             cache = remain_pool[:, :desc.size].view(desc.dtype).view((num_caches, *desc.shape))
+            if layered:
+                dims = list(range(cache.dim()))
+                cache = cache.permute(1, 0, *dims[2:])
             remain_pool = remain_pool[:, desc.aligned_size:]
             caches.append(cache)
         return mem_pool, caches
 
     @staticmethod
-    def get_cache_state_size(state_shapes: list[tuple[tuple[int], torch.dtype]]) -> int:
+    def get_cache_state_size(state_shapes: list[tuple[tuple[int], torch.dtype]],
+                             state_specs: list[StateCacheSpec] | None = None,
+                             num_layers: int | None = None) -> int:
         """Get the required cache size of the state cache.
 
         Args:
@@ -582,7 +607,11 @@ class StateCacheEngine:
         Return:
             int: Required memory size in bytes.
         """
-        mem_pool, _ = StateCacheEngine.allocate_caches(num_caches=1, state_shapes=state_shapes, device='meta')
+        mem_pool, _ = StateCacheEngine.allocate_caches(num_caches=1,
+                                                       state_shapes=state_shapes,
+                                                       state_specs=state_specs,
+                                                       num_layers=num_layers,
+                                                       device='meta')
         return mem_pool.numel() * mem_pool.element_size()
 
     @property

@@ -848,10 +848,10 @@ class Attention(nn.Module):
             # ---- compressed / index ----
             if self.compress_ratio == 4:
                 compressed_kv_cache = block_caches['v4_compressed_kv_r4'][self.layer_id]
-                compress_state = named_state_caches['v4_compress_state_r4'][slot]
+                compress_state = named_state_caches['v4_compress_state_r4'][self.layer_id, slot]
             else:
                 compressed_kv_cache = block_caches['v4_compressed_kv_r128'][self.layer_id]
-                compress_state = named_state_caches['v4_compress_state_r128'][slot]
+                compress_state = named_state_caches['v4_compress_state_r128'][self.layer_id, slot]
 
             # call compressor
             self.compressor.freqs_cis = self.freqs_cis
@@ -881,7 +881,7 @@ class Attention(nn.Module):
             if self.indexer is not None:
                 self.indexer.freqs_cis = self.freqs_cis
                 index_kv_cache = block_caches['v4_index_kv_r4']
-                compress_state_idx = named_state_caches['v4_compress_state_r4_idx'][slot]
+                compress_state_idx = named_state_caches['v4_compress_state_r4_idx'][self.layer_id, slot]
                 compress_topk_idxs = self.indexer(x, qr, start_pos, offset, compress_state_idx, index_kv_cache,
                                                   block_offsets, seq_idx, block_size, self.layer_id)
             else:
@@ -958,10 +958,10 @@ class Attention(nn.Module):
         if self.compress_ratio:
             if self.compress_ratio == 4:
                 compressed_cache = block_caches['v4_compressed_kv_r4'][self.layer_id]
-                compress_state = named_state_caches['v4_compress_state_r4'][slot.long()]
+                compress_state = named_state_caches['v4_compress_state_r4'][self.layer_id, slot.long()]
             else:
                 compressed_cache = block_caches['v4_compressed_kv_r128'][self.layer_id]
-                compress_state = named_state_caches['v4_compress_state_r128'][slot.long()]
+                compress_state = named_state_caches['v4_compress_state_r128'][self.layer_id, slot.long()]
 
             self.compressor.freqs_cis = self.freqs_cis
             new_compressed, emit_mask = self.compressor.forward_decode(x,
@@ -978,7 +978,7 @@ class Attention(nn.Module):
 
             if self.indexer is not None:
                 index_cache = block_caches['v4_index_kv_r4']
-                index_state = named_state_caches['v4_compress_state_r4_idx'][slot.long()]
+                index_state = named_state_caches['v4_compress_state_r4_idx'][self.layer_id, slot.long()]
                 index_scratch = decode_scratch['selected_index_kv_r4'][:bsz]
                 compress_topk = self.indexer.forward_decode(x,
                                                             qr,

@@ -323,6 +323,7 @@ class StateCacheSpec:
     name: str
     shape: tuple[int, ...]
     dtype: torch.dtype
+    layer_ids: list[int] | None = None
     alignment: int = 256
 
 

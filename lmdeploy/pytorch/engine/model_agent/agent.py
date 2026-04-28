@@ -1031,7 +1031,7 @@ class BaseModelAgent:
                                             tp_rank=dist_ctx.attn_tp_group.rank,
                                             world_size=tp,
                                             cache_stream=self.cache_stream)
-            self.state_cache_engine = StateCacheEngine(self.cache_config)
+            self.state_cache_engine = StateCacheEngine(self.cache_config, self.model_config)
 
             self.spec_agent.build_cache_engine(self.cache_stream)
 

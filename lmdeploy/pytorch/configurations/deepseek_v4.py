@@ -92,22 +92,22 @@ class DeepseekV4ModelConfigBuilder(AutoModelConfigBuilder):
             # rows = 2 * ratio = 8, state_dim = 2 * head_dim
             # compress_state shape = (2 * rows, state_dim) = (16, 2 * head_dim)
             state_specs.append(
-                StateCacheSpec('v4_compress_state_r4', (16, 2 * head_dim), torch.float32))
+                StateCacheSpec('v4_compress_state_r4', (16, 2 * head_dim), torch.float32, layer_ids=ratio4_layers))
             index_head_dim = getattr(hf_config, 'index_head_dim', 128)
-            index_topk = getattr(hf_config, 'index_topk', 512)
             # Indexer also has its own compressor (overlap=True because ratio==4)
             # rows = 2 * ratio = 8, state_dim = 2 * index_head_dim
             # compress_state shape = (2 * rows, state_dim) = (16, 2 * index_head_dim)
             state_specs.append(
-                StateCacheSpec('v4_compress_state_r4_idx', (16, 2 * index_head_dim), torch.float32))
-            state_specs.append(
-                StateCacheSpec('v4_index_state_r4', (index_topk, index_head_dim), torch.bfloat16))
+                StateCacheSpec('v4_compress_state_r4_idx',
+                               (16, 2 * index_head_dim),
+                               torch.float32,
+                               layer_ids=ratio4_layers))
 
         if ratio128_layers:
             # rows = ratio = 128, state_dim = head_dim
             # compress_state shape = (2 * rows, state_dim) = (256, head_dim)
             state_specs.append(
-                StateCacheSpec('v4_compress_state_r128', (256, head_dim), torch.float32))
+                StateCacheSpec('v4_compress_state_r128', (256, head_dim), torch.float32, layer_ids=ratio128_layers))
 
         config.state_cache_specs = state_specs
         # backward-compat bridge to keep scheduler.is_ssm working
