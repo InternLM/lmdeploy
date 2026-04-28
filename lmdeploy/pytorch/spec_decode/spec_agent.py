@@ -353,10 +353,16 @@ class SpecModelAgent(BaseSpecModelAgent):
             # update last token indices
             last_token_indices = last_token_indices - num_rejected_tokens
         else:
-            bonus_logits, raw_logprobs = await logits_processor(target_logits)
-            # Sample next token from bonus position
-            next_token_ids = logits_processor.sampling(bonus_logits)  # [batch_size]
-            output_token_ids = next_token_ids.unsqueeze(-1)
+            if model_inputs.is_chunk and not model_inputs.is_last_chunk:
+                # dummy output, no need to sampling or compute logprobs for non-last chunk
+                next_token_ids = num_rejected_tokens
+                output_token_ids = num_rejected_tokens.unsqueeze(-1)
+                raw_logprobs = None
+            else:
+                bonus_logits, raw_logprobs = await logits_processor(target_logits)
+                # Sample next token from bonus position
+                next_token_ids = logits_processor.sampling(bonus_logits)  # [batch_size]
+                output_token_ids = next_token_ids.unsqueeze(-1)
 
         logprobs = __compute_logprobs(raw_logprobs, output_token_ids, sampling_inputs.max_num_logprobs)
 
