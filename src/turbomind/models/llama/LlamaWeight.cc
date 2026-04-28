@@ -49,11 +49,11 @@ LlamaWeight::LlamaWeight(DataType           data_type,
 {
     if (vocab_size_padded_ % tp_size_ != 0) {
         vocab_size_padded_ = (vocab_size_ + tp_size_ - 1) / tp_size_ * tp_size_;
-        TM_LOG_WARNING("pad vocab size from %d to %d", vocab_size_, vocab_size_padded_);
+        TM_LOG_WARN("pad vocab size from {} to {}", vocab_size_, vocab_size_padded_);
     }
     if (embedding_size_ % tp_size_ != 0) {
         embedding_size_ = (embedding_size_ + tp_size_ - 1) / tp_size_ * tp_size_;
-        TM_LOG_WARNING("pad embed size from %d to %d", embedding_size_, embedding_size_);
+        TM_LOG_WARN("pad embed size from {} to {}", embedding_size_, embedding_size_);
     }
     FT_CHECK(hidden_units_ % tp_size_ == 0);
     TM_CHECK_EQ(vocab_size_padded_ % tp_size_, 0);

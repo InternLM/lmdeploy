@@ -3,7 +3,6 @@
 from collections.abc import Iterable
 
 import torch
-import torch.distributed as dist
 import torch.nn.functional as F
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
@@ -57,7 +56,8 @@ class Qwen3_5MoeSparseMoeBlock(nn.Module):
                  layer_idx: int,
                  dtype: torch.dtype | None = None,
                  device: torch.device | None = None,
-                 prefix: str = ''):
+                 prefix: str = '',
+                 is_tp: bool = True):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         self.layer_idx = layer_idx
@@ -82,12 +82,14 @@ class Qwen3_5MoeSparseMoeBlock(nn.Module):
             prefix=add_prefix('experts', prefix),
         )
 
+        self.moe_all_reduce = self.experts.build_moe_all_reduce()
+
         self.shared_expert = Qwen3_5MLP(
             config=config,
             intermediate_size=config.shared_expert_intermediate_size,
             dtype=dtype,
             device=device,
-            is_tp=True,
+            is_tp=self.moe_all_reduce.enable_shared_tp(),
             all_reduce=False,
             prefix=add_prefix('shared_expert', prefix),
         )
@@ -121,8 +123,7 @@ class Qwen3_5MoeSparseMoeBlock(nn.Module):
         out_states += shared_states
         out_states = out_states.reshape(batch_size, sequence_length, -1)
 
-        if self._all_reduce:
-            dist.all_reduce(out_states)
+        out_states = self.moe_all_reduce(out_states)
         return out_states
 
 
@@ -271,6 +272,7 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
         # for router replay
         bm_ctx = get_build_model_context()
         self.enable_return_routed_experts = bm_ctx.enable_return_routed_experts
+        self.is_spec_decoding = get_build_model_context().num_spec_tokens > 0
 
     def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter]):
         """Load weight experts."""

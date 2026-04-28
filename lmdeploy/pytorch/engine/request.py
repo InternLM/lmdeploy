@@ -102,7 +102,8 @@ class RequestSender:
 
     def _gather_request(self, req_types: list[RequestType], data: list[Any]):
         """Gather requests."""
-        if self.manager._loop_task is None:
+        should_enqueue = any(not self.manager.is_request_blocked(rtype) for rtype in req_types)
+        if should_enqueue and self.manager._loop_task is None:
             self.manager.create_loop_task()
         assert len(req_types) == len(data)
 
@@ -115,6 +116,10 @@ class RequestSender:
                             event=event,
                             data=None,
                             err_msg=None)
+            if self.manager.is_request_blocked(rtype):
+                self.manager.reject_request(resp, rtype, 'request type is blocked')
+                resps.append(resp)
+                continue
             req = Request(type=rtype, sender_id=self.sender_id, data=rdata, resp=resp)
             resps.append(resp)
             reqs.append(req)
@@ -123,7 +128,8 @@ class RequestSender:
     def batched_send_async(self, req_types: list[RequestType], data: list[Any]):
         """Batched send request asynchronize."""
         resps, reqs = self._gather_request(req_types, data)
-        self._req_put(reqs)
+        if len(reqs) > 0:
+            self._req_put(reqs)
         return resps
 
     def send_async(self, req_type: RequestType, data: Any):
@@ -183,6 +189,9 @@ class RequestManager:
         self._sender_wait_task: asyncio.Task = None
         self._send_count = 0
         self._send_event = None
+        # Sleep uses this admission gate to reject new inference work while
+        # still allowing cleanup requests such as STOP_SESSION/END_SESSION.
+        self._blocked_request_types: set[RequestType] = set()
 
     async def prepare_send(self):
         if self._condition is None:
@@ -288,6 +297,39 @@ class RequestManager:
         self.senders[sender_id] = new_sender
         return new_sender
 
+    def block_request_types(self, req_types: set[RequestType] | list[RequestType]):
+        """Block request types from entering the engine."""
+        req_types = set(req_types)
+        newly_blocked = req_types - self._blocked_request_types
+        self._blocked_request_types.update(req_types)
+        if newly_blocked:
+            names = ', '.join(sorted(req_type.name for req_type in newly_blocked))
+            logger.info(f'Blocking engine request types: {names}')
+
+    def unblock_request_types(self, req_types: set[RequestType] | list[RequestType]):
+        """Allow request types to enter the engine."""
+        req_types = set(req_types)
+        newly_unblocked = req_types & self._blocked_request_types
+        self._blocked_request_types.difference_update(req_types)
+        if newly_unblocked:
+            names = ', '.join(sorted(req_type.name for req_type in newly_unblocked))
+            logger.info(f'Unblocking engine request types: {names}')
+
+    def is_request_blocked(self, req_type: RequestType):
+        """Check whether a request type is blocked."""
+        return req_type in self._blocked_request_types
+
+    def reject_request(self, resp: Response, req_type: RequestType | None = None, reason: str = ''):
+        """Reject request and wake sender."""
+        if req_type is not None:
+            reason = reason or 'request rejected'
+            logger.debug(f'Reject {req_type.name} request from sender {resp.sender_id}: {reason}')
+        elif reason:
+            logger.debug(f'Reject response from sender {resp.sender_id}: {reason}')
+        resp.type = ResponseType.CANCEL
+        resp.is_done = True
+        self.response(resp)
+
     def has_requests(self):
         """Has unprocessed request."""
         if self.requests is None:
@@ -335,6 +377,11 @@ class RequestManager:
 
     def process_request(self, req_type: RequestType, reqs: ReqList, **kwargs):
         """Process reqs with given req type."""
+        if self.is_request_blocked(req_type):
+            for req in reqs:
+                self.reject_request(req.resp, req_type, 'queued request type is blocked')
+            return
+
         # get callback
         func = self.callbacks.get(req_type, None)
         if func is not None:

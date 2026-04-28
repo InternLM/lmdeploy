@@ -82,6 +82,7 @@ class CudaGraphMeta:
     use_fa3_decoding: bool = False
     is_ssm: bool = False
     use_mrope: bool = False
+    block_size: int = 64
 
 
 class CudaGraphMixin:
@@ -108,14 +109,12 @@ class CudaGraphMixin:
             output_buffers = output
         return output_buffers
 
-    def update_meta_flashattn(self, graph_meta: CudaGraphMeta, block_size: int, max_seqlen_k: int,
+    def update_meta_flashattn(self, batch_size: int, max_seqlen_q: int, block_size: int, max_seqlen_k: int,
                               cache_seqlens: torch.Tensor):
         """Update meta flashattn."""
         ctx_mgr = get_step_ctx_manager()
         step_ctx = ctx_mgr.current_context()
         model_config = step_ctx.model_config
-        batch_size = graph_meta.max_batchs
-        max_seqlen_q = graph_meta.decode_query_len
         sliding_window = model_config.sliding_window
         num_attention_heads = model_config.num_attention_heads
         num_key_value_heads = model_config.num_key_value_heads
@@ -125,6 +124,9 @@ class CudaGraphMixin:
             window_size = (-1, -1)
         elif isinstance(sliding_window, int):
             window_size = (sliding_window, sliding_window)
+        else:
+            window_size = sliding_window
+
         cache_seqlens = cache_seqlens.to(torch.int32)
         scheduler_metadata = _get_meta_flashattn(
             batch_size=batch_size,
@@ -187,9 +189,9 @@ class CudaGraphMixin:
 
         # use fa3 decode kernel for spec decode
         elif graph_meta.use_fa3_decoding is True:
-            block_size = past_key_values[0][0].size(1)
-            input_buffers['scheduler_metadata'] = self.update_meta_flashattn(graph_meta,
-                                                                             block_size=block_size,
+            input_buffers['scheduler_metadata'] = self.update_meta_flashattn(graph_meta.max_batchs,
+                                                                             graph_meta.decode_query_len,
+                                                                             block_size=graph_meta.block_size,
                                                                              max_seqlen_k=decode_query_len,
                                                                              cache_seqlens=input_buffers['kv_seqlens'])
 
@@ -227,7 +229,10 @@ class CudaGraphMixin:
 
         qkv = torch.stack((q_start_loc, q_seqlens, kv_seqlens))
         input_buffers['qkv_lens'].zero_()
-        input_buffers['q_seqlens'].fill_(graph_meta.max_tokens // graph_meta.max_batchs)
+        # initialize q_seqlens and kv_seqlens to max_tokens // max_batchs
+        # to avoid out of bound in flash attention kernels
+        # padding kv should be the same as padding q so q-kv=0
+        input_buffers['qkv_seqlens'].fill_(graph_meta.max_tokens // graph_meta.max_batchs)
         input_buffers['qkv_lens'][:, :batch_size] = qkv
         input_buffers['cu_seqlens'][:, 1:] = input_buffers['qkv_seqlens'].cumsum(1)
         if inputs_embeds is not None:
@@ -266,16 +271,17 @@ class CudaGraphMixin:
 
         # use fa3 decode kernel for spec decode
         elif graph_meta.use_fa3_decoding is True:
-            block_size = past_key_values[0][0].size(1)
             scheduler_metadata = self.update_meta_flashattn(
-                graph_meta,
-                block_size=block_size,
+                new_batch_size,
+                decode_query_len,
+                block_size=graph_meta.block_size,
                 max_seqlen_k=attn_metadata.max_kv_seqlen,
                 cache_seqlens=input_buffers['kv_seqlens'],
             )
-            assert scheduler_metadata.shape == input_buffers['scheduler_metadata'].shape
-            input_buffers['scheduler_metadata'].copy_(scheduler_metadata)
-            attn_metadata.scheduler_metadata = input_buffers['scheduler_metadata']
+            num_meta = scheduler_metadata.size(0)
+            input_buffers['scheduler_metadata'][:num_meta] = scheduler_metadata
+            input_buffers['scheduler_metadata'][num_meta:] = 0
+            attn_metadata.scheduler_metadata = input_buffers['scheduler_metadata'][:num_meta]
 
         new_inputs = dict(
             past_key_values=past_key_values,
@@ -295,6 +301,8 @@ class CudaGraphMixin:
             if mrope_position_ids is not None:
                 input_buffers['mrope_position_ids'][:, :num_tokens] = mrope_position_ids
                 new_inputs['mrope_position_ids'] = input_buffers['mrope_position_ids']
+            else:
+                raise ValueError('MROPE position ids is required for MROPE model.')
 
         # ssm
         if graph_meta.is_ssm:

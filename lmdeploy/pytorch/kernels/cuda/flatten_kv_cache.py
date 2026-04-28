@@ -1,10 +1,21 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Literal
 
 import torch
 import triton
 import triton.language as tl
 from torch import Tensor
+
+from lmdeploy.messages import QuantPolicy
+
+from .turbo_quant import get_lloyd_max_codebook
+
+# Triton-compatible quantization policy constants
+# Python Enum cannot be used in Triton kernels, so we define these as module-level
+# constants which Triton will inline at compile time.
+Q_POLICY_NONE = tl.constexpr(0)
+Q_POLICY_INT4 = tl.constexpr(4)
+Q_POLICY_INT8 = tl.constexpr(8)
+Q_POLICY_TURBO = tl.constexpr(42)
 
 
 @triton.jit
@@ -56,7 +67,6 @@ def _flatten_kv_cache(
     start_loc = tl.load(start_loc_ptr + batch_id)
     b_off = tl.load(block_offsets_ptr + batch_id * stride_boff + page_id)
     b_off = b_off.to(tl.int64)
-
     offs_bs = tl.arange(0, BLOCK_BS)
     offs_dk = tl.arange(0, BLOCK_DK) % HEAD_DIM_K
     offs_dv = tl.arange(0, BLOCK_DV) % HEAD_DIM_V
@@ -90,6 +100,14 @@ def _dequant_int4(val, HEAD_DIM: tl.constexpr, BLOCK: tl.constexpr):
 
 
 @triton.jit
+def _dequant_int2(val, HEAD_DIM: tl.constexpr, BLOCK: tl.constexpr):
+    quarter = HEAD_DIM // 4
+    group_id = tl.arange(0, BLOCK) // quarter
+    shift = group_id * 2
+    return (val >> shift) & 0x3
+
+
+@triton.jit
 def _flatten_kv_cache_quant(
     kc_ptr,
     vc_ptr,
@@ -97,6 +115,8 @@ def _flatten_kv_cache_quant(
     vo_ptr,
     ksz_ptr,
     vsz_ptr,
+    k_codebook_ptr,
+    v_codebook_ptr,
     start_loc_ptr,
     seqlens_ptr,
     block_offsets_ptr,
@@ -148,11 +168,18 @@ def _flatten_kv_cache_quant(
     b_off = tl.load(block_offsets_ptr + batch_id * stride_boff + page_id)
     b_off = b_off.to(tl.int64)
     offs_bs = tl.arange(0, BLOCK_BS)
-    if quant_policy == 4:
+    if quant_policy == Q_POLICY_INT4:
         HALF_HDK: tl.constexpr = HEAD_DIM_K // 2
         HALF_HDV: tl.constexpr = HEAD_DIM_V // 2
         offs_dk = tl.arange(0, BLOCK_DK) % HALF_HDK
         offs_dv = tl.arange(0, BLOCK_DV) % HALF_HDV
+    elif quant_policy == Q_POLICY_TURBO:
+        # K is QJL4 packed in int4 => packed dim = HEAD_DIM_K // 2
+        # V is TurboQuant MSE int2 => packed dim = HEAD_DIM_V // 4
+        HALF_HDK: tl.constexpr = HEAD_DIM_K // 2
+        QUARTER_HDV: tl.constexpr = HEAD_DIM_V // 4
+        offs_dk = tl.arange(0, BLOCK_DK) % HALF_HDK
+        offs_dv = tl.arange(0, BLOCK_DV) % QUARTER_HDV
     else:
         offs_dk = tl.arange(0, BLOCK_DK) % HEAD_DIM_K
         offs_dv = tl.arange(0, BLOCK_DV) % HEAD_DIM_V
@@ -175,21 +202,53 @@ def _flatten_kv_cache_quant(
     vo_ptrs = (vo_ptr + head_id * stride_voh + (start_loc + offs_obs[:, None]) * stride_vos +
                offs_dov[None, :] * stride_vod)
 
+    # -----------------------
+    # K path
+    # -----------------------
     kc = tl.load(kc_ptrs)
-    if quant_policy == 4:
+    if quant_policy == Q_POLICY_INT4 or quant_policy == Q_POLICY_TURBO:
         kc = _dequant_int4(kc, HEAD_DIM_K, BLOCK_DK)
-    ks = tl.load(ksz_ptrs)
-    kz = tl.load(ksz_ptrs + stride_kszd)
-    ksz = ks * kz
-    kq = (kc * ks[:, None] - ksz[:, None]).to(ko_ptr.dtype.element_ty)
+
+    if quant_policy == Q_POLICY_TURBO:
+        # QJL4:
+        #   low 3bit = mse idx
+        #   high 1bit = qjl sign
+        kmse_norm = tl.load(ksz_ptrs)
+        kqjl_norm = tl.load(ksz_ptrs + stride_kszd)
+
+        k_idx3 = kc & 0x7
+        k_bit1 = (kc >> 3) & 0x1
+        k_sign = k_bit1.to(tl.float32) * 2.0 - 1.0
+
+        k_cent = tl.load(k_codebook_ptr + k_idx3.to(tl.int32))
+        kq = kmse_norm[:, None] * (k_cent + kqjl_norm[:, None] * k_sign)
+        kq = kq.to(ko_ptr.dtype.element_ty)
+    else:
+        ks = tl.load(ksz_ptrs)
+        kz = tl.load(ksz_ptrs + stride_kszd)
+        ksz = ks * kz
+        kq = (kc * ks[:, None] - ksz[:, None]).to(ko_ptr.dtype.element_ty)
     tl.store(ko_ptrs, kq, mask=mask_bs[:, None] & mask_dok[None, :])
+    # -----------------------
+    # V path
+    # -----------------------
     vc = tl.load(vc_ptrs)
-    if quant_policy == 4:
+    if quant_policy == Q_POLICY_TURBO:
+        vc = _dequant_int2(vc, HEAD_DIM_V, BLOCK_DV)
+    elif quant_policy == Q_POLICY_INT4:
         vc = _dequant_int4(vc, HEAD_DIM_V, BLOCK_DV)
-    vs = tl.load(vsz_ptrs)
-    vz = tl.load(vsz_ptrs + stride_vszd)
-    vsz = vs * vz
-    vq = (vc * vs[:, None] - vsz[:, None]).to(vo_ptr.dtype.element_ty)
+
+    if quant_policy == Q_POLICY_TURBO:
+        # V is TurboQuant MSE int2, meta only stores norm
+        vs = tl.load(vsz_ptrs)
+        vq = tl.load(v_codebook_ptr + vc.to(tl.int32))
+        vq = (vq * vs[:, None]).to(vo_ptr.dtype.element_ty)
+    else:
+        vs = tl.load(vsz_ptrs)
+        vz = tl.load(vsz_ptrs + stride_vszd)
+        vsz = vs * vz
+        vq = (vc * vs[:, None] - vsz[:, None]).to(vo_ptr.dtype.element_ty)
+
     tl.store(vo_ptrs, vq, mask=mask_bs[:, None] & mask_dov[None, :])
 
 
@@ -202,7 +261,7 @@ def flatten_kv_cache(k_caches: Tensor,
                      out_dtype: torch.dtype = None,
                      k_scales_zeros: Tensor = None,
                      v_scales_zeros: Tensor = None,
-                     quant_policy: Literal[0, 4, 8] = 0,
+                     quant_policy: QuantPolicy = QuantPolicy.NONE,
                      kv_layout: str = 'bshd',
                      flatten_kv_layout: str = 'hsd'):
     """Recovery paged kv cache to normal kv cache."""
@@ -214,7 +273,10 @@ def flatten_kv_cache(k_caches: Tensor,
         raise RuntimeError('Unsupported layout.')
 
     if out_dtype is None:
-        out_dtype = k_caches.dtype
+        if quant_policy == QuantPolicy.TURBO_QUANT:
+            out_dtype = torch.float16
+        else:
+            out_dtype = k_caches.dtype
 
     if out_size is None or out_size <= 0:
         out_size = k_caches.size(b_dim) * k_caches.size(s_dim)
@@ -226,16 +288,19 @@ def flatten_kv_cache(k_caches: Tensor,
     num_heads = k_caches.size(h_dim)
     k_head_dim = k_caches.size(d_dim)
     v_head_dim = v_caches.size(d_dim)
-    if quant_policy == 4:
+    if quant_policy == QuantPolicy.INT4:
         k_head_dim *= 2
         v_head_dim *= 2
+    elif quant_policy == QuantPolicy.TURBO_QUANT:
+        k_head_dim *= 2   # K packed int4 => raw dim *2
+        v_head_dim *= 4   # V packed int2 => raw dim *4
     BLOCK_DK = triton.next_power_of_2(k_head_dim)
     BLOCK_DV = triton.next_power_of_2(v_head_dim)
     BLOCK_BS = k_caches.size(s_dim)
     shared_kv = k_caches.data_ptr() == v_caches.data_ptr() and v_head_dim < k_head_dim
     if flatten_kv_layout == 'hsd':
         k_states = k_caches.new_empty(num_heads, out_size, k_head_dim, dtype=out_dtype)
-        if quant_policy == 0 and shared_kv:
+        if quant_policy == QuantPolicy.NONE and shared_kv:
             v_states = k_states[..., :v_head_dim]
             v_head_dim = 0
         else:
@@ -246,7 +311,7 @@ def flatten_kv_cache(k_caches: Tensor,
         stride_vos = v_states.stride(1)
     elif flatten_kv_layout == 'shd':
         k_states = k_caches.new_empty(out_size, num_heads, k_head_dim, dtype=out_dtype)
-        if quant_policy == 0 and shared_kv:
+        if quant_policy == QuantPolicy.NONE and shared_kv:
             v_states = k_states[..., :v_head_dim]
             v_head_dim = 0
         else:
@@ -259,7 +324,7 @@ def flatten_kv_cache(k_caches: Tensor,
         raise RuntimeError('Unsupported layout.')
 
     grid = (num_blocks, batch_size, num_heads)
-    if quant_policy == 0:
+    if quant_policy == QuantPolicy.NONE:
         _flatten_kv_cache[grid](
             k_caches,
             v_caches,
@@ -291,6 +356,14 @@ def flatten_kv_cache(k_caches: Tensor,
             BLOCK_DV=BLOCK_DV,
         )
     else:
+        if quant_policy == QuantPolicy.TURBO_QUANT:
+            # K = QJL4 => 3bit centroid codebook
+            k_codebook, _ = get_lloyd_max_codebook(k_head_dim, bits=3, device=k_caches.device)
+            # V = TurboQuant MSE int2 => 2bit centroid codebook
+            v_codebook, _ = get_lloyd_max_codebook(v_head_dim, bits=2, device=v_caches.device)
+        else:
+            k_codebook = torch.empty((1,), device=k_caches.device, dtype=torch.float32)
+            v_codebook = torch.empty((1,), device=v_caches.device, dtype=torch.float32)
         _flatten_kv_cache_quant[grid](
             k_caches,
             v_caches,
@@ -298,6 +371,8 @@ def flatten_kv_cache(k_caches: Tensor,
             v_states,
             k_scales_zeros,
             v_scales_zeros,
+            k_codebook,
+            v_codebook,
             start_loc,
             seqlens,
             block_offsets,

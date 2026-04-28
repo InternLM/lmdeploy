@@ -46,24 +46,24 @@ target_compile_features(unittest PRIVATE cxx_std_14)
 target_link_libraries(  # Libs for test_attention_kernels
   unittest PUBLIC
     CUDA::cudart CUDA::curand
-    gpt_kernels gtest memory_utils tensor unfused_attention_kernels cuda_utils logger)
+    gpt_kernels gtest memory_utils tensor unfused_attention_kernels cuda_utils)
 target_link_libraries(  # Libs for test_logprob_kernels
   unittest PUBLIC
     CUDA::cudart
-    logprob_kernels memory_utils cuda_utils logger)
+    logprob_kernels memory_utils cuda_utils)
 target_link_libraries(  # Libs for test_penalty_kernels
   unittest PUBLIC
     CUDA::cublas CUDA::cublasLt CUDA::cudart
-    sampling_penalty_kernels memory_utils cuda_utils logger)
+    sampling_penalty_kernels memory_utils cuda_utils)
 target_link_libraries(  # Libs for test_sampling_kernel
   unittest PUBLIC
     CUDA::cudart
-    sampling_topk_kernels sampling_topp_kernels memory_utils tensor cuda_utils logger)
+    sampling_topk_kernels sampling_topp_kernels memory_utils tensor cuda_utils)
 target_link_libraries(  # Libs for test_sampling_layer
   unittest PUBLIC
     CUDA::cublas CUDA::cublasLt CUDA::cudart
     cublasMMWrapper memory_utils
-    DynamicDecodeLayer cuda_utils logger
+    DynamicDecodeLayer cuda_utils
 )
 target_link_libraries(  # Libs for test_tensor
-  unittest PUBLIC cuda_utils logger)
+  unittest PUBLIC cuda_utils)

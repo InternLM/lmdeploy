@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Any
 
 import torch
@@ -12,7 +12,7 @@ from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.messages import SchedulerSequence
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 
-from ..ar.model_agent import ARStoppingCriteria, get_model_inputs_next_decoding
+from ..ar.model_agent import ARStoppingCriteria
 from ..base.model_agent import ExtraInputs, ExtraOutputs, ModelAgentStrategy
 
 SeqList = list[SchedulerSequence]
@@ -25,6 +25,8 @@ class ARSpecExtraInputs(ExtraInputs):
     target_logits: torch.Tensor = None
     target_hidden_states: torch.Tensor = None
     target_position_ids: torch.Tensor = None
+    target_inputs_embeds: torch.Tensor = None
+    # used in draft inputs and draft outputs
     next_token_ids: torch.LongTensor = None
     last_token_indices: torch.LongTensor = None
 
@@ -32,6 +34,7 @@ class ARSpecExtraInputs(ExtraInputs):
     output_draft_token_ids: torch.Tensor = None
     num_rejected_tokens: torch.Tensor = None
     output_token_ids: torch.Tensor = None
+    logprobs: Any = None
 
     def __repr__(self):
         return (f'ARSpecExtraInputs(next_token_ids={self.next_token_ids}, '
@@ -45,10 +48,29 @@ class ARSpecExtraInputs(ExtraInputs):
         handle = dist.broadcast(self.num_rejected_tokens, src=src, group=group, async_op=async_op)
         return handle
 
+    def clone(self, **kwargs):
+        """Get new ARSpecExtraInputs with updated fields."""
+        out_dict = {f.name: getattr(self, f.name) for f in fields(self)}
+        out_dict.update(kwargs)
+        return ARSpecExtraInputs(**out_dict)
+
     def merge(self, other: 'ARSpecExtraInputs'):
         """Merge extra inputs."""
-        output_token_ids = torch.cat([self.output_token_ids, other.output_token_ids], dim=0)
-        return ARSpecExtraInputs(output_token_ids=output_token_ids)
+        self.output_draft_token_ids = torch.cat([self.output_draft_token_ids, other.output_draft_token_ids], dim=0)
+        self.num_rejected_tokens = torch.cat([self.num_rejected_tokens, other.num_rejected_tokens], dim=0)
+        return ARSpecExtraInputs(output_draft_token_ids=self.output_draft_token_ids,
+                                 num_rejected_tokens=self.num_rejected_tokens)
+
+    def update(self, delta: 'ModelInputsDelta'):
+        """Update stopping criteria."""
+        indices = delta.indices
+        output_draft_token_ids = self.output_draft_token_ids[indices]
+        num_rejected_tokens = self.num_rejected_tokens[indices]
+        output_token_ids=self.output_token_ids[indices] if self.output_token_ids is not None else None
+        return ARSpecExtraInputs(output_draft_token_ids=output_draft_token_ids,
+                                 num_rejected_tokens=num_rejected_tokens,
+                                 output_token_ids=output_token_ids,
+                                 )
 
 
 @dataclass
@@ -92,13 +114,16 @@ class ARSpecStoppingCriteria(ARStoppingCriteria):
         if token_ids.ndim == 1:
             token_ids = token_ids.unsqueeze(-1)
         valid_tokens = token_ids > -1
-        mask = (self.num_appendable_ids.unsqueeze(-1) - valid_tokens.cumsum(dim=-1)) <= 0
+        num_appendable_ids_exp = self.num_appendable_ids.unsqueeze(-1) - torch.arange(
+            1, token_ids.size(1) + 1, device=token_ids.device)[None]
+        mask = num_appendable_ids_exp <= 0
+        mask[~valid_tokens] = False
         if stop_words is not None:
             token_ids_rsp = token_ids.unsqueeze(-1).repeat(1, 1, stop_words.numel())
             stop_words_rsp = stop_words.reshape(1, 1, -1)
             assert stop_words_rsp.ndim == token_ids_rsp.ndim == 3
             stop_mask = (token_ids_rsp == stop_words_rsp).any(-1)
-            mask = mask ^ stop_mask
+            mask = torch.logical_or(mask, stop_mask)
         # find the index of first `1`,  if not found, would be 0
         index = torch.argmax(mask.int(), dim=-1, keepdim=True)
         # update index of 0 to -1 if not found
@@ -130,14 +155,13 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
     def slice_extra_inputs(self, extra_inputs: ARSpecExtraInputs, model_inputs: ModelInputs,
                            model_outputs: dict[str, torch.Tensor], **kwargs) -> ARSpecExtraInputs:
         """Slice outputs."""
-        extra_inputs = ARSpecExtraInputs()
-        extra_inputs.target_hidden_states = model_outputs.get('hidden_states')
-        extra_inputs.target_position_ids = model_outputs.get('position_ids', None)
-        if model_inputs.is_decoding:
-            batch_size = model_inputs.seq_length.size(0)
-            logits = model_outputs['logits'][0]
-            extra_inputs.target_logits = logits.unflatten(0, (batch_size, -1))[:, :-1]
-        return extra_inputs
+        target_logits = model_outputs['logits'][0]
+        return extra_inputs.clone(
+            target_hidden_states=model_outputs.get('hidden_states'),
+            target_position_ids=model_outputs.get('position_ids', None),
+            target_inputs_embeds=model_outputs.get('target_inputs_embeds', None),
+            target_logits=target_logits,
+        )
 
     def step_sampling_inputs(self, sampling_inputs: SamplingInputs, next_token_ids: torch.Tensor, **kwargs):
         """step."""
@@ -159,56 +183,10 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
         """Create extra inputs."""
         return ARSpecExtraInputs()
 
-    def update_extra_inputs(self, extra_inputs: ARSpecExtraInputs, delta: 'ModelInputsDelta') -> ARSpecExtraInputs:
-        """Update extra inputs with model inputs delta."""
-        indices = delta.indices
-        output_token_ids = extra_inputs.output_token_ids[indices]
-        return ARSpecExtraInputs(output_token_ids=output_token_ids)
-
     def make_extra_outputs(self, extra_inputs: ARSpecExtraInputs) -> ARSpecExtraOutputs:
         """Create extra outputs."""
-        output = ARSpecExtraOutputs()
-        output.draft_token_ids = extra_inputs.output_draft_token_ids
+        output = ARSpecExtraOutputs(draft_token_ids=extra_inputs.output_draft_token_ids)
         return output
-
-    def update_prefill_for_next_step(
-        self,
-        model_inputs: 'ModelInputs',
-        extra_inputs: ARSpecExtraInputs,
-        next_token_ids: torch.Tensor,
-        model_metas: Any,
-        extra_outputs: ARSpecExtraOutputs,
-    ) -> tuple['ModelInputs', ARSpecExtraInputs]:
-        """Step next decoding."""
-        next_token_ids = next_token_ids[:, None]
-        next_token_ids = torch.cat([next_token_ids, extra_outputs.draft_token_ids], dim=-1)
-        max_q_seqlen = next_token_ids.size(-1)
-        next_token_ids = next_token_ids.flatten()[None, :]
-        inputs = get_model_inputs_next_decoding(model_inputs,
-                                                next_token_ids,
-                                                max_q_seqlen=max_q_seqlen,
-                                                model_metas=model_metas)
-        extra_inputs = ARSpecExtraInputs(output_token_ids=extra_outputs.draft_token_ids)
-        return inputs, extra_inputs
-
-    def update_decoding_for_next_step(self, model_inputs: 'ModelInputs', next_token_ids: torch.Tensor, model_metas: Any,
-                                      extra_inputs: ARSpecExtraInputs, extra_outputs: ARSpecExtraOutputs):
-        """Step next inputs."""
-        model_inputs.model_metas = model_metas
-        step_seqlens = model_inputs.seq_length
-        batch_size = step_seqlens.size(0)
-
-        # update extra inputs
-        extra_inputs.output_token_ids = extra_outputs.draft_token_ids
-
-        # update inputs
-        step_seqlens = model_inputs.seq_length - extra_inputs.num_rejected_tokens
-        input_ids = next_token_ids.new_empty((batch_size, self.num_spec_tokens + 1))
-        input_ids[:, 0] = next_token_ids
-        input_ids[:, 1:] = extra_inputs.output_draft_token_ids
-        input_ids = input_ids.flatten()[None, :]
-        model_inputs.step(input_ids, step_seqlens)
-        return model_inputs, extra_inputs
 
     def post_sampling(self, inputs: 'ModelInputs', logits: torch.Tensor, next_token_ids: torch.LongTensor,
                       extra_inputs: ARSpecExtraInputs):
@@ -218,9 +196,10 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
     def make_dummy_next_token(self, inputs: 'ModelInputs', logits: torch.Tensor, extra_inputs: ExtraInputs):
         """Make dummy next token for broadcast."""
         with torch.inference_mode():
-            next_token_ids = inputs.input_ids.new_zeros(logits.size(0))
-            extra_inputs.output_draft_token_ids = inputs.input_ids.new_zeros((logits.size(0), self.num_spec_tokens))
-            extra_inputs.num_rejected_tokens = inputs.input_ids.new_zeros(logits.size(0))
+            batch_size = inputs.seq_length.size(0)
+            next_token_ids = inputs.input_ids.new_zeros(batch_size)
+            extra_inputs.output_draft_token_ids = inputs.input_ids.new_zeros((batch_size, self.num_spec_tokens))
+            extra_inputs.num_rejected_tokens = inputs.input_ids.new_zeros(batch_size)
         return next_token_ids, extra_inputs
 
     @contextmanager

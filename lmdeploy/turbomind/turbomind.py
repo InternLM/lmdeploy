@@ -285,7 +285,7 @@ class TurboMind:
         self._tm_model = tm_model
         return model_comm
 
-    def sleep(self, level: int = 1):
+    async def sleep(self, level: int = 1):
         """Sleep the model."""
         with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
             for _ in e.map(self.model_comm.sleep, range(self.gpu_count), [level] * self.gpu_count):
@@ -823,7 +823,7 @@ class TurboMindInstance:
         if cfg.logprobs:
             if cfg.logprobs > MAX_LOGPROBS:
                 cfg.logprobs = MAX_LOGPROBS
-                logger.warning(f'logprobs shoudd be in range [1, {MAX_LOGPROBS}]'
+                logger.warning(f'logprobs should be in range [1, {MAX_LOGPROBS}]'
                                f'update logprobs={cfg.logprobs}')
             c.output_logprobs = cfg.logprobs
         if cfg.random_seed is not None:

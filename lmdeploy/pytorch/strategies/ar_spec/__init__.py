@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from lmdeploy.pytorch.strategies.base.model_agent import ModelAgentStrategy
     from lmdeploy.pytorch.strategies.base.model_inputs import ModelInputsStrategy
     from lmdeploy.pytorch.strategies.base.sampling import SamplingStrategy
+    from lmdeploy.pytorch.strategies.base.step_inputs import StepInputs
 
 from ..base import StrategyFactoryBase
 
@@ -33,7 +34,8 @@ class ARSpecStrategyFactory(StrategyFactoryBase):
         from .sampling import ARSpecSamplingStrategy
         pad_token_id = self.model_config.bos_token_id
         pad_token_id = 0 if pad_token_id is None else pad_token_id
-        return ARSpecSamplingStrategy(pad_token_id)
+        num_spec_tokens = self.specdecode_config.num_speculative_tokens
+        return ARSpecSamplingStrategy(pad_token_id, num_spec_tokens=num_spec_tokens)
 
     def build_model_inputs_strategy(self) -> 'ModelInputsStrategy':
         """Build model inputs strategy."""
@@ -56,3 +58,13 @@ class ARSpecStrategyFactory(StrategyFactoryBase):
     def build_sequence_strategy(self) -> SequenceStrategy:
         from .sequence import ARSpecSequenceStrategy
         return ARSpecSequenceStrategy()
+
+    def build_step_inputs(self) -> 'StepInputs':
+        """Build step inputs for the decoding loop."""
+        from .step_inputs import ARSpecStepInputs
+        pad_token_id = self.model_config.bos_token_id
+        pad_token_id = 0 if pad_token_id is None else pad_token_id
+        return ARSpecStepInputs(
+            _pad_token_id=pad_token_id,
+            _num_spec_tokens=self.specdecode_config.num_speculative_tokens,
+        )

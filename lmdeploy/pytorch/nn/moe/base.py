@@ -319,3 +319,46 @@ class FusedMoEBase(nn.Module):
     def renormalize(self, topk_weights):
         """renormalize."""
         return _renormalize(topk_weights, self.do_renormalize)
+
+    def build_moe_all_reduce(self):
+        """Build moe all reduce.
+
+        This is only used when dp==1 and tp>1, and fused moe module does not perform all_reduce
+        """
+        dist_ctx = get_dist_manager().current_context()
+        dp = dist_ctx.dist_config.dp
+        enable = (dp == 1) and (not self.all_reduce)
+        return MoEAllReduce(enable, self.tp, self.tp_mode)
+
+
+class MoEAllReduce(nn.Module):
+
+    def __init__(self, enable: bool, moe_tp: int, tp_mode: TPMode):
+        super().__init__()
+        enable_moe_tp = moe_tp > 1
+        if tp_mode == TPMode.DEFAULT and enable_moe_tp:
+            # else, shared expert should has same tp as moe layer
+            #
+            self._enable_shared_tp = enable_moe_tp
+            self._all_reduce = enable and enable_moe_tp
+        else:
+            # do not support shared layer to perform tp
+            # do not perform all reduce here
+            self._enable_shared_tp = False
+            self._all_reduce = False
+
+        if self._all_reduce:
+            dist_ctx = get_dist_manager().current_context()
+            self.group = dist_ctx.moe_tp_group.gpu_group
+        else:
+            self.group = None
+
+    def enable_shared_tp(self):
+        """Shared tp."""
+        return self._enable_shared_tp
+
+    def forward(self, x: torch.Tensor):
+        """forward."""
+        if self._all_reduce:
+            dist.all_reduce(x, group=self.group)
+        return x
