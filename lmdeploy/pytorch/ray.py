@@ -100,14 +100,16 @@ def init_ray_cluster(world_size: int, ray_address: str = None, dp: int = 1, devi
         try:
             num_cpus = world_size
             object_store_memory = _get_obj_store_memory(dp=dp)
-            ray.init(address=ray_address,
+            ctx = ray.init(address=ray_address,
                      ignore_reinit_error=True,
                      num_cpus=num_cpus,
                      object_store_memory=object_store_memory)
+            logger.info(f'Ray initialized with address: {ctx.address_info["address"]}')
         except ValueError as e:
             if e.args is not None and len(e.args) >= 1 and e.args[
                     0] == 'When connecting to an existing cluster, num_cpus and num_gpus must not be provided.':
-                ray.init(address=ray_address, ignore_reinit_error=True)
+                ctx = ray.init(address=ray_address, ignore_reinit_error=True)
+                logger.info(f'Ray initialized with address: {ctx.address_info["address"]}')
             else:
                 raise
 

@@ -303,10 +303,10 @@ class AsyncRPCClient:
         """Async call."""
         return await self._async_call_impl(method, False, *args, **kwargs)
 
-    async def async_stream_call(self, method, *args, **kwargs):
+    async def async_stream_call(self, method, sess_event: asyncio.Event, *args, **kwargs):
         """Streaming call."""
         stream_id = await self._async_call_impl(method, True, *args, **kwargs)
-
+        sess_event.set()
         stopped = False
         while not stopped:
             output, stopped = await self.async_call('_asyncrpcserver_get_stream_output', stream_id)
