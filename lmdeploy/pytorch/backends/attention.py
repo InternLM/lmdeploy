@@ -27,8 +27,9 @@ class AttentionMetadata:
 class V4AttentionMetadata:
     """DeepSeek V4 attention metadata.
 
-    This metadata describes how the backend should read raw/compressed cache entries for a decode step. It intentionally
-    carries logical positions and fixed-shape sparse selection tensors instead of already materialized history buffers.
+    This metadata describes how the backend should read window/compressed cache entries for a decode step. It
+    intentionally carries logical positions and fixed-shape sparse selection tensors instead of already materialized
+    history buffers.
     """
 
     is_decoding: bool

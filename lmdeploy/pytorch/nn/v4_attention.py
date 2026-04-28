@@ -22,14 +22,14 @@ class V4Attention(nn.Module):
 
     def forward_decode(self,
                        query: torch.Tensor,
-                       raw_kv_cache: torch.Tensor,
+                       window_kv_state: torch.Tensor,
                        attn_sink: torch.Tensor,
                        attn_metadata: V4AttentionMetadata,
                        block_size: int,
                        compressed_kv_cache: torch.Tensor | None = None,
                        decode_scratch: dict[str, torch.Tensor] | None = None):
         return self.impl.forward_decode(query,
-                                        raw_kv_cache,
+                                        window_kv_state,
                                         attn_sink,
                                         attn_metadata,
                                         block_size,

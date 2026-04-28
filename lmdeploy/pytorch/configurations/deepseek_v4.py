@@ -65,9 +65,7 @@ class DeepseekV4ModelConfigBuilder(AutoModelConfigBuilder):
 
         # ---- block cache specs ----
         all_layers = list(range(num_layers))
-        block_specs = [
-            BlockCacheSpec('v4_raw_kv', all_layers, (head_dim,), torch.bfloat16),
-        ]
+        block_specs = []
 
         ratio4_layers = [i for i, r in enumerate(compress_ratios) if r == 4]
         ratio128_layers = [i for i, r in enumerate(compress_ratios) if r == 128]
@@ -87,6 +85,8 @@ class DeepseekV4ModelConfigBuilder(AutoModelConfigBuilder):
 
         # ---- state cache specs ----
         state_specs = []
+        state_specs.append(
+            StateCacheSpec('v4_window_kv', (hf_config.sliding_window, head_dim), torch.bfloat16, layer_ids=all_layers))
         if ratio4_layers:
             # overlap compressor scratch for Attention (kv_state + score_state)
             # rows = 2 * ratio = 8, state_dim = 2 * head_dim

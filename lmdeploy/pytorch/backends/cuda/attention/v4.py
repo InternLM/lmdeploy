@@ -61,7 +61,7 @@ class TritonV4AttentionImpl:
 
     def forward_decode(self,
                        query: torch.Tensor,
-                       raw_kv_cache: torch.Tensor,
+                       window_kv_state: torch.Tensor,
                        attn_sink: torch.Tensor,
                        attn_metadata: V4AttentionMetadata,
                        block_size: int,
@@ -74,8 +74,11 @@ class TritonV4AttentionImpl:
             window_kv = decode_scratch['selected_window_kv'][:bsz]
         else:
             window_kv = torch.empty((bsz, self.window_size, self.head_size), dtype=torch.bfloat16, device=query.device)
-        window_kv.copy_(self._gather_cache_entries(raw_kv_cache, block_offsets, attn_metadata.window_positions,
-                                                   block_size))
+        safe_positions = attn_metadata.window_positions.clamp(min=0)
+        gathered_window = window_kv_state.gather(1, safe_positions.unsqueeze(-1).expand(-1, -1, self.head_size))
+        gathered_window = torch.where(attn_metadata.window_positions.unsqueeze(-1) >= 0, gathered_window,
+                                      gathered_window.new_zeros(()))
+        window_kv.copy_(gathered_window)
 
         full_kv = window_kv
         if compressed_kv_cache is not None and attn_metadata.compressed_positions is not None:

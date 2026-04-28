@@ -202,8 +202,8 @@ def _build_prefix_positions(lengths: torch.Tensor, max_len: int):
 
 
 def _build_window_positions(total_lens: torch.Tensor, window_size: int):
-    """Build chronologically ordered trailing window positions padded with
-    `-1`."""
+    """Build chronologically ordered trailing window positions in ring-buffer
+    coordinates padded with `-1`."""
     device = total_lens.device
     if window_size == 0:
         empty = torch.empty((total_lens.numel(), 0), dtype=torch.long, device=device)
@@ -212,7 +212,7 @@ def _build_window_positions(total_lens: torch.Tensor, window_size: int):
     window_lens = total_lens.clamp(max=window_size)
     starts = total_lens - window_lens
     mask = arange < window_lens.unsqueeze(1)
-    positions = starts.unsqueeze(1) + arange
+    positions = torch.remainder(starts.unsqueeze(1) + arange, window_size)
     positions = torch.where(mask, positions, positions.new_full((), -1))
     return positions, window_lens, mask
 
@@ -766,6 +766,28 @@ class Attention(nn.Module):
         blend_mask = write_mask.view(-1, *([1] * (values.dim() - 1)))
         cache[phys_blocks, block_off] = torch.where(blend_mask, values, target)
 
+    @staticmethod
+    def _write_window_state_prefill(window_state: torch.Tensor, kv: torch.Tensor, start_pos: int, window_size: int):
+        """Write prefill KV into the per-sequence ring window state."""
+        seqlen = kv.size(0)
+        total_len = start_pos + seqlen
+        if total_len <= window_size:
+            positions = torch.remainder(torch.arange(start_pos, total_len, device=kv.device), window_size)
+            window_state[positions] = kv
+            return
+
+        if seqlen <= window_size:
+            positions = torch.remainder(torch.arange(start_pos, total_len, device=kv.device), window_size)
+            window_state[positions] = kv
+            return
+
+        trailing = kv[-window_size:]
+        cutoff = total_len % window_size
+        left = window_size - cutoff
+        window_state[cutoff:] = trailing[:left]
+        if cutoff > 0:
+            window_state[:cutoff] = trailing[left:]
+
     def _build_decode_attention_metadata(self,
                                          block_offsets: torch.Tensor,
                                          total_lens: torch.Tensor,
@@ -822,12 +844,10 @@ class Attention(nn.Module):
         named_state_caches = context.named_state_caches
         block_offsets = context.block_offsets
         block_size = context.cache_config.kernel_block_size
-        raw_kv_cache = block_caches['v4_raw_kv'][self.layer_id]
+        window_state = named_state_caches['v4_window_kv'][self.layer_id, slot]
 
-        # ---- write raw kv ----
-        raw_positions = torch.arange(start_pos, start_pos + seqlen, device=x.device, dtype=torch.long)
-        raw_batch_idx = torch.full_like(raw_positions, seq_idx)
-        self._write_cache_entries(raw_kv_cache, block_offsets, raw_batch_idx, raw_positions, kv[0], block_size)
+        # ---- write ring window state ----
+        self._write_window_state_prefill(window_state, kv[0], start_pos, self.window_size)
 
         # ---- gather window ----
         total_len = start_pos + seqlen
@@ -835,10 +855,11 @@ class Attention(nn.Module):
             # prefill: use the full kv directly (topk indices are absolute positions)
             window_kv = kv[0]
         else:
-            window_start = max(0, total_len - self.window_size)
-            window_positions = torch.arange(window_start, total_len, device=x.device, dtype=torch.long).unsqueeze(0)
-            window_kv = self._gather_cache_entries(raw_kv_cache, block_offsets[seq_idx:seq_idx + 1], window_positions,
-                                                   block_size)[0]
+            window_positions, _, window_mask = _build_window_positions(torch.tensor([total_len], device=x.device),
+                                                                       self.window_size)
+            safe_positions = window_positions.clamp(min=0)
+            window_kv = window_state[safe_positions[0]]
+            window_kv = torch.where(window_mask[0].unsqueeze(-1), window_kv, window_kv.new_zeros(()))
 
         topk_idxs = get_window_topk_idxs(self.window_size, bsz, seqlen, start_pos, x.device)
         compressed_kv = None
@@ -931,18 +952,16 @@ class Attention(nn.Module):
         named_state_caches = context.named_state_caches
         block_offsets = context.block_offsets.long()
         block_size = context.cache_config.kernel_block_size
-        raw_kv_cache = block_caches['v4_raw_kv']
-        cache_layer = raw_kv_cache[self.layer_id]
+        window_state = named_state_caches['v4_window_kv'][self.layer_id, slot.long()]
 
         batch_idx = torch.arange(bsz, device=x.device)
         total_lens = torch.where(valid_mask, safe_start_pos + 1, start_pos.new_zeros(()))
-        self._write_cache_entries(cache_layer,
-                                  block_offsets,
-                                  batch_idx,
-                                  safe_start_pos.long(),
-                                  kv[:, 0],
-                                  block_size,
-                                  write_mask=valid_mask)
+        window_write_pos = torch.remainder(safe_start_pos.long(), self.window_size)
+        target_window = window_state[batch_idx, window_write_pos]
+        values = kv[:, 0].to(target_window.dtype)
+        blend_mask = valid_mask.view(-1, 1)
+        window_state[batch_idx, window_write_pos] = torch.where(blend_mask, values, target_window)
+        named_state_caches['v4_window_kv'][self.layer_id, slot.long()] = window_state
 
         if decode_scratch is None:
             max_total_len = int(total_lens.max().item())
@@ -1015,7 +1034,7 @@ class Attention(nn.Module):
                                                           compressed_positions,
                                                           decode_scratch)
         out = self.attn_fwd.forward_decode(q,
-                                           cache_layer,
+                                           window_state,
                                            self.attn_sink,
                                            attn_meta,
                                            block_size,
