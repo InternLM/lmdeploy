@@ -27,6 +27,8 @@ class V4Attention(nn.Module):
                        attn_metadata: V4AttentionMetadata,
                        block_size: int,
                        compressed_kv_cache: torch.Tensor | None = None,
+                       window_kv_fp8_state: torch.Tensor | None = None,
+                       compressed_kv_fp8_cache: torch.Tensor | None = None,
                        decode_scratch: dict[str, torch.Tensor] | None = None):
         return self.impl.forward_decode(query,
                                         window_kv_state,
@@ -34,4 +36,6 @@ class V4Attention(nn.Module):
                                         attn_metadata,
                                         block_size,
                                         compressed_kv_cache=compressed_kv_cache,
+                                        window_kv_fp8_state=window_kv_fp8_state,
+                                        compressed_kv_fp8_cache=compressed_kv_fp8_cache,
                                         decode_scratch=decode_scratch)

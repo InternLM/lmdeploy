@@ -37,11 +37,15 @@ class V4AttentionMetadata:
     q_seqlens: torch.Tensor
     kv_seqlens: torch.Tensor
     state_ids: torch.Tensor
-    topk_indices: torch.Tensor
-    window_positions: torch.Tensor
-    window_lens: torch.Tensor
     valid_mask: torch.Tensor
+    window_positions: torch.Tensor = None
+    window_lens: torch.Tensor = None
+    topk_indices: torch.Tensor = None
     compress_ratio: int = 0
+    indices_in_kvcache: torch.Tensor = None
+    topk_length: torch.Tensor = None
+    extra_indices_in_kvcache: torch.Tensor = None
+    extra_topk_length: torch.Tensor = None
     compressed_positions: torch.Tensor = None
     compressed_valid_mask: torch.Tensor = None
 

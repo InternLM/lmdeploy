@@ -3,7 +3,7 @@
 import torch
 import torch.distributed as dist
 
-from ..indexer import BaseV4Indexer, BaseV4IndexerBuilder, V4IndexerMetadata
+from ..indexer import BaseV4Indexer, BaseV4IndexerBuilder, V4IndexerMetadata, V4IndexerOutput
 
 
 def _build_prefix_positions(lengths: torch.Tensor, max_len: int):
@@ -76,7 +76,7 @@ class TritonV4IndexerImpl(BaseV4Indexer):
                        meta: V4IndexerMetadata,
                        block_size: int,
                        layer_id: int,
-                       index_scratch: torch.Tensor):
+                       index_scratch: torch.Tensor) -> V4IndexerOutput:
         block_offsets = meta.block_offsets.long()
         valid_mask = meta.valid_mask
         start_pos = torch.where(valid_mask, meta.start_pos, meta.start_pos.new_zeros(()))
@@ -94,7 +94,9 @@ class TritonV4IndexerImpl(BaseV4Indexer):
 
         max_index = index_scratch.size(1)
         if max_index == 0:
-            return query.new_empty((bsz, 1, 0), dtype=torch.long)
+            empty = query.new_empty((bsz, 1, 0), dtype=torch.long)
+            return V4IndexerOutput(indices_in_kvcache=empty, topk_length=start_pos.new_zeros((bsz, ),
+                                                                                             dtype=torch.int32))
 
         num_index = torch.where(valid_mask,
                                 torch.div(start_pos + 1, self.compress_ratio, rounding_mode='floor'),
@@ -111,9 +113,18 @@ class TritonV4IndexerImpl(BaseV4Indexer):
 
         topk_width = min(self.index_topk, max_index)
         topk = score.topk(topk_width, dim=-1)[1]
+        topk_length = num_index.clamp(max=topk_width).to(torch.int32)
         valid_topk = torch.arange(topk_width, device=query.device).view(1, 1, -1)
-        valid_topk = valid_topk < num_index.clamp(max=topk_width).view(-1, 1, 1)
-        return torch.where(valid_topk, topk, topk.new_full((), -1))
+        valid_topk = valid_topk < topk_length.view(-1, 1, 1)
+        logical_topk = torch.where(valid_topk, topk, topk.new_full((), -1))
+
+        safe_logical_topk = logical_topk.clamp(min=0)
+        block_idx = torch.div(safe_logical_topk, block_size, rounding_mode='floor').long()
+        phys_block = block_offsets.gather(1, block_idx.view(bsz, -1)).view_as(logical_topk).long()
+        block_off = torch.remainder(safe_logical_topk, block_size).long()
+        phys_indices = phys_block * block_size + block_off
+        phys_indices = torch.where(logical_topk >= 0, phys_indices, phys_indices.new_full((), -1))
+        return V4IndexerOutput(indices_in_kvcache=phys_indices, topk_length=topk_length)
 
 
 class TritonV4IndexerBuilder(BaseV4IndexerBuilder):

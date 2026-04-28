@@ -19,6 +19,36 @@ class TritonV4AttentionImpl:
         self.window_size = window_size
         self.compress_ratio = compress_ratio
         self.kernel_mod = kernel_mod
+        import flash_mla
+        self.flash_mla = flash_mla
+
+    @staticmethod
+    def _pad_query_heads(query: torch.Tensor, attn_sink: torch.Tensor):
+        num_heads = query.size(2)
+        if num_heads in (64, 128):
+            return query, attn_sink, num_heads
+        if num_heads < 64:
+            padded_heads = 64
+        elif num_heads < 128:
+            padded_heads = 128
+        else:
+            raise RuntimeError(f'Unsupported h_q for FlashMLA sparse decode: {num_heads}')
+
+        pad_heads = padded_heads - num_heads
+        query = torch.nn.functional.pad(query, (0, 0, 0, pad_heads))
+        attn_sink = torch.nn.functional.pad(attn_sink, (0, pad_heads))
+        return query, attn_sink, num_heads
+
+    @staticmethod
+    def _pad_sparse_indices(indices: torch.Tensor | None, block: int = 64):
+        if indices is None:
+            return None
+        topk = indices.size(-1)
+        padded_topk = ((topk + block - 1) // block) * block
+        if padded_topk == topk:
+            return indices
+        pad = padded_topk - topk
+        return torch.nn.functional.pad(indices, (0, pad), value=-1)
 
     @staticmethod
     def _gather_cache_entries(cache: torch.Tensor, block_offsets: torch.Tensor, positions: torch.Tensor,
@@ -66,7 +96,43 @@ class TritonV4AttentionImpl:
                        attn_metadata: V4AttentionMetadata,
                        block_size: int,
                        compressed_kv_cache: torch.Tensor | None = None,
+                       window_kv_fp8_state: torch.Tensor | None = None,
+                       compressed_kv_fp8_cache: torch.Tensor | None = None,
                        decode_scratch: dict[str, torch.Tensor] | None = None):
+        if (self.compress_ratio == 4 and attn_metadata.indices_in_kvcache is not None
+                and attn_metadata.extra_indices_in_kvcache is not None and compressed_kv_fp8_cache is not None
+                and window_kv_fp8_state is not None):
+            num_window_blocks = self.window_size // block_size
+            extra_k_cache = window_kv_fp8_state.view(query.size(0), num_window_blocks, block_size, -1)
+            outputs = []
+            for batch_idx in range(query.size(0)):
+                sched_meta, _ = self.flash_mla.get_mla_metadata()
+                padded_query, padded_sink, original_heads = self._pad_query_heads(query[batch_idx:batch_idx + 1],
+                                                                                  attn_sink)
+                padded_indices = self._pad_sparse_indices(attn_metadata.indices_in_kvcache[batch_idx:batch_idx + 1])
+                padded_extra_indices = self._pad_sparse_indices(
+                    attn_metadata.extra_indices_in_kvcache[batch_idx:batch_idx + 1])
+                output, _ = self.flash_mla.flash_mla_with_kvcache(
+                    padded_query,
+                    k_cache=compressed_kv_fp8_cache.unsqueeze(2),
+                    block_table=None,
+                    cache_seqlens=None,
+                    head_dim_v=self.head_size,
+                    tile_scheduler_metadata=sched_meta,
+                    num_splits=None,
+                    softmax_scale=self.scale,
+                    causal=False,
+                    is_fp8_kvcache=True,
+                    indices=padded_indices.to(torch.int32),
+                    attn_sink=padded_sink,
+                    extra_k_cache=extra_k_cache[batch_idx].unsqueeze(2),
+                    extra_indices_in_kvcache=padded_extra_indices.to(torch.int32),
+                    topk_length=attn_metadata.topk_length[batch_idx:batch_idx + 1].to(torch.int32),
+                    extra_topk_length=attn_metadata.extra_topk_length[batch_idx:batch_idx + 1].to(torch.int32),
+                )
+                outputs.append(output[:, :, :original_heads])
+            return torch.cat(outputs, dim=0)
+
         block_offsets = attn_metadata.block_offsets.long()
         bsz = query.size(0)
 

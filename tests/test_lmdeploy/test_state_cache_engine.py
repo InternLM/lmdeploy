@@ -2,6 +2,11 @@ from types import SimpleNamespace
 
 import torch
 
+from lmdeploy.pytorch.backends.cuda.attention.flashmla_utils import (
+    dequantize_model1_fp8_sparse,
+    model1_fp8_sparse_token_dim,
+    quantize_model1_fp8_sparse,
+)
 from lmdeploy.pytorch.config import StateCacheSpec
 from lmdeploy.pytorch.configurations.deepseek_v4 import DeepseekV4ModelConfigBuilder
 from lmdeploy.pytorch.engine.cache_engine import StateCacheEngine
@@ -55,10 +60,14 @@ def test_deepseek_v4_builder_marks_state_cache_layers():
     block_specs = {spec.name: spec for spec in config.block_cache_specs}
 
     assert specs['v4_window_kv'].layer_ids == [0, 1, 2, 3]
+    assert specs['v4_window_kv_fp8'].layer_ids == [0, 1, 2, 3]
     assert specs['v4_compress_state_r4'].layer_ids == [0, 3]
     assert specs['v4_compress_state_r4_idx'].layer_ids == [0, 3]
     assert specs['v4_compress_state_r128'].layer_ids == [2]
+    assert 'v4_compress_state_r4_head' not in specs
+    assert 'v4_compress_state_r4_idx_head' not in specs
     assert 'v4_raw_kv' not in block_specs
+    assert 'v4_compressed_kv_r4_fp8' in block_specs
 
 
 def test_build_window_positions_uses_ring_coordinates():
@@ -69,3 +78,19 @@ def test_build_window_positions_uses_ring_coordinates():
     assert torch.equal(mask[0], torch.tensor([True, True, True, False, False, False, False, False]))
     assert torch.equal(positions[0, :3], torch.tensor([0, 1, 2]))
     assert torch.equal(positions[1], torch.tensor([2, 3, 4, 5, 6, 7, 0, 1]))
+
+
+def test_flashmla_model1_fp8_sparse_helper_shape():
+    token_dim = model1_fp8_sparse_token_dim(64)
+    assert token_dim == 584
+
+    if not torch.cuda.is_available():
+        return
+
+    cache = torch.randn(2, 64, 1, 512, dtype=torch.bfloat16, device='cuda')
+    packed = quantize_model1_fp8_sparse(cache)
+    assert packed.shape == (2, 64, 1, 584)
+    assert packed.dtype == torch.float8_e4m3fn
+    unpacked = dequantize_model1_fp8_sparse(packed)
+    assert unpacked.shape == (2, 64, 1, 512)
+    assert unpacked.dtype == torch.bfloat16

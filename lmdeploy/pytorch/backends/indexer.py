@@ -16,6 +16,14 @@ class V4IndexerMetadata:
     compress_ratio: int
 
 
+@dataclass
+class V4IndexerOutput:
+    """DeepSeek V4 indexer decode output."""
+
+    indices_in_kvcache: torch.Tensor
+    topk_length: torch.Tensor
+
+
 class BaseV4Indexer(ABC):
 
     @abstractmethod
@@ -28,7 +36,7 @@ class BaseV4Indexer(ABC):
                        meta: V4IndexerMetadata,
                        block_size: int,
                        layer_id: int,
-                       index_scratch: torch.Tensor) -> torch.Tensor:
+                       index_scratch: torch.Tensor) -> V4IndexerOutput:
         """forward_decode."""
         raise NotImplementedError
 

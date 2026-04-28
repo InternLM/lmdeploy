@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
+from lmdeploy.pytorch.backends.cuda.attention.flashmla_utils import model1_fp8_sparse_token_dim
 from lmdeploy.pytorch.config import BlockCacheSpec, ModelConfig, StateCacheSpec
 
 from .builder import AutoModelConfigBuilder
@@ -10,6 +11,11 @@ def _check_env_v4(device: str = 'cuda'):
     """Environment check for DeepSeek-V4."""
     if device != 'cuda':
         return
+
+    try:
+        import flash_mla  # noqa: F401
+    except ImportError as e:
+        raise ImportError('DeepSeek-V4 requires <flash_mla> to be installed.') from e
 
     try:
         import deep_gemm  # noqa: F401
@@ -46,6 +52,7 @@ class DeepseekV4ModelConfigBuilder(AutoModelConfigBuilder):
         """
         bos_token_id = getattr(hf_config, 'bos_token_id', None)
         head_dim = getattr(hf_config, 'head_dim', 512)
+        packed_token_dim = model1_fp8_sparse_token_dim(64)
         num_layers = hf_config.num_hidden_layers
         compress_ratios = getattr(hf_config, 'compress_ratios', None) or [0] * num_layers
 
@@ -73,6 +80,8 @@ class DeepseekV4ModelConfigBuilder(AutoModelConfigBuilder):
         if ratio4_layers:
             block_specs.append(
                 BlockCacheSpec('v4_compressed_kv_r4', ratio4_layers, (head_dim,), torch.bfloat16))
+            block_specs.append(
+                BlockCacheSpec('v4_compressed_kv_r4_fp8', ratio4_layers, (packed_token_dim,), torch.float8_e4m3fn))
             index_head_dim = getattr(hf_config, 'index_head_dim', 128)
             block_specs.append(
                 BlockCacheSpec('v4_index_kv_r4', ratio4_layers, (index_head_dim,), torch.bfloat16))
@@ -87,6 +96,9 @@ class DeepseekV4ModelConfigBuilder(AutoModelConfigBuilder):
         state_specs = []
         state_specs.append(
             StateCacheSpec('v4_window_kv', (hf_config.sliding_window, head_dim), torch.bfloat16, layer_ids=all_layers))
+        state_specs.append(
+            StateCacheSpec('v4_window_kv_fp8', (hf_config.sliding_window, packed_token_dim), torch.float8_e4m3fn,
+                           layer_ids=all_layers))
         if ratio4_layers:
             # overlap compressor scratch for Attention (kv_state + score_state)
             # rows = 2 * ratio = 8, state_dim = 2 * head_dim

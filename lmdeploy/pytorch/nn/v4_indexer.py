@@ -2,7 +2,7 @@
 from torch import nn
 
 from lmdeploy.pytorch.backends import OpType, get_backend
-from lmdeploy.pytorch.backends.indexer import V4IndexerMetadata
+from lmdeploy.pytorch.backends.indexer import V4IndexerMetadata, V4IndexerOutput
 
 
 class V4Indexer(nn.Module):
@@ -23,6 +23,6 @@ class V4Indexer(nn.Module):
                        meta: V4IndexerMetadata,
                        block_size: int,
                        layer_id: int,
-                       index_scratch):
+                       index_scratch) -> V4IndexerOutput:
         return self.impl.forward_decode(query, weights, new_kv, emit_mask, index_kv_cache, meta, block_size,
                                         layer_id, index_scratch)
