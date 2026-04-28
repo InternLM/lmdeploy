@@ -121,8 +121,6 @@ The grammar mask is applied at two stages:
 1. **Draft model** — forked grammar matchers are used to mask each draft position serially. Each position's mask depends on the token accepted at the previous position, ensuring the draft model proposes grammatically valid tokens.
 2. **Target model verification** — position-serial grammar masking is applied to the target model's logits. After rejection sampling, only the accepted tokens are fed back to the original (un-forked) grammar matchers, keeping them in sync for the next step.
 
-For **Eagle3**, the draft vocabulary may differ from the target vocabulary, so a grammar mask cannot be directly applied to draft-vocab logits. In this case, the draft model proposes freely and grammar constraints are enforced solely on the target side via rejection sampling.
-
 ### pipeline
 
 ```python
