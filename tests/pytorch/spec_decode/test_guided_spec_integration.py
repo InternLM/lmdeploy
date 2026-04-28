@@ -1104,13 +1104,22 @@ class TestEagle3GetOutputs:
         draft_token_ids, _, _ = proposer.get_outputs(
             model_outputs, model_inputs, guided_processors={0: draft_fork})
 
-        # Original matcher should be unchanged
+        # Original matcher should be unchanged, while the fork should reflect
+        # acceptance of the emitted token. Since immediate allowed-id sets may
+        # legitimately coincide for some JSON states, replay the same token on
+        # an independent fork and compare the resulting state to `draft_fork`.
+        accepted_token = int(draft_token_ids.reshape(-1)[0].item())
+        replay_fork = original.fork()
+        replay_fork.accept_token(accepted_token)
         bm_orig = guided_manager.allocate_batched_bitmap(1)
         guided_manager.fill_bitmap(original, bm_orig, 0)
         bm_fork = guided_manager.allocate_batched_bitmap(1)
         guided_manager.fill_bitmap(draft_fork, bm_fork, 0)
-        # fork has advanced by one token; original hasn't
-        assert _allowed_ids(bm_orig) != _allowed_ids(bm_fork) or True  # may coincide for JSON
+        bm_replay = guided_manager.allocate_batched_bitmap(1)
+        guided_manager.fill_bitmap(replay_fork, bm_replay, 0)
+        assert _allowed_ids(bm_fork) == _allowed_ids(bm_replay)
+        # Both original and advanced fork must remain usable for subsequent
+        # mask production even if their immediate masks happen to coincide.
 
     def test_get_outputs_multi_step_with_fork(self, compiler, tokenizer_info,
                                                 guided_manager):
