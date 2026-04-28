@@ -270,6 +270,7 @@ class Compressor(nn.Module):
 
     def __init__(self,
                  args: V4Args,
+                 layer_id: int,
                  kernel_mod,
                  compress_ratio: int,
                  head_dim: int,
@@ -277,6 +278,7 @@ class Compressor(nn.Module):
                  device: torch.device | str | None,
                  rotate: bool = False):
         super().__init__()
+        self.layer_id = layer_id
         self.kernel_mod = kernel_mod
         self.dim = args.dim
         self.head_dim = head_dim
@@ -442,6 +444,7 @@ class Indexer(nn.Module):
     def __init__(self,
                  config,
                  args: V4Args,
+                 layer_id: int,
                  kernel_mod,
                  compress_ratio: int,
                  world_size: int,
@@ -449,6 +452,7 @@ class Indexer(nn.Module):
                  dtype: torch.dtype,
                  device: torch.device | str | None):
         super().__init__()
+        self.layer_id = layer_id
         self.kernel_mod = kernel_mod
         self.n_heads = args.index_n_heads
         self.n_local_heads = args.index_n_heads // world_size
@@ -477,7 +481,7 @@ class Indexer(nn.Module):
             device=device,
             is_tp=True,
         )
-        self.compressor = Compressor(args, kernel_mod, compress_ratio, self.head_dim,
+        self.compressor = Compressor(args, layer_id, kernel_mod, compress_ratio, self.head_dim,
                                      dtype=dtype, device=device, rotate=True)
         self.freqs_cis = None
         self.indexer_fwd = NativeV4Indexer(index_topk=self.index_topk,
@@ -493,9 +497,9 @@ class Indexer(nn.Module):
                 index_kv_cache: torch.Tensor,
                 block_offsets: torch.Tensor,
                 seq_idx: int,
-                block_size: int,
-                layer_id: int):
+                block_size: int):
         bsz, seqlen, _ = x.size()
+        layer_id = self.layer_id
         assert bsz == 1
         freqs_cis = self.freqs_cis[start_pos:start_pos + seqlen]
         ratio = self.compress_ratio
@@ -553,9 +557,9 @@ class Indexer(nn.Module):
                        index_kv_cache: torch.Tensor,
                        block_offsets: torch.Tensor,
                        block_size: int,
-                       layer_id: int,
                        index_scratch: torch.Tensor,
                        valid_mask: torch.Tensor):
+        layer_id = self.layer_id
         bsz, seqlen, _ = x.size()
         assert seqlen == 1
         rd = self.rope_head_dim
@@ -707,11 +711,11 @@ class Attention(nn.Module):
         self.compressor = None
         self.indexer = None
         if self.compress_ratio:
-            self.compressor = Compressor(args, kernel_mod, self.compress_ratio, self.head_dim,
+            self.compressor = Compressor(args, self.layer_id, kernel_mod, self.compress_ratio, self.head_dim,
                                          dtype=dtype, device=device)
             if self.compress_ratio == 4:
                 world_size, rank = get_tp_world_rank('attn')
-                self.indexer = Indexer(config, args, kernel_mod, self.compress_ratio,
+                self.indexer = Indexer(config, args, self.layer_id, kernel_mod, self.compress_ratio,
                                        world_size, rank, dtype=dtype, device=device)
 
         if self.compress_ratio:
@@ -904,7 +908,7 @@ class Attention(nn.Module):
                 index_kv_cache = block_caches['v4_index_kv_r4']
                 compress_state_idx = named_state_caches['v4_compress_state_r4_idx'][self.layer_id, slot]
                 compress_topk_idxs = self.indexer(x, qr, start_pos, offset, compress_state_idx, index_kv_cache,
-                                                  block_offsets, seq_idx, block_size, self.layer_id)
+                                                  block_offsets, seq_idx, block_size)
             else:
                 compress_topk_idxs = get_compress_topk_idxs(self.compress_ratio, bsz, seqlen, start_pos, offset,
                                                             x.device)
@@ -1007,7 +1011,6 @@ class Attention(nn.Module):
                                                             index_cache,
                                                             block_offsets,
                                                             block_size,
-                                                            self.layer_id,
                                                             index_scratch,
                                                             valid_mask)
                 compressed_positions = torch.where(compress_topk >= 0, compress_topk - offset, compress_topk)
@@ -1052,9 +1055,6 @@ class Attention(nn.Module):
         max_comp_r128 = max_total_len // 128
         selected_comp_r4 = self.indexer.index_topk if self.indexer is not None else max_comp_r4
         return {
-            'selected_window_kv': torch.empty((batch_size, self.window_size, self.head_dim),
-                                              dtype=torch.bfloat16,
-                                              device=device),
             'selected_compressed_kv_r4': torch.empty((batch_size, selected_comp_r4, self.head_dim),
                                                      dtype=torch.bfloat16,
                                                      device=device),
@@ -1065,12 +1065,6 @@ class Attention(nn.Module):
                                                 dtype=torch.bfloat16,
                                                 device=device) if self.indexer is not None else torch.empty(
                                                     (batch_size, 0, 0), dtype=torch.bfloat16, device=device),
-            'selected_full_kv_r4': torch.empty((batch_size, self.window_size + selected_comp_r4, self.head_dim),
-                                               dtype=torch.bfloat16,
-                                               device=device),
-            'selected_full_kv_r128': torch.empty((batch_size, self.window_size + max_comp_r128, self.head_dim),
-                                                 dtype=torch.bfloat16,
-                                                 device=device),
         }
 
 
