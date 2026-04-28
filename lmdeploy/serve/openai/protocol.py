@@ -141,6 +141,8 @@ class ChatCompletionRequest(BaseModel):
     # additional argument of lmdeploy
     do_preprocess: bool | None = True
     repetition_penalty: float | None = 1.0
+    repetition_ngram_size: int = Field(default=0, ge=0)
+    repetition_ngram_threshold: int = Field(default=0, ge=0)
     session_id: int | None = -1
     ignore_eos: bool | None = False
     skip_special_tokens: bool | None = True
@@ -188,7 +190,7 @@ class ExtractedToolCallInformation(BaseModel):
     # indicate if tools were called
     tools_called: bool
     # extracted tool calls
-    tool_calls: list[ToolCall]
+    tool_calls: list[ToolCall] | None = None
     # content - per OpenAI spec, content AND tool calls can be returned rarely
     # But some models will do this intentionally
     content: str | None = None
@@ -253,7 +255,7 @@ class DeltaFunctionCall(BaseModel):
 # a tool call delta where everything is optional
 class DeltaToolCall(BaseModel):
     id: str = Field(default_factory=lambda: f'chatcmpl-tool-{shortuuid.random()}')
-    type: Literal['function'] = 'function'
+    type: Literal['function'] | None = 'function'
     index: int
     function: DeltaFunctionCall | None = None
 
@@ -264,7 +266,7 @@ class DeltaMessage(BaseModel):
     content: str | None = None
     reasoning_content: str | None = None
     gen_tokens: list[int] | None = None
-    tool_calls: list[DeltaToolCall] = Field(default_factory=list)
+    tool_calls: list[DeltaToolCall] | None = None
 
 
 class ChatCompletionResponseStreamChoice(BaseModel):
@@ -314,6 +316,8 @@ class CompletionRequest(BaseModel):
     user: str | None = None
     # additional argument of lmdeploy
     repetition_penalty: float | None = 1.0
+    repetition_ngram_size: int = Field(default=0, ge=0)
+    repetition_ngram_threshold: int = Field(default=0, ge=0)
     session_id: int | None = -1
     ignore_eos: bool | None = False
     skip_special_tokens: bool | None = True
@@ -459,8 +463,8 @@ class GenerateReqInput(BaseModel):
     spaces_between_special_tokens: bool | None = True
     include_stop_str_in_output: bool | None = False
     return_routed_experts: bool | None = False
-    repetition_ngram_size: int = 0
-    repetition_ngram_threshold: int = 0
+    repetition_ngram_size: int = Field(default=0, ge=0)
+    repetition_ngram_threshold: int = Field(default=0, ge=0)
     # kwargs for media IO
     media_io_kwargs: dict[str, Any] | None = Field(
         default=None,

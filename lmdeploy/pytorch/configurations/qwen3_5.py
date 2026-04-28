@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.utils import is_bf16_supported
 
 from .builder import AutoModelConfigBuilder
@@ -63,7 +64,8 @@ class Qwen3_5ModelConfigBuilder(AutoModelConfigBuilder):
             dtype = torch.bfloat16
         else:
             dtype = torch.float16
-        cfg.states_shapes = [(conv_state_shape, dtype), (recurrent_state_shape, dtype)]
+        ssm_dtype = dtype if not _envs.fp32_mamba_ssm_dtype else torch.float32
+        cfg.states_shapes = [(conv_state_shape, dtype), (recurrent_state_shape, ssm_dtype)]
         cfg.is_gated_delta = True
         cfg.check_env_func = _check_env_qwen3_next
 

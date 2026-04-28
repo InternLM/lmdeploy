@@ -10,6 +10,8 @@ Moreover, we will provide practical inference examples tailored to scenarios wit
 
 Using the pipeline interface to infer other VLM models is similar, with the main difference being the configuration and installation dependencies of the models. You can read [here](https://lmdeploy.readthedocs.io/en/latest/multi_modal/index.html) for environment installation and configuration methods for different models.
 
+> **See also:** [Multi-Modal Inputs](multimodal_inputs.md) — message format reference for all modalities (image, video, time series) with OpenAI-style examples.
+
 ## A 'Hello, world' example
 
 ```python

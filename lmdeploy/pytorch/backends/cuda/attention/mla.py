@@ -4,6 +4,7 @@ import functools
 
 import torch
 
+from lmdeploy.messages import QuantPolicy
 from lmdeploy.utils import get_logger
 
 from .default import TritonAttentionImpl, TritonAttentionMetadata
@@ -405,7 +406,7 @@ class FlashMLAImpl(TritonAttentionImpl):
         block_offsets = attn_metadata.block_offsets
         kv_seqlens = attn_metadata.kv_seqlens
         quant_policy = attn_metadata.quant_policy
-        assert quant_policy == 0
+        assert quant_policy == QuantPolicy.NONE
 
         # fill seqlen args
         fill_seqlens, fill_max_q_seqlen, fill_q_start_loc = self._get_fill_meta(

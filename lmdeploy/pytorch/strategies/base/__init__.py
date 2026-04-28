@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from .model_inputs import ModelInputsStrategy
     from .sampling import SamplingStrategy
     from .sequence import SequenceStrategy
+    from .step_inputs import StepInputs
 
 
 class StrategyFactoryBase(ABC):
@@ -44,4 +45,9 @@ class StrategyFactoryBase(ABC):
     @abstractmethod
     def build_sequence_strategy(self) -> 'SequenceStrategy':
         """Build sequence strategy."""
+        pass
+
+    @abstractmethod
+    def build_step_inputs(self) -> 'StepInputs':
+        """Build step inputs for the decoding loop."""
         pass
