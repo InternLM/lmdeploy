@@ -97,7 +97,7 @@ class CacheConfig:
     kernel_block_size: int = -1
     window_size: int = -1
     cache_max_entry_count: float = 0.8
-    max_prefill_token_num: int = 4096
+    max_prefill_token_num: int = 8192
     enable_prefix_caching: bool = False
     quant_policy: QuantPolicy = QuantPolicy.NONE
     device_type: str = 'cuda'
