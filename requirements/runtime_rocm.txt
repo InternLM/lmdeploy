@@ -21,4 +21,4 @@ shortuuid
 tiktoken
 transformers
 uvicorn
-xgrammar
+xgrammar>=0.1.33

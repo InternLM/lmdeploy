@@ -368,9 +368,15 @@ class SpecModelAgent(BaseSpecModelAgent):
 
         guided_processors = {}
         guided_manager = self.guided_decoding_manager
-        if guided_manager and sampling_inputs.session_ctx is not None:
-            guided_processors = guided_manager.get_processors(
-                sampling_inputs.session_ctx, sampling_inputs.response_formats)
+        if guided_manager:
+            session_to_cleanup = sampling_inputs.session_to_cleanup
+            if session_to_cleanup is not None:
+                for session_id in session_to_cleanup:
+                    guided_manager.remove_processor(session_id)
+
+            if sampling_inputs.session_ctx is not None:
+                guided_processors = guided_manager.get_processors(
+                    sampling_inputs.session_ctx, sampling_inputs.response_formats)
 
         if model_inputs.is_decoding:
             if guided_processors:
@@ -539,11 +545,10 @@ class SpecModelAgent(BaseSpecModelAgent):
             # create dummy draft tokens
             output_draft_ids = inputs.input_ids.new_zeros(1, self.num_spec_tokens)
         else:
-            # Fork guided processors when the proposer supports grammar masking.
+            # Fork guided processors for draft model.
             draft_guided_processors = None
             guided_manager = self.guided_decoding_manager
-            if (guided_manager and sampling_inputs.session_ctx is not None
-                    and self.proposer.supports_grammar_mask):
+            if guided_manager and sampling_inputs.session_ctx is not None:
                 orig_processors = guided_manager.get_processors(
                     sampling_inputs.session_ctx, sampling_inputs.response_formats)
                 draft_guided_processors = {idx: proc.fork()

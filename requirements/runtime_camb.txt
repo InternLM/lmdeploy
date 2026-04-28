@@ -26,4 +26,4 @@ torch<=2.6.0,>=2.4.0
 torchvision<=0.21.0,>=0.15.0
 transformers
 uvicorn
-xgrammar
+xgrammar>=0.1.33
