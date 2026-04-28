@@ -32,7 +32,8 @@ class GuidedDecodingManager:
                     if isinstance(schema, dict):
                         for key in ['json_schema', 'schema']:
                             if key in schema:
-                                schema = json.dumps(schema[key], ensure_ascii=False)
+                                val = schema[key]
+                                schema = val if isinstance(val, str) else json.dumps(val, ensure_ascii=False)
 
                     if not isinstance(schema, str):
                         raise ValueError(f'Cannot parse schema {schema}. The schema must be '
