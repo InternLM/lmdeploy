@@ -70,8 +70,6 @@ class TritonV4IndexerImpl(BaseV4Indexer):
     def forward_decode(self,
                        query: torch.Tensor,
                        weights: torch.Tensor,
-                       new_kv: torch.Tensor,
-                       emit_mask: torch.Tensor,
                        index_kv_cache: torch.Tensor,
                        meta: V4IndexerMetadata,
                        block_size: int,
@@ -81,16 +79,6 @@ class TritonV4IndexerImpl(BaseV4Indexer):
         valid_mask = meta.valid_mask
         start_pos = torch.where(valid_mask, meta.start_pos, meta.start_pos.new_zeros(()))
         bsz = query.size(0)
-        batch_idx = torch.arange(bsz, device=query.device)
-
-        abs_pos = torch.div(start_pos, self.compress_ratio, rounding_mode='floor')
-        self._write_cache_entries(index_kv_cache[layer_id],
-                                  block_offsets,
-                                  batch_idx,
-                                  abs_pos,
-                                  new_kv,
-                                  block_size,
-                                  write_mask=emit_mask)
 
         max_index = index_scratch.size(1)
         if max_index == 0:

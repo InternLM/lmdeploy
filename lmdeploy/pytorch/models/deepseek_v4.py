@@ -76,6 +76,90 @@ def _load_vector_shard(param: nn.Parameter, loaded_weight: torch.Tensor, world_s
     param.copy_(loaded_weight)
 
 
+def _gather_block_cache_entries(cache: torch.Tensor, block_offsets: torch.Tensor, positions: torch.Tensor,
+                                block_size: int):
+    if positions.numel() == 0:
+        return cache.new_empty((*positions.shape, cache.size(-1)))
+    safe_positions = positions.clamp(min=0)
+    block_idx = torch.div(safe_positions, block_size, rounding_mode='floor').long()
+    max_block_idx = block_offsets.size(1)
+    valid = (positions >= 0) & (block_idx < max_block_idx)
+    safe_block_idx = block_idx.clamp(max=max_block_idx - 1)
+    block_off = torch.remainder(safe_positions, block_size).long()
+    phys_blocks = block_offsets.gather(1, safe_block_idx).long()
+    gathered = cache[phys_blocks, block_off]
+    return torch.where(valid.unsqueeze(-1), gathered, gathered.new_zeros(()))
+
+
+def _write_block_cache_entries(cache: torch.Tensor, block_offsets: torch.Tensor, batch_idx: torch.Tensor,
+                               positions: torch.Tensor, values: torch.Tensor, block_size: int,
+                               write_mask: torch.Tensor | None = None):
+    if positions.numel() == 0:
+        return
+    block_idx = torch.div(positions, block_size, rounding_mode='floor').long()
+    valid = (positions >= 0) & (block_idx < block_offsets.size(1))
+    safe_block_idx = block_idx.clamp(max=block_offsets.size(1) - 1)
+    block_off = torch.remainder(positions, block_size).long()
+    phys_blocks = block_offsets[batch_idx, safe_block_idx].long()
+    if write_mask is None:
+        write_mask = valid
+    else:
+        write_mask = write_mask & valid
+    target = cache[phys_blocks, block_off]
+    values = values.to(target.dtype)
+    blend_mask = write_mask.view(-1, *([1] * (values.dim() - 1)))
+    cache[phys_blocks, block_off] = torch.where(blend_mask, values, target)
+
+
+def _gather_compressed_cache_entries(cache: torch.Tensor, block_offsets: torch.Tensor, positions: torch.Tensor,
+                                     block_size: int, compress_ratio: int):
+    if positions.numel() == 0:
+        return cache.new_empty((*positions.shape, cache.size(-1)))
+    safe_positions = positions.clamp(min=0)
+    token_positions = safe_positions * compress_ratio
+    block_idx = torch.div(token_positions, block_size, rounding_mode='floor').long()
+    max_block_idx = block_offsets.size(1)
+    valid = (positions >= 0) & (block_idx < max_block_idx)
+    safe_block_idx = block_idx.clamp(max=max_block_idx - 1)
+    entries_per_block = max(block_size // compress_ratio, 1)
+    block_off = torch.remainder(safe_positions, entries_per_block).long()
+    phys_blocks = block_offsets.gather(1, safe_block_idx).long()
+    gathered = cache[phys_blocks, block_off]
+    return torch.where(valid.unsqueeze(-1), gathered, gathered.new_zeros(()))
+
+
+def _write_compressed_cache_entries(cache: torch.Tensor, block_offsets: torch.Tensor, batch_idx: torch.Tensor,
+                                    positions: torch.Tensor, values: torch.Tensor, block_size: int,
+                                    compress_ratio: int, write_mask: torch.Tensor | None = None):
+    if positions.numel() == 0:
+        return
+    token_positions = positions * compress_ratio
+    block_idx = torch.div(token_positions, block_size, rounding_mode='floor').long()
+    valid = (positions >= 0) & (block_idx < block_offsets.size(1))
+    safe_block_idx = block_idx.clamp(max=block_offsets.size(1) - 1)
+    entries_per_block = max(block_size // compress_ratio, 1)
+    block_off = torch.remainder(positions.clamp(min=0), entries_per_block).long()
+    phys_blocks = block_offsets[batch_idx, safe_block_idx].long()
+    if write_mask is None:
+        write_mask = valid
+    else:
+        write_mask = write_mask & valid
+    target = cache[phys_blocks, block_off]
+    values = values.to(target.dtype)
+    blend_mask = write_mask.view(-1, *([1] * (values.dim() - 1)))
+    cache[phys_blocks, block_off] = torch.where(blend_mask, values, target)
+
+
+def _pack_block_cache_blocks(src_cache: torch.Tensor, dst_cache: torch.Tensor, phys_blocks: torch.Tensor):
+    valid_phys_blocks = phys_blocks[phys_blocks >= 0]
+    if valid_phys_blocks.numel() == 0:
+        return
+    valid_phys_blocks = torch.unique(valid_phys_blocks.long())
+    packed = quantize_model1_fp8_sparse(src_cache.index_select(0, valid_phys_blocks).unsqueeze(2)).squeeze(2)
+    for out_idx, block_id in enumerate(valid_phys_blocks.tolist()):
+        dst_cache[block_id].copy_(packed[out_idx])
+
+
 def _dequantize_wo_a_shard(weight: torch.Tensor, scale: torch.Tensor, world_size: int, rank: int) -> torch.Tensor:
     """Convert HF FP8 `wo_a` checkpoint tensors into the BF16 format used by
     inference/model.py.
@@ -340,7 +424,7 @@ class Compressor(nn.Module):
         ratio = self.compress_ratio
         return (torch.div(start_pos, ratio, rounding_mode='floor') % 2) * ratio
 
-    def forward(self, x: torch.Tensor, start_pos: int, context: StepContext, slot: int):
+    def forward(self, x: torch.Tensor, start_pos: int, context: StepContext, slot: int, seq_idx: int):
         bsz, seqlen, _ = x.size()
         assert bsz == 1
         ratio = self.compress_ratio
@@ -387,7 +471,37 @@ class Compressor(nn.Module):
             self.kernel_mod.fp4_act_quant(compressed, 32, True)
         else:
             self.kernel_mod.act_quant(compressed[..., :-rd], 64, 'ue8m0', torch.float8_e8m0fnu, True)
-        return compressed
+
+        self._write_emitted_cache_prefill(compressed, start_pos, context, seq_idx)
+
+    def _write_emitted_cache_prefill(self,
+                                     compressed: torch.Tensor, start_pos: int, context: StepContext, seq_idx: int):
+        if compressed is None:
+            return
+        block_caches = context.block_caches
+        block_offsets = context.block_offsets
+        block_size = context.cache_config.kernel_block_size
+        if self.rotate:
+            cache = block_caches['v4_index_kv_r4'][self.layer_id]
+            fp8_cache = None
+        elif self.compress_ratio == 4:
+            cache = block_caches['v4_compressed_kv_r4'][self.layer_id]
+            fp8_cache = block_caches['v4_compressed_kv_r4_fp8'][self.layer_id]
+        else:
+            cache = block_caches['v4_compressed_kv_r128'][self.layer_id]
+            fp8_cache = None
+        positions = torch.arange(start_pos // self.compress_ratio,
+                                 start_pos // self.compress_ratio + compressed.size(1),
+                                 device=compressed.device,
+                                 dtype=torch.long)
+        batch_idx = torch.full_like(positions, seq_idx)
+        _write_compressed_cache_entries(cache, block_offsets, batch_idx, positions, compressed[0], block_size,
+                                        self.compress_ratio)
+        if fp8_cache is not None:
+            compressed_block_ids = torch.div(positions * self.compress_ratio, block_size,
+                                             rounding_mode='floor').long()
+            phys_blocks = block_offsets[seq_idx, compressed_block_ids]
+            _pack_block_cache_blocks(cache, fp8_cache, phys_blocks)
 
     def forward_decode(self,
                        x: torch.Tensor,
@@ -458,7 +572,33 @@ class Compressor(nn.Module):
 
         compressed = torch.where(emit_mask.view(-1, 1), active_compressed, compressed)
         self._store_decode_state(context, slot, compress_state, valid_mask)
+
+        self.write_emitted_cache_decode(compressed, emit_mask, start_pos, context, valid_mask)
         return compressed, emit_mask
+
+    def write_emitted_cache_decode(self, compressed: torch.Tensor, emit_mask: torch.Tensor, start_pos: torch.Tensor,
+                                   context: StepContext, valid_mask: torch.Tensor):
+        block_caches = context.block_caches
+        block_offsets = context.block_offsets.long()
+        block_size = context.cache_config.kernel_block_size
+        batch_idx = torch.arange(start_pos.size(0), device=start_pos.device)
+        positions = torch.div(start_pos, self.compress_ratio, rounding_mode='floor').long()
+        if self.rotate:
+            cache = block_caches['v4_index_kv_r4'][self.layer_id]
+            fp8_cache = None
+        elif self.compress_ratio == 4:
+            cache = block_caches['v4_compressed_kv_r4'][self.layer_id]
+            fp8_cache = block_caches['v4_compressed_kv_r4_fp8'][self.layer_id]
+        else:
+            cache = block_caches['v4_compressed_kv_r128'][self.layer_id]
+            fp8_cache = None
+        _write_compressed_cache_entries(cache, block_offsets, batch_idx, positions, compressed, block_size,
+                                        self.compress_ratio, write_mask=emit_mask & valid_mask)
+        if fp8_cache is not None:
+            block_ids = torch.div(start_pos, block_size, rounding_mode='floor').long()
+            phys_blocks = block_offsets.gather(1, block_ids.unsqueeze(1)).squeeze(1)
+            phys_blocks = torch.where(emit_mask & valid_mask, phys_blocks, phys_blocks.new_full((), -1))
+            _pack_block_cache_blocks(cache, fp8_cache, phys_blocks)
 
 
 class Indexer(nn.Module):
@@ -532,7 +672,7 @@ class Indexer(nn.Module):
         apply_rotary_emb(q[..., -rd:], freqs_cis)
         q = rotate_activation(q)
         self.kernel_mod.fp4_act_quant(q, 32, True)
-        new_kv = self.compressor(x, start_pos, context, slot)
+        self.compressor(x, start_pos, context, slot, seq_idx)
 
         # gather existing index entries from block cache
         total_len = start_pos + seqlen
@@ -547,19 +687,6 @@ class Indexer(nn.Module):
             index_cache = torch.stack(index_tokens)
         else:
             index_cache = None
-
-        if new_kv is not None:
-            # write new index entries into block cache
-            for i, entry in enumerate(new_kv[0]):
-                abs_pos = (start_pos // ratio) + i
-                bidx = abs_pos // block_size
-                boff = abs_pos % block_size
-                pblock = block_offsets[seq_idx, bidx]
-                index_kv_cache[layer_id, pblock, boff] = entry
-            if index_cache is None:
-                index_cache = new_kv[0]
-            else:
-                index_cache = torch.cat([index_cache, new_kv[0]], dim=0)
 
         if index_cache is None or index_cache.size(0) == 0:
             return get_compress_topk_idxs(ratio, bsz, seqlen, start_pos, offset, x.device)
@@ -596,21 +723,14 @@ class Indexer(nn.Module):
         q = rotate_activation(q)
         self.kernel_mod.fp4_act_quant(q, 32, True)
 
-        new_kv, emit_mask = self.compressor.forward_decode(x, safe_start_pos, context, slot, valid_mask)
+        self.compressor.forward_decode(x, safe_start_pos, context, slot, valid_mask)
         weights = self.weights_proj(x) * (self.head_dim**-0.5 * self.n_heads**-0.5)
         meta = V4IndexerMetadata(block_offsets=block_offsets,
                                  start_pos=safe_start_pos,
                                  valid_mask=valid_mask,
                                  state_ids=start_pos.new_zeros(start_pos.shape),
                                  compress_ratio=self.compress_ratio)
-        topk = self.indexer_fwd.forward_decode(q,
-                                               weights,
-                                               new_kv,
-                                               emit_mask,
-                                               index_kv_cache,
-                                               meta,
-                                               block_size,
-                                               layer_id,
+        topk = self.indexer_fwd.forward_decode(q, weights, index_kv_cache, meta, block_size, layer_id,
                                                index_scratch)
         return topk
 
@@ -935,38 +1055,21 @@ class Attention(nn.Module):
             # ---- compressed / index ----
             if self.compress_ratio == 4:
                 compressed_kv_cache = block_caches['v4_compressed_kv_r4'][self.layer_id]
-                compressed_kv_cache_fp8 = block_caches['v4_compressed_kv_r4_fp8'][self.layer_id]
             else:
                 compressed_kv_cache = block_caches['v4_compressed_kv_r128'][self.layer_id]
-                compressed_kv_cache_fp8 = None
 
             # call compressor
             self.compressor.freqs_cis = self.freqs_cis
-            compressed = self.compressor(x, start_pos, context, slot)
-            if compressed is not None:
-                compressed_positions = torch.arange(start_pos // self.compress_ratio,
-                                                    start_pos // self.compress_ratio + compressed.size(1),
-                                                    device=x.device,
-                                                    dtype=torch.long)
-                compressed_batch_idx = torch.full_like(compressed_positions, seq_idx)
-                self._write_cache_entries(compressed_kv_cache,
-                                          block_offsets,
-                                          compressed_batch_idx,
-                                          compressed_positions,
-                                          compressed[0],
-                                          block_size)
-                if compressed_kv_cache_fp8 is not None:
-                    phys_blocks = block_offsets[seq_idx, torch.div(compressed_positions, block_size,
-                                                                   rounding_mode='floor').long()]
-                    self._pack_block_cache_blocks(compressed_kv_cache, compressed_kv_cache_fp8, phys_blocks)
+            self.compressor(x, start_pos, context, slot, seq_idx)
 
             # gather compressed
             num_compressed = total_len // self.compress_ratio
             compressed_positions = torch.arange(num_compressed, device=x.device, dtype=torch.long).unsqueeze(0)
-            compressed_kv = self._gather_cache_entries(compressed_kv_cache,
-                                                       block_offsets[seq_idx:seq_idx + 1],
-                                                       compressed_positions,
-                                                       block_size)[0]
+            compressed_kv = _gather_compressed_cache_entries(compressed_kv_cache,
+                                                             block_offsets[seq_idx:seq_idx + 1],
+                                                             compressed_positions,
+                                                             block_size,
+                                                             self.compress_ratio)[0]
 
             # indexer
             if self.indexer is not None:
@@ -1023,7 +1126,6 @@ class Attention(nn.Module):
 
         window_state_cache = named_state_caches['v4_window_kv'][self.layer_id]
         window_state_fp8_cache = named_state_caches['v4_window_kv_fp8'][self.layer_id]
-        batch_idx = torch.arange(bsz, device=x.device)
         window_pos = torch.remainder(safe_start_pos, self.window_size).long()
         slot_idx = slot.long()
         prev_window = window_state_cache[slot_idx, window_pos]
@@ -1058,23 +1160,11 @@ class Attention(nn.Module):
                 compressed_cache = block_caches['v4_compressed_kv_r128'][self.layer_id]
 
             self.compressor.freqs_cis = self.freqs_cis
-            new_compressed, emit_mask = self.compressor.forward_decode(x,
+            self.compressor.forward_decode(x,
                                                                        safe_start_pos.long(),
                                                                        context,
                                                                        slot,
                                                                        valid_mask)
-            self._write_cache_entries(compressed_cache,
-                                      block_offsets,
-                                      batch_idx,
-                                      torch.div(safe_start_pos, self.compress_ratio, rounding_mode='floor').long(),
-                                      new_compressed,
-                                      block_size,
-                                      write_mask=emit_mask)
-            if compressed_cache_fp8 is not None:
-                block_ids = torch.div(safe_start_pos, self.compress_ratio * block_size, rounding_mode='floor').long()
-                phys_blocks = block_offsets.gather(1, block_ids.unsqueeze(1)).squeeze(1)
-                phys_blocks = torch.where(emit_mask, phys_blocks, phys_blocks.new_full((), -1))
-                self._pack_block_cache_blocks(compressed_cache, compressed_cache_fp8, phys_blocks)
 
             if self.indexer is not None:
                 index_cache = block_caches['v4_index_kv_r4']

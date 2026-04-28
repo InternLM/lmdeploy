@@ -30,8 +30,6 @@ class BaseV4Indexer(ABC):
     def forward_decode(self,
                        query: torch.Tensor,
                        weights: torch.Tensor,
-                       new_kv: torch.Tensor,
-                       emit_mask: torch.Tensor,
                        index_kv_cache: torch.Tensor,
                        meta: V4IndexerMetadata,
                        block_size: int,

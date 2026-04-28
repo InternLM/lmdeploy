@@ -17,12 +17,9 @@ class V4Indexer(nn.Module):
     def forward_decode(self,
                        query,
                        weights,
-                       new_kv,
-                       emit_mask,
                        index_kv_cache,
                        meta: V4IndexerMetadata,
                        block_size: int,
                        layer_id: int,
                        index_scratch) -> V4IndexerOutput:
-        return self.impl.forward_decode(query, weights, new_kv, emit_mask, index_kv_cache, meta, block_size,
-                                        layer_id, index_scratch)
+        return self.impl.forward_decode(query, weights, index_kv_cache, meta, block_size, layer_id, index_scratch)

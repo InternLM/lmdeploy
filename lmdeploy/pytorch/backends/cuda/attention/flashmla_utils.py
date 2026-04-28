@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
-
 MODEL1_D = 512
 MODEL1_D_NOPE = 448
 MODEL1_D_ROPE = 64
@@ -49,8 +48,8 @@ def quantize_model1_fp8_sparse(input_k_cache: torch.Tensor) -> torch.Tensor:
 
 
 def quantize_model1_fp8_sparse_tokens(tokens: torch.Tensor) -> torch.Tensor:
-    """Pack BF16 `[num_tokens, 512]` tokens into FlashMLA MODEL1 sparse
-    per-token format `[num_tokens, packed_dim]`."""
+    """Pack BF16 `[num_tokens, 512]` tokens into FlashMLA MODEL1 sparse per-
+    token format `[num_tokens, packed_dim]`."""
     assert tokens.dim() == 2
     packed = quantize_model1_fp8_sparse(tokens.unsqueeze(1).unsqueeze(1))
     return packed.squeeze(2).squeeze(1)
