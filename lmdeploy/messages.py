@@ -527,7 +527,7 @@ class Response:
         return f'text={self.text}\n{self._format_none_text_fields()}'
 
     def __repr__(self):
-        return f'text={self.text!r}\n{self._format_none_text_fields()}'
+        return f'text={self.text}\n{self._format_none_text_fields()}'
 
     def _format_none_text_fields(self):
         fields = []

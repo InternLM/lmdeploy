@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+#include "src/turbomind/core/context.h"
+#include "src/turbomind/core/data_format.h"
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/memory_utils.h"
@@ -58,5 +61,70 @@ template void invokeInPlaceTranspose102(uint16_t*    data,
                                         const int    dim2,
                                         bool         copy,
                                         cudaStream_t stream);
+
+// -----------------------------------------------------------------------
+// Element-wise dtype cast kernel (fp32 <-> fp16 <-> bf16)
+// -----------------------------------------------------------------------
+
+template<typename To, typename Ti>
+__global__ void dtype_cast_kernel(To* dst, const Ti* src, size_t n)
+{
+    for (size_t i = threadIdx.x + blockIdx.x * blockDim.x; i < n; i += blockDim.x * gridDim.x) {
+        dst[i] = static_cast<To>(src[i]);
+    }
+}
+
+void invokeDtypeCast(
+    void* dst, const void* src, size_t count, DataType dst_dtype, DataType src_dtype, cudaStream_t stream)
+{
+    const int block = 512;
+    const int grid  = std::min((count + block - 1) / block, (size_t)8192);
+
+    using half_t = turbomind::half_t;
+    using bf16_t = turbomind::bfloat16_t;
+
+    // fp32 -> fp16
+    if (src_dtype == turbomind::kFloat32 && dst_dtype == turbomind::kFloat16) {
+        dtype_cast_kernel<<<grid, block, 0, stream>>>((half_t*)dst, (const float*)src, count);
+    }
+    // fp32 -> bf16
+    else if (src_dtype == turbomind::kFloat32 && dst_dtype == turbomind::kBfloat16) {
+        dtype_cast_kernel<<<grid, block, 0, stream>>>((bf16_t*)dst, (const float*)src, count);
+    }
+    // fp16 -> fp32
+    else if (src_dtype == turbomind::kFloat16 && dst_dtype == turbomind::kFloat32) {
+        dtype_cast_kernel<<<grid, block, 0, stream>>>((float*)dst, (const half_t*)src, count);
+    }
+    // bf16 -> fp32
+    else if (src_dtype == turbomind::kBfloat16 && dst_dtype == turbomind::kFloat32) {
+        dtype_cast_kernel<<<grid, block, 0, stream>>>((float*)dst, (const bf16_t*)src, count);
+    }
+    // fp16 -> bf16
+    else if (src_dtype == turbomind::kFloat16 && dst_dtype == turbomind::kBfloat16) {
+        dtype_cast_kernel<<<grid, block, 0, stream>>>((bf16_t*)dst, (const half_t*)src, count);
+    }
+    // bf16 -> fp16
+    else if (src_dtype == turbomind::kBfloat16 && dst_dtype == turbomind::kFloat16) {
+        dtype_cast_kernel<<<grid, block, 0, stream>>>((half_t*)dst, (const bf16_t*)src, count);
+    }
+}
+
+// -----------------------------------------------------------------------
+// EnsureFloatDtype — cast tensor to target dtype if both are trivial float
+// -----------------------------------------------------------------------
+
+void EnsureFloatDtype(core::Tensor& tensor, DataType target_dtype)
+{
+    if (!tensor || tensor.dtype() == target_dtype) {
+        return;
+    }
+    if (!IsTrivialFloatType(tensor.dtype()) || !IsTrivialFloatType(target_dtype)) {
+        return;
+    }
+    auto         stream = core::Context::stream().handle();
+    core::Tensor casted{tensor.shape(), target_dtype, tensor.device()};
+    invokeDtypeCast(casted.raw_data(), tensor.raw_data(), tensor.size(), target_dtype, tensor.dtype(), stream);
+    tensor = std::move(casted);
+}
 
 }  // namespace turbomind

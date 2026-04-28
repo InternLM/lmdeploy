@@ -91,66 +91,43 @@ UnifiedAttentionLayer::~UnifiedAttentionLayer()
     aux_stream_             = {};
 }
 
-UnifiedAttentionLayer::UnifiedAttentionLayer(const ModelParam&     model,
-                                             const AttentionParam& attn,
-                                             const EngineParam&    engine,
-                                             int                   tp_size,
-                                             const Context&        ctx,
-                                             int                   phases,
-                                             bool                  init):
-    head_num_(model.head_num),
-    kv_head_num_(model.kv_head_num),
-    size_per_head_(model.head_dim),
-    hidden_units_(model.hidden_units),
-    local_head_num_(head_num_ / tp_size),
-    local_kv_head_num_(model.kv_head_num / tp_size),
-    param_(attn),
-    model_param_(model),
-    engine_param_(engine),
-    cp_fn_ctx_(ctx.comm.d_comm, ctx.comm.d_cp_group),
+UnifiedAttentionLayer::UnifiedAttentionLayer(int                           quant_policy,
+                                             const std::vector<int>&       layer_types,
+                                             int                           layer_num,
+                                             std::vector<AttentionWeight*> attn_weights,
+                                             const EngineParam&            engine,
+                                             const Context&                ctx,
+                                             int                           phases,
+                                             bool                          init):
+    quant_policy_{quant_policy},
+    rope_{attn_weights[0]->rope},
+    engine_param_{engine},
+    cp_fn_ctx_{ctx.comm.d_comm, ctx.comm.d_cp_group},
     is_warm_up_{*ctx.is_warm_up},
-    context_(ctx),
+    context_{ctx},
+    init_{init},
     linear_(*ctx.linear),
-    arch_(getSMVersion())
+    arch_{getSMVersion()}
 {
-    TM_CHECK_EQ(head_num_ % tp_size, 0) << head_num_ << " " << tp_size;
-    TM_CHECK_EQ(head_num_ % kv_head_num_, 0) << head_num_ << " " << kv_head_num_;
+    TM_CHECK(!attn_weights.empty()) << "attn_weights must not be empty";
+    TM_CHECK(attn_weights[0]) << "attn_weights[0] must not be null";
 
     check_cuda_error(cudaStreamCreateWithFlags(&aux_stream_, cudaStreamNonBlocking));
     check_cuda_error(cudaEventCreateWithFlags(&qkv_event_, cudaEventDisableTiming));
     check_cuda_error(cudaEventCreateWithFlags(&aux_event_, cudaEventDisableTiming));
 
-    init_rope_kernel_param(param_.rope, rope_param_);
+    init_rope_kernel_param(rope_, rope_param_);
 
     // Skip other attention layer types
-    std::vector<int> layer_types = model_param_.layer_types;
-    layer_types.resize(model_param_.layer_num);
-    cache_layer_ids_.resize(layer_types.size(), -1);
+    std::vector<int> types = layer_types;
+    types.resize(layer_num);
+    cache_layer_ids_.resize(types.size(), -1);
     int next_cache_id = 0;
-    for (size_t i = 0; i < layer_types.size(); ++i) {
-        if (layer_types[i] == 0) {
+    for (size_t i = 0; i < types.size(); ++i) {
+        if (types[i] == 0) {
             cache_layer_ids_[i] = next_cache_id++;
         }
     }
-
-    Allocator alloc            = core::Context::device_alloc();
-    ssize_t   workspace_tokens = kMaxWorkspaceTokens;
-    if (engine_param_.attn_cp_size > 1) {
-        alloc = GetSymmAllocator(ctx.comm.d_comm);
-        workspace_tokens += engine_param_.max_forward_token_num;
-    }
-    // partial_O layout:
-    //   w/  cp, decode(q, h, k, 2) + prefill(q, h, 1, 2)
-    //   w/o cp, decode(q, h, k, 2)
-    partial_O_  = Tensor_<float>({workspace_tokens, local_head_num_, size_per_head_}, kDEVICE);
-    partial_ML_ = Tensor_<float>({engine_param_.attn_cp_size, workspace_tokens, local_head_num_, 2}, alloc);
-    split_cnt_  = Tensor_<int>({workspace_tokens}, kDEVICE);
-    if (init) {
-        const int dim = (int)local_head_num_ * (int)size_per_head_;
-        tmp_attn_     = Tensor{{engine_param_.max_forward_token_num, dim}, model.data_type, kDEVICE};
-    }
-
-    Clear(split_cnt_.buffer());
 
     const int bsz = engine.max_batch_size;
 
@@ -162,7 +139,7 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(const ModelParam&     model,
         mrope_position_delta_buf_ = {bsz, kCPUpinned};
         mrope_length_buf_         = {bsz, kCPUpinned};
     }
-    const int max_blocks = bsz * cdiv(engine.session_len, param_.cache_block_seq_len);
+    const int max_blocks = bsz * cdiv(engine.session_len, engine_param_.cache_block_seq_len);
     for (int i = 0; i < phases; ++i) {
         auto& d               = data_.emplace_back(std::make_shared<AttentionData>());
         d->block_ptrs         = {max_blocks + 16, kDEVICE};
@@ -178,9 +155,37 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(const ModelParam&     model,
             rope_param_.mrope.stride = d->mrope_position_ids.stride(0);
         }
     }
+
+    // Eagerly initialize workspace buffers (was previously lazy in Init())
+    {
+        const auto& w              = *attn_weights[0];
+        const int   tp_size        = w.tp_size;
+        const int   local_head_num = w.head_num / tp_size;
+        const int   size_per_head  = w.head_dim;
+
+        TM_CHECK_EQ(w.head_num % tp_size, 0) << w.head_num << " " << tp_size;
+        TM_CHECK_EQ(w.head_num % w.kv_head_num, 0) << w.head_num << " " << w.kv_head_num;
+
+        ssize_t   workspace_tokens = kMaxWorkspaceTokens;
+        Allocator alloc            = core::Context::device_alloc();
+        if (engine_param_.attn_cp_size > 1) {
+            alloc = GetSymmAllocator(context_.comm.d_comm);
+            workspace_tokens += engine_param_.max_forward_token_num;
+        }
+
+        partial_O_  = Tensor_<float>({workspace_tokens, local_head_num, size_per_head}, kDEVICE);
+        partial_ML_ = Tensor_<float>({engine_param_.attn_cp_size, workspace_tokens, local_head_num, 2}, alloc);
+        split_cnt_  = Tensor_<int>({workspace_tokens}, kDEVICE);
+        if (init_) {
+            const int dim = local_head_num * size_per_head;
+            tmp_attn_     = Tensor{{engine_param_.max_forward_token_num, dim}, w.data_type, kDEVICE};
+        }
+
+        Clear(split_cnt_.buffer());
+    }
 }
 
-static void init_dynamic_ntk(RequestCache& cache, const RopeParam& rope)
+static void init_dynamic_ntk(RequestCache& cache, const core::RopeConfig& rope)
 {
     cache.rope_base = rope.base;
     if (auto scaling_factor = rope.factor; scaling_factor > 1.f) {
@@ -203,7 +208,7 @@ void UnifiedAttentionLayer::Run(BatchOp op, int phase, TensorMap& env)
         Buffer_<RequestCache*> rc = env.at("requests").buffer();
         if (rope_param_.type == RopeType::kDynamic) {
             for (int i = 0; i < rc.size(); ++i) {
-                init_dynamic_ntk(*rc[i], param_.rope);
+                init_dynamic_ntk(*rc[i], rope_);
             }
         }
     }
@@ -313,6 +318,8 @@ void UnifiedAttentionLayer::Forward(ForwardParam p)
 
     const auto& weights = *p.weights;
 
+    TM_LOG_DEBUG("layer=%d, token_num=%d", layer_id, token_num);
+
     Tensor qkv;
 
     auto& d = *data_.at(p.phase);
@@ -321,12 +328,12 @@ void UnifiedAttentionLayer::Forward(ForwardParam p)
     //     DebugTensor(p.input.slice(d.dbg_offset, d.dbg_size), Concat("attn_in", p.layer_id), 0);
     // }
 
-    if (weights.qkv.output_dim) {
+    if (weights.w_qkv && weights.w_qkv->output_dim) {
         // [token_num, hidden_dim] -> [token_num, local_q_kv_head_num, head_dim]
-        qkv = linear_.Forward(p.input, weights.qkv);
+        qkv = linear_.Forward(p.input, *weights.w_qkv);
         sync_check_cuda_error();
 
-        if (model_param_.qk_norm) {
+        if (weights.qk_norm) {
             qk_norm(qkv, weights);
         }
     }
@@ -345,12 +352,16 @@ void UnifiedAttentionLayer::Forward(ForwardParam p)
 
     // Apply sigmoid gating: attn *= sigmoid(gate)
     // Gate is stored at the end of each token's QKV: [Q|K|V|Gate]
-    if (model_param_.attn_output_gate) {
-        const int  q_count     = qkv.shape(0);
-        const int  attn_dim    = local_head_num_ * size_per_head_;
-        const int  gate_offset = (local_head_num_ + 2 * local_kv_head_num_) * size_per_head_;
-        const int  qkv_stride  = (2 * local_head_num_ + 2 * local_kv_head_num_) * size_per_head_;
-        const auto stream      = core::Context::stream().handle();
+    if (weights.attn_output_gate) {
+        const int  tp_size           = weights.tp_size;
+        const int  local_head_num    = weights.head_num / tp_size;
+        const int  local_kv_head_num = weights.kv_head_num / tp_size;
+        const int  size_per_head     = weights.head_dim;
+        const int  q_count           = qkv.shape(0);
+        const int  attn_dim          = local_head_num * size_per_head;
+        const int  gate_offset       = (local_head_num + 2 * local_kv_head_num) * size_per_head;
+        const int  qkv_stride        = (2 * local_head_num + 2 * local_kv_head_num) * size_per_head;
+        const auto stream            = core::Context::stream().handle();
         invokeSigmoidGateMultiply(attn.raw_data(),
                                   (const char*)qkv.raw_data() + gate_offset * byte_size(qkv.dtype(), 1),
                                   attn_dim,
@@ -369,13 +380,18 @@ void UnifiedAttentionLayer::Forward(ForwardParam p)
 
     //////////////////////////////////////////////
     /// output gemm <Bs,HD> -> <Bs,HD>
-    (void)linear_.Forward(attn, weights.output, p.output);
+    (void)linear_.Forward(attn, *weights.wo, p.output);
     sync_check_cuda_error();
 }
 
 template<class T>
 Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p, const WeightType& weights)
 {
+    const int tp_size           = weights.tp_size;
+    const int local_head_num    = weights.head_num / tp_size;
+    const int local_kv_head_num = weights.kv_head_num / tp_size;
+    const int size_per_head     = weights.head_dim;
+
     const auto device = qkv.device();
     const auto dtype  = qkv.dtype();
 
@@ -386,20 +402,19 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
 
     TM_CHECK_EQ(d.prefill.q_sum + d.decode.n, q_count);
 
-    const int local_q_kv_head_num = local_head_num_ + 2 * local_kv_head_num_;
+    const int local_q_kv_head_num = local_head_num + 2 * local_kv_head_num;
 
     Tensor attn;
     if (tmp_attn_) {
         attn = tmp_attn_.slice(0, q_count);
     }
     else {
-        attn = {{q_count, (int)local_head_num_ * (int)size_per_head_}, dtype, device};
+        attn = {{q_count, local_head_num * size_per_head}, dtype, device};
     }
 
-    const bool is_mla = model_param_.mla.kv_lora_rank > 0;
+    const bool is_mla = weights.is_mla();
 
-    Tensor tmp_kv{
-        {(int)local_kv_head_num_, is_mla ? 1 : 2, d.prefill.k_sum + MAX_CTA_S, (int)size_per_head_}, dtype, device};
+    Tensor tmp_kv{{local_kv_head_num, is_mla ? 1 : 2, d.prefill.k_sum + MAX_CTA_S, size_per_head}, dtype, device};
 
     const int cache_layer_id = cache_layer_ids_[p.layer_id];
 
@@ -410,27 +425,27 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         params.out = (T*)attn.raw_data();
 
         params.q = (T*)qkv.raw_data();
-        params.k = params.q + local_head_num_ * size_per_head_;
+        params.k = params.q + local_head_num * size_per_head;
         if (is_mla) {
             params.v      = params.k;
-            params.stride = (local_head_num_ + 1 * local_kv_head_num_) * size_per_head_;
+            params.stride = (local_head_num + 1 * local_kv_head_num) * size_per_head;
         }
         else {
-            params.v = params.k + local_kv_head_num_ * size_per_head_;
+            params.v = params.k + local_kv_head_num * size_per_head;
             // When attn_output_gate, QKV layout is [Q|K|V|Gate] per token
             // stride must account for the extra gate portion at the end
-            if (model_param_.attn_output_gate) {
-                params.stride = (2 * local_head_num_ + 2 * local_kv_head_num_) * size_per_head_;
+            if (weights.attn_output_gate) {
+                params.stride = (2 * local_head_num + 2 * local_kv_head_num) * size_per_head;
             }
             else {
-                params.stride = (local_head_num_ + 2 * local_kv_head_num_) * size_per_head_;
+                params.stride = (local_head_num + 2 * local_kv_head_num) * size_per_head;
             }
         }
 
-        if (weights.qkv.bias) {
-            params.q_bias = (T*)weights.qkv.bias.data_or<T>(nullptr);
-            params.k_bias = params.q_bias + local_head_num_ * size_per_head_;
-            params.v_bias = params.k_bias + local_kv_head_num_ * size_per_head_;
+        if (!is_mla && weights.w_qkv && weights.w_qkv->bias) {
+            params.q_bias = (T*)weights.w_qkv->bias.data_or<T>(nullptr);
+            params.k_bias = params.q_bias + local_head_num * size_per_head;
+            params.v_bias = params.k_bias + local_kv_head_num * size_per_head;
         }
 
         params.batch_size = stat.n;
@@ -443,21 +458,21 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         params.block_iter_params = BlockIteratorParams{(char**)d.block_ptrs.data(),  //
                                                        d.block_ptrs_offsets.data() + offset,
                                                        cache_layer_id,
-                                                       (int)param_.cache_block_seq_len};
+                                                       engine_param_.cache_block_seq_len};
 
         // prefill only
         if (is_mla) {
             params.linear_iter_params = LinearIteratorParams{
-                tmp_kv.raw_data(),            // flattened KV
-                stat.k_sum * size_per_head_,  // stride to next head
-                0                             // stride from K to V
+                tmp_kv.raw_data(),           // flattened KV
+                stat.k_sum * size_per_head,  // stride to next head
+                0                            // stride from K to V
             };
         }
         else {
             params.linear_iter_params = LinearIteratorParams{
-                tmp_kv.raw_data(),                // flattened KV
-                stat.k_sum * size_per_head_ * 2,  // stride to next head
-                stat.k_sum * size_per_head_       // stride from K to V
+                tmp_kv.raw_data(),               // flattened KV
+                stat.k_sum * size_per_head * 2,  // stride to next head
+                stat.k_sum * size_per_head       // stride from K to V
             };
         }
 
@@ -465,21 +480,21 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         params.cu_q_len = d.q_offsets.data() + offset;
         params.cu_k_len = d.k_offsets.data() + offset;
 
-        params.num_heads     = local_head_num_;
-        params.num_kv_heads  = local_kv_head_num_;
-        params.size_per_head = size_per_head_;
+        params.num_heads     = local_head_num;
+        params.num_kv_heads  = local_kv_head_num;
+        params.size_per_head = size_per_head;
         params.layer_id      = cache_layer_id;
 
         double scaling = 1.;
-        if (param_.softmax_scale) {  // model predefined softmax scale
-            scaling *= param_.softmax_scale;
+        if (weights.softmax_scale) {  // model predefined softmax scale
+            scaling *= weights.softmax_scale;
         }
         else {  // default value
             scaling /= std::sqrt((float)params.size_per_head);
         }
         params.inv_sqrt_dh = scaling * std::log2(std::exp(1.));
 
-        params.sinks       = weights.sinks.data_or((T*)nullptr);
+        params.sinks       = weights.sinks ? weights.sinks.data_or((T*)nullptr) : (T*)nullptr;
         params.scale_sinks = scaling;
 
         params.window_size = weights.window_size;
@@ -498,8 +513,8 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         }
 
         // logn attn
-        params.use_logn_attn           = param_.use_logn_attn;
-        params.max_position_embeddings = param_.max_position_embeddings;
+        params.use_logn_attn           = weights.use_logn_attn;
+        params.max_position_embeddings = weights.rope.max_position_embeddings;
 
         // Decoding use only for now
         params.split_cnt   = split_cnt_.data();
@@ -515,9 +530,9 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
 
             // update ML,O offset if both prefill and decode present
             const int offset_ML_stage =
-                engine_param_.attn_cp_size * (offset ? kMaxWorkspaceTokens * local_head_num_ * 2 : 0);
-            const int offset_ML_rank = params.cp_rank * params.token_num * local_head_num_ * params.max_split_k * 2;
-            const int offset_O       = offset ? kMaxWorkspaceTokens * local_head_num_ * size_per_head_ : 0;
+                engine_param_.attn_cp_size * (offset ? kMaxWorkspaceTokens * local_head_num * 2 : 0);
+            const int offset_ML_rank = params.cp_rank * params.token_num * local_head_num * params.max_split_k * 2;
+            const int offset_O       = offset ? kMaxWorkspaceTokens * local_head_num * size_per_head : 0;
 
             params.partial_ML = partial_ML_.data() + offset_ML_stage + offset_ML_rank;
             params.partial_O  = partial_O_.data() + offset_O;
@@ -527,7 +542,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
             params.cp_fn          = CpPost;
             params.cp_fn_ctx      = (void*)&cp_fn_ctx_;
             cp_fn_ctx_.cp_rank    = params.cp_rank;
-            cp_fn_ctx_.count      = params.token_num * local_head_num_ * params.max_split_k * 2;
+            cp_fn_ctx_.count      = params.token_num * local_head_num * params.max_split_k * 2;
             cp_fn_ctx_.partial_ML = partial_ML_.data() + offset_ML_stage;
             cp_fn_ctx_.stream     = stream;
         }
@@ -535,7 +550,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         params.arch   = arch_;
         params.stream = stream;
 
-        params.quant_policy = model_param_.quant_policy;
+        params.quant_policy = quant_policy_;
         return params;
     };
 
@@ -592,48 +607,53 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
 Tensor UnifiedAttentionLayer::forward_mla(const Tensor& hidden_state, const WeightType& w)
 {
 
+    const int tp_size           = w.tp_size;
+    const int local_head_num    = w.head_num / tp_size;
+    const int local_kv_head_num = w.kv_head_num / tp_size;
+    const int size_per_head     = w.head_dim;
+
     const auto token_num = hidden_state.shape(0);
     const auto dtype     = hidden_state.dtype();
 
-    const int q_lora_rank  = w.q_a_proj.output_dim;
-    const int kv_lora_rank = w.kv_a_layernorm.size();
-    const int qk_rope_dim  = w.kv_a_proj.output_dim - kv_lora_rank;
+    const int q_lora_rank  = w.q_a_proj->output_dim;
+    const int kv_lora_rank = w.kv_a_layernorm->weight.size();
+    const int qk_rope_dim  = w.kv_a_proj->output_dim - kv_lora_rank;
 
     Tensor q;
 
     const auto stream = core::Context::stream().handle();
 
-    if (w.q_proj.weight) {
-        q = linear_.Forward(hidden_state, w.q_proj);
+    if (w.q_proj && w.q_proj->weight) {
+        q = linear_.Forward(hidden_state, *w.q_proj);
         sync_check_cuda_error();
     }
     else {
-        Tensor q_a = linear_.Forward(hidden_state, w.q_a_proj);
+        Tensor q_a = linear_.Forward(hidden_state, *w.q_a_proj);
         sync_check_cuda_error();
 
-        invokeRMSNorm(q_a, q_a, w.q_a_layernorm, model_param_.norm_eps, stream);
+        invokeRMSNorm(q_a, q_a, w.q_a_layernorm->weight, w.q_a_layernorm->norm_eps_, stream);
         sync_check_cuda_error();
 
-        q = linear_.Forward(q_a, w.q_b_proj);
+        q = linear_.Forward(q_a, *w.q_b_proj);
         sync_check_cuda_error();
     }
 
-    Tensor kv_a_k_pe = linear_.Forward(hidden_state, w.kv_a_proj);
+    Tensor kv_a_k_pe = linear_.Forward(hidden_state, *w.kv_a_proj);
     sync_check_cuda_error();
 
     auto kv_a = kv_a_k_pe.slice({0, 0}, {-1, kv_lora_rank});
-    invokeRMSNorm(kv_a, kv_a, w.kv_a_layernorm, model_param_.norm_eps, stream);
+    invokeRMSNorm(kv_a, kv_a, w.kv_a_layernorm->weight, w.kv_a_layernorm->norm_eps_, stream);
     sync_check_cuda_error();
 
-    const int local_q_kv_head_num = local_head_num_ + 1 * local_kv_head_num_;
+    const int local_q_kv_head_num = local_head_num + 1 * local_kv_head_num;
 
-    Tensor qkv{{token_num, local_q_kv_head_num, size_per_head_}, dtype, hidden_state.device()};
+    Tensor qkv{{token_num, local_q_kv_head_num, size_per_head}, dtype, hidden_state.device()};
     MLACopyQKV(dtype,
                qkv.raw_data(),
                q.raw_data(),
                kv_a_k_pe.raw_data(),
                token_num,
-               local_head_num_,
+               local_head_num,
                kv_lora_rank,
                qk_rope_dim,
                stream);
@@ -644,23 +664,28 @@ Tensor UnifiedAttentionLayer::forward_mla(const Tensor& hidden_state, const Weig
 
 void UnifiedAttentionLayer::qk_norm(Tensor& qkv, const WeightType& weights)
 {
+    const int tp_size           = weights.tp_size;
+    const int local_head_num    = weights.head_num / tp_size;
+    const int local_kv_head_num = weights.kv_head_num / tp_size;
+    const int size_per_head     = weights.head_dim;
+
     const auto stream = core::Context::stream().handle();
 
     check_cuda_error(cudaEventRecord(qkv_event_, stream));
     check_cuda_error(cudaStreamWaitEvent(aux_stream_, qkv_event_));
 
-    TM_CHECK(model_param_.attn_bias == false) << "not implemented";
+    TM_CHECK(weights.bias == false) << "not implemented";
 
     const auto token_num = qkv.shape(0);
 
-    auto qkv3 = qkv.view({token_num, -1, (int)size_per_head_});
+    auto qkv3 = qkv.view({token_num, -1, size_per_head});
 
-    auto q = qkv3.slice({0, 0, 0}, {-1, (int)local_head_num_, -1});
-    invokeRMSNormQK(q, weights.q_a_layernorm, model_param_.norm_eps, stream);
+    auto q = qkv3.slice({0, 0, 0}, {-1, local_head_num, -1});
+    invokeRMSNormQK(q, weights.q_norm->weight, weights.q_norm->norm_eps_, stream);
     sync_check_cuda_error();
 
-    auto k = qkv3.slice({0, (int)local_head_num_, 0}, {-1, (int)local_kv_head_num_, -1});
-    invokeRMSNormQK(k, weights.kv_a_layernorm, model_param_.norm_eps, aux_stream_);
+    auto k = qkv3.slice({0, local_head_num, 0}, {-1, local_kv_head_num, -1});
+    invokeRMSNormQK(k, weights.k_norm->weight, weights.k_norm->norm_eps_, aux_stream_);
     sync_check_cuda_error();
 
     check_cuda_error(cudaEventRecord(aux_event_, aux_stream_));
