@@ -2,8 +2,9 @@
 
 Speculative decoding is an optimization technique that introcude a lightweight draft model to propose multiple next tokens and then, the main model verify and choose the longest matched tokens in a forward pass. Compared with standard auto-regressive decoding, this methold lets the system generate multiple tokens at once.
 
-> \[!NOTE\]
-> This is an experimental feature in lmdeploy.
+:::{note}
+This is an experimental feature in lmdeploy.
+:::
 
 ## Examples
 
@@ -109,8 +110,9 @@ deepseek-ai/DeepSeek-V3 \
 
 Speculative decoding (MTP) can be combined with [structured output](./structed_output.md) so that the draft tokens proposed by the spec model also respect the grammar constraints (e.g. JSON schema, regex). This significantly improves the acceptance rate compared to running spec decoding without grammar masks.
 
-> \[!NOTE\]
-> This feature is supported for spec methods that inherit from `DeepseekMTP`, including `deepseek_mtp`, `qwen3_5_mtp`, and `eagle3` (with caveats below). Only the PyTorch backend is supported.
+:::{note}
+This feature is supported for spec methods that inherit from `DeepseekMTP`, including `deepseek_mtp`, `qwen3_5_mtp`, and `eagle3` (with caveats below). Only the PyTorch backend is supported.
+:::
 
 ### How it works
 

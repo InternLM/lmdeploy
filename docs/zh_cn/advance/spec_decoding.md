@@ -2,8 +2,9 @@
 
 投机解码是一种优化技术，它通过引入轻量级草稿模型来预测多个后续token，再由主模型在前向推理过程中验证并选择匹配度最高的长token序列。与标准的自回归解码相比，这种方法可使系统一次性生成多个token。
 
-> \[!NOTE\]
-> 请注意，这是lmdeploy中的实验性功能。
+:::{note}
+请注意，这是lmdeploy中的实验性功能。
+:::
 
 ## 示例
 
@@ -108,8 +109,9 @@ deepseek-ai/DeepSeek-V3 \
 
 投机解码（MTP）可以与[结构化输出](./structed_output.md)结合使用，使草稿模型提出的 token 也遵循语法约束（如 JSON Schema、正则表达式），从而显著提高接受率。
 
-> \[!NOTE\]
-> 该功能支持继承自 `DeepseekMTP` 的投机方法，包括 `deepseek_mtp`、`qwen3_5_mtp` 和 `eagle3`（注意事项见下文）。仅支持 PyTorch 后端。
+:::{note}
+该功能支持继承自 `DeepseekMTP` 的投机方法，包括 `deepseek_mtp`、`qwen3_5_mtp` 和 `eagle3`（注意事项见下文）。仅支持 PyTorch 后端。
+:::
 
 ### 工作原理
 
