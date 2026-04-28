@@ -21,6 +21,7 @@ from lmdeploy.pytorch.strategies.ar_spec.sequence import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_seq(prefill_tokens=None):
     """Create a minimal SchedulerSequenceARSpec with an optional prefill."""
     strategy = ARSpecSequenceStrategy()
@@ -160,7 +161,7 @@ class TestDecode:
         assert s['num_valid_ids'] == 6   # 3 + 3
         assert s['num_history_ids'] == 5  # num_valid - 1
         assert s['num_token_ids'] == 3
-        assert len(seq.history_cache) == 8 # with two new draft tokens appended
+        assert len(seq.history_cache) == 8  # with two new draft tokens appended
 
     def test_partial_spec_accepted(self):
         """Only 1 of 2 spec tokens accepted (second rejected = -1)."""
@@ -505,6 +506,7 @@ class TestRoutedExpertsPrefill:
 # ---------------------------------------------------------------------------
 # Tests for _update_token_ids_inputs across multiple turns
 # ---------------------------------------------------------------------------
+
 
 class TestMultiTurnUpdateInputs:
     """Test _update_token_ids_inputs — especially how it resets state for a new

@@ -49,8 +49,6 @@ class _FakeEngineLoop:
         self.resumed = True
 
 
-
-
 class _FakeExecutor:
 
     def __init__(self, engine):

@@ -451,6 +451,7 @@ class VisionModel(ABC):
             return True
         return False
 
+
 @dataclasses.dataclass
 class MultimodalSpecialTokens:
     image_token: str | None = None

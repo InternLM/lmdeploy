@@ -93,8 +93,8 @@ class TestInternVLChatTemplate:
     @pytest.fixture(scope='module')
     def mock_IMAGE_TOKEN_messages(self):
         return [
-            dict(role='system', content='你是书生·万象，英文名是InternVL，是由上海人工智能实验室、' \
-                    '清华大学及多家合作单位联合开发的多模态大语言模型。'),
+            dict(role='system', content='你是书生·万象，英文名是InternVL，是由上海人工智能实验室、'
+                 '清华大学及多家合作单位联合开发的多模态大语言模型。'),
             dict(role='user',
                  content=[
                      dict(type='text', text='<IMAGE_TOKEN>\nDescribe the following images in detail'),

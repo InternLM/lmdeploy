@@ -24,6 +24,7 @@ class QuantPolicy(enum.IntEnum):
     INT8 = 8  # 8-bit KV cache
     TURBO_QUANT = 42  # TurboQuant: K=4bit QJL4 + V=2bit MSE
 
+
 LogitsProcessor = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 """LogitsProcessor is a function that takes a tensor of input_ids, the logits
 tensor for the next token, and returns a modified tensor of logits to sample
@@ -312,7 +313,7 @@ class TurbomindEngineConfig:
         assert self.tp >= 1, 'tp must be a positive integer'
         assert self.cache_max_entry_count > 0, 'invalid cache_max_entry_count'
         assert self.quant_policy in (QuantPolicy.NONE, QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT), \
-               'invalid quant_policy'
+            'invalid quant_policy'
         assert self.rope_scaling_factor >= 0, 'invalid rope_scaling_factor'
         assert self.max_prefill_token_num >= 0, \
             'invalid max_prefill_token_num'
@@ -458,19 +459,19 @@ class PytorchEngineConfig:
             'invalid max_prefill_token_num'
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
         assert self.quant_policy in (QuantPolicy.NONE, QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT), \
-               'invalid quant_policy'
+            'invalid quant_policy'
         assert self.device_type in ['cuda', 'ascend', 'maca', 'camb'], (f'invalid device_type: {self.device_type}')
         assert self.kernel_block_size >= 16 and \
-               (self.kernel_block_size & (self.kernel_block_size - 1)) == 0, \
-               f'kernel_block_size must be >= 16 and a power of 2, but got {self.kernel_block_size}'
+            (self.kernel_block_size & (self.kernel_block_size - 1)) == 0, \
+            f'kernel_block_size must be >= 16 and a power of 2, but got {self.kernel_block_size}'
         assert self.block_size >= self.kernel_block_size and \
-               self.block_size % self.kernel_block_size == 0, \
-               (f'block_size must be >= kernel_block_size and an integer multiple '
-                f'of kernel_block_size, but got block_size {self.block_size} '
-                f'and kernel_block_size {self.kernel_block_size}')
+            self.block_size % self.kernel_block_size == 0, \
+            (f'block_size must be >= kernel_block_size and an integer multiple '
+             f'of kernel_block_size, but got block_size {self.block_size} '
+             f'and kernel_block_size {self.kernel_block_size}')
         if self.quant_policy > 0 and self.device_type not in ['cuda', 'ascend']:
             assert False, \
-                   'kv cache quantization only works for CUDA and ASCEND.'
+                'kv cache quantization only works for CUDA and ASCEND.'
         if self.device_type == 'camb' and self.block_size != 16:
             self.block_size = 16
             logger.warning('Currently, camb device requires block size to be 16, \

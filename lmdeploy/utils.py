@@ -123,8 +123,9 @@ _FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d' \
 _LOG_PID_ENABLED = os.getenv('LMDEPLOY_LOG_PID', '0').lower() in ('1', 'true', 'yes', 'on')
 if _LOG_PID_ENABLED:
     _FORMAT = ('%(asctime)s - %(name)s - %(levelname)s - '
-                '[pid=%(process)d ppid=%(ppid)d] - '
-                '%(filename)s:%(lineno)d - %(message)s')
+               '[pid=%(process)d ppid=%(ppid)d] - '
+               '%(filename)s:%(lineno)d - %(message)s')
+
 
 def get_logger(name: str | None = None,
                log_file: str | None = None,

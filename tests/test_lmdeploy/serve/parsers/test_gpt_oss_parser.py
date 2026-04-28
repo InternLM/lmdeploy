@@ -2,11 +2,11 @@ from dataclasses import dataclass
 
 import pytest
 
-pytest.importorskip('openai_harmony')
-
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 from lmdeploy.serve.parsers import _openai_harmony as openai_harmony_mod
 from lmdeploy.serve.parsers import gpt_oss_response_parser as gpt_oss_mod
+
+pytest.importorskip('openai_harmony')
 
 
 @dataclass

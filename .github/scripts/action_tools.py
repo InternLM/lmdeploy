@@ -94,7 +94,7 @@ def evaluate(models: list[str],
     for idx, ori_model in enumerate(models):
         print()
         print(50 * '==')
-        print(f'Start evaluating {idx+1}/{num_model} {ori_model} ...')
+        print(f'Start evaluating {idx + 1}/{num_model} {ori_model} ...')
         model = ori_model.lower()
 
         lmdeploy_dir = os.path.abspath(os.environ['LMDEPLOY_DIR'])

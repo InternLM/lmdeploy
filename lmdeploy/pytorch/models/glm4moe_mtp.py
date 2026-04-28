@@ -110,7 +110,7 @@ class Glm4MoeMTPModel(DeepseekMTPModel):
         num_hidden_layers = self.config.num_hidden_layers
 
         num_nextn_predict_layers = getattr(self.config, 'num_nextn_predict_layers', 1)
-        nextn_keys = [f'.layers.{num_hidden_layers+i}' for i in range(num_nextn_predict_layers)]
+        nextn_keys = [f'.layers.{num_hidden_layers + i}' for i in range(num_nextn_predict_layers)]
 
         # expert map
         num_experts = self.config.n_routed_experts

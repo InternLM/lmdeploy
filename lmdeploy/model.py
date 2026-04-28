@@ -162,10 +162,10 @@ class BaseChatTemplate:
                     f'{self.assistant}'
             else:
                 return f'{self.user}{prompt}{self.eoh}' \
-                       f'{self.assistant}'
+                    f'{self.assistant}'
         else:
             return f'{self.separator}{self.user}{prompt}{self.eoh}' \
-                   f'{self.assistant}'
+                f'{self.assistant}'
 
     def messages2prompt(self, messages, sequence_start=True, **kwargs):
         """Return the prompt that is concatenated with other elements in the
