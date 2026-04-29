@@ -22,11 +22,11 @@ AUTO_EVAL_API_URL
 
 If any are missing, stop and tell the user to populate `~/.eval/config`.
 
-Also verify `~/.eval/models/model.yaml` exists. If missing, stop and tell the user to create it.
+Also verify `~/.eval/model.yaml` exists. If missing, stop and tell the user to create it.
 
 ## 1. Gather inputs
 
-Read `~/.eval/models/model.yaml` and present the list of available model keys to the user. Ask them to select one or more models.
+Read `~/.eval/model.yaml` and present the list of available model keys to the user. Ask them to select one or more models. The model key (e.g. `Qwen3.5-35B-A3B`) is the `model_abbr`. User input is matched case-insensitively — `qwen3.5-35b-a3b` matches `Qwen3.5-35B-A3B`. The original casing from the YAML key is used in the payload.
 
 Then ask for:
 
@@ -38,7 +38,7 @@ If the user selected multiple models, repeat steps 3-10 for each model.
 
 ## 2. Look up model config
 
-For each selected model, read its entry from `~/.eval/models/model.yaml`. Extract `model_path` and all other fields.
+For each selected model, read its entry from `~/.eval/model.yaml`. Extract `model_path` and all other fields.
 
 All fields except `model_path` are passed as CLI flags to `infer_extra_params`, mapping each key to `--{key} {value}`. For example:
 
