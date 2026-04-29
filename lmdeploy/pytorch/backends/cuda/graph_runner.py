@@ -153,6 +153,20 @@ class CUDAGraphRunner(GraphRunner):
         self.max_tokens = cache_config.max_prefill_token_num
         self.num_blocks = cache_config.num_gpu_blocks
 
+        # Speculative decoding on CUDA requires FlashAttention-3 (FA3).
+        # FA3 is available on SM80+ (Ampere and above) GPUs with CUDA >= 12.3.
+        # Without FA3, the Triton paged attention kernel cannot handle
+        # multi-token decoding queries (max_q_seqlen > 1) used in spec decoding.
+        if model_config.model_paradigm == 'ar_spec':
+            from .attention import use_fa3
+            if not use_fa3:
+                raise RuntimeError(
+                    'Speculative decoding on CUDA requires FlashAttention-3 (FA3), '
+                    'which is available on SM80+ GPUs (Ampere architecture and above) '
+                    'with CUDA >= 12.3. Current GPU does not meet these requirements. '
+                    'Please use a SM80+ GPU with CUDA >= 12.3 and install flash-attn, '
+                    'or disable speculative decoding.')
+
         self.enable_graph = self.check_enable_graph()
 
         self.graph_pool_handle = torch.cuda.graph_pool_handle()
