@@ -13,6 +13,7 @@ import torch
 import torch.distributed as dist
 from torch.profiler import record_function
 
+from lmdeploy.messages import QuantPolicy
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
@@ -981,6 +982,13 @@ class BaseModelAgent:
         if adapters is not None:
             logger.debug(msg_with_rank(rank, 'loading adapters.'))
             add_adapters(patched_model, adapters, dtype=self.model_config.dtype, device=device)
+        calculate_kv_scales = self.cache_config.calculate_kv_scales and self.cache_config.quant_policy in (
+            QuantPolicy.FP8, QuantPolicy.FP8_E5M2)
+        for module in patched_model.modules():
+            if hasattr(module, 'set_calculate_kv_scales'):
+                module.set_calculate_kv_scales(calculate_kv_scales)
+            if hasattr(module, 'finalize_kv_scales'):
+                module.finalize_kv_scales(self.cache_config.quant_policy)
         self.patched_model = patched_model
         self.build_model_ctx = build_model_ctx
 

@@ -24,7 +24,8 @@ class TritonAttentionMetadata(AttentionMetadata):
         q_seqlens: Length of each query sequence [batch_size].
         kv_start_loc: Start location of each KV sequence [batch_size].
         kv_seqlens: Length of each KV sequence [batch_size].
-        quant_policy: Quantization policy (0=none, 4=int4, 8=int8, 16/17=fp8).
+        quant_policy: Quantization policy (0=none, 4=int4, 8=int8, 16/17=scalar fp8,
+            18/19=per-token/head fp8).
         kv_flatten_size: Total size of flattened KV cache.
         tile_scheduler_metadata: Scheduler metadata for Flash MLA.
         num_splits: Number of splits for Flash MLA.
@@ -149,6 +150,8 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         max_q_seqlen: int,
         k_scales_zeros: torch.Tensor = None,
         v_scales_zeros: torch.Tensor = None,
+        k_scale: torch.Tensor = None,
+        v_scale: torch.Tensor = None,
     ):
         """Fill kv cache."""
         kv_seqlens = attn_metadata.kv_seqlens
@@ -175,6 +178,8 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             block_offsets=block_offsets,
             k_scales_zeros=k_scales_zeros,
             v_scales_zeros=v_scales_zeros,
+            k_scale=k_scale,
+            v_scale=v_scale,
             quant_policy=quant_policy,
         )
 
@@ -187,6 +192,8 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         max_q_seqlen: int,
         k_scales_zeros: torch.Tensor = None,
         v_scales_zeros: torch.Tensor = None,
+        k_scale: torch.Tensor = None,
+        v_scale: torch.Tensor = None,
         learnable_sink: torch.Tensor = None,
     ) -> torch.Tensor:
         """Forward pass for decoding stage.
@@ -199,6 +206,8 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             max_q_seqlen: Maximum query sequence length.
             k_scales_zeros: Key quantization scales/zeros.
             v_scales_zeros: Value quantization scales/zeros.
+            k_scale: Scalar key scale for normal FP8 KV cache.
+            v_scale: Scalar value scale for normal FP8 KV cache.
             learnable_sink: Learnable sink tokens.
 
         Returns:
@@ -224,6 +233,8 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             quant_policy=quant_policy,
             k_scales_zeros=k_scales_zeros,
             v_scales_zeros=v_scales_zeros,
+            k_scale=k_scale,
+            v_scale=v_scale,
         )
         return attn_output
 
@@ -236,6 +247,8 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         max_q_seqlen: int,
         k_scales_zeros: torch.Tensor = None,
         v_scales_zeros: torch.Tensor = None,
+        k_scale: torch.Tensor = None,
+        v_scale: torch.Tensor = None,
         learnable_sink: torch.Tensor = None,
     ) -> torch.Tensor:
         """Forward pass for prefill stage.
@@ -248,6 +261,8 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             max_q_seqlen: Maximum query sequence length.
             k_scales_zeros: Key quantization scales/zeros.
             v_scales_zeros: Value quantization scales/zeros.
+            k_scale: Scalar key scale for normal FP8 KV cache.
+            v_scale: Scalar value scale for normal FP8 KV cache.
             learnable_sink: Learnable sink tokens.
 
         Returns:
@@ -275,6 +290,8 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             out_dtype=query.dtype,
             k_scales_zeros=k_scales_zeros,
             v_scales_zeros=v_scales_zeros,
+            k_scale=k_scale,
+            v_scale=v_scale,
             quant_policy=quant_policy,
             flatten_kv_layout=kv_layout,
         )
@@ -323,6 +340,8 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         attn_metadata: TritonAttentionMetadata,
         k_scales_zeros: torch.Tensor = None,
         v_scales_zeros: torch.Tensor = None,
+        k_scale: torch.Tensor = None,
+        v_scale: torch.Tensor = None,
         learnable_sink: torch.Tensor = None,
         inplace: bool = True,
         **kwargs,
@@ -343,6 +362,8 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             attn_metadata: Attention metadata containing stage info and indices.
             k_scales_zeros: Key quantization scales/zeros.
             v_scales_zeros: Value quantization scales/zeros.
+            k_scale: Scalar key scale for normal FP8 KV cache.
+            v_scale: Scalar value scale for normal FP8 KV cache.
             learnable_sink: Learnable sink tokens.
             inplace: Whether to modify query inplace (unused, kept for compatibility).
 
@@ -363,6 +384,8 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
                 max_q_seqlen=max_q_seqlen,
                 k_scales_zeros=k_scales_zeros,
                 v_scales_zeros=v_scales_zeros,
+                k_scale=k_scale,
+                v_scale=v_scale,
             )
 
         # Validate alibi configuration
@@ -379,6 +402,8 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
                 max_q_seqlen,
                 k_scales_zeros=k_scales_zeros,
                 v_scales_zeros=v_scales_zeros,
+                k_scale=k_scale,
+                v_scale=v_scale,
                 learnable_sink=learnable_sink,
             )
         else:
@@ -390,5 +415,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
                 max_q_seqlen,
                 k_scales_zeros=k_scales_zeros,
                 v_scales_zeros=v_scales_zeros,
+                k_scale=k_scale,
+                v_scale=v_scale,
                 learnable_sink=learnable_sink,
             )

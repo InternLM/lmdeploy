@@ -698,8 +698,114 @@ def _quant_fp8_per_token(x: torch.Tensor, fp8_dtype: torch.dtype):
     return q, scale
 
 
-class TestFillKVCacheFP8(TestFillKVCache):
-    """Tests for fill_kv_cache with QuantPolicy.FP8.
+def _quant_fp8_scalar(x: torch.Tensor, fp8_dtype: torch.dtype, scale: float):
+    """Scalar-scale FP8 quantization."""
+    fp8_max = torch.finfo(fp8_dtype).max
+    scale_t = x.new_tensor(scale, dtype=torch.float32)
+    q = (x.to(torch.float32) / scale_t).clamp(-fp8_max, fp8_max).to(fp8_dtype)
+    return q, scale_t
+
+
+class TestFillKVCacheFP8Scalar(TestFillKVCache):
+    """Tests for fill_kv_cache with normal scalar-scale QuantPolicy.FP8."""
+
+    @pytest.fixture
+    def fp8_dtype(self):
+        yield torch.float8_e4m3fn
+
+    @pytest.fixture
+    def quant_policy(self):
+        yield QuantPolicy.FP8
+
+    @pytest.fixture
+    def head_dim(self, request):
+        yield request.param
+
+    @pytest.fixture
+    def k_caches(self, batch_size, max_num_blocks, block_size, num_heads, head_dim, fp8_dtype):
+        shape = (batch_size * max_num_blocks, block_size, num_heads, head_dim)
+        yield torch.zeros(shape, dtype=fp8_dtype).cuda()
+
+    @pytest.fixture
+    def v_caches(self, batch_size, max_num_blocks, block_size, num_heads, head_dim, fp8_dtype):
+        shape = (batch_size * max_num_blocks, block_size, num_heads, head_dim)
+        yield torch.zeros(shape, dtype=fp8_dtype).cuda()
+
+    @pytest.fixture
+    def gt(self, k_states, v_states, k_caches, v_caches, seq_lens, history_lens, block_offsets, block_size, fp8_dtype):
+        k_states_q, k_scale = _quant_fp8_scalar(k_states, fp8_dtype, scale=0.25)
+        v_states_q, v_scale = _quant_fp8_scalar(v_states, fp8_dtype, scale=0.5)
+        batch_size = len(seq_lens)
+        k_caches = k_caches.clone()
+        v_caches = v_caches.clone()
+
+        splited_k_states = k_states_q.split(seq_lens)
+        splited_v_states = v_states_q.split(seq_lens)
+
+        for bidx in range(batch_size):
+            k_state = splited_k_states[bidx]
+            v_state = splited_v_states[bidx]
+            h_len = history_lens[bidx]
+            b_offs = block_offsets[bidx]
+            block_id = _div_up(h_len + 1, block_size) - 1
+            fill_start = h_len % block_size
+            fill_size = min(block_size - fill_start, k_state.size(0))
+            while True:
+                boff = b_offs[block_id]
+                fill_end = fill_start + fill_size
+                k_caches[boff, fill_start:fill_end] = k_state[:fill_size]
+                v_caches[boff, fill_start:fill_end] = v_state[:fill_size]
+                k_state = k_state[fill_size:]
+                v_state = v_state[fill_size:]
+                block_id += 1
+                fill_start = 0
+                fill_size = min(block_size, k_state.size(0))
+                if fill_size == 0:
+                    break
+
+        yield k_caches, v_caches, k_scale, v_scale
+
+    @pytest.mark.parametrize('head_dim', [128], indirect=True)
+    @pytest.mark.parametrize(['seq_lens', 'history_lens'], [
+        ((1, 1, 1, 1), (1, 16, 31, 24)),
+        ((1, 8, 16, 24), (1, 16, 31, 24)),
+    ],
+                             indirect=True)
+    def test_fill_kv_cache(self, k_states, v_states, k_caches, v_caches, block_offsets, q_start_loc, q_seq_length,
+                           kv_seq_length, max_q_seq_length, gt, quant_policy):
+        from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache
+        gt_k, gt_v, k_scale, v_scale = gt
+        fill_kv_cache(k_states,
+                      v_states,
+                      k_caches,
+                      v_caches,
+                      q_start_loc,
+                      q_seq_length,
+                      kv_seq_length,
+                      max_q_seq_length,
+                      block_offsets,
+                      quant_policy=quant_policy,
+                      k_scale=k_scale,
+                      v_scale=v_scale)
+        torch.testing.assert_close(k_caches.to(torch.float32), gt_k.to(torch.float32))
+        torch.testing.assert_close(v_caches.to(torch.float32), gt_v.to(torch.float32))
+
+
+class TestFillKVCacheFP8E5M2Scalar(TestFillKVCacheFP8Scalar):
+    """Tests for fill_kv_cache with normal scalar-scale
+    QuantPolicy.FP8_E5M2."""
+
+    @pytest.fixture
+    def fp8_dtype(self):
+        yield torch.float8_e5m2
+
+    @pytest.fixture
+    def quant_policy(self):
+        yield QuantPolicy.FP8_E5M2
+
+
+class TestFillKVCacheFP8PerTokenHead(TestFillKVCache):
+    """Tests for fill_kv_cache with QuantPolicy.FP8_PER_TOKEN_HEAD.
 
     FP8 KV cache: float8_e4m3fn dtype, per-token symmetric scale, no zero point.
     Scale shape: [num_blocks, block_size, num_heads, 1].
@@ -711,7 +817,7 @@ class TestFillKVCacheFP8(TestFillKVCache):
 
     @pytest.fixture
     def quant_policy(self):
-        yield QuantPolicy.FP8
+        yield QuantPolicy.FP8_PER_TOKEN_HEAD
 
     @pytest.fixture
     def head_dim(self, request):
@@ -838,8 +944,8 @@ class TestFillKVCacheFP8(TestFillKVCache):
         assert (v_scales_zeros >= 0).all(), 'V scales should be non-negative'
 
 
-class TestFillKVCacheFP8E5M2(TestFillKVCacheFP8):
-    """Tests for fill_kv_cache with QuantPolicy.FP8_E5M2."""
+class TestFillKVCacheFP8E5M2PerTokenHead(TestFillKVCacheFP8PerTokenHead):
+    """Tests for fill_kv_cache with QuantPolicy.FP8_E5M2_PER_TOKEN_HEAD."""
 
     @pytest.fixture
     def fp8_dtype(self):
@@ -847,4 +953,4 @@ class TestFillKVCacheFP8E5M2(TestFillKVCacheFP8):
 
     @pytest.fixture
     def quant_policy(self):
-        yield QuantPolicy.FP8_E5M2
+        yield QuantPolicy.FP8_E5M2_PER_TOKEN_HEAD
