@@ -117,18 +117,6 @@ class TestQwenVLChatTemplate:
             'Qwen/Qwen2.5-VL-7B-Instruct',
             'Qwen/Qwen2.5-VL-32B-Instruct',
             'Qwen/Qwen2.5-VL-72B-Instruct',
-            'Qwen/Qwen3-VL-2B-Instruct',
-            'Qwen/Qwen3-VL-2B-Thinking',
-            'Qwen/Qwen3-VL-4B-Instruct',
-            'Qwen/Qwen3-VL-4B-Thinking',
-            'Qwen/Qwen3-VL-8B-Instruct',
-            'Qwen/Qwen3-VL-8B-Thinking',
-            'Qwen/Qwen3-VL-32B-Instruct',
-            'Qwen/Qwen3-VL-32B-Thinking',
-            'Qwen/Qwen3-VL-30B-A3B-Instruct',
-            'Qwen/Qwen3-VL-30B-A3B-Thinking',
-            'Qwen/Qwen3-VL-235B-A22B-Instruct',
-            'Qwen/Qwen3-VL-235B-A22B-Thinking',
         ]
         models = [get_model_and_chat_template(model_path) for model_path in model_list]
         return models
@@ -161,4 +149,56 @@ class TestQwenVLChatTemplate:
                                                             tokenize=False,
                                                             return_dict=True)
             prompt, _ = model.proc_messages(mock_pure_text_messages, chat_template, sequence_start=True)
+            assert prompt == reference
+
+
+class TestQwen3VLChatTemplate:
+
+    @pytest.fixture(scope='module')
+    def models(self):
+        model_list = [
+            'Qwen/Qwen3-VL-2B-Instruct',
+            'Qwen/Qwen3-VL-2B-Thinking',
+            'Qwen/Qwen3-VL-4B-Instruct',
+            'Qwen/Qwen3-VL-4B-Thinking',
+            'Qwen/Qwen3-VL-8B-Instruct',
+            'Qwen/Qwen3-VL-8B-Thinking',
+            'Qwen/Qwen3-VL-32B-Instruct',
+            'Qwen/Qwen3-VL-32B-Thinking',
+            'Qwen/Qwen3-VL-30B-A3B-Instruct',
+            'Qwen/Qwen3-VL-30B-A3B-Thinking',
+            'Qwen/Qwen3-VL-235B-A22B-Instruct',
+            'Qwen/Qwen3-VL-235B-A22B-Thinking',
+        ]
+        models = [get_model_and_chat_template(model_path) for model_path in model_list]
+        return models
+
+    def test_get_input_prompt(self, models, mock_messages):
+        for model, chat_template in models:
+            model.build_preprocessor()
+            reference = model.processor.apply_chat_template(mock_messages,
+                                                            add_generation_prompt=True,
+                                                            tokenize=False,
+                                                            return_dict=True)
+            prompt = model.get_input_prompt(mock_messages, chat_template, sequence_start=True)
+            assert prompt == reference
+
+    def test_pure_img_messages(self, models, mock_pure_img_messages):
+        for model, chat_template in models:
+            model.build_preprocessor()
+            reference = model.processor.apply_chat_template(mock_pure_img_messages,
+                                                            add_generation_prompt=True,
+                                                            tokenize=False,
+                                                            return_dict=True)
+            prompt = model.get_input_prompt(mock_pure_img_messages, chat_template, sequence_start=True)
+            assert prompt == reference
+
+    def test_pure_text_messages(self, models, mock_pure_text_messages):
+        for model, chat_template in models:
+            model.build_preprocessor()
+            reference = model.processor.apply_chat_template(mock_pure_text_messages,
+                                                            add_generation_prompt=True,
+                                                            tokenize=False,
+                                                            return_dict=True)
+            prompt = model.get_input_prompt(mock_pure_text_messages, chat_template, sequence_start=True)
             assert prompt == reference

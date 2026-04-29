@@ -4,7 +4,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
-from lmdeploy.messages import ResponseType
+from lmdeploy.messages import EngineOutput, ResponseType
 from lmdeploy.pytorch.disagg.conn.protocol import (
     DistServeConnectionRequest,
     DistServeDropConnectionRequest,
@@ -20,6 +20,7 @@ logger = get_logger('lmdeploy')
 @dataclass
 class SessionState:
     is_exists: asyncio.Event = field(default_factory=asyncio.Event)
+    cancelled: bool = False
 
 
 class MPEngine(EngineBase):
@@ -28,6 +29,7 @@ class MPEngine(EngineBase):
         """Initialize mp engine."""
         self.session_states = defaultdict(SessionState)
         self.engine_config = self._collective_rpc('get_engine_config')
+        self.pending_cancel_sessions = set()
 
     def _collective_rpc(self, func, *args, **kwargs):
         """Collective rpc call."""
@@ -37,7 +39,7 @@ class MPEngine(EngineBase):
         """Collective rpc call."""
         raise NotImplementedError('This method has not been implemented yet.')
 
-    async def _collective_rpc_streaming_async(self, func, *args, **kwargs):
+    async def _collective_rpc_streaming_async(self, func: str, sess_event: asyncio.Event, *args, **kwargs):
         """Collective rpc call."""
         raise NotImplementedError('This method has not been implemented yet.')
 
@@ -53,9 +55,9 @@ class MPEngine(EngineBase):
         """End session."""
         return self._collective_rpc('end_session', session_id)
 
-    def sleep(self, level: int):
+    async def sleep(self, level: int):
         """sleep."""
-        return self._collective_rpc('sleep', level)
+        return await self._collective_rpc_async('sleep', level)
 
     def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
@@ -65,9 +67,9 @@ class MPEngine(EngineBase):
         """Update params."""
         return self._collective_rpc('update_params', request)
 
-    def get_schedule_metrics(self):
+    async def get_schedule_metrics(self):
         """Get schedule metrics."""
-        return self._collective_rpc('get_schedule_metrics')
+        return await self._collective_rpc_async('get_schedule_metrics')
 
     def p2p_initialize(self, conn_request: DistServeInitRequest):
         """Init rdma link."""
@@ -100,29 +102,41 @@ class MPEngineInstance(EngineInstanceBase):
     async def async_end(self, session_id: int):
         """End the given session."""
         if session_id not in self.session_states:
+            self.engine.pending_cancel_sessions.discard(session_id)
             logger.warning(f'Session {session_id} not found when end session.')
             return ResponseType.SESSION_NOT_EXIST
         await self.session_states[session_id].is_exists.wait()
         ret = await self.engine._collective_rpc_async('instance_async_end', session_id)
         self.session_states.pop(session_id)
+        self.engine.pending_cancel_sessions.discard(session_id)
         return ret
 
     async def async_cancel(self, session_id: int):
         """Stop current streaming inference."""
         if session_id not in self.session_states:
-            logger.warning(f'Session {session_id} not found when cancel session.')
+            logger.debug(f'Session {session_id} not found when cancel session.')
             return ResponseType.SESSION_NOT_EXIST
-        await self.session_states[session_id].is_exists.wait()
+        state = self.session_states[session_id]
+        self.engine.pending_cancel_sessions.add(session_id)
+        if not state.is_exists.is_set():
+            logger.warning(f'Session {session_id} not started yet, recording pending cancel.')
+            state.cancelled = True
+            return ResponseType.SUCCESS
         return await self.engine._collective_rpc_async('instance_async_cancel', session_id)
 
     async def async_stream_infer(self, session_id: int, *args, **kwargs):
         """Send stream inference request."""
         state = self.session_states[session_id]
+        if state.cancelled or session_id in self.engine.pending_cancel_sessions:
+            state.is_exists.set()
+            logger.warning(f'Session {session_id} canceld, async_stream_infer')
+            yield EngineOutput(ResponseType.CANCEL, [])
+            return
         kwargs['session_id'] = session_id
-        kwargs['notify_add_msg'] = True
-        generator = self.engine._collective_rpc_streaming_async('instance_async_stream_infer', *args, **kwargs)
-        # session should have been added
-        state.is_exists.set()
+        generator = self.engine._collective_rpc_streaming_async('instance_async_stream_infer',
+                                                                state.is_exists,
+                                                                *args,
+                                                                **kwargs)
 
         async for result in generator:
             yield result

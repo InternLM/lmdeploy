@@ -24,6 +24,9 @@ class Session:
         self.history: list[tuple[Any, str]] = []
         self.gen_config: GenerationConfig | None = None
         self.step: int = 0
+        # Set by api_server to AsyncEngine.epoch when a request binds a session;
+        # generate() drops work if stop_all_session() bumped epoch after bind.
+        self.epoch: int | None = None
         # event to wait for the session to be active
         self._active: asyncio.Event | None = None
         self._handle = None  # inference instance
@@ -64,6 +67,7 @@ class Session:
         self.history = []
         self.gen_config = None
         self.step = 0
+        self.epoch = None
         self._active = None
         self._handle = None
         self._session_mgr = None
@@ -101,7 +105,7 @@ class Session:
 
     async def async_abort(self):
         """Abort the session."""
-        logger.info(f'[session] Aborting session {self.session_id}')
+        logger.debug(f'[session] Aborting session {self.session_id}, epoch={self.epoch}')
         if self._handle is not None:
             await self._handle.async_cancel(self.session_id)
 
@@ -205,20 +209,22 @@ class SessionManager:
             session.update(**kwargs)
             return session
         else:
-            logger.info(f'[SessionManager] session {session_id} not found. Creating...')
+            logger.debug(f'[SessionManager] session {session_id} not found. Creating...')
             session = Session(session_id, self, **kwargs)
             self.sessions[session_id] = session
             return session
 
     async def async_abort_all(self):
         """Abort all sessions."""
+        logger.info(f'[SessionManager] aborting all {len(self.sessions)} sessions')
         tasks = []
         for session in list(self.sessions.values()):
             tasks.append(session.async_abort())
         await asyncio.gather(*tasks, return_exceptions=True)
-        # "abort all" is designed for async RL. The aborted sessions will be no longer used,
-        # so we clear the sessions here.
-        self.sessions.clear()
+        # Remove sessions without handle (i.e., those that have not started inference or already ended)
+        sessions_without_handle = [sid for sid, session in self.sessions.items() if session._handle is None]
+        for session_id in sessions_without_handle:
+            self.sessions.pop(session_id, None)
 
     def has(self, session_id):
         return session_id in self.sessions

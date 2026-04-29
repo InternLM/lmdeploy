@@ -135,6 +135,7 @@ with set_envs():
 
     # logging
     log_file = os.getenv('LMDEPLOY_LOG_FILE', None)
+    os.getenv('LMDEPLOY_LOG_PID', '0')
 
     # check env
     enable_check_env = env_to_bool('LMDEPLOY_ENABLE_CHECK_ENV', True)
@@ -161,6 +162,9 @@ with set_envs():
 
     # repetition check
     repetition_window_size = env_to_int('LMDEPLOY_REPETITION_WINDOW_SIZE', 1024)
+
+    # qwen3.5 recurrent_state dtype
+    fp32_mamba_ssm_dtype = env_to_bool('LMDEPLOY_FP32_MAMBA_SSM_DTYPE', False)
 
 
 def get_all_envs():

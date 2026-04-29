@@ -26,7 +26,6 @@ from lmdeploy.pytorch.nn.linear import (
 )
 from lmdeploy.pytorch.nn.rotary_embedding import get_rope_parameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader, load_weight
-from lmdeploy.vl.constants import Modality
 
 from .patch import add_prefix, get_build_model_context
 from .qwen2_5_vl import Qwen2_5_VisionRotaryEmbedding as Qwen3_5VisionRotaryEmbedding
@@ -1022,7 +1021,7 @@ class Qwen3_5Model(nn.Module):
         pixel_values: torch.Tensor | None = None,
         vis_cu_seqlens: torch.Tensor | None = None,
         vis_pos_emb: torch.Tensor | None = None,
-        image_mask: torch.Tensor | None = None,
+        multimodal_mask: torch.Tensor | None = None,
         pos_embeds: torch.Tensor | None = None,
         grid_thw: torch.Tensor | None = None,
         all_routed_experts: torch.Tensor | None = None,
@@ -1051,8 +1050,8 @@ class Qwen3_5Model(nn.Module):
                 image_embeds = torch.cat(image_embeds, dim=0).to(inputs_embeds.device, dtype)
 
                 # mask and scatter to create final input embeddings
-                expanded_image_mask = image_mask.unsqueeze(-1).expand_as(inputs_embeds)
-                inputs_embeds = inputs_embeds.masked_scatter(expanded_image_mask, image_embeds)
+                multimodal_mask = multimodal_mask.unsqueeze(-1).expand_as(inputs_embeds)
+                inputs_embeds = inputs_embeds.masked_scatter(multimodal_mask, image_embeds)
 
         output_inputs_embeds = inputs_embeds if return_input_embeds else None
 
@@ -1126,7 +1125,7 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         pixel_values: torch.Tensor | None = None,
         vis_cu_seqlens: torch.Tensor | None = None,
         vis_pos_emb: torch.Tensor | None = None,
-        image_mask: torch.Tensor | None = None,
+        multimodal_mask: torch.Tensor | None = None,
         pos_embeds: torch.Tensor | None = None,
         grid_thw: torch.Tensor | None = None,
         return_input_embeds: bool = False,
@@ -1151,7 +1150,7 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
             pixel_values=pixel_values,
             vis_cu_seqlens=vis_cu_seqlens,
             vis_pos_emb=vis_pos_emb,
-            image_mask=image_mask,
+            multimodal_mask=multimodal_mask,
             pos_embeds=pos_embeds,
             grid_thw=grid_thw,
             all_routed_experts=all_routed_experts,
@@ -1192,7 +1191,7 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         pixel_values = None
         vis_cu_seqlens = None
         vis_pos_emb = None
-        image_mask = None
+        multimodal_mask = None
         grid_thw = None
         pos_embeds = None
         if context.input_multimodals is not None:
@@ -1201,15 +1200,10 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
             mm_inputs = [item for sublist in mm_inputs for item in sublist]
 
             if len(mm_inputs) > 0:
-                modality = mm_inputs[0].modality
                 pixel_values = torch.cat([inp.data for inp in mm_inputs])
 
-                image_token_id = mm_inputs[0].meta.get('image_token_id')
-                video_token_id = mm_inputs[0].meta.get('video_token_id')
-                mm_token_id = image_token_id if modality == Modality.IMAGE else video_token_id
-                image_mask = (input_ids == mm_token_id)
-
-                grid_thw = torch.cat([data.meta['grid_thw'] for data in mm_inputs]).cpu()
+                multimodal_mask = self.get_multimodal_mask(input_ids, mm_inputs)
+                grid_thw = torch.stack([data.meta['grid_thw'] for data in mm_inputs]).cpu()
                 vis_pos_emb = self.model.visual.rot_pos_emb(grid_thw)
                 pos_embeds = self.model.visual.fast_pos_embed_interpolate(grid_thw)
                 vis_cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2],
@@ -1244,7 +1238,7 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
             pixel_values=pixel_values,
             vis_cu_seqlens=vis_cu_seqlens,
             vis_pos_emb=vis_pos_emb,
-            image_mask=image_mask,
+            multimodal_mask=multimodal_mask,
             grid_thw=grid_thw,
             pos_embeds=pos_embeds,
             return_input_embeds=return_input_embeds,

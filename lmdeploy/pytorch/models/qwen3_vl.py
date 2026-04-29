@@ -551,7 +551,7 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         pixel_values: torch.Tensor = None,
         vis_cu_seqlens: torch.Tensor = None,
         vis_pos_emb: torch.Tensor = None,
-        image_mask: torch.Tensor = None,
+        multimodal_mask: torch.Tensor = None,
         pos_embeds: torch.Tensor = None,
         grid_thw: torch.Tensor = None,
         **kwargs,
@@ -580,10 +580,9 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
                 image_embeds = torch.cat(image_embeds, dim=0).to(inputs_embeds.device, dtype)
 
                 # mask and scatter to create final input embeddings
-                expanded_image_mask = image_mask.unsqueeze(-1).expand_as(inputs_embeds)
-                inputs_embeds = inputs_embeds.masked_scatter(expanded_image_mask, image_embeds)
-
-                visual_pos_masks = expanded_image_mask
+                multimodal_mask = multimodal_mask.unsqueeze(-1).expand_as(inputs_embeds)
+                inputs_embeds = inputs_embeds.masked_scatter(multimodal_mask, image_embeds)
+                visual_pos_masks = multimodal_mask
 
         hidden_states = self.language_model(
             input_ids=input_ids,
@@ -618,7 +617,7 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         pixel_values = None
         vis_cu_seqlens = None
         vis_pos_emb = None
-        image_mask = None
+        multimodal_mask = None
         grid_thw = None
         pos_embeds = None
         if context.input_multimodals is not None:
@@ -627,15 +626,9 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
             mm_inputs = [item for sublist in mm_inputs for item in sublist]
 
             if len(mm_inputs) > 0:
-                modality = mm_inputs[0].modality
                 pixel_values = torch.cat([inp.data for inp in mm_inputs])
-
-                image_token_id = mm_inputs[0].meta.get('image_token_id')
-                video_token_id = mm_inputs[0].meta.get('video_token_id')
-                mm_token_id = image_token_id if modality == Modality.IMAGE else video_token_id
-                image_mask = (input_ids == mm_token_id)
-
-                grid_thw = torch.cat([data.meta['grid_thw'] for data in mm_inputs]).cpu()
+                multimodal_mask = self.get_multimodal_mask(input_ids, mm_inputs)
+                grid_thw = torch.stack([data.meta['grid_thw'] for data in mm_inputs]).cpu()
                 vis_pos_emb = self.visual.rot_pos_emb(grid_thw)
                 pos_embeds = self.visual.fast_pos_embed_interpolate(grid_thw)
                 vis_cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2],
@@ -665,7 +658,7 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
             pixel_values=pixel_values,
             vis_cu_seqlens=vis_cu_seqlens,
             vis_pos_emb=vis_pos_emb,
-            image_mask=image_mask,
+            multimodal_mask=multimodal_mask,
             grid_thw=grid_thw,
             pos_embeds=pos_embeds,
         )
@@ -744,7 +737,8 @@ class Qwen3VLInputProcessor(BaseModelInputProcessor):
 
     @classmethod
     def make_mrope(cls, grid_thw: torch.Tensor):
-        img_pos_ids = cls._get_multimodal_pos_ids(grid_thw[0].tolist())
+        grid_thw = grid_thw.tolist() if grid_thw.dim() == 1 else grid_thw[0].tolist()
+        img_pos_ids = cls._get_multimodal_pos_ids(grid_thw)
         return img_pos_ids
 
     def _make_image_mm_data(self, input_mm: dict[str, Any]) -> MultiModalData:
@@ -752,18 +746,14 @@ class Qwen3VLInputProcessor(BaseModelInputProcessor):
         pixel_values = input_mm['pixel_values']
         image_grid_thw = input_mm['image_grid_thw']
         offset = input_mm['offset']
-        start = offset
         image_token_id = input_mm['image_token_id']
-        num_pad = input_mm['mm_token_num']
-        if isinstance(num_pad, torch.Tensor):
-            num_pad = num_pad.item()
 
         mrope_pos_ids = self.make_mrope(image_grid_thw)
 
         mm_data = MultiModalData(modality=Modality.IMAGE,
                                  data=pixel_values,
-                                 start=start,
-                                 end=start + num_pad,
+                                 start=offset[0],
+                                 end=offset[1],
                                  mrope_pos_ids=mrope_pos_ids,
                                  meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
         return mm_data
@@ -773,18 +763,14 @@ class Qwen3VLInputProcessor(BaseModelInputProcessor):
         pixel_values_videos = input_mm['pixel_values_videos']
         video_grid_thw = input_mm['video_grid_thw']
         offset = input_mm['offset']
-        start = offset
         video_token_id = input_mm['video_token_id']
-        num_pad = input_mm['mm_token_num']
-        if isinstance(num_pad, torch.Tensor):
-            num_pad = num_pad.item()
 
         mrope_pos_ids = self.make_mrope(video_grid_thw)
 
         mm_data = MultiModalData(modality=Modality.VIDEO,
                                  data=pixel_values_videos,
-                                 start=start,
-                                 end=start + num_pad,
+                                 start=offset[0],
+                                 end=offset[1],
                                  mrope_pos_ids=mrope_pos_ids,
                                  meta=dict(
                                      grid_thw=video_grid_thw,

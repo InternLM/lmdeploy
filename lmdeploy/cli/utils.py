@@ -267,11 +267,14 @@ class ArgumentHelper:
     def quant_policy(parser, default: int = 0):
         """Add argument quant_policy to parser."""
 
+        from lmdeploy.messages import QuantPolicy
+
         return parser.add_argument('--quant-policy',
                                    type=int,
                                    default=0,
-                                   choices=[0, 4, 8],
-                                   help='Quantize kv or not. 0: no quant; 4: 4bit kv; 8: 8bit kv')
+                                   choices=list(QuantPolicy),
+                                   help='KV cache quantization policy. '
+                                   '0: no quantization; 4: 4-bit; 8: 8-bit; 42: TurboQuant (K4V2)')
 
     @staticmethod
     def rope_scaling_factor(parser):
@@ -462,18 +465,20 @@ class ArgumentHelper:
     @staticmethod
     def reasoning_parser(parser):
         """Add reasoning parser to parser."""
-        from lmdeploy.serve.openai.reasoning_parser import ReasoningParserManager
+        legacy_names = ['qwen-qwq', 'intern-s1', 'deepseek-r1']
+        from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
         return parser.add_argument(
             '--reasoning-parser',
             type=str,
             default=None,
-            help=f'The registered reasoning parser name from {ReasoningParserManager.module_dict.keys()}. '
+            help=f'The registered reasoning parser name: {ReasoningParserManager.module_dict.keys()}. '
+            f'Legacy names: {legacy_names}. '
             'Default to None.')
 
     @staticmethod
     def tool_call_parser(parser):
         """Add tool call parser to parser."""
-        from lmdeploy.serve.openai.tool_parser import ToolParserManager
+        from lmdeploy.serve.parsers.tool_parser import ToolParserManager
 
         return parser.add_argument(
             '--tool-call-parser',
@@ -545,6 +550,19 @@ class ArgumentHelper:
                                    'it should be a multiple of 64. For Pytorch Engine, '
                                    'if Lora Adapter is specified, this parameter will '
                                    'be ignored')
+
+    @staticmethod
+    def kernel_block_size(parser):
+        """Add argument kernel_block_size to parser."""
+
+        return parser.add_argument('--kernel-block-size',
+                                   type=int,
+                                   default=-1,
+                                   help='The length of the token sequence in a k/v block for kernels. '
+                                   'Only supported by Pytorch Engine. '
+                                   'When set to a different value than --cache-block-seq-len, '
+                                   'memory allocators and prefix cache use --cache-block-seq-len '
+                                   'as the block size, while kernels use --kernel-block-size.')
 
     @staticmethod
     def enable_prefix_caching(parser):

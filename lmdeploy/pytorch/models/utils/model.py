@@ -8,8 +8,10 @@ from lmdeploy.pytorch.config import QuantizationConfig
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, StepContext
 from lmdeploy.pytorch.models.patch import get_build_model_context
+from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.nn.embedding import ParallelEmbedding
 from lmdeploy.pytorch.nn.linear import build_rowwise_linear
+from lmdeploy.vl.constants import Modality
 
 
 class BaseModelMetaProcessor:
@@ -80,6 +82,8 @@ class DeployModelMixin:
         """Update quant config."""
         if quant_config is None:
             return
+        if getattr(quant_config, 'ignored_layers', None) is None:
+            return quant_config
         ignored_layers = [cls.rename_weight(name) for name in quant_config.ignored_layers]
 
         added_ignore_layers = set()
@@ -148,6 +152,24 @@ class DeployModelMixinV1(DeployModelMixin):
         )
         return lm_head
 
+    def get_multimodal_mask(self, input_ids: torch.Tensor, mm_inputs: list[MultiModalData]) -> torch.Tensor:
+        """Get position masks for vision tokens."""
+        image_token_id = next((m.meta.get('image_token_id') for m in mm_inputs if m.modality == Modality.IMAGE), None)
+        video_token_id = next((m.meta.get('video_token_id') for m in mm_inputs if m.modality == Modality.VIDEO), None)
+        ts_token_id = next((m.meta.get('ts_token_id') for m in mm_inputs if m.modality == Modality.TIME_SERIES), None)
+
+        image_mask, video_mask, ts_mask = None, None, None
+        if image_token_id is not None:
+            image_mask = (input_ids == image_token_id)
+        if video_token_id is not None:
+            video_mask = (input_ids == video_token_id)
+        if ts_token_id is not None:
+            ts_mask = (input_ids == ts_token_id)
+
+        masks = [m for m in (image_mask, video_mask, ts_mask) if m is not None]
+        multimodal_mask = None if not masks else torch.stack(masks, dim=0).any(dim=0)
+
+        return multimodal_mask
 
 def vlm_model(vlm_cls):
     if not issubclass(vlm_cls, torch.nn.Module):

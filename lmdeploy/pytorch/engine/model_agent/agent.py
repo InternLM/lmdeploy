@@ -20,7 +20,7 @@ from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
 from lmdeploy.pytorch.engine.guided_process import GuidedDecodingManager
-from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs, SamplingInputsDelta
+from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, step_ctx_manager
 from lmdeploy.pytorch.models.patch import BuildModelContext, add_adapters, build_patched_model, update_custom_module_map
 from lmdeploy.pytorch.spec_decode import build_spec_agent
@@ -229,92 +229,6 @@ class DistGatherScalar:
 SwapMap = dict[int, int]
 
 
-@dataclass
-class StepInputs:
-    """Step inputs."""
-    model_inputs: ModelInputs = None
-    extra_inputs: ExtraInputs = None
-    stopping_criteria: StoppingCriteria = None
-    sampling_delta: SamplingInputsDelta = None
-
-    @record_function('StepInputs.merge')
-    def merge(
-        self,
-        inputs: ModelInputs,
-        extra_inputs: ExtraInputs,
-        stopping_criteria: StoppingCriteria,
-        sampling_delta: SamplingInputsDelta,
-        next_token_ids: torch.Tensor,
-        model_metas,
-        extra_outputs: ExtraOutputs,
-        model_agent: 'BaseModelAgent',
-    ):
-        """Merge prefill inputs."""
-        inputs, extra_inputs = model_agent.agent_strategy.update_prefill_for_next_step(
-            inputs,
-            extra_inputs,
-            next_token_ids,
-            model_metas,
-            extra_outputs,
-        )
-        stopping_criteria = stopping_criteria.clone()
-        sampling_delta = model_agent.sampling_strategy.step_sampling_delta(sampling_delta,
-                                                                           next_token_ids,
-                                                                           extra_inputs=extra_inputs)
-        if self.model_inputs is None:
-            self.model_inputs = inputs
-            self.extra_inputs = extra_inputs
-            self.stopping_criteria = stopping_criteria
-            self.sampling_delta = sampling_delta
-        else:
-            self.model_inputs = model_agent.inputs_strategy.merge(self.model_inputs, inputs)
-            self.extra_inputs = self.extra_inputs.merge(extra_inputs)
-            self.stopping_criteria = self.stopping_criteria.merge(stopping_criteria)
-            self.sampling_delta = model_agent.sampling_strategy.merge_sampling_delta(
-                self.sampling_delta, sampling_delta)
-
-    def update_delta(
-        self,
-        delta: ModelInputsDelta,
-        model_agent: 'BaseModelAgent',
-    ):
-        """Get inputs from delta."""
-        self.model_inputs = model_agent.inputs_strategy.update_inputs(self.model_inputs, delta)
-        self.extra_inputs = model_agent.agent_strategy.update_extra_inputs(self.extra_inputs, delta)
-        self.stopping_criteria = self.stopping_criteria.update(delta)
-        self.sampling_delta = model_agent.sampling_strategy.update_sampling_delta(self.sampling_delta, delta)
-
-    @record_function('StepInputs.step')
-    def step(
-        self,
-        model_inputs: ModelInputs,
-        extra_inputs: ExtraInputs,
-        stopping_criteria: StoppingCriteria,
-        sampling_delta: SamplingInputsDelta,
-        next_token_ids: torch.Tensor,
-        model_metas,
-        extra_outputs: ExtraOutputs,
-        model_agent: 'BaseModelAgent',
-    ):
-        """Update inputs."""
-        # dp might change is_decoding of decoding inputs
-        model_inputs.is_decoding = True
-        (
-            self.model_inputs,
-            self.extra_inputs,
-        ) = model_agent.agent_strategy.update_decoding_for_next_step(
-            model_inputs,
-            next_token_ids=next_token_ids,
-            model_metas=model_metas,
-            extra_inputs=extra_inputs,
-            extra_outputs=extra_outputs,
-        )
-        self.stopping_criteria = stopping_criteria.clone()
-        self.sampling_delta = model_agent.sampling_strategy.step_sampling_delta(sampling_delta,
-                                                                                next_token_ids,
-                                                                                extra_inputs=extra_inputs)
-
-
 class BaseModelAgent:
     """Base model agent.
 
@@ -421,7 +335,7 @@ class BaseModelAgent:
         self.state: SleepWakeupState = SleepWakeupState()
 
         # decoding inputs
-        self.step_inputs = StepInputs()
+        self.step_inputs = self.strategy_factory.build_step_inputs()
 
         # long context
         self._prev_chunk_output: dict = None
@@ -644,7 +558,7 @@ class BaseModelAgent:
         sampling_inputs: SamplingInputs,
     ):
         """Get inputs from delta."""
-        self.step_inputs.update_delta(delta, self)
+        self.step_inputs.reindex(delta)
         inputs = self.step_inputs.model_inputs
         extra_inputs = self.step_inputs.extra_inputs
         stopping_criteria = self.step_inputs.stopping_criteria
@@ -661,9 +575,9 @@ class BaseModelAgent:
         if delta is not None:
             # update decoding inputs with delta
             # for second round chat
-            self.step_inputs.update_delta(delta, self)
+            self.step_inputs.reindex(delta)
 
-        if inputs.is_first_chunk:
+        if inputs.is_first_chunk or not inputs.is_chunk:
             self._prev_chunk_output = None
 
         # check long context
@@ -767,29 +681,6 @@ class BaseModelAgent:
         extra_inputs: ExtraInputs = None,
     ):
         """Asyc forward task."""
-
-        @record_function('update_decoding_for_next_step')
-        def __update_inputs(
-            inputs,
-            next_token_ids,
-            model_metas,
-            extra_inputs,
-            extra_outputs,
-            stopping_criteria,
-            sampling_delta: SamplingInputsDelta = None,
-        ):
-            """Update inputs."""
-            # dp might change is_decoding of decoding inputs
-            self.step_inputs.step(
-                inputs,
-                extra_inputs,
-                stopping_criteria,
-                sampling_delta,
-                next_token_ids,
-                model_metas,
-                extra_outputs,
-                model_agent=self,
-            )
 
         dist_ctx = get_dist_manager().current_context()
         dist_config = dist_ctx.dist_config
@@ -904,18 +795,7 @@ class BaseModelAgent:
 
         sampling_delta = sampling_inputs.get_delta()
         if need_update_inputs:
-            __update_inputs(inputs,
-                            next_token_ids,
-                            model_metas,
-                            extra_inputs,
-                            extra_outputs,
-                            stopping_criteria,
-                            sampling_delta=sampling_delta)
-        elif inputs.is_chunk and not inputs.is_last_chunk:
-            # _prev_chunk_output is used to update model metas
-            self._prev_chunk_output = output
-        elif self.cache_config.role != EngineRole.Prefill:
-            self.step_inputs.merge(
+            self.step_inputs.step_decode(
                 inputs,
                 extra_inputs,
                 stopping_criteria,
@@ -923,7 +803,19 @@ class BaseModelAgent:
                 next_token_ids,
                 model_metas,
                 extra_outputs,
-                model_agent=self,
+            )
+        elif inputs.is_chunk and not inputs.is_last_chunk:
+            # _prev_chunk_output is used to update model metas
+            self._prev_chunk_output = output
+        elif self.cache_config.role != EngineRole.Prefill:
+            self.step_inputs.merge_prefill(
+                inputs,
+                extra_inputs,
+                stopping_criteria,
+                sampling_delta,
+                next_token_ids,
+                model_metas,
+                extra_outputs,
             )
 
     async def _async_loop_background(self, forward_event: asyncio.Event = None):
@@ -1178,6 +1070,44 @@ class BaseModelAgent:
             ipc_tensor = func(*args)
             return ipc_tensor.clone() if require_clone else ipc_tensor
 
+        def _deserialize_weights(serialized_data):
+            weights = ForkingPickler.loads(pybase64.b64decode(serialized_data))
+            if request.load_format == 'flattened_bucket':
+                metadata: list[FlattenedTensorMetadata] = weights['metadata']
+                if not metadata:
+                    return []
+                if 'flattened_tensor' in weights:
+                    # Determine if clone is required
+                    require_clone = weights.get('require_clone', True)
+                    if 'event_ipc_handle' in weights and not hasattr(torch.cuda.Event, 'from_ipc_handle'):
+                        # Force clone when IPC event is provided but cannot be used
+                        require_clone = True
+                    self._update_params_ipc_tensor = _construct(weights['flattened_tensor'],
+                                                                require_clone=require_clone)
+                elif self._update_params_ipc_tensor is None:
+                    raise ValueError(
+                        'flattened_tensor is not provided in weights and no cached ipc tensor is available. '
+                        'Please provide flattened_tensor on the first update_params call.')
+                if 'event_ipc_handle' in weights and hasattr(torch.cuda.Event, 'from_ipc_handle'):
+                    self._update_params_ipc_event = torch.cuda.Event.from_ipc_handle(
+                        device=torch.cuda.current_device(),
+                        handle=weights['event_ipc_handle'],
+                    )
+                flattened_tensor: torch.Tensor = self._update_params_ipc_tensor
+                if self._update_params_ipc_event is not None:
+                    self._update_params_ipc_event.wait()
+                bucket = FlattenedTensorBucket(flattened_tensor=flattened_tensor, metadata=metadata)
+                return list(bucket.reconstruct_tensors())
+            return [(k, _construct(v)) for k, v in weights]
+
+        def _split_main_and_draft(weights):
+            # TODO, zhouxinyu, support split and update weights for other mtp methods
+            if not self.spec_agent.is_enabled() or self.spec_agent.method != 'qwen3_5_mtp':
+                return weights, []
+            main = [(name, weight) for name, weight in weights if not name.startswith('mtp.')]
+            draft = [(name, weight) for name, weight in weights if name.startswith('mtp.')]
+            return main, draft
+
         with self.all_context():
             # After deserialization, weights is a dict with following keys:
             # - metadata: List[FlattenedTensorMetadata]
@@ -1187,52 +1117,33 @@ class BaseModelAgent:
             serialized_data = request.serialized_named_tensors
             if isinstance(serialized_data, list):
                 serialized_data = serialized_data[self.dist_ctx.tp_group.rank]
-            model = self.patched_model.get_model()
-            weights = ForkingPickler.loads(pybase64.b64decode(serialized_data))
-            if request.load_format == 'flattened_bucket':
-                metadata: list[FlattenedTensorMetadata] = weights['metadata']
-                if metadata:
-                    if 'flattened_tensor' in weights:
-                        # Determine if clone is required
-                        require_clone = weights.get('require_clone', True)
-                        if 'event_ipc_handle' in weights and not hasattr(torch.cuda.Event, 'from_ipc_handle'):
-                            # Force clone when IPC event is provided but cannot be used
-                            require_clone = True
-                        self._update_params_ipc_tensor = _construct(weights['flattened_tensor'],
-                                                                    require_clone=require_clone)
-                    elif self._update_params_ipc_tensor is None:
-                        raise ValueError(
-                            'flattened_tensor is not provided in weights and no cached ipc tensor is available. '
-                            'Please provide flattened_tensor on the first update_params call.')
-                    if 'event_ipc_handle' in weights and hasattr(torch.cuda.Event, 'from_ipc_handle'):
-                        self._update_params_ipc_event = torch.cuda.Event.from_ipc_handle(
-                            device=torch.cuda.current_device(),
-                            handle=weights['event_ipc_handle'],
-                        )
-                    flattened_tensor: torch.Tensor = self._update_params_ipc_tensor
-                    if self._update_params_ipc_event is not None:
-                        self._update_params_ipc_event.wait()
-                    bucket = FlattenedTensorBucket(flattened_tensor=flattened_tensor, metadata=metadata)
-                    weights = bucket.reconstruct_tensors()
-                else:
-                    # empty data
-                    weights = []
-            else:
-                weights = [(k, _construct(v)) for k, v in weights]
 
-            weights = ModelWeightLoader._rename_weights_iterator(weights, model)
-            model.load_weights(weights)
-            if self._update_params_ipc_event is not None:
-                self._update_params_ipc_event.record()
+            model = self.patched_model.get_model()
+            spec_model = self.spec_agent.get_model()
+
+            weights = _deserialize_weights(serialized_data)
+            main_weights, draft_weights = _split_main_and_draft(weights)
+
+            for m, w, tag in [(model, main_weights, 'main'), (spec_model, draft_weights, 'draft')]:
+                if m is None or not w:
+                    continue
+
+                w = list(ModelWeightLoader._rename_weights_iterator(w, m))
+                logger.info(f'Update_params: {tag}_num_tensors={len(w)}')
+                m.load_weights(iter(w))
+
+                if self._update_params_ipc_event is not None:
+                    self._update_params_ipc_event.record()
 
             if request.finished:
-                for _, mod in model.named_modules():
-                    if not hasattr(mod, 'update_weights'):
-                        continue
-                    mod.update_weights()
-                torch.cuda.synchronize()
-                self._update_params_ipc_event = None
-                self._update_params_ipc_tensor = None
+                for m in filter(None, [model, spec_model]):
+                    for _, mod in m.named_modules():
+                        if hasattr(mod, 'update_weights'):
+                            mod.update_weights()
+
+                    torch.cuda.synchronize()
+                    self._update_params_ipc_event = None
+                    self._update_params_ipc_tensor = None
 
             torch.cuda.empty_cache()
 
@@ -1242,11 +1153,17 @@ class BaseModelAgent:
         self.state.is_sleeping = True
         if self.dist_config.dp > 1:
             await self.state.to_sleep.wait()
+        device = 'cpu' if level == 1 else 'meta'
         self.cache_engine = None
         self.state_cache_engine = None
         self.reset_graph_runner()
-        device = 'cpu' if level == 1 else 'meta'
         self.patched_model.get_model().to(device=device, non_blocking=True)
+
+        spec_model = self.spec_agent.get_model()
+        if spec_model is not None:
+            self.spec_agent.cache_engine = None
+            spec_model.to(device=device, non_blocking=True)
+
         torch.cuda.synchronize()
         # force clean _update_params_ipc tensor and event after all gpu jobs done
         self._update_params_ipc_tensor = None
@@ -1259,11 +1176,16 @@ class BaseModelAgent:
         """Wakeup."""
         if tags is None:
             tags = ['weights', 'kv_cache']
+
         if 'weights' in tags:
             device = next(self.patched_model.get_model().parameters()).device
             assert device.type in ['cpu', 'meta']
+            spec_model =  self.spec_agent.get_model()
+
             if device.type == 'cpu':
                 self.patched_model.get_model().to(torch.cuda.current_device())
+                if spec_model is not None:
+                    spec_model.to(torch.cuda.current_device())
             else:
                 # user should update weights after wakeup
                 old_empty_init = self.misc_config.empty_init

@@ -1,12 +1,21 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import dataclasses
 from abc import ABC, abstractmethod
 from itertools import groupby
+from typing import Any
 
 import numpy as np
 from mmengine import Registry
 from transformers import AutoConfig, AutoTokenizer
 
 from lmdeploy.archs import get_model_arch
+from lmdeploy.vl.constants import Modality
+from lmdeploy.vl.model.preprocess_utils import (
+    get_expanded_input_ids,
+    get_expanded_mm_items,
+    get_mm_items_offset,
+    get_override_size,
+)
 
 VISION_MODELS = Registry('vision_model')
 
@@ -14,6 +23,27 @@ VISION_MODELS = Registry('vision_model')
 class VisionModel(ABC):
     """Visual model which extract image feature."""
     _arch: str | list[str] = None
+
+    # mapping from processor output attribute names to modality types
+    ATTR_NAME_TO_MODALITY = {
+        # image-related attributes
+        'pixel_values': Modality.IMAGE,
+        'image_grid_thw': Modality.IMAGE,
+        # video-related attributes
+        'pixel_values_videos': Modality.VIDEO,
+        'video_grid_thw': Modality.VIDEO,
+        # time series-related attributes
+        'ts_values': Modality.TIME_SERIES,
+        'ts_sr': Modality.TIME_SERIES,
+        'ts_lens': Modality.TIME_SERIES,
+    }
+
+    # processor output attributes that carry the main feature tensor
+    FEATURE_NAMES = [
+        'pixel_values',
+        'pixel_values_videos',
+        'ts_values',
+    ]
 
     def __init__(self,
                  model_path: str,
@@ -60,52 +90,115 @@ class VisionModel(ABC):
         if self.backend == 'turbomind' or self.with_llm:
             raise NotImplementedError()
 
-    @abstractmethod
-    def preprocess(self, messages: list[dict]) -> list[dict]:
-        """Preprocess multimodal data in the messages.
+    def preprocess(self,
+                   messages: list[dict],
+                   input_prompt: str | list[int],
+                   mm_processor_kwargs: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Preprocess multimodal data and return a dict with ``input_ids`` and
+        multimodal features.
 
-        The derived class,
-        i.e., a specific vision model, takes the charge of image preprocessing
-        and the result management.
-        It can integrate the result into the messages list, or insert it to
-        the individual image item.
-        Args:
-            message(dict): multimodal data in a dict, which is as follows:
-            [
-                {'role': 'user', 'content': 'user prompt'},
-                {'role': 'assisant', 'content': 'AI reponse'},
-                {
-                    'role': 'user',
-                    'content': [
-                        {
-                            'type': 'text',
-                            'text': 'string',
-                        },
-                        {
-                            'type': 'image',
-                            'image': pillow.Image,
-                            'key1': value1,
-                            ...
-                        },
-                        {
-                            'type': 'image',
-                            'image': pillow.Image,
-                            'key1': value1,
-                            ...
-                        },
-                        ...
-                    ]
-                }
-                {....}
-            ]
-        Returns:
-            the message list with preprocessing results included, which is
-            determined by the derived classes
-        """  # noqa
-        raise NotImplementedError()
+        New-style models inherit this implementation. Legacy models override with `def preprocess(self, messages)`.
+        """
 
-    def has_input_ids(self, messages: list[dict]) -> bool:
+        mm_items = self.collect_multimodal_items(messages)
+
+        raw_images, raw_videos, video_metadatas = [], [], []
+        raw_time_series, sampling_rates = [], []
+        for modality, data, params in mm_items:
+            if modality == Modality.IMAGE:
+                raw_images.append(data)
+            elif modality == Modality.VIDEO:
+                raw_videos.append(data)
+                video_metadatas.append(params.get('video_metadata', None))
+            elif modality == Modality.TIME_SERIES:
+                raw_time_series.append(data)
+                sampling_rates.append(params.get('sampling_rate', None))
+            else:
+                raise ValueError(f'unsupported modality {modality}')
+
+        # get kwargs for processor
+        kwargs = {}
+        images_kwargs = {}
+        videos_kwargs = {}
+        mm_processor_kwargs = mm_processor_kwargs or {}
+        if raw_images:
+            kwargs['images'] = raw_images
+            image_size = get_override_size(self.processor.image_processor,
+                                           mm_processor_kwargs.get('image'),
+                                           modality='image')
+            if image_size is not None:
+                images_kwargs['size'] = image_size
+        if raw_videos:
+            kwargs['videos'] = raw_videos
+            videos_kwargs['video_metadata'] = video_metadatas
+            # perform resize in hf processor, while sample frames has been done in video loader
+            videos_kwargs['do_resize'] = True
+            videos_kwargs['do_sample_frames'] = False
+            video_size = get_override_size(self.processor.video_processor,
+                                           mm_processor_kwargs.get('video'),
+                                           modality='video')
+            if video_size is not None:
+                videos_kwargs['size'] = video_size
+        if images_kwargs:
+            kwargs['images_kwargs'] = images_kwargs
+        if videos_kwargs:
+            kwargs['videos_kwargs'] = videos_kwargs
+        if raw_time_series:
+            assert hasattr(self, 'time_series_processor'), \
+                'time series processor is not defined for time series input'
+            assert not raw_images and not raw_videos, \
+                'time series is not compatible with image/video input'
+            self.tokenizer = self.processor.tokenizer
+            time_series_processor = self.time_series_processor
+            kwargs['time_series'] = raw_time_series
+            kwargs['sampling_rate'] = sampling_rates
+
+        # process raw items with hf processor
+        input_text = input_prompt if isinstance(input_prompt, str) else ''
+        processor_outputs = (time_series_processor if raw_time_series else self.processor)(
+            text=[input_text],
+            padding=True,
+            return_tensors='pt',
+            **kwargs,
+        )
+
+        # collect items from hf processor outputs and categorized by modality for lmdeploy to consume
+        collected_mm_items: dict[Modality, dict[str, Any]] = {}
+        for attr_name, value in processor_outputs.items():
+            current_modality = self.ATTR_NAME_TO_MODALITY.get(attr_name)
+            if current_modality:
+                if current_modality not in collected_mm_items:
+                    collected_mm_items[current_modality] = {}
+
+                if attr_name in self.FEATURE_NAMES:
+                    attr_name = 'feature'
+
+                collected_mm_items[current_modality][attr_name] = value
+
+        # get input_ids, expand multimodal tokens only when we receive input ids from /generate endpoint
+        if isinstance(input_prompt, str):
+            input_ids = processor_outputs['input_ids'].flatten()
+        else:
+            input_ids = get_expanded_input_ids(input_prompt, collected_mm_items, self.processor, self.mm_tokens)
+
+        # compute offsets for all items
+        for modality, item in collected_mm_items.items():
+            mm_token_id = self.mm_tokens.get_token_id_by_modality(modality)
+            item['offset'] = get_mm_items_offset(input_ids=input_ids, mm_token_id=mm_token_id)
+
+        # expand bundled hf processor outputs into per-image/video entry for lmdeploy to consume
+        expanded_mm_items = get_expanded_mm_items(collected_mm_items, self.mm_tokens)
+
+        return dict(input_ids=input_ids.tolist(), multimodal=expanded_mm_items)
+
+    @staticmethod
+    def has_input_ids(messages: list[dict]) -> bool:
         """Check whether the messages contain input_ids directly.
+
+        This is True when the first (and only) user message content is a list
+        whose first item carries a ``text`` field that is itself a list of
+        token ids (i.e. the output of the ``/generate`` endpoint rather than a
+        plain text prompt).
 
         Args:
             messages (list[dict]): a list of message, which is supposed to be
@@ -113,8 +206,36 @@ class VisionModel(ABC):
         Returns:
             bool: whether the messages contain input_ids directly
         """
-        users = [x['content'] for x in messages if x['role'] == 'user']
-        return len(users) == 1 and isinstance(users[0], list) and isinstance(users[0][0].get('text', ''), list)
+        user_contents = [x['content'] for x in messages if x['role'] == 'user']
+        if len(user_contents) != 1:
+            return False
+        content = user_contents[0]
+        if not isinstance(content, list) or not content:
+            return False
+        first_item = content[0]
+        return isinstance(first_item, dict) and isinstance(first_item.get('text'), list)
+
+    @staticmethod
+    def get_input_prompt(messages: list[dict], chat_template, sequence_start: bool,
+                         chat_template_kwargs: dict | None = None) -> str | list[int]:
+        """Return the input prompt for the preprocessor.
+
+        When the messages already carry embedded token ids (from the
+        ``/generate`` endpoint), extract and return them directly.
+        Otherwise, render the messages through *chat_template* to produce a
+        plain-text prompt string.
+
+        Args:
+            messages: Preprocessed message list.
+            chat_template: Chat template used to render a text prompt.
+            sequence_start: Whether this is the start of a new sequence.
+            chat_template_kwargs: Extra kwargs forwarded to ``messages2prompt``.
+        Returns:
+            A list of token ids when input_ids are embedded, otherwise a str.
+        """
+        if VisionModel.has_input_ids(messages):
+            return messages[0]['content'][0]['text']
+        return chat_template.messages2prompt(messages, sequence_start, **(chat_template_kwargs or {}))
 
     def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
@@ -321,3 +442,24 @@ class VisionModel(ABC):
         if arch and (arch == cls._arch or arch in cls._arch):
             return True
         return False
+
+@dataclasses.dataclass
+class MultimodalSpecialTokens:
+    image_token: str | None = None
+    video_token: str | None = None
+    audio_token: str | None = None
+    ts_token: str | None = None
+
+    image_token_id: int | None = None
+    video_token_id: int | None = None
+    audio_token_id: int | None = None
+    ts_token_id: int | None = None
+
+    def get_token_id_by_modality(self, modality: Modality) -> int | None:
+        """Get token ID for a given modality."""
+        return {
+            Modality.IMAGE: self.image_token_id,
+            Modality.VIDEO: self.video_token_id,
+            Modality.AUDIO: self.audio_token_id,
+            Modality.TIME_SERIES: self.ts_token_id,
+        }.get(modality)

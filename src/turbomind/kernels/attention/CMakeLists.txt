@@ -32,7 +32,9 @@ if (BUILD_TEST)
         nvidia::cutlass::cutlass
         models
         unfused_attention_kernels
-        logger
+        core
+        cuda_utils
+        fmt::fmt
         cublas)
 
     add_executable(test_quant test_quant.cu test_utils.cu)
