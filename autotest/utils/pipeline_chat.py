@@ -8,6 +8,7 @@ from pytest_assume.plugin import assume
 from utils.common_utils import execute_command_with_logging
 from utils.config_utils import get_case_str_by_config, get_cuda_prefix_by_workerid, get_workerid, resolve_extra_params
 from utils.rule_condition_assert import assert_result
+from utils.run_restful_chat import _mm_demo_thinking_wrapper_shape_assert, _mm_demo_tomb_answer_assert
 
 
 def run_pipeline_llm_test(config, run_config, common_case_config, worker_id: str = '', is_smoke: bool = False):
@@ -337,6 +338,51 @@ def Qwen_vl_testcase(output_text, file):
         file.writelines(f'qwen-performance-images2 result: {case_result}, reason: buildings should in {response} \n')
         with assume:
             assert case_result, f'reason: performance images2: buildings should in {response}'
+    with allure.step('qwen3-demo-video'):
+        response = get_response_from_output(output_text, 'qwen3-demo-video')
+        rl = response.lower()
+        if 'skipped_no_demo_mp4' in rl:
+            file.writelines('qwen3-demo-video result: skipped (N1cdUjctpG8.mp4 not in resource_path)\n')
+        elif 'pipeline_video_error:' in rl:
+            file.writelines(f'qwen3-demo-video result: false, pipeline video error in {response} \n')
+            with assume:
+                assert False, f'qwen3-demo-video pipeline error: {response}'
+        else:
+            tomb_assert = _mm_demo_tomb_answer_assert(response)
+            shape_assert = _mm_demo_thinking_wrapper_shape_assert(response)
+            case_result = tomb_assert and shape_assert
+            reason = 'tomb/jar + bounded public tail'
+            file.writelines(f'qwen3-demo-video result: {case_result}, reason: {reason}: {response} \n')
+            with assume:
+                msg = 'reason: qwen3 demo video: expected tomb/jar-related bounded answer'
+                assert case_result, f'{msg}: {response}'
+    if '[caseresult qwen-mixed-image-text-video start]' in output_text:
+        with allure.step('qwen-mixed-image-text-video'):
+            response = get_response_from_output(output_text, 'qwen-mixed-image-text-video')
+            rl = response.lower()
+            if 'skipped_no_red_panda_mp4' in rl:
+                file.writelines(
+                    'qwen-mixed-image-text-video result: skipped (red-panda.mp4 not in resource_path)\n')
+            elif 'pipeline_mixed_mm_error:' in rl:
+                file.writelines(f'qwen-mixed-image-text-video result: false, mixed mm error in {response} \n')
+                with assume:
+                    assert False, f'qwen-mixed-image-text-video pipeline error: {response}'
+            else:
+                img = (
+                    any(w in rl for w in ('tiger', 'ski'))
+                    or '虎' in response
+                    or '滑雪' in response
+                )
+                vid = (
+                    any(w in rl for w in ('panda', 'red panda', 'lesser panda', 'ailurus'))
+                    or any(w in response for w in ('小熊猫', '红熊猫'))
+                )
+                case_result = bool(response.strip()) and img and vid
+                file.writelines(
+                    f'qwen-mixed-image-text-video result: {case_result}, reason: image+tiger + video+panda cues\n')
+                with assume:
+                    msg = 'reason: mixed image+video reply should mention tiger/ski and panda'
+                    assert case_result, f'{msg}: {response}'
 
 
 def save_pipeline_common_log(config, log_name, result, content, msg: str = '', write_type: str = 'w'):

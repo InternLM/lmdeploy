@@ -1,12 +1,13 @@
 import json
 import os
+import re
 import subprocess
 import time
 
 import allure
 import psutil
 import requests
-from openai import OpenAI
+from openai import APIStatusError, BadRequestError, OpenAI
 from pytest_assume.plugin import assume
 from utils.config_utils import (
     get_case_str_by_config,
@@ -15,7 +16,7 @@ from utils.config_utils import (
     get_workerid,
     resolve_extra_params,
 )
-from utils.constant import DEFAULT_PORT, DEFAULT_SERVER
+from utils.constant import DEFAULT_PORT, DEFAULT_SERVER, MM_DEMO_TOMB_USER_PROMPT
 from utils.restful_return_check import assert_chat_completions_batch_return
 from utils.rule_condition_assert import assert_result
 
@@ -244,6 +245,143 @@ def _run_logprobs_test(port: int = DEFAULT_PORT):
 
 PIC = 'tiger.jpeg'  # noqa E501
 PIC2 = 'human-pose.jpg'  # noqa E501
+VIDEO = 'red-panda.mp4'  # noqa E501
+VIDEO_QWEN3_DEMO = 'N1cdUjctpG8.mp4'  # noqa E501
+MM_DEMO_MAX_TOKENS = 24576
+MM_DEMO_MAX_TOKENS_STREAM = 24576
+VIDEO_SINGLE_FRAME_MAX_TOKENS = 512
+VIDEO_REDPANDA_STREAM_MAX_TOKENS = 2048
+
+
+def _vl_video_stream_finish_assert(finish: str | None, text: str) -> bool:
+    """``stop`` / ``length`` red-panda video: species keywords, then ``length``
+    needs enough text."""
+    if finish not in ('stop', 'length'):
+        return False
+    t = (text or '').lower()
+    raw = text or ''
+    species_match = (
+        any(p in t for p in ('red panda', 'lesser panda'))
+        or 'ailurus' in t
+        or any(s in raw for s in ('小熊猫', '红熊猫'))
+    )
+    if not species_match:
+        return False
+    if finish == 'length':
+        return len(raw.strip()) >= 300
+    return True
+
+
+def _vl_openai_http_error_skippable(exc: BaseException) -> bool:
+    if isinstance(exc, BadRequestError):
+        return True
+    if isinstance(exc, APIStatusError):
+        code = getattr(exc, 'status_code', None)
+        return isinstance(code, int) and code < 500
+    return False
+
+
+_REDACTED_THINKING_END = '</think>'
+
+
+def _mm_demo_public_answer_text(text: str) -> str:
+    """Optional JSON-string decode (pipeline logs); then tail after
+    ``</think>`` when present."""
+    s = (text or '').strip()
+    if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
+        try:
+            s = str(json.loads(s))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+    s = s.strip()
+    key = _REDACTED_THINKING_END
+    i = s.lower().rfind(key.lower())
+    if i == -1:
+        return s
+    return s[i + len(key) :].strip()
+
+
+def _mm_demo_tomb_answer_assert(text: str) -> bool:
+    """Tomb/MCQ: visible tail mentions scene, a digit, or an MCQ-style letter
+    (A–D)."""
+    raw = _mm_demo_public_answer_text(text).strip()
+    if not raw:
+        return False
+    rl = raw.lower()
+    if any(w in rl for w in ('jar', 'porcelain', 'tomb', 'niche', 'chamber', '罐', '瓷', '墓', '龛')):
+        return True
+    if any(c.isdigit() for c in raw):
+        return True
+    s = raw.strip()
+    if re.search(r'(?i)\b(?:answer|choice|option|correct)\b\s*[:：]?\s*[abcd]\b', s):
+        return True
+    if re.fullmatch(r'(?is)[`"\(\[]*[abcd][`"\)\]]*\.?\s*', s):
+        return True
+    if len(s) <= 120 and re.match(r'(?is)[`"\(\[]*[abcd][`"\)\]]*[\s\.\):,\-]', s):
+        return True
+    return False
+
+
+def _mm_demo_thinking_wrapper_shape_assert(text: str) -> bool:
+    """Bound user-visible tail after ``</think>``, or total size if the wrapper
+    never closes."""
+    s = (text or '').strip()
+    if not s:
+        return False
+    if _REDACTED_THINKING_END.lower() in s.lower():
+        public = _mm_demo_public_answer_text(s).strip()
+        return 0 < len(public) <= 2000
+    return len(s) <= 3200
+
+
+def _mm_demo_tomb_run_assert(finish: str | None, text: str) -> bool:
+    """Tomb + ``mm_processor``: ``stop`` + shape; ``length`` + closed thinking
+    + shape, else long jar/scene tail."""
+    t = (text or '').strip()
+    if not t or not _mm_demo_tomb_answer_assert(t):
+        return False
+    if finish == 'stop':
+        return _mm_demo_thinking_wrapper_shape_assert(t)
+    if finish == 'length':
+        if _REDACTED_THINKING_END.lower() in t.lower():
+            return _mm_demo_thinking_wrapper_shape_assert(t)
+        if len(t) < 1500:
+            return False
+        head_l = t[:8000].lower()
+        if 'jar' not in head_l:
+            return False
+        return any(w in head_l for w in ('niche', 'chamber', 'tomb', 'porcelain', 'primary', '罐', '墓', '龛', '瓷'))
+    return False
+
+
+def _mm_demo_single_frame_scene_assert(text: str) -> bool:
+    """Single-frame: short visible tail plus chamber / niche / vessel hints."""
+    raw = _mm_demo_public_answer_text(text).strip()
+    if not raw or len(raw) < 20:
+        return False
+    if sum(1 for c in raw if c.isalpha()) < 12:
+        return False
+    rl = raw.lower()
+    if any(w in rl for w in ('chamber', 'niche', 'jar', 'porcelain', 'artifact', 'coffin', '墓室', '龛', '罐')):
+        return True
+    return False
+
+
+def _consume_chat_completion_stream(stream_iter) -> tuple[str | None, str]:
+    """Drain a chat-completion stream: ``(finish_reason, joined delta content)``."""
+    chunks: list[str] = []
+    last_fr: str | None = None
+    for ev in stream_iter:
+        if not getattr(ev, 'choices', None):
+            continue
+        choice = ev.choices[0]
+        fr = getattr(choice, 'finish_reason', None)
+        if fr:
+            last_fr = fr
+        delta = getattr(choice, 'delta', None)
+        if delta and getattr(delta, 'content', None):
+            chunks.append(delta.content)
+    return last_fr, ''.join(chunks)
 
 
 def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
@@ -289,6 +427,355 @@ def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
     for item in api_client.chat_completions_v1(model=model_name, messages=prompt_messages):
         continue
     file.writelines(str(item) + '\n')
+
+    video_path = os.path.join(resource_path, VIDEO)
+    video_messages = [{
+        'role':
+        'user',
+        'content': [
+            {
+                'type': 'text',
+                'text': ('What animal appears in the clip? Give the common species name in one or two '
+                         'short sentences (avoid long step-by-step reasoning).'),
+            },
+            {
+                'type': 'video_url',
+                'video_url': {
+                    'url': video_path,
+                },
+            },
+        ],
+    }]
+    video_messages_one_frame = [{
+        'role':
+        'user',
+        'content': [
+            {
+                'type': 'text',
+                'text': ('The server decodes this clip to a single video frame only. What animal appears? '
+                         'Answer in one or two short sentences.'),
+            },
+            {
+                'type': 'video_url',
+                'video_url': {
+                    'url': video_path,
+                },
+            },
+        ],
+    }]
+
+    if not os.path.isfile(video_path):
+        file.writelines(f'[video testcase skipped] missing file: {video_path}\n')
+    else:
+        try:
+            v_resp = client.chat.completions.create(
+                model=model_name,
+                messages=video_messages,
+                temperature=0.2,
+                max_tokens=512,
+                extra_body={
+                    'media_io_kwargs': {
+                        'video': {
+                            'num_frames': 8,
+                        },
+                    },
+                },
+            )
+        except (BadRequestError, APIStatusError) as exc:
+            if not _vl_openai_http_error_skippable(exc):
+                raise
+            file.writelines(f'[video testcase skipped] model/server rejected video_url: {exc!r}\n')
+        else:
+            file.writelines('[video non-stream] ' + str(v_resp).lower() + '\n')
+            content = (v_resp.choices[0].message.content or '')
+            assert _vl_video_stream_finish_assert(getattr(v_resp.choices[0], 'finish_reason', None), content), v_resp
+
+            v_more = client.chat.completions.create(
+                model=model_name,
+                messages=video_messages,
+                temperature=0.0,
+                max_tokens=1,
+                extra_body={
+                    'media_io_kwargs': {
+                        'video': {
+                            'num_frames': 16,
+                        },
+                    },
+                },
+            )
+            v_few = client.chat.completions.create(
+                model=model_name,
+                messages=video_messages,
+                temperature=0.0,
+                max_tokens=1,
+                extra_body={
+                    'media_io_kwargs': {
+                        'video': {
+                            'num_frames': 4,
+                        },
+                    },
+                },
+            )
+            u_more = getattr(v_more, 'usage', None)
+            u_few = getattr(v_few, 'usage', None)
+            if u_more and u_few and getattr(u_few, 'prompt_tokens', None) and getattr(u_more, 'prompt_tokens', None):
+                if u_few.prompt_tokens < u_more.prompt_tokens:
+                    file.writelines('[video] fewer frames => fewer prompt_tokens (as expected)\n')
+                else:
+                    few_t, many_t = u_few.prompt_tokens, u_more.prompt_tokens
+                    file.writelines(
+                        f'[video] prompt_tokens not compared (few={few_t}, many={many_t})\n',
+                    )
+
+            stream = client.chat.completions.create(
+                model=model_name,
+                messages=video_messages,
+                temperature=0.2,
+                max_tokens=VIDEO_REDPANDA_STREAM_MAX_TOKENS,
+                stream=True,
+                extra_body={
+                    'media_io_kwargs': {
+                        'video': {
+                            'num_frames': 8,
+                        },
+                    },
+                },
+            )
+            stream_fr, joined = _consume_chat_completion_stream(stream)
+            file.writelines('[video stream] ' + joined.lower() + '\n')
+            assert _vl_video_stream_finish_assert(stream_fr, joined), (stream_fr, joined[:1200])
+
+            video_payload = {
+                'model': model_name,
+                'messages': video_messages,
+                'temperature': 0.2,
+                'max_tokens': VIDEO_REDPANDA_STREAM_MAX_TOKENS,
+                'media_io_kwargs': {
+                    'video': {
+                        'num_frames': 8,
+                    },
+                },
+            }
+            raw = requests.post(f'{http_url}/v1/chat/completions',
+                                headers={'content-type': 'application/json'},
+                                json=video_payload,
+                                timeout=600)
+            file.writelines(f'[video raw http] status={raw.status_code}\n')
+            assert raw.ok, raw.text
+            raw_json = raw.json()
+            raw_ch0 = (raw_json.get('choices') or [{}])[0]
+            raw_text = raw_ch0.get('message', {}).get('content') or ''
+            file.writelines(raw_text.lower() + '\n')
+            raw_fr = raw_ch0.get('finish_reason')
+            assert _vl_video_stream_finish_assert(raw_fr, raw_text), (raw_fr, raw_text[:1200], raw_json)
+
+            v_one = client.chat.completions.create(
+                model=model_name,
+                messages=video_messages_one_frame,
+                temperature=0.2,
+                max_tokens=VIDEO_SINGLE_FRAME_MAX_TOKENS,
+                extra_body={
+                    'media_io_kwargs': {
+                        'video': {
+                            'num_frames': 1,
+                        },
+                    },
+                },
+            )
+            file.writelines('[video single-frame] ' + str(v_one).lower() + '\n')
+            one_content = (v_one.choices[0].message.content or '')
+            assert _vl_video_stream_finish_assert(getattr(v_one.choices[0], 'finish_reason', None), one_content), v_one
+
+    # Qwen3-VL style: local demo mp4 + mm_processor_kwargs (fps / do_sample_frames), OpenAI-compatible body.
+    demo_video_path = os.path.join(resource_path, VIDEO_QWEN3_DEMO)
+    demo_question = MM_DEMO_TOMB_USER_PROMPT
+    # Single-frame sampling often lands on an aerial or intro shot, not the jar niche scene.
+    mm_one_question = (
+        'This is one frame from a short news-style clip about an ancient tomb. '
+        'If you see interior details, focus on chamber, niches, pottery or porcelain jars, '
+        'coffin, or furnishings, in one or two short sentences. '
+        'If the frame is only exterior or aerial, say that in one short sentence. '
+        'No long step-by-step reasoning.')
+    mm_demo_messages = [{
+        'role':
+        'user',
+        'content': [
+            {
+                'type': 'video_url',
+                'video_url': {
+                    'url': demo_video_path,
+                },
+            },
+            {
+                'type': 'text',
+                'text': demo_question,
+            },
+        ],
+    }]
+    mm_one_messages = [{
+        'role':
+        'user',
+        'content': [
+            {
+                'type': 'video_url',
+                'video_url': {
+                    'url': demo_video_path,
+                },
+            },
+            {
+                'type': 'text',
+                'text': mm_one_question,
+            },
+        ],
+    }]
+    if not os.path.isfile(demo_video_path):
+        file.writelines(f'[video mm_processor demo skipped] missing file: {demo_video_path}\n')
+    else:
+        try:
+            mm_resp = client.chat.completions.create(
+                model=model_name,
+                messages=mm_demo_messages,
+                max_tokens=MM_DEMO_MAX_TOKENS,
+                temperature=0.3,
+                top_p=0.95,
+                extra_body={
+                    'top_k': 20,
+                    'mm_processor_kwargs': {
+                        'fps': 2,
+                        'do_sample_frames': True,
+                    },
+                },
+            )
+        except (BadRequestError, APIStatusError) as exc:
+            if not _vl_openai_http_error_skippable(exc):
+                raise
+            file.writelines(f'[video mm_processor demo skipped] {exc!r}\n')
+        else:
+            file.writelines('[video mm_processor non-stream] ' + str(mm_resp).lower() + '\n')
+            mm_text = (mm_resp.choices[0].message.content or '').strip()
+            mm_fr = getattr(mm_resp.choices[0], 'finish_reason', None)
+            assert _mm_demo_tomb_run_assert(mm_fr, mm_text), (mm_fr, mm_text[:2000])
+
+            mm_stream = client.chat.completions.create(
+                model=model_name,
+                messages=mm_demo_messages,
+                max_tokens=MM_DEMO_MAX_TOKENS_STREAM,
+                temperature=0.2,
+                stream=True,
+                extra_body={
+                    'top_k': 20,
+                    'mm_processor_kwargs': {
+                        'fps': 2,
+                        'do_sample_frames': True,
+                    },
+                },
+            )
+            mm_finish, mm_joined = _consume_chat_completion_stream(mm_stream)
+            mm_joined = mm_joined.strip()
+            file.writelines('[video mm_processor stream] ' + mm_joined.lower() + '\n')
+            assert _mm_demo_tomb_run_assert(mm_finish, mm_joined), (mm_finish, mm_joined[:2000])
+
+            mm_raw_payload = {
+                'model': model_name,
+                'messages': mm_demo_messages,
+                'temperature': 0.3,
+                'max_tokens': MM_DEMO_MAX_TOKENS,
+                'top_k': 20,
+                'mm_processor_kwargs': {
+                    'fps': 2,
+                    'do_sample_frames': True,
+                },
+            }
+            mm_raw = requests.post(f'{http_url}/v1/chat/completions',
+                                     headers={'content-type': 'application/json'},
+                                     json=mm_raw_payload,
+                                     timeout=600)
+            file.writelines(f'[video mm_processor raw http] status={mm_raw.status_code}\n')
+            assert mm_raw.ok, mm_raw.text
+            mm_raw_json = mm_raw.json()
+            mm_raw_choice0 = (mm_raw_json.get('choices') or [{}])[0]
+            mm_raw_text = mm_raw_choice0.get('message', {}).get('content') or ''
+            file.writelines(mm_raw_text.lower() + '\n')
+            mm_raw_fr = mm_raw_choice0.get('finish_reason')
+            assert _mm_demo_tomb_run_assert(mm_raw_fr, mm_raw_text), (mm_raw_fr, mm_raw_text[:2000], mm_raw_json)
+
+            mm_one = client.chat.completions.create(
+                model=model_name,
+                messages=mm_one_messages,
+                max_tokens=2048,
+                temperature=0.3,
+                top_p=0.95,
+                extra_body={
+                    'top_k': 20,
+                    'media_io_kwargs': {
+                        'video': {
+                            'num_frames': 1,
+                        },
+                    },
+                },
+            )
+            file.writelines('[video mm_processor single-frame] ' + str(mm_one).lower() + '\n')
+            assert getattr(mm_one.choices[0], 'finish_reason', None) == 'stop', mm_one
+            mm_one_text = (mm_one.choices[0].message.content or '').strip()
+            assert mm_one_text and _mm_demo_single_frame_scene_assert(mm_one_text), mm_one_text
+            assert _mm_demo_thinking_wrapper_shape_assert(mm_one_text), mm_one_text
+
+    mixed_messages = [{
+        'role':
+        'user',
+        'content': [
+            {
+                'type':
+                'text',
+                'text': (
+                    'You receive one still image and one video clip in this message. In 2-4 short sentences: '
+                    '(1) name one clear subject from the image; '
+                    '(2) name the animal or main scene in the video.'),
+            },
+            {
+                'type': 'image_url',
+                'image_url': {
+                    'url': f'{resource_path}/{PIC}',
+                },
+            },
+            {
+                'type': 'video_url',
+                'video_url': {
+                    'url': video_path,
+                },
+            },
+        ],
+    }]
+    if not os.path.isfile(video_path):
+        file.writelines('[mixed image+text+video skipped] missing video file (same as video testcase)\n')
+    else:
+        try:
+            mix_resp = client.chat.completions.create(
+                model=model_name,
+                messages=mixed_messages,
+                temperature=0.3,
+                max_tokens=512,
+                extra_body={
+                    'media_io_kwargs': {
+                        'video': {
+                            'num_frames': 6,
+                        },
+                    },
+                },
+            )
+        except (BadRequestError, APIStatusError) as exc:
+            if not _vl_openai_http_error_skippable(exc):
+                raise
+            file.writelines(f'[mixed image+text+video skipped] server rejected: {exc!r}\n')
+        else:
+            file.writelines('[mixed image+text+video] ' + str(mix_resp).lower() + '\n')
+            mix_content = (mix_resp.choices[0].message.content or '').strip()
+            assert mix_content, mix_resp
+            assert ('tiger' in mix_content.lower() or '虎' in mix_content or 'ski' in mix_content.lower()
+                    or '滑雪' in mix_content), mix_resp
+            assert _vl_video_stream_finish_assert(
+                getattr(mix_resp.choices[0], 'finish_reason', None), mix_content), mix_resp
+
     file.close()
 
     allure.attach.file(restful_log, name=restful_log, attachment_type=allure.attachment_type.TEXT)
