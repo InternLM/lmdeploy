@@ -584,9 +584,9 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         return create_error_response(HTTPStatus.BAD_REQUEST, 'Failed to parse fc related info to json format!')
 
     message = ChatMessage(role='assistant',
-                            content=text,
-                            tool_calls=tool_calls,
-                            reasoning_content=reasoning_content)
+                          content=text,
+                          tool_calls=tool_calls,
+                          reasoning_content=reasoning_content)
 
     logprobs = None
     if gen_logprobs and len(final_logprobs):
@@ -1262,6 +1262,7 @@ def set_parsers(reasoning_parser_name: str | None = None, tool_parser_name: str 
                          f'{ResponseParserManager.module_dict.keys()}')
     cls.set_parsers(reasoning_parser_name=reasoning_parser_name, tool_parser_name=tool_parser_name)
     VariableInterface.response_parser_cls = cls
+
 
 def mount_metrics(app: FastAPI, backend_config: PytorchEngineConfig | TurbomindEngineConfig):
     if not getattr(backend_config, 'enable_metrics', False):

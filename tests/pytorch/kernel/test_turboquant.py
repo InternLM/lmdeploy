@@ -169,8 +169,8 @@ class TestTurboQuantQJL4:
         assert bit1.min().item() >= 0
         assert bit1.max().item() <= 1
 
-        print(f'  qjl4: mse_norm range=[{meta[:,0].min():.3f}, {meta[:,0].max():.3f}]')
-        print(f'  qjl4: qjl_norm range=[{meta[:,1].min():.3f}, {meta[:,1].max():.3f}]')
+        print(f'  qjl4: mse_norm range=[{meta[:, 0].min():.3f}, {meta[:, 0].max():.3f}]')
+        print(f'  qjl4: qjl_norm range=[{meta[:, 1].min():.3f}, {meta[:, 1].max():.3f}]')
 
     def test_reconstruction_quality(self, head_dim, n_vectors):
         torch.manual_seed(42)

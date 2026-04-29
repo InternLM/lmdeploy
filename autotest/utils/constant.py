@@ -238,7 +238,7 @@ TOOL_REASONING_MODEL_LIST_LEGACY = [
 TOOL_REASONING_MODEL_LIST = TOOL_REASONING_MODEL_LIST_LEGACY if _IS_LEGACY else TOOL_REASONING_MODEL_LIST_LATEST
 
 RESTFUL_BASE_MODEL_LIST = [
-    'Qwen/Qwen3.5-2B-Base', 'Qwen/Qwen3.5-35B-A3B-Base','Qwen/Qwen3-8B-Base',
+    'Qwen/Qwen3.5-2B-Base', 'Qwen/Qwen3.5-35B-A3B-Base', 'Qwen/Qwen3-8B-Base',
     'internlm/internlm2_5-20b', 'Qwen/Qwen3-4B', 'internlm/internlm3-8b-instruct'
 ]
 

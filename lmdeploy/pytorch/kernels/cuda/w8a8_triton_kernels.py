@@ -599,6 +599,6 @@ if __name__ == '__main__':
                                       plot_name='bench-triton',
                                       args={
                                           'dtype': torch.float16,
-                                      })
+    })
     bench_funch = (triton.testing.perf_report(config))(bench_rms_and_linear)
     bench_funch.run(print_data=True)

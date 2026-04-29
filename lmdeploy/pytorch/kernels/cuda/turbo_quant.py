@@ -174,13 +174,13 @@ def get_lloyd_max_codebook(d: int, bits: int, device: str = 'cuda') -> tuple[Ten
         # 3-bit Lloyd-Max centroids (K cache with QJL4)
         centroids_std = torch.tensor(
             [-2.1519456, -1.3439093, -0.7560052, -0.2450942,
-              0.2450942,  0.7560052,  1.3439093,  2.1519456],
+             0.2450942, 0.7560052, 1.3439093, 2.1519456],
             device=device,
             dtype=torch.float32,
         )
         boundaries_std = torch.tensor(
             [-1.7479274, -1.0499573, -0.5005497, 0.0,
-              0.5005497,  1.0499573,  1.7479274],
+             0.5005497, 1.0499573, 1.7479274],
             device=device,
             dtype=torch.float32,
         )

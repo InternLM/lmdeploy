@@ -20,3 +20,7 @@ select = [
 ignore = [
   "E231", "E741"
 ]
+
+[tool.autopep8]
+max_line_length = 120
+aggressive = 3

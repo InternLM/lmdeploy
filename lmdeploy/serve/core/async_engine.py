@@ -202,7 +202,7 @@ class AsyncEngine:
             metrics_processor.stat_loggers = self.stat_loggers
 
     def _if_session_stale(self, session: Session,
-                                   input_token_len: int) -> GenOut | None:
+                          input_token_len: int) -> GenOut | None:
         """If ``session.epoch`` was stamped by api_server and
         ``stop_all_session`` ran since then (the engine epoch changed), drop
         the session."""
@@ -446,7 +446,6 @@ class AsyncEngine:
         if not gen_config.ignore_eos:
             stop_ids = gen_config.stop_token_ids or []
 
-
         stale = self._if_session_stale(session, len(prompt_input['input_ids']))
         if stale is not None:
             metrics_processor.increase_failed_requests('abort')
@@ -457,7 +456,7 @@ class AsyncEngine:
         async with session.request_handle() as handle:
             if session.epoch is not None and session.epoch != self.epoch:
                 logger.info(f'[generate] session {session_id} got aborted before starting inference, '
-                               f'session.epoch={session.epoch}, async_engine.epoch={self.epoch}')
+                            f'session.epoch={session.epoch}, async_engine.epoch={self.epoch}')
                 metrics_processor.increase_failed_requests('abort')
                 yield GenOut(response='',
                              history_token_len=0,

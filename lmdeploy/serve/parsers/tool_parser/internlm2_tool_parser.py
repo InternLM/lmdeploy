@@ -14,6 +14,7 @@ if TYPE_CHECKING:
         ToolCall,
     )
 
+
 @ToolParserManager.register_module(['internlm', 'intern-s1'])
 class Internlm2ToolParser(ToolParser):
     """Tool parser for InternLM JSON tool-call payloads."""

@@ -89,7 +89,7 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
 
         valid_ids = token_ids[token_ids > -1]
         if stop_pos > -1:
-            valid_ids = valid_ids[:stop_pos+1]
+            valid_ids = valid_ids[:stop_pos + 1]
 
         num_valid = len(valid_ids)
         self.num_new_tokens += num_valid

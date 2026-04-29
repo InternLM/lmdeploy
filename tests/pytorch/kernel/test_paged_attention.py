@@ -782,7 +782,7 @@ class TestPagedAttentionQuant42(TestPagedAttentionBase):
                    feat_dim_v):
         batched_k, batched_v = batched_kv
         yield _make_blocked_cache_quant42(batched_k, batched_v, seq_lens, history_lens, block_offsets, block_size,
-                                        num_heads_k, feat_dim, feat_dim_v)
+                                          num_heads_k, feat_dim, feat_dim_v)
 
     @pytest.fixture
     def gt(self, batched_q, blocked_kv, block_offsets, kv_seqlens, block_size, num_heads_q, num_heads_k):

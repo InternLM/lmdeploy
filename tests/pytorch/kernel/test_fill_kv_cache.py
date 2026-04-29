@@ -151,7 +151,7 @@ class TestFillKVCache:
         ((1, 1, 1, 1), (1, 16, 31, 24)),
         ((1, 8, 16, 24), (1, 16, 31, 24)),
     ],
-                             indirect=True)
+        indirect=True)
     def test_fill_kv_cache(self, k_states, v_states, k_caches, v_caches, block_offsets, q_start_loc, q_seq_length,
                            kv_seq_length, max_q_seq_length, gt):
         from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache
@@ -242,7 +242,7 @@ class TestFillKVCacheInt8(TestFillKVCache):
         ((1, 1, 1, 1), (1, 16, 31, 24)),
         ((1, 8, 16, 24), (1, 16, 31, 24)),
     ],
-                             indirect=True)
+        indirect=True)
     def test_fill_kv_cache(self, k_states, v_states, k_caches, v_caches, k_scales_zeros, v_scales_zeros, block_offsets,
                            q_start_loc, q_seq_length, kv_seq_length, max_q_seq_length, gt):
         from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache
@@ -271,7 +271,7 @@ class TestFillKVCacheInt4(TestFillKVCacheInt8):
         ((1, 1, 1, 1), (1, 16, 31, 24)),
         ((1, 8, 16, 24), (1, 16, 31, 24)),
     ],
-                             indirect=True)
+        indirect=True)
     def test_fill_kv_cache(self, k_states, v_states, k_caches, v_caches, k_scales_zeros, v_scales_zeros, block_offsets,
                            q_start_loc, q_seq_length, kv_seq_length, max_q_seq_length, gt, nbits):
         from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache
@@ -378,7 +378,7 @@ class TestFillKVCacheInt42(TestFillKVCacheInt4):
         ((1, 1, 1, 1), (1, 16, 31, 24)),
         ((1, 8, 16, 24), (1, 16, 31, 24)),
     ],
-                             indirect=True)
+        indirect=True)
     def test_fill_kv_cache(self, k_states, v_states, k_caches, v_caches, k_scales_zeros, v_scales_zeros, block_offsets,
                            q_start_loc, q_seq_length, kv_seq_length, max_q_seq_length, gt):
         from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache
@@ -655,7 +655,7 @@ class TestFillKVCacheBlockedFP8(TestFillKVCache):
         ((1, 1, 1, 1), (1, 128, 256, 200)),
         ((1, 64, 128, 50), (1, 128, 256, 200)),
     ],
-                             indirect=True)
+        indirect=True)
     def test_fill_kv_cache(self, k_states, v_states, k_caches, v_caches, ks_caches, vs_caches, block_offsets,
                            cu_seqlen_q, kv_seq_length, max_q_seq_length, gt, group_size, scale_fmt):
         from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache_blocked_fp8

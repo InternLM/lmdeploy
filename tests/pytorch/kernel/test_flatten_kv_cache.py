@@ -354,7 +354,7 @@ class TestFlattenKVCacheQuant42:
         yield torch.float32
 
     def test_flatten_kv_cache_quant42(self, k_caches, v_caches, kv_seqlens, block_offsets, k_scales_zeros,
-                                       v_scales_zeros, out_dtype, head_dim, head_dim_v, num_heads):
+                                      v_scales_zeros, out_dtype, head_dim, head_dim_v, num_heads):
         """Test flatten_kv_cache with quant_policy=QuantPolicy.TURBO_QUANT.
 
         This test verifies that:
@@ -366,7 +366,6 @@ class TestFlattenKVCacheQuant42:
         from lmdeploy.pytorch.kernels.cuda.turbo_quant import (
             hadamard_rotate_inv,
         )
-
 
         # Run flatten with quant_policy=QuantPolicy.TURBO_QUANT
         k_states, v_states = flatten_kv_cache(
