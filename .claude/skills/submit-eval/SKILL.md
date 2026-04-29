@@ -26,24 +26,36 @@ Also verify `~/.eval/models/model.yaml` exists. If missing, stop and tell the us
 
 ## 1. Gather inputs
 
-Ask the user for:
+Read `~/.eval/models/model.yaml` and present the list of available model keys to the user. Ask them to select one or more models.
 
-- **model_abbr** — key in `~/.eval/models/model.yaml`
+Then ask for:
+
 - **instances** — number of inference instances (integer, used to compute `end_num`)
 - **datasets** — comma-separated dataset keys (looked up in `~/.eval/config`)
 - **image** (optional) — Docker image for the eval container
 
+If the user selected multiple models, repeat steps 3-10 for each model.
+
 ## 2. Look up model config
 
-Read `~/.eval/models/model.yaml`. Find the entry matching `model_abbr`. If not found, stop and list available model keys.
+For each selected model, read its entry from `~/.eval/models/model.yaml`. Extract `model_path` and all other fields.
 
-From the model entry, extract:
+All fields except `model_path` are passed as CLI flags to `infer_extra_params`, mapping each key to `--{key} {value}`. For example:
 
-- `model_path` (required)
-- `tp` (required)
-- `backend` (required)
-- `reasoning_parser` (optional)
-- `tool_call_parser` (optional)
+```yaml
+tp: 2
+backend: turbomind
+reasoning_parser: qwen-qwq
+tool_call_parser: qwen
+```
+
+produces:
+
+```
+--tp 2 --backend turbomind --reasoning-parser qwen-qwq --tool-call-parser qwen
+```
+
+Keys with underscores are converted to hyphens for the CLI flag name.
 
 ## 3. Resolve image
 
@@ -64,13 +76,7 @@ TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 MODEL_ABBR_PADDED="${model_abbr}-${TIMESTAMP}"
 ```
 
-Compute `infer_extra_params`:
-
-```
---tp {tp} --backend {backend} --reasoning-parser {reasoning_parser} [--tool-call-parser {tool_call_parser}]
-```
-
-- Append `--tool-call-parser {tool_call_parser}` only if `tool_call_parser` is set.
+Compute `infer_extra_params` from all model.yaml fields except `model_path` (see step 2 for the mapping rule).
 
 Compute resource fields:
 
@@ -107,7 +113,7 @@ Build as a Python dict string with these fields:
 }
 ```
 
-If `reasoning_parser` is set, add to `extra_body`:
+If the model has a `reasoning_parser` field, add to `extra_body`:
 
 ```python
 'chat_template_kwargs': {'enable_thinking': True},
