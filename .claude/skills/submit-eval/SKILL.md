@@ -59,7 +59,46 @@ Keys with underscores are converted to hyphens for the CLI flag name.
 
 ## 3. Resolve image
 
-If the user provided an `image`, use it. Otherwise, ask the user to run `/docker-build` in a separate session to build and push an image from the current branch, then come back with the resulting image tag. Wait for the user to provide the image before continuing.
+If the user provided an `image`, use it. Otherwise, build and push an image automatically:
+
+### 3a. Verify registry credentials
+
+```bash
+echo $LMDEPLOY_REGISTRY
+echo $REGISTRY_USER
+test -n "$REGISTRY_PASSWORD" && echo "<set>" || echo "<missing>"
+```
+
+If any are missing, stop and tell the user to set them.
+
+### 3b. Compute image tag
+
+```bash
+BRANCH=$(git branch --show-current | sed 's/[^a-zA-Z0-9._-]/-/g')
+SHA=$(git rev-parse --short=7 HEAD)
+TAG="${BRANCH}-${SHA}"
+IMAGE="${LMDEPLOY_REGISTRY}/lmdeploy:${TAG}"
+```
+
+### 3c. Build (patch mode)
+
+```bash
+docker build -f docker/Dockerfile_patch \
+  --build-arg BASE_IMAGE=openmmlab/lmdeploy:v0.12.3.post2-cu12.8 \
+  --build-arg BACKEND=pytorch \
+  --build-arg http_proxy=${http_proxy:-} \
+  --build-arg https_proxy=${https_proxy:-} \
+  --build-arg no_proxy=${no_proxy:-} \
+  -t "${IMAGE}" \
+  .
+```
+
+### 3d. Push
+
+```bash
+echo "${REGISTRY_PASSWORD}" | docker login "${LMDEPLOY_REGISTRY}" -u "${REGISTRY_USER}" --password-stdin
+docker push "${IMAGE}"
+```
 
 ## 4. Resolve datasets
 
