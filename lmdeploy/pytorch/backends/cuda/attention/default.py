@@ -24,7 +24,7 @@ class TritonAttentionMetadata(AttentionMetadata):
         q_seqlens: Length of each query sequence [batch_size].
         kv_start_loc: Start location of each KV sequence [batch_size].
         kv_seqlens: Length of each KV sequence [batch_size].
-        quant_policy: Quantization policy (0=none, 4=int4, 8=int8/fp8).
+        quant_policy: Quantization policy (0=none, 4=int4, 8=int8, 16/17=fp8).
         kv_flatten_size: Total size of flattened KV cache.
         tile_scheduler_metadata: Scheduler metadata for Flash MLA.
         num_splits: Number of splits for Flash MLA.

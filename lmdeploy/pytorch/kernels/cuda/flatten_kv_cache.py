@@ -281,8 +281,10 @@ def flatten_kv_cache(k_caches: Tensor,
     else:
         raise RuntimeError('Unsupported layout.')
 
+    is_fp8_quant = quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2)
+
     if out_dtype is None:
-        if quant_policy in (QuantPolicy.TURBO_QUANT, QuantPolicy.FP8):
+        if quant_policy == QuantPolicy.TURBO_QUANT or is_fp8_quant:
             out_dtype = torch.float16
         else:
             out_dtype = k_caches.dtype
@@ -408,7 +410,7 @@ def flatten_kv_cache(k_caches: Tensor,
             stride_vos=stride_vos,
             stride_vod=v_states.stride(2),
             stride_boff=block_offsets.stride(0),
-            quant_policy=quant_policy,
+            quant_policy=QuantPolicy.FP8 if is_fp8_quant else quant_policy,
             OUT_SIZE=out_size,
             HEAD_DIM_K=k_head_dim,
             HEAD_DIM_V=v_head_dim,

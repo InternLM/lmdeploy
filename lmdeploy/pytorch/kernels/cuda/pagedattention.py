@@ -884,6 +884,7 @@ def flash_attn_with_kvcache(
     else:
         num_warps, num_stages = _kernel_meta_sm9x(BLOCK_DMODEL, BLOCK_H)
 
+    is_fp8_quant = quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2)
     SPLIT_K = _get_split_k(q.device.index, grid_1, batch, num_warps)
 
     if quant_policy == QuantPolicy.INT4 or quant_policy == QuantPolicy.TURBO_QUANT:
@@ -927,7 +928,7 @@ def flash_attn_with_kvcache(
                                               stride_vszbs=v_scales_zeros.stride(s_dim),
                                               stride_vszh=v_scales_zeros.stride(h_dim),
                                               stride_vszd=v_scales_zeros.stride(d_dim),
-                                              quant_policy=quant_policy,
+                                              quant_policy=QuantPolicy.FP8 if is_fp8_quant else quant_policy,
                                               stride_ok=acc.stride(-2),
                                               stride_obs=acc.stride(-4),
                                               stride_oh=acc.stride(-3),

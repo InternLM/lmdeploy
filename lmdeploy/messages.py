@@ -23,6 +23,7 @@ class QuantPolicy(enum.IntEnum):
     INT4 = 4  # 4-bit KV cache
     INT8 = 8  # 8-bit KV cache
     FP8 = 16  # FP8 KV cache (float8_e4m3fn, per-token symmetric scale)
+    FP8_E5M2 = 17  # FP8 KV cache (float8_e5m2, per-token symmetric scale)
     TURBO_QUANT = 42  # TurboQuant: K=4bit QJL4 + V=2bit MSE
 
 LogitsProcessor = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
@@ -243,8 +244,9 @@ class TurbomindEngineConfig:
             a k/v block, default to 64
         enable_prefix_caching: enable cache prompts for block reuse,
             default to False
-        quant_policy: default to 0. When k/v is quantized into 4 or 8
-            bit, set it to 4 or 8, respectively
+        quant_policy: default to 0. When k/v is quantized into int4,
+            int8, fp8, or fp8_e5m2, set it to 4, 8, 16, or 17,
+            respectively
         rope_scaling_factor: scaling factor used for dynamic ntk,
             default to 0. TurboMind follows the implementation of transformer
             LlamaAttention
@@ -365,8 +367,9 @@ class PytorchEngineConfig:
         revision: The specific model version to use.
             It can be a branch name, a tag name, or a commit id.
             If unspecified, will use the default version.
-        quant_policy: default to 0. When k/v is quantized into 4 or 8
-            bit, set it to 4 or 8, respectively
+        quant_policy: default to 0. When k/v is quantized into int4,
+            int8, fp8, or fp8_e5m2, set it to 4, 8, 16, or 17,
+            respectively
         distributed_executor_backend: backend of distributed backend,
             options: ['uni', 'mp', 'ray']
         empty_init: Whether to load the model weights, you should set
@@ -459,7 +462,7 @@ class PytorchEngineConfig:
             'invalid max_prefill_token_num'
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
         assert self.quant_policy in (QuantPolicy.NONE, QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.FP8,
-                                     QuantPolicy.TURBO_QUANT), 'invalid quant_policy'
+                                     QuantPolicy.FP8_E5M2, QuantPolicy.TURBO_QUANT), 'invalid quant_policy'
         assert self.device_type in ['cuda', 'ascend', 'maca', 'camb'], (f'invalid device_type: {self.device_type}')
         assert self.kernel_block_size >= 16 and \
                (self.kernel_block_size & (self.kernel_block_size - 1)) == 0, \

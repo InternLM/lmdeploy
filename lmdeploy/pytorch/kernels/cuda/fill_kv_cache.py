@@ -806,7 +806,7 @@ def fill_kv_cache(k_states: Tensor,
             num_warps=4,
             num_stages=3,
         )
-    elif quant_policy == QuantPolicy.FP8:
+    elif quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2):
         fill_kv_cache_blocked_fp8(
             k_states,
             v_states,

@@ -435,21 +435,21 @@ def _make_blocked_cache_quant(batched_k, batched_v, seq_lens, history_lens, bloc
     return blocked_k, blocked_v, blocked_ksz, blocked_vsz
 
 
-def quant_fp8(kv: torch.Tensor):
+def quant_fp8(kv: torch.Tensor, fp8_dtype: torch.dtype = torch.float8_e4m3fn):
     """Quant kv to fp8 on the head_dim with per-token/head scale."""
-    finfo = torch.finfo(torch.float8_e4m3fn)
+    finfo = torch.finfo(fp8_dtype)
     scale = torch.maximum(kv.abs().amax(dim=-1, keepdim=True) / finfo.max, kv.new_tensor(1e-6))
-    q_kv = torch.clamp(kv / scale, finfo.min, finfo.max).to(torch.float8_e4m3fn)
+    q_kv = torch.clamp(kv / scale, finfo.min, finfo.max).to(fp8_dtype)
     dq_kv = q_kv.to(kv.dtype) * scale
     return q_kv, scale, dq_kv
 
 
 def _make_blocked_cache_fp8(batched_k, batched_v, seq_lens, history_lens, block_offsets, block_size, num_heads_k,
-                            feat_dim, feat_dim_v):
+                            feat_dim, feat_dim_v, fp8_dtype=torch.float8_e4m3fn):
     max_blocks_nums = block_offsets.max() + 1
     full_seq_lens = seq_lens + history_lens
-    batched_k, k_scales, dequant_k = quant_fp8(batched_k)
-    batched_v, v_scales, dequant_v = quant_fp8(batched_v)
+    batched_k, k_scales, dequant_k = quant_fp8(batched_k, fp8_dtype)
+    batched_v, v_scales, dequant_v = quant_fp8(batched_v, fp8_dtype)
 
     blocked_k = batched_k.new_zeros(max_blocks_nums, block_size, num_heads_k, feat_dim)
     blocked_v = batched_v.new_zeros(max_blocks_nums, block_size, num_heads_k, feat_dim_v)
@@ -550,11 +550,20 @@ class TestPagedAttentionInt4(TestPagedAttentionInt8):
 class TestPagedAttentionFP8(TestPagedAttentionBase):
 
     @pytest.fixture
+    def fp8_dtype(self):
+        yield torch.float8_e4m3fn
+
+    @pytest.fixture
+    def quant_policy(self):
+        from lmdeploy.messages import QuantPolicy
+        yield QuantPolicy.FP8
+
+    @pytest.fixture
     def blocked_kv(self, batched_kv, seq_lens, history_lens, block_offsets, block_size, num_heads_k, feat_dim,
-                   feat_dim_v):
+                   feat_dim_v, fp8_dtype):
         batched_k, batched_v = batched_kv
         yield _make_blocked_cache_fp8(batched_k, batched_v, seq_lens, history_lens, block_offsets, block_size,
-                                      num_heads_k, feat_dim, feat_dim_v)
+                                      num_heads_k, feat_dim, feat_dim_v, fp8_dtype)
 
     @pytest.fixture
     def gt(self, batched_q, blocked_kv, mask):
@@ -566,8 +575,7 @@ class TestPagedAttentionFP8(TestPagedAttentionBase):
     @pytest.mark.parametrize(['num_heads_q', 'num_heads_k'], [(8, 2), (2, 2)], indirect=True)
     @pytest.mark.parametrize('history_lens', [(50, 40, 30, 20)], indirect=True)
     @pytest.mark.parametrize('block_size', [16], indirect=True)
-    def test_paged_attention(self, conti_q, blocked_kv, block_offsets, kv_seqlens, conti_gt):
-        from lmdeploy.messages import QuantPolicy
+    def test_paged_attention(self, conti_q, blocked_kv, block_offsets, kv_seqlens, conti_gt, quant_policy):
         from lmdeploy.pytorch.kernels.cuda import flash_attn_with_kvcache
 
         blocked_k, blocked_v, blocked_ks, blocked_vs, _, _ = blocked_kv
@@ -577,10 +585,22 @@ class TestPagedAttentionFP8(TestPagedAttentionBase):
                                       blocked_v,
                                       k_scales_zeros=blocked_ks,
                                       v_scales_zeros=blocked_vs,
-                                      quant_policy=QuantPolicy.FP8,
+                                      quant_policy=quant_policy,
                                       page_table=block_offsets,
                                       cache_seqlens=kv_seqlens)
         torch.testing.assert_close(out, conti_gt, atol=1e-3, rtol=1e-5)
+
+
+class TestPagedAttentionFP8E5M2(TestPagedAttentionFP8):
+
+    @pytest.fixture
+    def fp8_dtype(self):
+        yield torch.float8_e5m2
+
+    @pytest.fixture
+    def quant_policy(self):
+        from lmdeploy.messages import QuantPolicy
+        yield QuantPolicy.FP8_E5M2
 
 
 class TestPagedAttentionBlockDecoding(TestPagedAttentionBase):
