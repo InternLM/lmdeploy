@@ -30,6 +30,7 @@ Read `~/.eval/model.yaml` and present the list of available model keys to the us
 
 Then ask for:
 
+- **backend** — `pytorch` or `turbomind`. This determines the Dockerfile used for building and is passed as `--backend` in `infer_extra_params`.
 - **instances** — number of inference instances (integer, used to compute `end_num`)
 - **datasets** — comma-separated dataset keys (looked up in `~/.eval/config`)
 - **image** (optional) — Docker image for the eval container
@@ -40,16 +41,15 @@ If the user selected multiple models, repeat steps 3-10 for each model.
 
 For each selected model, read its entry from `~/.eval/model.yaml`. Extract `model_path` and all other fields.
 
-All fields except `model_path` are passed as CLI flags to `infer_extra_params`, mapping each key to `--{key} {value}`. For example:
+All fields except `model_path` are passed as CLI flags to `infer_extra_params`, mapping each key to `--{key} {value}`. The `--backend` flag comes from the user's backend input (step 1), not from model.yaml. For example:
 
 ```yaml
 tp: 2
-backend: turbomind
 reasoning_parser: qwen-qwq
 tool_call_parser: qwen
 ```
 
-produces:
+with `backend=turbomind` produces:
 
 ```
 --tp 2 --backend turbomind --reasoning-parser qwen-qwq --tool-call-parser qwen
@@ -80,7 +80,21 @@ TAG="${BRANCH}-${SHA}"
 IMAGE="${LMDEPLOY_REGISTRY}/lmdeploy:${TAG}"
 ```
 
-### 3c. Build (patch mode)
+### 3c. Build
+
+If backend is `turbomind`, use the full build:
+
+```bash
+docker build -f docker/Dockerfile \
+  --build-arg CUDA_VERSION=cu12.8 \
+  --build-arg http_proxy=${http_proxy:-} \
+  --build-arg https_proxy=${https_proxy:-} \
+  --build-arg no_proxy=${no_proxy:-} \
+  -t "${IMAGE}" \
+  .
+```
+
+If backend is `pytorch`, use the patch build:
 
 ```bash
 docker build -f docker/Dockerfile_patch \
