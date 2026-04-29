@@ -59,7 +59,7 @@ Keys with underscores are converted to hyphens for the CLI flag name.
 
 ## 3. Resolve image
 
-If the user provided an `image`, use it. Otherwise, invoke the `docker-build` skill to build and push an image from the current branch, then use the resulting image tag.
+If the user provided an `image`, use it. Otherwise, ask the user to run `/docker-build` in a separate session to build and push an image from the current branch, then come back with the resulting image tag. Wait for the user to provide the image before continuing.
 
 ## 4. Resolve datasets
 
