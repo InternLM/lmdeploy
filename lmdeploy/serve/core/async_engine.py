@@ -396,8 +396,8 @@ class AsyncEngine:
                                                                         media_io_kwargs=media_io_kwargs,
                                                                         mm_processor_kwargs=mm_processor_kwargs,
                                                                         **kwargs)
-            prompt = prompt_input['prompt']
-            input_ids = prompt_input['input_ids']
+            prompt = prompt_input.get('prompt')
+            input_ids = prompt_input.get('input_ids')
             self.request_logger.log_inputs(session,
                                            prompt=prompt,
                                            prompt_token_ids=input_ids,
@@ -468,6 +468,8 @@ class AsyncEngine:
                              generate_token_len=0,
                              finish_reason='abort',
                              token_ids=[])
+                if sequence_end:
+                    self.session_mgr.remove(session)
                 return
             token_ids = input_ids.copy()
             history_len = session.step

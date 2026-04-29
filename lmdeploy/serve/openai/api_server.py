@@ -391,6 +391,13 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         except Exception as e:
             return create_error_response(HTTPStatus.BAD_REQUEST, str(e))
 
+    parser_cls = VariableInterface.response_parser_cls
+    if request.tool_choice != 'none' and request.tools:
+        if parser_cls is None or parser_cls.tool_parser_cls is None:
+            return create_error_response(
+                HTTPStatus.BAD_REQUEST,
+                'Please launch the api_server with --tool-call-parser if you want to use tool.')
+
     random_seed = request.seed if request.seed is not None else None
     max_new_tokens = (request.max_completion_tokens if request.max_completion_tokens else request.max_tokens)
     response_format = None
@@ -498,9 +505,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             if (request.tool_choice != 'none' and response_parser.tool_parser is not None):
                 if res.finish_reason == 'stop' and streaming_tools is True:
                     res.finish_reason = 'tool_calls'
-            elif request.tool_choice != 'none' and request.tools is not None:
-                if parser_cls.tool_parser_cls is None:
-                    logger.error('Please launch the api_server with --tool-call-parser if you want to use tool.')
 
             # The parser may intentionally suppress no-op chunks by returning
             # ``None``. Keep them suppressed unless this is a visible terminal
@@ -562,10 +566,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     except Exception as e:
         logger.error(f'Failed to parse {text}. Exception: {e}.')
         return create_error_response(HTTPStatus.BAD_REQUEST, 'Failed to parse fc related info to json format!')
-    if request.tool_choice != 'none' and request.tools is not None:
-        parser_cls = VariableInterface.response_parser_cls
-        if parser_cls is None or parser_cls.tool_parser_cls is None:
-            logger.error('Please launch the api_server with --tool-call-parser if you want to use tool.')
 
     message = ChatMessage(role='assistant',
                             content=text,
@@ -951,12 +951,16 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
                 return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
             text += res.response or ''
             output_ids.extend(res.token_ids or [])
-            if res.logprobs:
-                for tok, tok_logprobs in zip(res.token_ids, res.logprobs):
-                    logprobs.append((tok_logprobs[tok], tok))
+            logprobs.extend(res.logprobs or [])
+
+        output_token_logprobs = []
+        if len(logprobs) and len(output_ids):
+            for tok, tok_logprobs in zip(output_ids, logprobs):
+                output_token_logprobs.append((tok_logprobs[tok], tok))
+
         nonlocal response
         meta = GenerateReqMetaOutput(finish_reason=dict(type=res.finish_reason) if res.finish_reason else None,
-                                     output_token_logprobs=logprobs or None,
+                                     output_token_logprobs=output_token_logprobs or None,
                                      prompt_tokens=res.input_token_len,
                                      routed_experts=res.routed_experts,
                                      completion_tokens=res.generate_token_len)

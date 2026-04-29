@@ -48,7 +48,7 @@ class TestZMQRPC:
         result = await client.async_call('method', 'test1')
         assert result == 'test1: method'
 
-        async for result in client.async_stream_call('streaming_method', 'test3'):
+        async for result in client.async_stream_call('streaming_method', asyncio.Event(), 'test3'):
             pass
         assert result == 'test3: streaming method 2'
 

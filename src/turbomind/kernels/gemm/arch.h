@@ -26,8 +26,18 @@ struct Sm80: Arch<800, 900> {
     static constexpr int value = 800;
 };
 
-struct Sm90: Arch<900> {
+struct Sm90: Arch<900, 1000> {
     static constexpr int value = 900;
+};
+
+// B200 (Blackwell) SM 100
+struct Sm100: Arch<1000, 1200> {
+    static constexpr int value = 1000;
+};
+
+// SM12.x (e.g. sm_120): use same CUTLASS SM90 kernel family as pre-PR Sm90+ range
+struct Sm120: Arch<1200, 1300> {
+    static constexpr int value = 1200;
 };
 
 inline bool is_arch_compatible(int karch, int darch)
@@ -42,7 +52,11 @@ inline bool is_arch_compatible(int karch, int darch)
         case 800:
             return Sm80::is_compatible(darch);
         case 900:
-            return Sm90::is_compatible(darch);
+            return Sm90::is_compatible(darch) || Sm120::is_compatible(darch);
+        case 1000:
+            return Sm100::is_compatible(darch);
+        case 1200:
+            return Sm120::is_compatible(darch);
         default:
             return false;
     }

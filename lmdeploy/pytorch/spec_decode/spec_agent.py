@@ -178,6 +178,8 @@ class SpecModelAgent(BaseSpecModelAgent):
         history_lengths = model_inputs.history_lengths.clone()
 
         if not model_inputs.is_chunk:
+            # clear each time
+            self._prev_chunk_last.clear()
             # Case A: non-chunked — shift left by 1, place next_token at end
             input_ids = model_inputs.input_ids.clone()
             input_ids[:, :-1] = model_inputs.input_ids[:, 1:]
@@ -192,6 +194,8 @@ class SpecModelAgent(BaseSpecModelAgent):
 
         else:
             if model_inputs.is_first_chunk:
+                # clear each time
+                self._prev_chunk_last.clear()
                 # Case B: first chunk — skip first token, save last for next chunk
                 input_ids = model_inputs.input_ids[:, 1:]
                 seq_length = model_inputs.seq_length - 1
@@ -353,10 +357,16 @@ class SpecModelAgent(BaseSpecModelAgent):
             # update last token indices
             last_token_indices = last_token_indices - num_rejected_tokens
         else:
-            bonus_logits, raw_logprobs = await logits_processor(target_logits)
-            # Sample next token from bonus position
-            next_token_ids = logits_processor.sampling(bonus_logits)  # [batch_size]
-            output_token_ids = next_token_ids.unsqueeze(-1)
+            if model_inputs.is_chunk and not model_inputs.is_last_chunk:
+                # dummy output, no need to sampling or compute logprobs for non-last chunk
+                next_token_ids = num_rejected_tokens
+                output_token_ids = num_rejected_tokens.unsqueeze(-1)
+                raw_logprobs = None
+            else:
+                bonus_logits, raw_logprobs = await logits_processor(target_logits)
+                # Sample next token from bonus position
+                next_token_ids = logits_processor.sampling(bonus_logits)  # [batch_size]
+                output_token_ids = next_token_ids.unsqueeze(-1)
 
         logprobs = __compute_logprobs(raw_logprobs, output_token_ids, sampling_inputs.max_num_logprobs)
 

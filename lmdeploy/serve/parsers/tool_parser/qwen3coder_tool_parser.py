@@ -5,13 +5,12 @@ import json
 from typing import TYPE_CHECKING, Any
 
 from lmdeploy.serve.openai.protocol import (
-    DeltaFunctionCall,
-    DeltaToolCall,
     FunctionCall,
     ToolCall,
 )
 
-from .tool_parser import ToolParser, ToolParserManager
+from .tool_parser import ToolParserManager
+from .xml_tool_parser import XmlToolParser
 
 if TYPE_CHECKING:
     from lmdeploy.serve.openai.protocol import ChatCompletionRequest
@@ -32,22 +31,15 @@ def _parse_tool_call_arguments_dict(arguments: Any) -> dict[str, Any] | None:
 
 
 @ToolParserManager.register_module(['qwen3coder'])
-class Qwen3CoderToolParser(ToolParser):
+class Qwen3CoderToolParser(XmlToolParser):
     """Tool parser for Qwen3Coder XML tool-call payloads."""
 
-    def __init__(self, tokenizer: object):
-        super().__init__(tokenizer)
-        self.tool_start_token = '<tool_call>'
-        self.tool_end_token = '</tool_call>'
-        self.func_prefix = '<function='
-        self.func_end_token = '</function>'
-        self.param_prefix = '<parameter='
-        self.param_end_token = '</parameter>'
-        self.coder_has_emitted_name = False
-        self.coder_has_emitted_json_start = False
-        self.coder_json_closed = False
-        self.coder_emitted_param_names: set[str] = set()
-        self._function_param_schemas: dict[str, dict[str, dict[str, Any]]] = {}
+    tool_start_token = '<tool_call>'
+    tool_end_token = '</tool_call>'
+    func_prefix = '<function='
+    func_end_token = '</function>'
+    param_prefix = '<parameter='
+    param_end_token = '</parameter>'
 
     def _normalize_request_messages(self, messages: list[dict]) -> list[dict] | None:
         """Return a render-safe copy of request messages when needed."""
@@ -89,82 +81,14 @@ class Qwen3CoderToolParser(ToolParser):
 
         return normalized_messages
 
-    def get_tool_open_tag(self) -> str | None:
-        return self.tool_start_token
-
-    def get_tool_close_tag(self) -> str | None:
-        return self.tool_end_token
-
-    def get_tool_payload_format(self) -> str:
-        return 'xml'
-
-    def start_tool_call(self) -> None:
-        super().start_tool_call()
-        self.coder_has_emitted_name = False
-        self.coder_has_emitted_json_start = False
-        self.coder_json_closed = False
-        self.coder_emitted_param_names.clear()
-
-    def finish_tool_call(self) -> None:
-        super().finish_tool_call()
-        self.coder_has_emitted_name = False
-        self.coder_has_emitted_json_start = False
-        self.coder_json_closed = False
-        self.coder_emitted_param_names.clear()
-
-    def decode_tool_incremental(self, added_text: str, *, final: bool) -> list[DeltaToolCall]:
-        """Decode incremental XML tool payload."""
-        self._tool_payload += added_text
-        func_name, raw_args_dict, is_func_closed = self._extract_params(self._tool_payload)
-        args_dict = self._coerce_args_by_schema(func_name, raw_args_dict)
-
-        out: list[DeltaToolCall] = []
-        if func_name and not self.coder_has_emitted_name:
-            out.append(
-                DeltaToolCall(
-                    id=self._active_tool_call_id,
-                    index=self._active_tool_index,
-                    type='function',
-                    function=DeltaFunctionCall(name=func_name),
-                ))
-            self.coder_has_emitted_name = True
-
-        json_fragments: list[str] = []
-        if not self.coder_has_emitted_json_start and (args_dict or is_func_closed):
-            json_fragments.append('{')
-            self.coder_has_emitted_json_start = True
-
-        for k, v in args_dict.items():
-            if k in self.coder_emitted_param_names:
-                continue
-            prefix = ', ' if len(self.coder_emitted_param_names) > 0 else ''
-            json_fragments.append(f'{prefix}\"{k}\": {json.dumps(v, ensure_ascii=False)}')
-            self.coder_emitted_param_names.add(k)
-
-        if is_func_closed and self.coder_has_emitted_json_start and not self.coder_json_closed:
-            json_fragments.append('}')
-            self.coder_json_closed = True
-
-        if json_fragments:
-            out.append(
-                DeltaToolCall(
-                    id=self._active_tool_call_id,
-                    index=self._active_tool_index,
-                    type=None,
-                    function=DeltaFunctionCall(arguments=''.join(json_fragments)),
-                ))
-        return out
-
-    def parse_tool_call_complete(self, payload: str) -> ToolCall | None:
-        func_name, raw_args_dict, _ = self._extract_params(payload)
-        if not func_name:
-            return None
-        args_dict = self._coerce_args_by_schema(func_name, raw_args_dict)
-        args_json = json.dumps(args_dict, ensure_ascii=False) if args_dict else '{}'
-        return ToolCall(function=FunctionCall(name=func_name, arguments=args_json))
+    # Qwen3Coder closes tool argument JSON only when the model emits the
+    # explicit function end marker (</function>). We intentionally avoid
+    # auto-closing on stream final to prevent producing a syntactically
+    # complete but semantically incomplete arguments object.
+    def _close_json_on_final(self) -> bool:
+        return False
 
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
-        self._function_param_schemas = self._build_function_param_schemas(request)
         messages = request.messages
         if not isinstance(messages, list):
             return super().adjust_request(request)
@@ -174,124 +98,25 @@ class Qwen3CoderToolParser(ToolParser):
             return super().adjust_request(request)
         return super().adjust_request(request.model_copy(update={'messages': normalized_messages}))
 
-    def _build_function_param_schemas(self, request: ChatCompletionRequest) -> dict[str, dict[str, dict[str, Any]]]:
-        """Build function->parameter schema map from request tools."""
-        tools = request.tools
-        if not isinstance(tools, list):
-            return {}
+    def get_tool_open_tag(self) -> str | None:
+        return self.tool_start_token
 
-        out: dict[str, dict[str, dict[str, Any]]] = {}
-        for tool in tools:
-            function = getattr(tool, 'function', None)
-            if function is None:
-                continue
-            function_name = getattr(function, 'name', None)
-            parameters = getattr(function, 'parameters', None)
-            if not isinstance(function_name, str) or not function_name:
-                continue
-            if not isinstance(parameters, dict):
-                continue
-            properties = parameters.get('properties')
-            if not isinstance(properties, dict):
-                continue
+    def get_tool_close_tag(self) -> str | None:
+        return self.tool_end_token
 
-            param_schemas = {name: schema for name, schema in properties.items() if isinstance(schema, dict)}
-            if param_schemas:
-                out[function_name] = param_schemas
-        return out
+    def get_tool_payload_format(self) -> str:
+        return 'xml'
 
-    @staticmethod
-    def _resolve_schema_type(param_schema: dict[str, Any]) -> str | None:
-        schema_type = param_schema.get('type')
-        if isinstance(schema_type, str):
-            return schema_type
-        if isinstance(schema_type, list):
-            for item in schema_type:
-                if isinstance(item, str) and item != 'null':
-                    return item
-            for item in schema_type:
-                if isinstance(item, str):
-                    return item
-        return None
+    def _extract_incremental_state(self, payload: str, final: bool = False) -> tuple[str | None, dict[str, Any], bool]:
+        return self._extract_params(payload)
 
-    @staticmethod
-    def _coerce_value(raw_value: str, schema_type: str | None) -> Any:
-        """Coerce one XML parameter string by schema type."""
-        if schema_type is None or schema_type == 'string':
-            try:
-                parsed_val = json.loads(raw_value)
-                return parsed_val if isinstance(parsed_val, str) else raw_value
-            except json.JSONDecodeError:
-                return raw_value
-
-        if schema_type == 'integer':
-            try:
-                parsed_val = json.loads(raw_value)
-            except json.JSONDecodeError:
-                parsed_val = raw_value
-            if isinstance(parsed_val, bool):
-                return raw_value
-            if isinstance(parsed_val, int):
-                return parsed_val
-            return raw_value
-
-        if schema_type == 'number':
-            try:
-                parsed_val = json.loads(raw_value)
-            except json.JSONDecodeError:
-                parsed_val = raw_value
-            if isinstance(parsed_val, bool):
-                return raw_value
-            if isinstance(parsed_val, (int, float)):
-                return parsed_val
-            return raw_value
-
-        if schema_type == 'boolean':
-            lowered = raw_value.lower()
-            if lowered == 'true':
-                return True
-            if lowered == 'false':
-                return False
-            return raw_value
-
-        if schema_type == 'null':
-            return None if raw_value.lower() == 'null' else raw_value
-
-        if schema_type == 'array':
-            try:
-                parsed_val = json.loads(raw_value)
-            except json.JSONDecodeError:
-                return raw_value
-            return parsed_val if isinstance(parsed_val, list) else raw_value
-
-        if schema_type == 'object':
-            try:
-                parsed_val = json.loads(raw_value)
-            except json.JSONDecodeError:
-                return raw_value
-            return parsed_val if isinstance(parsed_val, dict) else raw_value
-
-        return raw_value
-
-    def _coerce_args_by_schema(self, func_name: str | None, args_dict: dict[str, Any]) -> dict[str, Any]:
-        if not func_name or not args_dict:
-            return args_dict
-        param_schemas = self._function_param_schemas.get(func_name)
-        if not param_schemas:
-            return args_dict
-
-        coerced: dict[str, Any] = {}
-        for key, value in args_dict.items():
-            if not isinstance(value, str):
-                coerced[key] = value
-                continue
-            schema = param_schemas.get(key)
-            if not isinstance(schema, dict):
-                coerced[key] = value
-                continue
-            schema_type = self._resolve_schema_type(schema)
-            coerced[key] = self._coerce_value(value, schema_type)
-        return coerced
+    def parse_tool_call_complete(self, payload: str) -> ToolCall | None:
+        func_name, raw_args_dict, _ = self._extract_params(payload)
+        if not func_name:
+            return None
+        args_dict = self._coerce_args_by_schema(func_name, raw_args_dict)
+        args_json = json.dumps(args_dict, ensure_ascii=False) if args_dict else '{}'
+        return ToolCall(function=FunctionCall(name=func_name, arguments=args_json))
 
     def _extract_params(self, content: str) -> tuple[str | None, dict[str, Any], bool]:
         """Extract function name, parameter map, and close status from XML."""

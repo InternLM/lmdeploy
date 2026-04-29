@@ -94,6 +94,75 @@ def _config_prune_func(config: list, *args, **kwargs):
         return config[cum_num_sm8x:]
 
 
+@triton.jit
+def _sorted_idx_phase1_kernel(
+    ExpertIds,
+    Counts,
+    LocalPos,
+    N,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """Phase 1: sort within CTA, atomic-count per expert, store local position."""
+    pid = tl.program_id(0)
+    lane = tl.arange(0, BLOCK_SIZE)
+    offs = pid * BLOCK_SIZE + lane
+    mask = offs < N
+
+    # Pack (expert_id, local_lane) into one int32 for key-value sort
+    expert_ids = tl.load(ExpertIds + offs, mask=mask, other=0).to(tl.int32)
+    packed = tl.where(mask, expert_ids * BLOCK_SIZE + lane, 0x7FFFFFFF)
+
+    # Sort groups same-expert threads for atomic coalescing
+    sorted_packed = tl.sort(packed)
+    sorted_expert = (sorted_packed // BLOCK_SIZE).to(tl.int64)
+    sorted_local_idx = sorted_packed % BLOCK_SIZE
+    sorted_valid = sorted_packed < 0x7FFFFFFF
+
+    # Atomic count: Counts starts at 0, each thread adds 1, gets back local position
+    local_pos = tl.atomic_add(Counts + sorted_expert, 1, mask=sorted_valid)
+
+    # Store local_pos at original global index for phase 2
+    orig = (pid * BLOCK_SIZE + sorted_local_idx).to(tl.int64)
+    tl.store(LocalPos + orig, local_pos, mask=sorted_valid)
+
+
+@triton.jit
+def _sorted_idx_phase2_kernel(
+    ExpertIds,
+    LocalPos,
+    ExpEnd,
+    Counts,
+    Out,
+    ExpStart,
+    N,
+    num_experts,
+    BLOCK_SIZE: tl.constexpr,
+    BLOCK_E: tl.constexpr,
+):
+    """Phase 2: scatter sorted_idx using cumsum result + compute exp_start."""
+    pid = tl.program_id(0)
+    lane = tl.arange(0, BLOCK_SIZE)
+    offs = pid * BLOCK_SIZE + lane
+    mask = offs < N
+
+    # Compute exp_start = exp_end - counts (only first block writes it)
+    if pid == 0:
+        e_offs = tl.arange(0, BLOCK_E)
+        e_mask = e_offs < num_experts
+        end_val = tl.load(ExpEnd + e_offs, mask=e_mask)
+        cnt_val = tl.load(Counts + e_offs, mask=e_mask)
+        tl.store(ExpStart + e_offs, end_val - cnt_val, mask=e_mask)
+
+    # Scatter: sorted_idx[exp_start[e] + local_pos] = orig_idx
+    expert_ids = tl.load(ExpertIds + offs, mask=mask, other=0).to(tl.int64)
+    local_pos = tl.load(LocalPos + offs, mask=mask, other=0)
+    end_val = tl.load(ExpEnd + expert_ids, mask=mask)
+    cnt_val = tl.load(Counts + expert_ids, mask=mask)
+    dst = end_val - cnt_val + local_pos
+
+    tl.store(Out + dst, offs, mask=mask)
+
+
 @triton.autotune(
     configs=get_cuda_autotune_config(),
     key=['N', 'K', 'tune_hint'],
@@ -258,169 +327,44 @@ def fused_moe_kernel_launcher(
     )
 
 
-@triton.jit
-def _get_exp_mask_kernel(
-    a_ptr,
-    o_mask_ptr,
-    o_k_ptr,
-    stride_a_token: tl.constexpr,
-    stride_a_exp: tl.constexpr,
-    stride_o_exp,
-    stride_o_token: tl.constexpr,
-    topk: tl.constexpr,
-    num_experts: tl.constexpr,
-    BLOCK_NA: tl.constexpr,
-    BLOCK_NO: tl.constexpr,
-):
-    token_id = tl.program_id(0)
 
-    offs_n = tl.arange(0, BLOCK_NA)
-    mask_n = offs_n < topk
-    a_ptrs = a_ptr + token_id * stride_a_token + offs_n * stride_a_exp
-    a = tl.load(a_ptrs, mask=mask_n)
+def _get_sorted_idx_triton(topk_ids: torch.Tensor, num_experts: int):
+    """Get sorted idx with 2-phase Triton kernels (4 kernel launches total)."""
+    if topk_ids.dim() != 2:
+        raise ValueError(f'topk_ids must be a 2D tensor, but got dim={topk_ids.dim()}')
+    if topk_ids.size(1) > num_experts:
+        raise ValueError(
+            f'topk_ids.size(1) must be <= num_experts, but got topk={topk_ids.size(1)} '
+            f'and num_experts={num_experts}')
 
-    # fill zeros
-    offs_no = tl.arange(0, BLOCK_NO)
-    mask_no = offs_no < num_experts
-    o_ptrs = o_mask_ptr + token_id * stride_o_token + offs_no * stride_o_exp
-    tl.store(o_ptrs, 0, mask=mask_no)
+    topk_ids = topk_ids.flatten()
+    N = topk_ids.numel()
 
-    # fill a
-    o_ptrs = o_mask_ptr + token_id * stride_o_token + a * stride_o_exp
-    tl.store(o_ptrs, 1, mask=mask_n)
+    BLOCK_SIZE = triton.next_power_of_2(min(num_experts, 256))
+    grid = (triton.cdiv(N, BLOCK_SIZE),)
 
-    # fill kid
-    ok_ptrs = o_k_ptr + token_id * stride_o_token + a * stride_o_exp
-    tl.store(ok_ptrs, offs_n, mask=mask_n)
+    # Phase 1: sort + atomic histogram + store local positions
+    # counts starts at 0; after phase1, counts[e] = number of tokens for expert e
+    counts = torch.zeros(num_experts, dtype=topk_ids.dtype, device=topk_ids.device)
+    local_pos = torch.empty(N, dtype=topk_ids.dtype, device=topk_ids.device)
+    _sorted_idx_phase1_kernel[grid](topk_ids, counts, local_pos, N, BLOCK_SIZE=BLOCK_SIZE)
 
+    # cumsum to get exp_end
+    exp_end = torch.cumsum(counts, dim=0)
 
-def _get_exp_mask(topk_ids: torch.Tensor, num_experts: int):
-    """Get exp mask."""
-    assert topk_ids.dim() == 2
-    M, topk = topk_ids.shape
-    assert topk <= num_experts
-
-    out_mask = topk_ids.new_empty((num_experts, M))
-    out_k = topk_ids.new_empty((num_experts, M))
-    BLOCK_NA = triton.next_power_of_2(topk)
-    BLOCK_NO = triton.next_power_of_2(num_experts)
-
-    grid = (M, )
-    _get_exp_mask_kernel[grid](
-        topk_ids,
-        out_mask,
-        out_k,
-        stride_a_token=topk_ids.stride(0),
-        stride_a_exp=topk_ids.stride(1),
-        stride_o_exp=out_mask.stride(0),
-        stride_o_token=out_mask.stride(1),
-        topk=topk,
-        num_experts=num_experts,
-        BLOCK_NA=BLOCK_NA,
-        BLOCK_NO=BLOCK_NO,
-        num_warps=1,
+    # Phase 2: scatter sorted_idx + compute exp_start
+    sorted_idx = torch.empty(N, dtype=topk_ids.dtype, device=topk_ids.device)
+    exp_start = torch.empty(num_experts, dtype=topk_ids.dtype, device=topk_ids.device)
+    BLOCK_E = triton.next_power_of_2(num_experts)
+    _sorted_idx_phase2_kernel[grid](
+        topk_ids, local_pos, exp_end, counts,
+        sorted_idx, exp_start, N, num_experts,
+        BLOCK_SIZE=BLOCK_SIZE, BLOCK_E=BLOCK_E,
     )
-    return out_mask, out_k
 
+    return sorted_idx, exp_start, exp_end
 
-@triton.jit
-def _get_start_end_kernel(
-    exp_cum_ptr,
-    exp_topk_ptr,
-    exp_out_ptr,
-    start_ptr,
-    end_ptr,
-    stride_cum_exp,
-    stride_cum_token: tl.constexpr,
-    stride_out: tl.constexpr,
-    num_tokens,
-    num_experts: tl.constexpr,
-    topk: tl.constexpr,
-    BLOCK_N: tl.constexpr,
-):
-    """Get start end kernel."""
-    token_start = tl.program_id(0)
-
-    offs_exp = tl.arange(0, BLOCK_N)
-    off_cum = offs_exp * stride_cum_exp + token_start * stride_cum_token
-    cum_ptrs = exp_cum_ptr + off_cum
-    val_k_ptrs = exp_topk_ptr + off_cum
-
-    mask_exp = offs_exp < num_experts
-
-    # get prev and cur cum
-    token_id = token_start
-    prev_cum_mask = mask_exp
-    if token_start == 0:
-        prev_cum_mask = mask_exp & (tl.arange(0, BLOCK_N) > 0)
-    prev_cum = tl.load(cum_ptrs - stride_cum_token, mask=prev_cum_mask, other=0)
-    cur_cum = tl.load(cum_ptrs, mask=mask_exp)
-
-    # store sorted idx
-    mask_out = mask_exp & (cur_cum > prev_cum)
-    val_k = tl.load(val_k_ptrs, mask=mask_exp)
-    val = token_id * topk + val_k
-    out_ptrs = exp_out_ptr + prev_cum * stride_out
-    tl.store(out_ptrs, val, mask=mask_out)
-
-    # fill start
-    if token_id == 0:
-        cur_start_ptrs = start_ptr + offs_exp
-        tl.store(cur_start_ptrs, prev_cum, mask=mask_exp)
-
-    # fill end
-    if token_id == num_tokens - 1:
-        cur_end_ptrs = end_ptr + offs_exp
-        tl.store(cur_end_ptrs, cur_cum, mask=mask_exp)
-
-
-def get_start_end(exp_cum: torch.Tensor, exp_topk: torch.Tensor, topk: int):
-    """Get start end."""
-    num_experts, num_tokens = exp_cum.shape
-
-    start_end = exp_cum.new_empty(2, num_experts)
-    exp_start = start_end[0, :]
-    exp_end = start_end[1, :]
-
-    out = exp_cum.new_empty(num_tokens * topk)
-
-    num_warps = 1
-
-    BLOCK_N = triton.next_power_of_2(num_experts)
-    grid = (num_tokens, )
-
-    _get_start_end_kernel[grid](
-        exp_cum,
-        exp_topk,
-        out,
-        exp_start,
-        exp_end,
-        stride_cum_exp=exp_cum.stride(0),
-        stride_cum_token=exp_cum.stride(1),
-        stride_out=out.stride(0),
-        num_tokens=num_tokens,
-        num_experts=num_experts,
-        topk=topk,
-        BLOCK_N=BLOCK_N,
-        num_warps=num_warps,
-    )
-    return out, exp_start, exp_end
-
-
-def _get_sorted_idx(topk_ids: torch.Tensor, num_experts: int):
-    """Get sorted idx."""
-    assert topk_ids.dim() == 2
-    _, topk = topk_ids.shape
-
-    # get expert mask   (num_experts, num_tokens)
-    exp_mask, exp_topk = _get_exp_mask(topk_ids, num_experts)
-    # get cumsum   (num_experts, num_tokens)
-    exp_cum = exp_mask.flatten().cumsum(0).view_as(exp_mask)
-
-    # get sort idx and start/end
-    sorted_idx, start, end = get_start_end(exp_cum, exp_topk, topk)
-
-    return sorted_idx, start, end
+_get_sorted_idx = _get_sorted_idx_triton
 
 
 def _renormalize(topk_weights: torch.Tensor, renormalize: bool):

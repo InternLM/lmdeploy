@@ -26,7 +26,7 @@ ______________________________________________________________________
 <details open>
 <summary><b>2026</b></summary>
 
-- \[2026/04\] The LMDeploy project on PyPI has reached its storage quota, so pre-built wheels for new releases cannot be uploaded for the time being. You can download packages from the [GitHub Releases](https://github.com/InternLM/lmdeploy/releases) page or install from source instead. We will update this notice when wheel uploads to PyPI resume. Affected versions: >=0.12.2
+- \[2026/04\] PyPI has expanded the storage quota for LMDeploy and wheel uploads have resumed. `v0.12.3` is now available on PyPI, so you can install it directly via `pip install lmdeploy`.
 - \[2026/02\] Support [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35)
 - \[2026/02\] Support [vllm-project/llm-compressor](https://github.com/vllm-project/llm-compressor) 4bit symmetric/asymmetric quantization. Refer [here](./docs/en/quantization/llm_compressor.md) for detailed guide
 
