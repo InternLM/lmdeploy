@@ -140,10 +140,15 @@ class CudaOpsBackend(DefaultOpsBackend):
         batch_size = attn_metadata.q_seqlens.size(0)
         max_seqlen_q = step_context.input_ids.size(1) // batch_size
         window_size = (step_context.model_config.sliding_window, ) * 2
+        # FA3's mha_fwd internally computes seqlen_k as
+        # page_table.size(1) * page_size when cu_seqlens_k is None
+        # (paged KV without varlen_k). get_scheduler_metadata must use
+        # the same value to produce a correctly-sized metadata buffer.
+        max_seqlen_k = attn_metadata.block_offsets.size(1) * step_context.model_config.block_size
         scheduler_metadata = _get_meta_flashattn(
             batch_size=batch_size,
             max_seqlen_q=max_seqlen_q,
-            max_seqlen_k=step_context.max_kv_seqlen,
+            max_seqlen_k=max_seqlen_k,
             num_heads_q=step_context.model_config.num_attention_heads,
             num_heads_kv=step_context.model_config.num_key_value_heads,
             headdim=step_context.model_config.head_dim,
@@ -153,7 +158,7 @@ class CudaOpsBackend(DefaultOpsBackend):
             window_size=window_size,
         )
         attn_metadata.scheduler_metadata = scheduler_metadata
-        attn_metadata.max_kv_seqlen = step_context.max_kv_seqlen
+        attn_metadata.max_kv_seqlen = max_seqlen_k
         return attn_metadata
 
     @classmethod
