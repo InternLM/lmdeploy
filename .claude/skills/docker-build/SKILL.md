@@ -1,7 +1,6 @@
 ---
 name: docker-build
 description: Build an LMDeploy Docker image and push it to the inner registry.
-disable-model-invocation: true
 ---
 
 # Docker Build & Push
