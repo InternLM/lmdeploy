@@ -190,6 +190,13 @@ MODULE_MAP.update({
     'Qwen3_5MTPModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_5_mtp.Qwen3_5MTPModel',
 })
 
+# qwen3 omni moe thinker
+# only support thinker module, so map to Qwen3OmniMoeThinkerForConditionalGeneration
+MODULE_MAP.update({
+    'Qwen3OmniMoeForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_omni_moe_thinker.Qwen3OmniMoeThinkerForConditionalGeneration',
+})
+
 # starcoder2
 MODULE_MAP.update({
     'Starcoder2ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.starcoder2.Starcoder2ForCausalLM',
