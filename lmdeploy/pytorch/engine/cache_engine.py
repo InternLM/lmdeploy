@@ -105,9 +105,11 @@ class CacheEngine:
         if self.model_config.use_mla_fp8_cache:
             cache_config.quant_policy = 0
 
-        # if _is_fp8_quant_policy(cache_config.quant_policy):
-        #     self.kv_cache_dtype = _get_fp8_cache_dtype(cache_config.quant_policy)
-        if cache_config.quant_policy > 0:
+        if _is_fp8_quant_policy(cache_config.quant_policy):
+            self.kv_cache_dtype = _get_fp8_cache_dtype(cache_config.quant_policy)
+            assert self.cache_config.device_type in ['cuda'], \
+                f'FP8 quantization is only supported on CUDA device, but got {self.cache_config.device_type}.'
+        elif cache_config.quant_policy > 0:
             if self.cache_config.device_type in ['cuda']:
                 self.kv_cache_dtype = torch.uint8
             elif self.cache_config.device_type in ['ascend', 'npu']:
