@@ -12,9 +12,9 @@ Build an LMDeploy Docker image and push it to the inner registry.
 Before starting, verify all three environment variables are set:
 
 ```bash
-echo $LMDEPLOY_REGISTRY    # inner registry hostname/path
+echo $LMDEPLOY_REGISTRY    # inner registry server address
 echo $REGISTRY_USER        # registry login username
-echo $REGISTRY_PASSWORD    # registry login password
+test -n "$REGISTRY_PASSWORD" && echo "<set>" || echo "<missing>"  # registry login password
 ```
 
 If any are missing, stop and tell the user to set them before proceeding.
