@@ -150,7 +150,10 @@ class ExecutorBase:
             raise RuntimeError('No enough gpu memory for kv cache.')
         # `available_mem` is already an integer byte budget. Keep the division
         # integral as well so cache sizing never depends on float rounding.
-        return available_mem // total_cache_block_size
+        num_gpu_blocks = available_mem // total_cache_block_size
+        if num_gpu_blocks <= 2:
+            raise RuntimeError('No enough gpu memory for kv cache.')
+        return num_gpu_blocks
 
     @staticmethod
     def _get_min_num_gpu_blocks(available_mems: list[int], cache_block_sizes: list[int]) -> int:
@@ -312,7 +315,7 @@ class ExecutorBase:
         available_mems = [int(free_mem * self.cache_config.cache_max_entry_count) for free_mem in free_mems]
         rank_cache_block_sizes = self._get_rank_cache_block_sizes(len(free_mems), cache_block_size)
         self.cache_config.num_gpu_blocks = self._get_min_num_gpu_blocks(available_mems, rank_cache_block_sizes)
-        if self.cache_config.num_gpu_blocks <= 0:
+        if self.cache_config.num_gpu_blocks <= 2:
             raise RuntimeError('No enough gpu memory for kv cache.')
         if spec_cache_config is not None:
             spec_cache_config.num_gpu_blocks = self.cache_config.num_gpu_blocks
