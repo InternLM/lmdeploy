@@ -27,4 +27,4 @@ torch-npu>=2.3.1,<2.10.0
 torchvision>=0.18.1,<0.25.0
 transformers
 uvicorn
-xgrammar
+xgrammar>=0.1.33

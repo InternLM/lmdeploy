@@ -331,6 +331,9 @@ class BaseModelAgent:
                                            self.agent_strategy,
                                            misc_config=misc_config,
                                            device=device)
+        if self.spec_agent.is_enabled():
+            self.spec_agent.guided_decoding_manager = self.guided_decoding_manager
+            self.spec_agent.proposer.guided_decoding_manager = self.guided_decoding_manager
         # sleep wakeup state
         self.state: SleepWakeupState = SleepWakeupState()
 
