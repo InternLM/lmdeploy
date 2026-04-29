@@ -57,6 +57,14 @@ const auto& GetCopyAPI()
         void*                           fpn{};
         TM_CHECK_EQ(cudaGetDriverEntryPoint(symbol, &fpn, cudaEnableDefault, &status), 0);
         if (fpn && status == cudaDriverEntryPointSuccess) {
+            // cuMemcpyBatchAsync crashes on sm_100 (Blackwell); force monostate -> serialized path.
+            int device = 0;
+            (void)cudaGetDevice(&device);
+            int major = 0;
+            (void)cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device);
+            if (major >= 10) {
+                return {};
+            }
             return (PFN_cuMemcpyBatchAsync_v12080)fpn;
         }
         else {
