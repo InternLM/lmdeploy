@@ -124,22 +124,33 @@ class MultimodalProcessor:
                 item_params = {k: v for k, v in item.items() if k not in ('type', item_type)}
                 data_src = item_val
 
+            def _require_data_src():
+                if data_src is not None:
+                    return data_src
+                raise ValueError(f'Invalid multimodal item at index {i}: {item}. '
+                                 f'Expected "{item_type}" to be a direct value or a dict containing "url" or "data".')
+
             if item_type == 'image_data':
                 modality = Modality.IMAGE
-                data = data_src
+                data = _require_data_src()
             elif item_type in ('image_url', 'image'):
                 modality = Modality.IMAGE
-                data = load_from_url(data_src, ImageMediaIO(**media_io_kwargs.get('image', {})))
+                data_src = _require_data_src()
+                if isinstance(data_src, PIL.Image.Image):
+                    data = data_src
+                elif isinstance(data_src, str):
+                    data = load_from_url(data_src, ImageMediaIO(**media_io_kwargs.get('image', {})))
+                else:
+                    raise ValueError(f'Invalid multimodal image item at index {i}: {item}. '
+                                     'Expected a str URL/path/data URL or PIL.Image.Image.')
             elif item_type in ('video_url', 'video'):
                 modality = Modality.VIDEO
-                data, metadata = load_from_url(data_src,
-                                               VideoMediaIO(image_io=ImageMediaIO(),
-                                                            **media_io_kwargs.get('video', {}))
-                                            )
+                data, metadata = load_from_url(
+                    _require_data_src(), VideoMediaIO(image_io=ImageMediaIO(), **media_io_kwargs.get('video', {})))
                 item_params['video_metadata'] = metadata
             elif item_type in ('time_series_url', 'time_series'):
                 modality = Modality.TIME_SERIES
-                data = load_from_url(data_src, TimeSeriesMediaIO(**media_io_kwargs.get('time_series', {})))
+                data = load_from_url(_require_data_src(), TimeSeriesMediaIO(**media_io_kwargs.get('time_series', {})))
             else:
                 raise NotImplementedError(f'unknown type: {item_type}')
 
@@ -315,7 +326,8 @@ class MultimodalProcessor:
         return messages
 
     def _has_multimodal_input(self, messages: list[dict]) -> bool:
-        """Check if messages contain multimodal input (images)."""
+        """Check if messages contain multimodal input such as images, videos,
+        or time series."""
         multimodal_types = ['image_url', 'image_data', 'image', 'video_url', 'video', 'time_series_url', 'time_series']
         return any(
             isinstance(message.get('content'), list) and any(
