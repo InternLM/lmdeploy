@@ -14,7 +14,7 @@ class FA3Impl(TritonAttentionImpl):
 
     This implementation leverages Flash Attention 3's optimized kernels for both
     prefill and decoding stages. FA3 provides significant performance improvements
-    on Hopper architecture (SM90) with CUDA >= 12.3.
+    on Ampere and above (SM80+) with CUDA >= 12.3.
 
     Key features:
     - Optimized prefill using flash_attn_varlen_func

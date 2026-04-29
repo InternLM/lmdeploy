@@ -27,8 +27,8 @@ def flash_attn_v3_available():
     """Check if flash attn v3 is available."""
     use_fa3 = False
     try:
-        # Now flash-attention only support FA3 for sm90a && cuda >= 12.3
-        if (torch.cuda.get_device_capability()[0] == 9) and (torch.version.cuda >= '12.3'):
+        # flash-attention supports FA3 for sm80+ (Ampere and above) && cuda >= 12.3
+        if (torch.cuda.get_device_capability()[0] >= 8) and (torch.version.cuda >= '12.3'):
             import flash_attn_interface  # noqa: F401
             assert torch.ops.flash_attn_3 is not None
             use_fa3 = True
