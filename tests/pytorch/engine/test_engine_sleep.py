@@ -69,7 +69,10 @@ class _FakeExecutor:
 
 @pytest.fixture
 def event_loop():
-    old_loop = asyncio.get_event_loop()
+    try:
+        old_loop = asyncio.get_event_loop()
+    except RuntimeError:
+        old_loop = None
     new_loop = asyncio.new_event_loop()
     try:
         asyncio.set_event_loop(new_loop)
