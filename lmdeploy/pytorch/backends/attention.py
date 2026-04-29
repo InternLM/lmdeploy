@@ -23,6 +23,33 @@ class AttentionMetadata:
     quant_policy: QuantPolicy = QuantPolicy.NONE
 
 
+@dataclass
+class V4AttentionMetadata:
+    """DeepSeek V4 attention metadata.
+
+    This metadata describes how the backend should read window/compressed cache entries for a decode step. It
+    intentionally carries logical positions and fixed-shape sparse selection tensors instead of already materialized
+    history buffers.
+    """
+
+    is_decoding: bool
+    block_offsets: torch.Tensor
+    q_seqlens: torch.Tensor
+    kv_seqlens: torch.Tensor
+    state_ids: torch.Tensor
+    valid_mask: torch.Tensor
+    window_positions: torch.Tensor = None
+    window_lens: torch.Tensor = None
+    topk_indices: torch.Tensor = None
+    compress_ratio: int = 0
+    indices_in_kvcache: torch.Tensor = None
+    topk_length: torch.Tensor = None
+    extra_indices_in_kvcache: torch.Tensor = None
+    extra_topk_length: torch.Tensor = None
+    compressed_positions: torch.Tensor = None
+    compressed_valid_mask: torch.Tensor = None
+
+
 T = TypeVar('T', bound=AttentionMetadata)
 
 

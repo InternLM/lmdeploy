@@ -20,7 +20,7 @@ from lmdeploy.pytorch.disagg.messages import (
 from lmdeploy.utils import get_logger
 
 from ...messages import QuantPolicy
-from ..config import CacheConfig, ModelConfig
+from ..config import CacheConfig, ModelConfig, StateCacheSpec
 
 KVCache = tuple[torch.Tensor, torch.Tensor]
 
@@ -254,18 +254,59 @@ class CacheEngine:
         return [key_scale_zero_desc, val_scale_zero_desc]
 
     @classmethod
-    def get_custom_cache_descs(cls, model_config: ModelConfig, cache_config: CacheConfig) -> list[CacheDesc]:
-        """Get custom cache descs."""
-        if len(model_config.cache_shapes) == 0:
-            return []
+    def _get_cache_desc_names(cls, model_config: ModelConfig, cache_config: CacheConfig, world_size: int):
+        """Return list of (desc, name) for all caches that will be allocated.
+
+        This must stay in sync with allocate_caches().
+        """
+        names = []
+        use_std = model_config.use_standard_kv_cache
+
+        if use_std:
+            k_cache_desc = cls.get_k_cache_desc(model_config, cache_config, world_size)
+            v_cache_desc = cls.get_v_cache_desc(model_config, cache_config, world_size)
+            quant_cache_descs = cls.get_quant_cache_descs(k_cache_desc, v_cache_desc, model_config, cache_config)
+            names.append((k_cache_desc, 'k_cache'))
+            names.append((v_cache_desc, 'v_cache'))
+            for idx, desc in enumerate(quant_cache_descs):
+                names.append((desc, f'quant_{idx}'))
+        else:
+            k_cache_desc = None
+            v_cache_desc = None
+            quant_cache_descs = []
 
         block_size = cache_config.kernel_block_size
 
+        # named block cache specs (shape without block_size, same as cache_shapes)
+        if len(model_config.block_cache_specs) > 0:
+            for spec in model_config.block_cache_specs:
+                custom_shape = (block_size, *spec.shape)
+                names.append((CacheDesc(shape=custom_shape, dtype=spec.dtype), spec.name))
+        else:
+            # legacy anonymous cache_shapes (shape without block_size)
+            if len(model_config.cache_shapes) > 0:
+                for idx, (shape, dtype) in enumerate(model_config.cache_shapes):
+                    custom_shape = (block_size, *shape)
+                    names.append((CacheDesc(shape=custom_shape, dtype=dtype), f'custom_{idx}'))
+
+        return names
+
+    @classmethod
+    def get_custom_cache_descs(cls, model_config: ModelConfig, cache_config: CacheConfig) -> list[CacheDesc]:
+        """Get custom cache descs."""
         descs = []
-        for shape, dtype in model_config.cache_shapes:
-            custom_shape = (block_size, *shape)
-            desc = CacheDesc(shape=custom_shape, dtype=dtype)
-            descs.append(desc)
+        block_size = cache_config.kernel_block_size
+        # named block cache specs (shape without block_size, same convention as cache_shapes)
+        if len(model_config.block_cache_specs) > 0:
+            for spec in model_config.block_cache_specs:
+                custom_shape = (block_size, *spec.shape)
+                descs.append(CacheDesc(shape=custom_shape, dtype=spec.dtype))
+            return descs
+        # legacy cache_shapes
+        if len(model_config.cache_shapes) > 0:
+            for shape, dtype in model_config.cache_shapes:
+                custom_shape = (block_size, *shape)
+                descs.append(CacheDesc(shape=custom_shape, dtype=dtype))
         return descs
 
     @classmethod
@@ -279,12 +320,18 @@ class CacheEngine:
         kernel_blocks_per_kv = cache_config.block_size // cache_config.kernel_block_size
         num_blocks *= kernel_blocks_per_kv
 
+        use_std = model_config.use_standard_kv_cache
+
         # get all descs
-        k_cache_desc = cls.get_k_cache_desc(model_config, cache_config, world_size)
-        v_cache_desc = cls.get_v_cache_desc(model_config, cache_config, world_size)
-        quant_cache_descs = cls.get_quant_cache_descs(k_cache_desc, v_cache_desc, model_config, cache_config)
+        cache_descs = []
+        if use_std:
+            k_cache_desc = cls.get_k_cache_desc(model_config, cache_config, world_size)
+            v_cache_desc = cls.get_v_cache_desc(model_config, cache_config, world_size)
+            quant_cache_descs = cls.get_quant_cache_descs(k_cache_desc, v_cache_desc, model_config, cache_config)
+            cache_descs += [k_cache_desc, v_cache_desc] + quant_cache_descs
+
         custom_cache_descs = cls.get_custom_cache_descs(model_config, cache_config)
-        cache_descs = [k_cache_desc, v_cache_desc] + quant_cache_descs + custom_cache_descs
+        cache_descs += custom_cache_descs
 
         # get mempool size
         mem_pool_size = 0
@@ -314,6 +361,9 @@ class CacheEngine:
         )
         self.full_gpu_cache = mem_pool
         self.local_gpu_cache = list(zip(*caches))
+        self._cache_names = [name for _, name in self._get_cache_desc_names(
+            self.model_config, self.cache_config, self.world_size)]
+        self._cache_list = caches
         return self.local_gpu_cache
 
     def allocate_cpu_cache(self):
@@ -328,6 +378,17 @@ class CacheEngine:
         self.full_cpu_cache = mem_pool
         self.local_cpu_cache = list(zip(*caches))
         return self.local_cpu_cache
+
+    @property
+    def block_caches(self) -> dict[str, torch.Tensor]:
+        """Return all caches (including k/v and custom) as a dict keyed by
+        name."""
+        if not hasattr(self, '_cache_names') or not hasattr(self, '_cache_list'):
+            return {}
+        return {
+            name: cache
+            for name, cache in zip(self._cache_names, self._cache_list)
+        }
 
     @staticmethod
     def get_custom_cache_shape_impl(num_layers: int, num_blocks: int, block_size: int, shape: list[int]):
@@ -479,20 +540,38 @@ class CacheEngine:
 class StateCacheEngine:
     """Cache engine for state cache."""
 
-    def __init__(self, cache_config: CacheConfig):
+    def __init__(self, cache_config: CacheConfig, model_config: ModelConfig | None = None):
         self.cache_config = cache_config
+        self.model_config = model_config
+        state_specs = None
+        if model_config is not None and len(model_config.state_cache_specs) > 0:
+            state_specs = model_config.state_cache_specs
         self.mem_pool, self._state_caches = self.allocate_caches(num_caches=cache_config.num_state_caches,
                                                                  state_shapes=cache_config.states_shapes,
+                                                                 state_specs=state_specs,
+                                                                 num_layers=getattr(model_config, 'num_layers', None),
                                                                  device='cuda')
 
     @staticmethod
-    def allocate_caches(num_caches: int, state_shapes: list[tuple[tuple[int], torch.dtype]], device: torch.device):
+    def allocate_caches(num_caches: int,
+                        state_shapes: list[tuple[tuple[int], torch.dtype]],
+                        device: torch.device,
+                        state_specs: list[StateCacheSpec] | None = None,
+                        num_layers: int | None = None):
         """Allocate cache implement."""
 
         if len(state_shapes) == 0 or num_caches == 0:
             return torch.empty((0, 0), dtype=torch.uint8, device=device), []
 
-        cache_descs = [CacheDesc(shape, dtype) for shape, dtype in state_shapes]
+        state_specs = state_specs or []
+        cache_descs = []
+        for idx, (shape, dtype) in enumerate(state_shapes):
+            spec = state_specs[idx] if idx < len(state_specs) else None
+            layered = spec is not None and spec.layer_ids
+            if layered:
+                assert num_layers is not None, 'num_layers is required for layer-scoped state caches'
+                shape = (num_layers, *shape)
+            cache_descs.append(CacheDesc(shape, dtype))
 
         # get mempool size
         mem_pool_size = 0
@@ -505,14 +584,21 @@ class StateCacheEngine:
         # slice caches
         caches = []
         remain_pool = mem_pool
-        for desc in cache_descs:
+        for idx, desc in enumerate(cache_descs):
+            spec = state_specs[idx] if idx < len(state_specs) else None
+            layered = spec is not None and spec.layer_ids
             cache = remain_pool[:, :desc.size].view(desc.dtype).view((num_caches, *desc.shape))
+            if layered:
+                dims = list(range(cache.dim()))
+                cache = cache.permute(1, 0, *dims[2:])
             remain_pool = remain_pool[:, desc.aligned_size:]
             caches.append(cache)
         return mem_pool, caches
 
     @staticmethod
-    def get_cache_state_size(state_shapes: list[tuple[tuple[int], torch.dtype]]) -> int:
+    def get_cache_state_size(state_shapes: list[tuple[tuple[int], torch.dtype]],
+                             state_specs: list[StateCacheSpec] | None = None,
+                             num_layers: int | None = None) -> int:
         """Get the required cache size of the state cache.
 
         Args:
@@ -521,7 +607,11 @@ class StateCacheEngine:
         Return:
             int: Required memory size in bytes.
         """
-        mem_pool, _ = StateCacheEngine.allocate_caches(num_caches=1, state_shapes=state_shapes, device='meta')
+        mem_pool, _ = StateCacheEngine.allocate_caches(num_caches=1,
+                                                       state_shapes=state_shapes,
+                                                       state_specs=state_specs,
+                                                       num_layers=num_layers,
+                                                       device='meta')
         return mem_pool.numel() * mem_pool.element_size()
 
     @property
