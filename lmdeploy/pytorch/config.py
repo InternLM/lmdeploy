@@ -373,6 +373,7 @@ class ModelConfig:
     block_cache_specs: list[BlockCacheSpec] = field(default_factory=list)
     state_cache_specs: list[StateCacheSpec] = field(default_factory=list)
     use_standard_kv_cache: bool = True
+    post_build_func: Callable[['ModelConfig', int], None] | None = None
 
     # check env for model-device combination
     check_env_func: Callable = _default_check_env
@@ -454,6 +455,8 @@ class ModelConfig:
         # add quant_config
         model_config.quant_config = QuantizationConfig.from_config(hf_config)
         model_config.block_size = block_size
+        if model_config.post_build_func is not None:
+            model_config.post_build_func(model_config, block_size)
         return model_config
 
     @classmethod

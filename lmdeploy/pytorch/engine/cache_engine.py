@@ -280,8 +280,7 @@ class CacheEngine:
         # named block cache specs (shape without block_size, same as cache_shapes)
         if len(model_config.block_cache_specs) > 0:
             for spec in model_config.block_cache_specs:
-                custom_shape = (block_size, *spec.shape)
-                names.append((CacheDesc(shape=custom_shape, dtype=spec.dtype), spec.name))
+                names.append((CacheDesc(shape=spec.shape, dtype=spec.dtype), spec.name))
         else:
             # legacy anonymous cache_shapes (shape without block_size)
             if len(model_config.cache_shapes) > 0:
@@ -299,8 +298,7 @@ class CacheEngine:
         # named block cache specs (shape without block_size, same convention as cache_shapes)
         if len(model_config.block_cache_specs) > 0:
             for spec in model_config.block_cache_specs:
-                custom_shape = (block_size, *spec.shape)
-                descs.append(CacheDesc(shape=custom_shape, dtype=spec.dtype))
+                descs.append(CacheDesc(shape=spec.shape, dtype=spec.dtype))
             return descs
         # legacy cache_shapes
         if len(model_config.cache_shapes) > 0:

@@ -65,6 +65,22 @@ class TritonV4AttentionImpl:
         gathered = cache[phys_blocks, block_off]
         return torch.where(valid.unsqueeze(-1), gathered, gathered.new_zeros(()))
 
+    @staticmethod
+    def _gather_compressed_cache_entries(cache: torch.Tensor, block_offsets: torch.Tensor, positions: torch.Tensor,
+                                         block_size: int, compress_ratio: int):
+        if positions.numel() == 0:
+            return cache.new_empty((*positions.shape, cache.size(-1)))
+        safe_positions = positions.clamp(min=0)
+        token_positions = safe_positions * compress_ratio
+        block_idx = torch.div(token_positions, block_size, rounding_mode='floor').long()
+        max_block_idx = block_offsets.size(1)
+        valid = (positions >= 0) & (block_idx < max_block_idx)
+        safe_block_idx = block_idx.clamp(max=max_block_idx - 1)
+        block_off = torch.remainder(safe_positions, cache.size(1)).long()
+        phys_blocks = block_offsets.gather(1, safe_block_idx).long()
+        gathered = cache[phys_blocks, block_off]
+        return torch.where(valid.unsqueeze(-1), gathered, gathered.new_zeros(()))
+
     def _get_compressed_scratch(self, decode_scratch: dict[str, torch.Tensor] | None, batch_size: int,
                                 max_width: int, device: torch.device):
         if self.compress_ratio == 4:
@@ -150,10 +166,10 @@ class TritonV4AttentionImpl:
         if compressed_kv_cache is not None and attn_metadata.compressed_positions is not None:
             max_width = attn_metadata.compressed_positions.size(1)
             compressed_kv = self._get_compressed_scratch(decode_scratch, bsz, max_width, query.device)
-            compressed_kv.copy_(self._gather_cache_entries(compressed_kv_cache,
-                                                           block_offsets,
-                                                           attn_metadata.compressed_positions,
-                                                           block_size))
+            compressed_kv.copy_(
+                self._gather_compressed_cache_entries(compressed_kv_cache, block_offsets,
+                                                      attn_metadata.compressed_positions, block_size,
+                                                      attn_metadata.compress_ratio))
             full_kv = self._get_full_scratch(decode_scratch, bsz, self.window_size + max_width, query.device)
             full_kv[:, :self.window_size] = window_kv
             full_kv[:, self.window_size:self.window_size + max_width] = compressed_kv

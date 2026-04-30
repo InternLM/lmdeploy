@@ -28,15 +28,16 @@ class TritonV4IndexerImpl(BaseV4Indexer):
 
     @staticmethod
     def _gather_cache_entries(cache: torch.Tensor, block_offsets: torch.Tensor, positions: torch.Tensor,
-                              block_size: int):
+                              block_size: int, compress_ratio: int):
         if positions.numel() == 0:
             return cache.new_empty((*positions.shape, cache.size(-1)))
         safe_positions = positions.clamp(min=0)
-        block_idx = torch.div(safe_positions, block_size, rounding_mode='floor').long()
+        token_positions = safe_positions * compress_ratio
+        block_idx = torch.div(token_positions, block_size, rounding_mode='floor').long()
         max_block_idx = block_offsets.size(1)
         valid = (positions >= 0) & (block_idx < max_block_idx)
         safe_block_idx = block_idx.clamp(max=max_block_idx - 1)
-        block_off = torch.remainder(safe_positions, block_size).long()
+        block_off = torch.remainder(safe_positions, cache.size(1)).long()
         phys_blocks = block_offsets.gather(1, safe_block_idx).long()
         gathered = cache[phys_blocks, block_off]
         return torch.where(valid.unsqueeze(-1), gathered, gathered.new_zeros(()))
@@ -91,7 +92,8 @@ class TritonV4IndexerImpl(BaseV4Indexer):
                                 start_pos.new_zeros(()))
         positions, pos_mask = _build_prefix_positions(num_index, max_index)
         index_scratch.copy_(
-            self._gather_cache_entries(index_kv_cache[layer_id], block_offsets, positions, block_size))
+            self._gather_cache_entries(index_kv_cache[layer_id], block_offsets, positions, block_size,
+                                       self.compress_ratio))
 
         score = torch.einsum('bshd,btd->bsht', query, index_scratch)
         score = (score.relu_() * weights.unsqueeze(-1)).sum(dim=2)
@@ -107,10 +109,12 @@ class TritonV4IndexerImpl(BaseV4Indexer):
         logical_topk = torch.where(valid_topk, topk, topk.new_full((), -1))
 
         safe_logical_topk = logical_topk.clamp(min=0)
-        block_idx = torch.div(safe_logical_topk, block_size, rounding_mode='floor').long()
+        token_positions = safe_logical_topk * self.compress_ratio
+        block_idx = torch.div(token_positions, block_size, rounding_mode='floor').long()
         phys_block = block_offsets.gather(1, block_idx.view(bsz, -1)).view_as(logical_topk).long()
-        block_off = torch.remainder(safe_logical_topk, block_size).long()
-        phys_indices = phys_block * block_size + block_off
+        page_size = index_kv_cache.size(1)
+        block_off = torch.remainder(safe_logical_topk, page_size).long()
+        phys_indices = phys_block * page_size + block_off
         phys_indices = torch.where(logical_topk >= 0, phys_indices, phys_indices.new_full((), -1))
         return V4IndexerOutput(indices_in_kvcache=phys_indices, topk_length=topk_length)
 

@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import pytest
 import torch
 
 from lmdeploy.pytorch.backends.cuda.attention.flashmla_utils import (
@@ -56,6 +57,8 @@ def test_deepseek_v4_builder_marks_state_cache_layers():
     )
 
     config = DeepseekV4ModelConfigBuilder.build(hf_config)
+    config.hf_config = hf_config
+    config.post_build_func(config, 128)
     specs = {spec.name: spec for spec in config.state_cache_specs}
     block_specs = {spec.name: spec for spec in config.block_cache_specs}
 
@@ -67,7 +70,54 @@ def test_deepseek_v4_builder_marks_state_cache_layers():
     assert 'v4_compress_state_r4_head' not in specs
     assert 'v4_compress_state_r4_idx_head' not in specs
     assert 'v4_raw_kv' not in block_specs
-    assert 'v4_compressed_kv_r4_fp8' in block_specs
+    assert block_specs['v4_compressed_kv_r4'].shape == (32, 512)
+    assert block_specs['v4_compressed_kv_r4_fp8'].shape == (32, model1_fp8_sparse_token_dim(64))
+    assert block_specs['v4_index_kv_r4'].shape == (32, 128)
+    assert block_specs['v4_compressed_kv_r128'].shape == (1, 512)
+
+
+def test_deepseek_v4_builder_rejects_small_block_size():
+    hf_config = SimpleNamespace(
+        model_type='deepseek_v4',
+        hidden_size=4096,
+        num_hidden_layers=2,
+        num_attention_heads=32,
+        num_key_value_heads=1,
+        bos_token_id=0,
+        eos_token_id=[1],
+        head_dim=512,
+        sliding_window=1024,
+        vocab_size=32000,
+        compress_ratios=[4, 128],
+        index_head_dim=128,
+        index_topk=512,
+    )
+    config = DeepseekV4ModelConfigBuilder.build(hf_config)
+    config.hf_config = hf_config
+    with pytest.raises(ValueError, match='block_size >= 128'):
+        config.post_build_func(config, 64)
+
+
+def test_deepseek_v4_builder_requires_block_size_multiple_of_128():
+    hf_config = SimpleNamespace(
+        model_type='deepseek_v4',
+        hidden_size=4096,
+        num_hidden_layers=2,
+        num_attention_heads=32,
+        num_key_value_heads=1,
+        bos_token_id=0,
+        eos_token_id=[1],
+        head_dim=512,
+        sliding_window=1024,
+        vocab_size=32000,
+        compress_ratios=[4, 128],
+        index_head_dim=128,
+        index_topk=512,
+    )
+    config = DeepseekV4ModelConfigBuilder.build(hf_config)
+    config.hf_config = hf_config
+    with pytest.raises(ValueError, match='multiple of 128'):
+        config.post_build_func(config, 192)
 
 
 def test_build_window_positions_uses_ring_coordinates():

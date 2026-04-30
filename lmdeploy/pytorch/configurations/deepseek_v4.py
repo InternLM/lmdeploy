@@ -36,6 +36,41 @@ def _check_env_v4(device: str = 'cuda'):
         raise RuntimeError('DeepSeek-V4 requires PyTorch with float4_e2m1fn_x2 support.')
 
 
+def _finalize_v4_cache_specs(model_config: ModelConfig, block_size: int):
+    if block_size < 128:
+        raise ValueError('DeepSeek-V4 requires block_size >= 128 because ratio=128 compressed cache needs at '
+                         'least one entry per token block.')
+    if block_size % 128 != 0:
+        raise ValueError('DeepSeek-V4 requires block_size to be a multiple of 128 so ratio=128 compressed cache '
+                         'has an integral number of entries per block.')
+
+    hf_config = model_config.hf_config
+    head_dim = getattr(hf_config, 'head_dim', 512)
+    packed_token_dim = model1_fp8_sparse_token_dim(64)
+    num_layers = hf_config.num_hidden_layers
+    compress_ratios = getattr(hf_config, 'compress_ratios', None) or [0] * num_layers
+    ratio4_layers = [i for i, r in enumerate(compress_ratios) if r == 4]
+    ratio128_layers = [i for i, r in enumerate(compress_ratios) if r == 128]
+
+    block_specs = []
+    if ratio4_layers:
+        entries_r4 = block_size // 4
+        index_head_dim = getattr(hf_config, 'index_head_dim', 128)
+        block_specs.append(
+            BlockCacheSpec('v4_compressed_kv_r4', ratio4_layers, (entries_r4, head_dim), torch.bfloat16))
+        block_specs.append(
+            BlockCacheSpec('v4_compressed_kv_r4_fp8', ratio4_layers, (entries_r4, packed_token_dim),
+                           torch.float8_e4m3fn))
+        block_specs.append(
+            BlockCacheSpec('v4_index_kv_r4', ratio4_layers, (entries_r4, index_head_dim), torch.bfloat16))
+    if ratio128_layers:
+        entries_r128 = block_size // 128
+        block_specs.append(
+            BlockCacheSpec('v4_compressed_kv_r128', ratio128_layers, (entries_r128, head_dim), torch.bfloat16))
+
+    model_config.block_cache_specs = block_specs
+
+
 class DeepseekV4ModelConfigBuilder(AutoModelConfigBuilder):
 
     @classmethod
@@ -71,26 +106,12 @@ class DeepseekV4ModelConfigBuilder(AutoModelConfigBuilder):
         )
 
         # ---- block cache specs ----
+        # block_cache_specs depend on the final token block_size, so they are
+        # materialized in a post-build hook after ModelConfig.block_size is set.
         all_layers = list(range(num_layers))
-        block_specs = []
-
         ratio4_layers = [i for i, r in enumerate(compress_ratios) if r == 4]
         ratio128_layers = [i for i, r in enumerate(compress_ratios) if r == 128]
-
-        if ratio4_layers:
-            block_specs.append(
-                BlockCacheSpec('v4_compressed_kv_r4', ratio4_layers, (head_dim,), torch.bfloat16))
-            block_specs.append(
-                BlockCacheSpec('v4_compressed_kv_r4_fp8', ratio4_layers, (packed_token_dim,), torch.float8_e4m3fn))
-            index_head_dim = getattr(hf_config, 'index_head_dim', 128)
-            block_specs.append(
-                BlockCacheSpec('v4_index_kv_r4', ratio4_layers, (index_head_dim,), torch.bfloat16))
-
-        if ratio128_layers:
-            block_specs.append(
-                BlockCacheSpec('v4_compressed_kv_r128', ratio128_layers, (head_dim,), torch.bfloat16))
-
-        config.block_cache_specs = block_specs
+        config.block_cache_specs = []
 
         # ---- state cache specs ----
         state_specs = []
@@ -126,4 +147,5 @@ class DeepseekV4ModelConfigBuilder(AutoModelConfigBuilder):
         config.states_shapes = [(tuple(spec.shape), spec.dtype) for spec in state_specs]
 
         config.check_env_func = _check_env_v4
+        config.post_build_func = _finalize_v4_cache_specs
         return config

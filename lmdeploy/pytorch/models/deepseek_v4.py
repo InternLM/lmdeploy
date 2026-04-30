@@ -121,7 +121,7 @@ def _gather_compressed_cache_entries(cache: torch.Tensor, block_offsets: torch.T
     max_block_idx = block_offsets.size(1)
     valid = (positions >= 0) & (block_idx < max_block_idx)
     safe_block_idx = block_idx.clamp(max=max_block_idx - 1)
-    entries_per_block = max(block_size // compress_ratio, 1)
+    entries_per_block = cache.size(1)
     block_off = torch.remainder(safe_positions, entries_per_block).long()
     phys_blocks = block_offsets.gather(1, safe_block_idx).long()
     gathered = cache[phys_blocks, block_off]
@@ -137,7 +137,7 @@ def _write_compressed_cache_entries(cache: torch.Tensor, block_offsets: torch.Te
     block_idx = torch.div(token_positions, block_size, rounding_mode='floor').long()
     valid = (positions >= 0) & (block_idx < block_offsets.size(1))
     safe_block_idx = block_idx.clamp(max=block_offsets.size(1) - 1)
-    entries_per_block = max(block_size // compress_ratio, 1)
+    entries_per_block = cache.size(1)
     block_off = torch.remainder(positions.clamp(min=0), entries_per_block).long()
     phys_blocks = block_offsets[batch_idx, safe_block_idx].long()
     if write_mask is None:
@@ -480,7 +480,7 @@ class Compressor(nn.Module):
             return
         block_caches = context.block_caches
         block_offsets = context.block_offsets
-        block_size = context.cache_config.kernel_block_size
+        block_size = context.cache_config.block_size
         if self.rotate:
             cache = block_caches['v4_index_kv_r4'][self.layer_id]
             fp8_cache = None
@@ -580,7 +580,7 @@ class Compressor(nn.Module):
                                    context: StepContext, valid_mask: torch.Tensor):
         block_caches = context.block_caches
         block_offsets = context.block_offsets.long()
-        block_size = context.cache_config.kernel_block_size
+        block_size = context.cache_config.block_size
         batch_idx = torch.arange(start_pos.size(0), device=start_pos.device)
         positions = torch.div(start_pos, self.compress_ratio, rounding_mode='floor').long()
         if self.rotate:
@@ -678,13 +678,12 @@ class Indexer(nn.Module):
         total_len = start_pos + seqlen
         num_index = total_len // ratio
         if num_index > 0:
-            index_tokens = []
-            for pos in range(num_index):
-                bidx = pos // block_size
-                boff = pos % block_size
-                pblock = block_offsets[seq_idx, bidx]
-                index_tokens.append(index_kv_cache[layer_id, pblock, boff])
-            index_cache = torch.stack(index_tokens)
+            positions = torch.arange(num_index, device=x.device, dtype=torch.long).unsqueeze(0)
+            index_cache = _gather_compressed_cache_entries(index_kv_cache[layer_id],
+                                                           block_offsets[seq_idx:seq_idx + 1],
+                                                           positions,
+                                                           block_size,
+                                                           self.compress_ratio)[0]
         else:
             index_cache = None
 
@@ -1027,13 +1026,14 @@ class Attention(nn.Module):
         block_caches = context.block_caches
         named_state_caches = context.named_state_caches
         block_offsets = context.block_offsets
-        block_size = context.cache_config.kernel_block_size
+        window_block_size = context.cache_config.kernel_block_size
+        token_block_size = context.cache_config.block_size
         window_state = named_state_caches['v4_window_kv'][self.layer_id, slot]
         window_state_fp8 = named_state_caches['v4_window_kv_fp8'][self.layer_id, slot]
 
         # ---- write ring window state ----
         self._write_window_state_prefill(window_state, kv[0], start_pos, self.window_size)
-        self._pack_window_state(window_state, window_state_fp8, block_size)
+        self._pack_window_state(window_state, window_state_fp8, window_block_size)
 
         # ---- gather window ----
         total_len = start_pos + seqlen
@@ -1068,7 +1068,7 @@ class Attention(nn.Module):
             compressed_kv = _gather_compressed_cache_entries(compressed_kv_cache,
                                                              block_offsets[seq_idx:seq_idx + 1],
                                                              compressed_positions,
-                                                             block_size,
+                                                             token_block_size,
                                                              self.compress_ratio)[0]
 
             # indexer
@@ -1076,7 +1076,7 @@ class Attention(nn.Module):
                 self.indexer.freqs_cis = self.freqs_cis
                 index_kv_cache = block_caches['v4_index_kv_r4']
                 compress_topk_idxs = self.indexer(x, qr, start_pos, offset, context, slot, index_kv_cache,
-                                                  block_offsets, seq_idx, block_size)
+                                                  block_offsets, seq_idx, token_block_size)
             else:
                 compress_topk_idxs = get_compress_topk_idxs(self.compress_ratio, bsz, seqlen, start_pos, offset,
                                                             x.device)
@@ -1122,7 +1122,7 @@ class Attention(nn.Module):
 
         named_state_caches = context.named_state_caches
         block_offsets = context.block_offsets.long()
-        block_size = context.cache_config.kernel_block_size
+        token_block_size = context.cache_config.block_size
 
         window_state_cache = named_state_caches['v4_window_kv'][self.layer_id]
         window_state_fp8_cache = named_state_caches['v4_window_kv_fp8'][self.layer_id]
@@ -1177,7 +1177,7 @@ class Attention(nn.Module):
                                                         slot,
                                                         index_cache,
                                                         block_offsets,
-                                                        block_size,
+                                                        token_block_size,
                                                         index_scratch,
                                                         valid_mask)
                 indices_in_kvcache = index_out.indices_in_kvcache
@@ -1214,7 +1214,7 @@ class Attention(nn.Module):
                                            window_state,
                                            self.attn_sink,
                                            attn_meta,
-                                           block_size,
+                                           token_block_size,
                                            compressed_kv_cache=compressed_cache,
                                            window_kv_fp8_state=window_state_fp8,
                                            compressed_kv_fp8_cache=compressed_cache_fp8,
