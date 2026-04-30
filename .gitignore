@@ -4,13 +4,10 @@ __pycache__/
 *$py.class
 .vscode/
 .idea/
+.cursor/
 # C extensions
 *.so
 
-# skills
-.cursor/
-!.claude/skills/docker-build/
-!.claude/skills/docker-build/SKILL.md
 
 # Distribution / packaging
 .Python
@@ -51,6 +48,7 @@ htmlcov/
 .cache
 *build*/
 !builder/
+!.claude/skills/docker-build/
 lmdeploy/lib/
 lmdeploy/bin/
 dist/
