@@ -8,46 +8,12 @@ from typing import Literal
 import torch
 from torch import nn
 
-from lmdeploy.lite.apis.calibrate import LAYER_TYPE_MAP, calibrate
+from lmdeploy.lite.apis.calibrate import LAYER_TYPE_MAP, MOE_MODEL_LIST, calibrate, load_model_tokenizer
+from lmdeploy.lite.moe_mlp_modules import CONVERT_MOE_MODELS
 from lmdeploy.lite.quantization.awq import FC_FCS_MAP, NORM_FCS_MAP, awq_layers, quant_weights, smooth_layers
-from lmdeploy.lite.utils import collect_target_modules, convert_moe_parameters
+from lmdeploy.lite.utils import collect_target_modules
+from lmdeploy.turbomind.deploy.converter import get_input_model_registered_name
 from lmdeploy.utils import try_import_deeplink
-
-
-def load_model(model: str, dtype: Literal['float16', 'bfloat16', 'auto'] = 'auto', work_dir: str = './work_dir'):
-    from pathlib import Path
-
-    from transformers import AutoTokenizer
-
-    from lmdeploy.lite.utils import load_hf_from_pretrained
-    tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=True)
-    model = load_hf_from_pretrained(model, dtype=dtype, trust_remote_code=True)
-    vl_model = None
-    work_dir = Path(work_dir)
-    work_dir.mkdir(parents=True, exist_ok=True)
-    return vl_model, model, tokenizer, work_dir
-
-
-def config_contains_keyword(config, keyword: str = 'experts') -> bool:
-    """Recursively check whether any config key or string value contains the
-    given keyword."""
-
-    keyword = keyword.lower()
-
-    if hasattr(config, 'to_dict'):
-        config = config.to_dict()
-
-    def search(obj) -> bool:
-        if isinstance(obj, dict):
-            for key, value in obj.items():
-                if keyword in str(key).lower():
-                    return True
-                if search(value):
-                    return True
-
-        return False
-
-    return search(config)
 
 
 def save_vl_model(vl_model, model_path, dst_path):
@@ -86,9 +52,7 @@ def auto_awq(model: str,
              device: str = 'cuda',
              revision: str = None,
              dtype: Literal['float16', 'bfloat16', 'auto'] = 'auto',
-             download_dir: str = None,
-             mod_skip_quant: list[str] | None = None,
-             calib_ds_req: bool = True):
+             download_dir: str = None):
     """Perform weight quantization using AWQ algorithm.
 
     Args:
@@ -97,6 +61,7 @@ def auto_awq(model: str,
         calib_dataset (str): The calibration dataset name.
             Defaults to 'wikitext2'.
         calib_samples (int): The number of samples for calibration.
+            Define 0 to indicate the data free quantization.
         batch_size (int): The batch size for running the calib samples.
             Low GPU mem requires small batch_size. Large batch_size
             reduces the calibration time while costs more VRAM.
@@ -113,8 +78,6 @@ def auto_awq(model: str,
         dtype (str): Data type for loading model weights and calib infer.
         download_dir (str): Directory to download and load the weights,
             default to the default cache directory of huggingface.
-        mod_skip_quant (list[str] | None): Module name substrings to skip during quantization.
-        calib_ds_req (bool): Whether the calibration dataset is required. Default to True.
     """
     try_import_deeplink(device)
     if not osp.exists(model):
@@ -123,7 +86,9 @@ def auto_awq(model: str,
         from lmdeploy.utils import get_model
         model = get_model(model, revision=revision, download_dir=download_dir)
     model_path = model
-    if calib_ds_req:
+    if calib_samples == 0:
+        vl_model, model, tokenizer, work_dir, _ = load_model_tokenizer(model, dtype=dtype, work_dir=work_dir)
+    else:
         vl_model, model, tokenizer, work_dir = calibrate(model,
                                                          calib_dataset,
                                                          calib_samples,
@@ -135,24 +100,24 @@ def auto_awq(model: str,
                                                          search_scale=search_scale,
                                                          dtype=dtype,
                                                          batch_size=batch_size)
-        input_stats = torch.load(osp.join(work_dir, 'inputs_stats.pth'), weights_only=True)
-    else:
-        vl_model, model, tokenizer, work_dir = load_model(model, dtype, work_dir)
 
     layer_type = LAYER_TYPE_MAP[type(model).__name__]
     layers = collect_target_modules(model, layer_type)
+    if not getattr(model.config, 'architectures', None):
+        # Qwen3.5 TurboMind quantization works on the text sub-model only, whose
+        # config may not contain `architectures`. Infer it from the loaded model class
+        # for downstream AWQ skip/convert logic.
+        model_arch = type(model).__name__
+        model.config.architectures = [model_arch]
     fcs = {}
-    is_moe = (
-        'moe' in model.config.model_type.lower() or
-        config_contains_keyword(model.config, 'experts')
-    )
     for l_name, layer in layers.items():
-        if is_moe:
-            convert_moe_parameters(model_path, layer)
+        if model.config.architectures[0] in MOE_MODEL_LIST:
+            model_name = get_input_model_registered_name(model_path, 'awq')
+            CONVERT_MOE_MODELS.get(model_name)(layer)
         name2fc = collect_target_modules(layer, nn.Linear, prefix=l_name)
         fcs.update(name2fc)
 
-    if calib_ds_req:
+    if calib_samples != 0:
         fc2fcs = FC_FCS_MAP[layer_type]
         norm2fcs = NORM_FCS_MAP[layer_type]
         input_stats = torch.load(osp.join(work_dir, 'inputs_stats.pth'), weights_only=True)
@@ -164,25 +129,21 @@ def auto_awq(model: str,
             act_scales = input_stats['absmax']
             smooth_layers(layers, fc2fcs, norm2fcs, act_scales, w_group_size, device)
 
-    quant_weights(model, fcs, w_bits, w_sym, w_group_size, device, mod_skip_quant=mod_skip_quant)
+    matched_exclude_modules = quant_weights(model, fcs, w_bits, w_sym, w_group_size, device,
+                                            arch=model.config.architectures[0])
     quantization_config = dict(quant_method='awq',
                                version='gemm',
                                bits=w_bits,
                                group_size=w_group_size,
                                zero_point=not w_sym)
-    if mod_skip_quant:
-        quantization_config['modules_to_not_convert'] = list(mod_skip_quant)
+    if matched_exclude_modules:
+        quantization_config['modules_to_not_convert'] = matched_exclude_modules
     model.config.update(dict(quantization_config=quantization_config))
 
     if vl_model:
         save_vl_model(vl_model, model_path, work_dir)
     else:
-        # model.save_pretrained(work_dir, safe_serialization=True)
-        model.save_pretrained(
-            work_dir,
-            safe_serialization=True,
-            max_shard_size='4GB',
-        )
+        model.save_pretrained(work_dir, safe_serialization=True)
     tokenizer.save_pretrained(work_dir)
 
 

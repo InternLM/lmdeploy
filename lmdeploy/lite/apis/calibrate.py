@@ -83,6 +83,12 @@ HEAD_NAME_MAP = {
     'MistralForCausalLM': 'lm_head',
 }
 
+MOE_MODEL_LIST = [
+    'Qwen3MoeForCausalLM',
+    'Qwen3_5MoeForCausalLM',
+    'MixtralForCausalLM'
+]
+
 
 def _prepare_for_calibrate(model: nn.Module,
                            layer_type: str | type,
@@ -185,7 +191,6 @@ def update_moe_mapping(model, model_type):
                 if '{i}' in k:
                     break
             num_experts = len(m.get_submodule(k.split('.{i}')[0]))
-            break
 
     # update FC_FCS_MAP
     updated_fc2fcs = dict()
@@ -202,6 +207,53 @@ def update_moe_mapping(model, model_type):
     for norm, fc in norm2fcs.items():
         updated_norm2fcs.update({norm: list(set([v.format(i=i) for v in fc for i in range(num_experts)]))})
     NORM_FCS_MAP[LAYER_TYPE_MAP[model_type]] = updated_norm2fcs
+
+
+def load_model_tokenizer(model: str,
+                         dtype: Literal['float16', 'bfloat16', 'auto'] = 'auto',
+                         work_dir: str = './work_dir'):
+    """Load model and tokenizer."""
+    model_type, _ = get_task(backend='turbomind', model_path=model)
+    make_compatible_internvl_config(model)
+
+    # Load tokenizer and configuration
+    tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=True)
+
+    if model_type == 'llm':
+        model = load_hf_from_pretrained(model, dtype=dtype, trust_remote_code=True)
+        vl_model = None
+    elif model_type == 'vlm':
+        _, original_config = get_model_arch(model)
+        vl_model = load_vl_model(model, backend=None, with_llm=True).vl_model
+        model = vl_model
+        if hasattr(vl_model, 'language_model'):  # deepseek-vl, ...
+            model = vl_model.language_model
+        if hasattr(vl_model, 'llm'):  # MiniCPMV, ...
+            model = vl_model.llm
+        model.config.use_cache = False
+        if hasattr(model.config, 'text_config'):
+            model.config.text_config.use_cache = False
+        elif hasattr(model.config, 'llm_config'):
+            model.config.llm_config.use_cache = False
+        if dtype == 'float16' or (dtype == 'auto' and original_config.torch_dtype == torch.float16):
+            model.half()
+        elif dtype == 'bfloat16' or (dtype == 'auto' and original_config.torch_dtype == torch.bfloat16):
+            assert torch.cuda.is_bf16_supported(
+            ), 'your device does not support bfloat16 please set --dtype float16'  # noqa
+            model.to(torch.bfloat16)
+        model.eval()
+
+    model_type = type(model).__name__
+    if model_type not in LAYER_TYPE_MAP or model_type not in NORM_TYPE_MAP:
+        raise RuntimeError(f'Currently, quantification and calibration of {model_type} are '
+                           f'not supported. The supported model types are '
+                           f"{', '.join(LAYER_TYPE_MAP.keys())}.")
+
+    # Create work directory if not exists
+    work_dir = Path(work_dir)
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    return vl_model, model, tokenizer, work_dir, model_type
 
 
 def calibrate(model: str,
@@ -250,41 +302,7 @@ def calibrate(model: str,
         'Support only `wikitext2`, `c4`, `pileval`, `gsm8k`, ' \
         '`neuralmagic_calibration`, `open-platypus`, `openwebtext`.'
 
-    model_type, _ = get_task(backend='turbomind', model_path=model)
-    make_compatible_internvl_config(model)
-
-    # Load tokenizer and configuration
-    tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=True)
-
-    if model_type == 'llm':
-        model = load_hf_from_pretrained(model, dtype=dtype, trust_remote_code=True)
-        vl_model = None
-    elif model_type == 'vlm':
-        _, original_config = get_model_arch(model)
-        vl_model = load_vl_model(model, backend=None, with_llm=True).vl_model
-        model = vl_model
-        if hasattr(vl_model, 'language_model'):  # deepseek-vl, ...
-            model = vl_model.language_model
-        if hasattr(vl_model, 'llm'):  # MiniCPMV, ...
-            model = vl_model.llm
-        model.config.use_cache = False
-        if hasattr(model.config, 'text_config'):
-            model.config.text_config.use_cache = False
-        elif hasattr(model.config, 'llm_config'):
-            model.config.llm_config.use_cache = False
-        if dtype == 'float16' or (dtype == 'auto' and original_config.torch_dtype == torch.float16):
-            model.half()
-        elif dtype == 'bfloat16' or (dtype == 'auto' and original_config.torch_dtype == torch.bfloat16):
-            assert torch.cuda.is_bf16_supported(
-            ), 'your device does not support bfloat16 please set --dtype float16'  # noqa
-            model.to(torch.bfloat16)
-        model.eval()
-
-    model_type = type(model).__name__
-    if model_type not in LAYER_TYPE_MAP or model_type not in NORM_TYPE_MAP:
-        raise RuntimeError(f'Currently, quantification and calibration of {model_type} are '
-                           f'not supported. The supported model types are '
-                           f"{', '.join(LAYER_TYPE_MAP.keys())}.")
+    vl_model, model, tokenizer, work_dir, model_type = load_model_tokenizer(model, dtype=dtype, work_dir=work_dir)
 
     if model_type in ['MixtralForCausalLM']:
         update_moe_mapping(model, model_type)
@@ -328,9 +346,6 @@ def calibrate(model: str,
         all_data = torch.cat(calib_loader).to(device)
         calib_ctx.calibrate(all_data)
 
-    # Create work directory if not exists
-    work_dir = Path(work_dir)
-    work_dir.mkdir(parents=True, exist_ok=True)
     calib_ctx.export(work_dir)
 
     return vl_model, model, tokenizer, work_dir
