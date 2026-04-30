@@ -66,6 +66,9 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
     def _update_token_ids_prefill(self, token_ids: np.ndarray, draft_token_ids: np.ndarray,
                                   stop_pos: int = -1, routed_experts: np.ndarray = None):
         """Update token ids for prefill."""
+        # back to last valid position
+        self.history_cache.resize(self.num_valid_ids)
+
         num_valid = len(token_ids)
         self.history_cache.append(token_ids)
         self.append_routed_experts(routed_experts)

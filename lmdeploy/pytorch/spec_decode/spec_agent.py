@@ -178,6 +178,8 @@ class SpecModelAgent(BaseSpecModelAgent):
         history_lengths = model_inputs.history_lengths.clone()
 
         if not model_inputs.is_chunk:
+            # clear each time
+            self._prev_chunk_last.clear()
             # Case A: non-chunked — shift left by 1, place next_token at end
             input_ids = model_inputs.input_ids.clone()
             input_ids[:, :-1] = model_inputs.input_ids[:, 1:]
@@ -192,6 +194,8 @@ class SpecModelAgent(BaseSpecModelAgent):
 
         else:
             if model_inputs.is_first_chunk:
+                # clear each time
+                self._prev_chunk_last.clear()
                 # Case B: first chunk — skip first token, save last for next chunk
                 input_ids = model_inputs.input_ids[:, 1:]
                 seq_length = model_inputs.seq_length - 1

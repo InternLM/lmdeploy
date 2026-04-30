@@ -468,6 +468,8 @@ class AsyncEngine:
                              generate_token_len=0,
                              finish_reason='abort',
                              token_ids=[])
+                if sequence_end:
+                    self.session_mgr.remove(session)
                 return
             token_ids = input_ids.copy()
             history_len = session.step
