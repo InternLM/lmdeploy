@@ -24,7 +24,7 @@ class TritonAttentionMetadata(AttentionMetadata):
         q_seqlens: Length of each query sequence [batch_size].
         kv_start_loc: Start location of each KV sequence [batch_size].
         kv_seqlens: Length of each KV sequence [batch_size].
-        quant_policy: Quantization policy (0=none, 4=int4, 8=int8, 16/17=scalar fp8).
+        quant_policy: Quantization policy (0=none, 4=int4, 8=int8, 16/17=per-tensor fp8).
         kv_flatten_size: Total size of flattened KV cache.
         tile_scheduler_metadata: Scheduler metadata for Flash MLA.
         num_splits: Number of splits for Flash MLA.
@@ -205,8 +205,8 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             max_q_seqlen: Maximum query sequence length.
             k_scales_zeros: Key quantization scales/zeros.
             v_scales_zeros: Value quantization scales/zeros.
-            k_scale: Scalar key scale for normal FP8 KV cache.
-            v_scale: Scalar value scale for normal FP8 KV cache.
+            k_scale: Per-tensor key scale for normal FP8 KV cache.
+            v_scale: Per-tensor value scale for normal FP8 KV cache.
             learnable_sink: Learnable sink tokens.
 
         Returns:
@@ -260,8 +260,8 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             max_q_seqlen: Maximum query sequence length.
             k_scales_zeros: Key quantization scales/zeros.
             v_scales_zeros: Value quantization scales/zeros.
-            k_scale: Scalar key scale for normal FP8 KV cache.
-            v_scale: Scalar value scale for normal FP8 KV cache.
+            k_scale: Per-tensor key scale for normal FP8 KV cache.
+            v_scale: Per-tensor value scale for normal FP8 KV cache.
             learnable_sink: Learnable sink tokens.
 
         Returns:
@@ -361,8 +361,8 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             attn_metadata: Attention metadata containing stage info and indices.
             k_scales_zeros: Key quantization scales/zeros.
             v_scales_zeros: Value quantization scales/zeros.
-            k_scale: Scalar key scale for normal FP8 KV cache.
-            v_scale: Scalar value scale for normal FP8 KV cache.
+            k_scale: Per-tensor key scale for normal FP8 KV cache.
+            v_scale: Per-tensor value scale for normal FP8 KV cache.
             learnable_sink: Learnable sink tokens.
             inplace: Whether to modify query inplace (unused, kept for compatibility).
 

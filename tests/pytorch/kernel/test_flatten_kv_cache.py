@@ -176,7 +176,7 @@ class TestFlattenKVCacheQuant4(TestFlattenKVCacheQuant8):
 
 
 def quant_fp8_scalar(kv: torch.Tensor, fp8_dtype: torch.dtype, scale: float):
-    """Quantize KV cache with one scalar FP8 scale."""
+    """Quantize KV cache with one per-tensor FP8 scale."""
     fp8_max = torch.finfo(fp8_dtype).max
     scale_t = kv.new_tensor(scale, dtype=torch.float32)
     q_kv = (kv.to(torch.float32) / scale_t).clamp(-fp8_max, fp8_max).to(fp8_dtype)

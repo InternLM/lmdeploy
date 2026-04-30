@@ -171,7 +171,7 @@ def _fill_kv_cache_fp8_scalar_kernel(
     BLOCK_D: tl.constexpr,
     BLOCK_DV: tl.constexpr,
 ):
-    """Fill FP8 KV cache with scalar K/V scales."""
+    """Fill FP8 KV cache with per-tensor K/V scales."""
     batch_id = tl.program_id(2)
     head_id = tl.program_id(0)
     block_id = tl.program_id(1)
@@ -801,8 +801,8 @@ def fill_kv_cache(k_states: Tensor,
     """Fill key/value state to cache for paged attention.
 
     Args:
-        k_scale: Scalar key scale for normal FP8 KV cache.
-        v_scale: Scalar value scale for normal FP8 KV cache.
+        k_scale: Per-tensor key scale for normal FP8 KV cache.
+        v_scale: Per-tensor value scale for normal FP8 KV cache.
     """
     if kv_layout == 'bshd':
         b_dim, s_dim, h_dim, d_dim = (0, 1, 2, 3)

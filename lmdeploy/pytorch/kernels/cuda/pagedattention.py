@@ -780,8 +780,8 @@ def flash_attn_with_kvcache(
     Note that this kernel is decoding-only
 
     Args:
-        k_scale: Scalar key scale for normal FP8 KV cache.
-        v_scale: Scalar value scale for normal FP8 KV cache.
+        k_scale: Per-tensor key scale for normal FP8 KV cache.
+        v_scale: Per-tensor value scale for normal FP8 KV cache.
     """
 
     global _nv_cap

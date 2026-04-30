@@ -22,8 +22,8 @@ class QuantPolicy(enum.IntEnum):
     NONE = 0
     INT4 = 4  # 4-bit KV cache
     INT8 = 8  # 8-bit KV cache
-    FP8 = 16  # FP8 KV cache (float8_e4m3fn, scalar scale)
-    FP8_E5M2 = 17  # FP8 KV cache (float8_e5m2, scalar scale)
+    FP8 = 16  # FP8 KV cache (float8_e4m3fn, per-tensor scale)
+    FP8_E5M2 = 17  # FP8 KV cache (float8_e5m2, per-tensor scale)
     TURBO_QUANT = 42  # TurboQuant: K=4bit QJL4 + V=2bit MSE
 
 LogitsProcessor = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]

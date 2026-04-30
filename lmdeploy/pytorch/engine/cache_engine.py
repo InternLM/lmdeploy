@@ -66,6 +66,21 @@ def _get_fp8_cache_dtype(quant_policy: QuantPolicy):
     raise ValueError(f'Not an FP8 quant policy: {quant_policy}')
 
 
+def _describe_kv_cache_quant_policy(quant_policy: QuantPolicy):
+    """Describe the active KV-cache quantization policy for logs."""
+    if quant_policy == QuantPolicy.FP8:
+        return 'fp8_e4m3 per-tensor KV cache (torch.float8_e4m3fn)'
+    if quant_policy == QuantPolicy.FP8_E5M2:
+        return 'fp8_e5m2 per-tensor KV cache (torch.float8_e5m2)'
+    if quant_policy == QuantPolicy.INT4:
+        return 'int4 KV cache'
+    if quant_policy == QuantPolicy.INT8:
+        return 'int8 KV cache'
+    if quant_policy == QuantPolicy.TURBO_QUANT:
+        return 'TurboQuant KV cache'
+    return None
+
+
 # 512*1 + 4*4 + 64*2 = 656
 MLA_FP8_HEAD_DIM = 656
 
@@ -116,6 +131,10 @@ class CacheEngine:
                 self.kv_cache_dtype = torch.int8
             else:
                 raise ValueError(f'unsupported device_type {self.cache_config.device_type}')
+
+        quant_desc = _describe_kv_cache_quant_policy(cache_config.quant_policy)
+        if quant_desc is not None:
+            logger.info('Using %s.', quant_desc)
 
         # Initialize the cache.
         self.local_gpu_cache = self.allocate_gpu_cache()

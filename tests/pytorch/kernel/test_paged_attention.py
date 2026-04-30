@@ -436,7 +436,7 @@ def _make_blocked_cache_quant(batched_k, batched_v, seq_lens, history_lens, bloc
 
 
 def quant_fp8_scalar(kv: torch.Tensor, fp8_dtype: torch.dtype, scale: float):
-    """Quant kv to fp8 with a scalar scale."""
+    """Quantize KV to FP8 with a per-tensor scale."""
     finfo = torch.finfo(fp8_dtype)
     scale_t = kv.new_tensor(scale, dtype=torch.float32)
     q_kv = torch.clamp(kv.to(torch.float32) / scale_t, finfo.min, finfo.max).to(fp8_dtype)

@@ -9,7 +9,12 @@ from pydantic_core import ValidationError
 from lmdeploy.cli.utils import ArgumentHelper
 from lmdeploy.messages import PytorchEngineConfig, QuantPolicy, TurbomindEngineConfig
 from lmdeploy.pytorch.config import CacheConfig
-from lmdeploy.pytorch.engine.cache_engine import CacheDesc, CacheEngine, _get_fp8_cache_dtype
+from lmdeploy.pytorch.engine.cache_engine import (
+    CacheDesc,
+    CacheEngine,
+    _describe_kv_cache_quant_policy,
+    _get_fp8_cache_dtype,
+)
 
 
 def test_quant_policy_fp8_aliases():
@@ -36,6 +41,16 @@ def test_turbomind_config_rejects_fp8_e5m2_quant_policy():
 def test_fp8_kv_cache_dtype_mapping():
     assert _get_fp8_cache_dtype(QuantPolicy.FP8) is torch.float8_e4m3fn
     assert _get_fp8_cache_dtype(QuantPolicy.FP8_E5M2) is torch.float8_e5m2
+
+
+def test_fp8_kv_cache_log_description():
+    assert 'fp8_e4m3' in _describe_kv_cache_quant_policy(QuantPolicy.FP8)
+    assert 'per-tensor' in _describe_kv_cache_quant_policy(QuantPolicy.FP8)
+    assert 'torch.float8_e4m3fn' in _describe_kv_cache_quant_policy(QuantPolicy.FP8)
+    assert 'fp8_e5m2' in _describe_kv_cache_quant_policy(QuantPolicy.FP8_E5M2)
+    assert 'per-tensor' in _describe_kv_cache_quant_policy(QuantPolicy.FP8_E5M2)
+    assert 'torch.float8_e5m2' in _describe_kv_cache_quant_policy(QuantPolicy.FP8_E5M2)
+    assert _describe_kv_cache_quant_policy(QuantPolicy.NONE) is None
 
 
 def test_fp8_quant_cache_descs_are_empty():

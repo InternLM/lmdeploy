@@ -690,7 +690,7 @@ class TestFillKVCacheBlockedFP8(TestFillKVCache):
 
 
 def _quant_fp8_scalar(x: torch.Tensor, fp8_dtype: torch.dtype, scale: float):
-    """Scalar-scale FP8 quantization."""
+    """Per-tensor FP8 quantization."""
     fp8_max = torch.finfo(fp8_dtype).max
     scale_t = x.new_tensor(scale, dtype=torch.float32)
     q = (x.to(torch.float32) / scale_t).clamp(-fp8_max, fp8_max).to(fp8_dtype)
@@ -719,7 +719,7 @@ def _assert_fp8_cache_close(actual: torch.Tensor,
 
 
 class TestFillKVCacheFP8Scalar(TestFillKVCache):
-    """Tests for fill_kv_cache with normal scalar-scale QuantPolicy.FP8."""
+    """Tests for fill_kv_cache with normal per-tensor QuantPolicy.FP8."""
 
     @pytest.fixture(autouse=True)
     def skip_unsupported_fp8_dtype(self, fp8_dtype):
@@ -808,8 +808,7 @@ class TestFillKVCacheFP8Scalar(TestFillKVCache):
 
 
 class TestFillKVCacheFP8E5M2Scalar(TestFillKVCacheFP8Scalar):
-    """Tests for fill_kv_cache with normal scalar-scale
-    QuantPolicy.FP8_E5M2."""
+    """Tests for fill_kv_cache with normal per-tensor QuantPolicy.FP8_E5M2."""
 
     @pytest.fixture
     def fp8_dtype(self):

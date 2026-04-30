@@ -356,7 +356,7 @@ class TestQuantPolicyFP8Accuracy:
     """Accuracy tests comparing quant_policy=QuantPolicy.FP8 against non-
     quantized baseline.
 
-    FP8 (float8_e4m3fn, scalar scale) is more precise than 4-bit TurboQuant, so
+    FP8 (float8_e4m3fn, per-tensor scale) is more precise than 4-bit TurboQuant, so
     thresholds are tighter: MAE < 0.05, Max AE < 0.3.
 
     Uses class-scoped fixtures to avoid holding three models in GPU memory simultaneously

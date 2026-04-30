@@ -124,7 +124,7 @@ def _flatten_kv_cache_fp8_scalar(
     BLOCK_DK: tl.constexpr,
     BLOCK_DV: tl.constexpr,
 ):
-    """Flatten scalar-scale FP8 KV cache."""
+    """Flatten per-tensor FP8 KV cache."""
     page_id = tl.program_id(0)
     batch_id = tl.program_id(1)
     head_id = tl.program_id(2)
@@ -344,8 +344,8 @@ def flatten_kv_cache(k_caches: Tensor,
     """Recovery paged kv cache to normal kv cache.
 
     Args:
-        k_scale: Scalar key scale for normal FP8 KV cache.
-        v_scale: Scalar value scale for normal FP8 KV cache.
+        k_scale: Per-tensor key scale for normal FP8 KV cache.
+        v_scale: Per-tensor value scale for normal FP8 KV cache.
     """
     if kv_layout == 'bshd':
         b_dim, s_dim, h_dim, d_dim = (0, 1, 2, 3)

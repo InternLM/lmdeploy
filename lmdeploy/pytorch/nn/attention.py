@@ -15,7 +15,7 @@ _DEFAULT_FP8_SCALE_WARNED = False
 
 
 def _is_normal_fp8_quant_policy(quant_policy: QuantPolicy):
-    """Return whether quant_policy uses scalar-scale FP8 KV cache."""
+    """Return whether quant_policy uses per-tensor FP8 KV cache."""
     return quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2)
 
 
@@ -99,7 +99,7 @@ class Attention(nn.Module):
 
     @torch.no_grad()
     def finalize_kv_scales(self, quant_policy: QuantPolicy):
-        """Finalize loaded scalar FP8 KV scales before inference."""
+        """Finalize loaded per-tensor FP8 KV scales before inference."""
         global _DEFAULT_FP8_SCALE_WARNED
         if not _is_normal_fp8_quant_policy(quant_policy):
             return
@@ -112,7 +112,7 @@ class Attention(nn.Module):
             _DEFAULT_FP8_SCALE_WARNED = True
 
     def _effective_kv_scales(self):
-        """Return scalar K/V scales."""
+        """Return per-tensor K/V scales."""
         return self.k_scale, self.v_scale
 
     def forward(
