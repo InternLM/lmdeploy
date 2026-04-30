@@ -255,6 +255,15 @@ def _score_kv_kernel(
                 curr_kv = tl.where(row_mask[:, None], cur_kv[None, :], curr_kv)
                 curr_score = tl.where(row_mask[:, None], cur_score[None, :], curr_score)
 
+                # mask unwritten state rows: rows beyond pos_in_ratio haven't been
+                # filled by fill_compress_state yet (score_state defaults to 0, not -inf).
+                # For prev window: valid only when start_pos >= ratio AND row_id <= pos_in_ratio
+                curr_valid = row_ids <= pos_in_ratio
+                prev_valid = (start_pos >= ratio) & curr_valid
+                NEG_INF = -1e30
+                prev_score = tl.where(prev_valid[:, None], prev_score, NEG_INF)
+                curr_score = tl.where(curr_valid[:, None], curr_score, NEG_INF)
+
                 # manual softmax over [2*ratio]
                 global_max = tl.maximum(tl.max(prev_score, 0), tl.max(curr_score, 0))
                 exp_prev = tl.exp(prev_score - global_max[None, :])
@@ -274,6 +283,8 @@ def _score_kv_kernel(
                 row_mask = row_ids == pos_in_ratio
                 merged_kv = tl.where(row_mask[:, None], cur_kv[None, :], merged_kv)
                 merged_score = tl.where(row_mask[:, None], cur_score[None, :], merged_score)
+                # mask unwritten state rows (score_state defaults to 0, not -inf)
+                merged_score = tl.where((row_ids <= pos_in_ratio)[:, None], merged_score, -1e30)
 
                 soft_score = tl.softmax(merged_score, 0)
                 compressed = tl.sum(merged_kv * soft_score, 0)
