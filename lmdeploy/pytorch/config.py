@@ -390,8 +390,9 @@ class ModelConfig:
                 activations. Refer to `PyTorchEngineConfig` for details
             hf_overrides (dict[str, Any]): overrides for the HF config.
         """
+        from transformers import AutoConfig  # noqa: I001
+
         from lmdeploy.pytorch.transformers import config_from_pretrained
-        from transformers import AutoConfig
         hf_config = config_from_pretrained(pretrained_model_name_or_path, trust_remote_code=trust_remote_code)
         if getattr(hf_config, 'model_type', None) in ['phi3']:
             # phi3 + trust_remote_code leads to error when tp.
