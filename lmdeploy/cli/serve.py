@@ -118,7 +118,6 @@ class SubCliServe:
         prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
         max_prefill_token_num_act = ArgumentHelper.max_prefill_token_num(pt_group)
         quant_policy = ArgumentHelper.quant_policy(pt_group)
-        ArgumentHelper.calculate_kv_scales(pt_group)
         model_format = ArgumentHelper.model_format(pt_group)
         hf_overrides = ArgumentHelper.hf_overrides(pt_group)
         disable_metrics = ArgumentHelper.disable_metrics(pt_group)
@@ -234,7 +233,6 @@ class SubCliServe:
                 enable_prefix_caching=args.enable_prefix_caching,
                 device_type=args.device,
                 quant_policy=args.quant_policy,
-                calculate_kv_scales=args.calculate_kv_scales,
                 eager_mode=args.eager_mode,
                 max_prefill_token_num=args.max_prefill_token_num,
                 enable_microbatch=args.enable_microbatch,

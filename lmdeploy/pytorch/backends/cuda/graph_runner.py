@@ -228,16 +228,7 @@ class CUDAGraphRunner(GraphRunner):
             self._try_compile_model_once()
 
         kwargs = self._prepare_inputs(**kwargs)
-        pending_kv_scale_calculation = False
-        if self.cache_config.calculate_kv_scales:
-            # Set cudagraph mode to none if calc_kv_scales is true.
-            # KV scales calculation involves dynamic operations that are
-            # incompatible with CUDA graph capture.
-            pending_kv_scale_calculation = any(
-                getattr(module, 'has_pending_kv_scale_calculation', _false)() for module in self.model.modules())
-            if not pending_kv_scale_calculation:
-                self.cache_config.calculate_kv_scales = False
-        enable_graph = False if pending_kv_scale_calculation else self.enable_graph(**kwargs)
+        enable_graph = self.enable_graph(**kwargs)
 
         if not enable_graph:
             with record_function('forward_eager'):

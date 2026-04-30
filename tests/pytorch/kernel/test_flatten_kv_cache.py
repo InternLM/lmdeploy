@@ -175,15 +175,6 @@ class TestFlattenKVCacheQuant4(TestFlattenKVCacheQuant8):
         yield 1e-3
 
 
-def quant_fp8(kv: torch.Tensor, fp8_dtype: torch.dtype):
-    """Quantize KV cache with per-token/head symmetric FP8 scales."""
-    fp8_max = torch.finfo(fp8_dtype).max
-    scale = torch.maximum(kv.abs().amax(dim=-1, keepdim=True) / fp8_max, kv.new_tensor(1e-6))
-    q_kv = (kv / scale).clamp(-fp8_max, fp8_max).to(fp8_dtype)
-    dq_kv = (q_kv.to(torch.float32) * scale).to(kv.dtype)
-    return q_kv, scale, dq_kv
-
-
 def quant_fp8_scalar(kv: torch.Tensor, fp8_dtype: torch.dtype, scale: float):
     """Quantize KV cache with one scalar FP8 scale."""
     fp8_max = torch.finfo(fp8_dtype).max
@@ -217,62 +208,6 @@ def flatten_reference(k_caches, v_caches, kv_lens, block_offsets, block_size, nu
             start_loc = end_loc
             remain_len -= block_len
     return k_states, v_states
-
-
-class TestFlattenKVCacheFP8PerTokenHead(TestFlattenKVCache):
-
-    @pytest.fixture(autouse=True)
-    def skip_unsupported_fp8_dtype(self, fp8_dtype):
-        _skip_unsupported_triton_fp8_dtype(fp8_dtype)
-
-    @pytest.fixture
-    def fp8_dtype(self):
-        yield torch.float8_e4m3fn
-
-    @pytest.fixture
-    def quant_policy(self):
-        yield QuantPolicy.FP8_PER_TOKEN_HEAD
-
-    @pytest.fixture
-    def atol(self):
-        yield 1e-3
-
-    @pytest.fixture
-    def rtol(self):
-        yield 1e-5
-
-    def test_flatten_kv_cache(self, k_caches, v_caches, kv_lens, kv_seqlens, block_offsets, block_size, num_heads,
-                              out_size, head_dim, out_dtype, fp8_dtype, quant_policy, atol, rtol):
-        from lmdeploy.pytorch.kernels.cuda.flatten_kv_cache import flatten_kv_cache
-
-        k_caches_fp8, k_scale, k_dequant = quant_fp8(k_caches, fp8_dtype)
-        v_caches_fp8, v_scale, v_dequant = quant_fp8(v_caches, fp8_dtype)
-        gt = flatten_reference(k_dequant, v_dequant, kv_lens, block_offsets, block_size, num_heads, out_size, head_dim,
-                               head_dim)
-
-        k_states, v_states = flatten_kv_cache(k_caches_fp8,
-                                              v_caches_fp8,
-                                              kv_seqlens,
-                                              block_offsets,
-                                              out_size=out_size,
-                                              out_dtype=out_dtype,
-                                              k_scales_zeros=k_scale.to(out_dtype),
-                                              v_scales_zeros=v_scale.to(out_dtype),
-                                              quant_policy=quant_policy)
-
-        torch.testing.assert_close(k_states, gt[0], atol=atol, rtol=rtol)
-        torch.testing.assert_close(v_states, gt[1], atol=atol, rtol=rtol)
-
-
-class TestFlattenKVCacheFP8E5M2PerTokenHead(TestFlattenKVCacheFP8PerTokenHead):
-
-    @pytest.fixture
-    def fp8_dtype(self):
-        yield torch.float8_e5m2
-
-    @pytest.fixture
-    def quant_policy(self):
-        yield QuantPolicy.FP8_E5M2_PER_TOKEN_HEAD
 
 
 class TestFlattenKVCacheFP8Scalar(TestFlattenKVCache):

@@ -24,7 +24,6 @@ Q_POLICY_NONE = tl.constexpr(0)
 Q_POLICY_INT4 = tl.constexpr(4)
 Q_POLICY_INT8 = tl.constexpr(8)
 Q_POLICY_FP8 = tl.constexpr(16)
-Q_POLICY_FP8_PER_TOKEN_HEAD = tl.constexpr(18)
 Q_POLICY_TURBO = tl.constexpr(42)
 
 TRITON_VERSION = version.parse(triton.__version__)
@@ -464,9 +463,6 @@ def _fwd_grouped_split_quant_kernel(
         elif quant_policy == Q_POLICY_FP8:
             ks = tl.load(KScalesZeros).to(tl.float32)
             k = k.to(q.dtype)
-        elif quant_policy == Q_POLICY_FP8_PER_TOKEN_HEAD:
-            ks = tl.load(ksz_ptrs + b_offset * stride_kszp)
-            k = k.to(q.dtype)
         else:
             ks = tl.load(ksz_ptrs + b_offset * stride_kszp)
             kz = tl.load(ksz_ptrs + b_offset * stride_kszp + 1)
@@ -485,8 +481,6 @@ def _fwd_grouped_split_quant_kernel(
                 k1_sign = ((k1 >> 3) & 0x1).to(tl.float32) * 2.0 - 1.0
                 k1 = (kmse_norm * (k1_cent + kqjl_norm * k1_sign)).to(q.dtype)
             elif quant_policy == Q_POLICY_FP8:
-                k1 = k1.to(q.dtype)
-            elif quant_policy == Q_POLICY_FP8_PER_TOKEN_HEAD:
                 k1 = k1.to(q.dtype)
             else:
                 k1 = ((k1 - kz) * ks).to(q.dtype)
@@ -508,9 +502,6 @@ def _fwd_grouped_split_quant_kernel(
         elif quant_policy == Q_POLICY_FP8:
             vs = tl.load(VScalesZeros).to(tl.float32)
             v = v.to(q.dtype)
-        elif quant_policy == Q_POLICY_FP8_PER_TOKEN_HEAD:
-            vs = tl.load(vsz_ptrs + b_offset * stride_vszp)
-            v = v.to(q.dtype)
         else:
             vs = tl.load(vsz_ptrs + b_offset * stride_vszp)
             vz = tl.load(vsz_ptrs + b_offset * stride_vszp + 1)
@@ -521,7 +512,7 @@ def _fwd_grouped_split_quant_kernel(
         qk += tl.dot(q, k)
         if BLOCK_DMODEL1 != 0:
             qk += tl.dot(q1, k1)
-        if quant_policy == Q_POLICY_FP8 or quant_policy == Q_POLICY_FP8_PER_TOKEN_HEAD:
+        if quant_policy == Q_POLICY_FP8:
             qk *= ks
         qk *= sm_scale
         if logit_softcapping > 0.0:
@@ -558,8 +549,6 @@ def _fwd_grouped_split_quant_kernel(
         # update acc
         if quant_policy == Q_POLICY_FP8:
             p = p * vs
-        elif quant_policy == Q_POLICY_FP8_PER_TOKEN_HEAD:
-            p = p * tl.trans(vs)
         p, v = _convert_pv(p, v)
         acc += tl.dot(p, v)
         # update m_i and l_i
@@ -902,7 +891,6 @@ def flash_attn_with_kvcache(
         num_warps, num_stages = _kernel_meta_sm9x(BLOCK_DMODEL, BLOCK_H)
 
     is_fp8_scalar = quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2)
-    is_fp8_per_token_head = quant_policy in (QuantPolicy.FP8_PER_TOKEN_HEAD, QuantPolicy.FP8_E5M2_PER_TOKEN_HEAD)
     SPLIT_K = _get_split_k(q.device.index, grid_1, batch, num_warps)
 
     if quant_policy == QuantPolicy.INT4 or quant_policy == QuantPolicy.TURBO_QUANT:
@@ -938,7 +926,7 @@ def flash_attn_with_kvcache(
             stride_vszbs = v_scales_zeros.stride(s_dim)
             stride_vszh = v_scales_zeros.stride(h_dim)
             stride_vszd = v_scales_zeros.stride(d_dim)
-            triton_quant_policy = QuantPolicy.FP8_PER_TOKEN_HEAD if is_fp8_per_token_head else quant_policy
+            triton_quant_policy = quant_policy
         _fwd_grouped_split_quant_kernel[grid](q,
                                               k_cache,
                                               v_cache,

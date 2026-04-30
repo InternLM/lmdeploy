@@ -271,8 +271,6 @@ class ArgumentHelper:
 
         _aliases = {p.name.lower(): p.value for p in QuantPolicy}
         _aliases['fp8_e4m3'] = QuantPolicy.FP8.value
-        _aliases['fp8_e4m3_per_token_head'] = QuantPolicy.FP8_PER_TOKEN_HEAD.value
-        _aliases['fp8_e5m2_per_token_head'] = QuantPolicy.FP8_E5M2_PER_TOKEN_HEAD.value
 
         def _parse(x):
             key = x.lower()
@@ -287,17 +285,7 @@ class ArgumentHelper:
                                    type=_parse,
                                    default=0,
                                    help='KV cache quant policy: none/int4/int8/fp8/fp8_e5m2/'
-                                   'fp8_per_token_head/fp8_e5m2_per_token_head/turbo_quant '
-                                   '(or 0/4/8/16/17/18/19/42). fp8 defaults to fp8_e4m3.')
-
-    @staticmethod
-    def calculate_kv_scales(parser):
-        """Add argument calculate_kv_scales to parser."""
-
-        return parser.add_argument('--calculate-kv-scales',
-                                   action='store_true',
-                                   default=False,
-                                   help='Compute scalar FP8 KV-cache scales on the first normal-FP8 forward pass.')
+                                   'turbo_quant (or 0/4/8/16/17/42). fp8 defaults to fp8_e4m3.')
 
     @staticmethod
     def rope_scaling_factor(parser):

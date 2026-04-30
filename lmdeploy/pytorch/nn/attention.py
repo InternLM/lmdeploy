@@ -19,15 +19,6 @@ def _is_normal_fp8_quant_policy(quant_policy: QuantPolicy):
     return quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2)
 
 
-def _get_fp8_dtype(quant_policy: QuantPolicy):
-    """Get the torch FP8 dtype for normal FP8 KV cache."""
-    if quant_policy == QuantPolicy.FP8:
-        return torch.float8_e4m3fn
-    if quant_policy == QuantPolicy.FP8_E5M2:
-        return torch.float8_e5m2
-    raise ValueError(f'Not a normal FP8 quant policy: {quant_policy}')
-
-
 def _update_num_heads(num_heads: int, num_kv_heads: int):
     """Update heads."""
     world_size, rank = get_tp_world_rank('attn')
@@ -90,7 +81,6 @@ class Attention(nn.Module):
         scale_device = kwargs.get('device', None)
         self.register_buffer('k_scale', torch.ones((), dtype=torch.float32, device=scale_device))
         self.register_buffer('v_scale', torch.ones((), dtype=torch.float32, device=scale_device))
-        self.calculate_kv_scales = False
 
     def _lazy_init(self, device):
         """Lazy init."""
@@ -107,15 +97,11 @@ class Attention(nn.Module):
             self.impl.set_alibi_slopes(alibi_slopes)
             self.alibi_ready = True
 
-    def set_calculate_kv_scales(self, enabled: bool):
-        """Set one-shot scalar FP8 KV scale calculation."""
-        self.calculate_kv_scales = enabled
-
     @torch.no_grad()
     def finalize_kv_scales(self, quant_policy: QuantPolicy):
         """Finalize loaded scalar FP8 KV scales before inference."""
         global _DEFAULT_FP8_SCALE_WARNED
-        if not _is_normal_fp8_quant_policy(quant_policy) or self.calculate_kv_scales:
+        if not _is_normal_fp8_quant_policy(quant_policy):
             return
 
         if _DEFAULT_FP8_SCALE_WARNED or quant_policy != QuantPolicy.FP8:
@@ -125,27 +111,9 @@ class Attention(nn.Module):
                            'This matches vLLM no-calibration behavior but may affect accuracy.')
             _DEFAULT_FP8_SCALE_WARNED = True
 
-    def has_pending_kv_scale_calculation(self):
-        """Return whether this layer still needs one-shot KV scale
-        calculation."""
-        return self.calculate_kv_scales
-
     def _effective_kv_scales(self):
         """Return scalar K/V scales."""
         return self.k_scale, self.v_scale
-
-    @torch.no_grad()
-    def _maybe_calculate_kv_scales(self, key: torch.Tensor, value: torch.Tensor, quant_policy: QuantPolicy):
-        """Calculate scalar FP8 KV scales once, then freeze them."""
-        if not self.calculate_kv_scales or not _is_normal_fp8_quant_policy(quant_policy):
-            return
-        fp8_max = torch.finfo(_get_fp8_dtype(quant_policy)).max
-        min_scale = torch.tensor(1e-6, dtype=torch.float32, device=key.device)
-        k_scale = torch.maximum(key.abs().max().to(torch.float32) / fp8_max, min_scale)
-        v_scale = torch.maximum(value.abs().max().to(torch.float32) / fp8_max, min_scale)
-        self.k_scale.copy_(k_scale)
-        self.v_scale.copy_(v_scale)
-        self.calculate_kv_scales = False
 
     def forward(
         self,
@@ -165,8 +133,6 @@ class Attention(nn.Module):
         self._lazy_init(query.device)
 
         quant_policy = attn_metadata.quant_policy
-        if key is not None and value is not None:
-            self._maybe_calculate_kv_scales(key, value, quant_policy)
         if _is_normal_fp8_quant_policy(quant_policy):
             k_scale, v_scale = self._effective_kv_scales()
         else:

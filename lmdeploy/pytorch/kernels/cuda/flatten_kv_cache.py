@@ -15,8 +15,6 @@ from .turbo_quant import get_lloyd_max_codebook
 Q_POLICY_NONE = tl.constexpr(0)
 Q_POLICY_INT4 = tl.constexpr(4)
 Q_POLICY_INT8 = tl.constexpr(8)
-Q_POLICY_FP8 = tl.constexpr(16)
-Q_POLICY_FP8_PER_TOKEN_HEAD = tl.constexpr(18)
 Q_POLICY_TURBO = tl.constexpr(42)
 
 
@@ -300,10 +298,6 @@ def _flatten_kv_cache_quant(
         k_cent = tl.load(k_codebook_ptr + k_idx3.to(tl.int32))
         kq = kmse_norm[:, None] * (k_cent + kqjl_norm[:, None] * k_sign)
         kq = kq.to(ko_ptr.dtype.element_ty)
-    elif quant_policy == Q_POLICY_FP8:
-        # per-token symmetric: scale only, no zero point
-        ks = tl.load(ksz_ptrs)
-        kq = (kc.to(tl.float32) * ks[:, None]).to(ko_ptr.dtype.element_ty)
     else:
         ks = tl.load(ksz_ptrs)
         kz = tl.load(ksz_ptrs + stride_kszd)
@@ -324,10 +318,6 @@ def _flatten_kv_cache_quant(
         vs = tl.load(vsz_ptrs)
         vq = tl.load(v_codebook_ptr + vc.to(tl.int32))
         vq = (vq * vs[:, None]).to(vo_ptr.dtype.element_ty)
-    elif quant_policy == Q_POLICY_FP8:
-        # per-token symmetric: scale only, no zero point
-        vs = tl.load(vsz_ptrs)
-        vq = (vc.to(tl.float32) * vs[:, None]).to(vo_ptr.dtype.element_ty)
     else:
         vs = tl.load(vsz_ptrs)
         vz = tl.load(vsz_ptrs + stride_vszd)
@@ -364,12 +354,8 @@ def flatten_kv_cache(k_caches: Tensor,
     else:
         raise RuntimeError('Unsupported layout.')
 
-    is_fp8_scalar = quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2)
-    is_fp8_per_token_head = quant_policy in (QuantPolicy.FP8_PER_TOKEN_HEAD, QuantPolicy.FP8_E5M2_PER_TOKEN_HEAD)
-    is_fp8_quant = is_fp8_scalar or is_fp8_per_token_head
-
     if out_dtype is None:
-        if quant_policy == QuantPolicy.TURBO_QUANT or is_fp8_quant:
+        if quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2, QuantPolicy.TURBO_QUANT):
             out_dtype = torch.float16
         else:
             out_dtype = k_caches.dtype
@@ -451,7 +437,7 @@ def flatten_kv_cache(k_caches: Tensor,
             BLOCK_DK=BLOCK_DK,
             BLOCK_DV=BLOCK_DV,
         )
-    elif is_fp8_scalar:
+    elif quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2):
         if k_scale is None:
             k_scale = torch.ones((), device=k_caches.device, dtype=torch.float32)
         if v_scale is None:
@@ -532,7 +518,7 @@ def flatten_kv_cache(k_caches: Tensor,
             stride_vos=stride_vos,
             stride_vod=v_states.stride(2),
             stride_boff=block_offsets.stride(0),
-            quant_policy=QuantPolicy.FP8 if is_fp8_per_token_head else quant_policy,
+            quant_policy=quant_policy,
             OUT_SIZE=out_size,
             HEAD_DIM_K=k_head_dim,
             HEAD_DIM_V=v_head_dim,

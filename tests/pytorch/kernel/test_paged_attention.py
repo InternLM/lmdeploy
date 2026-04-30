@@ -435,15 +435,6 @@ def _make_blocked_cache_quant(batched_k, batched_v, seq_lens, history_lens, bloc
     return blocked_k, blocked_v, blocked_ksz, blocked_vsz
 
 
-def quant_fp8(kv: torch.Tensor, fp8_dtype: torch.dtype = torch.float8_e4m3fn):
-    """Quant kv to fp8 on the head_dim with per-token/head scale."""
-    finfo = torch.finfo(fp8_dtype)
-    scale = torch.maximum(kv.abs().amax(dim=-1, keepdim=True) / finfo.max, kv.new_tensor(1e-6))
-    q_kv = torch.clamp(kv / scale, finfo.min, finfo.max).to(fp8_dtype)
-    dq_kv = q_kv.to(kv.dtype) * scale
-    return q_kv, scale, dq_kv
-
-
 def quant_fp8_scalar(kv: torch.Tensor, fp8_dtype: torch.dtype, scale: float):
     """Quant kv to fp8 with a scalar scale."""
     finfo = torch.finfo(fp8_dtype)
@@ -456,39 +447,6 @@ def quant_fp8_scalar(kv: torch.Tensor, fp8_dtype: torch.dtype, scale: float):
 def _skip_unsupported_triton_fp8_dtype(fp8_dtype: torch.dtype):
     if fp8_dtype is torch.float8_e4m3fn and torch.cuda.get_device_capability()[0] < 9:
         pytest.skip('Triton float8_e4m3fn conversion requires device with cc>=9.0')
-
-
-def _make_blocked_cache_fp8(batched_k, batched_v, seq_lens, history_lens, block_offsets, block_size, num_heads_k,
-                            feat_dim, feat_dim_v, fp8_dtype=torch.float8_e4m3fn):
-    max_blocks_nums = block_offsets.max() + 1
-    full_seq_lens = seq_lens + history_lens
-    batched_k, k_scales, dequant_k = quant_fp8(batched_k, fp8_dtype)
-    batched_v, v_scales, dequant_v = quant_fp8(batched_v, fp8_dtype)
-
-    blocked_k = batched_k.new_zeros(max_blocks_nums, block_size, num_heads_k, feat_dim)
-    blocked_v = batched_v.new_zeros(max_blocks_nums, block_size, num_heads_k, feat_dim_v)
-    blocked_ks = k_scales.new_zeros(max_blocks_nums, block_size, num_heads_k, 1)
-    blocked_vs = v_scales.new_zeros(max_blocks_nums, block_size, num_heads_k, 1)
-
-    for batch_id, offset in enumerate(block_offsets):
-        ori_k = batched_k[batch_id]
-        ori_v = batched_v[batch_id]
-        ori_ks = k_scales[batch_id]
-        ori_vs = v_scales[batch_id]
-        seq_len = full_seq_lens[batch_id]
-        for block_id, block_start in enumerate(range(0, seq_len, block_size)):
-            block_off = offset[block_id]
-            tmp_k = ori_k[block_start:block_start + block_size]
-            tmp_v = ori_v[block_start:block_start + block_size]
-            tmp_ks = ori_ks[block_start:block_start + block_size]
-            tmp_vs = ori_vs[block_start:block_start + block_size]
-            size = tmp_k.size(0)
-            blocked_k[block_off, :size] = tmp_k
-            blocked_v[block_off, :size] = tmp_v
-            blocked_ks[block_off, :size] = tmp_ks
-            blocked_vs[block_off, :size] = tmp_vs
-
-    return blocked_k, blocked_v, blocked_ks, blocked_vs, dequant_k, dequant_v
 
 
 def _make_blocked_cache_fp8_scalar(batched_k, batched_v, seq_lens, history_lens, block_offsets, block_size,
@@ -584,66 +542,6 @@ class TestPagedAttentionInt4(TestPagedAttentionInt8):
     @pytest.fixture
     def nbits(self):
         yield 4
-
-
-class TestPagedAttentionFP8PerTokenHead(TestPagedAttentionBase):
-
-    @pytest.fixture(autouse=True)
-    def skip_unsupported_fp8_dtype(self, fp8_dtype):
-        _skip_unsupported_triton_fp8_dtype(fp8_dtype)
-
-    @pytest.fixture
-    def fp8_dtype(self):
-        yield torch.float8_e4m3fn
-
-    @pytest.fixture
-    def quant_policy(self):
-        from lmdeploy.messages import QuantPolicy
-        yield QuantPolicy.FP8_PER_TOKEN_HEAD
-
-    @pytest.fixture
-    def blocked_kv(self, batched_kv, seq_lens, history_lens, block_offsets, block_size, num_heads_k, feat_dim,
-                   feat_dim_v, fp8_dtype):
-        batched_k, batched_v = batched_kv
-        yield _make_blocked_cache_fp8(batched_k, batched_v, seq_lens, history_lens, block_offsets, block_size,
-                                      num_heads_k, feat_dim, feat_dim_v, fp8_dtype)
-
-    @pytest.fixture
-    def gt(self, batched_q, blocked_kv, mask):
-        _, _, _, _, dequant_k, dequant_v = blocked_kv
-        yield _naive_attention(batched_q, (dequant_k, dequant_v), mask)
-
-    @pytest.mark.parametrize('feat_dim', [48, 32], indirect=True)
-    @pytest.mark.parametrize('feat_dim_v', [32], indirect=True)
-    @pytest.mark.parametrize(['num_heads_q', 'num_heads_k'], [(8, 2), (2, 2)], indirect=True)
-    @pytest.mark.parametrize('history_lens', [(50, 40, 30, 20)], indirect=True)
-    @pytest.mark.parametrize('block_size', [16], indirect=True)
-    def test_paged_attention(self, conti_q, blocked_kv, block_offsets, kv_seqlens, conti_gt, quant_policy):
-        from lmdeploy.pytorch.kernels.cuda import flash_attn_with_kvcache
-
-        blocked_k, blocked_v, blocked_ks, blocked_vs, _, _ = blocked_kv
-
-        out = flash_attn_with_kvcache(conti_q,
-                                      blocked_k,
-                                      blocked_v,
-                                      k_scales_zeros=blocked_ks,
-                                      v_scales_zeros=blocked_vs,
-                                      quant_policy=quant_policy,
-                                      page_table=block_offsets,
-                                      cache_seqlens=kv_seqlens)
-        torch.testing.assert_close(out, conti_gt, atol=1e-3, rtol=1e-5)
-
-
-class TestPagedAttentionFP8E5M2PerTokenHead(TestPagedAttentionFP8PerTokenHead):
-
-    @pytest.fixture
-    def fp8_dtype(self):
-        yield torch.float8_e5m2
-
-    @pytest.fixture
-    def quant_policy(self):
-        from lmdeploy.messages import QuantPolicy
-        yield QuantPolicy.FP8_E5M2_PER_TOKEN_HEAD
 
 
 class TestPagedAttentionFP8Scalar(TestPagedAttentionBase):

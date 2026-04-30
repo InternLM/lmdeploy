@@ -54,24 +54,14 @@ def _get_kv_cache_dtype(model_config: ModelConfig):
 
 def _is_fp8_quant_policy(quant_policy: QuantPolicy):
     """Return whether quant policy stores KV payload as torch FP8."""
-    return quant_policy in (
-        QuantPolicy.FP8,
-        QuantPolicy.FP8_E5M2,
-        QuantPolicy.FP8_PER_TOKEN_HEAD,
-        QuantPolicy.FP8_E5M2_PER_TOKEN_HEAD,
-    )
-
-
-def _is_fp8_per_token_head_quant_policy(quant_policy: QuantPolicy):
-    """Return whether FP8 KV cache stores per-token/head scale metadata."""
-    return quant_policy in (QuantPolicy.FP8_PER_TOKEN_HEAD, QuantPolicy.FP8_E5M2_PER_TOKEN_HEAD)
+    return quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2)
 
 
 def _get_fp8_cache_dtype(quant_policy: QuantPolicy):
     """Get the cache tensor dtype for an FP8 KV-cache quant policy."""
-    if quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_PER_TOKEN_HEAD):
+    if quant_policy == QuantPolicy.FP8:
         return torch.float8_e4m3fn
-    if quant_policy in (QuantPolicy.FP8_E5M2, QuantPolicy.FP8_E5M2_PER_TOKEN_HEAD):
+    if quant_policy == QuantPolicy.FP8_E5M2:
         return torch.float8_e5m2
     raise ValueError(f'Not an FP8 quant policy: {quant_policy}')
 
@@ -271,18 +261,13 @@ class CacheEngine:
         """Get quant cache descs."""
         if cache_config.quant_policy == QuantPolicy.NONE:
             return []
-        if _is_fp8_quant_policy(cache_config.quant_policy) and not _is_fp8_per_token_head_quant_policy(
-                cache_config.quant_policy):
+        if _is_fp8_quant_policy(cache_config.quant_policy):
             return []
 
         dtype = model_config.dtype
         # For quant_policy==QuantPolicy.TURBO_QUANT, K uses 4-bit quantization (has MSE norm and QJL norm),
         # V uses 2-bit quantization (only has MSE norm)
-        if _is_fp8_per_token_head_quant_policy(cache_config.quant_policy):
-            # per-token symmetric scale only, no zero point
-            key_scale_zero_shape = k_cache_desc.shape[:-1] + [1]
-            val_scale_zero_shape = v_cache_desc.shape[:-1] + [1]
-        elif cache_config.quant_policy == QuantPolicy.TURBO_QUANT:
+        if cache_config.quant_policy == QuantPolicy.TURBO_QUANT:
             key_scale_zero_shape = k_cache_desc.shape[:-1] + [2]
             val_scale_zero_shape = v_cache_desc.shape[:-1] + [1]
         else:

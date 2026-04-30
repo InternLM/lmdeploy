@@ -16,8 +16,6 @@ from .turbo_quant import get_lloyd_max_codebook, hadamard_rotate
 Q_POLICY_NONE = tl.constexpr(0)
 Q_POLICY_INT4 = tl.constexpr(4)
 Q_POLICY_INT8 = tl.constexpr(8)
-Q_POLICY_FP8 = tl.constexpr(16)
-Q_POLICY_FP8_PER_TOKEN_HEAD = tl.constexpr(18)
 Q_POLICY_TURBO = tl.constexpr(42)
 
 
@@ -877,9 +875,6 @@ def fill_kv_cache(k_states: Tensor,
     grid = (num_heads, max_num_blocks, batch_size)
     is_decoding = max_num_blocks == 1
 
-    is_fp8_scalar = quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2)
-    is_fp8_per_token_head = quant_policy in (QuantPolicy.FP8_PER_TOKEN_HEAD, QuantPolicy.FP8_E5M2_PER_TOKEN_HEAD)
-
     if quant_policy == QuantPolicy.NONE:
         _fill_kv_cache_kernel[grid](
             k_states,
@@ -914,7 +909,7 @@ def fill_kv_cache(k_states: Tensor,
             num_warps=4,
             num_stages=3,
         )
-    elif is_fp8_scalar:
+    elif quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2):
         if k_scale is None:
             k_scale = torch.ones((), device=k_states.device, dtype=torch.float32)
         if v_scale is None:
@@ -956,22 +951,6 @@ def fill_kv_cache(k_states: Tensor,
             BLOCK_DV=BLOCK_DV,
             num_warps=4,
             num_stages=3,
-        )
-    elif is_fp8_per_token_head:
-        fill_kv_cache_blocked_fp8(
-            k_states,
-            v_states,
-            k_caches,
-            v_caches,
-            k_scales_zeros,
-            v_scales_zeros,
-            q_start_loc,
-            kv_seq_length,
-            max_q_seq_length,
-            block_offsets,
-            q_seq_lens=q_seq_length,
-            group_size=k_caches.shape[d_dim],  # per-token scale: group_size == head_dim
-            kv_layout=kv_layout,
         )
     else:
         _fill_kv_cache_quant_kernel[grid](

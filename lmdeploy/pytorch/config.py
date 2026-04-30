@@ -100,9 +100,6 @@ class CacheConfig:
     max_prefill_token_num: int = 8192
     enable_prefix_caching: bool = False
     quant_policy: QuantPolicy = QuantPolicy.NONE
-    # If enabled, dynamically calculate normal FP8 KV-cache k/v scales on the
-    # first forward pass. Otherwise they default to 1.0.
-    calculate_kv_scales: bool = False
     device_type: str = 'cuda'
     num_state_caches: int = None
     states_shapes: list[tuple] = field(default_factory=list)
