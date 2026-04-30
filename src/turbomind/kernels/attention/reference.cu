@@ -4,6 +4,7 @@
 #include "src/turbomind/kernels/attention/rotary_embedding.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/unfused_attention_kernels.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
@@ -56,38 +57,39 @@ applyRotaryEmbedding(T* k_cache, int max_k_len, int head_num, int head_dim, floa
 }
 
 template<class T>
-void invokeApplyRotaryEmbedding(T*           k_cache,
-                                int          max_k_len,
-                                int          head_num,
-                                int          head_dim,
-                                float        rope_base,
-                                int          rope_dim,
-                                int          batch_size,
-                                cudaStream_t stream)
+cudaError_t invokeApplyRotaryEmbedding(T*           k_cache,
+                                       int          max_k_len,
+                                       int          head_num,
+                                       int          head_dim,
+                                       float        rope_base,
+                                       int          rope_dim,
+                                       int          batch_size,
+                                       cudaStream_t stream)
 {
     int  threads = 128;
     dim3 blocks(max_k_len, head_num, batch_size);
 
     applyRotaryEmbedding<<<blocks, threads, 0, stream>>>(k_cache, max_k_len, head_num, head_dim, rope_base, rope_dim);
+    return cudaGetLastError();
 }
 
-template void invokeApplyRotaryEmbedding(half*        k_cache,
-                                         int          max_k_len,
-                                         int          head_num,
-                                         int          head_dim,
-                                         float        rope_base,
-                                         int          rope_dim,
-                                         int          batch_size,
-                                         cudaStream_t stream);
+template cudaError_t invokeApplyRotaryEmbedding(half*        k_cache,
+                                                int          max_k_len,
+                                                int          head_num,
+                                                int          head_dim,
+                                                float        rope_base,
+                                                int          rope_dim,
+                                                int          batch_size,
+                                                cudaStream_t stream);
 #if ENABLE_BF16
-template void invokeApplyRotaryEmbedding(nv_bfloat16* k_cache,
-                                         int          max_k_len,
-                                         int          head_num,
-                                         int          head_dim,
-                                         float        rope_base,
-                                         int          rope_dim,
-                                         int          batch_size,
-                                         cudaStream_t stream);
+template cudaError_t invokeApplyRotaryEmbedding(nv_bfloat16* k_cache,
+                                                int          max_k_len,
+                                                int          head_num,
+                                                int          head_dim,
+                                                float        rope_base,
+                                                int          rope_dim,
+                                                int          batch_size,
+                                                cudaStream_t stream);
 #endif
 
 template<class T>
@@ -315,7 +317,7 @@ void Reference<T>::Execute(
     params.k_length        = max_k_len_;
     params.num_heads       = head_num_;
     params.sinks           = sinks;
-    invokeMaskedSoftmax(params, stream_);
+    TM_CUDA_CHECK(invokeMaskedSoftmax(params, stream_));
 
     alpha = 1.f;
     cublasGemmStridedBatchedEx(cublas_,
@@ -343,17 +345,17 @@ void Reference<T>::Execute(
                                CUBLAS_GEMM_DEFAULT);
 
     // [B, H, Q, D] -> [B, Q, H, D]
-    invokeTransposeAttentionOutRemovePadding(out_.data().get(),
-                                             output,
-                                             batch_size_ * max_q_len_,
-                                             batch_size_,
-                                             max_q_len_,
-                                             head_num_,
-                                             head_dim_,
-                                             nullptr,
-                                             nullptr,
-                                             0,
-                                             stream_);
+    TM_CUDA_CHECK(invokeTransposeAttentionOutRemovePadding(out_.data().get(),
+                                                           output,
+                                                           batch_size_ * max_q_len_,
+                                                           batch_size_,
+                                                           max_q_len_,
+                                                           head_num_,
+                                                           head_dim_,
+                                                           nullptr,
+                                                           nullptr,
+                                                           0,
+                                                           stream_));
 }
 
 template class Reference<half>;

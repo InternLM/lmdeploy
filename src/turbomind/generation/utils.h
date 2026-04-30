@@ -24,7 +24,7 @@ void init_stop_bad_words(G getter, const char* key, const Rs& rs, T* h_buf, T* d
         if (offsets.size() == 0 || token_ids.size() == 0) {
             continue;
         }
-        FT_CHECK(offsets.back() == token_ids.size());
+        TM_CHECK(offsets.back() == token_ids.size());
         if (offsets.back() <= kMaxStopBadWordsLen) {
             copy_tokens[i]  = std::make_pair(token_ids.data(), (int)token_ids.size());
             copy_offsets[i] = std::make_pair(offsets.data(), (int)offsets.size());

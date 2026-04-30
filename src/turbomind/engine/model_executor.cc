@@ -32,7 +32,8 @@ struct ModelExecutor::Impl {
 
     void InternalThreadEntry()
     {
-        check_cuda_error(cudaSetDevice(device_id_));
+        TM_FUNCTION_SCOPE();
+        TM_CUDA_CHECK(cudaSetDevice(device_id_));
 
         Stream    stream  = Stream::create();
         Allocator h_alloc = Allocator(kCPU);
@@ -55,6 +56,7 @@ struct ModelExecutor::Impl {
 
     void Run(BatchData& d)
     {
+        TM_FUNCTION_SCOPE();
         auto batch = &d;
 
         BatchCopy copy;

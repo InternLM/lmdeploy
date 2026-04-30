@@ -104,20 +104,18 @@ static void Convert(LlamaDenseWeight& dense, bool is_grouped, cudaStream_t st)
 
         if (bits == 4) {  // u4 -> u16
             extend_to_u16(tmp.data(), (const uint4_t*)dense.weight.raw_data(), tmp.size(), st);
-            sync_check_cuda_error();
         }
         else if (bits == 8) {  // u8 -> u16
             extend_to_u16(tmp.data(), (const uint8_t*)dense.weight.raw_data(), tmp.size(), st);
-            sync_check_cuda_error();
         }
         else if (bits == 16) {
-            check_cuda_error(
+            TM_CUDA_CHECK(
                 cudaMemcpyAsync(tmp.raw_data(), dense.weight.raw_data(), tmp.byte_size(), cudaMemcpyDefault, st));
         }
 
         if (order_w == kRowMajor) {  // (k,m) -> (m,k)
             Tensor_<uint16_t> trans{{dense.output_dim, dense.input_dim}, kDEVICE};
-            invokeTransposeAxis01(trans.data(), tmp.data(), dense.input_dim, dense.output_dim, 1, st);
+            TM_CUDA_CHECK(invokeTransposeAxis01(trans.data(), tmp.data(), dense.input_dim, dense.output_dim, 1, st));
             tmp = trans;
         }
 
@@ -145,11 +143,9 @@ static void Convert(LlamaDenseWeight& dense, bool is_grouped, cudaStream_t st)
         }
         k_desc.pack = conv_w->pack;
 
-        check_cuda_error(cudaMemsetAsync(dense.weight.raw_data(), 0, dense.weight.byte_size(), st));
+        TM_CUDA_CHECK(cudaMemsetAsync(dense.weight.raw_data(), 0, dense.weight.byte_size(), st));
 
         TM_CHECK(conv_w->Convert(tmp.data(), w_desc, dense.weight.raw_data(), k_desc, st) == 0);
-
-        sync_check_cuda_error();
 
         k_desc.type = dense.weight_type;
         if (is_A) {
@@ -188,7 +184,6 @@ static void Convert(LlamaDenseWeight& dense, bool is_grouped, cudaStream_t st)
 
         if (dense.data_type == kHalf && dense.weight_type == kFloat4_e2m1) {  // mxfp4
             AdjustUe8m0ScaleForHalf(tmp_q.data<uint8_t>(), tmp_q.size(), st);
-            sync_check_cuda_error();
         }
 
         MatrixLayout s_desc{
@@ -208,7 +203,6 @@ static void Convert(LlamaDenseWeight& dense, bool is_grouped, cudaStream_t st)
         q_desc.pack         = pack_s;
 
         TM_CHECK(conv_s->Convert(tmp_q.raw_data(), s_desc, dense.scales.raw_data(), q_desc, st) == 0);
-        sync_check_cuda_error();
 
         // weight is placed at B in `Linear`
         if (is_A) {
@@ -228,7 +222,7 @@ static void ConvertBlockscaleFP8Native(LlamaDenseWeight& dense, cudaStream_t str
     auto process = [&](Tensor& x, MatrixLayout& d, auto dtype) {
         using T = decltype(dtype);
         Tensor trans{{x.shape(1), x.shape(0)}, x.dtype(), kDEVICE};
-        invokeTransposeAxis01((T*)trans.raw_data(), (T*)x.raw_data(), x.shape(0), x.shape(1), 1, stream);
+        TM_CUDA_CHECK(invokeTransposeAxis01((T*)trans.raw_data(), (T*)x.raw_data(), x.shape(0), x.shape(1), 1, stream));
         x = std::move(trans);
         d = MatrixLayout{x.dtype(),  //
                          kColMajor,
@@ -427,19 +421,15 @@ void interleave(LlamaDenseWeight& c, LlamaDenseWeight& a, LlamaDenseWeight& b, D
     TM_CHECK_EQ(c.group_size, b.group_size);
 
     Interleave(a.weight, b.weight, c.weight, st);
-    sync_check_cuda_error();
 
     if (a.scales) {
         Interleave(a.scales, b.scales, c.scales, st);
-        sync_check_cuda_error();
     }
     if (a.zeros) {
         Interleave(a.zeros, b.zeros, c.zeros, st);
-        sync_check_cuda_error();
     }
     if (a.bias) {
         Interleave(a.bias, b.bias, c.bias, st);
-        sync_check_cuda_error();
     }
 }
 
@@ -460,22 +450,22 @@ static void Chunk(const Tensor& a, const Tensor& b, Tensor& c, cudaStream_t st)
     }
     int height = K;
     int width  = byte_size(a.dtype(), M);
-    check_cuda_error(cudaMemcpy2DAsync((char*)c.raw_data(),  //
-                                       dpitch,
-                                       (const char*)a.raw_data(),
-                                       spitch,
-                                       width,
-                                       height,
-                                       cudaMemcpyDefault,
-                                       st));
-    check_cuda_error(cudaMemcpy2DAsync((char*)c.raw_data() + width,  //
-                                       dpitch,
-                                       (const char*)b.raw_data(),
-                                       spitch,
-                                       width,
-                                       height,
-                                       cudaMemcpyDefault,
-                                       st));
+    TM_CUDA_CHECK(cudaMemcpy2DAsync((char*)c.raw_data(),  //
+                                    dpitch,
+                                    (const char*)a.raw_data(),
+                                    spitch,
+                                    width,
+                                    height,
+                                    cudaMemcpyDefault,
+                                    st));
+    TM_CUDA_CHECK(cudaMemcpy2DAsync((char*)c.raw_data() + width,  //
+                                    dpitch,
+                                    (const char*)b.raw_data(),
+                                    spitch,
+                                    width,
+                                    height,
+                                    cudaMemcpyDefault,
+                                    st));
 }
 
 void chunk(LlamaDenseWeight& c, LlamaDenseWeight& a, LlamaDenseWeight& b, DataType data_type, cudaStream_t st)
@@ -488,19 +478,15 @@ void chunk(LlamaDenseWeight& c, LlamaDenseWeight& a, LlamaDenseWeight& b, DataTy
     TM_CHECK_EQ(c.group_size, b.group_size);
 
     Chunk(a.weight, b.weight, c.weight, st);
-    sync_check_cuda_error();
 
     if (a.scales) {
         Chunk(a.scales, b.scales, c.scales, st);
-        sync_check_cuda_error();
     }
     if (a.zeros) {
         Chunk(a.zeros, b.zeros, c.zeros, st);
-        sync_check_cuda_error();
     }
     if (a.bias) {
         Chunk(a.bias, b.bias, c.bias, st);
-        sync_check_cuda_error();
     }
 }
 

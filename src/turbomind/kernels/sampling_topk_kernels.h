@@ -72,6 +72,6 @@ struct TopKSortFilterParams {
 };
 
 template<typename T>
-void invokeTopKSortFilter(TopKSortFilterParams& params, cudaStream_t stream);
+[[nodiscard]] cudaError_t invokeTopKSortFilter(TopKSortFilterParams& params, cudaStream_t stream);
 
 }  // namespace turbomind

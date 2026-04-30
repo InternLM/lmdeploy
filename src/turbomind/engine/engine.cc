@@ -218,7 +218,7 @@ void Engine::Impl::CreateSequenceManager()
 
     const auto get_free_size = [&] {  //
         size_t free{}, total{};
-        check_cuda_error(cudaMemGetInfo(&free, &total));
+        TM_CUDA_CHECK(cudaMemGetInfo(&free, &total));
         return AllReduce(tp_group_, free, comm::RedOp::kMin);
     };
 
@@ -771,7 +771,7 @@ void Engine::Impl::Update(BatchData& b, std::vector<Signal>& signals)
 
 void Engine::Impl::InternalThreadEntry()
 {
-    check_cuda_error(cudaSetDevice(device_id_));
+    TM_CUDA_CHECK(cudaSetDevice(device_id_));
 
     auto stream = Stream::create();
 

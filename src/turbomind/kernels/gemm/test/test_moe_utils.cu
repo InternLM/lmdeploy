@@ -2,6 +2,7 @@
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include "src/turbomind/kernels/gemm/tuner/cache_utils.h"
 #include "src/turbomind/kernels/gemm/types.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include <algorithm>
 #include <iomanip>
 #include <numeric>
@@ -210,7 +211,8 @@ bool test_moe_gate(int                     tokens,  //
     bool softmax = true;
 
     if (1) {
-        invokeMoeSoftmaxMaskTopKGroups(logits.data().get(), tokens, expert_num, expert_num / 8, 8, nullptr);
+        TM_CUDA_CHECK(
+            invokeMoeSoftmaxMaskTopKGroups(logits.data().get(), tokens, expert_num, expert_num / 8, 8, nullptr));
         softmax = false;
     }
 

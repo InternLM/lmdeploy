@@ -87,13 +87,13 @@ __global__ void batchApplyTemperaturePenalty_v2(T*           logits,
 }
 
 template<typename T>
-void invokeBatchApplyTemperaturePenalty_v2(T*           logits,
-                                           const T*     bias,
-                                           const float* temperatures,
-                                           const int    batch_size,
-                                           const int    vocab_size,
-                                           const int    vocab_size_padded,
-                                           cudaStream_t stream)
+cudaError_t invokeBatchApplyTemperaturePenalty_v2(T*           logits,
+                                                  const T*     bias,
+                                                  const float* temperatures,
+                                                  const int    batch_size,
+                                                  const int    vocab_size,
+                                                  const int    vocab_size_padded,
+                                                  cudaStream_t stream)
 {
 
     auto invoke = [&](auto vec_size) {
@@ -118,16 +118,17 @@ void invokeBatchApplyTemperaturePenalty_v2(T*           logits,
     else {
         invoke(std::integral_constant<int, 1>{});
     }
+    return cudaGetLastError();
 }
 
 #define INSTANTIATE_INVOKE_BATCH_APPLY_TEMPERATURE_PENALTY_V2(T)                                                       \
-    template void invokeBatchApplyTemperaturePenalty_v2(T*           logits,                                           \
-                                                        const T*     bias,                                             \
-                                                        const float* temperatures,                                     \
-                                                        const int    batch_size,                                       \
-                                                        const int    vocab_size,                                       \
-                                                        const int    vocab_size_padded,                                \
-                                                        cudaStream_t stream);
+    template cudaError_t invokeBatchApplyTemperaturePenalty_v2(T*           logits,                                    \
+                                                               const T*     bias,                                      \
+                                                               const float* temperatures,                              \
+                                                               const int    batch_size,                                \
+                                                               const int    vocab_size,                                \
+                                                               const int    vocab_size_padded,                         \
+                                                               cudaStream_t stream);
 
 INSTANTIATE_INVOKE_BATCH_APPLY_TEMPERATURE_PENALTY_V2(float);
 
@@ -216,30 +217,31 @@ __global__ void batchApplyMinLengthPenalty(T* __restrict__ logits,
 }
 
 template<typename T>
-void invokeMinLengthPenalty(T*           logits,
-                            const int*   min_lengths,
-                            const int*   sequnece_lengths,
-                            const int    vocab_size_padded,
-                            const int    batch_size,
-                            const int*   end_ids,
-                            const int    end_ids_size,
-                            cudaStream_t stream)
+cudaError_t invokeMinLengthPenalty(T*           logits,
+                                   const int*   min_lengths,
+                                   const int*   sequnece_lengths,
+                                   const int    vocab_size_padded,
+                                   const int    batch_size,
+                                   const int*   end_ids,
+                                   const int    end_ids_size,
+                                   cudaStream_t stream)
 {
     const dim3 block(std::min(batch_size * end_ids_size, 1024));
     const dim3 grid((batch_size * end_ids_size + block.x - 1) / block.x);
     batchApplyMinLengthPenalty<<<block, grid, 0, stream>>>(
         logits, min_lengths, sequnece_lengths, vocab_size_padded, batch_size, end_ids, end_ids_size);
+    return cudaGetLastError();
 }
 
 #define INSTANTIATE_INVOKE_MIN_LENGTH_PENALTY(T)                                                                       \
-    template void invokeMinLengthPenalty(T*           logits,                                                          \
-                                         const int*   min_lengths,                                                     \
-                                         const int*   sequnece_lengths,                                                \
-                                         const int    vocab_size_padded,                                               \
-                                         const int    batch_size,                                                      \
-                                         const int*   end_ids,                                                         \
-                                         const int    end_ids_size,                                                    \
-                                         cudaStream_t stream);
+    template cudaError_t invokeMinLengthPenalty(T*           logits,                                                   \
+                                                const int*   min_lengths,                                              \
+                                                const int*   sequnece_lengths,                                         \
+                                                const int    vocab_size_padded,                                        \
+                                                const int    batch_size,                                               \
+                                                const int*   end_ids,                                                  \
+                                                const int    end_ids_size,                                             \
+                                                cudaStream_t stream);
 
 INSTANTIATE_INVOKE_MIN_LENGTH_PENALTY(float);
 

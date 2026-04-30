@@ -55,13 +55,13 @@ __global__ void stop_words_criterion_v2(const int** token_ids_ptrs,
     }
 }
 
-void invokeStopWordsCriterion_v2(const int**  token_ids_ptrs,
-                                 const int*   sequence_length,
-                                 const int*   stop_words,
-                                 bool*        finished,
-                                 int          stop_words_len,
-                                 int          batch_size,
-                                 cudaStream_t stream)
+cudaError_t invokeStopWordsCriterion_v2(const int**  token_ids_ptrs,
+                                        const int*   sequence_length,
+                                        const int*   stop_words,
+                                        bool*        finished,
+                                        int          stop_words_len,
+                                        int          batch_size,
+                                        cudaStream_t stream)
 {
     // Check if we have sampled a word from the stop_words list. If so, stop the sequence.
 
@@ -70,6 +70,7 @@ void invokeStopWordsCriterion_v2(const int**  token_ids_ptrs,
 
     stop_words_criterion_v2<<<grid, block, 0, stream>>>(
         token_ids_ptrs, sequence_length, stop_words, finished, stop_words_len, batch_size);
+    return cudaGetLastError();
 }
 
 __global__ void length_criterion_v2(bool*      finished,  //
@@ -86,11 +87,11 @@ __global__ void length_criterion_v2(bool*      finished,  //
     }
 }
 
-void invokeLengthCriterion_v2(bool*        finished,  //
-                              const int*   sequence_length,
-                              const int*   sequence_length_limit,
-                              int          batch_size,
-                              cudaStream_t stream)
+cudaError_t invokeLengthCriterion_v2(bool*        finished,  //
+                                     const int*   sequence_length,
+                                     const int*   sequence_length_limit,
+                                     int          batch_size,
+                                     cudaStream_t stream)
 {
     // Check if we have attained the sequence length limit. If so, stop the sequence.
 
@@ -98,6 +99,7 @@ void invokeLengthCriterion_v2(bool*        finished,  //
     const int     grid  = cdiv(batch_size, block);
 
     length_criterion_v2<<<grid, block, 0, stream>>>(finished, sequence_length, sequence_length_limit, batch_size);
+    return cudaGetLastError();
 }
 
 }  // namespace turbomind

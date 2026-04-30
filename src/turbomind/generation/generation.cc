@@ -19,6 +19,7 @@
 #include "src/turbomind/kernels/sampling_topk_kernels.h"  // InitializeRandomStates
 
 #include "src/turbomind/models/llama/llama_kernels.h"  // invokePadLastTokenIds
+#include "src/turbomind/utils/cuda_utils.h"
 
 // #include "dbg.h"
 
@@ -256,7 +257,6 @@ struct Generation::Impl {
                                    d.random_init.data(),
                                    b.bsz,
                                    stream);
-            sync_check_cuda_error();
         }
 
         env.emplace("output_ids", output_ids_);              // out
@@ -270,7 +270,7 @@ struct Generation::Impl {
 
             if (logits.dtype() != kFloat32) {
                 auto tmp = empty_like(logits, kFloat32);
-                invokeCastFloat2D(logits, tmp, stream);
+                TM_CUDA_CHECK(invokeCastFloat2D(logits, tmp, stream));
                 logits = std::move(tmp);
             }
 

@@ -21,18 +21,18 @@
 
 namespace turbomind {
 
-void invokeStopWordsCriterion_v2(const int**  token_ids_ptrs,
-                                 const int*   sequence_length,
-                                 const int*   stop_words,
-                                 bool*        finished,
-                                 int          stop_words_len,
-                                 int          batch_size,
-                                 cudaStream_t stream);
+[[nodiscard]] cudaError_t invokeStopWordsCriterion_v2(const int**  token_ids_ptrs,
+                                                      const int*   sequence_length,
+                                                      const int*   stop_words,
+                                                      bool*        finished,
+                                                      int          stop_words_len,
+                                                      int          batch_size,
+                                                      cudaStream_t stream);
 
-void invokeLengthCriterion_v2(bool*        finished,  //
-                              const int*   sequence_length,
-                              const int*   sequence_length_limit,
-                              int          batch_size,
-                              cudaStream_t stream);
+[[nodiscard]] cudaError_t invokeLengthCriterion_v2(bool*        finished,  //
+                                                   const int*   sequence_length,
+                                                   const int*   sequence_length_limit,
+                                                   int          batch_size,
+                                                   cudaStream_t stream);
 
 }  // namespace turbomind

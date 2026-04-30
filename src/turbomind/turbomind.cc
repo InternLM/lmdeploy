@@ -70,7 +70,7 @@ static void parse_default_rope_param(const YAML::Node& node, RopeParam& param)
     param.dim  = node["dim"].as<int>();
     if (param.base == 0.f || param.dim == 0) {
         TM_LOG_ERROR("invalid rope param: base = {}, dim = {}", param.base, param.dim);
-        FT_CHECK(0);
+        TM_CHECK(0);
     }
 }
 
@@ -106,7 +106,7 @@ static void parse_mrope_rope_param(const YAML::Node& node, RopeParam& param)
 {
     parse_default_rope_param(node, param);
     auto mrope_section = node["mrope_section"].as<std::vector<int>>();
-    FT_CHECK(mrope_section.size() == 3);
+    TM_CHECK(mrope_section.size() == 3);
     param.mrope.section = {mrope_section[0], mrope_section[1], mrope_section[2]};
 }
 
@@ -134,7 +134,7 @@ static void parse_rope_param(const YAML::Node& node, RopeParam& rope)
             parse_mrope_rope_param(node, rope);
             break;
         default:
-            FT_CHECK(0);
+            TM_UNREACHABLE;
             break;
     }
 }
@@ -238,13 +238,12 @@ struct TurboMind::Impl {
     void ProcessWeights(int index)
     {
         CudaDeviceGuard dev_guard(engine_param_.devices[index]);
-        FT_CHECK(weights_[index] != nullptr);
+        TM_CHECK(weights_[index] != nullptr);
 
         cudaDeviceProp props{};
-        check_cuda_error(cudaGetDeviceProperties(&props, engine_param_.devices[index]));
+        TM_CUDA_CHECK(cudaGetDeviceProperties(&props, engine_param_.devices[index]));
 
         weights_[index]->prepare(props);
-        sync_check_cuda_error();
     }
 
     void CreateEngine(int index);
@@ -473,7 +472,7 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     }
 
     comm_size_ = engine_param_.attn_dp_size * engine_param_.attn_tp_size * engine_param_.attn_cp_size;
-    FT_CHECK(engine_param_.mlp_tp_size == comm_size_);
+    TM_CHECK(engine_param_.mlp_tp_size == comm_size_);
 
     communicator_type_ = engine["communicator"].as<std::string>();
 

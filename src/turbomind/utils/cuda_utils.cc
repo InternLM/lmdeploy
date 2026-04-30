@@ -15,28 +15,25 @@
  */
 
 #include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/core/scope.h"
 #include "src/turbomind/macro.h"
 #include <driver_types.h>
 #include <regex>
 
 namespace turbomind {
 
-void syncAndCheck(const char* const file, int const line)
+void ReportCudaError(cudaError_t ec, const char* file, int line)
 {
-    // When FT_DEBUG_LEVEL=DEBUG, must check error
-    static char* level_name = std::getenv("TM_DEBUG_LEVEL");
-    if (level_name != nullptr) {
-        static std::string level = std::string(level_name);
-        if (level == "DEBUG") {
-            cudaDeviceSynchronize();
-            cudaError_t result = cudaGetLastError();
-            if (result) {
-                TM_LOG_FATAL("CUDA runtime error: {} {}:{}", _cudaGetErrorEnum(result), file, line);
-                std::abort();
-            }
-            TM_LOG_DEBUG("run syncAndCheck at {}:{}", file, line);
-        }
-    }
+    core::Scope _("TM_CUDA_CHECK", file, line);
+    core::Logger::Instance().LogFatalImpl(file, line, fmt::format("CUDA error: {}", cudaGetErrorString(ec)));
+}
+
+void ReportCuDrvError(CUresult ec, const char* file, int line)
+{
+    core::Scope _("TM_CUDRV_CHECK", file, line);
+    const char* str{};
+    cuGetErrorString(ec, &str);
+    core::Logger::Instance().LogFatalImpl(file, line, fmt::format("CUDA Driver error: {}", str ? str : "Unknown"));
 }
 
 /* **************************** debug tools ********************************* */
@@ -48,7 +45,7 @@ void printMatrix(T* ptr, int m, int k, int stride, bool is_device_ptr)
     if (is_device_ptr) {
         // k < stride ; stride = col-dimension.
         tmp = reinterpret_cast<T*>(malloc(m * stride * sizeof(T)));
-        check_cuda_error(cudaMemcpy(tmp, ptr, sizeof(T) * m * stride, cudaMemcpyDeviceToHost));
+        TM_CUDA_CHECK(cudaMemcpy(tmp, ptr, sizeof(T) * m * stride, cudaMemcpyDeviceToHost));
         cudaDeviceSynchronize();
     }
     else {
@@ -91,7 +88,7 @@ void printMatrix(unsigned long long* ptr, int m, int k, int stride, bool is_devi
     if (is_device_ptr) {
         // k < stride ; stride = col-dimension.
         tmp = reinterpret_cast<T*>(malloc(m * stride * sizeof(T)));
-        check_cuda_error(cudaMemcpy(tmp, ptr, sizeof(T) * m * stride, cudaMemcpyDeviceToHost));
+        TM_CUDA_CHECK(cudaMemcpy(tmp, ptr, sizeof(T) * m * stride, cudaMemcpyDeviceToHost));
         cudaDeviceSynchronize();
     }
     else {
@@ -128,7 +125,7 @@ void printMatrix(int* ptr, int m, int k, int stride, bool is_device_ptr)
     if (is_device_ptr) {
         // k < stride ; stride = col-dimension.
         tmp = reinterpret_cast<T*>(malloc(m * stride * sizeof(T)));
-        check_cuda_error(cudaMemcpy(tmp, ptr, sizeof(T) * m * stride, cudaMemcpyDeviceToHost));
+        TM_CUDA_CHECK(cudaMemcpy(tmp, ptr, sizeof(T) * m * stride, cudaMemcpyDeviceToHost));
         cudaDeviceSynchronize();
     }
     else {
@@ -167,7 +164,7 @@ void printMatrix(size_t* ptr, int m, int k, int stride, bool is_device_ptr)
     if (is_device_ptr) {
         // k < stride ; stride = col-dimension.
         tmp = reinterpret_cast<T*>(malloc(m * stride * sizeof(T)));
-        check_cuda_error(cudaMemcpy(tmp, ptr, sizeof(T) * m * stride, cudaMemcpyDeviceToHost));
+        TM_CUDA_CHECK(cudaMemcpy(tmp, ptr, sizeof(T) * m * stride, cudaMemcpyDeviceToHost));
         cudaDeviceSynchronize();
     }
     else {
@@ -244,51 +241,51 @@ template void check_abs_mean_val(const __nv_bfloat16* result, const int size);
 int getSMVersion()
 {
     int device{-1};
-    check_cuda_error(cudaGetDevice(&device));
+    TM_CUDA_CHECK(cudaGetDevice(&device));
     int sm_major = 0;
     int sm_minor = 0;
-    check_cuda_error(cudaDeviceGetAttribute(&sm_major, cudaDevAttrComputeCapabilityMajor, device));
-    check_cuda_error(cudaDeviceGetAttribute(&sm_minor, cudaDevAttrComputeCapabilityMinor, device));
+    TM_CUDA_CHECK(cudaDeviceGetAttribute(&sm_major, cudaDevAttrComputeCapabilityMajor, device));
+    TM_CUDA_CHECK(cudaDeviceGetAttribute(&sm_minor, cudaDevAttrComputeCapabilityMinor, device));
     return sm_major * 10 + sm_minor;
 }
 
 int getSMCount()
 {
     int device{-1};
-    check_cuda_error(cudaGetDevice(&device));
+    TM_CUDA_CHECK(cudaGetDevice(&device));
     int sm_count{};
-    check_cuda_error(cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device));
+    TM_CUDA_CHECK(cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device));
     return sm_count;
 }
 
 std::string getDeviceName()
 {
     int device{-1};
-    check_cuda_error(cudaGetDevice(&device));
+    TM_CUDA_CHECK(cudaGetDevice(&device));
     cudaDeviceProp props;
-    check_cuda_error(cudaGetDeviceProperties(&props, device));
+    TM_CUDA_CHECK(cudaGetDeviceProperties(&props, device));
     return std::string(props.name);
 }
 
 int getDevice()
 {
     int current_dev_id = 0;
-    check_cuda_error(cudaGetDevice(&current_dev_id));
+    TM_CUDA_CHECK(cudaGetDevice(&current_dev_id));
     return current_dev_id;
 }
 
 int getDeviceCount()
 {
     int count = 0;
-    check_cuda_error(cudaGetDeviceCount(&count));
+    TM_CUDA_CHECK(cudaGetDeviceCount(&count));
     return count;
 }
 
 void trim_default_mempool(int device_id)
 {
     cudaMemPool_t mempool;
-    check_cuda_error(cudaDeviceGetDefaultMemPool(&mempool, device_id));
-    check_cuda_error(cudaMemPoolTrimTo(mempool, 0));
+    TM_CUDA_CHECK(cudaDeviceGetDefaultMemPool(&mempool, device_id));
+    TM_CUDA_CHECK(cudaMemPoolTrimTo(mempool, 0));
 }
 
 /* ************************** end of common utils ************************** */

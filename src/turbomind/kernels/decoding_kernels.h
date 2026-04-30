@@ -25,70 +25,70 @@ namespace turbomind {
 // get token from all_ids at step, then lookup from the embedding table
 // by the token
 template<typename T>
-void invokeEmbeddingLookupPosEncodingPadCount(T*                    from_tensor,
-                                              const T*              embedding_table,
-                                              const T*              position_encoding,
-                                              const int*            all_ids,
-                                              const int*            padding_count,
-                                              pPromptTuningParam<T> prompt_param,
-                                              const int             local_token_num,
-                                              const int             hidden_units,
-                                              const T               scale,
-                                              const int             step,
-                                              const int             token_num,
-                                              const int             ite,
-                                              const int             seq_len,
-                                              cudaStream_t          stream);
+[[nodiscard]] cudaError_t invokeEmbeddingLookupPosEncodingPadCount(T*                    from_tensor,
+                                                                   const T*              embedding_table,
+                                                                   const T*              position_encoding,
+                                                                   const int*            all_ids,
+                                                                   const int*            padding_count,
+                                                                   pPromptTuningParam<T> prompt_param,
+                                                                   const int             local_token_num,
+                                                                   const int             hidden_units,
+                                                                   const T               scale,
+                                                                   const int             step,
+                                                                   const int             token_num,
+                                                                   const int             ite,
+                                                                   const int             seq_len,
+                                                                   cudaStream_t          stream);
 
 template<typename T>
-void invokeEmbeddingLookupPosEncodingPadCount(T*           from_tensor,
-                                              const T*     embedding_table,
-                                              const T*     position_encoding,
-                                              const int*   all_ids,
-                                              const int*   padding_count,
-                                              const int    local_token_num,
-                                              const int    hidden_units,
-                                              const T      scale,
-                                              const int    step,
-                                              const int    token_num,
-                                              const int    ite,
-                                              cudaStream_t stream)
+[[nodiscard]] cudaError_t invokeEmbeddingLookupPosEncodingPadCount(T*           from_tensor,
+                                                                   const T*     embedding_table,
+                                                                   const T*     position_encoding,
+                                                                   const int*   all_ids,
+                                                                   const int*   padding_count,
+                                                                   const int    local_token_num,
+                                                                   const int    hidden_units,
+                                                                   const T      scale,
+                                                                   const int    step,
+                                                                   const int    token_num,
+                                                                   const int    ite,
+                                                                   cudaStream_t stream)
 {
-    invokeEmbeddingLookupPosEncodingPadCount(from_tensor,
-                                             embedding_table,
-                                             position_encoding,
-                                             all_ids,
-                                             padding_count,
-                                             {(const T**)nullptr, 0, 0, false, nullptr},
-                                             local_token_num,
-                                             hidden_units,
-                                             scale,
-                                             step,
-                                             token_num,
-                                             ite,
-                                             0,
-                                             stream);
+    return invokeEmbeddingLookupPosEncodingPadCount(from_tensor,
+                                                    embedding_table,
+                                                    position_encoding,
+                                                    all_ids,
+                                                    padding_count,
+                                                    {(const T**)nullptr, 0, 0, false, nullptr},
+                                                    local_token_num,
+                                                    hidden_units,
+                                                    scale,
+                                                    step,
+                                                    token_num,
+                                                    ite,
+                                                    0,
+                                                    stream);
 }
 
 template<typename T>
-void invokePaddingEmbedding(T*           padded_embedding_kernel,
-                            T*           padded_embedding_bias,
-                            const T*     embedding_kernel,
-                            const T*     embedding_bias,
-                            const int    hidden_unit,
-                            const int    vocab_size,
-                            const int    vocab_size_padded,
-                            cudaStream_t stream);
+[[nodiscard]] cudaError_t invokePaddingEmbedding(T*           padded_embedding_kernel,
+                                                 T*           padded_embedding_bias,
+                                                 const T*     embedding_kernel,
+                                                 const T*     embedding_bias,
+                                                 const int    hidden_unit,
+                                                 const int    vocab_size,
+                                                 const int    vocab_size_padded,
+                                                 cudaStream_t stream);
 
 template<typename T>
-void invokePaddingEmbeddingKernel(T*           padded_embedding_kernel,
-                                  const T*     embedding_kernel,
-                                  const int    hidden_unit,
-                                  const int    vocab_size,
-                                  const int    vocab_size_padded,
-                                  cudaStream_t stream);
+[[nodiscard]] cudaError_t invokePaddingEmbeddingKernel(T*           padded_embedding_kernel,
+                                                       const T*     embedding_kernel,
+                                                       const int    hidden_unit,
+                                                       const int    vocab_size,
+                                                       const int    vocab_size_padded,
+                                                       cudaStream_t stream);
 
 template<typename T>
-void invokePlusScalar(T* buf, const T val, const int size, cudaStream_t stream);
+[[nodiscard]] cudaError_t invokePlusScalar(T* buf, const T val, const int size, cudaStream_t stream);
 
 }  // namespace turbomind

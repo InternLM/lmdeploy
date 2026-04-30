@@ -19,16 +19,16 @@
 namespace turbomind {
 
 template<typename T>
-void invokeLogProbFromLogits(float*       cum_log_probs,
-                             const T*     logits,
-                             const int*   input_ids,
-                             const int*   input_lengths,
-                             const size_t max_input_length,
-                             const size_t batch_size,
-                             const size_t vocab_size,
-                             const size_t vocab_size_padded,
-                             void*        workspace,
-                             const size_t workspace_size,
-                             cudaStream_t stream,
-                             const bool   batch_first = false);
+[[nodiscard]] cudaError_t invokeLogProbFromLogits(float*       cum_log_probs,
+                                                  const T*     logits,
+                                                  const int*   input_ids,
+                                                  const int*   input_lengths,
+                                                  const size_t max_input_length,
+                                                  const size_t batch_size,
+                                                  const size_t vocab_size,
+                                                  const size_t vocab_size_padded,
+                                                  void*        workspace,
+                                                  const size_t workspace_size,
+                                                  cudaStream_t stream,
+                                                  const bool   batch_first = false);
 }  // namespace turbomind

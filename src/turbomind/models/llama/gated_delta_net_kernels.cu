@@ -243,19 +243,19 @@ __global__ void recurrent_gated_delta_rule_kernel_v2(T*         v_out,
     }
 }
 
-void invokeGatedDeltaRuleBatched_v2(Ref<Tensor>           v_out_,
-                                    const Tensor&         qkv_in,
-                                    const Tensor&         beta,
-                                    const Tensor&         g,
-                                    const Buffer_<void*>& state_ptrs,
-                                    const Buffer_<int>&   q_offsets,
-                                    int                   batch_size,
-                                    int                   num_k_heads,
-                                    int                   state_layer_offset,
-                                    DataType              state_dtype,
-                                    int /*sm_count*/,
-                                    int* /*work_counter*/,
-                                    cudaStream_t stream)
+cudaError_t invokeGatedDeltaRuleBatched_v2(Ref<Tensor>           v_out_,
+                                           const Tensor&         qkv_in,
+                                           const Tensor&         beta,
+                                           const Tensor&         g,
+                                           const Buffer_<void*>& state_ptrs,
+                                           const Buffer_<int>&   q_offsets,
+                                           int                   batch_size,
+                                           int                   num_k_heads,
+                                           int                   state_layer_offset,
+                                           DataType              state_dtype,
+                                           int /*sm_count*/,
+                                           int* /*work_counter*/,
+                                           cudaStream_t stream)
 {
     auto& v_out = v_out_.get();
 
@@ -265,7 +265,7 @@ void invokeGatedDeltaRuleBatched_v2(Ref<Tensor>           v_out_,
     const int k_dim_total    = (qkv_in.shape(1) - v_dim) / 2;
 
     if (batch_size == 0 || num_v_heads == 0)
-        return;
+        return cudaSuccess;
 
     constexpr int kHeadDim  = 128;
     constexpr int kBlockDim = 256;
@@ -306,6 +306,7 @@ void invokeGatedDeltaRuleBatched_v2(Ref<Tensor>           v_out_,
         }
     };
     TM_DISPATCH_PRIMARY_DTYPES(v_out.dtype(), invoke);
+    return cudaGetLastError();
 }
 
 // =============================================================================
@@ -482,19 +483,19 @@ __global__ __launch_bounds__(block_dim, 2) void recurrent_gated_delta_rule_kerne
     }
 }
 
-void invokeGatedDeltaRuleBatched_v3(Ref<Tensor>           v_out_,
-                                    const Tensor&         qkv_in,
-                                    const Tensor&         beta,
-                                    const Tensor&         g,
-                                    const Buffer_<void*>& state_ptrs,
-                                    const Buffer_<int>&   q_offsets,
-                                    int                   batch_size,
-                                    int                   num_k_heads,
-                                    int                   state_layer_offset,
-                                    DataType              state_dtype,
-                                    int                   sm_count,
-                                    int*                  work_counter,
-                                    cudaStream_t          stream)
+cudaError_t invokeGatedDeltaRuleBatched_v3(Ref<Tensor>           v_out_,
+                                           const Tensor&         qkv_in,
+                                           const Tensor&         beta,
+                                           const Tensor&         g,
+                                           const Buffer_<void*>& state_ptrs,
+                                           const Buffer_<int>&   q_offsets,
+                                           int                   batch_size,
+                                           int                   num_k_heads,
+                                           int                   state_layer_offset,
+                                           DataType              state_dtype,
+                                           int                   sm_count,
+                                           int*                  work_counter,
+                                           cudaStream_t          stream)
 {
     auto& v_out = v_out_.get();
 
@@ -503,7 +504,7 @@ void invokeGatedDeltaRuleBatched_v3(Ref<Tensor>           v_out_,
     const int k_dim_total = (qkv_in.shape(1) - v_dim) / 2;
 
     if (batch_size == 0 || num_v_heads == 0)
-        return;
+        return cudaSuccess;
 
     constexpr int kHeadDim  = 128;
     constexpr int kBlockDim = 256;
@@ -544,6 +545,7 @@ void invokeGatedDeltaRuleBatched_v3(Ref<Tensor>           v_out_,
             launch(T{});
     };
     TM_DISPATCH_PRIMARY_DTYPES(v_out.dtype(), invoke);
+    return cudaGetLastError();
 }
 
 // =============================================================================
@@ -842,19 +844,19 @@ __global__ void chunked_gated_delta_rule_kernel(T*         v_out,
 }
 
 // Host-side launcher
-void invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out_,
-                                        const Tensor&         qkv_in,
-                                        const Tensor&         beta,
-                                        const Tensor&         g,
-                                        const Buffer_<void*>& state_ptrs,
-                                        const Buffer_<int>&   q_offsets,
-                                        int                   batch_size,
-                                        int                   num_k_heads,
-                                        int                   state_layer_offset,
-                                        DataType              state_dtype,
-                                        int /*sm_count*/,
-                                        int* /*work_counter*/,
-                                        cudaStream_t stream)
+cudaError_t invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out_,
+                                               const Tensor&         qkv_in,
+                                               const Tensor&         beta,
+                                               const Tensor&         g,
+                                               const Buffer_<void*>& state_ptrs,
+                                               const Buffer_<int>&   q_offsets,
+                                               int                   batch_size,
+                                               int                   num_k_heads,
+                                               int                   state_layer_offset,
+                                               DataType              state_dtype,
+                                               int /*sm_count*/,
+                                               int* /*work_counter*/,
+                                               cudaStream_t stream)
 {
     auto& v_out = v_out_.get();
 
@@ -864,7 +866,7 @@ void invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out_,
     const int k_dim_total    = (qkv_in.shape(1) - v_dim) / 2;
 
     if (batch_size == 0 || num_v_heads == 0)
-        return;
+        return cudaSuccess;
 
     constexpr int kHeadDim   = 128;
     constexpr int kChunkSize = 16;
@@ -914,6 +916,7 @@ void invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out_,
         }
     };
     TM_DISPATCH_PRIMARY_DTYPES(v_out.dtype(), invoke);
+    return cudaGetLastError();
 }
 
 template<class T>
@@ -1028,7 +1031,8 @@ __global__ void rms_norm_gated_kernel(
     }
 }
 
-void invokeRMSNormGated(Ref<Tensor> hidden_, const Tensor& gate, const Tensor& weight, float eps, cudaStream_t stream)
+cudaError_t
+invokeRMSNormGated(Ref<Tensor> hidden_, const Tensor& gate, const Tensor& weight, float eps, cudaStream_t stream)
 {
     auto& hidden = hidden_.get();
 
@@ -1039,7 +1043,7 @@ void invokeRMSNormGated(Ref<Tensor> hidden_, const Tensor& gate, const Tensor& w
     const int num_heads   = N / token_num;
 
     if (N == 0)
-        return;
+        return cudaSuccess;
 
     const int threads = std::min(256, head_dim);
 
@@ -1049,6 +1053,7 @@ void invokeRMSNormGated(Ref<Tensor> hidden_, const Tensor& gate, const Tensor& w
             hidden.data<T>(), gate.data<T>(), weight.data<T>(), eps, N, head_dim, gate_stride, num_heads);
     };
     TM_DISPATCH_PRIMARY_DTYPES(hidden.dtype(), invoke);
+    return cudaGetLastError();
 }
 
 // =============================================================================
@@ -1231,18 +1236,18 @@ __global__ void __launch_bounds__(BLOCK_DIM) fused_conv1d_batched_kernel_v2(T*  
     }
 }
 
-void invokeFusedConv1dSiLU(Ref<Tensor>           out_,
-                           const Tensor&         in,
-                           const Tensor&         weight,
-                           const Tensor&         bias,
-                           const Buffer_<void*>& conv_state_ptrs,
-                           const Buffer_<int>&   q_offsets,
-                           const Buffer_<int>&   k_offsets,
-                           int                   batch_size,
-                           int                   state_layer_offset,
-                           int                   sm_count,
-                           int*                  work_counter,
-                           cudaStream_t          stream)
+cudaError_t invokeFusedConv1dSiLU(Ref<Tensor>           out_,
+                                  const Tensor&         in,
+                                  const Tensor&         weight,
+                                  const Tensor&         bias,
+                                  const Buffer_<void*>& conv_state_ptrs,
+                                  const Buffer_<int>&   q_offsets,
+                                  const Buffer_<int>&   k_offsets,
+                                  int                   batch_size,
+                                  int                   state_layer_offset,
+                                  int                   sm_count,
+                                  int*                  work_counter,
+                                  cudaStream_t          stream)
 {
     auto& out = out_.get();
 
@@ -1301,6 +1306,7 @@ void invokeFusedConv1dSiLU(Ref<Tensor>           out_,
         }
     };
     TM_DISPATCH_PRIMARY_DTYPES(out.dtype(), invoke);
+    return cudaGetLastError();
 }
 
 }  // namespace turbomind

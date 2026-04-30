@@ -6,6 +6,7 @@
 #include "attention_universal.h"
 #include "reduce.h"
 #include "src/turbomind/kernels/core/thread_map.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include "utils.h"
 namespace turbomind {
 
@@ -59,28 +60,25 @@ bool invokeDecoding(const typename Kernel::ParamType& params, int sm_count, int 
     kernel_func<<<grid, block, kSmemSize, params.stream>>>(
         params, cache_iter_factory, CtaMap{}, q_group_size, q_head_per_cta, cta_per_q_group);
 
-    if (auto err = cudaGetLastError(); err != cudaSuccess) {
-        std::cout << cudaGetErrorString(err) << "\n";
-        std::abort();
-    }
+    TM_CUDA_CHECK(cudaGetLastError());
 
     if (params.cp_fn) {
         params.cp_fn(params.cp_fn_ctx);
     }
 
     if (split_cnt > 1 || params.cp_size > 1) {
-        attention::invokeReduceV3<Kernel::kHeadDim>(params.out,
-                                                    params.partial_ML,
-                                                    params.partial_O,
-                                                    split_cnt > 1 ? params.split_cnt : nullptr,
-                                                    params.max_split_k,
-                                                    split_cnt,
-                                                    params.cp_size,
-                                                    params.cp_rank,
-                                                    params.token_num,
-                                                    params.num_heads,
-                                                    params.inv_sqrt_dh,
-                                                    params.stream);
+        TM_CUDA_CHECK(attention::invokeReduceV3<Kernel::kHeadDim>(params.out,
+                                                                  params.partial_ML,
+                                                                  params.partial_O,
+                                                                  split_cnt > 1 ? params.split_cnt : nullptr,
+                                                                  params.max_split_k,
+                                                                  split_cnt,
+                                                                  params.cp_size,
+                                                                  params.cp_rank,
+                                                                  params.token_num,
+                                                                  params.num_heads,
+                                                                  params.inv_sqrt_dh,
+                                                                  params.stream));
     }
 
     return true;

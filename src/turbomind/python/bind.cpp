@@ -231,27 +231,27 @@ static void safe_memcpy(void* dst, const void* src, size_t size)
 {
     cudaPointerAttributes dat{};
     cudaPointerAttributes sat{};
-    ft::check_cuda_error(cudaPointerGetAttributes(&dat, dst));
-    ft::check_cuda_error(cudaPointerGetAttributes(&sat, src));
+    TM_CUDA_CHECK(cudaPointerGetAttributes(&dat, dst));
+    TM_CUDA_CHECK(cudaPointerGetAttributes(&sat, src));
     try {
         if (dat.devicePointer && sat.devicePointer) {
             // Both can be accessed from current context
-            ft::check_cuda_error(cudaMemcpy(dst, src, size, cudaMemcpyDefault));
+            TM_CUDA_CHECK(cudaMemcpy(dst, src, size, cudaMemcpyDefault));
         }
         else if (dat.type == cudaMemoryTypeDevice && sat.type == cudaMemoryTypeDevice) {
             if (dat.device != sat.device) {
                 // On different devices, try peer memcpy
-                ft::check_cuda_error(cudaMemcpyPeer(dst, dat.device, src, sat.device, size));
+                TM_CUDA_CHECK(cudaMemcpyPeer(dst, dat.device, src, sat.device, size));
             }
             else {
                 // Same device, switch to the device first (this is unlikely)
                 ft::CudaDeviceGuard guard(dat.device);
-                ft::check_cuda_error(cudaMemcpy(dst, src, size, cudaMemcpyDefault));
+                TM_CUDA_CHECK(cudaMemcpy(dst, src, size, cudaMemcpyDefault));
             }
         }
         else {
             // Unknown case, give it a try anyway
-            ft::check_cuda_error(cudaMemcpy(dst, src, size, cudaMemcpyDefault));
+            TM_CUDA_CHECK(cudaMemcpy(dst, src, size, cudaMemcpyDefault));
         }
     }
     catch (...) {

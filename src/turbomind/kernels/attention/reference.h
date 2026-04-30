@@ -12,14 +12,14 @@
 namespace turbomind {
 
 template<class T>
-void invokeApplyRotaryEmbedding(T*           k_cache,
-                                int          max_k_len,
-                                int          head_num,
-                                int          head_dim,
-                                float        rope_base,
-                                int          rope_dim,
-                                int          batch_size,
-                                cudaStream_t stream = {});
+[[nodiscard]] cudaError_t invokeApplyRotaryEmbedding(T*           k_cache,
+                                                     int          max_k_len,
+                                                     int          head_num,
+                                                     int          head_dim,
+                                                     float        rope_base,
+                                                     int          rope_dim,
+                                                     int          batch_size,
+                                                     cudaStream_t stream = {});
 
 template<class T>
 class Reference {

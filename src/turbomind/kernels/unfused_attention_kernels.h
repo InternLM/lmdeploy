@@ -31,7 +31,7 @@ struct MaskedSoftmaxParam {
 };
 
 template<typename T>
-void invokeMaskedSoftmax(MaskedSoftmaxParam<T>& param, cudaStream_t stream);
+[[nodiscard]] cudaError_t invokeMaskedSoftmax(MaskedSoftmaxParam<T>& param, cudaStream_t stream);
 
 template<typename T>
 void invokeTransposeQKV(T*           dst,
@@ -45,17 +45,17 @@ void invokeTransposeQKV(T*           dst,
                         cudaStream_t stream);
 
 template<typename T>
-void invokeTransposeAttentionOutRemovePadding(T*           src,
-                                              T*           dst,
-                                              const int    valid_word_num,
-                                              const int    batch_size,
-                                              const int    seq_len,
-                                              const int    head_num,
-                                              const int    size_per_head,
-                                              const int*   mask_offset,
-                                              const float* scale,
-                                              const int    int8_mode,
-                                              cudaStream_t stream);
+[[nodiscard]] cudaError_t invokeTransposeAttentionOutRemovePadding(T*           src,
+                                                                   T*           dst,
+                                                                   const int    valid_word_num,
+                                                                   const int    batch_size,
+                                                                   const int    seq_len,
+                                                                   const int    head_num,
+                                                                   const int    size_per_head,
+                                                                   const int*   mask_offset,
+                                                                   const float* scale,
+                                                                   const int    int8_mode,
+                                                                   cudaStream_t stream);
 
 template<typename T>
 void invokeAddFusedQKVBiasTranspose(T*           q_buf,
@@ -105,12 +105,12 @@ void invokeTranspose4dBatchMajor(T*           k_dst,
                                  cudaStream_t stream);
 
 template<typename T>
-void invokeAddRelativeAttentionBias(T*           qk_buf,
-                                    const T*     relative_attention_bias,
-                                    const int    batch_size,
-                                    const int    head_num,
-                                    const int    seq_len,
-                                    cudaStream_t stream);
+[[nodiscard]] cudaError_t invokeAddRelativeAttentionBias(T*           qk_buf,
+                                                         const T*     relative_attention_bias,
+                                                         const int    batch_size,
+                                                         const int    head_num,
+                                                         const int    seq_len,
+                                                         cudaStream_t stream);
 
 template<typename T>
 void invokeAddHead3SizeQKVBias(const T*     mm_qkv,

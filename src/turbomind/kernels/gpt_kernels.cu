@@ -40,10 +40,8 @@ embeddingLookupKernel(T* dst, int dst_stride, const T* src, int src_stride, cons
     }
 }
 
-void invokeEmbeddingLookup(Ref<Tensor>         out_,
-                           const Buffer_<int>& token_ids,
-                           const Tensor&       embedding_table,
-                           cudaStream_t        st)
+cudaError_t
+invokeEmbeddingLookup(Ref<Tensor> out_, const Buffer_<int>& token_ids, const Tensor& embedding_table, cudaStream_t st)
 {
     auto& out = out_.get();
 
@@ -72,9 +70,11 @@ void invokeEmbeddingLookup(Ref<Tensor>         out_,
     };
 
     if (byte_size(out.dtype()) == byte_size<uint16_t>()) {
-        return invoke(uint16_t{});
+        invoke(uint16_t{});
+        return cudaGetLastError();
     }
     TM_CHECK(0) << "not implemented";
+    return cudaErrorNotReady;
 }
 
 // TODO Add half2 implementation
@@ -95,30 +95,31 @@ __global__ void transposeAxis01(T* out, T* in, const int dim0, const int dim1, c
 }
 
 template<typename T>
-void invokeTransposeAxis01(T* out, T* in, const int dim0, const int dim1, const int dim2, cudaStream_t stream)
+cudaError_t invokeTransposeAxis01(T* out, T* in, const int dim0, const int dim1, const int dim2, cudaStream_t stream)
 {
     dim3 block(512);
     dim3 grid((int)(ceil(dim0 * dim1 * dim2 / 512.)));
     transposeAxis01<<<grid, block, 0, stream>>>(out, in, dim0, dim1, dim2);
+    return cudaGetLastError();
 }
 
-template void
+template cudaError_t
 invokeTransposeAxis01(float* out, float* in, const int dim0, const int dim1, const int dim2, cudaStream_t stream);
 
-template void
+template cudaError_t
 invokeTransposeAxis01(half* out, half* in, const int dim0, const int dim1, const int dim2, cudaStream_t stream);
 
-template void
+template cudaError_t
 invokeTransposeAxis01(int* out, int* in, const int dim0, const int dim1, const int dim2, cudaStream_t stream);
 
-template void
+template cudaError_t
 invokeTransposeAxis01(uint16_t* out, uint16_t* in, const int dim0, const int dim1, const int dim2, cudaStream_t stream);
 
-template void
+template cudaError_t
 invokeTransposeAxis01(uint8_t* out, uint8_t* in, const int dim0, const int dim1, const int dim2, cudaStream_t stream);
 
 #ifdef ENABLE_BF16
-template void invokeTransposeAxis01(
+template cudaError_t invokeTransposeAxis01(
     __nv_bfloat16* out, __nv_bfloat16* in, const int dim0, const int dim1, const int dim2, cudaStream_t stream);
 #endif
 
@@ -141,15 +142,16 @@ __global__ void transposeAxis01(T* out, T* in, const int* in_skipping_dim1, cons
 }
 
 template<typename T>
-void invokeTransposeAxis01(
-    T* out, T* in, const int* in_skipping_dim1, const int dim0, const int dim1, cudaStream_t stream)
+cudaError_t
+invokeTransposeAxis01(T* out, T* in, const int* in_skipping_dim1, const int dim0, const int dim1, cudaStream_t stream)
 {
     dim3 block(512);
     dim3 grid((int)(ceil(dim0 * dim1 / 512.)));
     transposeAxis01<<<grid, block, 0, stream>>>(out, in, in_skipping_dim1, dim0, dim1);
+    return cudaGetLastError();
 }
 
-template void invokeTransposeAxis01(
+template cudaError_t invokeTransposeAxis01(
     int* out, int* in, const int* in_skipping_dim1, const int dim0, const int dim1, cudaStream_t stream);
 
 template<int TILE_DIM, int BLOCK_ROWS, class T>
@@ -188,7 +190,7 @@ __global__ void transpose_2d_kernel(T* __restrict__ dst, const T* __restrict__ s
 }
 
 template<class T>
-void invokeTranspose2D_(T* dst, const T* src, int rows, int cols, cudaStream_t st)
+cudaError_t invokeTranspose2D_(T* dst, const T* src, int rows, int cols, cudaStream_t st)
 {
     constexpr int TILE_DIM   = 32;  // warp size
     constexpr int BLOCK_ROWS = 8;
@@ -205,8 +207,9 @@ void invokeTranspose2D_(T* dst, const T* src, int rows, int cols, cudaStream_t s
     }
 
     transpose_2d_kernel<TILE_DIM, BLOCK_ROWS><<<grid, block, 0, st>>>(dst, src, rows, cols, swap_xy);
+    return cudaGetLastError();
 }
 
-template void invokeTranspose2D_(uint32_t*, const uint32_t*, int, int, cudaStream_t);
+template cudaError_t invokeTranspose2D_(uint32_t*, const uint32_t*, int, int, cudaStream_t);
 
 }  // namespace turbomind

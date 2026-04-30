@@ -6,39 +6,9 @@
 
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/logger.h"
+#include "src/turbomind/core/scope.h"
 
 namespace turbomind::core {
-
-namespace {
-
-std::string StripSrcPrefix(const char* file)
-{
-    static const char* flag = std::getenv("TM_SRC_FULL_PATH");
-    if (flag) {
-        return file;
-    }
-
-    std::filesystem::path path{file};
-    std::filesystem::path ret{path};  // return the original path if anchor is not found
-
-    constexpr auto anchor = "turbomind";
-
-    bool found = false;
-
-    for (const auto& x : path) {
-        if (x == anchor) {
-            found = true;
-            ret.clear();
-        }
-        else if (found) {
-            ret /= x;
-        }
-    }
-
-    return ret.string();
-}
-
-}  // namespace
 
 CheckOpStringBuilder::CheckOpStringBuilder()
 {
@@ -64,7 +34,8 @@ std::string* CheckOpStringBuilder::NewString()
 CheckErrorStream::CheckErrorStream(const char* file, int line, const char* expr): file_{file}, line_{line}
 {
     oss_ = new std::ostringstream{};
-    *oss_ << StripSrcPrefix(file) << "(" << line << "): Check failed: " << expr << " ";
+    // *oss_ << StripSrcPrefix(file) << "(" << line << "): Check failed: " << expr << " ";
+    *oss_ << "Check failed: " << expr << " ";
 }
 
 CheckErrorStream::CheckErrorStream(const char* file, int line, const char* expr, std::string* str):
@@ -75,12 +46,14 @@ CheckErrorStream::CheckErrorStream(const char* file, int line, const char* expr,
 
 void CheckErrorStream::Report()
 {
-    Logger::Instance().LogFatal(SourceLocation{file_, line_}, "{}", oss_->str());
+    Scope _("TM_CHECK", file_, line_);
+    Logger::Instance().LogFatalImpl(file_, line_, oss_->str());
 }
 
 void ReportNullError(const char* file, int line, const char* expr)
 {
-    Logger::Instance().LogFatal(SourceLocation{file, line}, "{}: '{}' Must be non NULL", StripSrcPrefix(file), expr);
+    Scope _("TM_CHECK_NOTNULL", file, line);
+    Logger::Instance().LogFatalImpl(file, line, fmt::format("'{}' Must be non NULL", expr));
 }
 
 }  // namespace turbomind::core

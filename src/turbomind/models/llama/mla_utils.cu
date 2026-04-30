@@ -6,6 +6,7 @@
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/math.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
@@ -46,14 +47,14 @@ __global__ void mla_copy_qkv_kernel(T*       qkv,        // [s, head_num + 2, kv
 }
 
 template<class T>
-void invokeMLACopyQKV(T*           qkv,
-                      const T*     q,
-                      const T*     kv_a_k_pe,
-                      int          token_num,
-                      int          head_num,
-                      int          kv_lora_rank,
-                      int          rope_dim,
-                      cudaStream_t stream)
+cudaError_t invokeMLACopyQKV(T*           qkv,
+                             const T*     q,
+                             const T*     kv_a_k_pe,
+                             int          token_num,
+                             int          head_num,
+                             int          kv_lora_rank,
+                             int          rope_dim,
+                             cudaStream_t stream)
 {
     constexpr int vec_size = 16 / sizeof(T);
 
@@ -70,6 +71,7 @@ void invokeMLACopyQKV(T*           qkv,
 
     mla_copy_qkv_kernel<T, vec_size>
         <<<grid, block, 0, stream>>>(qkv, q, kv_a_k_pe, head_num, head_dim, kv_lora_rank, rope_dim);
+    return cudaGetLastError();
 }
 
 void MLACopyQKV(DataType     dtype,
@@ -84,8 +86,8 @@ void MLACopyQKV(DataType     dtype,
 {
     auto invoke = [&](auto t) {
         using T = decltype(t);
-        invokeMLACopyQKV(
-            (T*)qkv, (const T*)q, (const T*)kv_a_k_pe, token_num, head_num, kv_lora_rank, rope_dim, stream);
+        TM_CUDA_CHECK(invokeMLACopyQKV(
+            (T*)qkv, (const T*)q, (const T*)kv_a_k_pe, token_num, head_num, kv_lora_rank, rope_dim, stream));
     };
 
     TM_CHECK_EQ(byte_size(dtype, 1), 2) << "unsupported data type: " << dtype;

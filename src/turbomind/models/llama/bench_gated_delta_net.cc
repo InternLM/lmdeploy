@@ -8,6 +8,7 @@
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include "src/turbomind/models/llama/gated_delta_net_kernels.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 using namespace turbomind;
 using namespace turbomind::core;
@@ -203,37 +204,37 @@ int main(int argc, char** argv)
     // --- Benchmark recurrent (v2) kernel ---
     printf("\n=== Benchmarks ===\n");
     auto launch_v2 = [&] {
-        invokeGatedDeltaRuleBatched_v2(v_out_v2,
-                                       qkv_in,
-                                       beta,
-                                       g,
-                                       state_ptrs_v2_dev,
-                                       q_offsets_dev,
-                                       batch_size,
-                                       num_k_heads,
-                                       0,
-                                       state_dtype,
-                                       sm_count,
-                                       work_counter,
-                                       cu_stream);
+        TM_CUDA_CHECK(invokeGatedDeltaRuleBatched_v2(v_out_v2,
+                                                     qkv_in,
+                                                     beta,
+                                                     g,
+                                                     state_ptrs_v2_dev,
+                                                     q_offsets_dev,
+                                                     batch_size,
+                                                     num_k_heads,
+                                                     0,
+                                                     state_dtype,
+                                                     sm_count,
+                                                     work_counter,
+                                                     cu_stream));
     };
     float v2_ms = benchmark_kernel("invokeGatedDeltaRuleBatched_v2", launch_v2, cu_stream, args.warmup, args.iters);
 
     // --- Benchmark chunked kernel ---
     auto launch_chunked = [&] {
-        invokeChunkedGatedDeltaRuleBatched(v_out_chunked,
-                                           qkv_in,
-                                           beta,
-                                           g,
-                                           state_ptrs_chunked_dev,
-                                           q_offsets_dev,
-                                           batch_size,
-                                           num_k_heads,
-                                           0,
-                                           state_dtype,
-                                           sm_count,
-                                           work_counter,
-                                           cu_stream);
+        TM_CUDA_CHECK(invokeChunkedGatedDeltaRuleBatched(v_out_chunked,
+                                                         qkv_in,
+                                                         beta,
+                                                         g,
+                                                         state_ptrs_chunked_dev,
+                                                         q_offsets_dev,
+                                                         batch_size,
+                                                         num_k_heads,
+                                                         0,
+                                                         state_dtype,
+                                                         sm_count,
+                                                         work_counter,
+                                                         cu_stream));
     };
     float chunked_ms =
         benchmark_kernel("invokeChunkedGatedDeltaRuleBatched", launch_chunked, cu_stream, args.warmup, args.iters);
@@ -241,19 +242,19 @@ int main(int argc, char** argv)
     // --- Benchmark v3 persistent decode kernel (seq_len == 1 only) ---
     float v3_ms     = -1.f;
     auto  launch_v3 = [&] {
-        invokeGatedDeltaRuleBatched_v3(v_out_v3,
-                                       qkv_in,
-                                       beta,
-                                       g,
-                                       state_ptrs_v3_dev,
-                                       q_offsets_dev,
-                                       batch_size,
-                                       num_k_heads,
-                                       0,
-                                       state_dtype,
-                                       sm_count,
-                                       work_counter,
-                                       cu_stream);
+        TM_CUDA_CHECK(invokeGatedDeltaRuleBatched_v3(v_out_v3,
+                                                     qkv_in,
+                                                     beta,
+                                                     g,
+                                                     state_ptrs_v3_dev,
+                                                     q_offsets_dev,
+                                                     batch_size,
+                                                     num_k_heads,
+                                                     0,
+                                                     state_dtype,
+                                                     sm_count,
+                                                     work_counter,
+                                                     cu_stream));
     };
     if (is_decode) {
         v3_ms = benchmark_kernel(

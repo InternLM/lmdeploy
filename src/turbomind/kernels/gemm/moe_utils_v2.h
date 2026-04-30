@@ -29,54 +29,54 @@ void invokeMoeGate_V2(int*         f2n,
                       float        routed_scale,
                       cudaStream_t st);
 
-void invokeMoeDispatch(Ref<Tensor>   out_,  //
-                       const Tensor& src,
-                       const int*    f2n,
-                       int           expert_per_token,
-                       cudaStream_t  st);
+[[nodiscard]] cudaError_t invokeMoeDispatch(Ref<Tensor>   out_,  //
+                                            const Tensor& src,
+                                            const int*    f2n,
+                                            int           expert_per_token,
+                                            cudaStream_t  st);
 
-void invokeMoeDispatchScales(Ref<Tensor>   out_,  //
-                             const Tensor& src,
-                             const int*    f2n,
-                             int           expert_per_token,
-                             cudaStream_t  st);
+[[nodiscard]] cudaError_t invokeMoeDispatchScales(Ref<Tensor>   out_,  //
+                                                  const Tensor& src,
+                                                  const int*    f2n,
+                                                  int           expert_per_token,
+                                                  cudaStream_t  st);
 
-void invokeMoeCombine(Ref<Tensor>   out_,
-                      const Tensor& src,
-                      const Tensor& bias,
-                      const float*  scales,
-                      const int*    en2f,
-                      const int*    f2E,
-                      const float*  dst_scales,
-                      int           experts_per_token,
-                      float         bscale,
-                      float         dst_scale,
-                      cudaStream_t  st);
+[[nodiscard]] cudaError_t invokeMoeCombine(Ref<Tensor>   out_,
+                                           const Tensor& src,
+                                           const Tensor& bias,
+                                           const float*  scales,
+                                           const int*    en2f,
+                                           const int*    f2E,
+                                           const float*  dst_scales,
+                                           int           experts_per_token,
+                                           float         bscale,
+                                           float         dst_scale,
+                                           cudaStream_t  st);
 
-void invokeMoeSoftmaxMaskTopKGroups(
+[[nodiscard]] cudaError_t invokeMoeSoftmaxMaskTopKGroups(
     float* logits, int token_num, int expert_num, int group_size, int top_k, cudaStream_t st);
 
 /// noaux_tc routing: scores = scoring_func(logits), scores_for_choice = scores + correction_bias,
 /// top-k on scores_for_choice, weights from scores; renormalize if norm_topk_prob; always apply routed_scale.
 /// correction_bias may be nullptr (then treated as 0).
 /// use_sigmoid: if true, scores = sigmoid(logits); if false, scores = softmax(logits).
-void invokeMoeGate_NoAuxTC(int*         f2n,
-                           int*         f2E,
-                           int*         en2f,
-                           int*         offsets,
-                           float*       scales,
-                           void*        masks,
-                           int*         accum,
-                           const float* logits,
-                           const float* correction_bias,
-                           int          tokens,
-                           int          tokens_padded,
-                           int          experts,
-                           int          exp_per_tok,
-                           bool         norm_topk_prob,
-                           float        routed_scale,
-                           bool         use_sigmoid,
-                           cudaStream_t st);
+[[nodiscard]] cudaError_t invokeMoeGate_NoAuxTC(int*         f2n,
+                                                int*         f2E,
+                                                int*         en2f,
+                                                int*         offsets,
+                                                float*       scales,
+                                                void*        masks,
+                                                int*         accum,
+                                                const float* logits,
+                                                const float* correction_bias,
+                                                int          tokens,
+                                                int          tokens_padded,
+                                                int          experts,
+                                                int          exp_per_tok,
+                                                bool         norm_topk_prob,
+                                                float        routed_scale,
+                                                bool         use_sigmoid,
+                                                cudaStream_t st);
 
 // Sample `e` from `E` experts uniformly for every token
 std::vector<int> SampleUniform(int token_num, int expert_num, int exp_per_tok, std::mt19937& g);

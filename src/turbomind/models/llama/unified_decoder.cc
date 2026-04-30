@@ -90,7 +90,6 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
                                                 group1,
                                                 local_token_nums,
                                                 stream);
-        sync_check_cuda_error();
     }
     else if (d_comm_) {
         d_comm_->AllreduceResidualBiasRMSnorm(hidden_states.raw_data(),
@@ -103,19 +102,17 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
                                               dtype,
                                               0,
                                               stream);
-        sync_check_cuda_error();
     }
     else {
-        invokeResidualBiasRMSNorm(hidden_states.raw_data(),
-                                  residual.data_or((void*)nullptr),
-                                  weight.raw_data(),
-                                  bias.data_or((void*)nullptr),
-                                  dtype,
-                                  hidden_units_,
-                                  token_num,
-                                  rmsnorm_eps_,
-                                  stream);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(invokeResidualBiasRMSNorm(hidden_states.raw_data(),
+                                                residual.data_or((void*)nullptr),
+                                                weight.raw_data(),
+                                                bias.data_or((void*)nullptr),
+                                                dtype,
+                                                hidden_units_,
+                                                token_num,
+                                                rmsnorm_eps_,
+                                                stream));
     }
 }
 
@@ -138,6 +135,8 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
      *   \param last_token_hidden_units [batch_size, hidden_units]
      *   \param block_ptrs [total_block_counts], void*
      */
+
+    TM_FUNCTION_SCOPE();
 
     constexpr auto device = kDEVICE;
 
@@ -179,8 +178,8 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
 
     const auto stream = core::Context::stream().handle();
 
-    invokeRMSNorm(local_hidden_states, local_residual, weights.at(0)->self_attn_norm, rmsnorm_eps_, stream);
-    sync_check_cuda_error();
+    TM_CUDA_CHECK(
+        invokeRMSNorm(local_hidden_states, local_residual, weights.at(0)->self_attn_norm, rmsnorm_eps_, stream));
 
     TM_DEBUG_TENSOR(local_hidden_states, Concat("norm0", 0), 2);
 
@@ -188,6 +187,9 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
     // core::ContextGuard ctx{Allocator{stack_alloc}};
 
     for (int layer = 0; layer < layer_num_; ++layer) {
+
+        auto layer_str = fmt::format("layer_{}", layer);
+        TM_SCOPE(layer_str.c_str());  // non-owning
 
         // stack_alloc->iter();
 
@@ -271,7 +273,6 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
                                  0,
                                  attn_tp_group_,
                                  local_token_nums.data());
-        sync_check_cuda_error();
 
         TM_DEBUG_TENSOR(local_residual, Concat("residual1", layer), 2);
         TM_DEBUG_TENSOR(local_hidden_states, Concat("norm0", layer + 1), 2);

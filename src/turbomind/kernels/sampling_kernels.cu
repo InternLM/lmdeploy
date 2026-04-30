@@ -81,7 +81,7 @@ __global__ void sampling(const T*       logits,
 }
 
 template<typename T>
-void invokeSampling(SamplingParams& params, cudaStream_t stream)
+cudaError_t invokeSampling(SamplingParams& params, cudaStream_t stream)
 {
     const int grid  = params.batch_size;
     const int block = 256;
@@ -95,8 +95,9 @@ void invokeSampling(SamplingParams& params, cudaStream_t stream)
                                                    (T*)params.sampled_logprobs,
                                                    params.sampled_indexes,
                                                    params.sampled_nums);
+    return cudaGetLastError();
 }
 
-template void invokeSampling<float>(SamplingParams& params, cudaStream_t stream);
+template cudaError_t invokeSampling<float>(SamplingParams& params, cudaStream_t stream);
 
 }  // namespace turbomind

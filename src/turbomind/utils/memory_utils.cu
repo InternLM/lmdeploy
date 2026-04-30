@@ -37,26 +37,27 @@ __global__ void transpose102(T_OUT* dst, T_IN* src, const int dim0, const int di
 }
 
 template<typename T>
-void invokeInPlaceTranspose102(
+cudaError_t invokeInPlaceTranspose102(
     T* data, T* workspace, const int dim0, const int dim1, const int dim2, bool copy, cudaStream_t stream)
 {
     // copy data to workspace, and then transpose from workspace to data
     // Note that this kernel is used for pre-processing and not very efficient.
     const size_t count = dim0 * dim1 * dim2;
     if (copy) {
-        check_cuda_error(cudaMemcpyAsync(workspace, data, sizeof(T) * count, cudaMemcpyDefault, stream));
+        TM_CUDA_CHECK(cudaMemcpyAsync(workspace, data, sizeof(T) * count, cudaMemcpyDefault, stream));
     }
     const int block = 512;
     const int grid  = std::min((count + block - 1) / block, (size_t)8192);
     transpose102<<<grid, block, 0, stream>>>(data, workspace, dim0, dim1, dim2);
+    return cudaGetLastError();
 }
 
-template void invokeInPlaceTranspose102(uint16_t*    data,
-                                        uint16_t*    workspace,
-                                        const int    dim0,
-                                        const int    dim1,
-                                        const int    dim2,
-                                        bool         copy,
-                                        cudaStream_t stream);
+template cudaError_t invokeInPlaceTranspose102(uint16_t*    data,
+                                               uint16_t*    workspace,
+                                               const int    dim0,
+                                               const int    dim1,
+                                               const int    dim2,
+                                               bool         copy,
+                                               cudaStream_t stream);
 
 }  // namespace turbomind

@@ -53,9 +53,10 @@ public:
     template<typename... Args>
     [[noreturn]] void LogFatal(SourceLocation loc, fmt::format_string<Args...> fmt_str, Args&&... args)
     {
-        Enqueue(Level::kFatal, loc.file, loc.line, fmt::format(fmt_str, std::forward<Args>(args)...));
-        std::abort();
+        LogFatalTraced(loc.file, loc.line, fmt::format(fmt_str, std::forward<Args>(args)...));
     }
+
+    [[noreturn]] void LogFatalImpl(const char* file, int line, std::string message);
 
     void set_level(Level level);
 
@@ -74,6 +75,8 @@ private:
 
     void Enqueue(Level level, std::string message);
     void Enqueue(Level level, const char* file, int line, std::string message);
+
+    [[noreturn]] void LogFatalTraced(const char* file, int line, std::string message);
 
     static std::string LevelName(Level level);
     static std::string Prefix(Level level, const char* file, int line);

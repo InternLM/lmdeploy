@@ -19,22 +19,22 @@
 
 namespace turbomind {
 
-void invokeTopPSortInitialize(const int    vocab_size_padded,
-                              const int    vocab_size,
-                              const size_t batch_size,
-                              const int*   top_ks,
-                              int*         topp_id_val_buf,
-                              int*         begin_offet_buf,
-                              int*         end_offset_buf,
-                              cudaStream_t stream);
+[[nodiscard]] cudaError_t invokeTopPSortInitialize(const int    vocab_size_padded,
+                                                   const int    vocab_size,
+                                                   const size_t batch_size,
+                                                   const int*   top_ks,
+                                                   int*         topp_id_val_buf,
+                                                   int*         begin_offet_buf,
+                                                   int*         end_offset_buf,
+                                                   cudaStream_t stream);
 
 template<typename T>
-void invokeSoftmax(T*           logits,
-                   const int    vocab_size_padded,
-                   const int    vocab_size,
-                   const int    batch_size,
-                   const int*   kept,
-                   cudaStream_t stream);
+[[nodiscard]] cudaError_t invokeSoftmax(T*           logits,
+                                        const int    vocab_size_padded,
+                                        const int    vocab_size,
+                                        const int    batch_size,
+                                        const int*   kept,
+                                        cudaStream_t stream);
 
 struct BlockPrefixCallbackOp {
     // Running prefix
@@ -64,7 +64,7 @@ struct TopPSortParams {
 };
 
 template<typename T>
-void invokeTopPSort(TopPSortParams& params, cudaStream_t stream);
+[[nodiscard]] cudaError_t invokeTopPSort(TopPSortParams& params, cudaStream_t stream);
 
 struct TopPMinPFilterParams {
     void*  sorted_logits;
@@ -78,6 +78,6 @@ struct TopPMinPFilterParams {
 };
 
 template<typename T>
-void invokeTopPMinPFilter(TopPMinPFilterParams& params, cudaStream_t stream);
+[[nodiscard]] cudaError_t invokeTopPMinPFilter(TopPMinPFilterParams& params, cudaStream_t stream);
 
 }  // namespace turbomind

@@ -532,7 +532,7 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnorm(void*        hidden,
 
     // fallback
     AllReduceSum(hidden, hidden, token_num * dim, dtype, group, stream);
-    invokeResidualBiasRMSNorm(hidden, residual, weights, bias, dtype, dim, token_num, eps, stream);
+    TM_CUDA_CHECK(invokeResidualBiasRMSNorm(hidden, residual, weights, bias, dtype, dim, token_num, eps, stream));
 }
 
 }  // namespace turbomind::comm

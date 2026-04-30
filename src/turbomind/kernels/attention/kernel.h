@@ -12,7 +12,7 @@ public:
 
     virtual ~Kernel() = default;
 
-    virtual bool Launch(const void* params, int sm_count) const = 0;
+    [[nodiscard]] virtual cudaError_t Launch(const void* params, int sm_count) const = 0;
 
     const KernelDesc& desc() const noexcept
     {

@@ -33,11 +33,11 @@ struct LlamaLinear::Impl {
 
         auto st = core::Context::stream().handle();
 
-        check_cuda_error(cudaMallocAsync(&workspace_.barriers, workspace_.barriers_size, st));
-        check_cuda_error(cudaMallocAsync(&workspace_.partials, workspace_.partials_size, st));
-        check_cuda_error(cudaMallocAsync(&workspace_.tensormaps, workspace_.partials_size, st));
-        check_cuda_error(cudaMemsetAsync(workspace_.barriers, 0, workspace_.barriers_size, st));
-        check_cuda_error(cudaMallocAsync(&workspace_.flags, sizeof(int), st));
+        TM_CUDA_CHECK(cudaMallocAsync(&workspace_.barriers, workspace_.barriers_size, st));
+        TM_CUDA_CHECK(cudaMallocAsync(&workspace_.partials, workspace_.partials_size, st));
+        TM_CUDA_CHECK(cudaMallocAsync(&workspace_.tensormaps, workspace_.partials_size, st));
+        TM_CUDA_CHECK(cudaMemsetAsync(workspace_.barriers, 0, workspace_.barriers_size, st));
+        TM_CUDA_CHECK(cudaMallocAsync(&workspace_.flags, sizeof(int), st));
 
         core::Context::stream().Sync();
     }
@@ -75,7 +75,6 @@ struct LlamaLinear::Impl {
         // Currently, FP8 only; INT8 may be added later
         if (input.dtype() != dense.input_type) {
             QuantizeSymm(A, U, input, st);
-            sync_check_cuda_error();
         }
         else {
             A = input;
@@ -85,11 +84,9 @@ struct LlamaLinear::Impl {
             const auto [bsz, k] = A.shapes(0, 1);
             const int e         = indices.size() / bsz;
             Tensor    A_e       = {{m, k}, A.dtype(), kDEVICE};
-            invokeMoeDispatch(A_e, A, indices.data(), e, st);
-            sync_check_cuda_error();
+            TM_CUDA_CHECK(invokeMoeDispatch(A_e, A, indices.data(), e, st));
             Tensor U_e;
-            invokeMoeDispatchScales(U_e, U, indices.data(), e, st);
-            sync_check_cuda_error();
+            TM_CUDA_CHECK(invokeMoeDispatchScales(U_e, U, indices.data(), e, st));
             A       = A_e;
             U       = U_e;
             indices = {};  // indices already applied

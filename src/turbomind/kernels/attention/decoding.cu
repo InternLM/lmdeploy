@@ -17,7 +17,7 @@ void dispatchDecoding(const AttentionParams<T>& params)
     const bool is_kv_int4     = params.quant_policy & QuantPolicy::kCacheKVInt4;
     const int  query_group_sz = params.num_heads / params.num_kv_heads;
 
-    FT_CHECK(!(is_kv_int4 && is_kv_int8));
+    TM_CHECK(!(is_kv_int4 && is_kv_int8));
 
     int kv_quant = is_kv_int4 ? 4 : (is_kv_int8 ? 8 : 0);
 
@@ -33,7 +33,7 @@ void dispatchDecoding(const AttentionParams<T>& params)
 
     TM_CHECK(kernel) << "No decoding kernel found: " + to_string(desc);
 
-    kernel->Launch(&params, reg.sm_count());
+    TM_CUDA_CHECK(kernel->Launch(&params, reg.sm_count()));
 }
 
 template void dispatchDecoding(const AttentionParams<half>& params);

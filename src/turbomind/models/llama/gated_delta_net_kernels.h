@@ -20,18 +20,18 @@ namespace turbomind {
 // conv_state_ptrs: device array[batch_size] of per-request state pointers
 // q_offsets:       device int[batch_size+1] cumulative token offsets
 // k_offsets:       device int[batch_size+1] cumulative key (history+input) offsets
-void invokeFusedConv1dSiLU(Ref<Tensor>           out,
-                           const Tensor&         in,
-                           const Tensor&         weight,
-                           const Tensor&         bias,
-                           const Buffer_<void*>& conv_state_ptrs,
-                           const Buffer_<int>&   q_offsets,
-                           const Buffer_<int>&   k_offsets,
-                           int                   batch_size,
-                           int                   state_layer_offset,
-                           int                   sm_count,
-                           int*                  work_counter,
-                           cudaStream_t          stream);
+[[nodiscard]] cudaError_t invokeFusedConv1dSiLU(Ref<Tensor>           out,
+                                                const Tensor&         in,
+                                                const Tensor&         weight,
+                                                const Tensor&         bias,
+                                                const Buffer_<void*>& conv_state_ptrs,
+                                                const Buffer_<int>&   q_offsets,
+                                                const Buffer_<int>&   k_offsets,
+                                                int                   batch_size,
+                                                int                   state_layer_offset,
+                                                int                   sm_count,
+                                                int*                  work_counter,
+                                                cudaStream_t          stream);
 
 // All three recurrent-rule launchers share the same trailing parameters for
 // interface consistency:
@@ -41,37 +41,37 @@ void invokeFusedConv1dSiLU(Ref<Tensor>           out,
 //   stream        — CUDA stream
 //
 // v2: standard one-block-per-(b,h) grid launch; sm_count and work_counter ignored.
-void invokeGatedDeltaRuleBatched_v2(Ref<Tensor>           v_out,
-                                    const Tensor&         qkv_in,
-                                    const Tensor&         beta,
-                                    const Tensor&         g,
-                                    const Buffer_<void*>& state_ptrs,
-                                    const Buffer_<int>&   q_offsets,
-                                    int                   batch_size,
-                                    int                   num_k_heads,
-                                    int                   state_layer_offset,
-                                    DataType              state_dtype,
-                                    int                   sm_count,
-                                    int*                  work_counter,
-                                    cudaStream_t          stream);
+[[nodiscard]] cudaError_t invokeGatedDeltaRuleBatched_v2(Ref<Tensor>           v_out,
+                                                         const Tensor&         qkv_in,
+                                                         const Tensor&         beta,
+                                                         const Tensor&         g,
+                                                         const Buffer_<void*>& state_ptrs,
+                                                         const Buffer_<int>&   q_offsets,
+                                                         int                   batch_size,
+                                                         int                   num_k_heads,
+                                                         int                   state_layer_offset,
+                                                         DataType              state_dtype,
+                                                         int                   sm_count,
+                                                         int*                  work_counter,
+                                                         cudaStream_t          stream);
 
 // v3: persistent decode kernel, seq_len == 1 only.
 // Launches min(total_work, blocks_per_sm * sm_count) blocks; each block claims
 // work items atomically via work_counter (zeroed via cudaMemsetAsync per launch).
 // state_dtype controls state precision: kFloat32 → S=float, otherwise S=T.
-void invokeGatedDeltaRuleBatched_v3(Ref<Tensor>           v_out,
-                                    const Tensor&         qkv_in,
-                                    const Tensor&         beta,
-                                    const Tensor&         g,
-                                    const Buffer_<void*>& state_ptrs,
-                                    const Buffer_<int>&   q_offsets,
-                                    int                   batch_size,
-                                    int                   num_k_heads,
-                                    int                   state_layer_offset,
-                                    DataType              state_dtype,
-                                    int                   sm_count,
-                                    int*                  work_counter,
-                                    cudaStream_t          stream);
+[[nodiscard]] cudaError_t invokeGatedDeltaRuleBatched_v3(Ref<Tensor>           v_out,
+                                                         const Tensor&         qkv_in,
+                                                         const Tensor&         beta,
+                                                         const Tensor&         g,
+                                                         const Buffer_<void*>& state_ptrs,
+                                                         const Buffer_<int>&   q_offsets,
+                                                         int                   batch_size,
+                                                         int                   num_k_heads,
+                                                         int                   state_layer_offset,
+                                                         DataType              state_dtype,
+                                                         int                   sm_count,
+                                                         int*                  work_counter,
+                                                         cudaStream_t          stream);
 
 // =============================================================================
 // Chunked Gated Delta Rule — for accelerating prefill
@@ -82,19 +82,19 @@ void invokeGatedDeltaRuleBatched_v3(Ref<Tensor>           v_out,
 //
 // Same tensor layouts as invokeGatedDeltaRuleBatched_v2.
 // sm_count and work_counter accepted for interface parity; ignored internally.
-void invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out,
-                                        const Tensor&         qkv_in,
-                                        const Tensor&         beta,
-                                        const Tensor&         g,
-                                        const Buffer_<void*>& state_ptrs,
-                                        const Buffer_<int>&   q_offsets,
-                                        int                   batch_size,
-                                        int                   num_k_heads,
-                                        int                   state_layer_offset,
-                                        DataType              state_dtype,
-                                        int                   sm_count,
-                                        int*                  work_counter,
-                                        cudaStream_t          stream);
+[[nodiscard]] cudaError_t invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out,
+                                                             const Tensor&         qkv_in,
+                                                             const Tensor&         beta,
+                                                             const Tensor&         g,
+                                                             const Buffer_<void*>& state_ptrs,
+                                                             const Buffer_<int>&   q_offsets,
+                                                             int                   batch_size,
+                                                             int                   num_k_heads,
+                                                             int                   state_layer_offset,
+                                                             DataType              state_dtype,
+                                                             int                   sm_count,
+                                                             int*                  work_counter,
+                                                             cudaStream_t          stream);
 
 // =============================================================================
 // Helper kernels
@@ -109,6 +109,7 @@ void ComputeBetaG_v2(Ref<Tensor>   beta_out_,
                      cudaStream_t  stream);
 
 // RMSNorm * SiLU-gate (fused output normalization)
-void invokeRMSNormGated(Ref<Tensor> hidden, const Tensor& gate, const Tensor& weight, float eps, cudaStream_t stream);
+[[nodiscard]] cudaError_t
+invokeRMSNormGated(Ref<Tensor> hidden, const Tensor& gate, const Tensor& weight, float eps, cudaStream_t stream);
 
 }  // namespace turbomind

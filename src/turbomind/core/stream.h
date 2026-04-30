@@ -11,7 +11,7 @@ class StreamImpl {
 public:
     StreamImpl(int priority): stream_{}
     {
-        check_cuda_error(cudaStreamCreateWithPriority(&stream_, cudaStreamNonBlocking, priority));
+        TM_CUDA_CHECK(cudaStreamCreateWithPriority(&stream_, cudaStreamNonBlocking, priority));
     }
 
     ~StreamImpl()
@@ -24,7 +24,7 @@ public:
 
     void Sync()
     {
-        check_cuda_error(cudaStreamSynchronize(stream_));
+        TM_CUDA_CHECK(cudaStreamSynchronize(stream_));
     }
 
     void Wait(const Event& event);
@@ -93,7 +93,7 @@ class EventImpl {
 public:
     explicit EventImpl(unsigned flags)
     {
-        check_cuda_error(cudaEventCreateWithFlags(&event_, flags));
+        TM_CUDA_CHECK(cudaEventCreateWithFlags(&event_, flags));
     }
 
     ~EventImpl()
@@ -105,12 +105,12 @@ public:
 
     void Record(const Stream& stream)
     {
-        check_cuda_error(cudaEventRecord(event_, stream.handle()));
+        TM_CUDA_CHECK(cudaEventRecord(event_, stream.handle()));
     }
 
     void Sync() const
     {
-        check_cuda_error(cudaEventSynchronize(event_));
+        TM_CUDA_CHECK(cudaEventSynchronize(event_));
     }
 
     cudaEvent_t handle() const

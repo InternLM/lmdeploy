@@ -11,6 +11,7 @@
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include "src/turbomind/models/llama/gated_delta_net_kernels.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 using namespace turbomind;
 using namespace turbomind::core;
@@ -236,18 +237,18 @@ int main(int argc, char** argv)
     stream.Sync();
 
     auto launch_v2 = [&] {
-        invokeFusedConv1dSiLU(out_v2,
-                              all_proj,
-                              weight,
-                              Tensor{},
-                              state_ptrs_v2_dev,
-                              q_offsets_dev,
-                              k_offsets_dev,
-                              batch_size,
-                              0,
-                              sm_count,
-                              work_counter.data(),
-                              cu_stream);
+        TM_CUDA_CHECK(invokeFusedConv1dSiLU(out_v2,
+                                            all_proj,
+                                            weight,
+                                            Tensor{},
+                                            state_ptrs_v2_dev,
+                                            q_offsets_dev,
+                                            k_offsets_dev,
+                                            batch_size,
+                                            0,
+                                            sm_count,
+                                            work_counter.data(),
+                                            cu_stream));
     };
 
     // === Benchmark ===

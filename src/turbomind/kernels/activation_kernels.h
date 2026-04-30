@@ -30,6 +30,6 @@ template<typename T> struct IdentityActivation;
 // clang-format on
 
 template<template<typename T> class Activation>
-void invokeGenericActivation_v3(Ref<Tensor> inter_, const Tensor& gate, cudaStream_t stream);
+[[nodiscard]] cudaError_t invokeGenericActivation_v3(Ref<Tensor> inter_, const Tensor& gate, cudaStream_t stream);
 
 }  // namespace turbomind

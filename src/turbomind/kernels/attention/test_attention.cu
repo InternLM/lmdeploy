@@ -143,28 +143,28 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
     // [B, 2H, S, D] -> [B, S/s] x [2H, s, D]
     for (int i = 0; i < 1; ++i) {
         // (B, 2, H, S, D) -> blocks
-        invokeProcessKV_v2(k_ptrs.data().get(),
-                           kv_cache.data().get(),
-                           kv_cache.data().get() + head_num * seq_len * head_dim,
-                           (T*)nullptr,
-                           (T*)nullptr,
-                           cu_seq_lens.data().get(),
-                           cu_seq_lens.data().get(),
-                           cu_block_cnts.data().get(),
-                           RopeKernelParam{},
-                           2 * head_num * seq_len,
-                           0,
-                           seq_len,
-                           1,
-                           block_seq_len,
-                           0,  // layer_id
-                           0,  // cp_rank
-                           1,  // cp_size
-                           seq_len,
-                           head_num,
-                           head_dim,
-                           batch_size,
-                           quant_policy);
+        TM_CUDA_CHECK(invokeProcessKV_v2(k_ptrs.data().get(),
+                                         kv_cache.data().get(),
+                                         kv_cache.data().get() + head_num * seq_len * head_dim,
+                                         (T*)nullptr,
+                                         (T*)nullptr,
+                                         cu_seq_lens.data().get(),
+                                         cu_seq_lens.data().get(),
+                                         cu_block_cnts.data().get(),
+                                         RopeKernelParam{},
+                                         2 * head_num * seq_len,
+                                         0,
+                                         seq_len,
+                                         1,
+                                         block_seq_len,
+                                         0,  // layer_id
+                                         0,  // cp_rank
+                                         1,  // cp_size
+                                         seq_len,
+                                         head_num,
+                                         head_dim,
+                                         batch_size,
+                                         quant_policy));
     }
 
     thrust::universal_vector<T> kv_cache_2(kv_cache.size());
@@ -172,25 +172,25 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
     // round trip test
     for (int i = 0; i < 1; ++i) {
         // kv_cache_2 is [B, 2, H, S, D]
-        invokeFlattenKV_v2(kv_cache_2.data().get(),
-                           kv_cache_2.data().get() + head_num * seq_len * head_dim,
-                           k_ptrs.data().get(),
-                           cu_seq_lens.data().get(),
-                           cu_block_cnts.data().get(),
-                           RopeKernelParam{},
-                           2 * head_num * seq_len,
-                           0,
-                           seq_len,
-                           1,
-                           block_seq_len,
-                           0,  // layer_id
-                           0,  // cp_rank
-                           1,  // cp_size
-                           seq_len,
-                           head_num,
-                           head_dim,
-                           batch_size,
-                           quant_policy);
+        TM_CUDA_CHECK(invokeFlattenKV_v2(kv_cache_2.data().get(),
+                                         kv_cache_2.data().get() + head_num * seq_len * head_dim,
+                                         k_ptrs.data().get(),
+                                         cu_seq_lens.data().get(),
+                                         cu_block_cnts.data().get(),
+                                         RopeKernelParam{},
+                                         2 * head_num * seq_len,
+                                         0,
+                                         seq_len,
+                                         1,
+                                         block_seq_len,
+                                         0,  // layer_id
+                                         0,  // cp_rank
+                                         1,  // cp_size
+                                         seq_len,
+                                         head_num,
+                                         head_dim,
+                                         batch_size,
+                                         quant_policy));
     }
 
     cudaDeviceSynchronize();
@@ -355,7 +355,8 @@ int test_attention()
                           kBatchSize * KvHeadNum);
     }
 
-    invokeApplyRotaryEmbedding(k_cache.data().get(), kContextLen, KvHeadNum, kHeadDim, kRoPEBase, kRoPEDim, kBatchSize);
+    TM_CUDA_CHECK(invokeApplyRotaryEmbedding(
+        k_cache.data().get(), kContextLen, KvHeadNum, kHeadDim, kRoPEBase, kRoPEDim, kBatchSize));
 
     thrust::universal_vector<T> k_cache_ref = k_cache;
     thrust::universal_vector<T> v_cache_ref = v_cache;
@@ -517,9 +518,9 @@ int test_attention()
         cudaEventRecord(ev_end[i]);
 #else
         // input -> blocked
-        invokeProcessKV_v2_(params);
+        TM_CUDA_CHECK(invokeProcessKV_v2_(params));
         // blocked -> linear
-        invokeFlattenKV_v2_(params, cu_kv_lens[kBatchSize]);
+        TM_CUDA_CHECK(invokeFlattenKV_v2_(params, cu_kv_lens[kBatchSize]));
 
         cudaEventRecord(ev_start[i]);
         dispatchAttention(params);
@@ -557,25 +558,25 @@ int test_attention()
         }
     }
 
-    invokeFlattenKV_v2(k_cache.data().get(),  // [B, H, S, D]
-                       v_cache.data().get(),
-                       k_ptrs.data().get(),
-                       cu_kv_lens.data().get(),
-                       cu_block_cnts.data().get(),
-                       RopeKernelParam{},  // DECODING ? nullptr : params.rope_theta,
-                       KvHeadNum * kContextLen,
-                       0,
-                       kContextLen,
-                       1,
-                       kBlockSz,
-                       0,  // layer_id
-                       0,  // cp_rank
-                       1,  // cp_size
-                       kContextLen,
-                       KvHeadNum,
-                       kHeadDim,
-                       kBatchSize,
-                       kQuantPolicy);
+    TM_CUDA_CHECK(invokeFlattenKV_v2(k_cache.data().get(),  // [B, H, S, D]
+                                     v_cache.data().get(),
+                                     k_ptrs.data().get(),
+                                     cu_kv_lens.data().get(),
+                                     cu_block_cnts.data().get(),
+                                     RopeKernelParam{},  // DECODING ? nullptr : params.rope_theta,
+                                     KvHeadNum * kContextLen,
+                                     0,
+                                     kContextLen,
+                                     1,
+                                     kBlockSz,
+                                     0,  // layer_id
+                                     0,  // cp_rank
+                                     1,  // cp_size
+                                     kContextLen,
+                                     KvHeadNum,
+                                     kHeadDim,
+                                     kBatchSize,
+                                     kQuantPolicy));
     cudaDeviceSynchronize();
 
     const size_t nbytes = blocks.size() / kContextLen * std::min(kContextLen, (size_t)params.window_size);

@@ -44,19 +44,20 @@ __global__ void gatherOutput(int*       output_ids,
     }
 }
 
-void invokeGatherOutput(int*         output_ids,
-                        const int*   ids,
-                        const int*   context_length,
-                        int          max_context_len,
-                        int          max_gen_step,
-                        int          max_output_len,
-                        int          batch_size,
-                        cudaStream_t stream)
+cudaError_t invokeGatherOutput(int*         output_ids,
+                               const int*   ids,
+                               const int*   context_length,
+                               int          max_context_len,
+                               int          max_gen_step,
+                               int          max_output_len,
+                               int          batch_size,
+                               cudaStream_t stream)
 {
     int block_size = 128;
     int grid_size  = batch_size;
     gatherOutput<<<grid_size, block_size, 0, stream>>>(
         output_ids, ids, context_length, max_context_len, max_gen_step, max_output_len, batch_size);
+    return cudaGetLastError();
 }
 
 __global__ void updateOutput(int**      request_output_ids_ptrs,
@@ -84,15 +85,15 @@ __global__ void updateOutput(int**      request_output_ids_ptrs,
     *request_seqlen = seqlen;
 }
 
-void invokeUpdateOutput(int**        request_output_ids_ptrs,
-                        int**        request_seqlen_ptrs,
-                        const int*   output_ids,
-                        const int*   sequence_lengths,
-                        const int*   request_output_ids_lens,
-                        int          max_session_len,
-                        bool         token_generated,
-                        int          batch_size,
-                        cudaStream_t stream)
+cudaError_t invokeUpdateOutput(int**        request_output_ids_ptrs,
+                               int**        request_seqlen_ptrs,
+                               const int*   output_ids,
+                               const int*   sequence_lengths,
+                               const int*   request_output_ids_lens,
+                               int          max_session_len,
+                               bool         token_generated,
+                               int          batch_size,
+                               cudaStream_t stream)
 {
     constexpr int block_size = 128;
     const int     grid_size  = batch_size;
@@ -104,6 +105,7 @@ void invokeUpdateOutput(int**        request_output_ids_ptrs,
                                                        request_output_ids_lens,
                                                        max_session_len,
                                                        token_generated);
+    return cudaGetLastError();
 }
 
 template<int BLOCK_DIM>
@@ -141,17 +143,18 @@ __global__ void compactOutputIds(
     }
 }
 
-void invokeCompactOutputIds(int*         cu_output_ids,
-                            const int*   output_ids,
-                            const int*   sequence_lengths,
-                            int          max_session_len,
-                            bool         token_generated,
-                            int          batch_size,
-                            cudaStream_t stream)
+cudaError_t invokeCompactOutputIds(int*         cu_output_ids,
+                                   const int*   output_ids,
+                                   const int*   sequence_lengths,
+                                   int          max_session_len,
+                                   bool         token_generated,
+                                   int          batch_size,
+                                   cudaStream_t stream)
 {
     constexpr int BLOCK_DIM = 128;
     compactOutputIds<BLOCK_DIM><<<batch_size, BLOCK_DIM, 0, stream>>>(
         cu_output_ids, output_ids, sequence_lengths, max_session_len, token_generated);
+    return cudaGetLastError();
 }
 
 template<int N, int C>
@@ -201,7 +204,7 @@ void invokeIndexedCopyImpl(void**       h_src_ptr,
             std::copy_n(h_dst_ptr, N, param.dst_ptr.data());
             std::transform(h_elem_sz, h_elem_sz + N, param.stride.data(), [](int size) {
                 // Basic alignment check
-                FT_CHECK_WITH_INFO(size % sizeof(T) == 0, fmtstr("misalignment: %d %% %d", size, (int)sizeof(T)));
+                TM_CHECK(size % sizeof(T) == 0) << fmtstr("misalignment: %d %% %d", size, (int)sizeof(T));
                 return size / sizeof(T);
             });
             param.max_stride = *std::max_element(param.stride.begin(), param.stride.end());
@@ -217,14 +220,14 @@ void invokeIndexedCopyImpl(void**       h_src_ptr,
         });
 }
 
-void invokeIndexedCopy(void**       h_src_ptr,
-                       void**       h_dst_ptr,
-                       const int*   h_elem_sz,
-                       const int*   h_src_idx,
-                       const int*   h_dst_idx,
-                       int          count,
-                       int          n_copys,
-                       cudaStream_t st)
+cudaError_t invokeIndexedCopy(void**       h_src_ptr,
+                              void**       h_dst_ptr,
+                              const int*   h_elem_sz,
+                              const int*   h_src_idx,
+                              const int*   h_dst_idx,
+                              int          count,
+                              int          n_copys,
+                              cudaStream_t st)
 {
     auto success = dispatch(std::integer_sequence<int, 1, 2, 3, 4>{}, [&](auto N) {
         if (N == n_copys) {
@@ -233,7 +236,8 @@ void invokeIndexedCopy(void**       h_src_ptr,
         }
         return false;
     });
-    FT_CHECK(success);
+    TM_CHECK(success);
+    return cudaGetLastError();
 }
 
 __global__ void padLastTokenIds(int* token_ids, const int* context_length, int max_context_len, int batch_size)
@@ -243,10 +247,11 @@ __global__ void padLastTokenIds(int* token_ids, const int* context_length, int m
     }
 }
 
-void invokePadLastTokenIds(
+cudaError_t invokePadLastTokenIds(
     int* token_ids, const int* context_length, int max_context_len, int batch_size, cudaStream_t stream)
 {
     padLastTokenIds<<<1, 512, 0, stream>>>(token_ids, context_length, max_context_len, batch_size);
+    return cudaGetLastError();
 }
 
 template<typename T>
@@ -259,10 +264,11 @@ __global__ void getFeatureOfLastToken(T* output, const T* input, const int* cu_s
     }
 }
 
-void invokeGetFeatureOfLastToken(
+cudaError_t invokeGetFeatureOfLastToken(
     uint16_t* output, const uint16_t* input, const int* cu_seqlens, int dims, int batch_size, cudaStream_t stream)
 {
     getFeatureOfLastToken<<<batch_size, 256, 0, stream>>>(output, input, cu_seqlens, dims);
+    return cudaGetLastError();
 }
 
 template<class T, int C>
@@ -307,7 +313,7 @@ struct BatchedCopyLauncher {
     }
 };
 
-void invokeBatchedCopy(void** src_ptr, void** dst_ptr, int* size, int count, cudaStream_t st)
+cudaError_t invokeBatchedCopy(void** src_ptr, void** dst_ptr, int* size, int count, cudaStream_t st)
 {
     dispatch(
         std::integer_sequence<int, 1, 8, 32, 128>{},
@@ -323,7 +329,7 @@ void invokeBatchedCopy(void** src_ptr, void** dst_ptr, int* size, int count, cud
                 for (int i = 0; i < bsz; ++i) {
                     params.src_ptr[i] = (T*)src_ptr[c + i];
                     params.dst_ptr[i] = (T*)dst_ptr[c + i];
-                    FT_CHECK(size[c + i] % sizeof(T) == 0);
+                    TM_CHECK(size[c + i] % sizeof(T) == 0);
                     params.size[i] = size[c + i] / sizeof(T);
                 }
                 const int max_size = *std::max_element(params.size.begin(), params.size.end());
@@ -333,6 +339,7 @@ void invokeBatchedCopy(void** src_ptr, void** dst_ptr, int* size, int count, cud
                     BatchedCopyLauncher<BatchedCopyParam<T, C>>{max_size, count, &params, st});
             }
         });
+    return cudaGetLastError();
 }
 
 template<typename T>
@@ -347,17 +354,18 @@ __global__ void maskOutput(T* output, const int* mask, int dim)
 }
 
 template<typename T>
-void invokeMask(T* output, const int* mask, int batch_size, int dim, cudaStream_t stream)
+cudaError_t invokeMask(T* output, const int* mask, int batch_size, int dim, cudaStream_t stream)
 {
     maskOutput<<<batch_size, 1024, 0, stream>>>(output, mask, dim);
+    return cudaGetLastError();
 }
 
 #ifdef ENABLE_FP32
-template void invokeMask(float* output, const int* mask, int batch_size, int dim, cudaStream_t stream);
+template cudaError_t invokeMask(float* output, const int* mask, int batch_size, int dim, cudaStream_t stream);
 #endif
-template void invokeMask(half* output, const int* mask, int batch_size, int dim, cudaStream_t stream);
+template cudaError_t invokeMask(half* output, const int* mask, int batch_size, int dim, cudaStream_t stream);
 #ifdef ENABLE_BF16
-template void invokeMask(__nv_bfloat16* output, const int* mask, int batch_size, int dim, cudaStream_t stream);
+template cudaError_t invokeMask(__nv_bfloat16* output, const int* mask, int batch_size, int dim, cudaStream_t stream);
 #endif
 
 template<typename T, int vec_size>
@@ -390,7 +398,7 @@ __global__ void castFloat2D(const T* input, float* output, int channels)
     }
 }
 
-void invokeCastFloat2D(const core::Tensor& src, core::Tensor& dst, cudaStream_t stream)
+cudaError_t invokeCastFloat2D(const core::Tensor& src, core::Tensor& dst, cudaStream_t stream)
 {
     TM_CHECK(src.is_contiguous());
     TM_CHECK(dst.is_contiguous());
@@ -429,14 +437,15 @@ void invokeCastFloat2D(const core::Tensor& src, core::Tensor& dst, cudaStream_t 
     };
 
     if (channels % 4 == 0) {
-        return dispatch_t(std::integral_constant<int, 4>{});
+        dispatch_t(std::integral_constant<int, 4>{});
     }
     else if (channels % 2 == 0) {
-        return dispatch_t(std::integral_constant<int, 2>{});
+        dispatch_t(std::integral_constant<int, 2>{});
     }
     else {
-        return dispatch_t(std::integral_constant<int, 1>{});
+        dispatch_t(std::integral_constant<int, 1>{});
     }
+    return cudaGetLastError();
 }
 
 template<class T>
@@ -573,7 +582,7 @@ __global__ void SigmoidGateMultiplyKernel(T* attn, const T* gate_base, int dim, 
     attn[ti * dim + di] = (T)(a * s);
 }
 
-void invokeSigmoidGateMultiply(
+cudaError_t invokeSigmoidGateMultiply(
     void* attn, const void* gate_base, int dim, int gate_stride, int num_tokens, DataType dtype, cudaStream_t stream)
 {
     constexpr int block = 256;
@@ -586,6 +595,7 @@ void invokeSigmoidGateMultiply(
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(dtype, invoke);
+    return cudaGetLastError();
 }
 
 }  // namespace turbomind

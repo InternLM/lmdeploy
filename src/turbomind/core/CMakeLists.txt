@@ -20,6 +20,7 @@ add_library(core STATIC
         allocator.cc
         stream.cc
         context.cc
+        scope.cc
         buffer.cc
         layout.cc
         tensor.cc
@@ -38,6 +39,9 @@ target_compile_options(core PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-v>)
 if (BUILD_TEST)
     add_executable(test_core test_core.cc)
     target_link_libraries(test_core PRIVATE core Catch2::Catch2WithMain)
+
+    add_executable(test_scope test_scope.cc)
+    target_link_libraries(test_scope PRIVATE core Catch2::Catch2WithMain)
 
     add_executable(test_logger test_logger.cc)
     target_link_libraries(test_logger PRIVATE core Catch2::Catch2WithMain)

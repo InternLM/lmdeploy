@@ -1,12 +1,48 @@
 
+#include <filesystem>
+#include <fmt/format.h>
+#include <ostream>
 #include <stack>
+#include <string>
+#include <string_view>
+#include <thread>
+#include <vector>
 
 #include "src/turbomind/core/allocator.h"
+#include "src/turbomind/core/check.h"
 #include "src/turbomind/core/context.h"
+#include "src/turbomind/core/scope.h"
 
 namespace turbomind::core {
 
 namespace {
+
+std::string StripNamespace(std::string_view name)
+{
+    static constexpr std::string_view ns = "turbomind::";
+    std::string                       result;
+
+    for (auto it = name.find(ns); it != std::string_view::npos; it = name.find(ns)) {
+        result.append(name.substr(0, it));
+        name.remove_prefix(it + ns.size());
+    }
+
+    result.append(name);
+
+    return result;
+}
+
+std::string StripPathPrefix(std::string_view file)
+{
+    static const char* flag = std::getenv("TM_SRC_FULL_PATH");
+    if (flag) {
+        return std::string{file};
+    }
+
+    // Return only the filename (last component of the path)
+    std::filesystem::path path{file};
+    return path.filename().string();
+}
 
 struct ContextStorage {
     enum
@@ -22,6 +58,8 @@ struct ContextStorage {
     std::stack<Allocator> device_alloc_;
     std::stack<Allocator> pinned_alloc_;
     std::stack<int>       mask_;
+
+    std::vector<ScopeEntry> scope_;
 
     ContextStorage()
     {
@@ -76,6 +114,41 @@ struct ContextStorage {
         mask_.pop();
     }
 
+    void push_scope(const ScopeEntry& entry)
+    {
+        scope_.push_back(entry);
+    }
+
+    void pop_scope()
+    {
+        TM_CHECK(!scope_.empty()) << "pop_scope called with empty scope stack";
+        scope_.pop_back();
+    }
+
+    int scope_depth() const
+    {
+        return static_cast<int>(scope_.size());
+    }
+
+    std::string scope_trace() const
+    {
+        if (scope_.empty()) {
+            return {};
+        }
+        std::ostringstream oss;
+        oss << std::hex << std::this_thread::get_id();
+        std::string s = fmt::format("*** stacktrace of thread 0x{} ***\n", oss.str());
+        for (size_t i = 0; i < scope_.size(); ++i) {
+            const int r    = static_cast<int>(scope_.size()) - i - 1;
+            auto      name = StripNamespace(scope_[r].name);
+            if (scope_[r].type == scope_type::function) {
+                name = StripFunctionSignature(name);
+            }
+            s += fmt::format("  [{:>2}] {} @ {}:{}\n", i, name, StripPathPrefix(scope_[r].file), scope_[r].line);
+        }
+        return s;
+    }
+
     static ContextStorage& instance()
     {
         thread_local ContextStorage inst{};
@@ -98,6 +171,26 @@ void Context::push(const Allocator& alloc)
 void Context::pop()
 {
     ContextStorage::instance().pop();
+}
+
+void Context::push_scope(const ScopeEntry& entry)
+{
+    ContextStorage::instance().push_scope(entry);
+}
+
+void Context::pop_scope()
+{
+    ContextStorage::instance().pop_scope();
+}
+
+std::string Context::scope_trace()
+{
+    return ContextStorage::instance().scope_trace();
+}
+
+int Context::scope_depth()
+{
+    return ContextStorage::instance().scope_depth();
 }
 
 Stream& Context::stream()

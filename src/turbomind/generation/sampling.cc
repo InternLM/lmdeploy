@@ -19,6 +19,7 @@
 #include "src/turbomind/kernels/sampling_kernels.h"
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
 #include "src/turbomind/kernels/sampling_topp_kernels.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 #include "src/turbomind/engine/batch.h"
 #include "src/turbomind/engine/request.h"
@@ -112,12 +113,13 @@ void Sampling::Forward(int phase, TensorMap& args)
         params.batch_size        = bsz;
         params.vocab_size        = vocab_size_;
         params.vocab_size_padded = vocab_size_padded_;
-        invokeTopKSortFilter<float>(params, stream);
+        TM_CUDA_CHECK(invokeTopKSortFilter<float>(params, stream));
     }
 
     // use topp sort if some request skip topk filter
     if (d.min_topk == 0) {
-        invokeSoftmax<float>(logits.data(), vocab_size_padded_, vocab_size_, bsz, d.kept_buf.data(), stream);
+        TM_CUDA_CHECK(
+            invokeSoftmax<float>(logits.data(), vocab_size_padded_, vocab_size_, bsz, d.kept_buf.data(), stream));
 
         TopPSortParams params{};
         params.logits            = logits.data();
@@ -129,7 +131,7 @@ void Sampling::Forward(int phase, TensorMap& args)
         params.batch_size        = bsz;
         params.vocab_size        = vocab_size_;
         params.vocab_size_padded = vocab_size_padded_;
-        invokeTopPSort<float>(params, stream);
+        TM_CUDA_CHECK(invokeTopPSort<float>(params, stream));
     }
 
     // apply topp minp filter
@@ -143,7 +145,7 @@ void Sampling::Forward(int phase, TensorMap& args)
         params.batch_size        = bsz;
         params.vocab_size        = vocab_size_;
         params.vocab_size_padded = vocab_size_padded_;
-        invokeTopPMinPFilter<float>(params, stream);
+        TM_CUDA_CHECK(invokeTopPMinPFilter<float>(params, stream));
     }
 
     // sample
@@ -164,8 +166,7 @@ void Sampling::Forward(int phase, TensorMap& args)
             params.sampled_nums     = d.sampled_nums.data();
         }
 
-        invokeSampling<float>(params, stream);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(invokeSampling<float>(params, stream));
     }
 
     TM_LOG_DEBUG("{} stop", __PRETTY_FUNCTION__);

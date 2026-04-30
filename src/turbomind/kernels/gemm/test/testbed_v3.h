@@ -10,6 +10,7 @@
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/quantization.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
@@ -56,8 +57,8 @@ static Tensor CopyTransposed(const Tensor& src, Tensor out = {})
 
     auto invoke = [&](auto t) {
         using T = decltype(t);
-        invokeTransposeAxis01(
-            (T*)out.raw_data(), (T*)src.raw_data(), src.shape(0), src.shape(1), 1, core::Context::stream().handle());
+        TM_CUDA_CHECK(invokeTransposeAxis01(
+            (T*)out.raw_data(), (T*)src.raw_data(), src.shape(0), src.shape(1), 1, core::Context::stream().handle()));
     };
 
     const int bits = byte_size(src.dtype(), 8);
@@ -316,7 +317,7 @@ struct Testbed_v3: Parameter {
         Tensor xe{{x.shape(0) * experts_per_token, input_dim}, data_type, kDEVICE};
         Tensor de{{x.shape(0) * experts_per_token, output_dim}, data_type, kDEVICE};
 
-        invokeMoeDispatch(xe, x, f2n_.data(), experts_per_token, stream_);
+        TM_CUDA_CHECK(invokeMoeDispatch(xe, x, f2n_.data(), experts_per_token, stream_));
 
         for (int i = 0; i < expert_num; ++i) {
             const int base = h_offsets_[i], size = h_offsets_[i + 1] - base;
@@ -326,17 +327,17 @@ struct Testbed_v3: Parameter {
         auto& d = d_.get();
         if (combine_experts) {
             d = Tensor{{x.shape(0), output_dim}, data_type, kDEVICE};
-            invokeMoeCombine(d,  //
-                             de,
-                             {},
-                             scales_.data(),
-                             en2f_.data(),
-                             nullptr,
-                             nullptr,
-                             experts_per_token,
-                             1.,
-                             0.,
-                             stream_);
+            TM_CUDA_CHECK(invokeMoeCombine(d,  //
+                                           de,
+                                           {},
+                                           scales_.data(),
+                                           en2f_.data(),
+                                           nullptr,
+                                           nullptr,
+                                           experts_per_token,
+                                           1.,
+                                           0.,
+                                           stream_));
         }
         else {
             d = de;
@@ -352,17 +353,17 @@ struct Testbed_v3: Parameter {
             auto de = linear_.Forward(x_original_, *w_quant_, f2n_, offsets_);
             if (combine_experts) {
                 d_quant_ = Tensor{{x_original_.shape(0), output_dim}, data_type, kDEVICE};
-                invokeMoeCombine(d_quant_,
-                                 de,
-                                 {},
-                                 scales_.data(),
-                                 en2f_.data(),
-                                 nullptr,
-                                 nullptr,
-                                 experts_per_token,
-                                 1.,
-                                 0.,
-                                 stream_);
+                TM_CUDA_CHECK(invokeMoeCombine(d_quant_,
+                                               de,
+                                               {},
+                                               scales_.data(),
+                                               en2f_.data(),
+                                               nullptr,
+                                               nullptr,
+                                               experts_per_token,
+                                               1.,
+                                               0.,
+                                               stream_));
             }
             else {
                 d_quant_ = de;

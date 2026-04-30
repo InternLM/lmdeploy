@@ -130,29 +130,29 @@ __global__ void embeddingLookup(T*                    from_tensor,
 
 /* Adapter function for invokeEmbeddingLookupPosEncoding{PadCount,InputLen} */
 template<typename T>
-void invokeEmbeddingLookupPosEncoding(T*                    from_tensor,
-                                      const T*              embedding_table,
-                                      const T*              position_encoding,
-                                      const int*            all_ids,
-                                      const int*            padding_count,
-                                      const int*            input_lengths,
-                                      pPromptTuningParam<T> prompt_param,
-                                      const int             local_token_num,
-                                      const int             hidden_units,
-                                      const T               scale,
-                                      const int             step,
-                                      const int             max_input_length,
-                                      const int             token_num,
-                                      const int             ite,
-                                      const int             seq_len,
-                                      cudaStream_t          stream)
+cudaError_t invokeEmbeddingLookupPosEncoding(T*                    from_tensor,
+                                             const T*              embedding_table,
+                                             const T*              position_encoding,
+                                             const int*            all_ids,
+                                             const int*            padding_count,
+                                             const int*            input_lengths,
+                                             pPromptTuningParam<T> prompt_param,
+                                             const int             local_token_num,
+                                             const int             hidden_units,
+                                             const T               scale,
+                                             const int             step,
+                                             const int             max_input_length,
+                                             const int             token_num,
+                                             const int             ite,
+                                             const int             seq_len,
+                                             cudaStream_t          stream)
 {
     dim3 grid(min(local_token_num, 65536));
     dim3 block(min(hidden_units, 1024));
     if (position_encoding != nullptr) {
-        FT_CHECK_WITH_INFO(prompt_param.use_request_p_prompt_embedding == false
-                               && prompt_param.p_prompt_tuning_batch_weights == nullptr,
-                           fmtstr("embeddingLookupPosEncoding still not support prompt tuning"));
+        TM_CHECK(prompt_param.use_request_p_prompt_embedding == false
+                 && prompt_param.p_prompt_tuning_batch_weights == nullptr)
+            << fmtstr("embeddingLookupPosEncoding still not support prompt tuning");
         embeddingLookupPosEncoding<T><<<grid, block, 0, stream>>>(from_tensor,
                                                                   embedding_table,
                                                                   position_encoding,
@@ -178,59 +178,60 @@ void invokeEmbeddingLookupPosEncoding(T*                    from_tensor,
             EMBEDDING_LOOKUP(0);
         }
     }
+    return cudaGetLastError();
 }
 
 #undef EMBEDDING_LOOKUP
 
 template<typename T>
-void invokeEmbeddingLookupPosEncodingPadCount(T*                    from_tensor,
-                                              const T*              embedding_table,
-                                              const T*              position_encoding,
-                                              const int*            all_ids,
-                                              const int*            pad_count,
-                                              pPromptTuningParam<T> prompt_param,
-                                              const int             local_token_num,
-                                              const int             hidden_units,
-                                              const T               scale,
-                                              const int             step,
-                                              const int             token_num,
-                                              const int             ite,
-                                              const int             seq_len,
-                                              cudaStream_t          stream)
+cudaError_t invokeEmbeddingLookupPosEncodingPadCount(T*                    from_tensor,
+                                                     const T*              embedding_table,
+                                                     const T*              position_encoding,
+                                                     const int*            all_ids,
+                                                     const int*            pad_count,
+                                                     pPromptTuningParam<T> prompt_param,
+                                                     const int             local_token_num,
+                                                     const int             hidden_units,
+                                                     const T               scale,
+                                                     const int             step,
+                                                     const int             token_num,
+                                                     const int             ite,
+                                                     const int             seq_len,
+                                                     cudaStream_t          stream)
 {
-    invokeEmbeddingLookupPosEncoding<T>(from_tensor,
-                                        embedding_table,
-                                        position_encoding,
-                                        all_ids,
-                                        pad_count,
-                                        nullptr,
-                                        prompt_param,
-                                        local_token_num,
-                                        hidden_units,
-                                        scale,
-                                        step,
-                                        0,
-                                        token_num,
-                                        ite,
-                                        seq_len,
-                                        stream);
+    return invokeEmbeddingLookupPosEncoding<T>(from_tensor,
+                                               embedding_table,
+                                               position_encoding,
+                                               all_ids,
+                                               pad_count,
+                                               nullptr,
+                                               prompt_param,
+                                               local_token_num,
+                                               hidden_units,
+                                               scale,
+                                               step,
+                                               0,
+                                               token_num,
+                                               ite,
+                                               seq_len,
+                                               stream);
 }
 
 #define INSTANTIATE_LOOKUP_POS_ENCODING_PAD_COUNT(T)                                                                   \
-    template void invokeEmbeddingLookupPosEncodingPadCount(T*                    from_tensor,                          \
-                                                           const T*              embedding_table,                      \
-                                                           const T*              position_encoding,                    \
-                                                           const int*            all_ids,                              \
-                                                           const int*            pad_count,                            \
-                                                           pPromptTuningParam<T> prompt_param,                         \
-                                                           const int             local_token_num,                      \
-                                                           const int             hidden_units,                         \
-                                                           const T               scale,                                \
-                                                           const int             step,                                 \
-                                                           const int             token_num,                            \
-                                                           const int             ite,                                  \
-                                                           const int             seq_len,                              \
-                                                           cudaStream_t          stream)
+    template cudaError_t invokeEmbeddingLookupPosEncodingPadCount(T*                    from_tensor,                   \
+                                                                  const T*              embedding_table,               \
+                                                                  const T*              position_encoding,             \
+                                                                  const int*            all_ids,                       \
+                                                                  const int*            pad_count,                     \
+                                                                  pPromptTuningParam<T> prompt_param,                  \
+                                                                  const int             local_token_num,               \
+                                                                  const int             hidden_units,                  \
+                                                                  const T               scale,                         \
+                                                                  const int             step,                          \
+                                                                  const int             token_num,                     \
+                                                                  const int             ite,                           \
+                                                                  const int             seq_len,                       \
+                                                                  cudaStream_t          stream)
 #ifdef ENABLE_FP32
 INSTANTIATE_LOOKUP_POS_ENCODING_PAD_COUNT(float);
 #endif
@@ -272,14 +273,14 @@ __global__ void paddingEmbedding(T*            padded_embedding_kernel,
 }
 
 template<typename T>
-void invokePaddingEmbedding(T*           padded_embedding_kernel,
-                            T*           padded_embedding_bias,
-                            const T*     embedding_kernel,
-                            const T*     embedding_bias,
-                            const int    hidden_unit,
-                            const int    vocab_size,
-                            const int    vocab_size_padded,
-                            cudaStream_t stream)
+cudaError_t invokePaddingEmbedding(T*           padded_embedding_kernel,
+                                   T*           padded_embedding_bias,
+                                   const T*     embedding_kernel,
+                                   const T*     embedding_bias,
+                                   const int    hidden_unit,
+                                   const int    vocab_size,
+                                   const int    vocab_size_padded,
+                                   cudaStream_t stream)
 {
     dim3 block(512);
     dim3 grid((int)(ceil(hidden_unit * vocab_size_padded / 512.)));
@@ -290,6 +291,7 @@ void invokePaddingEmbedding(T*           padded_embedding_kernel,
                                                  hidden_unit,
                                                  vocab_size,
                                                  vocab_size_padded);
+    return cudaGetLastError();
 }
 
 // template void invokePaddingEmbedding(float*       padded_embedding_kernel,
@@ -341,17 +343,18 @@ __global__ void paddingEmbeddingKernel(T*        padded_embedding_kernel,
 }
 
 template<typename T>
-void invokePaddingEmbeddingKernel(T*           padded_embedding_kernel,
-                                  const T*     embedding_kernel,
-                                  const int    hidden_unit,
-                                  const int    vocab_size,
-                                  const int    vocab_size_padded,
-                                  cudaStream_t stream)
+cudaError_t invokePaddingEmbeddingKernel(T*           padded_embedding_kernel,
+                                         const T*     embedding_kernel,
+                                         const int    hidden_unit,
+                                         const int    vocab_size,
+                                         const int    vocab_size_padded,
+                                         cudaStream_t stream)
 {
     dim3 block(512);
     dim3 grid((int)(ceil(hidden_unit * vocab_size_padded / 512.)));
     paddingEmbeddingKernel<<<grid, block, 0, stream>>>(
         padded_embedding_kernel, embedding_kernel, hidden_unit, vocab_size, vocab_size_padded);
+    return cudaGetLastError();
 }
 
 // template void invokePaddingEmbeddingKernel(float*       padded_embedding_kernel,
@@ -386,13 +389,14 @@ __global__ void plusScalar(T* buf, const T val, const int size)
 }
 
 template<typename T>
-void invokePlusScalar(T* buf, const T val, const int size, cudaStream_t stream)
+cudaError_t invokePlusScalar(T* buf, const T val, const int size, cudaStream_t stream)
 {
     dim3 block(min(256, size));
     dim3 grid(ceil(size / 256.));
     plusScalar<<<block, grid, 0, stream>>>(buf, val, size);
+    return cudaGetLastError();
 }
 
-template void invokePlusScalar(int* buf, const int val, const int size, cudaStream_t stream);
+template cudaError_t invokePlusScalar(int* buf, const int val, const int size, cudaStream_t stream);
 
 }  // namespace turbomind

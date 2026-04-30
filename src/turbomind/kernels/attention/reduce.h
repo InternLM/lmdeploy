@@ -12,16 +12,16 @@
 namespace turbomind::attention {
 
 template<int HeadDim, class T>
-void invokeReduceV3(T*           out,
-                    float*       partial_ML,
-                    float*       partial_O,
-                    const int*   split_cnt,
-                    int          partial_len,
-                    int          max_split_cnt,
-                    int          cp_size,
-                    int          cp_rank,
-                    int          query_num,
-                    int          head_num,
-                    float        exp_scale,
-                    cudaStream_t stream);
+[[nodiscard]] cudaError_t invokeReduceV3(T*           out,
+                                         float*       partial_ML,
+                                         float*       partial_O,
+                                         const int*   split_cnt,
+                                         int          partial_len,
+                                         int          max_split_cnt,
+                                         int          cp_size,
+                                         int          cp_rank,
+                                         int          query_num,
+                                         int          head_num,
+                                         float        exp_scale,
+                                         cudaStream_t stream);
 }  // namespace turbomind::attention

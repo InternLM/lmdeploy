@@ -209,7 +209,7 @@ public:
         constexpr int kTileN = Gemm::TILE_N;
 
         if (Gemm::Scheduler::is_dynamic) {
-            check_cuda_error(cudaMemsetAsync(workspace.flags, 0, sizeof(int), stream));
+            TM_CUDA_CHECK(cudaMemsetAsync(workspace.flags, 0, sizeof(int), stream));
         }
 
         // std::cout << "A: " << Adesc << "\n";
@@ -294,7 +294,7 @@ public:
                                      to_param((void*)D, Ddesc),
                                      sched,
                                      workspace.tensormaps);
-        TM_CHECK_EQ(ec, cudaSuccess) << cudaGetErrorString(ec);
+        TM_CUDA_CHECK(ec);
 
         return 0;
     }

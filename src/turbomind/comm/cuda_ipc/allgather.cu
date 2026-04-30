@@ -111,11 +111,11 @@ void CudaIpcCommImpl::AllGather(
 
         for (int i = 1; i < ranks; ++i) {
             const int p = (rank + i) % ranks;
-            check_cuda_error(cudaMemcpyAsync(symm_ptr.uc[p] + rank * bytesize,  //
-                                             (char*)recvbuff + rank * bytesize,
-                                             bytesize,
-                                             cudaMemcpyDefault,
-                                             stream));
+            TM_CUDA_CHECK(cudaMemcpyAsync(symm_ptr.uc[p] + rank * bytesize,  //
+                                          (char*)recvbuff + rank * bytesize,
+                                          bytesize,
+                                          cudaMemcpyDefault,
+                                          stream));
         }
 
         Barrier(group, stream);
@@ -315,14 +315,14 @@ void CudaIpcCommImpl::AllGather2D(const void*  sendbuff,
 
         for (int i = 1; i < ranks; ++i) {
             const int p = (rank + i) % ranks;
-            check_cuda_error(cudaMemcpy2DAsync(symm_ptr.uc[p] + rank * byte_stride,
-                                               byte_pitch,
-                                               (char*)recvbuff + rank * byte_stride,
-                                               byte_pitch,
-                                               byte_width,
-                                               height,
-                                               cudaMemcpyDefault,
-                                               stream));
+            TM_CUDA_CHECK(cudaMemcpy2DAsync(symm_ptr.uc[p] + rank * byte_stride,
+                                            byte_pitch,
+                                            (char*)recvbuff + rank * byte_stride,
+                                            byte_pitch,
+                                            byte_width,
+                                            height,
+                                            cudaMemcpyDefault,
+                                            stream));
         }
 
         Barrier(group, stream);

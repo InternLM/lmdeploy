@@ -93,33 +93,32 @@ concat_weights_4(const Tensor& a, const Tensor& b, const Tensor& c, const Tensor
     char* dst_ptr = reinterpret_cast<char*>(dst.raw_data());
 
     // Columns [0, M_a)
-    check_cuda_error(
+    TM_CUDA_CHECK(
         cudaMemcpy2DAsync(dst_ptr, dst_pitch, a.raw_data(), src_pitch_a, src_pitch_a, K, cudaMemcpyDefault, st));
 
     // Columns [M_a, M_a+M_b)
-    check_cuda_error(cudaMemcpy2DAsync(
+    TM_CUDA_CHECK(cudaMemcpy2DAsync(
         dst_ptr + src_pitch_a, dst_pitch, b.raw_data(), src_pitch_b, src_pitch_b, K, cudaMemcpyDefault, st));
 
     // Columns [M_a+M_b, M_a+M_b+M_c)
-    check_cuda_error(cudaMemcpy2DAsync(dst_ptr + src_pitch_a + src_pitch_b,
-                                       dst_pitch,
-                                       c.raw_data(),
-                                       src_pitch_c,
-                                       src_pitch_c,
-                                       K,
-                                       cudaMemcpyDefault,
-                                       st));
+    TM_CUDA_CHECK(cudaMemcpy2DAsync(dst_ptr + src_pitch_a + src_pitch_b,
+                                    dst_pitch,
+                                    c.raw_data(),
+                                    src_pitch_c,
+                                    src_pitch_c,
+                                    K,
+                                    cudaMemcpyDefault,
+                                    st));
 
     // Columns [M_a+M_b+M_c, M_dst)
-    check_cuda_error(cudaMemcpy2DAsync(dst_ptr + src_pitch_a + src_pitch_b + src_pitch_c,
-                                       dst_pitch,
-                                       d.raw_data(),
-                                       src_pitch_d,
-                                       src_pitch_d,
-                                       K,
-                                       cudaMemcpyDefault,
-                                       st));
-    sync_check_cuda_error();
+    TM_CUDA_CHECK(cudaMemcpy2DAsync(dst_ptr + src_pitch_a + src_pitch_b + src_pitch_c,
+                                    dst_pitch,
+                                    d.raw_data(),
+                                    src_pitch_d,
+                                    src_pitch_d,
+                                    K,
+                                    cudaMemcpyDefault,
+                                    st));
 }
 
 void GatedDeltaNetWeight::prepare()
@@ -167,8 +166,8 @@ void GatedDeltaNetWeight::prepare()
         const int cols = conv1d.shape(1);  // d_conv
 
         Tensor conv1d_t{{cols, rows}, conv1d.dtype(), kDEVICE};
-        invokeTransposeAxis01((uint16_t*)conv1d_t.raw_data(), (uint16_t*)conv1d.raw_data(), rows, cols, 1, stream);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(
+            invokeTransposeAxis01((uint16_t*)conv1d_t.raw_data(), (uint16_t*)conv1d.raw_data(), rows, cols, 1, stream));
         conv1d = std::move(conv1d_t);
     }
 }

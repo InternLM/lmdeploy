@@ -233,7 +233,7 @@ __global__ void topKSortStage2(const int* top_ks,
                                                                                             params.kept);
 
 template<typename T>
-void invokeTopKSortFilter(TopKSortFilterParams& params, cudaStream_t stream)
+cudaError_t invokeTopKSortFilter(TopKSortFilterParams& params, cudaStream_t stream)
 {
     const int max_top_k             = params.max_top_k;
     const int batch_size            = params.batch_size;
@@ -264,8 +264,9 @@ void invokeTopKSortFilter(TopKSortFilterParams& params, cudaStream_t stream)
     else {
         throw std::domain_error(fmtstr("top-k kernel supports 1<=k<=1024 but got k=%d", max_top_k));
     }
+    return cudaGetLastError();
 }
 
-template void invokeTopKSortFilter<float>(TopKSortFilterParams& params, cudaStream_t stream);
+template cudaError_t invokeTopKSortFilter<float>(TopKSortFilterParams& params, cudaStream_t stream);
 
 }  // namespace turbomind

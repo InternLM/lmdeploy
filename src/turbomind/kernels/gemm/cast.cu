@@ -6,6 +6,7 @@
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/math.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
@@ -91,24 +92,25 @@ __global__ void cast_kernel(To* dst, const Ti* src, size_t n)
 }
 
 template<int VecSize, class Ti, class To>
-void invokeCast(To* dst, const Ti* src, size_t n, cudaStream_t st)
+cudaError_t invokeCast(To* dst, const Ti* src, size_t n, cudaStream_t st)
 {
     cast_kernel<VecSize><<<256, 256, 0, st>>>(dst, src, n);
+    return cudaGetLastError();
 }
 
 void extend_to_u8(uint8_t* dst, const uint4_t* src, size_t n, cudaStream_t st)
 {
-    invokeCast<8>(dst, src, n, st);
+    TM_CUDA_CHECK(invokeCast<8>(dst, src, n, st));
 }
 
 void compact_to_u4(uint4_t* dst, const uint8_t* src, size_t n, cudaStream_t st)
 {
-    invokeCast<8>(dst, src, n, st);
+    TM_CUDA_CHECK(invokeCast<8>(dst, src, n, st));
 }
 
 void extend_to_u16(uint16_t* dst, const uint4_t* src, size_t n, cudaStream_t st)
 {
-    invokeCast<8>(dst, src, n, st);
+    TM_CUDA_CHECK(invokeCast<8>(dst, src, n, st));
 }
 
 namespace {

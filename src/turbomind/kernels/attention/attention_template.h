@@ -5,12 +5,13 @@
 #include "attention_params.h"
 #include "attention_universal.h"
 #include "reduce.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include "utils.h"
 
 namespace turbomind {
 
 template<class Kernel>
-void invokeAttention(const typename Kernel::ParamType& params, int sm_count, int max_active_ctas)
+[[nodiscard]] cudaError_t invokeAttention(const typename Kernel::ParamType& params, int sm_count, int max_active_ctas)
 {
     static const size_t kSmemSize = sizeof(typename Kernel::SharedStorage);
 
@@ -61,8 +62,7 @@ void invokeAttention(const typename Kernel::ParamType& params, int sm_count, int
     );
 
     if (auto err = cudaGetLastError(); err != cudaSuccess) {
-        std::cout << cudaGetErrorString(err) << "\n";
-        std::abort();
+        return err;
     }
 
     if (params.cp_fn) {
@@ -70,19 +70,22 @@ void invokeAttention(const typename Kernel::ParamType& params, int sm_count, int
     }
 
     if (split_cnt > 1 || params.cp_size > 1) {
-        attention::invokeReduceV3<Kernel::kHeadDim>(params.out + params.offset_q * params.num_heads * Kernel::kHeadDim,
-                                                    params.partial_ML,
-                                                    params.partial_O,
-                                                    split_cnt > 1 ? params.split_cnt : nullptr,
-                                                    params.max_split_k,
-                                                    split_cnt,
-                                                    params.cp_size,
-                                                    params.cp_rank,
-                                                    params.token_num,
-                                                    params.num_heads,
-                                                    params.inv_sqrt_dh,
-                                                    params.stream);
+        TM_CUDA_CHECK(attention::invokeReduceV3<Kernel::kHeadDim>(
+            params.out + params.offset_q * params.num_heads * Kernel::kHeadDim,
+            params.partial_ML,
+            params.partial_O,
+            split_cnt > 1 ? params.split_cnt : nullptr,
+            params.max_split_k,
+            split_cnt,
+            params.cp_size,
+            params.cp_rank,
+            params.token_num,
+            params.num_heads,
+            params.inv_sqrt_dh,
+            params.stream));
     }
+
+    return cudaSuccess;
 }
 
 }  // namespace turbomind

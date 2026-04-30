@@ -216,8 +216,7 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
     }
 
     if (tp_size_ == 1) {
-        invokeEmbeddingLookup(input_embeds, input_ids, embedding_table, st);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(invokeEmbeddingLookup(input_embeds, input_ids, embedding_table, st));
     }
     else if (use_ag2d_) {
         const auto local_hidden_units = embedding_table.shape(1);
@@ -225,8 +224,7 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
         Tensor temp{symm_buf.view(dtype_), {token_num, tp_size_, local_hidden_units}};
         Tensor local{temp.slice({0, tp_rank_, 0}, {-1, 1, -1}).squeeze(1)};
 
-        invokeEmbeddingLookup(local, input_ids, embedding_table, st);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(invokeEmbeddingLookup(local, input_ids, embedding_table, st));
 
         comm_.d_comm->AllGather2D(local.raw_data(),
                                   temp.raw_data(),
@@ -238,7 +236,6 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
                                   {true, true},
                                   comm_.d_tp_group,
                                   st);
-        sync_check_cuda_error();
 
         Copy(temp.buffer(), input_embeds.buffer());
     }
@@ -248,20 +245,17 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
         Tensor temp{symm_buf.view(dtype_), {tp_size_, token_num, local_hidden_units}};
         Tensor local{temp.slice(tp_rank_).squeeze(0)};
 
-        invokeEmbeddingLookup(local, input_ids, embedding_table, st);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(invokeEmbeddingLookup(local, input_ids, embedding_table, st));
 
         comm_.d_comm->AllGather(local.raw_data(), temp.raw_data(), local.size(), dtype_, comm_.d_tp_group, st);
-        sync_check_cuda_error();
 
-        invokeInPlaceTranspose102((uint16_t*)input_embeds.raw_data(),
-                                  (uint16_t*)temp.raw_data(),
-                                  tp_size_,
-                                  token_num,
-                                  local_hidden_units,
-                                  false,
-                                  st);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(invokeInPlaceTranspose102((uint16_t*)input_embeds.raw_data(),
+                                                (uint16_t*)temp.raw_data(),
+                                                tp_size_,
+                                                token_num,
+                                                local_hidden_units,
+                                                false,
+                                                st));
     }
 
     return input_embeds;
@@ -284,7 +278,6 @@ Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer symm_bu
     if (tp_size_ == 1) {
         Tensor logits{{bsz, vocab_size}, dtype_, kDEVICE};
         linear_.Forward(features, weights_.post_decoder_embedding, logits);
-        sync_check_cuda_error();
         TM_DEBUG_TENSOR(logits, "logits", 1);
         return logits;
     }
@@ -292,7 +285,6 @@ Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer symm_bu
         Tensor logits{symm_buf.view(dtype_), {bsz, tp_size_, local_vocab_size}};
         Tensor local = logits.slice({0, tp_rank_, 0}, {-1, 1, -1});
         linear_.Forward(features, weights_.post_decoder_embedding, local.squeeze(1));
-        sync_check_cuda_error();
         comm_.d_comm->AllGather2D(local.raw_data(),
                                   logits.raw_data(),
                                   vocab_size,
@@ -303,26 +295,23 @@ Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer symm_bu
                                   {true, true},
                                   comm_.d_tp_group,
                                   st);
-        sync_check_cuda_error();
         return logits.view({bsz, -1});
     }
     else {
         Tensor logits{symm_buf.view(dtype_), {tp_size_, bsz, local_vocab_size}};
         Tensor local = logits.slice({tp_rank_, 0, 0}, {1, -1, -1});
         linear_.Forward(features, weights_.post_decoder_embedding, local.squeeze(0));
-        sync_check_cuda_error();
         comm_.d_comm->AllGather(local.raw_data(), logits.raw_data(), local.size(), local.dtype(), comm_.d_tp_group, st);
-        sync_check_cuda_error();
         Tensor out{{bsz, vocab_size}, features.dtype(), features.device()};
-        invokeTransposeAxis01(
-            (uint16_t*)out.raw_data(), (uint16_t*)logits.raw_data(), tp_size_, bsz, local_vocab_size, st);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(invokeTransposeAxis01(
+            (uint16_t*)out.raw_data(), (uint16_t*)logits.raw_data(), tp_size_, bsz, local_vocab_size, st));
         return out;
     }
 }
 
 void LanguageModel::Impl::Setup(int phase, TensorMap& env)
 {
+    TM_FUNCTION_SCOPE();
     input_processor_->Run(BatchOp::kSetup, phase, env);
 
     auto& d    = data_.at(phase);
@@ -351,6 +340,7 @@ void LanguageModel::Impl::Setup(int phase, TensorMap& env)
 
 void LanguageModel::Impl::Prepare(int phase, TensorMap& env)
 {
+    TM_FUNCTION_SCOPE();
     env.emplace("autoreg_ids", autoreg_ids_);
 
     input_processor_->Run(BatchOp::kPrepare, phase, env);
@@ -412,7 +402,7 @@ void LanguageModel::Impl::Prepare(int phase, TensorMap& env)
 
 void LanguageModel::Impl::Forward(int phase, TensorMap& env)
 {
-
+    TM_FUNCTION_SCOPE();
     auto& d = data_.at(phase);
     auto& b = *env.at("batch").data<BatchData*>()[0];
 
@@ -461,6 +451,7 @@ void LanguageModel::Impl::Forward(int phase, TensorMap& env)
 
 void LanguageModel::Impl::Unprep(int phase, TensorMap& env)
 {
+    TM_FUNCTION_SCOPE();
     auto& d    = data_.at(phase);
     auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 
@@ -473,6 +464,7 @@ void LanguageModel::Impl::Unprep(int phase, TensorMap& env)
 
 void LanguageModel::Impl::Fetch(int phase, TensorMap& env)
 {
+    TM_FUNCTION_SCOPE();
     auto& d    = data_.at(phase);
     auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 

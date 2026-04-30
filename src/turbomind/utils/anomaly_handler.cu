@@ -200,8 +200,8 @@ struct AnomalyHandler::Impl {
                 TM_LOG_WARN("fallback: {}", fallback_);
             }
 
-            FT_CHECK(0 <= fallback_);
-            FT_CHECK(fallback_ < vocab_size);
+            TM_CHECK(0 <= fallback_);
+            TM_CHECK(fallback_ < vocab_size);
 
             TM_LOG_WARN("max_batch_size: {}", max_batch_size);
             TM_LOG_WARN("vocab_size: {}", vocab_size);
@@ -211,19 +211,19 @@ struct AnomalyHandler::Impl {
     void Summarize(std::function<void(const int*, int)> handler)
     {
         if (g_level) {
-            check_cuda_error(cudaMemcpyAsync(h_count_.data(),
-                                             d_count_.data().get(),
-                                             sizeof(size_type) * info_.size() * 2,
-                                             cudaMemcpyDefault,
-                                             stream_));
+            TM_CUDA_CHECK(cudaMemcpyAsync(h_count_.data(),
+                                          d_count_.data().get(),
+                                          sizeof(size_type) * info_.size() * 2,
+                                          cudaMemcpyDefault,
+                                          stream_));
 
-            check_cuda_error(cudaMemcpyAsync(h_is_anomaly_.data(),
-                                             d_is_anomaly_.data().get(),
-                                             sizeof(int) * batch_size_,
-                                             cudaMemcpyDefault,
-                                             stream_));
+            TM_CUDA_CHECK(cudaMemcpyAsync(h_is_anomaly_.data(),
+                                          d_is_anomaly_.data().get(),
+                                          sizeof(int) * batch_size_,
+                                          cudaMemcpyDefault,
+                                          stream_));
 
-            check_cuda_error(cudaStreamSynchronize(stream_));
+            TM_CUDA_CHECK(cudaStreamSynchronize(stream_));
 
 #if 0
             int die = 0;
@@ -251,24 +251,23 @@ struct AnomalyHandler::Impl {
         if (g_level) {
             if (!info_.empty()) {
                 std::fill_n(h_count_.data(), info_.size() * 2, 0);
-                check_cuda_error(
-                    cudaMemsetAsync(d_count_.data().get(), 0, sizeof(size_type) * info_.size() * 2, stream_));
+                TM_CUDA_CHECK(cudaMemsetAsync(d_count_.data().get(), 0, sizeof(size_type) * info_.size() * 2, stream_));
                 info_.clear();
             }
 
             if (batch_size_) {
                 std::fill_n(h_is_anomaly_.data(), batch_size_, 0);
-                check_cuda_error(cudaMemsetAsync(d_is_anomaly_.data().get(), 0, sizeof(int) * batch_size_, stream_));
+                TM_CUDA_CHECK(cudaMemsetAsync(d_is_anomaly_.data().get(), 0, sizeof(int) * batch_size_, stream_));
                 batch_size_ = 0;
             }
         }
     }
 
     template<class T>
-    void invokeCountAndFixAnomaly(T* data, int64_t size, const std::string& key, int level)
+    cudaError_t invokeCountAndFixAnomaly(T* data, int64_t size, const std::string& key, int level)
     {
         if (g_level && level <= g_level) {
-            FT_CHECK(size >= 0);
+            TM_CHECK(size >= 0);
 
             constexpr int block = 512;
             const int     grid  = (size + block - 1) / block;
@@ -278,7 +277,7 @@ struct AnomalyHandler::Impl {
 
             info_.push_back(key);
 
-            FT_CHECK(info_.size() <= max_entries);
+            TM_CHECK(info_.size() <= max_entries);
 
             CountAndFixAnormaly<T, block><<<grid, block, 0, stream_>>>(data,  //
                                                                        size,
@@ -287,16 +286,15 @@ struct AnomalyHandler::Impl {
                                                                        g_pinf_val_,
                                                                        g_ninf_val_,
                                                                        g_nan_val_);
-
-            sync_check_cuda_error();
         }
+        return cudaGetLastError();
     }
 
     template<class T>
-    void invokeFixLogitsAnomaly(T* logits, int batch_size, int level)
+    cudaError_t invokeFixLogitsAnomaly(T* logits, int batch_size, int level)
     {
         if (g_level && level <= g_level) {
-            FT_CHECK(batch_size <= max_batch_size_);
+            TM_CHECK(batch_size <= max_batch_size_);
 
             batch_size_ = batch_size;
 
@@ -307,9 +305,8 @@ struct AnomalyHandler::Impl {
                                                                           vocab_size_,
                                                                           batch_size,
                                                                           fallback_);
-
-            sync_check_cuda_error();
         }
+        return cudaGetLastError();
     }
 
     static int   g_level;
@@ -372,7 +369,7 @@ void AnomalyHandler::Reset()
 template<class T>
 void AnomalyHandler::CountAndFix(T* data, int64_t size, std::string key, int level)
 {
-    return impl_->invokeCountAndFixAnomaly(data, size, key, level);
+    impl_->invokeCountAndFixAnomaly(data, size, key, level);
 }
 
 template void AnomalyHandler::CountAndFix(float*, int64_t, std::string, int);

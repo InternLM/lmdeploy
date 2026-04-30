@@ -38,16 +38,16 @@ struct SystemSemaphoreStorage {
             }
         }
 
-        check_cuda_error(cudaMallocAsync(&info_, sizeof(SystemSemaphoreInfo), 0));
-        check_cuda_error(cudaMemcpyAsync(info_, &info, sizeof(SystemSemaphoreInfo), cudaMemcpyDefault, 0));
+        TM_CUDA_CHECK(cudaMallocAsync(&info_, sizeof(SystemSemaphoreInfo), 0));
+        TM_CUDA_CHECK(cudaMemcpyAsync(info_, &info, sizeof(SystemSemaphoreInfo), cudaMemcpyDefault, 0));
 
-        check_cuda_error(cudaStreamSynchronize(0));
+        TM_CUDA_CHECK(cudaStreamSynchronize(0));
     }
 
     template<class DeregFree>
     void Free(DeregFree dereg_free)
     {
-        check_cuda_error(cudaFreeAsync(info_, 0));
+        TM_CUDA_CHECK(cudaFreeAsync(info_, 0));
         info_ = {};
 
         dereg_free(data_);

@@ -143,7 +143,7 @@ void CudaIpcCommImpl::Broadcast(const void*  sendbuff,  //
         Barrier(group, stream);
         if (rank != root) {
             SymmetricPtr_V2<char> symm_ptr = get_symmetric_v2((char*)recvbuff, group);
-            check_cuda_error(cudaMemcpyAsync((char*)recvbuff, symm_ptr.uc[root], bytesize, cudaMemcpyDefault, stream));
+            TM_CUDA_CHECK(cudaMemcpyAsync((char*)recvbuff, symm_ptr.uc[root], bytesize, cudaMemcpyDefault, stream));
         }
         Barrier(group, stream);
     }
@@ -157,7 +157,7 @@ void CudaIpcCommImpl::Broadcast(const void*  sendbuff,  //
             Barrier(group, stream);
             int s = i - rank;
             if (0 <= s && s < slices && rank != root) {
-                check_cuda_error(cudaMemcpyAsync(
+                TM_CUDA_CHECK(cudaMemcpyAsync(
                     (char*)recvbuff + s * slice, symm_ptr.uc[rank - 1] + s * slice, slice, cudaMemcpyDefault, stream));
             }
         }
@@ -169,18 +169,15 @@ void CudaIpcCommImpl::Broadcast(const void*  sendbuff,  //
         TM_CHECK_EQ(root, 0);
         Barrier(group, stream);
         if (rank == 4) {
-            check_cuda_error(
-                cudaMemcpyAsync((char*)recvbuff, symm_ptr.uc[rank - 4], bytesize, cudaMemcpyDefault, stream));
+            TM_CUDA_CHECK(cudaMemcpyAsync((char*)recvbuff, symm_ptr.uc[rank - 4], bytesize, cudaMemcpyDefault, stream));
         }
         Barrier(group, stream);
         if (rank == 2 || rank == 6) {
-            check_cuda_error(
-                cudaMemcpyAsync((char*)recvbuff, symm_ptr.uc[rank - 2], bytesize, cudaMemcpyDefault, stream));
+            TM_CUDA_CHECK(cudaMemcpyAsync((char*)recvbuff, symm_ptr.uc[rank - 2], bytesize, cudaMemcpyDefault, stream));
         }
         Barrier(group, stream);
         if (rank & 1) {
-            check_cuda_error(
-                cudaMemcpyAsync((char*)recvbuff, symm_ptr.uc[rank - 1], bytesize, cudaMemcpyDefault, stream));
+            TM_CUDA_CHECK(cudaMemcpyAsync((char*)recvbuff, symm_ptr.uc[rank - 1], bytesize, cudaMemcpyDefault, stream));
         }
         Barrier(group, stream);
     }
@@ -227,36 +224,36 @@ void CudaIpcCommImpl::Broadcast(const void*  sendbuff,  //
         // 0->1, 2->3, 4->5, 6->7
         Barrier(group, stream);
         if (rank == 0) {
-            check_cuda_error(cudaMemcpyAsync(symm_ptr.uc[rank + 4] + slice * (rank + 4),
-                                             symm_ptr.uc[rank + 0] + slice * (rank + 4),
-                                             slice * 4,
-                                             cudaMemcpyDefault,
-                                             stream));
+            TM_CUDA_CHECK(cudaMemcpyAsync(symm_ptr.uc[rank + 4] + slice * (rank + 4),
+                                          symm_ptr.uc[rank + 0] + slice * (rank + 4),
+                                          slice * 4,
+                                          cudaMemcpyDefault,
+                                          stream));
         }
         Barrier(group, stream);
         if (rank == 0 || rank == 4) {
-            check_cuda_error(cudaMemcpyAsync(symm_ptr.uc[rank + 2] + slice * (rank + 2),
-                                             symm_ptr.uc[rank + 0] + slice * (rank + 2),
-                                             slice * 2,
-                                             cudaMemcpyDefault,
-                                             stream));
+            TM_CUDA_CHECK(cudaMemcpyAsync(symm_ptr.uc[rank + 2] + slice * (rank + 2),
+                                          symm_ptr.uc[rank + 0] + slice * (rank + 2),
+                                          slice * 2,
+                                          cudaMemcpyDefault,
+                                          stream));
         }
         Barrier(group, stream);
         if (rank % 2 == 0) {
-            check_cuda_error(cudaMemcpyAsync(symm_ptr.uc[rank + 1] + slice * (rank + 1),
-                                             symm_ptr.uc[rank + 0] + slice * (rank + 1),
-                                             slice * 1,
-                                             cudaMemcpyDefault,
-                                             stream));
+            TM_CUDA_CHECK(cudaMemcpyAsync(symm_ptr.uc[rank + 1] + slice * (rank + 1),
+                                          symm_ptr.uc[rank + 0] + slice * (rank + 1),
+                                          slice * 1,
+                                          cudaMemcpyDefault,
+                                          stream));
         }
         Barrier(group, stream);
         for (int i = 1; i < ranks; ++i) {
             const int p = (rank + i) % ranks;
-            check_cuda_error(cudaMemcpyAsync(symm_ptr.uc[p] + rank * slice,  //
-                                             (char*)recvbuff + rank * slice,
-                                             slice,
-                                             cudaMemcpyDefault,
-                                             stream));
+            TM_CUDA_CHECK(cudaMemcpyAsync(symm_ptr.uc[p] + rank * slice,  //
+                                          (char*)recvbuff + rank * slice,
+                                          slice,
+                                          cudaMemcpyDefault,
+                                          stream));
         }
         Barrier(group, stream);
     }

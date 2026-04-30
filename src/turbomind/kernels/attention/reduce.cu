@@ -208,18 +208,18 @@ __global__ void reduce(T*         out,
 }
 
 template<int HeadDim, class T>
-void invokeReduceV3(T*           out,
-                    float*       partial_ML,
-                    float*       partial_O,
-                    const int*   split_cnt,
-                    int          partial_len,
-                    int          max_split_cnt,
-                    int          cp_size,
-                    int          cp_rank,
-                    int          query_num,
-                    int          head_num,
-                    float        exp_scale,
-                    cudaStream_t stream)
+cudaError_t invokeReduceV3(T*           out,
+                           float*       partial_ML,
+                           float*       partial_O,
+                           const int*   split_cnt,
+                           int          partial_len,
+                           int          max_split_cnt,
+                           int          cp_size,
+                           int          cp_rank,
+                           int          query_num,
+                           int          head_num,
+                           float        exp_scale,
+                           cudaStream_t stream)
 {
     constexpr int CTA_K = 32;  // warp size
 
@@ -245,8 +245,6 @@ void invokeReduceV3(T*           out,
             cp_rank,
             stride_k,
             stride_k * CTA_K);
-
-        sync_check_cuda_error();
     };
 
     auto dispatch_cp = [&](int stride_k, auto is_first) {
@@ -275,21 +273,23 @@ void invokeReduceV3(T*           out,
         stride_k *= CTA_K;
         dispatch_cp(stride_k, std::false_type{});
     }
+
+    return cudaGetLastError();
 }
 
 #define INSTANTIATE_invokeReduceV3(dim, type)                                                                          \
-    template void invokeReduceV3<dim>(type * out,                                                                      \
-                                      float*       partial_ML,                                                         \
-                                      float*       partial_O,                                                          \
-                                      const int*   split_cnt,                                                          \
-                                      int          partial_len,                                                        \
-                                      int          max_split_cnt,                                                      \
-                                      int          cp_size,                                                            \
-                                      int          cp_rank,                                                            \
-                                      int          query_num,                                                          \
-                                      int          head_num,                                                           \
-                                      float        exp_scale,                                                          \
-                                      cudaStream_t stream);
+    template cudaError_t invokeReduceV3<dim>(type * out,                                                               \
+                                             float*       partial_ML,                                                  \
+                                             float*       partial_O,                                                   \
+                                             const int*   split_cnt,                                                   \
+                                             int          partial_len,                                                 \
+                                             int          max_split_cnt,                                               \
+                                             int          cp_size,                                                     \
+                                             int          cp_rank,                                                     \
+                                             int          query_num,                                                   \
+                                             int          head_num,                                                    \
+                                             float        exp_scale,                                                   \
+                                             cudaStream_t stream);
 
 INSTANTIATE_invokeReduceV3(64, half);
 INSTANTIATE_invokeReduceV3(128, half);

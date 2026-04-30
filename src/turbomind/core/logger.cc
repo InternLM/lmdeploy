@@ -1,6 +1,8 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include "src/turbomind/core/logger.h"
+#include "src/turbomind/core/context.h"
+#include "src/turbomind/core/scope.h"
 
 #include <algorithm>
 #include <array>
@@ -272,6 +274,18 @@ void Logger::Enqueue(Level level, std::string message)
     Enqueue(level, nullptr, 0, std::move(message));
 }
 
+void Logger::LogFatalTraced(const char* file, int line, std::string message)
+{
+    core::Scope _("TM_LOG_FATAL", file, line);
+    LogFatalImpl(file, line, std::move(message));
+}
+
+void Logger::LogFatalImpl(const char* file, int line, std::string message)
+{
+    Enqueue(Level::kFatal, file, line, std::move(message));
+    std::abort();
+}
+
 // ---------------------------------------------------------------------------
 // AsyncLogWorker — background I/O thread
 // ---------------------------------------------------------------------------
@@ -284,6 +298,10 @@ AsyncLogWorker& AsyncLogWorker::Instance()
 
 static void OnFatalSignal(int signum)
 {
+    auto trace = Context::scope_trace();
+    if (!trace.empty()) {
+        fmt::print(stderr, "{}", trace);
+    }
     AsyncLogWorker::Instance().OnSignal();
     ::signal(signum, SIG_DFL);
     ::raise(signum);

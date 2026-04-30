@@ -55,7 +55,7 @@ LlamaWeight::LlamaWeight(DataType           data_type,
         embedding_size_ = (embedding_size_ + tp_size_ - 1) / tp_size_ * tp_size_;
         TM_LOG_WARN("pad embed size from {} to {}", embedding_size_, embedding_size_);
     }
-    FT_CHECK(hidden_units_ % tp_size_ == 0);
+    TM_CHECK(hidden_units_ % tp_size_ == 0);
     TM_CHECK_EQ(vocab_size_padded_ % tp_size_, 0);
     TM_CHECK_EQ(hidden_units_ % tp_size_, 0);
 
@@ -160,7 +160,7 @@ void LlamaWeight::prepare(const cudaDeviceProp& prop)
     core::ContextGuard guard = context();
 
     // Wait for the weights to be filled externally
-    check_cuda_error(cudaDeviceSynchronize());
+    TM_CUDA_CHECK(cudaDeviceSynchronize());
 
     auto stream = core::Context::stream().handle();
 
@@ -181,7 +181,7 @@ void LlamaWeight::prepare(const cudaDeviceProp& prop)
     post_decoder_embedding.prepare();
 
     // Block until processing is done
-    check_cuda_error(cudaStreamSynchronize(stream));
+    TM_CUDA_CHECK(cudaStreamSynchronize(stream));
 }
 
 }  // namespace turbomind
