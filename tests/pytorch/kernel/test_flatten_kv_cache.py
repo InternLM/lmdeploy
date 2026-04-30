@@ -193,6 +193,11 @@ def quant_fp8_scalar(kv: torch.Tensor, fp8_dtype: torch.dtype, scale: float):
     return q_kv, scale_t, dq_kv
 
 
+def _skip_unsupported_triton_fp8_dtype(fp8_dtype: torch.dtype):
+    if fp8_dtype is torch.float8_e4m3fn and torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip('Triton float8_e4m3fn conversion requires device with cc>=9.0')
+
+
 def flatten_reference(k_caches, v_caches, kv_lens, block_offsets, block_size, num_heads, out_size, k_head_dim,
                       v_head_dim):
     """Reference flatten for paged KV cache tensors."""
@@ -215,6 +220,10 @@ def flatten_reference(k_caches, v_caches, kv_lens, block_offsets, block_size, nu
 
 
 class TestFlattenKVCacheFP8PerTokenHead(TestFlattenKVCache):
+
+    @pytest.fixture(autouse=True)
+    def skip_unsupported_fp8_dtype(self, fp8_dtype):
+        _skip_unsupported_triton_fp8_dtype(fp8_dtype)
 
     @pytest.fixture
     def fp8_dtype(self):
@@ -267,6 +276,10 @@ class TestFlattenKVCacheFP8E5M2PerTokenHead(TestFlattenKVCacheFP8PerTokenHead):
 
 
 class TestFlattenKVCacheFP8Scalar(TestFlattenKVCache):
+
+    @pytest.fixture(autouse=True)
+    def skip_unsupported_fp8_dtype(self, fp8_dtype):
+        _skip_unsupported_triton_fp8_dtype(fp8_dtype)
 
     @pytest.fixture
     def fp8_dtype(self):

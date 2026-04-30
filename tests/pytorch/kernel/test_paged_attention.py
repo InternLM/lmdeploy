@@ -453,6 +453,11 @@ def quant_fp8_scalar(kv: torch.Tensor, fp8_dtype: torch.dtype, scale: float):
     return q_kv, scale_t, dq_kv
 
 
+def _skip_unsupported_triton_fp8_dtype(fp8_dtype: torch.dtype):
+    if fp8_dtype is torch.float8_e4m3fn and torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip('Triton float8_e4m3fn conversion requires device with cc>=9.0')
+
+
 def _make_blocked_cache_fp8(batched_k, batched_v, seq_lens, history_lens, block_offsets, block_size, num_heads_k,
                             feat_dim, feat_dim_v, fp8_dtype=torch.float8_e4m3fn):
     max_blocks_nums = block_offsets.max() + 1
@@ -583,6 +588,10 @@ class TestPagedAttentionInt4(TestPagedAttentionInt8):
 
 class TestPagedAttentionFP8PerTokenHead(TestPagedAttentionBase):
 
+    @pytest.fixture(autouse=True)
+    def skip_unsupported_fp8_dtype(self, fp8_dtype):
+        _skip_unsupported_triton_fp8_dtype(fp8_dtype)
+
     @pytest.fixture
     def fp8_dtype(self):
         yield torch.float8_e4m3fn
@@ -638,6 +647,10 @@ class TestPagedAttentionFP8E5M2PerTokenHead(TestPagedAttentionFP8PerTokenHead):
 
 
 class TestPagedAttentionFP8Scalar(TestPagedAttentionBase):
+
+    @pytest.fixture(autouse=True)
+    def skip_unsupported_fp8_dtype(self, fp8_dtype):
+        _skip_unsupported_triton_fp8_dtype(fp8_dtype)
 
     @pytest.fixture
     def fp8_dtype(self):

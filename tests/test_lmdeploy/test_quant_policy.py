@@ -28,11 +28,12 @@ def model_id():
     return MODEL_ID
 
 
-@pytest.fixture(scope='session')
+@pytest.fixture(scope='class')
 def pipe_no_quant(model_id):
     """Create pipeline without quantization (baseline).
 
-    This fixture has session scope to avoid reloading the model for each test. Caller is responsible for cleanup.
+    This fixture has class scope so large model instances are released before later FP8 accuracy tests allocate their
+    own pipelines.
     """
     engine_config = PytorchEngineConfig(
         tp=1,
@@ -49,11 +50,12 @@ def pipe_no_quant(model_id):
         torch.cuda.empty_cache()
 
 
-@pytest.fixture(scope='session')
+@pytest.fixture(scope='class')
 def pipe_quant_42(model_id):
     """Create pipeline with quant_policy=QuantPolicy.TURBO_QUANT.
 
-    This fixture has session scope to avoid reloading the model for each test. Caller is responsible for cleanup.
+    This fixture has class scope so large model instances are released before later FP8 accuracy tests allocate their
+    own pipelines.
     """
     engine_config = PytorchEngineConfig(
         tp=1,

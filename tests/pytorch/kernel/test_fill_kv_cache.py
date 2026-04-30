@@ -706,8 +706,17 @@ def _quant_fp8_scalar(x: torch.Tensor, fp8_dtype: torch.dtype, scale: float):
     return q, scale_t
 
 
+def _skip_unsupported_triton_fp8_dtype(fp8_dtype: torch.dtype):
+    if fp8_dtype is torch.float8_e4m3fn and torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip('Triton float8_e4m3fn conversion requires device with cc>=9.0')
+
+
 class TestFillKVCacheFP8Scalar(TestFillKVCache):
     """Tests for fill_kv_cache with normal scalar-scale QuantPolicy.FP8."""
+
+    @pytest.fixture(autouse=True)
+    def skip_unsupported_fp8_dtype(self, fp8_dtype):
+        _skip_unsupported_triton_fp8_dtype(fp8_dtype)
 
     @pytest.fixture
     def fp8_dtype(self):
@@ -810,6 +819,10 @@ class TestFillKVCacheFP8PerTokenHead(TestFillKVCache):
     FP8 KV cache: float8_e4m3fn dtype, per-token symmetric scale, no zero point.
     Scale shape: [num_blocks, block_size, num_heads, 1].
     """
+
+    @pytest.fixture(autouse=True)
+    def skip_unsupported_fp8_dtype(self, fp8_dtype):
+        _skip_unsupported_triton_fp8_dtype(fp8_dtype)
 
     @pytest.fixture
     def fp8_dtype(self):
