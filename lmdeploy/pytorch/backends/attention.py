@@ -98,6 +98,8 @@ class AttentionImpl(ABC, Generic[T]):
         attn_metadata: T,
         k_scales_zeros: torch.Tensor = None,
         v_scales_zeros: torch.Tensor = None,
+        k_scale: torch.Tensor = None,
+        v_scale: torch.Tensor = None,
         learnable_sink: torch.Tensor = None,
         nsa_indices: torch.Tensor = None,
         inplace: bool = False,

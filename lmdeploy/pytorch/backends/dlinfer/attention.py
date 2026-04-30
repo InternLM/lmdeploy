@@ -66,6 +66,8 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
         attn_metadata: DlinferAttentionMetadata,
         k_scales_zeros: Tensor = None,
         v_scales_zeros: Tensor = None,
+        k_scale: Tensor = None,
+        v_scale: Tensor = None,
         learnable_sink: Tensor = None,
         nsa_indices: Tensor = None,
         inplace: bool = True,

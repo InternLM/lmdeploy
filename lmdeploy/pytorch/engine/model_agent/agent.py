@@ -981,6 +981,9 @@ class BaseModelAgent:
         if adapters is not None:
             logger.debug(msg_with_rank(rank, 'loading adapters.'))
             add_adapters(patched_model, adapters, dtype=self.model_config.dtype, device=device)
+        for module in patched_model.modules():
+            if hasattr(module, 'finalize_kv_scales'):
+                module.finalize_kv_scales(self.cache_config.quant_policy)
         self.patched_model = patched_model
         self.build_model_ctx = build_model_ctx
 

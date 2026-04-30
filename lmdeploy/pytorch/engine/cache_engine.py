@@ -51,6 +51,35 @@ def _get_kv_cache_dtype(model_config: ModelConfig):
     return kv_cache_dtype
 
 
+def _is_fp8_quant_policy(quant_policy: QuantPolicy):
+    """Return whether quant policy stores KV payload as torch FP8."""
+    return quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2)
+
+
+def _get_fp8_cache_dtype(quant_policy: QuantPolicy):
+    """Get the cache tensor dtype for an FP8 KV-cache quant policy."""
+    if quant_policy == QuantPolicy.FP8:
+        return torch.float8_e4m3fn
+    if quant_policy == QuantPolicy.FP8_E5M2:
+        return torch.float8_e5m2
+    raise ValueError(f'Not an FP8 quant policy: {quant_policy}')
+
+
+def _describe_kv_cache_quant_policy(quant_policy: QuantPolicy):
+    """Describe the active KV-cache quantization policy for logs."""
+    if quant_policy == QuantPolicy.FP8:
+        return 'fp8_e4m3 per-tensor KV cache (torch.float8_e4m3fn)'
+    if quant_policy == QuantPolicy.FP8_E5M2:
+        return 'fp8_e5m2 per-tensor KV cache (torch.float8_e5m2)'
+    if quant_policy == QuantPolicy.INT4:
+        return 'int4 KV cache'
+    if quant_policy == QuantPolicy.INT8:
+        return 'int8 KV cache'
+    if quant_policy == QuantPolicy.TURBO_QUANT:
+        return 'TurboQuant KV cache'
+    return None
+
+
 # 512*1 + 4*4 + 64*2 = 656
 MLA_FP8_HEAD_DIM = 656
 
@@ -90,13 +119,21 @@ class CacheEngine:
         if self.model_config.use_mla_fp8_cache:
             cache_config.quant_policy = 0
 
-        if cache_config.quant_policy > 0:
+        if _is_fp8_quant_policy(cache_config.quant_policy):
+            self.kv_cache_dtype = _get_fp8_cache_dtype(cache_config.quant_policy)
+            assert self.cache_config.device_type in ['cuda'], \
+                f'FP8 quantization is only supported on CUDA device, but got {self.cache_config.device_type}.'
+        elif cache_config.quant_policy > 0:
             if self.cache_config.device_type in ['cuda']:
                 self.kv_cache_dtype = torch.uint8
             elif self.cache_config.device_type in ['ascend', 'npu']:
                 self.kv_cache_dtype = torch.int8
             else:
                 raise ValueError(f'unsupported device_type {self.cache_config.device_type}')
+
+        quant_desc = _describe_kv_cache_quant_policy(cache_config.quant_policy)
+        if quant_desc is not None:
+            logger.info('Using %s.', quant_desc)
 
         # Initialize the cache.
         self.local_gpu_cache = self.allocate_gpu_cache()
@@ -211,7 +248,9 @@ class CacheEngine:
         )
         shape = list(shape)
         dtype = _get_kv_cache_dtype(model_config)
-        if cache_config.quant_policy in (QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT):
+        if _is_fp8_quant_policy(cache_config.quant_policy):
+            dtype = _get_fp8_cache_dtype(cache_config.quant_policy)
+        elif cache_config.quant_policy in (QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT):
             dtype = torch.uint8
         return CacheDesc(shape=shape, dtype=dtype)
 
@@ -230,7 +269,9 @@ class CacheEngine:
         )
         shape = list(shape)
         dtype = _get_kv_cache_dtype(model_config)
-        if cache_config.quant_policy in (QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT):
+        if _is_fp8_quant_policy(cache_config.quant_policy):
+            dtype = _get_fp8_cache_dtype(cache_config.quant_policy)
+        elif cache_config.quant_policy in (QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT):
             dtype = torch.uint8
         return CacheDesc(shape=shape, dtype=dtype)
 
@@ -239,6 +280,8 @@ class CacheEngine:
                               cache_config: CacheConfig):
         """Get quant cache descs."""
         if cache_config.quant_policy == QuantPolicy.NONE:
+            return []
+        if _is_fp8_quant_policy(cache_config.quant_policy):
             return []
 
         dtype = model_config.dtype
