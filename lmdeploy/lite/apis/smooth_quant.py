@@ -96,7 +96,7 @@ def smooth_quant(model: str,
     rmsnorms = collect_target_modules(model, norm_type)
 
     for name, linear in fcs.items():
-        if skipped_module(name):
+        if skipped_module(name, model.config.architectures[0]):
             continue
         linear.to(device)
         q_linear = QLinear.from_float(linear, quant_dtype=quant_dtype)
@@ -108,7 +108,7 @@ def smooth_quant(model: str,
         torch.cuda.empty_cache()
 
     for name, norm in rmsnorms.items():
-        if skipped_module(name):
+        if skipped_module(name, model.config.architectures[0]):
             continue
         norm.to(device)
         q_norm = QRMSNorm.from_float(norm, quant_dtype=quant_dtype)

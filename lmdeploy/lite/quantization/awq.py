@@ -1,5 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+from fnmatch import fnmatchcase
+
 import torch
 
 # Maps that describe the structure of your model.
@@ -29,6 +31,10 @@ NORM_FCS_MAP = {
         'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
     },
     'Qwen3DecoderLayer': {
+        'input_layernorm': ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
+        'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
+    },
+    'Qwen3MoeDecoderLayer': {
         'input_layernorm': ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
         'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
     },
@@ -121,15 +127,43 @@ FC_FCS_MAP = {
     }
 }
 
-SKIPPED_MODULE = ['lora', 'block_sparse_moe.gate']
+SKIPPED_MODULE = ['lora']
+
+IGNORE_MODULE_FOR_MODELS = {
+    'Qwen3MoeForCausalLM': ['mlp.gate'],
+    'Qwen3_5ForCausalLM': ['visual', 'linear_attn', 'self_attn', 'model.layers.0.', 'mtp'],
+    'Qwen3_5MoeForCausalLM': ['mlp.gate', 'visual', 'linear_attn', 'self_attn',
+                               'model.layers.0.', 'mtp', 'shared_expert'],
+    'MixtralForCausalLM': ['block_sparse_moe.gate', 'mlp.gate']
+}
 
 
-def skipped_module(name: str):
-    """Whether the module should be skipped from quantization."""
-    for m in SKIPPED_MODULE:
-        if m in name:
-            return True
-    return False
+def match_skip_pattern(name, pattern):
+    if pattern.startswith('re:'):
+        import re
+        return re.search(pattern[3:], name) is not None
+
+    if '*' in pattern:
+        return fnmatchcase(name, pattern)
+
+    return pattern in name
+
+
+def skipped_module(name: str, arch: str | None = None):
+    """Whether the module should be skipped from quantization.
+
+    Args:
+        name: The fully-qualified module name.
+        arch (str | None): Optional model architecture name to determine specific modules to skip.
+    """
+    patterns = list(SKIPPED_MODULE)
+    patterns.extend(IGNORE_MODULE_FOR_MODELS.get(arch, []))
+
+    for pattern in patterns:
+        if match_skip_pattern(name, pattern):
+            return True, pattern
+
+    return False, None
 
 
 @torch.no_grad()
@@ -294,19 +328,23 @@ def check_awq_supported(layer_type):
         raise NotImplementedError
 
 
-def quant_weights(model, fcs, bits, symmetry, group_size=-1, device='cuda'):
+def quant_weights(model, fcs, bits, symmetry, group_size=-1, device='cuda', arch: str | None = None):
     """Quantize the weights of the target model's linear layers."""
     from lmdeploy.lite.quantization import WeightQuantizer
     from lmdeploy.lite.quantization.modules import WeightOnlyQLinear
     from lmdeploy.lite.utils import QParams
+    skipped_modules = []
     for name, fc in fcs.items():
         fc.to(device)
         parent_name, _, child_name = name.rpartition('.')
         parent = model.get_submodule(parent_name)
         pack_or_skip = 'packed'
-        if skipped_module(name):
+        skipped, skipped_pattern = skipped_module(name, arch)
+        if skipped:
             q_linear = fc
             pack_or_skip = 'skipped'
+            if skipped_pattern and skipped_pattern not in skipped_modules:
+                skipped_modules.append(skipped_pattern)
         else:
             quantizer = WeightQuantizer(bits, symmetry, 'per_group', group_size)
             fc.weight.data, scales, zeros = pseudo_quantize_tensor(fc.weight.data,
@@ -319,6 +357,8 @@ def quant_weights(model, fcs, bits, symmetry, group_size=-1, device='cuda'):
         torch.cuda.empty_cache()
 
         print(f'{name} weight {pack_or_skip}.')
+
+    return skipped_modules
 
 
 def smooth_layers(layers, fc2fcs, norm2fcs, a_scales, group_size=-1, device='cuda'):
