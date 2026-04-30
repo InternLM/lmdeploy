@@ -388,6 +388,9 @@ class ModelConfig:
     # flags mark if this model use mrope
     use_mrope: bool = False
 
+    # update cache config
+    update_cache_config_func: Any = None
+
     def get_head_size(self):
         """Get head size."""
         return self.head_dim

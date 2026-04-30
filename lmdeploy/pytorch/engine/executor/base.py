@@ -147,6 +147,9 @@ class ExecutorBase:
 
     def _adjust_block_size(self):
         """Adjust block_size."""
+        if self.model_config.update_cache_config_func is not None:
+            self.model_config.update_cache_config_func(self.cache_config)
+            return
         if self.model_config.use_flash_mla is True:
             if self.cache_config.block_size != 64:
                 raise ValueError('Please set block_size to 64 for flash_mla.')

@@ -71,6 +71,12 @@ def _finalize_v4_cache_specs(model_config: ModelConfig, block_size: int):
     model_config.block_cache_specs = block_specs
 
 
+def update_cache_config(cache_config):
+    if cache_config.block_size < 128:
+        raise ValueError('DeepSeek-V4 requires block_size >= 128 because ratio=128 compressed cache needs at '
+                         'least one entry per token block.')
+
+
 class DeepseekV4ModelConfigBuilder(AutoModelConfigBuilder):
 
     @classmethod
@@ -148,4 +154,5 @@ class DeepseekV4ModelConfigBuilder(AutoModelConfigBuilder):
 
         config.check_env_func = _check_env_v4
         config.post_build_func = _finalize_v4_cache_specs
+        config.update_cache_config_func = update_cache_config
         return config
