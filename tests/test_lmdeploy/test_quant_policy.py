@@ -18,6 +18,10 @@ from lmdeploy.messages import QuantPolicy, Response
 MODEL_ID = 'Qwen/Qwen3-8B'
 
 
+def _e4m3_fp8_requires_sm90():
+    return torch.cuda.is_available() and torch.cuda.get_device_capability()[0] < 9
+
+
 # =============================================================================
 # Shared Fixtures
 # =============================================================================
@@ -296,6 +300,7 @@ class TestQuantPolicy42Accuracy:
 # =============================================================================
 
 
+@pytest.mark.skipif(_e4m3_fp8_requires_sm90(), reason='Triton float8_e4m3fn conversion requires device with cc>=9.0')
 class TestQuantPolicyFP8Basic:
     """Basic functional tests for quant_policy=QuantPolicy.FP8."""
 
@@ -346,11 +351,12 @@ class TestQuantPolicyFP8Basic:
         assert len(response.text) > 0
 
 
+@pytest.mark.skipif(_e4m3_fp8_requires_sm90(), reason='Triton float8_e4m3fn conversion requires device with cc>=9.0')
 class TestQuantPolicyFP8Accuracy:
     """Accuracy tests comparing quant_policy=QuantPolicy.FP8 against non-
     quantized baseline.
 
-    FP8 (float8_e4m3fn, per-token symmetric) is more precise than 4-bit TurboQuant, so
+    FP8 (float8_e4m3fn, scalar scale) is more precise than 4-bit TurboQuant, so
     thresholds are tighter: MAE < 0.05, Max AE < 0.3.
 
     Uses class-scoped fixtures to avoid holding three models in GPU memory simultaneously

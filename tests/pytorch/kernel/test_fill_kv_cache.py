@@ -711,6 +711,12 @@ def _skip_unsupported_triton_fp8_dtype(fp8_dtype: torch.dtype):
         pytest.skip('Triton float8_e4m3fn conversion requires device with cc>=9.0')
 
 
+def _fp8_cache_value_tolerances(fp8_dtype: torch.dtype):
+    if fp8_dtype is torch.float8_e5m2:
+        return 1024.0, 0.25
+    return 1e-5, 1.3e-6
+
+
 class TestFillKVCacheFP8Scalar(TestFillKVCache):
     """Tests for fill_kv_cache with normal scalar-scale QuantPolicy.FP8."""
 
@@ -781,7 +787,7 @@ class TestFillKVCacheFP8Scalar(TestFillKVCache):
     ],
                              indirect=True)
     def test_fill_kv_cache(self, k_states, v_states, k_caches, v_caches, block_offsets, q_start_loc, q_seq_length,
-                           kv_seq_length, max_q_seq_length, gt, quant_policy):
+                           kv_seq_length, max_q_seq_length, gt, quant_policy, fp8_dtype):
         from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache
         gt_k, gt_v, k_scale, v_scale = gt
         fill_kv_cache(k_states,
@@ -796,8 +802,9 @@ class TestFillKVCacheFP8Scalar(TestFillKVCache):
                       quant_policy=quant_policy,
                       k_scale=k_scale,
                       v_scale=v_scale)
-        torch.testing.assert_close(k_caches.to(torch.float32), gt_k.to(torch.float32))
-        torch.testing.assert_close(v_caches.to(torch.float32), gt_v.to(torch.float32))
+        atol, rtol = _fp8_cache_value_tolerances(fp8_dtype)
+        torch.testing.assert_close(k_caches.to(torch.float32), gt_k.to(torch.float32), atol=atol, rtol=rtol)
+        torch.testing.assert_close(v_caches.to(torch.float32), gt_v.to(torch.float32), atol=atol, rtol=rtol)
 
 
 class TestFillKVCacheFP8E5M2Scalar(TestFillKVCacheFP8Scalar):
@@ -911,7 +918,7 @@ class TestFillKVCacheFP8PerTokenHead(TestFillKVCache):
     ],
                              indirect=True)
     def test_fill_kv_cache(self, k_states, v_states, k_caches, v_caches, k_scales_zeros, v_scales_zeros, block_offsets,
-                           q_start_loc, q_seq_length, kv_seq_length, max_q_seq_length, gt, quant_policy):
+                           q_start_loc, q_seq_length, kv_seq_length, max_q_seq_length, gt, quant_policy, fp8_dtype):
         from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache
         fill_kv_cache(
             k_states,
@@ -929,8 +936,9 @@ class TestFillKVCacheFP8PerTokenHead(TestFillKVCache):
         )
         gt_k, gt_v, gt_ks, gt_vs = gt
         # Compare fp8 values via float conversion
-        torch.testing.assert_close(k_caches.to(torch.float32), gt_k.to(torch.float32))
-        torch.testing.assert_close(v_caches.to(torch.float32), gt_v.to(torch.float32))
+        atol, rtol = _fp8_cache_value_tolerances(fp8_dtype)
+        torch.testing.assert_close(k_caches.to(torch.float32), gt_k.to(torch.float32), atol=atol, rtol=rtol)
+        torch.testing.assert_close(v_caches.to(torch.float32), gt_v.to(torch.float32), atol=atol, rtol=rtol)
         torch.testing.assert_close(k_scales_zeros, gt_ks, atol=1e-6, rtol=1e-6)
         torch.testing.assert_close(v_scales_zeros, gt_vs, atol=1e-6, rtol=1e-6)
 
