@@ -711,10 +711,20 @@ def _skip_unsupported_triton_fp8_dtype(fp8_dtype: torch.dtype):
         pytest.skip('Triton float8_e4m3fn conversion requires device with cc>=9.0')
 
 
-def _fp8_cache_value_tolerances(fp8_dtype: torch.dtype):
+def _assert_fp8_cache_close(actual: torch.Tensor,
+                            expected: torch.Tensor,
+                            fp8_dtype: torch.dtype,
+                            scale: torch.Tensor = None):
+    actual = actual.to(torch.float32)
+    expected = expected.to(torch.float32)
     if fp8_dtype is torch.float8_e5m2:
-        return 1024.0, 0.25
-    return 1e-5, 1.3e-6
+        if scale is not None:
+            scale = scale.to(torch.float32)
+            actual = actual * scale
+            expected = expected * scale
+        torch.testing.assert_close(actual, expected, atol=1e-6, rtol=0.25)
+    else:
+        torch.testing.assert_close(actual, expected)
 
 
 class TestFillKVCacheFP8Scalar(TestFillKVCache):
@@ -802,9 +812,8 @@ class TestFillKVCacheFP8Scalar(TestFillKVCache):
                       quant_policy=quant_policy,
                       k_scale=k_scale,
                       v_scale=v_scale)
-        atol, rtol = _fp8_cache_value_tolerances(fp8_dtype)
-        torch.testing.assert_close(k_caches.to(torch.float32), gt_k.to(torch.float32), atol=atol, rtol=rtol)
-        torch.testing.assert_close(v_caches.to(torch.float32), gt_v.to(torch.float32), atol=atol, rtol=rtol)
+        _assert_fp8_cache_close(k_caches, gt_k, fp8_dtype, k_scale)
+        _assert_fp8_cache_close(v_caches, gt_v, fp8_dtype, v_scale)
 
 
 class TestFillKVCacheFP8E5M2Scalar(TestFillKVCacheFP8Scalar):
@@ -935,10 +944,8 @@ class TestFillKVCacheFP8PerTokenHead(TestFillKVCache):
             quant_policy,
         )
         gt_k, gt_v, gt_ks, gt_vs = gt
-        # Compare fp8 values via float conversion
-        atol, rtol = _fp8_cache_value_tolerances(fp8_dtype)
-        torch.testing.assert_close(k_caches.to(torch.float32), gt_k.to(torch.float32), atol=atol, rtol=rtol)
-        torch.testing.assert_close(v_caches.to(torch.float32), gt_v.to(torch.float32), atol=atol, rtol=rtol)
+        _assert_fp8_cache_close(k_caches, gt_k, fp8_dtype, gt_ks)
+        _assert_fp8_cache_close(v_caches, gt_v, fp8_dtype, gt_vs)
         torch.testing.assert_close(k_scales_zeros, gt_ks, atol=1e-6, rtol=1e-6)
         torch.testing.assert_close(v_scales_zeros, gt_vs, atol=1e-6, rtol=1e-6)
 
