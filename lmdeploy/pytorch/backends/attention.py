@@ -37,7 +37,6 @@ class V4AttentionMetadata:
     q_seqlens: torch.Tensor
     kv_seqlens: torch.Tensor
     state_ids: torch.Tensor
-    valid_mask: torch.Tensor
     window_positions: torch.Tensor = None
     window_lens: torch.Tensor = None
     topk_indices: torch.Tensor = None
@@ -47,7 +46,6 @@ class V4AttentionMetadata:
     extra_indices_in_kvcache: torch.Tensor = None
     extra_topk_length: torch.Tensor = None
     compressed_positions: torch.Tensor = None
-    compressed_valid_mask: torch.Tensor = None
 
 
 T = TypeVar('T', bound=AttentionMetadata)

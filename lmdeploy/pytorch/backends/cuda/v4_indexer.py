@@ -77,8 +77,7 @@ class TritonV4IndexerImpl(BaseV4Indexer):
                        layer_id: int,
                        index_scratch: torch.Tensor) -> V4IndexerOutput:
         block_offsets = meta.block_offsets.long()
-        valid_mask = meta.valid_mask
-        start_pos = torch.where(valid_mask, meta.start_pos, meta.start_pos.new_zeros(()))
+        start_pos = meta.start_pos
         bsz = query.size(0)
 
         max_index = index_scratch.size(1)
@@ -87,9 +86,7 @@ class TritonV4IndexerImpl(BaseV4Indexer):
             return V4IndexerOutput(indices_in_kvcache=empty, topk_length=start_pos.new_zeros((bsz, ),
                                                                                              dtype=torch.int32))
 
-        num_index = torch.where(valid_mask,
-                                torch.div(start_pos + 1, self.compress_ratio, rounding_mode='floor'),
-                                start_pos.new_zeros(()))
+        num_index = torch.div(start_pos + 1, self.compress_ratio, rounding_mode='floor')
         positions, pos_mask = _build_prefix_positions(num_index, max_index)
         index_scratch.copy_(
             self._gather_cache_entries(index_kv_cache[layer_id], block_offsets, positions, block_size,

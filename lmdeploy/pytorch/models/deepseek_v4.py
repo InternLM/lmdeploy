@@ -444,11 +444,7 @@ class Compressor(nn.Module):
         # ---- Phase F: Post-processing (norm + RoPE + quant on entire compressed_kv) ----
         compressed_kv = self.norm(compressed_kv.to(dtype))
         # compress_freqs is already indexed via (position_ids + 1 - ratio).clamp(min=0)
-        # Shape: decode [bsz, 1, rd//2], prefill [1, total_tokens, rd//2]
-        if seq_info.is_decoding:
-            freqs_for_compress = compress_freqs
-        else:
-            freqs_for_compress = compress_freqs.squeeze(0).unsqueeze(1)
+        freqs_for_compress = compress_freqs
         apply_rotary_emb(compressed_kv[..., -rd:].unsqueeze(1), freqs_for_compress)
         compressed_kv = compressed_kv.squeeze(1)
         if self.rotate:
@@ -870,9 +866,8 @@ class Attention(nn.Module):
                                          extra_topk_length: torch.Tensor | None = None):
         window_positions, window_lens, _ = _build_window_positions(total_lens.long(), self.window_size)
 
-        compressed_valid_mask = None
         if compressed_positions is not None:
-            compressed_valid_mask = compressed_positions >= 0
+            pass
         elif self.compress_ratio:
             num_compressed = torch.div(total_lens, self.compress_ratio, rounding_mode='floor').long()
             if decode_scratch is not None:
@@ -882,7 +877,7 @@ class Attention(nn.Module):
                     max_width = decode_scratch['selected_compressed_kv_r128'].size(1)
             else:
                 max_width = int(num_compressed.max().item()) if num_compressed.numel() > 0 else 0
-            compressed_positions, compressed_valid_mask = _build_prefix_positions(num_compressed, max_width)
+            compressed_positions, _ = _build_prefix_positions(num_compressed, max_width)
 
         return V4AttentionMetadata(is_decoding=True,
                                    block_offsets=block_offsets,
@@ -897,8 +892,7 @@ class Attention(nn.Module):
                                    topk_length=topk_length,
                                    extra_indices_in_kvcache=extra_indices_in_kvcache,
                                    extra_topk_length=extra_topk_length,
-                                   compressed_positions=compressed_positions,
-                                   compressed_valid_mask=compressed_valid_mask)
+                                   compressed_positions=compressed_positions)
 
     def forward(self,
                 x: torch.Tensor,
@@ -1503,8 +1497,6 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         for ratio in (4, 128):
             cidx = (position_ids + 1 - ratio).clamp(min=0)
             cf = self.freqs_cis_compress[cidx]
-            if seq_info.is_decoding:
-                cf = cf.transpose(0, 1)
             compress_freqs[ratio] = cf
 
         # Single layer loop — no tensor indexing inside

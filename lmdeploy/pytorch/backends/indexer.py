@@ -11,7 +11,6 @@ class V4IndexerMetadata:
 
     block_offsets: torch.Tensor
     start_pos: torch.Tensor
-    valid_mask: torch.Tensor
     state_ids: torch.Tensor
     compress_ratio: int
 
