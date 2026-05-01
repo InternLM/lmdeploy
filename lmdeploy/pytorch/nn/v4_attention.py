@@ -39,3 +39,20 @@ class V4Attention(nn.Module):
                                         window_kv_fp8_state=window_kv_fp8_state,
                                         compressed_kv_fp8_cache=compressed_kv_fp8_cache,
                                         decode_scratch=decode_scratch)
+
+    def forward_prefill(self,
+                        query: torch.Tensor,
+                        window_kv: torch.Tensor,
+                        attn_sink: torch.Tensor,
+                        topk_indices: torch.Tensor,
+                        compressed_kv_cache: torch.Tensor | None = None,
+                        block_offsets: torch.Tensor | None = None,
+                        compressed_positions: torch.Tensor | None = None,
+                        block_size: int = 1,
+                        compress_ratio: int = 0):
+        return self.impl.forward_prefill(query, window_kv, attn_sink, topk_indices,
+                                         compressed_kv_cache=compressed_kv_cache,
+                                         block_offsets=block_offsets,
+                                         compressed_positions=compressed_positions,
+                                         block_size=block_size,
+                                         compress_ratio=compress_ratio)

@@ -3,6 +3,7 @@
 import torch
 
 from lmdeploy.pytorch.backends.attention import V4AttentionMetadata
+from lmdeploy.pytorch.models.deepseek_v4_utils import gather_cache_entries, gather_compressed_cache_entries
 
 
 class TritonV4AttentionImpl:
@@ -49,37 +50,6 @@ class TritonV4AttentionImpl:
             return indices
         pad = padded_topk - topk
         return torch.nn.functional.pad(indices, (0, pad), value=-1)
-
-    @staticmethod
-    def _gather_cache_entries(cache: torch.Tensor, block_offsets: torch.Tensor, positions: torch.Tensor,
-                              block_size: int):
-        if positions.numel() == 0:
-            return cache.new_empty((*positions.shape, cache.size(-1)))
-        safe_positions = positions.clamp(min=0)
-        block_idx = torch.div(safe_positions, block_size, rounding_mode='floor').long()
-        max_block_idx = block_offsets.size(1)
-        valid = (positions >= 0) & (block_idx < max_block_idx)
-        safe_block_idx = block_idx.clamp(max=max_block_idx - 1)
-        block_off = torch.remainder(safe_positions, block_size).long()
-        phys_blocks = block_offsets.gather(1, safe_block_idx).long()
-        gathered = cache[phys_blocks, block_off]
-        return torch.where(valid.unsqueeze(-1), gathered, gathered.new_zeros(()))
-
-    @staticmethod
-    def _gather_compressed_cache_entries(cache: torch.Tensor, block_offsets: torch.Tensor, positions: torch.Tensor,
-                                         block_size: int, compress_ratio: int):
-        if positions.numel() == 0:
-            return cache.new_empty((*positions.shape, cache.size(-1)))
-        safe_positions = positions.clamp(min=0)
-        token_positions = safe_positions * compress_ratio
-        block_idx = torch.div(token_positions, block_size, rounding_mode='floor').long()
-        max_block_idx = block_offsets.size(1)
-        valid = (positions >= 0) & (block_idx < max_block_idx)
-        safe_block_idx = block_idx.clamp(max=max_block_idx - 1)
-        block_off = torch.remainder(safe_positions, cache.size(1)).long()
-        phys_blocks = block_offsets.gather(1, safe_block_idx).long()
-        gathered = cache[phys_blocks, block_off]
-        return torch.where(valid.unsqueeze(-1), gathered, gathered.new_zeros(()))
 
     def _get_compressed_scratch(self, decode_scratch: dict[str, torch.Tensor] | None, batch_size: int,
                                 max_width: int, device: torch.device):
@@ -167,7 +137,7 @@ class TritonV4AttentionImpl:
             max_width = attn_metadata.compressed_positions.size(1)
             compressed_kv = self._get_compressed_scratch(decode_scratch, bsz, max_width, query.device)
             compressed_kv.copy_(
-                self._gather_compressed_cache_entries(compressed_kv_cache, block_offsets,
+                gather_compressed_cache_entries(compressed_kv_cache, block_offsets,
                                                       attn_metadata.compressed_positions, block_size,
                                                       attn_metadata.compress_ratio))
             full_kv = self._get_full_scratch(decode_scratch, bsz, self.window_size + max_width, query.device)
@@ -175,6 +145,25 @@ class TritonV4AttentionImpl:
             full_kv[:, self.window_size:self.window_size + max_width] = compressed_kv
 
         return self.kernel_mod.sparse_attn(query, full_kv, attn_sink, attn_metadata.topk_indices.int(), self.scale)
+
+    def forward_prefill(self,
+                        query: torch.Tensor,
+                        window_kv: torch.Tensor,
+                        attn_sink: torch.Tensor,
+                        topk_indices: torch.Tensor,
+                        compressed_kv_cache: torch.Tensor | None = None,
+                        block_offsets: torch.Tensor | None = None,
+                        compressed_positions: torch.Tensor | None = None,
+                        block_size: int = 1,
+                        compress_ratio: int = 0):
+        full_kv = window_kv
+        if compressed_kv_cache is not None and compressed_positions is not None:
+            compressed_kv = gather_compressed_cache_entries(
+                compressed_kv_cache, block_offsets, compressed_positions,
+                block_size, compress_ratio)
+            full_kv = torch.cat([window_kv, compressed_kv], dim=1)
+        return self.kernel_mod.sparse_attn(query, full_kv, attn_sink,
+                                           topk_indices.int(), self.scale)
 
 
 class TritonV4AttentionBuilder:

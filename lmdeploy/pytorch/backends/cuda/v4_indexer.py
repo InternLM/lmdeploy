@@ -4,18 +4,7 @@ import torch
 import torch.distributed as dist
 
 from ..indexer import BaseV4Indexer, BaseV4IndexerBuilder, V4IndexerMetadata, V4IndexerOutput
-
-
-def _build_prefix_positions(lengths: torch.Tensor, max_len: int):
-    """Build `[0, ..., len-1]` positions padded with `-1`."""
-    device = lengths.device
-    if max_len == 0:
-        empty = torch.empty((lengths.numel(), 0), dtype=torch.long, device=device)
-        return empty, empty.bool()
-    arange = torch.arange(max_len, device=device).unsqueeze(0)
-    mask = arange < lengths.unsqueeze(1)
-    positions = torch.where(mask, arange, arange.new_full((), -1))
-    return positions, mask
+from lmdeploy.pytorch.models.deepseek_v4_utils import build_prefix_positions, gather_compressed_cache_entries
 
 
 class TritonV4IndexerImpl(BaseV4Indexer):
@@ -25,48 +14,6 @@ class TritonV4IndexerImpl(BaseV4Indexer):
         self.index_topk = index_topk
         self.compress_ratio = compress_ratio
         self.world_size = world_size
-
-    @staticmethod
-    def _gather_cache_entries(cache: torch.Tensor, block_offsets: torch.Tensor, positions: torch.Tensor,
-                              block_size: int, compress_ratio: int):
-        if positions.numel() == 0:
-            return cache.new_empty((*positions.shape, cache.size(-1)))
-        safe_positions = positions.clamp(min=0)
-        token_positions = safe_positions * compress_ratio
-        block_idx = torch.div(token_positions, block_size, rounding_mode='floor').long()
-        max_block_idx = block_offsets.size(1)
-        valid = (positions >= 0) & (block_idx < max_block_idx)
-        safe_block_idx = block_idx.clamp(max=max_block_idx - 1)
-        block_off = torch.remainder(safe_positions, cache.size(1)).long()
-        phys_blocks = block_offsets.gather(1, safe_block_idx).long()
-        gathered = cache[phys_blocks, block_off]
-        return torch.where(valid.unsqueeze(-1), gathered, gathered.new_zeros(()))
-
-    @staticmethod
-    def _write_cache_entries(cache: torch.Tensor,
-                             block_offsets: torch.Tensor,
-                             batch_idx: torch.Tensor,
-                             positions: torch.Tensor,
-                             values: torch.Tensor,
-                             block_size: int,
-                             write_mask: torch.Tensor | None = None):
-        if positions.numel() == 0:
-            return
-        block_idx = torch.div(positions, block_size, rounding_mode='floor')
-        max_block_idx = block_offsets.size(1)
-        valid = (positions >= 0) & (block_idx >= 0) & (block_idx < max_block_idx)
-        if write_mask is not None:
-            valid = valid & write_mask
-        safe_block_idx = block_idx.clamp(min=0, max=max_block_idx - 1)
-        safe_positions = positions.clamp(min=0)
-        block_off = torch.remainder(safe_positions, block_size).long()
-        phys_blocks = block_offsets[batch_idx, safe_block_idx].long()
-        if not valid.any():
-            return
-        target = cache[phys_blocks, block_off]
-        values = values.to(target.dtype)
-        blend_mask = valid.view(-1, *([1] * (values.dim() - 1)))
-        cache[phys_blocks, block_off] = torch.where(blend_mask, values, target)
 
     def _logical_to_physical(self, logical_topk: torch.Tensor, block_offsets: torch.Tensor,
                              block_size: int, index_kv_cache: torch.Tensor) -> torch.Tensor:
@@ -108,15 +55,15 @@ class TritonV4IndexerImpl(BaseV4Indexer):
             return V4IndexerOutput(indices_in_kvcache=empty,
                                    topk_length=num_index.new_zeros((bsz,), dtype=torch.int32))
 
-        positions, pos_mask = _build_prefix_positions(num_index, max_index)
+        positions, pos_mask = build_prefix_positions(num_index, max_index)
         if index_scratch is not None:
             index_scratch.copy_(
-                self._gather_cache_entries(index_kv_cache[layer_id], block_offsets, positions,
-                                           block_size, self.compress_ratio))
+                gather_compressed_cache_entries(index_kv_cache[layer_id], block_offsets, positions,
+                                                block_size, self.compress_ratio))
             gathered = index_scratch
         else:
-            gathered = self._gather_cache_entries(index_kv_cache[layer_id], block_offsets, positions,
-                                                  block_size, self.compress_ratio)
+            gathered = gather_compressed_cache_entries(index_kv_cache[layer_id], block_offsets, positions,
+                                                       block_size, self.compress_ratio)
 
         score = torch.einsum('bshd,btd->bsht', query, gathered)
         score = (score.relu_() * weights.unsqueeze(-1)).sum(dim=2)
