@@ -98,16 +98,6 @@ def _gather_compressed_cache_entries(cache: torch.Tensor, block_offsets: torch.T
     return torch.where(valid.unsqueeze(-1), gathered, gathered.new_zeros(()))
 
 
-def _pack_block_cache_blocks(src_cache: torch.Tensor, dst_cache: torch.Tensor, phys_blocks: torch.Tensor):
-    valid_phys_blocks = phys_blocks[phys_blocks >= 0]
-    if valid_phys_blocks.numel() == 0:
-        return
-    valid_phys_blocks = torch.unique(valid_phys_blocks.long())
-    packed = quantize_model1_fp8_sparse(src_cache.index_select(0, valid_phys_blocks).unsqueeze(2)).squeeze(2)
-    for out_idx, block_id in enumerate(valid_phys_blocks.tolist()):
-        dst_cache[block_id].copy_(packed[out_idx])
-
-
 def _dequantize_wo_a_shard(weight: torch.Tensor, scale: torch.Tensor, world_size: int, rank: int) -> torch.Tensor:
     """Convert HF FP8 `wo_a` checkpoint tensors into the BF16 format used by
     inference/model.py.
@@ -463,30 +453,8 @@ class Compressor(nn.Module):
         fp8_cache = block_caches[fp8_cache_name][self.layer_id] if fp8_cache_name else None
 
         fill_compressed_kv(compressed_kv, cache, cu_q_seqlens, kv_seqlens, block_offsets,
-                           self.compress_ratio, block_size, max_seqlen_q)
-        if fp8_cache is not None:
-            if seq_info.is_decoding:
-                emit_mask = torch.remainder(start_pos + 1, ratio) == 0
-                block_ids = torch.div(start_pos, block_size, rounding_mode='floor').long()
-                phys_blocks = block_offsets.long().gather(1, block_ids.unsqueeze(1)).squeeze(1)
-                phys_blocks = torch.where(emit_mask, phys_blocks, phys_blocks.new_full((), -1))
-            else:
-                num_compressed_per_seq = (start_pos + q_seqlens) // ratio - start_pos // ratio
-                all_batch_idx, all_positions = [], []
-                for s in range(bsz):
-                    nc = num_compressed_per_seq[s].item()
-                    if nc == 0:
-                        continue
-                    sp = start_pos[s].item()
-                    all_batch_idx.append(torch.full((nc,), s, device=x.device, dtype=torch.long))
-                    pos_start = sp // ratio
-                    all_positions.append(torch.arange(pos_start, pos_start + nc, device=x.device, dtype=torch.long))
-                flat_batch_idx = torch.cat(all_batch_idx)
-                flat_positions = torch.cat(all_positions)
-                compressed_block_ids = torch.div(flat_positions * ratio, block_size,
-                                                 rounding_mode='floor').long()
-                phys_blocks = block_offsets[flat_batch_idx, compressed_block_ids]
-            _pack_block_cache_blocks(cache, fp8_cache, phys_blocks)
+                           self.compress_ratio, block_size, max_seqlen_q,
+                           fp8_cache=fp8_cache)
 
 
 class Indexer(nn.Module):

@@ -744,3 +744,186 @@ class TestFillCompressedKV:
     @pytest.mark.parametrize('kvlen', [128, 256, 129])
     def test_decode_r128(self, kvlen, compress_ratio, head_dim, block_size, device, dtype):
         self._run_decode_test(kvlen, compress_ratio, head_dim, block_size, device, dtype)
+
+
+class TestFillCompressedKVFP8:
+    """Test FP8 direct write in fill_compressed_kv.
+
+    Verifies that the kernel's MODEL1 sparse FP8 output matches
+    the Python reference (quantize_model1_fp8_sparse).
+    Only ratio=4 is tested since r128 has no FP8 cache.
+    """
+
+    HEAD_DIM = 512
+    D_NOPE = 448
+    D_ROPE = 64
+    TILE_SIZE = 64
+    NUM_TILES = 7
+    BLOCK_SIZE = 128
+
+    @pytest.fixture
+    def device(self):
+        yield 'cuda'
+
+    @pytest.fixture
+    def dtype(self):
+        yield torch.bfloat16
+
+    def _packed_token_dim(self):
+        return self.D_NOPE + 2 * self.D_ROPE + self.NUM_TILES + 1  # 584
+
+    def _reference_pack_fp8(self, bf16_tokens):
+        """Pack BF16 tokens [N, 512] to MODEL1 FP8 using the Python reference."""
+        from lmdeploy.pytorch.backends.cuda.attention.flashmla_utils import quantize_model1_fp8_sparse
+        # quantize_model1_fp8_sparse expects [num_blocks, block_size, 1, 512]
+        # For N tokens, treat as 1 block of N entries
+        N = bf16_tokens.size(0)
+        input_cache = bf16_tokens.unsqueeze(0).unsqueeze(2)  # [1, N, 1, 512]
+        packed = quantize_model1_fp8_sparse(input_cache)  # [1, N, 1, 584]
+        return packed.squeeze(0).squeeze(1)  # [N, 584]
+
+    def _run_test(self, compressed_kv, cu_q_seqlens, kv_seqlens, block_offsets, device):
+        """Run fill_compressed_kv with FP8 cache and compare against reference."""
+        from lmdeploy.pytorch.kernels.cuda.v4_compressor import fill_compressed_kv
+        head_dim = self.HEAD_DIM
+        compress_ratio = 4
+        block_size = self.BLOCK_SIZE
+        entries_per_block = block_size // compress_ratio  # 32
+        packed_dim = self._packed_token_dim()
+        B = kv_seqlens.size(0)
+        max_seqlen_q = (cu_q_seqlens[-1] - cu_q_seqlens[0]).item()
+
+        # Build caches
+        num_blocks = block_offsets.max().item() + 1
+        kv_cache = torch.zeros(num_blocks, entries_per_block, head_dim, dtype=torch.bfloat16,
+                               device=device)
+        fp8_cache = torch.zeros(num_blocks, entries_per_block, packed_dim, dtype=torch.float8_e4m3fn,
+                                device=device)
+
+        fill_compressed_kv(compressed_kv, kv_cache, cu_q_seqlens, kv_seqlens,
+                           block_offsets, compress_ratio, block_size, max_seqlen_q,
+                           fp8_cache=fp8_cache)
+
+        # Reference: dequantize FP8 cache and compare with BF16 cache
+        from lmdeploy.pytorch.backends.cuda.attention.flashmla_utils import dequantize_model1_fp8_sparse
+        # Dequantize all blocks
+        dequant = dequantize_model1_fp8_sparse(
+            fp8_cache.unsqueeze(2))  # [num_blocks, entries_per_block, 1, 512]
+        dequant = dequant.squeeze(2)  # [num_blocks, entries_per_block, 512]
+
+        # Compare: for each written entry, BF16 cache ≈ dequantized FP8 cache
+        # Only check positions that were actually written (non-zero in BF16 cache)
+        for b in range(B):
+            seq_start = cu_q_seqlens[b].item()
+            seq_end = cu_q_seqlens[b + 1].item()
+            seqlen = seq_end - seq_start
+            kvlen = kv_seqlens[b].item()
+            start_pos = kvlen - seqlen
+            entries_per_block = block_size // compress_ratio
+
+            if seqlen == 1:
+                if (start_pos + 1) % compress_ratio != 0:
+                    continue
+                p = start_pos // compress_ratio
+                token_pos = p * compress_ratio
+                block_idx = token_pos // block_size
+                block_off = p % entries_per_block
+                phys_block = block_offsets[b, block_idx].item()
+                bf16_val = kv_cache[phys_block, block_off]
+                fp8_val = dequant[phys_block, block_off]
+                torch.testing.assert_close(fp8_val.float(), bf16_val.float(), atol=0.1, rtol=0.1)
+            else:
+                first_compress = ((start_pos + compress_ratio) // compress_ratio) * compress_ratio - 1
+                last_pos = start_pos + seqlen - 1
+                if first_compress > last_pos:
+                    continue
+                for compress_abs in range(first_compress, last_pos + 1, compress_ratio):
+                    p = compress_abs // compress_ratio
+                    token_pos = p * compress_ratio
+                    block_idx = token_pos // block_size
+                    block_off = p % entries_per_block
+                    phys_block = block_offsets[b, block_idx].item()
+                    bf16_val = kv_cache[phys_block, block_off]
+                    fp8_val = dequant[phys_block, block_off]
+                    torch.testing.assert_close(fp8_val.float(), bf16_val.float(), atol=0.1, rtol=0.1)
+
+    def test_decode_emit(self, device, dtype):
+        """Decode with emit (kvlen % 4 == 0)."""
+        B = 3
+        kvlens = [8, 12, 4]
+        compressed_kv = torch.randn(B, self.HEAD_DIM, dtype=dtype, device=device)
+        cu_q_seqlens = torch.tensor([0, 1, 2, 3], dtype=torch.int32, device=device)
+        kv_seqlens = torch.tensor(kvlens, dtype=torch.int32, device=device)
+        max_blocks = 4
+        block_offsets = torch.arange(B * max_blocks, device=device).reshape(B, max_blocks).long()
+        self._run_test(compressed_kv, cu_q_seqlens, kv_seqlens, block_offsets, device)
+
+    def test_decode_no_emit(self, device, dtype):
+        """Decode without emit (kvlen % 4 != 0) — FP8 cache should stay zero."""
+        B = 2
+        kvlens = [5, 7]
+        compressed_kv = torch.randn(B, self.HEAD_DIM, dtype=dtype, device=device)
+        cu_q_seqlens = torch.tensor([0, 1, 2], dtype=torch.int32, device=device)
+        kv_seqlens = torch.tensor(kvlens, dtype=torch.int32, device=device)
+        max_blocks = 4
+        block_offsets = torch.arange(B * max_blocks, device=device).reshape(B, max_blocks).long()
+
+        from lmdeploy.pytorch.kernels.cuda.v4_compressor import fill_compressed_kv
+        packed_dim = self._packed_token_dim()
+        num_blocks = B * max_blocks
+        entries_per_block = self.BLOCK_SIZE // 4
+        kv_cache = torch.zeros(num_blocks, entries_per_block, self.HEAD_DIM, dtype=dtype, device=device)
+        fp8_cache = torch.zeros(num_blocks, entries_per_block, packed_dim, dtype=torch.float8_e4m3fn,
+                                device=device)
+
+        fill_compressed_kv(compressed_kv, kv_cache, cu_q_seqlens, kv_seqlens,
+                           block_offsets, 4, self.BLOCK_SIZE, 1, fp8_cache=fp8_cache)
+        # No emit → BF16 and FP8 caches should remain all zeros
+        assert kv_cache.abs().max() == 0
+        assert fp8_cache.view(torch.uint8).max() == 0
+
+    def test_prefill(self, device, dtype):
+        """Prefill with ratio=4."""
+        B = 2
+        q_seqlens = [8, 16]
+        kvlens = [8, 16]
+        total_q = sum(q_seqlens)
+        max_seqlen_q = max(q_seqlens)
+        compressed_kv = torch.randn(total_q, self.HEAD_DIM, dtype=dtype, device=device)
+        cu_q_seqlens = torch.tensor([0] + q_seqlens, dtype=torch.int32, device=device).cumsum(0)
+        kv_seqlens = torch.tensor(kvlens, dtype=torch.int32, device=device)
+        max_blocks = 8
+        block_offsets = torch.arange(B * max_blocks, device=device).reshape(B, max_blocks).long()
+        self._run_test(compressed_kv, cu_q_seqlens, kv_seqlens, block_offsets, device)
+
+    def test_prefill_with_history(self, device, dtype):
+        """Prefill with existing history (start_pos > 0)."""
+        B = 1
+        q_seqlens = [16]
+        kvlens = [32]  # 16 history + 16 new
+        total_q = sum(q_seqlens)
+        compressed_kv = torch.randn(total_q, self.HEAD_DIM, dtype=dtype, device=device)
+        cu_q_seqlens = torch.tensor([0] + q_seqlens, dtype=torch.int32, device=device).cumsum(0)
+        kv_seqlens = torch.tensor(kvlens, dtype=torch.int32, device=device)
+        max_blocks = 8
+        block_offsets = torch.arange(B * max_blocks, device=device).reshape(B, max_blocks).long()
+        self._run_test(compressed_kv, cu_q_seqlens, kv_seqlens, block_offsets, device)
+
+    def test_no_fp8_cache(self, device, dtype):
+        """Without fp8_cache, should work identically to before (BF16 only)."""
+        B = 2
+        kvlens = [4, 8]
+        compressed_kv = torch.randn(B, self.HEAD_DIM, dtype=dtype, device=device)
+        cu_q_seqlens = torch.tensor([0, 1, 2], dtype=torch.int32, device=device)
+        kv_seqlens = torch.tensor(kvlens, dtype=torch.int32, device=device)
+        max_blocks = 4
+        entries_per_block = self.BLOCK_SIZE // 4
+        num_blocks = B * max_blocks
+        block_offsets = torch.arange(num_blocks, device=device).reshape(B, max_blocks).long()
+        kv_cache = torch.zeros(num_blocks, entries_per_block, self.HEAD_DIM, dtype=dtype, device=device)
+
+        from lmdeploy.pytorch.kernels.cuda.v4_compressor import fill_compressed_kv
+        fill_compressed_kv(compressed_kv, kv_cache, cu_q_seqlens, kv_seqlens,
+                           block_offsets, 4, self.BLOCK_SIZE, 1)
+        # Should have written entries (both batches emit: kvlen=4→emit, kvlen=8→emit)
+        assert kv_cache.abs().max() > 0

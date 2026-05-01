@@ -531,10 +531,23 @@ def _fill_compressed_kv_kernel(
     kvc_stride_d: tl.constexpr,
     stride_boff0,
     stride_boff1: tl.constexpr,
+    fp8_nope_rope_ptr,
+    fp8nr_stride_b,
+    fp8nr_stride_s: tl.constexpr,
+    fp8nr_stride_d: tl.constexpr,
+    fp8_rope_bf16_ptr,
+    fp8rbf16_stride_b,
+    fp8rbf16_stride_s: tl.constexpr,
+    fp8rbf16_stride_d: tl.constexpr,
+    fp8_scales_u8_ptr,
+    fp8sc_stride_b,
+    fp8sc_stride_s: tl.constexpr,
+    fp8sc_stride_d: tl.constexpr,
     head_dim: tl.constexpr,
     compress_ratio: tl.constexpr,
     block_size: tl.constexpr,
     is_decoding: tl.constexpr,
+    has_fp8: tl.constexpr,
     BLOCK_D: tl.constexpr,
 ):
     group_id = tl.program_id(0)
@@ -571,6 +584,7 @@ def _fill_compressed_kv_kernel(
     block_off = p % entries_per_block
     phys_block = tl.load(block_offsets_ptr + batch_id * stride_boff0 + block_idx * stride_boff1)
 
+    # ---- Write to BF16 paged block cache ----
     n_tiles = head_dim // BLOCK_D
     for d_tile in range(n_tiles):
         d_off = d_tile * BLOCK_D
@@ -579,6 +593,60 @@ def _fill_compressed_kv_kernel(
         compressed = tl.load(ckv_ptr + write_pos * ckv_stride_s + offs_d * ckv_stride_d)
         cache_ptrs = kv_cache_ptr + phys_block * kvc_stride_b + block_off * kvc_stride_s + offs_d * kvc_stride_d
         tl.store(cache_ptrs, compressed.to(kv_cache_ptr.dtype.element_ty))
+
+    # ---- Write to FP8 paged block cache (MODEL1 sparse format) ----
+    if has_fp8:
+        # FlashMLA MODEL1 sparse FP8 layout (matches C++ kernel addressing):
+        #   NoPE+RoPE region: [num_blocks, entries_per_block, 576] as e4m3fn
+        #     per-token: [NoPE 448 fp8 | RoPE 128 bytes (64 bf16)]
+        #     token stride = 576 bytes
+        #   Scales region: [num_blocks, entries_per_block, 8] as uint8
+        #     per-token: [7 e8m0 scale bytes | 1 padding]
+        #     located at byte offset entries_per_block * 576 within each block
+        #
+        # Three pointers (all views of the same underlying fp8_cache tensor):
+        #   fp8_nope_rope_ptr  — e4m3fn, stride_b/stride_s for NoPE write
+        #   fp8_rope_bf16_ptr  — bfloat16 view of the RoPE region
+        #   fp8_scales_u8_ptr  — uint8 view of the scales region
+        D_NOPE: tl.constexpr = 448
+        D_ROPE: tl.constexpr = 64
+        TILE_SIZE: tl.constexpr = 64
+        NUM_TILES: tl.constexpr = 7
+        FP8_MAX: tl.constexpr = 448.0
+
+        fp8_elem_ty = fp8_nope_rope_ptr.dtype.element_ty
+        nope_base = fp8_nope_rope_ptr + phys_block * fp8nr_stride_b + block_off * fp8nr_stride_s
+
+        # Quantize 7 NoPE tiles
+        offs_tile = tl.arange(0, TILE_SIZE)
+        for tile_idx in range(NUM_TILES):
+            d_base = tile_idx * TILE_SIZE
+            tile_ptrs = ckv_ptr + write_pos * ckv_stride_s + (d_base + offs_tile) * ckv_stride_d
+            tile_bf16 = tl.load(tile_ptrs)
+            tile_f32 = tile_bf16.to(tl.float32)
+
+            amax = tl.max(tl.abs(tile_f32), axis=0)
+            ceil_log2 = tl.math.ceil(tl.math.log2(tl.maximum(amax / FP8_MAX, 1e-4)))
+            scale_inv = tl.math.exp2(ceil_log2)
+            quantized = (tile_f32 / scale_inv).to(fp8_elem_ty)
+
+            nope_ptrs = nope_base + (d_base + offs_tile) * fp8nr_stride_d
+            tl.store(nope_ptrs, quantized)
+
+            # e8m0fnu scale byte: raw byte = ceil_log2 + bias(127)
+            scale_byte = (ceil_log2.to(tl.int32) + 127).to(tl.uint8)
+            sc_base = fp8_scales_u8_ptr + phys_block * fp8sc_stride_b + block_off * fp8sc_stride_s
+            tl.store(sc_base + tile_idx * fp8sc_stride_d, scale_byte)
+
+        # Copy RoPE dims: store 64 BF16 values via the bf16 view pointer.
+        # fp8_rope_bf16_ptr is already sliced to the RoPE region
+        # (bf16 view starting at D_NOPE/2=224 within each token's NoPE+RoPE),
+        # so we write directly at offset 0..63.
+        rope_offs_bf16 = tl.arange(0, D_ROPE)
+        rope_ptrs = ckv_ptr + write_pos * ckv_stride_s + (D_NOPE + rope_offs_bf16) * ckv_stride_d
+        rope_bf16 = tl.load(rope_ptrs)
+        rope_base = fp8_rope_bf16_ptr + phys_block * fp8rbf16_stride_b + block_off * fp8rbf16_stride_s
+        tl.store(rope_base + rope_offs_bf16 * fp8rbf16_stride_d, rope_bf16)
 
 
 def fill_compressed_kv(
@@ -590,12 +658,17 @@ def fill_compressed_kv(
     compress_ratio: int,
     block_size: int,
     max_seqlen_q: int,
+    fp8_cache: torch.Tensor | None = None,
     ):
     """Write compressed KV entries from compressed_kv into the paged kv_cache.
 
     After score_kv produces compressed entries at compression points
     (abs_pos = n*ratio - 1), this kernel scatters those entries into the
     block-paged kv_cache used by the decode-phase sparse attention.
+
+    When fp8_cache is provided, also writes MODEL1 sparse FP8 packed entries
+    directly into fp8_cache, eliminating the need for a separate Python-side
+    packing step.
 
     == Addressing scheme ==
     The kv_cache is a paged block table:
@@ -609,17 +682,10 @@ def fill_compressed_kv(
       phys_block  = block_offsets[batch_id, block_idx]  (physical block in kv_cache)
       write target: kv_cache[phys_block, block_off]
 
-    == Decode path (seqlen=1) ==
-    One CTA per batch. Writes only when (start_pos + 1) % ratio == 0
-    (emit condition). Position = start_pos // ratio (single compressed entry).
-    Skips stores for non-emitting batches.
-
-    == Prefill path ==
-    One CTA per compression point per batch.
-    Compression points at abs_pos = first_compress + group_id * ratio
-    where first_compress = ((start_pos + ratio) // ratio) * ratio - 1.
-    Each CTA reads the compressed value from compressed_kv[write_pos] and writes it
-    to the corresponding slot in kv_cache.
+    == FP8 MODEL1 sparse format ==
+    When fp8_cache is not None, the kernel also writes to:
+      fp8_cache: [num_blocks, entries_per_block, packed_dim=584]
+    Per-token layout: [NoPE 448 FP8 | RoPE 128 BF16-as-bytes | 7 E8M0 scales | 1 pad]
 
     Args:
         compressed_kv: [S, head_dim] flat tensor with compressed results from score_kv.
@@ -633,6 +699,8 @@ def fill_compressed_kv(
         compress_ratio: compression ratio (4 or 128).
         block_size: number of original tokens per block (e.g. 128).
         max_seqlen_q: max query seq len (used for prefill grid size).
+        fp8_cache: optional [num_blocks, entries_per_block, packed_dim] FP8 cache.
+            When provided, MODEL1 sparse FP8 entries are written directly.
     """
     B = kv_seqlens.size(0)
     head_dim = compressed_kv.size(-1)
@@ -647,15 +715,54 @@ def fill_compressed_kv(
         num_groups = (max_seqlen_q + compress_ratio - 1) // compress_ratio
         grid = (num_groups, B)
 
+    has_fp8 = fp8_cache is not None
+    if has_fp8:
+        # FlashMLA MODEL1 sparse FP8 layout: the fp8_cache tensor is
+        # [num_blocks, entries_per_block, 584] but the actual memory layout
+        # has NoPE+RoPE at stride 576 bytes per token, with scales in a
+        # separate region. We create three views matching FlashMLA's addressing:
+        num_blocks = fp8_cache.size(0)
+        entries_per_block_val = fp8_cache.size(1)
+        D_NOPE = 448
+        D_ROPE_BF16 = 64  # 64 bf16 values = 128 bytes
+        NR_DIM = D_NOPE + 2 * D_ROPE_BF16  # 576 bytes per token
+
+        # NoPE+RoPE view: [num_blocks, entries_per_block, 576] e4m3fn
+        fp8_flat = fp8_cache.view(num_blocks, -1)
+        fp8_nope_rope = fp8_flat[:, :entries_per_block_val * NR_DIM].view(
+            num_blocks, entries_per_block_val, NR_DIM)
+
+        # RoPE bf16 view: same memory, viewed as bf16 at offset D_NOPE
+        # NoPE+RoPE as bf16: [num_blocks, entries_per_block, 288]
+        fp8_nope_rope_bf16 = fp8_nope_rope.view(torch.bfloat16)
+        # RoPE starts at bf16 offset D_NOPE//2 = 224 within each token
+        fp8_rope_bf16 = fp8_nope_rope_bf16[:, :, D_NOPE // 2:]
+
+        # Scales view: [num_blocks, entries_per_block, 8] uint8
+        fp8_scales_u8 = fp8_flat[:, entries_per_block_val * NR_DIM:].view(
+            num_blocks, entries_per_block_val, 8).view(torch.uint8)
+    else:
+        # Dummy views (kernel won't access due to has_fp8=False)
+        fp8_nope_rope = kv_cache
+        fp8_rope_bf16 = kv_cache.view(torch.bfloat16)
+        fp8_scales_u8 = kv_cache.view(torch.uint8)
+
     _fill_compressed_kv_kernel[grid](
         compressed_kv, kv_cache, cu_q_seqlens, kv_seqlens, block_offsets,
         *compressed_kv.stride(),
         *kv_cache.stride(),
         *block_offsets.stride(),
+        fp8_nope_rope,
+        *fp8_nope_rope.stride(),
+        fp8_rope_bf16,
+        *fp8_rope_bf16.stride(),
+        fp8_scales_u8,
+        *fp8_scales_u8.stride(),
         head_dim=head_dim,
         compress_ratio=compress_ratio,
         block_size=block_size,
         is_decoding=is_decoding,
+        has_fp8=has_fp8,
         BLOCK_D=BLOCK_D,
         num_warps=4,
     )
