@@ -552,93 +552,22 @@ class Indexer(nn.Module):
                 seq_info: SeqInfo,
                 is_decoding: bool = False,
                 index_scratch: torch.Tensor | None = None):
-        if is_decoding:
-            return self._forward_decode(x, qr, start_pos, offset, context, slot, index_kv_cache,
-                                        block_offsets, block_size, rot_freqs, compress_freqs, seq_info, index_scratch)
-        return self._forward_prefill(x, qr, start_pos, offset, context, slot, index_kv_cache,
-                                     block_offsets, block_size, rot_freqs, compress_freqs, seq_info)
-
-    def _forward_prefill(self,
-                         x: torch.Tensor,
-                         qr: torch.Tensor,
-                         start_pos: torch.Tensor,
-                         offset: int,
-                         context: StepContext,
-                         slot: torch.Tensor,
-                         index_kv_cache: torch.Tensor,
-                         block_offsets: torch.Tensor,
-                         block_size: int,
-                         rot_freqs: torch.Tensor,
-                         compress_freqs: torch.Tensor,
-                         seq_info: SeqInfo):
-        bsz, seqlen, _ = x.size()
-        layer_id = self.layer_id
-        assert bsz == 1
-        sp = start_pos.item() if isinstance(start_pos, torch.Tensor) else start_pos
-        ratio = self.compress_ratio
         rd = self.rope_head_dim
         q = self.wq_b(qr).unflatten(-1, (self.n_local_heads, self.head_dim))
         apply_rotary_emb(q[..., -rd:], rot_freqs)
         q = rotate_activation(q)
         self.kernel_mod.fp4_act_quant(q, 32, True)
-        self.compressor(x, start_pos, slot, context, compress_freqs, seq_info)
 
-        total_len = sp + seqlen
-        num_index = total_len // ratio
-        if num_index > 0:
-            positions = torch.arange(num_index, device=x.device, dtype=torch.long).unsqueeze(0)
-            index_cache = _gather_compressed_cache_entries(index_kv_cache[layer_id],
-                                                           block_offsets[:1],
-                                                           positions,
-                                                           block_size,
-                                                           self.compress_ratio)[0]
-        else:
-            index_cache = None
-
-        if index_cache is None or index_cache.size(0) == 0:
-            return get_compress_topk_idxs(ratio, bsz, seqlen, sp, offset, x.device)
+        comp_start_pos = seq_info.start_pos if is_decoding else start_pos
+        self.compressor(x, comp_start_pos, slot, context, compress_freqs, seq_info)
         weights = self.weights_proj(x) * (self.head_dim**-0.5 * self.n_heads**-0.5)
-        score = torch.einsum('bshd,td->bsht', q, index_cache)
-        score = (score.relu_() * weights.unsqueeze(-1)).sum(dim=2)
-        if self.world_size > 1:
-            dist.all_reduce(score)
-        topk = score.topk(min(self.index_topk, index_cache.size(0)), dim=-1)[1]
-        return topk + offset
 
-    def _forward_decode(self,
-                        x: torch.Tensor,
-                        qr: torch.Tensor,
-                        start_pos: torch.Tensor,
-                        offset: int,
-                        context: StepContext,
-                        slot: torch.Tensor,
-                        index_kv_cache: torch.Tensor,
-                        block_offsets: torch.Tensor,
-                        block_size: int,
-                        rot_freqs: torch.Tensor,
-                        compress_freqs: torch.Tensor,
-                        seq_info: SeqInfo,
-                        index_scratch: torch.Tensor):
-        layer_id = self.layer_id
-        seqlen = x.size(1)
-        assert seqlen == 1
-        rd = self.rope_head_dim
-        start_pos = seq_info.start_pos
-
-        q = self.wq_b(qr).unflatten(-1, (self.n_local_heads, self.head_dim))
-        apply_rotary_emb(q[..., -rd:], rot_freqs)
-        q = rotate_activation(q)
-        self.kernel_mod.fp4_act_quant(q, 32, True)
-
-        self.compressor(x, start_pos, slot, context, compress_freqs, seq_info)
-        weights = self.weights_proj(x) * (self.head_dim**-0.5 * self.n_heads**-0.5)
         meta = V4IndexerMetadata(block_offsets=block_offsets,
-                                 start_pos=start_pos,
-                                 state_ids=start_pos.new_zeros(start_pos.shape),
+                                 start_pos=comp_start_pos,
+                                 state_ids=comp_start_pos.new_zeros(comp_start_pos.shape),
                                  compress_ratio=self.compress_ratio)
-        topk = self.indexer_fwd.forward_decode(q, weights, index_kv_cache, meta, block_size, layer_id,
-                                               index_scratch)
-        return topk
+        return self.indexer_fwd(q, weights, index_kv_cache, meta, block_size, self.layer_id,
+                                index_scratch, offset, is_decoding)
 
 class DeepseekV4BMM(nn.Module):
     """Wrapped bmm."""
@@ -1104,7 +1033,7 @@ class Attention(nn.Module):
                     index_kv_cache = block_caches['v4_index_kv_r4']
                     seq_rot_freqs = rot_freqs[:, offset_tokens:offset_tokens + sl]
                     seq_compress_freqs = compress_freqs[:, offset_tokens:offset_tokens + sl]
-                    compress_topk_idxs = self.indexer(
+                    index_out = self.indexer(
                         x=seq_x,
                         qr=seq_qr,
                         start_pos=start_pos[s:s + 1],
@@ -1118,6 +1047,7 @@ class Attention(nn.Module):
                         compress_freqs=seq_compress_freqs,
                         seq_info=seq_info[s:s + 1],
                         is_decoding=False)
+                    compress_topk_idxs = index_out.indices_in_kvcache
                 else:
                     compress_topk_idxs = get_compress_topk_idxs(self.compress_ratio, 1, sl, sp, comp_offset, x.device)
                 topk_idxs = torch.cat([topk_idxs, compress_topk_idxs], dim=-1)

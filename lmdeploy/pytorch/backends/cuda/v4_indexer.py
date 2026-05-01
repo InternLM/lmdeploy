@@ -68,31 +68,57 @@ class TritonV4IndexerImpl(BaseV4Indexer):
         blend_mask = valid.view(-1, *([1] * (values.dim() - 1)))
         cache[phys_blocks, block_off] = torch.where(blend_mask, values, target)
 
-    def forward_decode(self,
-                       query: torch.Tensor,
-                       weights: torch.Tensor,
-                       index_kv_cache: torch.Tensor,
-                       meta: V4IndexerMetadata,
-                       block_size: int,
-                       layer_id: int,
-                       index_scratch: torch.Tensor) -> V4IndexerOutput:
+    def _logical_to_physical(self, logical_topk: torch.Tensor, block_offsets: torch.Tensor,
+                             block_size: int, index_kv_cache: torch.Tensor) -> torch.Tensor:
+        """Convert logical compressed positions to physical KV cache indices."""
+        bsz = logical_topk.size(0)
+        safe_logical_topk = logical_topk.clamp(min=0)
+        token_positions = safe_logical_topk * self.compress_ratio
+        block_idx = torch.div(token_positions, block_size, rounding_mode='floor').long()
+        phys_block = block_offsets.gather(1, block_idx.view(bsz, -1)).view_as(logical_topk).long()
+        page_size = index_kv_cache.size(1)
+        block_off = torch.remainder(safe_logical_topk, page_size).long()
+        phys_indices = phys_block * page_size + block_off
+        return torch.where(logical_topk >= 0, phys_indices, phys_indices.new_full((), -1))
+
+    def forward(self,
+                query: torch.Tensor,
+                weights: torch.Tensor,
+                index_kv_cache: torch.Tensor,
+                meta: V4IndexerMetadata,
+                block_size: int,
+                layer_id: int,
+                index_scratch: torch.Tensor,
+                offset: int,
+                is_decoding: bool) -> V4IndexerOutput:
         block_offsets = meta.block_offsets.long()
         start_pos = meta.start_pos
         bsz = query.size(0)
+        seqlen = query.size(1)
 
-        max_index = index_scratch.size(1)
+        total_lens = start_pos + seqlen
+        num_index = torch.div(total_lens, self.compress_ratio, rounding_mode='floor')
+        max_index = int(num_index.max().item()) if num_index.numel() > 1 else int(num_index.item())
+
+        if index_scratch is not None:
+            max_index = index_scratch.size(1)
+
         if max_index == 0:
             empty = query.new_empty((bsz, 1, 0), dtype=torch.long)
-            return V4IndexerOutput(indices_in_kvcache=empty, topk_length=start_pos.new_zeros((bsz, ),
-                                                                                             dtype=torch.int32))
+            return V4IndexerOutput(indices_in_kvcache=empty,
+                                   topk_length=num_index.new_zeros((bsz,), dtype=torch.int32))
 
-        num_index = torch.div(start_pos + 1, self.compress_ratio, rounding_mode='floor')
         positions, pos_mask = _build_prefix_positions(num_index, max_index)
-        index_scratch.copy_(
-            self._gather_cache_entries(index_kv_cache[layer_id], block_offsets, positions, block_size,
-                                       self.compress_ratio))
+        if index_scratch is not None:
+            index_scratch.copy_(
+                self._gather_cache_entries(index_kv_cache[layer_id], block_offsets, positions,
+                                           block_size, self.compress_ratio))
+            gathered = index_scratch
+        else:
+            gathered = self._gather_cache_entries(index_kv_cache[layer_id], block_offsets, positions,
+                                                  block_size, self.compress_ratio)
 
-        score = torch.einsum('bshd,btd->bsht', query, index_scratch)
+        score = torch.einsum('bshd,btd->bsht', query, gathered)
         score = (score.relu_() * weights.unsqueeze(-1)).sum(dim=2)
         score = score.masked_fill(~pos_mask.unsqueeze(1), float('-inf'))
         if self.world_size > 1:
@@ -101,19 +127,16 @@ class TritonV4IndexerImpl(BaseV4Indexer):
         topk_width = min(self.index_topk, max_index)
         topk = score.topk(topk_width, dim=-1)[1]
         topk_length = num_index.clamp(max=topk_width).to(torch.int32)
-        valid_topk = torch.arange(topk_width, device=query.device).view(1, 1, -1)
-        valid_topk = valid_topk < topk_length.view(-1, 1, 1)
-        logical_topk = torch.where(valid_topk, topk, topk.new_full((), -1))
 
-        safe_logical_topk = logical_topk.clamp(min=0)
-        token_positions = safe_logical_topk * self.compress_ratio
-        block_idx = torch.div(token_positions, block_size, rounding_mode='floor').long()
-        phys_block = block_offsets.gather(1, block_idx.view(bsz, -1)).view_as(logical_topk).long()
-        page_size = index_kv_cache.size(1)
-        block_off = torch.remainder(safe_logical_topk, page_size).long()
-        phys_indices = phys_block * page_size + block_off
-        phys_indices = torch.where(logical_topk >= 0, phys_indices, phys_indices.new_full((), -1))
-        return V4IndexerOutput(indices_in_kvcache=phys_indices, topk_length=topk_length)
+        if is_decoding:
+            valid_topk = torch.arange(topk_width, device=query.device).view(1, 1, -1)
+            valid_topk = valid_topk < topk_length.view(-1, 1, 1)
+            logical_topk = torch.where(valid_topk, topk, topk.new_full((), -1))
+            phys_indices = self._logical_to_physical(logical_topk, block_offsets, block_size,
+                                                     index_kv_cache)
+            return V4IndexerOutput(indices_in_kvcache=phys_indices, topk_length=topk_length)
+        else:
+            return V4IndexerOutput(indices_in_kvcache=topk + offset, topk_length=topk_length)
 
 
 class TritonV4IndexerBuilder(BaseV4IndexerBuilder):
