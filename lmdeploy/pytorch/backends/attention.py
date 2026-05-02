@@ -25,27 +25,16 @@ class AttentionMetadata:
 
 @dataclass
 class V4AttentionMetadata:
-    """DeepSeek V4 attention metadata.
+    """DeepSeek V4 attention metadata for decode.
 
-    This metadata describes how the backend should read window/compressed cache entries for a decode step. It
-    intentionally carries logical positions and fixed-shape sparse selection tensors instead of already materialized
-    history buffers.
+    All ratio types (0, 4, 128) use FlashMLA sparse decode.
     """
 
     is_decoding: bool
-    block_offsets: torch.Tensor
-    q_seqlens: torch.Tensor
-    kv_seqlens: torch.Tensor
-    state_ids: torch.Tensor
-    window_positions: torch.Tensor = None
-    window_lens: torch.Tensor = None
-    topk_indices: torch.Tensor = None
-    compress_ratio: int = 0
-    indices_in_kvcache: torch.Tensor = None
-    topk_length: torch.Tensor = None
-    extra_indices_in_kvcache: torch.Tensor = None
-    extra_topk_length: torch.Tensor = None
-    compressed_positions: torch.Tensor = None
+    indices_in_kvcache: torch.Tensor = None       # [bsz, 1, topk] physical fp8 compressed cache indices
+    topk_length: torch.Tensor = None              # [bsz] int32
+    extra_indices_in_kvcache: torch.Tensor = None  # [bsz, 1, extra_topk] ring-buffer positions
+    extra_topk_length: torch.Tensor = None        # [bsz] int32
 
 
 T = TypeVar('T', bound=AttentionMetadata)

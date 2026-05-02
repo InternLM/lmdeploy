@@ -9,14 +9,12 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 import torch
-import torch.distributed as dist
 import torch.nn.functional as F
 from torch import nn
 
 from lmdeploy.pytorch.backends.attention import V4AttentionMetadata
 from lmdeploy.pytorch.backends.cuda.attention.flashmla_utils import (
     quantize_model1_fp8_sparse,
-    quantize_model1_fp8_sparse_tokens,
 )
 from lmdeploy.pytorch.backends.indexer import V4IndexerMetadata
 from lmdeploy.pytorch.distributed import get_tp_world_rank
@@ -34,7 +32,7 @@ from lmdeploy.pytorch.nn.moe import FusedMoEV4
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 from lmdeploy.utils import get_logger
 
-from .deepseek_v4_utils import build_compress_topk_indices, build_prefix_positions, build_window_topk_indices, gather_compressed_cache_entries
+from .deepseek_v4_utils import build_compress_topk_indices, build_prefix_positions, build_window_topk_indices
 from .utils.cudagraph import CudaGraphMixin
 from .utils.model import DeployModelMixinV1, build_embedding
 
@@ -592,8 +590,7 @@ class Attention(nn.Module):
         self.attn_fwd = NativeV4Attention(head_size=self.head_dim,
                                           scale=self.softmax_scale,
                                           window_size=self.window_size,
-                                          compress_ratio=self.compress_ratio,
-                                          kernel_mod=kernel_mod)
+                                          compress_ratio=self.compress_ratio)
         self.compressor = None
         self.indexer = None
         if self.compress_ratio:
@@ -654,64 +651,75 @@ class Attention(nn.Module):
             window_state[:cutoff] = trailing[left:]
 
     def _pack_window_state(self, window_state: torch.Tensor, window_state_fp8: torch.Tensor, block_size: int):
-        assert self.window_size % block_size == 0
-        num_blocks = self.window_size // block_size
-        packed = quantize_model1_fp8_sparse(window_state.view(num_blocks, block_size, 1, self.head_dim)).squeeze(2)
-        window_state_fp8.view(num_blocks, block_size, -1).copy_(packed)
+        # Window FP8 uses window_size as its own block size (independent of engine block_size).
+        # When block_size > window_size, we pack the entire window as a single block.
+        pack_block_size = min(block_size, self.window_size)
+        assert self.window_size % pack_block_size == 0
+        num_blocks = self.window_size // pack_block_size
+        packed = quantize_model1_fp8_sparse(window_state.view(num_blocks, pack_block_size, 1, self.head_dim)).squeeze(2)
+        window_state_fp8.view(num_blocks, pack_block_size, -1).copy_(packed)
 
     def _pack_window_state_tokens(self,
                                   kv_tokens: torch.Tensor,
                                   window_state_fp8_cache: torch.Tensor,
                                   slot: torch.Tensor,
                                   positions: torch.Tensor):
+        """Update FP8 window cache for specific token positions.
+
+        FlashMLA MODEL1 layout is flat: [all tokens' NoPE+RoPE | all tokens' scales].
+        We must write NoPE+RoPE and scales to their correct flat offsets, NOT to the
+        interleaved per-token [NoPE+RoPE+scales] layout that quantize_model1_fp8_sparse_tokens produces.
+        """
+        from lmdeploy.pytorch.backends.cuda.attention.flashmla_utils import (
+            MODEL1_D_NOPE, MODEL1_D_ROPE, MODEL1_NUM_TILES, MODEL1_TILE_SIZE)
         slots = slot.long()
         if slots.numel() == 0:
             return
         pos = positions.long()
-        packed_tokens = quantize_model1_fp8_sparse_tokens(kv_tokens)
-        for row, cur_slot, cur_pos in zip(packed_tokens, slots.tolist(), pos.tolist()):
-            window_state_fp8_cache[cur_slot, cur_pos].copy_(row)
+        window_size = self.window_size
+        nope_rope_stride = MODEL1_D_NOPE + 2 * MODEL1_D_ROPE  # 576
+
+        for i in range(slots.numel()):
+            cur_slot = slots[i].item()
+            cur_pos = pos[i].item()
+            token_kv = kv_tokens[i]  # [512] BF16
+
+            # Write NoPE (e4m3fn) and RoPE (bf16) into the flat NoPE+RoPE region
+            nope_rope_region = window_state_fp8_cache[cur_slot].view(window_size, -1)
+            # nope_rope_region: [window_size, 584] in the view, but the actual flat layout is
+            # [window_size * 576 NoPE+RoPE bytes | window_size * 8 scale bytes]
+            # The view is misleading! We need to write to the flat buffer directly.
+            flat = window_state_fp8_cache[cur_slot].view(-1)  # [window_size * 584]
+
+            # NoPE+RoPE offset for token cur_pos
+            nope_rope_off = cur_pos * nope_rope_stride
+            nope_region = flat[nope_rope_off:nope_rope_off + MODEL1_D_NOPE].view(torch.float8_e4m3fn)
+            rope_region = flat[nope_rope_off + MODEL1_D_NOPE:nope_rope_off + nope_rope_stride].view(torch.bfloat16)
+
+            # RoPE: direct copy (bf16)
+            rope_region.copy_(token_kv[MODEL1_D_NOPE:])
+
+            # NoPE: quantize per-tile with scales
+            scales_off = window_size * nope_rope_stride + cur_pos * 8
+            scale_region = flat[scales_off:scales_off + 8].view(torch.float8_e8m0fnu)
+            for tile_idx in range(MODEL1_NUM_TILES):
+                tile = token_kv[tile_idx * MODEL1_TILE_SIZE:(tile_idx + 1) * MODEL1_TILE_SIZE].float()
+                scale_inv = tile.abs().amax() / 448.0
+                scale_inv = torch.pow(2, torch.clamp_min(scale_inv, 1e-4).log2().ceil())
+                scale_region[tile_idx].copy_(scale_inv.to(torch.float8_e8m0fnu))
+                quantized = (tile / scale_inv).to(torch.float8_e4m3fn)
+                nope_region[tile_idx * MODEL1_TILE_SIZE:(tile_idx + 1) * MODEL1_TILE_SIZE].copy_(quantized)
 
     def _build_decode_attention_metadata(self,
-                                         block_offsets: torch.Tensor,
-                                         total_lens: torch.Tensor,
-                                         slot: torch.Tensor,
-                                         topk_indices: torch.Tensor,
-                                         compressed_positions: torch.Tensor | None = None,
-                                         decode_scratch: dict[str, torch.Tensor] | None = None,
-                                         indices_in_kvcache: torch.Tensor | None = None,
-                                         topk_length: torch.Tensor | None = None,
-                                         extra_indices_in_kvcache: torch.Tensor | None = None,
-                                         extra_topk_length: torch.Tensor | None = None):
-        window_positions, window_lens, _ = _build_window_positions(total_lens.long(), self.window_size)
-
-        if compressed_positions is not None:
-            pass
-        elif self.compress_ratio:
-            num_compressed = torch.div(total_lens, self.compress_ratio, rounding_mode='floor').long()
-            if decode_scratch is not None:
-                if self.compress_ratio == 4:
-                    max_width = decode_scratch['selected_compressed_kv_r4'].size(1)
-                else:
-                    max_width = decode_scratch['selected_compressed_kv_r128'].size(1)
-            else:
-                max_width = int(num_compressed.max().item()) if num_compressed.numel() > 0 else 0
-            compressed_positions, _ = build_prefix_positions(num_compressed, max_width)
-
+                                         indices_in_kvcache: torch.Tensor = None,
+                                         topk_length: torch.Tensor = None,
+                                         extra_indices_in_kvcache: torch.Tensor = None,
+                                         extra_topk_length: torch.Tensor = None):
         return V4AttentionMetadata(is_decoding=True,
-                                   block_offsets=block_offsets,
-                                   q_seqlens=torch.ones_like(total_lens),
-                                   kv_seqlens=total_lens,
-                                   state_ids=slot.long(),
-                                   topk_indices=topk_indices,
-                                   window_positions=window_positions,
-                                   window_lens=window_lens,
-                                   compress_ratio=self.compress_ratio,
                                    indices_in_kvcache=indices_in_kvcache,
                                    topk_length=topk_length,
                                    extra_indices_in_kvcache=extra_indices_in_kvcache,
-                                   extra_topk_length=extra_topk_length,
-                                   compressed_positions=compressed_positions)
+                                   extra_topk_length=extra_topk_length)
 
     def forward(self,
                 x: torch.Tensor,
@@ -752,9 +760,9 @@ class Attention(nn.Module):
         apply_rotary_emb(out[..., -rd:], rot_freqs, True)
         total_tokens = out.size(0) * out.size(1)
         out = out.view(total_tokens, self.n_local_groups, -1)
-        old_out = out
-        out = old_out.new_empty(*old_out.shape[:-1], self.o_lora_rank)
-        self.wo_a(old_out, out)
+        proj_in = out
+        out = proj_in.new_empty(*proj_in.shape[:-1], self.o_lora_rank)
+        self.wo_a(proj_in, out)
         if is_decoding:
             # bsz is updated, we need to reconstruct the output shape here
             return self.wo_b(out.flatten(-2, -1).view(1, total_tokens, -1))
@@ -772,6 +780,8 @@ class Attention(nn.Module):
         window_pos = torch.remainder(start_pos, self.window_size).long()
         slot_idx = slot.long()
         caches['window_state'][slot_idx, window_pos] = kv[:, 0]
+        # Update FP8 window cache for the current decode token
+        self._pack_window_state_tokens(kv[:, 0], caches['window_state_fp8'], slot, window_pos)
         window_state = caches['window_state'].index_select(0, slot_idx)
         window_state_fp8 = caches['window_state_fp8'].index_select(0, slot_idx)
 
@@ -779,23 +789,22 @@ class Attention(nn.Module):
             max_total_len = int(total_lens.max().item())
             decode_scratch = self._alloc_decode_scratch(bsz, max_total_len, q.device)
 
+        # Window positions (shared by all ratio paths)
         window_positions, window_lens, _ = _build_window_positions(total_lens.long(), self.window_size)
-        window_topk = build_window_topk_indices(total_lens.long(), self.window_size, offset=0, causal=False)
+        extra_indices_in_kvcache = window_positions.unsqueeze(1).to(torch.int32)  # [bsz, 1, window_size]
+        extra_topk_length = window_lens.to(torch.int32)                           # [bsz]
         offset = self.window_size
 
-        compressed_cache = None
+        # Build compressed indices based on compress_ratio
         compressed_cache_fp8 = None
-        topk_parts = [window_topk]
-        compressed_positions = None
         indices_in_kvcache = None
         topk_length = None
-        extra_indices_in_kvcache = None
-        extra_topk_length = None
+
         if self.compress_ratio:
-            compressed_cache = caches['compressed_kv']
             compressed_cache_fp8 = caches['compressed_kv_fp8']
 
             if self.indexer is not None:
+                # ratio=4: Indexer provides physical indices into fp8 compressed cache
                 index_cache = caches['index_kv']
                 index_scratch = decode_scratch['selected_index_kv_r4'][:bsz]
                 index_out = self.indexer(x=x,
@@ -814,43 +823,40 @@ class Attention(nn.Module):
                                          is_decoding=True)
                 indices_in_kvcache = index_out.indices_in_kvcache
                 topk_length = index_out.topk_length
-                extra_indices_in_kvcache = window_positions.unsqueeze(1).to(torch.int32)
-                extra_topk_length = window_lens.to(torch.int32)
-                compress_topk = torch.where(indices_in_kvcache >= 0,
-                                            torch.arange(indices_in_kvcache.size(-1),
-                                                         device=q.device,
-                                                         dtype=torch.long).view(1, 1, -1) + offset,
-                                            indices_in_kvcache.new_full((), -1))
             else:
+                # ratio=128: logical-to-physical index conversion for FlashMLA sparse path
                 num_compressed = torch.div(total_lens, self.compress_ratio, rounding_mode='floor').long()
-                if self.compress_ratio == 4:
-                    comp_width = decode_scratch['selected_compressed_kv_r4'].size(1)
-                else:
-                    comp_width = decode_scratch['selected_compressed_kv_r128'].size(1)
-                compress_topk = build_compress_topk_indices(num_compressed, self.compress_ratio,
-                                                            offset=offset, max_width=comp_width, causal=False)
-            topk_parts.append(compress_topk)
+                max_comp = max(int(num_compressed.max().item()), 1) if num_compressed.numel() > 0 else 1
+                comp_positions, _ = build_prefix_positions(num_compressed, max_comp)
+                entries_per_block = compressed_cache_fp8.size(1)
+                valid = comp_positions >= 0
+                safe_pos = comp_positions.clamp(min=0)
+                token_positions = safe_pos * self.compress_ratio
+                block_idx = torch.div(token_positions, token_block_size, rounding_mode='floor').long()
+                max_block_idx = block_offsets.size(1)
+                safe_block_idx = block_idx.clamp(max=max_block_idx - 1)
+                phys_blocks = block_offsets.gather(1, safe_block_idx).long()
+                block_off = torch.remainder(safe_pos, entries_per_block).long()
+                phys_indices = phys_blocks * entries_per_block + block_off
+                indices_in_kvcache = torch.where(valid, phys_indices,
+                                                 phys_indices.new_full((), -1)).unsqueeze(1).to(torch.int32)
+                topk_length = num_compressed.to(torch.int32)
+        else:
+            # ratio=0: No compressed KV. Use window as k_cache (topk_length=0 → not read).
+            indices_in_kvcache = torch.full((bsz, 1, 1), -1, dtype=torch.int32, device=q.device)
+            topk_length = torch.zeros(bsz, dtype=torch.int32, device=q.device)
 
-        topk_idxs = torch.cat(topk_parts, dim=-1)
-        attn_meta = self._build_decode_attention_metadata(block_offsets,
-                                                          total_lens.long(),
-                                                          slot,
-                                                          topk_idxs,
-                                                          compressed_positions,
-                                                          decode_scratch,
-                                                          indices_in_kvcache=indices_in_kvcache,
-                                                          topk_length=topk_length,
-                                                          extra_indices_in_kvcache=extra_indices_in_kvcache,
-                                                          extra_topk_length=extra_topk_length)
+        attn_meta = self._build_decode_attention_metadata(
+            indices_in_kvcache=indices_in_kvcache,
+            topk_length=topk_length,
+            extra_indices_in_kvcache=extra_indices_in_kvcache,
+            extra_topk_length=extra_topk_length)
         return self.attn_fwd.forward_decode(q,
-                                            window_state,
+                                            window_state_fp8,
                                             self.attn_sink,
                                             attn_meta,
                                             token_block_size,
-                                            compressed_kv_cache=compressed_cache,
-                                            window_kv_fp8_state=window_state_fp8,
-                                            compressed_kv_fp8_cache=compressed_cache_fp8,
-                                            decode_scratch=decode_scratch)
+                                            compressed_kv_fp8_cache=compressed_cache_fp8)
 
     def _forward_prefill_core(self, q, kv, qr, x, seq_info: SeqInfo, slot, context, rot_freqs, compress_freqs, num_seqs):
         from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
@@ -980,15 +986,7 @@ class Attention(nn.Module):
 
     def _alloc_decode_scratch(self, batch_size: int, max_total_len: int, device: torch.device):
         max_comp_r4 = max_total_len // 4
-        max_comp_r128 = max_total_len // 128
-        selected_comp_r4 = self.indexer.index_topk if self.indexer is not None else max_comp_r4
         return {
-            'selected_compressed_kv_r4': torch.empty((batch_size, selected_comp_r4, self.head_dim),
-                                                     dtype=torch.bfloat16,
-                                                     device=device),
-            'selected_compressed_kv_r128': torch.empty((batch_size, max_comp_r128, self.head_dim),
-                                                       dtype=torch.bfloat16,
-                                                       device=device),
             'selected_index_kv_r4': torch.empty((batch_size, max_comp_r4, self.indexer.head_dim),
                                                 dtype=torch.bfloat16,
                                                 device=device) if self.indexer is not None else torch.empty(
@@ -1168,10 +1166,9 @@ class Block(nn.Module):
 
 
 class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
-    """DeepSeek-V4 bring-up model.
+    """DeepSeek-V4 model.
 
-    Decode uses lmdeploy named block/state caches as the primary history storage. The older per-sequence compressed-
-    cache path is kept only as an eager fallback/debug path while tensorized decode is being stabilized.
+    Decode uses FlashMLA sparse decode with FP8 window + compressed KV caches.
     """
 
     def __init__(self,
@@ -1259,11 +1256,7 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         # buffer to load weight
         self._load_buffers = dict()
 
-        # TODO: remove this shit!
-        self._decode_graph_scratch: dict[str, torch.Tensor] | None = None
-
     def _hc_head(self, x: torch.Tensor):
-        # TODO: try fuse this head
         shape, dtype = x.size(), x.dtype
         x = x.flatten(2).float()
         rsqrt = torch.rsqrt(x.square().mean(-1, keepdim=True) + self.config.rms_norm_eps)
@@ -1276,32 +1269,6 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         hidden_states = self._hc_head(hidden_states)
         hidden_states = self.norm(hidden_states)
         return self.head(hidden_states)
-
-    def support_cuda_graph(
-        self,
-        input_ids: torch.Tensor,
-        position_ids: torch.Tensor,
-        past_key_values: list[list[torch.Tensor]],
-        attn_metadata=None,
-        inputs_embeds: torch.Tensor | None = None,
-        **kwargs,
-    ):
-        # The V4 decode path has been refactored to use a backend wrapper,
-        # but the cache-aware graph-safe contract is not complete yet.
-        # Keep cudagraph disabled until raw/compressed/index retrieval is
-        # fully handled inside the backend without dense fallback scratch.
-        return False
-
-    def make_buffers_cudagraph(self, graph_meta, **kwargs):
-        input_buffers = super().make_buffers_cudagraph(graph_meta, **kwargs)
-        max_total_len = graph_meta.num_blocks * graph_meta.block_size
-        self._decode_graph_scratch = self._alloc_decode_scratch(graph_meta.max_batchs, max_total_len, graph_meta.device)
-        return input_buffers
-
-    def fill_buffers_cudagraph(self, graph_meta, input_ids: torch.Tensor, **kwargs):
-        new_inputs = super().fill_buffers_cudagraph(graph_meta, input_ids=input_ids, **kwargs)
-        new_inputs['decode_scratch'] = self._decode_graph_scratch
-        return new_inputs
 
     def forward(self,
                 input_ids: torch.Tensor,
