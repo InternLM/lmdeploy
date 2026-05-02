@@ -629,86 +629,65 @@ class Attention(nn.Module):
                     index_kv=index_kv)
 
     @staticmethod
-    def _write_window_state_prefill(window_state: torch.Tensor, kv: torch.Tensor, start_pos: int, window_size: int):
-        """Write prefill KV into the per-sequence ring window state."""
-        seqlen = kv.size(0)
-        total_len = start_pos + seqlen
-        if total_len <= window_size:
-            positions = torch.remainder(torch.arange(start_pos, total_len, device=kv.device), window_size)
-            window_state[positions] = kv
-            return
+    def _write_window_state_prefill_batched(window_state_cache: torch.Tensor,
+                                             kv_flat: torch.Tensor,
+                                             start_pos: torch.Tensor,
+                                             q_seqlens: torch.Tensor,
+                                             slot: torch.Tensor,
+                                             window_size: int):
+        """Batched ring-buffer write for all prefill sequences.
 
-        if seqlen <= window_size:
-            positions = torch.remainder(torch.arange(start_pos, total_len, device=kv.device), window_size)
-            window_state[positions] = kv
-            return
-
-        trailing = kv[-window_size:]
-        cutoff = total_len % window_size
-        left = window_size - cutoff
-        window_state[cutoff:] = trailing[:left]
-        if cutoff > 0:
-            window_state[:cutoff] = trailing[left:]
-
-    def _pack_window_state(self, window_state: torch.Tensor, window_state_fp8: torch.Tensor, block_size: int):
-        # Window FP8 uses window_size as its own block size (independent of engine block_size).
-        # When block_size > window_size, we pack the entire window as a single block.
-        pack_block_size = min(block_size, self.window_size)
-        assert self.window_size % pack_block_size == 0
-        num_blocks = self.window_size // pack_block_size
-        packed = quantize_model1_fp8_sparse(window_state.view(num_blocks, pack_block_size, 1, self.head_dim)).squeeze(2)
-        window_state_fp8.view(num_blocks, pack_block_size, -1).copy_(packed)
-
-    def _pack_window_state_tokens(self,
-                                  kv_tokens: torch.Tensor,
-                                  window_state_fp8_cache: torch.Tensor,
-                                  slot: torch.Tensor,
-                                  positions: torch.Tensor):
-        """Update FP8 window cache for specific token positions.
-
-        FlashMLA MODEL1 layout is flat: [all tokens' NoPE+RoPE | all tokens' scales].
-        We must write NoPE+RoPE and scales to their correct flat offsets, NOT to the
-        interleaved per-token [NoPE+RoPE+scales] layout that quantize_model1_fp8_sparse_tokens produces.
+        Uses advanced indexing to scatter kv_flat into window_state_cache
+        at the correct (slot, ring_position) indices.
         """
-        from lmdeploy.pytorch.backends.cuda.attention.flashmla_utils import (
-            MODEL1_D_NOPE, MODEL1_D_ROPE, MODEL1_NUM_TILES, MODEL1_TILE_SIZE)
-        slots = slot.long()
-        if slots.numel() == 0:
-            return
-        pos = positions.long()
-        window_size = self.window_size
-        nope_rope_stride = MODEL1_D_NOPE + 2 * MODEL1_D_ROPE  # 576
+        num_seqs = start_pos.numel()
+        cu_q = torch.cat([start_pos.new_zeros(1), q_seqlens.cumsum(0)])
+        total_tokens = kv_flat.size(0)
 
-        for i in range(slots.numel()):
-            cur_slot = slots[i].item()
-            cur_pos = pos[i].item()
-            token_kv = kv_tokens[i]  # [512] BF16
+        # Build per-token indices
+        # token_slot[i] = which slot token i writes to
+        # token_pos_in_seq[i] = position of token i within its sequence
+        token_slot = slot.repeat_interleave(q_seqlens.long())  # [total_tokens]
+        token_seq = torch.arange(num_seqs, device=slot.device).repeat_interleave(q_seqlens.long())
+        token_pos_in_seq = torch.arange(total_tokens, device=slot.device) - cu_q[token_seq]
 
-            # Write NoPE (e4m3fn) and RoPE (bf16) into the flat NoPE+RoPE region
-            nope_rope_region = window_state_fp8_cache[cur_slot].view(window_size, -1)
-            # nope_rope_region: [window_size, 584] in the view, but the actual flat layout is
-            # [window_size * 576 NoPE+RoPE bytes | window_size * 8 scale bytes]
-            # The view is misleading! We need to write to the flat buffer directly.
-            flat = window_state_fp8_cache[cur_slot].view(-1)  # [window_size * 584]
+        # Compute the absolute position: start_pos + pos_in_seq
+        token_start = start_pos.repeat_interleave(q_seqlens.long())
+        token_abs_pos = token_start + token_pos_in_seq
 
-            # NoPE+RoPE offset for token cur_pos
-            nope_rope_off = cur_pos * nope_rope_stride
-            nope_region = flat[nope_rope_off:nope_rope_off + MODEL1_D_NOPE].view(torch.float8_e4m3fn)
-            rope_region = flat[nope_rope_off + MODEL1_D_NOPE:nope_rope_off + nope_rope_stride].view(torch.bfloat16)
+        # For overflow (seqlen > window_size): only the last window_size tokens are kept
+        # Skip tokens where abs_pos < (total_len - window_size)
+        total_lens = start_pos + q_seqlens
+        token_total = total_lens[token_seq]
+        cutoff_pos = (token_total - window_size).clamp(min=0)
+        valid = token_abs_pos >= cutoff_pos
 
-            # RoPE: direct copy (bf16)
-            rope_region.copy_(token_kv[MODEL1_D_NOPE:])
+        # Ring-buffer position
+        ring_pos = torch.remainder(token_abs_pos, window_size)
 
-            # NoPE: quantize per-tile with scales
-            scales_off = window_size * nope_rope_stride + cur_pos * 8
-            scale_region = flat[scales_off:scales_off + 8].view(torch.float8_e8m0fnu)
-            for tile_idx in range(MODEL1_NUM_TILES):
-                tile = token_kv[tile_idx * MODEL1_TILE_SIZE:(tile_idx + 1) * MODEL1_TILE_SIZE].float()
-                scale_inv = tile.abs().amax() / 448.0
-                scale_inv = torch.pow(2, torch.clamp_min(scale_inv, 1e-4).log2().ceil())
-                scale_region[tile_idx].copy_(scale_inv.to(torch.float8_e8m0fnu))
-                quantized = (tile / scale_inv).to(torch.float8_e4m3fn)
-                nope_region[tile_idx * MODEL1_TILE_SIZE:(tile_idx + 1) * MODEL1_TILE_SIZE].copy_(quantized)
+        # Scatter write
+        valid_slot = token_slot[valid].long()
+        valid_ring = ring_pos[valid].long()
+        valid_kv = kv_flat[valid]
+        window_state_cache[valid_slot, valid_ring] = valid_kv
+
+    def _pack_window_state_batched(self, window_state_cache: torch.Tensor,
+                                    window_state_fp8_cache: torch.Tensor,
+                                    slot: torch.Tensor,
+                                    block_size: int):
+        """Batched FP8 pack for all prefill sequences' window states."""
+        from lmdeploy.pytorch.kernels.cuda.v4_pack_window import pack_window_tokens_fp8
+
+        # Gather all slots' window state
+        selected = window_state_cache[slot.long()]  # [num_seqs, window_size, head_dim]
+
+        # Use the Triton kernel to pack all tokens at once
+        # slot values must be the real slot indices into window_state_fp8_cache
+        num_seqs = slot.numel()
+        slot_expanded = slot.long().repeat_interleave(self.window_size)
+        pos_expanded = torch.arange(self.window_size, device=slot.device).repeat(num_seqs).long()
+        kv_tokens = selected.reshape(-1, self.head_dim)
+        pack_window_tokens_fp8(kv_tokens, window_state_fp8_cache, slot_expanded, pos_expanded)
 
     def _build_decode_attention_metadata(self,
                                          indices_in_kvcache: torch.Tensor = None,
@@ -781,7 +760,8 @@ class Attention(nn.Module):
         slot_idx = slot.long()
         caches['window_state'][slot_idx, window_pos] = kv[:, 0]
         # Update FP8 window cache for the current decode token
-        self._pack_window_state_tokens(kv[:, 0], caches['window_state_fp8'], slot, window_pos)
+        from lmdeploy.pytorch.kernels.cuda.v4_pack_window import pack_window_tokens_fp8
+        pack_window_tokens_fp8(kv[:, 0], caches['window_state_fp8'], slot_idx, window_pos)
         window_state = caches['window_state'].index_select(0, slot_idx)
         window_state_fp8 = caches['window_state_fp8'].index_select(0, slot_idx)
 
@@ -879,62 +859,57 @@ class Attention(nn.Module):
         qr_flat = qr.squeeze(0)  # [total_tokens, q_lora_rank]
         x_flat = x.squeeze(0)    # [total_tokens, dim]
 
-        # ---- Phase 1: Write window state (per-seq, must happen before flatten) ----
-        offset_tokens = 0
-        for s in range(num_seqs):
-            sp = start_pos[s].item()
-            sl = q_seqlens[s].item()
-            sl_slot = slot[s].item()
-
-            seq_kv = kv_flat[offset_tokens:offset_tokens + sl]
-            window_state = caches['window_state'][sl_slot]
-            window_state_fp8 = caches['window_state_fp8'][sl_slot]
-
-            self._write_window_state_prefill(window_state, seq_kv, sp, self.window_size)
-            self._pack_window_state(window_state, window_state_fp8, window_block_size)
-            offset_tokens += sl
+        # ---- Phase 1: Write window state (batched) ----
+        self._write_window_state_prefill_batched(
+            caches['window_state'], kv_flat, start_pos, q_seqlens, slot, self.window_size)
+        self._pack_window_state_batched(
+            caches['window_state'], caches['window_state_fp8'], slot, window_block_size)
 
         # ---- Phase 2: Per-seq Indexer call (writes compressed KV) ----
+        # Cannot be batched because: (1) the internal Compressor writes ring-buffer
+        # state and paged block cache as side effects — zero-padded input would
+        # corrupt both; (2) the Indexer backend derives total_lens from seqlen,
+        # so padded seqlen produces wrong compression points for shorter sequences.
         compress_topk = None
-        compress_topk_parts = []
         if self.compress_ratio:
             if self.indexer is not None:
-                offset_tokens = 0
+                cu_q = torch.cat([q_seqlens.new_zeros(1), q_seqlens.cumsum(0)])
+                parts = []
                 for s in range(num_seqs):
-                    sp = start_pos[s].item()
                     sl = q_seqlens[s].item()
+                    off = cu_q[s].item()
+                    seq_x = x[:, off:off + sl]
+                    seq_qr = qr[:, off:off + sl]
+                    seq_rot = rot_freqs[:, off:off + sl] if rot_freqs is not None else None
+                    seq_comp_freqs = compress_freqs[:, off:off + sl] if compress_freqs is not None else None
                     seq_info_s = seq_info[s:s + 1]
-                    seq_x = x[:, offset_tokens:offset_tokens + sl]
-                    seq_qr = qr[:, offset_tokens:offset_tokens + sl]
-                    seq_rot_freqs = rot_freqs[:, offset_tokens:offset_tokens + sl] if rot_freqs is not None else None
-                    seq_compress_freqs = compress_freqs[:, offset_tokens:offset_tokens + sl] if compress_freqs is not None else None
-                    window_kv_len = window_kv_lens[s]
+
                     index_out = self.indexer(
                         x=seq_x,
                         qr=seq_qr,
                         start_pos=start_pos[s:s + 1],
-                        offset=window_kv_len,
+                        offset=window_kv_lens[s:s + 1],
                         context=context,
                         slot=slot[s:s + 1],
                         index_kv_cache=caches['index_kv'],
-                        block_offsets=block_offsets,
+                        block_offsets=block_offsets[s:s + 1],
                         block_size=token_block_size,
-                        rot_freqs=seq_rot_freqs,
-                        compress_freqs=seq_compress_freqs,
+                        rot_freqs=seq_rot,
+                        compress_freqs=seq_comp_freqs,
                         seq_info=seq_info_s,
                         index_scratch=None,
                         is_decoding=False)
-                    # indices are [1, sl, topk] with offset already applied
-                    raw = index_out.indices_in_kvcache.view(-1, index_out.indices_in_kvcache.size(-1))
-                    compress_topk_parts.append(raw)
-                    offset_tokens += sl
+
+                    raw = index_out.indices_in_kvcache  # [1, sl, topk]
+                    parts.append(raw.squeeze(0))  # [sl, topk]
+
                 # Pad to same topk width before concatenating
-                max_topk = max(p.size(1) for p in compress_topk_parts)
-                compress_topk_parts = [
+                max_topk = max(p.size(1) for p in parts)
+                parts = [
                     F.pad(p, (0, max_topk - p.size(1)), value=-1) if p.size(1) < max_topk else p
-                    for p in compress_topk_parts
+                    for p in parts
                 ]
-                compress_topk = torch.cat(compress_topk_parts, dim=0)
+                compress_topk = torch.cat(parts, dim=0)
             else:
                 compress_topk = build_compress_topk_indices(
                     total_lens, self.compress_ratio,
@@ -1307,8 +1282,7 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         compress_freqs = {}
         for ratio in (4, 128):
             cidx = (position_ids + 1 - ratio).clamp(min=0)
-            cf = self.freqs_cis_compress[cidx]
-            compress_freqs[ratio] = cf
+            compress_freqs[ratio] = self.freqs_cis_compress[cidx]
 
         # Single layer loop — no tensor indexing inside
         for layer in self.layers:

@@ -1,4 +1,4 @@
-"""Unit tests for the flatten_v4_kv Triton kernel."""
+"""Unit tests for the flatten_v4_kv Triton kernel and pack_window_tokens_fp8 kernel."""
 
 import pytest
 import torch
@@ -589,3 +589,109 @@ class TestFlattenV4KV:
         # Expected: tokens 96, 97, 98, 99 (mod 256)
         vals = flat_kv[:, 0, 0].cpu().tolist()
         assert vals == [96.0, 97.0, 98.0, 99.0]
+
+
+class TestPackWindowTokensFP8:
+    """Tests for the pack_window_tokens_fp8 Triton kernel."""
+
+    @pytest.fixture
+    def device(self):
+        yield DEVICE
+
+    @pytest.fixture
+    def dtype(self):
+        yield DTYPE
+
+    def test_round_trip_single_token(self, device, dtype):
+        """Pack one token, dequantize, compare vs original."""
+        from lmdeploy.pytorch.kernels.cuda.v4_pack_window import pack_window_tokens_fp8
+        from lmdeploy.pytorch.backends.cuda.attention.flashmla_utils import (
+            MODEL1_D, dequantize_model1_fp8_sparse)
+
+        window_size = 4
+        packed_dim = 584
+        kv = torch.randn(1, MODEL1_D, dtype=dtype, device=device)
+        fp8_cache = torch.zeros(1, window_size, packed_dim, dtype=torch.float8_e4m3fn, device=device)
+
+        slot = torch.tensor([0], dtype=torch.long, device=device)
+        positions = torch.tensor([2], dtype=torch.long, device=device)
+
+        pack_window_tokens_fp8(kv, fp8_cache, slot, positions)
+
+        deq = dequantize_model1_fp8_sparse(fp8_cache.unsqueeze(2)).squeeze(2)
+        err = (deq[0, 2] - kv[0]).abs().max().item()
+        assert err < 0.15, f'Max error {err}'
+
+    def test_round_trip_multiple_tokens(self, device, dtype):
+        """Pack multiple tokens, dequantize, compare."""
+        from lmdeploy.pytorch.kernels.cuda.v4_pack_window import pack_window_tokens_fp8
+        from lmdeploy.pytorch.backends.cuda.attention.flashmla_utils import (
+            MODEL1_D, dequantize_model1_fp8_sparse)
+
+        num_tokens = 3
+        window_size = 4
+        packed_dim = 584
+        kv = torch.randn(num_tokens, MODEL1_D, dtype=dtype, device=device)
+        fp8_cache = torch.zeros(1, window_size, packed_dim, dtype=torch.float8_e4m3fn, device=device)
+
+        slot = torch.tensor([0, 0, 0], dtype=torch.long, device=device)
+        positions = torch.tensor([0, 1, 2], dtype=torch.long, device=device)
+
+        pack_window_tokens_fp8(kv, fp8_cache, slot, positions)
+
+        deq = dequantize_model1_fp8_sparse(fp8_cache.unsqueeze(2)).squeeze(2)
+        for i in range(num_tokens):
+            err = (deq[0, i] - kv[i]).abs().max().item()
+            assert err < 0.15, f'Token {i} max error {err}'
+
+    def test_match_block_quantize(self, device, dtype):
+        """Pack all tokens individually via kernel, compare vs block-level quantize."""
+        from lmdeploy.pytorch.kernels.cuda.v4_pack_window import pack_window_tokens_fp8
+        from lmdeploy.pytorch.backends.cuda.attention.flashmla_utils import (
+            MODEL1_D, quantize_model1_fp8_sparse, dequantize_model1_fp8_sparse)
+
+        num_slots = 2
+        window_size = 4
+        packed_dim = 584
+        head_dim = MODEL1_D
+
+        # Block-level reference
+        block_kv = torch.randn(num_slots, window_size, 1, head_dim, dtype=dtype, device=device)
+        packed_ref = quantize_model1_fp8_sparse(block_kv)
+        fp8_ref = packed_ref.squeeze(2).clone()
+        deq_ref = dequantize_model1_fp8_sparse(packed_ref).squeeze(2)
+
+        # Per-token kernel pack
+        fp8_kernel = torch.zeros(num_slots, window_size, packed_dim, dtype=torch.float8_e4m3fn, device=device)
+        slot_all = torch.arange(num_slots, device=device).repeat_interleave(window_size).long()
+        pos_all = torch.arange(window_size, device=device).repeat(num_slots).long()
+        kv_all = block_kv.squeeze(2).reshape(-1, head_dim)
+
+        pack_window_tokens_fp8(kv_all, fp8_kernel, slot_all, pos_all)
+
+        deq_kernel = dequantize_model1_fp8_sparse(fp8_kernel.unsqueeze(2)).squeeze(2)
+
+        # Should be exactly identical (same quantization logic)
+        max_diff = (deq_kernel - deq_ref).abs().max().item()
+        assert max_diff == 0.0, f'Kernel vs block pack differ by {max_diff}'
+
+    def test_multi_slot(self, device, dtype):
+        """Pack tokens into different slots."""
+        from lmdeploy.pytorch.kernels.cuda.v4_pack_window import pack_window_tokens_fp8
+        from lmdeploy.pytorch.backends.cuda.attention.flashmla_utils import (
+            MODEL1_D, dequantize_model1_fp8_sparse)
+
+        window_size = 4
+        packed_dim = 584
+        kv = torch.randn(3, MODEL1_D, dtype=dtype, device=device)
+        fp8_cache = torch.zeros(2, window_size, packed_dim, dtype=torch.float8_e4m3fn, device=device)
+
+        slot = torch.tensor([0, 1, 1], dtype=torch.long, device=device)
+        positions = torch.tensor([0, 1, 3], dtype=torch.long, device=device)
+
+        pack_window_tokens_fp8(kv, fp8_cache, slot, positions)
+
+        deq = dequantize_model1_fp8_sparse(fp8_cache.unsqueeze(2)).squeeze(2)
+        for i, (s, p) in enumerate(zip(slot.tolist(), positions.tolist())):
+            err = (deq[s, p] - kv[i]).abs().max().item()
+            assert err < 0.15, f'Token {i} (slot={s}, pos={p}) error {err}'
