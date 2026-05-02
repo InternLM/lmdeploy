@@ -311,6 +311,8 @@ class Compressor(nn.Module):
             return None
         if self.compress_ratio == 4:
             return 'v4_compressed_kv_r4_fp8'
+        if self.compress_ratio == 128:
+            return 'v4_compressed_kv_r128_fp8'
         return None
 
     def forward(self,
@@ -387,10 +389,10 @@ class Compressor(nn.Module):
         block_size = context.cache_config.block_size
         cache_name = self._get_block_cache_name()
         fp8_cache_name = self._get_fp8_cache_name()
-        cache = block_caches[cache_name][self.layer_id]
+        bf16_cache = block_caches[cache_name][self.layer_id] if cache_name in block_caches else None
         fp8_cache = block_caches[fp8_cache_name][self.layer_id] if fp8_cache_name else None
 
-        fill_compressed_kv(compressed_kv, cache, cu_q_seqlens, kv_seqlens, block_offsets,
+        fill_compressed_kv(compressed_kv, bf16_cache, cu_q_seqlens, kv_seqlens, block_offsets,
                            self.compress_ratio, block_size, max_seqlen_q,
                            fp8_cache=fp8_cache)
 
@@ -618,11 +620,10 @@ class Attention(nn.Module):
         index_kv = None
         if self.compress_ratio:
             if self.compress_ratio == 4:
-                compressed_kv = block_caches['v4_compressed_kv_r4'][self.layer_id]
                 compressed_kv_fp8 = block_caches['v4_compressed_kv_r4_fp8'][self.layer_id]
                 index_kv = block_caches['v4_index_kv_r4']
             else:
-                compressed_kv = block_caches['v4_compressed_kv_r128'][self.layer_id]
+                compressed_kv_fp8 = block_caches['v4_compressed_kv_r128_fp8'][self.layer_id]
 
         return dict(window_state=window_state,
                     window_state_fp8=window_state_fp8,
@@ -937,7 +938,9 @@ class Attention(nn.Module):
                     causal=True)
 
         # ---- Phase 3: Flatten window + compressed KV into contiguous tensor ----
-        compressed_kv_cache = caches['compressed_kv'] if self.compress_ratio else None
+        # BF16 compressed KV caches are eliminated; read from FP8 instead
+        compressed_kv_cache = None
+        fp8_compressed_kv_cache = caches['compressed_kv_fp8'] if self.compress_ratio else None
         # Select only the window states for sequences in the current batch
         batch_window_kv = caches['window_state'].index_select(0, slot.long())
         flat_kv, cu_seqlens_k = flatten_v4_kv(
@@ -946,7 +949,8 @@ class Attention(nn.Module):
             block_offsets.long(),
             total_lens.long(),
             self.window_size,
-            self.compress_ratio)
+            self.compress_ratio,
+            fp8_compressed_kv_cache=fp8_compressed_kv_cache)
 
         # ---- Phase 4: Build topk indices and convert to global ----
         window_topk = build_window_topk_indices(

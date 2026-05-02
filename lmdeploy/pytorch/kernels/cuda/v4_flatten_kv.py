@@ -40,13 +40,11 @@ def _flatten_v4_kv_kernel(
     if token_id >= flat_kv_len:
         return
 
-    offs_d = tl.arange(0, HEAD_DIM)
-
     window_kv_len = tl.minimum(tl.load(total_lens_ptr + batch_id), WINDOW_SIZE)
+    offs_d = tl.arange(0, HEAD_DIM)
 
     if token_id < window_kv_len:
         # ---- Window region ----
-        # Chronological ordering within the ring buffer.
         total_len = tl.load(total_lens_ptr + batch_id)
         window_start = total_len - WINDOW_SIZE if total_len > WINDOW_SIZE else 0
         actual_pos = window_start + token_id
@@ -83,24 +81,40 @@ def flatten_v4_kv(
     window_size: int,
     compress_ratio: int,
     cu_seqlens_k: torch.Tensor | None = None,
+    fp8_compressed_kv_cache: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Flatten V4 window + compressed KV caches into a contiguous BF16 tensor.
 
     Args:
         window_kv_cache: [bsz, window_size, head_dim] BF16 ring buffer.
-        compressed_kv_cache: [num_blocks, block_size, head_dim] BF16 paged
-            cache, or None if no compression.
+        compressed_kv_cache: [num_blocks, entries_per_block, head_dim] BF16 paged
+            cache, or None if no compression or reading from FP8.
         block_offsets: [bsz, num_blocks] page table.
         kv_seqlens: [bsz] total KV length per sequence.
         window_size: sliding window size.
         compress_ratio: compression ratio (4 or 128), 0 if no compression.
         cu_seqlens_k: optional [bsz+1] int32 cumulative KV sequence lengths.
             If None, computed from kv_seqlens.
+        fp8_compressed_kv_cache: optional [num_blocks, entries_per_block, 584]
+            FP8 MODEL1 sparse paged cache. When provided and compressed_kv_cache
+            is None, the FP8 cache is dequantized to a temporary BF16 tensor
+            and used instead.
 
     Returns:
         flat_kv: [total_kv_tokens, 1, head_dim] BF16 flat tensor.
         cu_seqlens_k: [bsz+1] int32 cumulative sequence lengths.
     """
+    # If FP8 cache is provided and no BF16 cache, dequantize first
+    if fp8_compressed_kv_cache is not None and compressed_kv_cache is None:
+        from lmdeploy.pytorch.backends.cuda.attention.flashmla_utils import dequantize_model1_fp8_sparse
+        # fp8_cache is [num_blocks, entries, 584]; dequantize expects [num_blocks, entries, 1, 584]
+        dequant = dequantize_model1_fp8_sparse(
+            fp8_compressed_kv_cache.unsqueeze(2)).squeeze(2)  # [num_blocks, entries, 512]
+        # Clone to ensure the tensor owns its memory and sync to avoid CUDA errors
+        # from overlapping async operations on the FP8 cache views.
+        compressed_kv_cache = dequant.clone()
+        torch.cuda.synchronize()
+
     bsz = kv_seqlens.numel()
     head_dim = window_kv_cache.size(-1)
     device = kv_seqlens.device

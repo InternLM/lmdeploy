@@ -85,7 +85,7 @@ class TritonV4AttentionImpl:
                        window_kv_fp8_state: torch.Tensor | None = None,
                        compressed_kv_fp8_cache: torch.Tensor | None = None,
                        decode_scratch: dict[str, torch.Tensor] | None = None):
-        if (self.compress_ratio == 4 and attn_metadata.indices_in_kvcache is not None
+        if (self.compress_ratio > 0 and attn_metadata.indices_in_kvcache is not None
                 and attn_metadata.extra_indices_in_kvcache is not None and compressed_kv_fp8_cache is not None
                 and window_kv_fp8_state is not None):
             num_window_blocks = self.window_size // block_size

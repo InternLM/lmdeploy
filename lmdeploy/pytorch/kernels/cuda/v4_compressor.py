@@ -547,6 +547,7 @@ def _fill_compressed_kv_kernel(
     compress_ratio: tl.constexpr,
     block_size: tl.constexpr,
     is_decoding: tl.constexpr,
+    has_bf16: tl.constexpr,
     has_fp8: tl.constexpr,
     BLOCK_D: tl.constexpr,
 ):
@@ -585,14 +586,15 @@ def _fill_compressed_kv_kernel(
     phys_block = tl.load(block_offsets_ptr + batch_id * stride_boff0 + block_idx * stride_boff1)
 
     # ---- Write to BF16 paged block cache ----
-    n_tiles = head_dim // BLOCK_D
-    for d_tile in range(n_tiles):
-        d_off = d_tile * BLOCK_D
-        offs_d = d_off + tl.arange(0, BLOCK_D)
+    if has_bf16:
+        n_tiles = head_dim // BLOCK_D
+        for d_tile in range(n_tiles):
+            d_off = d_tile * BLOCK_D
+            offs_d = d_off + tl.arange(0, BLOCK_D)
 
-        compressed = tl.load(ckv_ptr + write_pos * ckv_stride_s + offs_d * ckv_stride_d)
-        cache_ptrs = kv_cache_ptr + phys_block * kvc_stride_b + block_off * kvc_stride_s + offs_d * kvc_stride_d
-        tl.store(cache_ptrs, compressed.to(kv_cache_ptr.dtype.element_ty))
+            compressed = tl.load(ckv_ptr + write_pos * ckv_stride_s + offs_d * ckv_stride_d)
+            cache_ptrs = kv_cache_ptr + phys_block * kvc_stride_b + block_off * kvc_stride_s + offs_d * kvc_stride_d
+            tl.store(cache_ptrs, compressed.to(kv_cache_ptr.dtype.element_ty))
 
     # ---- Write to FP8 paged block cache (MODEL1 sparse format) ----
     if has_fp8:
@@ -651,7 +653,7 @@ def _fill_compressed_kv_kernel(
 
 def fill_compressed_kv(
     compressed_kv: torch.Tensor,
-    kv_cache: torch.Tensor,
+    kv_cache: torch.Tensor | None,
     cu_q_seqlens: torch.Tensor,
     kv_seqlens: torch.Tensor,
     block_offsets: torch.Tensor,
@@ -660,7 +662,7 @@ def fill_compressed_kv(
     max_seqlen_q: int,
     fp8_cache: torch.Tensor | None = None,
     ):
-    """Write compressed KV entries from compressed_kv into the paged kv_cache.
+    """Write compressed KV entries from compressed_kv into paged caches.
 
     After score_kv produces compressed entries at compression points
     (abs_pos = n*ratio - 1), this kernel scatters those entries into the
@@ -669,6 +671,8 @@ def fill_compressed_kv(
     When fp8_cache is provided, also writes MODEL1 sparse FP8 packed entries
     directly into fp8_cache, eliminating the need for a separate Python-side
     packing step.
+
+    When kv_cache is None, the BF16 write is skipped (only FP8 is written).
 
     == Addressing scheme ==
     The kv_cache is a paged block table:
@@ -690,8 +694,9 @@ def fill_compressed_kv(
     Args:
         compressed_kv: [S, head_dim] flat tensor with compressed results from score_kv.
             Read-only.
-        kv_cache: [num_blocks, entries_per_block, head_dim] paged block cache.
-            Modified in-place at the computed (phys_block, block_off) slots.
+        kv_cache: [num_blocks, entries_per_block, head_dim] paged block cache, or None
+            to skip the BF16 write. Modified in-place at the computed
+            (phys_block, block_off) slots.
         cu_q_seqlens: [B + 1] cumulative query sequence lengths.
         kv_seqlens: [B] total kv sequence lengths (history + new).
         block_offsets: [B, max_blocks] logical-to-physical block index mapping.
@@ -715,7 +720,16 @@ def fill_compressed_kv(
         num_groups = (max_seqlen_q + compress_ratio - 1) // compress_ratio
         grid = (num_groups, B)
 
+    has_bf16 = kv_cache is not None
     has_fp8 = fp8_cache is not None
+
+    # Dummy tensor for when kv_cache or fp8_cache is None.
+    # Must be 3D to match the kernel's expected stride count (3 strides).
+    dummy = compressed_kv.view(1, 1, -1)[:, :, :1]  # [1, 1, 1] — never accessed due to constexpr guards
+
+    if not has_bf16:
+        kv_cache = dummy
+
     if has_fp8:
         # FlashMLA MODEL1 sparse FP8 layout: the fp8_cache tensor is
         # [num_blocks, entries_per_block, 584] but the actual memory layout
@@ -743,9 +757,9 @@ def fill_compressed_kv(
             num_blocks, entries_per_block_val, 8).view(torch.uint8)
     else:
         # Dummy views (kernel won't access due to has_fp8=False)
-        fp8_nope_rope = kv_cache
-        fp8_rope_bf16 = kv_cache.view(torch.bfloat16)
-        fp8_scales_u8 = kv_cache.view(torch.uint8)
+        fp8_nope_rope = dummy
+        fp8_rope_bf16 = dummy.view(torch.bfloat16)
+        fp8_scales_u8 = dummy.view(torch.uint8)
 
     _fill_compressed_kv_kernel[grid](
         compressed_kv, kv_cache, cu_q_seqlens, kv_seqlens, block_offsets,
@@ -762,6 +776,7 @@ def fill_compressed_kv(
         compress_ratio=compress_ratio,
         block_size=block_size,
         is_decoding=is_decoding,
+        has_bf16=has_bf16,
         has_fp8=has_fp8,
         BLOCK_D=BLOCK_D,
         num_warps=4,
