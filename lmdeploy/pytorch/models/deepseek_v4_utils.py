@@ -104,30 +104,35 @@ def build_window_topk_indices(total_lens: torch.Tensor, window_size: int,
 
     if causal and q_seqlens is not None:
         # Prefill path: build per-token causal indices
-        # Use the per-sequence scalar version for compatibility
+        # Returns [total_q_tokens, topk_width] (flattened across batch)
+        # Indices are positions into the flat KV tensor's window region [0..W-1],
+        # which is laid out chronologically (earliest window token at position 0).
         results = []
         for s in range(bsz):
             sl = q_seqlens[s].item()
             sp = start_pos[s].item() if start_pos is not None else 0
-            if sp >= window_size - 1:
-                ring_pos = sp % window_size
-                row = torch.cat([
-                    torch.arange(ring_pos + 1, window_size, device=device),
-                    torch.arange(0, ring_pos + 1, device=device)
-                ], dim=0)
-                # Repeat for each query token (all tokens see full window)
-                matrix = row.unsqueeze(0).expand(sl, -1)
-            elif sp > 0:
-                row = F.pad(torch.arange(sp + 1, device=device), (0, window_size - sp - 1), value=-1)
-                # Repeat for each query token
-                matrix = row.unsqueeze(0).expand(sl, -1)
-            else:
-                # sp == 0: per-token causal mask
-                base = torch.arange(sl, device=device).unsqueeze(1)
-                matrix = (base - window_size + 1).clamp(0) + torch.arange(min(sl, window_size), device=device)
-                matrix = torch.where(matrix > base, -1, matrix)
-            results.append(matrix.unsqueeze(0))
-        return torch.cat(results, dim=0)
+            total_len = total_lens[s].item()
+            # window_start is the logical position of the first window KV entry
+            window_start = max(0, total_len - window_size)
+            # In the flat KV, window entries are at positions 0..window_kv_len-1
+            # flat_pos = logical_pos - window_start
+            # Token t can causally see window flat positions where (window_start + flat_pos) <= t
+            # i.e., flat_pos <= t - window_start
+            # If t < window_start, token t sees no window entries.
+            base = torch.arange(sp, sp + sl, device=device).unsqueeze(1)
+            # Number of visible window entries per query token
+            num_vis = (base - window_start + 1).clamp(min=0)
+            num_vis = num_vis.clamp(max=window_size)
+            # Build flat position indices
+            max_vis = min(int(num_vis.max().item()), window_size)
+            offsets = torch.arange(max_vis, device=device).unsqueeze(0)
+            matrix = offsets  # ascending: 0, 1, 2, ...
+            matrix = torch.where(offsets < num_vis, matrix, -1)
+            # Pad to window_size
+            if max_vis < window_size:
+                matrix = F.pad(matrix, (0, window_size - max_vis), value=-1)
+            results.append(matrix)
+        return torch.cat(results, dim=0)  # [total_q_tokens, window_size]
 
     # Decode / non-causal path: simple topk range
     window_lens = total_lens.clamp(max=window_size).long()
@@ -136,7 +141,7 @@ def build_window_topk_indices(total_lens: torch.Tensor, window_size: int,
     return positions.unsqueeze(1)  # [bsz, 1, window_size]
 
 
-def build_compress_topk_indices(total_lens: torch.Tensor, compress_ratio: int, offset: int = 0,
+def build_compress_topk_indices(total_lens: torch.Tensor, compress_ratio: int, offset=0,
                                 q_seqlens: torch.Tensor | None = None,
                                 start_pos: torch.Tensor | None = None,
                                 causal: bool = False, max_width: int | None = None):
@@ -145,8 +150,8 @@ def build_compress_topk_indices(total_lens: torch.Tensor, compress_ratio: int, o
     Args:
         total_lens: [bsz] total KV length per sequence.
         compress_ratio: compression ratio (4 or 128).
-        offset: offset to add to indices (usually window_size or
-            window_size + sl for prefill sp==0).
+        offset: offset to add to indices. Can be a scalar int or a [bsz]
+            tensor of per-sequence offsets.
         q_seqlens: [bsz] query sequence lengths (required when causal=True).
         start_pos: [bsz] start position for each sequence (required when
             causal=True).
@@ -161,28 +166,44 @@ def build_compress_topk_indices(total_lens: torch.Tensor, compress_ratio: int, o
     """
     device = total_lens.device
     bsz = total_lens.numel()
+    per_seq_offset = isinstance(offset, torch.Tensor)
 
     if causal and q_seqlens is not None:
         # Prefill path: build per-token causal indices
+        # Returns [total_q_tokens, max_width] (flattened across batch)
+        max_comp = int(torch.div(total_lens, compress_ratio, rounding_mode='floor').max().item()) if bsz > 0 else 0
+        if max_width is None:
+            max_width = max_comp
         results = []
         for s in range(bsz):
             sl = q_seqlens[s].item()
             sp = start_pos[s].item() if start_pos is not None else 0
+            seq_offset = offset[s].item() if per_seq_offset else offset
             if sp > 0:
                 num_compressed = (sp + sl) // compress_ratio
-                row = torch.arange(num_compressed, device=device) + offset
+                row = torch.arange(num_compressed, device=device) + seq_offset
+                # Pad to max_width
+                if num_compressed < max_width:
+                    row = F.pad(row, (0, max_width - num_compressed), value=-1)
                 matrix = row.unsqueeze(0).expand(sl, -1)
             else:
-                matrix = torch.arange(sl // compress_ratio, device=device).repeat(sl, 1)
+                num_comp = sl // compress_ratio
+                matrix = torch.arange(num_comp, device=device).repeat(sl, 1)
                 mask = matrix >= torch.arange(1, sl + 1, device=device).unsqueeze(1) // compress_ratio
-                matrix = torch.where(mask, -1, matrix + offset)
-            results.append(matrix.unsqueeze(0))
-        return torch.cat(results, dim=0)
+                matrix = torch.where(mask, -1, matrix + seq_offset)
+                # Pad to max_width
+                if num_comp < max_width:
+                    matrix = F.pad(matrix, (0, max_width - num_comp), value=-1)
+            results.append(matrix)
+        return torch.cat(results, dim=0)  # [total_q_tokens, max_width]
 
     # Decode / non-causal path
     num_compressed = torch.div(total_lens, compress_ratio, rounding_mode='floor').long()
     if max_width is None:
         max_width = int(num_compressed.max().item()) if num_compressed.numel() > 0 else 0
     positions, mask = build_prefix_positions(num_compressed, max_width)
-    positions = torch.where(mask, positions + offset, positions)
+    if per_seq_offset:
+        positions = torch.where(mask, positions + offset.unsqueeze(1), positions)
+    else:
+        positions = torch.where(mask, positions + offset, positions)
     return positions.unsqueeze(1)  # [bsz, 1, max_width]

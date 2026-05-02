@@ -852,13 +852,19 @@ class Attention(nn.Module):
                                             decode_scratch=decode_scratch)
 
     def _forward_prefill_core(self, q, kv, qr, x, seq_info: SeqInfo, slot, context, rot_freqs, compress_freqs, num_seqs):
+        from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
+
         start_pos = seq_info.start_pos
         q_seqlens = seq_info.q_seqlens
+        total_lens = seq_info.total_lens
 
         caches = self._resolve_attention_caches(context)
         block_offsets = context.block_offsets
         window_block_size = context.cache_config.kernel_block_size
         token_block_size = context.cache_config.block_size
+
+        # Pre-compute window_kv_lens for Indexer offset
+        window_kv_lens = total_lens.clamp(max=self.window_size)
 
         # Prefill: x is [1, total_tokens, ...], flatten to [total_tokens, ...]
         q_flat = q.squeeze(0)    # [total_tokens, n_heads, head_dim]
@@ -866,87 +872,107 @@ class Attention(nn.Module):
         qr_flat = qr.squeeze(0)  # [total_tokens, q_lora_rank]
         x_flat = x.squeeze(0)    # [total_tokens, dim]
 
-        compressed_kv_cache = caches['compressed_kv'] if self.compress_ratio else None
-
-        outputs = []
+        # ---- Phase 1: Write window state (per-seq, must happen before flatten) ----
         offset_tokens = 0
         for s in range(num_seqs):
             sp = start_pos[s].item()
             sl = q_seqlens[s].item()
             sl_slot = slot[s].item()
 
-            seq_q = q_flat[offset_tokens:offset_tokens + sl].unsqueeze(0)
-            seq_kv = kv_flat[offset_tokens:offset_tokens + sl].unsqueeze(0)
-            seq_qr = qr_flat[offset_tokens:offset_tokens + sl].unsqueeze(0)
-            seq_x = x_flat[offset_tokens:offset_tokens + sl].unsqueeze(0)
-
+            seq_kv = kv_flat[offset_tokens:offset_tokens + sl]
             window_state = caches['window_state'][sl_slot]
             window_state_fp8 = caches['window_state_fp8'][sl_slot]
 
-            self._write_window_state_prefill(window_state, seq_kv[0], sp, self.window_size)
+            self._write_window_state_prefill(window_state, seq_kv, sp, self.window_size)
             self._pack_window_state(window_state, window_state_fp8, window_block_size)
+            offset_tokens += sl
 
-            total_len = sp + sl
-            if sp == 0:
-                window_kv = seq_kv[0]
-            else:
-                window_positions, _, window_mask = _build_window_positions(
-                    torch.tensor([total_len], device=x.device), self.window_size)
-                safe_positions = window_positions.clamp(min=0)
-                window_kv = window_state[safe_positions[0]]
-                window_kv = torch.where(window_mask[0].unsqueeze(-1), window_kv, window_kv.new_zeros(()))
-
-            topk_idxs = build_window_topk_indices(
-                torch.tensor([total_len], device=x.device), self.window_size,
-                q_seqlens=torch.tensor([sl], device=x.device),
-                start_pos=torch.tensor([sp], device=x.device),
-                causal=True)
-            comp_offset = window_kv.size(0) + (0 if sp > 0 else sl)
-
-            compressed_positions = None
-            if self.compress_ratio:
-                num_compressed = total_len // self.compress_ratio
-                compressed_positions = torch.arange(num_compressed, device=x.device, dtype=torch.long).unsqueeze(0)
-
-                if self.indexer is not None:
-                    index_kv_cache = caches['index_kv']
-                    seq_rot_freqs = rot_freqs[:, offset_tokens:offset_tokens + sl]
-                    seq_compress_freqs = compress_freqs[:, offset_tokens:offset_tokens + sl]
+        # ---- Phase 2: Per-seq Indexer call (writes compressed KV) ----
+        compress_topk = None
+        compress_topk_parts = []
+        if self.compress_ratio:
+            if self.indexer is not None:
+                offset_tokens = 0
+                for s in range(num_seqs):
+                    sp = start_pos[s].item()
+                    sl = q_seqlens[s].item()
+                    seq_info_s = seq_info[s:s + 1]
+                    seq_x = x[:, offset_tokens:offset_tokens + sl]
+                    seq_qr = qr[:, offset_tokens:offset_tokens + sl]
+                    seq_rot_freqs = rot_freqs[:, offset_tokens:offset_tokens + sl] if rot_freqs is not None else None
+                    seq_compress_freqs = compress_freqs[:, offset_tokens:offset_tokens + sl] if compress_freqs is not None else None
+                    window_kv_len = window_kv_lens[s]
                     index_out = self.indexer(
                         x=seq_x,
                         qr=seq_qr,
                         start_pos=start_pos[s:s + 1],
-                        offset=comp_offset,
+                        offset=window_kv_len,
                         context=context,
                         slot=slot[s:s + 1],
-                        index_kv_cache=index_kv_cache,
+                        index_kv_cache=caches['index_kv'],
                         block_offsets=block_offsets,
                         block_size=token_block_size,
                         rot_freqs=seq_rot_freqs,
                         compress_freqs=seq_compress_freqs,
-                        seq_info=seq_info[s:s + 1],
+                        seq_info=seq_info_s,
+                        index_scratch=None,
                         is_decoding=False)
-                    compress_topk_idxs = index_out.indices_in_kvcache
-                else:
-                    compress_topk_idxs = build_compress_topk_indices(
-                        torch.tensor([total_len], device=x.device), self.compress_ratio,
-                        offset=comp_offset,
-                        q_seqlens=torch.tensor([sl], device=x.device),
-                        start_pos=torch.tensor([sp], device=x.device),
-                        causal=True)
-                topk_idxs = torch.cat([topk_idxs, compress_topk_idxs], dim=-1)
+                    # indices are [1, sl, topk] with offset already applied
+                    raw = index_out.indices_in_kvcache.view(-1, index_out.indices_in_kvcache.size(-1))
+                    compress_topk_parts.append(raw)
+                    offset_tokens += sl
+                # Pad to same topk width before concatenating
+                max_topk = max(p.size(1) for p in compress_topk_parts)
+                compress_topk_parts = [
+                    F.pad(p, (0, max_topk - p.size(1)), value=-1) if p.size(1) < max_topk else p
+                    for p in compress_topk_parts
+                ]
+                compress_topk = torch.cat(compress_topk_parts, dim=0)
+            else:
+                compress_topk = build_compress_topk_indices(
+                    total_lens, self.compress_ratio,
+                    offset=window_kv_lens,
+                    q_seqlens=q_seqlens,
+                    start_pos=start_pos,
+                    causal=True)
 
-            out = self.attn_fwd.forward_prefill(seq_q, window_kv.unsqueeze(0), self.attn_sink,
-                                                topk_idxs,
-                                                compressed_kv_cache=compressed_kv_cache,
-                                                block_offsets=block_offsets[s:s + 1].long() if compressed_kv_cache is not None else None,
-                                                compressed_positions=compressed_positions,
-                                                block_size=token_block_size,
-                                                compress_ratio=self.compress_ratio)
-            outputs.append(out)
-            offset_tokens += sl
+        # ---- Phase 3: Flatten window + compressed KV into contiguous tensor ----
+        compressed_kv_cache = caches['compressed_kv'] if self.compress_ratio else None
+        # Select only the window states for sequences in the current batch
+        batch_window_kv = caches['window_state'].index_select(0, slot.long())
+        flat_kv, cu_seqlens_k = flatten_v4_kv(
+            batch_window_kv,
+            compressed_kv_cache,
+            block_offsets.long(),
+            total_lens.long(),
+            self.window_size,
+            self.compress_ratio)
 
-        return torch.cat(outputs, dim=1)
+        # ---- Phase 4: Build topk indices and convert to global ----
+        window_topk = build_window_topk_indices(
+            total_lens, self.window_size,
+            q_seqlens=q_seqlens,
+            start_pos=start_pos,
+            causal=True)  # [total_q_tokens, window_size]
+
+        if compress_topk is not None:
+            topk_indices = torch.cat([window_topk, compress_topk], dim=-1)  # [total_q_tokens, total_topk]
+        else:
+            topk_indices = window_topk  # [total_q_tokens, window_size]
+
+        # Convert per-seq-local indices to global flat indices
+        # cu_seqlens_k[:-1] gives per-seq KV start offset in the flat tensor
+        kv_start_per_token = torch.repeat_interleave(
+            cu_seqlens_k[:-1], q_seqlens.to(torch.long))
+        neg_mask = topk_indices < 0
+        topk_indices = topk_indices + kv_start_per_token.unsqueeze(1)
+        topk_indices[neg_mask] = -1
+        topk_indices = topk_indices.unsqueeze(1).to(torch.int32)  # [total_q_tokens, 1, total_topk]
+
+        # ---- Phase 5: Call flash_mla_sparse_fwd ----
+        out = self.attn_fwd.forward_prefill(q_flat, flat_kv, self.attn_sink, topk_indices)
+        # out is [total_q_tokens, n_heads, head_dim] -> reshape to [1, total_q_tokens, n_heads, head_dim]
+        return out.unsqueeze(0)
 
     def _alloc_decode_scratch(self, batch_size: int, max_total_len: int, device: torch.device):
         max_comp_r4 = max_total_len // 4

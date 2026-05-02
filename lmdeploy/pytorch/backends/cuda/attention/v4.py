@@ -41,7 +41,7 @@ class TritonV4AttentionImpl:
         return query, attn_sink, num_heads
 
     @staticmethod
-    def _pad_sparse_indices(indices: torch.Tensor | None, block: int = 64):
+    def _pad_sparse_indices(indices: torch.Tensor | None, block: int = 128):
         if indices is None:
             return None
         topk = indices.size(-1)
@@ -148,22 +148,32 @@ class TritonV4AttentionImpl:
 
     def forward_prefill(self,
                         query: torch.Tensor,
-                        window_kv: torch.Tensor,
+                        flat_kv: torch.Tensor,
                         attn_sink: torch.Tensor,
-                        topk_indices: torch.Tensor,
-                        compressed_kv_cache: torch.Tensor | None = None,
-                        block_offsets: torch.Tensor | None = None,
-                        compressed_positions: torch.Tensor | None = None,
-                        block_size: int = 1,
-                        compress_ratio: int = 0):
-        full_kv = window_kv
-        if compressed_kv_cache is not None and compressed_positions is not None:
-            compressed_kv = gather_compressed_cache_entries(
-                compressed_kv_cache, block_offsets, compressed_positions,
-                block_size, compress_ratio)
-            full_kv = torch.cat([window_kv, compressed_kv], dim=1)
-        return self.kernel_mod.sparse_attn(query, full_kv, attn_sink,
-                                           topk_indices.int(), self.scale)
+                        topk_indices: torch.Tensor):
+        """Prefill attention using ``flash_mla_sparse_fwd``.
+
+        Args:
+            query: [total_q_tokens, num_heads, head_dim] BF16.
+            flat_kv: [total_kv_tokens, 1, head_dim] BF16 flat KV tensor.
+            attn_sink: [num_heads] float32.
+            topk_indices: [total_q_tokens, 1, topk] int32 global indices
+                into ``flat_kv`` with -1 sentinel.
+        """
+        topk_indices = self._pad_sparse_indices(topk_indices).to(torch.int32)
+
+        # Pad heads for FlashMLA compatibility (requires h_q = 64 or 128)
+        num_heads = query.size(1)
+        target = 64 if num_heads < 64 else (128 if num_heads < 128 else num_heads)
+        if target != num_heads:
+            pad = target - num_heads
+            query = torch.nn.functional.pad(query, (0, 0, 0, pad))
+            attn_sink = torch.nn.functional.pad(attn_sink, (0, pad))
+
+        out = self.flash_mla.flash_mla_sparse_fwd(
+            query, flat_kv, topk_indices,
+            sm_scale=self.scale, attn_sink=attn_sink)
+        return out[0][:, :num_heads]
 
 
 class TritonV4AttentionBuilder:
