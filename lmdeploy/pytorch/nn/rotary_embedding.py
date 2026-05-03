@@ -226,7 +226,8 @@ class ApplyRotaryEmb(nn.Module):
         builder = backend.get_layer_impl_builder(OpType.ApplyRotaryEmb)
         self.impl = builder.build()
 
-    def forward(self, query: Tensor, key: Tensor, cos: Tensor, sin: Tensor, inplace: bool = True):
+    def forward(self, query: Tensor, key: Tensor, cos: Tensor, sin: Tensor, inplace: bool = True,
+                complex_mode: bool = False):
         """forward."""
 
         assert cos.dim() <= 3 and sin.dim() <= 3
@@ -244,12 +245,34 @@ class ApplyRotaryEmb(nn.Module):
             query = query.view(seq_len, -1, query.size(-1))
             key = key.view(seq_len, -1, key.size(-1))
 
-        query, key = self.impl.forward(query, key, cos, sin, inplace)
+        query, key = self.impl.forward(query, key, cos, sin, inplace, complex_mode=complex_mode)
 
         if need_reshape:
             query = query.view(query_shape)
             key = key.view(key_shape)
         return query, key
+
+    def forward_single(self, x: Tensor, cos: Tensor, sin: Tensor, inplace: bool = True,
+                       complex_mode: bool = False):
+        """Apply rotary embedding to a single tensor (not Q/K pair).
+
+        Dispatches to the same fused kernel as forward() by using a 1-head
+        dummy key. Handles arbitrary x dimensions by reshaping to 3D
+        (seq, heads, dim) for the kernel, then restoring the original shape.
+        Always uses inplace=False internally to guarantee correctness regardless
+        of whether the input is a view/slice of a larger tensor.
+        """
+        assert cos.dim() <= 2 and sin.dim() <= 2
+        dim = x.size(-1)
+        x_3d = x.reshape(-1, x.size(-2), dim) if x.dim() >= 3 else x.unsqueeze(-2)
+        orig_shape = x.shape
+        # In complex_mode, cos/sin are (seq, dim//2), but dummy_k needs full dim
+        dummy_dim = dim // 2 if complex_mode else dim
+        dummy_k = x_3d.new_empty(x_3d.size(0), 1, dummy_dim)
+        x_3d, _ = self.forward(x_3d, dummy_k, cos, sin, inplace=False,
+                               complex_mode=complex_mode)
+        x.copy_(x_3d.reshape(orig_shape))
+        return x
 
 
 class FopeRotaryEmbedding(nn.Module):

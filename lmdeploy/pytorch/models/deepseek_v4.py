@@ -1,12 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import importlib.util
-import math
 import os.path as osp
 import re
 from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
-from functools import lru_cache
 
 import torch
 import torch.nn.functional as F
@@ -24,9 +22,11 @@ from lmdeploy.pytorch.kernels.cuda.v4_compressor import (
     score_kv,
 )
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import RMSNorm, SiluAndMul
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, RMSNorm, SiluAndMul
 from lmdeploy.pytorch.nn import V4Attention as NativeV4Attention
 from lmdeploy.pytorch.nn import V4Indexer as NativeV4Indexer
+from lmdeploy.pytorch.nn.rotary_embedding import build_rotary_embedding
+from lmdeploy.pytorch.backends.rotary_embedding import RopeType, YarnParameters
 from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_down_linear, build_gateup_linear, build_o_proj
 from lmdeploy.pytorch.nn.moe import FusedMoEV4
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
@@ -112,57 +112,6 @@ def _map_v4_expert_param_name(name: str, use_fused_experts: bool) -> tuple[str, 
     if proj == 'w3':
         return name, 'up'
     return name, 'down'
-
-@lru_cache(2)
-def precompute_freqs_cis(dim, seqlen, original_seq_len, base, factor, beta_fast, beta_slow):
-
-    def find_correction_dim(num_rotations, dim, base, max_seq_len):
-        return dim * math.log(max_seq_len / (num_rotations * 2 * math.pi)) / (2 * math.log(base))
-
-    def find_correction_range(low_rot, high_rot, dim, base, max_seq_len):
-        low = math.floor(find_correction_dim(low_rot, dim, base, max_seq_len))
-        high = math.ceil(find_correction_dim(high_rot, dim, base, max_seq_len))
-        return max(low, 0), min(high, dim - 1)
-
-    def linear_ramp_factor(min_idx, max_idx, dim):
-        if min_idx == max_idx:
-            max_idx += 0.001
-        linear = (torch.arange(dim, dtype=torch.float32) - min_idx) / (max_idx - min_idx)
-        return torch.clamp(linear, 0, 1)
-
-    freqs = 1.0 / (base**(torch.arange(0, dim, 2, dtype=torch.float32) / dim))
-    if original_seq_len > 0:
-        low, high = find_correction_range(beta_fast, beta_slow, dim, base, original_seq_len)
-        smooth = 1 - linear_ramp_factor(low, high, dim // 2)
-        freqs = freqs / factor * (1 - smooth) + freqs * smooth
-    t = torch.arange(seqlen)
-    freqs = torch.outer(t, freqs)
-    return torch.polar(torch.ones_like(freqs), freqs)
-
-
-def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor, inverse: bool = False):
-    y = x
-    x = torch.view_as_complex(x.float().unflatten(-1, (-1, 2)))
-    if inverse:
-        freqs_cis = freqs_cis.conj()
-    if x.ndim == 3:
-        if freqs_cis.ndim == 3:
-            freqs_cis = freqs_cis.view(x.size(0), x.size(1), x.size(-1))
-        elif freqs_cis.ndim == 2 and freqs_cis.size(0) == x.size(0):
-            freqs_cis = freqs_cis.view(x.size(0), x.size(1), x.size(-1))
-        else:
-            freqs_cis = freqs_cis.view(1, x.size(1), x.size(-1))
-    else:
-        if freqs_cis.ndim == 4:
-            freqs_cis = freqs_cis.view(x.size(0), x.size(1), 1, x.size(-1))
-        elif freqs_cis.ndim == 3 and freqs_cis.size(0) == x.size(0):
-            freqs_cis = freqs_cis.view(x.size(0), x.size(1), 1, x.size(-1))
-        else:
-            freqs_cis = freqs_cis.view(1, x.size(1), 1, x.size(-1))
-    x = torch.view_as_real(x * freqs_cis).flatten(-2)
-    y.copy_(x)
-    return y
-
 
 def rotate_activation(x: torch.Tensor) -> torch.Tensor:
     """Apply the official DeepSeek-V4 Hadamard rotation used by the indexer."""
@@ -287,6 +236,7 @@ class Compressor(nn.Module):
         self.wkv = build_colwise_linear(self.dim, coff * self.head_dim, False, dtype=dtype, device=device)
         self.wgate = build_colwise_linear(self.dim, coff * self.head_dim, False, dtype=dtype, device=device)
         self.norm = RMSNorm(self.head_dim, args.norm_eps, dtype=dtype, device=device)
+        self.apply_rotary = ApplyRotaryEmb()
         self.state_cache_name = self._get_state_cache_name()
 
     def _get_state_cache_name(self):
@@ -318,7 +268,7 @@ class Compressor(nn.Module):
                 start_pos: torch.Tensor,
                 slot: torch.Tensor,
                 context: StepContext,
-                compress_freqs: torch.Tensor,
+                compress_pos_emb: tuple[torch.Tensor, torch.Tensor],
                 seq_info: SeqInfo):
         """Unified forward for both prefill and decode.
 
@@ -330,7 +280,7 @@ class Compressor(nn.Module):
             start_pos: Tensor[bsz] start position for each sequence.
             context: StepContext with block_caches, named_state_caches, etc.
             slot: Tensor[bsz] state cache slot for each sequence.
-            compress_freqs: Pre-indexed rotary frequencies for compressed KV RoPE.
+            compress_pos_emb: (cos, sin) tuple for compressed KV RoPE.
             seq_info: Bundled sequence-length metadata.
         """
         bsz, seqlen, _ = x.size()
@@ -371,10 +321,11 @@ class Compressor(nn.Module):
 
         # ---- Phase F: Post-processing (norm + RoPE + quant on entire compressed_kv) ----
         compressed_kv = self.norm(compressed_kv.to(dtype))
-        # compress_freqs is already indexed via (position_ids + 1 - ratio).clamp(min=0)
-        freqs_for_compress = compress_freqs
-        apply_rotary_emb(compressed_kv[..., -rd:].unsqueeze(1), freqs_for_compress)
-        compressed_kv = compressed_kv.squeeze(1)
+        # Apply RoPE to compressed KV rope dims
+        kv_rope = compressed_kv[..., -rd:].unsqueeze(1)  # [total_flat, 1, rd]
+        cos_c, sin_c = compress_pos_emb
+        self.apply_rotary.forward_single(kv_rope, cos_c, sin_c, inplace=True, complex_mode=True)
+        compressed_kv[..., -rd:] = kv_rope.squeeze(1)
         if self.rotate:
             compressed_kv = rotate_activation(compressed_kv)
             self.kernel_mod.fp4_act_quant(compressed_kv, 32, True)
@@ -442,6 +393,7 @@ class Indexer(nn.Module):
         self.indexer_fwd = NativeV4Indexer(index_topk=self.index_topk,
                                            compress_ratio=self.compress_ratio,
                                            world_size=world_size)
+        self.apply_rotary = ApplyRotaryEmb()
 
     def forward(self,
                 x: torch.Tensor,
@@ -453,19 +405,20 @@ class Indexer(nn.Module):
                 index_kv_cache: torch.Tensor,
                 block_offsets: torch.Tensor,
                 block_size: int,
-                rot_freqs: torch.Tensor,
-                compress_freqs: torch.Tensor,
+                rotary_pos_emb: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+                compress_pos_emb: tuple[torch.Tensor, torch.Tensor],
                 seq_info: SeqInfo,
                 is_decoding: bool = False,
                 index_scratch: torch.Tensor | None = None):
         rd = self.rope_head_dim
         q = self.wq_b(qr).unflatten(-1, (self.n_local_heads, self.head_dim))
-        apply_rotary_emb(q[..., -rd:], rot_freqs)
+        cos, sin, _ = rotary_pos_emb
+        self.apply_rotary.forward_single(q[..., -rd:], cos, sin, inplace=True, complex_mode=True)
         q = rotate_activation(q)
         self.kernel_mod.fp4_act_quant(q, 32, True)
 
         comp_start_pos = seq_info.start_pos if is_decoding else start_pos
-        self.compressor(x, comp_start_pos, slot, context, compress_freqs, seq_info)
+        self.compressor(x, comp_start_pos, slot, context, compress_pos_emb, seq_info)
         weights = self.weights_proj(x) * (self.head_dim**-0.5 * self.n_heads**-0.5)
 
         meta = V4IndexerMetadata(block_offsets=block_offsets,
@@ -593,6 +546,7 @@ class Attention(nn.Module):
                                           compress_ratio=self.compress_ratio)
         self.compressor = None
         self.indexer = None
+        self.apply_rotary = ApplyRotaryEmb()
         if self.compress_ratio:
             self.compressor = Compressor(args, self.layer_id, kernel_mod, self.compress_ratio, self.head_dim,
                                          dtype=dtype, device=device)
@@ -705,8 +659,8 @@ class Attention(nn.Module):
                 seq_info: SeqInfo,
                 slot: torch.Tensor,
                 context: StepContext,
-                rot_freqs: torch.Tensor | None = None,
-                compress_freqs: torch.Tensor | None = None,
+                rotary_pos_emb: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None,
+                compress_pos_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
                 decode_scratch: dict[str, torch.Tensor] | None = None):
         is_decoding = seq_info.is_decoding
         rd = self.rope_head_dim
@@ -719,24 +673,34 @@ class Attention(nn.Module):
         qr = q = self.q_norm(self.wq_a(x))
         q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim))
         q *= torch.rsqrt(q.square().mean(-1, keepdim=True) + self.eps)
-        apply_rotary_emb(q[..., -rd:], rot_freqs)
-
+        cos, sin, neg_sin = rotary_pos_emb
+        q_rope = q[..., -rd:]  # [bsz, seq, n_heads, rd]
         kv = self.wkv(x)
         kv = self.kv_norm(kv)
-        apply_rotary_emb(kv[..., -rd:], rot_freqs)
+        kv_rope = kv[..., -rd:]  # [bsz, seq, rd]
+        # Triton kernel expects 3D (seq, heads, dim) — flatten batch+seq
+        n_tokens = q_rope.shape[0] * q_rope.shape[1]
+        n_heads = q_rope.shape[2]
+        q_rope_3d = q_rope.reshape(n_tokens, n_heads, rd)
+        kv_rope_3d = kv_rope.reshape(n_tokens, 1, rd)
+        q_rope_3d, kv_rope_3d = self.apply_rotary(q_rope_3d, kv_rope_3d, cos, sin, inplace=False,
+                                                    complex_mode=True)
+        q[..., -rd:] = q_rope_3d.reshape_as(q_rope)
+        kv[..., -rd:] = kv_rope_3d.reshape_as(kv_rope)
         self.kernel_mod.act_quant(kv[..., :-rd], 64, 'ue8m0', torch.float8_e8m0fnu, True)
 
         # ---- Batched Compressor call ----
         if self.compress_ratio:
-            self.compressor(x, seq_info.start_pos.long(), slot.long(), context, compress_freqs, seq_info)
+            self.compressor(x, seq_info.start_pos.long(), slot.long(), context, compress_pos_emb, seq_info)
 
         if is_decoding:
-            out = self._forward_decode_core(q, kv, qr, x, seq_info, slot, context, rot_freqs, compress_freqs, decode_scratch, bsz)
+            out = self._forward_decode_core(q, kv, qr, x, seq_info, slot, context, rotary_pos_emb, compress_pos_emb, decode_scratch, bsz)
         else:
-            out = self._forward_prefill_core(q, kv, qr, x, seq_info, slot, context, rot_freqs, compress_freqs, bsz)
+            out = self._forward_prefill_core(q, kv, qr, x, seq_info, slot, context, rotary_pos_emb, compress_pos_emb, bsz)
 
-        # ---- Output projection ----
-        apply_rotary_emb(out[..., -rd:], rot_freqs, True)
+        # ---- Output projection (inverse RoPE via precomputed neg_sin) ----
+        self.apply_rotary.forward_single(out[..., -rd:], cos, neg_sin, inplace=True,
+                                         complex_mode=True)
         total_tokens = out.size(0) * out.size(1)
         out = out.view(total_tokens, self.n_local_groups, -1)
         proj_in = out
@@ -748,7 +712,7 @@ class Attention(nn.Module):
         else:
             return self.wo_b(out.flatten(-2, -1).view(1, total_tokens, -1))
 
-    def _forward_decode_core(self, q, kv, qr, x, seq_info: SeqInfo, slot, context, rot_freqs, compress_freqs, decode_scratch, bsz):
+    def _forward_decode_core(self, q, kv, qr, x, seq_info: SeqInfo, slot, context, rotary_pos_emb, compress_pos_emb, decode_scratch, bsz):
         start_pos = seq_info.start_pos
         total_lens = seq_info.total_lens
 
@@ -796,8 +760,8 @@ class Attention(nn.Module):
                                          index_kv_cache=index_cache,
                                          block_offsets=block_offsets,
                                          block_size=token_block_size,
-                                         rot_freqs=rot_freqs,
-                                         compress_freqs=compress_freqs,
+                                         rotary_pos_emb=rotary_pos_emb,
+                                         compress_pos_emb=compress_pos_emb,
                                          seq_info=seq_info,
                                          index_scratch=index_scratch,
                                          is_decoding=True)
@@ -838,7 +802,7 @@ class Attention(nn.Module):
                                             token_block_size,
                                             compressed_kv_fp8_cache=compressed_cache_fp8)
 
-    def _forward_prefill_core(self, q, kv, qr, x, seq_info: SeqInfo, slot, context, rot_freqs, compress_freqs, num_seqs):
+    def _forward_prefill_core(self, q, kv, qr, x, seq_info: SeqInfo, slot, context, rotary_pos_emb, compress_pos_emb, num_seqs):
         from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
 
         start_pos = seq_info.start_pos
@@ -880,8 +844,10 @@ class Attention(nn.Module):
                     off = cu_q[s].item()
                     seq_x = x[:, off:off + sl]
                     seq_qr = qr[:, off:off + sl]
-                    seq_rot = rot_freqs[:, off:off + sl] if rot_freqs is not None else None
-                    seq_comp_freqs = compress_freqs[:, off:off + sl] if compress_freqs is not None else None
+                    cos_r, sin_r, neg_sin_r = rotary_pos_emb
+                    seq_rotary_pos_emb = (cos_r[off:off + sl], sin_r[off:off + sl], neg_sin_r[off:off + sl])
+                    cos_c, sin_c = compress_pos_emb
+                    seq_compress_pos_emb = (cos_c[off:off + sl], sin_c[off:off + sl])
                     seq_info_s = seq_info[s:s + 1]
 
                     index_out = self.indexer(
@@ -894,8 +860,8 @@ class Attention(nn.Module):
                         index_kv_cache=caches['index_kv'],
                         block_offsets=block_offsets[s:s + 1],
                         block_size=token_block_size,
-                        rot_freqs=seq_rot,
-                        compress_freqs=seq_comp_freqs,
+                        rotary_pos_emb=seq_rotary_pos_emb,
+                        compress_pos_emb=seq_compress_pos_emb,
                         seq_info=seq_info_s,
                         index_scratch=None,
                         is_decoding=False)
@@ -1122,14 +1088,14 @@ class Block(nn.Module):
 
     def forward(self, x: torch.Tensor, seq_info: SeqInfo, input_ids: torch.Tensor,
                 slot: torch.Tensor, context: StepContext,
-                rot_freqs: torch.Tensor | None = None,
-                compress_freqs: torch.Tensor | None = None,
+                rotary_pos_emb: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None,
+                compress_pos_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
                 decode_scratch: dict[str, torch.Tensor] | None = None):
         residual = x
         x, post, comb = self._hc_pre(x, self.hc_attn_fn, self.hc_attn_scale, self.hc_attn_base)
         x = self.attn_norm(x)
-        x = self.attn(x, seq_info, slot, context, rot_freqs=rot_freqs,
-                       compress_freqs=compress_freqs, decode_scratch=decode_scratch)
+        x = self.attn(x, seq_info, slot, context, rotary_pos_emb=rotary_pos_emb,
+                       compress_pos_emb=compress_pos_emb, decode_scratch=decode_scratch)
         x = self._hc_post(x, residual, post, comb)
 
         residual = x
@@ -1198,12 +1164,27 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             hc_eps=config.hc_eps,
         )
         args = self.args
-        self.freqs_cis_plain = precompute_freqs_cis(
-            args.rope_head_dim, args.original_seq_len, 0, args.rope_theta,
-            args.rope_factor, args.beta_fast, args.beta_slow).to(device)
-        self.freqs_cis_compress = precompute_freqs_cis(
-            args.rope_head_dim, args.original_seq_len, args.original_seq_len, args.compress_rope_theta,
-            args.rope_factor, args.beta_fast, args.beta_slow).to(device)
+        # Plain RoPE: Default type (no YaRN correction), base=rope_theta
+        self.rotary_emb_plain = build_rotary_embedding(
+            dim=args.rope_head_dim,
+            max_position_embeddings=args.original_seq_len,
+            base=args.rope_theta,
+            emb_type=RopeType.Default,
+            device=device,
+        )
+        # Compress RoPE: YaRN type with compress_rope_theta base
+        # attention_factor=1.0 disables mscale scaling (official V4 inference
+        # uses YaRN frequency interpolation but does not apply mscale)
+        yarn_params = YarnParameters(beta_fast=args.beta_fast, beta_slow=args.beta_slow, attention_factor=1.0)
+        self.rotary_emb_compress = build_rotary_embedding(
+            dim=args.rope_head_dim,
+            max_position_embeddings=args.original_seq_len,
+            base=args.compress_rope_theta,
+            scaling_factor=args.rope_factor,
+            emb_type=RopeType.Yarn,
+            yarn_params=yarn_params,
+            device=device,
+        )
         self.embed = build_embedding(config.vocab_size,
                                        config.hidden_size,
                                        None,
@@ -1270,28 +1251,34 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             max_total_len = context.block_offsets.size(1) * context.cache_config.kernel_block_size
             decode_scratch = self._alloc_decode_scratch(safe_state_ids.numel(), max_total_len, input_ids.device)
 
-        # Pre-compute rotary frequencies from position_ids (outside the layer loop)
-        # position_ids shape: decode=[1, bsz], prefill=[1, total_tokens]
-        rot_freqs_plain = self.freqs_cis_plain[position_ids]
-        rot_freqs_compress = self.freqs_cis_compress[position_ids]
-        if seq_info.is_decoding:
-            # Attention decode uses [bsz, 1, rd//2] (x transposed to [bsz, 1, dim])
-            rot_freqs_plain = rot_freqs_plain.transpose(0, 1)
-            rot_freqs_compress = rot_freqs_compress.transpose(0, 1)
+        # Compute rotary (cos, sin, neg_sin) from position_ids (outside the layer loop)
+        # V4 uses complex-number RoPE: cos/sin are (seq_len, rd//2), not duplicated
+        # neg_sin is precomputed once to avoid per-layer -sin allocation
+        rd = self.args.rope_head_dim
+        cos_plain, sin_plain = self.rotary_emb_plain(h, position_ids)
+        cos_plain = cos_plain[0, :, :rd // 2]
+        sin_plain = sin_plain[0, :, :rd // 2]
+        rotary_pos_emb_plain = (cos_plain, sin_plain, -sin_plain)
 
-        compress_freqs = {}
+        cos_compress, sin_compress = self.rotary_emb_compress(h, position_ids)
+        cos_compress = cos_compress[0, :, :rd // 2]
+        sin_compress = sin_compress[0, :, :rd // 2]
+        rotary_pos_emb_compress = (cos_compress, sin_compress, -sin_compress)
+
+        compress_pos_emb = {}
         for ratio in (4, 128):
             cidx = (position_ids + 1 - ratio).clamp(min=0)
-            compress_freqs[ratio] = self.freqs_cis_compress[cidx]
+            cos_c, sin_c = self.rotary_emb_compress(h, cidx)
+            compress_pos_emb[ratio] = (cos_c[0, :, :rd // 2], sin_c[0, :, :rd // 2])
 
         # Single layer loop — no tensor indexing inside
         for layer in self.layers:
             if layer.attn.compress_ratio:
-                rot, cf = rot_freqs_compress, compress_freqs[layer.attn.compress_ratio]
+                rot_emb, comp_emb = rotary_pos_emb_compress, compress_pos_emb[layer.attn.compress_ratio]
             else:
-                rot, cf = rot_freqs_plain, None
+                rot_emb, comp_emb = rotary_pos_emb_plain, None
             h = layer(h, seq_info, input_ids, safe_state_ids, context,
-                      rot_freqs=rot, compress_freqs=cf, decode_scratch=decode_scratch)
+                      rotary_pos_emb=rot_emb, compress_pos_emb=comp_emb, decode_scratch=decode_scratch)
 
         return h
 
