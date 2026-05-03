@@ -45,7 +45,7 @@ class TritonV4IndexerImpl(BaseV4Indexer):
 
         total_lens = start_pos + seqlen
         num_index = torch.div(total_lens, self.compress_ratio, rounding_mode='floor')
-        max_index = int(num_index.max().item()) if num_index.numel() > 1 else int(num_index.item())
+        max_index = max(block_offsets.size(1) * block_size // self.compress_ratio, 1)
 
         if index_scratch is not None:
             max_index = index_scratch.size(1)

@@ -660,8 +660,7 @@ class Attention(nn.Module):
                 slot: torch.Tensor,
                 context: StepContext,
                 rotary_pos_emb: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None,
-                compress_pos_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
-                decode_scratch: dict[str, torch.Tensor] | None = None):
+                compress_pos_emb: tuple[torch.Tensor, torch.Tensor] | None = None):
         is_decoding = seq_info.is_decoding
         rd = self.rope_head_dim
         bsz = seq_info.start_pos.numel()
@@ -694,7 +693,7 @@ class Attention(nn.Module):
             self.compressor(x, seq_info.start_pos.long(), slot.long(), context, compress_pos_emb, seq_info)
 
         if is_decoding:
-            out = self._forward_decode_core(q, kv, qr, x, seq_info, slot, context, rotary_pos_emb, compress_pos_emb, decode_scratch, bsz)
+            out = self._forward_decode_core(q, kv, qr, x, seq_info, slot, context, rotary_pos_emb, compress_pos_emb, bsz)
         else:
             out = self._forward_prefill_core(q, kv, qr, x, seq_info, slot, context, rotary_pos_emb, compress_pos_emb, bsz)
 
@@ -712,7 +711,7 @@ class Attention(nn.Module):
         else:
             return self.wo_b(out.flatten(-2, -1).view(1, total_tokens, -1))
 
-    def _forward_decode_core(self, q, kv, qr, x, seq_info: SeqInfo, slot, context, rotary_pos_emb, compress_pos_emb, decode_scratch, bsz):
+    def _forward_decode_core(self, q, kv, qr, x, seq_info: SeqInfo, slot, context, rotary_pos_emb, compress_pos_emb, bsz):
         start_pos = seq_info.start_pos
         total_lens = seq_info.total_lens
 
@@ -728,10 +727,6 @@ class Attention(nn.Module):
         pack_window_tokens_fp8(kv[:, 0], caches['window_state_fp8'], slot_idx, window_pos)
         window_state = caches['window_state'].index_select(0, slot_idx)
         window_state_fp8 = caches['window_state_fp8'].index_select(0, slot_idx)
-
-        if decode_scratch is None:
-            max_total_len = int(total_lens.max().item())
-            decode_scratch = self._alloc_decode_scratch(bsz, max_total_len, q.device)
 
         # Window positions (shared by all ratio paths)
         window_positions, window_lens, _ = _build_window_positions(total_lens.long(), self.window_size)
@@ -750,7 +745,6 @@ class Attention(nn.Module):
             if self.indexer is not None:
                 # ratio=4: Indexer provides physical indices into fp8 compressed cache
                 index_cache = caches['index_kv']
-                index_scratch = decode_scratch['selected_index_kv_r4'][:bsz]
                 index_out = self.indexer(x=x,
                                          qr=qr,
                                          start_pos=start_pos.long(),
@@ -763,14 +757,14 @@ class Attention(nn.Module):
                                          rotary_pos_emb=rotary_pos_emb,
                                          compress_pos_emb=compress_pos_emb,
                                          seq_info=seq_info,
-                                         index_scratch=index_scratch,
+                                         index_scratch=None,
                                          is_decoding=True)
                 indices_in_kvcache = index_out.indices_in_kvcache
                 topk_length = index_out.topk_length
             else:
                 # ratio=128: logical-to-physical index conversion for FlashMLA sparse path
                 num_compressed = torch.div(total_lens, self.compress_ratio, rounding_mode='floor').long()
-                max_comp = max(int(num_compressed.max().item()), 1) if num_compressed.numel() > 0 else 1
+                max_comp = max(block_offsets.size(1) * token_block_size // self.compress_ratio, 1)
                 comp_positions, _ = build_prefix_positions(num_compressed, max_comp)
                 entries_per_block = compressed_cache_fp8.size(1)
                 valid = comp_positions >= 0
@@ -869,7 +863,7 @@ class Attention(nn.Module):
                     raw = index_out.indices_in_kvcache  # [1, sl, topk]
                     parts.append(raw.squeeze(0))  # [sl, topk]
 
-                # Pad to same topk width before concatenating
+                # Pad to   same topk width before concatenating
                 max_topk = max(p.size(1) for p in parts)
                 parts = [
                     F.pad(p, (0, max_topk - p.size(1)), value=-1) if p.size(1) < max_topk else p
@@ -924,15 +918,6 @@ class Attention(nn.Module):
         out = self.attn_fwd.forward_prefill(q_flat, flat_kv, self.attn_sink, topk_indices)
         # out is [total_q_tokens, n_heads, head_dim] -> reshape to [1, total_q_tokens, n_heads, head_dim]
         return out.unsqueeze(0)
-
-    def _alloc_decode_scratch(self, batch_size: int, max_total_len: int, device: torch.device):
-        max_comp_r4 = max_total_len // 4
-        return {
-            'selected_index_kv_r4': torch.empty((batch_size, max_comp_r4, self.indexer.head_dim),
-                                                dtype=torch.bfloat16,
-                                                device=device) if self.indexer is not None else torch.empty(
-                                                    (batch_size, 0, 0), dtype=torch.bfloat16, device=device),
-        }
 
 
 class Gate(nn.Module):
@@ -1089,13 +1074,12 @@ class Block(nn.Module):
     def forward(self, x: torch.Tensor, seq_info: SeqInfo, input_ids: torch.Tensor,
                 slot: torch.Tensor, context: StepContext,
                 rotary_pos_emb: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None,
-                compress_pos_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
-                decode_scratch: dict[str, torch.Tensor] | None = None):
+                compress_pos_emb: tuple[torch.Tensor, torch.Tensor] | None = None):
         residual = x
         x, post, comb = self._hc_pre(x, self.hc_attn_fn, self.hc_attn_scale, self.hc_attn_base)
         x = self.attn_norm(x)
         x = self.attn(x, seq_info, slot, context, rotary_pos_emb=rotary_pos_emb,
-                       compress_pos_emb=compress_pos_emb, decode_scratch=decode_scratch)
+                       compress_pos_emb=compress_pos_emb)
         x = self._hc_post(x, residual, post, comb)
 
         residual = x
@@ -1233,7 +1217,6 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
                 attn_metadata=None,
                 inputs_embeds: torch.Tensor | None = None,
                 state_ids: torch.Tensor | None = None,
-                decode_scratch: dict[str, torch.Tensor] | None = None,
                 **kwargs):
         if state_ids is None:
             raise RuntimeError('DeepSeek-V4 requires state_ids to provide stable cache slots.')
@@ -1245,11 +1228,6 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
 
         h = self.embed(input_ids)
         h = h.unsqueeze(2).repeat(1, 1, self.config.hc_mult, 1)
-
-        # Allocate decode scratch if needed
-        if seq_info.is_decoding and decode_scratch is None:
-            max_total_len = context.block_offsets.size(1) * context.cache_config.kernel_block_size
-            decode_scratch = self._alloc_decode_scratch(safe_state_ids.numel(), max_total_len, input_ids.device)
 
         # Compute rotary (cos, sin, neg_sin) from position_ids (outside the layer loop)
         # V4 uses complex-number RoPE: cos/sin are (seq_len, rd//2), not duplicated
@@ -1278,19 +1256,9 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             else:
                 rot_emb, comp_emb = rotary_pos_emb_plain, None
             h = layer(h, seq_info, input_ids, safe_state_ids, context,
-                      rotary_pos_emb=rot_emb, compress_pos_emb=comp_emb, decode_scratch=decode_scratch)
+                      rotary_pos_emb=rot_emb, compress_pos_emb=comp_emb)
 
         return h
-
-    def _alloc_decode_scratch(self, batch_size: int, max_total_len: int, device: torch.device):
-        scratch: dict[str, torch.Tensor] = {}
-        for layer in self.layers:
-            attn_scratch = layer.attn._alloc_decode_scratch(batch_size, max_total_len, device)
-            for name, tensor in attn_scratch.items():
-                if name not in scratch or any(a < b for a, b in zip(scratch[name].shape, tensor.shape)):
-                    scratch[name] = tensor
-        scratch['selected_valid_lens'] = torch.empty((batch_size, 3), dtype=torch.int32, device=device)
-        return scratch
 
     def prepare_inputs_for_generation(self,
                                       past_key_values: list[list[torch.Tensor]],
