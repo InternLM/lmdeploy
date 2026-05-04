@@ -808,6 +808,15 @@ class Attention(nn.Module):
         window_block_size = context.cache_config.kernel_block_size
         token_block_size = context.cache_config.block_size
 
+        # CPU-side upper bounds for flatten_v4_kv (avoids GPU .item() sync)
+        max_kv = context.max_kv_seqlen
+        sum_kv = context.sum_kv_seqlen
+        cr = self.compress_ratio if self.compress_ratio else 1
+        max_flat_kv_len = min(max_kv, self.window_size) + max_kv // cr
+        total_flat_kv_tokens = sum_kv + sum_kv // cr
+        # CPU-side upper bound for build_compress_topk_indices
+        max_compress_width = max_kv // cr
+
         # Pre-compute window_kv_lens for Indexer offset
         window_kv_lens = total_lens.clamp(max=self.window_size)
 
@@ -876,7 +885,8 @@ class Attention(nn.Module):
                     offset=window_kv_lens,
                     q_seqlens=q_seqlens,
                     start_pos=start_pos,
-                    causal=True)
+                    causal=True,
+                    max_width=max_compress_width)
 
         # ---- Phase 3: Flatten window + compressed KV into contiguous tensor ----
         # BF16 compressed KV caches are eliminated; read from FP8 instead
@@ -891,6 +901,8 @@ class Attention(nn.Module):
             total_lens.long(),
             self.window_size,
             self.compress_ratio,
+            total_flat_kv_tokens,
+            max_flat_kv_len,
             fp8_compressed_kv_cache=fp8_compressed_kv_cache)
 
         # ---- Phase 4: Build topk indices and convert to global ----

@@ -134,11 +134,11 @@ def build_compress_topk_indices(total_lens: torch.Tensor, compress_ratio: int, o
     if causal and q_seqlens is not None:
         # Prefill path: build per-token causal indices
         # Returns [total_q_tokens, max_width] (flattened across batch)
-        max_comp = torch.div(total_lens, compress_ratio, rounding_mode='floor').max()
         if max_width is None:
-            max_width = max_comp
-        if isinstance(max_width, torch.Tensor):
-            max_width = int(max_width.item())  # only used for arange size — static per graph capture
+            max_comp = torch.div(total_lens, compress_ratio, rounding_mode='floor').max()
+            max_width = int(max_comp.item())
+        elif isinstance(max_width, torch.Tensor):
+            max_width = int(max_width.item())
 
         token_pos_in_seq, total_q, cu_q, seq_id = _build_token_positions(q_seqlens)
         abs_pos = start_pos[seq_id] + token_pos_in_seq

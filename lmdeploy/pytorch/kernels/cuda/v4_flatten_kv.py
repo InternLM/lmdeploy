@@ -80,6 +80,8 @@ def flatten_v4_kv(
     kv_seqlens: torch.Tensor,
     window_size: int,
     compress_ratio: int,
+    total_kv_tokens: int,
+    max_flat_kv_len: int,
     cu_seqlens_k: torch.Tensor | None = None,
     fp8_compressed_kv_cache: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -93,6 +95,12 @@ def flatten_v4_kv(
         kv_seqlens: [bsz] total KV length per sequence.
         window_size: sliding window size.
         compress_ratio: compression ratio (4 or 128), 0 if no compression.
+        total_kv_tokens: safe upper bound on the total number of flat KV
+            tokens across all sequences. Used for output allocation; slight
+            over-estimation is acceptable.
+        max_flat_kv_len: safe upper bound on the maximum flat KV length
+            across sequences. Used for Triton grid size; slight
+            over-estimation is acceptable (excess programs exit immediately).
         cu_seqlens_k: optional [bsz+1] int32 cumulative KV sequence lengths.
             If None, computed from kv_seqlens.
         fp8_compressed_kv_cache: optional [num_blocks, entries_per_block, 584]
@@ -110,10 +118,10 @@ def flatten_v4_kv(
         # fp8_cache is [num_blocks, entries, 584]; dequantize expects [num_blocks, entries, 1, 584]
         dequant = dequantize_model1_fp8_sparse(
             fp8_compressed_kv_cache.unsqueeze(2)).squeeze(2)  # [num_blocks, entries, 512]
-        # Clone to ensure the tensor owns its memory and sync to avoid CUDA errors
-        # from overlapping async operations on the FP8 cache views.
+        # Clone to decouple from FP8 cache views. No synchronize() needed —
+        # same-stream kernel launches are ordered, so the Triton flatten kernel
+        # will see the clone's data after all preceding GPU work completes.
         compressed_kv_cache = dequant.clone()
-        torch.cuda.synchronize()
 
     bsz = kv_seqlens.numel()
     head_dim = window_kv_cache.size(-1)
@@ -127,15 +135,12 @@ def flatten_v4_kv(
     if cu_seqlens_k is None:
         cu_seqlens_k = torch.zeros(bsz + 1, dtype=torch.int32, device=device)
         torch.cumsum(flat_kv_lens, dim=0, out=cu_seqlens_k[1:])
-    total_kv_tokens = cu_seqlens_k[-1].item()
 
     flat_kv = window_kv_cache.new_empty(total_kv_tokens, 1, head_dim)
 
     has_compress = compress_ratio > 0 and compressed_kv_cache is not None
     block_size = compressed_kv_cache.size(1) if has_compress else 1
 
-    # Launch one program per (batch_item, token_position)
-    max_flat_kv_len = int(flat_kv_lens.max().item()) if bsz > 0 else 0
     if max_flat_kv_len == 0:
         return flat_kv, cu_seqlens_k
 

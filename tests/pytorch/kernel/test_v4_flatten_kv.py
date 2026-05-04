@@ -7,6 +7,16 @@ DEVICE = 'cuda'
 DTYPE = torch.bfloat16
 
 
+def _flat_kv_bounds(kv_seqlens, window_size, compress_ratio):
+    """Compute safe upper bounds for flatten_v4_kv (no GPU sync)."""
+    kv = kv_seqlens.cpu() if kv_seqlens.is_cuda else kv_seqlens
+    cr = compress_ratio if compress_ratio > 0 else 1
+    window_kv_lens = kv.clamp(max=window_size)
+    num_compressed = torch.div(kv, cr, rounding_mode='floor').long() if compress_ratio > 0 else kv.new_zeros(kv.shape, dtype=torch.long)
+    flat_kv_lens = window_kv_lens + num_compressed
+    return int(flat_kv_lens.sum().item()), int(flat_kv_lens.max().item())
+
+
 def _reference_flatten_v4_kv(window_kv_cache, compressed_kv_cache, block_offsets,
                               kv_seqlens, window_size, compress_ratio):
     """Python reference for flatten_v4_kv.
@@ -118,8 +128,9 @@ class TestFlattenV4KV:
                 window_kv[b, p] = b * 100 + p
 
         block_offsets = torch.zeros(bsz, 1, dtype=torch.long, device=device)
+        tot, mxf = _flat_kv_bounds(total_lens, window_size, 0)
         flat_kv, cu = flatten_v4_kv(window_kv, None, block_offsets,
-                                    total_lens, window_size, 0)
+                                    total_lens, window_size, 0, tot, mxf)
 
         ref_kv, ref_cu = _reference_flatten_v4_kv(
             window_kv, None, block_offsets, total_lens, window_size, 0)
@@ -139,8 +150,9 @@ class TestFlattenV4KV:
             token_fn=lambda b, p: p)
 
         block_offsets = torch.zeros(bsz, 1, dtype=torch.long, device=device)
+        tot, mxf = _flat_kv_bounds(total_lens, window_size, 0)
         flat_kv, cu = flatten_v4_kv(window_kv, None, block_offsets,
-                                    total_lens, window_size, 0)
+                                    total_lens, window_size, 0, tot, mxf)
 
         ref_kv, ref_cu = _reference_flatten_v4_kv(
             window_kv, None, block_offsets, total_lens, window_size, 0)
@@ -160,8 +172,9 @@ class TestFlattenV4KV:
             token_fn=lambda b, p: p)
 
         block_offsets = torch.zeros(bsz, 1, dtype=torch.long, device=device)
+        tot, mxf = _flat_kv_bounds(total_lens, window_size, 0)
         flat_kv, cu = flatten_v4_kv(window_kv, None, block_offsets,
-                                    total_lens, window_size, 0)
+                                    total_lens, window_size, 0, tot, mxf)
 
         # Expected: last 4 tokens = 16, 17, 18, 19 in chronological order
         vals = flat_kv[:, 0, 0].cpu().tolist()
@@ -191,8 +204,9 @@ class TestFlattenV4KV:
         compressed_kv = torch.zeros(1, block_size, head_dim, dtype=dtype, device=device)
         compressed_kv[0, 0] = 100
 
+        tot, mxf = _flat_kv_bounds(total_lens, window_size, compress_ratio)
         flat_kv, cu = flatten_v4_kv(window_kv, compressed_kv, block_offsets,
-                                    total_lens, window_size, compress_ratio)
+                                    total_lens, window_size, compress_ratio, tot, mxf)
 
         ref_kv, ref_cu = _reference_flatten_v4_kv(
             window_kv, compressed_kv, block_offsets, total_lens,
@@ -221,8 +235,9 @@ class TestFlattenV4KV:
         compressed_kv[0, 0] = 100
         compressed_kv[0, 1] = 101
 
+        tot, mxf = _flat_kv_bounds(total_lens, window_size, compress_ratio)
         flat_kv, cu = flatten_v4_kv(window_kv, compressed_kv, block_offsets,
-                                    total_lens, window_size, compress_ratio)
+                                    total_lens, window_size, compress_ratio, tot, mxf)
 
         # Window chronological: tokens 6,7,8,9
         vals = flat_kv[:, 0, 0].cpu().tolist()
@@ -252,8 +267,9 @@ class TestFlattenV4KV:
         compressed_kv[0, 1] = 201
         compressed_kv[1, 0] = 202
 
+        tot, mxf = _flat_kv_bounds(total_lens, window_size, compress_ratio)
         flat_kv, cu = flatten_v4_kv(window_kv, compressed_kv, block_offsets,
-                                    total_lens, window_size, compress_ratio)
+                                    total_lens, window_size, compress_ratio, tot, mxf)
 
         ref_kv, ref_cu = _reference_flatten_v4_kv(
             window_kv, compressed_kv, block_offsets, total_lens,
@@ -288,8 +304,9 @@ class TestFlattenV4KV:
         for e in range(num_comp):
             compressed_kv[e // block_size, e % block_size] = 500 + e
 
+        tot, mxf = _flat_kv_bounds(total_lens, window_size, compress_ratio)
         flat_kv, cu = flatten_v4_kv(window_kv, compressed_kv, block_offsets,
-                                    total_lens, window_size, compress_ratio)
+                                    total_lens, window_size, compress_ratio, tot, mxf)
 
         ref_kv, ref_cu = _reference_flatten_v4_kv(
             window_kv, compressed_kv, block_offsets, total_lens,
@@ -327,8 +344,9 @@ class TestFlattenV4KV:
         compressed_kv[1, 0] = 300
         compressed_kv[1, 1] = 301
 
+        tot, mxf = _flat_kv_bounds(total_lens, window_size, compress_ratio)
         flat_kv, cu = flatten_v4_kv(window_kv, compressed_kv, block_offsets,
-                                    total_lens, window_size, compress_ratio)
+                                    total_lens, window_size, compress_ratio, tot, mxf)
 
         ref_kv, ref_cu = _reference_flatten_v4_kv(
             window_kv, compressed_kv, block_offsets, total_lens,
@@ -351,8 +369,9 @@ class TestFlattenV4KV:
                 window_kv[b, p] = b * 50 + p
 
         block_offsets = torch.zeros(bsz, 1, dtype=torch.long, device=device)
+        tot, mxf = _flat_kv_bounds(total_lens, window_size, 0)
         flat_kv, cu = flatten_v4_kv(window_kv, None, block_offsets,
-                                    total_lens, window_size, 0)
+                                    total_lens, window_size, 0, tot, mxf)
 
         ref_kv, ref_cu = _reference_flatten_v4_kv(
             window_kv, None, block_offsets, total_lens, window_size, 0)
@@ -374,8 +393,9 @@ class TestFlattenV4KV:
         window_kv[0, 0] = 42
 
         block_offsets = torch.zeros(bsz, 1, dtype=torch.long, device=device)
+        tot, mxf = _flat_kv_bounds(total_lens, window_size, 0)
         flat_kv, cu = flatten_v4_kv(window_kv, None, block_offsets,
-                                    total_lens, window_size, 0)
+                                    total_lens, window_size, 0, tot, mxf)
 
         assert flat_kv.shape == (1, 1, head_dim)
         assert flat_kv[0, 0, 0].item() == 42.0
@@ -399,8 +419,9 @@ class TestFlattenV4KV:
         compressed_kv = torch.zeros(1, block_size, head_dim, dtype=dtype, device=device)
         compressed_kv[0, 0] = 99
 
+        tot, mxf = _flat_kv_bounds(total_lens, window_size, compress_ratio)
         flat_kv, cu = flatten_v4_kv(window_kv, compressed_kv, block_offsets,
-                                    total_lens, window_size, compress_ratio)
+                                    total_lens, window_size, compress_ratio, tot, mxf)
 
         # window_kv_len = min(4, 4) = 4, num_compressed = 4//4 = 1
         vals = flat_kv[:, 0, 0].cpu().tolist()
@@ -424,8 +445,9 @@ class TestFlattenV4KV:
         block_offsets = torch.zeros(bsz, 1, dtype=torch.long, device=device)
         compressed_kv = torch.zeros(1, 1, head_dim, dtype=dtype, device=device)
 
+        tot, mxf = _flat_kv_bounds(total_lens, window_size, compress_ratio)
         flat_kv, cu = flatten_v4_kv(window_kv, compressed_kv, block_offsets,
-                                    total_lens, window_size, compress_ratio)
+                                    total_lens, window_size, compress_ratio, tot, mxf)
 
         # 3 < 4 → 0 compressed, flat_kv_len = 3
         assert flat_kv.shape[0] == 3
@@ -475,9 +497,10 @@ class TestFlattenV4KV:
             compressed_kv_bf16.unsqueeze(2))  # [1, block_size, 1, packed_dim]
 
         # Flatten using FP8 path
+        tot, mxf = _flat_kv_bounds(total_lens, window_size, compress_ratio)
         flat_kv, cu = flatten_v4_kv(
             window_kv, None, block_offsets, total_lens,
-            window_size, compress_ratio,
+            window_size, compress_ratio, tot, mxf,
             fp8_compressed_kv_cache=fp8_cache.squeeze(2))  # [1, block_size, packed_dim]
 
         # FP8 quantization has limited precision — allow small tolerance
@@ -529,9 +552,10 @@ class TestFlattenV4KV:
         fp8_cache = quantize_model1_fp8_sparse(fp8_input)
 
         # Flatten using FP8 path
+        tot, mxf = _flat_kv_bounds(total_lens, window_size, compress_ratio)
         flat_kv, cu = flatten_v4_kv(
             window_kv, None, block_offsets, total_lens,
-            window_size, compress_ratio,
+            window_size, compress_ratio, tot, mxf,
             fp8_compressed_kv_cache=fp8_cache.squeeze(2))
 
         torch.testing.assert_close(flat_kv.cpu(), ref_kv.cpu(), atol=0.1, rtol=0.05)
@@ -558,8 +582,9 @@ class TestFlattenV4KV:
         # Provide cu_seqlens_k explicitly
         cu_seqlens_k = torch.tensor([0, 5], dtype=torch.int32, device=device)
 
+        tot, mxf = _flat_kv_bounds(total_lens, window_size, 0)
         flat_kv, cu_out = flatten_v4_kv(
-            window_kv, None, block_offsets, total_lens, window_size, 0,
+            window_kv, None, block_offsets, total_lens, window_size, 0, tot, mxf,
             cu_seqlens_k=cu_seqlens_k)
 
         assert cu_out.data_ptr() == cu_seqlens_k.data_ptr() or cu_out.cpu().tolist() == [0, 5]
@@ -583,8 +608,9 @@ class TestFlattenV4KV:
             token_fn=lambda b, p: p % 256)
 
         block_offsets = torch.zeros(bsz, 1, dtype=torch.long, device=device)
+        tot, mxf = _flat_kv_bounds(total_lens, window_size, 0)
         flat_kv, cu = flatten_v4_kv(window_kv, None, block_offsets,
-                                    total_lens, window_size, 0)
+                                    total_lens, window_size, 0, tot, mxf)
 
         # Expected: tokens 96, 97, 98, 99 (mod 256)
         vals = flat_kv[:, 0, 0].cpu().tolist()
