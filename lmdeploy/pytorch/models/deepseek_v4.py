@@ -276,14 +276,13 @@ class Compressor(nn.Module):
         (fill_compress_state, score_kv) instead of managing state in Python.
 
         Args:
-            x: [bsz, seqlen, dim] input tensor.
+            x: [bsz, seqlen, dim] for decode, [1, total_tokens, dim] for prefill.
             start_pos: Tensor[bsz] start position for each sequence.
             context: StepContext with block_caches, named_state_caches, etc.
             slot: Tensor[bsz] state cache slot for each sequence.
             compress_pos_emb: (cos, sin) tuple for compressed KV RoPE.
             seq_info: Bundled sequence-length metadata.
         """
-        bsz, seqlen, _ = x.size()
         ratio = self.compress_ratio
         rd = self.rope_head_dim
         dtype = x.dtype
@@ -296,8 +295,8 @@ class Compressor(nn.Module):
         kv_seqlens = seq_info.kv_seqlens
 
         # ---- Phase A: Projections ----
-        kv = self.wkv(x)       # [bsz, seqlen, D]
-        score = self.wgate(x)   # [bsz, seqlen, D]
+        kv = self.wkv(x)       # same layout as x
+        score = self.wgate(x)   # same layout as x
 
         kv_flat = kv.view(-1, kv.size(-1))
         score_flat = score.view(-1, score.size(-1))
@@ -311,7 +310,7 @@ class Compressor(nn.Module):
 
         # ---- Phase D: score_kv (reads state, produces compressed_kv) ----
         compressed_kv = kv_flat.new_zeros(kv_flat.size(0), self.head_dim)
-        max_seqlen_q = seqlen
+        max_seqlen_q = context.max_kv_seqlen
         score_kv(kv_flat, score_flat, self.ape, kv_state, score_state, state_ids,
                  cu_q_seqlens, kv_seqlens, compressed_kv, overlap, max_seqlen_q)
 
@@ -424,7 +423,9 @@ class Indexer(nn.Module):
         meta = V4IndexerMetadata(block_offsets=block_offsets,
                                  start_pos=comp_start_pos,
                                  state_ids=comp_start_pos.new_zeros(comp_start_pos.shape),
-                                 compress_ratio=self.compress_ratio)
+                                 compress_ratio=self.compress_ratio,
+                                 cu_q_seqlens=seq_info.cu_q_seqlens if not is_decoding else None,
+                                 kv_seqlens=seq_info.kv_seqlens if not is_decoding else None)
         return self.indexer_fwd(q, weights, index_kv_cache, meta, block_size, self.layer_id,
                                 index_scratch, offset, is_decoding)
 
@@ -823,8 +824,6 @@ class Attention(nn.Module):
         # Prefill: x is [1, total_tokens, ...], flatten to [total_tokens, ...]
         q_flat = q.squeeze(0)    # [total_tokens, n_heads, head_dim]
         kv_flat = kv.squeeze(0)  # [total_tokens, head_dim]
-        qr_flat = qr.squeeze(0)  # [total_tokens, q_lora_rank]
-        x_flat = x.squeeze(0)    # [total_tokens, dim]
 
         # ---- Phase 1: Write window state (batched) ----
         self._write_window_state_prefill_batched(
@@ -832,53 +831,31 @@ class Attention(nn.Module):
         self._pack_window_state_batched(
             caches['window_state'], caches['window_state_fp8'], slot, window_block_size)
 
-        # ---- Phase 2: Per-seq Indexer call (writes compressed KV) ----
-        # Cannot be batched because: (1) the internal Compressor writes ring-buffer
-        # state and paged block cache as side effects — zero-padded input would
-        # corrupt both; (2) the Indexer backend derives total_lens from seqlen,
-        # so padded seqlen produces wrong compression points for shorter sequences.
+        # ---- Phase 2: Batched Indexer call (writes compressed KV) ----
+        # Compressor kernels use cu_q_seqlens/kv_seqlens GPU pointers,
+        # so flat [1, total_tokens, dim] input is handled correctly.
+        # The scoring/topk step in TritonV4IndexerImpl pads to [bsz, max_seqlen]
+        # using cu_q_seqlens + searchsorted (no CUDA sync).
         compress_topk = None
         if self.compress_ratio:
             if self.indexer is not None:
-                cu_q = torch.cat([q_seqlens.new_zeros(1), q_seqlens.cumsum(0)])
-                parts = []
-                for s in range(num_seqs):
-                    sl = q_seqlens[s].item()
-                    off = cu_q[s].item()
-                    seq_x = x[:, off:off + sl]
-                    seq_qr = qr[:, off:off + sl]
-                    cos_r, sin_r, neg_sin_r = rotary_pos_emb
-                    seq_rotary_pos_emb = (cos_r[off:off + sl], sin_r[off:off + sl], neg_sin_r[off:off + sl])
-                    cos_c, sin_c = compress_pos_emb
-                    seq_compress_pos_emb = (cos_c[off:off + sl], sin_c[off:off + sl])
-                    seq_info_s = seq_info[s:s + 1]
+                index_out = self.indexer(
+                    x=x,
+                    qr=qr,
+                    start_pos=start_pos,
+                    offset=window_kv_lens,
+                    context=context,
+                    slot=slot,
+                    index_kv_cache=caches['index_kv'],
+                    block_offsets=block_offsets,
+                    block_size=token_block_size,
+                    rotary_pos_emb=rotary_pos_emb,
+                    compress_pos_emb=compress_pos_emb,
+                    seq_info=seq_info,
+                    index_scratch=None,
+                    is_decoding=False)
 
-                    index_out = self.indexer(
-                        x=seq_x,
-                        qr=seq_qr,
-                        start_pos=start_pos[s:s + 1],
-                        offset=window_kv_lens[s:s + 1],
-                        context=context,
-                        slot=slot[s:s + 1],
-                        index_kv_cache=caches['index_kv'],
-                        block_offsets=block_offsets[s:s + 1],
-                        block_size=token_block_size,
-                        rotary_pos_emb=seq_rotary_pos_emb,
-                        compress_pos_emb=seq_compress_pos_emb,
-                        seq_info=seq_info_s,
-                        index_scratch=None,
-                        is_decoding=False)
-
-                    raw = index_out.indices_in_kvcache  # [1, sl, topk]
-                    parts.append(raw.squeeze(0))  # [sl, topk]
-
-                # Pad to   same topk width before concatenating
-                max_topk = max(p.size(1) for p in parts)
-                parts = [
-                    F.pad(p, (0, max_topk - p.size(1)), value=-1) if p.size(1) < max_topk else p
-                    for p in parts
-                ]
-                compress_topk = torch.cat(parts, dim=0)
+                compress_topk = index_out.indices_in_kvcache.squeeze(0)  # [total_tokens, topk]
             else:
                 compress_topk = build_compress_topk_indices(
                     total_lens, self.compress_ratio,

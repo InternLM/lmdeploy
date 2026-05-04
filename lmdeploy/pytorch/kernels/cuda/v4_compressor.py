@@ -422,7 +422,7 @@ def fill_compress_state(
     coff = kv_state.size(1) // ratio
     overlap = coff > 1
 
-    is_decoding = kv.size(0) == kv_seqlens.size(0)
+    is_decoding = kv.size(0) == B
     max_write = ratio * 2 if overlap else ratio
 
     grid = (1 if is_decoding else max_write, B, )
@@ -492,7 +492,7 @@ def score_kv(
     head_dim = D // (1 + overlap)
     B = state_ids.size(0)
 
-    is_decoding = kv.size(0) == kv_seqlens.size(0)
+    is_decoding = kv.size(0) == B
 
     BLOCK_D = 128
 

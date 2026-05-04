@@ -273,6 +273,7 @@ class StepContext:
     is_decoding: bool
     sum_kv_seqlen: int
     max_kv_seqlen: int | None = None
+    max_q_seqlen: int | None = None
     local_adapter_ids: torch.LongTensor | None = None
     input_embeddings: torch.Tensor | None = None
     input_embedding_indexing: torch.Tensor | None = None
@@ -357,6 +358,7 @@ class StepContext:
             is_decoding=inputs.is_decoding,
             sum_kv_seqlen=inputs.sum_kv_seqlen,
             max_kv_seqlen=inputs.max_kv_seqlen,
+            max_q_seqlen=inputs.max_q_seqlen,
             local_adapter_ids=inputs.local_adapter_ids,
             vision_inputs=inputs.vision_inputs,
             kv_quant_policy=kv_quant_policy,
