@@ -326,6 +326,7 @@ class CudaGraphMixin:
         context.q_seqlens = input_buffers['q_seqlens']
         context.kv_seqlens = input_buffers['kv_seqlens']
         context.q_start_loc = input_buffers['q_start_loc']
+        context.block_offsets = input_buffers['block_offsets']
 
         # mrope
         if graph_meta.use_mrope:

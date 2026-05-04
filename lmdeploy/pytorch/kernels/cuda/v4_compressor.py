@@ -57,11 +57,15 @@ def _fill_compress_state_kernel(
     t_id = tl.program_id(0)
     batch_id = tl.program_id(1)
 
+    state_id = tl.load(state_idx_ptr + batch_id)
+
+    if state_id < 0:
+        return
+
     seq_start = tl.load(cu_q_seqlens_ptr + batch_id)
     seq_end = tl.load(cu_q_seqlens_ptr + batch_id + 1)
     seqlen = seq_end - seq_start
     kvlen = tl.load(kv_seqlens_ptr + batch_id)
-    state_id = tl.load(state_idx_ptr + batch_id)
 
     if overlap:
         max_num_write = ratio * 2
@@ -179,11 +183,15 @@ def _score_kv_kernel(
     group_id = tl.program_id(0)
     batch_id = tl.program_id(1)
 
+    kvlen = tl.load(kv_seqlens_ptr + batch_id)
+    state_id = tl.load(state_idx_ptr + batch_id)
+
+    if state_id < 0:
+        return
+
     seq_start = tl.load(cu_q_seqlens_ptr + batch_id)
     seq_end = tl.load(cu_q_seqlens_ptr + batch_id + 1)
     seqlen = seq_end - seq_start
-    kvlen = tl.load(kv_seqlens_ptr + batch_id)
-    state_id = tl.load(state_idx_ptr + batch_id)
     start_pos = kvlen - seqlen
 
     if is_decoding:

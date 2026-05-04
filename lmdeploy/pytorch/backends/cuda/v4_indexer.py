@@ -23,11 +23,16 @@ class TritonV4IndexerImpl(BaseV4Indexer):
         safe_logical_topk = logical_topk.clamp(min=0)
         token_positions = safe_logical_topk * self.compress_ratio
         block_idx = torch.div(token_positions, block_size, rounding_mode='floor').long()
-        phys_block = block_offsets.gather(1, block_idx.view(bsz, -1)).view_as(logical_topk).long()
-        page_size = index_kv_cache.size(1)
-        block_off = torch.remainder(safe_logical_topk, page_size).long()
-        phys_indices = phys_block * page_size + block_off
-        return torch.where(logical_topk >= 0, phys_indices, phys_indices.new_full((), -1))
+        max_block_idx = block_offsets.size(1)
+        safe_block_idx = block_idx.clamp(max=max_block_idx - 1)
+        block_idx_valid = block_idx < max_block_idx
+        phys_block = block_offsets.gather(1, safe_block_idx.view(bsz, -1)).view_as(logical_topk).long()
+        # entries_per_block = block_size / compress_ratio (e.g. 128/4=32)
+        entries_per_block = block_size // self.compress_ratio
+        block_off = torch.remainder(safe_logical_topk, entries_per_block).long()
+        phys_indices = phys_block * entries_per_block + block_off
+        valid = (logical_topk >= 0) & block_idx_valid
+        return torch.where(valid, phys_indices, phys_indices.new_full((), -1))
 
     def forward(self,
                 query: torch.Tensor,

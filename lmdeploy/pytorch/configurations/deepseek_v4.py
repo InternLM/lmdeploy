@@ -74,6 +74,10 @@ def update_cache_config(cache_config):
     if cache_config.block_size < 128:
         raise ValueError('DeepSeek-V4 requires block_size >= 128 because ratio=128 compressed cache needs at '
                          'least one entry per token block.')
+    # V4 manages its sliding window via ring-buffer state caches internally.
+    # Setting window_size=-1 selects DefaultBlockManager so blocks are not
+    # dropped and kv_seqlens are not reduced by num_ignored_history.
+    cache_config.window_size = -1
 
 
 class DeepseekV4ModelConfigBuilder(AutoModelConfigBuilder):
