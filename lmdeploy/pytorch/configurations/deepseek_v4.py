@@ -60,7 +60,9 @@ def _finalize_v4_cache_specs(model_config: ModelConfig, block_size: int):
             BlockCacheSpec('v4_compressed_kv_r4_fp8', ratio4_layers, (entries_r4, packed_token_dim),
                            torch.float8_e4m3fn))
         block_specs.append(
-            BlockCacheSpec('v4_index_kv_r4', ratio4_layers, (entries_r4, index_head_dim), torch.bfloat16))
+            BlockCacheSpec('v4_index_kv_r4', ratio4_layers, (entries_r4, index_head_dim), torch.float8_e4m3fn))
+        block_specs.append(
+            BlockCacheSpec('v4_index_kv_r4_scale', ratio4_layers, (entries_r4, 1), torch.float32))
     if ratio128_layers:
         entries_r128 = block_size // 128
         block_specs.append(

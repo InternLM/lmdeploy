@@ -327,7 +327,6 @@ class Compressor(nn.Module):
         compressed_kv[..., -rd:] = kv_rope.squeeze(1)
         if self.rotate:
             compressed_kv = rotate_activation(compressed_kv)
-            self.kernel_mod.fp4_act_quant(compressed_kv, 32, True)
         else:
             self.kernel_mod.act_quant(compressed_kv[..., :-rd], 64, 'ue8m0', torch.float8_e8m0fnu, True)
 
@@ -337,12 +336,15 @@ class Compressor(nn.Module):
         block_size = context.cache_config.block_size
         cache_name = self._get_block_cache_name()
         fp8_cache_name = self._get_fp8_cache_name()
-        bf16_cache = block_caches[cache_name][self.layer_id] if cache_name in block_caches else None
+        kv_cache = block_caches[cache_name][self.layer_id] if cache_name in block_caches else None
         fp8_cache = block_caches[fp8_cache_name][self.layer_id] if fp8_cache_name else None
+        scale_cache_name = f'{cache_name}_scale' if self.rotate else None
+        kv_scale_cache = block_caches[scale_cache_name][self.layer_id] if scale_cache_name and scale_cache_name in block_caches else None
 
-        fill_compressed_kv(compressed_kv, bf16_cache, cu_q_seqlens, kv_seqlens, block_offsets,
+        fill_compressed_kv(compressed_kv, kv_cache, cu_q_seqlens, kv_seqlens, block_offsets,
                            self.compress_ratio, block_size, max_seqlen_q,
-                           fp8_cache=fp8_cache)
+                           fp8_cache=fp8_cache,
+                           kv_scale_cache=kv_scale_cache)
 
 
 class Indexer(nn.Module):
@@ -402,32 +404,47 @@ class Indexer(nn.Module):
                 context: StepContext,
                 slot: torch.Tensor,
                 index_kv_cache: torch.Tensor,
+                index_kv_scale_cache: torch.Tensor,
                 block_offsets: torch.Tensor,
                 block_size: int,
                 rotary_pos_emb: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
                 compress_pos_emb: tuple[torch.Tensor, torch.Tensor],
                 seq_info: SeqInfo,
-                is_decoding: bool = False,
-                index_scratch: torch.Tensor | None = None):
+                is_decoding: bool = False):
         rd = self.rope_head_dim
         q = self.wq_b(qr).unflatten(-1, (self.n_local_heads, self.head_dim))
         cos, sin, _ = rotary_pos_emb
         self.apply_rotary.forward_single(q[..., -rd:], cos, sin, inplace=True, complex_mode=True)
         q = rotate_activation(q)
-        self.kernel_mod.fp4_act_quant(q, 32, True)
+        # FP8 quantize Indexer Q (replaces fp4_act_quant for better precision)
+        from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
+        n_local_heads = self.n_local_heads
+        head_dim = self.head_dim
+        q_2d = q.reshape(-1, head_dim)
+        q_fp8, q_scale_2d = quant_fp8(q_2d, group_size=128,
+                                       dtype=torch.float8_e4m3fn, scale_fmt='ue8m0')
+        q = q_fp8.reshape(*q.shape)
+        q_scale = q_scale_2d.squeeze(-1).reshape(-1, n_local_heads)
 
         comp_start_pos = seq_info.start_pos if is_decoding else start_pos
         self.compressor(x, comp_start_pos, slot, context, compress_pos_emb, seq_info)
         weights = self.weights_proj(x) * (self.head_dim**-0.5 * self.n_heads**-0.5)
 
+        # Use fixed upper bound for max_kv_seqlen during decode (CUDAGraph compat)
+        if is_decoding:
+            max_kv_seqlen = context.cache_config.block_size * context.cache_config.num_gpu_blocks
+        else:
+            max_kv_seqlen = context.max_kv_seqlen or 0
         meta = V4IndexerMetadata(block_offsets=block_offsets,
                                  start_pos=comp_start_pos,
                                  state_ids=comp_start_pos.new_zeros(comp_start_pos.shape),
                                  compress_ratio=self.compress_ratio,
                                  cu_q_seqlens=seq_info.cu_q_seqlens if not is_decoding else None,
-                                 kv_seqlens=seq_info.kv_seqlens if not is_decoding else None)
-        return self.indexer_fwd(q, weights, index_kv_cache, meta, block_size, self.layer_id,
-                                index_scratch, offset, is_decoding)
+                                 kv_seqlens=seq_info.kv_seqlens if not is_decoding else None,
+                                 index_kv_scale_cache=index_kv_scale_cache,
+                                 max_kv_seqlen=max_kv_seqlen)
+        return self.indexer_fwd(q, q_scale, weights, index_kv_cache, meta, block_size, self.layer_id,
+                                offset, is_decoding)
 
 class DeepseekV4BMM(nn.Module):
     """Wrapped bmm."""
@@ -570,10 +587,12 @@ class Attention(nn.Module):
         compressed_kv = None
         compressed_kv_fp8 = None
         index_kv = None
+        index_kv_scale = None
         if self.compress_ratio:
             if self.compress_ratio == 4:
                 compressed_kv_fp8 = block_caches['v4_compressed_kv_r4_fp8'][self.layer_id]
-                index_kv = block_caches['v4_index_kv_r4']
+                index_kv = block_caches['v4_index_kv_r4'][self.layer_id]
+                index_kv_scale = block_caches['v4_index_kv_r4_scale'][self.layer_id]
             else:
                 compressed_kv_fp8 = block_caches['v4_compressed_kv_r128_fp8'][self.layer_id]
 
@@ -581,7 +600,8 @@ class Attention(nn.Module):
                     window_state_fp8=window_state_fp8,
                     compressed_kv=compressed_kv,
                     compressed_kv_fp8=compressed_kv_fp8,
-                    index_kv=index_kv)
+                    index_kv=index_kv,
+                    index_kv_scale=index_kv_scale)
 
     @staticmethod
     def _write_window_state_prefill_batched(window_state_cache: torch.Tensor,
@@ -753,6 +773,7 @@ class Attention(nn.Module):
             if self.indexer is not None:
                 # ratio=4: Indexer provides physical indices into fp8 compressed cache
                 index_cache = caches['index_kv']
+                index_scale_cache = caches['index_kv_scale']
                 index_out = self.indexer(x=x,
                                          qr=qr,
                                          start_pos=start_pos.long(),
@@ -760,12 +781,12 @@ class Attention(nn.Module):
                                          context=context,
                                          slot=slot,
                                          index_kv_cache=index_cache,
+                                         index_kv_scale_cache=index_scale_cache,
                                          block_offsets=block_offsets,
                                          block_size=token_block_size,
                                          rotary_pos_emb=rotary_pos_emb,
                                          compress_pos_emb=compress_pos_emb,
                                          seq_info=seq_info,
-                                         index_scratch=None,
                                          is_decoding=True)
                 indices_in_kvcache = index_out.indices_in_kvcache
                 topk_length = index_out.topk_length
@@ -802,12 +823,13 @@ class Attention(nn.Module):
             topk_length=topk_length,
             extra_indices_in_kvcache=extra_indices_in_kvcache,
             extra_topk_length=extra_topk_length)
-        return self.attn_fwd.forward_decode(q,
+        ret = self.attn_fwd.forward_decode(q,
                                             window_state_fp8,
                                             self.attn_sink,
                                             attn_meta,
                                             token_block_size,
                                             compressed_kv_fp8_cache=compressed_cache_fp8)
+        return ret
 
     def _forward_prefill_core(self, q, kv, qr, x, seq_info: SeqInfo, slot, context, rotary_pos_emb, compress_pos_emb, num_seqs):
         from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
@@ -859,12 +881,12 @@ class Attention(nn.Module):
                     context=context,
                     slot=slot,
                     index_kv_cache=caches['index_kv'],
+                    index_kv_scale_cache=caches['index_kv_scale'],
                     block_offsets=block_offsets,
                     block_size=token_block_size,
                     rotary_pos_emb=rotary_pos_emb,
                     compress_pos_emb=compress_pos_emb,
                     seq_info=seq_info,
-                    index_scratch=None,
                     is_decoding=False)
 
                 compress_topk = index_out.indices_in_kvcache.squeeze(0)  # [total_tokens, topk]

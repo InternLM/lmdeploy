@@ -15,6 +15,8 @@ class V4IndexerMetadata:
     compress_ratio: int
     cu_q_seqlens: torch.Tensor = None
     kv_seqlens: torch.Tensor = None
+    index_kv_scale_cache: torch.Tensor = None
+    max_kv_seqlen: int = None
 
 
 @dataclass
@@ -30,12 +32,12 @@ class BaseV4Indexer(ABC):
     @abstractmethod
     def forward(self,
                 query: torch.Tensor,
+                q_scale: torch.Tensor,
                 weights: torch.Tensor,
                 index_kv_cache: torch.Tensor,
                 meta: V4IndexerMetadata,
                 block_size: int,
                 layer_id: int,
-                index_scratch: torch.Tensor,
                 offset: int,
                 is_decoding: bool) -> V4IndexerOutput:
         raise NotImplementedError

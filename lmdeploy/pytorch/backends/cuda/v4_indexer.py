@@ -1,11 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import torch
-import torch.distributed as dist
 
 from ..indexer import BaseV4Indexer, BaseV4IndexerBuilder, V4IndexerMetadata, V4IndexerOutput
 from lmdeploy.pytorch.kernels.cuda.bitonic_topk import bitonic_topk
-from lmdeploy.pytorch.models.deepseek_v4_utils import build_prefix_positions, gather_compressed_cache_entries
+from lmdeploy.pytorch.kernels.cuda.ds_index import fp8_index
 
 
 class TritonV4IndexerImpl(BaseV4Indexer):
@@ -27,7 +26,6 @@ class TritonV4IndexerImpl(BaseV4Indexer):
         safe_block_idx = block_idx.clamp(max=max_block_idx - 1)
         block_idx_valid = block_idx < max_block_idx
         phys_block = block_offsets.gather(1, safe_block_idx.view(bsz, -1)).view_as(logical_topk).long()
-        # entries_per_block = block_size / compress_ratio (e.g. 128/4=32)
         entries_per_block = block_size // self.compress_ratio
         block_off = torch.remainder(safe_logical_topk, entries_per_block).long()
         phys_indices = phys_block * entries_per_block + block_off
@@ -36,141 +34,129 @@ class TritonV4IndexerImpl(BaseV4Indexer):
 
     def forward(self,
                 query: torch.Tensor,
+                q_scale: torch.Tensor,
                 weights: torch.Tensor,
                 index_kv_cache: torch.Tensor,
                 meta: V4IndexerMetadata,
                 block_size: int,
                 layer_id: int,
-                index_scratch: torch.Tensor,
                 offset: int,
                 is_decoding: bool) -> V4IndexerOutput:
         block_offsets = meta.block_offsets.long()
         start_pos = meta.start_pos
         cu_q_seqlens = meta.cu_q_seqlens
         kv_seqlens = meta.kv_seqlens
+        index_kv_scale_cache = meta.index_kv_scale_cache
 
         if cu_q_seqlens is not None and not is_decoding:
             return self._forward_prefill_batched(
-                query, weights, index_kv_cache, block_offsets,
-                cu_q_seqlens, kv_seqlens, layer_id, block_size, offset)
+                query, q_scale, weights, index_kv_cache, index_kv_scale_cache,
+                block_offsets, cu_q_seqlens, kv_seqlens, block_size, offset)
 
         bsz = query.size(0)
         seqlen = query.size(1)
 
         total_lens = start_pos + seqlen
         num_index = torch.div(total_lens, self.compress_ratio, rounding_mode='floor')
-        max_index = max(block_offsets.size(1) * block_size // self.compress_ratio, 1)
-
-        if index_scratch is not None:
-            max_index = index_scratch.size(1)
+        max_kv_seqlen = meta.max_kv_seqlen if meta.max_kv_seqlen is not None else block_offsets.size(1) * block_size
+        max_index = max(max_kv_seqlen // self.compress_ratio, 1)
 
         if max_index == 0:
             empty = query.new_empty((bsz, 1, 0), dtype=torch.long)
             return V4IndexerOutput(indices_in_kvcache=empty,
                                    topk_length=num_index.new_zeros((bsz,), dtype=torch.int32))
 
-        positions, pos_mask = build_prefix_positions(num_index, max_index)
-        if index_scratch is not None:
-            index_scratch.copy_(
-                gather_compressed_cache_entries(index_kv_cache[layer_id], block_offsets, positions,
-                                                block_size, self.compress_ratio))
-            gathered = index_scratch
-        else:
-            gathered = gather_compressed_cache_entries(index_kv_cache[layer_id], block_offsets, positions,
-                                                       block_size, self.compress_ratio)
+        # Merge weights into q_scale
+        q_scale_weighted = q_scale * weights.squeeze(1)  # [bsz, n_heads]
 
-        score = torch.einsum('bshd,btd->bsht', query, gathered)
-        score = (score.relu_() * weights.unsqueeze(-1)).sum(dim=2)
-        score = score.masked_fill(~pos_mask.unsqueeze(1), float('-inf'))
-        if self.world_size > 1:
-            dist.all_reduce(score)
+        # Reshape Q from [bsz, 1, n_heads, head_dim] to [bsz, n_heads, head_dim]
+        q_3d = query.squeeze(1)  # [bsz, n_heads, head_dim]
+
+        # Build cu_q_seqlens for decode: [0, 1, 2, ..., bsz]
+        cu_q = torch.arange(bsz + 1, device=query.device, dtype=torch.int32)
+
+        # fp8_index: fused scoring kernel
+        # k_cache already sliced by layer_id: [num_blocks, entries_per_block, head_dim]
+        # k_seqlens must be in compressed entries (not tokens) since BLOCK_N=entries_per_block
+        k_cache = index_kv_cache
+        k_s_cache = index_kv_scale_cache.squeeze(-1)  # [num_blocks, entries_per_block]
+        scores = fp8_index(q_3d, q_scale_weighted,
+                           k_cache, k_s_cache,
+                           cu_q, num_index.to(torch.int32), block_offsets,
+                           max_q_seqlen=1, max_k_seqlen=max_index, causal=False)
 
         topk_width = min(self.index_topk, max_index)
-        topk = score.topk(topk_width, dim=-1)[1]
         topk_length = num_index.clamp(max=topk_width).to(torch.int32)
 
         if is_decoding:
-            valid_topk = torch.arange(topk_width, device=query.device).view(1, 1, -1)
-            valid_topk = valid_topk < topk_length.view(-1, 1, 1)
-            logical_topk = torch.where(valid_topk, topk, topk.new_full((), -1))
-            phys_indices = self._logical_to_physical(logical_topk, block_offsets, block_size,
+            # bitonic_topk with fill=-1 handles invalid positions natively
+            if topk_width > 0 and (topk_width & (topk_width - 1)) == 0:
+                topk = bitonic_topk(scores, None, num_index.to(torch.int32),
+                                    k=topk_width, fill=-1, descending=True).long()
+            else:
+                topk = scores.topk(topk_width, dim=-1)[1]
+            topk = topk.unsqueeze(1)  # [bsz, 1, topk_width]
+            phys_indices = self._logical_to_physical(topk, block_offsets, block_size,
                                                      index_kv_cache)
             return V4IndexerOutput(indices_in_kvcache=phys_indices, topk_length=topk_length)
         else:
+            topk = scores.topk(topk_width, dim=-1)[1]
             return V4IndexerOutput(indices_in_kvcache=topk + offset, topk_length=topk_length)
 
     def _forward_prefill_batched(self,
                                  query: torch.Tensor,
+                                 q_scale: torch.Tensor,
                                  weights: torch.Tensor,
                                  index_kv_cache: torch.Tensor,
+                                 index_kv_scale_cache: torch.Tensor,
                                  block_offsets: torch.Tensor,
                                  cu_q_seqlens: torch.Tensor,
                                  kv_seqlens: torch.Tensor,
-                                 layer_id: int,
                                  block_size: int,
                                  offset: int) -> V4IndexerOutput:
-        """Batched prefill: all operations are token-wise on flat tensors.
-
-        query is [1, total_tokens, n_heads, head_dim], gathered from paged
-        cache as [bsz, max_index, head_dim], then expanded to
-        [total_tokens, max_index, head_dim] via searchsorted.
-
-        No padding, no CUDA sync, no .item() calls.
-        """
+        """Batched prefill: uses fp8_index fused kernel for scoring."""
         bsz = kv_seqlens.size(0)
         total_tokens = query.size(1)
         q_seqlens = cu_q_seqlens[1:] - cu_q_seqlens[:-1]
 
-        # Per-token sequence id (GPU tensor, no sync)
-        token_seq = torch.arange(total_tokens, device=query.device)
-        seq_id = torch.searchsorted(cu_q_seqlens[1:], token_seq, right=True)
-
         total_lens = kv_seqlens
         num_index = torch.div(total_lens, self.compress_ratio, rounding_mode='floor')
-        max_index = max(block_offsets.size(1) * block_size // self.compress_ratio, 1)
+        max_kv_seqlen = kv_seqlens.max().item()
+        max_index = max(max_kv_seqlen // self.compress_ratio, 1)
 
         if max_index == 0:
             empty = query.new_empty((1, total_tokens, 0), dtype=torch.long)
             return V4IndexerOutput(indices_in_kvcache=empty,
                                    topk_length=num_index.new_zeros((bsz,), dtype=torch.int32))
 
-        # Gather compressed cache entries: [bsz, max_index, head_dim]
-        positions, pos_mask = build_prefix_positions(num_index, max_index)
-        gathered = gather_compressed_cache_entries(index_kv_cache[layer_id], block_offsets, positions,
-                                                   block_size, self.compress_ratio)
+        # Reshape Q to [total_tokens, n_heads, head_dim] for fp8_index
+        q_3d = query.squeeze(0)  # [total_tokens, n_heads, head_dim]
+        q_s = q_scale.squeeze(0) if q_scale.dim() == 3 else q_scale  # [total_tokens, n_heads]
+        w_flat = weights.squeeze(0)  # [total_tokens, n_heads]
+        q_s_weighted = q_s * w_flat  # merge weights into q_scale
 
-        # Expand gathered from [bsz, max_index, head_dim] to [total_tokens, max_index, head_dim]
-        gathered_flat = gathered[seq_id]  # [total_tokens, max_index, head_dim]
+        # fp8_index: k_seqlens must be in compressed entries
+        k_cache = index_kv_cache
+        k_s_cache = index_kv_scale_cache.squeeze(-1)  # [num_blocks, entries_per_block]
+        scores = fp8_index(q_3d, q_s_weighted,
+                           k_cache, k_s_cache,
+                           cu_q_seqlens, num_index.to(torch.int32), block_offsets,
+                           max_q_seqlen=total_tokens, max_k_seqlen=max_index, causal=True)
 
-        # Score: einsum on flat tensors
-        # q_flat: [T, n_heads, head_dim], gathered_flat: [T, max_index, head_dim]
-        # result: [T, n_heads, max_index] = sum_d q[t,h,d] * gathered[t,m,d]
-        q_flat = query.squeeze(0)
-        score = torch.einsum('qhd,qmd->qhm', q_flat, gathered_flat)
-
-        # ReLU * weights, sum over heads: [T, M]
-        score = (score.relu_() * weights.squeeze(0).unsqueeze(-1)).sum(dim=1)
-
-        # Mask invalid compression positions (per-token via seq_id)
-        pos_mask_flat = pos_mask[seq_id]  # [total_tokens, max_index]
-        score = score.masked_fill(~pos_mask_flat, float('-inf'))
-
-        if self.world_size > 1:
-            dist.all_reduce(score)
-
-        # Topk using bitonic_topk (no sync, uses GPU q_seqlens/num_index)
         topk_width = min(self.index_topk, max_index)
-        # bitonic_topk expects [num_tokens, max_kv_len], q_seqlens, kv_seqlens
-        # For us: num_index is per-sequence, expand to per-token
-        num_index_flat = num_index[seq_id]  # [total_tokens]
-        topk = bitonic_topk(score, q_seqlens, num_index_flat, k=topk_width, fill=-1, descending=True)
+        # bitonic_topk requires K to be a power of 2; fall back to torch.topk otherwise
+        if topk_width > 0 and (topk_width & (topk_width - 1)) == 0:
+            topk = bitonic_topk(scores, q_seqlens, num_index.to(torch.int32),
+                                k=topk_width, fill=-1, descending=True).long()
+        else:
+            topk = scores.topk(topk_width, dim=-1)[1]
 
         # Apply per-token offset
-        # In prefill, offset is per-sequence [bsz]; expand to per-token via seq_id
+        token_seq = torch.arange(total_tokens, device=query.device)
+        seq_id = torch.searchsorted(cu_q_seqlens[1:], token_seq, right=True)
         token_offset = torch.as_tensor(offset, device=seq_id.device)[seq_id].unsqueeze(-1)
         topk = topk + token_offset
 
-        # topk_length: [bsz] -> [total_tokens] per-token
         topk_length = num_index.clamp(max=topk_width).to(torch.int32)
 
         return V4IndexerOutput(indices_in_kvcache=topk.unsqueeze(0), topk_length=topk_length)
