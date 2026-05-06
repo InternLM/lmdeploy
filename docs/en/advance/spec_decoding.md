@@ -111,7 +111,7 @@ deepseek-ai/DeepSeek-V3 \
 Speculative decoding (MTP) can be combined with [structured output](./structed_output.md) so that the draft tokens proposed by the spec model also respect the grammar constraints (e.g. JSON schema, regex). This significantly improves the acceptance rate compared to running spec decoding without grammar masks.
 
 :::{note}
-This feature is supported for spec methods that inherit from `DeepseekMTP`, including `deepseek_mtp`, `qwen3_5_mtp`, and `eagle3` (with caveats below). Only the PyTorch backend is supported.
+This feature is supported for spec methods that inherit from `DeepseekMTP`, including `deepseek_mtp`, `qwen3_5_mtp`, and `eagle3`. Only the PyTorch backend is supported.
 :::
 
 ### How it works
