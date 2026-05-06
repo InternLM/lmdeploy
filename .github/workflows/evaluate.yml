@@ -47,6 +47,7 @@ on:
 env:
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
   COMPASS_DATA_CACHE: /nvme/qa_test_models/compass_data_cache
+  MMENGINE_NO_LAZY: 1
 
 jobs:
   linux-build:
