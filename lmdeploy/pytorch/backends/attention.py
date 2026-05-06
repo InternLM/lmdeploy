@@ -31,7 +31,8 @@ class V4AttentionMetadata:
     """
 
     is_decoding: bool
-    indices_in_kvcache: torch.Tensor = None       # [bsz, 1, topk] physical fp8 compressed cache indices
+    # [bsz, 1, topk] logical compressed KV indices (converted to physical by V4IndicesUpdater)
+    indices_in_kvcache: torch.Tensor = None
     topk_length: torch.Tensor = None              # [bsz] int32
     extra_indices_in_kvcache: torch.Tensor = None  # [bsz, 1, extra_topk] ring-buffer positions
     extra_topk_length: torch.Tensor = None        # [bsz] int32

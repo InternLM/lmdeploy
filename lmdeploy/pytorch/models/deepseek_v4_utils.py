@@ -4,27 +4,6 @@
 import torch
 
 
-def gather_compressed_cache_entries(cache: torch.Tensor, block_offsets: torch.Tensor, positions: torch.Tensor,
-                                    block_size: int, compress_ratio: int):
-    """Gather entries from a compressed KV block cache.
-
-    Scales logical positions by ``compress_ratio`` before computing the
-    physical block index.
-    """
-    if positions.numel() == 0:
-        return cache.new_empty((*positions.shape, cache.size(-1)))
-    safe_positions = positions.clamp(min=0)
-    token_positions = safe_positions * compress_ratio
-    block_idx = torch.div(token_positions, block_size, rounding_mode='floor').long()
-    max_block_idx = block_offsets.size(1)
-    valid = (positions >= 0) & (block_idx < max_block_idx)
-    safe_block_idx = block_idx.clamp(max=max_block_idx - 1)
-    block_off = torch.remainder(safe_positions, cache.size(1)).long()
-    phys_blocks = block_offsets.gather(1, safe_block_idx).long()
-    gathered = cache[phys_blocks, block_off]
-    return torch.where(valid.unsqueeze(-1), gathered, gathered.new_zeros(()))
-
-
 def build_prefix_positions(lengths: torch.Tensor, max_len: int):
     """Build ``[0, ..., len-1]`` positions padded with ``-1``."""
     device = lengths.device

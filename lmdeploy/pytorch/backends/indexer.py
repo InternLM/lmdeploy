@@ -14,6 +14,7 @@ class V4IndexerMetadata:
     is_decoding: bool
     cu_q_seqlens: torch.Tensor = None
     kv_seqlens: torch.Tensor = None
+    q_seqlens: torch.Tensor = None
     max_kv_seqlen: int = None
     max_q_seqlen: int = None
 
@@ -35,8 +36,7 @@ class BaseV4Indexer(ABC):
                 index_kv_cache: torch.Tensor,
                 index_kv_scale_cache: torch.Tensor,
                 meta: V4IndexerMetadata,
-                block_size: int,
-                offset: int) -> V4IndexerOutput:
+                block_size: int) -> V4IndexerOutput:
         raise NotImplementedError
 
 

@@ -16,37 +16,18 @@ class TritonV4IndexerImpl(BaseV4Indexer):
         self.index_topk = index_topk
         self.compress_ratio = compress_ratio
 
-    def _logical_to_physical(self, logical_topk: torch.Tensor, block_offsets: torch.Tensor,
-                             block_size: int) -> torch.Tensor:
-        """Convert logical compressed positions to physical KV cache
-        indices."""
-        bsz = logical_topk.size(0)
-        safe_logical_topk = logical_topk.clamp(min=0)
-        token_positions = safe_logical_topk * self.compress_ratio
-        block_idx = torch.div(token_positions, block_size, rounding_mode='floor').long()
-        max_block_idx = block_offsets.size(1)
-        safe_block_idx = block_idx.clamp(max=max_block_idx - 1)
-        block_idx_valid = block_idx < max_block_idx
-        phys_block = block_offsets.gather(1, safe_block_idx.view(bsz, -1)).view_as(logical_topk).long()
-        entries_per_block = block_size // self.compress_ratio
-        block_off = torch.remainder(safe_logical_topk, entries_per_block).long()
-        phys_indices = phys_block * entries_per_block + block_off
-        valid = (logical_topk >= 0) & block_idx_valid
-        return torch.where(valid, phys_indices, phys_indices.new_full((), -1))
-
     def forward(self,
                 query: torch.Tensor,
                 weights: torch.Tensor,
                 index_kv_cache: torch.Tensor,
                 index_kv_scale_cache: torch.Tensor,
                 meta: V4IndexerMetadata,
-                block_size: int,
-                offset: int) -> V4IndexerOutput:
-        block_offsets = meta.block_offsets.long()
+                block_size: int) -> V4IndexerOutput:
+        block_offsets = meta.block_offsets
         cu_q_seqlens = meta.cu_q_seqlens
         kv_seqlens = meta.kv_seqlens
         is_decoding = meta.is_decoding
-        q_seqlens = cu_q_seqlens[1:] - cu_q_seqlens[:-1]
+        q_seqlens = meta.q_seqlens
         bsz = kv_seqlens.size(0)
 
         # quant query
@@ -99,19 +80,8 @@ class TritonV4IndexerImpl(BaseV4Indexer):
 
         if is_decoding:
             topk = topk.unsqueeze(1)  # [bsz, 1, topk_width]
-            phys_indices = self._logical_to_physical(topk, block_offsets, block_size)
-            return V4IndexerOutput(indices_in_kvcache=phys_indices, topk_length=topk_length)
+            return V4IndexerOutput(indices_in_kvcache=topk, topk_length=topk_length)
         else:
-            total_tokens = q_3d.size(0)
-
-            # Apply per-token offset
-            token_seq = torch.arange(total_tokens, device=q_3d.device)
-            seq_id = torch.searchsorted(cu_q_seqlens[1:], token_seq, right=True)
-            token_offset = torch.as_tensor(offset, device=seq_id.device)[seq_id].unsqueeze(-1)
-            topk = topk + token_offset
-
-            topk_length = num_index.clamp(max=topk_width).to(torch.int32)
-
             return V4IndexerOutput(indices_in_kvcache=topk.unsqueeze(0), topk_length=topk_length)
 
 

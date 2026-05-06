@@ -25,12 +25,14 @@ class V4Attention(nn.Module):
                        attn_sink: torch.Tensor,
                        attn_metadata: V4AttentionMetadata,
                        block_size: int,
+                       block_offsets: torch.Tensor = None,
                        compressed_kv_fp8_cache: torch.Tensor | None = None):
         return self.impl.forward_decode(query,
                                         window_kv_fp8_state,
                                         attn_sink,
                                         attn_metadata,
                                         block_size,
+                                        block_offsets=block_offsets,
                                         compressed_kv_fp8_cache=compressed_kv_fp8_cache)
 
     def forward_prefill(self,

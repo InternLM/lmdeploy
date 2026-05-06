@@ -1,8 +1,59 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+import functools
+
 import torch
 
 from lmdeploy.pytorch.backends.attention import V4AttentionMetadata
+
+
+class V4IndicesUpdater:
+    """V4 indices updater.
+
+    Converts logical compressed KV positions to physical paged cache indices for decode, mirroring NSAIndicesUpdater in
+    mla.py.
+    """
+
+    def __init__(self):
+        self._update_decode_func = None
+
+    def _update_decode_impl(self, logical_topk: torch.Tensor, block_offsets: torch.Tensor,
+                            block_size: int, compress_ratio: int) -> torch.Tensor:
+        """Convert logical compressed positions to physical KV cache
+        indices."""
+        bsz = logical_topk.size(0)
+        safe_logical_topk = logical_topk.clamp(min=0)
+        token_positions = safe_logical_topk * compress_ratio
+        block_idx = torch.div(token_positions, block_size, rounding_mode='floor').long()
+        max_block_idx = block_offsets.size(1)
+        safe_block_idx = block_idx.clamp(max=max_block_idx - 1)
+        block_idx_valid = block_idx < max_block_idx
+        phys_block = block_offsets.gather(1, safe_block_idx.view(bsz, -1)).view_as(logical_topk).long()
+        entries_per_block = block_size // compress_ratio
+        block_off = torch.remainder(safe_logical_topk, entries_per_block).long()
+        phys_indices = phys_block * entries_per_block + block_off
+        valid = (logical_topk >= 0) & block_idx_valid
+        return torch.where(valid, phys_indices, phys_indices.new_full((), -1))
+
+    def update_decode(self, logical_topk: torch.Tensor, block_offsets: torch.Tensor,
+                      block_size: int, compress_ratio: int) -> torch.Tensor:
+        if self._update_decode_func is None:
+            self._update_decode_func = _try_dynamic_compile(
+                self._update_decode_impl, logical_topk, block_offsets, block_size, compress_ratio)
+        return self._update_decode_func(logical_topk, block_offsets, block_size, compress_ratio)
+
+    @staticmethod
+    @functools.cache
+    def build():
+        return V4IndicesUpdater()
+
+
+def _try_dynamic_compile(func, *args, **kwargs):
+    """Try to compile a function with torch.compile, fall back to eager."""
+    try:
+        return torch.compile(func, dynamic=True)
+    except Exception:
+        return func
 
 
 class TritonV4AttentionImpl:
@@ -12,6 +63,8 @@ class TritonV4AttentionImpl:
         self.head_size = head_size
         self.scale = scale
         self.window_size = window_size
+        self.compress_ratio = compress_ratio
+        self.v4_updater = V4IndicesUpdater.build()
         import flash_mla
         self.flash_mla = flash_mla
 
@@ -49,6 +102,7 @@ class TritonV4AttentionImpl:
                        attn_sink: torch.Tensor,
                        attn_metadata: V4AttentionMetadata,
                        block_size: int,
+                       block_offsets: torch.Tensor = None,
                        compressed_kv_fp8_cache: torch.Tensor | None = None):
         bsz = query.size(0)
 
@@ -58,7 +112,13 @@ class TritonV4AttentionImpl:
         batch_offsets = torch.arange(bsz, device=extra_indices.device, dtype=torch.int32).view(-1, 1, 1) * self.window_size # noqa: E501
         extra_indices = torch.where(extra_indices >= 0, extra_indices + batch_offsets, extra_indices)
 
-        padded_indices = self._pad_sparse_indices(attn_metadata.indices_in_kvcache)
+        # Convert logical topk indices to physical paged cache indices
+        indices_in_kvcache = attn_metadata.indices_in_kvcache
+        if block_offsets is not None and self.compress_ratio and indices_in_kvcache is not None:
+            indices_in_kvcache = self.v4_updater.update_decode(
+                indices_in_kvcache, block_offsets.long(), block_size, self.compress_ratio)
+
+        padded_indices = self._pad_sparse_indices(indices_in_kvcache)
         padded_extra_indices = self._pad_sparse_indices(extra_indices)
         padded_query, padded_sink, original_heads = self._pad_query_heads(query, attn_sink)
 

@@ -9,7 +9,6 @@ import torch.nn.functional as F
 from torch import nn
 
 from lmdeploy.pytorch.backends.attention import V4AttentionMetadata
-from lmdeploy.pytorch.backends.indexer import V4IndexerMetadata
 from lmdeploy.pytorch.backends.rotary_embedding import RopeType, YarnParameters
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.kernels.cuda.v4_compressor import (
@@ -381,19 +380,15 @@ class Indexer(nn.Module):
     def forward(self,
                 x: torch.Tensor,
                 qr: torch.Tensor,
-                start_pos: torch.Tensor,
-                offset: int,
                 schedule: V4ScheduleInfo,
                 caches: V4Caches,
                 slot: torch.Tensor,
                 index_kv_cache: torch.Tensor,
                 index_kv_scale_cache: torch.Tensor,
-                block_offsets: torch.Tensor,
-                block_size: int,
                 rotary_pos_emb: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
                 compress_pos_emb: tuple[torch.Tensor, torch.Tensor],
                 seq_info: SeqInfo,
-                is_decoding: bool = False):
+                attn_metadata=None):
         rd = self.rope_head_dim
         q = self.wq_b(qr).unflatten(-1, (-1, self.head_dim))
 
@@ -404,20 +399,7 @@ class Indexer(nn.Module):
         self.compressor(x, slot, schedule, caches, compress_pos_emb, seq_info)
         weights = self.weights_proj(x) * (self.head_dim**-0.5 * self.n_heads**-0.5)
 
-        # Use fixed upper bound for max_kv_seqlen during decode (CUDAGraph compat)
-        if is_decoding:
-            max_kv_seqlen = schedule.block_size * schedule.num_gpu_blocks
-        else:
-            max_kv_seqlen = schedule.max_kv_seqlen or 0
-        meta = V4IndexerMetadata(block_offsets=block_offsets,
-                                 compress_ratio=self.compress_ratio,
-                                 is_decoding=is_decoding,
-                                 cu_q_seqlens=seq_info.cu_q_seqlens,
-                                 kv_seqlens=seq_info.kv_seqlens,
-                                 max_kv_seqlen=max_kv_seqlen,
-                                 max_q_seqlen=schedule.max_q_seqlen)
-        return self.indexer_fwd(q, weights, index_kv_cache, index_kv_scale_cache, meta, block_size,
-                                offset)
+        return self.indexer_fwd(q, weights, index_kv_cache, index_kv_scale_cache, attn_metadata)
 
 class DeepseekV4BMM(nn.Module):
     """Wrapped bmm."""
@@ -654,7 +636,8 @@ class Attention(nn.Module):
                 schedule: V4ScheduleInfo,
                 caches: V4Caches,
                 rotary_pos_emb: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None,
-                compress_pos_emb: tuple[torch.Tensor, torch.Tensor] | None = None):
+                compress_pos_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
+                attn_metadata=None):
         is_decoding = seq_info.is_decoding
         rd = self.rope_head_dim
         bsz = seq_info.start_pos.numel()
@@ -689,10 +672,10 @@ class Attention(nn.Module):
 
         if is_decoding:
             out = self._forward_decode_core(q, kv, qr, x, seq_info, slot, schedule, caches,
-                                            rotary_pos_emb, compress_pos_emb, bsz)
+                                            rotary_pos_emb, compress_pos_emb, bsz, attn_metadata)
         else:
             out = self._forward_prefill_core(q, kv, qr, x, seq_info, slot, schedule, caches,
-                                             rotary_pos_emb, compress_pos_emb)
+                                             rotary_pos_emb, compress_pos_emb, attn_metadata)
 
         # ---- Output projection (inverse RoPE via precomputed neg_sin) ----
         self.apply_rotary.forward_single(out[..., -rd:], cos, neg_sin, inplace=True,
@@ -706,7 +689,7 @@ class Attention(nn.Module):
 
     def _forward_decode_core(self, q, kv, qr, x, seq_info: SeqInfo, slot,
                              schedule: V4ScheduleInfo, caches: V4Caches,
-                             rotary_pos_emb, compress_pos_emb, bsz):
+                             rotary_pos_emb, compress_pos_emb, bsz, attn_metadata):
         start_pos = seq_info.start_pos
         total_lens = seq_info.total_lens
 
@@ -728,7 +711,6 @@ class Attention(nn.Module):
         window_positions, window_lens, _ = _build_window_positions(total_lens.long(), self.window_size)
         extra_indices_in_kvcache = window_positions.unsqueeze(1).to(torch.int32)  # [bsz, 1, window_size]
         extra_topk_length = window_lens.to(torch.int32)                           # [bsz]
-        offset = self.window_size
 
         # Padded slots (slot=-1): minimal topk/extra_topk to keep FlashMLA
         # num_splits within MAX_SPLITS. No .any() — avoids CUDA sync.
@@ -736,6 +718,8 @@ class Attention(nn.Module):
         extra_topk_length = torch.where(is_padded, 1, extra_topk_length)
 
         # Build compressed indices based on compress_ratio
+        # Indexer returns raw logical topk; V4IndicesUpdater in attention impl
+        # converts to physical paged cache indices.
         compressed_cache_fp8 = None
         indices_in_kvcache = None
         topk_length = None
@@ -744,45 +728,28 @@ class Attention(nn.Module):
             compressed_cache_fp8 = attn_caches['compressed_kv_fp8']
 
             if self.indexer is not None:
-                # ratio=4: Indexer provides physical indices into fp8 compressed cache
+                # ratio=4: Indexer returns logical topk indices
                 index_cache = attn_caches['index_kv']
                 index_scale_cache = attn_caches['index_kv_scale']
                 index_out = self.indexer(x=x,
                                          qr=qr,
-                                         start_pos=start_pos.long(),
-                                         offset=offset,
                                          schedule=schedule,
                                          caches=caches,
                                          slot=slot,
                                          index_kv_cache=index_cache,
                                          index_kv_scale_cache=index_scale_cache,
-                                         block_offsets=block_offsets,
-                                         block_size=token_block_size,
                                          rotary_pos_emb=rotary_pos_emb,
                                          compress_pos_emb=compress_pos_emb,
                                          seq_info=seq_info,
-                                         is_decoding=True)
+                                         attn_metadata=attn_metadata)
                 indices_in_kvcache = index_out.indices_in_kvcache
                 topk_length = index_out.topk_length
             else:
-                # ratio=128: logical-to-physical index conversion for FlashMLA sparse path
+                # ratio=128: build logical positions (physical conversion in attention impl)
                 num_compressed = torch.div(total_lens, self.compress_ratio, rounding_mode='floor').long()
                 max_comp = max(block_offsets.size(1) * token_block_size // self.compress_ratio, 1)
                 comp_positions, _ = build_prefix_positions(num_compressed, max_comp)
-                entries_per_block = compressed_cache_fp8.size(1)
-                valid = comp_positions >= 0
-                safe_pos = comp_positions.clamp(min=0)
-                token_positions = safe_pos * self.compress_ratio
-                block_idx = torch.div(token_positions, token_block_size, rounding_mode='floor').long()
-                max_block_idx = block_offsets.size(1)
-                safe_block_idx = block_idx.clamp(max=max_block_idx - 1)
-                block_idx_valid = block_idx < max_block_idx
-                phys_blocks = block_offsets.gather(1, safe_block_idx).long()
-                block_off = torch.remainder(safe_pos, entries_per_block).long()
-                phys_indices = phys_blocks * entries_per_block + block_off
-                valid = valid & block_idx_valid
-                indices_in_kvcache = torch.where(valid, phys_indices,
-                                                 phys_indices.new_full((), -1)).unsqueeze(1).to(torch.int32)
+                indices_in_kvcache = comp_positions.unsqueeze(1).to(torch.int32)
                 topk_length = num_compressed.to(torch.int32)
         else:
             # ratio=0: No compressed KV. Use window as k_cache (topk_length=0 → not read).
@@ -802,11 +769,13 @@ class Attention(nn.Module):
                                             self.attn_sink,
                                             attn_meta,
                                             token_block_size,
+                                            block_offsets=block_offsets,
                                             compressed_kv_fp8_cache=compressed_cache_fp8)
         return ret
 
     def _forward_prefill_core(self, q, kv, qr, x, seq_info: SeqInfo, slot,
-                              schedule: V4ScheduleInfo, caches: V4Caches, rotary_pos_emb, compress_pos_emb):
+                              schedule: V4ScheduleInfo, caches: V4Caches, rotary_pos_emb, compress_pos_emb,
+                              attn_metadata):
         from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
 
         start_pos = seq_info.start_pos
@@ -816,7 +785,6 @@ class Attention(nn.Module):
         attn_caches = self._resolve_attention_caches(caches)
         block_offsets = schedule.block_offsets
         window_block_size = schedule.kernel_block_size
-        token_block_size = schedule.block_size
 
         # CPU-side upper bounds for flatten_v4_kv (avoids GPU .item() sync)
         max_kv = schedule.max_kv_seqlen
@@ -851,21 +819,23 @@ class Attention(nn.Module):
                 index_out = self.indexer(
                     x=x,
                     qr=qr,
-                    start_pos=start_pos,
-                    offset=window_kv_lens,
                     schedule=schedule,
                     caches=caches,
                     slot=slot,
                     index_kv_cache=attn_caches['index_kv'],
                     index_kv_scale_cache=attn_caches['index_kv_scale'],
-                    block_offsets=block_offsets,
-                    block_size=token_block_size,
                     rotary_pos_emb=rotary_pos_emb,
                     compress_pos_emb=compress_pos_emb,
                     seq_info=seq_info,
-                    is_decoding=False)
+                    attn_metadata=attn_metadata)
 
                 compress_topk = index_out.indices_in_kvcache.squeeze(0)  # [total_tokens, topk]
+                # Apply window_kv_lens offset to raw logical topk (moved from indexer backend)
+                cu_q_seqlens = seq_info.cu_q_seqlens
+                total_tokens = compress_topk.size(0)
+                token_seq = torch.arange(total_tokens, device=compress_topk.device)
+                seq_id = torch.searchsorted(cu_q_seqlens[1:], token_seq, right=True)
+                compress_topk = compress_topk + window_kv_lens[seq_id].unsqueeze(-1)
             else:
                 compress_topk = build_compress_topk_indices(
                     total_lens, self.compress_ratio,
@@ -1071,12 +1041,13 @@ class Block(nn.Module):
     def forward(self, x: torch.Tensor, seq_info: SeqInfo, input_ids: torch.Tensor,
                 slot: torch.Tensor, schedule: V4ScheduleInfo, caches: V4Caches,
                 rotary_pos_emb: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None,
-                compress_pos_emb: tuple[torch.Tensor, torch.Tensor] | None = None):
+                compress_pos_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
+                attn_metadata=None):
         residual = x
         x, post, comb = self._hc_pre(x, self.hc_attn_fn, self.hc_attn_scale, self.hc_attn_base)
         x = self.attn_norm(x)
         x = self.attn(x, seq_info, slot, schedule, caches, rotary_pos_emb=rotary_pos_emb,
-                       compress_pos_emb=compress_pos_emb)
+                       compress_pos_emb=compress_pos_emb, attn_metadata=attn_metadata)
         x = self._hc_post(x, residual, post, comb)
 
         residual = x
@@ -1263,7 +1234,8 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             else:
                 rot_emb, comp_emb = rotary_pos_emb_plain, None
             h = layer(h, seq_info, input_ids, safe_state_ids, schedule, caches,
-                      rotary_pos_emb=rot_emb, compress_pos_emb=comp_emb)
+                      rotary_pos_emb=rot_emb, compress_pos_emb=comp_emb,
+                      attn_metadata=attn_metadata)
 
         return h
 
