@@ -110,7 +110,7 @@ deepseek-ai/DeepSeek-V3 \
 投机解码（MTP）可以与[结构化输出](./structed_output.md)结合使用，使草稿模型提出的 token 也遵循语法约束（如 JSON Schema、正则表达式），从而显著提高接受率。
 
 :::{note}
-该功能支持继承自 `DeepseekMTP` 的投机方法，包括 `deepseek_mtp`、`qwen3_5_mtp` 和 `eagle3`（注意事项见下文）。仅支持 PyTorch 后端。
+该功能支持继承自 `DeepseekMTP` 的投机方法，包括 `deepseek_mtp`、`qwen3_5_mtp` 和 `eagle3`。仅支持 PyTorch 后端。
 :::
 
 ### 工作原理
