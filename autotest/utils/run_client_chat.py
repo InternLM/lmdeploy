@@ -1,3 +1,4 @@
+import copy
 import os
 import time
 from subprocess import PIPE, Popen
@@ -7,6 +8,11 @@ from utils.config_utils import get_case_str_by_config, get_cli_common_param, get
 from utils.rule_condition_assert import assert_result
 
 TEMPLATE = 'autotest/template.json'
+
+CHAT_EXCLUDED_PARAMS = {
+    'max-batch-size', 'cache-max-entry-count', 'max-prefill-token-num', 'server-name', 'enable-prefix-caching',
+    'dllm-block-length', 'dllm-denoising-steps', 'dllm-confidence-threshold'
+}
 
 
 def run_tests(config, usercase, cli_case_config, run_config, worker_id):
@@ -28,14 +34,19 @@ def hf_command_line_test(config, case, case_info, run_config, cuda_prefix: str =
     else:
         model_path = os.path.join(config.get('model_path'), model)
 
-    run_config['extra_params']['session_len'] = 4096
+    chat_config = copy.deepcopy(run_config)
+    chat_config['extra_params'] = {
+        k: v
+        for k, v in chat_config.get('extra_params', {}).items() if k not in CHAT_EXCLUDED_PARAMS
+    }
+    chat_config['extra_params']['session_len'] = 4096
     if case == 'base_testcase':
-        run_config['extra_params']['chat_template'] = TEMPLATE
-        run_config['extra_params']['session_len'] = 512
+        chat_config['extra_params']['chat_template'] = TEMPLATE
+        chat_config['extra_params']['session_len'] = 512
 
-    print(run_config)
+    print(chat_config)
 
-    cmd = ' '.join([cuda_prefix, ' '.join(['lmdeploy chat', model_path, get_cli_common_param(run_config)])]).strip()
+    cmd = ' '.join([cuda_prefix, ' '.join(['lmdeploy chat', model_path, get_cli_common_param(chat_config)])]).strip()
 
     result, chat_log, msg = command_test(config, cmd, run_config, case_info, True)
     if chat_log:

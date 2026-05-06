@@ -681,7 +681,7 @@ class ChatmlDirect(BaseChatTemplate):
 class HFChatTemplate(BaseChatTemplate):
     """Chat template for HuggingFace models with `apply_chat_template` method.
 
-    It MUST be at the end of @MODLES registry
+    It MUST be at the end of @MODELS registry
     """
 
     def __init__(self, model_path: str = '', trust_remote_code: bool = False, **kwargs):

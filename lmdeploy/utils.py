@@ -105,9 +105,26 @@ class FilterDuplicateWarning(logging.Filter):
         return False
 
 
+class ProcessContextFilter(logging.Filter):
+    """Inject process context fields used by log formatter."""
+
+    def __init__(self, name: str = 'lmdeploy'):
+        super().__init__(name)
+
+    def filter(self, record: LogRecord) -> bool:
+        # `ppid` is not a builtin LogRecord attribute, inject it so logs from
+        # parent api_server and child executor processes can be correlated.
+        record.ppid = os.getppid()
+        return True
+
+
 _FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d' \
           ' - %(message)s'
-
+_LOG_PID_ENABLED = os.getenv('LMDEPLOY_LOG_PID', '0').lower() in ('1', 'true', 'yes', 'on')
+if _LOG_PID_ENABLED:
+    _FORMAT = ('%(asctime)s - %(name)s - %(levelname)s - '
+                '[pid=%(process)d ppid=%(ppid)d] - '
+                '%(filename)s:%(lineno)d - %(message)s')
 
 def get_logger(name: str | None = None,
                log_file: str | None = None,
@@ -168,6 +185,8 @@ def get_logger(name: str | None = None,
         handler.setFormatter(formatter)
         handler.setLevel(logging.DEBUG)
         handler.addFilter(FilterDuplicateWarning(name))
+        if _LOG_PID_ENABLED:
+            handler.addFilter(ProcessContextFilter(name))
         logger.addHandler(handler)
 
     logger.setLevel(log_level)

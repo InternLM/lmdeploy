@@ -582,7 +582,7 @@ class HistoryMultiModals:
         for modal_type, modal_datas in self.multimodals.items():
             data = []
             for modal_data in modal_datas:
-                if (modal_data.start not in test_range and modal_data.end - 1 not in test_range):
+                if (modal_data.start not in test_range or modal_data.end - 1 not in test_range):
                     continue
                 data.append(modal_data)
             if len(data) > 0:
@@ -731,7 +731,7 @@ class SchedulerSequence:
         if (not self.return_routed_experts) or self.all_routed_experts is None:
             return None
 
-        end = max(0, self.num_all_ids - 1)
+        end = max(0, self.num_valid_ids - 1)
         if 0 < end <= len(self.all_routed_experts):
             return self.all_routed_experts.get_real()[:end]
         else:

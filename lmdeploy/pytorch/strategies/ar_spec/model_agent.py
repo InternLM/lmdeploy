@@ -66,7 +66,11 @@ class ARSpecExtraInputs(ExtraInputs):
         indices = delta.indices
         output_draft_token_ids = self.output_draft_token_ids[indices]
         num_rejected_tokens = self.num_rejected_tokens[indices]
-        return ARSpecExtraInputs(output_draft_token_ids=output_draft_token_ids, num_rejected_tokens=num_rejected_tokens)
+        output_token_ids=self.output_token_ids[indices] if self.output_token_ids is not None else None
+        return ARSpecExtraInputs(output_draft_token_ids=output_draft_token_ids,
+                                 num_rejected_tokens=num_rejected_tokens,
+                                 output_token_ids=output_token_ids,
+                                 )
 
 
 @dataclass
@@ -119,7 +123,7 @@ class ARSpecStoppingCriteria(ARStoppingCriteria):
             stop_words_rsp = stop_words.reshape(1, 1, -1)
             assert stop_words_rsp.ndim == token_ids_rsp.ndim == 3
             stop_mask = (token_ids_rsp == stop_words_rsp).any(-1)
-            mask = mask ^ stop_mask
+            mask = torch.logical_or(mask, stop_mask)
         # find the index of first `1`,  if not found, would be 0
         index = torch.argmax(mask.int(), dim=-1, keepdim=True)
         # update index of 0 to -1 if not found

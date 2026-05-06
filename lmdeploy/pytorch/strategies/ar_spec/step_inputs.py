@@ -177,9 +177,6 @@ class ARSpecStepInputs(StepInputs):
         model_inputs.is_decoding = True
         model_inputs.model_metas = model_metas
 
-        # update extra inputs
-        extra_inputs.output_token_ids = extra_outputs.draft_token_ids
-
         # update inputs with rejected token adjustment
         step_seqlens = model_inputs.seq_length - extra_inputs.num_rejected_tokens
         batch_size = step_seqlens.size(0)

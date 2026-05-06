@@ -146,7 +146,9 @@ class Ffn(Module):
         self.inter_size = model.model_config.inter_size
         self.group_size = max(1, model.model_config.group_size)
 
-    def _export(self, inter_size: int, fmt: str, idx: int, w123, kind: str, pack_fn, apply_gs=[], **kwargs):
+    def _export(self, inter_size: int, fmt: str, idx: int, w123, kind: str, pack_fn, apply_gs=None, **kwargs):
+        if apply_gs is None:
+            apply_gs = []
         is_lora_a, is_lora_b = get_lora_flags(kind)
         w1, w2, w3 = map(transpose, w123)
 
@@ -317,7 +319,9 @@ class Attn(Module):
 
         return (q, k, v, o)
 
-    def _export(self, idx: int, qkvo, kind: str, pack_fn, apply_gs=[], **kwargs):
+    def _export(self, idx: int, qkvo, kind: str, pack_fn, apply_gs=None, **kwargs):
+        if apply_gs is None:
+            apply_gs = []
         if all(x is None for x in qkvo):
             return
         is_lora_a, is_lora_b = get_lora_flags(kind)

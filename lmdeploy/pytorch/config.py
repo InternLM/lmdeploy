@@ -2,11 +2,11 @@
 import enum
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any
 
 import torch
 
-from lmdeploy.messages import PytorchEngineConfig
+from lmdeploy.messages import PytorchEngineConfig, QuantPolicy
 from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
 from lmdeploy.pytorch.utils import maybe_register_config_serialize_by_value
 from lmdeploy.utils import get_logger, is_bf16_supported
@@ -97,9 +97,9 @@ class CacheConfig:
     kernel_block_size: int = -1
     window_size: int = -1
     cache_max_entry_count: float = 0.8
-    max_prefill_token_num: int = 4096
+    max_prefill_token_num: int = 8192
     enable_prefix_caching: bool = False
-    quant_policy: Literal[0, 4, 8] = 0
+    quant_policy: QuantPolicy = QuantPolicy.NONE
     device_type: str = 'cuda'
     num_state_caches: int = None
     states_shapes: list[tuple] = field(default_factory=list)
@@ -582,6 +582,7 @@ class SpecDecodeConfig:
         if method not in no_caches:
             cache_config = CacheConfig(max_batches=target_cache_cfg.max_batches,
                                        block_size=target_cache_cfg.block_size,
+                                       kernel_block_size=target_cache_cfg.kernel_block_size,
                                        num_cpu_blocks=target_cache_cfg.num_cpu_blocks,
                                        num_gpu_blocks=target_cache_cfg.num_gpu_blocks,
                                        cache_max_entry_count=target_cache_cfg.cache_max_entry_count,

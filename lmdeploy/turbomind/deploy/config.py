@@ -206,8 +206,10 @@ class TurbomindModelConfig:
                 '`--rope-scaling-factor` will be removed in a future release. Please instead use `--hf-overrides`.')
 
     @classmethod
-    def from_dict(cls, config: dict = {}):
+    def from_dict(cls, config: dict | None = None):
         """Construct TurbomindModelConfig instance from config in a dict."""
+        if config is None:
+            config = {}
         _cfg = {field.name: config.get(field.name, {}) for field in fields(TurbomindModelConfig)}
 
         return TurbomindModelConfig(model_config=config_from_dict(ModelConfig, _cfg['model_config']),

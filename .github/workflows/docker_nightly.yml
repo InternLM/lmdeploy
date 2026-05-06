@@ -1,0 +1,91 @@
+name: publish-docker-nightly
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo_ref:
+        required: false
+        description: 'Set branch or tag or commit id. Default is "main"'
+        type: string
+        default: 'main'
+      docker_tag:
+        required: false
+        description: 'Set Docker tag. Default is "cu12.8"'
+        type: string
+        default: 'cu12.8'
+  schedule:
+    - cron:  '00 8 * * 0-4'
+
+env:
+  TAG: "openmmlab/lmdeploy:nightly-${{inputs.docker_tag || 'cu12.8'}}"
+  DEV_TAG: "openmmlab/lmdeploy:nightly-test-${{inputs.docker_tag || 'cu12.8'}}"
+
+jobs:
+  publish_docker_image:
+    runs-on: ubuntu-latest
+    env:
+      OFFLINE_REQUIREMENTS: ${{ vars.OFFLINE_REQUIREMENTS }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.repo_ref || 'main' }}
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # This might remove tools that are actually needed, if set to "true" but frees about 6 GB
+          tool-cache: false
+          docker-images: false
+          # All of these default to true, but feel free to set to "false" if necessary for your workflow
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: false
+      - name: Get docker info
+        run: |
+          docker info
+          # remove http extraheader (tolerate missing key)
+          git config --local --unset "http.https://github.com/.extraheader" || true
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build and push Docker image
+        run: |
+          echo ${{ env.TAG }}
+          docker build . -f docker/Dockerfile -t ${{ env.TAG }} --build-arg CUDA_VERSION=cu12.8
+          docker push ${{ env.TAG }}
+
+          mkdir -p docker
+          cat > docker/Dockerfile.nightly-extended << 'EOF'
+          ARG BASE_IMAGE=${{ env.TAG }}
+          FROM ${BASE_IMAGE}
+          COPY requirements /tmp/requirements
+          RUN apt-get update -y && \
+              apt-get install -y --no-install-recommends libgl1 libglib2.0-0 && \
+              apt-get clean -y && \
+              rm -rf /var/lib/apt/lists/*
+          RUN python3 -m pip install --no-cache-dir -r /tmp/requirements/lite.txt && \
+              python3 -m pip install --no-cache-dir -r /tmp/requirements/test.txt && \
+              pip install --no-cache-dir ${{ env.OFFLINE_REQUIREMENTS }}
+          EOF
+          docker build . -f docker/Dockerfile.nightly-extended \
+            --build-arg BASE_IMAGE=${{ env.TAG }} \
+            -t ${{ env.DEV_TAG }}
+          docker push ${{ env.DEV_TAG }}
+
+  publish_inner_docker_image:
+    runs-on: image-sync-inner
+    needs: publish_docker_image
+    env:
+      INNER_REGISTRY: ${{ secrets.INNER_DOCKER_REGISTRY }}
+      INNER_TAG: "${{ secrets.INNER_DOCKER_REGISTRY }}/ailab-puyu-puyu_gpu/lmdeploy:nightly-test-${{inputs.docker_tag || 'cu12.8'}}"
+    steps:
+      - name: Pull and push to inner
+        run: |
+          docker pull ${{ env.DEV_TAG }}
+          docker login ${{ env.INNER_REGISTRY }} -p ${{ secrets.CLUSTER_DOCKERHUB_TOKEN }} -u ${{ secrets.CLUSTER_DOCKERHUB_USERNAME }}
+          docker tag ${{ env.DEV_TAG }} ${{ env.INNER_TAG }}
+          docker push ${{ env.INNER_TAG }}

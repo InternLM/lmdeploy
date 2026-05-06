@@ -10,6 +10,7 @@ memory_test:
             - 新疆
             - uwumqi
             - Ürümqi
+            - uyghur
     - 介绍它的相应美食#please introduce some delicious foods:
         - contain:
             - urumqi
@@ -19,6 +20,7 @@ memory_test:
             - 新疆
             - uwumqi
             - Ürümqi
+            - uyghur
 
 chinese_poem_case:
     - 给我一首中文诗，需要添加标点符号，请用中文回答Give me a Chinese poem in Chinese:

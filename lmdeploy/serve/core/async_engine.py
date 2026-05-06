@@ -252,11 +252,7 @@ class AsyncEngine:
         logger.info(f'stop all sessions, epoch {self.epoch} -> {self.epoch + 1}')
         self.epoch += 1
         await self.session_mgr.async_abort_all()
-
-    def prepare_sleep(self):
-        """Reject new inference requests before backend sleep starts."""
-        self.sleeping_tags = {'weights', 'kv_cache'}
-        self.is_sleeping = True
+        logger.info('stopped all sessions')
 
     async def sleep(self, level: int = 1):
         """Sleep the model.
@@ -266,9 +262,10 @@ class AsyncEngine:
                 weights and discard the kv cache. Level 2 sleep will
                 discard both the model weights and the kv cache.
         """
-        await self.engine.sleep(level)
-        self.sleeping_tags = {'weights', 'kv_cache'}
         self.is_sleeping = True
+        self.sleeping_tags = {'weights', 'kv_cache'}
+        await self.stop_all_session()
+        await self.engine.sleep(level)
 
     def wakeup(self, tags: list[str] | None = None):
         """Wake up the model.
@@ -413,8 +410,8 @@ class AsyncEngine:
                                                                         media_io_kwargs=media_io_kwargs,
                                                                         mm_processor_kwargs=mm_processor_kwargs,
                                                                         **kwargs)
-            prompt = prompt_input['prompt']
-            input_ids = prompt_input['input_ids']
+            prompt = prompt_input.get('prompt')
+            input_ids = prompt_input.get('input_ids')
             self.request_logger.log_inputs(session,
                                            prompt=prompt,
                                            prompt_token_ids=input_ids,
@@ -485,6 +482,8 @@ class AsyncEngine:
                              generate_token_len=0,
                              finish_reason='abort',
                              token_ids=[])
+                if sequence_end:
+                    self.session_mgr.remove(session)
                 return
             token_ids = input_ids.copy()
             history_len = session.step

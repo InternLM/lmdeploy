@@ -1,0 +1,53 @@
+# Shrink `docker build` context (e.g. docker/Dockerfile `COPY .`, docker/Dockerfile_patch).
+# Keep paths required by `pip install` / `python -m build` (setup.py reads README.md).
+
+# VCS & CI
+.git
+.github
+
+# Editors / local tooling
+.cursor
+.claude
+.vscode
+.idea
+.clangd
+
+# Python caches & local envs
+__pycache__
+*.py[cod]
+*$py.class
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.venv
+.cache
+*.egg-info
+.eggs
+.Python
+
+# Local build outputs (rebuilt inside the image)
+build
+dist
+
+# Not needed to build or install the package
+docs
+tests
+benchmark
+autotest
+workspace
+builder
+k8s
+eval
+icl_inference_output
+install
+
+# Extra readmes (setup.py only bundles README.md)
+README_zh-CN.md
+README_ja.md
+
+# Large / scratch artifacts often present in dev trees
+*.jsonl
+*.ttf
+*.png
+compile_commands.json
+profile_*.csv

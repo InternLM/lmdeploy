@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from transformers import AutoProcessor
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS
@@ -25,17 +24,4 @@ class Qwen3_5Model(Qwen3VLModel):
 
     def build_preprocessor(self, trust_remote_code: bool = False):
         check_transformers()
-
-        self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=trust_remote_code)
-
-        # image tokens
-        self.image_token = self.processor.image_token
-        self.image_token_id = self.processor.image_token_id
-
-        # video tokens
-        self.video_token = self.processor.video_token
-        self.video_token_id = self.processor.video_token_id
-
-        # vision start and end tokens
-        self.vision_start_token = self.processor.vision_start_token
-        self.vision_end_token = self.processor.vision_end_token
+        super().build_preprocessor(trust_remote_code)

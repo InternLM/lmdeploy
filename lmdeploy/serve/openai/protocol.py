@@ -190,7 +190,7 @@ class ExtractedToolCallInformation(BaseModel):
     # indicate if tools were called
     tools_called: bool
     # extracted tool calls
-    tool_calls: list[ToolCall]
+    tool_calls: list[ToolCall] | None = None
     # content - per OpenAI spec, content AND tool calls can be returned rarely
     # But some models will do this intentionally
     content: str | None = None
@@ -255,7 +255,7 @@ class DeltaFunctionCall(BaseModel):
 # a tool call delta where everything is optional
 class DeltaToolCall(BaseModel):
     id: str = Field(default_factory=lambda: f'chatcmpl-tool-{shortuuid.random()}')
-    type: Literal['function'] = 'function'
+    type: Literal['function'] | None = 'function'
     index: int
     function: DeltaFunctionCall | None = None
 
@@ -266,7 +266,7 @@ class DeltaMessage(BaseModel):
     content: str | None = None
     reasoning_content: str | None = None
     gen_tokens: list[int] | None = None
-    tool_calls: list[DeltaToolCall] = Field(default_factory=list)
+    tool_calls: list[DeltaToolCall] | None = None
 
 
 class ChatCompletionResponseStreamChoice(BaseModel):
