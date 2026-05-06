@@ -10,11 +10,10 @@ from ..indexer import BaseV4Indexer, BaseV4IndexerBuilder, V4IndexerMetadata, V4
 
 class TritonV4IndexerImpl(BaseV4Indexer):
 
-    def __init__(self, index_topk: int, compress_ratio: int, world_size: int = 1) -> None:
+    def __init__(self, index_topk: int, compress_ratio: int) -> None:
         super().__init__()
         self.index_topk = index_topk
         self.compress_ratio = compress_ratio
-        self.world_size = world_size
 
     def _logical_to_physical(self, logical_topk: torch.Tensor, block_offsets: torch.Tensor,
                              block_size: int, index_kv_cache: torch.Tensor) -> torch.Tensor:
@@ -41,7 +40,6 @@ class TritonV4IndexerImpl(BaseV4Indexer):
                 index_kv_cache: torch.Tensor,
                 meta: V4IndexerMetadata,
                 block_size: int,
-                layer_id: int,
                 offset: int,
                 is_decoding: bool) -> V4IndexerOutput:
         block_offsets = meta.block_offsets.long()
@@ -53,13 +51,12 @@ class TritonV4IndexerImpl(BaseV4Indexer):
         if cu_q_seqlens is not None and not is_decoding:
             return self._forward_prefill_batched(
                 query, q_scale, weights, index_kv_cache, index_kv_scale_cache,
-                block_offsets, cu_q_seqlens, kv_seqlens, block_size, offset,
+                block_offsets, cu_q_seqlens, kv_seqlens, meta, offset,
                 max_q_seqlen=meta.max_q_seqlen)
 
-        bsz = query.size(0)
-        seqlen = query.size(1)
+        bsz = start_pos.size(0)
 
-        total_lens = start_pos + seqlen
+        total_lens = kv_seqlens
         num_index = torch.div(total_lens, self.compress_ratio, rounding_mode='floor')
         max_kv_seqlen = meta.max_kv_seqlen if meta.max_kv_seqlen is not None else block_offsets.size(1) * block_size
         max_index = max(max_kv_seqlen // self.compress_ratio, 1)
@@ -115,7 +112,7 @@ class TritonV4IndexerImpl(BaseV4Indexer):
                                  block_offsets: torch.Tensor,
                                  cu_q_seqlens: torch.Tensor,
                                  kv_seqlens: torch.Tensor,
-                                 block_size: int,
+                                 meta: V4IndexerMetadata,
                                  offset: int,
                                  max_q_seqlen: int | None = None) -> V4IndexerOutput:
         """Batched prefill: uses fp8_index fused kernel for scoring."""
@@ -125,7 +122,7 @@ class TritonV4IndexerImpl(BaseV4Indexer):
 
         total_lens = kv_seqlens
         num_index = torch.div(total_lens, self.compress_ratio, rounding_mode='floor')
-        max_kv_seqlen = kv_seqlens.max().item()
+        max_kv_seqlen = meta.max_kv_seqlen
         max_index = max(max_kv_seqlen // self.compress_ratio, 1)
 
         if max_index == 0:
@@ -172,5 +169,5 @@ class TritonV4IndexerImpl(BaseV4Indexer):
 class TritonV4IndexerBuilder(BaseV4IndexerBuilder):
 
     @staticmethod
-    def build(index_topk: int, compress_ratio: int, world_size: int = 1) -> BaseV4Indexer:
-        return TritonV4IndexerImpl(index_topk=index_topk, compress_ratio=compress_ratio, world_size=world_size)
+    def build(index_topk: int, compress_ratio: int) -> BaseV4Indexer:
+        return TritonV4IndexerImpl(index_topk=index_topk, compress_ratio=compress_ratio)

@@ -37,7 +37,6 @@ class BaseV4Indexer(ABC):
                 index_kv_cache: torch.Tensor,
                 meta: V4IndexerMetadata,
                 block_size: int,
-                layer_id: int,
                 offset: int,
                 is_decoding: bool) -> V4IndexerOutput:
         raise NotImplementedError
@@ -47,6 +46,6 @@ class BaseV4IndexerBuilder:
 
     @staticmethod
     @abstractmethod
-    def build(index_topk: int, compress_ratio: int, world_size: int = 1) -> BaseV4Indexer:
+    def build(index_topk: int, compress_ratio: int) -> BaseV4Indexer:
         """Build layer implementation."""
         raise NotImplementedError

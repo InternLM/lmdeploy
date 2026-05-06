@@ -1,6 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import importlib.util
-import os.path as osp
 import re
 from collections.abc import Iterable
 from contextlib import contextmanager
@@ -35,32 +33,6 @@ from .utils.model import DeployModelMixinV1, build_embedding
 
 logger = get_logger('lmdeploy')
 
-_KERNEL_MODULE_CACHE: dict[str, object] = {}
-
-
-def _load_v4_kernel_module(model_path: str):
-    """Load the official DeepSeek-V4 kernel helpers from the model
-    directory."""
-    model_path = osp.abspath(model_path)
-    if model_path in _KERNEL_MODULE_CACHE:
-        return _KERNEL_MODULE_CACHE[model_path]
-
-    kernel_path = osp.join(model_path, 'inference', 'kernel.py')
-    if not osp.exists(kernel_path):
-        raise FileNotFoundError(f'Can not find DeepSeek-V4 kernel.py at {kernel_path}.')
-
-    mod_name = f'lmdeploy_deepseek_v4_kernel_{abs(hash(kernel_path))}'
-    spec = importlib.util.spec_from_file_location(mod_name, kernel_path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    _KERNEL_MODULE_CACHE[model_path] = module
-    return module
-
-
-def _get_world_size_rank():
-    return get_tp_world_rank('attn')
-
 
 @contextmanager
 def _set_default_dtype(dtype: torch.dtype):
@@ -71,7 +43,8 @@ def _set_default_dtype(dtype: torch.dtype):
     finally:
         torch.set_default_dtype(prev)
 
-def _load_vector_shard(param: nn.Parameter, loaded_weight: torch.Tensor, world_size: int, rank: int):
+def _load_vector_shard(param: nn.Parameter, loaded_weight: torch.Tensor):
+    world_size, rank = get_tp_world_rank('attn')
     if world_size > 1:
         loaded_weight = loaded_weight.chunk(world_size, dim=0)[rank]
     param.copy_(loaded_weight)
@@ -232,7 +205,6 @@ class Compressor(nn.Module):
     def __init__(self,
                  args: V4Args,
                  layer_id: int,
-                 kernel_mod,
                  compress_ratio: int,
                  head_dim: int,
                  dtype: torch.dtype,
@@ -240,7 +212,6 @@ class Compressor(nn.Module):
                  rotate: bool = False):
         super().__init__()
         self.layer_id = layer_id
-        self.kernel_mod = kernel_mod
         self.dim = args.dim
         self.head_dim = head_dim
         self.rope_head_dim = args.rope_head_dim
@@ -344,7 +315,9 @@ class Compressor(nn.Module):
         if self.rotate:
             compressed_kv = rotate_activation(compressed_kv)
         else:
-            self.kernel_mod.act_quant(compressed_kv[..., :-rd], 64, 'ue8m0', torch.float8_e8m0fnu, True)
+            # TODO: FP8 quantize NoPE dims directly and write to FP8 cache,
+            # eliminating the BF16 round-trip that act_quant(inplace=True) did
+            pass
 
         # ---- Phase G: Write to paged block cache via fill_compressed_kv ----
         block_caches = caches.block_caches
@@ -370,23 +343,16 @@ class Indexer(nn.Module):
                  config,
                  args: V4Args,
                  layer_id: int,
-                 kernel_mod,
                  compress_ratio: int,
-                 world_size: int,
-                 rank: int,
                  dtype: torch.dtype,
                  device: torch.device | str | None):
         super().__init__()
         self.layer_id = layer_id
-        self.kernel_mod = kernel_mod
         self.n_heads = args.index_n_heads
-        self.n_local_heads = args.index_n_heads // world_size
         self.head_dim = args.index_head_dim
         self.rope_head_dim = args.rope_head_dim
         self.index_topk = args.index_topk
         self.compress_ratio = compress_ratio
-        self.world_size = world_size
-        self.rank = rank
 
         quantization_config = getattr(config, 'quantization_config', None)
         self.wq_b = build_colwise_linear(
@@ -406,11 +372,10 @@ class Indexer(nn.Module):
             device=device,
             is_tp=True,
         )
-        self.compressor = Compressor(args, layer_id, kernel_mod, compress_ratio, self.head_dim,
+        self.compressor = Compressor(args, layer_id, compress_ratio, self.head_dim,
                                      dtype=dtype, device=device, rotate=True)
         self.indexer_fwd = NativeV4Indexer(index_topk=self.index_topk,
-                                           compress_ratio=self.compress_ratio,
-                                           world_size=world_size)
+                                           compress_ratio=self.compress_ratio)
         self.apply_rotary = ApplyRotaryEmb()
 
     def forward(self,
@@ -430,19 +395,20 @@ class Indexer(nn.Module):
                 seq_info: SeqInfo,
                 is_decoding: bool = False):
         rd = self.rope_head_dim
-        q = self.wq_b(qr).unflatten(-1, (self.n_local_heads, self.head_dim))
+        q = self.wq_b(qr).unflatten(-1, (-1, self.head_dim))
+        n_local_heads = q.size(-2)
+
         cos, sin, _ = rotary_pos_emb
         self.apply_rotary.forward_single(q[..., -rd:], cos, sin, inplace=True, complex_mode=True)
         q = rotate_activation(q)
         # FP8 quantize Indexer Q (replaces fp4_act_quant for better precision)
         from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
-        n_local_heads = self.n_local_heads
         head_dim = self.head_dim
         q_2d = q.reshape(-1, head_dim)
         q_fp8, q_scale_2d = quant_fp8(q_2d, group_size=128,
                                        dtype=torch.float8_e4m3fn, scale_fmt='ue8m0')
         q = q_fp8.reshape(*q.shape)
-        q_scale = q_scale_2d.squeeze(-1).reshape(-1, n_local_heads)
+        q_scale = q_scale_2d.reshape(-1, n_local_heads)
 
         comp_start_pos = start_pos
         self.compressor(x, slot, schedule, caches, compress_pos_emb, seq_info)
@@ -456,12 +422,12 @@ class Indexer(nn.Module):
         meta = V4IndexerMetadata(block_offsets=block_offsets,
                                  start_pos=comp_start_pos,
                                  compress_ratio=self.compress_ratio,
-                                 cu_q_seqlens=seq_info.cu_q_seqlens if not is_decoding else None,
-                                 kv_seqlens=seq_info.kv_seqlens if not is_decoding else None,
+                                 cu_q_seqlens=seq_info.cu_q_seqlens,
+                                 kv_seqlens=seq_info.kv_seqlens,
                                  index_kv_scale_cache=index_kv_scale_cache,
                                  max_kv_seqlen=max_kv_seqlen,
                                  max_q_seqlen=schedule.max_q_seqlen)
-        return self.indexer_fwd(q, q_scale, weights, index_kv_cache, meta, block_size, self.layer_id,
+        return self.indexer_fwd(q, q_scale, weights, index_kv_cache, meta, block_size,
                                 offset, is_decoding)
 
 class DeepseekV4BMM(nn.Module):
@@ -509,13 +475,11 @@ class Attention(nn.Module):
                  config,
                  layer_id: int,
                  args: V4Args,
-                 kernel_mod,
                  dtype: torch.dtype,
                  device: torch.device | str | None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
-        world_size, rank = _get_world_size_rank()
-        self.kernel_mod = kernel_mod
+        world_size, _ = get_tp_world_rank('attn')
         self.layer_id = layer_id
         self.n_heads = args.n_heads
         self.n_local_heads = args.n_heads // world_size
@@ -584,16 +548,15 @@ class Attention(nn.Module):
         self.indexer = None
         self.apply_rotary = ApplyRotaryEmb()
         if self.compress_ratio:
-            self.compressor = Compressor(args, self.layer_id, kernel_mod, self.compress_ratio, self.head_dim,
+            self.compressor = Compressor(args, self.layer_id, self.compress_ratio, self.head_dim,
                                          dtype=dtype, device=device)
             if self.compress_ratio == 4:
-                world_size, rank = get_tp_world_rank('attn')
-                self.indexer = Indexer(config, args, self.layer_id, kernel_mod, self.compress_ratio,
-                                       world_size, rank, dtype=dtype, device=device)
+                world_size, _ = get_tp_world_rank('attn')
+                self.indexer = Indexer(config, args, self.layer_id, self.compress_ratio,
+                                       dtype=dtype, device=device)
 
     def _attn_sink_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
-        world_size, rank = get_tp_world_rank('attn')
-        _load_vector_shard(param, loaded_weight, world_size, rank)
+        _load_vector_shard(param, loaded_weight)
 
     def _resolve_attention_caches(self, caches: V4Caches) -> dict:
         named_state_caches = caches.named_state_caches
@@ -728,7 +691,8 @@ class Attention(nn.Module):
                                                     complex_mode=True)
         q[..., -rd:] = q_rope_3d.reshape_as(q_rope)
         kv[..., -rd:] = kv_rope_3d.reshape_as(kv_rope)
-        self.kernel_mod.act_quant(kv[..., :-rd], 64, 'ue8m0', torch.float8_e8m0fnu, True)
+        # TODO: FP8 quantize NoPE dims directly and write to FP8 cache,
+        # eliminating the BF16 round-trip that act_quant(inplace=True) did
 
         # ---- Batched Compressor call ----
         if self.compress_ratio:
@@ -738,7 +702,8 @@ class Attention(nn.Module):
             out = self._forward_decode_core(q, kv, qr, x, seq_info, slot, schedule, caches,
                                             rotary_pos_emb, compress_pos_emb, bsz)
         else:
-            out = self._forward_prefill_core(q, kv, qr, x, seq_info, slot, schedule, caches, rotary_pos_emb, compress_pos_emb)
+            out = self._forward_prefill_core(q, kv, qr, x, seq_info, slot, schedule, caches,
+                                             rotary_pos_emb, compress_pos_emb)
 
         # ---- Output projection (inverse RoPE via precomputed neg_sin) ----
         self.apply_rotary.forward_single(out[..., -rd:], cos, neg_sin, inplace=True,
@@ -1010,7 +975,7 @@ class Gate(nn.Module):
 
 class Expert(nn.Module):
 
-    def __init__(self, config, dim: int, inter_dim: int, kernel_mod, dtype=None, swiglu_limit=0.0, device=None):
+    def __init__(self, config, dim: int, inter_dim: int, dtype=None, swiglu_limit=0.0, device=None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         self.w13 = build_gateup_linear(dim, [inter_dim, inter_dim], bias=False, dtype=dtype, device=device,
@@ -1044,7 +1009,6 @@ class MoE(nn.Module):
                  config,
                  layer_id: int,
                  args: V4Args,
-                 kernel_mod,
                  dtype: torch.dtype,
                  device: torch.device | str | None):
         super().__init__()
@@ -1060,7 +1024,6 @@ class MoE(nn.Module):
             config,
             args.dim,
             args.moe_inter_dim,
-            kernel_mod,
             dtype=dtype,
             swiglu_limit=0.0,
             device=device)
@@ -1080,13 +1043,12 @@ class Block(nn.Module):
                  config,
                  layer_id: int,
                  args: V4Args,
-                 kernel_mod,
                  dtype: torch.dtype,
                  device: torch.device | str | None):
         super().__init__()
         self.norm_eps = args.norm_eps
-        self.attn = Attention(config, layer_id, args, kernel_mod, dtype=dtype, device=device)
-        self.ffn = MoE(config, layer_id, args, kernel_mod, dtype=dtype, device=device)
+        self.attn = Attention(config, layer_id, args, dtype=dtype, device=device)
+        self.ffn = MoE(config, layer_id, args, dtype=dtype, device=device)
         self.attn_norm = RMSNorm(args.dim, args.norm_eps, dtype=dtype, device=device)
         self.ffn_norm = RMSNorm(args.dim, args.norm_eps, dtype=dtype, device=device)
         self.hc_mult = args.hc_mult
@@ -1101,15 +1063,15 @@ class Block(nn.Module):
             self.hc_ffn_base = nn.Parameter(torch.empty(mix_hc, device=device), requires_grad=False)
             self.hc_attn_scale = nn.Parameter(torch.empty(3, device=device), requires_grad=False)
             self.hc_ffn_scale = nn.Parameter(torch.empty(3, device=device), requires_grad=False)
-        self.kernel_mod = kernel_mod
 
     def _hc_pre(self, x: torch.Tensor, hc_fn: torch.Tensor, hc_scale: torch.Tensor, hc_base: torch.Tensor):
         shape, dtype = x.size(), x.dtype
         x = x.flatten(2).float()
         rsqrt = torch.rsqrt(x.square().mean(-1, keepdim=True) + self.norm_eps)
         mixes = F.linear(x, hc_fn) * rsqrt
-        pre, post, comb = self.kernel_mod.hc_split_sinkhorn(mixes, hc_scale, hc_base, self.hc_mult,
-                                                            self.hc_sinkhorn_iters, self.hc_eps)
+        from lmdeploy.pytorch.kernels.cuda.dsv4.hc_split_sinkhorn import hc_split_sinkhorn
+        pre, post, comb = hc_split_sinkhorn(mixes, hc_scale, hc_base, self.hc_mult,
+                                            self.hc_sinkhorn_iters, self.hc_eps)
         y = torch.sum(pre.unsqueeze(-1) * x.view(shape), dim=2)
         return y.to(dtype), post, comb
 
@@ -1150,11 +1112,6 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         super().__init__()
         self.config = config
         self.ctx_mgr = ctx_mgr
-        self.model_path = getattr(config, '_name_or_path', None) or getattr(config, 'name_or_path', None)
-        if self.model_path is None:
-            raise RuntimeError('DeepSeek-V4 requires config._name_or_path to load official kernels.')
-        self.kernel_mod = _load_v4_kernel_module(self.model_path)
-        self.world_size, self.rank = _get_world_size_rank()
         self.dtype = dtype or torch.bfloat16
         if isinstance(device, str):
             device = torch.device(device)
@@ -1222,7 +1179,7 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
                                        dtype=self.dtype,
                                        is_tp=True,)
         self.layers = nn.ModuleList([
-            Block(config, layer_idx, self.args, self.kernel_mod, dtype=self.dtype, device=self.device)
+            Block(config, layer_idx, self.args, dtype=self.dtype, device=self.device)
             for layer_idx in range(config.num_hidden_layers)
         ])
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=self.dtype, device=self.device)
