@@ -11,7 +11,6 @@ class V4IndexerMetadata:
 
     block_offsets: torch.Tensor
     start_pos: torch.Tensor
-    state_ids: torch.Tensor
     compress_ratio: int
     cu_q_seqlens: torch.Tensor = None
     kv_seqlens: torch.Tensor = None

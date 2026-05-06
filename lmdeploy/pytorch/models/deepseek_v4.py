@@ -262,7 +262,6 @@ class Compressor(nn.Module):
 
     def forward(self,
                 x: torch.Tensor,
-                start_pos: torch.Tensor,
                 slot: torch.Tensor,
                 context: StepContext,
                 compress_pos_emb: tuple[torch.Tensor, torch.Tensor],
@@ -425,8 +424,8 @@ class Indexer(nn.Module):
         q = q_fp8.reshape(*q.shape)
         q_scale = q_scale_2d.squeeze(-1).reshape(-1, n_local_heads)
 
-        comp_start_pos = seq_info.start_pos if is_decoding else start_pos
-        self.compressor(x, comp_start_pos, slot, context, compress_pos_emb, seq_info)
+        comp_start_pos = start_pos
+        self.compressor(x, slot, context, compress_pos_emb, seq_info)
         weights = self.weights_proj(x) * (self.head_dim**-0.5 * self.n_heads**-0.5)
 
         # Use fixed upper bound for max_kv_seqlen during decode (CUDAGraph compat)
@@ -436,7 +435,6 @@ class Indexer(nn.Module):
             max_kv_seqlen = context.max_kv_seqlen or 0
         meta = V4IndexerMetadata(block_offsets=block_offsets,
                                  start_pos=comp_start_pos,
-                                 state_ids=comp_start_pos.new_zeros(comp_start_pos.shape),
                                  compress_ratio=self.compress_ratio,
                                  cu_q_seqlens=seq_info.cu_q_seqlens if not is_decoding else None,
                                  kv_seqlens=seq_info.kv_seqlens if not is_decoding else None,
@@ -713,7 +711,7 @@ class Attention(nn.Module):
 
         # ---- Batched Compressor call ----
         if self.compress_ratio:
-            self.compressor(x, seq_info.start_pos.long(), slot.long(), context, compress_pos_emb, seq_info)
+            self.compressor(x, slot, context, compress_pos_emb, seq_info)
 
         if is_decoding:
             out = self._forward_decode_core(q, kv, qr, x, seq_info, slot, context,
@@ -729,11 +727,7 @@ class Attention(nn.Module):
         proj_in = out
         out = proj_in.new_empty(*proj_in.shape[:-1], self.o_lora_rank)
         self.wo_a(proj_in, out)
-        if is_decoding:
-            # bsz is updated, we need to reconstruct the output shape here
-            return self.wo_b(out.flatten(-2, -1).view(1, total_tokens, -1))
-        else:
-            return self.wo_b(out.flatten(-2, -1).view(1, total_tokens, -1))
+        return self.wo_b(out.flatten(-2, -1).view(1, total_tokens, -1))
 
     def _forward_decode_core(self, q, kv, qr, x, seq_info: SeqInfo, slot,
                              context, rotary_pos_emb, compress_pos_emb, bsz):
@@ -1231,111 +1225,6 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         pre = torch.sigmoid(mixes * self.hc_head_scale + self.hc_head_base) + self.config.hc_eps
         y = torch.sum(pre.unsqueeze(-1) * x.view(shape), dim=2)
         return y.to(dtype)
-
-    def support_cuda_graph(self, input_ids, position_ids, past_key_values, attn_metadata=None,
-                           **kwargs):
-        return attn_metadata is not None and attn_metadata.is_decoding
-
-    def make_buffers_cudagraph(self, graph_meta, *args, past_key_values=None, **kwargs):
-        """Create V4-specific input buffers for CUDA graph capture.
-
-        V4 cannot use the base class padding because:
-        - kv_seqlens padded to max_tokens // max_batchs is unnecessary for V4
-        - V4 uses its own V4AttentionMetadata, not the base AttentionMetadata
-        - V4 needs state_ids for ring-buffer cache slots
-        """
-        max_batches = graph_meta.max_batchs
-        max_tokens = graph_meta.max_tokens
-        num_blocks = graph_meta.num_blocks
-        device = graph_meta.device
-
-        input_buffers = dict()
-        input_buffers['input_ids'] = torch.randint(0, graph_meta.vocab_size, (1, max_tokens),
-                                                    dtype=torch.int64, device=device)
-        input_buffers['position_ids'] = torch.zeros((1, max_tokens), dtype=torch.int64, device=device)
-        input_buffers['block_offsets'] = torch.zeros((max_batches, num_blocks), dtype=torch.int32, device=device)
-        input_buffers['qkv_lens'] = torch.zeros(3, max_batches, dtype=torch.int32, device=device)
-        input_buffers['q_start_loc'] = input_buffers['qkv_lens'][0]
-        input_buffers['q_seqlens'] = input_buffers['qkv_lens'][1]
-        input_buffers['kv_seqlens'] = input_buffers['qkv_lens'][2]
-        input_buffers['qkv_seqlens'] = input_buffers['qkv_lens'][1:]
-        input_buffers['state_ids'] = torch.full((max_batches, ), -1, dtype=torch.int64, device=device)
-
-        return input_buffers
-
-    def fill_buffers_cudagraph(self, graph_meta, input_ids, position_ids, past_key_values,
-                               attn_metadata, inputs_embeds, **kwargs):
-        """Fill V4-specific input buffers from forward inputs."""
-        input_buffers = graph_meta.input_buffers
-        batch_size = attn_metadata.q_seqlens.size(0)
-        num_tokens = input_ids.size(-1)
-
-        # Fill standard buffers
-        input_buffers['input_ids'].random_(0, graph_meta.vocab_size)
-        input_buffers['input_ids'][:, :num_tokens] = input_ids
-        input_buffers['position_ids'][:, :num_tokens] = position_ids
-
-        # Block offsets: copy real data, padded slots keep block 0
-        block_offsets = attn_metadata.block_offsets
-        if not block_offsets.dtype == torch.int32:
-            block_offsets = block_offsets.to(torch.int32)
-        real_blocks = block_offsets.size(1)
-        padded_blocks = input_buffers['block_offsets'].size(1)
-        copy_blocks = min(real_blocks, padded_blocks)
-        input_buffers['block_offsets'].zero_()
-        input_buffers['block_offsets'][:batch_size, :copy_blocks] = block_offsets[:, :copy_blocks]
-
-        # Sequence lengths: padded slots get kv_seqlens=1, q_seqlens=1
-        q_start_loc = attn_metadata.q_start_loc
-        q_seqlens = attn_metadata.q_seqlens
-        kv_seqlens = attn_metadata.kv_seqlens
-        qkv = torch.stack((q_start_loc, q_seqlens, kv_seqlens))
-        input_buffers['qkv_lens'].zero_()
-        # initialize q_seqlens and kv_seqlens to max_tokens // max_batchs
-        # to avoid out of bound in flash attention kernels
-        # padding kv should be the same as padding q so q-kv=0
-        input_buffers['qkv_seqlens'].fill_(graph_meta.max_tokens // graph_meta.max_batchs)
-        input_buffers['qkv_lens'][:, :batch_size] = qkv
-
-        # State IDs: padded slots get -1 (kernel guards skip writes)
-        state_ids = kwargs.get('state_ids', None)
-        if state_ids is not None:
-            input_buffers['state_ids'].fill_(-1)
-            input_buffers['state_ids'][:state_ids.size(0)].copy_(state_ids)
-
-        # Replace attn_metadata fields with buffer pointers
-        attn_metadata.block_offsets = input_buffers['block_offsets']
-        attn_metadata.q_seqlens = input_buffers['q_seqlens']
-        attn_metadata.kv_seqlens = input_buffers['kv_seqlens']
-        attn_metadata.q_start_loc = input_buffers['q_start_loc']
-
-        new_inputs = dict(
-            past_key_values=past_key_values,
-            attn_metadata=attn_metadata,
-            input_ids=input_buffers['input_ids'],
-            position_ids=input_buffers['position_ids'],
-        )
-        if inputs_embeds is not None:
-            emb_size = inputs_embeds.size(-1)
-            if 'inputs_embeds' not in input_buffers:
-                max_num_tokens = input_buffers['input_ids'].size(-1)
-                input_buffers['inputs_embeds'] = inputs_embeds.new_zeros(1, max_num_tokens, emb_size)
-            input_buffers['inputs_embeds'][:, :num_tokens] = inputs_embeds
-            new_inputs['inputs_embeds'] = input_buffers['inputs_embeds']
-
-        if state_ids is not None:
-            new_inputs['state_ids'] = input_buffers['state_ids']
-
-        return new_inputs
-
-    def update_context_cudagraph(self, graph_meta, context):
-        """Update step context with V4 input buffers."""
-        input_buffers = graph_meta.input_buffers
-        context.q_seqlens = input_buffers['q_seqlens']
-        context.kv_seqlens = input_buffers['kv_seqlens']
-        context.q_start_loc = input_buffers['q_start_loc']
-        context.block_offsets = input_buffers['block_offsets']
-        context.state_offsets = input_buffers['state_ids']
 
     def get_logits(self, hidden_states: torch.Tensor):
         hidden_states = self._hc_head(hidden_states)
