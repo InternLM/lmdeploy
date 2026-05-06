@@ -127,7 +127,7 @@ class SpecModelAgent(BaseSpecModelAgent):
         self.method = specdecode_config.method
         self.model_config = specdecode_config.model_config
         self.cache_config = specdecode_config.cache_config
-        self.draft_dist_ctx = DistContext.build(rank=0, dist_config=DistConfig())
+        self.draft_dist_ctx = DistContext.build(rank=dist_ctx.rank, dist_config=DistConfig())
 
         # make dummy meta
         self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(self.model_config)
@@ -137,9 +137,6 @@ class SpecModelAgent(BaseSpecModelAgent):
     @contextmanager
     def draft_context(self):
         """Draft-local dist context."""
-        if self.draft_dist_ctx is None:
-            yield
-            return
         dist_mgr = get_dist_manager()
         with dist_mgr.context(self.draft_dist_ctx):
             yield
@@ -479,32 +476,31 @@ class SpecModelAgent(BaseSpecModelAgent):
         capture_batch_sizes = self.proposer.model.get_capture_batch_sizes()
         capture_batch_sizes = sorted(capture_batch_sizes, reverse=True)
 
-        with self.draft_context():
-            # warmup prefill
-            self._forward_impl(inputs)
+        # warmup prefill
+        self._forward_impl(inputs)
 
-            # warmup decode
-            for batch_size in capture_batch_sizes:
-                # decode with num_spec_tokens + 1 per seq
-                inputs = self.inputs_strategy.make_dummy(batch_size,
-                                                        is_decoding=True,
-                                                        device='cuda',
-                                                        vocab_size=self.model_config.vocab_size,
-                                                        max_q_seqlen=self.num_spec_tokens + 1,
-                                                        target_hidden_size=target_hidden_size,
-                                                        target_dtype=self.model_config.dtype,
-                                                        meta=self.make_dummy_meta)
-                self._forward_impl(inputs)
-                # decode 1 tokens per sequence
-                inputs = self.inputs_strategy.make_dummy(batch_size,
-                                                        is_decoding=True,
-                                                        device='cuda',
-                                                        vocab_size=self.model_config.vocab_size,
-                                                        max_q_seqlen=1,
-                                                        target_hidden_size=self.model_config.hidden_size,
-                                                        target_dtype=self.model_config.dtype,
-                                                        meta=self.make_dummy_meta)
-                self._forward_impl(inputs)
+        # warmup decode
+        for batch_size in capture_batch_sizes:
+            # decode with num_spec_tokens + 1 per seq
+            inputs = self.inputs_strategy.make_dummy(batch_size,
+                                                    is_decoding=True,
+                                                    device='cuda',
+                                                    vocab_size=self.model_config.vocab_size,
+                                                    max_q_seqlen=self.num_spec_tokens + 1,
+                                                    target_hidden_size=target_hidden_size,
+                                                    target_dtype=self.model_config.dtype,
+                                                    meta=self.make_dummy_meta)
+            self._forward_impl(inputs)
+            # decode 1 tokens per sequence
+            inputs = self.inputs_strategy.make_dummy(batch_size,
+                                                    is_decoding=True,
+                                                    device='cuda',
+                                                    vocab_size=self.model_config.vocab_size,
+                                                    max_q_seqlen=1,
+                                                    target_hidden_size=self.model_config.hidden_size,
+                                                    target_dtype=self.model_config.dtype,
+                                                    meta=self.make_dummy_meta)
+            self._forward_impl(inputs)
 
     def reset_graph_runner(self):
         """Reset graph runner."""
