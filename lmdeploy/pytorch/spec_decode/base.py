@@ -53,14 +53,16 @@ class BaseSpecModelAgent:
         'reset graph runner'
         pass
 
-    def update_main_model_outputs(self, output: dict[str, torch.Tensor], model_inputs: ModelInputs):
+    def update_main_model_outputs(self, output: dict[str, torch.Tensor],
+                                  model_inputs: ModelInputs,
+                                  extra_inputs: ExtraInputs = None):
         """Update outputs of main model."""
-        if not self.is_enabled():
+        if model_inputs.is_dummy or not self.is_enabled():
             hidden_states = output.pop('hidden_states')
             return hidden_states, output
 
         hidden_states = output['hidden_states']
-        if not model_inputs.is_decoding:
+        if extra_inputs is None or extra_inputs.output_draft_token_ids is None:
             logits_indices = model_inputs.seq_length.cumsum(0) - 1
             hidden_states = hidden_states[:, logits_indices]
         if 'aux_hidden_states' in output:
@@ -71,3 +73,8 @@ class BaseSpecModelAgent:
     def get_model(self):
         """Get model."""
         return None
+
+    def get_padding_batch_size(self, num_tokens: int):
+        """Get padding batch size."""
+        padding_batch_size = num_tokens // (self.num_spec_tokens + 1) if self.is_enabled() else num_tokens
+        return padding_batch_size

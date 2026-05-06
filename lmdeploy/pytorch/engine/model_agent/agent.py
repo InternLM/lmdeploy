@@ -440,15 +440,15 @@ class BaseModelAgent:
         self,
         inputs: ModelInputs,
         return_logits: bool,
+        extra_inputs: ExtraInputs,
     ):
         """Model forward."""
-        origin_inputs = inputs
         ret = await self.async_forward(inputs)
 
         if not return_logits:
-            ret = self._postprocess_forward_output(ret, origin_inputs)
+            ret = self._postprocess_forward_output(ret, inputs)
 
-        hidden_states, ret = self.spec_agent.update_main_model_outputs(ret, origin_inputs)
+        hidden_states, ret = self.spec_agent.update_main_model_outputs(ret, inputs, extra_inputs)
 
         logits = self.get_logits(hidden_states)
         ret['logits'] = logits
@@ -539,10 +539,11 @@ class BaseModelAgent:
         # pad batch size for decoding
         all_num_tokens = gathered_meta[:, 2].tolist()
         if is_decoding:
-            max_num_tokens = max(all_num_tokens)
+            padding_batch_size = max(all_num_tokens)
+            padding_batch_size = self.spec_agent.get_padding_batch_size(padding_batch_size)
             meta = self.patched_model.get_meta()
-            meta.padding_batch_size = max_num_tokens
-            logger.debug(f'max_num_tokens={max_num_tokens}')
+            meta.padding_batch_size = padding_batch_size
+            logger.debug(f'padding_batch_size={padding_batch_size}')
 
         # update if enable_microbatch
         if self.enable_microbatch:
@@ -739,6 +740,7 @@ class BaseModelAgent:
         output = await self._async_model_forward(
             inputs,
             return_logits=return_logits,
+            extra_inputs=extra_inputs,
         )
         # recovery is_decoding
         inputs.is_decoding = is_decoding
