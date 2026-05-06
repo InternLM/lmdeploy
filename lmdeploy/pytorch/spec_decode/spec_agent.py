@@ -441,14 +441,17 @@ class SpecModelAgent(BaseSpecModelAgent):
             # at pre-step state.  Accept rejection-sampled output + bonus token
             # to bring originals to the correct state for the next step.
             if guided_processors:
+                cpu_num_rejected = num_rejected_tokens.cpu()
+                cpu_output_token_ids = output_token_ids.cpu()
+                cpu_next_token_ids = next_token_ids.cpu()
                 for idx, processor in guided_processors.items():
-                    n_rejected = num_rejected_tokens[idx].item()
+                    n_rejected = cpu_num_rejected[idx].item()
                     n_valid_draft = self.num_spec_tokens - n_rejected
                     for pos in range(n_valid_draft):
-                        tid = output_token_ids[idx, pos].item()
+                        tid = cpu_output_token_ids[idx, pos].item()
                         if tid >= 0:
                             guided_manager.accept_token(processor, tid)
-                    guided_manager.accept_token(processor, next_token_ids[idx].item())
+                    guided_manager.accept_token(processor, cpu_next_token_ids[idx].item())
         else:
             # Prefill path — standard FusedLogitsProcessor handles guided decoding
             logits_processor = FusedLogitsProcessor(
@@ -540,8 +543,9 @@ class SpecModelAgent(BaseSpecModelAgent):
             # ensures only accepted tokens are fed to original matchers.
             pos_token_ids = pos_logits.argmax(dim=-1)
 
+            cpu_pos_token_ids = pos_token_ids.cpu()
             for idx, fork_proc in forked.items():
-                guided_manager.accept_token(fork_proc, pos_token_ids[idx].item())
+                guided_manager.accept_token(fork_proc, cpu_pos_token_ids[idx].item())
 
         # Forked matchers go out of scope — originals untouched.
         scores = scores_3d.view(batch_size * num_expand, -1)
