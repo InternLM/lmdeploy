@@ -11,14 +11,10 @@ from torch import nn
 from lmdeploy.pytorch.backends.attention import V4AttentionMetadata
 from lmdeploy.pytorch.backends.rotary_embedding import RopeType, YarnParameters
 from lmdeploy.pytorch.distributed import get_tp_world_rank
-from lmdeploy.pytorch.kernels.cuda.v4_compressor import (
-    fill_compress_state,
-    fill_compressed_kv,
-    score_kv,
-)
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, RMSNorm, SiluAndMul
 from lmdeploy.pytorch.nn import V4Attention as NativeV4Attention
+from lmdeploy.pytorch.nn import V4Compressor as NativeV4Compressor
 from lmdeploy.pytorch.nn import V4Indexer as NativeV4Indexer
 from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_down_linear, build_gateup_linear, build_o_proj
 from lmdeploy.pytorch.nn.moe import FusedMoEV4
@@ -81,12 +77,6 @@ def _map_v4_expert_param_name(name: str, use_fused_experts: bool) -> tuple[str, 
     if proj == 'w3':
         return name, 'up'
     return name, 'down'
-
-def rotate_activation(x: torch.Tensor) -> torch.Tensor:
-    """Apply the official DeepSeek-V4 Hadamard rotation used by the indexer."""
-    from fast_hadamard_transform import hadamard_transform
-    return hadamard_transform(x, scale=x.size(-1)**-0.5)
-
 
 def _build_window_positions(total_lens: torch.Tensor, window_size: int):
     """Build chronologically ordered trailing window positions in ring-buffer
@@ -224,6 +214,10 @@ class Compressor(nn.Module):
         self.wgate = build_colwise_linear(self.dim, coff * self.head_dim, False, dtype=dtype, device=device)
         self.norm = RMSNorm(self.head_dim, args.norm_eps, dtype=dtype, device=device)
         self.apply_rotary = ApplyRotaryEmb()
+        self.compressor_impl = NativeV4Compressor(
+            compress_ratio=compress_ratio,
+            overlap=self.overlap,
+            head_dim=head_dim)
         self.state_cache_name = self._get_state_cache_name()
 
     def _get_state_cache_name(self):
@@ -253,22 +247,20 @@ class Compressor(nn.Module):
     def forward(self,
                 x: torch.Tensor,
                 slot: torch.Tensor,
-                schedule: V4ScheduleInfo,
                 caches: V4Caches,
                 compress_pos_emb: tuple[torch.Tensor, torch.Tensor],
-                seq_info: SeqInfo):
+                attn_metadata=None):
         """Unified forward for both prefill and decode.
 
-        Delegates ring-buffer management and scoring to the Triton kernels
-        (fill_compress_state, score_kv) instead of managing state in Python.
+        Delegates ring-buffer management and scoring to the backend-dispatched
+        V4Compressor impl instead of calling kernels directly.
 
         Args:
             x: [bsz, seqlen, dim] for decode, [1, total_tokens, dim] for prefill.
             slot: Tensor[bsz] state cache slot for each sequence.
-            schedule: Cross-layer shared scheduling data.
             caches: Cache dictionaries (named_state_caches + block_caches).
             compress_pos_emb: (cos, sin) tuple for compressed KV RoPE.
-            seq_info: Bundled sequence-length metadata.
+            attn_metadata: Attention metadata for backend dispatch.
         """
         ratio = self.compress_ratio
         rd = self.rope_head_dim
@@ -276,9 +268,6 @@ class Compressor(nn.Module):
         overlap = self.overlap
         coff = 1 + overlap
         rows = coff * ratio
-
-        cu_q_seqlens = seq_info.cu_q_seqlens
-        kv_seqlens = seq_info.kv_seqlens
 
         # ---- Phase A: Projections ----
         kv = self.wkv(x)       # same layout as x
@@ -294,15 +283,9 @@ class Compressor(nn.Module):
         kv_state = state_cache[:, :rows]
         score_state = state_cache[:, rows:2 * rows]
 
-        # ---- Phase D: score_kv (reads state, produces compressed_kv) ----
-        compressed_kv = kv_flat.new_zeros(kv_flat.size(0), self.head_dim)
-        max_seqlen_q = schedule.max_kv_seqlen
-        score_kv(kv_flat, score_flat, self.ape, kv_state, score_state, state_ids,
-                 cu_q_seqlens, kv_seqlens, compressed_kv, overlap, max_seqlen_q)
-
-        # ---- Phase E: fill_compress_state (writes new state) ----
-        fill_compress_state(kv_flat, score_flat, self.ape, kv_state, score_state, state_ids,
-                            cu_q_seqlens, kv_seqlens)
+        # ---- Phase D+E: score + fill state (via backend dispatch) ----
+        compressed_kv = self.compressor_impl.score_and_fill_state(
+            kv_flat, score_flat, self.ape, kv_state, score_state, state_ids, attn_metadata)
 
         # ---- Phase F: Post-processing (norm + RoPE + quant on entire compressed_kv) ----
         compressed_kv = self.norm(compressed_kv.to(dtype))
@@ -312,13 +295,13 @@ class Compressor(nn.Module):
         self.apply_rotary.forward_single(kv_rope, cos_c, sin_c, inplace=True, complex_mode=True)
         compressed_kv[..., -rd:] = kv_rope.squeeze(1)
         if self.rotate:
-            compressed_kv = rotate_activation(compressed_kv)
+            compressed_kv = self.compressor_impl.rotate_activation(compressed_kv)
         else:
             # TODO: FP8 quantize NoPE dims directly and write to FP8 cache,
             # eliminating the BF16 round-trip that act_quant(inplace=True) did
             pass
 
-        # ---- Phase G: Write to paged block cache via fill_compressed_kv ----
+        # ---- Phase G: Write to paged block cache (via backend dispatch) ----
         block_caches = caches.block_caches
         cache_name = self._get_block_cache_name()
         fp8_cache_name = self._get_fp8_cache_name()
@@ -330,10 +313,13 @@ class Compressor(nn.Module):
         else:
             kv_scale_cache = None
 
-        fill_compressed_kv(compressed_kv, kv_cache, cu_q_seqlens, kv_seqlens, schedule.block_offsets,
-                           self.compress_ratio, schedule.block_size, max_seqlen_q,
-                           fp8_cache=fp8_cache,
-                           kv_scale_cache=kv_scale_cache)
+        self.compressor_impl.write_compressed_kv(
+            compressed_kv, kv_cache, attn_metadata,
+            fp8_cache=fp8_cache,
+            kv_scale_cache=kv_scale_cache)
+
+    def rotate_activation(self, x: torch.Tensor) -> torch.Tensor:
+        return self.compressor_impl.rotate_activation(x)
 
 
 class Indexer(nn.Module):
@@ -380,23 +366,21 @@ class Indexer(nn.Module):
     def forward(self,
                 x: torch.Tensor,
                 qr: torch.Tensor,
-                schedule: V4ScheduleInfo,
                 caches: V4Caches,
                 slot: torch.Tensor,
                 index_kv_cache: torch.Tensor,
                 index_kv_scale_cache: torch.Tensor,
                 rotary_pos_emb: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
                 compress_pos_emb: tuple[torch.Tensor, torch.Tensor],
-                seq_info: SeqInfo,
                 attn_metadata=None):
         rd = self.rope_head_dim
         q = self.wq_b(qr).unflatten(-1, (-1, self.head_dim))
 
         cos, sin, _ = rotary_pos_emb
         self.apply_rotary.forward_single(q[..., -rd:], cos, sin, inplace=True, complex_mode=True)
-        q = rotate_activation(q)
+        q = self.compressor.rotate_activation(q)
 
-        self.compressor(x, slot, schedule, caches, compress_pos_emb, seq_info)
+        self.compressor(x, slot, caches, compress_pos_emb, attn_metadata=attn_metadata)
         weights = self.weights_proj(x) * (self.head_dim**-0.5 * self.n_heads**-0.5)
 
         return self.indexer_fwd(q, weights, index_kv_cache, index_kv_scale_cache, attn_metadata)
@@ -668,7 +652,7 @@ class Attention(nn.Module):
 
         # ---- Batched Compressor call ----
         if self.compress_ratio:
-            self.compressor(x, slot, schedule, caches, compress_pos_emb, seq_info)
+            self.compressor(x, slot, caches, compress_pos_emb, attn_metadata=attn_metadata)
 
         if is_decoding:
             out = self._forward_decode_core(q, kv, qr, x, seq_info, slot, schedule, caches,
@@ -733,14 +717,12 @@ class Attention(nn.Module):
                 index_scale_cache = attn_caches['index_kv_scale']
                 index_out = self.indexer(x=x,
                                          qr=qr,
-                                         schedule=schedule,
                                          caches=caches,
                                          slot=slot,
                                          index_kv_cache=index_cache,
                                          index_kv_scale_cache=index_scale_cache,
                                          rotary_pos_emb=rotary_pos_emb,
                                          compress_pos_emb=compress_pos_emb,
-                                         seq_info=seq_info,
                                          attn_metadata=attn_metadata)
                 indices_in_kvcache = index_out.indices_in_kvcache
                 topk_length = index_out.topk_length
@@ -819,14 +801,12 @@ class Attention(nn.Module):
                 index_out = self.indexer(
                     x=x,
                     qr=qr,
-                    schedule=schedule,
                     caches=caches,
                     slot=slot,
                     index_kv_cache=attn_caches['index_kv'],
                     index_kv_scale_cache=attn_caches['index_kv_scale'],
                     rotary_pos_emb=rotary_pos_emb,
                     compress_pos_emb=compress_pos_emb,
-                    seq_info=seq_info,
                     attn_metadata=attn_metadata)
 
                 compress_topk = index_out.indices_in_kvcache.squeeze(0)  # [total_tokens, topk]

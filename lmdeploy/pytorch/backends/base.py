@@ -34,6 +34,7 @@ class OpType(Enum):
     NSAIndexFP8 = auto()
     V4Attention = auto()
     V4Indexer = auto()
+    V4Compressor = auto()
     Embedding = auto()
 
     # MoE router

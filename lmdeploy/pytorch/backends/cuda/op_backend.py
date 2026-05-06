@@ -76,6 +76,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.V4Indexer:
             from .v4_indexer import TritonV4IndexerBuilder
             return TritonV4IndexerBuilder
+        elif layer_type == OpType.V4Compressor:
+            from .v4_compressor import TritonV4CompressorBuilder
+            return TritonV4CompressorBuilder
         elif layer_type == OpType.RouterNoauxTC:
             from .moe_router import TritonRouterNoauxTCBuilder
             return TritonRouterNoauxTCBuilder

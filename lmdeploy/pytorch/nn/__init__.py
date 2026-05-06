@@ -14,4 +14,5 @@ from .rotary_embedding import (
     build_rotary_params,  # noqa: F401
 )
 from .v4_attention import V4Attention  # noqa: F401
+from .v4_compressor import V4Compressor  # noqa: F401
 from .v4_indexer import V4Indexer  # noqa: F401
