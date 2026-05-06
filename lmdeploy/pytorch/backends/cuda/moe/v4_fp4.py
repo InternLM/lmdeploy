@@ -3,16 +3,15 @@ import torch
 
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.backends.moe import FusedMoEBuilder
-from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import fused_moe_blocked_fp8
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
+from lmdeploy.pytorch.kernels.cuda.v4_fp4_fused_moe import fused_moe_v4_fp4
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
 
 
 def _v4_swiglu(intermediate: torch.Tensor, swiglu_limit: float) -> torch.Tensor:
-    """Match DeepSeek-V4 expert activation in the blocked FP8 fused MoE
-    path."""
+    """Match DeepSeek-V4 expert activation in the Triton FP4 fused MoE path."""
     hidden = intermediate.size(-1) // 2
     gate = intermediate[..., :hidden].float()
     up = intermediate[..., hidden:].float()
@@ -30,11 +29,8 @@ def _slice_local_topk(topk_ids: torch.LongTensor,
     """Map global routed experts into the current TP rank's local expert id
     space.
 
-    `invalid_expert` is backend-specific:
-    - `-1` for the SM100 grouped FP8xFP4 path, matching TileKernels'
-      fused-routing helpers.
-    - `0` for the Hopper blocked FP8 path, because lmdeploy's blocked fused MoE
-      routing kernel does not accept negative expert ids.
+    `invalid_expert` is backend-specific. Triton FP4 uses 0 with a zero route
+    weight; the legacy DeepGEMM path uses -1 to match TileKernels routing.
     """
     local_topk_ids = topk_ids.to(torch.int64) - expert_offset
     local_mask = (local_topk_ids >= 0) & (local_topk_ids < num_experts)
@@ -43,12 +39,13 @@ def _slice_local_topk(topk_ids: torch.LongTensor,
     return local_topk_ids, local_topk_weights, local_mask
 
 
-class TritonFusedMoEV4BlockedF8TPImpl:
-    """TP-only blocked FP8 fused MoE for DeepSeek-V4 on Hopper.
+class TritonFusedMoEV4FP4TPImpl:
+    """TP-only Triton FP8xFP4 fused MoE for DeepSeek-V4.
 
-    DeepGEMM grouped FP8xFP4 kernels currently require SM100 for packed FP4 expert weights. On SM90/Hopper we instead
-    convert expert weights to blocked FP8 at load time, then reuse lmdeploy's graph-friendly blocked FP8 fused MoE
-    kernel while keeping DeepSeek-V4's expert-parallel routing semantics.
+    This path keeps checkpoint-native packed FP4 expert weights resident in
+    memory. The Triton GEMM unpacks FP4 weights in-kernel, casts the E2M1 values
+    to FP8, then uses the same two-stage fused-MoE flow as the generic fused
+    MoE path.
     """
 
     def __init__(self,
@@ -84,43 +81,31 @@ class TritonFusedMoEV4BlockedF8TPImpl:
                 gate_up_weight: torch.Tensor,
                 gate_up_scale: torch.Tensor,
                 down_weight: torch.Tensor,
-                down_scale: torch.Tensor,
-                group: dist.ProcessGroup | None = None):
+                down_scale: torch.Tensor):
         num_tokens = hidden_states.size(0)
         if num_tokens == 0:
             return hidden_states.new_empty((0, self.hidden_dim))
 
-        local_topk_ids, local_topk_weights, local_mask = _slice_local_topk(topk_ids,
-                                                                           topk_weights,
-                                                                           self.expert_offset,
-                                                                           self.num_experts,
-                                                                           invalid_expert=0)
-
-        if not local_mask.any():
-            out = hidden_states.new_zeros((num_tokens, self.hidden_dim))
-            if group is not None:
-                dist.all_reduce(out, group=group)
-            return out
-
         input_quant, input_scale = quant_fp8(hidden_states,
                                              128,
-                                             dtype=gate_up_weight.dtype,
+                                             dtype=torch.float8_e4m3fn,
                                              scale_fmt=self.scale_fmt)
-        out = fused_moe_blocked_fp8(input_quant,
-                                    input_scale,
-                                    gate_up_weight,
-                                    gate_up_scale,
-                                    down_weight,
-                                    down_scale,
-                                    topk_weights=local_topk_weights.contiguous(),
-                                    topk_ids=local_topk_ids.contiguous(),
-                                    topk=self.top_k,
-                                    out_dtype=hidden_states.dtype,
-                                    renormalize=False,
-                                    act_func=self._act_func)
-        out = out.float()
-        if group is not None:
-            dist.all_reduce(out, group=group)
+        if self.swiglu_limit > 0:
+            act_func = self._act_func
+        else:
+            act_func = None
+        out = fused_moe_v4_fp4(input_quant,
+                               input_scale,
+                               gate_up_weight,
+                               gate_up_scale,
+                               down_weight,
+                               down_scale,
+                               topk_weights=topk_weights,
+                               topk_ids=topk_ids,
+                               topk=self.top_k,
+                               out_dtype=hidden_states.dtype,
+                               renormalize=False,
+                               act_func=act_func)
         return out
 
 
@@ -186,8 +171,7 @@ class DeepGemmFusedMoEV4TPImpl:
                 gate_up_weight: torch.Tensor,
                 gate_up_scale: torch.Tensor,
                 down_weight: torch.Tensor,
-                down_scale: torch.Tensor,
-                group: dist.ProcessGroup | None = None):
+                down_scale: torch.Tensor):
         deep_gemm, per_token_cast_to_fp8, get_fused_mapping, expand_to_fused_with_sf, reduce_fused, swiglu_forward = \
             self._import_impl()
 
@@ -195,16 +179,11 @@ class DeepGemmFusedMoEV4TPImpl:
         if num_tokens == 0:
             return hidden_states.new_empty((0, self.hidden_dim))
 
-        local_topk_ids, _, local_mask = _slice_local_topk(topk_ids,
-                                                          topk_weights,
-                                                          self.expert_offset,
-                                                          self.num_experts,
-                                                          invalid_expert=-1)
-        if not local_mask.any():
-            out = hidden_states.new_zeros((num_tokens, self.hidden_dim))
-            if group is not None:
-                dist.all_reduce(out, group=group)
-            return out
+        local_topk_ids, _, _ = _slice_local_topk(topk_ids,
+                                                 topk_weights,
+                                                 self.expert_offset,
+                                                 self.num_experts,
+                                                 invalid_expert=-1)
 
         alignment = deep_gemm.get_theoretical_mk_alignment_for_contiguous_layout()
         deep_gemm.set_mk_alignment_for_contiguous_layout(alignment)
@@ -260,8 +239,6 @@ class DeepGemmFusedMoEV4TPImpl:
         )
 
         out = reduce_fused(down_out, None, token_topk_to_pos)
-        if group is not None:
-            dist.all_reduce(out, group=group)
         return out
 
 
@@ -291,8 +268,8 @@ class DeepGemmFusedMoEV4Builder(FusedMoEBuilder):
                                         swiglu_limit=swiglu_limit)
 
 
-class TritonFusedMoEV4BlockedF8Builder(FusedMoEBuilder):
-    """Builder for TP-only DeepSeek-V4 blocked FP8 fused MoE."""
+class TritonFusedMoEV4FP4Builder(FusedMoEBuilder):
+    """Builder for TP-only DeepSeek-V4 Triton FP4 fused MoE."""
 
     @staticmethod
     def build(top_k: int,
@@ -310,10 +287,10 @@ class TritonFusedMoEV4BlockedF8Builder(FusedMoEBuilder):
         del renormalize, ep_group, layer_idx, out_dtype
         if ep_size > 1:
             raise RuntimeError('DeepSeek-V4 fused MoE currently supports TP only; EP is not implemented.')
-        return TritonFusedMoEV4BlockedF8TPImpl(top_k=top_k,
-                                               num_experts=num_experts,
-                                               hidden_dim=hidden_dim,
-                                               ffn_dim=ffn_dim,
-                                               expert_offset=expert_offset,
-                                               swiglu_limit=swiglu_limit,
-                                               scale_fmt=scale_fmt)
+        return TritonFusedMoEV4FP4TPImpl(top_k=top_k,
+                                         num_experts=num_experts,
+                                         hidden_dim=hidden_dim,
+                                         ffn_dim=ffn_dim,
+                                         expert_offset=expert_offset,
+                                         swiglu_limit=swiglu_limit,
+                                         scale_fmt=scale_fmt)
