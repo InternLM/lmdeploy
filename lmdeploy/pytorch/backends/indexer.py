@@ -10,11 +10,10 @@ class V4IndexerMetadata:
     """DeepSeek V4 indexer metadata."""
 
     block_offsets: torch.Tensor
-    start_pos: torch.Tensor
     compress_ratio: int
+    is_decoding: bool
     cu_q_seqlens: torch.Tensor = None
     kv_seqlens: torch.Tensor = None
-    index_kv_scale_cache: torch.Tensor = None
     max_kv_seqlen: int = None
     max_q_seqlen: int = None
 
@@ -32,13 +31,12 @@ class BaseV4Indexer(ABC):
     @abstractmethod
     def forward(self,
                 query: torch.Tensor,
-                q_scale: torch.Tensor,
                 weights: torch.Tensor,
                 index_kv_cache: torch.Tensor,
+                index_kv_scale_cache: torch.Tensor,
                 meta: V4IndexerMetadata,
                 block_size: int,
-                offset: int,
-                is_decoding: bool) -> V4IndexerOutput:
+                offset: int) -> V4IndexerOutput:
         raise NotImplementedError
 
 

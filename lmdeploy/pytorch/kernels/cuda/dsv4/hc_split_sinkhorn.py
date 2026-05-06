@@ -3,24 +3,24 @@
 # Source: DeepSeek-V4-Flash/inference/kernel.py (hc_split_sinkhorn_kernel + hc_split_sinkhorn)
 # Original copyright (c) DeepSeek
 
-import torch
 import tilelang
 import tilelang.language as T
+import torch
 
-tilelang.set_log_level("WARNING")
+tilelang.set_log_level('WARNING')
 
 pass_configs = {
     tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True,
     tilelang.PassConfigKey.TL_DISABLE_TMA_LOWER: True,
 }
 
-FP32 = "float32"
-INT32 = "int32"
+FP32 = 'float32'
+INT32 = 'int32'
 
 
 @tilelang.jit(pass_configs=pass_configs)
 def hc_split_sinkhorn_kernel(hc: int, sinkhorn_iters: int, eps: float):
-    n = T.symbolic("n")
+    n = T.symbolic('n')
     mix_hc = (2 + hc) * hc
     threads = 64
 

@@ -396,21 +396,11 @@ class Indexer(nn.Module):
                 is_decoding: bool = False):
         rd = self.rope_head_dim
         q = self.wq_b(qr).unflatten(-1, (-1, self.head_dim))
-        n_local_heads = q.size(-2)
 
         cos, sin, _ = rotary_pos_emb
         self.apply_rotary.forward_single(q[..., -rd:], cos, sin, inplace=True, complex_mode=True)
         q = rotate_activation(q)
-        # FP8 quantize Indexer Q (replaces fp4_act_quant for better precision)
-        from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
-        head_dim = self.head_dim
-        q_2d = q.reshape(-1, head_dim)
-        q_fp8, q_scale_2d = quant_fp8(q_2d, group_size=128,
-                                       dtype=torch.float8_e4m3fn, scale_fmt='ue8m0')
-        q = q_fp8.reshape(*q.shape)
-        q_scale = q_scale_2d.reshape(-1, n_local_heads)
 
-        comp_start_pos = start_pos
         self.compressor(x, slot, schedule, caches, compress_pos_emb, seq_info)
         weights = self.weights_proj(x) * (self.head_dim**-0.5 * self.n_heads**-0.5)
 
@@ -420,15 +410,14 @@ class Indexer(nn.Module):
         else:
             max_kv_seqlen = schedule.max_kv_seqlen or 0
         meta = V4IndexerMetadata(block_offsets=block_offsets,
-                                 start_pos=comp_start_pos,
                                  compress_ratio=self.compress_ratio,
+                                 is_decoding=is_decoding,
                                  cu_q_seqlens=seq_info.cu_q_seqlens,
                                  kv_seqlens=seq_info.kv_seqlens,
-                                 index_kv_scale_cache=index_kv_scale_cache,
                                  max_kv_seqlen=max_kv_seqlen,
                                  max_q_seqlen=schedule.max_q_seqlen)
-        return self.indexer_fwd(q, q_scale, weights, index_kv_cache, meta, block_size,
-                                offset, is_decoding)
+        return self.indexer_fwd(q, weights, index_kv_cache, index_kv_scale_cache, meta, block_size,
+                                offset)
 
 class DeepseekV4BMM(nn.Module):
     """Wrapped bmm."""

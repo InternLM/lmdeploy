@@ -16,12 +16,11 @@ class V4Indexer(nn.Module):
 
     def forward(self,
                 query,
-                q_scale,
                 weights,
                 index_kv_cache,
+                index_kv_scale_cache,
                 meta: V4IndexerMetadata,
                 block_size: int,
-                offset: int,
-                is_decoding: bool) -> V4IndexerOutput:
-        return self.impl.forward(query, q_scale, weights, index_kv_cache, meta, block_size,
-                                 offset, is_decoding)
+                offset: int) -> V4IndexerOutput:
+        return self.impl.forward(query, weights, index_kv_cache, index_kv_scale_cache, meta, block_size,
+                                 offset)
