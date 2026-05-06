@@ -63,9 +63,6 @@ class SubCliServe:
                             default=['*'],
                             help='A list of allowed http headers for cors')
         parser.add_argument('--proxy-url', type=str, default=None, help='The proxy url for api server.')
-        parser.add_argument('--trust-remote-code',
-                            action='store_true',
-                            help='Whether to trust remote code from model repositories.')
         parser.add_argument('--max-concurrent-requests',
                             type=int,
                             default=None,
@@ -84,6 +81,7 @@ class SubCliServe:
         ArgumentHelper.disable_fastapi_docs(parser)
         ArgumentHelper.allow_terminate_by_client(parser)
         ArgumentHelper.enable_abort_handling(parser)
+        ArgumentHelper.trust_remote_code(parser)
         # chat template args
         ArgumentHelper.chat_template(parser)
 
