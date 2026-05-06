@@ -58,7 +58,7 @@ def register(router: APIRouter, server_context) -> None:
         if request.tools and (parser_cls is None or parser_cls.tool_parser_cls is None):
             return create_error_response(
                 HTTPStatus.BAD_REQUEST,
-                'Please launch the api_server with --tool-call-parser if you want to use tool.')
+                'Please launch the api_server with --tool-call-parser if you want to use tool calling.')
 
         response_parser = None
         parsed_request = None

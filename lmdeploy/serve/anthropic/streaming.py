@@ -90,17 +90,25 @@ async def stream_messages_response(result_generator,
         events: list[str] = []
         tool_index = tool_delta.index
         block = tool_blocks.get(tool_index)
-        if block is None:
+        same_block = (
+            current_block is not None and current_block.get('kind') == 'tool_use'
+            and current_block.get('tool_index') == tool_index
+            and block is not None
+            and current_block.get('block_index') == block['block_index'])
+        if not same_block:
             closing = _close_current_block()
             if closing:
                 events.append(closing)
+        if block is None:
+            function_delta = getattr(tool_delta, 'function', None)
+            tool_name = '' if function_delta is None else function_delta.name or ''
             block_index = next_block_index
             next_block_index += 1
             block = dict(
                 tool_index=tool_index,
                 block_index=block_index,
                 tool_use_id=tool_delta.id,
-                name='',
+                name=tool_name,
             )
             tool_blocks[tool_index] = block
             events.append(
@@ -112,7 +120,7 @@ async def stream_messages_response(result_generator,
                         'content_block': {
                             'type': 'tool_use',
                             'id': tool_delta.id,
-                            'name': '',
+                            'name': tool_name,
                             'input': {},
                         },
                     },

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from types import SimpleNamespace
 
 from fastapi import FastAPI
@@ -7,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from lmdeploy.serve.anthropic.endpoints import messages, messages_count_tokens, models
 from lmdeploy.serve.anthropic.router import create_anthropic_router
+from lmdeploy.serve.anthropic.streaming import stream_messages_response
 from lmdeploy.serve.openai.protocol import DeltaFunctionCall, DeltaMessage, DeltaToolCall, FunctionCall, ToolCall
 
 
@@ -312,6 +315,80 @@ def test_messages_streaming_with_reasoning_and_tool_use_events():
     assert '"type": "thinking_delta"' in body
     assert '"type": "input_json_delta"' in body
     assert '"type": "tool_use"' in body
+
+
+def test_stream_messages_response_closes_text_before_resuming_tool_delta():
+    class _InterleavedToolParser:
+        def __init__(self):
+            self.calls = 0
+
+        def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return DeltaMessage(
+                    role='assistant',
+                    tool_calls=[
+                        DeltaToolCall(
+                            index=0,
+                            id='toolu_123',
+                            function=DeltaFunctionCall(
+                                name='search',
+                                arguments='{"query":',
+                            ),
+                        )
+                    ],
+                ), True
+            if self.calls == 2:
+                return DeltaMessage(role='assistant', content='interlude'), False
+            return DeltaMessage(
+                role='assistant',
+                tool_calls=[
+                    DeltaToolCall(
+                        index=0,
+                        id='toolu_123',
+                        function=DeltaFunctionCall(arguments='"lmdeploy"}'),
+                    )
+                ],
+            ), True
+
+    async def _result_generator():
+        for idx, finish_reason in enumerate([None, None, 'stop'], start=1):
+            yield SimpleNamespace(
+                response=f'chunk-{idx}',
+                token_ids=[idx],
+                input_token_len=8,
+                generate_token_len=idx,
+                finish_reason=finish_reason,
+            )
+
+    async def _collect_events():
+        return [
+            event async for event in stream_messages_response(
+                _result_generator(),
+                request_id='msg_test',
+                model='fake-model',
+                response_parser=_InterleavedToolParser(),
+            )
+        ]
+
+    events = asyncio.run(_collect_events())
+    payloads = [
+        json.loads(line.removeprefix('data: ')) for event in events for line in event.splitlines()
+        if line.startswith('data: ')
+    ]
+
+    tool_start = next(
+        item for item in payloads
+        if item['type'] == 'content_block_start' and item['content_block']['type'] == 'tool_use')
+    assert tool_start['content_block']['name'] == 'search'
+
+    resumed_tool_delta_index = next(
+        idx for idx, item in enumerate(payloads)
+        if item['type'] == 'content_block_delta' and item['delta']['type'] == 'input_json_delta'
+        and item['delta']['partial_json'] == '"lmdeploy"}')
+    assert any(
+        item['type'] == 'content_block_stop' and item['index'] == 1
+        for item in payloads[:resumed_tool_delta_index])
 
 
 def test_count_tokens():
