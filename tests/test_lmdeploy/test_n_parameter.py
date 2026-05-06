@@ -11,6 +11,7 @@ import pytest
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, CompletionRequest
 from lmdeploy.serve.openai.serving_chat_completion import check_request as chat_check_request
 from lmdeploy.serve.openai.serving_completion import check_request as completion_check_request
+from lmdeploy.serve.parsers.response_parser import BaseResponseParser
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -38,6 +39,7 @@ async def _async_gen(*items):
 def _make_session(session_id=42):
     sess = MagicMock()
     sess.session_id = session_id
+    sess.epoch = 0
     sess.async_abort = AsyncMock()
     return sess
 
@@ -118,19 +120,21 @@ def _setup_variable_interface(mock_vi, n_sessions=1, gen_outputs=None):
     engine = MagicMock()
     engine.model_name = 'test-model'
     engine.arch = 'LlamaForCausalLM'
+    engine.epoch = 0
     engine.tokenizer = MagicMock()
 
     sessions = [_make_session(i + 10) for i in range(max(n_sessions, 1))]
     _session_iter = iter(sessions)
 
-    def _get_session(sid):
+    def _create_session(_user_session_id=-1):
         try:
             return next(_session_iter)
         except StopIteration:
             return _make_session(99)
 
-    mock_vi.get_session.side_effect = _get_session
+    mock_vi.create_session.side_effect = _create_session
     mock_vi.async_engine = engine
+    mock_vi.response_parser_cls = BaseResponseParser
     mock_vi.tool_parser = None
     mock_vi.reasoning_parser = None
     mock_vi.allow_terminate_by_client = False
@@ -232,7 +236,7 @@ class TestChatCompletionsN:
             _setup_variable_interface(mock_vi, n_sessions=1)
             await api_server.chat_completions_v1(request, raw_request)
 
-        mock_vi.get_session.assert_called_once_with(77)
+        mock_vi.create_session.assert_called_once_with(77)
 
     @pytest.mark.asyncio
     async def test_n3_uses_auto_sessions(self):
@@ -247,7 +251,7 @@ class TestChatCompletionsN:
             await api_server.chat_completions_v1(request, raw_request)
 
         # All 3 sessions should be auto-assigned (-1)
-        calls = mock_vi.get_session.call_args_list
+        calls = mock_vi.create_session.call_args_list
         assert len(calls) == 3
         assert all(c.args[0] == -1 for c in calls)
 
