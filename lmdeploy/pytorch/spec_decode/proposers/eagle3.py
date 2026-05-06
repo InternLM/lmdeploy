@@ -102,7 +102,8 @@ class Eagle3(DeepseekMTP):
 
         if guided_processors and self.guided_decoding_manager is not None:
             guided_manager = self.guided_decoding_manager
+            cpu_draft_token_ids = draft_token_ids[:, 0].cpu()
             for idx, processor in guided_processors.items():
-                guided_manager.accept_token(processor, draft_token_ids[idx, 0].item())
+                guided_manager.accept_token(processor, cpu_draft_token_ids[idx].item())
 
         return draft_token_ids, model_metas, hidden_states_prenorm
