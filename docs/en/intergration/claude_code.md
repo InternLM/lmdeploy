@@ -56,27 +56,25 @@ Set `ANTHROPIC_BASE_URL` to the server root, not to `/v1`. Claude Code appends
   "env": {
     "ANTHROPIC_BASE_URL": "http://127.0.0.1:23333",
     "ANTHROPIC_AUTH_TOKEN": "dummy",
-    "ANTHROPIC_MODEL": "qwen3.5-35b",
-    "ANTHROPIC_CUSTOM_MODEL_OPTION": "qwen3.5-35b",
+    "ANTHROPIC_MODEL": "Qwen/Qwen3.5-35B-A3B",
+    "ANTHROPIC_CUSTOM_MODEL_OPTION": "Qwen/Qwen3.5-35B-A3B",
     "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME": "LMDeploy local model",
     "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION": "Served by LMDeploy /v1/messages",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "qwen3.5-35b",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "qwen3.5-35b",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "qwen3.5-35b",
-    "CLAUDE_CODE_SUBAGENT_MODEL": "qwen3.5-35b",
-    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-    "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1"
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "Qwen/Qwen3.5-35B-A3B",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "Qwen/Qwen3.5-35B-A3B",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "Qwen/Qwen3.5-35B-A3B",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "Qwen/Qwen3.5-35B-A3B",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
   }
 }
 ```
 
-The model name must exactly match the name exposed by LMDeploy. For the example above,
-start LMDeploy with `--model-name qwen3.5-35b`.
+The model name must exactly match the name exposed by LMDeploy.
 
 Then start Claude Code:
 
 ```bash
-claude --model qwen3.5-35b
+claude --model Qwen/Qwen3.5-35B-A3B
 ```
 
 ## 4. Streaming Behavior
@@ -102,31 +100,3 @@ Claude Code may query `/v1/models` when `ANTHROPIC_BASE_URL` points to a gateway
 LMDeploy's Anthropic model list endpoint is currently documented as `GET /anthropic/v1/models`.
 If Claude Code does not discover your model automatically, use `ANTHROPIC_MODEL` and
 `ANTHROPIC_CUSTOM_MODEL_OPTION` as shown above.
-
-## Minimal Setup
-
-```bash
-lmdeploy serve api_server Qwen/Qwen3.5-35B-A3B \
-  --server-port 23333 \
-  --model-name qwen3.5-35b
-```
-
-Add this to `~/.claude/settings.json`:
-
-```json
-{
-  "env": {
-    "ANTHROPIC_BASE_URL": "http://127.0.0.1:23333",
-    "ANTHROPIC_AUTH_TOKEN": "dummy",
-    "ANTHROPIC_MODEL": "qwen3.5-35b",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "qwen3.5-35b",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "qwen3.5-35b",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "qwen3.5-35b",
-    "CLAUDE_CODE_SUBAGENT_MODEL": "qwen3.5-35b"
-  }
-}
-```
-
-```bash
-claude --model qwen3.5-35b
-```
