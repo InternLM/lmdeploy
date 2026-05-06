@@ -264,9 +264,10 @@ class ApplyRotaryEmb(nn.Module):
         dim = x.size(-1)
         x_3d = x.reshape(-1, x.size(-2), dim) if x.dim() >= 3 else x.unsqueeze(-2)
         orig_shape = x.shape
-        # In complex_mode, cos/sin are (seq, dim//2), but dummy_k needs full dim
-        dummy_dim = dim // 2 if complex_mode else dim
-        dummy_k = x_3d.new_empty(x_3d.size(0), 1, dummy_dim)
+        # dummy_k must have full dim in both modes: rotate_half accesses
+        # [0, half) and [half, dim); complex accesses [0,2,4,...] and [1,3,5,...]
+        dummy_dim = dim
+        dummy_k = x_3d.new_empty(x_3d.size(0), 0, dummy_dim)
         x_3d, _ = self.forward(x_3d, dummy_k, cos, sin, inplace=False,
                                complex_mode=complex_mode)
         x.copy_(x_3d.reshape(orig_shape))
