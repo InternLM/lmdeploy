@@ -5,12 +5,21 @@ from lmdeploy.utils import get_logger
 logger = get_logger('lmdeploy')
 
 SUPPORTED_ARCHS = dict(
+    # Qwen2 / Qwen2-MoE
+    Qwen2ForCausalLM='qwen2',
+    Qwen2MoeForCausalLM='qwen2-moe',
     # Qwen3
     Qwen3ForCausalLM='qwen3',
     Qwen3MoeForCausalLM='qwen3-moe',
     # Qwen 3.5
     Qwen3_5ForConditionalGeneration='qwen3_5',
     Qwen3_5MoeForConditionalGeneration='qwen3_5-moe',
+    # InternVL3.5
+    InternVLChatModel='internvl3_5',
+    # Llama (2, 3, 3.1, 3.2) + InternLM3
+    LlamaForCausalLM='llama',
+    InternLM2ForCausalLM='internlm2',
+    InternLM3ForCausalLM='llama',
     # glm4-moe-lite (e.g. GLM-4.7-Flash)
     Glm4MoeLiteForCausalLM='glm4-moe-lite',
     # gpt-oss

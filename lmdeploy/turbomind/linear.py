@@ -7,9 +7,6 @@ Two weight types flow through the TurboMind weight loading pipeline:
   optional scales, zeros, bias).
 - Raw ``torch.Tensor`` -- everything else (norms, embeddings, scalars).
 
-**Tensor functions** ``pad_out_dim`` and ``pad_in_dim`` accept an explicit
-``dim`` argument and operate on a single ``torch.Tensor``.
-
 **concat_out_dim** joins ``Linear`` bundles along the output
 dimension, handling all component tensors correctly regardless of
 quantization-induced dimension scaling.
@@ -17,53 +14,16 @@ quantization-induced dimension scaling.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
-
 import functools
 import inspect
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import torch
 from torch import Tensor
 
 if TYPE_CHECKING:
     from .weight_format import WeightFormat
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-
-def _norm(dim: int, ndim: int) -> int:
-    """Normalise a possibly-negative dimension index."""
-    return dim if dim >= 0 else dim + ndim
-
-
-def _pad_1d(t: Tensor, dim: int, target: int) -> Tensor:
-    """Pad one dimension of *t* to *target* size with zeros."""
-    deficit = target - t.size(dim)
-    if deficit <= 0:
-        return t
-    pad = [0] * (2 * t.dim())
-    # F.pad expects pairs in reverse dim order
-    pad[2 * (t.dim() - 1 - dim) + 1] = deficit
-    return torch.nn.functional.pad(t, pad, 'constant', 0)
-
-
-# ---------------------------------------------------------------------------
-# Tensor functions
-# ---------------------------------------------------------------------------
-
-
-def pad_out_dim(t: Tensor, target: int, dim: int) -> Tensor:
-    """Pad *dim* to *target* size with zeros."""
-    return _pad_1d(t, _norm(dim, t.dim()), target)
-
-
-def pad_in_dim(t: Tensor, target: int, dim: int) -> Tensor:
-    """Pad *dim* to *target* size with zeros."""
-    return _pad_1d(t, _norm(dim, t.dim()), target)
 
 
 # ---------------------------------------------------------------------------
@@ -256,3 +216,50 @@ def transform_input_dim(fn):
         return outputs if len(outputs) > 1 else outputs[0]
 
     return wrapper
+
+
+# ---------------------------------------------------------------------------
+# Group-based padding
+# ---------------------------------------------------------------------------
+
+
+@transform_output_dim
+def pad_output_groups(t: torch.Tensor, *, src_groups: int,
+                      dst_groups: int) -> torch.Tensor:
+    """Pad output dim by src_groups → dst_groups, viewing it as (groups, -1)."""
+    t = t.reshape(t.shape[:-1] + (src_groups, -1))
+    pad = t.new_zeros(t.shape[:-2] + (dst_groups - src_groups, t.shape[-1]))
+    return torch.cat([t, pad], dim=-2).reshape(t.shape[:-2] + (-1,))
+
+
+@transform_input_dim
+def pad_input_groups(t: torch.Tensor, *, src_groups: int,
+                     dst_groups: int) -> torch.Tensor:
+    """Pad input dim by src_groups → dst_groups, viewing it as (groups, -1)."""
+    t = t.reshape((src_groups, -1) + t.shape[1:])
+    block = t.shape[1]
+    pad = t.new_zeros((dst_groups - src_groups, block) + t.shape[2:])
+    return torch.cat([t, pad], dim=0).reshape((dst_groups * block,) + t.shape[2:])
+
+
+def _round_up(src_groups: int, div: int) -> int:
+    """Round *src_groups* up to the nearest multiple of *div*."""
+    return ((src_groups + div - 1) // div) * div
+
+
+def round_up_output_groups(linear: Linear, groups: int,
+                           div: int) -> Linear:
+    """Pad output-dim groups to ``round_up(groups, div)``."""
+    dst = _round_up(groups, div)
+    if dst == groups:
+        return linear
+    return pad_output_groups(linear, src_groups=groups, dst_groups=dst)
+
+
+def round_up_input_groups(linear: Linear, groups: int,
+                          div: int) -> Linear:
+    """Pad input-dim groups to ``round_up(groups, div)``."""
+    dst = _round_up(groups, div)
+    if dst == groups:
+        return linear
+    return pad_input_groups(linear, src_groups=groups, dst_groups=dst)

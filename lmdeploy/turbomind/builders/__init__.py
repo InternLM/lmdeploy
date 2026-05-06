@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from ._base import Builder, BuiltModule, SplitSide, _act_type_id, _cpp_dtype, _torch_dtype_to_cpp
-from .text_model import TextModelBuilder
 from .attention import AttentionBuilder
 from .decoder_layer import DecoderLayerBuilder, DecoderLayerConfig
 from .deltanet import DeltaNetBuilder
@@ -12,6 +11,7 @@ from .mla import MLABuilder
 from .module_list import ModuleListBuilder, ModuleListConfig
 from .moe import MoeBuilder
 from .norm import NormBuilder, make_norm_config
+from .text_model import TextModelBuilder
 
 __all__ = [
     # Base

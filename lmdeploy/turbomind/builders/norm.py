@@ -5,10 +5,9 @@ import torch
 from ._base import Builder
 
 
-def make_norm_config(*, dim, data_type, norm_eps):
+def make_norm_config(*, dim, norm_eps):
     cfg = _tm.NormConfig()
     cfg.dim = dim
-    cfg.data_type = data_type
     cfg.norm_eps = norm_eps
     return cfg
 

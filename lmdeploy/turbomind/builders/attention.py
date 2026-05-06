@@ -12,7 +12,7 @@ from __future__ import annotations
 import torch
 
 from ..linear import Linear, dequant_mixed, transform_output_dim
-from ._base import Builder, SplitSide
+from ._base import Builder, ParallelGroup, SplitSide
 
 # ---------------------------------------------------------------------------
 # New pipeline functions (replacing merge_qkv_linear)
@@ -51,15 +51,15 @@ def repeat_kv_for_tp(k: Linear, v: Linear, *,
 
 
 @transform_output_dim
-def split_output_gate(tensor: torch.Tensor, *, head_dim: int
+def split_output_gate(tensor: torch.Tensor, *, head_num: int
                       ) -> tuple[torch.Tensor, torch.Tensor]:
     """Split output gate from Q projection (Qwen3.5).
 
     Q's output dim is 2 * head_num * head_dim. Reshape to [batch, head_num, 2, head_dim], split into q_real and gate.
     """
-    head_num = tensor.size(-1) // (head_dim * 2)
-    q, gate = tensor.view(-1, head_num, 2, head_dim).unbind(2)
-    return q.reshape(-1, head_num * head_dim), gate.reshape(-1, head_num * head_dim)
+    per_head = tensor.size(-1) // (head_num * 2)
+    q, gate = tensor.view(-1, head_num, 2, per_head).unbind(2)
+    return q.reshape(-1, head_num * per_head), gate.reshape(-1, head_num * per_head)
 
 
 @transform_output_dim
@@ -88,18 +88,23 @@ class AttentionBuilder(Builder):
         'sinks': SplitSide.OUTPUT,
     }
 
+    def __init__(self, config, ctx, tp: ParallelGroup):
+        super().__init__(config, ctx)
+        self.tp = tp
+        self.config.tp_size = tp.size
+
     def add_qkv_proj(self, q, k, v, *, gate=None):
         """Fuse Q/K/V into a single w_qkv with TP interleave, commit.
 
         Pipeline: dequant_mixed -> repeat_kv_for_tp -> fuse_qkv -> commit.
         """
         q, k, v, gate = dequant_mixed(q, k, v, gate, data_type=self.config.data_type)
-        k, v = repeat_kv_for_tp(k, v, tp=self._tp,
+        k, v = repeat_kv_for_tp(k, v, tp=self.tp.size,
                                 head_dim=self.config.head_dim)
         # After KV head repeat, push the padded-global kv_head_num onto
         # config so that C++ module creation sees the correct head count.
         self.config.kv_head_num = _infer_heads(k, self.config.head_dim)
-        merged = fuse_qkv(q, k, v, tp=self._tp, gate=gate)
+        merged = fuse_qkv(q, k, v, tp=self.tp.size, gate=gate)
         self._add_linear('w_qkv', merged, SplitSide.OUTPUT)
 
     def add_o_proj(self, o):

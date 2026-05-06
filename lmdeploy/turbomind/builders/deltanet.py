@@ -11,7 +11,7 @@ from __future__ import annotations
 import torch
 
 from ..linear import Linear, concat_out_dim, dequant_mixed
-from ._base import Builder, SplitSide
+from ._base import Builder, ParallelGroup, SplitSide
 
 
 def tp_interleave_tensor(t: torch.Tensor, tp: int, d: int) -> torch.Tensor:
@@ -110,6 +110,11 @@ def fuse_qkv_conv1d(t: torch.Tensor, qkv_split: tuple[int, int, int],
 class DeltaNetBuilder(Builder):
     """DeltaNet (Gated Delta Net) weight loading builder."""
 
+    def __init__(self, config, ctx, tp: ParallelGroup):
+        super().__init__(config, ctx)
+        self.tp = tp
+        self.config.tp_size = tp.size
+
     def add_input_projections(self, *, in_proj_qkv, in_proj_z=None,
                               in_proj_b=None, in_proj_a=None, out_proj=None,
                               qkv_split):
@@ -120,7 +125,7 @@ class DeltaNetBuilder(Builder):
         q, k, v = split_qkv(in_proj_qkv, qkv_split)
         q, k, v, z, b, a = dequant_mixed(q, k, v, in_proj_z, in_proj_b, in_proj_a,
                                            data_type=self.config.data_type)
-        fused = fuse_gdn(q, k, v, z, b, a, tp=self._tp)
+        fused = fuse_gdn(q, k, v, z, b, a, tp=self.tp.size)
         self._add_linear('in_proj_all', fused, SplitSide.OUTPUT)
         if out_proj is not None:
             self._add_linear('out_proj', out_proj, SplitSide.INPUT)
@@ -137,5 +142,5 @@ class DeltaNetBuilder(Builder):
         if conv1d.ndim == 3 and conv1d.shape[1] == 1:
             conv1d = conv1d.squeeze(1)
         conv1d = conv1d.t().contiguous()
-        conv1d = fuse_qkv_conv1d(conv1d, qkv_split, self._tp)
+        conv1d = fuse_qkv_conv1d(conv1d, qkv_split, self.tp.size)
         self._add_tensor('conv1d', conv1d, split_side=SplitSide.OUTPUT)

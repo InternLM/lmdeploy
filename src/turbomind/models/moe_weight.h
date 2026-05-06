@@ -7,12 +7,6 @@
 
 namespace turbomind {
 
-enum class MoeMethod
-{
-    kNaive,
-    kFused,
-};
-
 }  // namespace turbomind
 
 namespace turbomind::core {
@@ -21,27 +15,18 @@ struct MoeConfig: ModuleConfig {
     MoeConfig(): ModuleConfig{"MoeWeight"} {}
 
 #define MOE_FIELDS(X)                                                                                                  \
-    X(int, layer_id)                                                                                                   \
-    X(int, method)                                                                                                     \
-    X(int, experts_per_token)                                                                                          \
-    X(int, inter_size)                                                                                                 \
-    X(bool, norm_topk_prob)                                                                                            \
-    X(bool, shared_gate)                                                                                               \
-    X(double, routed_scale)                                                                                            \
-    X(bool, router_bias)                                                                                               \
-    X(int, topk_group)                                                                                                 \
-    X(std::string, topk_method)                                                                                        \
-    X(int, n_group)                                                                                                    \
-    X(std::string, scoring_func)                                                                                       \
-    X(int, router_n_groups)                                                                                            \
     X(int, expert_num)                                                                                                 \
-    X(int, hidden_dim)                                                                                                 \
-    X(bool, mlp_bias)                                                                                                  \
-    X(DataType, data_type)                                                                                             \
-    X(int, tp_size)                                                                                                    \
-    X(int, tp_rank)                                                                                                    \
+    X(int, experts_per_token)                                                                                          \
     X(int, act_type)                                                                                                   \
-    X(bool, fuse_silu)
+    X(bool, fuse_silu)                                                                                                 \
+    X(bool, norm_topk_prob)                                                                                            \
+    X(std::string, topk_method)                                                                                        \
+    X(std::string, scoring_func)                                                                                       \
+    X(int, topk_group)                                                                                                 \
+    X(int, n_group)                                                                                                    \
+    X(int, router_n_groups)                                                                                            \
+    X(double, routed_scale)                                                                                            \
+    X(DataType, data_type)
 
     MOE_FIELDS(TM_MEMBER)
     TM_FOR_EACH(MoeConfig, MOE_FIELDS)
@@ -86,38 +71,25 @@ public:
     {
         return block_.get();
     }
-    MoeMethod method() const
-    {
-        return method_;
-    }
 
     // --- Config fields (public for runtime access) ---
-    int  hidden_dim{};
-    int  inter_size{};
-    int  experts_per_token{};
-    bool norm_topk_prob{};
-    /// From cfg.shared_gate; cannot be named `shared_gate` (child LinearWeight).
-    bool        use_shared_gate{};
+    int         expert_num{};
+    int         experts_per_token{};
+    bool        norm_topk_prob{};
     float       routed_scale{};
-    bool        router_bias{};
     int         topk_group{};
     std::string topk_method;
     int         n_group{};
     std::string scoring_func;
     int         router_n_groups{};
-    int         expert_num{};
 
 private:
-    int            layer_id_{};
-    MoeMethod      method_{MoeMethod::kFused};
-    bool           mlp_bias_{};
-    DataType       data_type_{};
-    int            tp_size_{};
-    int            tp_rank_{};
     ActivationType act_type_{};
     bool           fuse_silu_act_{};
 
-    mutable std::unique_ptr<FfnWeight> block_;
+    DataType data_type_{};
+
+    std::unique_ptr<FfnWeight> block_;
 };
 
 }  // namespace turbomind

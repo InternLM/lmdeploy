@@ -4,12 +4,13 @@ import torch
 
 from lmdeploy.archs import get_model_arch, search_nested_config
 from lmdeploy.messages import TurbomindEngineConfig
+from lmdeploy.pytorch.config import override_hf_config
 from lmdeploy.utils import get_logger
 
 from ..utils import _get_and_verify_max_len, is_bf16_supported
 from .builders import _cpp_dtype
 from .models.base import INPUT_MODELS
-from .models.utils import load_model_config
+from .models.utils import source_model_config
 from .supported_models import SUPPORTED_ARCHS
 from .weight_format import (
     AWQFormat,
@@ -64,6 +65,13 @@ def _deep_merge(base: dict, override: dict, path: str = '') -> dict:
             base[k] = v
     return base
 
+
+def _apply_hf_overrides(cfg, override: dict):
+    """Apply hf_overrides to a Transformers config object or nested dict."""
+    override_hf_config(cfg, override)
+    return cfg
+
+
 _DEFAULT_GROUP_SIZES = {
     'awq': 128,
     'gptq': 128,
@@ -99,7 +107,7 @@ def _validate_quant_group_size(model_format: str | None, group_size: int | None)
     return group_size
 
 
-def get_registered_name(model_path: str, model_format: str):
+def get_registered_name(model_path: str, model_format: str, arch: str = None):
     """Get the registered name of a model. The name will be used to access the
     INPUT_MODELS registry.
 
@@ -107,8 +115,10 @@ def get_registered_name(model_path: str, model_format: str):
         model_path (str): the path of the input model
         model_format (str): the format of the model, which can be one of
             ['hf', 'awq', 'gptq', 'compressed-tensors', 'fp8', 'mxfp4']
+        arch (str): optional architecture string, to avoid reloading config
     """
-    arch = get_model_arch(model_path)[0]
+    if arch is None:
+        arch = get_model_arch(model_path)[0]
     register_name = SUPPORTED_ARCHS[arch]
     return register_name
 
@@ -143,10 +153,10 @@ def get_tm_config(model_path,
     in place, build the text model.
 
     Returns:
-        tuple: (text_model, model_path)
+        tuple: (text_model, model_path, data_type)
     """
     # 1. Load HF config once; reused for quant_config, dtype, and session_len.
-    _, hf_model_cfg = get_model_arch(model_path)
+    arch, hf_model_cfg = get_model_arch(model_path)
 
     # 2. Reconcile quant_config (unchanged logic from the prior flow).
     quant_config = search_nested_config(
@@ -218,13 +228,13 @@ def get_tm_config(model_path,
     engine_config.attn_cp_size = engine_config.attn_cp_size or 1
     engine_config.mlp_tp_size = engine_config.mlp_tp_size or 1
 
-    # 6. Build text model (hf_overrides handling unchanged).
-    hf_cfg = load_model_config(model_path)
+    # 6. Build text model.
+    cfg = source_model_config(hf_model_cfg)
     if engine_config.hf_overrides:
         logger.warning(f'Overriding HF config with {engine_config.hf_overrides}')
-        _deep_merge(hf_cfg, engine_config.hf_overrides)
-    registered_name = get_registered_name(model_path, engine_config.model_format)
+        _apply_hf_overrides(cfg, engine_config.hf_overrides)
+    registered_name = get_registered_name(model_path, engine_config.model_format, arch=arch)
     model_cls = INPUT_MODELS.get(registered_name)
-    text_model = model_cls(hf_cfg, engine_config, resolver=resolver)
+    text_model = model_cls(cfg, resolver=resolver)
 
-    return text_model, model_path
+    return text_model, model_path, _cpp_dtype(dtype)

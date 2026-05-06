@@ -23,11 +23,11 @@ EXTRA_SAFE_WEIGHT_PATTERN = '*.safetensors'
 
 class BaseLoader(ABC):
 
-    def __init__(self, model_path: str, pattern, mappings: list):
+    def __init__(self, model_path: str, pattern=None, mappings: list | None = None):
         self.model_path = model_path
         self.pattern = pattern
         self.item_count = defaultdict(int)
-        self.mappings = mappings
+        self.mappings = mappings or []
 
     def get_index(self, index_name: str, file_pattern: str) -> tuple[dict, list]:
         """Get shards and weight map (if possible) for the model."""
@@ -66,7 +66,9 @@ class BaseLoader(ABC):
 
 class SafetensorsLoader(BaseLoader):
 
-    def __init__(self, model_path: str, pattern: str, mappings: list, index_name=None, file_pattern=None):
+    def __init__(self, model_path: str, pattern=None,
+                 mappings: list | None = None, index_name=None,
+                 file_pattern=None):
         super().__init__(model_path, pattern, mappings)
         self.shards, index = self.get_index(index_name, file_pattern)
         if not index:
@@ -79,10 +81,11 @@ class SafetensorsLoader(BaseLoader):
         # self.index maps weight names to their corresponding safetensors file name
         self.index = index
         # count layer-wise parameters
-        for k in index.keys():
-            match = re.findall(self.pattern, k)
-            if match:
-                self.item_count[int(match[0])] += 1
+        if self.pattern:
+            for k in index.keys():
+                match = re.findall(self.pattern, k)
+                if match:
+                    self.item_count[int(match[0])] += 1
 
     def items(self):
         params = defaultdict(dict)
@@ -96,7 +99,7 @@ class SafetensorsLoader(BaseLoader):
                     # - Exclude duplicated weights (present in multiple files)
                     if k not in self.index or self.index[k] != filename:
                         continue
-                    match = re.findall(self.pattern, k)
+                    match = re.findall(self.pattern, k) if self.pattern else []
                     if not match:
                         misc.append(k)
                     else:
@@ -124,13 +127,16 @@ class SafetensorsLoader(BaseLoader):
 
 class PytorchLoader(BaseLoader):
 
-    def __init__(self, model_path: str, pattern: str, mappings: list, index_name=None, file_pattern=None):
+    def __init__(self, model_path: str, pattern=None,
+                 mappings: list | None = None, index_name=None,
+                 file_pattern=None):
         super().__init__(model_path, pattern, mappings)
         self.shards, index = self.get_index(index_name, file_pattern)
-        for k in index.keys():
-            match = re.findall(self.pattern, k)
-            if match:
-                self.item_count[int(match[0])] += 1
+        if self.pattern:
+            for k in index.keys():
+                match = re.findall(self.pattern, k)
+                if match:
+                    self.item_count[int(match[0])] += 1
 
     def items(self):
         params = defaultdict(dict)
@@ -138,7 +144,7 @@ class PytorchLoader(BaseLoader):
             misc = {}
             tmp = torch.load(shard, map_location='cpu', weights_only=True)
             for k, v in tmp.items():
-                match = re.findall(self.pattern, k)
+                match = re.findall(self.pattern, k) if self.pattern else []
                 if not match:
                     misc[k] = v
                 else:
@@ -179,7 +185,7 @@ class StateDictLoader:
     lm_head, norm).
     """
 
-    def __init__(self, queue: Queue, pattern: str, mappings: list):
+    def __init__(self, queue: Queue, pattern=None, mappings: list | None = None):
         self.que = queue
         self.pattern = pattern
 
@@ -187,9 +193,11 @@ class StateDictLoader:
         for data in iter(self.que.get, None):
             # If data is state dict of a decoder layer, any key will match the pattern.
             # Otherwise, none of the keys will match the pattern.
-            for k in data.keys():
-                match = re.findall(self.pattern, k)
-                break
+            match = []
+            if self.pattern:
+                for k in data.keys():
+                    match = re.findall(self.pattern, k)
+                    break
 
             if not match:
                 yield (-1, data)
@@ -204,7 +212,8 @@ class StateDictLoader:
         raise NotImplementedError('StateDictLoader does not support all_items()')
 
 
-def create_loader(model_path: str | Queue, pattern: str, mappings: list) -> BaseLoader:
+def create_loader(model_path: str | Queue, pattern=None,
+                  mappings: list | None = None) -> BaseLoader:
     args = (model_path, pattern, mappings)
 
     if isinstance(model_path, Queue):

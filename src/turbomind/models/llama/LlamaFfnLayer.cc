@@ -31,7 +31,7 @@ void LlamaFfnLayer::forward(ForwardParam param)
     const auto& mlp = *param.weights;
 
     const int token_num  = param.input.shape(0);
-    const int inter_size = mlp.inter_size();
+    const int inter_size = mlp.inter_size;
     const int layer_id   = param.layer_id;
 
     const auto stream = core::Context::stream().handle();
@@ -47,7 +47,7 @@ void LlamaFfnLayer::forward(ForwardParam param)
         sync_check_cuda_error();
 
         gating = mix.slice({0, 0}, {(int)token_num, inter_size});
-        if (!mlp.is_fused_silu()) {
+        if (!mlp.is_fused_silu) {
             inter = mix.slice({0, inter_size}, {(ssize_t)token_num, inter_size});
         }
     }
@@ -63,9 +63,9 @@ void LlamaFfnLayer::forward(ForwardParam param)
 
     // When using the fused kernel (w1w3 + fused silu), activation is already applied.
     // Otherwise (separate w1/w3 or non-fused), apply activation explicitly.
-    if (!use_fused || !mlp.is_fused_silu()) {
+    if (!use_fused || !mlp.is_fused_silu) {
         // gate' = silu(gate) * up
-        Activation(gating, inter, mlp.act_type(), stream);
+        Activation(gating, inter, mlp.act_type, stream);
         sync_check_cuda_error();
         TM_DEBUG_TENSOR(gating, Concat("act", layer_id), 3);
     }

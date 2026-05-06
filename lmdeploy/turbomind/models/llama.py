@@ -1,12 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Qwen3 TextModel for the new pipeline.
-
-Qwen3 is a standard Llama-like model with QK norm and optional MoE. No shared expert in the MoE variant, no linear
-attention, no zero-centered norm.
-"""
+"""Llama TextModel for the new pipeline."""
 from __future__ import annotations
 
-from transformers import Qwen3Config, Qwen3MoeConfig
+from transformers import LlamaConfig
 
 from ..builders import (
     AttentionBuilder,
@@ -15,7 +11,6 @@ from ..builders import (
     FfnBuilder,
     ModuleListBuilder,
     ModuleListConfig,
-    MoeBuilder,
     TextModelBuilder,
     _act_type_id,
 )
@@ -26,19 +21,17 @@ from .utils import (
     make_attention_config,
     make_ffn_config,
     make_model_weight_config,
-    make_moe_config,
     reorder_rotary_emb,
 )
 
 
-@INPUT_MODELS.register_module(name='qwen3-moe')
-@INPUT_MODELS.register_module(name='qwen3')
-class Qwen3TextModel(TextModel):
-    """Weight model for Qwen3 (dense) and Qwen3-MoE."""
+@INPUT_MODELS.register_module(name='llama')
+class LlamaModel(TextModel):
+    """Weight model for Llama decoder-only variants."""
 
-    cfg: Qwen3Config | Qwen3MoeConfig
+    cfg: LlamaConfig
 
-    def __init__(self, cfg: Qwen3Config | Qwen3MoeConfig, *, resolver):
+    def __init__(self, cfg: LlamaConfig, *, resolver):
         super().__init__(cfg, resolver=resolver)
 
         self._attn_cfg = make_attention_config(cfg)
@@ -46,20 +39,11 @@ class Qwen3TextModel(TextModel):
         self._ffn_cfg = make_ffn_config(cfg,
                                         act_type=_act_type_id('silu'))
 
-        self._n_experts = getattr(cfg, 'num_experts', 0)
-
-        if self._n_experts > 0:
-            self._moe_cfg = make_moe_config(
-                cfg,
-                experts_per_token=cfg.num_experts_per_tok,
-                norm_topk_prob=cfg.norm_topk_prob)
-            self._moe_cfg.expert_num = self._n_experts
-
     # ------------------------------------------------------------------
-    # model() — walks full hierarchy (same as existing code)
+    # model() — walks full hierarchy
     # ------------------------------------------------------------------
 
-    def model(self, pfx=''):
+    def model(self):
         embed_key = 'model.embed_tokens.weight'
         root_cfg = make_model_weight_config(self.cfg)
         root = TextModelBuilder(
@@ -67,15 +51,15 @@ class Qwen3TextModel(TextModel):
             root_handles=self._root_handles,
             tp=self._model_tp,
             vocab_size=self.cfg.vocab_size)
-        root.add_token_embeds(self._get(f'{pfx}{embed_key}'))
-        root.norm = self.norm(self._get(f'{pfx}model.norm.weight'))
+        root.add_token_embeds(self._get(embed_key))
+        root.norm = self.norm(self._get('model.norm.weight'))
         lm_key = embed_key if self.cfg.tie_word_embeddings else 'lm_head.weight'
-        root.add_lm_head(self._linear(f'{pfx}{lm_key.removesuffix(".weight")}'))
-        root.layers = self.layers(f'{pfx}model.layers')
+        root.add_lm_head(self._linear(lm_key.removesuffix('.weight')))
+        root.layers = self.layers('model.layers')
         root.build()
 
     # ------------------------------------------------------------------
-    # Attention / FFN / MoE factories
+    # Attention / FFN factories
     # ------------------------------------------------------------------
 
     def attn(self, pfx):
@@ -88,57 +72,32 @@ class Qwen3TextModel(TextModel):
 
         q, k = [reorder(x) for x in (q, k)]
 
-        # No per-layer attention fields for Qwen3 (no sliding window).
+        # No QK-norm for Llama.
         m = AttentionBuilder(cfg, self._ctx, tp=self._attn_tp)
 
         m.add_qkv_proj(q, k, v)
         m.add_o_proj(o)
 
-        q_norm, k_norm = [self._get(f'{pfx}.{x}_norm.weight') for x in 'qk']
-        m.q_norm = self.norm(reorder(q_norm))
-        m.k_norm = self.norm(reorder(k_norm))
-
         return m.build()
 
-
-    def ffn(self, pfx, is_expert=False):
+    def ffn(self, pfx):
         w1, w3, w2 = [self._linear(f'{pfx}.{x}_proj') for x in ('gate', 'up', 'down')]
 
         cfg = self._ffn_cfg.clone()
-        cfg.is_expert  = is_expert
 
         m = FfnBuilder(cfg, self._ctx, tp=self._mlp_tp)
         m.add_ffn(w1, w2, w3)
         return m.build()
 
-
-    def moe(self, pfx):
-        cfg = self._moe_cfg.clone()
-
-        m = MoeBuilder(cfg, self._ctx)
-
-        m.add_gate('gate', self._linear(f'{pfx}.gate'))
-
-        experts = ModuleListBuilder(ModuleListConfig(), self._ctx)
-        for e in range(self.cfg.num_experts):
-            experts[e] = self.ffn(f'{pfx}.experts.{e}', is_expert=True)
-        m.experts = experts.build()
-
-        return m.build()
-
-
     def layers(self, pfx):
         layers = ModuleListBuilder(ModuleListConfig(), self._ctx)
-
         for i in layer_progress(self.cfg.num_hidden_layers):
             d = DecoderLayerBuilder(DecoderLayerConfig(), self._ctx)
-            d.attention_norm = self.norm(self._get(f'{pfx}.{i}.input_layernorm.weight'))
+            d.attention_norm = self.norm(
+                self._get(f'{pfx}.{i}.input_layernorm.weight'))
             d.attention = self.attn(f'{pfx}.{i}.self_attn')
-            d.ffn_norm = self.norm(self._get(f'{pfx}.{i}.post_attention_layernorm.weight'))
-            if self._n_experts:
-                d.moe_ffn = self.moe(f'{pfx}.{i}.mlp')
-            else:
-                d.feed_forward = self.ffn(f'{pfx}.{i}.mlp')
+            d.ffn_norm = self.norm(
+                self._get(f'{pfx}.{i}.post_attention_layernorm.weight'))
+            d.feed_forward = self.ffn(f'{pfx}.{i}.mlp')
             layers[i] = d.build()
-
         return layers.build()

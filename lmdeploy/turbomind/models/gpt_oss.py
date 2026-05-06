@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-import _turbomind as _tm
+from transformers import GptOssConfig
 
 from ..builders import (
     AttentionBuilder,
@@ -19,9 +19,15 @@ from ..builders import (
 )
 from ..text_model import TextModel
 from .base import INPUT_MODELS
-from .utils import layer_progress, read_packed_moe_expert, reorder_rotary_emb
-
-_LAYER_PATTERN = r'model\.layers\.([0-9]+).'
+from .utils import (
+    layer_progress,
+    make_attention_config,
+    make_ffn_config,
+    make_model_weight_config,
+    make_moe_config,
+    read_packed_moe_expert,
+    reorder_rotary_emb,
+)
 
 
 def map_experts(s: str) -> str:
@@ -36,198 +42,101 @@ def map_experts(s: str) -> str:
 class GptOssModel(TextModel):
     """Weight model for gpt-oss (MoE with packed experts)."""
 
-    _layer_pattern = _LAYER_PATTERN
+    cfg: GptOssConfig
+
     _loader_mappings = [map_experts]
 
-    def __init__(self, hf_cfg: dict, engine_cfg, *, resolver):
-        super().__init__(hf_cfg, engine_cfg, resolver=resolver)
+    def __init__(self, cfg: GptOssConfig, *, resolver):
+        super().__init__(cfg, resolver=resolver)
 
-        self._layer_prefix = 'model.layers'
-        self._embed_key = 'model.embed_tokens.weight'
-        self._norm_key = 'model.norm.weight'
+        self._attn_cfg = make_attention_config(cfg)
 
-        self._n_experts = hf_cfg['num_local_experts']
-        dtype = self._dtype
-
-        # ---- Attention template (sliding window set per layer) ----
-        self._attn_cfg = _tm.AttentionConfig()
-        self._attn_cfg.hidden_dim  = self._hidden_units
-        self._attn_cfg.head_dim    = self._head_dim
-        self._attn_cfg.head_num    = self._head_num
-        self._attn_cfg.kv_head_num = self._kv_head_num
-        self._attn_cfg.has_bias    = int(hf_cfg['attention_bias'])
-        self._attn_cfg.attn_sink   = True
-        self._apply_rope(self._attn_cfg.rope)
-        self._attn_cfg.window_size = 0
-        self._attn_cfg.tp_size     = engine_cfg.attn_tp_size
-        self._attn_cfg.data_type   = dtype
-        self._attn_cfg.softmax_scale          = self._softmax_scale
-
-        # ---- FFN template ----
-        self._ffn_cfg = _tm.FfnConfig()
-        self._ffn_cfg.hidden_dim = self._hidden_units
-        self._ffn_cfg.has_bias   = True
-        self._ffn_cfg.tp_size    = engine_cfg.mlp_tp_size
-        self._ffn_cfg.data_type  = dtype
-        self._ffn_cfg.act_type   = _act_type_id('gpt-oss')
+        self._ffn_cfg = make_ffn_config(cfg,
+                                        act_type=_act_type_id('gpt-oss'))
+        self._ffn_cfg.inter_size = cfg.intermediate_size
+        self._ffn_cfg.is_expert = True
 
         # ---- MoE template ----
-        self._moe_cfg = _tm.MoeConfig()
-        self._moe_cfg.method            = 1
-        self._moe_cfg.experts_per_token = hf_cfg['experts_per_token']
-        self._moe_cfg.norm_topk_prob    = True
-        self._moe_cfg.shared_gate       = False
-        self._moe_cfg.routed_scale      = 1.0
-        self._moe_cfg.router_bias       = True
-        self._moe_cfg.topk_group        = 1
-        self._moe_cfg.topk_method       = 'greedy'
-        self._moe_cfg.n_group           = 1
-        self._moe_cfg.scoring_func      = 'softmax'
-        self._moe_cfg.router_n_groups   = 0
-        self._moe_cfg.hidden_dim        = self._hidden_units
-        self._moe_cfg.mlp_bias          = True
-        self._moe_cfg.data_type         = dtype
-        self._moe_cfg.tp_size           = engine_cfg.mlp_tp_size
-        self._moe_cfg.act_type          = _act_type_id('gpt-oss')
-        self._moe_cfg.fuse_silu         = True
-
-        self._expert_inter_size = hf_cfg['intermediate_size']
-
-        # Per-layer window sizes from layer_types
-        types = hf_cfg['layer_types']
-        sliding = hf_cfg['sliding_window']
-        self._window_sizes = [
-            sliding if t == 'sliding_attention' else 0 for t in types
-        ]
-
-        # Inter-size list (zero; gpt-oss has no dense FFN layers)
-        self._inter_sizes = [0] * self._num_layer
-        self._expert_nums = [self._n_experts] * self._num_layer
-
-    def num_experts(self, layer: int) -> int:
-        return self._n_experts
+        self._moe_cfg = make_moe_config(
+            cfg,
+            act_type=_act_type_id('gpt-oss'),
+            experts_per_token=cfg.num_experts_per_tok)
+        self._moe_cfg.expert_num = cfg.num_local_experts
 
     # ------------------------------------------------------------------
-    # model() — same topology as old code
+    # model() — walks full hierarchy
     # ------------------------------------------------------------------
 
     def model(self):
-        ec = self.engine_cfg
-        cfg = _tm.ModelWeightConfig()
-        cfg.tp_size = ec.attn_tp_size * ec.attn_cp_size
-        cfg.data_type = self._dtype
-        cfg.hidden_units = self._hidden_units
+        embed_key = 'model.embed_tokens.weight'
+        root_cfg = make_model_weight_config(self.cfg)
         root = TextModelBuilder(
-            cfg, self._contexts,
+            root_cfg, self._ctx,
             root_handles=self._root_handles,
-            tp=ec.attn_tp_size * ec.attn_cp_size,
-            ranks=self._model_tp_ranks,
-            vocab_size=self._vocab_size)
-        root.add_token_embeds(self._get(self._embed_key))
-        root.norm = self.norm(self._get(self._norm_key))
-        lm_key = self._embed_key if self._tie_embeddings else 'lm_head.weight'
+            tp=self._model_tp,
+            vocab_size=self.cfg.vocab_size)
+        root.add_token_embeds(self._get(embed_key))
+        root.norm = self.norm(self._get('model.norm.weight'))
+        lm_key = embed_key if self.cfg.tie_word_embeddings else 'lm_head.weight'
         root.add_lm_head(self._linear(lm_key.removesuffix('.weight')))
-        root.layers = self.layers(self._layer_prefix)
+        root.layers = self.layers('model.layers')
         root.build()
 
     # ------------------------------------------------------------------
-    # Attention factory — sets per-layer window_size on the clone
+    # Attention / FFN / MoE factories
     # ------------------------------------------------------------------
 
     def attn(self, pfx, layer):
-        q = self._linear(f'{pfx}.q_proj')
-        k = self._linear(f'{pfx}.k_proj')
-        v = self._linear(f'{pfx}.v_proj')
-        o = self._linear(f'{pfx}.o_proj')
-
-        q = reorder_rotary_emb(q, self._head_dim, self._rope.dim,
-                               resolver=self._resolver)
-        k = reorder_rotary_emb(k, self._head_dim, self._rope.dim,
-                               resolver=self._resolver)
+        q, k, v, o = [self._linear(f'{pfx}.{x}_proj') for x in 'qkvo']
 
         cfg = self._attn_cfg.clone()
-        cfg.window_size = self._window_sizes[layer]
+        if self.cfg.layer_types[layer] == 'sliding_attention':
+            cfg.window_size = self.cfg.sliding_window
 
-        attn = AttentionBuilder(cfg, self._contexts,
-                                tp=self.engine_cfg.attn_tp_size,
-                                ranks=self._attn_ranks)
-        attn.add_qkv_proj(q, k, v)
-        attn.add_o_proj(o)
+        def reorder(x):
+            return reorder_rotary_emb(x, cfg.head_dim, cfg.rope.dim, resolver=self._resolver)
 
-        attn.add_param('sinks', self._get(f'{pfx}.sinks'))
-        return attn.build()
+        q, k = [reorder(x) for x in (q, k)]
 
-    # ------------------------------------------------------------------
-    # FFN/MoE factories — packed-expert handling
-    # ------------------------------------------------------------------
+        m = AttentionBuilder(cfg, self._ctx, tp=self._attn_tp)
+        m.add_qkv_proj(q, k, v)
+        m.add_o_proj(o)
 
-    def ffn(self, pfx, layer, inter_size=None, fused_moe=False):
-        w1 = self._linear(f'{pfx}.gate_proj')
-        w3 = self._linear(f'{pfx}.up_proj')
-        w2 = self._linear(f'{pfx}.down_proj')
-
-        cfg = self._ffn_cfg.clone()
-        cfg.inter_size = (inter_size if inter_size is not None
-                          else self._inter_sizes[layer])
-        cfg.fuse_silu  = False
-        cfg.fused_moe  = fused_moe
-
-        m = FfnBuilder(cfg, self._contexts,
-                       tp=self.engine_cfg.mlp_tp_size,
-                       ranks=self._mlp_ranks)
-        m.add_ffn(w1, w2, w3)
+        m.add_param('sinks', self._get(f'{pfx}.sinks'))
         return m.build()
 
-    def moe(self, pfx, layer):
-        if self.num_experts(layer) <= 0:
-            return None
-
+    def moe(self, pfx):
         cfg = self._moe_cfg.clone()
-        cfg.layer_id   = layer
-        cfg.expert_num = self._expert_nums[layer]
-        cfg.inter_size = self._expert_inter_size
-
-        m = MoeBuilder(cfg, self._contexts,
-                       tp=self.engine_cfg.mlp_tp_size,
-                       ranks=self._mlp_ranks)
-
+        m = MoeBuilder(cfg, self._ctx)
         m.add_gate('gate', self._linear(f'{pfx}.router'))
-
-        experts = ModuleListBuilder(ModuleListConfig(), self._contexts)
-        for e in range(self.num_experts(layer)):
-            experts[e] = self._packed_moe_ffn(
-                pfx, e, self._expert_inter_size)
+        experts = ModuleListBuilder(ModuleListConfig(), self._ctx)
+        for e in range(cfg.expert_num):
+            experts[e] = self._packed_moe_ffn(f'{pfx}.experts', e)
         m.experts = experts.build()
         return m.build()
 
     def layers(self, pfx):
-        layers = ModuleListBuilder(ModuleListConfig(), self._contexts)
-        for i in layer_progress(self._num_layer):
-            d = DecoderLayerBuilder(DecoderLayerConfig(), self._contexts)
-            d.attention_norm = self.norm(self._get(f'{pfx}.{i}.input_layernorm.weight'))
+        layers = ModuleListBuilder(ModuleListConfig(), self._ctx)
+        for i in layer_progress(self.cfg.num_hidden_layers):
+            d = DecoderLayerBuilder(DecoderLayerConfig(), self._ctx)
             d.attention = self.attn(f'{pfx}.{i}.self_attn', i)
+            d.moe_ffn = self.moe(f'{pfx}.{i}.mlp')
+            d.attention_norm = self.norm(self._get(f'{pfx}.{i}.input_layernorm.weight'))
             d.ffn_norm = self.norm(self._get(f'{pfx}.{i}.post_attention_layernorm.weight'))
-            if self.num_experts(i) > 0:
-                d.moe_ffn = self.moe(f'{pfx}.{i}.mlp', i)
             layers[i] = d.build()
         return layers.build()
 
-    def _packed_moe_ffn(self, mlp_pfx, expert_idx, inter_size):
+    def _packed_moe_ffn(self, pfx, idx):
         w1, w2, w3 = read_packed_moe_expert(
             self.params,
-            f'{mlp_pfx}.experts.gate_up_proj',
-            f'{mlp_pfx}.experts.down_proj',
-            expert_idx,
+            f'{pfx}.gate_up_proj',
+            f'{pfx}.down_proj',
+            idx,
             resolver=self._resolver,
             interleaved=True,
             trans=True,
         )
         cfg = self._ffn_cfg.clone()
-        cfg.inter_size = inter_size
-        cfg.fuse_silu  = False
-        cfg.fused_moe  = True
-        m = FfnBuilder(cfg, self._contexts,
-                       tp=self.engine_cfg.mlp_tp_size,
-                       ranks=self._mlp_ranks)
+        m = FfnBuilder(cfg, self._ctx, tp=self._mlp_tp)
         m.add_ffn(w1, w2, w3)
         return m.build()

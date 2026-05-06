@@ -4,7 +4,7 @@ from __future__ import annotations
 import torch
 
 from ..linear import Linear
-from ._base import Builder, SplitSide
+from ._base import Builder, ParallelGroup, SplitSide
 
 # ---------------------------------------------------------------------------
 # MLA fold+pad pipeline (standalone functions)
@@ -66,6 +66,13 @@ def pad_wo_input(wo: Linear, *, cfg) -> Linear:
 
 class MLABuilder(Builder):
     """MLA (Multi-head Latent Attention) weight loading builder."""
+
+    def __init__(self, config, ctx, tp: ParallelGroup):
+        super().__init__(config, ctx)
+        self.tp = tp
+        self.config.tp_size = tp.size
+        if config.kv_lora_rank > 0 and config.kv_head_num < tp.size:
+            config.kv_head_num = tp.size
 
     def add_projections(self, *, q_a_proj, q_b_proj, kv_a_proj, kv_b_proj,
                         wo):

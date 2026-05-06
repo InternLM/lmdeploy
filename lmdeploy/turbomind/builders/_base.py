@@ -150,6 +150,20 @@ class BuiltModule:
         return len(self.handles)
 
 
+class Context:
+    """Bundle of per-GPU contexts and the model compute dtype."""
+    def __init__(self, devices, data_type):
+        self.devices = devices
+        self.data_type = data_type
+
+
+class ParallelGroup:
+    """Bundle a parallelism size with per-GPU TP ranks."""
+    def __init__(self, size, ranks):
+        self.size = size
+        self.ranks = ranks
+
+
 class Builder:
     """Wraps N GPU handles for a single logical module.
 
@@ -164,29 +178,26 @@ class Builder:
     attachments raise.
     """
 
-    def __init__(self, config, contexts, tp=1, ranks=None):
+    def __init__(self, config, ctx):
         """Initialise the builder with staging dicts.
 
         Parameters
         ----------
         config : C++ config struct
-            Config with ``clone()`` method and optionally ``tp_rank`` field.
-        contexts : list
-            GPU context managers (one per GPU).
-        tp : int
-            Tensor parallelism degree.
-        ranks : list[int] | None
-            Per-GPU TP ranks.
+            Config with ``clone()`` method.
+        ctx : Context
+            Per-GPU context handles + model compute dtype.
         """
         # `_built` must be set first: __setattr__ reads it inside the
         # BuiltModule branch.  Bool is not a BuiltModule, so the normal
         # fall-through assigns it via object.__setattr__ at the end of
         # __setattr__.
         self._built = False
-        self._contexts = contexts
-        self._tp = tp
-        self._ranks = ranks
+        self._ctx = ctx
+        self.tp = ParallelGroup(1, None)   # default: no TP
         self.config = config
+        if hasattr(self.config, 'data_type'):
+            self.config.data_type = ctx.data_type
         self._pending_tensors = {}
         self._pending_children = {}
         self._handles = None
@@ -215,11 +226,11 @@ class Builder:
 
     @property
     def tp_size(self):
-        return self._tp
+        return self.tp.size
 
     def _rank_for(self, gpu_idx: int) -> int:
-        if self._ranks and self._tp > 1:
-            return self._ranks[gpu_idx]
+        if self.tp.ranks and self.tp.size > 1:
+            return self.tp.ranks[gpu_idx]
         return 0
 
     # ------------------------------------------------------------------
@@ -244,7 +255,7 @@ class Builder:
         # --- GPU-invariant preparation -------------------------------------
         fmt = linear.weight_format
 
-        tp = self._tp if split_side else 1
+        tp = self.tp.size if split_side else 1
         split_dim = _SPLIT_SIDE_TO_DIM.get(split_side) if split_side else None
 
         in_dim, out_dim = w.shape[0], w.shape[-1]
@@ -281,7 +292,7 @@ class Builder:
 
         # --- Per-GPU: standalone creation + tensor copy --------------------
         handles = []
-        for i, ctx in enumerate(self._contexts):
+        for i, ctx in enumerate(self._ctx.devices):
             with ctx:
                 rank = self._rank_for(i) if tp > 1 else 0
 
@@ -364,7 +375,7 @@ class Builder:
     def _create_handles(self):
         """Create one C++ module per context via ``_tm.create_module(cfg)``."""
         handles = []
-        for i, ctx in enumerate(self._contexts):
+        for i, ctx in enumerate(self._ctx.devices):
             with ctx:
                 cfg = self._cfg_for_rank(i)
                 handle = _tm.create_module(cfg)
@@ -373,9 +384,9 @@ class Builder:
 
     def _cfg_for_rank(self, gpu_idx: int):
         """Clone config and set tp_rank if tp > 1."""
-        if self._tp > 1 and hasattr(self.config, 'tp_rank'):
+        if self.tp.size > 1 and hasattr(self.config, 'tp_rank'):
             cfg = self.config.clone()
-            cfg.tp_rank = self._ranks[gpu_idx]
+            cfg.tp_rank = self.tp.ranks[gpu_idx]
             return cfg
         return self.config
 
@@ -383,7 +394,7 @@ class Builder:
         """Attach pre-created per-GPU child handles to parent handles."""
         for i, (parent_h, child_h) in enumerate(
                 zip(self._handles, handles)):
-            with self._contexts[i]:
+            with self._ctx.devices[i]:
                 parent_h.add_child_raw(name, child_h)
 
     # ------------------------------------------------------------------
@@ -403,11 +414,11 @@ class Builder:
         split_side : SplitSide | None
             TP split semantics.  ``None`` means broadcast.
         """
-        tp = self._tp if split_side else 1
+        tp = self.tp.size if split_side else 1
         split_dim = _SPLIT_SIDE_TO_DIM.get(split_side) if split_side else None
 
         for i, handle in enumerate(self._handles):
-            with self._contexts[i]:
+            with self._ctx.devices[i]:
                 rank = self._rank_for(i) if tp > 1 else 0
                 shard = _shard(tensor, split_dim, tp, rank)
                 _copy_shard_to_param(handle, name, shard,

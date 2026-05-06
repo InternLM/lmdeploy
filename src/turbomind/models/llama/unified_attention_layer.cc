@@ -333,9 +333,7 @@ void UnifiedAttentionLayer::Forward(ForwardParam p)
         qkv = linear_.Forward(p.input, *weights.w_qkv);
         sync_check_cuda_error();
 
-        if (weights.qk_norm) {
-            qk_norm(qkv, weights);
-        }
+        qk_norm(qkv, weights);
     }
     else {
         qkv = forward_mla(p.input, weights);
@@ -352,7 +350,7 @@ void UnifiedAttentionLayer::Forward(ForwardParam p)
 
     // Apply sigmoid gating: attn *= sigmoid(gate)
     // Gate is stored at the end of each token's QKV: [Q|K|V|Gate]
-    if (weights.attn_output_gate) {
+    if (weights.output_gate) {
         const int  tp_size           = weights.tp_size;
         const int  local_head_num    = weights.head_num / tp_size;
         const int  local_kv_head_num = weights.kv_head_num / tp_size;
@@ -434,7 +432,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
             params.v = params.k + local_kv_head_num * size_per_head;
             // When attn_output_gate, QKV layout is [Q|K|V|Gate] per token
             // stride must account for the extra gate portion at the end
-            if (weights.attn_output_gate) {
+            if (weights.output_gate) {
                 params.stride = (2 * local_head_num + 2 * local_kv_head_num) * size_per_head;
             }
             else {
@@ -664,6 +662,12 @@ Tensor UnifiedAttentionLayer::forward_mla(const Tensor& hidden_state, const Weig
 
 void UnifiedAttentionLayer::qk_norm(Tensor& qkv, const WeightType& weights)
 {
+    if (!(weights.q_norm || weights.k_norm)) {
+        return;
+    }
+
+    TM_CHECK(weights.q_norm && weights.k_norm);
+
     const int tp_size           = weights.tp_size;
     const int local_head_num    = weights.head_num / tp_size;
     const int local_kv_head_num = weights.kv_head_num / tp_size;
@@ -673,8 +677,6 @@ void UnifiedAttentionLayer::qk_norm(Tensor& qkv, const WeightType& weights)
 
     check_cuda_error(cudaEventRecord(qkv_event_, stream));
     check_cuda_error(cudaStreamWaitEvent(aux_stream_, qkv_event_));
-
-    TM_CHECK(weights.bias == false) << "not implemented";
 
     const auto token_num = qkv.shape(0);
 

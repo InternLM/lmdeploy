@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from ._base import Builder, BuiltModule, SplitSide
-from ..linear import Linear, pad_out_dim
+from ..linear import round_up_output_groups
+from ._base import Builder, BuiltModule, ParallelGroup, SplitSide
 
 
 class TextModelBuilder(Builder):
@@ -17,9 +17,11 @@ class TextModelBuilder(Builder):
     ``add_lm_head``.
     """
 
-    def __init__(self, config, contexts, *, root_handles,
-                 tp, ranks, vocab_size):
-        super().__init__(config=config, contexts=contexts, tp=tp, ranks=ranks)
+    def __init__(self, config, ctx, *, root_handles,
+                 tp: ParallelGroup, vocab_size):
+        super().__init__(config, ctx)
+        self.tp = tp
+        self.config.tp_size = tp.size
         self._root_handles = root_handles
         self._vocab_size = vocab_size
 
@@ -30,7 +32,7 @@ class TextModelBuilder(Builder):
         built = super().build()
         for i, (root, text_model) in enumerate(
                 zip(self._root_handles, built.handles)):
-            with self._contexts[i]:
+            with self._ctx.devices[i]:
                 root.add_child_raw('text_model', text_model)
         return built
 
@@ -38,7 +40,7 @@ class TextModelBuilder(Builder):
         """Commit the raw embedding lookup as the ``tok_embeddings`` root
         param.
 
-        Shards along hidden (output) dim by ``self._tp``. No vocab padding —
+        Shards along hidden (output) dim by ``self.tp.size``. No vocab padding —
         embedding lookup never indexes past ``vocab - 1``.
         """
         self._add_tensor('tok_embeddings', tensor,
@@ -46,20 +48,7 @@ class TextModelBuilder(Builder):
 
     def add_lm_head(self, linear):
         """Pad output dim to ``round_up(vocab_size, tp)`` and commit to the
-        ``output`` LinearWeight root child.
-
-        Works for every checkpoint format in use today — trivial / AWQ /
-        GPTQ / compressed-tensors / MXFP4 all have ``block_out is None``,
-        so padding every tensor in the bundle along ``dim=-1`` keeps the
-        format-specific block structure intact. FP8 ``lm_head``
-        (``block_out == 128``) would misalign scales under naive padding
-        but is not a configuration used by any released checkpoint.
-        """
-        padded_vocab = ((self._vocab_size + self._tp - 1)
-                        // self._tp) * self._tp
-        padded = Linear(
-            tensors={k: pad_out_dim(t, padded_vocab, dim=-1)
-                     for k, t in linear.tensors.items()},
-            weight_format=linear.weight_format)
-        self._add_linear('output', padded,
-                            split_side=SplitSide.OUTPUT)
+        ``output`` LinearWeight root child."""
+        linear = round_up_output_groups(linear, self._vocab_size,
+                                        self.tp.size)
+        self._add_linear('output', linear, split_side=SplitSide.OUTPUT)

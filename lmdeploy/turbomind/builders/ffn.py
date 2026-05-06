@@ -12,8 +12,9 @@ import math
 
 import torch
 
-from ..linear import Linear, pad_in_dim, pad_out_dim, transform_input_dim, transform_output_dim
-from ._base import Builder, SplitSide
+from ..linear import (Linear, round_up_input_groups, round_up_output_groups,
+                       transform_output_dim)
+from ._base import Builder, ParallelGroup, SplitSide
 
 __all__ = [
     'FfnBuilder',
@@ -44,18 +45,6 @@ def _chunk_w1w3(w1: torch.Tensor, w3: torch.Tensor, *,
     return combined.reshape(w1.shape[:d] + (-1,)).contiguous()
 
 
-@transform_output_dim
-def _pad_out(tensor: torch.Tensor, *, target: int) -> torch.Tensor:
-    """Pad output dimension to target size."""
-    return pad_out_dim(tensor, target, dim=tensor.dim() - 1)
-
-
-@transform_input_dim
-def _pad_in(tensor: torch.Tensor, *, target: int) -> torch.Tensor:
-    """Pad input dimension to target size (1-D tensors pass through)."""
-    return pad_in_dim(tensor, target, dim=0)
-
-
 # ---------------------------------------------------------------------------
 # FFN fusion helpers
 # ---------------------------------------------------------------------------
@@ -64,8 +53,9 @@ def _pad_in(tensor: torch.Tensor, *, target: int) -> torch.Tensor:
 def _should_fuse_silu(w1_linear: Linear, act_type: str, is_moe: bool = False) -> bool:
     """Determine if fused SiLU (interleave) should be used for w1+w3 fusion.
 
-    Gold standard condition (from GEMM kernel constraints — trust it):     act_type == SiLU && (int4 || mxfp4 || fp8 ||
-    moe) && !(fp8 && SM90)
+    Gold standard condition (from GEMM kernel constraints — trust it):
+
+    act_type == SiLU && (int4 || mxfp4 || fp8 || moe) && !(fp8 && SM90)
     """
     if act_type not in ('', 'silu', 'SiLU'):
         return False
@@ -142,6 +132,11 @@ def fuse_w1w3(
 # TP padding
 # ---------------------------------------------------------------------------
 
+# Minimum CTA_K across all registered grouped-GEMM kernels (SM75–SM90).
+# Included in effective_block via lcm so the padded intermediate is always
+# GEMM-aligned.
+_GEMM_K_ALIGN = 32
+
 
 def _pad_ffn_for_tp(w1: Linear, w2: Linear, w3: Linear,
                      tp: int) -> tuple[Linear, Linear, Linear]:
@@ -150,20 +145,15 @@ def _pad_ffn_for_tp(w1: Linear, w2: Linear, w3: Linear,
 
     if tp <= 1:
         return w1, w2, w3
+
     fmt = w1.weight_format
-    block_out = (fmt.block_out or 1) if fmt else 1
-    block_in = (fmt.block_in or 1) if fmt else 1
-    effective_block = math.lcm(block_in, block_out) if block_in != block_out else block_out
+    effective_block = math.lcm(fmt.block_in or 1, fmt.block_out or 1,
+                               _GEMM_K_ALIGN)
 
-    groups = (raw_inter + effective_block - 1) // effective_block
-    groups_per_rank = (groups + tp - 1) // tp
-    padded_inter = groups_per_rank * effective_block * tp
-    if padded_inter == raw_inter:
-        return w1, w2, w3
-
-    w1 = _pad_out(w1, target=padded_inter)
-    w3 = _pad_out(w3, target=padded_inter)
-    w2 = _pad_in(w2, target=padded_inter)
+    groups = raw_inter // effective_block
+    w1 = round_up_output_groups(w1, groups, tp)
+    w3 = round_up_output_groups(w3, groups, tp)
+    w2 = round_up_input_groups(w2, groups, tp)
     return w1, w2, w3
 
 
@@ -174,6 +164,11 @@ def _pad_ffn_for_tp(w1: Linear, w2: Linear, w3: Linear,
 
 class FfnBuilder(Builder):
     """FFN weight loading builder with w1+w3 fusion."""
+
+    def __init__(self, config, ctx, tp: ParallelGroup):
+        super().__init__(config, ctx)
+        self.tp = tp
+        self.config.tp_size = tp.size
 
     def add_ffn(self, w1, w2, w3):
         """Pad weights for TP alignment, fuse w1+w3 if possible, then shard and
@@ -186,15 +181,15 @@ class FfnBuilder(Builder):
         # Pad weights for TP alignment before any fusion or sharding.
         # After padding, push the padded-global inter_size onto config so
         # that C++ module creation sees the correct dimension.
-        w1, w2, w3 = _pad_ffn_for_tp(w1, w2, w3, self._tp)
+        w1, w2, w3 = _pad_ffn_for_tp(w1, w2, w3, self.tp.size)
         self.config.inter_size = w1.tensors['weight'].size(-1)
 
         act_type = getattr(self.config, 'act_type', 0)
         if isinstance(act_type, int):
             act_type = {0: 'silu', 1: 'gpt-oss'}.get(act_type, 'silu')
         fused, fused_silu = fuse_w1w3(
-            w1, w3, self._tp, act_type,
-            is_moe=getattr(self.config, 'fused_moe', False))
+            w1, w3, self.tp.size, act_type,
+            is_moe=self.config.is_expert)
 
         self.config.fuse_silu = fused_silu
 

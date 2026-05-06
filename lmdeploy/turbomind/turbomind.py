@@ -219,7 +219,7 @@ class TurboMind:
         from .converter import get_tm_config
         from .model_loader import ModelLoader
 
-        text_model, model_path = get_tm_config(model_path, engine_config)
+        text_model, model_path, data_type = get_tm_config(model_path, engine_config)
 
         self._vocab_size = text_model._vocab_size
         self.engine_config = engine_config
@@ -267,7 +267,10 @@ class TurboMind:
             model=text_model,
             model_comm=model_comm,
             gpu_count=self.gpu_count,
-            model_path=model_path)
+            model_path=model_path,
+            data_type=data_type,
+            engine_config=engine_config,
+        )
         return model_comm
 
     async def sleep(self, level: int = 1):

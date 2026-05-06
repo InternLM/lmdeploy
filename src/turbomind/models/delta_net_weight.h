@@ -18,10 +18,9 @@ struct DeltaNetConfig: ModuleConfig {
     X(int, key_head_dim)                                                                                               \
     X(int, value_head_dim)                                                                                             \
     X(int, d_conv, 4)                                                                                                  \
-    X(bool, has_bias)                                                                                                  \
+    X(DataType, data_type)                                                                                             \
     X(int, tp_size)                                                                                                    \
-    X(int, tp_rank)                                                                                                    \
-    X(DataType, data_type)
+    X(int, tp_rank)
 
     DELTANET_FIELDS(TM_MEMBER)
     TM_FOR_EACH(DeltaNetConfig, DELTANET_FIELDS)
@@ -67,10 +66,9 @@ public:
     int      key_head_dim{};
     int      value_head_dim{};
     int      d_conv{};
-    bool     bias{};
+    DataType data_type{};
     int      tp_size{};
     int      tp_rank{};
-    DataType data_type{};
 };
 
 }  // namespace turbomind

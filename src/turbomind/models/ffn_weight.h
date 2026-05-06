@@ -14,13 +14,12 @@ struct FfnConfig: ModuleConfig {
 #define FFN_FIELDS(X)                                                                                                  \
     X(int, hidden_dim)                                                                                                 \
     X(int, inter_size)                                                                                                 \
-    X(bool, has_bias)                                                                                                  \
-    X(int, tp_size)                                                                                                    \
-    X(int, tp_rank)                                                                                                    \
-    X(DataType, data_type)                                                                                             \
     X(int, act_type)                                                                                                   \
     X(bool, fuse_silu)                                                                                                 \
-    X(bool, fused_moe)
+    X(bool, is_expert)                                                                                                 \
+    X(DataType, data_type)                                                                                             \
+    X(int, tp_size)                                                                                                    \
+    X(int, tp_rank)
 
     FFN_FIELDS(TM_MEMBER)
     TM_FOR_EACH(FfnConfig, FFN_FIELDS)
@@ -56,35 +55,16 @@ public:
 
     TM_MODULE_DECLARE(FfnWeight, FFN_WEIGHT_CHILDREN, FFN_WEIGHT_PARAMS)
 
-    int inter_size() const
-    {
-        return inter_size_;
-    }
-    ActivationType act_type() const
-    {
-        return act_type_;
-    }
-    bool is_fused_silu() const
-    {
-        return is_fused_silu_;
-    }
-
-    /// Override is_fused_silu_ (used by MoE block view after linking experts).
-    void set_fused_silu(bool val)
-    {
-        is_fused_silu_ = val;
-    }
+    int            hidden_dim{};
+    int            inter_size{};
+    ActivationType act_type{};
+    bool           is_fused_silu{};
+    int            tp_size{};
+    int            tp_rank{};
 
 private:
-    int            hidden_dim_{};
-    int            inter_size_{};
-    bool           bias_{};
-    int            tp_size_{};
-    int            tp_rank_{};
-    DataType       data_type_{};
-    ActivationType act_type_{};
-    bool           is_fused_silu_{};
-    bool           is_fused_moe_{};
+    bool     is_expert_{};
+    DataType data_type_{};
 };
 
 }  // namespace turbomind

@@ -173,6 +173,8 @@ public:
         [[maybe_unused]] const int n = Ddesc.cols;
         [[maybe_unused]] const int k = Adesc.cols;
 
+        TM_CHECK_GE(cdiv(k, TILE_K), 2) << "The kernel requires at least 2 k-tiles to work";
+
         // std::cout << "M: " << m << ", N: " << n << ", K: " << k << "\n";
 
         auto transpose = [](MatrixLayout x) {

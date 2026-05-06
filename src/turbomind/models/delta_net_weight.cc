@@ -14,10 +14,9 @@ DeltaNetWeight::DeltaNetWeight(const core::DeltaNetConfig& cfg):
     key_head_dim(cfg.key_head_dim),
     value_head_dim(cfg.value_head_dim),
     d_conv(cfg.d_conv),
-    bias(cfg.has_bias),
+    data_type(cfg.data_type),
     tp_size(cfg.tp_size),
-    tp_rank(cfg.tp_rank),
-    data_type(cfg.data_type)
+    tp_rank(cfg.tp_rank)
 {
 }
 

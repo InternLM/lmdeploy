@@ -45,16 +45,12 @@ struct AttentionConfig: ModuleConfig {
     X(int, q_lora_rank)                                                                                                \
     X(int, qk_rope_dim)                                                                                                \
     X(int, v_head_dim)                                                                                                 \
-    X(bool, has_bias)                                                                                                  \
-    X(bool, qk_norm)                                                                                                   \
     X(int, tp_size)                                                                                                    \
     X(int, tp_rank)                                                                                                    \
     X(DataType, data_type)                                                                                             \
-    X(int, window_size, -1)                                                                                            \
-    X(bool, attn_sink)                                                                                                 \
-    X(bool, attn_output_gate)                                                                                          \
+    X(int, window_size, 0)                                                                                             \
+    X(bool, output_gate, 0)                                                                                            \
     X(RopeConfig, rope, {})                                                                                            \
-    X(int, repeat_kv)                                                                                                  \
     X(int, qk_nope_dim)                                                                                                \
     X(float, softmax_scale, 0.f)                                                                                       \
     X(bool, use_logn_attn, false)
@@ -108,24 +104,22 @@ public:
     }
 
     // --- Config fields (public for runtime access) ---
-    int              hidden_dim{};
-    int              head_dim{};
-    int              head_num{};
-    int              kv_head_num{};
-    int              kv_lora_rank{};
-    int              q_lora_rank{};
-    int              qk_rope_dim{};
-    int              v_head_dim{};
-    bool             bias{};
-    bool             qk_norm{};
-    int              tp_size{};
-    int              tp_rank{};
-    DataType         data_type{};
-    int              window_size{};
-    bool             sink{};
-    bool             attn_output_gate{};
-    float            softmax_scale{};
-    bool             use_logn_attn{};
+    int      hidden_dim{};
+    int      head_dim{};
+    int      head_num{};
+    int      kv_head_num{};
+    int      kv_lora_rank{};
+    int      q_lora_rank{};
+    int      qk_rope_dim{};
+    int      v_head_dim{};
+    int      tp_size{};
+    int      tp_rank{};
+    DataType data_type{};
+    int      window_size{};
+    bool     output_gate{};
+    float    softmax_scale{};
+    bool     use_logn_attn{};
+
     core::RopeConfig rope{};
 };
 

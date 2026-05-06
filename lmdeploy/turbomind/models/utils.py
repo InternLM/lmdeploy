@@ -5,27 +5,53 @@ from __future__ import annotations
 import math
 from types import SimpleNamespace
 
+import _turbomind as _tm
 import torch
 
 from lmdeploy.archs import get_model_arch
+from lmdeploy.utils import get_logger
 
-from ..linear import _dequant_linear
-from ..linear import Linear
+from ..builders import _act_type_id
+from ..linear import Linear, _dequant_linear
 
 
-def load_model_config(model_path: str) -> dict:
-    """Load and normalise the HuggingFace model config to a plain dict.
+def source_model_config(model_config):
+    """Select the local config object consumed by a TurboMind source model.
 
-    Handles nested configs (text_config, llm_config) and transformers AutoConfig objects that expose a to_dict() method.
+    Unwrap text_config for text-only wrappers. Keep llm_config on the outer config so aggregate models, such as
+    InternVL3.5, can validate and delegate explicitly.
     """
-    _, model_config = get_model_arch(model_path)
     if hasattr(model_config, 'text_config'):
-        model_config = model_config.text_config
-    elif hasattr(model_config, 'llm_config'):
-        model_config = model_config.llm_config
-    if hasattr(model_config, 'to_dict'):
-        return model_config.to_dict()
+        return model_config.text_config
     return model_config
+
+
+def load_model_config(model_path: str):
+    """Load the local Transformers config object for a source text model."""
+    _, model_config = get_model_arch(model_path)
+    return source_model_config(model_config)
+
+
+def _optional_attr(cfg, name: str, default=None):
+    if isinstance(cfg, dict):
+        return cfg.get(name, default)
+    return getattr(cfg, name, default)
+
+
+def _param_get(params, name: str, default=None):
+    if params is None:
+        return default
+    if isinstance(params, dict):
+        return params.get(name, default)
+    return getattr(params, name, default)
+
+
+def _param_has(params, name: str) -> bool:
+    if params is None:
+        return False
+    if isinstance(params, dict):
+        return name in params
+    return hasattr(params, name)
 
 
 _ROPE_TYPE_MAP = {
@@ -42,8 +68,15 @@ def rope_type_to_int(type_str: str) -> int:
     return _ROPE_TYPE_MAP[type_str]
 
 
-def parse_rope_param(cfg: dict, head_dim: int) -> tuple[SimpleNamespace, int]:
-    """Parse RoPE configuration from a model config dict.
+def _get_mscale(scale, mscale=1):
+    """YaRN mscale helper. Shared by parse_rope_param and MLA softmax_scale."""
+    if scale <= 1:
+        return 1.0
+    return 0.1 * mscale * math.log(scale) + 1.0
+
+
+def parse_rope_param(cfg, head_dim: int) -> tuple[SimpleNamespace, int]:
+    """Parse RoPE configuration from a model config dict or object.
 
     Returns:
         rope_param: SimpleNamespace carrying rope fields (type, base, dim,
@@ -52,19 +85,23 @@ def parse_rope_param(cfg: dict, head_dim: int) -> tuple[SimpleNamespace, int]:
             original_max_position_embeddings, mrope_section)
         max_position_embeddings: int (0 if not present in config)
     """
-    if 'rope_parameters' in cfg:
+    rope_parameters = _optional_attr(cfg, 'rope_parameters', None)
+    if rope_parameters is not None:
         # transformers v5.0.0 aggregates rope settings into rope_parameters
-        rope_scaling = cfg['rope_parameters']
-        rope_theta = float(rope_scaling.get('rope_theta', 10000.0))
+        rope_scaling = rope_parameters
+        rope_theta = float(_param_get(rope_scaling, 'rope_theta', 10000.0))
     else:
-        rope_theta = float(cfg.get('rope_theta', 10000.0))
-        rope_scaling = cfg.get('rope_scaling', None)
+        rope_theta = float(_optional_attr(cfg, 'rope_theta', 10000.0))
+        rope_scaling = _optional_attr(cfg, 'rope_scaling', None)
 
-    max_position_embeddings = int(cfg.get('max_position_embeddings', 0))
+    max_position_embeddings = int(_optional_attr(cfg, 'max_position_embeddings', 0))
+    partial_rotary_factor = _param_get(rope_parameters, 'partial_rotary_factor', None)
+    if partial_rotary_factor is None:
+        partial_rotary_factor = float(_optional_attr(cfg, 'partial_rotary_factor', 1.0))
     rope_param = SimpleNamespace(
         type='default',
         base=rope_theta,
-        dim=head_dim,
+        dim=int(head_dim * partial_rotary_factor),
         factor=1.0,
         max_position_embeddings=None,
         attention_factor=1.0,
@@ -76,11 +113,11 @@ def parse_rope_param(cfg: dict, head_dim: int) -> tuple[SimpleNamespace, int]:
         mrope_section=None,
     )
 
-    if isinstance(rope_scaling, dict):
-        rope_type = rope_scaling.get('rope_type', '') or rope_scaling.get('type', '')
-        if rope_scaling.get('mrope_section') is not None:
+    if rope_scaling is not None:
+        rope_type = _param_get(rope_scaling, 'rope_type', '') or _param_get(rope_scaling, 'type', '')
+        if _param_get(rope_scaling, 'mrope_section') is not None:
             rope_type = 'mrope'
-        scaling_factor = rope_scaling.get('factor', 0.0)
+        scaling_factor = _param_get(rope_scaling, 'factor', 0.0)
 
         if rope_type == 'default':
             pass
@@ -92,23 +129,30 @@ def parse_rope_param(cfg: dict, head_dim: int) -> tuple[SimpleNamespace, int]:
             rope_param.type = 'linear'
             rope_param.factor = scaling_factor
         elif rope_type == 'llama3':
-            low_freq_factor = rope_scaling.get('low_freq_factor', 1.0)
-            high_freq_factor = rope_scaling.get('high_freq_factor', 1.0)
-            original_max_position_embeddings = rope_scaling.get('original_max_position_embeddings', 0)
+            low_freq_factor = _param_get(rope_scaling, 'low_freq_factor', 1.0)
+            high_freq_factor = _param_get(rope_scaling, 'high_freq_factor', 1.0)
+            original_max_position_embeddings = _param_get(rope_scaling, 'original_max_position_embeddings', 0)
             rope_param.type = 'llama3'
             rope_param.factor = scaling_factor
             rope_param.low_freq_factor = low_freq_factor
             rope_param.high_freq_factor = high_freq_factor
             rope_param.original_max_position_embeddings = original_max_position_embeddings
         elif rope_type == 'yarn':
-            attention_factor = rope_scaling.get('attention_factor', None)
+            attention_factor = _param_get(rope_scaling, 'attention_factor', None)
             if attention_factor is None:
-                attention_factor = 0.1 * math.log(scaling_factor) + 1.0
-            beta_fast = rope_scaling.get('beta_fast', 32.0)
-            beta_slow = rope_scaling.get('beta_slow', 1.0)
+                mscale = _param_get(rope_scaling, 'mscale')
+                mscale_all_dim = _param_get(rope_scaling, 'mscale_all_dim')
+                if mscale is not None and mscale_all_dim is not None:
+                    attention_factor = float(
+                        _get_mscale(scaling_factor, mscale) /
+                        _get_mscale(scaling_factor, mscale_all_dim))
+                else:
+                    attention_factor = _get_mscale(scaling_factor)
+            beta_fast = _param_get(rope_scaling, 'beta_fast', 32.0)
+            beta_slow = _param_get(rope_scaling, 'beta_slow', 1.0)
             rope_param.type = 'yarn'
-            if 'original_max_position_embeddings' in rope_scaling:
-                original_max_position_embeddings = rope_scaling['original_max_position_embeddings']
+            if _param_has(rope_scaling, 'original_max_position_embeddings'):
+                original_max_position_embeddings = _param_get(rope_scaling, 'original_max_position_embeddings')
                 scaling_factor = max_position_embeddings / original_max_position_embeddings
             else:
                 original_max_position_embeddings = max_position_embeddings
@@ -118,7 +162,7 @@ def parse_rope_param(cfg: dict, head_dim: int) -> tuple[SimpleNamespace, int]:
             rope_param.beta_fast = beta_fast
             rope_param.beta_slow = beta_slow
         elif rope_type == 'mrope':
-            mrope_section = rope_scaling.get('mrope_section')
+            mrope_section = _param_get(rope_scaling, 'mrope_section')
             rope_param.type = 'mrope'
             rope_param.mrope_section = mrope_section
         else:
@@ -127,31 +171,138 @@ def parse_rope_param(cfg: dict, head_dim: int) -> tuple[SimpleNamespace, int]:
     return rope_param, max_position_embeddings
 
 
-def get_yarn_params(rope_scaling: dict) -> tuple[float, float]:
-    """Compute DeepSeek2/MLA YaRN attention scale factors.
+def copy_rope_config(rope_cfg, rope_param, max_position_embeddings: int):
+    """Copy parsed RoPE fields into a TurboMind C++ rope config object."""
+    rope_cfg.type = rope_type_to_int(rope_param.type)
+    rope_cfg.base = rope_param.base
+    rope_cfg.dim = rope_param.dim
+    rope_cfg.factor = rope_param.factor
+    rope_cfg.max_position_embeddings = max_position_embeddings
+    if rope_param.type == 'yarn':
+        rope_cfg.yarn_attention_factor = rope_param.attention_factor
+        rope_cfg.yarn_beta_fast = rope_param.beta_fast
+        rope_cfg.yarn_beta_slow = rope_param.beta_slow
+    elif rope_param.type == 'llama3':
+        rope_cfg.llama3_low_freq_factor = rope_param.low_freq_factor
+        rope_cfg.llama3_high_freq_factor = rope_param.high_freq_factor
+        rope_cfg.llama3_original_max_position_embeddings = rope_param.original_max_position_embeddings
+    elif rope_param.type == 'mrope':
+        rope_cfg.mrope_section = rope_param.mrope_section
+
+
+def make_model_weight_config(cfg):
+    """Build the root ModelWeightConfig from root-module fields."""
+    model_cfg = _tm.ModelWeightConfig()
+    model_cfg.hidden_units = cfg.hidden_size
+    return model_cfg
+
+
+def make_attention_config(cfg, *, head_dim=None):
+    """Build common AttentionConfig fields from attention-module geometry."""
+    hidden_dim = cfg.hidden_size
+    head_num = cfg.num_attention_heads
+    head_dim = head_dim if head_dim is not None else getattr(cfg, 'head_dim', hidden_dim // head_num)
+    kv_head_num = cfg.num_key_value_heads
+    rope, max_position_embeddings = parse_rope_param(cfg, head_dim)
+    attn_cfg = _tm.AttentionConfig()
+    attn_cfg.hidden_dim = hidden_dim
+    attn_cfg.head_dim = head_dim
+    attn_cfg.head_num = head_num
+    attn_cfg.kv_head_num = kv_head_num
+    attn_cfg.window_size = 0
+    attn_cfg.softmax_scale = 0.0
+    copy_rope_config(attn_cfg.rope, rope, max_position_embeddings)
+    return attn_cfg
+
+
+def make_ffn_config(cfg, *, act_type, inter_size=None):
+    """Build common FfnConfig fields from FFN-module shape."""
+    ffn_cfg = _tm.FfnConfig()
+    ffn_cfg.hidden_dim = cfg.hidden_size
+    ffn_cfg.act_type = act_type
+    ffn_cfg.inter_size = inter_size if inter_size is not None else cfg.intermediate_size
+    return ffn_cfg
+
+
+def make_moe_config(cfg, *,
+                    experts_per_token,
+                    act_type=None,
+                    norm_topk_prob=True,
+                    topk_method='greedy',
+                    scoring_func='softmax',
+                    routed_scale=1.0,
+                    topk_group=1,
+                    n_group=1,
+                    router_n_groups=0):
+    """Build a MoeConfig populated from HF config and per-model overrides."""
+    if act_type is None:
+        act_type = _act_type_id('silu')
+
+    moe_cfg = _tm.MoeConfig()
+    moe_cfg.experts_per_token = experts_per_token
+    moe_cfg.norm_topk_prob = norm_topk_prob
+    moe_cfg.routed_scale = routed_scale
+    moe_cfg.topk_group = topk_group
+    moe_cfg.topk_method = topk_method
+    moe_cfg.n_group = n_group
+    moe_cfg.scoring_func = scoring_func
+    moe_cfg.router_n_groups = router_n_groups
+    moe_cfg.act_type = act_type
+    moe_cfg.fuse_silu = True
+    return moe_cfg
+
+
+def make_mla_config(cfg):
+    """Build an AttentionConfig for MLA models.
+
+    Computes MLA geometry, softmax scale (including YaRN mscale_all_dim),
+    and populates all MLA-specific AttentionConfig fields.
 
     Returns:
-        attention_factor: mscale ratio used for attention scaling
-        softmax_scale: pre-softmax scale (non-zero only when mscale_all_dim > 0)
+        _tm.AttentionConfig populated with MLA fields.
     """
-    scaling_factor = float(rope_scaling['factor'])
-    mscale = rope_scaling['mscale']
-    mscale_all_dim = rope_scaling['mscale_all_dim']
+    qk_nope_dim = cfg.qk_nope_head_dim
+    qk_rope_dim = cfg.qk_rope_head_dim
+    kv_lora_rank = cfg.kv_lora_rank
+    q_head_dim = qk_nope_dim + qk_rope_dim
 
-    def yarn_get_mscale(scale=1, mscale=1):
-        if scale <= 1:
-            return 1.0
-        return 0.1 * mscale * math.log(scale) + 1.0
-
-    attention_factor = float(
-        yarn_get_mscale(scaling_factor, mscale) / yarn_get_mscale(scaling_factor, mscale_all_dim))
-
+    size_per_head = q_head_dim
+    v_head_dim = cfg.v_head_dim
     softmax_scale = 0.0
-    if mscale_all_dim:
-        scale = yarn_get_mscale(scaling_factor, mscale_all_dim)
-        softmax_scale = scale * scale
+    if kv_lora_rank and kv_lora_rank != qk_nope_dim:
+        size_per_head = kv_lora_rank + qk_rope_dim
+        v_head_dim = kv_lora_rank
+        softmax_scale = q_head_dim ** (-0.5)
 
-    return attention_factor, softmax_scale
+    rope, max_position_embeddings = parse_rope_param(cfg, qk_rope_dim)
+
+    # MLA-specific YaRN mscale_all_dim softmax_scale adjustment
+    rope_params = (getattr(cfg, 'rope_parameters', None)
+                   or getattr(cfg, 'rope_scaling', None))
+    if rope_params:
+        rope_type = (_param_get(rope_params, 'rope_type', '')
+                     or _param_get(rope_params, 'type', ''))
+        if rope_type == 'yarn':
+            mscale_all_dim = _param_get(rope_params, 'mscale_all_dim')
+            if mscale_all_dim:
+                scaling_factor = float(_param_get(rope_params, 'factor', 0.0))
+                mscale = _get_mscale(scaling_factor, mscale_all_dim)
+                softmax_scale = q_head_dim ** (-0.5) * mscale * mscale
+
+    attn_cfg = _tm.AttentionConfig()
+    attn_cfg.hidden_dim = cfg.hidden_size
+    attn_cfg.head_dim = size_per_head
+    attn_cfg.head_num = cfg.num_attention_heads
+    attn_cfg.kv_head_num = 1
+    attn_cfg.kv_lora_rank = kv_lora_rank
+    attn_cfg.q_lora_rank = cfg.q_lora_rank or 0
+    attn_cfg.qk_rope_dim = qk_rope_dim
+    attn_cfg.qk_nope_dim = qk_nope_dim
+    attn_cfg.v_head_dim = v_head_dim
+    copy_rope_config(attn_cfg.rope, rope, max_position_embeddings)
+    attn_cfg.softmax_scale = softmax_scale
+
+    return attn_cfg
 
 
 def _reorder_rotary_emb(x: torch.Tensor, head_dim: int, rope_dim: int):
@@ -189,8 +340,6 @@ def reorder_rotary_emb(x, head_dim: int, rope_dim: int, *, resolver=None):
     For ``torch.Tensor`` inputs the element-level interleave-transpose is
     applied directly. ``resolver`` is ignored.
     """
-    from ..linear import Linear
-
     if isinstance(x, Linear):
         if resolver is None:
             raise TypeError(
@@ -224,29 +373,6 @@ def reorder_rotary_emb(x, head_dim: int, rope_dim: int, *, resolver=None):
         return Linear(tensors=new_tensors, weight_format=x.weight_format)
 
     return _reorder_rotary_emb(x, head_dim, rope_dim)
-
-
-# --- TP padding helpers ----------------------------------------------------
-
-def _pad_inter_size(inter_size: int, group_size: int, tp: int) -> int:
-    """Pad inter_size so it is divisible by group_size * tp."""
-    group_size = max(1, group_size)
-    group_num = (inter_size + group_size - 1) // group_size
-    groups_per_rank = (group_num + tp - 1) // tp
-    inter_size_padded = groups_per_rank * group_size * tp
-    return inter_size_padded
-
-
-def _pad_kv_head(kv_head_num: int, attn_tp: int) -> int:
-    """Pad kv_head_num up to attn_tp when attn_tp is a multiple of kv_head_num.
-
-    Rule:
-      if attn_tp > kv_head_num and attn_tp % kv_head_num == 0:
-          kv_head_num = attn_tp
-    """
-    if attn_tp > kv_head_num and attn_tp % kv_head_num == 0:
-        return attn_tp
-    return kv_head_num
 
 
 def layer_progress(num_layers: int):
