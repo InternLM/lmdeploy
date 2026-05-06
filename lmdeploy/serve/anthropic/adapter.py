@@ -10,12 +10,12 @@ from lmdeploy.messages import GenerationConfig
 from lmdeploy.serve.openai.protocol import Tool, ToolChoice, ToolChoiceFuncName
 
 from .protocol import (
+    ContentBlockParam,
     CountTokensRequest,
     MessagesRequest,
     MessageTextBlock,
     MessageThinkingBlock,
     MessageToolUseBlock,
-    TextContentBlockParam,
     ToolChoiceParam,
     ToolChoiceToolParam,
     ToolParam,
@@ -110,26 +110,64 @@ def build_message_content_blocks(
     return blocks
 
 
-def _text_from_blocks(blocks: list[TextContentBlockParam | dict[str, Any]], field_name: str) -> str:
+def _stringify_block_value(value: Any) -> str:
+    if value is None:
+        return ''
+    if isinstance(value, str):
+        return value
+    if hasattr(value, 'model_dump'):
+        value = value.model_dump()
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _text_from_block_content(content: Any, field_name: str) -> str:
+    if content is None:
+        return ''
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return _text_from_blocks(content, field_name=field_name)
+    return _stringify_block_value(content)
+
+
+def _text_from_blocks(blocks: list[ContentBlockParam | dict[str, Any]], field_name: str) -> str:
     out: list[str] = []
     for idx, block in enumerate(blocks):
         if isinstance(block, dict):
             block_type = block.get('type')
             text = block.get('text')
+            content = block.get('content')
+            tool_use_id = block.get('tool_use_id')
+            tool_name = block.get('name')
+            tool_input = block.get('input')
+            thinking = block.get('thinking')
         else:
             block_type = block.type
             text = block.text
-        if block_type != 'text':
-            raise ValueError(
-                f'Only text content blocks are supported in `{field_name}`. '
-                f'Got: {block_type!r} at index {idx}.')
-        if text is None:
-            raise ValueError(f'Missing `text` in `{field_name}` content block at index {idx}.')
-        out.append(text)
+            content = block.content
+            tool_use_id = block.tool_use_id
+            tool_name = block.name
+            tool_input = block.input
+            thinking = block.thinking
+        if block_type == 'text':
+            if text is None:
+                raise ValueError(f'Missing `text` in `{field_name}` content block at index {idx}.')
+            out.append(text)
+        elif block_type == 'tool_result':
+            result_text = _text_from_block_content(content, field_name=f'{field_name}[{idx}].content')
+            out.append(f'\n[tool_result id={tool_use_id or ""}]\n{result_text}\n[/tool_result]\n')
+        elif block_type == 'tool_use':
+            tool_payload = _stringify_block_value(tool_input)
+            out.append(f'\n[tool_use name={tool_name or ""}]\n{tool_payload}\n[/tool_use]\n')
+        elif block_type in ('thinking', 'redacted_thinking'):
+            if thinking:
+                out.append(f'\n[thinking]\n{thinking}\n[/thinking]\n')
+        else:
+            out.append(f'\n[{block_type}]\n{_stringify_block_value(block)}\n[/{block_type}]\n')
     return ''.join(out)
 
 
-def text_from_content(content: str | list[TextContentBlockParam], field_name: str) -> str:
+def text_from_content(content: str | list[ContentBlockParam], field_name: str) -> str:
     """Normalize Anthropic content field to plain text."""
 
     if isinstance(content, str):

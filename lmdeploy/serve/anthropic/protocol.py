@@ -7,7 +7,7 @@ import time
 from typing import Any, Literal
 
 import shortuuid
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AnthropicError(BaseModel):
@@ -31,11 +31,32 @@ class TextContentBlockParam(BaseModel):
     text: str
 
 
+class ContentBlockParam(BaseModel):
+    """Permissive Anthropic input content block.
+
+    Claude Code may replay beta conversation history containing blocks such as
+    ``tool_use`` and ``tool_result``. The adapter decides how to render each
+    block into LMDeploy's text-only chat history.
+    """
+
+    model_config = ConfigDict(extra='allow')
+
+    type: str
+    text: str | None = None
+    thinking: str | None = None
+    id: str | None = None
+    name: str | None = None
+    input: Any | None = None
+    tool_use_id: str | None = None
+    content: str | list[Any] | dict[str, Any] | None = None
+    is_error: bool | None = None
+
+
 class MessageParam(BaseModel):
     """Anthropic input message."""
 
     role: Literal['user', 'assistant']
-    content: str | list[TextContentBlockParam]
+    content: str | list[ContentBlockParam]
 
 
 class ToolParam(BaseModel):
@@ -74,7 +95,7 @@ class MessagesRequest(BaseModel):
     model: str
     messages: list[MessageParam]
     max_tokens: int = Field(gt=0)
-    system: str | list[TextContentBlockParam] | None = None
+    system: str | list[ContentBlockParam] | None = None
     stop_sequences: list[str] | None = None
     stream: bool = False
     temperature: float | None = 1.0
@@ -134,7 +155,7 @@ class CountTokensRequest(BaseModel):
 
     model: str
     messages: list[MessageParam]
-    system: str | list[TextContentBlockParam] | None = None
+    system: str | list[ContentBlockParam] | None = None
     tools: list[ToolParam] | None = None
 
 

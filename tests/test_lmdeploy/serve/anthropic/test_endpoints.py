@@ -213,6 +213,50 @@ def test_messages_unknown_model():
     assert response.json()['error']['type'] == 'not_found_error'
 
 
+def test_messages_beta_accepts_tool_history_blocks():
+    client = _make_client()
+    response = client.post(
+        '/v1/messages?beta=true',
+        headers={'anthropic-version': '2023-06-01'},
+        json={
+            'model': 'fake-model',
+            'max_tokens': 16,
+            'messages': [
+                {
+                    'role': 'assistant',
+                    'content': [{
+                        'type': 'tool_use',
+                        'id': 'toolu_123',
+                        'name': 'search',
+                        'input': {
+                            'query': 'lmdeploy'
+                        },
+                    }],
+                },
+                {
+                    'role': 'user',
+                    'content': [{
+                        'type': 'tool_result',
+                        'tool_use_id': 'toolu_123',
+                        'content': [{
+                            'type': 'text',
+                            'text': 'LMDeploy serves LLMs.',
+                        }],
+                    }],
+                },
+                {
+                    'role': 'user',
+                    'content': 'Summarize the tool result.',
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data['type'] == 'message'
+
+
 def test_messages_non_stream_with_reasoning_and_tool_use_blocks():
     client = _make_client(response_parser_cls=_ToolAndReasoningParser)
     response = client.post(
