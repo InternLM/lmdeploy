@@ -403,7 +403,8 @@ class SpecModelAgent(BaseSpecModelAgent):
                 # original matchers are NOT modified.
                 processed_logits, raw_logprobs = await self._guided_spec_logits_process(
                     target_logits, expanded_sampling_inputs, guided_manager,
-                    guided_processors, batch_size, num_expand_sampling)
+                    guided_processors, batch_size, num_expand_sampling,
+                    draft_token_ids=extra_inputs.output_draft_token_ids)
             else:
                 logits_processor = FusedLogitsProcessor(
                     expanded_sampling_inputs,
@@ -489,6 +490,7 @@ class SpecModelAgent(BaseSpecModelAgent):
         guided_processors: dict[int, xgr.GrammarMatcher],
         batch_size: int,
         num_expand: int,
+        draft_token_ids: torch.LongTensor,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Apply position-serial grammar mask to target logits for spec decode.
 
@@ -505,13 +507,14 @@ class SpecModelAgent(BaseSpecModelAgent):
             guided_processors: {orig_batch_idx: GrammarMatcher} for guided seqs.
             batch_size: Number of sequences.
             num_expand: num_spec_tokens + 1.
+            draft_token_ids: [batch_size, num_spec_tokens] draft tokens from
+                the proposer.  Forks are advanced using these (not argmax)
+                because target logits are conditioned on the draft tokens and
+                rejection sampling discards positions after the first rejection.
 
         Returns:
             (processed_logits, raw_logprobs) — same shapes as FusedLogitsProcessor.
         """
-        # Step 1: Non-grammar logits processing (temperature, penalties, etc.)
-        # FusedLogitsProcessor is created WITHOUT guided_decoding_manager so it
-        # skips grammar mask — we apply it ourselves below.
         logits_processor = FusedLogitsProcessor(
             expanded_sampling_inputs,
             logprobs_mode=self.misc_config.logprobs_mode,
@@ -521,12 +524,10 @@ class SpecModelAgent(BaseSpecModelAgent):
         if not guided_processors:
             return scores, raw_logprobs
 
-        # Step 2: Position-serial grammar mask via forked matchers.
         scores_3d = scores.view(batch_size, num_expand, -1)
 
-        # One fork per guided sequence; each fork is advanced in-place so
-        # subsequent positions get the correct mask.
         forked = {idx: proc.fork() for idx, proc in guided_processors.items()}
+        cpu_draft_token_ids = draft_token_ids.cpu()
 
         guided_bitmask = guided_manager.allocate_batched_bitmap(batch_size)
         for pos in range(num_expand):
@@ -538,16 +539,15 @@ class SpecModelAgent(BaseSpecModelAgent):
             guided_manager.apply_batched_bitmap(pos_logits, guided_bitmask)
             scores_3d[:, pos, :] = pos_logits
 
-            # Argmax as a greedy approximation to advance the forked matcher.
-            # The actual sampled token may differ, but rejection sampling
-            # ensures only accepted tokens are fed to original matchers.
-            pos_token_ids = pos_logits.argmax(dim=-1)
+            # Advance fork using draft tokens for draft positions.
+            # Target logits are conditioned on the draft tokens, so the
+            # grammar state must follow the draft-token path.  If a draft
+            # token is rejected, rejection sampling discards all later
+            # positions — so the draft-token path is the only reachable one.
+            if pos < self.num_spec_tokens:
+                for idx, fork_proc in forked.items():
+                    guided_manager.accept_token(fork_proc, cpu_draft_token_ids[idx, pos].item())
 
-            cpu_pos_token_ids = pos_token_ids.cpu()
-            for idx, fork_proc in forked.items():
-                guided_manager.accept_token(fork_proc, cpu_pos_token_ids[idx].item())
-
-        # Forked matchers go out of scope — originals untouched.
         scores = scores_3d.view(batch_size * num_expand, -1)
         return scores, raw_logprobs
 
