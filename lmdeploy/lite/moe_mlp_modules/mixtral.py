@@ -22,7 +22,7 @@ class MixtralMoeMLP(nn.Module):
         self.w3.weight = nn.Parameter(w3_weight.detach(), requires_grad=False)
 
 
-@CONVERT_MOE_MODELS.register_module(name='mixtral')
+@CONVERT_MOE_MODELS.register_module(name='MixtralForCausalLM')
 class MixtralMoeMLPConverter:
 
     MoEMLP = MixtralMoeMLP
@@ -70,10 +70,7 @@ class MixtralMoeMLPConverter:
     def convert_moe_parameters(self, model: nn.Module):
         """Replace fused MoE experts with expert ModuleList if transformers >=
         5.0."""
-        parent_target = next(
-            (mod for name, mod in model.named_modules() if name == 'mlp'),
-            None
-        )
+        parent_target = getattr(model, 'mlp', None)
         if parent_target is None:
             return
 

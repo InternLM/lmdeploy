@@ -131,11 +131,46 @@ SKIPPED_MODULE = ['lora']
 
 IGNORE_MODULE_FOR_MODELS = {
     'Qwen3MoeForCausalLM': ['mlp.gate'],
-    'Qwen3_5ForCausalLM': ['visual', 'linear_attn', 'self_attn', 'model.layers.0.', 'mtp'],
-    'Qwen3_5MoeForCausalLM': ['mlp.gate', 'visual', 'linear_attn', 'self_attn',
+    'Qwen3_5ForConditionalGeneration': ['visual', 'linear_attn', 'self_attn', 'model.layers.0.', 'mtp'],
+    'Qwen3_5MoeForConditionalGeneration': ['mlp.gate', 'visual', 'linear_attn', 'self_attn',
                                'model.layers.0.', 'mtp', 'shared_expert'],
-    'MixtralForCausalLM': ['block_sparse_moe.gate', 'mlp.gate']
+    'MixtralForCausalLM': [
+        {'pattern': 'block_sparse_moe.gate', 'transformers': '<5.0.0'},
+        {'pattern': 'mlp.gate', 'transformers': '>=5.0.0'}
+    ]
 }
+
+def match_transformers_version(version_spec: str):
+    """Whether the installed transformers version matches the specifier."""
+    import transformers
+    from packaging import version
+    from packaging.specifiers import SpecifierSet
+    return version.parse(transformers.__version__) in SpecifierSet(version_spec)
+
+
+def get_ignored_module_patterns(arch: str | None):
+    """Get model-specific modules to skip from quantization."""
+    patterns = []
+    for rule in IGNORE_MODULE_FOR_MODELS.get(arch, []):
+        if isinstance(rule, str):
+            patterns.append(rule)
+            continue
+
+        if 'transformers' in rule and not match_transformers_version(rule['transformers']):
+            continue
+
+        patterns.append(rule['pattern'])
+
+    return patterns
+
+
+def extend_skip_modules(arch, skipped_modules):
+    patterns = list(SKIPPED_MODULE)
+    extra_patterns = get_ignored_module_patterns(arch)
+    skipped_modules.extend(extra_patterns)
+    patterns.extend(extra_patterns)
+
+    return patterns
 
 
 def match_skip_pattern(name, pattern):
@@ -149,15 +184,13 @@ def match_skip_pattern(name, pattern):
     return pattern in name
 
 
-def skipped_module(name: str, arch: str | None = None):
+def skipped_module(name: str, patterns: list[str]):
     """Whether the module should be skipped from quantization.
 
     Args:
         name: The fully-qualified module name.
         arch (str | None): Optional model architecture name to determine specific modules to skip.
     """
-    patterns = list(SKIPPED_MODULE)
-    patterns.extend(IGNORE_MODULE_FOR_MODELS.get(arch, []))
 
     for pattern in patterns:
         if match_skip_pattern(name, pattern):
@@ -329,17 +362,22 @@ def check_awq_supported(layer_type):
 
 
 def quant_weights(model, fcs, bits, symmetry, group_size=-1, device='cuda', arch: str | None = None):
-    """Quantize the weights of the target model's linear layers."""
+    """Quantize the weights of the target model's linear layers.
+
+    Returns:
+        Matched skip patterns.
+    """
     from lmdeploy.lite.quantization import WeightQuantizer
     from lmdeploy.lite.quantization.modules import WeightOnlyQLinear
     from lmdeploy.lite.utils import QParams
     skipped_modules = []
+    patterns = extend_skip_modules(arch, skipped_modules)
     for name, fc in fcs.items():
         fc.to(device)
         parent_name, _, child_name = name.rpartition('.')
         parent = model.get_submodule(parent_name)
         pack_or_skip = 'packed'
-        skipped, skipped_pattern = skipped_module(name, arch)
+        skipped, skipped_pattern = skipped_module(name, patterns)
         if skipped:
             q_linear = fc
             pack_or_skip = 'skipped'

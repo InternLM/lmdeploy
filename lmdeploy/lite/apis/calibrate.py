@@ -6,7 +6,7 @@ import torch
 from torch import nn
 from transformers import AutoTokenizer
 
-from lmdeploy.archs import get_model_arch, get_task
+from lmdeploy.archs import get_model_arch
 from lmdeploy.lite.quantization import CalibrationContext, CalibrationContextV2
 from lmdeploy.lite.utils import collect_target_modules, get_calib_loaders, load_hf_from_pretrained
 from lmdeploy.vl.model.builder import load_vl_model
@@ -19,8 +19,8 @@ LAYER_TYPE_MAP = {
     'Qwen2ForCausalLM': 'Qwen2DecoderLayer',
     'Qwen3ForCausalLM': 'Qwen3DecoderLayer',
     'Qwen3MoeForCausalLM': 'Qwen3MoeDecoderLayer',
-    'Qwen3_5ForCausalLM': 'Qwen3_5DecoderLayer',
-    'Qwen3_5MoeForCausalLM': 'Qwen3_5MoeDecoderLayer',
+    'Qwen3_5ForConditionalGeneration': 'Qwen3_5DecoderLayer',
+    'Qwen3_5MoeForConditionalGeneration': 'Qwen3_5MoeDecoderLayer',
     'BaiChuanForCausalLM': 'DecoderLayer',  # Baichuan 7B
     'BaichuanForCausalLM': 'DecoderLayer',  # Baichuan2 7B
     'LlamaForCausalLM': 'LlamaDecoderLayer',
@@ -43,8 +43,8 @@ NORM_TYPE_MAP = {
     'Qwen2ForCausalLM': 'Qwen2RMSNorm',
     'Qwen3ForCausalLM': 'Qwen3RMSNorm',
     'Qwen3MoeForCausalLM': 'Qwen3MoeRMSNorm',
-    'Qwen3_5ForCausalLM': 'Qwen3_5RMSNorm',
-    'Qwen3_5MoeForCausalLM': 'Qwen3_5MoeRMSNorm',
+    'Qwen3_5ForConditionalGeneration': 'Qwen3_5RMSNorm',
+    'Qwen3_5MoeForConditionalGeneration': 'Qwen3_5MoeRMSNorm',
     'BaiChuanForCausalLM': 'RMSNorm',  # Baichuan 7B
     'BaichuanForCausalLM': 'RMSNorm',  # Baichuan2 7B
     'LlamaForCausalLM': 'LlamaRMSNorm',
@@ -67,8 +67,8 @@ HEAD_NAME_MAP = {
     'Qwen2ForCausalLM': 'lm_head',
     'Qwen3ForCausalLM': 'lm_head',
     'Qwen3MoeForCausalLM': 'lm_head',
-    'Qwen3_5ForCausalLM': 'lm_head',
-    'Qwen3_5MoeForCausalLM': 'lm_head',
+    'Qwen3_5ForConditionalGeneration': 'lm_head',
+    'Qwen3_5MoeForConditionalGeneration': 'lm_head',
     'BaiChuanForCausalLM': 'lm_head',  # Baichuan 7B
     'BaichuanForCausalLM': 'lm_head',  # Baichuan2 7B
     'LlamaForCausalLM': 'lm_head',
@@ -85,9 +85,57 @@ HEAD_NAME_MAP = {
 
 MOE_MODEL_LIST = [
     'Qwen3MoeForCausalLM',
-    'Qwen3_5MoeForCausalLM',
+    'Qwen3_5MoeForConditionalGeneration',
     'MixtralForCausalLM'
 ]
+
+
+def check_vl_llm(backend: str, config: dict) -> bool:
+    """Check if the model is a vl model from model config."""
+    if 'auto_map' in config:
+        for _, v in config['auto_map'].items():
+            if 'InternLMXComposer2ForCausalLM' in v:
+                return True
+
+    if 'language_config' in config and 'vision_config' in config and config['language_config'].get(
+            'architectures', [None])[0] == 'DeepseekV2ForCausalLM':
+        return True
+
+    arch = config['architectures'][0]
+    supported_archs = set([
+        'LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM', 'CogVLMForCausalLM', 'InternLMXComposer2ForCausalLM',
+        'InternVLChatModel', 'MiniCPMV', 'LlavaForConditionalGeneration', 'LlavaNextForConditionalGeneration',
+        'Phi3VForCausalLM', 'Qwen2VLForConditionalGeneration', 'Qwen2_5_VLForConditionalGeneration',
+        'Qwen3VLForConditionalGeneration', 'Qwen3VLMoeForConditionalGeneration', 'Qwen3_5ForConditionalGeneration',
+        'Qwen3_5MoeForConditionalGeneration', 'MllamaForConditionalGeneration', 'MolmoForCausalLM',
+        'Gemma3ForConditionalGeneration', 'Llama4ForConditionalGeneration', 'InternVLForConditionalGeneration',
+        'InternS1ForConditionalGeneration', 'InternS1ProForConditionalGeneration',
+        'InternS1_1_ForConditionalGeneration', 'Glm4vForConditionalGeneration'
+    ])
+    if arch == 'QWenLMHeadModel' and 'visual' in config:
+        return True
+    elif arch == 'MultiModalityCausalLM' and 'language_config' in config:
+        return True
+    elif arch in ['ChatGLMModel', 'ChatGLMForConditionalGeneration'] and 'vision_config' in config:
+        return True
+    elif arch in supported_archs:
+        return True
+    return False
+
+
+def get_task(backend: str, model_path: str):
+    """Get pipeline type and pipeline class from model config."""
+    import os
+
+    if os.path.exists(os.path.join(model_path, 'triton_models', 'weights')):
+        # workspace model
+        return 'llm'
+    _, config = get_model_arch(model_path)
+    if check_vl_llm(backend, config.to_dict()):
+        return 'vlm'
+
+    # default task
+    return 'llm'
 
 
 def _prepare_for_calibrate(model: nn.Module,
@@ -191,6 +239,7 @@ def update_moe_mapping(model, model_type):
                 if '{i}' in k:
                     break
             num_experts = len(m.get_submodule(k.split('.{i}')[0]))
+            break
 
     # update FC_FCS_MAP
     updated_fc2fcs = dict()
@@ -209,21 +258,23 @@ def update_moe_mapping(model, model_type):
     NORM_FCS_MAP[LAYER_TYPE_MAP[model_type]] = updated_norm2fcs
 
 
-def load_model_tokenizer(model: str,
+def load_model_and_tokenizer(model: str,
                          dtype: Literal['float16', 'bfloat16', 'auto'] = 'auto',
                          work_dir: str = './work_dir'):
     """Load model and tokenizer."""
-    model_type, _ = get_task(backend='turbomind', model_path=model)
+    model_type = get_task(backend='turbomind', model_path=model)
     make_compatible_internvl_config(model)
 
-    # Load tokenizer and configuration
+    # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=True)
+
+    # get model arch and config
+    arch, original_config = get_model_arch(model)
 
     if model_type == 'llm':
         model = load_hf_from_pretrained(model, dtype=dtype, trust_remote_code=True)
         vl_model = None
     elif model_type == 'vlm':
-        _, original_config = get_model_arch(model)
         vl_model = load_vl_model(model, backend=None, with_llm=True).vl_model
         model = vl_model
         if hasattr(vl_model, 'language_model'):  # deepseek-vl, ...
@@ -253,7 +304,7 @@ def load_model_tokenizer(model: str,
     work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    return vl_model, model, tokenizer, work_dir, model_type
+    return arch, vl_model, model, tokenizer, model_type, work_dir
 
 
 def calibrate(model: str,
@@ -302,7 +353,8 @@ def calibrate(model: str,
         'Support only `wikitext2`, `c4`, `pileval`, `gsm8k`, ' \
         '`neuralmagic_calibration`, `open-platypus`, `openwebtext`.'
 
-    vl_model, model, tokenizer, work_dir, model_type = load_model_tokenizer(model, dtype=dtype, work_dir=work_dir)
+    arch, vl_model, model, tokenizer, model_type, work_dir = load_model_and_tokenizer(
+        model, dtype=dtype, work_dir=work_dir)
 
     if model_type in ['MixtralForCausalLM']:
         update_moe_mapping(model, model_type)
@@ -348,7 +400,7 @@ def calibrate(model: str,
 
     calib_ctx.export(work_dir)
 
-    return vl_model, model, tokenizer, work_dir
+    return arch, vl_model, model, tokenizer
 
 
 if __name__ == '__main__':

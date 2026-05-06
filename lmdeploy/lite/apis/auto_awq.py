@@ -8,11 +8,10 @@ from typing import Literal
 import torch
 from torch import nn
 
-from lmdeploy.lite.apis.calibrate import LAYER_TYPE_MAP, MOE_MODEL_LIST, calibrate, load_model_tokenizer
+from lmdeploy.lite.apis.calibrate import LAYER_TYPE_MAP, MOE_MODEL_LIST, calibrate, load_model_and_tokenizer
 from lmdeploy.lite.moe_mlp_modules import CONVERT_MOE_MODELS
 from lmdeploy.lite.quantization.awq import FC_FCS_MAP, NORM_FCS_MAP, awq_layers, quant_weights, smooth_layers
 from lmdeploy.lite.utils import collect_target_modules
-from lmdeploy.turbomind.deploy.converter import get_input_model_registered_name
 from lmdeploy.utils import try_import_deeplink
 
 
@@ -87,9 +86,9 @@ def auto_awq(model: str,
         model = get_model(model, revision=revision, download_dir=download_dir)
     model_path = model
     if calib_samples == 0:
-        vl_model, model, tokenizer, work_dir, _ = load_model_tokenizer(model, dtype=dtype, work_dir=work_dir)
+        arch, vl_model, model, tokenizer, _, _ = load_model_and_tokenizer(model, dtype=dtype, work_dir=work_dir)
     else:
-        vl_model, model, tokenizer, work_dir = calibrate(model,
+        arch, vl_model, model, tokenizer = calibrate(model,
                                                          calib_dataset,
                                                          calib_samples,
                                                          calib_seqlen,
@@ -103,17 +102,10 @@ def auto_awq(model: str,
 
     layer_type = LAYER_TYPE_MAP[type(model).__name__]
     layers = collect_target_modules(model, layer_type)
-    if not getattr(model.config, 'architectures', None):
-        # Qwen3.5 TurboMind quantization works on the text sub-model only, whose
-        # config may not contain `architectures`. Infer it from the loaded model class
-        # for downstream AWQ skip/convert logic.
-        model_arch = type(model).__name__
-        model.config.architectures = [model_arch]
     fcs = {}
     for l_name, layer in layers.items():
-        if model.config.architectures[0] in MOE_MODEL_LIST:
-            model_name = get_input_model_registered_name(model_path, 'awq')
-            CONVERT_MOE_MODELS.get(model_name)(layer)
+        if arch in MOE_MODEL_LIST:
+            CONVERT_MOE_MODELS.get(arch)(layer)
         name2fc = collect_target_modules(layer, nn.Linear, prefix=l_name)
         fcs.update(name2fc)
 
@@ -130,7 +122,7 @@ def auto_awq(model: str,
             smooth_layers(layers, fc2fcs, norm2fcs, act_scales, w_group_size, device)
 
     matched_exclude_modules = quant_weights(model, fcs, w_bits, w_sym, w_group_size, device,
-                                            arch=model.config.architectures[0])
+                                            arch=arch)
     quantization_config = dict(quant_method='awq',
                                version='gemm',
                                bits=w_bits,
