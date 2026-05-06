@@ -28,8 +28,8 @@ def _v4_swiglu(intermediate: torch.Tensor, swiglu_limit: float) -> torch.Tensor:
 def _get_v4_moe_runtime_kind(device: torch.device) -> str:
     """Select the routed-expert runtime path for the current GPU.
 
-    CUDA uses lmdeploy's Triton FP8xFP4 MoE path, which keeps checkpoint-native
-    packed FP4 expert weights resident and unpacks them inside the GEMM kernel.
+    CUDA uses lmdeploy's Triton FP8xFP4 MoE path, which keeps checkpoint-native packed FP4 expert weights resident and
+    unpacks them inside the GEMM kernel.
     """
     if device.type == 'cuda' and torch.cuda.is_available():
         return 'triton_fp4'
@@ -271,8 +271,7 @@ class V4ExpertTPWeights(nn.Module):
 class FusedMoEV4(nn.Module):
     """DeepSeek-V4 routed experts on top of lmdeploy's generic fused MoE.
 
-    CUDA keeps checkpoint-native FP4 expert weights and runs the Triton FP8xFP4
-    fused MoE kernel.
+    CUDA keeps checkpoint-native FP4 expert weights and runs the Triton FP8xFP4 fused MoE kernel.
     """
 
     def __init__(self,

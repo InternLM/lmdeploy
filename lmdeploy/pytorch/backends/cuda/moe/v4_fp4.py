@@ -42,10 +42,8 @@ def _slice_local_topk(topk_ids: torch.LongTensor,
 class TritonFusedMoEV4FP4TPImpl:
     """TP-only Triton FP8xFP4 fused MoE for DeepSeek-V4.
 
-    This path keeps checkpoint-native packed FP4 expert weights resident in
-    memory. The Triton GEMM unpacks FP4 weights in-kernel, casts the E2M1 values
-    to FP8, then uses the same two-stage fused-MoE flow as the generic fused
-    MoE path.
+    This path keeps checkpoint-native packed FP4 expert weights resident in memory. The Triton GEMM unpacks FP4 weights
+    in-kernel, casts the E2M1 values to FP8, then uses the same two-stage fused-MoE flow as the generic fused MoE path.
     """
 
     def __init__(self,

@@ -1,7 +1,6 @@
 import pytest
 import torch
 
-
 _FP4_TABLE = torch.tensor([
     0.0,
     0.5,

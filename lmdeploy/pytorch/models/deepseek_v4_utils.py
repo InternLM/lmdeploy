@@ -2,7 +2,6 @@
 """Shared utilities for DeepSeek-V4 model and backend implementations."""
 
 import torch
-import torch.nn.functional as F
 
 
 def gather_compressed_cache_entries(cache: torch.Tensor, block_offsets: torch.Tensor, positions: torch.Tensor,
@@ -41,9 +40,8 @@ def build_prefix_positions(lengths: torch.Tensor, max_len: int):
 def _build_token_positions(q_seqlens: torch.Tensor):
     """Build per-token position indices without CUDA synchronization.
 
-    Given q_seqlens [bsz], returns token_pos [total_q] where
-    token_pos[i] is the position of token i within its sequence.
-    Also returns total_q as a tensor (no .item()).
+    Given q_seqlens [bsz], returns token_pos [total_q] where token_pos[i] is the position of token i within its
+    sequence. Also returns total_q as a tensor (no .item()).
     """
     cu_q = torch.cat([q_seqlens.new_zeros(1, device=q_seqlens.device), q_seqlens.cumsum(0)])
     total_q = cu_q[-1]
@@ -128,7 +126,6 @@ def build_compress_topk_indices(total_lens: torch.Tensor, compress_ratio: int, o
         (non-causal) topk indices with -1 padding.
     """
     device = total_lens.device
-    bsz = total_lens.numel()
     per_seq_offset = isinstance(offset, torch.Tensor)
 
     if causal and q_seqlens is not None:

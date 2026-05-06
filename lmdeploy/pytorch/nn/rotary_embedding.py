@@ -256,11 +256,9 @@ class ApplyRotaryEmb(nn.Module):
                        complex_mode: bool = False):
         """Apply rotary embedding to a single tensor (not Q/K pair).
 
-        Dispatches to the same fused kernel as forward() by using a 1-head
-        dummy key. Handles arbitrary x dimensions by reshaping to 3D
-        (seq, heads, dim) for the kernel, then restoring the original shape.
-        Always uses inplace=False internally to guarantee correctness regardless
-        of whether the input is a view/slice of a larger tensor.
+        Dispatches to the same fused kernel as forward() by using a 1-head dummy key. Handles arbitrary x dimensions by
+        reshaping to 3D (seq, heads, dim) for the kernel, then restoring the original shape. Always uses inplace=False
+        internally to guarantee correctness regardless of whether the input is a view/slice of a larger tensor.
         """
         assert cos.dim() <= 2 and sin.dim() <= 2
         dim = x.size(-1)

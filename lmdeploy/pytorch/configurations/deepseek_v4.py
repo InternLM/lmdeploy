@@ -45,7 +45,6 @@ def _finalize_v4_cache_specs(model_config: ModelConfig, block_size: int):
                          'has an integral number of entries per block.')
 
     hf_config = model_config.hf_config
-    head_dim = getattr(hf_config, 'head_dim', 512)
     packed_token_dim = model1_fp8_sparse_token_dim(64)
     num_layers = hf_config.num_hidden_layers
     compress_ratios = getattr(hf_config, 'compress_ratios', None) or [0] * num_layers

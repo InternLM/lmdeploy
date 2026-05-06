@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Triton kernel to pack BF16 tokens into FlashMLA MODEL1 sparse FP8 flat-layout
-window cache, replacing the per-token Python loop in _pack_window_state_tokens.
+"""Triton kernel to pack BF16 tokens into FlashMLA MODEL1 sparse FP8 flat-
+layout window cache, replacing the per-token Python loop in
+_pack_window_state_tokens.
 
 FlashMLA MODEL1 flat layout per slot (viewed as flat bytes):
   [token_0 NoPE+RoPE | token_1 NoPE+RoPE | ... | token_0 scales | token_1 scales | ...]
@@ -100,7 +101,10 @@ def pack_window_tokens_fp8(
         positions: [num_tokens] ring-buffer positions within the window.
     """
     from lmdeploy.pytorch.backends.cuda.attention.flashmla_utils import (
-        MODEL1_D_NOPE, MODEL1_D_ROPE, MODEL1_TILE_SIZE, MODEL1_NUM_TILES,
+        MODEL1_D_NOPE,
+        MODEL1_D_ROPE,
+        MODEL1_NUM_TILES,
+        MODEL1_TILE_SIZE,
     )
 
     assert kv_tokens.dim() == 2

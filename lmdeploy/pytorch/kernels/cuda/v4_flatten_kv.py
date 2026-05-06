@@ -16,6 +16,7 @@ def _flatten_v4_kv_kernel(
     flat_kv_lens_ptr,
     total_lens_ptr,
     block_offsets_ptr,
+    slot_ptr,
     stride_wkv_b,
     stride_wkv_s,
     stride_wkv_d,
@@ -30,6 +31,7 @@ def _flatten_v4_kv_kernel(
     HEAD_DIM: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
     HAS_COMPRESS: tl.constexpr,
+    HAS_SLOT: tl.constexpr,
 ):
     batch_id = tl.program_id(0)
     token_id = tl.program_id(1)
@@ -50,10 +52,21 @@ def _flatten_v4_kv_kernel(
         actual_pos = window_start + token_id
         ring_pos = actual_pos % WINDOW_SIZE
 
-        src_ptr = (window_kv_ptr + batch_id * stride_wkv_b
-                   + ring_pos * stride_wkv_s
-                   + offs_d * stride_wkv_d)
-        val = tl.load(src_ptr, mask=actual_pos < total_len, other=0.0)
+        if HAS_SLOT:
+            slot_val = tl.load(slot_ptr + batch_id)
+            if slot_val < 0:
+                # Negative slot (padded/unallocated) -> all zeros
+                val = tl.zeros((HEAD_DIM,), dtype=out_ptr.dtype.element_ty)
+            else:
+                src_ptr = (window_kv_ptr + slot_val.to(tl.int64) * stride_wkv_b
+                           + ring_pos * stride_wkv_s
+                           + offs_d * stride_wkv_d)
+                val = tl.load(src_ptr, mask=actual_pos < total_len, other=0.0)
+        else:
+            src_ptr = (window_kv_ptr + batch_id * stride_wkv_b
+                       + ring_pos * stride_wkv_s
+                       + offs_d * stride_wkv_d)
+            val = tl.load(src_ptr, mask=actual_pos < total_len, other=0.0)
     else:
         # ---- Compressed region ----
         if not HAS_COMPRESS:
@@ -84,11 +97,15 @@ def flatten_v4_kv(
     max_flat_kv_len: int,
     cu_seqlens_k: torch.Tensor | None = None,
     fp8_compressed_kv_cache: torch.Tensor | None = None,
+    slot: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Flatten V4 window + compressed KV caches into a contiguous BF16 tensor.
 
     Args:
-        window_kv_cache: [bsz, window_size, head_dim] BF16 ring buffer.
+        window_kv_cache: When ``slot`` is None, a [bsz, window_size, head_dim]
+            BF16 ring buffer already batch-gathered.  When ``slot`` is provided,
+            the full global cache [num_total_slots, window_size, head_dim] indexed
+            by ``slot[batch_id]``.
         compressed_kv_cache: [num_blocks, entries_per_block, head_dim] BF16 paged
             cache, or None if no compression or reading from FP8.
         block_offsets: [bsz, num_blocks] page table.
@@ -107,6 +124,11 @@ def flatten_v4_kv(
             FP8 MODEL1 sparse paged cache. When provided and compressed_kv_cache
             is None, the FP8 cache is dequantized to a temporary BF16 tensor
             and used instead.
+        slot: optional [bsz] int64 slot indices into the global
+            ``window_kv_cache``.  When provided, the kernel uses
+            ``slot[batch_id]`` instead of ``batch_id`` to index the window
+            cache.  Negative slot values produce all-zero output for that
+            sequence's window region (handles padded / unallocated slots).
 
     Returns:
         flat_kv: [total_kv_tokens, 1, head_dim] BF16 flat tensor.
@@ -126,10 +148,12 @@ def flatten_v4_kv(
     bsz = kv_seqlens.numel()
     head_dim = window_kv_cache.size(-1)
     device = kv_seqlens.device
-    dtype = window_kv_cache.dtype
 
     window_kv_lens = kv_seqlens.clamp(max=window_size)
-    num_compressed = torch.div(kv_seqlens, compress_ratio, rounding_mode='floor').long() if compress_ratio > 0 else kv_seqlens.new_zeros(kv_seqlens.shape, dtype=torch.long)
+    if compress_ratio > 0:
+        num_compressed = torch.div(kv_seqlens, compress_ratio, rounding_mode='floor').long()
+    else:
+        num_compressed = kv_seqlens.new_zeros(kv_seqlens.shape, dtype=torch.long)
     flat_kv_lens = (window_kv_lens + num_compressed).to(torch.int32)
 
     if cu_seqlens_k is None:
@@ -140,6 +164,7 @@ def flatten_v4_kv(
 
     has_compress = compress_ratio > 0 and compressed_kv_cache is not None
     block_size = compressed_kv_cache.size(1) if has_compress else 1
+    has_slot = slot is not None
 
     if max_flat_kv_len == 0:
         return flat_kv, cu_seqlens_k
@@ -154,6 +179,7 @@ def flatten_v4_kv(
         flat_kv_lens,
         kv_seqlens.to(torch.int32),
         block_offsets.long(),
+        slot if has_slot else kv_seqlens,  # placeholder when no slot
         stride_wkv_b=window_kv_cache.stride(0),
         stride_wkv_s=window_kv_cache.stride(1),
         stride_wkv_d=window_kv_cache.stride(2),
@@ -168,6 +194,7 @@ def flatten_v4_kv(
         HEAD_DIM=head_dim,
         BLOCK_SIZE=block_size,
         HAS_COMPRESS=has_compress,
+        HAS_SLOT=has_slot,
     )
 
     return flat_kv, cu_seqlens_k

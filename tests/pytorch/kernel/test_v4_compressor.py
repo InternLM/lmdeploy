@@ -749,9 +749,8 @@ class TestFillCompressedKV:
 class TestFillCompressedKVFP8:
     """Test FP8 direct write in fill_compressed_kv.
 
-    Verifies that the kernel's MODEL1 sparse FP8 output matches
-    the Python reference (quantize_model1_fp8_sparse).
-    Only ratio=4 is tested since r128 has no FP8 cache.
+    Verifies that the kernel's MODEL1 sparse FP8 output matches the Python reference (quantize_model1_fp8_sparse). Only
+    ratio=4 is tested since r128 has no FP8 cache.
     """
 
     HEAD_DIM = 512
@@ -773,17 +772,18 @@ class TestFillCompressedKVFP8:
         return self.D_NOPE + 2 * self.D_ROPE + self.NUM_TILES + 1  # 584
 
     def _reference_pack_fp8(self, bf16_tokens):
-        """Pack BF16 tokens [N, 512] to MODEL1 FP8 using the Python reference."""
+        """Pack BF16 tokens [N, 512] to MODEL1 FP8 using the Python
+        reference."""
         from lmdeploy.pytorch.backends.cuda.attention.flashmla_utils import quantize_model1_fp8_sparse
         # quantize_model1_fp8_sparse expects [num_blocks, block_size, 1, 512]
         # For N tokens, treat as 1 block of N entries
-        N = bf16_tokens.size(0)
         input_cache = bf16_tokens.unsqueeze(0).unsqueeze(2)  # [1, N, 1, 512]
         packed = quantize_model1_fp8_sparse(input_cache)  # [1, N, 1, 584]
         return packed.squeeze(0).squeeze(1)  # [N, 584]
 
     def _run_test(self, compressed_kv, cu_q_seqlens, kv_seqlens, block_offsets, device):
-        """Run fill_compressed_kv with FP8 cache and compare against reference."""
+        """Run fill_compressed_kv with FP8 cache and compare against
+        reference."""
         from lmdeploy.pytorch.kernels.cuda.v4_compressor import fill_compressed_kv
         head_dim = self.HEAD_DIM
         compress_ratio = 4
@@ -859,7 +859,8 @@ class TestFillCompressedKVFP8:
         self._run_test(compressed_kv, cu_q_seqlens, kv_seqlens, block_offsets, device)
 
     def test_decode_no_emit(self, device, dtype):
-        """Decode without emit (kvlen % 4 != 0) — FP8 cache should stay zero."""
+        """Decode without emit (kvlen % 4 != 0) — FP8 cache should stay
+        zero."""
         B = 2
         kvlens = [5, 7]
         compressed_kv = torch.randn(B, self.HEAD_DIM, dtype=dtype, device=device)
@@ -888,7 +889,6 @@ class TestFillCompressedKVFP8:
         q_seqlens = [8, 16]
         kvlens = [8, 16]
         total_q = sum(q_seqlens)
-        max_seqlen_q = max(q_seqlens)
         compressed_kv = torch.randn(total_q, self.HEAD_DIM, dtype=dtype, device=device)
         cu_q_seqlens = torch.tensor([0] + q_seqlens, dtype=torch.int32, device=device).cumsum(0)
         kv_seqlens = torch.tensor(kvlens, dtype=torch.int32, device=device)

@@ -78,7 +78,8 @@ def fused_moe_v4_fp4_kernel(
     reindex_c: tl.constexpr,
     B_SCALE_E8M0: tl.constexpr,
 ):
-    """Fused MoE GEMM with FP8 activations and checkpoint-native V4 FP4 weights."""
+    """Fused MoE GEMM with FP8 activations and checkpoint-native V4 FP4
+    weights."""
     exp_id = tl.program_id(1)
     pid = tl.program_id(0)
 
@@ -268,7 +269,8 @@ def fused_moe_v4_fp4(input: torch.Tensor,
                      num_experts: int = None,
                      renormalize: bool = False,
                      act_func: Callable = None) -> torch.Tensor:
-    """Fused MoE for DeepSeek-V4 checkpoint-native packed FP4 expert weights."""
+    """Fused MoE for DeepSeek-V4 checkpoint-native packed FP4 expert
+    weights."""
     device = input.device
     M = input.size(0)
     E, N, _ = w1.shape

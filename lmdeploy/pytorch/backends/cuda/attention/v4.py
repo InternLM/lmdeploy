@@ -55,7 +55,7 @@ class TritonV4AttentionImpl:
         extra_k_cache = window_kv_fp8_state.view(bsz, self.window_size, 1, -1)
 
         extra_indices = attn_metadata.extra_indices_in_kvcache
-        batch_offsets = torch.arange(bsz, device=extra_indices.device, dtype=torch.int32).view(-1, 1, 1) * self.window_size
+        batch_offsets = torch.arange(bsz, device=extra_indices.device, dtype=torch.int32).view(-1, 1, 1) * self.window_size # noqa: E501
         extra_indices = torch.where(extra_indices >= 0, extra_indices + batch_offsets, extra_indices)
 
         padded_indices = self._pad_sparse_indices(attn_metadata.indices_in_kvcache)

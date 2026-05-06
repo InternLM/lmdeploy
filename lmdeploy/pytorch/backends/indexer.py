@@ -17,6 +17,7 @@ class V4IndexerMetadata:
     kv_seqlens: torch.Tensor = None
     index_kv_scale_cache: torch.Tensor = None
     max_kv_seqlen: int = None
+    max_q_seqlen: int = None
 
 
 @dataclass

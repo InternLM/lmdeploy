@@ -2,9 +2,10 @@
 
 import torch
 
-from ..indexer import BaseV4Indexer, BaseV4IndexerBuilder, V4IndexerMetadata, V4IndexerOutput
 from lmdeploy.pytorch.kernels.cuda.bitonic_topk import bitonic_topk
 from lmdeploy.pytorch.kernels.cuda.ds_index import fp8_index
+
+from ..indexer import BaseV4Indexer, BaseV4IndexerBuilder, V4IndexerMetadata, V4IndexerOutput
 
 
 class TritonV4IndexerImpl(BaseV4Indexer):
@@ -17,7 +18,8 @@ class TritonV4IndexerImpl(BaseV4Indexer):
 
     def _logical_to_physical(self, logical_topk: torch.Tensor, block_offsets: torch.Tensor,
                              block_size: int, index_kv_cache: torch.Tensor) -> torch.Tensor:
-        """Convert logical compressed positions to physical KV cache indices."""
+        """Convert logical compressed positions to physical KV cache
+        indices."""
         bsz = logical_topk.size(0)
         safe_logical_topk = logical_topk.clamp(min=0)
         token_positions = safe_logical_topk * self.compress_ratio
@@ -51,7 +53,8 @@ class TritonV4IndexerImpl(BaseV4Indexer):
         if cu_q_seqlens is not None and not is_decoding:
             return self._forward_prefill_batched(
                 query, q_scale, weights, index_kv_cache, index_kv_scale_cache,
-                block_offsets, cu_q_seqlens, kv_seqlens, block_size, offset)
+                block_offsets, cu_q_seqlens, kv_seqlens, block_size, offset,
+                max_q_seqlen=meta.max_q_seqlen)
 
         bsz = query.size(0)
         seqlen = query.size(1)
@@ -113,7 +116,8 @@ class TritonV4IndexerImpl(BaseV4Indexer):
                                  cu_q_seqlens: torch.Tensor,
                                  kv_seqlens: torch.Tensor,
                                  block_size: int,
-                                 offset: int) -> V4IndexerOutput:
+                                 offset: int,
+                                 max_q_seqlen: int | None = None) -> V4IndexerOutput:
         """Batched prefill: uses fp8_index fused kernel for scoring."""
         bsz = kv_seqlens.size(0)
         total_tokens = query.size(1)
@@ -136,12 +140,15 @@ class TritonV4IndexerImpl(BaseV4Indexer):
         q_s_weighted = q_s * w_flat  # merge weights into q_scale
 
         # fp8_index: k_seqlens must be in compressed entries
+        # max_q_seqlen is the max per-sequence query length (CPU int, no sync)
+        if max_q_seqlen is None:
+            max_q_seqlen = total_tokens
         k_cache = index_kv_cache
         k_s_cache = index_kv_scale_cache.squeeze(-1)  # [num_blocks, entries_per_block]
         scores = fp8_index(q_3d, q_s_weighted,
                            k_cache, k_s_cache,
                            cu_q_seqlens, num_index.to(torch.int32), block_offsets,
-                           max_q_seqlen=total_tokens, max_k_seqlen=max_index, causal=True)
+                           max_q_seqlen=max_q_seqlen, max_k_seqlen=max_index, causal=True)
 
         topk_width = min(self.index_topk, max_index)
         # bitonic_topk requires K to be a power of 2; fall back to torch.topk otherwise
