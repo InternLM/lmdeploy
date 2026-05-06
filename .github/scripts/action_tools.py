@@ -124,6 +124,8 @@ def evaluate(models: list[str],
                 f.write(f'\nmodels = [{model}]\n')
 
         work_dir = os.path.join(workspace, model)
+        os.environ['MMENGINE_NO_LAZY'] = '1'
+        os.environ['LAZY_IMPORT'] = '0'
         cmd_eval = [
             f'opencompass {config_path_new} -w {work_dir} --reuse --max-num-workers {max_num_workers} --dump-res-length'  # noqa: E501
         ]
