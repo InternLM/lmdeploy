@@ -577,7 +577,7 @@ class BaseModelAgent:
             # for second round chat
             self.step_inputs.reindex(delta)
 
-        if inputs.is_first_chunk:
+        if inputs.is_first_chunk or not inputs.is_chunk:
             self._prev_chunk_output = None
 
         # check long context
