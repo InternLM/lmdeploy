@@ -156,7 +156,7 @@ void Copy(const Tensor& src, Tensor& dst, Stream& stream)
         param.kind   = cudaMemcpyDefault;
 
         if (auto ec = cudaMemcpy3DAsync(&param, stream.handle()); ec == cudaSuccess) {
-            TM_LOG_WARNING(cudaGetErrorString(ec));
+            TM_LOG_WARN("{}", cudaGetErrorString(ec));
             return;
         }
     }

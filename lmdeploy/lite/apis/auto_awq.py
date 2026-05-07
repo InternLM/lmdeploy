@@ -8,11 +8,10 @@ from typing import Literal
 import torch
 from torch import nn
 
+from lmdeploy.lite.apis.calibrate import LAYER_TYPE_MAP, calibrate
 from lmdeploy.lite.quantization.awq import FC_FCS_MAP, NORM_FCS_MAP, awq_layers, quant_weights, smooth_layers
 from lmdeploy.lite.utils import collect_target_modules
 from lmdeploy.utils import try_import_deeplink
-
-from .calibrate import LAYER_TYPE_MAP, calibrate
 
 
 def save_vl_model(vl_model, model_path, dst_path):
@@ -51,7 +50,8 @@ def auto_awq(model: str,
              device: str = 'cuda',
              revision: str = None,
              dtype: Literal['float16', 'bfloat16', 'auto'] = 'auto',
-             download_dir: str = None):
+             download_dir: str = None,
+             trust_remote_code: bool = False):
     """Perform weight quantization using AWQ algorithm.
 
     Args:
@@ -94,7 +94,8 @@ def auto_awq(model: str,
                                                      w_group_size=w_group_size,
                                                      search_scale=search_scale,
                                                      dtype=dtype,
-                                                     batch_size=batch_size)
+                                                     batch_size=batch_size,
+                                                     trust_remote_code=trust_remote_code)
 
     layer_type = LAYER_TYPE_MAP[type(model).__name__]
     fc2fcs = FC_FCS_MAP[layer_type]

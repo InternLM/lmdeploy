@@ -32,9 +32,9 @@
 #endif
 
 #include "src/turbomind/core/check.h"
+#include "src/turbomind/core/logger.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/utils/cuda_bf16_wrapper.h"
-#include "src/turbomind/utils/logger.h"
 
 namespace turbomind {
 
@@ -84,9 +84,7 @@ template<typename T>
 void check(T result, char const* const func, const char* const file, int const line)
 {
     if (result) {
-        TM_LOG_ERROR((std::string("CUDA runtime error: ") + (_cudaGetErrorEnum(result)) + " " + file + ":"
-                      + std::to_string(line))
-                         .c_str());
+        TM_LOG_ERROR("CUDA runtime error: {} {}:{}", _cudaGetErrorEnum(result), file, line);
         std::abort();
     }
 }
@@ -103,7 +101,7 @@ void syncAndCheck(const char* const file, int const line);
         const char* p_str{};                                                                                           \
         cuGetErrorString(ec, &p_str);                                                                                  \
         p_str    = p_str ? p_str : "Unknown error";                                                                    \
-        auto msg = fmtstr("[TM][ERROR] CUDA driver error: %s:%d '%s'", __FILE__, __LINE__, p_str);                     \
+        auto msg = fmt::format("[TM][ERROR] CUDA driver error: {}:{} '{}'", __FILE__, __LINE__, p_str);                \
         throw std::runtime_error(msg.c_str());                                                                         \
     }
 

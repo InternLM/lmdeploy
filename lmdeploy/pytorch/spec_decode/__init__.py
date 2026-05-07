@@ -20,6 +20,7 @@ def build_spec_agent(specdecode_config: SpecDecodeConfig,
                               inputs_strategy,
                               agent_strategy,
                               misc_config,
+                              dist_ctx,
                               device=device)
     else:
         from .base import BaseSpecModelAgent

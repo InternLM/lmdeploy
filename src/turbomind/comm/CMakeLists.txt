@@ -5,11 +5,11 @@ cmake_minimum_required(VERSION 3.11)
 find_package(Threads)
 
 add_library(host_comm STATIC host_comm.cc thread_comm.cc)
-target_link_libraries(host_comm PRIVATE core logger Threads::Threads)
+target_link_libraries(host_comm PRIVATE core Threads::Threads)
 set_property(TARGET host_comm PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 add_library(device_comm STATIC device_comm.cc)
-target_link_libraries(device_comm PRIVATE core logger)
+target_link_libraries(device_comm PRIVATE core)
 set_property(TARGET device_comm PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET device_comm PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 

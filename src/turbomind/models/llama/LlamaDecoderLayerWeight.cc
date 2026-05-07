@@ -26,10 +26,10 @@
 #include "src/turbomind/models/llama/LlamaDecoderLayerWeight.h"
 
 #include "src/turbomind/core/data_type.h"
+#include "src/turbomind/core/logger.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/utils/logger.h"
 
 namespace turbomind {
 
@@ -40,7 +40,7 @@ static bool is_fuse_silu_act()
         if (str) {
             try {
                 auto v = std::stoi(str) != 0;
-                TM_LOG_INFO("TM_FUSE_SILU_ACT=%d", (int)v);
+                TM_LOG_INFO("TM_FUSE_SILU_ACT={}", (int)v);
                 return v;
             }
             catch (...) {

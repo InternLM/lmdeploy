@@ -10,7 +10,7 @@
 #include "src/turbomind/kernels/logprob_kernels.h"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/utils/logger.h"
+#include "src/turbomind/core/logger.h"
 #include "src/turbomind/utils/memory_utils.h"
 
 #include "gtest_utils.h"

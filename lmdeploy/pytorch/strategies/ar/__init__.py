@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from lmdeploy.pytorch.strategies.base.model_agent import ModelAgentStrategy
     from lmdeploy.pytorch.strategies.base.model_inputs import ModelInputsStrategy
     from lmdeploy.pytorch.strategies.base.sampling import SamplingStrategy
+    from lmdeploy.pytorch.strategies.base.step_inputs import StepInputs
 
 from ..base import StrategyFactoryBase
 
@@ -52,3 +53,10 @@ class ARStrategyFactory(StrategyFactoryBase):
     def build_sequence_strategy(self) -> SequenceStrategy:
         from .sequence import ARSequenceStrategy
         return ARSequenceStrategy()
+
+    def build_step_inputs(self) -> 'StepInputs':
+        """Build step inputs for the decoding loop."""
+        from .step_inputs import ARStepInputs
+        pad_token_id = self.model_config.bos_token_id
+        pad_token_id = 0 if pad_token_id is None else pad_token_id
+        return ARStepInputs(_pad_token_id=pad_token_id)

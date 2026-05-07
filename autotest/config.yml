@@ -15,6 +15,8 @@ config:
         meta-llama/Llama-4-Scout-17B-16E-Instruct: 4
         meta-llama/Meta-Llama-3-1-70B-Instruct: 4
         OpenGVLab/InternVL3-38B: 2
+        Qwen/Qwen3.5-27B: 2
+        Qwen/Qwen3.5-35B-A3B: 2
         Qwen/Qwen3-235B-A22B: 8
         Qwen/Qwen3-30B-A3B: 2
         Qwen/Qwen3-32B: 2
@@ -38,6 +40,9 @@ turbomind_chat_model:
         - OpenGVLab/InternVL3-8B
         - OpenGVLab/InternVL3-38B
         - OpenGVLab/InternVL3_5-30B-A3B
+        - Qwen/Qwen3.5-0.8B
+        - Qwen/Qwen3.5-27B
+        - Qwen/Qwen3.5-35B-A3B
         - Qwen/Qwen3-0.6B
         - Qwen/Qwen3-4B
         - Qwen/Qwen3-8B
@@ -64,6 +69,9 @@ pytorch_chat_model:
         - OpenGVLab/InternVL3-8B
         - OpenGVLab/InternVL3-38B
         - OpenGVLab/InternVL3_5-30B-A3B
+        - Qwen/Qwen3.5-0.8B
+        - Qwen/Qwen3.5-27B
+        - Qwen/Qwen3.5-35B-A3B
         - Qwen/Qwen3-0.6B
         - Qwen/Qwen3-4B
         - Qwen/Qwen3-8B
@@ -93,6 +101,9 @@ pytorch_vl_model:
     tp:
         - OpenGVLab/InternVL3-8B
         - OpenGVLab/InternVL3_5-30B-A3B
+        - Qwen/Qwen3.5-0.8B
+        - Qwen/Qwen3.5-27B
+        - Qwen/Qwen3.5-35B-A3B
         - Qwen/Qwen3-VL-8B-Instruct
         - Qwen/Qwen3-VL-30B-A3B-Instruct
         - THUDM/cogvlm-chat-hf
@@ -103,11 +114,15 @@ pytorch_vl_model:
 
 turbomind_base_model:
     tp:
+        - Qwen/Qwen3.5-2B-Base
+        - Qwen/Qwen3.5-35B-A3B-Base
         - Qwen/Qwen3-8B-Base
         - Qwen/Qwen3-30B-A3B-Base
 
 pytorch_base_model:
     tp:
+        - Qwen/Qwen3.5-2B-Base
+        - Qwen/Qwen3.5-35B-A3B-Base
         - Qwen/Qwen3-8B-Base
         - Qwen/Qwen3-30B-A3B-Base
 
@@ -116,6 +131,11 @@ turbomind_quantization:
         - meta-llama/Meta-Llama-3-1-70B-Instruct
         - internlm/internlm3-8b-instruct # ImportError: cannot import name 'LossKwargs' from 'transformers.utils' (/opt/py3/lib/python3.10/site-packages/transformers/utils/__init__.py)
         - OpenGVLab/InternVL3-8B
+        - Qwen/Qwen3.5-2B-Base
+        - Qwen/Qwen3.5-35B-A3B-Base
+        - Qwen/Qwen3.5-0.8B
+        - Qwen/Qwen3.5-27B
+        - Qwen/Qwen3.5-35B-A3B
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-235B-A22B
         - Qwen/Qwen3-30B-A3B-Base
@@ -130,6 +150,11 @@ turbomind_quantization:
         - meta-llama/Llama-3.2-1B-Instruct
         - OpenGVLab/InternVL3-2B
         - OpenGVLab/InternVL3-8B
+        - Qwen/Qwen3.5-2B-Base
+        - Qwen/Qwen3.5-35B-A3B-Base
+        - Qwen/Qwen3.5-0.8B
+        - Qwen/Qwen3.5-27B
+        - Qwen/Qwen3.5-35B-A3B
         - Qwen/Qwen3-0.6B
         - Qwen/Qwen3-4B
         - Qwen/Qwen3-8B
@@ -168,6 +193,11 @@ pytorch_quantization:
         - meta-llama/Llama-3.2-1B-Instruct
         - OpenGVLab/InternVL3-2B
         - OpenGVLab/InternVL3-8B
+        - Qwen/Qwen3.5-2B-Base
+        - Qwen/Qwen3.5-35B-A3B-Base
+        - Qwen/Qwen3.5-0.8B
+        - Qwen/Qwen3.5-27B
+        - Qwen/Qwen3.5-35B-A3B
         - Qwen/Qwen3-8B-Base
         - Qwen/Qwen3-30B-A3B-Base
         - Qwen/Qwen3-0.6B

@@ -16,7 +16,7 @@
  */
 #pragma once
 
-#include "src/turbomind/utils/logger.h"
+#include "src/turbomind/core/logger.h"
 #include <curand_kernel.h>
 namespace turbomind {
 

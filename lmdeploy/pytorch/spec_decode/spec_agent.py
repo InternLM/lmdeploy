@@ -1,12 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+from contextlib import contextmanager
+
 import torch
 from torch.profiler import record_function
 
 from lmdeploy.utils import get_logger
 
 from ..backends import get_backend
-from ..config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
+from ..config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
+from ..distributed import DistContext, get_dist_manager
 from ..engine.cache_engine import CacheEngine
 from ..engine.logits_process import FusedLogitsProcessor, SamplingInputs, _torch_topk
 from ..engine.model_agent.agent import BatchedLogProbs
@@ -107,11 +110,13 @@ class SpecModelAgent(BaseSpecModelAgent):
         inputs_strategy,
         agent_strategy,
         misc_config: MiscConfig,
+        dist_ctx: DistContext,
         device: str = 'cuda',
     ):
         super().__init__(specdecode_config, enable=True)
 
         self.backend_config = backend_config
+        self.dist_ctx = dist_ctx
         self.device = device
         self.cache_engine = None
         self.inputs_strategy = inputs_strategy
@@ -122,11 +127,19 @@ class SpecModelAgent(BaseSpecModelAgent):
         self.method = specdecode_config.method
         self.model_config = specdecode_config.model_config
         self.cache_config = specdecode_config.cache_config
+        self.draft_dist_ctx = DistContext.build(rank=dist_ctx.rank, dist_config=DistConfig())
 
         # make dummy meta
         self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(self.model_config)
         # for long context carry-over in chunked decoding
         self._prev_chunk_last = {}
+
+    @contextmanager
+    def draft_context(self):
+        """Draft-local dist context."""
+        dist_mgr = get_dist_manager()
+        with dist_mgr.context(self.draft_dist_ctx):
+            yield
 
     def set_cache_config(self, cache_config: CacheConfig):
         """Set all cache config."""
@@ -141,26 +154,29 @@ class SpecModelAgent(BaseSpecModelAgent):
 
     def build_model(self, empty_init: bool, target_model=None, build_model_ctx=None):
         """Build draft model."""
-        self.proposer.build_model(empty_init, target_model=target_model, build_model_ctx=build_model_ctx)
+        with self.draft_context():
+            self.proposer.build_model(empty_init, target_model=target_model, build_model_ctx=build_model_ctx)
 
     def build_graph_runner(self):
         """Build graph runner."""
-        backend = get_backend()
-        self.proposer.model = backend.build_graph_runner(self.proposer.model,
-                                                         model_config=self.model_config,
-                                                         cache_config=self.cache_config,
-                                                         backend_config=self.backend_config,
-                                                         device=self.device)
+        with self.draft_context():
+            backend = get_backend()
+            self.proposer.model = backend.build_graph_runner(self.proposer.model,
+                                                             model_config=self.model_config,
+                                                             cache_config=self.cache_config,
+                                                             backend_config=self.backend_config,
+                                                             device=self.device)
 
     def build_cache_engine(self, cache_stream: torch.cuda.Stream):
         """Build cache engine."""
         if self.cache_config is not None:
-            self.cache_engine = CacheEngine(self.cache_config,
-                                            self.model_config,
-                                            rank=0,
-                                            tp_rank=0,
-                                            world_size=1,
-                                            cache_stream=cache_stream)
+            with self.draft_context():
+                self.cache_engine = CacheEngine(self.cache_config,
+                                                self.model_config,
+                                                rank=0,
+                                                tp_rank=0,
+                                                world_size=1,
+                                                cache_stream=cache_stream)
 
     def _prepare_inputs_from_main(self, model_inputs: ModelInputs, extra_inputs: ExtraInputs):
         """Update inputs from main model inputs."""
@@ -178,6 +194,8 @@ class SpecModelAgent(BaseSpecModelAgent):
         history_lengths = model_inputs.history_lengths.clone()
 
         if not model_inputs.is_chunk:
+            # clear each time
+            self._prev_chunk_last.clear()
             # Case A: non-chunked — shift left by 1, place next_token at end
             input_ids = model_inputs.input_ids.clone()
             input_ids[:, :-1] = model_inputs.input_ids[:, 1:]
@@ -192,6 +210,8 @@ class SpecModelAgent(BaseSpecModelAgent):
 
         else:
             if model_inputs.is_first_chunk:
+                # clear each time
+                self._prev_chunk_last.clear()
                 # Case B: first chunk — skip first token, save last for next chunk
                 input_ids = model_inputs.input_ids[:, 1:]
                 seq_length = model_inputs.seq_length - 1
@@ -293,69 +313,21 @@ class SpecModelAgent(BaseSpecModelAgent):
             self._prev_chunk_last.pop(key, None)
         return torch.cat([saved, tensor], dim=1)
 
-    async def async_sampling_logits(self, target_logits: torch.Tensor, sampling_inputs: SamplingInputs):
-        """Process target logits and sample bonus token using
-        FusedLogitsProcessor.
-
-        Args:
-            target_logits: [batch_size, num_tokens, vocab_size]
-                num_tokens = 1 + num_spec_tokens (decoding) or 1 (prefill)
-            sampling_inputs: SamplingInputs — already expanded by
-                make_sampling_inputs to batch_size * (num_spec_tokens + 1)
-
-        Returns:
-            processed_logits: [batch_size, num_tokens, vocab_size]
-            next_token_ids: [batch_size] — sampled from the bonus (last) position
-            logprobs: BatchedLogProbs or None
-        """
-        with record_function('spec_sampling_logits'):
-            batch_size, num_tokens, vocab_size = target_logits.shape
-
-            # Reshape to 2D: [batch * num_tokens, vocab]
-            flat_logits = target_logits.reshape(-1, vocab_size)
-
-            # TODO: guided decoding not supported yet for spec decoding
-            # sampling_inputs is already expanded to batch_size * num_tokens
-            logits_processor = FusedLogitsProcessor(
-                sampling_inputs,
-                logprobs_mode=self.misc_config.logprobs_mode,
-            )
-            processed_logits, raw_logprobs = await logits_processor(flat_logits)
-
-            # Slice bonus (last) position logits for each batch element
-            bonus_logits = processed_logits[num_tokens - 1::num_tokens]  # [batch_size, vocab]
-
-            # Create a per-batch processor for bonus token sampling
-            # by slicing the expanded sampling_inputs back to batch_size
-            bonus_sampling_inputs = _slice_sampling_inputs(sampling_inputs, num_tokens)
-            bonus_processor = FusedLogitsProcessor(
-                bonus_sampling_inputs,
-                logprobs_mode=self.misc_config.logprobs_mode,
-            )
-            # Sample next token from bonus position
-            next_token_ids = bonus_processor.sampling(bonus_logits)  # [batch_size]
-
-            # Reshape back to 3D
-            processed_logits = processed_logits.view(batch_size, num_tokens, vocab_size)
-
-        return processed_logits, next_token_ids, raw_logprobs
-
     async def _rejection_sampling(self, model_inputs: 'ModelInputs', extra_inputs: ARSpecExtraInputs,
                                   sampling_inputs: SamplingInputs):
         """Do rejection sampling."""
 
         @torch.inference_mode()
         def __compute_logprobs(raw_logprobs: torch.Tensor, token_ids: torch.LongTensor,
-                               sampling_inputs: SamplingInputs):
+                               max_num_logprobs: int):
             """Compute logprobs."""
-            if raw_logprobs is None or sampling_inputs.max_num_logprobs <= 0:
+            if raw_logprobs is None or max_num_logprobs <= 0:
                 return None
 
             indices = token_ids.flatten().unsqueeze(-1)
             clamped_indices = indices.clamp_min(0)
             logprobs = raw_logprobs.gather(-1, clamped_indices)
-            num_logprobs = sampling_inputs.max_num_logprobs
-            topk_logprobs, topk_indices = _torch_topk(raw_logprobs, num_logprobs, dim=-1)
+            topk_logprobs, topk_indices = _torch_topk(raw_logprobs, max_num_logprobs, dim=-1)
             logprobs = torch.cat([logprobs, topk_logprobs], dim=-1)
             indices = torch.cat([indices, topk_indices], dim=-1).to(torch.int32)
             output_logprobs = BatchedLogProbs(
@@ -366,30 +338,53 @@ class SpecModelAgent(BaseSpecModelAgent):
 
         # Process target_logits via FusedLogitsProcessor for BOTH prefill and decoding
         target_logits = extra_inputs.target_logits
-        num_tokens = target_logits.shape[1]
-        expanded_sampling_inputs = _expand_sampling_inputs(sampling_inputs, num_tokens)
-        processed_logits, next_token_ids, raw_logprobs = await self.async_sampling_logits(
-            target_logits, expanded_sampling_inputs)
+        batch_size = model_inputs.seq_length.size(0)
 
+        num_expand_sampling = 1 if not model_inputs.is_decoding else self.num_spec_tokens + 1
+        expanded_sampling_inputs = _expand_sampling_inputs(sampling_inputs, num_expand_sampling)
         num_rejected_tokens = torch.zeros_like(model_inputs.seq_length)
-        output_token_ids = next_token_ids.unsqueeze(-1)
         last_token_indices = model_inputs.seq_length.cumsum(0) - 1
-
+        logits_processor = FusedLogitsProcessor(
+            expanded_sampling_inputs,
+            logprobs_mode=self.misc_config.logprobs_mode,
+        )
         if model_inputs.is_decoding:
+            # TODO: guided decoding not supported yet for spec decoding
+            processed_logits, raw_logprobs = await logits_processor(target_logits)
+            # Slice bonus (last) position logits for each batch element
+            bonus_logits = processed_logits[num_expand_sampling - 1::num_expand_sampling]  # [batch_size, vocab]
+            # Create a per-batch processor for bonus token sampling
+            # by slicing the expanded sampling_inputs back to batch_size
+            bonus_sampling_inputs = _slice_sampling_inputs(expanded_sampling_inputs, num_expand_sampling)
+            logits_processor.sampling_inputs = bonus_sampling_inputs
+            # Sample next token from bonus position
+            next_token_ids = logits_processor.sampling(bonus_logits)  # [batch_size]
+            # Reshape back to 3D
+            processed_logits = processed_logits.view(batch_size, num_expand_sampling, -1)
             # Rejection sampling on processed logits (exclude bonus position)
-            target_logits = processed_logits[:, :-1].contiguous()  # [batch, num_spec, vocab]
-            num_tokens = self.num_spec_tokens + 1
-            batch_sampling_inputs = _slice_sampling_inputs(expanded_sampling_inputs, num_tokens, is_last=False)
+            target_draft_logits = processed_logits[:, :-1].contiguous()  # [batch, num_spec, vocab]
+            draft_sampling_inputs = _slice_sampling_inputs(expanded_sampling_inputs, num_expand_sampling, is_last=False)
             output_token_ids, num_rejected_tokens, next_token_ids = self.rejection_sampler(
-                target_logits,
+                target_draft_logits,
                 extra_inputs.output_draft_token_ids,
                 next_token_ids,
-                sampling_inputs=batch_sampling_inputs,
+                sampling_inputs=draft_sampling_inputs,
             )
             # update last token indices
             last_token_indices = last_token_indices - num_rejected_tokens
+        else:
+            if model_inputs.is_chunk and not model_inputs.is_last_chunk:
+                # dummy output, no need to sampling or compute logprobs for non-last chunk
+                next_token_ids = num_rejected_tokens
+                output_token_ids = num_rejected_tokens.unsqueeze(-1)
+                raw_logprobs = None
+            else:
+                bonus_logits, raw_logprobs = await logits_processor(target_logits)
+                # Sample next token from bonus position
+                next_token_ids = logits_processor.sampling(bonus_logits)  # [batch_size]
+                output_token_ids = next_token_ids.unsqueeze(-1)
 
-        logprobs = __compute_logprobs(raw_logprobs, output_token_ids, sampling_inputs)
+        logprobs = __compute_logprobs(raw_logprobs, output_token_ids, sampling_inputs.max_num_logprobs)
 
         new_extra_inputs = extra_inputs.clone(
             next_token_ids=next_token_ids,
@@ -403,7 +398,8 @@ class SpecModelAgent(BaseSpecModelAgent):
 
     def _forward_impl(self, inputs: ModelInputs):
         """Forward impl."""
-        output = self.proposer._forward(inputs, cache_engine=self.cache_engine)
+        with self.draft_context():
+            output = self.proposer._forward(inputs, cache_engine=self.cache_engine)
         return output
 
     async def _async_model_forward(self, inputs: ModelInputs, extra_inputs: ARSpecExtraInputs,
@@ -439,8 +435,6 @@ class SpecModelAgent(BaseSpecModelAgent):
                         inputs.target_hidden_states = target_hidden_states
                         if inputs.target_position_ids is not None:
                             inputs.target_position_ids += 1
-                        if inputs.mrope_pos_ids is not None:
-                            inputs.mrope_pos_ids += 1
 
             output_draft_ids = torch.cat(draft_tokens_li, dim=-1)
 
@@ -461,7 +455,8 @@ class SpecModelAgent(BaseSpecModelAgent):
         sampling_inputs: SamplingInputs,
     ):
         """Draft model forward."""
-        draft_extra_inputs = await self._rejection_sampling(model_inputs, extra_inputs, sampling_inputs)
+        with record_function('spec_rejection_sampling'):
+            draft_extra_inputs = await self._rejection_sampling(model_inputs, extra_inputs, sampling_inputs)
         draft_model_inputs, draft_extra_inputs = self._prepare_inputs_from_main(model_inputs, draft_extra_inputs)
         return await self._async_model_forward(draft_model_inputs, draft_extra_inputs, sampling_inputs)
 
@@ -478,37 +473,40 @@ class SpecModelAgent(BaseSpecModelAgent):
                                                  target_dtype=self.model_config.dtype,
                                                  meta=self.make_dummy_meta)
 
-        self._forward_impl(inputs)
-
         capture_batch_sizes = self.proposer.model.get_capture_batch_sizes()
         capture_batch_sizes = sorted(capture_batch_sizes, reverse=True)
 
+        # warmup prefill
+        self._forward_impl(inputs)
+
+        # warmup decode
         for batch_size in capture_batch_sizes:
             # decode with num_spec_tokens + 1 per seq
             inputs = self.inputs_strategy.make_dummy(batch_size,
-                                                     is_decoding=True,
-                                                     device='cuda',
-                                                     vocab_size=self.model_config.vocab_size,
-                                                     max_q_seqlen=self.num_spec_tokens + 1,
-                                                     target_hidden_size=target_hidden_size,
-                                                     target_dtype=self.model_config.dtype,
-                                                     meta=self.make_dummy_meta)
+                                                    is_decoding=True,
+                                                    device='cuda',
+                                                    vocab_size=self.model_config.vocab_size,
+                                                    max_q_seqlen=self.num_spec_tokens + 1,
+                                                    target_hidden_size=target_hidden_size,
+                                                    target_dtype=self.model_config.dtype,
+                                                    meta=self.make_dummy_meta)
             self._forward_impl(inputs)
             # decode 1 tokens per sequence
             inputs = self.inputs_strategy.make_dummy(batch_size,
-                                                     is_decoding=True,
-                                                     device='cuda',
-                                                     vocab_size=self.model_config.vocab_size,
-                                                     max_q_seqlen=1,
-                                                     target_hidden_size=self.model_config.hidden_size,
-                                                     target_dtype=self.model_config.dtype,
-                                                     meta=self.make_dummy_meta)
+                                                    is_decoding=True,
+                                                    device='cuda',
+                                                    vocab_size=self.model_config.vocab_size,
+                                                    max_q_seqlen=1,
+                                                    target_hidden_size=self.model_config.hidden_size,
+                                                    target_dtype=self.model_config.dtype,
+                                                    meta=self.make_dummy_meta)
             self._forward_impl(inputs)
 
     def reset_graph_runner(self):
         """Reset graph runner."""
-        if self.proposer.model is not None and hasattr(self.proposer.model, 'reset'):
-            self.proposer.model.reset()
+        with self.draft_context():
+            if self.proposer.model is not None and hasattr(self.proposer.model, 'reset'):
+                self.proposer.model.reset()
 
     def get_model(self):
         """Get model."""

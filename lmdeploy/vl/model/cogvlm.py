@@ -12,7 +12,7 @@ class CogVLMVisionModel(VisionModel):
 
     _arch = 'CogVLMForCausalLM'
 
-    def build_preprocessor(self):
+    def build_preprocessor(self, trust_remote_code: bool = False):
         from torchvision import transforms
         self.image_transform = transforms.Compose([
             transforms.Resize((self.hf_config.vision_config['image_size'], ) * 2,
@@ -29,12 +29,12 @@ class CogVLMVisionModel(VisionModel):
             # cogvlm2, https://huggingface.co/THUDM/cogvlm2-llama3-chinese-chat-19B/blob/2c2226281325649d49b8aa237a932367c7da4f26/modeling_cogvlm.py#L819 # noqa E501
             self.n_token_per_image = 2 + (image_size // patch_size // 2)**2
 
-    def build_model(self):
+    def build_model(self, trust_remote_code: bool = False):
         if self.with_llm:
             from transformers import AutoModelForCausalLM
             self.vl_model = AutoModelForCausalLM.from_pretrained(self.model_path,
                                                                  device_map='cpu',
-                                                                 trust_remote_code=True)
+                                                                 trust_remote_code=trust_remote_code)
         else:
             raise NotImplementedError('turbomind has not supported cogvlm yet')
 

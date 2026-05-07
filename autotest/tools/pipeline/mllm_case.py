@@ -60,7 +60,7 @@ def run_pipeline_mllm_test(model_path, run_config, resource_path, is_pr_test: bo
             print(f"Warning: Cannot set attribute '{attr_name}' on backend_config. Skipping.")
 
     print('backend_config config: ' + str(backend_config))
-    pipe = pipeline(model_path, backend_config=backend_config)
+    pipe = pipeline(model_path, backend_config=backend_config, trust_remote_code=True)
 
     image = load_image(f'{resource_path}/{PIC1}')
 

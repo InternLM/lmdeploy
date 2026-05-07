@@ -92,9 +92,10 @@ class Xcomposer2VisionModel(VisionModel):
                  with_llm: bool = False,
                  max_memory: dict[int, int] = None,
                  hf_config: AutoConfig = None,
-                 backend: str = ''):
+                 backend: str = '',
+                 trust_remote_code: bool = False):
         model_path = model_path.rstrip(os.sep)
-        super().__init__(model_path, with_llm, max_memory, hf_config, backend)
+        super().__init__(model_path, with_llm, max_memory, hf_config, backend, trust_remote_code=trust_remote_code)
         check_xcomposer_install()
         self.model_type, self.module = get_xcomposer_type(self.model_path)
         logger.info(f'matching type of {self.model_type}')
@@ -111,7 +112,7 @@ class Xcomposer2VisionModel(VisionModel):
                 return True
         return False
 
-    def build_preprocessor(self):
+    def build_preprocessor(self, trust_remote_code: bool = False):
 
         import torchvision.transforms as transforms
         from torchvision.transforms.functional import InterpolationMode
@@ -133,7 +134,7 @@ class Xcomposer2VisionModel(VisionModel):
             ])
             self.preprocess_func = self._preprocess_7b
 
-    def build_model(self):
+    def build_model(self, trust_remote_code: bool = False):
         """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         from accelerate import init_empty_weights
@@ -141,7 +142,7 @@ class Xcomposer2VisionModel(VisionModel):
                 init_empty_vit(self.model_path):
             warnings.simplefilter('ignore')
             config = self.hf_config
-            model = AutoModelForCausalLM.from_config(config, trust_remote_code=True)
+            model = AutoModelForCausalLM.from_config(config, trust_remote_code=trust_remote_code)
             model.vit.load_model()
             model.vit.resize_pos()
             if hasattr(self.hf_config, 'img_size'):

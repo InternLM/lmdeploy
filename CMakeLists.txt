@@ -21,6 +21,12 @@ if (MSVC)
     add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>)
     add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/Zc:__cplusplus>)
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler=/Zc:preprocessor -Xcompiler=/Zc:__cplusplus")
+    # nvcc's front-end has a known bug (fixed in NVCC 13.1) where the fmt 11.x
+    # literal-encoding probe (fmt/base.h:is_utf8_enabled) always returns false,
+    # causing a static_assert failure.  Disable fmt's Unicode check project-wide;
+    # without /utf-8 the MSVC host compiler also sees use_utf8=false, so all TUs
+    # agree and there is no ODR inconsistency.
+    add_compile_definitions(FMT_UNICODE=0)
 endif ()
 
 find_package(CUDAToolkit REQUIRED)
@@ -38,6 +44,19 @@ option(SPARSITY_SUPPORT "Build project with Ampere sparsity feature support" OFF
 option(BUILD_FAST_MATH "Build in fast math mode" ON)
 
 include(FetchContent)
+
+FetchContent_Declare(
+  fmt
+  GIT_REPOSITORY https://github.com/fmtlib/fmt.git
+  GIT_TAG        11.1.4
+  GIT_SHALLOW    ON
+  GIT_PROGRESS   TRUE
+  USES_TERMINAL_DOWNLOAD TRUE
+  EXCLUDE_FROM_ALL
+)
+FetchContent_MakeAvailable(fmt)
+set_target_properties(fmt PROPERTIES POSITION_INDEPENDENT_CODE ON)
+include_directories(${fmt_SOURCE_DIR}/include)
 
 if (BUILD_TEST)
   FetchContent_Declare(
@@ -244,8 +263,11 @@ if(ARCH STREQUAL "x86_64")
     if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "12.8")
       list(APPEND CMAKE_CUDA_ARCHITECTURES 120a-real) # 5090
     endif ()
+    if(${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "12.8")
+      list(APPEND CMAKE_CUDA_ARCHITECTURES 100a-real) # B200
+    endif()
     if (MSVC)
-      list(REMOVE_ITEM CMAKE_CUDA_ARCHITECTURES 80-real 90a-real)
+      list(REMOVE_ITEM CMAKE_CUDA_ARCHITECTURES 80-real 90a-real 100a-real)
     endif ()
   endif ()
 elseif(ARCH STREQUAL "aarch64")
@@ -269,6 +291,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-relaxed-constexpr")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --std=c++${CXX_STD}")
+# Suppress nvcc warning 128 (loop not reachable) in fmt headers - nvcc false positive
+# Suppress nvcc warning 27 (character value out of range) from fmt/format.h's
+# fractional_part_rounding_thresholds which uses U32 string literals with values
+# exceeding 0x10FFFF - harmless, pending fix in fmtlib (PR #4719)
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --diag-suppress=128 --diag-suppress=27")
 
 string(REPLACE "-O2" "" CMAKE_CXX_FLAGS_RELEASE         "${CMAKE_CXX_FLAGS_RELEASE}")
 string(REPLACE "-O2" "" CMAKE_CUDA_FLAGS_RELEASE        "${CMAKE_CUDA_FLAGS_RELEASE}")

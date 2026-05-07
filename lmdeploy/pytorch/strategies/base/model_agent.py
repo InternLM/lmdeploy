@@ -2,7 +2,7 @@
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from dataclasses import dataclass, fields
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 import torch
@@ -136,10 +136,6 @@ class ModelAgentStrategy(ABC):
         """Create extra inputs."""
         pass
 
-    def update_extra_inputs(self, extra_inputs: ExtraInputs, delta: 'ModelInputsDelta') -> ExtraInputs:
-        """Update extra inputs with model inputs delta."""
-        return extra_inputs
-
     @abstractmethod
     def make_extra_outputs(self, extra_inputs: ExtraInputs) -> ExtraOutputs:
         """Create extra outputs."""
@@ -153,25 +149,6 @@ class ModelAgentStrategy(ABC):
         extra_inputs: ExtraInputs,
     ):
         """step."""
-        pass
-
-    @abstractmethod
-    def update_prefill_for_next_step(
-        self,
-        model_inputs: 'ModelInputs',
-        extra_inputs: ExtraInputs,
-        next_token_ids: torch.Tensor,
-        model_metas: Any,
-        extra_outputs: ExtraOutputs,
-    ) -> tuple['ModelInputs', ExtraInputs]:
-        """Step next decoding."""
-        pass
-
-    @abstractmethod
-    def update_decoding_for_next_step(self, model_inputs: 'ModelInputs', next_token_ids: torch.Tensor, model_metas: Any,
-                                      extra_inputs: ExtraInputs,
-                                      extra_outputs: ExtraOutputs) -> tuple['ModelInputs', ExtraInputs]:
-        """Step next inputs."""
         pass
 
     @abstractmethod

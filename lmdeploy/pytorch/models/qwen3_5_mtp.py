@@ -37,7 +37,6 @@ class Qwen3_5MtpDecoderLayer(Qwen3_5DecoderLayer):
                                           layer_idx,
                                           dtype=dtype,
                                           device=device,
-                                          is_tp=False,
                                           prefix=add_prefix('self_attn', prefix=prefix),
                                           )
 
@@ -47,16 +46,12 @@ class Qwen3_5MtpDecoderLayer(Qwen3_5DecoderLayer):
                                                 layer_idx,
                                                 dtype=dtype,
                                                 device=device,
-                                                is_tp=False,
                                                 prefix=add_prefix('mlp', prefix=prefix),
                                                 )
-            self.mlp._all_reduce = False
         else:
             self.mlp = Qwen3_5MLP(config,
                                   dtype=dtype,
                                   device=device,
-                                  is_tp=False,
-                                  all_reduce=False,
                                   prefix=add_prefix('mlp', prefix=prefix),
                                   )
 
@@ -146,7 +141,6 @@ class Qwen3_5MultiTokenPredictor(nn.Module):
         layer_idx = self.mtp_start_layer_idx + current_step_idx
         past_key_value = past_key_values[current_step_idx]
 
-        # TODO: fix input mrope position ids
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
 

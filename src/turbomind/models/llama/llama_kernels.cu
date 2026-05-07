@@ -16,6 +16,7 @@
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/dispatch.h"
+#include "src/turbomind/utils/string_utils.h"
 
 namespace turbomind {
 

@@ -17,7 +17,7 @@ public:
     ~StreamImpl()
     {
         if (auto ec = cudaStreamDestroy(stream_); ec != cudaSuccess) {
-            TM_LOG_ERROR(cudaGetErrorString(ec));
+            TM_LOG_ERROR("{}", cudaGetErrorString(ec));
         }
         stream_ = {};
     }
@@ -99,7 +99,7 @@ public:
     ~EventImpl()
     {
         if (auto ec = cudaEventDestroy(event_); ec != cudaSuccess) {
-            TM_LOG_ERROR(cudaGetErrorString(ec));
+            TM_LOG_ERROR("{}", cudaGetErrorString(ec));
         }
     }
 

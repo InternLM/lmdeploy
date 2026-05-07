@@ -168,6 +168,7 @@ class RayWorkerWrapper(WorkerWrapperBase):
         dtype: str = 'auto',
         log_level: int = 30,
         specdecode_config: SpecDecodeConfig = None,
+        trust_remote_code: bool = False
     ):
         init_backend(device_type)
         try_import_deeplink(device_type)
@@ -183,6 +184,7 @@ class RayWorkerWrapper(WorkerWrapperBase):
             device_type=device_type,
             log_level=log_level,
             specdecode_config=specdecode_config,
+            trust_remote_code=trust_remote_code
         )
         self.node_ip = ray.util.get_node_ip_address()
         self._remote_logger = RemoteLogger()
@@ -243,6 +245,7 @@ class RayExecutor(ExecutorBase):
         device_type: str = 'cuda',
         dtype: str = 'auto',
         specdecode_config: SpecDecodeConfig = None,
+        trust_remote_code: bool = False,
     ):
         """Initialize Executor."""
         super().__init__(
@@ -255,6 +258,7 @@ class RayExecutor(ExecutorBase):
             adapters=adapters,
             device_type=device_type,
             specdecode_config=specdecode_config,
+            trust_remote_code=trust_remote_code,
         )
 
         device_ctx = DeviceContext(device_type)
@@ -287,6 +291,7 @@ class RayExecutor(ExecutorBase):
                 dtype=dtype,
                 log_level=logger.level,
                 specdecode_config=specdecode_config,
+                trust_remote_code=trust_remote_code
             )
 
             logger.info('Init ray workers.')
@@ -321,6 +326,18 @@ class RayExecutor(ExecutorBase):
             kwargs = dict()
         return ray.get([getattr(worker, method).remote(*args, **kwargs) for worker in self.workers], timeout=timeout)
 
+    async def collective_rpc_async(self,
+                                   method: str,
+                                   args: tuple[Any] = None,
+                                   kwargs: dict[str, Any] = None):
+        """Collective async rpc."""
+        if args is None:
+            args = list()
+        if kwargs is None:
+            kwargs = dict()
+        tasks = [getattr(worker, method).remote(*args, **kwargs) for worker in self.workers]
+        return await asyncio.gather(*tasks)
+
     def build_model(self):
         """Build model."""
         self.collective_rpc('build_model')
@@ -353,9 +370,9 @@ class RayExecutor(ExecutorBase):
         """Build cache engine."""
         self.collective_rpc('warmup')
 
-    def sleep(self, level: int = 1):
+    async def sleep(self, level: int = 1):
         """Sleep."""
-        self.collective_rpc('sleep', (level, ))
+        await self.collective_rpc_async('sleep', (level, ))
 
     def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
@@ -494,8 +511,10 @@ class RayExecutor(ExecutorBase):
                     logger.warning(f'Free input ref failed: {e}')
 
         self._prev_inputs = ray.put(inputs)
-        # make sure in order
-        self._prev_out = self.dag.execute(self._prev_inputs)
+        # non-compiled dag would add input object ref, and the ref can not be released in python
+        self._prev_out = [
+            worker.forward_async.remote(self._prev_inputs) for worker in self.workers
+        ]
 
     async def get_output_async(self):
         """Get output async."""

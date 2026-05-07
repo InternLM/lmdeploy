@@ -3,7 +3,6 @@
 from collections.abc import Iterable
 
 import torch
-import torch.distributed as dist
 import torch.nn.functional as F
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
@@ -83,12 +82,14 @@ class Qwen3_5MoeSparseMoeBlock(nn.Module):
             prefix=add_prefix('experts', prefix),
         )
 
+        self.moe_all_reduce = self.experts.build_moe_all_reduce()
+
         self.shared_expert = Qwen3_5MLP(
             config=config,
             intermediate_size=config.shared_expert_intermediate_size,
             dtype=dtype,
             device=device,
-            is_tp=is_tp,
+            is_tp=self.moe_all_reduce.enable_shared_tp(),
             all_reduce=False,
             prefix=add_prefix('shared_expert', prefix),
         )
@@ -122,8 +123,7 @@ class Qwen3_5MoeSparseMoeBlock(nn.Module):
         out_states += shared_states
         out_states = out_states.reshape(batch_size, sequence_length, -1)
 
-        if self._all_reduce:
-            dist.all_reduce(out_states)
+        out_states = self.moe_all_reduce(out_states)
         return out_states
 
 

@@ -5,7 +5,7 @@
 #include <sstream>
 
 #include "src/turbomind/core/check.h"
-#include "src/turbomind/utils/logger.h"
+#include "src/turbomind/core/logger.h"
 
 namespace turbomind::core {
 
@@ -61,7 +61,7 @@ std::string* CheckOpStringBuilder::NewString()
     return new std::string{oss_->str()};
 }
 
-CheckErrorStream::CheckErrorStream(const char* file, int line, const char* expr)
+CheckErrorStream::CheckErrorStream(const char* file, int line, const char* expr): file_{file}, line_{line}
 {
     oss_ = new std::ostringstream{};
     *oss_ << StripSrcPrefix(file) << "(" << line << "): Check failed: " << expr << " ";
@@ -75,16 +75,12 @@ CheckErrorStream::CheckErrorStream(const char* file, int line, const char* expr,
 
 void CheckErrorStream::Report()
 {
-    // ! Be aware of `%` in expr
-    std::cerr << "[TM][FATAL] " << oss_->str() << "\n";
-    std::abort();
+    Logger::Instance().LogFatal(SourceLocation{file_, line_}, "{}", oss_->str());
 }
 
 void ReportNullError(const char* file, int line, const char* expr)
 {
-    // ! Be aware of `%` in expr
-    std::cerr << "[TM][FATAL] " << StripSrcPrefix(file) << "(" << line << "): '" << expr << "' Must be non NULL\n";
-    std::abort();
+    Logger::Instance().LogFatal(SourceLocation{file, line}, "{}: '{}' Must be non NULL", StripSrcPrefix(file), expr);
 }
 
 }  // namespace turbomind::core
