@@ -48,7 +48,7 @@ class DeepSeek2VisionModel(VisionModel):
             return arch == cls._arch
         return False
 
-    def build_preprocessor(self):
+    def build_preprocessor(self, trust_remote_code: bool = False):
         check_trans_version()
         check_deepseek_vl2_install()
         from deepseek_vl2.models.processing_deepseek_vl_v2 import DeepseekVLV2Processor
@@ -57,10 +57,11 @@ class DeepSeek2VisionModel(VisionModel):
         with open(os.devnull, 'w') as devnull:
             with redirect_stdout(devnull):
                 self.image_processor = DeepseekVLV2Processor.from_pretrained(self.model_path,
-                                                                             image_token='<IMAGE_TOKEN>')
+                                                                             image_token='<IMAGE_TOKEN>',
+                                                                             trust_remote_code=trust_remote_code)
                 self.image_token_id = self.image_processor.image_token_id
 
-    def build_model(self):
+    def build_model(self, trust_remote_code: bool = False):
         """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         # TODO, implement for tubomind engine

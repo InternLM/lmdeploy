@@ -45,6 +45,7 @@ from lmdeploy.pytorch.disagg.conn.protocol import (
     DistServeInitRequest,
     MigrationRequest,
 )
+from lmdeploy.serve.anthropic import create_anthropic_router
 from lmdeploy.serve.core import AsyncEngine
 from lmdeploy.serve.openai.protocol import (
     AbortRequest,
@@ -1328,6 +1329,7 @@ def serve(model_path: str,
           max_log_len: int | None = None,
           disable_fastapi_docs: bool = False,
           max_concurrent_requests: int | None = None,
+          trust_remote_code: bool = False,
           reasoning_parser: str | None = None,
           tool_call_parser: str | None = None,
           allow_terminate_by_client: bool = False,
@@ -1400,7 +1402,7 @@ def serve(model_path: str,
         http_or_https = 'https'
 
     handle_torchrun()
-    _, pipeline_class = get_task(backend, model_path)
+    _, pipeline_class = get_task(backend, model_path, trust_remote_code=trust_remote_code)
     if isinstance(backend_config, PytorchEngineConfig):
         backend_config.enable_mp_engine = True
         # router replay
@@ -1412,6 +1414,7 @@ def serve(model_path: str,
                                                     backend_config=backend_config,
                                                     chat_template_config=chat_template_config,
                                                     max_log_len=max_log_len,
+                                                    trust_remote_code=trust_remote_code,
                                                     speculative_config=speculative_config,
                                                     **kwargs)
     set_parsers(reasoning_parser, tool_call_parser)
@@ -1425,6 +1428,7 @@ def serve(model_path: str,
         app = FastAPI(docs_url='/', lifespan=lifespan)
 
     app.include_router(router)
+    app.include_router(create_anthropic_router(VariableInterface))
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
     mount_metrics(app, backend_config)
 

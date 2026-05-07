@@ -64,6 +64,7 @@ def test_guided_matrix(model_id, backend_name, backend_factory, schema_type):
         model_id,
         backend_config=backend_factory(),
         log_level='INFO',
+        trust_remote_code=True,
     )
 
     if schema_type is None:
@@ -104,6 +105,7 @@ def test_mix_guided_matrix(model_id, backend_name, backend_factory):
         model_id,
         backend_config=backend_factory(),
         log_level='INFO',
+        trust_remote_code=True,
     )
 
     schema_type = 'json_schema'

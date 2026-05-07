@@ -22,9 +22,9 @@ class GLM4_1_VisionModel(VisionModel):
             return True
         return False
 
-    def build_preprocessor(self):
+    def build_preprocessor(self, trust_remote_code: bool = False):
         from transformers import AutoProcessor
-        self.processor = AutoProcessor.from_pretrained(self.model_path)
+        self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=trust_remote_code)
 
         self.image_token = self.processor.image_token
         self.image_token_id = self.processor.image_token_id

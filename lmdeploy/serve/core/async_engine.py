@@ -110,6 +110,7 @@ class AsyncEngine:
                  backend_config: TurbomindEngineConfig | PytorchEngineConfig | None = None,
                  chat_template_config: ChatTemplateConfig | None = None,
                  max_log_len: int | None = None,
+                 trust_remote_code: bool = False,
                  speculative_config: SpeculativeConfig | None = None,
                  **kwargs) -> None:
         logger.info(f'input backend={backend}, backend_config={backend_config}')
@@ -117,11 +118,11 @@ class AsyncEngine:
         backend_config = backend_config or (TurbomindEngineConfig()
                                             if backend == 'turbomind' else PytorchEngineConfig())
         self.model_name = model_name if model_name else model_path
-        self.chat_template = get_chat_template(model_path, chat_template_config)
-        self.tokenizer = Tokenizer(model_path)
+        self.chat_template = get_chat_template(model_path, chat_template_config, trust_remote_code=trust_remote_code)
+        self.tokenizer = Tokenizer(model_path, trust_remote_code=trust_remote_code)
         self.prompt_processor = MultimodalProcessor(self.tokenizer, self.chat_template)
-        self.hf_gen_cfg = get_hf_gen_cfg(model_path)
-        self.arch, self.hf_cfg = get_model_arch(model_path)
+        self.hf_gen_cfg = get_hf_gen_cfg(model_path, trust_remote_code=trust_remote_code)
+        self.arch, self.hf_cfg = get_model_arch(model_path, trust_remote_code=trust_remote_code)
         self.session_len = (_get_and_verify_max_len(self.hf_cfg, None)
                             if backend_config.session_len is None else backend_config.session_len)
         backend_config.session_len = self.session_len
@@ -129,10 +130,14 @@ class AsyncEngine:
             logger.warning('speculative decoding is not supported by turbomind ')
         # build backend engine
         if backend == 'turbomind':
-            self.engine = self._build_turbomind(model_path=model_path, backend_config=backend_config, **kwargs)
+            self.engine = self._build_turbomind(model_path=model_path,
+                                                backend_config=backend_config,
+                                                trust_remote_code=trust_remote_code,
+                                                **kwargs)
         elif backend == 'pytorch':
             self.engine = self._build_pytorch(model_path=model_path,
                                               backend_config=backend_config,
+                                              trust_remote_code=trust_remote_code,
                                               speculative_config=speculative_config,
                                               **kwargs)
         else:
@@ -169,19 +174,31 @@ class AsyncEngine:
     def __exit__(self, exc_type, exc_value, traceback):
         self.close()
 
-    def _build_turbomind(self, model_path: str, backend_config: TurbomindEngineConfig | None = None, **kwargs):
+    def _build_turbomind(self,
+                         model_path: str,
+                         backend_config: TurbomindEngineConfig | None = None,
+                         trust_remote_code: bool = False,
+                         **kwargs):
         """Inner build method for turbomind backend."""
         from lmdeploy import turbomind as tm
-        return tm.TurboMind.from_pretrained(model_path, engine_config=backend_config, **kwargs)
+        return tm.TurboMind.from_pretrained(model_path,
+                                            engine_config=backend_config,
+                                            trust_remote_code=trust_remote_code,
+                                            **kwargs)
 
     def _build_pytorch(self,
                        model_path: str,
                        backend_config: PytorchEngineConfig | None = None,
                        speculative_config: SpeculativeConfig | None = None,
+                       trust_remote_code: bool = False,
                        **kwargs):
         """Inner build method for pytorch backend."""
         from lmdeploy.pytorch.engine import Engine
-        return Engine.from_pretrained(model_path, engine_config=backend_config, speculative_config=speculative_config)
+        return Engine.from_pretrained(model_path,
+                                      engine_config=backend_config,
+                                      speculative_config=speculative_config,
+                                      trust_remote_code=trust_remote_code,
+                                      **kwargs)
 
     def _build_stat_loggers(self):
         self.stat_loggers = []

@@ -24,8 +24,9 @@ class MiniCPMVModel(VisionModel):
                  with_llm: bool = False,
                  max_memory: dict[int, int] = None,
                  hf_config: AutoConfig = None,
-                 backend: str = ''):
-        super().__init__(model_path, with_llm, max_memory, hf_config, backend)
+                 backend: str = '',
+                 trust_remote_code: bool = False):
+        super().__init__(model_path, with_llm, max_memory, hf_config, backend, trust_remote_code=trust_remote_code)
         if not hasattr(self.hf_config, 'version'):
             raise ValueError('Can not find `version` in config.json. '
                              'Please checkout the latest model')
@@ -34,13 +35,13 @@ class MiniCPMVModel(VisionModel):
             raise ValueError(f'Only support v2.5 and v2.6, but got version {version}')
         self.version = version
 
-    def build_preprocessor(self):
+    def build_preprocessor(self, trust_remote_code: bool = False):
         from transformers import AutoProcessor
-        self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=True)
+        self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=trust_remote_code)
         self.image_processor = self.processor.image_processor
         self._preprocess_func = (self._preprocess_v2_5 if self.version == '2.5' else self._preprocess_v2_6)
 
-    def build_model(self):
+    def build_model(self, trust_remote_code: bool = False):
         """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         from accelerate import init_empty_weights
@@ -49,7 +50,7 @@ class MiniCPMVModel(VisionModel):
             config = self.hf_config
             assert config.slice_mode is True, 'only support slice mode'
             config.quantization_config = {}  # disable vision part quantization
-            model = AutoModelForCausalLM.from_config(config, trust_remote_code=True)
+            model = AutoModelForCausalLM.from_config(config, trust_remote_code=trust_remote_code)
         self.vl_model = model
         if not self.with_llm:
             del model.llm

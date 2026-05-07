@@ -27,21 +27,21 @@ class DeepSeekVisionModel(VisionModel):
 
     _arch = 'MultiModalityCausalLM'
 
-    def build_preprocessor(self):
+    def build_preprocessor(self, trust_remote_code: bool = False):
         check_deepseek_vl_install()
         from deepseek_vl.models import VLChatProcessor
-        vl_chat_processor = VLChatProcessor.from_pretrained(self.model_path)
+        vl_chat_processor = VLChatProcessor.from_pretrained(self.model_path, trust_remote_code=trust_remote_code)
         tokenizer = vl_chat_processor.tokenizer
         self.image_token_id = tokenizer.vocab.get(vl_chat_processor.image_tag)
         self.image_processor = vl_chat_processor.image_processor
 
-    def build_model(self):
+    def build_model(self, trust_remote_code: bool = False):
         """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         from accelerate import init_empty_weights
         with init_empty_weights():
             warnings.simplefilter('ignore')
-            model = AutoModelForCausalLM.from_pretrained(self.model_path)
+            model = AutoModelForCausalLM.from_pretrained(self.model_path, trust_remote_code=trust_remote_code)
             self.vl_model = model
             if not self.with_llm:
                 del model.language_model

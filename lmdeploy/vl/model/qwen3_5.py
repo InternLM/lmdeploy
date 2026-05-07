@@ -22,6 +22,6 @@ class Qwen3_5Model(Qwen3VLModel):
 
     _arch = ['Qwen3_5ForConditionalGeneration', 'Qwen3_5MoeForConditionalGeneration']
 
-    def build_preprocessor(self):
+    def build_preprocessor(self, trust_remote_code: bool = False):
         check_transformers()
-        super().build_preprocessor()
+        super().build_preprocessor(trust_remote_code)

@@ -368,7 +368,7 @@ class ModelConfig:
     def from_pretrained(
         cls,
         pretrained_model_name_or_path: str,
-        trust_remote_code: bool = True,
+        trust_remote_code: bool = False,
         dtype: str = 'auto',
         dist_config: DistConfig = None,
         hf_overrides: dict[str, Any] = None,
@@ -566,10 +566,11 @@ class SpecDecodeConfig:
         target_cache_cfg: CacheConfig,
         target_model: str = None,
         dtype: str = 'auto',
+        trust_remote_code: bool = False,
     ):
         model = model or target_model
         model_config = ModelConfig.from_pretrained(model,
-                                                   trust_remote_code=True,
+                                                   trust_remote_code=trust_remote_code,
                                                    dtype=dtype,
                                                    is_draft_model=True,
                                                    spec_method=method,
