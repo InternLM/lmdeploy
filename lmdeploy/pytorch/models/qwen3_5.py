@@ -1230,8 +1230,8 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
                 else:
                     pixel_values = torch.cat([inp.data for inp in mm_inputs])
                     grid_thw = torch.stack([data.meta['grid_thw'] for data in mm_inputs]).cpu()
-                    vis_pos_emb = self.visual.rot_pos_emb(grid_thw)
-                    pos_embeds = self.visual.fast_pos_embed_interpolate(grid_thw)
+                    vis_pos_emb = self.model.visual.rot_pos_emb(grid_thw)
+                    pos_embeds = self.model.visual.fast_pos_embed_interpolate(grid_thw)
                     vis_cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2],
                                                              grid_thw[:, 0]).to(pixel_values.device)
                     vis_cu_seqlens = vis_cu_seqlens.cumsum(dim=0, dtype=torch.int32)
