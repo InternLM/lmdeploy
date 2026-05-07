@@ -23,7 +23,7 @@ from lmdeploy.vl.constants import Modality
 from .qwen3_vl import Qwen3VLVisionBlock, Qwen3VLVisionPatchEmbed, Qwen3VLVisionRotaryEmbedding
 from .qwen3_vl_moe import Qwen3VLMoeTextModel
 from .utils.cudagraph import CudaGraphMixin
-from .utils.model import DeployModelMixin, vlm_model
+from .utils.model import DeployModelMixinV1, vlm_model
 
 
 def _get_feat_extract_output_lengths(input_lengths):
@@ -489,7 +489,7 @@ class Qwen3OmniMoeVisionEncoder(nn.Module):
         return hidden_states, deepstack_feature_lists
 
 
-class Qwen3OmniMoeThinkerForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixin):
+class Qwen3OmniMoeThinkerForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMixin):
     """ModelForCausalLM."""
 
     packed_modules_mapping = {
@@ -647,26 +647,30 @@ class Qwen3OmniMoeThinkerForConditionalGeneration(nn.Module, DeployModelMixin, C
             mm_inputs = [item for sublist in mm_inputs for item in sublist]
 
             if len(mm_inputs) > 0:
-                modality = mm_inputs[0].modality
+                audio_inputs = [inp for inp in mm_inputs if inp.modality == Modality.AUDIO]
+                visual_inputs = [inp for inp in mm_inputs if inp.modality in [Modality.IMAGE, Modality.VIDEO]]
 
-                image_token_id = mm_inputs[0].meta.get('image_token_id')
-                video_token_id = mm_inputs[0].meta.get('video_token_id')
-                audio_token_id = mm_inputs[0].meta.get('audio_token_id')
-
-                if modality == Modality.AUDIO:
-                    audio_values = torch.cat([inp.data for inp in mm_inputs])
-                    # FIXME: zhouxinyu, batch ?
-                    audio_values = audio_values.squeeze(0)
+                if audio_inputs:
+                    audio_chunks = []
+                    for inp in audio_inputs:
+                        audio_data = inp.data
+                        if audio_data.dim() == 3 and audio_data.shape[0] == 1:
+                            audio_data = audio_data.squeeze(0)
+                        audio_chunks.append(audio_data)
+                    audio_values = torch.cat(audio_chunks, dim=-1)
+                    audio_token_id = audio_inputs[0].meta.get('audio_token_id')
                     audio_mask = (input_ids == audio_token_id)
-                    # FIXME: zhouxinyu, list ?
-                    audio_feature_lengths = mm_inputs[0].meta['audio_feature_lengths']
-                elif modality in [Modality.IMAGE, Modality.VIDEO]:
-                    pixel_values = torch.cat([inp.data for inp in mm_inputs])
+                    audio_feature_lengths = torch.cat([
+                        inp.meta['audio_feature_lengths']
+                        if isinstance(inp.meta['audio_feature_lengths'], torch.Tensor) else
+                        torch.tensor([inp.meta['audio_feature_lengths']], dtype=torch.long) for inp in audio_inputs
+                    ])
 
-                    mm_token_id = image_token_id if modality == Modality.IMAGE else video_token_id
-                    image_mask = (input_ids == mm_token_id)
+                if visual_inputs:
+                    pixel_values = torch.cat([inp.data for inp in visual_inputs])
+                    image_mask = self.get_multimodal_mask(input_ids, visual_inputs)
 
-                    grid_thw = torch.cat([data.meta['grid_thw'] for data in mm_inputs]).cpu()
+                    grid_thw = torch.stack([data.meta['grid_thw'] for data in visual_inputs]).cpu()
                     vis_pos_emb = self.visual.rot_pos_emb(grid_thw)
                     pos_embeds = self.visual.fast_pos_embed_interpolate(grid_thw)
                     vis_cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2],
@@ -814,7 +818,8 @@ class Qwen3OmniInputProcessor(BaseModelInputProcessor):
 
     @classmethod
     def make_mrope(cls, grid_thw: torch.Tensor):
-        img_pos_ids = cls._get_multimodal_pos_ids(grid_thw[0].tolist())
+        grid_thw = grid_thw.tolist() if grid_thw.dim() == 1 else grid_thw[0].tolist()
+        img_pos_ids = cls._get_multimodal_pos_ids(grid_thw)
         return img_pos_ids
 
     def _make_image_mm_data(self, input_mm: dict[str, Any]) -> MultiModalData:
@@ -822,18 +827,14 @@ class Qwen3OmniInputProcessor(BaseModelInputProcessor):
         pixel_values = input_mm['pixel_values']
         image_grid_thw = input_mm['image_grid_thw']
         offset = input_mm['offset']
-        start = offset
         image_token_id = input_mm['image_token_id']
-        num_pad = input_mm['mm_token_num']
-        if isinstance(num_pad, torch.Tensor):
-            num_pad = num_pad.item()
 
         mrope_pos_ids = self.make_mrope(image_grid_thw)
 
         mm_data = MultiModalData(modality=Modality.IMAGE,
                                  data=pixel_values,
-                                 start=start,
-                                 end=start + num_pad,
+                                 start=offset[0],
+                                 end=offset[1],
                                  mrope_pos_ids=mrope_pos_ids,
                                  meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
         return mm_data
@@ -843,18 +844,14 @@ class Qwen3OmniInputProcessor(BaseModelInputProcessor):
         pixel_values_videos = input_mm['pixel_values_videos']
         video_grid_thw = input_mm['video_grid_thw']
         offset = input_mm['offset']
-        start = offset
         video_token_id = input_mm['video_token_id']
-        num_pad = input_mm['mm_token_num']
-        if isinstance(num_pad, torch.Tensor):
-            num_pad = num_pad.item()
 
         mrope_pos_ids = self.make_mrope(video_grid_thw)
 
         mm_data = MultiModalData(modality=Modality.VIDEO,
                                  data=pixel_values_videos,
-                                 start=start,
-                                 end=start + num_pad,
+                                 start=offset[0],
+                                 end=offset[1],
                                  mrope_pos_ids=mrope_pos_ids,
                                  meta=dict(
                                      grid_thw=video_grid_thw,
@@ -867,19 +864,28 @@ class Qwen3OmniInputProcessor(BaseModelInputProcessor):
         """Make audio MultiModalData."""
         input_features = input_mm['input_features']
         offset = input_mm['offset']
-        start = offset
         audio_token_id = input_mm['audio_token_id']
-        num_pad = input_mm['mm_token_num']
-        if isinstance(num_pad, torch.Tensor):
-            num_pad = num_pad.item()
+        feature_attention_mask = input_mm.get('feature_attention_mask')
+        if feature_attention_mask is not None:
+            audio_feature_lengths = torch.sum(feature_attention_mask, dim=1)
+            input_features = input_features.permute(0, 2, 1)[feature_attention_mask.bool()].permute(1, 0)
+        else:
+            audio_feature_lengths = input_mm.get('audio_feature_lengths')
+            if audio_feature_lengths is None:
+                audio_feature_lengths = torch.full((input_features.shape[0], ),
+                                                   input_features.shape[-1],
+                                                   dtype=torch.long)
+        audio_len = offset[1] - offset[0]
+        mrope_pos_ids = np.arange(audio_len, dtype=np.int64)[:, None].repeat(3, axis=1)
 
         mm_data = MultiModalData(modality=Modality.AUDIO,
                                  data=input_features,
-                                 start=start,
-                                 end=start + num_pad,
+                                 start=offset[0],
+                                 end=offset[1],
+                                 mrope_pos_ids=mrope_pos_ids,
                                  meta=dict(
                                      audio_token_id=audio_token_id,
-                                     audio_feature_lengths=input_mm.get('audio_feature_lengths'),
+                                     audio_feature_lengths=audio_feature_lengths,
                                  ))
         return mm_data
 
