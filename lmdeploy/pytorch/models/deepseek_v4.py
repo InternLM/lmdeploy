@@ -14,7 +14,7 @@ from lmdeploy.pytorch.backends.indexer import V4IndexerMetadata
 from lmdeploy.pytorch.backends.rotary_embedding import RopeType, YarnParameters
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import ApplyRotaryEmb, RMSNorm, SiluAndMul
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, HcSplitSinkhorn, RMSNorm, SiluAndMul
 from lmdeploy.pytorch.nn import V4Attention as NativeV4Attention
 from lmdeploy.pytorch.nn import V4Compressor as NativeV4Compressor
 from lmdeploy.pytorch.nn import V4Indexer as NativeV4Indexer
@@ -667,6 +667,7 @@ class Block(nn.Module):
         self.hc_mult = args.hc_mult
         self.hc_sinkhorn_iters = args.hc_sinkhorn_iters
         self.hc_eps = args.hc_eps
+        self.hc_split_sinkhorn_impl = HcSplitSinkhorn(self.hc_mult, self.hc_sinkhorn_iters, self.hc_eps)
         mix_hc = (2 + self.hc_mult) * self.hc_mult
         hc_dim = self.hc_mult * args.dim
         with _set_default_dtype(torch.float32):
@@ -682,9 +683,7 @@ class Block(nn.Module):
         x = x.flatten(2).float()
         rsqrt = torch.rsqrt(x.square().mean(-1, keepdim=True) + self.norm_eps)
         mixes = F.linear(x, hc_fn) * rsqrt
-        from lmdeploy.pytorch.kernels.cuda.dsv4.hc_split_sinkhorn import hc_split_sinkhorn
-        pre, post, comb = hc_split_sinkhorn(mixes, hc_scale, hc_base, self.hc_mult,
-                                            self.hc_sinkhorn_iters, self.hc_eps)
+        pre, post, comb = self.hc_split_sinkhorn_impl(mixes, hc_scale, hc_base)
         y = torch.sum(pre.unsqueeze(-1) * x.view(shape), dim=2)
         return y.to(dtype), post, comb
 

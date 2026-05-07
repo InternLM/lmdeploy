@@ -544,6 +544,11 @@ class StateCacheEngine:
         state_specs = None
         if model_config is not None and len(model_config.state_cache_specs) > 0:
             state_specs = model_config.state_cache_specs
+            self._state_cache_names = [spec.name for spec in state_specs]
+        elif model_config is not None and len(model_config.states_shapes) > 0:
+            self._state_cache_names = [f'state_{i}' for i in range(len(model_config.states_shapes))]
+        else:
+            self._state_cache_names = []
         self.mem_pool, self._state_caches = self.allocate_caches(num_caches=cache_config.num_state_caches,
                                                                  state_shapes=cache_config.states_shapes,
                                                                  state_specs=state_specs,
@@ -616,6 +621,16 @@ class StateCacheEngine:
     def state_caches(self):
         """State caches."""
         return self._state_caches
+
+    @property
+    def named_state_caches(self) -> dict[str, torch.Tensor]:
+        """State caches keyed by name."""
+        if not self._state_cache_names or not self._state_caches:
+            return {}
+        return {
+            name: cache
+            for name, cache in zip(self._state_cache_names, self._state_caches)
+        }
 
     def init_caches(self, idx: torch.Tensor, mask: torch.Tensor):
         """Initialize state caches.

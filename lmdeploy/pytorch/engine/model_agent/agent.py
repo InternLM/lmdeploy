@@ -168,18 +168,7 @@ def model_forward(
 
         # Attach named cache views for models that declare block_cache_specs / state_cache_specs.
         context.block_caches = cache_engine.block_caches
-        model_cfg = cache_engine.model_config
-        if model_cfg.state_cache_specs:
-            spec_names = [spec.name for spec in model_cfg.state_cache_specs]
-        elif model_cfg.states_shapes:
-            spec_names = [f'state_{i}' for i in range(len(model_cfg.states_shapes))]
-        else:
-            spec_names = []
-        if spec_names and state_cache_engine.state_caches:
-            context.named_state_caches = {
-                name: cache
-                for name, cache in zip(spec_names, state_cache_engine.state_caches)
-            }
+        context.named_state_caches = state_cache_engine.named_state_caches
 
         with ctx_mgr.context(context):
             # initialize cache for ssm
