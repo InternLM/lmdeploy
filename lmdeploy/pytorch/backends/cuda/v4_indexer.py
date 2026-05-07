@@ -15,20 +15,29 @@ class TritonV4IndexerImpl(BaseV4Indexer):
         super().__init__()
         self.index_topk = index_topk
         self.compress_ratio = compress_ratio
+        self._block_size = None
+
+    @property
+    def block_size(self) -> int:
+        return self._block_size
+
+    @block_size.setter
+    def block_size(self, value: int):
+        self._block_size = value
 
     def forward(self,
                 query: torch.Tensor,
                 weights: torch.Tensor,
                 index_kv_cache: torch.Tensor,
                 index_kv_scale_cache: torch.Tensor,
-                meta: V4IndexerMetadata,
-                block_size: int) -> V4IndexerOutput:
+                meta: V4IndexerMetadata) -> V4IndexerOutput:
         block_offsets = meta.block_offsets
         cu_q_seqlens = meta.cu_q_seqlens
         kv_seqlens = meta.kv_seqlens
         is_decoding = meta.is_decoding
         q_seqlens = meta.q_seqlens
         bsz = kv_seqlens.size(0)
+        block_size = self._block_size
 
         # quant query
         # FP8 quantize Indexer Q (replaces fp4_act_quant for better precision)

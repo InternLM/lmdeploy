@@ -2,9 +2,7 @@
 from torch import nn
 
 from lmdeploy.pytorch.backends import OpType, get_backend
-from lmdeploy.pytorch.backends.attention import AttentionMetadata
 from lmdeploy.pytorch.backends.indexer import V4IndexerMetadata, V4IndexerOutput
-from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 
 
 class V4Indexer(nn.Module):
@@ -21,24 +19,8 @@ class V4Indexer(nn.Module):
                 weights,
                 index_kv_cache,
                 index_kv_scale_cache,
-                attn_metadata: AttentionMetadata) -> V4IndexerOutput:
-        step_ctx = get_step_ctx_manager().current_context()
-        cache_config = step_ctx.cache_config
-        is_decoding = attn_metadata.is_decoding
-        cu_q_seqlens = attn_metadata.cu_seqlens_q
-        kv_seqlens = attn_metadata.kv_seqlens
-        # CUDAGraph compat: fixed upper bound for decode max_kv_seqlen
-        max_kv_seqlen = cache_config.block_size * cache_config.num_gpu_blocks if is_decoding else step_ctx.max_kv_seqlen
-        max_q_seqlen = step_ctx.max_q_seqlen
-        block_size = cache_config.block_size
-        meta = V4IndexerMetadata(
-            block_offsets=attn_metadata.block_offsets,
-            compress_ratio=self.impl.compress_ratio,
-            is_decoding=is_decoding,
-            cu_q_seqlens=cu_q_seqlens,
-            kv_seqlens=kv_seqlens,
-            q_seqlens=attn_metadata.q_seqlens,
-            max_kv_seqlen=max_kv_seqlen,
-            max_q_seqlen=max_q_seqlen,
-        )
-        return self.impl.forward(query, weights, index_kv_cache, index_kv_scale_cache, meta, block_size)
+                meta: V4IndexerMetadata) -> V4IndexerOutput:
+        # Lazy-init block_size on impl from metadata (global constant, same every step)
+        if self.impl._block_size is None:
+            self.impl.block_size = meta.block_size
+        return self.impl.forward(query, weights, index_kv_cache, index_kv_scale_cache, meta)

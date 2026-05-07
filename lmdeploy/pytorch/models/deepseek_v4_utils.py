@@ -16,6 +16,22 @@ def build_prefix_positions(lengths: torch.Tensor, max_len: int):
     return positions, mask
 
 
+def build_window_positions(total_lens: torch.Tensor, window_size: int):
+    """Build chronologically ordered trailing window positions in ring-buffer
+    coordinates padded with ``-1``."""
+    device = total_lens.device
+    if window_size == 0:
+        empty = torch.empty((total_lens.numel(), 0), dtype=torch.long, device=device)
+        return empty, total_lens.new_zeros((total_lens.numel(), )), empty.bool()
+    arange = torch.arange(window_size, device=device).unsqueeze(0)
+    window_lens = total_lens.clamp(max=window_size)
+    starts = total_lens - window_lens
+    mask = arange < window_lens.unsqueeze(1)
+    positions = torch.remainder(starts.unsqueeze(1) + arange, window_size)
+    positions = torch.where(mask, positions, positions.new_full((), -1))
+    return positions, window_lens, mask
+
+
 def _build_token_positions(q_seqlens: torch.Tensor):
     """Build per-token position indices without CUDA synchronization.
 

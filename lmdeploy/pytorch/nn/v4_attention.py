@@ -4,6 +4,7 @@ from torch import nn
 
 from lmdeploy.pytorch.backends import OpType, get_backend
 from lmdeploy.pytorch.backends.attention import V4AttentionMetadata
+from lmdeploy.pytorch.backends.indexer import V4IndexerOutput
 
 
 class V4Attention(nn.Module):
@@ -19,25 +20,15 @@ class V4Attention(nn.Module):
                                        compress_ratio=compress_ratio,
                                        **kwargs)
 
-    def forward_decode(self,
-                       query: torch.Tensor,
-                       window_kv_fp8_state: torch.Tensor,
-                       attn_sink: torch.Tensor,
-                       attn_metadata: V4AttentionMetadata,
-                       block_size: int,
-                       block_offsets: torch.Tensor = None,
-                       compressed_kv_fp8_cache: torch.Tensor | None = None):
-        return self.impl.forward_decode(query,
-                                        window_kv_fp8_state,
-                                        attn_sink,
-                                        attn_metadata,
-                                        block_size,
-                                        block_offsets=block_offsets,
-                                        compressed_kv_fp8_cache=compressed_kv_fp8_cache)
-
-    def forward_prefill(self,
-                        query: torch.Tensor,
-                        flat_kv: torch.Tensor,
-                        attn_sink: torch.Tensor,
-                        topk_indices: torch.Tensor):
-        return self.impl.forward_prefill(query, flat_kv, attn_sink, topk_indices)
+    def forward(self,
+                query: torch.Tensor,
+                kv: torch.Tensor,
+                attn_sink: torch.Tensor,
+                attn_metadata: V4AttentionMetadata,
+                caches: dict,
+                slot: torch.Tensor,
+                index_out: V4IndexerOutput | None = None):
+        """Unified forward — dispatches to decoding or prefilling
+        internally."""
+        return self.impl.forward(query, kv, attn_sink, attn_metadata, caches, slot,
+                                 index_out=index_out)

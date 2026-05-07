@@ -10,13 +10,13 @@ class V4IndexerMetadata:
     """DeepSeek V4 indexer metadata."""
 
     block_offsets: torch.Tensor
-    compress_ratio: int
     is_decoding: bool
     cu_q_seqlens: torch.Tensor = None
     kv_seqlens: torch.Tensor = None
     q_seqlens: torch.Tensor = None
     max_kv_seqlen: int = None
     max_q_seqlen: int = None
+    block_size: int = None
 
 
 @dataclass
@@ -35,8 +35,7 @@ class BaseV4Indexer(ABC):
                 weights: torch.Tensor,
                 index_kv_cache: torch.Tensor,
                 index_kv_scale_cache: torch.Tensor,
-                meta: V4IndexerMetadata,
-                block_size: int) -> V4IndexerOutput:
+                meta: V4IndexerMetadata) -> V4IndexerOutput:
         raise NotImplementedError
 
 
