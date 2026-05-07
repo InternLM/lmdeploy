@@ -44,7 +44,8 @@ class LoadNoInit:
         torch.Tensor.normal_ = self.tensor_normal_
 
 
-def load_hf_from_pretrained(pretrained_model_name_or_path, dtype: Literal['float16', 'bfloat16', 'auto'], **kwargs):
+def load_hf_from_pretrained(pretrained_model_name_or_path, dtype: Literal['float16', 'bfloat16', 'auto'],
+                            trust_remote_code: bool = False, **kwargs):
 
     if dtype == 'bfloat16' and not torch.cuda.is_bf16_supported():
         raise RuntimeError('Your device does not supports bf16(bfloat16), '
@@ -52,7 +53,7 @@ def load_hf_from_pretrained(pretrained_model_name_or_path, dtype: Literal['float
 
     kwargs.pop('config', None)
 
-    hf_config = AutoConfig.from_pretrained(pretrained_model_name_or_path, trust_remote_code=True)
+    hf_config = AutoConfig.from_pretrained(pretrained_model_name_or_path, trust_remote_code=trust_remote_code)
 
     # HACK hard code for qwen, other configs do not have the `fp16` attribute.
     if hasattr(hf_config, 'fp16') or hasattr(hf_config, 'bf16'):
@@ -67,15 +68,14 @@ def load_hf_from_pretrained(pretrained_model_name_or_path, dtype: Literal['float
     elif dtype == 'float16':
         torch_dtype = torch.float16
     elif dtype == 'auto' and torch_dtype == torch.bfloat16:
-        print('Warning: we cast model to float16 to prevent OOM. '
-              'You may enforce it bfloat16 by `--dtype bfloat16`')
-        torch_dtype = torch.float16
+        assert torch.cuda.is_bf16_supported(), 'your device does not support bfloat16 please set --dtype float16'
 
     with LoadNoInit():
         # Load model
         model = AutoModelForCausalLM.from_pretrained(pretrained_model_name_or_path,
                                                      config=hf_config,
                                                      torch_dtype=torch_dtype,
+                                                     trust_remote_code=trust_remote_code,
                                                      **kwargs)
         model.config.use_cache = False
 

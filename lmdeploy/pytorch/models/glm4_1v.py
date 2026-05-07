@@ -2,22 +2,23 @@
 # adapted from:
 # https://github.com/huggingface/transformers/blob/main/src/transformers/models/glm4v/modeling_glm4v.py
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
-from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor
+from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
+from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, FlashAttention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
 from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .glm4 import Glm4DecoderLayer
-from .qwen2_vl import Qwen2VLInputProcessor as Glm4vInputProcessor
 from .utils.cudagraph import CudaGraphMixin
 from .utils.model import DeployModelMixin, vlm_model
 
@@ -629,7 +630,7 @@ class Glm4vForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixin)
                 pixel_values = torch.cat([data.data for data in image_data])
                 image_token_id = image_data[0].meta['image_token_id']
                 image_mask = input_ids == image_token_id
-                grid_thw = torch.cat([data.meta['grid_thw'] for data in image_data]).cpu()
+                grid_thw = torch.stack([data.meta['grid_thw'] for data in image_data]).cpu()
                 vis_pos_emb, image_type_ids = self.visual.rot_pos_emb(grid_thw)
                 vis_cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2],
                                                          grid_thw[:, 0]).to(pixel_values.device)
@@ -722,3 +723,57 @@ class Glm4vForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixin)
     def get_input_processor(self) -> BaseModelInputProcessor:
         """Get input processor."""
         return self.input_processor
+
+class Glm4vInputProcessor(BaseModelInputProcessor):
+    """Glm4v input processor."""
+
+    def __init__(self, config: PretrainedConfig) -> None:
+        self.config = config
+
+    @classmethod
+    def _get_multimodal_pos_ids(cls, grid_thw: Sequence[int]) -> np.ndarray:
+        """Get mrope ids."""
+        t, h, w = grid_thw
+        h = h // 2
+        w = w // 2
+        stride = np.array([h * w, w, 1])[None]
+        size = np.array([t, h, w])[None]
+        pos_ids = np.arange(t * h * w)[:, None].repeat(3, axis=1)
+        pos_ids = pos_ids // stride % size
+        return pos_ids
+
+    @classmethod
+    def make_mrope(cls, grid_thw: torch.Tensor):
+        grid_thw = grid_thw.tolist() if grid_thw.dim() == 1 else grid_thw[0].tolist()
+        img_pos_ids = cls._get_multimodal_pos_ids(grid_thw)
+        return img_pos_ids
+
+    def preprocess_input(self,
+                         input_ids: list[int],
+                         input_multimodals: list[dict[str, Any]] = None,
+                         **kwargs) -> PreprocessInputResult:
+        """Prepare multimodal input."""
+        if input_multimodals is None or len(input_multimodals) == 0:
+            return input_ids, input_multimodals
+
+        input_imgs = []
+        for input_mm in input_multimodals:
+            pixel_values = input_mm['pixel_values']
+            image_grid_thw = input_mm['image_grid_thw']
+            offset = input_mm['offset']
+            image_token_id = input_mm['image_token_id']
+
+            mrope_pos_ids = self.make_mrope(image_grid_thw)
+
+            mm_data = MultiModalData(data=pixel_values,
+                                     start=offset[0],
+                                     end=offset[1],
+                                     mrope_pos_ids=mrope_pos_ids,
+                                     meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
+            input_imgs.append(mm_data)
+
+        result = PreprocessInputResult(
+            input_ids=input_ids,
+            input_multimodals=dict(image=input_imgs),
+        )
+        return result

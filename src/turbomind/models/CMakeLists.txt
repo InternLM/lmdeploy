@@ -40,7 +40,6 @@ target_link_libraries(models PUBLIC
         gpt_kernels
         memory_utils
         cuda_utils
-        logger
         anomaly_handler)
 target_compile_options(models PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-v --generate-line-info --threads 8>)
 

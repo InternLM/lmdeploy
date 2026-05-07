@@ -5,10 +5,10 @@
 #include <ctime>
 #include <numeric>
 
+#include "src/turbomind/core/logger.h"
 #include "src/turbomind/kernels/attention/block.h"
 #include "src/turbomind/models/llama/BlockManager.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
-#include "src/turbomind/utils/logger.h"
 
 // #include "dbg.h"
 
@@ -82,15 +82,15 @@ SequenceManager::SequenceManager(const ModelParam& model_param,
         for (int slot = max_batch_size - 1; slot >= 0; --slot) {
             free_linear_state_slots_.push_back(slot);
         }
-        TM_LOG_INFO("[SeqMgr] linear-state slot pool initialized: %d slots", max_batch_size);
+        TM_LOG_INFO("[SeqMgr] linear-state slot pool initialized: {} slots", max_batch_size);
         const auto   conv_one      = pooled_conv_states_.slice(0, 1).squeeze(0);
         const auto   recurrent_one = pooled_recurrent_states_.slice(0, 1).squeeze(0);
         const double mb            = 1.0 / (1024.0 * 1024.0);
-        TM_LOG_INFO("[SeqMgr] linear-state per slot: conv %.2f MB + recurrent %.2f MB = %.2f MB",
+        TM_LOG_INFO("[SeqMgr] linear-state per slot: conv {:.2f} MB + recurrent {:.2f} MB = {:.2f} MB",
                     conv_one.byte_size() * mb,
                     recurrent_one.byte_size() * mb,
                     (conv_one.byte_size() + recurrent_one.byte_size()) * mb);
-        TM_LOG_INFO("[SeqMgr] linear-state combined total: %.2f MB",
+        TM_LOG_INFO("[SeqMgr] linear-state combined total: {:.2f} MB",
                     (pooled_conv_states_.byte_size() + pooled_recurrent_states_.byte_size()) * mb);
     }
 
@@ -115,12 +115,12 @@ SequenceManager::SequenceManager(const ModelParam& model_param,
     if (num_linear_layers > 0 && block_count < 1.) {
         const size_t linear_bytes = pooled_conv_states_.byte_size() + pooled_recurrent_states_.byte_size();
         const size_t target_bytes = static_cast<size_t>(free_before * block_count);
-        TM_LOG_INFO("[SeqMgr] Adjusting block_count: free_before %.2f MB, linear %.2f MB, target %.2f MB",
+        TM_LOG_INFO("[SeqMgr] Adjusting block_count: free_before {:.2f} MB, linear {:.2f} MB, target {:.2f} MB",
                     free_before / (1024. * 1024.),
                     linear_bytes / (1024. * 1024.),
                     target_bytes / (1024. * 1024.));
         if (target_bytes <= linear_bytes) {
-            TM_LOG_ERROR("[SeqMgr] Linear-state memory (%.2f MB) >= cache budget (%.2f MB). ",
+            TM_LOG_ERROR("[SeqMgr] Linear-state memory ({:.2f} MB) >= cache budget ({:.2f} MB). ",
                          linear_bytes / (1024. * 1024.),
                          target_bytes / (1024. * 1024.));
             TM_CHECK(0)
@@ -128,7 +128,7 @@ SequenceManager::SequenceManager(const ModelParam& model_param,
         }
         const size_t cache_bytes = target_bytes - linear_bytes;
         block_count              = static_cast<double>(cache_bytes) / static_cast<double>(block_size);
-        TM_LOG_INFO("[SeqMgr] Adjusted block_count to %.0f", block_count);
+        TM_LOG_INFO("[SeqMgr] Adjusted block_count to {:.0f}", block_count);
     }
 
     block_manager_ = std::make_shared<BlockManager>(block_size, block_count, chunk_size, allocator, get_free_size);
@@ -136,7 +136,7 @@ SequenceManager::SequenceManager(const ModelParam& model_param,
     if (enable_prefix_caching) {
         block_trie_ = std::make_shared<BlockTrie>(block_config.block_len_, block_manager_);
     }
-    TM_LOG_WARNING("[SegMgr] prefix caching is %s", enable_prefix_caching ? "enabled" : "disabled");
+    TM_LOG_WARN("prefix caching is {}", enable_prefix_caching ? "enabled" : "disabled");
 }
 
 const Sequence* SequenceManager::Create(uint64_t id)
@@ -145,13 +145,13 @@ const Sequence* SequenceManager::Create(uint64_t id)
     auto     it = sequences_.find(id);
     if (it != sequences_.end()) {
         if (rank_ == 0) {
-            TM_LOG_WARNING("[SeqMgr][Create] Removing conflicting ID %llu", id);
+            TM_LOG_WARN("Removing conflicting ID {}", id);
         }
         Erase(it);
     }
     it = sequences_.emplace_hint(it, id, std::move(sequence));
     if (rank_ == 0) {
-        TM_LOG_INFO("[SeqMgr][Create] ID %llu", id);
+        TM_LOG_INFO("ID {}", id);
     }
     return &it->second;
 }
@@ -272,10 +272,10 @@ void SequenceManager::CachePrompt(const Sequences& sequences, int active_size)
             const auto& [block_ids, unique_ids] = block_trie_->Cache(seq, seq.prompt);
             if (rank_ == 0) {
                 // clang-format off
-                TM_LOG_INFO("[SeqMgr][CachePrompt] ID %llu, cached blocks %d, tokens %d", seq.id,
+                TM_LOG_INFO("ID {}, cached blocks {}, tokens {}", seq.id,
                             (int)block_ids.size(), (int)seq.prompt.size());
-                TM_LOG_DEBUG("[SeqMgr][CachePrompt] ID %llu, cached block_ids %s, unique_ids %s", seq.id,
-                             vector2string(block_ids).c_str(), vector2string(unique_ids).c_str());
+                TM_LOG_DEBUG("ID {}, cached block_ids {}, unique_ids {}", seq.id,
+                             vector2string(block_ids), vector2string(unique_ids));
                 // clang-format on
             }
             if (seq.cache_len >= seq.prompt.size()) {
@@ -295,10 +295,10 @@ void SequenceManager::CacheGeneration(const Sequence& seq)
 
     if (rank_ == 0) {
         // clang-format off
-        TM_LOG_INFO("[SeqMgr][CacheGeneration] ID %llu, cached blocks %d, tokens %d",
+        TM_LOG_INFO("ID {}, cached blocks {}, tokens {}",
                     seq.id, (int)block_ids.size(), (int)seq.tokens.size());
-        TM_LOG_DEBUG("[SeqMgr][CacheGeneration] ID %llu, cached block_ids %s, unique_ids %s", seq.id,
-                     vector2string(block_ids).c_str(), vector2string(unique_ids).c_str());
+        TM_LOG_DEBUG("ID {}, cached block_ids {}, unique_ids {}", seq.id,
+                     vector2string(block_ids), vector2string(unique_ids));
         // clang-format on
     }
 }
@@ -595,9 +595,9 @@ void SequenceManager::PrefixMatch(Sequences& sequences, const std::vector<int>& 
 
         if (rank_ == 0) {
             // clang-format off
-            TM_LOG_INFO("[SeqMgr][match] ID %llu, hit blocks %d, cache_len %d", seq.id, (int)block_ids.size(), seq.cache_len);
-            TM_LOG_DEBUG("[SeqMgr][match] ID %llu, hit block_ids %s, unique_ids %s", seq.id,
-                         vector2string(block_ids).c_str(), vector2string(unique_ids).c_str());
+            TM_LOG_INFO("ID {}, hit blocks {}, cache_len {}", seq.id, (int)block_ids.size(), seq.cache_len);
+            TM_LOG_DEBUG("ID {}, hit block_ids {}, unique_ids {}", seq.id,
+                         vector2string(block_ids), vector2string(unique_ids));
             // clang-format on
         }
 
@@ -616,10 +616,10 @@ void SequenceManager::PrefixMatch(Sequences& sequences, const std::vector<int>& 
 
         if (rank_ == 0) {
             // clang-format off
-            TM_LOG_INFO("[SeqMgr][match] ID %llu, after matching, blocks %d, cache_len %d",
+            TM_LOG_INFO("ID {}, after matching, blocks {}, cache_len {}",
                         seq.id, seq.blocks.size(), seq.cache_len);
-            TM_LOG_DEBUG("[SeqMgr][match] ID %llu, after matching, block_ids %s, unique_ids %s", seq.id,
-                         vector2string(seq.blocks).c_str(), vector2string(seq.block_unique_ids).c_str());
+            TM_LOG_DEBUG("ID {}, after matching, block_ids {}, unique_ids {}", seq.id,
+                         vector2string(seq.blocks), vector2string(seq.block_unique_ids));
             // clang-format on
         }
     }
@@ -694,7 +694,7 @@ auto SequenceManager::Materialize(Sequences             sequences,
 
     // release preempted blocks -> cached
     if (!schedule.victims.empty()) {
-        TM_LOG_INFO("[SeqMgr] #victim: %d", (int)schedule.victims.size());
+        TM_LOG_WARN("#victim: {}", (int)schedule.victims.size());
         for (const auto& p : schedule.victims) {
             UpdateAndSetUnlock(*p);
         }
@@ -723,7 +723,7 @@ auto SequenceManager::Materialize(Sequences             sequences,
         }
     }
 
-    // TM_LOG_ERROR("active: %4d, cached: %4d, free: %4d",
+    // TM_LOG_ERROR("active: {:4}, cached: {:4}, free: {:4}",
     //              block_manager_->active_count(),
     //              block_manager_->cached_count(),
     //              block_manager_->free_count());

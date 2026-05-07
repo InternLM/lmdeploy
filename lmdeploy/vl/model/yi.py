@@ -94,18 +94,20 @@ class YiVisionModel(LlavaVisionModel):
                 return True
         return False
 
-    def build_preprocessor(self):
+    def build_preprocessor(self, trust_remote_code: bool = False):
         from transformers import CLIPImageProcessor
         vision_tower_name = osp.join(self.model_path, self.hf_config.mm_vision_tower)
-        self.image_processor = CLIPImageProcessor.from_pretrained(vision_tower_name)
-        config = AutoConfig.from_pretrained(vision_tower_name)
+        self.image_processor = CLIPImageProcessor.from_pretrained(vision_tower_name,
+                                                                  trust_remote_code=trust_remote_code)
+        config = AutoConfig.from_pretrained(vision_tower_name,
+                                            trust_remote_code=trust_remote_code)
         image_size = config.image_size
         patch_size = config.patch_size
         self.n_token_per_image = (image_size // patch_size)**2
         if self.hf_config.mm_vision_select_feature == 'cls_patch':
             self.n_token_per_image += 1
 
-    def build_model(self):
+    def build_model(self, trust_remote_code: bool = False):
         """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         check_llava_install()
@@ -114,7 +116,7 @@ class YiVisionModel(LlavaVisionModel):
         _model_path = self.model_path
 
         with init_yi_model(), disable_transformers_logging():
-            super().build_model()
+            super().build_model(trust_remote_code=trust_remote_code)
 
     def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refer to `super().preprocess() for spec."""

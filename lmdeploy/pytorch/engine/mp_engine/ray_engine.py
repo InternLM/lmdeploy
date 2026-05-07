@@ -4,7 +4,7 @@ import asyncio
 import ray
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
-from lmdeploy.messages import PytorchEngineConfig
+from lmdeploy.messages import EngineOutput, PytorchEngineConfig, ResponseType
 from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.ray import RayContext, get_device_str, get_resource_kwargs
 from lmdeploy.utils import get_logger
@@ -40,17 +40,29 @@ class RayEngineWorker(EngineWorkerBase):
         """Create a stream task."""
         method = getattr(self, func)
         event = self._stream_aiter[stream_id][0]
+
+        # notify after add msg
+        def _notify_add_msg():
+            nonlocal init_event
+            init_event.set()
+
+        if func == 'instance_async_stream_infer':
+            kwargs['notify_add_msg_func'] = _notify_add_msg
+
+        result = EngineOutput(ResponseType.INTERNAL_ENGINE_ERROR, [])
         try:
             generator = method(*args, **kwargs)
-            init_event.set()
             async for result in generator:
                 self._engine_output_gather.add(stream_id, result)
                 self._stream_aiter[stream_id][1] = (result, False)
                 event.set()
+        except Exception:
+            logger.exception(f'Stream task {stream_id} failed.')
         finally:
+            if not init_event.is_set():
+                init_event.set()
             self._stream_aiter[stream_id][1] = (result, True)
             event.set()
-            init_event.set()
 
     async def create_stream_task(self, func, *args, **kwargs):
         """Create a stream task."""
@@ -94,13 +106,15 @@ def _update_runtime_envs(runtime_env: dict):
 
 class RayMPEngine(MPEngine):
 
-    def __init__(self, model_path: str, engine_config: PytorchEngineConfig = None, **kwargs) -> None:
+    def __init__(self, model_path: str, engine_config: PytorchEngineConfig = None,
+                 trust_remote_code: bool = False, **kwargs) -> None:
         """Initialize mp engine."""
         self.ray_ctx = self._init_ray(engine_config)
         placement_group = self.ray_ctx.get_placement_group()
         self.placement_group = placement_group
 
-        self.worker = self._create_worker(model_path, engine_config, log_level=logger.level, **kwargs)
+        self.worker = self._create_worker(model_path, engine_config, log_level=logger.level,
+                                          trust_remote_code=trust_remote_code, **kwargs)
         super().__init__()
 
     def _init_ray(self, engine_config: PytorchEngineConfig = None):
@@ -147,11 +161,11 @@ class RayMPEngine(MPEngine):
         method = getattr(self.worker, func)
         return await method.remote(*args, **kwargs)
 
-    async def _collective_rpc_streaming_async(self, func, *args, **kwargs):
+    async def _collective_rpc_streaming_async(self, func: str, sess_event: asyncio.Event, *args, **kwargs):
         """Collective rpc call."""
         # ray generator would try cache every result, which is too verbose.
         stream_id = await self._collective_rpc_async('create_stream_task', func, *args, **kwargs)
-
+        sess_event.set()
         stopped = False
         while not stopped:
             result, stopped = await self._collective_rpc_async('get_stream_task_result', stream_id)

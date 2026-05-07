@@ -17,7 +17,8 @@ def auto_gptq(model: str,
               calib_seqlen: int = 2048,
               batch_size: int = 1,
               dtype: Literal['float16', 'bfloat16', 'auto'] = 'auto',
-              revision: str = None):
+              revision: str = None,
+              trust_remote_code: bool = False):
     """Perform weight quantization using AWQ algorithm.
 
     Args:
@@ -61,7 +62,7 @@ def auto_gptq(model: str,
     pretrained_model_dir = model
     quantized_model_dir = work_dir
 
-    tokenizer = AutoTokenizer.from_pretrained(pretrained_model_dir, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(pretrained_model_dir, trust_remote_code=trust_remote_code)
     print('Loading calibrate dataset ...')
     calib_loader = get_calib_loaders(calib_dataset, tokenizer, nsamples=calib_samples, seqlen=calib_seqlen)
     attention_mask = [1] * calib_seqlen
@@ -76,7 +77,7 @@ def auto_gptq(model: str,
 
     # load un-quantized model, by default,
     # the model will always be loaded into CPU memory
-    hf_config = AutoConfig.from_pretrained(pretrained_model_dir, revision=revision, trust_remote_code=True)
+    hf_config = AutoConfig.from_pretrained(pretrained_model_dir, revision=revision, trust_remote_code=trust_remote_code)
     torch_dtype = getattr(hf_config, 'torch_dtype', torch.float16)
     if dtype == 'float16':
         torch_dtype = torch.float16
@@ -86,7 +87,7 @@ def auto_gptq(model: str,
                                                 quantize_config,
                                                 revision=revision,
                                                 torch_dtype=torch_dtype,
-                                                trust_remote_code=True).cuda()
+                                                trust_remote_code=trust_remote_code).cuda()
 
     # quantize model, the examples should be list of dict whose keys
     # can only be "input_ids" and "attention_mask"

@@ -64,7 +64,7 @@ SUPPORTED_ARCHS = dict(
 )
 
 
-def is_supported(model_path: str):
+def is_supported(model_path: str, trust_remote_code: bool = False):
     """Check whether supported by turbomind engine.
 
     Args:
@@ -84,56 +84,50 @@ def is_supported(model_path: str):
     Returns:
         support_by_turbomind (bool): Whether input model is supported by turbomind engine
     """  # noqa: E501
-    import os
 
     def _is_head_dim_supported(cfg):
         head_dim = cfg.head_dim if hasattr(cfg, 'head_dim') else cfg.hidden_size // cfg.num_attention_heads
         return head_dim in [128, 64]
 
     support_by_turbomind = False
-    triton_model_path = os.path.join(model_path, 'triton_models')
-    if os.path.exists(triton_model_path):
+    arch, cfg = get_model_arch(model_path, trust_remote_code=trust_remote_code)
+    quant_method = search_nested_config(cfg.to_dict(), 'quant_method')
+    if quant_method and quant_method in ['smooth_quant']:
+        # tm hasn't support quantized models by applying smoothquant
+        return False
+
+    if arch in SUPPORTED_ARCHS.keys():
         support_by_turbomind = True
-    else:
-
-        arch, cfg = get_model_arch(model_path)
-        quant_method = search_nested_config(cfg.to_dict(), 'quant_method')
-        if quant_method and quant_method in ['smooth_quant']:
-            # tm hasn't support quantized models by applying smoothquant
-            return False
-
-        if arch in SUPPORTED_ARCHS.keys():
-            support_by_turbomind = True
-            # special cases
-            if arch == 'BaichuanForCausalLM':
-                num_attn_head = cfg.num_attention_heads
-                if num_attn_head == 40:
-                    # baichuan-13B, baichuan2-13B not supported by turbomind
-                    support_by_turbomind = False
-            elif arch in ['Qwen2ForCausalLM', 'LlamaForCausalLM']:
-                support_by_turbomind = _is_head_dim_supported(cfg)
-            elif arch in ('ChatGLMModel', 'ChatGLMForConditionalGeneration'):
-                # chatglm1/2/3 is not working yet
-                support_by_turbomind = cfg.num_layers == 40
-                if getattr(cfg, 'vision_config', None) is not None:
-                    # glm-4v-9b not supported
-                    support_by_turbomind = False
-            elif arch == 'InternVLChatModel':
-                llm_arch = cfg.llm_config.architectures[0]
-                support_by_turbomind = (llm_arch in SUPPORTED_ARCHS and _is_head_dim_supported(cfg.llm_config))
-            elif arch in ['LlavaForConditionalGeneration', 'InternVLForConditionalGeneration']:
-                llm_arch = cfg.text_config.architectures[0]
-                if llm_arch in ['Qwen2ForCausalLM', 'LlamaForCausalLM']:
-                    support_by_turbomind = _is_head_dim_supported(cfg.text_config)
-            elif arch == 'MolmoForCausalLM':
-                kv_heads = cfg.num_key_value_heads
-                # TM hasn't supported allenai/Molmo-7B-O-0924 yet
-                support_by_turbomind = kv_heads is not None
-            elif arch == 'DeepseekV2ForCausalLM':
-                if getattr(cfg, 'vision_config', None) is not None:
-                    support_by_turbomind = False
-            elif arch == 'Glm4MoeLiteForCausalLM':
-                if getattr(cfg, 'vision_config', None) is not None:
-                    support_by_turbomind = False
+        # special cases
+        if arch == 'BaichuanForCausalLM':
+            num_attn_head = cfg.num_attention_heads
+            if num_attn_head == 40:
+                # baichuan-13B, baichuan2-13B not supported by turbomind
+                support_by_turbomind = False
+        elif arch in ['Qwen2ForCausalLM', 'LlamaForCausalLM']:
+            support_by_turbomind = _is_head_dim_supported(cfg)
+        elif arch in ('ChatGLMModel', 'ChatGLMForConditionalGeneration'):
+            # chatglm1/2/3 is not working yet
+            support_by_turbomind = cfg.num_layers == 40
+            if getattr(cfg, 'vision_config', None) is not None:
+                # glm-4v-9b not supported
+                support_by_turbomind = False
+        elif arch == 'InternVLChatModel':
+            llm_arch = cfg.llm_config.architectures[0]
+            support_by_turbomind = (llm_arch in SUPPORTED_ARCHS and _is_head_dim_supported(cfg.llm_config))
+        elif arch in ['LlavaForConditionalGeneration', 'InternVLForConditionalGeneration']:
+            llm_arch = cfg.text_config.architectures[0]
+            if llm_arch in ['Qwen2ForCausalLM', 'LlamaForCausalLM']:
+                support_by_turbomind = _is_head_dim_supported(cfg.text_config)
+        elif arch == 'MolmoForCausalLM':
+            kv_heads = cfg.num_key_value_heads
+            # TM hasn't supported allenai/Molmo-7B-O-0924 yet
+            support_by_turbomind = kv_heads is not None
+        elif arch == 'DeepseekV2ForCausalLM':
+            if getattr(cfg, 'vision_config', None) is not None:
+                support_by_turbomind = False
+        elif arch == 'Glm4MoeLiteForCausalLM':
+            if getattr(cfg, 'vision_config', None) is not None:
+                support_by_turbomind = False
 
     return support_by_turbomind

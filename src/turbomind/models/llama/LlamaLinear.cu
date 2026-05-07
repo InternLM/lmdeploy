@@ -81,17 +81,21 @@ struct LlamaLinear::Impl {
             A = input;
         }
 
-        if (indices && A.dtype() == kFloat8_e4m3) {
+        // SM100+ grouped bf16/fp16: use chunk() weights so Activation() runs separately.
+        const bool is_cublas_grouped = offsets && getSMVersion() == 100 && dense.weight_type == kBfloat16;
+        if (indices && (A.dtype() == kFloat8_e4m3 || is_cublas_grouped)) {
             const auto [bsz, k] = A.shapes(0, 1);
             const int e         = indices.size() / bsz;
             Tensor    A_e       = {{m, k}, A.dtype(), kDEVICE};
             invokeMoeDispatch(A_e, A, indices.data(), e, st);
             sync_check_cuda_error();
-            Tensor U_e;
-            invokeMoeDispatchScales(U_e, U, indices.data(), e, st);
-            sync_check_cuda_error();
+            if (U) {
+                Tensor U_e;
+                invokeMoeDispatchScales(U_e, U, indices.data(), e, st);
+                sync_check_cuda_error();
+                U = U_e;
+            }
             A       = A_e;
-            U       = U_e;
             indices = {};  // indices already applied
         }
 
@@ -169,7 +173,7 @@ struct LlamaLinear::Impl {
                             core::Context::stream().handle());
 
         if (ec) {
-            TM_LOG_ERROR("%s: %d", __PRETTY_FUNCTION__, ec);
+            TM_LOG_ERROR("{}: {}", __PRETTY_FUNCTION__, ec);
         }
     }
 

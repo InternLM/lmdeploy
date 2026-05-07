@@ -54,6 +54,8 @@ private:
     [[noreturn]] void Report();
 
     std::ostringstream* oss_;
+    const char*         file_;
+    int                 line_;
 };
 
 class CheckOpStringBuilder {

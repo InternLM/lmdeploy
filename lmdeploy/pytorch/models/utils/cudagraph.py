@@ -229,7 +229,10 @@ class CudaGraphMixin:
 
         qkv = torch.stack((q_start_loc, q_seqlens, kv_seqlens))
         input_buffers['qkv_lens'].zero_()
-        input_buffers['q_seqlens'].fill_(graph_meta.max_tokens // graph_meta.max_batchs)
+        # initialize q_seqlens and kv_seqlens to max_tokens // max_batchs
+        # to avoid out of bound in flash attention kernels
+        # padding kv should be the same as padding q so q-kv=0
+        input_buffers['qkv_seqlens'].fill_(graph_meta.max_tokens // graph_meta.max_batchs)
         input_buffers['qkv_lens'][:, :batch_size] = qkv
         input_buffers['cu_seqlens'][:, 1:] = input_buffers['qkv_seqlens'].cumsum(1)
         if inputs_embeds is not None:

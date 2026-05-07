@@ -109,29 +109,52 @@ class MultimodalProcessor:
                 out_message['content'].append(item)
                 continue
 
-            item_params = item.get(item_type, {}).copy()
-            data_src = item_params.pop('url', None) or item_params.pop('data', None)
+            item_val = item.get(item_type, {})
+            if isinstance(item_val, dict):
+                # value is a dict containing data and other params
+                # msg = {'type': 'image_url', 'image_url': {'url': xxx, ...}}
+                # msg = {'type': 'image', 'image': {'url': xxx, ...}}
+                # msg = {'type': 'image_data', 'image_data': {'data': PIL.Image.Image, ...}}
+                item_params = item_val.copy()
+                data_src = item_params.pop('url', None) or item_params.pop('data', None)
+            else:
+                # value is a direct data reference
+                # msg = {'type': 'image_url', 'image_url': 'xxx', ...}
+                # msg = {'type': 'image', 'image': 'xxx', ...}
+                item_params = {k: v for k, v in item.items() if k not in ('type', item_type)}
+                data_src = item_val
+
+            def _require_data_src():
+                if data_src is not None:
+                    return data_src
+                raise ValueError(f'Invalid multimodal item at index {i}: {item}. '
+                                 f'Expected "{item_type}" to be a direct value or a dict containing "url" or "data".')
 
             if item_type == 'image_data':
                 modality = Modality.IMAGE
-                data = data_src
-            elif item_type == 'image_url':
+                data = _require_data_src()
+            elif item_type in ('image_url', 'image'):
                 modality = Modality.IMAGE
-                img_io = ImageMediaIO(**media_io_kwargs.get('image', {}))
-                data = load_from_url(data_src, img_io)
-            elif item_type == 'video_url':
+                data_src = _require_data_src()
+                if isinstance(data_src, PIL.Image.Image):
+                    data = data_src
+                elif isinstance(data_src, str):
+                    data = load_from_url(data_src, ImageMediaIO(**media_io_kwargs.get('image', {})))
+                else:
+                    raise ValueError(f'Invalid multimodal image item at index {i}: {item}. '
+                                     'Expected a str URL/path/data URL or PIL.Image.Image.')
+            elif item_type in ('video_url', 'video'):
                 modality = Modality.VIDEO
-                vid_io = VideoMediaIO(image_io=ImageMediaIO(), **media_io_kwargs.get('video', {}))
-                data, metadata = load_from_url(data_src, vid_io)
+                data, metadata = load_from_url(
+                    _require_data_src(), VideoMediaIO(image_io=ImageMediaIO(), **media_io_kwargs.get('video', {})))
                 item_params['video_metadata'] = metadata
-            elif item_type == 'time_series_url':
+            elif item_type in ('time_series_url', 'time_series'):
                 modality = Modality.TIME_SERIES
-                ts_io = TimeSeriesMediaIO(**media_io_kwargs.get('time_series', {}))
-                data = load_from_url(data_src, ts_io)
+                data = load_from_url(_require_data_src(), TimeSeriesMediaIO(**media_io_kwargs.get('time_series', {})))
             else:
                 raise NotImplementedError(f'unknown type: {item_type}')
 
-            out_message['content'].append({'type': modality, 'data': data, **item_params})
+            out_message['content'].append({'type': modality.value, 'data': data, **item_params})
 
         out_messages[i] = out_message
 
@@ -303,8 +326,9 @@ class MultimodalProcessor:
         return messages
 
     def _has_multimodal_input(self, messages: list[dict]) -> bool:
-        """Check if messages contain multimodal input (images)."""
-        multimodal_types = ['image_url', 'image_data', 'video_url', 'time_series_url']
+        """Check if messages contain multimodal input such as images, videos,
+        or time series."""
+        multimodal_types = ['image_url', 'image_data', 'image', 'video_url', 'video', 'time_series_url', 'time_series']
         return any(
             isinstance(message.get('content'), list) and any(
                 item.get('type') in multimodal_types for item in message['content']) for message in messages)
@@ -356,14 +380,9 @@ class MultimodalProcessor:
         engines."""
         chat_template = self.chat_template if do_preprocess else BaseChatTemplate()
         messages = await self.async_parse_multimodal_item(messages, media_io_kwargs)
-        results = await self.vl_encoder.preprocess(messages, mm_processor_kwargs)
 
         if self.backend == 'turbomind':
-            # for tm engine, this module perform vision embedding after image
-            # preprocessing. It utilizes the hf model's vision embeddings
-            # functions and returns the input_ids, input_embeddings,
-            # embedding_ranges and so on. All the returned values are passed
-            # to tm engine for token generation
+            results = await self.vl_encoder.preprocess(messages, mm_processor_kwargs)
             results = await self.vl_encoder.async_infer(results)
             results = await self.vl_encoder.wrap_for_turbomind(messages=results,
                                                                chat_template=chat_template,
@@ -372,12 +391,19 @@ class MultimodalProcessor:
                                                                tools=tools,
                                                                chat_template_kwargs=chat_template_kwargs)
         elif self.backend == 'pytorch':
-            # for pt engine, this module only conduct the image preprocessing
-            # It leaves the vision embedding to the pt engine
-            results = await self.vl_encoder.wrap_for_pytorch(messages=results,
-                                                             chat_template=chat_template,
-                                                             tokenizer=self.tokenizer,
-                                                             sequence_start=sequence_start,
-                                                             tools=tools,
-                                                             chat_template_kwargs=chat_template_kwargs)
+            if self.vl_encoder._uses_new_preprocess:
+                input_prompt = self.vl_encoder.model.get_input_prompt(messages=messages,
+                                                                      chat_template=chat_template,
+                                                                      sequence_start=sequence_start,
+                                                                      chat_template_kwargs=chat_template_kwargs)
+                results = await self.vl_encoder.preprocess(messages, input_prompt, mm_processor_kwargs)
+            else:
+                results = await self.vl_encoder.preprocess(messages, mm_processor_kwargs)
+                results = await self.vl_encoder.wrap_for_pytorch(messages=results,
+                                                                 chat_template=chat_template,
+                                                                 tokenizer=self.tokenizer,
+                                                                 sequence_start=sequence_start,
+                                                                 tools=tools,
+                                                                 chat_template_kwargs=chat_template_kwargs)
+
         return results

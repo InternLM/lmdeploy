@@ -24,6 +24,9 @@ class Session:
         self.history: list[tuple[Any, str]] = []
         self.gen_config: GenerationConfig | None = None
         self.step: int = 0
+        # Set by api_server to AsyncEngine.epoch when a request binds a session;
+        # generate() drops work if stop_all_session() bumped epoch after bind.
+        self.epoch: int | None = None
         # event to wait for the session to be active
         self._active: asyncio.Event | None = None
         self._handle = None  # inference instance
@@ -64,6 +67,7 @@ class Session:
         self.history = []
         self.gen_config = None
         self.step = 0
+        self.epoch = None
         self._active = None
         self._handle = None
         self._session_mgr = None
@@ -101,7 +105,7 @@ class Session:
 
     async def async_abort(self):
         """Abort the session."""
-        logger.info(f'[session] Aborting session {self.session_id}')
+        logger.debug(f'[session] Aborting session {self.session_id}, epoch={self.epoch}')
         if self._handle is not None:
             await self._handle.async_cancel(self.session_id)
 
@@ -192,44 +196,75 @@ class SessionManager:
         """Initialize the session manager."""
 
         self.sessions = {}
-        self.session_id_generator = itertools.count(1)
+        self.session_id_generator = itertools.count(0)
         self.request_handle_pool = None
         self.loop = None
+        # user_session_id->session_id. If user specifies
+        # a session_id when visiting the api_server's endpoint,
+        # we map the user_session_id to the session_id to keep
+        # session's id globally identical across different requests.
+        self.user_session_id_map = {}
+        # session_id->user_session_id map.
+        self.session_id_map = {}
 
-    def get(self, session_id: int | None = None, **kwargs) -> Session:
-        """Create a new session."""
-        session_id = session_id or next(self.session_id_generator)
+    def map_user_session_id(self, user_session_id: int) -> int:
+        """Map a user_session_id to a session_id."""
+        if user_session_id in self.user_session_id_map:
+            raise ValueError(f'User session id {user_session_id} already exists')
+        session_id = next(self.session_id_generator)
+        self.user_session_id_map[user_session_id] = session_id
+        self.session_id_map[session_id] = user_session_id
+        return session_id
+
+    def get(self, session_id: int | None = None, create_if_not_exists: bool = True, **kwargs) -> Session | None:
+        """Get or create a session."""
+        if not create_if_not_exists:
+            return self.sessions.get(session_id, None)
+
+        if session_id is None:
+            session_id = next(self.session_id_generator)
+
         if session_id in self.sessions:
             logger.debug(f'[SessionManager] session {session_id} already exists. Updating...')
             session = self.sessions[session_id]
             session.update(**kwargs)
             return session
         else:
-            logger.info(f'[SessionManager] session {session_id} not found. Creating...')
+            logger.debug(f'[SessionManager] session {session_id} not found. Creating...')
             session = Session(session_id, self, **kwargs)
             self.sessions[session_id] = session
             return session
 
     async def async_abort_all(self):
         """Abort all sessions."""
+        logger.info(f'[SessionManager] aborting all {len(self.sessions)} sessions')
         tasks = []
         for session in list(self.sessions.values()):
             tasks.append(session.async_abort())
         await asyncio.gather(*tasks, return_exceptions=True)
-        # "abort all" is designed for async RL. The aborted sessions will be no longer used,
-        # so we clear the sessions here.
-        self.sessions.clear()
+        # Remove sessions without handle (i.e., those that have not started inference or already ended)
+        sessions_without_handle = [sid for sid, session in self.sessions.items() if session._handle is None]
+        for session_id in sessions_without_handle:
+            self.sessions.pop(session_id, None)
+            user_session_id = self.session_id_map.pop(session_id, None)
+            if user_session_id is not None:
+                self.user_session_id_map.pop(user_session_id, None)
 
     def has(self, session_id):
         return session_id in self.sessions
 
     def remove(self, session: Session):
         self.sessions.pop(session.session_id, None)
+        user_session_id = self.session_id_map.pop(session.session_id, None)
+        if user_session_id is not None:
+            self.user_session_id_map.pop(user_session_id, None)
 
     def clear(self):
         self.sessions.clear()
+        self.user_session_id_map.clear()
+        self.session_id_map.clear()
         # reset the session id generator
-        self.session_id_generator = itertools.count(1)
+        self.session_id_generator = itertools.count(0)
 
     def attach_event_loop(self, loop):
         self.loop = loop

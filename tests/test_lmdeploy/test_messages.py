@@ -1,12 +1,29 @@
 
 import pytest
+from pydantic import ValidationError
 
 from lmdeploy import GenerationConfig, Tokenizer
+from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 from lmdeploy.utils import get_hf_gen_cfg
 
 
+def test_generation_config_repetition_ngram_clamped():
+    c = GenerationConfig(repetition_ngram_size=-1, repetition_ngram_threshold=-2)
+    assert c.repetition_ngram_size == 0
+    assert c.repetition_ngram_threshold == 0
+
+
+def test_chat_completion_request_repetition_ngram_ge_zero():
+    with pytest.raises(ValidationError):
+        ChatCompletionRequest(
+            model='m',
+            messages=[{'role': 'user', 'content': 'hi'}],
+            repetition_ngram_size=-1,
+        )
+
+
 def test_engine_generation_config():
-    tokenizer = Tokenizer('internlm/internlm-chat-7b')
+    tokenizer = Tokenizer('internlm/internlm-chat-7b', trust_remote_code=True)
     config = GenerationConfig(n=3, stop_words=['<eoa>'])
     stop_token_ids = tokenizer.encode('<eoa>', add_bos=False)
     config.convert_stop_bad_words_to_ids(tokenizer)
@@ -21,7 +38,7 @@ def test_engine_generation_config():
     'internlm/internlm3-8b-instruct',
 ])
 def test_update_from_hf_gen_cfg(model_path):
-    tokenizer = Tokenizer(model_path)
+    tokenizer = Tokenizer(model_path, trust_remote_code=True)
     model_cfg = get_hf_gen_cfg(model_path)
 
     generation_config = GenerationConfig()

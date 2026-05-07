@@ -203,7 +203,7 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
             T.annotate_layout({h_smem: tilelang.layout.make_swizzled_layout(h_smem)})
             for i, j in T.Parallel(K, v_per_cta):
                 v_idx = v_start * v_per_cta + j
-                if v_idx < V:
+                if v_idx < V and state_id >= 0:
                     h_smem[i, j] = State[state_id, state_seq_id, hv_id, i, v_idx]
                 else:
                     h_smem[i, j] = 0.0

@@ -353,7 +353,7 @@ class Scheduler:
         return self.has_ready() or self.has_waiting() or self.has_migration_done()
 
     def get_block_tables(self, seqs: SeqList):
-        """Get block table of the sequences."""
+        """Get block tables for the sequences."""
         return [self.block_manager.get_block_table(seq) for seq in seqs]
 
     def evict_seqs(self, running: SeqList):

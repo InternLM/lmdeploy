@@ -62,6 +62,7 @@ class ConfigBuilder:
         cache_config = CacheConfig(
             max_batches=engine_config.max_batch_size,
             block_size=engine_config.block_size,
+            kernel_block_size=engine_config.kernel_block_size,
             num_cpu_blocks=engine_config.num_cpu_blocks,
             num_gpu_blocks=engine_config.num_gpu_blocks,
             cache_max_entry_count=engine_config.cache_max_entry_count,
@@ -98,7 +99,7 @@ class ConfigBuilder:
 
     @staticmethod
     def build_specdecode_config(target_model, speculative_config: SpeculativeConfig, engine_config: PytorchEngineConfig,
-                                cache_config: CacheConfig):
+                                cache_config: CacheConfig, trust_remote_code: bool = False):
         """Build spec decode config."""
         specdecode_config = None
         if speculative_config is not None:
@@ -113,6 +114,7 @@ class ConfigBuilder:
                 target_model=target_model,
                 target_cache_cfg=cache_config,
                 dtype=engine_config.dtype,
+                trust_remote_code=trust_remote_code,
                 hf_overrides=engine_config.hf_overrides,
             )
         return specdecode_config

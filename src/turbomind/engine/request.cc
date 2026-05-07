@@ -53,10 +53,10 @@ void UpdateState(Request& r, int status, int seq_len)
         }
     }
     catch (const std::exception& e) {
-        TM_LOG_ERROR("Error invoking callback for (%lu): %s", r.id, e.what());
+        TM_LOG_ERROR("Error invoking callback for ({}): {}", r.id, e.what());
     }
     catch (...) {
-        TM_LOG_ERROR("Unknown error invoking callback for (%lu)", r.id);
+        TM_LOG_ERROR("Unknown error invoking callback for ({})", r.id);
     }
 }
 

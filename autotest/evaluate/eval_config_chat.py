@@ -4,7 +4,7 @@ from mmengine.config import read_base
 from opencompass.models import OpenAISDK
 from opencompass.partitioners import NaivePartitioner, NumWorkerPartitioner
 from opencompass.runners import LocalRunner
-from opencompass.tasks import OpenICLEvalTask, OpenICLInferTask
+from opencompass.tasks import OpenICLEvalTask, OpenICLInferConcurrentTask
 from opencompass.utils.text_postprocessors import extract_non_reasoning_content
 
 #######################################################################
@@ -48,6 +48,7 @@ models = [
          run_cfg=dict(num_gpus=0),
          meta_template=api_meta_template,
          timeout=10800,
+         max_workers=1024,
          pred_postprocessor=dict(type=extract_non_reasoning_content))
 ]
 
@@ -128,15 +129,13 @@ for item in datasets:
     if 'max_out_len' in item['infer_cfg']['inferencer']:
         del item['infer_cfg']['inferencer']['max_out_len']
 
-NUM_WORKERS = 8
-
 infer = dict(
-    partitioner=dict(type=NumWorkerPartitioner, num_worker=NUM_WORKERS),
+    partitioner=dict(type=NumWorkerPartitioner, num_worker=1),
     runner=dict(
         type=LocalRunner,
         max_num_workers=64,
         retry=0,
-        task=dict(type=OpenICLInferTask),
+        task=dict(type=OpenICLInferConcurrentTask),
     ),
 )
 
@@ -145,5 +144,3 @@ eval = dict(
     partitioner=dict(type=NaivePartitioner, n=10),
     runner=dict(type=LocalRunner, max_num_workers=64, task=dict(type=OpenICLEvalTask)),
 )
-
-infer['partitioner']['num_worker'] = 64

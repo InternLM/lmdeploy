@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
+from lmdeploy.messages import QuantPolicy
 from lmdeploy.utils import get_logger
 
 from .default import TritonAttentionImpl, TritonAttentionMetadata
@@ -102,6 +103,19 @@ class FA3Impl(TritonAttentionImpl):
         Returns:
             Attention output tensor.
         """
+        quant_policy = attn_metadata.quant_policy
+
+        # TurboQuant stores packed uint8 data in cache, which FA3's native
+        # flash_attn_with_kvcache cannot dequantize directly.
+        if quant_policy == QuantPolicy.TURBO_QUANT:
+            raise NotImplementedError(
+                'quant_policy=QuantPolicy.TURBO_QUANT is not supported with '
+                'FA3 speculative decoding (max_q_seqlen > 1). '
+                'FA3 speculative decoding accesses raw KV cache directly '
+                'and cannot dequantize TurboQuant packed data. '
+                'Use standard decoding (max_q_seqlen=1).'
+            )
+
         block_offsets = attn_metadata.block_offsets
         sliding_window = self._normalize_sliding_window(self.sliding_window)
 
@@ -257,6 +271,15 @@ class FA3Impl(TritonAttentionImpl):
 
         sliding_window = self._normalize_sliding_window(self.sliding_window)
 
+        # For TurboQuant, flattened K/V are in rotated domain.
+        # Rotate Q to match, and inverse-rotate output afterwards.
+        if quant_policy == QuantPolicy.TURBO_QUANT:
+            from lmdeploy.pytorch.kernels.cuda.turbo_quant import (
+                hadamard_rotate,
+                hadamard_rotate_inv,
+            )
+            query = hadamard_rotate(query)
+
         attn_output = self.flash_attn_varlen_func_v3(
             q=query,
             k=flatten_k,
@@ -270,6 +293,11 @@ class FA3Impl(TritonAttentionImpl):
             window_size=sliding_window,
             softcap=self.logit_softcapping,
         )
+
+        # Inverse-rotate output back to original domain
+        if quant_policy == QuantPolicy.TURBO_QUANT:
+            attn_output = hadamard_rotate_inv(attn_output)
+
         return attn_output
 
     def forward(

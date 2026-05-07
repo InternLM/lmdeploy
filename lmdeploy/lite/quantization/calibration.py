@@ -56,9 +56,9 @@ class CalibrationContext:
         self.norm_type = norm_type
         self.batch_size = batch_size
 
-        num_kv_heads, num_attn_heads = self._guess_num_heads(model)
+        num_kv_heads, num_attn_heads, text_config = self._guess_num_heads(model)
         self.num_kv_heads = num_kv_heads
-        self.head_dim = model.config.hidden_size // num_attn_heads
+        self.head_dim = text_config.hidden_size // num_attn_heads
         self.model = model
 
         self.tokenizer = tokenizer
@@ -83,14 +83,21 @@ class CalibrationContext:
 
     def _guess_num_heads(self, model):
 
-        if hasattr(model.config, 'num_key_value_heads'):
-            num_kv_heads = model.config.num_key_value_heads
+        if hasattr(model.config, 'text_config'):
+            text_config = model.config.text_config
+        elif hasattr(model.config, 'llm_config'):
+            text_config = model.config.llm_config
         else:
-            num_kv_heads = model.config.num_attention_heads
+            text_config = model.config
 
-        num_attn_heads = model.config.num_attention_heads
+        if hasattr(text_config, 'num_key_value_heads'):
+            num_kv_heads = text_config.num_key_value_heads
+        else:
+            num_kv_heads = text_config.num_attention_heads
 
-        return num_kv_heads, num_attn_heads
+        num_attn_heads = text_config.num_attention_heads
+
+        return num_kv_heads, num_attn_heads, text_config
 
     def _init_input_observers(self, name2mod):
         """Initialize input observers for given modules."""
@@ -258,7 +265,9 @@ def auto_scale_block(module, module_kwargs, w_bit, w_group_size, input_feat, mod
         module_kwargs.pop('use_cache')
 
     # find the best scale ratio
-    def _search_module_scale(block, linears2scale: list, x, kwargs={}):
+    def _search_module_scale(block, linears2scale: list, x, kwargs=None):
+        if kwargs is None:
+            kwargs = {}
         x = x.to(next(block.parameters()).device)
         with torch.no_grad():
             org_out = block(x, **kwargs)
@@ -306,7 +315,9 @@ def auto_scale_block(module, module_kwargs, w_bit, w_group_size, input_feat, mod
             raise Exception
         return best_ratio
 
-    def _auto_get_scale(layers, inp, module2inspect=None, kwargs={}):
+    def _auto_get_scale(layers, inp, module2inspect=None, kwargs=None):
+        if kwargs is None:
+            kwargs = {}
         # module2inspect: if given, we will check the output diff of
         #  this module instead of layers
         if module2inspect is None:

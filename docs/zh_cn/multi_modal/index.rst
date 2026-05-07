@@ -3,6 +3,12 @@
 
 .. toctree::
    :maxdepth: 2
+   :caption: 指南
+
+   multimodal_inputs.md
+
+.. toctree::
+   :maxdepth: 2
    :caption: 示例
 
    deepseek_vl2.md
