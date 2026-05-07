@@ -34,7 +34,7 @@ def next_power_of_2(n: int):
 
 
 @functools.lru_cache
-def _get_capture_batch_size_impl(max_batches: int):
+def _get_capture_batch_size_impl(max_batches: int, decode_query_len: int = 1):
     """Capture batch size."""
     ret = []
     batch_size = 1
@@ -167,6 +167,7 @@ class CUDAGraphRunner(GraphRunner):
 
         # enable deepep
         self.is_ep_mode = get_dist_manager().current_context().dist_config.ep > 1
+        self.num_spec_tokens = build_ctx.num_spec_tokens
 
     def check_enable_graph(self):
         """Check enable graph."""
@@ -307,6 +308,7 @@ class CUDAGraphRunner(GraphRunner):
             meta = self.get_meta()
             padding_batch_size = meta.padding_batch_size
             tp_size = self._get_capture_tokens(padding_batch_size)
+            tp_size *= self.num_spec_tokens + 1
             dp_meta.sync_tp_size(tp_size)
         return inputs
 
