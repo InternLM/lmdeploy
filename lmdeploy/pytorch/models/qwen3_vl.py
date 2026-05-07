@@ -786,14 +786,11 @@ class Qwen3VLInputProcessor(BaseModelInputProcessor):
         ts_token_id = input_mm['ts_token_id']
         ts_lens = input_mm['ts_lens']
         ts_sr = input_mm['ts_sr']
-        num_pad = input_mm['ts_tokens']
-        if isinstance(num_pad, torch.Tensor):
-            num_pad = num_pad.item()
 
         mm_data = MultiModalData(modality=Modality.TIME_SERIES,
                                  data=ts_values,
-                                 start=offset,
-                                 end=offset + num_pad,
+                                 start=offset[0],
+                                 end=offset[1],
                                  meta=dict(ts_lens=ts_lens, ts_sr=ts_sr, ts_token_id=ts_token_id))
         return mm_data
 
