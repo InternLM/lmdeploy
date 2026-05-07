@@ -112,6 +112,17 @@ class WeightScaleInv(Parameter):
         f(i, g('weight'), 'weight', identity)
 
 
+class WeightScale(Parameter):
+    KEYS = '.weight_scale', '.weight'
+
+    # TODO: flag any operations crossing the quant blocks as illegal
+    def __call__(self, f, g, i):
+        f(i, g('weight_scale'), 'scales', to_float, apply_gs=['w1', 'w3', 'w2'])
+        f(i, g('weight'), 'weight', identity)
+
+
+
+
 class Mxfp4Weight(Parameter):
     KEYS = '.blocks', '.scales'
 
@@ -151,6 +162,8 @@ def get_params(keys: list[str], bias=0):
         ps.append(QuantWeightOnly(xs))
     if WeightScaleInv.take(keys):
         ps.append(WeightScaleInv())
+    if WeightScale.take(keys):
+        ps.append(WeightScale())
     if Mxfp4Weight.take(keys):
         ps.append(Mxfp4Weight())
     if Weight.take(keys):
