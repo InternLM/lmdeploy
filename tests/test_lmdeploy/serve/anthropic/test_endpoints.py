@@ -71,7 +71,7 @@ class _FakeServerContext:
         self.async_engine = _FakeEngine()
         self.response_parser_cls = response_parser_cls
 
-    def get_session(self, _session_id: int):
+    def create_session(self, _session_id: int):
         return _FakeSession()
 
 
