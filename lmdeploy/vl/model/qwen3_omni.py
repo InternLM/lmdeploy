@@ -35,9 +35,12 @@ class Qwen3OmniModel(VisionModel):
         self.audio_token = self.processor.audio_token
         self.audio_token_id = tokenizer.encode(self.audio_token)[-1]
 
-        self.mm_tokens = MultimodalSpecialTokens(image_token=self.image_token,
-                                                 video_token=self.video_token,
-                                                 audio_token=self.audio_token,
-                                                 image_token_id=self.image_token_id,
-                                                 video_token_id=self.video_token_id,
-                                                 audio_token_id=self.audio_token_id)
+        # special tokens
+        self.mm_tokens = MultimodalSpecialTokens(
+            image_token=self.image_token,
+            video_token=self.video_token,
+            audio_token=self.audio_token,
+            image_token_id=self.image_token_id,
+            video_token_id=self.video_token_id,
+            audio_token_id=self.audio_token_id,
+        )
