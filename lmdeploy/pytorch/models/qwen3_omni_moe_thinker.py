@@ -798,6 +798,9 @@ class Qwen3OmniInputProcessor(BaseModelInputProcessor):
 
     def __init__(self, config: PretrainedConfig) -> None:
         self.config = config
+        thinker_config = config.thinker_config
+        self.spatial_merge_size = thinker_config.vision_config.spatial_merge_size
+        self.position_id_per_seconds = thinker_config.position_id_per_seconds
 
     @staticmethod
     def _get_multimodal_pos_ids(grid_thw: Sequence[int],
@@ -813,18 +816,18 @@ class Qwen3OmniInputProcessor(BaseModelInputProcessor):
         pos_ids = np.arange(t * h * w)[:, None].repeat(3, axis=1)
         pos_ids = pos_ids // stride % size
         if second_per_grid is not None:
-            scale = float(second_per_grid) * float(position_id_per_seconds)
-            pos_ids[:, 0] = np.rint(pos_ids[:, 0].astype(np.float64) * scale).astype(np.int64)
+            # HF Qwen3-Omni spaces video temporal ids by elapsed seconds.
+            scale = second_per_grid * position_id_per_seconds
+            pos_ids[:, 0] = np.rint(pos_ids[:, 0] * scale)
         return pos_ids
 
     def make_mrope(self, grid_thw: torch.Tensor, second_per_grid: float | None = None):
         grid_thw = grid_thw.tolist() if grid_thw.dim() == 1 else grid_thw[0].tolist()
-        thinker_config = self.config.thinker_config
         img_pos_ids = self._get_multimodal_pos_ids(
             grid_thw,
-            spatial_merge_size=thinker_config.vision_config.spatial_merge_size,
+            spatial_merge_size=self.spatial_merge_size,
             second_per_grid=second_per_grid,
-            position_id_per_seconds=thinker_config.position_id_per_seconds,
+            position_id_per_seconds=self.position_id_per_seconds,
         )
         return img_pos_ids
 
