@@ -25,6 +25,7 @@ class FakeQwen3OmniProcessor:
         self.video_processor = SimpleNamespace(merge_size=2,
                                                temporal_patch_size=2,
                                                size={'shortest_edge': 4, 'longest_edge': 1024})
+        self.feature_extractor = SimpleNamespace(sampling_rate=16000)
         self.calls = []
 
     def __call__(self, text, images=None, videos=None, audio=None, return_tensors=None, **kwargs):
@@ -116,6 +117,16 @@ def test_audio_only_new_preprocess_returns_audio_features_and_span():
     assert audio['offset'] == (1, 40)
     assert audio['audio_token_id'] == model.audio_token_id
     assert 'mm_token_num' not in audio
+    assert model.processor.calls[-1]['audio_kwargs']['sampling_rate'] == 16000
+
+
+def test_audio_preprocess_uses_processor_sample_rate():
+    model = _fake_model()
+    messages = [{'role': 'user', 'content': [{'type': 'audio', 'data': 'audio-array', 'sample_rate': 22050}]}]
+
+    model.preprocess(messages, input_prompt=f'transcribe {model.audio_token}')
+
+    assert model.processor.calls[-1]['audio_kwargs']['sampling_rate'] == 16000
 
 
 def test_video_only_new_preprocess_keeps_whole_video_item():
@@ -213,11 +224,13 @@ def test_mixed_image_audio_video_preserves_prompt_order_and_independent_offsets(
     assert processor_kwargs['padding'] is True
     assert processor_kwargs['images_kwargs']['size'] == {'shortest_edge': 4, 'longest_edge': 16}
     assert processor_kwargs['videos_kwargs']['size'] == {'shortest_edge': 4, 'longest_edge': 16}
-    assert 'audio_kwargs' not in processor_kwargs
+    assert processor_kwargs['audio_kwargs']['sampling_rate'] == 16000
 
 
 def test_qwen3_omni_input_processor_packs_mixed_modalities():
-    processor = Qwen3OmniInputProcessor(config=SimpleNamespace())
+    config = SimpleNamespace(thinker_config=SimpleNamespace(vision_config=SimpleNamespace(spatial_merge_size=2),
+                                                            position_id_per_seconds=25))
+    processor = Qwen3OmniInputProcessor(config=config)
     image = {
         'modality': Modality.IMAGE,
         'pixel_values': torch.ones(16, 3),
@@ -254,6 +267,7 @@ def test_qwen3_omni_input_processor_packs_mixed_modalities():
     assert mm_data[1].mrope_pos_ids[0].tolist() == [0, 0, 0]
     assert mm_data[1].mrope_pos_ids[-1].tolist() == [38, 38, 38]
     assert mm_data[2].meta['second_per_grid'] == 2.0
+    assert mm_data[2].mrope_pos_ids[:, 0].tolist() == [0, 0, 0, 0, 50, 50, 50, 50]
 
 
 def test_multimodal_mask_includes_audio_token_id():

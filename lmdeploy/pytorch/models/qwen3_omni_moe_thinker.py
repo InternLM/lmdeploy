@@ -799,22 +799,33 @@ class Qwen3OmniInputProcessor(BaseModelInputProcessor):
     def __init__(self, config: PretrainedConfig) -> None:
         self.config = config
 
-    @classmethod
-    def _get_multimodal_pos_ids(cls, grid_thw: Sequence[int]) -> np.ndarray:
+    @staticmethod
+    def _get_multimodal_pos_ids(grid_thw: Sequence[int],
+                                spatial_merge_size: int = 2,
+                                second_per_grid: float | None = None,
+                                position_id_per_seconds: int = 25) -> np.ndarray:
         """Get mrope ids."""
         t, h, w = grid_thw
-        h = h // 2
-        w = w // 2
+        h = h // spatial_merge_size
+        w = w // spatial_merge_size
         stride = np.array([h * w, w, 1])[None]
         size = np.array([t, h, w])[None]
         pos_ids = np.arange(t * h * w)[:, None].repeat(3, axis=1)
         pos_ids = pos_ids // stride % size
+        if second_per_grid is not None:
+            scale = float(second_per_grid) * float(position_id_per_seconds)
+            pos_ids[:, 0] = np.rint(pos_ids[:, 0].astype(np.float64) * scale).astype(np.int64)
         return pos_ids
 
-    @classmethod
-    def make_mrope(cls, grid_thw: torch.Tensor):
+    def make_mrope(self, grid_thw: torch.Tensor, second_per_grid: float | None = None):
         grid_thw = grid_thw.tolist() if grid_thw.dim() == 1 else grid_thw[0].tolist()
-        img_pos_ids = cls._get_multimodal_pos_ids(grid_thw)
+        thinker_config = self.config.thinker_config
+        img_pos_ids = self._get_multimodal_pos_ids(
+            grid_thw,
+            spatial_merge_size=thinker_config.vision_config.spatial_merge_size,
+            second_per_grid=second_per_grid,
+            position_id_per_seconds=thinker_config.position_id_per_seconds,
+        )
         return img_pos_ids
 
     def _make_image_mm_data(self, input_mm: dict[str, Any]) -> MultiModalData:
@@ -841,7 +852,7 @@ class Qwen3OmniInputProcessor(BaseModelInputProcessor):
         offset = input_mm['offset']
         video_token_id = input_mm['video_token_id']
 
-        mrope_pos_ids = self.make_mrope(video_grid_thw)
+        mrope_pos_ids = self.make_mrope(video_grid_thw, second_per_grid=input_mm.get('second_per_grid'))
 
         mm_data = MultiModalData(modality=Modality.VIDEO,
                                  data=pixel_values_videos,

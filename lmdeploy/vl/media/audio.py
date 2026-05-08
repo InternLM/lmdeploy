@@ -28,12 +28,15 @@ class AudioMediaIO(MediaIO[tuple[npt.NDArray, float]]):
         except ImportError:
             raise ImportError('Please install soundfile via `pip install soundfile`.')
 
+        # Qwen3-Omni's feature extractor expects 16 kHz audio; allow explicit
+        # media-io overrides but resample to that rate by default.
+        self.sampling_rate = kwargs.get('sampling_rate', kwargs.get('sample_rate', 16000))
+
         # for potential custom arguments from --media-io-kwargs
         self.kwargs = kwargs
 
     def load_bytes(self, data: bytes) -> tuple[npt.NDArray, float]:
-        # sr = None, preserves the original sampling rate of the audio file
-        return self._librosa.load(BytesIO(data), sr=None)
+        return self._librosa.load(BytesIO(data), sr=self.sampling_rate)
 
     def load_base64(
         self,
@@ -43,7 +46,7 @@ class AudioMediaIO(MediaIO[tuple[npt.NDArray, float]]):
         return self.load_bytes(base64.b64decode(data))
 
     def load_file(self, filepath: Path) -> tuple[npt.NDArray, float]:
-        return self._librosa.load(filepath, sr=None)
+        return self._librosa.load(filepath, sr=self.sampling_rate)
 
     def encode_base64(
         self,

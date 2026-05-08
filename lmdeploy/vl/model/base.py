@@ -151,7 +151,11 @@ class VisionModel(ABC):
                 videos_kwargs['size'] = video_size
         if raw_audios:
             kwargs['audio'] = raw_audios
-            audio_kwargs = mm_processor_kwargs.get('audio') or {}
+            audio_kwargs = dict(mm_processor_kwargs.get('audio') or {})
+            feature_extractor = getattr(self.processor, 'feature_extractor', None)
+            sampling_rate = getattr(feature_extractor, 'sampling_rate', None)
+            if sampling_rate is not None:
+                audio_kwargs.setdefault('sampling_rate', sampling_rate)
         if images_kwargs:
             kwargs['images_kwargs'] = images_kwargs
         if videos_kwargs:
