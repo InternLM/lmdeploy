@@ -88,14 +88,13 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGra
         pixel_values: torch.Tensor = None,
         vis_cu_seqlens: torch.Tensor = None,
         vis_pos_emb: torch.Tensor = None,
-        image_mask: torch.Tensor = None,
+        multimodal_mask: torch.Tensor = None,
         pos_embeds: torch.Tensor = None,
         grid_thw: torch.Tensor = None,
         # for time series
         ts_values: torch.Tensor = None,
         ts_lens: torch.Tensor = None,
         ts_sr: torch.Tensor = None,
-        ts_mask: torch.Tensor = None,
         **kwargs,
     ):
         """Model forward, return logits."""
@@ -121,12 +120,11 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGra
                 image_embeds = torch.cat(image_embeds, dim=0).to(inputs_embeds.device, dtype)
 
                 # mask and scatter to create final input embeddings
-                image_mask = image_mask.unsqueeze(-1).expand_as(inputs_embeds)
-                inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
-
-            if ts_values is not None:
+                multimodal_mask = multimodal_mask.unsqueeze(-1).expand_as(inputs_embeds)
+                inputs_embeds = inputs_embeds.masked_scatter(multimodal_mask, image_embeds)
+            elif ts_values is not None:
                 ts_embeds = self.time_series(ts_values, ts_lens, ts_sr)  # [B, T, C]
-                inputs_embeds = inputs_embeds.masked_scatter(ts_mask[..., None], ts_embeds)
+                inputs_embeds = inputs_embeds.masked_scatter(multimodal_mask[..., None], ts_embeds)
 
         # router replay
         all_routed_experts = None
@@ -166,27 +164,29 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGra
         pixel_values = None
         vis_cu_seqlens = None
         vis_pos_emb = None
-        image_mask = None
+        multimodal_mask = None
         grid_thw = None
         pos_embeds = None
         # for time series
         ts_values = None
         ts_lens = None
         ts_sr = None
-        ts_mask = None
         if context.input_multimodals is not None:
             mm_inputs = [input_mm.get('mm_data', []) for input_mm in context.input_multimodals]
             # flatten batch
             mm_inputs = [item for sublist in mm_inputs for item in sublist]
 
             if len(mm_inputs) > 0:
-                ts_inputs = [inp for inp in mm_inputs if inp.modality == Modality.TIME_SERIES]
-                visual_inputs = [inp for inp in mm_inputs if inp.modality in [Modality.IMAGE, Modality.VIDEO]]
+                modality = mm_inputs[0].modality
+                multimodal_mask = self.get_multimodal_mask(input_ids, mm_inputs)
 
-                if visual_inputs:
-                    image_mask = self.get_multimodal_mask(input_ids, visual_inputs)
-                    pixel_values = torch.cat([inp.data for inp in visual_inputs])
-                    grid_thw = torch.stack([data.meta['grid_thw'] for data in visual_inputs]).cpu()
+                if modality == Modality.TIME_SERIES:
+                    ts_values = torch.cat([inp.data for inp in mm_inputs])
+                    ts_lens = mm_inputs[0].meta['ts_lens']
+                    ts_sr = mm_inputs[0].meta['ts_sr']
+                else:
+                    pixel_values = torch.cat([inp.data for inp in mm_inputs])
+                    grid_thw = torch.stack([data.meta['grid_thw'] for data in mm_inputs]).cpu()
                     vis_pos_emb = self.visual.rot_pos_emb(grid_thw)
                     pos_embeds = self.visual.fast_pos_embed_interpolate(grid_thw)
                     vis_cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2],
@@ -194,12 +194,6 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGra
                     vis_cu_seqlens = vis_cu_seqlens.cumsum(dim=0, dtype=torch.int32)
                     vis_pos_emb = vis_pos_emb.repeat(1, 2)
                     vis_pos_emb = (vis_pos_emb.cos(), vis_pos_emb.sin())
-
-                if ts_inputs:
-                    ts_mask = self.get_multimodal_mask(input_ids, ts_inputs)
-                    ts_values = torch.cat([inp.data for inp in ts_inputs])
-                    ts_lens = torch.cat([inp.meta['ts_lens'] for inp in ts_inputs])
-                    ts_sr = torch.cat([inp.meta['ts_sr'] for inp in ts_inputs])
 
         # process vision embeddings
         vision_embeddings = context.input_embeddings
@@ -219,14 +213,13 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGra
             pixel_values=pixel_values,
             vis_cu_seqlens=vis_cu_seqlens,
             vis_pos_emb=vis_pos_emb,
-            image_mask=image_mask,
+            multimodal_mask=multimodal_mask,
             grid_thw=grid_thw,
             pos_embeds=pos_embeds,
             # for time series
             ts_values=ts_values,
             ts_lens=ts_lens,
             ts_sr=ts_sr,
-            ts_mask=ts_mask,
         )
 
     @classmethod
