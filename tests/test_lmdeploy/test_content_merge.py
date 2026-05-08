@@ -237,6 +237,11 @@ def test_async_parse_multimodal_item_supports_new_value_encodings(monkeypatch):
             self.image_io = image_io
             self.kwargs = kwargs
 
+    class FakeAudioMediaIO:
+
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
     def fake_load_from_url(data_src, media_io):
         load_calls.append((data_src, type(media_io).__name__))
         if isinstance(media_io, FakeVideoMediaIO):
@@ -244,6 +249,7 @@ def test_async_parse_multimodal_item_supports_new_value_encodings(monkeypatch):
         return f'loaded:{data_src}'
 
     monkeypatch.setattr(multimodal_module, 'VideoMediaIO', FakeVideoMediaIO)
+    monkeypatch.setattr(multimodal_module, 'AudioMediaIO', FakeAudioMediaIO)
     monkeypatch.setattr(multimodal_module, 'load_from_url', fake_load_from_url)
 
     messages = [{
@@ -322,7 +328,7 @@ def test_async_parse_multimodal_item_supports_new_value_encodings(monkeypatch):
         ('http://example.com/a.png', 'ImageMediaIO'),
         ('/tmp/b.png', 'ImageMediaIO'),
         ('file:///tmp/a.mp4', 'FakeVideoMediaIO'),
-        ('file:///tmp/a.wav', 'AudioMediaIO'),
+        ('file:///tmp/a.wav', 'FakeAudioMediaIO'),
         ('file:///tmp/a.npy', 'TimeSeriesMediaIO'),
     ]
 
