@@ -418,12 +418,12 @@ class AsyncEngine:
                                             prompt_token_ids=input_ids,
                                             gen_config=gen_config,
                                             adapter_name=adapter_name)
-            except Exception as e:
-                logger.error(f'[generate] error in prompt processing: {e}')
+            except Exception:
+                logger.exception('[generate] error in prompt processing')
                 metrics_processor.increase_failed_requests('error')
-                yield GenOut(response=f'error in prompt processing: {e}',
+                yield GenOut(response='in prompt processing error',
                              history_token_len=session.step,
-                             input_token_len=len(input_ids),
+                             input_token_len=len(input_ids) if input_ids is not None else 0,
                              generate_token_len=0,
                              finish_reason='error',
                              token_ids=[])
