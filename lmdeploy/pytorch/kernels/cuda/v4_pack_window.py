@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Triton kernel to pack BF16 tokens into V4 FlashMLA sparse FP8 flat-
-layout window cache, replacing the per-token Python loop in
-_pack_window_state_tokens.
+"""Triton kernel to pack BF16 tokens into V4 FlashMLA sparse FP8 flat- layout
+window cache, replacing the per-token Python loop in _pack_window_state_tokens.
 
 V4 FlashMLA flat layout per slot (viewed as flat bytes):
   [token_0 NoPE+RoPE | token_1 NoPE+RoPE | ... | token_0 scales | token_1 scales | ...]
@@ -100,7 +99,7 @@ def pack_window_tokens_fp8(
         slot: [num_tokens] slot indices (which cache row to write to).
         positions: [num_tokens] ring-buffer positions within the window.
     """
-    from lmdeploy.pytorch.kernels.cuda.dsv4.layout import (
+    from lmdeploy.pytorch.consts import (
         V4_FLASHMLA_D_NOPE,
         V4_FLASHMLA_D_ROPE,
         V4_FLASHMLA_NUM_TILES,

@@ -1,6 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """Triton kernel to flatten V4 window + compressed KV caches into a contiguous
-BF16 tensor for ``flash_mla_sparse_fwd`` prefill."""
+BF16 tensor for ``flash_mla_sparse_fwd`` prefill.
+
+When the compressed KV cache is in V4 FlashMLA sparse FP8 format, the kernel
+dequantizes in-place (per-tile FP8→BF16 using e8m0fnu scales), avoiding the
+large intermediate BF16 allocation that ``dequantize_v4_flashmla_sparse`` would
+require.
+"""
 
 import torch
 import triton
@@ -26,12 +32,25 @@ def _flatten_v4_kv_kernel(
     stride_out_s,
     stride_out_d,
     stride_boff,
+    fp8_nope_rope_ptr,
+    fp8nr_stride_b,
+    fp8nr_stride_s,
+    fp8nr_stride_d,
+    fp8_rope_bf16_ptr,
+    fp8rbf16_stride_b,
+    fp8rbf16_stride_s,
+    fp8rbf16_stride_d,
+    fp8_scales_u8_ptr,
+    fp8sc_stride_b,
+    fp8sc_stride_s,
+    fp8sc_stride_d,
     WINDOW_SIZE: tl.constexpr,
     COMPRESS_RATIO: tl.constexpr,
     HEAD_DIM: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
     HAS_COMPRESS: tl.constexpr,
     HAS_SLOT: tl.constexpr,
+    HAS_FP8_COMPRESS: tl.constexpr,
 ):
     batch_id = tl.program_id(0)
     token_id = tl.program_id(1)
@@ -55,7 +74,6 @@ def _flatten_v4_kv_kernel(
         if HAS_SLOT:
             slot_val = tl.load(slot_ptr + batch_id)
             if slot_val < 0:
-                # Negative slot (padded/unallocated) -> all zeros
                 val = tl.zeros((HEAD_DIM,), dtype=out_ptr.dtype.element_ty)
             else:
                 src_ptr = (window_kv_ptr + slot_val.to(tl.int64) * stride_wkv_b
@@ -67,8 +85,59 @@ def _flatten_v4_kv_kernel(
                        + ring_pos * stride_wkv_s
                        + offs_d * stride_wkv_d)
             val = tl.load(src_ptr, mask=actual_pos < total_len, other=0.0)
+
+        out_ptr_off = (start_loc + token_id) * stride_out_s + offs_d * stride_out_d
+        tl.store(out_ptr + out_ptr_off, val)
+
+    elif HAS_FP8_COMPRESS:
+        # ---- Compressed region: FP8 dequantize path ----
+        comp_pos = token_id - window_kv_len
+        page_id = comp_pos // BLOCK_SIZE
+        page_off = comp_pos % BLOCK_SIZE
+        phys_block = tl.load(block_offsets_ptr + batch_id * stride_boff + page_id)
+        phys_block_64 = phys_block.to(tl.int64)
+
+        D_NOPE: tl.constexpr = 448
+        D_ROPE: tl.constexpr = 64
+        TILE_SIZE: tl.constexpr = 64
+        NUM_TILES: tl.constexpr = 7
+
+        # NoPE tiles: dequantize FP8→BF16 and write directly
+        offs_tile = tl.arange(0, TILE_SIZE)
+        for tile_idx in range(NUM_TILES):
+            d_base = tile_idx * TILE_SIZE
+            nope_ptrs = (fp8_nope_rope_ptr
+                         + phys_block_64 * fp8nr_stride_b
+                         + page_off * fp8nr_stride_s
+                         + (d_base + offs_tile) * fp8nr_stride_d)
+            nope_fp8 = tl.load(nope_ptrs)
+
+            sc_ptr = (fp8_scales_u8_ptr
+                      + phys_block_64 * fp8sc_stride_b
+                      + page_off * fp8sc_stride_s
+                      + tile_idx * fp8sc_stride_d)
+            scale_byte = tl.load(sc_ptr).to(tl.int32)
+            scale_bits = scale_byte << 23
+            scale_f32 = tl.cast(scale_bits, tl.float32, bitcast=True)
+
+            dequant = (nope_fp8.to(tl.float32) * scale_f32).to(tl.bfloat16)
+            out_off_tile = ((start_loc + token_id) * stride_out_s
+                            + (d_base + offs_tile) * stride_out_d)
+            tl.store(out_ptr + out_off_tile, dequant)
+
+        # RoPE: read from bf16 view, write directly
+        rope_offs = tl.arange(0, D_ROPE)
+        rope_ptrs = (fp8_rope_bf16_ptr
+                     + phys_block_64 * fp8rbf16_stride_b
+                     + page_off * fp8rbf16_stride_s
+                     + rope_offs * fp8rbf16_stride_d)
+        rope_val = tl.load(rope_ptrs)
+        out_off_rope = ((start_loc + token_id) * stride_out_s
+                        + (D_NOPE + rope_offs) * stride_out_d)
+        tl.store(out_ptr + out_off_rope, rope_val)
+
     else:
-        # ---- Compressed region ----
+        # ---- Compressed region: BF16 path ----
         if not HAS_COMPRESS:
             val = tl.zeros((HEAD_DIM,), dtype=out_ptr.dtype.element_ty)
         else:
@@ -81,9 +150,8 @@ def _flatten_v4_kv_kernel(
                        + offs_d * stride_ckv_d)
             val = tl.load(src_ptr)
 
-    # Write to flat output
-    out_ptr_off = (start_loc + token_id) * stride_out_s + offs_d * stride_out_d
-    tl.store(out_ptr + out_ptr_off, val)
+        out_ptr_off = (start_loc + token_id) * stride_out_s + offs_d * stride_out_d
+        tl.store(out_ptr + out_ptr_off, val)
 
 
 def flatten_v4_kv(
@@ -100,6 +168,10 @@ def flatten_v4_kv(
     slot: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Flatten V4 window + compressed KV caches into a contiguous BF16 tensor.
+
+    When ``fp8_compressed_kv_cache`` is provided and ``compressed_kv_cache`` is
+    None, the kernel dequantizes FP8 data in-place (per-tile FP8→BF16 with
+    e8m0fnu scales) instead of allocating a full intermediate BF16 tensor.
 
     Args:
         window_kv_cache: When ``slot`` is None, a [bsz, window_size, head_dim]
@@ -121,9 +193,9 @@ def flatten_v4_kv(
         cu_seqlens_k: optional [bsz+1] int32 cumulative KV sequence lengths.
             If None, computed from kv_seqlens.
         fp8_compressed_kv_cache: optional [num_blocks, entries_per_block, 584]
-            FP8 V4 FlashMLA sparse paged cache. When provided and compressed_kv_cache
-            is None, the FP8 cache is dequantized to a temporary BF16 tensor
-            and used instead.
+            FP8 V4 FlashMLA sparse paged cache. When provided and
+            compressed_kv_cache is None, the kernel dequantizes FP8 data
+            in-place instead of using a Python-side dequantization.
         slot: optional [bsz] int64 slot indices into the global
             ``window_kv_cache``.  When provided, the kernel uses
             ``slot[batch_id]`` instead of ``batch_id`` to index the window
@@ -134,17 +206,6 @@ def flatten_v4_kv(
         flat_kv: [total_kv_tokens, 1, head_dim] BF16 flat tensor.
         cu_seqlens_k: [bsz+1] int32 cumulative sequence lengths.
     """
-    # If FP8 cache is provided and no BF16 cache, dequantize first
-    if fp8_compressed_kv_cache is not None and compressed_kv_cache is None:
-        from lmdeploy.pytorch.kernels.cuda.dsv4.layout import dequantize_v4_flashmla_sparse
-        # fp8_cache is [num_blocks, entries, 584]; dequantize expects [num_blocks, entries, 1, 584]
-        dequant = dequantize_v4_flashmla_sparse(
-            fp8_compressed_kv_cache.unsqueeze(2)).squeeze(2)  # [num_blocks, entries, 512]
-        # Clone to decouple from FP8 cache views. No synchronize() needed —
-        # same-stream kernel launches are ordered, so the Triton flatten kernel
-        # will see the clone's data after all preceding GPU work completes.
-        compressed_kv_cache = dequant.clone()
-
     bsz = kv_seqlens.numel()
     head_dim = window_kv_cache.size(-1)
     device = kv_seqlens.device
@@ -162,8 +223,12 @@ def flatten_v4_kv(
 
     flat_kv = window_kv_cache.new_empty(total_kv_tokens, 1, head_dim)
 
-    has_compress = compress_ratio > 0 and compressed_kv_cache is not None
-    block_size = compressed_kv_cache.size(1) if has_compress else 1
+    has_compress = compress_ratio > 0 and (compressed_kv_cache is not None
+                                           or fp8_compressed_kv_cache is not None)
+    has_fp8_compress = (compress_ratio > 0 and fp8_compressed_kv_cache is not None
+                        and compressed_kv_cache is None)
+    block_size = compressed_kv_cache.size(1) if compressed_kv_cache is not None else (
+        fp8_compressed_kv_cache.size(1) if fp8_compressed_kv_cache is not None else 1)
     has_slot = slot is not None
 
     if max_flat_kv_len == 0:
@@ -171,30 +236,66 @@ def flatten_v4_kv(
 
     grid = (bsz, max_flat_kv_len)
 
+    # Build FP8 views (same pattern as v4_compressor.py / v4_pack_window.py)
+    if has_fp8_compress:
+        num_blocks = fp8_compressed_kv_cache.size(0)
+        entries_per_block = fp8_compressed_kv_cache.size(1)
+        D_NOPE = 448
+        D_ROPE_BF16 = 64
+        NR_DIM = D_NOPE + 2 * D_ROPE_BF16  # 576 bytes per token
+
+        fp8_flat = fp8_compressed_kv_cache.view(num_blocks, -1)
+        fp8_nope_rope = fp8_flat[:, :entries_per_block * NR_DIM].view(
+            num_blocks, entries_per_block, NR_DIM)
+
+        fp8_nope_rope_bf16 = fp8_nope_rope.view(torch.bfloat16)
+        fp8_rope_bf16 = fp8_nope_rope_bf16[:, :, D_NOPE // 2:]
+
+        fp8_scales_u8 = fp8_flat[:, entries_per_block * NR_DIM:].view(
+            num_blocks, entries_per_block, 8).view(torch.uint8)
+    else:
+        dummy = torch.empty(1, 1, 16, dtype=torch.bfloat16, device=device)
+        fp8_nope_rope = dummy
+        fp8_rope_bf16 = dummy.view(torch.bfloat16)
+        fp8_scales_u8 = dummy.view(torch.uint8)
+
     _flatten_v4_kv_kernel[grid](
         window_kv_cache,
-        compressed_kv_cache if has_compress else window_kv_cache,  # placeholder
+        compressed_kv_cache if has_compress and not has_fp8_compress else window_kv_cache,
         flat_kv,
         cu_seqlens_k[:-1],  # start_loc
         flat_kv_lens,
         kv_seqlens.to(torch.int32),
         block_offsets.long(),
         slot if has_slot else kv_seqlens,  # placeholder when no slot
-        stride_wkv_b=window_kv_cache.stride(0),
-        stride_wkv_s=window_kv_cache.stride(1),
-        stride_wkv_d=window_kv_cache.stride(2),
-        stride_ckv_b=compressed_kv_cache.stride(0) if has_compress else 0,
-        stride_ckv_s=compressed_kv_cache.stride(1) if has_compress else 0,
-        stride_ckv_d=compressed_kv_cache.stride(2) if has_compress else 0,
-        stride_out_s=flat_kv.stride(0),
-        stride_out_d=flat_kv.stride(2),
-        stride_boff=block_offsets.stride(0),
+        window_kv_cache.stride(0),
+        window_kv_cache.stride(1),
+        window_kv_cache.stride(2),
+        compressed_kv_cache.stride(0) if has_compress and not has_fp8_compress else 0,
+        compressed_kv_cache.stride(1) if has_compress and not has_fp8_compress else 0,
+        compressed_kv_cache.stride(2) if has_compress and not has_fp8_compress else 0,
+        flat_kv.stride(0),
+        flat_kv.stride(2),
+        block_offsets.stride(0),
+        fp8_nope_rope,
+        fp8_nope_rope.stride(0),
+        fp8_nope_rope.stride(1),
+        fp8_nope_rope.stride(2),
+        fp8_rope_bf16,
+        fp8_rope_bf16.stride(0),
+        fp8_rope_bf16.stride(1),
+        fp8_rope_bf16.stride(2),
+        fp8_scales_u8,
+        fp8_scales_u8.stride(0),
+        fp8_scales_u8.stride(1),
+        fp8_scales_u8.stride(2),
         WINDOW_SIZE=window_size,
         COMPRESS_RATIO=compress_ratio,
         HEAD_DIM=head_dim,
         BLOCK_SIZE=block_size,
         HAS_COMPRESS=has_compress,
         HAS_SLOT=has_slot,
+        HAS_FP8_COMPRESS=has_fp8_compress,
     )
 
     return flat_kv, cu_seqlens_k

@@ -465,8 +465,9 @@ class TestFlattenV4KV:
 
     def test_fp8_compressed_path(self, device, dtype):
         """Flatten with FP8 compressed cache: dequantize → compare vs BF16 reference."""
-        from lmdeploy.pytorch.kernels.cuda.dsv4.layout import V4_FLASHMLA_HEAD_DIM
+        from lmdeploy.pytorch.consts import V4_FLASHMLA_HEAD_DIM
         from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
+
         from .dsv4_utils import quantize_v4_flashmla_sparse
 
         bsz, window_size = 1, 4
@@ -513,8 +514,9 @@ class TestFlattenV4KV:
 
     def test_fp8_multi_batch(self, device, dtype):
         """FP8 path with multiple sequences of different lengths."""
-        from lmdeploy.pytorch.kernels.cuda.dsv4.layout import V4_FLASHMLA_HEAD_DIM
+        from lmdeploy.pytorch.consts import V4_FLASHMLA_HEAD_DIM
         from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
+
         from .dsv4_utils import quantize_v4_flashmla_sparse
 
         bsz, window_size = 2, 4
@@ -740,8 +742,9 @@ class TestPackWindowTokensFP8:
 
     def test_round_trip_single_token(self, device, dtype):
         """Pack one token, dequantize, compare vs original."""
-        from lmdeploy.pytorch.kernels.cuda.dsv4.layout import V4_FLASHMLA_HEAD_DIM
+        from lmdeploy.pytorch.consts import V4_FLASHMLA_HEAD_DIM
         from lmdeploy.pytorch.kernels.cuda.v4_pack_window import pack_window_tokens_fp8
+
         from .dsv4_utils import dequantize_v4_flashmla_sparse
 
         window_size = 4
@@ -760,8 +763,9 @@ class TestPackWindowTokensFP8:
 
     def test_round_trip_multiple_tokens(self, device, dtype):
         """Pack multiple tokens, dequantize, compare."""
-        from lmdeploy.pytorch.kernels.cuda.dsv4.layout import V4_FLASHMLA_HEAD_DIM
+        from lmdeploy.pytorch.consts import V4_FLASHMLA_HEAD_DIM
         from lmdeploy.pytorch.kernels.cuda.v4_pack_window import pack_window_tokens_fp8
+
         from .dsv4_utils import dequantize_v4_flashmla_sparse
 
         num_tokens = 3
@@ -783,8 +787,9 @@ class TestPackWindowTokensFP8:
     def test_match_block_quantize(self, device, dtype):
         """Pack all tokens individually via kernel, compare vs block-level
         quantize."""
-        from lmdeploy.pytorch.kernels.cuda.dsv4.layout import V4_FLASHMLA_HEAD_DIM
+        from lmdeploy.pytorch.consts import V4_FLASHMLA_HEAD_DIM
         from lmdeploy.pytorch.kernels.cuda.v4_pack_window import pack_window_tokens_fp8
+
         from .dsv4_utils import dequantize_v4_flashmla_sparse, quantize_v4_flashmla_sparse
 
         num_slots = 2
@@ -813,8 +818,9 @@ class TestPackWindowTokensFP8:
 
     def test_multi_slot(self, device, dtype):
         """Pack tokens into different slots."""
-        from lmdeploy.pytorch.kernels.cuda.dsv4.layout import V4_FLASHMLA_HEAD_DIM
+        from lmdeploy.pytorch.consts import V4_FLASHMLA_HEAD_DIM
         from lmdeploy.pytorch.kernels.cuda.v4_pack_window import pack_window_tokens_fp8
+
         from .dsv4_utils import dequantize_v4_flashmla_sparse
 
         window_size = 4

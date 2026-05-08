@@ -135,7 +135,7 @@ def fp8_index(q: torch.Tensor,
 
     assert q.stride(-1) == 1 and k_cache.stride(-1) == 1
 
-    out = q.new_zeros((cum_seqlen, max_k_seqlen), dtype=torch.float32)
+    out = q.new_empty((cum_seqlen, max_k_seqlen), dtype=torch.float32)
 
     num_warps = 4
     device_idx = q.device.index

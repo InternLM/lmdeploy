@@ -749,8 +749,8 @@ class TestFillCompressedKV:
 class TestFillCompressedKVFP8:
     """Test FP8 direct write in fill_compressed_kv.
 
-    Verifies that the kernel's V4 FlashMLA sparse FP8 output matches the Python reference (quantize_v4_flashmla_sparse). Only
-    ratio=4 is tested since r128 has no FP8 cache.
+    Verifies that the kernel's V4 FlashMLA sparse FP8 output matches the Python reference (quantize_v4_flashmla_sparse).
+    Only ratio=4 is tested since r128 has no FP8 cache.
     """
 
     HEAD_DIM = 512

@@ -1,8 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
-from lmdeploy.pytorch.kernels.cuda.dsv4.layout import V4_FLASHMLA_D_NOPE, V4_FLASHMLA_D_ROPE, V4_FLASHMLA_NUM_TILES
 from lmdeploy.pytorch.config import BlockCacheSpec, ModelConfig, StateCacheSpec
+from lmdeploy.pytorch.consts import V4_FLASHMLA_D_NOPE, V4_FLASHMLA_D_ROPE, V4_FLASHMLA_NUM_TILES
 
 from .builder import AutoModelConfigBuilder
 
