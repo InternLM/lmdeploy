@@ -32,9 +32,6 @@ def _check_env_v4(device: str = 'cuda'):
     except ImportError as e:
         raise ImportError('DeepSeek-V4 requires <fast_hadamard_transform> to be installed.') from e
 
-    if not hasattr(torch, 'float4_e2m1fn_x2'):
-        raise RuntimeError('DeepSeek-V4 requires PyTorch with float4_e2m1fn_x2 support.')
-
 
 def _finalize_v4_cache_specs(model_config: ModelConfig, block_size: int):
     if block_size < 128:

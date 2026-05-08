@@ -10,32 +10,6 @@ from .base import moe_reduce
 from .base import split_size as _split_size
 
 
-def _v4_swiglu(intermediate: torch.Tensor, swiglu_limit: float) -> torch.Tensor:
-    """Match DeepSeek-V4 routed-expert activation semantics.
-
-    Keep the activation hook in `nn/moe` so the V4 fused MoE wrapper does not depend on the legacy CUDA backend
-    implementation file.
-    """
-    hidden = intermediate.size(-1) // 2
-    gate = intermediate[..., :hidden].float()
-    up = intermediate[..., hidden:].float()
-    if swiglu_limit > 0:
-        up = torch.clamp(up, min=-swiglu_limit, max=swiglu_limit)
-        gate = torch.clamp(gate, max=swiglu_limit)
-    return (torch.nn.functional.silu(gate) * up).to(intermediate.dtype)
-
-
-def _get_v4_moe_runtime_kind(device: torch.device) -> str:
-    """Select the routed-expert runtime path for the current GPU.
-
-    CUDA uses lmdeploy's Triton FP8xFP4 MoE path, which keeps checkpoint-native packed FP4 expert weights resident and
-    unpacks them inside the GEMM kernel.
-    """
-    if device.type == 'cuda' and torch.cuda.is_available():
-        return 'triton_fp4'
-    raise RuntimeError('DeepSeek-V4 FP4 MoE requires CUDA because the expert weights stay in packed FP4 format.')
-
-
 class V4ExpertWeights(nn.Module):
     """Local expert-sharded V4 expert weights.
 
@@ -142,7 +116,6 @@ class ExpertParallelFusedMoEV4FP4(nn.Module):
         self.ffn_dim = ffn_dim
         self.top_k = top_k
         self.block_size = 128
-        self.runtime_kind = _get_v4_moe_runtime_kind(device)
 
         self.gate_up = V4ExpertWeights(self.num_local_experts,
                                        hidden_dim,
@@ -283,7 +256,6 @@ class FusedMoEV4(nn.Module):
                  device: torch.device | None = None):
         super().__init__()
         device = device or torch.device('cpu')
-        self.runtime_kind = _get_v4_moe_runtime_kind(device)
         dist_ctx = get_dist_manager().current_context()
         dist_config = dist_ctx.dist_config
         if dist_config.ep > 1:
