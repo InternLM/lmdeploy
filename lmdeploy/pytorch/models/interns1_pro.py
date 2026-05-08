@@ -198,16 +198,8 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGra
                 if ts_inputs:
                     ts_mask = self.get_multimodal_mask(input_ids, ts_inputs)
                     ts_values = torch.cat([inp.data for inp in ts_inputs])
-                    ts_lens = torch.cat([
-                        inp.meta['ts_lens'] if isinstance(inp.meta['ts_lens'], torch.Tensor) else
-                        torch.tensor([inp.meta['ts_lens']], dtype=torch.long, device=ts_values.device)
-                        for inp in ts_inputs
-                    ])
-                    ts_sr = torch.cat([
-                        inp.meta['ts_sr'] if isinstance(inp.meta['ts_sr'], torch.Tensor) else
-                        torch.tensor([inp.meta['ts_sr']], dtype=torch.float32, device=ts_values.device)
-                        for inp in ts_inputs
-                    ])
+                    ts_lens = torch.cat([inp.meta['ts_lens'] for inp in ts_inputs])
+                    ts_sr = torch.cat([inp.meta['ts_sr'] for inp in ts_inputs])
 
         # process vision embeddings
         vision_embeddings = context.input_embeddings

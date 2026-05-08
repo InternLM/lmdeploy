@@ -203,8 +203,6 @@ class VisionModel(ABC):
 
         # expand bundled hf processor outputs into per-image/video entry for lmdeploy to consume
         expanded_mm_items = get_expanded_mm_items(collected_mm_items, self.mm_tokens)
-        # HF processors return features grouped by modality; offsets restore prompt order for mixed inputs.
-        expanded_mm_items.sort(key=lambda item: item['offset'][0])
 
         return dict(input_ids=input_ids.tolist(), multimodal=expanded_mm_items)
 

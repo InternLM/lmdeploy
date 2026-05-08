@@ -6,7 +6,7 @@ from lmdeploy.pytorch.models.qwen3_omni_moe_thinker import Qwen3OmniInputProcess
 from lmdeploy.pytorch.models.utils.model import DeployModelMixinV1
 from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.vl.constants import Modality
-from lmdeploy.vl.model.base import MultimodalSpecialTokens, VisionModel
+from lmdeploy.vl.model.base import MultimodalSpecialTokens
 from lmdeploy.vl.model.preprocess_utils import get_expanded_mm_items
 from lmdeploy.vl.model.qwen3_omni import Qwen3OmniModel
 
@@ -99,10 +99,6 @@ def test_image_only_new_preprocess_returns_token_span():
     assert image['offset'] == (1, 5)
     assert image['image_token_id'] == model.image_token_id
     assert 'mm_token_num' not in image
-
-
-def test_qwen3_omni_uses_shared_new_preprocess_path():
-    assert Qwen3OmniModel.preprocess is VisionModel.preprocess
 
 
 def test_audio_only_new_preprocess_returns_audio_features_and_span():

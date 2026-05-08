@@ -238,4 +238,6 @@ def get_expanded_mm_items(collected_mm_items, mm_tokens: 'MultimodalSpecialToken
                         audio_token_id=token_id,
                     ))
 
+    # HF processors return features grouped by modality; offsets restore prompt order for mixed inputs.
+    expanded_mm_items.sort(key=lambda item: item['offset'][0])
     return expanded_mm_items
