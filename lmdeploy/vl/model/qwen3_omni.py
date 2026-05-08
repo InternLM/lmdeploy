@@ -18,9 +18,9 @@ class Qwen3OmniModel(VisionModel):
 
     _arch = ['Qwen3OmniMoeForConditionalGeneration']
 
-    def build_preprocessor(self):
+    def build_preprocessor(self, trust_remote_code: bool = False):
         check_transformers()
-        self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=True)
+        self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=trust_remote_code)
         tokenizer = self.processor.tokenizer
 
         # image tokens
