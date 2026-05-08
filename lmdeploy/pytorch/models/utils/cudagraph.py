@@ -225,6 +225,9 @@ class CudaGraphMixin:
         input_buffers['input_ids'].random_(0, graph_meta.vocab_size)
         input_buffers['input_ids'][:, :num_tokens] = input_ids
         input_buffers['position_ids'][:, :num_tokens] = position_ids
+        # 0 is reserved for padding requests
+        # fill zero to prevent writing to the unexpected blocks
+        input_buffers['block_offsets'].zero_()
         input_buffers['block_offsets'][:batch_size, :num_blocks] = block_offsets
 
         qkv = torch.stack((q_start_loc, q_seqlens, kv_seqlens))

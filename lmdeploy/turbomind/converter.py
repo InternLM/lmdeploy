@@ -148,7 +148,8 @@ def _resolve_dtype(requested: str, hf_model_cfg) -> str:
 
 def get_tm_config(model_path,
                   engine_config: TurbomindEngineConfig,
-                  group_size: int = None):
+                  group_size: int = None,
+                  trust_remote_code: bool = False):
     """Resolve dtype/model_format/group_size/session_len, mutate engine_config
     in place, build the text model.
 
@@ -156,7 +157,7 @@ def get_tm_config(model_path,
         tuple: (text_model, model_path, data_type)
     """
     # 1. Load HF config once; reused for quant_config, dtype, and session_len.
-    arch, hf_model_cfg = get_model_arch(model_path)
+    arch, hf_model_cfg = get_model_arch(model_path, trust_remote_code=trust_remote_code)
 
     # 2. Reconcile quant_config (unchanged logic from the prior flow).
     quant_config = search_nested_config(

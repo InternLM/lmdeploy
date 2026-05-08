@@ -12,13 +12,17 @@ class TestRequestHander:
 
     @pytest.fixture
     def event_loop(self):
-        old_loop = asyncio.get_event_loop()
+        try:
+            old_loop = asyncio.get_event_loop()
+        except RuntimeError:
+            old_loop = None
         new_loop = asyncio.new_event_loop()
         try:
             asyncio.set_event_loop(new_loop)
             yield new_loop
         finally:
             new_loop.stop()
+            new_loop.close()
             asyncio.set_event_loop(old_loop)
 
     @pytest.fixture

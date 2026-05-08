@@ -105,6 +105,9 @@ std::array<const LayoutConverter*, 2> GetConverters(DataType data_type,
     if (weight_type == kHalf || weight_type == kBfloat16) {
         constexpr Cvt<uint16_t, uint16_t> W;
         if (grouped) {
+            // SM10.x only: CublasGroupedKernel (cublasGemmGroupedBatchedEx) expects standard (K,N)
+            if (sm >= 100 && sm < 120)
+                return {};
             // clang-format off
             if (sm >= 80) return {W(sm8_, kRow, s16816h | B | _1), {}};
             if (sm == 75) return {W(sm75, kRow, s16816h | B | _1), {}};

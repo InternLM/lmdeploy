@@ -7,6 +7,7 @@ from ..check_env.dist import DistChecker
 from ..check_env.model import ModelChecker
 from ..check_env.torch import TorchChecker
 from ..check_env.transformers import TransformersChecker
+from ..disagg.config import EngineRole
 
 
 class EngineChecker(BaseChecker):
@@ -96,6 +97,13 @@ class EngineChecker(BaseChecker):
                               message='num_gpu_blocks should be greater than 16, '
                               f'but got {num_gpu_blocks}. Set num_gpu_blocks to 0 to automatically '
                               'determine the number of GPU blocks based on the model size and device memory.')
+
+        if (engine_config.role != EngineRole.Hybrid
+                and engine_config.block_size != engine_config.kernel_block_size):
+            self.log_and_exit(mod_name='Engine',
+                              message='PD migration does not support block_size != kernel_block_size, '
+                              f'but got block_size {engine_config.block_size} and '
+                              f'kernel_block_size {engine_config.kernel_block_size}.')
 
     def _handle_impl(self):
         return super().handle()

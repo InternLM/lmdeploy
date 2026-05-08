@@ -17,20 +17,21 @@ class LlavaNextVisionModel(LlavaHfVisionModel):
 
     _arch = 'LlavaNextForConditionalGeneration'
 
-    def build_preprocessor(self):
-        super().build_preprocessor()
+    def build_preprocessor(self, trust_remote_code: bool = False):
+        super().build_preprocessor(trust_remote_code=trust_remote_code)
         # build the model with empty weights. The model will be used in
         # `preprocess` to get the image token number
         from accelerate import init_empty_weights
         with init_empty_weights(), warnings.catch_warnings():
             warnings.simplefilter('ignore')
             from transformers import LlavaNextForConditionalGeneration
-            self.model = LlavaNextForConditionalGeneration._from_config(self.hf_config)
+            self.model = LlavaNextForConditionalGeneration._from_config(self.hf_config,
+                                                                        trust_remote_code=trust_remote_code)
             self.vl_model = self.model
             if not self.with_llm:
                 del self.model.language_model
 
-    def build_model(self):
+    def build_model(self, trust_remote_code: bool = False):
         """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         from accelerate import load_checkpoint_and_dispatch

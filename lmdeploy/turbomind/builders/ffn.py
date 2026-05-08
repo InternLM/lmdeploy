@@ -73,6 +73,15 @@ def _should_fuse_silu(w1_linear: Linear, act_type: str, is_moe: bool = False) ->
             if cap == (9, 0):
                 return False
 
+    # SM100+ grouped bf16 MoE: CublasGroupedKernel has no fused GatedSilu
+    if is_moe:
+        weight = w1_linear.tensors.get('weight')
+        if weight is not None and weight.dtype == torch.bfloat16:
+            if torch.cuda.is_available():
+                cap = torch.cuda.get_device_capability()
+                if cap >= (10, 0):
+                    return False
+
     return True
 
 

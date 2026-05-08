@@ -25,10 +25,10 @@ class Qwen2VLModel(VisionModel):
 
     _arch = ['Qwen2VLForConditionalGeneration', 'Qwen2_5_VLForConditionalGeneration']
 
-    def build_preprocessor(self):
+    def build_preprocessor(self, trust_remote_code: bool = False):
         check_qwen_vl_deps_install()
         from transformers import AutoProcessor
-        self.processor = AutoProcessor.from_pretrained(self.model_path)
+        self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=trust_remote_code)
         tokenizer = self.processor.tokenizer
         self.image_token = self.processor.image_token
         self.image_token_id = tokenizer.encode(self.image_token)[-1]
@@ -52,7 +52,7 @@ class Qwen2VLModel(VisionModel):
         messages.append(dict(role='preprocess', content=outputs))
         return messages
 
-    def build_model(self):
+    def build_model(self, trust_remote_code: bool = False):
         check_qwen_vl_deps_install()
         arch = self.hf_config.architectures[0]
         if arch == 'Qwen2VLForConditionalGeneration':
@@ -63,7 +63,8 @@ class Qwen2VLModel(VisionModel):
             raise ValueError(f'Unsupported arch={arch}')
 
         if self.with_llm:
-            self.vl_model = AutoModelCls.from_pretrained(self.model_path, device_map='cpu')
+            self.vl_model = AutoModelCls.from_pretrained(self.model_path, device_map='cpu',
+                                                         trust_remote_code=trust_remote_code)
         else:
             from accelerate import init_empty_weights
             with init_empty_weights():
@@ -72,7 +73,7 @@ class Qwen2VLModel(VisionModel):
                 config.tie_word_embeddings = False
                 if hasattr(config, 'text_config'):
                     config.text_config.tie_word_embeddings = False
-                model = AutoModelCls._from_config(config)
+                model = AutoModelCls._from_config(config, trust_remote_code=trust_remote_code)
                 model.visual = model.model.visual
                 del model.model
                 del model.lm_head

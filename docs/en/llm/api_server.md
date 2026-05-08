@@ -144,6 +144,10 @@ for item in api_client.completions_v1(model=model_name, prompt='hi'):
 
 May refer to [api_server_tools](./api_server_tools.md).
 
+### Anthropic-Compatible Endpoints
+
+May refer to [api_server_anthropic](./api_server_anthropic.md).
+
 ### Integrate with Java/Golang/Rust
 
 May use [openapi-generator-cli](https://github.com/OpenAPITools/openapi-generator-cli) to convert `http://{server_ip}:{server_port}/openapi.json` to java/rust/golang client.

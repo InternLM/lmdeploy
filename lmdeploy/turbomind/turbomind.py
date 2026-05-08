@@ -129,6 +129,7 @@ class TurboMind:
                  model_name: str = None,
                  chat_template_name: str = None,
                  engine_config: TurbomindEngineConfig = None,
+                 trust_remote_code: bool = False,
                  **kwargs):
         self.model_name = model_name
         self.chat_template_name = chat_template_name
@@ -161,9 +162,10 @@ class TurboMind:
 
         if not osp.exists(model_path):
             model_path = get_model(model_path, _engine_config.download_dir, _engine_config.revision)
-        self.model_comm = self._from_hf(model_path=model_path, engine_config=_engine_config)
+        self.model_comm = self._from_hf(model_path=model_path, engine_config=_engine_config,
+                                        trust_remote_code=trust_remote_code)
         self.is_dummy = self.model_comm.is_dummy_node()
-        self.tokenizer = Tokenizer(model_path)
+        self.tokenizer = Tokenizer(model_path, trust_remote_code=trust_remote_code)
         if not _engine_config.empty_init:
             self._load_weights()
             self._process_weights()
@@ -210,16 +212,18 @@ class TurboMind:
             for future in futures:
                 future.result()
 
-    def _from_hf(self, model_path: str, engine_config: TurbomindEngineConfig):
+    def _from_hf(self, model_path: str, engine_config: TurbomindEngineConfig,
+                 trust_remote_code: bool = False):
         """Load model which is in hf format."""
-        assert is_supported(model_path), (
+        assert is_supported(model_path, trust_remote_code=trust_remote_code), (
             f'turbomind does not support {model_path}. '
             'Plz try pytorch engine instead.')
 
         from .converter import get_tm_config
         from .model_loader import ModelLoader
 
-        text_model, model_path, data_type = get_tm_config(model_path, engine_config)
+        text_model, model_path, data_type = get_tm_config(model_path, engine_config,
+                                                           trust_remote_code=trust_remote_code)
 
         self._vocab_size = text_model._vocab_size
         self.engine_config = engine_config
@@ -333,6 +337,7 @@ class TurboMind:
                         model_name: str = None,
                         chat_template_name: str = None,
                         engine_config: TurbomindEngineConfig = None,
+                        trust_remote_code: bool = False,
                         **kwargs):
         """LMDeploy's turbomind inference engine.
 
@@ -357,6 +362,7 @@ class TurboMind:
                    model_name=model_name,
                    chat_template_name=chat_template_name,
                    engine_config=engine_config,
+                   trust_remote_code=trust_remote_code,
                    **kwargs)
 
     def close(self):
