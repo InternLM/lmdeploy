@@ -34,13 +34,14 @@ class LLama4VisionModel(VisionModel):
         arch = config.architectures[0]
         return arch == cls._arch
 
-    def build_preprocessor(self):
+    def build_preprocessor(self, trust_remote_code: bool = False):
         check_trans_version()
         from transformers.models.llama4 import Llama4Processor
         from transformers.models.llama4.processing_llama4 import Llama4ProcessorKwargs
         self.processor = Llama4Processor.from_pretrained(
             self.model_path,
             padding_side='left',
+            trust_remote_code=trust_remote_code,
         )
         img_patch_token = self.processor.img_patch_token
         self.image_token_id = self.processor.tokenizer.encode(img_patch_token, add_special_tokens=False)[0]
@@ -51,7 +52,7 @@ class LLama4VisionModel(VisionModel):
             add_special_tokens=False,
         )['images_kwargs']
 
-    def build_model(self):
+    def build_model(self, trust_remote_code: bool = False):
         """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         # TODO, implement for tubomind engine

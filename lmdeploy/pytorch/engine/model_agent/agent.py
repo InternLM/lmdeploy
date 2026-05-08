@@ -252,6 +252,7 @@ class BaseModelAgent:
         device_ctx: DeviceContext,
         adapters: dict[str, str] = None,
         specdecode_config: SpecDecodeConfig = None,
+        trust_remote_code: bool = False
     ):
 
         self.model_config = model_config
@@ -259,7 +260,7 @@ class BaseModelAgent:
         # use raw tokenizer
         if dist_ctx.dist_config.world_size > 1:
             monkey_patch_hf_modules_cache()
-        self.tokenizer = Tokenizer(model_path).model.model
+        self.tokenizer = Tokenizer(model_path, trust_remote_code=trust_remote_code).model.model
 
         # asyncio
         self._pre_in_que = None

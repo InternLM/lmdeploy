@@ -1,12 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+from contextlib import contextmanager
+
 import torch
 from torch.profiler import record_function
 
 from lmdeploy.utils import get_logger
 
 from ..backends import get_backend
-from ..config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
+from ..config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
+from ..distributed import DistContext, get_dist_manager
 from ..engine.cache_engine import CacheEngine
 from ..engine.logits_process import FusedLogitsProcessor, SamplingInputs, _torch_topk
 from ..engine.model_agent.agent import BatchedLogProbs
@@ -107,11 +110,13 @@ class SpecModelAgent(BaseSpecModelAgent):
         inputs_strategy,
         agent_strategy,
         misc_config: MiscConfig,
+        dist_ctx: DistContext,
         device: str = 'cuda',
     ):
         super().__init__(specdecode_config, enable=True)
 
         self.backend_config = backend_config
+        self.dist_ctx = dist_ctx
         self.device = device
         self.cache_engine = None
         self.inputs_strategy = inputs_strategy
@@ -122,11 +127,19 @@ class SpecModelAgent(BaseSpecModelAgent):
         self.method = specdecode_config.method
         self.model_config = specdecode_config.model_config
         self.cache_config = specdecode_config.cache_config
+        self.draft_dist_ctx = DistContext.build(rank=dist_ctx.rank, dist_config=DistConfig())
 
         # make dummy meta
         self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(self.model_config)
         # for long context carry-over in chunked decoding
         self._prev_chunk_last = {}
+
+    @contextmanager
+    def draft_context(self):
+        """Draft-local dist context."""
+        dist_mgr = get_dist_manager()
+        with dist_mgr.context(self.draft_dist_ctx):
+            yield
 
     def set_cache_config(self, cache_config: CacheConfig):
         """Set all cache config."""
@@ -141,26 +154,29 @@ class SpecModelAgent(BaseSpecModelAgent):
 
     def build_model(self, empty_init: bool, target_model=None, build_model_ctx=None):
         """Build draft model."""
-        self.proposer.build_model(empty_init, target_model=target_model, build_model_ctx=build_model_ctx)
+        with self.draft_context():
+            self.proposer.build_model(empty_init, target_model=target_model, build_model_ctx=build_model_ctx)
 
     def build_graph_runner(self):
         """Build graph runner."""
-        backend = get_backend()
-        self.proposer.model = backend.build_graph_runner(self.proposer.model,
-                                                         model_config=self.model_config,
-                                                         cache_config=self.cache_config,
-                                                         backend_config=self.backend_config,
-                                                         device=self.device)
+        with self.draft_context():
+            backend = get_backend()
+            self.proposer.model = backend.build_graph_runner(self.proposer.model,
+                                                             model_config=self.model_config,
+                                                             cache_config=self.cache_config,
+                                                             backend_config=self.backend_config,
+                                                             device=self.device)
 
     def build_cache_engine(self, cache_stream: torch.cuda.Stream):
         """Build cache engine."""
         if self.cache_config is not None:
-            self.cache_engine = CacheEngine(self.cache_config,
-                                            self.model_config,
-                                            rank=0,
-                                            tp_rank=0,
-                                            world_size=1,
-                                            cache_stream=cache_stream)
+            with self.draft_context():
+                self.cache_engine = CacheEngine(self.cache_config,
+                                                self.model_config,
+                                                rank=0,
+                                                tp_rank=0,
+                                                world_size=1,
+                                                cache_stream=cache_stream)
 
     def _prepare_inputs_from_main(self, model_inputs: ModelInputs, extra_inputs: ExtraInputs):
         """Update inputs from main model inputs."""
@@ -382,7 +398,8 @@ class SpecModelAgent(BaseSpecModelAgent):
 
     def _forward_impl(self, inputs: ModelInputs):
         """Forward impl."""
-        output = self.proposer._forward(inputs, cache_engine=self.cache_engine)
+        with self.draft_context():
+            output = self.proposer._forward(inputs, cache_engine=self.cache_engine)
         return output
 
     async def _async_model_forward(self, inputs: ModelInputs, extra_inputs: ARSpecExtraInputs,
@@ -456,37 +473,40 @@ class SpecModelAgent(BaseSpecModelAgent):
                                                  target_dtype=self.model_config.dtype,
                                                  meta=self.make_dummy_meta)
 
-        self._forward_impl(inputs)
-
         capture_batch_sizes = self.proposer.model.get_capture_batch_sizes()
         capture_batch_sizes = sorted(capture_batch_sizes, reverse=True)
 
+        # warmup prefill
+        self._forward_impl(inputs)
+
+        # warmup decode
         for batch_size in capture_batch_sizes:
             # decode with num_spec_tokens + 1 per seq
             inputs = self.inputs_strategy.make_dummy(batch_size,
-                                                     is_decoding=True,
-                                                     device='cuda',
-                                                     vocab_size=self.model_config.vocab_size,
-                                                     max_q_seqlen=self.num_spec_tokens + 1,
-                                                     target_hidden_size=target_hidden_size,
-                                                     target_dtype=self.model_config.dtype,
-                                                     meta=self.make_dummy_meta)
+                                                    is_decoding=True,
+                                                    device='cuda',
+                                                    vocab_size=self.model_config.vocab_size,
+                                                    max_q_seqlen=self.num_spec_tokens + 1,
+                                                    target_hidden_size=target_hidden_size,
+                                                    target_dtype=self.model_config.dtype,
+                                                    meta=self.make_dummy_meta)
             self._forward_impl(inputs)
             # decode 1 tokens per sequence
             inputs = self.inputs_strategy.make_dummy(batch_size,
-                                                     is_decoding=True,
-                                                     device='cuda',
-                                                     vocab_size=self.model_config.vocab_size,
-                                                     max_q_seqlen=1,
-                                                     target_hidden_size=self.model_config.hidden_size,
-                                                     target_dtype=self.model_config.dtype,
-                                                     meta=self.make_dummy_meta)
+                                                    is_decoding=True,
+                                                    device='cuda',
+                                                    vocab_size=self.model_config.vocab_size,
+                                                    max_q_seqlen=1,
+                                                    target_hidden_size=self.model_config.hidden_size,
+                                                    target_dtype=self.model_config.dtype,
+                                                    meta=self.make_dummy_meta)
             self._forward_impl(inputs)
 
     def reset_graph_runner(self):
         """Reset graph runner."""
-        if self.proposer.model is not None and hasattr(self.proposer.model, 'reset'):
-            self.proposer.model.reset()
+        with self.draft_context():
+            if self.proposer.model is not None and hasattr(self.proposer.model, 'reset'):
+                self.proposer.model.reset()
 
     def get_model(self):
         """Get model."""
