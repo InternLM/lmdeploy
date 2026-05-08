@@ -102,6 +102,12 @@ class CudaOpsBackend(DefaultOpsBackend):
         return TritonAttentionMetadata
 
     @staticmethod
+    def get_v4_attention_metadata_cls():
+        """Get V4 attention metadata class."""
+        from .attention.v4 import CudaV4AttentionMetadata
+        return CudaV4AttentionMetadata
+
+    @staticmethod
     def get_k_block_shape(
         block_size: int,
         num_heads: int,

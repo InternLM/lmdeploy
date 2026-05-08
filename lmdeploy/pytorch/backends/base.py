@@ -68,6 +68,16 @@ class OpsBackend(ABC):
         raise NotImplementedError
 
     @staticmethod
+    def get_v4_attention_metadata_cls():
+        """Get V4 attention metadata class.
+
+        Returns ``V4AttentionMetadata`` by default; backends with V4-specific
+        pre-computation should override this to return their subclass.
+        """
+        from lmdeploy.pytorch.backends.attention import V4AttentionMetadata
+        return V4AttentionMetadata
+
+    @staticmethod
     @abstractmethod
     def get_k_block_shape(
         block_size: int,

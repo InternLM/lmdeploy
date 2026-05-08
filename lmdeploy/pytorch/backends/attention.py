@@ -25,10 +25,10 @@ class AttentionMetadata:
 
 @dataclass
 class V4AttentionMetadata:
-    """DeepSeek V4 attention metadata.
+    """DeepSeek V4 attention metadata base class.
 
     Built once per step from attn_metadata + step_ctx, then passed through all V4 sub-modules (Attention, Compressor,
-    Indexer).
+    Indexer). Backends should subclass this to add their own pre-computed fields and override ``from_step_context``.
     """
 
     is_decoding: bool
@@ -47,26 +47,34 @@ class V4AttentionMetadata:
     block_size: int = 0
     cu_seqlens_k: torch.Tensor = None
     sum_kv_seqlen: int = None
+    start_pos: torch.Tensor = None                      # [bsz] long
 
     @classmethod
-    def from_step_context(cls, attn_metadata, step_ctx) -> 'V4AttentionMetadata':
+    def from_step_context(cls, attn_metadata, step_ctx, **kwargs) -> 'V4AttentionMetadata':
         """Build V4AttentionMetadata from the scheduler's attn_metadata and
-        step_ctx."""
+        step_ctx.
+
+        Subclasses can accept additional keyword arguments for backend- specific pre-computation.
+        """
         is_decoding = attn_metadata.is_decoding
         cache_config = step_ctx.cache_config
         max_kv_seqlen = (cache_config.block_size * cache_config.num_gpu_blocks
                          if is_decoding else step_ctx.max_kv_seqlen)
+        kv_seqlens = attn_metadata.kv_seqlens
+        q_seqlens = attn_metadata.q_seqlens
+
         return cls(
             is_decoding=is_decoding,
             block_offsets=attn_metadata.block_offsets,
             cu_q_seqlens=attn_metadata.cu_seqlens_q,
-            kv_seqlens=attn_metadata.kv_seqlens,
-            q_seqlens=attn_metadata.q_seqlens,
+            kv_seqlens=kv_seqlens,
+            q_seqlens=q_seqlens,
             max_kv_seqlen=max_kv_seqlen,
             max_q_seqlen=step_ctx.max_q_seqlen,
             block_size=cache_config.block_size,
             sum_kv_seqlen=step_ctx.sum_kv_seqlen,
             cu_seqlens_k=attn_metadata.cu_seqlens_k,
+            start_pos=(kv_seqlens.to(torch.long) - q_seqlens.to(torch.long)),
         )
 
 

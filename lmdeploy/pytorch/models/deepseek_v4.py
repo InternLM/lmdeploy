@@ -8,6 +8,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.backends.attention import V4AttentionMetadata
 from lmdeploy.pytorch.backends.compressor import V4CompressorMetadata
 from lmdeploy.pytorch.backends.indexer import V4IndexerMetadata
@@ -840,8 +841,13 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         context = self.ctx_mgr.current_context()
 
         # Build V4AttentionMetadata once from attn_metadata + step_ctx.
-        # Replaces SeqInfo + V4ScheduleInfo; sub-modules read from this single object.
-        v4_meta = V4AttentionMetadata.from_step_context(attn_metadata, context)
+        # Uses backend-dispatched subclass (e.g. CudaV4AttentionMetadata) so
+        # backend-specific indices are pre-computed once per step.
+        safe_state_ids = state_ids.to(torch.long)
+        v4_meta_cls = get_backend().get_v4_attention_metadata_cls()
+        v4_meta = v4_meta_cls.from_step_context(
+            attn_metadata, context,
+            window_size=self.args.window_size, slot=safe_state_ids)
 
         # Pre-build indexer/compressor metadata once (not per-layer)
         v4_indexer_meta = V4IndexerMetadata(
@@ -866,8 +872,6 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             named_state_caches=context.named_state_caches,
             block_caches=context.block_caches,
         )
-
-        safe_state_ids = state_ids.to(torch.long)
 
         h = self.embed(input_ids)
         h = h.unsqueeze(2).repeat(1, 1, self.config.hc_mult, 1)
