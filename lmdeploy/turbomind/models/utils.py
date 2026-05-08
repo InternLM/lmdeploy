@@ -9,7 +9,6 @@ import _turbomind as _tm
 import torch
 
 from lmdeploy.archs import get_model_arch
-from lmdeploy.utils import get_logger
 
 from ..builders import _act_type_id
 from ..linear import Linear, _dequant_linear
@@ -69,7 +68,10 @@ def rope_type_to_int(type_str: str) -> int:
 
 
 def _get_mscale(scale, mscale=1):
-    """YaRN mscale helper. Shared by parse_rope_param and MLA softmax_scale."""
+    """YaRN mscale helper.
+
+    Shared by parse_rope_param and MLA softmax_scale.
+    """
     if scale <= 1:
         return 1.0
     return 0.1 * mscale * math.log(scale) + 1.0
@@ -375,33 +377,23 @@ def reorder_rotary_emb(x, head_dim: int, rope_dim: int, *, resolver=None):
     return _reorder_rotary_emb(x, head_dim, rope_dim)
 
 
-def layer_progress(num_layers: int):
-    """Tqdm iterable for model.layers() per-layer conversion loops.
-
-    Yields the layer indices 0..num_layers-1, displaying a single-line
-    progress bar on stderr. ``leave=False`` clears the bar when the loop
-    completes. Lazy-imports tqdm so importing utils.py stays cheap.
-    """
-    from tqdm import tqdm
-    return tqdm(range(num_layers), desc='Loading', leave=False)
-
 
 def read_packed_moe_expert(
-    params: dict,
-    gate_up_pfx: str,
-    down_pfx: str,
+    gate_up_pfx,
+    down_pfx,
     expert_idx: int,
     *,
     resolver,
     interleaved: bool = False,
     trans: bool = False,
-) -> tuple[Linear, Linear, Linear]:
+):
     """Read one packed MoE expert's fused gate_up + down and split into (w1,
     w2, w3) Linears in TM layout.
 
-    ``gate_up_pfx`` and ``down_pfx`` are the full prefixes to the two
-    packed tensors (e.g. ``'model.layers.5.mlp.experts.gate_up_proj'``).
-    The caller composes these strings; this helper concatenates nothing.
+    ``gate_up_pfx`` and ``down_pfx`` are Prefix objects pointing to the
+    two packed tensors (e.g. ``experts_pfx + 'gate_up_proj'``).  The
+    caller composes these via Prefix arithmetic; this helper concatenates
+    nothing.
 
     Parameters
     ----------
@@ -416,8 +408,8 @@ def read_packed_moe_expert(
         ``TrivialFormat.normalize``. Only affects the ``weight`` kind on
         trivial-format linears; quantized formats use their own normalizers.
     """
-    gate_up = resolver.resolve(params, gate_up_pfx, index=expert_idx)
-    down    = resolver.resolve(params, down_pfx,    index=expert_idx)
+    gate_up = resolver.resolve(gate_up_pfx, index=expert_idx)
+    down    = resolver.resolve(down_pfx,    index=expert_idx)
 
     if trans:
         for lin in (gate_up, down):

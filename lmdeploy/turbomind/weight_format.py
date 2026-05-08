@@ -187,7 +187,6 @@ class TrivialFormat(WeightFormat):
         return w is None or w.dtype.is_floating_point
 
     def normalize(self, x: Tensor, kind: str) -> Tensor:
-        x = x.cuda()
         if x.dim() >= 2:
             x = x.t()
         return x
@@ -222,7 +221,6 @@ class AWQFormat(WeightFormat):
         #   qweight: [K, N//8] int32 → unpack → [K, N] (TM, no .t())
         #   scales:  [K//g, N] float16 → already TM
         #   zeros:   [K//g, N//8] int32 → unpack → [K//g, N]
-        x = x.cuda()
         if x.dtype == torch.int32:
             x = _unpack_awq_gemm(x)
         if kind == 'zeros':
@@ -273,7 +271,6 @@ class GPTQFormat(WeightFormat):
         #   qweight: [K//8, N] int32 → unpack → [K, N]
         #   scales:  [K//g, N] float16 → already TM
         #   zeros:   [K//g, N//8] int32 → unpack → [K//g, N] (+1 offset)
-        x = x.cuda()
         if x.dtype == torch.int32:
             xs = _get_u4_slices(x, torch.uint8)
             if kind == 'weight':
@@ -311,7 +308,6 @@ class CompressedTensorFormat(WeightFormat):
         return wp is not None and wp.dtype == torch.int32
 
     def normalize(self, x: Tensor, kind: str) -> Tensor:
-        x = x.cuda()
         if x.dtype == torch.int32:
             xs = _get_u4_slices(x, torch.uint8)
             if kind == 'weight':
@@ -352,7 +348,6 @@ class FP8Format(WeightFormat):
         return w is None or w.dtype in (torch.float8_e4m3fn, torch.uint8)
 
     def normalize(self, x: Tensor, kind: str) -> Tensor:
-        x = x.cuda()
         if x.dtype == torch.float8_e4m3fn:
             x = x.view(dtype=torch.uint8)
         if x.dim() >= 2:
@@ -398,7 +393,6 @@ class MXFP4Format(WeightFormat):
         return w is None or w.dtype == torch.uint8
 
     def normalize(self, x: Tensor, kind: str) -> Tensor:
-        x = x.cuda()
         if kind == 'weight':
             xs = _get_u4_slices(torch.flatten(x, start_dim=-2), torch.uint8)
             x = torch.flatten(torch.stack(xs, dim=-1), start_dim=-2)
@@ -456,19 +450,18 @@ class WeightFormatResolver:
     def data_type(self) -> _tm.DataType:
         return self._data_type
 
-    def resolve(self, params: dict[str, Tensor], prefix: str, *,
-                index: int | None = None,
-                optional: bool = False) -> Linear | None:
-        available = {s: params[prefix + s]
-                     for s in self._suffixes if (prefix + s) in params}
-        if index is not None:
-            available = {s: t[index] for s, t in available.items()}
+    def resolve(self, pfx, *, index: int | None = None,
+                optional: bool = False):
+        """Resolve to a Linear bundle at the given Prefix."""
+        read = pfx.get if index is not None else pfx.pop
+        available = {s: read(s, sep='', index=index)
+                     for s in self._suffixes if pfx.has(s, sep='')}
 
         if not available:
             if optional:
                 return None
             raise KeyError(
-                f'no checkpoint tensors found at prefix {prefix!r} '
+                f'no checkpoint tensors found at prefix {pfx.prefix!r} '
                 f'(candidate suffixes: {sorted(self._suffixes)})')
 
         for fmt in self._formats:
@@ -476,7 +469,7 @@ class WeightFormatResolver:
                 return self._build_linear(fmt, available)
 
         raise ValueError(
-            f'no weight format accepts tensors at {prefix!r}: '
+            f'no weight format accepts tensors at {pfx.prefix!r}: '
             f'got {sorted(available)}, '
             f'tried {[f.name for f in self._formats]}')
 

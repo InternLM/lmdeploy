@@ -17,7 +17,6 @@ from ..builders import (
 from ..text_model import TextModel
 from .base import INPUT_MODELS
 from .utils import (
-    layer_progress,
     make_attention_config,
     make_ffn_config,
     make_model_weight_config,
@@ -31,6 +30,8 @@ class LlamaModel(TextModel):
 
     cfg: LlamaConfig
 
+    _uses_prefix = True
+
     def __init__(self, cfg: LlamaConfig, *, resolver):
         super().__init__(cfg, resolver=resolver)
 
@@ -43,27 +44,28 @@ class LlamaModel(TextModel):
     # model() — walks full hierarchy
     # ------------------------------------------------------------------
 
-    def model(self):
-        embed_key = 'model.embed_tokens.weight'
+    def model(self, pfx):
         root_cfg = make_model_weight_config(self.cfg)
-        root = TextModelBuilder(
+        builder = TextModelBuilder(
             root_cfg, self._ctx,
             root_handles=self._root_handles,
             tp=self._model_tp,
             vocab_size=self.cfg.vocab_size)
-        root.add_token_embeds(self._get(embed_key))
-        root.norm = self.norm(self._get('model.norm.weight'))
-        lm_key = embed_key if self.cfg.tie_word_embeddings else 'lm_head.weight'
-        root.add_lm_head(self._linear(lm_key.removesuffix('.weight')))
-        root.layers = self.layers('model.layers')
-        root.build()
+        builder.add_token_embeds(pfx.get('model.embed_tokens.weight'))
+        builder.norm = self.norm(pfx + 'model.norm')
+        lm_pfx = (pfx + 'model.embed_tokens'
+                  if self.cfg.tie_word_embeddings
+                  else pfx + 'lm_head')
+        builder.add_lm_head(self._linear(lm_pfx))
+        builder.layers = self.layers(pfx + 'model.layers')
+        builder.build()
 
     # ------------------------------------------------------------------
     # Attention / FFN factories
     # ------------------------------------------------------------------
 
     def attn(self, pfx):
-        q, k, v, o = [self._linear(f'{pfx}.{x}_proj') for x in 'qkvo']
+        q, k, v, o = [self._linear(pfx + f'{x}_proj') for x in 'qkvo']
 
         cfg = self._attn_cfg.clone()
 
@@ -81,7 +83,7 @@ class LlamaModel(TextModel):
         return m.build()
 
     def ffn(self, pfx):
-        w1, w3, w2 = [self._linear(f'{pfx}.{x}_proj') for x in ('gate', 'up', 'down')]
+        w1, w3, w2 = [self._linear(pfx + f'{x}_proj') for x in ('gate', 'up', 'down')]
 
         cfg = self._ffn_cfg.clone()
 
@@ -91,13 +93,11 @@ class LlamaModel(TextModel):
 
     def layers(self, pfx):
         layers = ModuleListBuilder(ModuleListConfig(), self._ctx)
-        for i in layer_progress(self.cfg.num_hidden_layers):
+        for i, p in pfx.slices(0, self.cfg.num_hidden_layers):
             d = DecoderLayerBuilder(DecoderLayerConfig(), self._ctx)
-            d.attention_norm = self.norm(
-                self._get(f'{pfx}.{i}.input_layernorm.weight'))
-            d.attention = self.attn(f'{pfx}.{i}.self_attn')
-            d.ffn_norm = self.norm(
-                self._get(f'{pfx}.{i}.post_attention_layernorm.weight'))
-            d.feed_forward = self.ffn(f'{pfx}.{i}.mlp')
+            d.attention_norm = self.norm(p + 'input_layernorm')
+            d.attention = self.attn(p + 'self_attn')
+            d.ffn_norm = self.norm(p + 'post_attention_layernorm')
+            d.feed_forward = self.ffn(p + 'mlp')
             layers[i] = d.build()
         return layers.build()

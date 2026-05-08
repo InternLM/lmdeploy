@@ -22,7 +22,6 @@ from ..linear import transform_output_dim
 from ..text_model import TextModel
 from .base import INPUT_MODELS
 from .utils import (
-    layer_progress,
     make_attention_config,
     make_ffn_config,
     make_model_weight_config,
@@ -56,6 +55,8 @@ class InternLM2Model(TextModel):
 
     cfg: PretrainedConfig
 
+    _uses_prefix = True
+
     def __init__(self, cfg: PretrainedConfig, *, resolver):
         super().__init__(cfg, resolver=resolver)
 
@@ -68,32 +69,33 @@ class InternLM2Model(TextModel):
     # model() — full topology
     # ------------------------------------------------------------------
 
-    def model(self):
-        embed_key = 'model.tok_embeddings.weight'
+    def model(self, pfx):
         root_cfg = make_model_weight_config(self.cfg)
-        root = TextModelBuilder(
+        builder = TextModelBuilder(
             root_cfg, self._ctx,
             root_handles=self._root_handles,
             tp=self._model_tp,
             vocab_size=self.cfg.vocab_size)
-        root.add_token_embeds(self._get(embed_key))
-        root.norm = self.norm(self._get('model.norm.weight'))
-        lm_key = embed_key if self.cfg.tie_word_embeddings else 'output.weight'
-        root.add_lm_head(self._linear(lm_key.removesuffix('.weight')))
-        root.layers = self.layers('model.layers')
-        root.build()
+        builder.add_token_embeds(pfx.get('model.tok_embeddings.weight'))
+        builder.norm = self.norm(pfx + 'model.norm')
+        lm_pfx = (pfx + 'model.tok_embeddings'
+                  if self.cfg.tie_word_embeddings
+                  else pfx + 'output')
+        builder.add_lm_head(self._linear(lm_pfx))
+        builder.layers = self.layers(pfx + 'model.layers')
+        builder.build()
 
     # ------------------------------------------------------------------
     # attn() — deinterleave fused wqkv then feed to AttentionBuilder
     # ------------------------------------------------------------------
 
     def attn(self, pfx):
-        wqkv = self._linear(f'{pfx}.wqkv')
+        wqkv = self._linear(pfx + 'wqkv')
         cfg = self._attn_cfg.clone()
         q, k, v = _split_qkv_gqa(
             wqkv, head_dim=cfg.head_dim,
             q_heads=cfg.head_num, kv_heads=cfg.kv_head_num)
-        o = self._linear(f'{pfx}.wo')
+        o = self._linear(pfx + 'wo')
 
         def reorder(x):
             return reorder_rotary_emb(x, cfg.head_dim, cfg.rope.dim, resolver=self._resolver)
@@ -111,7 +113,7 @@ class InternLM2Model(TextModel):
     # ------------------------------------------------------------------
 
     def ffn(self, pfx):
-        w1, w3, w2 = [self._linear(f'{pfx}.{x}') for x in ('w1', 'w3', 'w2')]
+        w1, w3, w2 = [self._linear(pfx + x) for x in ('w1', 'w3', 'w2')]
 
         cfg = self._ffn_cfg.clone()
 
@@ -125,13 +127,11 @@ class InternLM2Model(TextModel):
 
     def layers(self, pfx):
         layers = ModuleListBuilder(ModuleListConfig(), self._ctx)
-        for i in layer_progress(self.cfg.num_hidden_layers):
+        for i, p in pfx.slices(0, self.cfg.num_hidden_layers):
             d = DecoderLayerBuilder(DecoderLayerConfig(), self._ctx)
-            d.attention_norm = self.norm(
-                self._get(f'{pfx}.{i}.attention_norm.weight'))
-            d.attention = self.attn(f'{pfx}.{i}.attention')
-            d.ffn_norm = self.norm(
-                self._get(f'{pfx}.{i}.ffn_norm.weight'))
-            d.feed_forward = self.ffn(f'{pfx}.{i}.feed_forward')
+            d.attention_norm = self.norm(p + 'attention_norm')
+            d.attention = self.attn(p + 'attention')
+            d.ffn_norm = self.norm(p + 'ffn_norm')
+            d.feed_forward = self.ffn(p + 'feed_forward')
             layers[i] = d.build()
         return layers.build()

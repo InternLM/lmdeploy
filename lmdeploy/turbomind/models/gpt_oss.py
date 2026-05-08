@@ -20,7 +20,6 @@ from ..builders import (
 from ..text_model import TextModel
 from .base import INPUT_MODELS
 from .utils import (
-    layer_progress,
     make_attention_config,
     make_ffn_config,
     make_model_weight_config,
@@ -43,6 +42,8 @@ class GptOssModel(TextModel):
     """Weight model for gpt-oss (MoE with packed experts)."""
 
     cfg: GptOssConfig
+
+    _uses_prefix = True
 
     _loader_mappings = [map_experts]
 
@@ -67,27 +68,28 @@ class GptOssModel(TextModel):
     # model() — walks full hierarchy
     # ------------------------------------------------------------------
 
-    def model(self):
-        embed_key = 'model.embed_tokens.weight'
+    def model(self, pfx):
         root_cfg = make_model_weight_config(self.cfg)
-        root = TextModelBuilder(
+        builder = TextModelBuilder(
             root_cfg, self._ctx,
             root_handles=self._root_handles,
             tp=self._model_tp,
             vocab_size=self.cfg.vocab_size)
-        root.add_token_embeds(self._get(embed_key))
-        root.norm = self.norm(self._get('model.norm.weight'))
-        lm_key = embed_key if self.cfg.tie_word_embeddings else 'lm_head.weight'
-        root.add_lm_head(self._linear(lm_key.removesuffix('.weight')))
-        root.layers = self.layers('model.layers')
-        root.build()
+        builder.add_token_embeds(pfx.get('model.embed_tokens.weight'))
+        builder.norm = self.norm(pfx + 'model.norm')
+        lm_pfx = (pfx + 'model.embed_tokens'
+                  if self.cfg.tie_word_embeddings
+                  else pfx + 'lm_head')
+        builder.add_lm_head(self._linear(lm_pfx))
+        builder.layers = self.layers(pfx + 'model.layers')
+        builder.build()
 
     # ------------------------------------------------------------------
     # Attention / FFN / MoE factories
     # ------------------------------------------------------------------
 
     def attn(self, pfx, layer):
-        q, k, v, o = [self._linear(f'{pfx}.{x}_proj') for x in 'qkvo']
+        q, k, v, o = [self._linear(pfx + f'{x}_proj') for x in 'qkvo']
 
         cfg = self._attn_cfg.clone()
         if self.cfg.layer_types[layer] == 'sliding_attention':
@@ -102,35 +104,35 @@ class GptOssModel(TextModel):
         m.add_qkv_proj(q, k, v)
         m.add_o_proj(o)
 
-        m.add_param('sinks', self._get(f'{pfx}.sinks'))
+        m.add_param('sinks', pfx.pop('sinks'))
         return m.build()
 
     def moe(self, pfx):
         cfg = self._moe_cfg.clone()
         m = MoeBuilder(cfg, self._ctx)
-        m.add_gate('gate', self._linear(f'{pfx}.router'))
+        m.add_gate('gate', self._linear(pfx + 'router'))
+        experts_pfx = pfx + 'experts'
         experts = ModuleListBuilder(ModuleListConfig(), self._ctx)
         for e in range(cfg.expert_num):
-            experts[e] = self._packed_moe_ffn(f'{pfx}.experts', e)
+            experts[e] = self._packed_moe_ffn(experts_pfx, e)
         m.experts = experts.build()
         return m.build()
 
     def layers(self, pfx):
         layers = ModuleListBuilder(ModuleListConfig(), self._ctx)
-        for i in layer_progress(self.cfg.num_hidden_layers):
+        for i, p in pfx.slices(0, self.cfg.num_hidden_layers):
             d = DecoderLayerBuilder(DecoderLayerConfig(), self._ctx)
-            d.attention = self.attn(f'{pfx}.{i}.self_attn', i)
-            d.moe_ffn = self.moe(f'{pfx}.{i}.mlp')
-            d.attention_norm = self.norm(self._get(f'{pfx}.{i}.input_layernorm.weight'))
-            d.ffn_norm = self.norm(self._get(f'{pfx}.{i}.post_attention_layernorm.weight'))
+            d.attention = self.attn(p + 'self_attn', i)
+            d.moe_ffn = self.moe(p + 'mlp')
+            d.attention_norm = self.norm(p + 'input_layernorm')
+            d.ffn_norm = self.norm(p + 'post_attention_layernorm')
             layers[i] = d.build()
         return layers.build()
 
-    def _packed_moe_ffn(self, pfx, idx):
+    def _packed_moe_ffn(self, experts_pfx, idx):
         w1, w2, w3 = read_packed_moe_expert(
-            self.params,
-            f'{pfx}.gate_up_proj',
-            f'{pfx}.down_proj',
+            experts_pfx + 'gate_up_proj',
+            experts_pfx + 'down_proj',
             idx,
             resolver=self._resolver,
             interleaved=True,

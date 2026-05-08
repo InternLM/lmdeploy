@@ -24,7 +24,6 @@ from ..builders.attention import split_output_gate
 from ..text_model import TextModel
 from .base import INPUT_MODELS
 from .utils import (
-    layer_progress,
     make_attention_config,
     make_ffn_config,
     make_model_weight_config,
@@ -39,11 +38,16 @@ def map_packed_qwen35_experts(name: str) -> str:
     return re.sub(r'(mlp\.experts\.(?:gate_up|down)_proj)$', r'\1.weight', name)
 
 
+def _center_norm(w):
+    return 1.0 + w.float()
+
+
 @INPUT_MODELS.register_module(name='qwen3_5-moe')
 @INPUT_MODELS.register_module(name='qwen3_5')
 class Qwen3_5Model(TextModel):
     """Weight model for Qwen3.5 (dense + linear-attn + optional MoE)."""
 
+    _uses_prefix = True
     _loader_mappings = [map_packed_qwen35_experts]
     cfg: Qwen3_5TextConfig | Qwen3_5MoeTextConfig
 
@@ -91,27 +95,29 @@ class Qwen3_5Model(TextModel):
     # model() — same topology as old code
     # ------------------------------------------------------------------
 
-    def model(self):
+    def model(self, pfx):
         root_cfg = make_model_weight_config(self.cfg)
-        root = TextModelBuilder(
+        builder = TextModelBuilder(
             root_cfg, self._ctx,
             root_handles=self._root_handles,
             tp=self._model_tp,
             vocab_size=self.cfg.vocab_size)
-        embed_key = 'model.language_model.embed_tokens.weight'
-        root.add_token_embeds(self._get(embed_key))
-        root.norm = self.norm(1.0 + self._get('model.language_model.norm.weight'))
-        lm_key = embed_key if self.cfg.tie_word_embeddings else 'lm_head.weight'
-        root.add_lm_head(self._linear(lm_key.removesuffix('.weight')))
-        root.layers = self.layers('model.language_model.layers')
-        root.build()
+        builder.add_token_embeds(pfx.get('model.language_model.embed_tokens.weight'))
+        builder.norm = self.norm(
+            pfx + 'model.language_model.norm', _center_norm)
+        lm_pfx = (pfx + 'model.language_model.embed_tokens'
+                  if self.cfg.tie_word_embeddings
+                  else pfx + 'lm_head')
+        builder.add_lm_head(self._linear(lm_pfx))
+        builder.layers = self.layers(pfx + 'model.language_model.layers')
+        builder.build()
 
     # ------------------------------------------------------------------
     # Attention / linear-attention factories
     # ------------------------------------------------------------------
 
     def attn(self, pfx):
-        q, k, v, o = [self._linear(f'{pfx}.{x}_proj') for x in 'qkvo']
+        q, k, v, o = [self._linear(pfx + f'{x}_proj') for x in 'qkvo']
 
         cfg = self._attn_cfg.clone()
         q, gate = split_output_gate(q, head_num=cfg.head_num)
@@ -126,32 +132,31 @@ class Qwen3_5Model(TextModel):
         m.add_qkv_proj(q, k, v, gate=gate)
         m.add_o_proj(o)
 
-        q_norm, k_norm = [self._get(f'{pfx}.{x}_norm.weight') for x in 'qk']
-
-        m.q_norm = self.norm(reorder(1.0 + q_norm.float()))
-        m.k_norm = self.norm(reorder(1.0 + k_norm.float()))
+        m.q_norm = self.norm(pfx + 'q_norm',
+                             lambda w: reorder(_center_norm(w)))
+        m.k_norm = self.norm(pfx + 'k_norm',
+                             lambda w: reorder(_center_norm(w)))
 
         return m.build()
 
     def linear_attn(self, pfx):
         cfg = self._dn_cfg.clone()
-        builder = DeltaNetBuilder(cfg, self._ctx,
-                                  tp=self._attn_tp)
+        builder = DeltaNetBuilder(cfg, self._ctx, tp=self._attn_tp)
 
         builder.add_input_projections(
-            in_proj_qkv=self._linear(f'{pfx}.in_proj_qkv'),
-            in_proj_z=self._linear(f'{pfx}.in_proj_z'),
-            in_proj_b=self._linear(f'{pfx}.in_proj_b'),
-            in_proj_a=self._linear(f'{pfx}.in_proj_a'),
-            out_proj=self._linear(f'{pfx}.out_proj'),
+            in_proj_qkv=self._linear(pfx + 'in_proj_qkv'),
+            in_proj_z=self._linear(pfx + 'in_proj_z'),
+            in_proj_b=self._linear(pfx + 'in_proj_b'),
+            in_proj_a=self._linear(pfx + 'in_proj_a'),
+            out_proj=self._linear(pfx + 'out_proj'),
             qkv_split=self._linear_qkv_split)
         builder.add_scalar_params(
-            a_log=self._get(f'{pfx}.A_log'),
-            dt_bias=self._get(f'{pfx}.dt_bias'))
+            a_log=pfx.pop('A_log'),
+            dt_bias=pfx.pop('dt_bias'))
         builder.add_conv1d(
-            self._get(f'{pfx}.conv1d.weight'),
+            pfx.pop('conv1d.weight'),
             qkv_split=self._linear_qkv_split)
-        builder.norm = self.norm(self._get(f'{pfx}.norm.weight'))  # ! not zero-centered
+        builder.norm = self.norm(pfx + 'norm')  # not zero-centered
         return builder.build()
 
     # ------------------------------------------------------------------
@@ -160,7 +165,7 @@ class Qwen3_5Model(TextModel):
 
     def ffn(self, pfx, inter_size, is_expert=False):
         try:
-            w1, w3, w2 = [self._linear(f'{pfx}.{x}_proj')
+            w1, w3, w2 = [self._linear(pfx + f'{x}_proj')
                           for x in ('gate', 'up', 'down')]
         except KeyError:
             return None
@@ -178,23 +183,24 @@ class Qwen3_5Model(TextModel):
 
         m = MoeBuilder(cfg, self._ctx)
 
-        m.add_gate('gate', self._linear(f'{pfx}.gate'))
+        m.add_gate('gate', self._linear(pfx + 'gate'))
 
+        experts_pfx = pfx + 'experts'
         experts = ModuleListBuilder(ModuleListConfig(), self._ctx)
         for e in range(self._n_experts):
-            experts[e] = self._moe_expert_ffn(f'{pfx}.experts', e, self.cfg.moe_intermediate_size)
+            experts[e] = self._moe_expert_ffn(
+                experts_pfx, e, self.cfg.moe_intermediate_size)
         m.experts = experts.build()
 
-        m.add_gate('shared_gate', self._linear(f'{pfx}.shared_expert_gate'))
-        shared = self.ffn(f'{pfx}.shared_expert', self.cfg.shared_expert_intermediate_size)
+        m.add_gate('shared_gate', self._linear(pfx + 'shared_expert_gate'))
+        shared = self.ffn(pfx + 'shared_expert', self.cfg.shared_expert_intermediate_size)
 
         return m.build(), shared
 
-    def _packed_moe_ffn(self, pfx, expert_idx, inter_size):
+    def _packed_moe_ffn(self, experts_pfx, expert_idx, inter_size):
         w1, w2, w3 = read_packed_moe_expert(
-            self.params,
-            f'{pfx}.gate_up_proj',
-            f'{pfx}.down_proj',
+            experts_pfx + 'gate_up_proj',
+            experts_pfx + 'down_proj',
             expert_idx,
             resolver=self._resolver,
         )
@@ -205,11 +211,10 @@ class Qwen3_5Model(TextModel):
         m.add_ffn(w1, w2, w3)
         return m.build()
 
-    def _moe_expert_ffn(self, pfx, expert_idx, inter_size):
-        expert_pfx = f'{pfx}.{expert_idx}'
-        inter_size = self.cfg.moe_intermediate_size
+    def _moe_expert_ffn(self, experts_pfx, expert_idx, inter_size):
+        expert_pfx = experts_pfx + expert_idx
         return (self.ffn(expert_pfx, inter_size, is_expert=True)
-                or self._packed_moe_ffn(pfx, expert_idx, inter_size))
+                or self._packed_moe_ffn(experts_pfx, expert_idx, inter_size))
 
     # ------------------------------------------------------------------
     # layers() — dispatch by layer type
@@ -217,17 +222,17 @@ class Qwen3_5Model(TextModel):
 
     def layers(self, pfx):
         layers = ModuleListBuilder(ModuleListConfig(), self._ctx)
-        for i in layer_progress(self.cfg.num_hidden_layers):
+        for i, p in pfx.slices(0, self.cfg.num_hidden_layers):
             d = DecoderLayerBuilder(DecoderLayerConfig(), self._ctx)
             if self.cfg.layer_types[i] == 'linear_attention':
-                d.linear_attn = self.linear_attn(f'{pfx}.{i}.linear_attn')
+                d.linear_attn = self.linear_attn(p + 'linear_attn')
             else:
-                d.attention = self.attn(f'{pfx}.{i}.self_attn')
+                d.attention = self.attn(p + 'self_attn')
             if self._n_experts > 0:
-                d.moe_ffn, d.feed_forward = self.moe(f'{pfx}.{i}.mlp')
+                d.moe_ffn, d.feed_forward = self.moe(p + 'mlp')
             else:
-                d.feed_forward = self.ffn(f'{pfx}.{i}.mlp', self.cfg.intermediate_size)
-            d.attention_norm = self.norm(1.0 + self._get(f'{pfx}.{i}.input_layernorm.weight').float())
-            d.ffn_norm = self.norm(1.0 + self._get(f'{pfx}.{i}.post_attention_layernorm.weight').float())
+                d.feed_forward = self.ffn(p + 'mlp', self.cfg.intermediate_size)
+            d.attention_norm = self.norm(p + 'input_layernorm', _center_norm)
+            d.ffn_norm = self.norm(p + 'post_attention_layernorm', _center_norm)
             layers[i] = d.build()
         return layers.build()

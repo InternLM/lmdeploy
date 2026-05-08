@@ -3,7 +3,7 @@
 import torch
 
 from .builders._base import Context, ParallelGroup
-from .loader import create_loader
+from .checkpoint import Prefix, create_checkpoint
 
 
 class ModelLoader:
@@ -48,16 +48,22 @@ class ModelLoader:
         )
 
     def export(self):
-        loader = create_loader(self.model_path, None,
-                               getattr(self.model, '_loader_mappings', []))
-        self.model.set_params(loader.all_items())
-        self.model.model()
+        ckpt = create_checkpoint(
+            self.model_path,
+            mappings=getattr(self.model, '_loader_mappings', []))
+        try:
+            self.model.model(Prefix(ckpt))
+        finally:
+            ckpt.close()
         torch.cuda.empty_cache()
 
     def export_iter(self):
-        loader = create_loader(self.model_path, None,
-                               getattr(self.model, '_loader_mappings', []))
-        self.model.set_params(loader.all_items())
-        self.model.model()
-        yield -1
+        ckpt = create_checkpoint(
+            self.model_path,
+            mappings=getattr(self.model, '_loader_mappings', []))
+        try:
+            self.model.model(Prefix(ckpt))
+            yield -1
+        finally:
+            ckpt.close()
         torch.cuda.empty_cache()

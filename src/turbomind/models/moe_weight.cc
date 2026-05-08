@@ -95,12 +95,12 @@ void MoeWeight::prepare()
     block_cfg.inter_size = e0->inter_size;
     // tp_size=1: expert weights are already TP-sharded — the block
     // just batches them and must not divide inter_size a second time.
-    block_cfg.tp_size    = 1;
-    block_cfg.tp_rank    = 0;
-    block_cfg.data_type  = data_type_;
-    block_cfg.act_type   = static_cast<int>(act_type_);
-    block_cfg.fuse_silu  = fuse_silu_act_;
-    block_               = std::make_unique<FfnWeight>(block_cfg);
+    block_cfg.tp_size   = 1;
+    block_cfg.tp_rank   = 0;
+    block_cfg.data_type = data_type_;
+    block_cfg.act_type  = static_cast<int>(act_type_);
+    block_cfg.fuse_silu = fuse_silu_act_;
+    block_              = std::make_unique<FfnWeight>(block_cfg);
 
     // Link each linear in the block to the corresponding expert linears
     auto get_expert_w1w3 = [this](int i) -> LinearWeight* {

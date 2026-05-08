@@ -12,8 +12,7 @@ import math
 
 import torch
 
-from ..linear import (Linear, round_up_input_groups, round_up_output_groups,
-                       transform_output_dim)
+from ..linear import Linear, round_up_input_groups, round_up_output_groups, transform_output_dim
 from ._base import Builder, ParallelGroup, SplitSide
 
 __all__ = [

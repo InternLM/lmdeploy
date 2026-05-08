@@ -146,42 +146,58 @@ class _FakeTrivial(WeightFormat):
 # ---------------------------------------------------------------------------
 
 
-class TestResolveQuantized:
+class TestResolveViaPrefix:
 
     def _make_resolver(self):
         return WeightFormatResolver(
             data_type=0,
             formats=[_FakeQuant(), _FakeTrivial()])
 
+    def _ckpt_with(self, params):
+        # Reuse the test_prefix _FakeCheckpoint shape so the resolver only
+        # depends on get/has/pop.
+        class _Fake:
+            def __init__(self, d): self._d = d
+            def get(self, k, index=None):
+                t = self._d[k]
+                if index is not None:
+                    t = t[index]
+                return t
+            def pop(self, k, index=None):
+                t = self._d.pop(k)
+                if index is not None:
+                    t = t[index]
+                return t
+            def has(self, k): return k in self._d
+            def keys(self): return iter(self._d.keys())
+        return _Fake(params)
+
+    def _pfx(self, params, prefix='layer'):
+        from lmdeploy.turbomind.checkpoint import Prefix
+        return Prefix(self._ckpt_with(params), prefix)
+
     def test_quant_prefix_picks_quant_format(self):
-        params = {
+        pfx = self._pfx({
             'layer.qfoo':   torch.randn(4, 4),
             'layer.scales': torch.randn(1, 4),
-        }
-        lin = self._make_resolver().resolve(params, 'layer')
+        })
+        lin = self._make_resolver().resolve(pfx)
         assert isinstance(lin.weight_format, _FakeQuant)
         assert set(lin.tensors) == {'weight', 'scales'}
 
     def test_trivial_prefix_falls_through(self):
-        params = {'layer.weight': torch.randn(4, 4)}
-        lin = self._make_resolver().resolve(params, 'layer')
+        pfx = self._pfx({'layer.weight': torch.randn(4, 4)})
+        lin = self._make_resolver().resolve(pfx)
         assert isinstance(lin.weight_format, _FakeTrivial)
 
-
-class TestResolveFailureModes:
-
-    def _make_resolver(self):
-        return WeightFormatResolver(
-            data_type=0,
-            formats=[_FakeQuant(), _FakeTrivial()])
-
     def test_missing_prefix_default_raises_key_error(self):
+        pfx = self._pfx({}, 'missing.prefix')
         with pytest.raises(KeyError, match='no checkpoint tensors found'):
-            self._make_resolver().resolve({}, 'missing.prefix')
+            self._make_resolver().resolve(pfx)
 
     def test_missing_prefix_optional_returns_none(self):
-        assert self._make_resolver().resolve(
-            {}, 'missing.prefix', optional=True) is None
+        pfx = self._pfx({}, 'missing.prefix')
+        assert self._make_resolver().resolve(pfx, optional=True) is None
 
     def test_tensors_present_no_match_raises_value_error(self):
         class _PickyTrivial(_FakeTrivial):
@@ -191,34 +207,29 @@ class TestResolveFailureModes:
         resolver = WeightFormatResolver(
             data_type=0,
             formats=[_FakeQuant(), _PickyTrivial()])
-        params = {'layer.weight': torch.randn(4, 4)}
+        pfx = self._pfx({'layer.weight': torch.randn(4, 4)})
         with pytest.raises(ValueError, match='no weight format accepts'):
-            resolver.resolve(params, 'layer')
-
-
-class TestIndexedProbe:
+            resolver.resolve(pfx)
 
     def test_index_slices_available_tensors(self):
         resolver = WeightFormatResolver(
             data_type=0, formats=[_FakeTrivial()])
         params = {'experts.weight': torch.arange(24).reshape(3, 4, 2).float()}
-        lin = resolver.resolve(params, 'experts', index=1)
+        pfx = self._pfx(params, 'experts')
+        lin = resolver.resolve(pfx, index=1)
         assert lin.tensors['weight'].shape == (4, 2)
         torch.testing.assert_close(
             lin.tensors['weight'],
             torch.arange(8, 16).reshape(4, 2).float())
 
-
-class TestZerosSynthesis:
-
     def test_synthesize_zeros_called_when_missing(self):
-        params = {
+        pfx = self._pfx({
             'layer.qfoo':   torch.randn(4, 4),
             'layer.scales': torch.ones(1, 4),
-        }
+        })
         resolver = WeightFormatResolver(
             data_type=0, formats=[_FakeQuantWithZeros()])
-        lin = resolver.resolve(params, 'layer')
+        lin = resolver.resolve(pfx)
         assert 'zeros' in lin.tensors
         torch.testing.assert_close(
             lin.tensors['zeros'], torch.zeros(1, 4))
@@ -226,14 +237,14 @@ class TestZerosSynthesis:
     def test_synthesize_zeros_skipped_when_present(self):
         scales   = torch.ones(1, 4)
         supplied = torch.full_like(scales, 5.0)
-        params = {
+        pfx = self._pfx({
             'layer.qfoo':   torch.randn(4, 4),
             'layer.scales': scales,
             'layer.qzeros': supplied,
-        }
+        })
         resolver = WeightFormatResolver(
             data_type=0, formats=[_FakeQuantWithZeros()])
-        lin = resolver.resolve(params, 'layer')
+        lin = resolver.resolve(pfx)
         torch.testing.assert_close(lin.tensors['zeros'], supplied)
 
 

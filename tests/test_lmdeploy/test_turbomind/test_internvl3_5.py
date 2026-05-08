@@ -5,69 +5,8 @@ import _turbomind as _tm
 import pytest
 from transformers import PretrainedConfig
 
+from lmdeploy.turbomind.checkpoint import Prefix
 from lmdeploy.turbomind.models.qwen3 import Qwen3TextModel
-
-
-def _make_qwen3_stub():
-    model = Qwen3TextModel.__new__(Qwen3TextModel)
-    model.cfg = PretrainedConfig(hidden_size=4, vocab_size=8, tie_word_embeddings=False)
-    model._contexts = []
-    model._root_handles = []
-    model._model_tp_ranks = []
-    model._layer_prefix = 'model.layers'
-    model._tie_embeddings = False
-    model._get = Mock(side_effect=lambda key: f'tensor:{key}')
-    model._linear = Mock(side_effect=lambda key: f'linear:{key}')
-    model.norm = Mock(side_effect=lambda weight: f'norm:{weight}')
-    model.layers = Mock(side_effect=lambda pfx: f'layers:{pfx}')
-    return model
-
-
-class _FakeRoot:
-
-    last = None
-
-    def __init__(self, *args, **kwargs):
-        self.add_token_embeds = Mock()
-        self.add_lm_head = Mock()
-        self.norm = None
-        self.layers = None
-        self.build = Mock()
-        _FakeRoot.last = self
-
-
-def test_qwen3_model_uses_optional_checkpoint_prefix(monkeypatch):
-    import lmdeploy.turbomind.models.qwen3 as qwen3_mod
-
-    monkeypatch.setattr(qwen3_mod, 'TextModelBuilder', _FakeRoot)
-    model = _make_qwen3_stub()
-
-    model.model(pfx='language_model.')
-
-    model._get.assert_any_call('language_model.model.embed_tokens.weight')
-    model._get.assert_any_call('language_model.model.norm.weight')
-    model._linear.assert_called_once_with('language_model.lm_head')
-    model.layers.assert_called_once_with('language_model.model.layers')
-
-    root = _FakeRoot.last
-    root.add_token_embeds.assert_called_once_with(
-        'tensor:language_model.model.embed_tokens.weight')
-    root.add_lm_head.assert_called_once_with('linear:language_model.lm_head')
-    root.build.assert_called_once_with()
-
-
-def test_qwen3_model_default_prefix_preserves_plain_keys(monkeypatch):
-    import lmdeploy.turbomind.models.qwen3 as qwen3_mod
-
-    monkeypatch.setattr(qwen3_mod, 'TextModelBuilder', _FakeRoot)
-    model = _make_qwen3_stub()
-
-    model.model()
-
-    model._get.assert_any_call('model.embed_tokens.weight')
-    model._get.assert_any_call('model.norm.weight')
-    model._linear.assert_called_once_with('lm_head')
-    model.layers.assert_called_once_with('model.layers')
 
 
 def _internvl_cfg(inner_arch='Qwen3ForCausalLM'):
@@ -102,7 +41,7 @@ def test_internvl35_model_creates_qwen3_text_model():
     assert model.vision_model is None
 
 
-def test_internvl35_model_delegates_runtime_params_and_export(monkeypatch):
+def test_internvl35_model_delegates_runtime_and_model(monkeypatch):
     from lmdeploy.turbomind.models.internvl3_5 import InternVL3_5Model
 
     fake_text_model = Mock()
@@ -135,12 +74,15 @@ def test_internvl35_model_delegates_runtime_params_and_export(monkeypatch):
         model_tp=model_tp,
     )
 
-    params = {'language_model.lm_head.weight': object()}
-    model.set_params(params)
-    fake_text_model.set_params.assert_called_once_with(params)
+    fake_ckpt = Mock()
+    pfx = Prefix(fake_ckpt)
+    model.model(pfx)
 
-    model.model()
-    fake_text_model.model.assert_called_once_with(pfx='language_model.')
+    fake_text_model.model.assert_called_once()
+    inner_pfx = fake_text_model.model.call_args[0][0]
+    assert isinstance(inner_pfx, Prefix)
+    assert inner_pfx.ckpt is fake_ckpt
+    assert inner_pfx.prefix == 'language_model'
 
     fake_text_model.cfg.vocab_size = 32000
     assert model._vocab_size == 32000

@@ -83,7 +83,7 @@ def _cast_shard_for_tm(shard: torch.Tensor, tm_tensor) -> torch.Tensor:
 def _copy_shard_to_param(handle, param_name: str, shard: torch.Tensor, *,
                          alloc_shape: list[int] | None = None,
                          alloc_dtype=None) -> None:
-    """Move shard to GPU, allocate the C++ param slot, cast, and copy.
+    """Allocate the C++ param slot, cast, and copy the shard.
 
     Invariant: ``dst.byte_size == shard.nbytes`` after the cast.  Upstream
     is responsible for any padding/reshape needed to satisfy this.  A
@@ -94,9 +94,7 @@ def _copy_shard_to_param(handle, param_name: str, shard: torch.Tensor, *,
     size is preserved (e.g. quantized weight: physical int32
     [in, out/8] stored in a logical UINT4 [in, out] C++ slot).
     """
-    if not shard.is_cuda:
-        shard = shard.cuda(0).contiguous()
-    elif not shard.is_contiguous():
+    if not shard.is_contiguous():
         shard = shard.contiguous()
 
     if alloc_shape is None:

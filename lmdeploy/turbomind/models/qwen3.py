@@ -22,7 +22,6 @@ from ..builders import (
 from ..text_model import TextModel
 from .base import INPUT_MODELS
 from .utils import (
-    layer_progress,
     make_attention_config,
     make_ffn_config,
     make_model_weight_config,
@@ -37,6 +36,8 @@ class Qwen3TextModel(TextModel):
     """Weight model for Qwen3 (dense) and Qwen3-MoE."""
 
     cfg: Qwen3Config | Qwen3MoeConfig
+
+    _uses_prefix = True
 
     def __init__(self, cfg: Qwen3Config | Qwen3MoeConfig, *, resolver):
         super().__init__(cfg, resolver=resolver)
@@ -56,30 +57,31 @@ class Qwen3TextModel(TextModel):
             self._moe_cfg.expert_num = self._n_experts
 
     # ------------------------------------------------------------------
-    # model() — walks full hierarchy (same as existing code)
+    # model() — walks full hierarchy
     # ------------------------------------------------------------------
 
-    def model(self, pfx=''):
-        embed_key = 'model.embed_tokens.weight'
+    def model(self, pfx):
         root_cfg = make_model_weight_config(self.cfg)
-        root = TextModelBuilder(
+        builder = TextModelBuilder(
             root_cfg, self._ctx,
             root_handles=self._root_handles,
             tp=self._model_tp,
             vocab_size=self.cfg.vocab_size)
-        root.add_token_embeds(self._get(f'{pfx}{embed_key}'))
-        root.norm = self.norm(self._get(f'{pfx}model.norm.weight'))
-        lm_key = embed_key if self.cfg.tie_word_embeddings else 'lm_head.weight'
-        root.add_lm_head(self._linear(f'{pfx}{lm_key.removesuffix(".weight")}'))
-        root.layers = self.layers(f'{pfx}model.layers')
-        root.build()
+        builder.add_token_embeds(pfx.get('model.embed_tokens.weight'))
+        builder.norm = self.norm(pfx + 'model.norm')
+        lm_pfx = (pfx + 'model.embed_tokens'
+                  if self.cfg.tie_word_embeddings
+                  else pfx + 'lm_head')
+        builder.add_lm_head(self._linear(lm_pfx))
+        builder.layers = self.layers(pfx + 'model.layers')
+        builder.build()
 
     # ------------------------------------------------------------------
     # Attention / FFN / MoE factories
     # ------------------------------------------------------------------
 
     def attn(self, pfx):
-        q, k, v, o = [self._linear(f'{pfx}.{x}_proj') for x in 'qkvo']
+        q, k, v, o = [self._linear(pfx + f'{x}_proj') for x in 'qkvo']
 
         cfg = self._attn_cfg.clone()
 
@@ -88,57 +90,48 @@ class Qwen3TextModel(TextModel):
 
         q, k = [reorder(x) for x in (q, k)]
 
-        # No per-layer attention fields for Qwen3 (no sliding window).
         m = AttentionBuilder(cfg, self._ctx, tp=self._attn_tp)
-
         m.add_qkv_proj(q, k, v)
         m.add_o_proj(o)
 
-        q_norm, k_norm = [self._get(f'{pfx}.{x}_norm.weight') for x in 'qk']
-        m.q_norm = self.norm(reorder(q_norm))
-        m.k_norm = self.norm(reorder(k_norm))
+        m.q_norm = self.norm(pfx + 'q_norm', reorder)
+        m.k_norm = self.norm(pfx + 'k_norm', reorder)
 
         return m.build()
 
-
     def ffn(self, pfx, is_expert=False):
-        w1, w3, w2 = [self._linear(f'{pfx}.{x}_proj') for x in ('gate', 'up', 'down')]
+        w1, w3, w2 = [self._linear(pfx + f'{x}_proj') for x in ('gate', 'up', 'down')]
 
         cfg = self._ffn_cfg.clone()
-        cfg.is_expert  = is_expert
+        cfg.is_expert = is_expert
 
         m = FfnBuilder(cfg, self._ctx, tp=self._mlp_tp)
         m.add_ffn(w1, w2, w3)
         return m.build()
 
-
     def moe(self, pfx):
         cfg = self._moe_cfg.clone()
 
         m = MoeBuilder(cfg, self._ctx)
-
-        m.add_gate('gate', self._linear(f'{pfx}.gate'))
+        m.add_gate('gate', self._linear(pfx + 'gate'))
 
         experts = ModuleListBuilder(ModuleListConfig(), self._ctx)
         for e in range(self.cfg.num_experts):
-            experts[e] = self.ffn(f'{pfx}.experts.{e}', is_expert=True)
+            experts[e] = self.ffn(pfx + 'experts' + e, is_expert=True)
         m.experts = experts.build()
 
         return m.build()
 
-
     def layers(self, pfx):
         layers = ModuleListBuilder(ModuleListConfig(), self._ctx)
-
-        for i in layer_progress(self.cfg.num_hidden_layers):
+        for i, p in pfx.slices(0, self.cfg.num_hidden_layers):
             d = DecoderLayerBuilder(DecoderLayerConfig(), self._ctx)
-            d.attention_norm = self.norm(self._get(f'{pfx}.{i}.input_layernorm.weight'))
-            d.attention = self.attn(f'{pfx}.{i}.self_attn')
-            d.ffn_norm = self.norm(self._get(f'{pfx}.{i}.post_attention_layernorm.weight'))
+            d.attention_norm = self.norm(p + 'input_layernorm')
+            d.attention = self.attn(p + 'self_attn')
+            d.ffn_norm = self.norm(p + 'post_attention_layernorm')
             if self._n_experts:
-                d.moe_ffn = self.moe(f'{pfx}.{i}.mlp')
+                d.moe_ffn = self.moe(p + 'mlp')
             else:
-                d.feed_forward = self.ffn(f'{pfx}.{i}.mlp')
+                d.feed_forward = self.ffn(p + 'mlp')
             layers[i] = d.build()
-
         return layers.build()

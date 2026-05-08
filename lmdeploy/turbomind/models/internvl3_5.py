@@ -18,8 +18,10 @@ def _cfg_get(cfg, name: str, default=None):
 class InternVL3_5Model:
     """Aggregate source model for Qwen3-backed InternVL3.5 checkpoints."""
 
-    _text_pfx = 'language_model.'
+    _text_pfx = 'language_model'
     _supported_inner_arch = 'Qwen3ForCausalLM'
+
+    _uses_prefix = True
 
     def __init__(self, cfg: PretrainedConfig, *, resolver):
         llm_cfg = _cfg_get(cfg, 'llm_config')
@@ -54,8 +56,5 @@ class InternVL3_5Model:
     def _vocab_size(self):
         return self.text_model.cfg.vocab_size
 
-    def set_params(self, params: dict):
-        self.text_model.set_params(params)
-
-    def model(self):
-        self.text_model.model(pfx=self._text_pfx)
+    def model(self, pfx):
+        self.text_model.model(pfx + self._text_pfx)

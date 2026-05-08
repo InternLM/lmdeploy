@@ -19,7 +19,6 @@ from ..builders import (
 from ..text_model import TextModel
 from .base import INPUT_MODELS
 from .utils import (
-    layer_progress,
     make_mla_config,
     make_model_weight_config,
     make_moe_config,
@@ -31,6 +30,8 @@ class Glm4MoeLiteModel(TextModel):
     """Weight model for GLM-4 MoE Lite (e.g. GLM-4.7-Flash)."""
 
     cfg: Glm4MoeLiteConfig
+
+    _uses_prefix = True
 
     def __init__(self, cfg: Glm4MoeLiteConfig, *, resolver):
         super().__init__(cfg, resolver=resolver)
@@ -57,21 +58,21 @@ class Glm4MoeLiteModel(TextModel):
         self._tune_layer_num = 2  # GLM-MoE recommends tuning 2 layers
 
     # ------------------------------------------------------------------
-    # model() — same as old code
+    # model()
     # ------------------------------------------------------------------
 
-    def model(self):
+    def model(self, pfx):
         root_cfg = make_model_weight_config(self.cfg)
-        root = TextModelBuilder(
+        builder = TextModelBuilder(
             root_cfg, self._ctx,
             root_handles=self._root_handles,
             tp=self._model_tp,
             vocab_size=self.cfg.vocab_size)
-        root.add_token_embeds(self._get('model.embed_tokens.weight'))
-        root.norm = self.norm(self._get('model.norm.weight'))
-        root.add_lm_head(self._linear('lm_head'))  # GLM: never tied
-        root.layers = self.layers('model.layers')
-        root.build()
+        builder.add_token_embeds(pfx.get('model.embed_tokens.weight'))
+        builder.norm = self.norm(pfx + 'model.norm')
+        builder.add_lm_head(self._linear(pfx + 'lm_head'))  # GLM: never tied
+        builder.layers = self.layers(pfx + 'model.layers')
+        builder.build()
 
     # ------------------------------------------------------------------
     # MLA attention (uses MLABuilder + self._attn_cfg clone)
@@ -81,17 +82,17 @@ class Glm4MoeLiteModel(TextModel):
         cfg = self._attn_cfg.clone()
         m = MLABuilder(cfg, self._ctx, tp=self._attn_tp)
 
-        q_b = (self._linear(f'{pfx}.q_b_proj', optional=True) or
-               self._linear(f'{pfx}.q_proj'))
+        q_b = (self._linear(pfx + 'q_b_proj', optional=True) or
+               self._linear(pfx + 'q_proj'))
         m.add_projections(
-            q_a_proj=self._linear(f'{pfx}.q_a_proj'),
+            q_a_proj=self._linear(pfx + 'q_a_proj'),
             q_b_proj=q_b,
-            kv_a_proj=self._linear(f'{pfx}.kv_a_proj_with_mqa'),
-            kv_b_proj=self._linear(f'{pfx}.kv_b_proj'),
-            wo=self._linear(f'{pfx}.o_proj'),
+            kv_a_proj=self._linear(pfx + 'kv_a_proj_with_mqa'),
+            kv_b_proj=self._linear(pfx + 'kv_b_proj'),
+            wo=self._linear(pfx + 'o_proj'),
         )
-        m.q_a_layernorm  = self.norm(self._get(f'{pfx}.q_a_layernorm.weight'))
-        m.kv_a_layernorm = self.norm(self._get(f'{pfx}.kv_a_layernorm.weight'))
+        m.q_a_layernorm  = self.norm(pfx + 'q_a_layernorm')
+        m.kv_a_layernorm = self.norm(pfx + 'kv_a_layernorm')
         return m.build()
 
     # ------------------------------------------------------------------
@@ -99,7 +100,7 @@ class Glm4MoeLiteModel(TextModel):
     # ------------------------------------------------------------------
 
     def ffn(self, pfx, inter_size, is_expert=False):
-        w1, w3, w2 = [self._linear(f'{pfx}.{x}_proj') for x in ('gate', 'up', 'down')]
+        w1, w3, w2 = [self._linear(pfx + f'{x}_proj') for x in ('gate', 'up', 'down')]
 
         cfg = self._ffn_cfg.clone()
         cfg.inter_size = inter_size
@@ -114,32 +115,32 @@ class Glm4MoeLiteModel(TextModel):
 
         m = MoeBuilder(cfg, self._ctx)
 
-        m.add_gate('gate', self._linear(f'{pfx}.gate'))
+        m.add_gate('gate', self._linear(pfx + 'gate'))
 
-        correction = self._get(f'{pfx}.gate.e_score_correction_bias')
+        correction = pfx.pop('gate.e_score_correction_bias')
         m.add_param('score_correction_bias', correction)
 
         experts = ModuleListBuilder(ModuleListConfig(), self._ctx)
         for e in range(cfg.expert_num):
-            experts[e] = self.ffn(f'{pfx}.experts.{e}', 
+            experts[e] = self.ffn(pfx + 'experts' + e,
                                   self.cfg.moe_intermediate_size, is_expert=True)
         m.experts = experts.build()
 
-        shared = self.ffn(f'{pfx}.shared_experts', 
+        shared = self.ffn(pfx + 'shared_experts',
                           self.cfg.intermediate_size * self.cfg.n_shared_experts)
 
         return m.build(), shared
 
     def layers(self, pfx):
         layers = ModuleListBuilder(ModuleListConfig(), self._ctx)
-        for i in layer_progress(self.cfg.num_hidden_layers):
+        for i, p in pfx.slices(0, self.cfg.num_hidden_layers):
             d = DecoderLayerBuilder(DecoderLayerConfig(), self._ctx)
-            d.attention_norm = self.norm(self._get(f'{pfx}.{i}.input_layernorm.weight'))
-            d.attention = self.attn(f'{pfx}.{i}.self_attn')
-            d.ffn_norm = self.norm(self._get(f'{pfx}.{i}.post_attention_layernorm.weight'))
+            d.attention_norm = self.norm(p + 'input_layernorm')
+            d.attention = self.attn(p + 'self_attn')
+            d.ffn_norm = self.norm(p + 'post_attention_layernorm')
             if self.cfg.mlp_layer_types[i] == 'sparse':
-                d.moe_ffn, d.feed_forward = self.moe(f'{pfx}.{i}.mlp')
+                d.moe_ffn, d.feed_forward = self.moe(p + 'mlp')
             else:
-                d.feed_forward = self.ffn(f'{pfx}.{i}.mlp', self.cfg.intermediate_size)
+                d.feed_forward = self.ffn(p + 'mlp', self.cfg.intermediate_size)
             layers[i] = d.build()
         return layers.build()

@@ -226,7 +226,8 @@ def transform_input_dim(fn):
 @transform_output_dim
 def pad_output_groups(t: torch.Tensor, *, src_groups: int,
                       dst_groups: int) -> torch.Tensor:
-    """Pad output dim by src_groups → dst_groups, viewing it as (groups, -1)."""
+    """Pad output dim by src_groups → dst_groups, viewing it as (groups,
+    -1)."""
     t = t.reshape(t.shape[:-1] + (src_groups, -1))
     pad = t.new_zeros(t.shape[:-2] + (dst_groups - src_groups, t.shape[-1]))
     return torch.cat([t, pad], dim=-2).reshape(t.shape[:-2] + (-1,))
