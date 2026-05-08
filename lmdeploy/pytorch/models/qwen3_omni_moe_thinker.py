@@ -658,13 +658,8 @@ class Qwen3OmniMoeThinkerForConditionalGeneration(nn.Module, DeployModelMixinV1,
                             audio_data = audio_data.squeeze(0)
                         audio_chunks.append(audio_data)
                     audio_values = torch.cat(audio_chunks, dim=-1)
-                    audio_token_id = audio_inputs[0].meta.get('audio_token_id')
-                    audio_mask = (input_ids == audio_token_id)
-                    audio_feature_lengths = torch.cat([
-                        inp.meta['audio_feature_lengths']
-                        if isinstance(inp.meta['audio_feature_lengths'], torch.Tensor) else
-                        torch.tensor([inp.meta['audio_feature_lengths']], dtype=torch.long) for inp in audio_inputs
-                    ])
+                    audio_mask = self.get_multimodal_mask(input_ids, audio_inputs)
+                    audio_feature_lengths = torch.cat([inp.meta['audio_feature_lengths'] for inp in audio_inputs])
 
                 if visual_inputs:
                     pixel_values = torch.cat([inp.data for inp in visual_inputs])

@@ -3,6 +3,8 @@ from types import SimpleNamespace
 import torch
 
 from lmdeploy.pytorch.models.qwen3_omni_moe_thinker import Qwen3OmniInputProcessor
+from lmdeploy.pytorch.models.utils.model import DeployModelMixinV1
+from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.vl.constants import Modality
 from lmdeploy.vl.model.base import MultimodalSpecialTokens, VisionModel
 from lmdeploy.vl.model.preprocess_utils import get_expanded_mm_items
@@ -256,3 +258,15 @@ def test_qwen3_omni_input_processor_packs_mixed_modalities():
     assert mm_data[1].mrope_pos_ids[0].tolist() == [0, 0, 0]
     assert mm_data[1].mrope_pos_ids[-1].tolist() == [38, 38, 38]
     assert mm_data[2].meta['second_per_grid'] == 2.0
+
+
+def test_multimodal_mask_includes_audio_token_id():
+    input_ids = torch.tensor([1, 10, 10, 11, 11, 12])
+    mm_inputs = [
+        MultiModalData(modality=Modality.IMAGE, data=torch.empty(0), start=1, end=3, meta={'image_token_id': 10}),
+        MultiModalData(modality=Modality.AUDIO, data=torch.empty(0), start=3, end=5, meta={'audio_token_id': 11}),
+    ]
+
+    mask = DeployModelMixinV1().get_multimodal_mask(input_ids, mm_inputs)
+
+    assert mask.tolist() == [False, True, True, True, True, False]
