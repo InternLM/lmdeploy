@@ -39,7 +39,7 @@ def _repeat_kv_heads(tensor: torch.Tensor, *, tp: int,
     n_repeat = target_heads // heads
     per_head = tensor.size(-1) // heads
     t = tensor.view(tensor.size(0), heads, per_head)
-    return t.repeat(1, n_repeat, 1).reshape(tensor.size(0), target_heads * per_head)
+    return t.repeat_interleave(n_repeat, dim=1).reshape(tensor.size(0), target_heads * per_head)
 
 
 def repeat_kv_for_tp(k: Linear, v: Linear, *,
