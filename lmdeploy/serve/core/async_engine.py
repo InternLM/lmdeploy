@@ -713,8 +713,8 @@ class AsyncEngine:
                     async for outputs in gen:
                         pass
                     logits[i] = outputs.logits[:input_len, :]
-            if sequence_end and self.backend == 'pytorch':
-                await handle.async_end(session.session_id)
+                if sequence_end and self.backend == 'pytorch':
+                    await handle.async_end(session.session_id)
 
         create_sessions = False
         if sessions is None:
