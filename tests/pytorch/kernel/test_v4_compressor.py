@@ -749,7 +749,7 @@ class TestFillCompressedKV:
 class TestFillCompressedKVFP8:
     """Test FP8 direct write in fill_compressed_kv.
 
-    Verifies that the kernel's MODEL1 sparse FP8 output matches the Python reference (quantize_model1_fp8_sparse). Only
+    Verifies that the kernel's V4 FlashMLA sparse FP8 output matches the Python reference (quantize_v4_flashmla_sparse). Only
     ratio=4 is tested since r128 has no FP8 cache.
     """
 
@@ -772,13 +772,13 @@ class TestFillCompressedKVFP8:
         return self.D_NOPE + 2 * self.D_ROPE + self.NUM_TILES + 1  # 584
 
     def _reference_pack_fp8(self, bf16_tokens):
-        """Pack BF16 tokens [N, 512] to MODEL1 FP8 using the Python
+        """Pack BF16 tokens [N, 512] to V4 FlashMLA FP8 using the Python
         reference."""
-        from lmdeploy.pytorch.backends.cuda.attention.flashmla_utils import quantize_model1_fp8_sparse
-        # quantize_model1_fp8_sparse expects [num_blocks, block_size, 1, 512]
+        from .dsv4_utils import quantize_v4_flashmla_sparse
+        # quantize_v4_flashmla_sparse expects [num_blocks, block_size, 1, 512]
         # For N tokens, treat as 1 block of N entries
         input_cache = bf16_tokens.unsqueeze(0).unsqueeze(2)  # [1, N, 1, 512]
-        packed = quantize_model1_fp8_sparse(input_cache)  # [1, N, 1, 584]
+        packed = quantize_v4_flashmla_sparse(input_cache)  # [1, N, 1, 584]
         return packed.squeeze(0).squeeze(1)  # [N, 584]
 
     def _run_test(self, compressed_kv, cu_q_seqlens, kv_seqlens, block_offsets, device):
@@ -805,9 +805,9 @@ class TestFillCompressedKVFP8:
                            fp8_cache=fp8_cache)
 
         # Reference: dequantize FP8 cache and compare with BF16 cache
-        from lmdeploy.pytorch.backends.cuda.attention.flashmla_utils import dequantize_model1_fp8_sparse
+        from .dsv4_utils import dequantize_v4_flashmla_sparse
         # Dequantize all blocks
-        dequant = dequantize_model1_fp8_sparse(
+        dequant = dequantize_v4_flashmla_sparse(
             fp8_cache.unsqueeze(2))  # [num_blocks, entries_per_block, 1, 512]
         dequant = dequant.squeeze(2)  # [num_blocks, entries_per_block, 512]
 

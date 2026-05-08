@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
-from lmdeploy.pytorch.backends.cuda.attention.flashmla_utils import model1_fp8_sparse_token_dim
+from lmdeploy.pytorch.kernels.cuda.dsv4.layout import V4_FLASHMLA_D_NOPE, V4_FLASHMLA_D_ROPE, V4_FLASHMLA_NUM_TILES
 from lmdeploy.pytorch.config import BlockCacheSpec, ModelConfig, StateCacheSpec
 
 from .builder import AutoModelConfigBuilder
@@ -45,7 +45,8 @@ def _finalize_v4_cache_specs(model_config: ModelConfig, block_size: int):
                          'has an integral number of entries per block.')
 
     hf_config = model_config.hf_config
-    packed_token_dim = model1_fp8_sparse_token_dim(64)
+    # V4 FlashMLA sparse FP8: 448 fp8 NoPE + 128 bytes (64 bf16) RoPE + 7 e8m0 scales + 1 pad = 584
+    packed_token_dim = V4_FLASHMLA_D_NOPE + 2 * V4_FLASHMLA_D_ROPE + V4_FLASHMLA_NUM_TILES + 1
     num_layers = hf_config.num_hidden_layers
     compress_ratios = getattr(hf_config, 'compress_ratios', None) or [0] * num_layers
     ratio4_layers = [i for i, r in enumerate(compress_ratios) if r == 4]
@@ -97,7 +98,8 @@ class DeepseekV4ModelConfigBuilder(AutoModelConfigBuilder):
         """
         bos_token_id = getattr(hf_config, 'bos_token_id', None)
         head_dim = getattr(hf_config, 'head_dim', 512)
-        packed_token_dim = model1_fp8_sparse_token_dim(64)
+        # V4 FlashMLA sparse FP8: 448 fp8 NoPE + 128 bytes (64 bf16) RoPE + 7 e8m0 scales + 1 pad = 584
+        packed_token_dim = V4_FLASHMLA_D_NOPE + 2 * V4_FLASHMLA_D_ROPE + V4_FLASHMLA_NUM_TILES + 1
         num_layers = hf_config.num_hidden_layers
         compress_ratios = getattr(hf_config, 'compress_ratios', None) or [0] * num_layers
 

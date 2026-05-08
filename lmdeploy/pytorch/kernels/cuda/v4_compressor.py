@@ -625,9 +625,9 @@ def _fill_compressed_kv_kernel(
             cache_ptrs = kv_cache_ptr + phys_block * kvc_stride_b + block_off * kvc_stride_s + offs_d * kvc_stride_d
             tl.store(cache_ptrs, compressed.to(kv_cache_ptr.dtype.element_ty))
 
-    # ---- Write to FP8 paged block cache (MODEL1 sparse format) ----
+    # ---- Write to FP8 paged block cache (V4 FlashMLA sparse format) ----
     if has_fp8:
-        # FlashMLA MODEL1 sparse FP8 layout (matches C++ kernel addressing):
+        # V4 FlashMLA sparse FP8 layout (matches C++ kernel addressing):
         #   NoPE+RoPE region: [num_blocks, entries_per_block, 576] as e4m3fn
         #     per-token: [NoPE 448 fp8 | RoPE 128 bytes (64 bf16)]
         #     token stride = 576 bytes
@@ -639,6 +639,7 @@ def _fill_compressed_kv_kernel(
         #   fp8_nope_rope_ptr  — e4m3fn, stride_b/stride_s for NoPE write
         #   fp8_rope_bf16_ptr  — bfloat16 view of the RoPE region
         #   fp8_scales_u8_ptr  — uint8 view of the scales region
+        # Must match V4_FLASHMLA_* in dsv4/layout.py
         D_NOPE: tl.constexpr = 448
         D_ROPE: tl.constexpr = 64
         TILE_SIZE: tl.constexpr = 64
@@ -732,7 +733,7 @@ def fill_compressed_kv(
     (abs_pos = n*ratio - 1), this kernel scatters those entries into the
     block-paged kv_cache used by the decode-phase sparse attention.
 
-    When fp8_cache is provided, also writes MODEL1 sparse FP8 packed entries
+    When fp8_cache is provided, also writes V4 FlashMLA sparse FP8 packed entries
     directly into fp8_cache, eliminating the need for a separate Python-side
     packing step.
 
@@ -755,7 +756,7 @@ def fill_compressed_kv(
       phys_block  = block_offsets[batch_id, block_idx]  (physical block in kv_cache)
       write target: kv_cache[phys_block, block_off]
 
-    == FP8 MODEL1 sparse format ==
+    == FP8 V4 FlashMLA sparse format ==
     When fp8_cache is not None, the kernel also writes to:
       fp8_cache: [num_blocks, entries_per_block, packed_dim=584]
     Per-token layout: [NoPE 448 FP8 | RoPE 128 BF16-as-bytes | 7 E8M0 scales | 1 pad]
@@ -806,7 +807,7 @@ def fill_compressed_kv(
         kv_scale_cache = dummy
 
     if has_fp8:
-        # FlashMLA MODEL1 sparse FP8 layout: the fp8_cache tensor is
+        # V4 FlashMLA sparse FP8 layout: the fp8_cache tensor is
         # [num_blocks, entries_per_block, 584] but the actual memory layout
         # has NoPE+RoPE at stride 576 bytes per token, with scales in a
         # separate region. We create three views matching FlashMLA's addressing:

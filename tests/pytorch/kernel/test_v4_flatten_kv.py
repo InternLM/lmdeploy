@@ -465,12 +465,13 @@ class TestFlattenV4KV:
 
     def test_fp8_compressed_path(self, device, dtype):
         """Flatten with FP8 compressed cache: dequantize → compare vs BF16 reference."""
-        from lmdeploy.pytorch.backends.cuda.attention.flashmla_utils import MODEL1_D, quantize_model1_fp8_sparse
+        from lmdeploy.pytorch.kernels.cuda.dsv4.layout import V4_FLASHMLA_HEAD_DIM
         from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
+        from .dsv4_utils import quantize_v4_flashmla_sparse
 
         bsz, window_size = 1, 4
         compress_ratio = 4
-        head_dim = MODEL1_D  # must be 512 for FP8 path
+        head_dim = V4_FLASHMLA_HEAD_DIM  # must be 512 for FP8 path
         block_size = 4
         total_len = 10
         total_lens = torch.tensor([total_len], dtype=torch.long, device=device)
@@ -495,8 +496,8 @@ class TestFlattenV4KV:
             window_kv, compressed_kv_bf16, block_offsets, total_lens,
             window_size, compress_ratio)
 
-        # Quantize compressed cache to FP8 MODEL1 format
-        fp8_cache = quantize_model1_fp8_sparse(
+        # Quantize compressed cache to V4 FlashMLA FP8 format
+        fp8_cache = quantize_v4_flashmla_sparse(
             compressed_kv_bf16.unsqueeze(2))  # [1, block_size, 1, packed_dim]
 
         # Flatten using FP8 path
@@ -512,12 +513,13 @@ class TestFlattenV4KV:
 
     def test_fp8_multi_batch(self, device, dtype):
         """FP8 path with multiple sequences of different lengths."""
-        from lmdeploy.pytorch.backends.cuda.attention.flashmla_utils import MODEL1_D, quantize_model1_fp8_sparse
+        from lmdeploy.pytorch.kernels.cuda.dsv4.layout import V4_FLASHMLA_HEAD_DIM
         from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
+        from .dsv4_utils import quantize_v4_flashmla_sparse
 
         bsz, window_size = 2, 4
         compress_ratio = 4
-        head_dim = MODEL1_D
+        head_dim = V4_FLASHMLA_HEAD_DIM
         block_size = 4
         total_lens = torch.tensor([8, 12], dtype=torch.long, device=device)
 
@@ -551,7 +553,7 @@ class TestFlattenV4KV:
 
         # Quantize to FP8
         fp8_input = compressed_kv_bf16.unsqueeze(2)  # [num_blocks, block_size, 1, head_dim]
-        fp8_cache = quantize_model1_fp8_sparse(fp8_input)
+        fp8_cache = quantize_v4_flashmla_sparse(fp8_input)
 
         # Flatten using FP8 path
         tot, mxf = _flat_kv_bounds(total_lens, window_size, compress_ratio)
@@ -738,12 +740,13 @@ class TestPackWindowTokensFP8:
 
     def test_round_trip_single_token(self, device, dtype):
         """Pack one token, dequantize, compare vs original."""
-        from lmdeploy.pytorch.backends.cuda.attention.flashmla_utils import MODEL1_D, dequantize_model1_fp8_sparse
+        from lmdeploy.pytorch.kernels.cuda.dsv4.layout import V4_FLASHMLA_HEAD_DIM
         from lmdeploy.pytorch.kernels.cuda.v4_pack_window import pack_window_tokens_fp8
+        from .dsv4_utils import dequantize_v4_flashmla_sparse
 
         window_size = 4
         packed_dim = 584
-        kv = torch.randn(1, MODEL1_D, dtype=dtype, device=device)
+        kv = torch.randn(1, V4_FLASHMLA_HEAD_DIM, dtype=dtype, device=device)
         fp8_cache = torch.zeros(1, window_size, packed_dim, dtype=torch.float8_e4m3fn, device=device)
 
         slot = torch.tensor([0], dtype=torch.long, device=device)
@@ -751,19 +754,20 @@ class TestPackWindowTokensFP8:
 
         pack_window_tokens_fp8(kv, fp8_cache, slot, positions)
 
-        deq = dequantize_model1_fp8_sparse(fp8_cache.unsqueeze(2)).squeeze(2)
+        deq = dequantize_v4_flashmla_sparse(fp8_cache.unsqueeze(2)).squeeze(2)
         err = (deq[0, 2] - kv[0]).abs().max().item()
         assert err < 0.15, f'Max error {err}'
 
     def test_round_trip_multiple_tokens(self, device, dtype):
         """Pack multiple tokens, dequantize, compare."""
-        from lmdeploy.pytorch.backends.cuda.attention.flashmla_utils import MODEL1_D, dequantize_model1_fp8_sparse
+        from lmdeploy.pytorch.kernels.cuda.dsv4.layout import V4_FLASHMLA_HEAD_DIM
         from lmdeploy.pytorch.kernels.cuda.v4_pack_window import pack_window_tokens_fp8
+        from .dsv4_utils import dequantize_v4_flashmla_sparse
 
         num_tokens = 3
         window_size = 4
         packed_dim = 584
-        kv = torch.randn(num_tokens, MODEL1_D, dtype=dtype, device=device)
+        kv = torch.randn(num_tokens, V4_FLASHMLA_HEAD_DIM, dtype=dtype, device=device)
         fp8_cache = torch.zeros(1, window_size, packed_dim, dtype=torch.float8_e4m3fn, device=device)
 
         slot = torch.tensor([0, 0, 0], dtype=torch.long, device=device)
@@ -771,7 +775,7 @@ class TestPackWindowTokensFP8:
 
         pack_window_tokens_fp8(kv, fp8_cache, slot, positions)
 
-        deq = dequantize_model1_fp8_sparse(fp8_cache.unsqueeze(2)).squeeze(2)
+        deq = dequantize_v4_flashmla_sparse(fp8_cache.unsqueeze(2)).squeeze(2)
         for i in range(num_tokens):
             err = (deq[0, i] - kv[i]).abs().max().item()
             assert err < 0.15, f'Token {i} max error {err}'
@@ -779,22 +783,19 @@ class TestPackWindowTokensFP8:
     def test_match_block_quantize(self, device, dtype):
         """Pack all tokens individually via kernel, compare vs block-level
         quantize."""
-        from lmdeploy.pytorch.backends.cuda.attention.flashmla_utils import (
-            MODEL1_D,
-            dequantize_model1_fp8_sparse,
-            quantize_model1_fp8_sparse,
-        )
+        from lmdeploy.pytorch.kernels.cuda.dsv4.layout import V4_FLASHMLA_HEAD_DIM
         from lmdeploy.pytorch.kernels.cuda.v4_pack_window import pack_window_tokens_fp8
+        from .dsv4_utils import dequantize_v4_flashmla_sparse, quantize_v4_flashmla_sparse
 
         num_slots = 2
         window_size = 4
         packed_dim = 584
-        head_dim = MODEL1_D
+        head_dim = V4_FLASHMLA_HEAD_DIM
 
         # Block-level reference
         block_kv = torch.randn(num_slots, window_size, 1, head_dim, dtype=dtype, device=device)
-        packed_ref = quantize_model1_fp8_sparse(block_kv)
-        deq_ref = dequantize_model1_fp8_sparse(packed_ref).squeeze(2)
+        packed_ref = quantize_v4_flashmla_sparse(block_kv)
+        deq_ref = dequantize_v4_flashmla_sparse(packed_ref).squeeze(2)
 
         # Per-token kernel pack
         fp8_kernel = torch.zeros(num_slots, window_size, packed_dim, dtype=torch.float8_e4m3fn, device=device)
@@ -804,7 +805,7 @@ class TestPackWindowTokensFP8:
 
         pack_window_tokens_fp8(kv_all, fp8_kernel, slot_all, pos_all)
 
-        deq_kernel = dequantize_model1_fp8_sparse(fp8_kernel.unsqueeze(2)).squeeze(2)
+        deq_kernel = dequantize_v4_flashmla_sparse(fp8_kernel.unsqueeze(2)).squeeze(2)
 
         # Should be exactly identical (same quantization logic)
         max_diff = (deq_kernel - deq_ref).abs().max().item()
@@ -812,12 +813,13 @@ class TestPackWindowTokensFP8:
 
     def test_multi_slot(self, device, dtype):
         """Pack tokens into different slots."""
-        from lmdeploy.pytorch.backends.cuda.attention.flashmla_utils import MODEL1_D, dequantize_model1_fp8_sparse
+        from lmdeploy.pytorch.kernels.cuda.dsv4.layout import V4_FLASHMLA_HEAD_DIM
         from lmdeploy.pytorch.kernels.cuda.v4_pack_window import pack_window_tokens_fp8
+        from .dsv4_utils import dequantize_v4_flashmla_sparse
 
         window_size = 4
         packed_dim = 584
-        kv = torch.randn(3, MODEL1_D, dtype=dtype, device=device)
+        kv = torch.randn(3, V4_FLASHMLA_HEAD_DIM, dtype=dtype, device=device)
         fp8_cache = torch.zeros(2, window_size, packed_dim, dtype=torch.float8_e4m3fn, device=device)
 
         slot = torch.tensor([0, 1, 1], dtype=torch.long, device=device)
@@ -825,7 +827,7 @@ class TestPackWindowTokensFP8:
 
         pack_window_tokens_fp8(kv, fp8_cache, slot, positions)
 
-        deq = dequantize_model1_fp8_sparse(fp8_cache.unsqueeze(2)).squeeze(2)
+        deq = dequantize_v4_flashmla_sparse(fp8_cache.unsqueeze(2)).squeeze(2)
         for i, (s, p) in enumerate(zip(slot.tolist(), positions.tolist())):
             err = (deq[s, p] - kv[i]).abs().max().item()
             assert err < 0.15, f'Token {i} (slot={s}, pos={p}) error {err}'

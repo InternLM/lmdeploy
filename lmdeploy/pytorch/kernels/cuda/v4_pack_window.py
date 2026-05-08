@@ -1,9 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Triton kernel to pack BF16 tokens into FlashMLA MODEL1 sparse FP8 flat-
+"""Triton kernel to pack BF16 tokens into V4 FlashMLA sparse FP8 flat-
 layout window cache, replacing the per-token Python loop in
 _pack_window_state_tokens.
 
-FlashMLA MODEL1 flat layout per slot (viewed as flat bytes):
+V4 FlashMLA flat layout per slot (viewed as flat bytes):
   [token_0 NoPE+RoPE | token_1 NoPE+RoPE | ... | token_0 scales | token_1 scales | ...]
   NoPE+RoPE per token = 576 bytes (448 e4m3fn + 128 bf16)
   Scales per token = 8 bytes (7 e8m0fnu + 1 padding)
@@ -92,7 +92,7 @@ def pack_window_tokens_fp8(
     slot: torch.Tensor,
     positions: torch.Tensor,
 ):
-    """Pack BF16 tokens into FlashMLA MODEL1 sparse FP8 window cache.
+    """Pack BF16 tokens into V4 FlashMLA sparse FP8 window cache.
 
     Args:
         kv_tokens: [num_tokens, 512] BF16 tokens to pack.
@@ -100,11 +100,11 @@ def pack_window_tokens_fp8(
         slot: [num_tokens] slot indices (which cache row to write to).
         positions: [num_tokens] ring-buffer positions within the window.
     """
-    from lmdeploy.pytorch.backends.cuda.attention.flashmla_utils import (
-        MODEL1_D_NOPE,
-        MODEL1_D_ROPE,
-        MODEL1_NUM_TILES,
-        MODEL1_TILE_SIZE,
+    from lmdeploy.pytorch.kernels.cuda.dsv4.layout import (
+        V4_FLASHMLA_D_NOPE,
+        V4_FLASHMLA_D_ROPE,
+        V4_FLASHMLA_NUM_TILES,
+        V4_FLASHMLA_TILE_SIZE,
     )
 
     assert kv_tokens.dim() == 2
@@ -113,7 +113,7 @@ def pack_window_tokens_fp8(
         return
 
     window_size = window_state_fp8_cache.size(1)
-    nope_rope_stride = MODEL1_D_NOPE + 2 * MODEL1_D_ROPE  # 576 bytes per token in NoPE+RoPE region
+    nope_rope_stride = V4_FLASHMLA_D_NOPE + 2 * V4_FLASHMLA_D_ROPE  # 576 bytes per token in NoPE+RoPE region
     num_slots = window_state_fp8_cache.size(0)
 
     # Create three views of the same FP8 cache buffer (same pattern as fill_compressed_kv)
@@ -122,16 +122,16 @@ def pack_window_tokens_fp8(
     # NoPE+RoPE region: [num_slots, window_size * 576] as e4m3fn
     nope_rope = flat[:, :window_size * nope_rope_stride].view(
         num_slots, window_size, nope_rope_stride)
-    nope_view = nope_rope[:, :, :MODEL1_D_NOPE]  # [num_slots, window_size, 448] e4m3fn
+    nope_view = nope_rope[:, :, :V4_FLASHMLA_D_NOPE]  # [num_slots, window_size, 448] e4m3fn
 
     # RoPE region: slice the RoPE part first (128 e4m3fn bytes = 64 bf16 elements),
-    # then view as bf16 — same pattern as quantize_model1_fp8_sparse
-    rope_e4 = nope_rope[:, :, MODEL1_D_NOPE:]  # [num_slots, window_size, 128] e4m3fn
+    # then view as bf16 — same pattern as quantize_v4_flashmla_sparse
+    rope_e4 = nope_rope[:, :, V4_FLASHMLA_D_NOPE:]  # [num_slots, window_size, 128] e4m3fn
     rope_view = rope_e4.view(torch.bfloat16)    # [num_slots, window_size, 64] bf16
 
     # Scale region: uint8 view
     scale_view = flat[:, window_size * nope_rope_stride:].view(
-        num_slots, window_size, 8)[:, :, :MODEL1_NUM_TILES].view(torch.uint8)
+        num_slots, window_size, 8)[:, :, :V4_FLASHMLA_NUM_TILES].view(torch.uint8)
 
     grid = (num_tokens,)
     _pack_window_tokens_fp8_kernel[grid](
@@ -151,8 +151,8 @@ def pack_window_tokens_fp8(
         stride_scale_pos=scale_view.stride(1),
         stride_slot=1,
         WINDOW_SIZE=window_size,
-        D_NOPE=MODEL1_D_NOPE,
-        D_ROPE=MODEL1_D_ROPE,
-        TILE_SIZE=MODEL1_TILE_SIZE,
-        NUM_TILES=MODEL1_NUM_TILES,
+        D_NOPE=V4_FLASHMLA_D_NOPE,
+        D_ROPE=V4_FLASHMLA_D_ROPE,
+        TILE_SIZE=V4_FLASHMLA_TILE_SIZE,
+        NUM_TILES=V4_FLASHMLA_NUM_TILES,
     )

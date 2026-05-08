@@ -121,7 +121,7 @@ def flatten_v4_kv(
         cu_seqlens_k: optional [bsz+1] int32 cumulative KV sequence lengths.
             If None, computed from kv_seqlens.
         fp8_compressed_kv_cache: optional [num_blocks, entries_per_block, 584]
-            FP8 MODEL1 sparse paged cache. When provided and compressed_kv_cache
+            FP8 V4 FlashMLA sparse paged cache. When provided and compressed_kv_cache
             is None, the FP8 cache is dequantized to a temporary BF16 tensor
             and used instead.
         slot: optional [bsz] int64 slot indices into the global
@@ -136,9 +136,9 @@ def flatten_v4_kv(
     """
     # If FP8 cache is provided and no BF16 cache, dequantize first
     if fp8_compressed_kv_cache is not None and compressed_kv_cache is None:
-        from lmdeploy.pytorch.backends.cuda.attention.flashmla_utils import dequantize_model1_fp8_sparse
+        from lmdeploy.pytorch.kernels.cuda.dsv4.layout import dequantize_v4_flashmla_sparse
         # fp8_cache is [num_blocks, entries, 584]; dequantize expects [num_blocks, entries, 1, 584]
-        dequant = dequantize_model1_fp8_sparse(
+        dequant = dequantize_v4_flashmla_sparse(
             fp8_compressed_kv_cache.unsqueeze(2)).squeeze(2)  # [num_blocks, entries, 512]
         # Clone to decouple from FP8 cache views. No synchronize() needed —
         # same-stream kernel launches are ordered, so the Triton flatten kernel
