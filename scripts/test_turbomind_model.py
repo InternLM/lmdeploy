@@ -112,7 +112,8 @@ def run_smoke_infer(
     prompt = 'Write a short paragraph about the importance of reading books.'
 
     t0 = time.perf_counter()
-    with pipeline(model_path, backend_config=engine_config, log_level='WARNING') as pipe:
+    with pipeline(model_path, backend_config=engine_config, log_level='WARNING',
+                  trust_remote_code=True) as pipe:
         create_s = time.perf_counter() - t0
         t1 = time.perf_counter()
         out = pipe([prompt], gen_config=gen_config, do_preprocess=True)
