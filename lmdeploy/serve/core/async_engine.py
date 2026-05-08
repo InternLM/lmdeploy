@@ -398,25 +398,36 @@ class AsyncEngine:
                 logger.warning('chat_template_kwargs["enable_thinking"] is already set, '
                                'the value will not be overwritten by enable_thinking')
         if messages:
-            prompt = messages
-            self.request_logger.log_prompt(session, prompt=prompt)
-            prompt_input = await self.prompt_processor.get_prompt_input(prompt=prompt,
-                                                                        do_preprocess=do_preprocess,
-                                                                        sequence_start=sequence_start,
-                                                                        adapter_name=adapter_name,
-                                                                        tools=tools,
-                                                                        reasoning_effort=reasoning_effort,
-                                                                        chat_template_kwargs=chat_template_kwargs,
-                                                                        media_io_kwargs=media_io_kwargs,
-                                                                        mm_processor_kwargs=mm_processor_kwargs,
-                                                                        **kwargs)
-            prompt = prompt_input.get('prompt')
-            input_ids = prompt_input.get('input_ids')
-            self.request_logger.log_inputs(session,
-                                           prompt=prompt,
-                                           prompt_token_ids=input_ids,
-                                           gen_config=gen_config,
-                                           adapter_name=adapter_name)
+            try:
+                prompt = messages
+                self.request_logger.log_prompt(session, prompt=prompt)
+                prompt_input = await self.prompt_processor.get_prompt_input(prompt=prompt,
+                                                                            do_preprocess=do_preprocess,
+                                                                            sequence_start=sequence_start,
+                                                                            adapter_name=adapter_name,
+                                                                            tools=tools,
+                                                                            reasoning_effort=reasoning_effort,
+                                                                            chat_template_kwargs=chat_template_kwargs,
+                                                                            media_io_kwargs=media_io_kwargs,
+                                                                            mm_processor_kwargs=mm_processor_kwargs,
+                                                                            **kwargs)
+                prompt = prompt_input.get('prompt')
+                input_ids = prompt_input.get('input_ids')
+                self.request_logger.log_inputs(session,
+                                            prompt=prompt,
+                                            prompt_token_ids=input_ids,
+                                            gen_config=gen_config,
+                                            adapter_name=adapter_name)
+            except Exception as e:
+                logger.error(f'[generate] error in prompt processing: {e}')
+                metrics_processor.increase_failed_requests('error')
+                yield GenOut(response=f'error in prompt processing: {e}',
+                             history_token_len=session.step,
+                             input_token_len=len(input_ids),
+                             generate_token_len=0,
+                             finish_reason='error',
+                             token_ids=[])
+                return
         else:
             # TODO(lvhan) VLM doesn't support input_ids as an argument.
             # Figure out a graceful way to handle the invalid input
