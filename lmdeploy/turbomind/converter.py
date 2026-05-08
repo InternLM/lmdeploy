@@ -28,7 +28,7 @@ logger = get_logger('lmdeploy')
 
 def _build_resolver(model_format: str | None,
                     group_size: int | None,
-                    data_type: '_tm.DataType') -> WeightFormatResolver:
+                    data_type) -> WeightFormatResolver:
     """Build the active resolver: quantized format (if any) + trivial fallback.
 
     Called after the int4 fp16 force but before the ``compressed-tensors →
