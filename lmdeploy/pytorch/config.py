@@ -98,6 +98,7 @@ class CacheConfig:
     window_size: int = -1
     cache_max_entry_count: float = 0.8
     max_prefill_token_num: int = 8192
+    cudagraph_capture_batch_sizes: list[int] | None = None
     enable_prefix_caching: bool = False
     quant_policy: QuantPolicy = QuantPolicy.NONE
     device_type: str = 'cuda'
@@ -390,9 +391,8 @@ class ModelConfig:
                 activations. Refer to `PyTorchEngineConfig` for details
             hf_overrides (dict[str, Any]): overrides for the HF config.
         """
-        from transformers import AutoConfig
-
         from lmdeploy.pytorch.transformers import config_from_pretrained
+        from transformers import AutoConfig
         hf_config = config_from_pretrained(pretrained_model_name_or_path, trust_remote_code=trust_remote_code)
         if getattr(hf_config, 'model_type', None) in ['phi3']:
             # phi3 + trust_remote_code leads to error when tp.
@@ -587,6 +587,7 @@ class SpecDecodeConfig:
                                        num_gpu_blocks=target_cache_cfg.num_gpu_blocks,
                                        cache_max_entry_count=target_cache_cfg.cache_max_entry_count,
                                        max_prefill_token_num=target_cache_cfg.max_prefill_token_num,
+                                       cudagraph_capture_batch_sizes=target_cache_cfg.cudagraph_capture_batch_sizes,
                                        device_type=target_cache_cfg.device_type,
                                        migration_backend=target_cache_cfg.migration_backend)
         obj = cls(

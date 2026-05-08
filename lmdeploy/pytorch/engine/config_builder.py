@@ -39,6 +39,18 @@ class ConfigBuilder:
                                f'since dllm_block_length({engine_config.dllm_block_length}) * max_batch_size '
                                f'({max_batch_size}) > max_prefill_token_num ({max_prefill_token_num}).')
 
+        capture_sizes = engine_config.cudagraph_capture_batch_sizes
+        if capture_sizes is not None:
+            assert len(capture_sizes) > 0, 'cudagraph_capture_batch_sizes should not be empty'
+            assert all(isinstance(size, int) for size in capture_sizes), (
+                'cudagraph_capture_batch_sizes should be integers')
+            assert all(size > 0 for size in capture_sizes), 'cudagraph_capture_batch_sizes should be positive'
+            capture_sizes = sorted({size for size in capture_sizes if size <= engine_config.max_batch_size})
+            assert len(capture_sizes) > 0, (
+                'cudagraph_capture_batch_sizes should contain at least one value '
+                f'<= max_batch_size ({engine_config.max_batch_size})')
+            engine_config.cudagraph_capture_batch_sizes = capture_sizes
+
         if engine_config.dp != 1:
             if engine_config.tp == 1 and engine_config.ep == 1:
                 logger.warning('Data parallelism is enabled but tensor parallelism and '
@@ -67,6 +79,7 @@ class ConfigBuilder:
             num_gpu_blocks=engine_config.num_gpu_blocks,
             cache_max_entry_count=engine_config.cache_max_entry_count,
             max_prefill_token_num=engine_config.max_prefill_token_num,
+            cudagraph_capture_batch_sizes=engine_config.cudagraph_capture_batch_sizes,
             enable_prefix_caching=engine_config.enable_prefix_caching,
             quant_policy=engine_config.quant_policy,
             device_type=engine_config.device_type,

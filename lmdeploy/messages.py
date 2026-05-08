@@ -352,6 +352,8 @@ class PytorchEngineConfig:
             would be allocate according to current environment.
         adapters: The path configs to lora adapters.
         max_prefill_token_num: tokens per iteration.
+        cudagraph_capture_batch_sizes: Batch sizes to capture CUDA graphs for.
+            If not specified, the engine will infer them from max_batch_size.
         thread_safe: thread safe engine instance.
         enable_prefix_caching: Enable token match and sharing caches.
         device_type: The inference device type, options ['cuda']
@@ -411,6 +413,7 @@ class PytorchEngineConfig:
     num_gpu_blocks: int = 0
     adapters: dict[str, str] = None
     max_prefill_token_num: int = 8192
+    cudagraph_capture_batch_sizes: list[int] | None = None
     thread_safe: bool = False
     enable_prefix_caching: bool = False
     device_type: str = 'cuda'

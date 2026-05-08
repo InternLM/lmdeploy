@@ -101,4 +101,6 @@ class GraphRunner:
 
     def get_capture_batch_sizes(self) -> list[int]:
         """Capture batch sizes."""
+        if self.cache_config.cudagraph_capture_batch_sizes is not None:
+            return self.cache_config.cudagraph_capture_batch_sizes
         return _get_capture_batch_size_impl(self.cache_config.max_batches)
