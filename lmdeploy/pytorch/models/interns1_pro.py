@@ -359,17 +359,13 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGra
 class InternS1ProInputProcessor(BaseModelInputProcessor):
     """InternS1Pro input processor."""
 
-    def __init__(self, config: PretrainedConfig, dtype: torch.dtype | None = None) -> None:
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype) -> None:
         self.config = config
         self.dtype = dtype
 
-    def _cast_dtype(self, value: torch.Tensor) -> torch.Tensor:
-        """Cast input tensor only when the model dtype is known."""
-        return value if self.dtype is None else value.to(self.dtype)
-
     def _make_image_mm_data(self, input_mm: dict[str, Any]) -> MultiModalData:
         """Make image MultiModalData."""
-        pixel_values = self._cast_dtype(input_mm['pixel_values'])
+        pixel_values = input_mm['pixel_values'].to(self.dtype)
         image_grid_thw = input_mm['image_grid_thw']
         offset = input_mm['offset']
         image_token_id = input_mm['image_token_id']
@@ -383,7 +379,7 @@ class InternS1ProInputProcessor(BaseModelInputProcessor):
 
     def _make_video_mm_data(self, input_mm: dict[str, Any]) -> MultiModalData:
         """Make video MultiModalData."""
-        pixel_values_videos = self._cast_dtype(input_mm['pixel_values_videos'])
+        pixel_values_videos = input_mm['pixel_values_videos'].to(self.dtype)
         video_grid_thw = input_mm['video_grid_thw']
         offset = input_mm['offset']
         video_token_id = input_mm['video_token_id']
@@ -400,7 +396,7 @@ class InternS1ProInputProcessor(BaseModelInputProcessor):
 
     def _make_time_series_mm_data(self, input_mm: dict[str, Any]) -> MultiModalData:
         """Make time series MultiModalData."""
-        ts_values = self._cast_dtype(input_mm['ts_values'])
+        ts_values = input_mm['ts_values'].to(self.dtype)
         offset = input_mm['offset']
         ts_token_id = input_mm['ts_token_id']
         ts_lens = input_mm['ts_lens']
