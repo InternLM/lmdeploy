@@ -26,7 +26,7 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
     compress_fallback_topk_r128: torch.Tensor = None     # [bsz] int32
 
     # --- Prefill pre-computed ---
-    prefill_window_kv_lens: torch.Tensor = None         # [bsz] long
+    prefill_uncompressed_kv_lens: torch.Tensor = None   # [bsz] long (prev_window + raw_kv)
     prefill_max_flat_kv_len_r4: int = None
     prefill_total_flat_kv_tokens_r4: int = None
     prefill_max_flat_kv_len_r128: int = None
@@ -35,6 +35,8 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
     prefill_window_topk: torch.Tensor = None            # [total_q_tokens, window_size]
     prefill_compress_topk_r4: torch.Tensor = None       # [total_q_tokens, max_width]
     prefill_compress_topk_r128: torch.Tensor = None     # [total_q_tokens, max_width]
+    prefill_topk_length: torch.Tensor = None            # [total_q_tokens] int32
+    prefill_num_vis_compress_r128: torch.Tensor = None  # [total_q_tokens] int32
 
     @classmethod
     def from_step_context(cls, attn_metadata, step_ctx, **kwargs) -> 'CudaV4AttentionMetadata':
@@ -93,10 +95,18 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
         max_kv = meta.max_kv_seqlen
         sum_kv = meta.sum_kv_seqlen
 
-        meta.prefill_window_kv_lens = total_lens.clamp(max=window_size)
+        # Uncompressed region = prev_window (ring buffer) + raw_kv (current chunk)
+        # prev_window_len = min(start_pos, window_size), raw_kv_len = q_seqlens
+        prev_window_lens = start_pos.clamp(max=window_size)
+        meta.prefill_uncompressed_kv_lens = (prev_window_lens + q_seqlens).long()
+
+        # Safe upper bounds (no CUDA sync): max_unkv <= window_size + max_q,
+        # sum_unkv <= sum(kv_seqlens) = sum_kv (since min(sp,ws) <= sp)
+        max_q = meta.max_q_seqlen
+        max_unkv = min(window_size, max_kv) + max_q
 
         for ratio in (4, 128):
-            mfk = min(max_kv, window_size) + max_kv // ratio
+            mfk = max_unkv + max_kv // ratio
             tfk = sum_kv + sum_kv // ratio
             if ratio == 4:
                 meta.prefill_max_flat_kv_len_r4 = mfk
@@ -107,21 +117,30 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
 
         meta.prefill_max_compress_width = max_kv // 4
 
-        meta.prefill_window_topk = build_window_topk_indices(
+        meta.prefill_window_topk, _ = build_window_topk_indices(
             total_lens, window_size,
             q_seqlens=q_seqlens, start_pos=start_pos, causal=True)
 
+        num_vis_compress = None
         for ratio in (4, 128):
             max_width = max_kv // ratio
-            compress_topk = build_compress_topk_indices(
+            compress_topk, num_vis_r = build_compress_topk_indices(
                 total_lens, ratio,
-                offset=meta.prefill_window_kv_lens,
+                offset=meta.prefill_uncompressed_kv_lens,
                 q_seqlens=q_seqlens, start_pos=start_pos,
                 causal=True, max_width=max_width)
             if ratio == 4:
                 meta.prefill_compress_topk_r4 = compress_topk
+                num_vis_compress = num_vis_r
             else:
                 meta.prefill_compress_topk_r128 = compress_topk
+                meta.prefill_num_vis_compress_r128 = num_vis_r.to(torch.int32)
+
+        # topk_length: window indices are -1 padded beyond num_vis, so flash_mla
+        # scans all window_size slots (skipping -1s); topk_length must cover
+        # window_size + the number of visible compress entries per token.
+        if num_vis_compress is not None:
+            meta.prefill_topk_length = (window_size + num_vis_compress).to(torch.int32)
 
 
 class V4IndicesUpdater:
@@ -429,13 +448,11 @@ class TritonV4AttentionImpl:
             max_flat_kv_len = attn_metadata.prefill_max_flat_kv_len_r128
             total_flat_kv_tokens = attn_metadata.prefill_total_flat_kv_tokens_r128
 
-        window_kv_lens = attn_metadata.prefill_window_kv_lens
-
-        # Write window state + FP8 pack (batched)
-        self._write_window_prefill(kv, caches, slot, start_pos, q_seqlens, total_lens)
+        uncompressed_kv_lens = attn_metadata.prefill_uncompressed_kv_lens
 
         # Compress topk
         compress_topk = None
+        indexer_topk_length = None
         if self.compress_ratio:
             if index_out is not None:
                 compress_topk = index_out.indices_in_kvcache.squeeze(0)
@@ -443,20 +460,38 @@ class TritonV4AttentionImpl:
                 total_tokens = compress_topk.size(0)
                 token_seq = torch.arange(total_tokens, device=compress_topk.device)
                 seq_id = torch.searchsorted(cu_q_seqlens[1:], token_seq, right=True)
-                compress_topk = compress_topk + window_kv_lens[seq_id].unsqueeze(-1)
+                compress_topk = compress_topk + uncompressed_kv_lens[seq_id].unsqueeze(-1)
+                # Per-token causal topk_length for indexer: use the pre-computed
+                # causal limits for the actual compress_ratio, NOT the per-sequence
+                # index_out.topk_length. index_out.topk_length is per-sequence and
+                # doesn't account for per-token causal masking.
+                if self.compress_ratio == 128 and attn_metadata.prefill_num_vis_compress_r128 is not None:
+                    indexer_topk_length = attn_metadata.prefill_num_vis_compress_r128
+                else:
+                    indexer_topk_length = (attn_metadata.prefill_topk_length
+                                           - self.window_size).clamp(min=0)
             elif self.compress_ratio == 4:
                 compress_topk = attn_metadata.prefill_compress_topk_r4
             else:
                 compress_topk = attn_metadata.prefill_compress_topk_r128
 
-        # Flatten window + compressed KV into contiguous tensor
+        # Flatten BEFORE writing window state so that the ring buffer's
+        # previous window is preserved for chunked prefill reads.
+        # Current chunk tokens come from raw_kv (not ring buffer).
         fp8_compressed_kv_cache = caches['compressed_kv_fp8'] if self.compress_ratio else None
+        raw_kv = kv.squeeze(0)  # [total_q_tokens, head_dim]
         flat_kv, cu_seqlens_k = self._flatten_v4_kv(
             caches['window_state'], None,
             block_offsets.long(), total_lens.long(),
             self.window_size, self.compress_ratio,
             total_flat_kv_tokens, max_flat_kv_len,
-            fp8_compressed_kv_cache=fp8_compressed_kv_cache, slot=slot)
+            fp8_compressed_kv_cache=fp8_compressed_kv_cache, slot=slot,
+            raw_kv=raw_kv, raw_kv_lens=q_seqlens,
+            start_pos=start_pos)
+
+        # Write window state + FP8 pack (after flatten, so ring buffer is
+        # updated for the next step without clobbering prev window)
+        self._write_window_prefill(kv, caches, slot, start_pos, q_seqlens, total_lens)
 
         # Window topk (pre-computed once per step)
         window_topk = attn_metadata.prefill_window_topk
@@ -480,9 +515,25 @@ class TritonV4AttentionImpl:
             q_flat = torch.nn.functional.pad(q_flat, (0, 0, 0, pad))
             attn_sink = torch.nn.functional.pad(attn_sink, (0, pad))
 
+        # Compute per-token topk_length. _precompute_prefill stores
+        # prefill_topk_length from ratio=4's num_vis_compress, which is wrong
+        # for ratio=128. Use the ratio-specific count when available.
+        topk_width = topk_indices.size(-1)
+        if not self.compress_ratio:
+            topk_length = torch.full((q_flat.size(0),), self.window_size,
+                                     dtype=torch.int32, device=query.device)
+        elif indexer_topk_length is not None:
+            topk_length = self.window_size + indexer_topk_length
+        elif self.compress_ratio == 128 and attn_metadata.prefill_num_vis_compress_r128 is not None:
+            topk_length = self.window_size + attn_metadata.prefill_num_vis_compress_r128
+        else:
+            topk_length = attn_metadata.prefill_topk_length
+        topk_length = topk_length.clamp(max=topk_width)
+
         out = self.flash_mla.flash_mla_sparse_fwd(
             q_flat, flat_kv, topk_indices,
-            sm_scale=self.scale, attn_sink=attn_sink)
+            sm_scale=self.scale, attn_sink=attn_sink,
+            topk_length=topk_length)
         return out[0][:, :num_heads].unsqueeze(0)  # [1, total_q_tokens, n_heads, head_dim]
 
 

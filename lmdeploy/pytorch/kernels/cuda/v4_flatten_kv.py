@@ -20,7 +20,6 @@ def _flatten_v4_kv_kernel(
     out_ptr,
     start_loc_ptr,
     flat_kv_lens_ptr,
-    total_lens_ptr,
     block_offsets_ptr,
     slot_ptr,
     stride_wkv_b,
@@ -44,6 +43,12 @@ def _flatten_v4_kv_kernel(
     fp8sc_stride_b,
     fp8sc_stride_s,
     fp8sc_stride_d,
+    raw_kv_ptr,
+    stride_rkv_s,
+    stride_rkv_d,
+    cu_raw_kv_ptr,
+    raw_kv_lens_ptr,
+    start_pos_ptr,
     WINDOW_SIZE: tl.constexpr,
     COMPRESS_RATIO: tl.constexpr,
     HEAD_DIM: tl.constexpr,
@@ -51,6 +56,7 @@ def _flatten_v4_kv_kernel(
     HAS_COMPRESS: tl.constexpr,
     HAS_SLOT: tl.constexpr,
     HAS_FP8_COMPRESS: tl.constexpr,
+    HAS_RAW_KV: tl.constexpr,
 ):
     batch_id = tl.program_id(0)
     token_id = tl.program_id(1)
@@ -61,13 +67,16 @@ def _flatten_v4_kv_kernel(
     if token_id >= flat_kv_len:
         return
 
-    window_kv_len = tl.minimum(tl.load(total_lens_ptr + batch_id), WINDOW_SIZE)
+    # Ring buffer covers only the previous window (before current chunk).
+    # For first-time prefill (start_pos=0), prev_window_len=0 and all tokens
+    # come from raw_kv. For chunked prefill, prev_window_len=min(start_pos, WINDOW_SIZE).
+    start_pos_val = tl.load(start_pos_ptr + batch_id)
+    prev_window_len = tl.minimum(start_pos_val, WINDOW_SIZE)
     offs_d = tl.arange(0, HEAD_DIM)
 
-    if token_id < window_kv_len:
-        # ---- Window region ----
-        total_len = tl.load(total_lens_ptr + batch_id)
-        window_start = total_len - WINDOW_SIZE if total_len > WINDOW_SIZE else 0
+    if token_id < prev_window_len:
+        # ---- Previous window region (from ring buffer) ----
+        window_start = start_pos_val - WINDOW_SIZE if start_pos_val > WINDOW_SIZE else 0
         actual_pos = window_start + token_id
         ring_pos = actual_pos % WINDOW_SIZE
 
@@ -79,19 +88,32 @@ def _flatten_v4_kv_kernel(
                 src_ptr = (window_kv_ptr + slot_val.to(tl.int64) * stride_wkv_b
                            + ring_pos * stride_wkv_s
                            + offs_d * stride_wkv_d)
-                val = tl.load(src_ptr, mask=actual_pos < total_len, other=0.0)
+                val = tl.load(src_ptr, mask=actual_pos < start_pos_val, other=0.0)
         else:
             src_ptr = (window_kv_ptr + batch_id * stride_wkv_b
                        + ring_pos * stride_wkv_s
                        + offs_d * stride_wkv_d)
-            val = tl.load(src_ptr, mask=actual_pos < total_len, other=0.0)
+            val = tl.load(src_ptr, mask=actual_pos < start_pos_val, other=0.0)
+
+        out_ptr_off = (start_loc + token_id) * stride_out_s + offs_d * stride_out_d
+        tl.store(out_ptr + out_ptr_off, val)
+
+    elif HAS_RAW_KV and token_id < prev_window_len + tl.load(raw_kv_lens_ptr + batch_id):
+        # ---- Current chunk region (from raw KV input) ----
+        raw_kv_len = tl.load(raw_kv_lens_ptr + batch_id)
+        local_pos = token_id - prev_window_len
+        cu_raw_kv_val = tl.load(cu_raw_kv_ptr + batch_id)
+        src_ptr = (raw_kv_ptr + (cu_raw_kv_val + local_pos) * stride_rkv_s
+                   + offs_d * stride_rkv_d)
+        val = tl.load(src_ptr)
 
         out_ptr_off = (start_loc + token_id) * stride_out_s + offs_d * stride_out_d
         tl.store(out_ptr + out_ptr_off, val)
 
     elif HAS_FP8_COMPRESS:
         # ---- Compressed region: FP8 dequantize path ----
-        comp_pos = token_id - window_kv_len
+        raw_kv_len = tl.load(raw_kv_lens_ptr + batch_id) if HAS_RAW_KV else 0
+        comp_pos = token_id - prev_window_len - raw_kv_len
         page_id = comp_pos // BLOCK_SIZE
         page_off = comp_pos % BLOCK_SIZE
         phys_block = tl.load(block_offsets_ptr + batch_id * stride_boff + page_id)
@@ -138,10 +160,11 @@ def _flatten_v4_kv_kernel(
 
     else:
         # ---- Compressed region: BF16 path ----
+        raw_kv_len = tl.load(raw_kv_lens_ptr + batch_id) if HAS_RAW_KV else 0
         if not HAS_COMPRESS:
             val = tl.zeros((HEAD_DIM,), dtype=out_ptr.dtype.element_ty)
         else:
-            comp_pos = token_id - window_kv_len
+            comp_pos = token_id - prev_window_len - raw_kv_len
             page_id = comp_pos // BLOCK_SIZE
             page_off = comp_pos % BLOCK_SIZE
             phys_block = tl.load(block_offsets_ptr + batch_id * stride_boff + page_id)
@@ -166,12 +189,22 @@ def flatten_v4_kv(
     cu_seqlens_k: torch.Tensor | None = None,
     fp8_compressed_kv_cache: torch.Tensor | None = None,
     slot: torch.Tensor | None = None,
+    raw_kv: torch.Tensor | None = None,
+    raw_kv_lens: torch.Tensor | None = None,
+    start_pos: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Flatten V4 window + compressed KV caches into a contiguous BF16 tensor.
 
     When ``fp8_compressed_kv_cache`` is provided and ``compressed_kv_cache`` is
     None, the kernel dequantizes FP8 data in-place (per-tile FP8→BF16 with
     e8m0fnu scales) instead of allocating a full intermediate BF16 tensor.
+
+    Flat KV layout per sequence:
+        [prev_window (ring buffer) | raw_kv (current chunk) | compressed_kv]
+
+    For first-time prefill (start_pos=0), prev_window is empty and all current
+    tokens come from raw_kv. For chunked prefill (start_pos>0), prev_window
+    contains the last min(start_pos, window_size) tokens from the ring buffer.
 
     Args:
         window_kv_cache: When ``slot`` is None, a [bsz, window_size, head_dim]
@@ -201,6 +234,16 @@ def flatten_v4_kv(
             ``slot[batch_id]`` instead of ``batch_id`` to index the window
             cache.  Negative slot values produce all-zero output for that
             sequence's window region (handles padded / unallocated slots).
+        raw_kv: optional [total_q_tokens, head_dim] raw KV from the model's
+            wkv projection for the current prefill chunk. When provided,
+            the kernel reads current-chunk tokens from this tensor instead
+            of the ring buffer, so the ring buffer's previous window is
+            preserved for chunked prefill.
+        raw_kv_lens: optional [bsz] per-sequence raw KV entry count
+            (= q_seqlens). Required when raw_kv is provided.
+        start_pos: optional [bsz] start positions per sequence. Required
+            when raw_kv is provided. Used to compute prev_window_len =
+            min(start_pos, window_size).
 
     Returns:
         flat_kv: [total_kv_tokens, 1, head_dim] BF16 flat tensor.
@@ -210,12 +253,20 @@ def flatten_v4_kv(
     head_dim = window_kv_cache.size(-1)
     device = kv_seqlens.device
 
-    window_kv_lens = kv_seqlens.clamp(max=window_size)
+    has_raw_kv = raw_kv is not None
+
+    if has_raw_kv:
+        prev_window_lens = start_pos.clamp(max=window_size).long()
+        raw_kv_lens_t = raw_kv_lens.long()
+    else:
+        prev_window_lens = kv_seqlens.clamp(max=window_size).long()
+        raw_kv_lens_t = kv_seqlens.new_zeros(bsz, dtype=torch.long)
+
     if compress_ratio > 0:
         num_compressed = torch.div(kv_seqlens, compress_ratio, rounding_mode='floor').long()
     else:
         num_compressed = kv_seqlens.new_zeros(kv_seqlens.shape, dtype=torch.long)
-    flat_kv_lens = (window_kv_lens + num_compressed).to(torch.int32)
+    flat_kv_lens = (prev_window_lens + raw_kv_lens_t + num_compressed).to(torch.int32)
 
     if cu_seqlens_k is None:
         cu_seqlens_k = torch.zeros(bsz + 1, dtype=torch.int32, device=device)
@@ -259,13 +310,21 @@ def flatten_v4_kv(
         fp8_rope_bf16 = dummy.view(torch.bfloat16)
         fp8_scales_u8 = dummy.view(torch.uint8)
 
+    # Build raw KV tensors
+    if has_raw_kv:
+        cu_raw_kv = torch.zeros(bsz + 1, dtype=torch.int32, device=device)
+        torch.cumsum(raw_kv_lens_t.to(torch.int32), dim=0, out=cu_raw_kv[1:])
+    else:
+        cu_raw_kv = kv_seqlens.new_zeros(bsz + 1, dtype=torch.int32)
+        # raw_kv_ptr must still be a valid tensor for the kernel call
+        raw_kv = window_kv_cache  # placeholder, HAS_RAW_KV=False so it's never read
+
     _flatten_v4_kv_kernel[grid](
         window_kv_cache,
         compressed_kv_cache if has_compress and not has_fp8_compress else window_kv_cache,
         flat_kv,
         cu_seqlens_k[:-1],  # start_loc
         flat_kv_lens,
-        kv_seqlens.to(torch.int32),
         block_offsets.long(),
         slot if has_slot else kv_seqlens,  # placeholder when no slot
         window_kv_cache.stride(0),
@@ -289,6 +348,12 @@ def flatten_v4_kv(
         fp8_scales_u8.stride(0),
         fp8_scales_u8.stride(1),
         fp8_scales_u8.stride(2),
+        raw_kv,
+        raw_kv.stride(0) if has_raw_kv else 0,
+        raw_kv.stride(1) if has_raw_kv else 0,
+        cu_raw_kv[:-1],
+        raw_kv_lens_t.to(torch.int32),
+        start_pos.to(torch.int32) if has_raw_kv else kv_seqlens.to(torch.int32),
         WINDOW_SIZE=window_size,
         COMPRESS_RATIO=compress_ratio,
         HEAD_DIM=head_dim,
@@ -296,6 +361,7 @@ def flatten_v4_kv(
         HAS_COMPRESS=has_compress,
         HAS_SLOT=has_slot,
         HAS_FP8_COMPRESS=has_fp8_compress,
+        HAS_RAW_KV=has_raw_kv,
     )
 
     return flat_kv, cu_seqlens_k

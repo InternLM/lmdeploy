@@ -34,9 +34,9 @@ def _check_env_v4(device: str = 'cuda'):
 
 
 def _finalize_v4_cache_specs(model_config: ModelConfig, block_size: int):
-    if block_size < 128:
-        raise ValueError('DeepSeek-V4 requires block_size >= 128 because ratio=128 compressed cache needs at '
-                         'least one entry per token block.')
+    if block_size < 256:
+        raise ValueError('DeepSeek-V4 requires block_size >= 256 because FlashMLA sparse decode crashes '
+                         'with entries_per_block=1 (block_size=128, ratio=128). entries_per_block must be >= 2.')
     if block_size % 128 != 0:
         raise ValueError('DeepSeek-V4 requires block_size to be a multiple of 128 so ratio=128 compressed cache '
                          'has an integral number of entries per block.')
@@ -70,9 +70,9 @@ def _finalize_v4_cache_specs(model_config: ModelConfig, block_size: int):
 
 
 def update_cache_config(cache_config):
-    if cache_config.block_size < 128:
-        raise ValueError('DeepSeek-V4 requires block_size >= 128 because ratio=128 compressed cache needs at '
-                         'least one entry per token block.')
+    if cache_config.block_size < 256:
+        raise ValueError('DeepSeek-V4 requires block_size >= 256 because FlashMLA sparse decode crashes '
+                         'with entries_per_block=1 (block_size=128, ratio=128). entries_per_block must be >= 2.')
     # V4 manages its sliding window via ring-buffer state caches internally.
     # Setting window_size=-1 selects DefaultBlockManager so blocks are not
     # dropped and kv_seqlens are not reduced by num_ignored_history.
