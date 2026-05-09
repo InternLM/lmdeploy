@@ -43,8 +43,6 @@ class GptOssModel(TextModel):
 
     cfg: GptOssConfig
 
-    _uses_prefix = True
-
     _loader_mappings = [map_experts]
 
     def __init__(self, cfg: GptOssConfig, *, resolver):

@@ -31,8 +31,6 @@ class Glm4MoeLiteModel(TextModel):
 
     cfg: Glm4MoeLiteConfig
 
-    _uses_prefix = True
-
     def __init__(self, cfg: Glm4MoeLiteConfig, *, resolver):
         super().__init__(cfg, resolver=resolver)
 

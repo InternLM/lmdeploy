@@ -30,8 +30,6 @@ class LlamaModel(TextModel):
 
     cfg: LlamaConfig
 
-    _uses_prefix = True
-
     def __init__(self, cfg: LlamaConfig, *, resolver):
         super().__init__(cfg, resolver=resolver)
 

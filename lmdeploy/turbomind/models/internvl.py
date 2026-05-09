@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""InternVL aggregate source model for TurboMind (legacy InternVLChatModel and HF-style InternVL/InternS1)."""
+"""InternVL aggregate source model for TurboMind (legacy InternVLChatModel and
+HF-style InternVL/InternS1)."""
 from __future__ import annotations
 
 from transformers import PretrainedConfig
@@ -16,9 +17,8 @@ def _cfg_get(cfg, name: str, default=None):
 
 @INPUT_MODELS.register_module(name='internvl')
 class InternVLModel:
-    """Aggregate source model for InternVL checkpoints with any registered text model."""
-
-    _uses_prefix = True
+    """Aggregate source model for InternVL checkpoints with any registered text
+    model."""
 
     def __init__(self, cfg: PretrainedConfig, *, resolver):
         llm_cfg = _cfg_get(cfg, 'llm_config')

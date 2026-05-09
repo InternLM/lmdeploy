@@ -55,8 +55,6 @@ class InternLM2Model(TextModel):
 
     cfg: PretrainedConfig
 
-    _uses_prefix = True
-
     def __init__(self, cfg: PretrainedConfig, *, resolver):
         super().__init__(cfg, resolver=resolver)
 

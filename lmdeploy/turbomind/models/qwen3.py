@@ -37,8 +37,6 @@ class Qwen3TextModel(TextModel):
 
     cfg: Qwen3Config | Qwen3MoeConfig
 
-    _uses_prefix = True
-
     def __init__(self, cfg: Qwen3Config | Qwen3MoeConfig, *, resolver):
         super().__init__(cfg, resolver=resolver)
 

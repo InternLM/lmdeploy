@@ -42,12 +42,9 @@ def _center_norm(w):
     return 1.0 + w.float()
 
 
-@INPUT_MODELS.register_module(name='qwen3_5-moe')
-@INPUT_MODELS.register_module(name='qwen3_5')
-class Qwen3_5Model(TextModel):
+class Qwen3_5TextModel(TextModel):
     """Weight model for Qwen3.5 (dense + linear-attn + optional MoE)."""
 
-    _uses_prefix = True
     _loader_mappings = [map_packed_qwen35_experts]
     cfg: Qwen3_5TextConfig | Qwen3_5MoeTextConfig
 
@@ -231,3 +228,35 @@ class Qwen3_5Model(TextModel):
             d.ffn_norm = self.norm(p + 'post_attention_layernorm', _center_norm)
             layers[i] = d.build()
         return layers.build()
+
+
+@INPUT_MODELS.register_module(name='qwen3_5-moe')
+@INPUT_MODELS.register_module(name='qwen3_5')
+class Qwen3_5Model:
+    """Aggregate source model for Qwen3.5 checkpoints."""
+
+    def __init__(self, cfg, *, resolver):
+        text_cfg = getattr(cfg, 'text_config', cfg)
+        self.text_model = Qwen3_5TextModel(text_cfg, resolver=resolver)
+        self.vision_model = None
+
+    def bind_runtime(self, *, ctx, root_handles,
+                     attn_tp, mlp_tp, model_tp):
+        self.text_model.bind_runtime(
+            ctx=ctx,
+            root_handles=root_handles,
+            attn_tp=attn_tp,
+            mlp_tp=mlp_tp,
+            model_tp=model_tp,
+        )
+
+    @property
+    def _vocab_size(self):
+        return self.text_model.cfg.vocab_size
+
+    @property
+    def _loader_mappings(self):
+        return list(getattr(type(self.text_model), '_loader_mappings', []))
+
+    def model(self, pfx):
+        self.text_model.model(pfx)
