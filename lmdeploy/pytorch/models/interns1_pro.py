@@ -123,6 +123,8 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGra
                 multimodal_mask = multimodal_mask.unsqueeze(-1).expand_as(inputs_embeds)
                 inputs_embeds = inputs_embeds.masked_scatter(multimodal_mask, image_embeds)
             elif ts_values is not None:
+                if not hasattr(self, 'time_series'):
+                    raise RuntimeError('Time-series inputs require a time_series module.')
                 ts_embeds = self.time_series(ts_values, ts_lens, ts_sr)  # [B, T, C]
                 inputs_embeds = inputs_embeds.masked_scatter(multimodal_mask[..., None], ts_embeds)
 
@@ -182,8 +184,8 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGra
 
                 if modality == Modality.TIME_SERIES:
                     ts_values = torch.cat([inp.data for inp in mm_inputs])
-                    ts_lens = mm_inputs[0].meta['ts_lens']
-                    ts_sr = mm_inputs[0].meta['ts_sr']
+                    ts_lens = torch.cat([inp.meta['ts_lens'] for inp in mm_inputs])
+                    ts_sr = torch.cat([inp.meta['ts_sr'] for inp in mm_inputs])
                 else:
                     pixel_values = torch.cat([inp.data for inp in mm_inputs])
                     grid_thw = torch.stack([data.meta['grid_thw'] for data in mm_inputs]).cpu()
@@ -346,6 +348,8 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGra
                         elif name in buffers_dict:
                             param = buffers_dict[name]
                             load_weight(param, loaded_weight)
+                        else:
+                            raise KeyError(f'Unexpected weight name: {name}')
 
     def get_input_processor(self) -> BaseModelInputProcessor:
         """Get input processor."""
@@ -355,13 +359,17 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGra
 class InternS1ProInputProcessor(BaseModelInputProcessor):
     """InternS1Pro input processor."""
 
-    def __init__(self, config: PretrainedConfig, dtype: torch.dtype) -> None:
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype | None = None) -> None:
         self.config = config
         self.dtype = dtype
 
+    def _cast_dtype(self, value: torch.Tensor) -> torch.Tensor:
+        """Cast input tensor only when the model dtype is known."""
+        return value if self.dtype is None else value.to(self.dtype)
+
     def _make_image_mm_data(self, input_mm: dict[str, Any]) -> MultiModalData:
         """Make image MultiModalData."""
-        pixel_values = input_mm['pixel_values'].to(self.dtype)
+        pixel_values = self._cast_dtype(input_mm['pixel_values'])
         image_grid_thw = input_mm['image_grid_thw']
         offset = input_mm['offset']
         image_token_id = input_mm['image_token_id']
@@ -375,7 +383,7 @@ class InternS1ProInputProcessor(BaseModelInputProcessor):
 
     def _make_video_mm_data(self, input_mm: dict[str, Any]) -> MultiModalData:
         """Make video MultiModalData."""
-        pixel_values_videos = input_mm['pixel_values_videos'].to(self.dtype)
+        pixel_values_videos = self._cast_dtype(input_mm['pixel_values_videos'])
         video_grid_thw = input_mm['video_grid_thw']
         offset = input_mm['offset']
         video_token_id = input_mm['video_token_id']
@@ -392,7 +400,7 @@ class InternS1ProInputProcessor(BaseModelInputProcessor):
 
     def _make_time_series_mm_data(self, input_mm: dict[str, Any]) -> MultiModalData:
         """Make time series MultiModalData."""
-        ts_values = input_mm['ts_values'].to(self.dtype)
+        ts_values = self._cast_dtype(input_mm['ts_values'])
         offset = input_mm['offset']
         ts_token_id = input_mm['ts_token_id']
         ts_lens = input_mm['ts_lens']

@@ -41,7 +41,7 @@ class InternS1ProVisionModel(Qwen3VLModel):
         )
 
     def time_series_processor(self,
-                              text: str,
+                              text: list[str],
                               time_series: list[Any],
                               sampling_rate: float | None = None,
                               **kwargs):
