@@ -15,12 +15,9 @@ from ..linear import Linear, _dequant_linear
 
 
 def source_model_config(model_config):
-    """Select the local config object consumed by a TurboMind source model.
-
-    Unwrap text_config for text-only wrappers. Keep llm_config on the outer config so aggregate models, such as
-    InternVL3.5, can validate and delegate explicitly.
-    """
-    if hasattr(model_config, 'text_config'):
+    """Local config consumed by a TurboMind source model."""
+    # VLM aggregates expose both text_config and vision_config; only text-only HF wrappers unwrap.
+    if hasattr(model_config, 'text_config') and not hasattr(model_config, 'vision_config'):
         return model_config.text_config
     return model_config
 

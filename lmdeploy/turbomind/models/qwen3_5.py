@@ -72,9 +72,6 @@ class Qwen3_5Model(TextModel):
         self._dn_cfg.key_head_dim    = ln_key_dim
         self._dn_cfg.value_head_dim  = ln_val_dim
         self._dn_cfg.d_conv          = cfg.linear_conv_kernel_dim or 4
-        q_dim = ln_key_heads * ln_key_dim
-        v_dim = ln_val_heads * ln_val_dim
-        self._linear_qkv_split = (q_dim, q_dim, v_dim)
 
         # ---- MoE template ----
         if self._n_experts > 0:
@@ -148,14 +145,12 @@ class Qwen3_5Model(TextModel):
             in_proj_z=self._linear(pfx + 'in_proj_z'),
             in_proj_b=self._linear(pfx + 'in_proj_b'),
             in_proj_a=self._linear(pfx + 'in_proj_a'),
-            out_proj=self._linear(pfx + 'out_proj'),
-            qkv_split=self._linear_qkv_split)
+            out_proj=self._linear(pfx + 'out_proj'))
         builder.add_scalar_params(
             a_log=pfx.pop('A_log'),
             dt_bias=pfx.pop('dt_bias'))
         builder.add_conv1d(
-            pfx.pop('conv1d.weight'),
-            qkv_split=self._linear_qkv_split)
+            pfx.pop('conv1d.weight'))
         builder.norm = self.norm(pfx + 'norm')  # not zero-centered
         return builder.build()
 
