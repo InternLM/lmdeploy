@@ -203,6 +203,7 @@ class Qwen3_5MTPModel(nn.Module, CudaGraphMixin):
                                                 prefix=add_prefix('model', prefix=prefix))
 
         self.num_experts = getattr(config.text_config, 'num_experts', None)
+        self.enable_sci_mtp = getattr(config, 'enable_sci_mtp', False)
         # for router replay
 
         self.enable_return_routed_experts = False
@@ -341,6 +342,23 @@ class Qwen3_5MTPModel(nn.Module, CudaGraphMixin):
                 w2 = loaded_weight[expert_id]
                 load_weight(param, w2, expert_id=expert_id, shard_id='down')
 
+    def _rename_interns2_preview(self, name: str, suffixs: list[str]) -> tuple[str, bool]:
+        """Rename the weight name of interns2 preview model."""
+        skip = False
+        if self.enable_sci_mtp:
+            if name.startswith('mtp.sci.'):
+                name = name.replace('mtp.sci.', 'mtp.')
+            else:
+                skip = True
+        else:
+            if name.startswith('mtp.sci.'):
+                skip = True
+            else:
+                name = name.replace('mtp.normal.', 'mtp.')
+        if any(suffix in name for suffix in suffixs):
+            name = name.replace('mtp.layers.0.', 'mtp.')
+        return name, skip
+
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         """Load weights."""
         stacked_params_mapping = [
@@ -368,11 +386,17 @@ class Qwen3_5MTPModel(nn.Module, CudaGraphMixin):
             'model.norm', '.input_layernorm', '.post_attention_layernorm', '.q_norm', '.k_norm', 'mtp.norm',
             '.pre_fc_norm_embedding', '.pre_fc_norm_hidden'
         ]
+        interns2_preview_names = ['.fc.weight', '.pre_fc_norm_embedding.weight',
+                                  '.pre_fc_norm_hidden.weight', '.norm.weight']
 
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
             if not name.startswith('mtp.'):
                 continue
+            name, skip = self._rename_interns2_preview(name, interns2_preview_names)
+            if skip:
+                continue
+
             name = name.replace('mtp.', 'model.')
             if '.experts' in name and '.shared_expert' not in name:
                 if name.split('.experts.', 1)[1].split('.', 1)[0].isdigit():
