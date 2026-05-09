@@ -661,6 +661,7 @@ class Block(nn.Module):
                  device: torch.device | str | None):
         super().__init__()
         self.norm_eps = args.norm_eps
+        self.layer_id = layer_id
         self.attn = Attention(config, layer_id, args, dtype=dtype, device=device)
         self.ffn = MoE(config, layer_id, args, dtype=dtype, device=device)
         self.attn_norm = RMSNorm(args.dim, args.norm_eps, dtype=dtype, device=device)
@@ -986,8 +987,21 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         params_dict = dict(self.named_parameters())
 
+        def __skip_layers():
+            """We might change the number of layers so we can debug the model
+            with less gpus."""
+            import re
+            matches = re.findall(r'layers\.(\d+)\.', name)
+            if not matches:
+                return False
+            layer_id = int(matches[0])
+            return layer_id >= self.config.num_hidden_layers
+
         for name, loaded_weight in weights:
             if name.startswith('mtp.'):
+                continue
+
+            if __skip_layers():
                 continue
 
             if name.endswith('tie2eid'):
