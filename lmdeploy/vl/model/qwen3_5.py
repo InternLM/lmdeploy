@@ -23,9 +23,12 @@ def check_transformers():
 class Qwen3_5Model(Qwen3VLModel):
     """Qwen3_5 model."""
 
-    _arch = ['Qwen3_5ForConditionalGeneration',
-             'Qwen3_5MoeForConditionalGeneration',
-             'InternS2PreviewForConditionalGeneration']
+    _arch = [
+        'Qwen3_5ForConditionalGeneration',
+        'Qwen3_5MoeForConditionalGeneration',
+        'InternS2PreviewForConditionalGeneration',
+        'InternS2PreviewForCausalLM',
+    ]
 
     def build_preprocessor(self, trust_remote_code: bool = False):
         check_transformers()
@@ -48,7 +51,7 @@ class Qwen3_5Model(Qwen3VLModel):
         )
 
     def time_series_processor(self,
-                              text: str,
+                              text: list[str],
                               time_series: list[Any],
                               sampling_rate: float | None = None,
                               **kwargs):

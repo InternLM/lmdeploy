@@ -401,3 +401,5 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
                         elif name in buffers_dict:
                             param = buffers_dict[name]
                             load_weight(param, loaded_weight)
+                        else:
+                            raise KeyError(f'Unexpected weight name: {name}')

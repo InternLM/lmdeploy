@@ -1058,6 +1058,8 @@ class Qwen3_5Model(nn.Module):
                 multimodal_mask = multimodal_mask.unsqueeze(-1).expand_as(inputs_embeds)
                 inputs_embeds = inputs_embeds.masked_scatter(multimodal_mask, image_embeds)
             elif ts_values is not None:
+                if not hasattr(self, 'time_series'):
+                    raise RuntimeError('Time-series inputs require a time_series module.')
                 ts_embeds = self.time_series(ts_values, ts_lens, ts_sr)  # [B, T, C]
                 inputs_embeds = inputs_embeds.masked_scatter(multimodal_mask[..., None], ts_embeds)
 
@@ -1106,7 +1108,7 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         self.ctx_mgr = ctx_mgr
 
         # build preprocessor
-        self.input_processor = Qwen3_5InputProcessor(self.config)
+        self.input_processor = Qwen3_5InputProcessor(self.config, dtype)
 
         # build model
         self.model = Qwen3_5Model(config, dtype=dtype, device=device, prefix=add_prefix('model', prefix))
@@ -1225,8 +1227,8 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
 
                 if modality == Modality.TIME_SERIES:
                     ts_values = torch.cat([inp.data for inp in mm_inputs])
-                    ts_lens = mm_inputs[0].meta['ts_lens']
-                    ts_sr = mm_inputs[0].meta['ts_sr']
+                    ts_lens = torch.cat([inp.meta['ts_lens'] for inp in mm_inputs])
+                    ts_sr = torch.cat([inp.meta['ts_sr'] for inp in mm_inputs])
                 else:
                     pixel_values = torch.cat([inp.data for inp in mm_inputs])
                     grid_thw = torch.stack([data.meta['grid_thw'] for data in mm_inputs]).cpu()

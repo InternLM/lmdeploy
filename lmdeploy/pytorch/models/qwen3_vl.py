@@ -720,7 +720,7 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
 class Qwen3VLInputProcessor(BaseModelInputProcessor):
     """Qwen3 input processor."""
 
-    def __init__(self, config: PretrainedConfig, dtype: torch.dtype) -> None:
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype | None = None) -> None:
         self.config = config
         self.dtype = dtype
 
@@ -781,7 +781,9 @@ class Qwen3VLInputProcessor(BaseModelInputProcessor):
 
     def _make_time_series_mm_data(self, input_mm: dict[str, Any]) -> MultiModalData:
         """Make time series MultiModalData."""
-        ts_values = input_mm['ts_values'].to(self.dtype)
+        ts_values = input_mm['ts_values']
+        if self.dtype is not None:
+            ts_values = ts_values.to(self.dtype)
         offset = input_mm['offset']
         ts_token_id = input_mm['ts_token_id']
         ts_lens = input_mm['ts_lens']
