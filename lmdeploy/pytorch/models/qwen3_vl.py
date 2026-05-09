@@ -517,7 +517,7 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
         self.ctx_mgr = ctx_mgr
 
         # build preprocessor
-        self.input_processor = Qwen3VLInputProcessor(self.config)
+        self.input_processor = Qwen3VLInputProcessor(self.config, dtype)
 
         # build vision model
         self.visual = Qwen3VLVisionModel(
@@ -720,8 +720,9 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGraphMi
 class Qwen3VLInputProcessor(BaseModelInputProcessor):
     """Qwen3 input processor."""
 
-    def __init__(self, config: PretrainedConfig) -> None:
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype) -> None:
         self.config = config
+        self.dtype = dtype
 
     @classmethod
     def _get_multimodal_pos_ids(cls, grid_thw: Sequence[int]) -> np.ndarray:
@@ -778,6 +779,21 @@ class Qwen3VLInputProcessor(BaseModelInputProcessor):
                                  ))
         return mm_data
 
+    def _make_time_series_mm_data(self, input_mm: dict[str, Any]) -> MultiModalData:
+        """Make time series MultiModalData."""
+        ts_values = input_mm['ts_values'].to(self.dtype)
+        offset = input_mm['offset']
+        ts_token_id = input_mm['ts_token_id']
+        ts_lens = input_mm['ts_lens']
+        ts_sr = input_mm['ts_sr']
+
+        mm_data = MultiModalData(modality=Modality.TIME_SERIES,
+                                 data=ts_values,
+                                 start=offset[0],
+                                 end=offset[1],
+                                 meta=dict(ts_lens=ts_lens, ts_sr=ts_sr, ts_token_id=ts_token_id))
+        return mm_data
+
     def preprocess_input(self,
                          input_ids: list[int],
                          input_multimodals: list[dict[str, Any]] = None,
@@ -793,6 +809,8 @@ class Qwen3VLInputProcessor(BaseModelInputProcessor):
                 mm_data = self._make_image_mm_data(input_mm)
             elif modality == Modality.VIDEO:
                 mm_data = self._make_video_mm_data(input_mm)
+            elif modality == Modality.TIME_SERIES:
+                mm_data = self._make_time_series_mm_data(input_mm)
             input_mm_data.append(mm_data)
 
         result = PreprocessInputResult(input_ids=input_ids, input_multimodals=dict(mm_data=input_mm_data))

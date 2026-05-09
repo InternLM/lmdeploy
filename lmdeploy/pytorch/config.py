@@ -569,6 +569,7 @@ class SpecDecodeConfig:
         dtype: str = 'auto',
         trust_remote_code: bool = False,
         model_format: str = None,
+        hf_overrides: dict[str, Any] = None,
     ):
         model = model or target_model
         model_config = ModelConfig.from_pretrained(model,
@@ -578,6 +579,7 @@ class SpecDecodeConfig:
                                                    spec_method=method,
                                                    block_size=target_cache_cfg.block_size,
                                                    model_format=model_format,
+                                                   hf_overrides=hf_overrides,
                                                    )
         cache_config = None
         # include medusa

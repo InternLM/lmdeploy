@@ -186,6 +186,16 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_5_moe.Qwen3_5MoeForConditionalGeneration',
 })
 
+# interns2preview
+MODULE_MAP.update({
+    'InternS2PreviewForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_5_moe.Qwen3_5MoeForConditionalGeneration',
+})
+MODULE_MAP.update({
+    'InternS2PreviewForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_5_moe.Qwen3_5MoeForConditionalGeneration',
+})
+
 MODULE_MAP.update({
     'Qwen3_5MTPModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_5_mtp.Qwen3_5MTPModel',
 })

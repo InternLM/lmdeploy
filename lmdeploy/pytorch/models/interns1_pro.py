@@ -123,6 +123,8 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGra
                 multimodal_mask = multimodal_mask.unsqueeze(-1).expand_as(inputs_embeds)
                 inputs_embeds = inputs_embeds.masked_scatter(multimodal_mask, image_embeds)
             elif ts_values is not None:
+                if not hasattr(self, 'time_series'):
+                    raise RuntimeError('Time-series inputs require a time_series module.')
                 ts_embeds = self.time_series(ts_values, ts_lens, ts_sr)  # [B, T, C]
                 inputs_embeds = inputs_embeds.masked_scatter(multimodal_mask[..., None], ts_embeds)
 
@@ -182,8 +184,8 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGra
 
                 if modality == Modality.TIME_SERIES:
                     ts_values = torch.cat([inp.data for inp in mm_inputs])
-                    ts_lens = mm_inputs[0].meta['ts_lens']
-                    ts_sr = mm_inputs[0].meta['ts_sr']
+                    ts_lens = torch.cat([inp.meta['ts_lens'] for inp in mm_inputs])
+                    ts_sr = torch.cat([inp.meta['ts_sr'] for inp in mm_inputs])
                 else:
                     pixel_values = torch.cat([inp.data for inp in mm_inputs])
                     grid_thw = torch.stack([data.meta['grid_thw'] for data in mm_inputs]).cpu()
@@ -346,6 +348,8 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGra
                         elif name in buffers_dict:
                             param = buffers_dict[name]
                             load_weight(param, loaded_weight)
+                        else:
+                            raise KeyError(f'Unexpected weight name: {name}')
 
     def get_input_processor(self) -> BaseModelInputProcessor:
         """Get input processor."""
