@@ -469,6 +469,10 @@ class BaseResponseParser(ResponseParser):
 
         while pos < n:
             if mode == self.MODE_REASONING:
+                open_tag = self.profile.reasoning_open_tag
+                if open_tag and text.startswith(open_tag, pos):
+                    pos += len(open_tag)
+                    continue
                 close_tag = self.profile.reasoning_close_tag
                 close_idx = text.find(close_tag, pos) if close_tag else -1
                 if close_idx < 0:
