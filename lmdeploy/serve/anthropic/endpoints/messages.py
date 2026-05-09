@@ -82,7 +82,7 @@ def register(router: APIRouter, server_context) -> None:
         session = server_context.create_session(-1)
         adapter_name = None if request.model == server_context.async_engine.model_name else request.model
         result_generator = server_context.async_engine.generate(
-            parsed_request.messages,
+            parser_messages if parsed_request is None else parsed_request.messages,
             session,
             gen_config=to_generation_config(request),
             tools=None if parsed_request is None else parsed_request.tools,
