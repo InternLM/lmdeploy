@@ -16,30 +16,15 @@ logger_initialized = {}
 
 
 async def await_executor_future(future: asyncio.Future):
-    """Await executor work without releasing a lock before cancellation
-    ends."""
-    cancelled = False
-    while not future.done():
+    """Await executor work without releasing a lock before it finishes."""
+    try:
+        return await asyncio.shield(future)
+    except asyncio.CancelledError:
         try:
-            result = await asyncio.shield(future)
-        except asyncio.CancelledError:
-            cancelled = True
-        except Exception:
-            if cancelled:
-                raise asyncio.CancelledError
-            raise
-        else:
-            if cancelled:
-                raise asyncio.CancelledError
-            return result
-
-    if cancelled:
-        try:
-            future.exception()
+            await future
         except BaseException:
             pass
-        raise asyncio.CancelledError
-    return future.result()
+        raise
 
 
 class _ASNI_COLOR:
