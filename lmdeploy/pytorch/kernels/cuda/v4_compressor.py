@@ -130,8 +130,7 @@ def _score_kv_kernel(
     is_decoding: tl.constexpr,
     BLOCK_D: tl.constexpr,
 ):
-    """Compute compressed kv via softmax-weighted sum, write back to
-    kv[:head_dim].
+    """Compute compressed kv via softmax-weighted sum, write to compressed_kv.
 
     Compression points are at abs_pos = n*ratio - 1 (0-indexed).
     For ratio=4, this means kv positions 3, 7, 11, 15, ...
@@ -149,7 +148,7 @@ def _score_kv_kernel(
                 Manual softmax (Triton tl.cat only supports 1D).
       no-overlap: single [ratio, BLOCK_D] block, tl.softmax.
     - Replaces current token's slot in the loaded block via tl.where.
-    - Write-back: kv[seq_start, :head_dim] (masked by emit).
+    - Write-back: compressed_kv[seq_start] (masked by emit).
 
     == PREFILL PATH (is_decoding=False) ==
     Grid: (num_groups, B). One CTA per compression point per batch.
@@ -157,7 +156,7 @@ def _score_kv_kernel(
         first_compress = ceil((start_pos+1) / ratio) * ratio - 1
       = ((start_pos + ratio) // ratio) * ratio - 1
     - Each CTA handles compress_abs = first_compress + group_id * ratio.
-    - Write-back position: kv[seq_start + (compress_abs - start_pos), :head_dim].
+    - Write-back position: compressed_kv[seq_start + (compress_abs - start_pos)].
 
     Prefill overlap data windows per compression point at compress_abs:
       prev window: abs_pos in [compress_abs - 2*ratio + 1, compress_abs - ratio]
@@ -220,19 +219,19 @@ def _score_kv_kernel(
             pos_in_ratio = start_pos % ratio
             if overlap:
                 cur_kv = tl.load(
-                    kv_ptr + seq_start * kv_stride_s + (head_dim + d_off + offs_d) * kv_stride_d).to(
+                    kv_ptr + seq_start * kv_stride_s + (head_dim + offs_d) * kv_stride_d).to(
                         tl.float32)
                 cur_score = tl.load(
-                    score_ptr + seq_start * score_stride_s + (head_dim + d_off + offs_d) *
+                    score_ptr + seq_start * score_stride_s + (head_dim + offs_d) *
                     score_stride_d).to(tl.float32)
                 cur_ape = tl.load(
-                    ape_ptr + pos_in_ratio * ape_stride_r + (head_dim + d_off + offs_d) *
+                    ape_ptr + pos_in_ratio * ape_stride_r + (head_dim + offs_d) *
                     ape_stride_d).to(tl.float32)
             else:
                 cur_kv = tl.load(kv_ptr + seq_start * kv_stride_s + offs_d * kv_stride_d).to(tl.float32)
                 cur_score = tl.load(score_ptr + seq_start * score_stride_s + offs_d * score_stride_d).to(tl.float32)
                 cur_ape = tl.load(
-                    ape_ptr + pos_in_ratio * ape_stride_r + (d_off + offs_d) * ape_stride_d).to(
+                    ape_ptr + pos_in_ratio * ape_stride_r + offs_d * ape_stride_d).to(
                         tl.float32)
             cur_score = cur_score + cur_ape
 
@@ -252,11 +251,11 @@ def _score_kv_kernel(
                 curr_row_ids = (head + ratio + row_ids) % cap
                 curr_kv = tl.load(
                     kv_state_ptr + state_id * kvc_stride_n + curr_row_ids[:, None] * kvc_stride_r +
-                    (head_dim + d_off + offs_d[None, :]) * kvc_stride_d).to(tl.float32)
+                    (head_dim + offs_d[None, :]) * kvc_stride_d).to(tl.float32)
                 curr_score = tl.load(
                     score_state_ptr + state_id * scorec_stride_n +
                     curr_row_ids[:, None] * scorec_stride_r +
-                    (head_dim + d_off + offs_d[None, :]) * scorec_stride_d).to(tl.float32)
+                    (head_dim + offs_d[None, :]) * scorec_stride_d).to(tl.float32)
 
                 # replace current token's slot in curr window
                 row_mask = row_ids == pos_in_ratio
@@ -341,13 +340,13 @@ def _score_kv_kernel(
                 _curr_abs_pos = curr_abs_base + row_ids
                 curr_kv = tl.load(
                     kv_ptr + (_curr_kv_pos + row_ids[:, None]) * kv_stride_s +
-                    (head_dim + d_off + offs_d[None, :]) * kv_stride_d).to(tl.float32)
+                    (head_dim + offs_d[None, :]) * kv_stride_d).to(tl.float32)
                 _curr_score_raw = tl.load(
                     score_ptr + (_curr_kv_pos + row_ids[:, None]) * score_stride_s +
-                    (head_dim + d_off + offs_d[None, :]) * score_stride_d).to(tl.float32)
+                    (head_dim + offs_d[None, :]) * score_stride_d).to(tl.float32)
                 _curr_ape = tl.load(
                     ape_ptr + (_curr_abs_pos % ratio)[:, None] * ape_stride_r +
-                    (head_dim + d_off + offs_d[None, :]) * ape_stride_d).to(tl.float32)
+                    (head_dim + offs_d[None, :]) * ape_stride_d).to(tl.float32)
                 curr_score = _curr_score_raw + _curr_ape
 
                 global_max = tl.maximum(tl.max(prev_score, 0), tl.max(curr_score, 0))

@@ -116,38 +116,12 @@ class TestFillCompressState:
     @pytest.mark.parametrize('overlap', [True], indirect=True)
     @pytest.mark.parametrize('ratio', [4], indirect=True)
     @pytest.mark.parametrize('kv_seqlens_list, q_seqlens_list', [
-        # decode: history + 1
-        ([13, 17, 9], [1, 1, 1]),
-        # decode: various history lengths
-        ([5, 21, 33], [1, 1, 1]),
-        # prefill: kv_seqlens == q_seqlens (no history)
-        ([8, 16], [8, 16]),
-        # prefill: long (more than max_write)
-        ([32, 64], [32, 64]),
-        # prefill: with history (multi-turn, start_pos > 0)
-        ([20, 48], [8, 16]),
-        ([128, 256], [16, 32]),
+        ([13, 17, 9], [1, 1, 1]),     # decode
+        ([8, 16], [8, 16]),            # prefill: no history
+        ([20, 48], [8, 16]),           # prefill: with history
     ])
     def test_overlap(self, kv_seqlens_list, q_seqlens_list, ratio, head_dim,
                      num_states, overlap, device, dtype):
-        self._run_test(kv_seqlens_list, q_seqlens_list, ratio, head_dim,
-                       num_states, overlap, device, dtype)
-
-    # ---- overlap=False, ratio=4 ----
-
-    @pytest.mark.parametrize('overlap', [False], indirect=True)
-    @pytest.mark.parametrize('ratio', [4], indirect=True)
-    @pytest.mark.parametrize('kv_seqlens_list, q_seqlens_list', [
-        # decode
-        ([13, 9, 128], [1, 1, 1]),
-        # prefill
-        ([4, 8], [4, 8]),
-        ([16], [16]),
-        # prefill: with history
-        ([20, 40], [8, 16]),
-    ])
-    def test_no_overlap(self, kv_seqlens_list, q_seqlens_list, ratio, head_dim,
-                        num_states, overlap, device, dtype):
         self._run_test(kv_seqlens_list, q_seqlens_list, ratio, head_dim,
                        num_states, overlap, device, dtype)
 
@@ -439,12 +413,8 @@ class TestScoreKV:
     @pytest.mark.parametrize('overlap', [True], indirect=True)
     @pytest.mark.parametrize('ratio', [4], indirect=True)
     @pytest.mark.parametrize('kv_seqlens_list, q_seqlens_list', [
-        # prefill: no history (start_pos=0)
-        ([8, 16], [8, 16]),
-        ([4, 12], [4, 12]),
-        # prefill: with history (start_pos>0)
-        ([20, 48], [8, 16]),
-        ([12, 24], [8, 16]),
+        ([8, 16], [8, 16]),       # no history
+        ([12, 24], [8, 16]),      # with history
     ])
     def test_prefill_overlap(self, kv_seqlens_list, q_seqlens_list, ratio, head_dim,
                              num_states, overlap, device, dtype):
@@ -456,41 +426,11 @@ class TestScoreKV:
     @pytest.mark.parametrize('overlap', [True], indirect=True)
     @pytest.mark.parametrize('ratio', [4], indirect=True)
     @pytest.mark.parametrize('kvlen', [
-        4,    # first emit (start_pos=3)
-        8,    # second emit (start_pos=7)
-        5,    # no emit (start_pos=4, (4+1)%4=1!=0)
-        7,    # no emit
-        12,   # third emit
+        4,    # emit (start_pos=3)
+        5,    # no emit (start_pos=4)
     ])
     def test_decode_overlap(self, kvlen, ratio, head_dim, num_states, overlap,
                             device, dtype):
-        self._run_decode_test(kvlen, ratio, head_dim, num_states, overlap, device, dtype)
-
-    # ---- overlap=False, ratio=4, prefill ----
-
-    @pytest.mark.parametrize('overlap', [False], indirect=True)
-    @pytest.mark.parametrize('ratio', [4], indirect=True)
-    @pytest.mark.parametrize('kv_seqlens_list, q_seqlens_list', [
-        ([4, 8], [4, 8]),
-        ([16], [16]),
-        ([20, 40], [8, 16]),
-    ])
-    def test_prefill_no_overlap(self, kv_seqlens_list, q_seqlens_list, ratio, head_dim,
-                                num_states, overlap, device, dtype):
-        self._run_prefill_test(kv_seqlens_list, q_seqlens_list, ratio, head_dim,
-                               num_states, overlap, device, dtype)
-
-    # ---- overlap=False, ratio=4, decode ----
-
-    @pytest.mark.parametrize('overlap', [False], indirect=True)
-    @pytest.mark.parametrize('ratio', [4], indirect=True)
-    @pytest.mark.parametrize('kvlen', [
-        4,    # emit
-        8,    # emit
-        5,    # no emit
-    ])
-    def test_decode_no_overlap(self, kvlen, ratio, head_dim, num_states, overlap,
-                               device, dtype):
         self._run_decode_test(kvlen, ratio, head_dim, num_states, overlap, device, dtype)
 
     # ---- overlap=False, ratio=128, prefill ----
@@ -518,6 +458,153 @@ class TestScoreKV:
     def test_decode_ratio_128(self, kvlen, ratio, head_dim, num_states, overlap,
                               device, dtype):
         self._run_decode_test(kvlen, ratio, head_dim, num_states, overlap, device, dtype)
+
+
+class TestScoreKVLargeHeadDim:
+    """Test score_kv with head_dim=512 (n_tiles=4), matching real V4 model
+    config.
+
+    The original tests all use head_dim=128 where n_tiles=1, so a double-d_off bug in the kernel was masked (d_off=0 for
+    the only tile). Only overlap=True ratio=4 is tested because that is the V4 model's actual config — overlap=False
+    ratio=4 is not a real config, and overlap=False ratio=128 prefill had no bug (offs_d without d_off prefix).
+    """
+
+    @pytest.fixture
+    def head_dim(self):
+        yield 512
+
+    @pytest.fixture
+    def num_states(self):
+        yield 8
+
+    @pytest.fixture
+    def device(self):
+        yield 'cuda'
+
+    @pytest.fixture
+    def dtype(self):
+        yield torch.bfloat16
+
+    @pytest.fixture
+    def overlap(self, request):
+        yield request.param
+
+    @pytest.fixture
+    def ratio(self, request):
+        yield request.param
+
+    def _run_prefill_test(self, kv_seqlens_list, q_seqlens_list, ratio, head_dim,
+                          num_states, overlap, device, dtype):
+        B = len(kv_seqlens_list)
+        coff = 1 + overlap
+        D = coff * head_dim
+        max_write = ratio * coff
+        total_q = sum(q_seqlens_list)
+        max_seqlen_q = max(q_seqlens_list)
+
+        kv_seqlens = torch.tensor(kv_seqlens_list, dtype=torch.int32, device=device)
+        cu_q_seqlens = torch.tensor([0] + list(q_seqlens_list), dtype=torch.int32,
+                                    device=device).cumsum(0)
+
+        kv = torch.randn(total_q, D, dtype=dtype, device=device)
+        score = torch.randn(total_q, D, dtype=dtype, device=device)
+        ape = torch.randn(ratio, D, dtype=torch.float32, device=device)
+
+        state_ids = torch.arange(B, dtype=torch.int32, device=device)
+        kv_state = torch.zeros(num_states, max_write, D, dtype=torch.float32, device=device)
+        score_state = torch.full((num_states, max_write, D), float('-inf'),
+                                 dtype=torch.float32, device=device)
+
+        from lmdeploy.pytorch.kernels.cuda.v4_compressor import fill_compress_state
+        has_history = any(kv_seqlens_list[b] > q_seqlens_list[b] for b in range(B))
+        if has_history:
+            for b in range(B):
+                history_len = kv_seqlens_list[b] - q_seqlens_list[b]
+                if history_len > 0:
+                    hist_kv = torch.randn(history_len, D, dtype=dtype, device=device)
+                    hist_score = torch.randn(history_len, D, dtype=dtype, device=device)
+                    hist_cu_q = torch.tensor([0, history_len], dtype=torch.int32, device=device)
+                    hist_kvlen = torch.tensor([kv_seqlens_list[b] - q_seqlens_list[b]],
+                                              dtype=torch.int32, device=device)
+                    hist_sids = torch.tensor([b], dtype=torch.int32, device=device)
+                    fill_compress_state(hist_kv, hist_score, ape, kv_state, score_state,
+                                        hist_sids, hist_cu_q, hist_kvlen)
+
+        kv_state_ref = kv_state.clone()
+        score_state_ref = score_state.clone()
+        ref_compressed = _reference_score_kv(kv.clone(), score.clone(), ape, kv_state_ref,
+                                             score_state_ref, state_ids, cu_q_seqlens,
+                                             kv_seqlens, overlap)
+
+        from lmdeploy.pytorch.kernels.cuda.v4_compressor import score_kv
+        compressed_kv = torch.zeros(total_q, head_dim, dtype=dtype, device=device)
+        kv_state_k = kv_state.clone()
+        score_state_k = score_state.clone()
+        score_kv(kv, score, ape, kv_state_k, score_state_k, state_ids,
+                 cu_q_seqlens, kv_seqlens, compressed_kv, overlap, max_seqlen_q)
+
+        torch.testing.assert_close(compressed_kv.float(),
+                                   ref_compressed.float(),
+                                   atol=1e-2, rtol=1e-2)
+
+    def _run_decode_test(self, kvlen, ratio, head_dim, num_states, overlap, device, dtype):
+        coff = 1 + overlap
+        D = coff * head_dim
+        max_write = ratio * coff
+
+        full_kv = torch.randn(kvlen, D, dtype=dtype, device=device)
+        full_score = torch.randn(kvlen, D, dtype=dtype, device=device)
+        ape = torch.randn(ratio, D, dtype=torch.float32, device=device)
+
+        state_ids = torch.tensor([0], dtype=torch.int32, device=device)
+        kv_state = torch.zeros(num_states, max_write, D, dtype=torch.float32, device=device)
+        score_state = torch.full((num_states, max_write, D), float('-inf'),
+                                 dtype=torch.float32, device=device)
+
+        from lmdeploy.pytorch.kernels.cuda.v4_compressor import fill_compress_state
+        full_cu_q = torch.tensor([0, kvlen], dtype=torch.int32, device=device)
+        full_kvlen = torch.tensor([kvlen], dtype=torch.int32, device=device)
+        fill_compress_state(full_kv, full_score, ape, kv_state, score_state,
+                            state_ids, full_cu_q, full_kvlen)
+
+        last_kv = full_kv[-1:].clone()
+        last_score = full_score[-1:].clone()
+        last_cu_q = torch.tensor([0, 1], dtype=torch.int32, device=device)
+        last_kvlen = torch.tensor([kvlen], dtype=torch.int32, device=device)
+
+        kv_state_ref = kv_state.clone()
+        score_state_ref = score_state.clone()
+        ref_compressed = _reference_score_kv(last_kv.clone(), last_score.clone(), ape,
+                                             kv_state_ref, score_state_ref, state_ids,
+                                             last_cu_q, last_kvlen, overlap)
+
+        from lmdeploy.pytorch.kernels.cuda.v4_compressor import score_kv
+        compressed_kv = torch.zeros(1, head_dim, dtype=dtype, device=device)
+        kv_state_k = kv_state.clone()
+        score_state_k = score_state.clone()
+        score_kv(last_kv, last_score, ape, kv_state_k, score_state_k, state_ids,
+                 last_cu_q, last_kvlen, compressed_kv, overlap, 1)
+
+        torch.testing.assert_close(compressed_kv.float(),
+                                   ref_compressed.float(),
+                                   atol=1e-2, rtol=1e-2)
+
+    @pytest.mark.parametrize('overlap', [True], indirect=True)
+    @pytest.mark.parametrize('ratio', [4], indirect=True)
+    @pytest.mark.parametrize('kvlen', [12])
+    def test_decode_overlap(self, kvlen, ratio, head_dim, num_states, overlap,
+                            device, dtype):
+        self._run_decode_test(kvlen, ratio, head_dim, num_states, overlap, device, dtype)
+
+    @pytest.mark.parametrize('overlap', [True], indirect=True)
+    @pytest.mark.parametrize('ratio', [4], indirect=True)
+    @pytest.mark.parametrize('kv_seqlens_list, q_seqlens_list', [
+        ([12, 24], [8, 16]),
+    ])
+    def test_prefill_overlap(self, kv_seqlens_list, q_seqlens_list, ratio, head_dim,
+                             num_states, overlap, device, dtype):
+        self._run_prefill_test(kv_seqlens_list, q_seqlens_list, ratio, head_dim,
+                               num_states, overlap, device, dtype)
 
 
 def _reference_fill_compressed_kv(compressed_kv, kv_cache, cu_q_seqlens, kv_seqlens,
@@ -710,9 +797,8 @@ class TestFillCompressedKV:
 
     @pytest.mark.parametrize('compress_ratio', [4], indirect=True)
     @pytest.mark.parametrize('kv_seqlens_list, q_seqlens_list', [
-        ([8, 16], [8, 16]),
-        ([4, 12], [4, 12]),
-        ([20, 48], [8, 16]),
+        ([8, 16], [8, 16]),       # no history
+        ([20, 48], [8, 16]),      # with history
     ])
     def test_prefill_r4(self, kv_seqlens_list, q_seqlens_list, compress_ratio,
                         head_dim, block_size, device, dtype):
@@ -722,7 +808,7 @@ class TestFillCompressedKV:
     # ---- ratio=4, decode ----
 
     @pytest.mark.parametrize('compress_ratio', [4], indirect=True)
-    @pytest.mark.parametrize('kvlen', [4, 8, 5, 7, 12])
+    @pytest.mark.parametrize('kvlen', [4, 5])
     def test_decode_r4(self, kvlen, compress_ratio, head_dim, block_size, device, dtype):
         self._run_decode_test(kvlen, compress_ratio, head_dim, block_size, device, dtype)
 

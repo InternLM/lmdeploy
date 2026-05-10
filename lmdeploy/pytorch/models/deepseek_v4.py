@@ -220,7 +220,7 @@ class Compressor(nn.Module):
         kv_flat = kv.view(-1, kv.size(-1))
         score_flat = score.view(-1, score.size(-1))
 
-        state_ids = slot.long().to(torch.int32)
+        state_ids = slot
 
         # ---- Phase C: Get state views ----
         state_cache = caches.named_state_caches[self.state_cache_name][self.layer_id]
