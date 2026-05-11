@@ -8,7 +8,7 @@ from lmdeploy.pytorch.config import override_hf_config
 from lmdeploy.utils import get_logger
 
 from ..utils import _get_and_verify_max_len, is_bf16_supported
-from .builders import _TORCH_TO_CPP
+from .builders import _torch_dtype_to_cpp
 from .models.base import INPUT_MODELS
 from .models.utils import source_model_config
 from .supported_models import SUPPORTED_ARCHS
@@ -28,21 +28,24 @@ logger = get_logger('lmdeploy')
 
 def _build_resolver(model_format: str | None,
                     group_size: int | None,
-                    data_type) -> WeightFormatResolver:
+                    dtype: torch.dtype) -> (WeightFormatResolver, torch.dtype):
     """Build the active resolver: quantized format (if any) + trivial fallback.
 
     Called after the int4 fp16 force but before the ``compressed-tensors →
     awq`` rename, so compressed-tensors models get ``CompressedTensorFormat``.
     """
     formats: list[WeightFormat] = []
-    if model_format in (None, 'hf'):
+    if model_format is None:
         pass
     elif model_format == 'awq':
         formats.append(AWQFormat(block_in=group_size))
+        dtype = torch.float16
     elif model_format == 'gptq':
         formats.append(GPTQFormat(block_in=group_size))
+        dtype = torch.float16
     elif model_format == 'compressed-tensors':
         formats.append(CompressedTensorFormat(block_in=group_size))
+        dtype = torch.float16
     elif model_format == 'fp8':
         formats.append(FP8Format())
     elif model_format == 'mxfp4':
@@ -50,7 +53,7 @@ def _build_resolver(model_format: str | None,
     else:
         raise ValueError(f'unknown model_format: {model_format!r}')
     formats.append(TrivialFormat())
-    return WeightFormatResolver(data_type=data_type, formats=formats)
+    return WeightFormatResolver(data_type=_torch_dtype_to_cpp(dtype), formats=formats), dtype
 
 
 def _deep_merge(base: dict, override: dict, path: str = '') -> dict:
@@ -107,7 +110,7 @@ def _validate_quant_group_size(model_format: str | None, group_size: int | None)
     return group_size
 
 
-def get_registered_name(model_path: str, model_format: str, arch: str = None):
+def get_registered_name(model_path: str, arch: str = None):
     """Get the registered name of a model. The name will be used to access the
     INPUT_MODELS registry.
 
@@ -201,24 +204,17 @@ def get_tm_config(model_path,
         group_size = _group_size
 
     group_size = _validate_quant_group_size(engine_config.model_format, group_size)
-    if engine_config.model_format is None:
-        engine_config.model_format = 'hf'
 
     # 3. Resolve dtype and format overrides.
     dtype = _resolve_dtype(engine_config.dtype, hf_model_cfg)
-    if engine_config.model_format in ('awq', 'gptq', 'compressed-tensors'):
-        dtype = 'float16'
-    engine_config.dtype = dtype
-    torch_dtype = getattr(torch, dtype)
+    dtype = getattr(torch, dtype)
 
     # Build resolver after dtype is finalized but before the CT→AWQ rename,
     # so compressed-tensors models instantiate CompressedTensorFormat.
-    resolver = _build_resolver(engine_config.model_format,
-                               group_size, _TORCH_TO_CPP[torch_dtype])
+    resolver, dtype = _build_resolver(engine_config.model_format,
+                                      group_size, dtype)
 
-    # C++-side label rename (does not affect resolver).
-    if engine_config.model_format == 'compressed-tensors':
-        engine_config.model_format = 'awq'
+    engine_config.dtype = str(dtype).split('.')[1]
 
     # 4. Resolve session_len default.
     session_len_default = _get_and_verify_max_len(hf_model_cfg, None)
@@ -235,8 +231,8 @@ def get_tm_config(model_path,
     if engine_config.hf_overrides:
         logger.warning(f'Overriding HF config with {engine_config.hf_overrides}')
         _apply_hf_overrides(cfg, engine_config.hf_overrides)
-    registered_name = get_registered_name(model_path, engine_config.model_format, arch=arch)
+    registered_name = get_registered_name(model_path, arch=arch)
     model_cls = INPUT_MODELS.get(registered_name)
     text_model = model_cls(cfg, resolver=resolver)
 
-    return text_model, model_path, _TORCH_TO_CPP[torch_dtype]
+    return text_model, model_path, resolver.data_type
