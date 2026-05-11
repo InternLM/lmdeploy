@@ -15,17 +15,17 @@ class TestAutoBackend:
             ('baichuan-inc/Baichuan2-13B-Chat', False),
             ('internlm/internlm-chat-7b', False),
             ('internlm/internlm2-chat-7b', True),
-            ('internlm/internlm-xcomposer2-7b', True),
+            ('internlm/internlm-xcomposer2-7b', False),
             ('internlm/internlm-xcomposer-7b', False),
             ('THUDM/chatglm2-6b', False),
             ('THUDM/chatglm3-6b', False),
             ('deepseek-ai/deepseek-moe-16b-chat', False),
             ('01-ai/Yi-34B-Chat', False),
             ('codellama/CodeLlama-7b-Instruct-hf', False),
-            ('Qwen/Qwen-7B-Chat', True),
-            ('Qwen/Qwen-VL-Chat', True),
-            ('Qwen/Qwen1.5-4B-Chat', True),
-            ('Qwen/Qwen1.5-0.5B-Chat', True),
+            ('Qwen/Qwen-7B-Chat', False),
+            ('Qwen/Qwen-VL-Chat', False),
+            ('Qwen/Qwen1.5-4B-Chat', False),
+            ('Qwen/Qwen1.5-0.5B-Chat', False),
         ]
         return models
 
