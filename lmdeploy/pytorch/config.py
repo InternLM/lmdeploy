@@ -97,7 +97,7 @@ class CacheConfig:
     kernel_block_size: int = -1
     window_size: int = -1
     cache_max_entry_count: float = 0.8
-    max_prefill_token_num: int = 4096
+    max_prefill_token_num: int = 8192
     enable_prefix_caching: bool = False
     quant_policy: QuantPolicy = QuantPolicy.NONE
     device_type: str = 'cuda'
@@ -399,7 +399,7 @@ class ModelConfig:
     def from_pretrained(
         cls,
         pretrained_model_name_or_path: str,
-        trust_remote_code: bool = True,
+        trust_remote_code: bool = False,
         dtype: str = 'auto',
         dist_config: DistConfig = None,
         hf_overrides: dict[str, Any] = None,
@@ -599,14 +599,17 @@ class SpecDecodeConfig:
         target_cache_cfg: CacheConfig,
         target_model: str = None,
         dtype: str = 'auto',
+        trust_remote_code: bool = False,
+        hf_overrides: dict[str, Any] = None,
     ):
         model = model or target_model
         model_config = ModelConfig.from_pretrained(model,
-                                                   trust_remote_code=True,
+                                                   trust_remote_code=trust_remote_code,
                                                    dtype=dtype,
                                                    is_draft_model=True,
                                                    spec_method=method,
                                                    block_size=target_cache_cfg.block_size,
+                                                   hf_overrides=hf_overrides,
                                                    )
         cache_config = None
         # include medusa
@@ -614,6 +617,7 @@ class SpecDecodeConfig:
         if method not in no_caches:
             cache_config = CacheConfig(max_batches=target_cache_cfg.max_batches,
                                        block_size=target_cache_cfg.block_size,
+                                       kernel_block_size=target_cache_cfg.kernel_block_size,
                                        num_cpu_blocks=target_cache_cfg.num_cpu_blocks,
                                        num_gpu_blocks=target_cache_cfg.num_gpu_blocks,
                                        cache_max_entry_count=target_cache_cfg.cache_max_entry_count,

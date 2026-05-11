@@ -23,7 +23,7 @@ def register_config(model_type: str):
 def config_from_pretrained(pretrained_model_name_or_path: str, **kwargs):
     try:
         return AutoConfig.from_pretrained(pretrained_model_name_or_path, **kwargs)
-    except ValueError as e:
+    except Exception as e:
         logger.debug(f'AutoConfig.from_pretrained failed: {e}, try register config manually.')
         # some models do not provide auto map for config
         from transformers import PretrainedConfig
@@ -33,5 +33,4 @@ def config_from_pretrained(pretrained_model_name_or_path: str, **kwargs):
         if trust_remote_code is not None:
             kwargs['trust_remote_code'] = trust_remote_code
         register_config(model_type)
-
-    return AutoConfig.from_pretrained(pretrained_model_name_or_path, **kwargs)
+        return AutoConfig.from_pretrained(pretrained_model_name_or_path, **kwargs)

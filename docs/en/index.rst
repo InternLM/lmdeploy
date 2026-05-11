@@ -60,6 +60,7 @@ Documentation
    llm/api_server.md
    llm/api_server_tools.md
    llm/api_server_reasoning.md
+   llm/api_server_anthropic.md
    llm/api_server_lora.md
    llm/proxy_server.md
 

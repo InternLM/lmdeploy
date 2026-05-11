@@ -26,6 +26,7 @@ class UniExecutor(ExecutorBase):
         adapters: dict[str, str] = None,
         device_type: str = 'cuda',
         specdecode_config: SpecDecodeConfig = None,
+        trust_remote_code: bool = False
     ):
         """Initialize Executor."""
         super().__init__(model_path=model_path,
@@ -36,7 +37,8 @@ class UniExecutor(ExecutorBase):
                          misc_config=misc_config,
                          adapters=adapters,
                          device_type=device_type,
-                         specdecode_config=specdecode_config)
+                         specdecode_config=specdecode_config,
+                         trust_remote_code=trust_remote_code)
 
         self.device_ctx = DeviceContext(device_type=device_type)
         self.model_agent = build_model_agent(
@@ -48,6 +50,7 @@ class UniExecutor(ExecutorBase):
             device_ctx=self.device_ctx,
             adapters=adapters,
             specdecode_config=specdecode_config,
+            trust_remote_code=trust_remote_code,
         )
 
     def download_models(self):

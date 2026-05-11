@@ -106,6 +106,8 @@ class CacheEngine:
         self.migration_backend_impl: MigrationBackendImpl | None = None
 
         # Initialize the stream for caching operations.
+        # Non-CUDA device integrations currently provide CUDA-compatible torch
+        # APIs in their backend layer, so the cache engine keeps this path.
         self.cache_stream = cache_stream or torch.cuda.Stream()
         assert self.cache_stream != torch.cuda.current_stream()
         # Initialize the events for stream synchronization.
@@ -312,9 +314,16 @@ class CacheEngine:
                         device: str):
         """Allocate caches."""
 
-        num_layers = model_config.num_layers
         if cache_config.block_size < cache_config.kernel_block_size:
-            raise ValueError(f'block_size {cache_config.block_size} must be greater than or equal to kernel_block_size {cache_config.kernel_block_size}.')  # noqa
+            raise ValueError(
+                f'block_size {cache_config.block_size} must be greater than or equal to '
+                f'kernel_block_size {cache_config.kernel_block_size}.')
+        if cache_config.block_size % cache_config.kernel_block_size != 0:
+            raise ValueError(
+                f'block_size {cache_config.block_size} must be divisible by '
+                f'kernel_block_size {cache_config.kernel_block_size}.')
+
+        num_layers = model_config.num_layers
         kernel_blocks_per_kv = cache_config.block_size // cache_config.kernel_block_size
         num_blocks *= kernel_blocks_per_kv
 
@@ -350,6 +359,8 @@ class CacheEngine:
 
     def allocate_gpu_cache(self):
         """Allocate caches on GPU."""
+        # Non-CUDA device integrations patch the canonical "cuda" device path
+        # before reaching this layer, so keep using it here.
         mem_pool, caches = self.allocate_caches(
             num_blocks=self.num_gpu_blocks,
             model_config=self.model_config,
@@ -500,6 +511,8 @@ class CacheEngine:
         self.migration_backend_impl.p2p_connect(remote_engine_id, migration_conn_request[self.tp_rank])
 
     async def migrate(self, migration_execution_inputs: MigrationExecutionBatch):
+        if self.cache_config.block_size != self.cache_config.kernel_block_size:
+            raise RuntimeError('PD migration does not support block_size != kernel_block_size.')
 
         assignment_len = self.full_gpu_cache.element_size() * self.full_gpu_cache.size(-1)
         layer_stride = self.cache_config.num_gpu_blocks * assignment_len
@@ -549,6 +562,8 @@ class StateCacheEngine:
             self._state_cache_names = [f'state_{i}' for i in range(len(model_config.states_shapes))]
         else:
             self._state_cache_names = []
+        # Non-CUDA device integrations patch the canonical "cuda" device path
+        # before reaching this layer, so keep using it here.
         self.mem_pool, self._state_caches = self.allocate_caches(num_caches=cache_config.num_state_caches,
                                                                  state_shapes=cache_config.states_shapes,
                                                                  state_specs=state_specs,

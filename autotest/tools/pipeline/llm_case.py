@@ -54,7 +54,8 @@ def run_pipeline_chat_test(model_path, run_config, cases_path, is_pr_test: bool 
 
     print('backend_config config: ' + str(backend_config))
     print('speculative_config config: ' + str(speculative_config))
-    pipe = pipeline(model_path, backend_config=backend_config, speculative_config=speculative_config)
+    pipe = pipeline(model_path, backend_config=backend_config, speculative_config=speculative_config,
+                    trust_remote_code=True)
 
     cases_path = os.path.join(cases_path)
     with open(cases_path) as f:

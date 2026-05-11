@@ -23,7 +23,7 @@ def test_chat_completion_request_repetition_ngram_ge_zero():
 
 
 def test_engine_generation_config():
-    tokenizer = Tokenizer('internlm/internlm-chat-7b')
+    tokenizer = Tokenizer('internlm/internlm-chat-7b', trust_remote_code=True)
     config = GenerationConfig(n=3, stop_words=['<eoa>'])
     stop_token_ids = tokenizer.encode('<eoa>', add_bos=False)
     config.convert_stop_bad_words_to_ids(tokenizer)
@@ -38,7 +38,7 @@ def test_engine_generation_config():
     'internlm/internlm3-8b-instruct',
 ])
 def test_update_from_hf_gen_cfg(model_path):
-    tokenizer = Tokenizer(model_path)
+    tokenizer = Tokenizer(model_path, trust_remote_code=True)
     model_cfg = get_hf_gen_cfg(model_path)
 
     generation_config = GenerationConfig()

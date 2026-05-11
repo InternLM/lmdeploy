@@ -110,6 +110,7 @@ class AsyncEngine:
                  backend_config: TurbomindEngineConfig | PytorchEngineConfig | None = None,
                  chat_template_config: ChatTemplateConfig | None = None,
                  max_log_len: int | None = None,
+                 trust_remote_code: bool = False,
                  speculative_config: SpeculativeConfig | None = None,
                  **kwargs) -> None:
         logger.info(f'input backend={backend}, backend_config={backend_config}')
@@ -117,11 +118,11 @@ class AsyncEngine:
         backend_config = backend_config or (TurbomindEngineConfig()
                                             if backend == 'turbomind' else PytorchEngineConfig())
         self.model_name = model_name if model_name else model_path
-        self.chat_template = get_chat_template(model_path, chat_template_config)
-        self.tokenizer = Tokenizer(model_path)
+        self.chat_template = get_chat_template(model_path, chat_template_config, trust_remote_code=trust_remote_code)
+        self.tokenizer = Tokenizer(model_path, trust_remote_code=trust_remote_code)
         self.prompt_processor = MultimodalProcessor(self.tokenizer, self.chat_template)
-        self.hf_gen_cfg = get_hf_gen_cfg(model_path)
-        self.arch, self.hf_cfg = get_model_arch(model_path)
+        self.hf_gen_cfg = get_hf_gen_cfg(model_path, trust_remote_code=trust_remote_code)
+        self.arch, self.hf_cfg = get_model_arch(model_path, trust_remote_code=trust_remote_code)
         self.session_len = (_get_and_verify_max_len(self.hf_cfg, None)
                             if backend_config.session_len is None else backend_config.session_len)
         backend_config.session_len = self.session_len
@@ -129,10 +130,14 @@ class AsyncEngine:
             logger.warning('speculative decoding is not supported by turbomind ')
         # build backend engine
         if backend == 'turbomind':
-            self.engine = self._build_turbomind(model_path=model_path, backend_config=backend_config, **kwargs)
+            self.engine = self._build_turbomind(model_path=model_path,
+                                                backend_config=backend_config,
+                                                trust_remote_code=trust_remote_code,
+                                                **kwargs)
         elif backend == 'pytorch':
             self.engine = self._build_pytorch(model_path=model_path,
                                               backend_config=backend_config,
+                                              trust_remote_code=trust_remote_code,
                                               speculative_config=speculative_config,
                                               **kwargs)
         else:
@@ -169,19 +174,31 @@ class AsyncEngine:
     def __exit__(self, exc_type, exc_value, traceback):
         self.close()
 
-    def _build_turbomind(self, model_path: str, backend_config: TurbomindEngineConfig | None = None, **kwargs):
+    def _build_turbomind(self,
+                         model_path: str,
+                         backend_config: TurbomindEngineConfig | None = None,
+                         trust_remote_code: bool = False,
+                         **kwargs):
         """Inner build method for turbomind backend."""
         from lmdeploy import turbomind as tm
-        return tm.TurboMind.from_pretrained(model_path, engine_config=backend_config, **kwargs)
+        return tm.TurboMind.from_pretrained(model_path,
+                                            engine_config=backend_config,
+                                            trust_remote_code=trust_remote_code,
+                                            **kwargs)
 
     def _build_pytorch(self,
                        model_path: str,
                        backend_config: PytorchEngineConfig | None = None,
                        speculative_config: SpeculativeConfig | None = None,
+                       trust_remote_code: bool = False,
                        **kwargs):
         """Inner build method for pytorch backend."""
         from lmdeploy.pytorch.engine import Engine
-        return Engine.from_pretrained(model_path, engine_config=backend_config, speculative_config=speculative_config)
+        return Engine.from_pretrained(model_path,
+                                      engine_config=backend_config,
+                                      speculative_config=speculative_config,
+                                      trust_remote_code=trust_remote_code,
+                                      **kwargs)
 
     def _build_stat_loggers(self):
         self.stat_loggers = []
@@ -235,11 +252,7 @@ class AsyncEngine:
         logger.info(f'stop all sessions, epoch {self.epoch} -> {self.epoch + 1}')
         self.epoch += 1
         await self.session_mgr.async_abort_all()
-
-    def prepare_sleep(self):
-        """Reject new inference requests before backend sleep starts."""
-        self.sleeping_tags = {'weights', 'kv_cache'}
-        self.is_sleeping = True
+        logger.info('stopped all sessions')
 
     async def sleep(self, level: int = 1):
         """Sleep the model.
@@ -249,9 +262,10 @@ class AsyncEngine:
                 weights and discard the kv cache. Level 2 sleep will
                 discard both the model weights and the kv cache.
         """
-        await self.engine.sleep(level)
-        self.sleeping_tags = {'weights', 'kv_cache'}
         self.is_sleeping = True
+        self.sleeping_tags = {'weights', 'kv_cache'}
+        await self.stop_all_session()
+        await self.engine.sleep(level)
 
     def wakeup(self, tags: list[str] | None = None):
         """Wake up the model.
@@ -384,25 +398,36 @@ class AsyncEngine:
                 logger.warning('chat_template_kwargs["enable_thinking"] is already set, '
                                'the value will not be overwritten by enable_thinking')
         if messages:
-            prompt = messages
-            self.request_logger.log_prompt(session, prompt=prompt)
-            prompt_input = await self.prompt_processor.get_prompt_input(prompt=prompt,
-                                                                        do_preprocess=do_preprocess,
-                                                                        sequence_start=sequence_start,
-                                                                        adapter_name=adapter_name,
-                                                                        tools=tools,
-                                                                        reasoning_effort=reasoning_effort,
-                                                                        chat_template_kwargs=chat_template_kwargs,
-                                                                        media_io_kwargs=media_io_kwargs,
-                                                                        mm_processor_kwargs=mm_processor_kwargs,
-                                                                        **kwargs)
-            prompt = prompt_input['prompt']
-            input_ids = prompt_input['input_ids']
-            self.request_logger.log_inputs(session,
-                                           prompt=prompt,
-                                           prompt_token_ids=input_ids,
-                                           gen_config=gen_config,
-                                           adapter_name=adapter_name)
+            try:
+                prompt = messages
+                self.request_logger.log_prompt(session, prompt=prompt)
+                prompt_input = await self.prompt_processor.get_prompt_input(prompt=prompt,
+                                                                            do_preprocess=do_preprocess,
+                                                                            sequence_start=sequence_start,
+                                                                            adapter_name=adapter_name,
+                                                                            tools=tools,
+                                                                            reasoning_effort=reasoning_effort,
+                                                                            chat_template_kwargs=chat_template_kwargs,
+                                                                            media_io_kwargs=media_io_kwargs,
+                                                                            mm_processor_kwargs=mm_processor_kwargs,
+                                                                            **kwargs)
+                prompt = prompt_input.get('prompt')
+                input_ids = prompt_input.get('input_ids')
+                self.request_logger.log_inputs(session,
+                                            prompt=prompt,
+                                            prompt_token_ids=input_ids,
+                                            gen_config=gen_config,
+                                            adapter_name=adapter_name)
+            except Exception:
+                logger.exception('[generate] error in prompt processing')
+                metrics_processor.increase_failed_requests('error')
+                yield GenOut(response='in prompt processing error',
+                             history_token_len=session.step,
+                             input_token_len=len(input_ids) if input_ids is not None else 0,
+                             generate_token_len=0,
+                             finish_reason='error',
+                             token_ids=[])
+                return
         else:
             # TODO(lvhan) VLM doesn't support input_ids as an argument.
             # Figure out a graceful way to handle the invalid input
@@ -468,6 +493,8 @@ class AsyncEngine:
                              generate_token_len=0,
                              finish_reason='abort',
                              token_ids=[])
+                if sequence_end:
+                    self.session_mgr.remove(session)
                 return
             token_ids = input_ids.copy()
             history_len = session.step
@@ -697,6 +724,8 @@ class AsyncEngine:
                     async for outputs in gen:
                         pass
                     logits[i] = outputs.logits[:input_len, :]
+                if sequence_end and self.backend == 'pytorch':
+                    await handle.async_end(session.session_id)
 
         create_sessions = False
         if sessions is None:
@@ -704,9 +733,6 @@ class AsyncEngine:
             sessions = [self.session_mgr.get() for _ in range(len(input_ids))]
         tasks = [_proc(session, i) for i, session in enumerate(sessions)]
         await asyncio.gather(*tasks)
-        if sequence_end and self.backend == 'pytorch':
-            for session in sessions:
-                await session.async_close()
         if sequence_end and create_sessions:
             for session in sessions:
                 self.session_mgr.remove(session)

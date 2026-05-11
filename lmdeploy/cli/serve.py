@@ -81,6 +81,7 @@ class SubCliServe:
         ArgumentHelper.disable_fastapi_docs(parser)
         ArgumentHelper.allow_terminate_by_client(parser)
         ArgumentHelper.enable_abort_handling(parser)
+        ArgumentHelper.trust_remote_code(parser)
         # chat template args
         ArgumentHelper.chat_template(parser)
 
@@ -214,7 +215,7 @@ class SubCliServe:
         backend = args.backend
         if backend != 'pytorch':
             # set auto backend mode
-            backend = autoget_backend(args.model_path)
+            backend = autoget_backend(args.model_path, trust_remote_code=args.trust_remote_code)
 
         if backend == 'pytorch':
             from lmdeploy.messages import PytorchEngineConfig
@@ -305,6 +306,7 @@ class SubCliServe:
                 max_log_len=args.max_log_len,
                 disable_fastapi_docs=args.disable_fastapi_docs,
                 max_concurrent_requests=args.max_concurrent_requests,
+                trust_remote_code=args.trust_remote_code,
                 reasoning_parser=args.reasoning_parser,
                 tool_call_parser=args.tool_call_parser,
                 speculative_config=speculative_config,
@@ -336,6 +338,7 @@ class SubCliServe:
                 max_log_len=args.max_log_len,
                 disable_fastapi_docs=args.disable_fastapi_docs,
                 max_concurrent_requests=args.max_concurrent_requests,
+                trust_remote_code=args.trust_remote_code,
                 reasoning_parser=args.reasoning_parser,
                 tool_call_parser=args.tool_call_parser,
                 speculative_config=speculative_config,

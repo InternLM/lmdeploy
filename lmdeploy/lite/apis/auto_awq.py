@@ -50,7 +50,8 @@ def auto_awq(model: str,
              device: str = 'cuda',
              revision: str = None,
              dtype: Literal['float16', 'bfloat16', 'auto'] = 'auto',
-             download_dir: str = None):
+             download_dir: str = None,
+             trust_remote_code: bool = False):
     """Perform weight quantization using AWQ algorithm.
 
     Args:
@@ -93,7 +94,8 @@ def auto_awq(model: str,
                                                      w_group_size=w_group_size,
                                                      search_scale=search_scale,
                                                      dtype=dtype,
-                                                     batch_size=batch_size)
+                                                     batch_size=batch_size,
+                                                     trust_remote_code=trust_remote_code)
 
     layer_type = LAYER_TYPE_MAP[type(model).__name__]
     fc2fcs = FC_FCS_MAP[layer_type]

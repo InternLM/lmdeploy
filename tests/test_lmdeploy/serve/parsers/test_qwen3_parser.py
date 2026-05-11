@@ -373,3 +373,29 @@ class TestQwenResponseParserStreaming:
         finally:
             cls.reasoning_parser_cls = old_reasoning_cls
             cls.tool_parser_cls = old_tool_cls
+
+
+class TestQwenResponseParserComplete:
+
+    def test_parse_complete_strips_reasoning_open_tag(self, tokenizer):
+        cls = ResponseParserManager.get('default')
+        old_reasoning_cls = cls.reasoning_parser_cls
+        old_tool_cls = cls.tool_parser_cls
+        try:
+            cls.reasoning_parser_cls = ReasoningParserManager.get('default')
+            cls.tool_parser_cls = None
+            request = ChatCompletionRequest(
+                model=MODEL_ID,
+                messages=[],
+                stream=False,
+                tool_choice='none',
+                chat_template_kwargs={'enable_thinking': True},
+            )
+            parser = cls(request=request, tokenizer=tokenizer)
+            content, tool_calls, reasoning = parser.parse_complete('<think>\nabc\n</think>\n\nHello')
+            assert reasoning == '\nabc\n'
+            assert content == '\n\nHello'
+            assert tool_calls is None
+        finally:
+            cls.reasoning_parser_cls = old_reasoning_cls
+            cls.tool_parser_cls = old_tool_cls

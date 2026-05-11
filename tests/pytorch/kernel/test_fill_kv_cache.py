@@ -675,6 +675,7 @@ class TestFillKVCacheBlockedFP8(TestFillKVCache):
         # uncache
         out_k, out_ks, out_v, out_vs = self.uncache(k_caches, ks_caches, v_caches, vs_caches, cu_seqlen_q,
                                                     kv_seq_length, block_offsets)
+        out_k = out_k.float()
         out_k = out_k / out_k.max()
         gt_k = gt_k.float()
         gt_k = gt_k / gt_k.max()
