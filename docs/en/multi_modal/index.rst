@@ -3,6 +3,12 @@ Vision-Language Models
 
 .. toctree::
    :maxdepth: 2
+   :caption: Guides
+
+   multimodal_inputs.md
+
+.. toctree::
+   :maxdepth: 2
    :caption: Examples
 
    deepseek_vl2.md

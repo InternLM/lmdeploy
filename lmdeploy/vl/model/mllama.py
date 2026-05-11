@@ -18,9 +18,9 @@ class MllamaVLModel(VisionModel):
 
     _arch = 'MllamaForConditionalGeneration'
 
-    def build_preprocessor(self):
+    def build_preprocessor(self, trust_remote_code: bool = False):
         from transformers import AutoProcessor
-        self.processor = AutoProcessor.from_pretrained(self.model_path)
+        self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=trust_remote_code)
         self.image_token_id = 128256
 
     def preprocess(self, messages: list[dict]) -> list[dict]:
@@ -34,11 +34,12 @@ class MllamaVLModel(VisionModel):
         messages.append(dict(role='preprocess', content=outputs))
         return messages
 
-    def build_model(self):
+    def build_model(self, trust_remote_code: bool = False):
         check_transformers()
         if self.with_llm:
             from transformers import MllamaForConditionalGeneration
-            model = MllamaForConditionalGeneration.from_pretrained(self.model_path, device_map='cpu')
+            model = MllamaForConditionalGeneration.from_pretrained(self.model_path, device_map='cpu',
+                                                                   trust_remote_code=trust_remote_code)
             self.vl_model = model
         else:
             raise NotImplementedError('turbomind has not supported mllama yet')

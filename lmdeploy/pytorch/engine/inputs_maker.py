@@ -55,11 +55,19 @@ class InputsMakerConfig:
     spec_decoding: bool = False
     enable_chunked_prefill: bool = False
     use_mrope: bool = False
+    prefill_interval: int = 16
 
     @staticmethod
     def from_engine(engine: 'Engine'):
         cache_config = engine.cache_config
         model_config = engine.model_config
+        prefill_interval = engine.engine_config.prefill_interval
+        kwargs = dict()
+        if prefill_interval is not None:
+            if not isinstance(prefill_interval, int) or prefill_interval <= 0:
+                raise ValueError('engine.engine_config.prefill_interval must be a positive int '
+                                f'or None, but got {prefill_interval!r}')
+            kwargs['prefill_interval'] = prefill_interval
         return InputsMakerConfig(
             spec_decoding=engine.specdecode_config is not None,
             max_batches=cache_config.max_batches,
@@ -69,6 +77,7 @@ class InputsMakerConfig:
             dp=engine.dist_config.dp,
             enable_chunked_prefill=engine.misc_config.enable_chunked_prefill,
             use_mrope=model_config.use_mrope,
+            **kwargs,
         )
 
 
@@ -224,6 +233,9 @@ class InputsMakerAsync:
         self.model_agent_strategy = model_agent_strategy
 
         self._init_do_prefill(config)
+
+        # consecutive decode counter for prefill starvation prevention
+        self._decode_count = 0
 
         # record for next forward.
         self.next_is_prefill = True
@@ -693,6 +705,10 @@ class InputsMakerAsync:
                 swap_out_map,
             ) = __create_inputs_prefill()
 
+        # reset decode count when non-decoding inputs are produced
+        if inputs is not None and not inputs.is_decoding:
+            self._decode_count = 0
+
         # try decoding
         if inputs is None and len(self.running_seqs) > 0 and self.config.role != EngineRole.Prefill:
             prefill = False
@@ -735,7 +751,12 @@ class InputsMakerAsync:
 
         # do decoding if not waiting
         if not scheduler.has_waiting():
+            self._decode_count = 0
             return False
+
+        # force prefill if too many consecutive decode rounds
+        if self._decode_count >= self.config.prefill_interval:
+            return True
 
         # do prefill if too much tokens
         waiting = scheduler.waiting
@@ -753,6 +774,7 @@ class InputsMakerAsync:
             return True
 
         # decoding
+        self._decode_count += 1
         return False
 
     def do_prefill_chunked(self):

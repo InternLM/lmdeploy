@@ -45,6 +45,8 @@ def quantization(config,
     else:
         quantization_cmd += ' --batch-size 32'
 
+    quantization_cmd += ' --trust-remote-code'
+
     with open(quantization_log, 'w') as f:
         # remove existing folder
         subprocess.run([' '.join(['rm -rf', quantization_model_path])],

@@ -317,7 +317,8 @@ def calibrate(model: str,
               w_group_size: int = 128,
               search_scale: bool = False,
               dtype: Literal['float16', 'bfloat16', 'auto'] = 'auto',
-              batch_size: int = 1) -> None:
+              batch_size: int = 1,
+              trust_remote_code: bool = False) -> None:
     """The main function for loading the model and performing calibration on a
     given dataset.
 

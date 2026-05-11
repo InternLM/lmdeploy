@@ -410,7 +410,7 @@ class PytorchEngineConfig:
     num_cpu_blocks: int = 0
     num_gpu_blocks: int = 0
     adapters: dict[str, str] = None
-    max_prefill_token_num: int = 4096
+    max_prefill_token_num: int = 8192
     thread_safe: bool = False
     enable_prefix_caching: bool = False
     device_type: str = 'cuda'
@@ -473,8 +473,9 @@ class PytorchEngineConfig:
                    'kv cache quantization only works for CUDA and ASCEND.'
         if self.device_type == 'camb' and self.block_size != 16:
             self.block_size = 16
-            logger.warning('Currently, camb device requires block size to be 16, \
-                    setting block size to 16')
+            self.kernel_block_size = 16
+            logger.warning('Currently, camb device requires block_size and kernel_block_size to be 16, '
+                           'setting both to 16.')
 
 
 class ResponseType(enum.Enum):

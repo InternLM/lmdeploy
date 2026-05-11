@@ -51,7 +51,8 @@ def auto_awq(model: str,
              device: str = 'cuda',
              revision: str = None,
              dtype: Literal['float16', 'bfloat16', 'auto'] = 'auto',
-             download_dir: str = None):
+             download_dir: str = None,
+             trust_remote_code: bool = False):
     """Perform weight quantization using AWQ algorithm.
 
     Args:

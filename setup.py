@@ -139,7 +139,7 @@ if get_target_device() == 'cuda' and os.getenv('DISABLE_TURBOMIND', '').lower() 
             cmake_depends_on=['pybind11'],
             source_dir=str(Path(__file__).parent.absolute()),
             cmake_generator=None if os.name == 'nt' else 'Ninja',
-            cmake_build_type=os.getenv('CMAKE_BUILD_TYPE', 'RelWithDebInfo'),
+            cmake_build_type=os.getenv('CMAKE_BUILD_TYPE', 'Release'),
             cmake_configure_options=[
                 f'-DPython3_ROOT_DIR={Path(sys.prefix)}',
                 f'-DPYTHON_EXECUTABLE={Path(sys.executable)}',

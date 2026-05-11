@@ -441,7 +441,8 @@ def get_model(pretrained_model_name_or_path: str) -> str:
     return pretrained_model_name_or_path
 
 
-def get_tokenizer(pretrained_model_name_or_path: str, ) -> PreTrainedTokenizer | PreTrainedTokenizerFast:
+def get_tokenizer(pretrained_model_name_or_path: str,
+                  trust_remote_code: bool = False) -> PreTrainedTokenizer | PreTrainedTokenizerFast:
     if pretrained_model_name_or_path.endswith('.json') or pretrained_model_name_or_path.endswith('.model'):
         from sglang.srt.hf_transformers_utils import get_tokenizer
 
@@ -449,10 +450,11 @@ def get_tokenizer(pretrained_model_name_or_path: str, ) -> PreTrainedTokenizer |
 
     if pretrained_model_name_or_path is not None and not os.path.exists(pretrained_model_name_or_path):
         pretrained_model_name_or_path = get_model(pretrained_model_name_or_path)
-    return AutoTokenizer.from_pretrained(pretrained_model_name_or_path, trust_remote_code=True)
+    return AutoTokenizer.from_pretrained(pretrained_model_name_or_path, trust_remote_code=trust_remote_code)
 
 
-def get_processor(pretrained_model_name_or_path: str, ) -> PreTrainedTokenizer | PreTrainedTokenizerFast:
+def get_processor(pretrained_model_name_or_path: str,
+                  trust_remote_code: bool = False) -> PreTrainedTokenizer | PreTrainedTokenizerFast:
     assert (pretrained_model_name_or_path is not None and pretrained_model_name_or_path != '')
     if pretrained_model_name_or_path.endswith('.json') or pretrained_model_name_or_path.endswith('.model'):
         from sglang.srt.utils.hf_transformers_utils import get_processor
@@ -461,7 +463,7 @@ def get_processor(pretrained_model_name_or_path: str, ) -> PreTrainedTokenizer |
 
     if pretrained_model_name_or_path is not None and not os.path.exists(pretrained_model_name_or_path):
         pretrained_model_name_or_path = get_model(pretrained_model_name_or_path)
-    return AutoProcessor.from_pretrained(pretrained_model_name_or_path, trust_remote_code=True)
+    return AutoProcessor.from_pretrained(pretrained_model_name_or_path, trust_remote_code=trust_remote_code)
 
 
 ASYNC_REQUEST_FUNCS = {
@@ -1172,9 +1174,9 @@ def parse_request_rate_range(request_rate_range):
         return list(map(int, request_rate_range.split(',')))
 
 
-def check_chat_template(model_path):
+def check_chat_template(model_path, trust_remote_code: bool = False):
     try:
-        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=args.trust_remote_code)
         return 'chat_template' in tokenizer.init_kwargs
     except Exception as e:
         print(f'Fail to load tokenizer config with error={e}')
@@ -1256,7 +1258,7 @@ def run_benchmark(args_: argparse.Namespace):
               'using `--model`.')
         sys.exit(1)
 
-    if not check_chat_template(model_path):
+    if not check_chat_template(model_path, args.trust_remote_code):
         print('\nWARNING It is recommended to use the `Chat` or `Instruct` '
               'model for benchmarking.\n'
               'Because when the tokenizer counts the output tokens, if '
@@ -1264,7 +1266,7 @@ def run_benchmark(args_: argparse.Namespace):
 
     print(f'{args}\n')
 
-    tokenizer = get_tokenizer(tokenizer_id)
+    tokenizer = get_tokenizer(tokenizer_id, args.trust_remote_code)
 
     if args.dataset_name == 'sharegpt':
         assert args.random_input_len is None and args.random_output_len is None
@@ -1286,7 +1288,7 @@ def run_benchmark(args_: argparse.Namespace):
             dataset_path=args.dataset_path,
         )
     elif args.dataset_name == 'image':
-        processor = get_processor(model_path)
+        processor = get_processor(model_path, args.trust_remote_code)
         input_requests = sample_image_requests(
             num_requests=args.num_prompts,
             image_count=args.image_count,
@@ -1501,6 +1503,12 @@ if __name__ == '__main__':
         action='store_true',
         default=None,
         help='Disable a warmup request before the benchmark. ',
+    )
+    parser.add_argument(
+        '--trust-remote-code',
+        action='store_true',
+        default=False,
+        help='Trust remote code.',
     )
     args = parser.parse_args()
     run_benchmark(args)
