@@ -223,7 +223,7 @@ class AWQFormat(WeightFormat):
         #   zeros:   [K//g, N//8] int32 → unpack → [K//g, N]
         if x.dtype == torch.int32:
             x = _unpack_awq_gemm(x)
-        if kind == 'zeros':
+        if kind != 'weight':
             x = x.to(torch.float16)
         return x
 
@@ -277,7 +277,7 @@ class GPTQFormat(WeightFormat):
                 x = torch.stack(xs, dim=1).view(-1, x.size(-1))
             else:
                 x = torch.stack(xs, dim=-1).view(x.size(0), -1) + 1
-        if kind == 'zeros':
+        if kind != 'weight':
             x = x.to(torch.float16)
         return x
 
@@ -314,7 +314,7 @@ class CompressedTensorFormat(WeightFormat):
                 x = torch.stack(xs, dim=-1).view(*x.shape[:-1], -1)
             elif kind == 'zeros':
                 x = torch.stack(xs, dim=1).view(-1, x.size(-1))
-        if kind == 'zeros':
+        if kind != 'weight':
             x = x.to(torch.float16)
         if x.dim() >= 2:
             x = x.t()
