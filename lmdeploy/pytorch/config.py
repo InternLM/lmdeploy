@@ -389,6 +389,7 @@ class ModelConfig:
             dtype (str): user specified data type for model weights and
                 activations. Refer to `PyTorchEngineConfig` for details
             hf_overrides (dict[str, Any]): overrides for the HF config.
+            model_format (str): the quantization format of the model.
         """
         from transformers import AutoConfig
 
@@ -567,6 +568,7 @@ class SpecDecodeConfig:
         target_model: str = None,
         dtype: str = 'auto',
         trust_remote_code: bool = False,
+        model_format: str = None,
         hf_overrides: dict[str, Any] = None,
     ):
         model = model or target_model
@@ -576,6 +578,7 @@ class SpecDecodeConfig:
                                                    is_draft_model=True,
                                                    spec_method=method,
                                                    block_size=target_cache_cfg.block_size,
+                                                   model_format=model_format,
                                                    hf_overrides=hf_overrides,
                                                    )
         cache_config = None
@@ -590,6 +593,7 @@ class SpecDecodeConfig:
                                        cache_max_entry_count=target_cache_cfg.cache_max_entry_count,
                                        max_prefill_token_num=target_cache_cfg.max_prefill_token_num,
                                        device_type=target_cache_cfg.device_type,
+                                       quant_policy=target_cache_cfg.quant_policy,
                                        migration_backend=target_cache_cfg.migration_backend)
         obj = cls(
             model=model,
