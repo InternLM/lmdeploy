@@ -35,7 +35,7 @@ def _build_resolver(model_format: str | None,
     awq`` rename, so compressed-tensors models get ``CompressedTensorFormat``.
     """
     formats: list[WeightFormat] = []
-    if model_format is None:
+    if model_format in (None, 'hf'):
         pass
     elif model_format == 'awq':
         formats.append(AWQFormat(block_in=group_size))
