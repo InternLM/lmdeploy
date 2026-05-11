@@ -8,7 +8,7 @@ from lmdeploy.pytorch.config import override_hf_config
 from lmdeploy.utils import get_logger
 
 from ..utils import _get_and_verify_max_len, is_bf16_supported
-from .builders import _cpp_dtype
+from .builders import _TORCH_TO_CPP
 from .models.base import INPUT_MODELS
 from .models.utils import source_model_config
 from .supported_models import SUPPORTED_ARCHS
@@ -209,11 +209,12 @@ def get_tm_config(model_path,
     if engine_config.model_format in ('awq', 'gptq', 'compressed-tensors'):
         dtype = 'float16'
     engine_config.dtype = dtype
+    torch_dtype = getattr(torch, dtype)
 
     # Build resolver after dtype is finalized but before the CT→AWQ rename,
     # so compressed-tensors models instantiate CompressedTensorFormat.
     resolver = _build_resolver(engine_config.model_format,
-                               group_size, _cpp_dtype(dtype))
+                               group_size, _TORCH_TO_CPP[torch_dtype])
 
     # C++-side label rename (does not affect resolver).
     if engine_config.model_format == 'compressed-tensors':
@@ -238,4 +239,4 @@ def get_tm_config(model_path,
     model_cls = INPUT_MODELS.get(registered_name)
     text_model = model_cls(cfg, resolver=resolver)
 
-    return text_model, model_path, _cpp_dtype(dtype)
+    return text_model, model_path, _TORCH_TO_CPP[torch_dtype]

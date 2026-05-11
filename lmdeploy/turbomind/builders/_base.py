@@ -27,12 +27,6 @@ class SplitSide(enum.Enum):
 # Canonical dtype mappings (moved from commit.py)
 # ---------------------------------------------------------------------------
 
-_STR_TO_DTYPE: dict[str, _tm.DataType] = {
-    'float32':  _tm.DataType.TYPE_FP32,
-    'float16':  _tm.DataType.TYPE_FP16,
-    'bfloat16': _tm.DataType.TYPE_BF16,
-}
-
 _TORCH_TO_CPP: dict[torch.dtype, _tm.DataType] = {
     torch.float32:  _tm.DataType.TYPE_FP32,
     torch.float16:  _tm.DataType.TYPE_FP16,
@@ -51,11 +45,6 @@ _SPLIT_SIDE_TO_DIM: dict[SplitSide, int] = {SplitSide.OUTPUT: -1, SplitSide.INPU
 # ---------------------------------------------------------------------------
 # Dtype / format helpers (moved from commit.py)
 # ---------------------------------------------------------------------------
-
-
-def _cpp_dtype(dtype_str: str):
-    """Convert a model-config data_type string to C++ DataType enum."""
-    return _STR_TO_DTYPE[dtype_str]
 
 
 def _act_type_id(act_str: str) -> int:
