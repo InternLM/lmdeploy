@@ -10,7 +10,7 @@ import numpy.typing as npt
 from .base import MediaIO
 
 
-class AudioMediaIO(MediaIO[tuple[npt.NDArray, float]]):
+class AudioMediaIO(MediaIO[tuple[npt.NDArray, int]]):
 
     def __init__(self, **kwargs) -> None:
         super().__init__()
@@ -35,17 +35,17 @@ class AudioMediaIO(MediaIO[tuple[npt.NDArray, float]]):
         # for potential custom arguments from --media-io-kwargs
         self.kwargs = kwargs
 
-    def load_bytes(self, data: bytes) -> tuple[npt.NDArray, float]:
+    def load_bytes(self, data: bytes) -> tuple[npt.NDArray, int]:
         return self._librosa.load(BytesIO(data), sr=self.sampling_rate)
 
     def load_base64(
         self,
         media_type: str,
         data: str,
-    ) -> tuple[npt.NDArray, float]:
+    ) -> tuple[npt.NDArray, int]:
         return self.load_bytes(base64.b64decode(data))
 
-    def load_file(self, filepath: Path) -> tuple[npt.NDArray, float]:
+    def load_file(self, filepath: Path) -> tuple[npt.NDArray, int]:
         return self._librosa.load(filepath, sr=self.sampling_rate)
 
     def encode_base64(

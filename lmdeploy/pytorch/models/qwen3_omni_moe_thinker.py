@@ -596,7 +596,8 @@ class Qwen3OmniMoeThinkerForConditionalGeneration(nn.Module, DeployModelMixinV1,
                     input_features=audio_values,
                     feature_lens=audio_feature_lengths,
                 )
-                inputs_embeds = inputs_embeds.masked_scatter(audio_mask.unsqueeze(-1), audio_embeds)
+                expanded_audio_mask = audio_mask.unsqueeze(-1).expand_as(inputs_embeds)
+                inputs_embeds = inputs_embeds.masked_scatter(expanded_audio_mask, audio_embeds)
 
         hidden_states = self.language_model(
             input_ids=input_ids,
