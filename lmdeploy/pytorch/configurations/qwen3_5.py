@@ -14,7 +14,7 @@ class Qwen3_5ModelConfigBuilder(AutoModelConfigBuilder):
     @classmethod
     def condition(cls, hf_config):
         """config."""
-        return hf_config.model_type in ['qwen3_5', 'qwen3_5_moe']
+        return hf_config.model_type in ['qwen3_5', 'qwen3_5_moe', 'intern_s2_preview']
 
     @classmethod
     def build(cls,

@@ -12,6 +12,7 @@ from lmdeploy.messages import EngineEvent, EventType, GenerationConfig, LogitsPr
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
 from lmdeploy.utils import get_logger
+from lmdeploy.vl.constants import Modality
 
 from .block import LogicalTokenBlocks
 
@@ -872,6 +873,10 @@ class SchedulerSequence:
             modal_datas = list(multimodals.values())[0]
             mm_offset = next_pos
             for modal_data in modal_datas:
+                # InternS2Preview uses mrope for image / video, except time series
+                if modal_data.modality == Modality.TIME_SERIES:
+                    continue
+
                 mm_start = modal_data.start + mm_offset
 
                 # tokens
