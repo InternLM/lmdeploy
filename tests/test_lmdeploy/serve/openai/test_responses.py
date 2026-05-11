@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+from lmdeploy.serve.openai.protocol import DeltaFunctionCall, DeltaMessage, DeltaToolCall, FunctionCall, ToolCall
 from lmdeploy.serve.openai.responses import (
     ResponsesRequest,
     _make_response,
     _messages_from_input,
+    _openai_tools_from_responses,
     _stream_response,
     _to_generation_config,
     _validate_text_v1_request,
@@ -52,6 +54,174 @@ def test_responses_maps_instructions_and_typed_message_input():
             'content': 'Say hello.',
         },
     ]
+
+
+def test_responses_merges_multiple_system_messages():
+    request = ResponsesRequest(
+        model='fake-model',
+        instructions='You are concise.',
+        input=[
+            {
+                'type': 'message',
+                'role': 'developer',
+                'content': 'Follow the repo instructions.',
+            },
+            {
+                'type': 'message',
+                'role': 'system',
+                'content': 'Use plain text.',
+            },
+            {
+                'type': 'message',
+                'role': 'user',
+                'content': 'Say hello.',
+            },
+        ],
+    )
+
+    assert _messages_from_input(request) == [
+        {
+            'role': 'system',
+            'content': 'You are concise.\n\nFollow the repo instructions.\n\nUse plain text.',
+        },
+        {
+            'role': 'user',
+            'content': 'Say hello.',
+        },
+    ]
+
+
+def test_responses_maps_developer_message_to_system_message():
+    request = ResponsesRequest(
+        model='fake-model',
+        input=[
+            {
+                'type': 'message',
+                'role': 'developer',
+                'content': 'Follow the repo instructions.',
+            },
+            {
+                'type': 'message',
+                'role': 'user',
+                'content': 'Say hello.',
+            },
+        ],
+    )
+
+    assert _messages_from_input(request) == [
+        {
+            'role': 'system',
+            'content': 'Follow the repo instructions.',
+        },
+        {
+            'role': 'user',
+            'content': 'Say hello.',
+        },
+    ]
+
+
+def test_responses_moves_developer_messages_before_conversation():
+    request = ResponsesRequest(
+        model='fake-model',
+        input=[
+            {
+                'type': 'message',
+                'role': 'user',
+                'content': 'Say hello.',
+            },
+            {
+                'type': 'message',
+                'role': 'developer',
+                'content': 'Follow the repo instructions.',
+            },
+        ],
+    )
+
+    assert _messages_from_input(request) == [
+        {
+            'role': 'system',
+            'content': 'Follow the repo instructions.',
+        },
+        {
+            'role': 'user',
+            'content': 'Say hello.',
+        },
+    ]
+
+
+def test_responses_maps_function_call_history_to_chat_messages():
+    request = ResponsesRequest(
+        model='fake-model',
+        input=[
+            {
+                'type': 'message',
+                'role': 'user',
+                'content': 'Search for lmdeploy.',
+            },
+            {
+                'type': 'function_call',
+                'call_id': 'call_123',
+                'name': 'search',
+                'arguments': '{"query":"lmdeploy"}',
+            },
+            {
+                'type': 'function_call_output',
+                'call_id': 'call_123',
+                'output': '{"result":"ok"}',
+            },
+        ],
+    )
+
+    assert _messages_from_input(request) == [
+        {
+            'role': 'user',
+            'content': 'Search for lmdeploy.',
+        },
+        {
+            'role': 'assistant',
+            'content': None,
+            'tool_calls': [{
+                'id': 'call_123',
+                'type': 'function',
+                'function': {
+                    'name': 'search',
+                    'arguments': {
+                        'query': 'lmdeploy',
+                    },
+                },
+            }],
+        },
+        {
+            'role': 'tool',
+            'tool_call_id': 'call_123',
+            'content': '{"result":"ok"}',
+        },
+    ]
+
+
+def test_responses_maps_function_tools_to_openai_tools():
+    request = ResponsesRequest(
+        model='fake-model',
+        input='Hi',
+        tools=[{
+            'type': 'function',
+            'name': 'search',
+            'description': 'demo',
+            'parameters': {
+                'type': 'object',
+            },
+        }, {
+            'type': 'web_search',
+        }],
+    )
+
+    tools = _openai_tools_from_responses(request)
+
+    assert tools is not None
+    assert len(tools) == 1
+    assert tools[0].function.name == 'search'
+    assert tools[0].function.description == 'demo'
+    assert tools[0].function.parameters == {'type': 'object'}
 
 
 def test_responses_generation_config_mapping():
@@ -123,21 +293,69 @@ def test_responses_non_stream_response_shape():
     }
 
 
-def test_responses_rejects_agentic_fields_for_text_v1():
+def test_responses_tool_call_response_shape():
     request = ResponsesRequest(
         model='fake-model',
         input='Hi',
-        tools=[{
-            'type': 'function',
-            'name': 'search',
-        }],
     )
+
+    response = _make_response(
+        request=request,
+        model_name='fake-model',
+        created_time=123,
+        text='',
+        tool_calls=[
+            ToolCall(
+                id='call_123',
+                function=FunctionCall(name='search', arguments='{"query":"lmdeploy"}'),
+            )
+        ],
+        input_tokens=8,
+        output_tokens=2,
+        finish_reason='tool_calls',
+    ).model_dump(exclude_none=True)
+
+    assert response['output_text'] == ''
+    assert response['output'][0] == {
+        'id': 'call_123',
+        'type': 'function_call',
+        'call_id': 'call_123',
+        'name': 'search',
+        'arguments': '{"query":"lmdeploy"}',
+    }
+
+
+def test_responses_tool_call_response_accepts_no_visible_text():
+    request = ResponsesRequest(model='fake-model', input='Hi')
+
+    response = _make_response(
+        request=request,
+        model_name='fake-model',
+        created_time=123,
+        text=None,
+        tool_calls=[
+            ToolCall(
+                id='call_123',
+                function=FunctionCall(name='search', arguments='{"query":"lmdeploy"}'),
+            )
+        ],
+        input_tokens=8,
+        output_tokens=2,
+        finish_reason='tool_calls',
+    ).model_dump(exclude_none=True)
+
+    assert response['output_text'] == ''
+    assert response['output'][0]['type'] == 'function_call'
+
+
+def test_responses_rejects_unsupported_agentic_fields_for_text_v1():
+    request = ResponsesRequest(model='fake-model', input='Hi', previous_response_id='resp_123')
 
     response = _validate_text_v1_request(request)
 
     assert response is not None
     assert response.status_code == 400
-    assert json.loads(response.body)['error']['param'] == 'tools'
+    assert json.loads(response.body)['error']['param'] == 'previous_response_id'
 
 
 def test_responses_rejects_unsupported_input_items():
@@ -206,3 +424,75 @@ def test_responses_streaming_sse_shape():
     assert done_item['id'] == added_item['id']
     assert payloads[-1]['type'] == 'response.completed'
     assert payloads[-1]['response']['output_text'] == 'Hello world!'
+
+
+def test_responses_streaming_tool_call_events():
+    request = ResponsesRequest(model='fake-model', input='Hi there', stream=True)
+
+    class _ToolParser:
+
+        def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
+            if delta_text == 'tool-start':
+                return DeltaMessage(
+                    role='assistant',
+                    tool_calls=[
+                        DeltaToolCall(
+                            index=0,
+                            id='call_123',
+                            function=DeltaFunctionCall(name='search', arguments='{"query":'),
+                        )
+                    ],
+                ), True
+            return DeltaMessage(
+                role='assistant',
+                tool_calls=[
+                    DeltaToolCall(
+                        index=0,
+                        id='call_123',
+                        function=DeltaFunctionCall(arguments='"lmdeploy"}'),
+                    )
+                ],
+            ), True
+
+    async def _result_generator():
+        yield SimpleNamespace(
+            response='tool-start',
+            token_ids=[101],
+            input_token_len=8,
+            generate_token_len=1,
+            finish_reason=None,
+        )
+        yield SimpleNamespace(
+            response='tool-end',
+            token_ids=[102],
+            input_token_len=8,
+            generate_token_len=2,
+            finish_reason='stop',
+        )
+
+    async def _collect_events():
+        return [
+            event async for event in _stream_response(
+                _result_generator(),
+                request=request,
+                model_name='fake-model',
+                created_time=123,
+                response_parser=_ToolParser(),
+            )
+        ]
+
+    import asyncio
+
+    events = asyncio.run(_collect_events())
+    body = ''.join(events)
+    payloads = _sse_payloads(events)
+
+    assert 'event: response.output_item.added' in body
+    assert 'event: response.function_call_arguments.delta' in body
+    assert 'event: response.function_call_arguments.done' in body
+    added = next(payload for payload in payloads if payload['type'] == 'response.output_item.added')
+    done = next(payload for payload in payloads if payload['type'] == 'response.output_item.done')
+    assert added['item']['type'] == 'function_call'
+    assert added['item']['name'] == 'search'
+    assert done['item']['arguments'] == '{"query":"lmdeploy"}'
+    assert payloads[-1]['response']['output'][0]['type'] == 'function_call'

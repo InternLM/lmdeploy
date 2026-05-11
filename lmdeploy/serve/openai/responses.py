@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from lmdeploy.messages import GenerationConfig
+from lmdeploy.serve.openai.protocol import ChatCompletionRequest, Tool, ToolChoice, ToolChoiceFuncName
 from lmdeploy.serve.utils.server_utils import validate_json_request
 
 
@@ -76,6 +77,16 @@ class ResponseOutputMessage(BaseModel):
     content: list[ResponseOutputText]
 
 
+class ResponseOutputFunctionCall(BaseModel):
+    """Function call output item in Responses API shape."""
+
+    id: str
+    type: Literal['function_call'] = 'function_call'
+    call_id: str
+    name: str
+    arguments: str
+
+
 class ResponsesResponse(BaseModel):
     """Response body for Text V1 ``POST /v1/responses``."""
 
@@ -84,7 +95,7 @@ class ResponsesResponse(BaseModel):
     created_at: int
     model: str
     status: Literal['in_progress', 'completed', 'incomplete', 'failed'] = 'completed'
-    output: list[ResponseOutputMessage] = Field(default_factory=list)
+    output: list[ResponseOutputMessage | ResponseOutputFunctionCall] = Field(default_factory=list)
     output_text: str = ''
     usage: ResponseUsage | None = None
     instructions: str | None = None
@@ -121,12 +132,31 @@ def _validate_text_v1_request(request: ResponsesRequest) -> JSONResponse | None:
         return _error_response(HTTPStatus.BAD_REQUEST,
                                'previous_response_id is not supported by Responses Text V1.',
                                param='previous_response_id')
-    if request.tools:
-        return _error_response(HTTPStatus.BAD_REQUEST, 'tools are not supported by Responses Text V1.', param='tools')
-    if request.tool_choice not in ('auto', 'none', None):
-        return _error_response(HTTPStatus.BAD_REQUEST, 'tool_choice is not supported by Responses Text V1.',
-                               param='tool_choice')
     return None
+
+
+def _stringify_value(value: Any) -> str:
+    if value is None:
+        return ''
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _tool_arguments_mapping(value: Any) -> dict[str, Any]:
+    if value in (None, ''):
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {'raw_arguments': value}
+        if isinstance(parsed, dict):
+            return parsed
+        return {'value': parsed}
+    return {'value': value}
 
 
 def _text_from_content(content: Any, field_name: str) -> str:
@@ -150,29 +180,111 @@ def _text_from_content(content: Any, field_name: str) -> str:
     return ''.join(text_parts)
 
 
-def _messages_from_input(request: ResponsesRequest) -> list[dict[str, str]]:
-    messages: list[dict[str, str]] = []
+def _messages_from_input(request: ResponsesRequest) -> list[dict[str, Any]]:
+    system_parts: list[str] = []
+    messages: list[dict[str, Any]] = []
     if request.instructions:
-        messages.append(dict(role='system', content=request.instructions))
+        system_parts.append(request.instructions)
 
     if isinstance(request.input, str):
         messages.append(dict(role='user', content=request.input))
-        return messages
+        return ([dict(role='system', content='\n\n'.join(system_parts))] if system_parts else []) + messages
 
     for idx, item in enumerate(request.input):
         if not isinstance(item, dict):
             raise ValueError(f'Unsupported Responses input item at index {idx}.')
 
         item_type = item.get('type', 'message')
+        if item_type == 'function_call':
+            call_id = item.get('call_id') or item.get('id')
+            name = item.get('name')
+            if not call_id or not name:
+                raise ValueError(f'Missing `call_id` or `name` in function_call item at index {idx}.')
+            messages.append(
+                dict(
+                    role='assistant',
+                    content=None,
+                    tool_calls=[
+                        dict(
+                            id=call_id,
+                            type='function',
+                            function=dict(
+                                name=name,
+                                arguments=_tool_arguments_mapping(item.get('arguments')),
+                            ),
+                        )
+                    ],
+                ))
+            continue
+        if item_type == 'function_call_output':
+            call_id = item.get('call_id')
+            if not call_id:
+                raise ValueError(f'Missing `call_id` in function_call_output item at index {idx}.')
+            messages.append(
+                dict(
+                    role='tool',
+                    tool_call_id=call_id,
+                    content=_stringify_value(item.get('output')),
+                ))
+            continue
         if item_type != 'message':
             raise ValueError(f'Unsupported Responses input item type: {item_type!r}.')
 
         role = item.get('role')
+        if role == 'developer':
+            role = 'system'
         if role not in ('system', 'user', 'assistant'):
             raise ValueError(f'Unsupported Responses message role at index {idx}: {role!r}.')
         content = _text_from_content(item.get('content', ''), f'input[{idx}].content')
-        messages.append(dict(role=role, content=content))
-    return messages
+        if role == 'system':
+            system_parts.append(content)
+        else:
+            messages.append(dict(role=role, content=content))
+    return ([dict(role='system', content='\n\n'.join(system_parts))] if system_parts else []) + messages
+
+
+def _openai_tools_from_responses(request: ResponsesRequest) -> list[Tool] | None:
+    """Convert Responses function tools into LMDeploy/OpenAI tool entries."""
+
+    if not request.tools:
+        return None
+    tools: list[Tool] = []
+    for idx, tool in enumerate(request.tools):
+        if tool.get('type') != 'function':
+            continue
+        name = tool.get('name')
+        if not name:
+            raise ValueError(f'Missing function tool `name` at index {idx}.')
+        tools.append(
+            Tool(
+                type='function',
+                function=dict(
+                    name=name,
+                    description=tool.get('description'),
+                    parameters=tool.get('parameters'),
+                ),
+            ))
+    return tools or None
+
+
+def _tool_choice_from_responses(tool_choice: Any) -> ToolChoice | Literal['auto', 'required', 'none']:
+    """Map Responses tool_choice to the OpenAI chat tool_choice shape used
+    internally."""
+
+    if tool_choice is None:
+        return 'auto'
+    if isinstance(tool_choice, str):
+        if tool_choice in ('auto', 'required', 'none'):
+            return tool_choice
+        raise ValueError(f'Unsupported tool_choice: {tool_choice!r}.')
+    if isinstance(tool_choice, dict):
+        if tool_choice.get('type') == 'function':
+            name = tool_choice.get('name')
+            if not name:
+                raise ValueError('Missing `name` in function tool_choice.')
+            return ToolChoice(function=ToolChoiceFuncName(name=name))
+        raise ValueError(f'Unsupported tool_choice type: {tool_choice.get("type")!r}.')
+    raise ValueError('Unsupported tool_choice. Expected string or function tool choice object.')
 
 
 def _response_format_from_text(text: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -222,25 +334,45 @@ def _make_response(*,
                    request: ResponsesRequest,
                    model_name: str,
                    created_time: int,
-                   text: str,
+                   text: str | None,
+                   tool_calls: list[Any] | None = None,
                    input_tokens: int,
                    output_tokens: int,
                    finish_reason: str | None,
                    message_id: str | None = None) -> ResponsesResponse:
+    text = text or ''
     status = 'incomplete' if finish_reason == 'length' else 'completed'
     message_status = 'incomplete' if status == 'incomplete' else 'completed'
+    output: list[ResponseOutputMessage | ResponseOutputFunctionCall] = []
+    if text or not tool_calls:
+        output.append(
+            ResponseOutputMessage(
+                id=message_id or f'msg_{shortuuid.random()}',
+                status=message_status,
+                content=[ResponseOutputText(text=text)],
+            ))
+    if tool_calls:
+        for tool_call in tool_calls:
+            if isinstance(tool_call, ResponseOutputFunctionCall):
+                output.append(tool_call)
+                continue
+            function = getattr(tool_call, 'function', None)
+            if function is None:
+                continue
+            call_id = getattr(tool_call, 'id', None) or f'call_{shortuuid.random()}'
+            output.append(
+                ResponseOutputFunctionCall(
+                    id=call_id,
+                    call_id=call_id,
+                    name=function.name,
+                    arguments=function.arguments or '',
+                ))
     return ResponsesResponse(
         id=request.request_id,
         created_at=created_time,
         model=model_name,
         status=status,
-        output=[
-            ResponseOutputMessage(
-                id=message_id or f'msg_{shortuuid.random()}',
-                status=message_status,
-                content=[ResponseOutputText(text=text)],
-            )
-        ],
+        output=output,
         output_text=text,
         usage=ResponseUsage(
             input_tokens=input_tokens,
@@ -263,7 +395,8 @@ async def _stream_response(result_generator,
                            *,
                            request: ResponsesRequest,
                            model_name: str,
-                           created_time: int) -> AsyncGenerator[str, None]:
+                           created_time: int,
+                           response_parser=None) -> AsyncGenerator[str, None]:
     initial_response = ResponsesResponse(
         id=request.request_id,
         created_at=created_time,
@@ -283,24 +416,28 @@ async def _stream_response(result_generator,
     })
 
     message_id = f'msg_{shortuuid.random()}'
-    output_index = 0
+    next_output_index = 0
     content_index = 0
     sequence_number = 2
-    started = False
+    text_started = False
     text = ''
+    tool_states: dict[int, dict[str, Any]] = {}
+    streaming_tools = False
     final_res = None
 
-    async for res in result_generator:
-        final_res = res
-        delta = res.response or ''
-        if not started:
-            started = True
-            yield _sse(
+    def _start_text_item() -> list[str]:
+        nonlocal next_output_index, sequence_number, text_started
+        if text_started:
+            return []
+        text_started = True
+        events = [
+            _sse(
                 'response.output_item.added',
                 {
                     'type': 'response.output_item.added',
                     'sequence_number': sequence_number,
-                    'output_index': output_index,
+                    'response_id': request.request_id,
+                    'output_index': next_output_index,
                     'item': {
                         'id': message_id,
                         'type': 'message',
@@ -310,13 +447,16 @@ async def _stream_response(result_generator,
                     },
                 },
             )
-            sequence_number += 1
-            yield _sse(
+        ]
+        sequence_number += 1
+        events.append(
+            _sse(
                 'response.content_part.added',
                 {
                     'type': 'response.content_part.added',
                     'sequence_number': sequence_number,
-                    'output_index': output_index,
+                    'response_id': request.request_id,
+                    'output_index': next_output_index,
                     'item_id': message_id,
                     'content_index': content_index,
                     'part': {
@@ -325,75 +465,213 @@ async def _stream_response(result_generator,
                         'annotations': [],
                     },
                 },
-            )
-            sequence_number += 1
-        if delta:
-            text += delta
+            ))
+        sequence_number += 1
+        next_output_index += 1
+        return events
+
+    def _start_tool_item(tool_delta) -> list[str]:
+        nonlocal next_output_index, sequence_number
+        tool_index = tool_delta.index
+        state = tool_states.get(tool_index)
+        function_delta = getattr(tool_delta, 'function', None)
+        if state is not None:
+            if function_delta is not None and function_delta.name:
+                state['name'] = function_delta.name
+            return []
+        tool_id = tool_delta.id or f'call_{shortuuid.random()}'
+        name = '' if function_delta is None else function_delta.name or ''
+        state = dict(
+            item_id=tool_id,
+            call_id=tool_id,
+            name=name,
+            arguments='',
+            output_index=next_output_index,
+        )
+        tool_states[tool_index] = state
+        next_output_index += 1
+        event = _sse(
+            'response.output_item.added',
+            {
+                'type': 'response.output_item.added',
+                'sequence_number': sequence_number,
+                'response_id': request.request_id,
+                'output_index': state['output_index'],
+                'item': {
+                    'id': state['item_id'],
+                    'type': 'function_call',
+                    'call_id': state['call_id'],
+                    'name': state['name'],
+                    'arguments': '',
+                },
+            },
+        )
+        sequence_number += 1
+        return [event]
+
+    async for res in result_generator:
+        final_res = res
+        delta = res.response or ''
+        delta_message = None
+        tool_emitted = False
+        if response_parser is not None:
+            delta_token_ids = res.token_ids if getattr(res, 'token_ids', None) is not None else []
+            delta_message, tool_emitted = response_parser.stream_chunk(delta, delta_token_ids)
+        elif delta:
+            delta_message = dict(content=delta)
+
+        if tool_emitted:
+            streaming_tools = True
+        if response_parser is not None and res.finish_reason == 'stop' and streaming_tools:
+            res.finish_reason = 'tool_calls'
+
+        content_delta = ''
+        tool_deltas = None
+        if isinstance(delta_message, dict):
+            content_delta = delta_message.get('content', '')
+        elif delta_message is not None:
+            content_delta = getattr(delta_message, 'content', None) or ''
+            tool_deltas = getattr(delta_message, 'tool_calls', None)
+
+        if content_delta:
+            for event in _start_text_item():
+                yield event
+            text += content_delta
             yield _sse(
                 'response.output_text.delta',
                 {
                     'type': 'response.output_text.delta',
                     'sequence_number': sequence_number,
+                    'response_id': request.request_id,
                     'item_id': message_id,
-                    'output_index': output_index,
+                    'output_index': 0,
                     'content_index': content_index,
-                    'delta': delta,
+                    'delta': content_delta,
                 },
             )
             sequence_number += 1
+        if tool_deltas:
+            for tool_delta in tool_deltas:
+                for event in _start_tool_item(tool_delta):
+                    yield event
+                function_delta = getattr(tool_delta, 'function', None)
+                if function_delta is None:
+                    continue
+                state = tool_states[tool_delta.index]
+                if function_delta.name:
+                    state['name'] = function_delta.name
+                arguments_delta = function_delta.arguments or ''
+                if arguments_delta:
+                    state['arguments'] += arguments_delta
+                    yield _sse(
+                        'response.function_call_arguments.delta',
+                        {
+                            'type': 'response.function_call_arguments.delta',
+                            'sequence_number': sequence_number,
+                            'response_id': request.request_id,
+                            'item_id': state['item_id'],
+                            'output_index': state['output_index'],
+                            'delta': arguments_delta,
+                        },
+                    )
+                    sequence_number += 1
 
     input_tokens = 0 if final_res is None else final_res.input_token_len
     output_tokens = 0 if final_res is None else final_res.generate_token_len
     finish_reason = None if final_res is None else final_res.finish_reason
+    tool_calls = [
+        ResponseOutputFunctionCall(
+            id=state['item_id'],
+            call_id=state['call_id'],
+            name=state['name'],
+            arguments=state['arguments'],
+        ) for _, state in sorted(tool_states.items(), key=lambda item: item[1]['output_index'])
+    ]
     final_response = _make_response(
         request=request,
         model_name=model_name,
         created_time=created_time,
         text=text,
+        tool_calls=tool_calls,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         finish_reason=finish_reason,
         message_id=message_id,
     )
-    output_text = {
-        'type': 'output_text',
-        'text': text,
-        'annotations': [],
-    }
-    yield _sse(
-        'response.output_text.done',
-        {
-            'type': 'response.output_text.done',
-            'sequence_number': sequence_number,
-            'item_id': message_id,
-            'output_index': output_index,
-            'content_index': content_index,
+    if text_started:
+        output_text = {
+            'type': 'output_text',
             'text': text,
-        },
-    )
-    sequence_number += 1
-    yield _sse(
-        'response.content_part.done',
-        {
-            'type': 'response.content_part.done',
-            'sequence_number': sequence_number,
-            'item_id': message_id,
-            'output_index': output_index,
-            'content_index': content_index,
-            'part': output_text,
-        },
-    )
-    sequence_number += 1
-    yield _sse(
-        'response.output_item.done',
-        {
-            'type': 'response.output_item.done',
-            'sequence_number': sequence_number,
-            'output_index': output_index,
-            'item': final_response.output[0].model_dump(exclude_none=True),
-        },
-    )
-    sequence_number += 1
+            'annotations': [],
+        }
+        yield _sse(
+            'response.output_text.done',
+            {
+                'type': 'response.output_text.done',
+                'sequence_number': sequence_number,
+                'response_id': request.request_id,
+                'item_id': message_id,
+                'output_index': 0,
+                'content_index': content_index,
+                'text': text,
+            },
+        )
+        sequence_number += 1
+        yield _sse(
+            'response.content_part.done',
+            {
+                'type': 'response.content_part.done',
+                'sequence_number': sequence_number,
+                'response_id': request.request_id,
+                'item_id': message_id,
+                'output_index': 0,
+                'content_index': content_index,
+                'part': output_text,
+            },
+        )
+        sequence_number += 1
+        yield _sse(
+            'response.output_item.done',
+            {
+                'type': 'response.output_item.done',
+                'sequence_number': sequence_number,
+                'response_id': request.request_id,
+                'output_index': 0,
+                'item': final_response.output[0].model_dump(exclude_none=True),
+            },
+        )
+        sequence_number += 1
+    for state in sorted(tool_states.values(), key=lambda item: item['output_index']):
+        item = {
+            'id': state['item_id'],
+            'type': 'function_call',
+            'call_id': state['call_id'],
+            'name': state['name'],
+            'arguments': state['arguments'],
+        }
+        yield _sse(
+            'response.function_call_arguments.done',
+            {
+                'type': 'response.function_call_arguments.done',
+                'sequence_number': sequence_number,
+                'response_id': request.request_id,
+                'item_id': state['item_id'],
+                'output_index': state['output_index'],
+                'arguments': state['arguments'],
+            },
+        )
+        sequence_number += 1
+        yield _sse(
+            'response.output_item.done',
+            {
+                'type': 'response.output_item.done',
+                'sequence_number': sequence_number,
+                'response_id': request.request_id,
+                'output_index': state['output_index'],
+                'item': item,
+            },
+        )
+        sequence_number += 1
     yield _sse(
         'response.completed',
         {
@@ -422,8 +700,37 @@ def create_responses_router(server_context) -> APIRouter:
         try:
             messages = _messages_from_input(request)
             gen_config = _to_generation_config(request)
+            tools = _openai_tools_from_responses(request)
+            tool_choice = _tool_choice_from_responses(request.tool_choice)
         except ValueError as err:
             return _error_response(HTTPStatus.BAD_REQUEST, str(err), param='input')
+
+        parser_cls = getattr(server_context, 'response_parser_cls', None)
+        if tools and (parser_cls is None or parser_cls.tool_parser_cls is None):
+            return _error_response(
+                HTTPStatus.BAD_REQUEST,
+                'Please launch the api_server with --tool-call-parser if you want to use tool calling.',
+                param='tools',
+            )
+
+        response_parser = None
+        parsed_request = None
+        if parser_cls is not None:
+            tokenizer_holder = server_context.async_engine.tokenizer
+            tokenizer = getattr(getattr(tokenizer_holder, 'model', None), 'model', tokenizer_holder)
+            openai_request = ChatCompletionRequest(
+                model=model_name,
+                messages=messages,
+                max_tokens=request.max_output_tokens,
+                temperature=request.temperature,
+                top_p=request.top_p,
+                top_k=request.top_k,
+                stop=request.stop,
+                tools=tools,
+                tool_choice=tool_choice,
+            )
+            response_parser = parser_cls(request=openai_request, tokenizer=tokenizer)
+            parsed_request = response_parser.request
 
         session = server_context.create_session(-1)
         adapter_name = None if model_name == server_context.async_engine.model_name else model_name
@@ -431,6 +738,7 @@ def create_responses_router(server_context) -> APIRouter:
             messages,
             session,
             gen_config=gen_config,
+            tools=None if parsed_request is None else parsed_request.tools,
             stream_response=True,
             sequence_start=True,
             sequence_end=True,
@@ -446,11 +754,13 @@ def create_responses_router(server_context) -> APIRouter:
                     request=request,
                     model_name=model_name,
                     created_time=created_time,
+                    response_parser=response_parser,
                 ),
                 media_type='text/event-stream',
             )
 
         text = ''
+        final_token_ids: list[int] = []
         final_res = None
         async for res in result_generator:
             if await raw_request.is_disconnected():
@@ -458,15 +768,27 @@ def create_responses_router(server_context) -> APIRouter:
                 return _error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
             final_res = res
             text += res.response or ''
+            if getattr(res, 'token_ids', None):
+                final_token_ids.extend(res.token_ids)
 
         if final_res is None:
             return _error_response(HTTPStatus.INTERNAL_SERVER_ERROR, 'No generation output from engine.')
+
+        tool_calls = None
+        if response_parser is not None:
+            try:
+                text, tool_calls, _reasoning_content = response_parser.parse_complete(text, final_token_ids)
+            except Exception as err:
+                return _error_response(HTTPStatus.BAD_REQUEST, f'Failed to parse output: {err}')
+            if tool_calls and final_res.finish_reason == 'stop':
+                final_res.finish_reason = 'tool_calls'
 
         response = _make_response(
             request=request,
             model_name=model_name,
             created_time=created_time,
             text=text,
+            tool_calls=tool_calls,
             input_tokens=final_res.input_token_len,
             output_tokens=final_res.generate_token_len,
             finish_reason=final_res.finish_reason,
