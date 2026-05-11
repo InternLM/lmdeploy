@@ -333,6 +333,7 @@ class BaseResponseParser(ResponseParser):
 
         Behavior:
         - Drops the explicit open tag if model emits it.
+        - Detects tool open tag within reasoning content and switches to MODE_TOOL.
         - If no close tag is present, emits only the safe reasoning-text prefix and
           preserves possible partial-tag suffix for the next chunk.
         - If a close tag is found, emits text before the close tag as reasoning content,
@@ -350,24 +351,51 @@ class BaseResponseParser(ResponseParser):
             self._pending = self._pending[len(open_tag):]
             return None, True
 
+        # Check for tool open tag within reasoning content.
+        # But only if reasoning close tag is not found first.
         close_tag = self.profile.reasoning_close_tag
         if not close_tag:
             raise RuntimeError('Invariant violated: MODE_REASONING requires a reasoning_close_tag.')
 
-        idx = self._pending.find(close_tag)
-        # No close tag found, treat the whole pending text as reasoning content.
-        if idx < 0:
-            if not self._pending:
-                return None, False
-            out = self._pending
-            self._pending = ''
-            return out, True
+        close_idx = self._pending.find(close_tag)
+        tool_tag = self.profile.tool_open_tag
+        tool_idx = self._pending.find(tool_tag) if tool_tag else -1
 
-        reasoning_chunk = self._pending[:idx]
-        self._pending = self._pending[idx + len(close_tag):]
-        # reasoning part is done, switch to plain mode
-        self._mode = self.MODE_PLAIN
-        return (reasoning_chunk if reasoning_chunk else None), True
+        # If close tag is found, process it first.
+        if close_idx >= 0:
+            # Check if tool tag appears before close tag.
+            if tool_idx >= 0 and tool_idx < close_idx:
+                # Tool tag is before reasoning close - emit reasoning before tool, switch to tool mode.
+                reasoning_chunk = self._pending[:tool_idx] if tool_idx > 0 else None
+                self._pending = self._pending[tool_idx + len(tool_tag):]
+                self._mode = self.MODE_TOOL
+                if self.tool_parser is not None:
+                    self.tool_parser.start_tool_call()
+                return (reasoning_chunk if reasoning_chunk else None), True
+
+            # Reasoning close comes first (or no tool tag).
+            reasoning_chunk = self._pending[:close_idx]
+            self._pending = self._pending[close_idx + len(close_tag):]
+            self._mode = self.MODE_PLAIN
+            return (reasoning_chunk if reasoning_chunk else None), True
+
+        # No close tag found yet. Check for tool open tag.
+        if tool_idx >= 0:
+            # Tool tag found before reasoning close - emit reasoning before tool, switch to tool mode.
+            reasoning_chunk = self._pending[:tool_idx] if tool_idx > 0 else None
+            self._pending = self._pending[tool_idx + len(tool_tag):]
+            self._mode = self.MODE_TOOL
+            if self.tool_parser is not None:
+                self.tool_parser.start_tool_call()
+            return (reasoning_chunk if reasoning_chunk else None), True
+
+        # No close tag and no tool tag found - emit safe reasoning prefix,
+        # keeping possible partial-tag suffix in buffer.
+        if not self._pending:
+            return None, False
+        out = self._pending
+        self._pending = ''
+        return out, True
 
     def _consume_tool(self) -> tuple[list[DeltaToolCall], bool]:
         """Consume buffered text while in tool mode.

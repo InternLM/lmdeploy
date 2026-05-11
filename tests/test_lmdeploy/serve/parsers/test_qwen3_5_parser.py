@@ -90,7 +90,7 @@ class TestQwen3_5ResponseParserStreaming:
 
     @staticmethod
     def _encode_ids(tokenizer, text: str) -> list[int]:
-        return tokenizer.encode(text, add_bos=False, add_special_tokens=False)
+        return tokenizer.encode(text, add_special_tokens=False)
 
     def test_stream_chunk_matches_reference(self, tokenizer, response_parser):
         """Feed the real streaming sequence into ResponseParser.stream_chunk

@@ -138,7 +138,7 @@ class TestQwenResponseParserStreaming:
 
     @staticmethod
     def _encode_ids(tokenizer, text: str) -> list[int]:
-        return tokenizer.encode(text, add_bos=False, add_special_tokens=False)
+        return tokenizer.encode(text, add_special_tokens=False)
 
     @pytest.mark.parametrize('reference_chunks', [REFERENCE_CHUNKS_0, REFERENCE_CHUNKS_1, REFERENCE_CHUNKS_2])
     def test_stream_chunk_matches_reference(self, tokenizer, response_parser, reference_chunks):
