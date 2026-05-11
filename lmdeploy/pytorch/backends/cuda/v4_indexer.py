@@ -73,15 +73,11 @@ class TritonV4IndexerImpl(BaseV4Indexer):
                            cu_q_seqlens, num_index.to(torch.int32), block_offsets,
                            max_q_seqlen=meta.max_q_seqlen, max_k_seqlen=max_index, causal=True)
 
-        topk_width = min(self.index_topk, max_index)
+        topk_width = self.index_topk
         topk_length = num_index.clamp(max=topk_width).to(torch.int32)
-
         # bitonic_topk requires K to be a power of 2; fall back to torch.topk otherwise
-        if topk_width > 0 and (topk_width & (topk_width - 1)) == 0:
-            topk = bitonic_topk(scores, q_seqlens, num_index.to(torch.int32),
-                                k=topk_width, fill=-1, descending=True).long()
-        else:
-            topk = scores.topk(topk_width, dim=-1)[1]
+        topk = bitonic_topk(scores, q_seqlens, num_index.to(torch.int32),
+                            k=topk_width, fill=-1, descending=True).long()
 
         # Always return [total_q, topk_width] — caller handles decode/prefill dimension adaptation
         return V4IndexerOutput(indices_in_kvcache=topk, topk_length=topk_length)
