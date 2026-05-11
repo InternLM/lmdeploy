@@ -34,25 +34,23 @@ class TritonV4IndexerImpl(BaseV4Indexer):
         block_offsets = meta.block_offsets
         cu_q_seqlens = meta.cu_q_seqlens
         kv_seqlens = meta.kv_seqlens
-        is_decoding = meta.is_decoding
         q_seqlens = meta.q_seqlens
         bsz = kv_seqlens.size(0)
         block_size = self._block_size
 
-        # quant query
-        # FP8 quantize Indexer Q (replaces fp4_act_quant for better precision)
-        # we might need to do quant fp4 in the future
-        q_2d = query.reshape(-1, query.size(-1) * query.size(-2))
+        # Reshape to fp8_index expected layout upfront.
+        # query: [bsz, seqlen, n_heads, head_dim] -> [cum_seqlen, n_heads, head_dim]
+        # weights: [bsz, seqlen, n_heads] -> [cum_seqlen, n_heads]
+        q_3d = query.flatten(0, 1)
+        weights_2d = weights.flatten(0, -2)
+
+        # FP8 quantize Indexer Q directly on 3D (replaces fp4_act_quant for better precision)
+        q_2d = q_3d.reshape(-1, q_3d.size(-1) * q_3d.size(-2))
         q_fp8, q_scale_2d = quant_fp8(q_2d, group_size=128,
                                        dtype=torch.float8_e4m3fn, scale_fmt='ue8m0')
-        query = q_fp8.view_as(query)
-        q_scale = q_scale_2d.view(query.shape[:-1])
-
-        # reshape q and weights
-        q_3d = query.flatten(0, 1)
-        q_scale = q_scale.flatten(0, -2)
-        weights = weights.flatten(0, -2)
-        q_scale_weighted = q_scale * weights  # [bsz, n_heads]
+        q_3d = q_fp8.view_as(q_3d)
+        q_scale = q_scale_2d.view(q_3d.shape[:-1])  # [cum_seqlen, n_heads]
+        q_scale_weighted = q_scale * weights_2d
 
         total_lens = kv_seqlens
         num_index = torch.div(total_lens, self.compress_ratio, rounding_mode='floor')
@@ -60,10 +58,8 @@ class TritonV4IndexerImpl(BaseV4Indexer):
         max_index = max(max_kv_seqlen // self.compress_ratio, 1)
 
         if max_index == 0:
-            if is_decoding:
-                empty = query.new_empty((1, bsz, 0), dtype=torch.long)
-            else:
-                empty = query.new_empty((bsz, 1, 0), dtype=torch.long)
+            total_q = q_3d.size(0)
+            empty = query.new_empty((total_q, 0), dtype=torch.long)
             return V4IndexerOutput(indices_in_kvcache=empty,
                                    topk_length=num_index.new_zeros((bsz,), dtype=torch.int32))
 
@@ -87,11 +83,8 @@ class TritonV4IndexerImpl(BaseV4Indexer):
         else:
             topk = scores.topk(topk_width, dim=-1)[1]
 
-        if is_decoding:
-            topk = topk.unsqueeze(1)  # [bsz, 1, topk_width]
-            return V4IndexerOutput(indices_in_kvcache=topk, topk_length=topk_length)
-        else:
-            return V4IndexerOutput(indices_in_kvcache=topk.unsqueeze(0), topk_length=topk_length)
+        # Always return [total_q, topk_width] — caller handles decode/prefill dimension adaptation
+        return V4IndexerOutput(indices_in_kvcache=topk, topk_length=topk_length)
 
 
 class TritonV4IndexerBuilder(BaseV4IndexerBuilder):

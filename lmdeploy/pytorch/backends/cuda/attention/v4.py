@@ -363,7 +363,7 @@ class TritonV4AttentionImpl:
         if self.compress_ratio:
             compressed_cache_fp8 = caches['compressed_kv_fp8']
             if index_out is not None:
-                indices_in_kvcache = index_out.indices_in_kvcache
+                indices_in_kvcache = index_out.indices_in_kvcache.unsqueeze(1)  # [bsz, 1, topk_width]
                 topk_length = index_out.topk_length
             elif self.compress_ratio == 4:
                 indices_in_kvcache = attn_metadata.compress_fallback_indices_r4
@@ -440,7 +440,7 @@ class TritonV4AttentionImpl:
             return None, None
 
         if index_out is not None:
-            compress_topk = index_out.indices_in_kvcache.squeeze(0)
+            compress_topk = index_out.indices_in_kvcache
             # Offset indexer's logical indices into flat_kv positions
             uncompressed_kv_lens = attn_metadata.prefill_uncompressed_kv_lens
             cu_q_seqlens = attn_metadata.cu_q_seqlens

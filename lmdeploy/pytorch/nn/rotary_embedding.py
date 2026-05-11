@@ -270,8 +270,10 @@ class ApplyRotaryEmb(nn.Module):
         dummy_k = x_3d.new_empty(x_3d.size(0), 0, dummy_dim)
         x_3d, _ = self.forward(x_3d, dummy_k, cos, sin, inplace=False,
                                complex_mode=complex_mode)
-        x.copy_(x_3d.reshape(orig_shape))
-        return x
+        if inplace:
+            x.copy_(x_3d.reshape(orig_shape))
+            return x
+        return x_3d.reshape(orig_shape)
 
 
 class FopeRotaryEmbedding(nn.Module):

@@ -237,7 +237,6 @@ class Compressor(nn.Module):
         kv_rope = compressed_kv[..., -rd:].unsqueeze(1)  # [total_flat, 1, rd]
         cos_c, sin_c = compress_pos_emb
         self.apply_rotary.forward_single(kv_rope, cos_c, sin_c, inplace=True, complex_mode=True)
-        compressed_kv[..., -rd:] = kv_rope.squeeze(1)
         if self.rotate:
             compressed_kv = self.compressor_impl.rotate_activation(compressed_kv)
         else:
