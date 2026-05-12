@@ -6,11 +6,13 @@ from types import SimpleNamespace
 from lmdeploy.serve.openai.protocol import DeltaFunctionCall, DeltaMessage, DeltaToolCall, FunctionCall, ToolCall
 from lmdeploy.serve.openai.responses import (
     ResponsesRequest,
+    _generation_messages_from_parser,
     _make_response,
     _messages_from_input,
     _openai_tools_from_responses,
     _stream_response,
     _to_generation_config,
+    _tool_choice_from_responses,
     _validate_text_v1_request,
 )
 
@@ -185,9 +187,7 @@ def test_responses_maps_function_call_history_to_chat_messages():
                 'type': 'function',
                 'function': {
                     'name': 'search',
-                    'arguments': {
-                        'query': 'lmdeploy',
-                    },
+                    'arguments': '{"query":"lmdeploy"}',
                 },
             }],
         },
@@ -222,6 +222,51 @@ def test_responses_maps_function_tools_to_openai_tools():
     assert tools[0].function.name == 'search'
     assert tools[0].function.description == 'demo'
     assert tools[0].function.parameters == {'type': 'object'}
+
+
+def test_responses_tool_choice_without_function_tools_validation():
+    assert _tool_choice_from_responses('auto', None) == 'none'
+    assert _tool_choice_from_responses('none', None) == 'none'
+
+    for tool_choice in ('required', {'type': 'function', 'name': 'search'}):
+        try:
+            _tool_choice_from_responses(tool_choice, None)
+        except ValueError as err:
+            assert 'tools' in str(err)
+        else:
+            raise AssertionError(f'{tool_choice!r} should require function tools')
+
+
+def test_responses_named_tool_choice_must_match_function_tools():
+    request = ResponsesRequest(
+        model='fake-model',
+        input='Hi',
+        tools=[{
+            'type': 'function',
+            'name': 'search',
+        }],
+        tool_choice={
+            'type': 'function',
+            'name': 'missing',
+        },
+    )
+    tools = _openai_tools_from_responses(request)
+
+    try:
+        _tool_choice_from_responses(request.tool_choice, tools)
+    except ValueError as err:
+        assert 'not found' in str(err)
+    else:
+        raise AssertionError('named tool_choice should match one of the function tools')
+
+
+def test_responses_uses_parser_adjusted_messages_for_generation():
+    original_messages = [{'role': 'user', 'content': 'original'}]
+    adjusted_messages = [{'role': 'user', 'content': 'adjusted'}]
+    parsed_request = SimpleNamespace(messages=adjusted_messages)
+
+    assert _generation_messages_from_parser(original_messages, parsed_request) is adjusted_messages
+    assert _generation_messages_from_parser(original_messages, None) is original_messages
 
 
 def test_responses_generation_config_mapping():
@@ -494,5 +539,7 @@ def test_responses_streaming_tool_call_events():
     done = next(payload for payload in payloads if payload['type'] == 'response.output_item.done')
     assert added['item']['type'] == 'function_call'
     assert added['item']['name'] == 'search'
+    assert next(payload for payload in payloads
+                if payload['type'] == 'response.function_call_arguments.done')['name'] == 'search'
     assert done['item']['arguments'] == '{"query":"lmdeploy"}'
     assert payloads[-1]['response']['output'][0]['type'] == 'function_call'
