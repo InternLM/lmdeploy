@@ -12,7 +12,7 @@ def build_prefix_positions(lengths: torch.Tensor, max_len: int):
         return empty, empty.bool()
     arange = torch.arange(max_len, device=device).unsqueeze(0)
     mask = arange < lengths.unsqueeze(1)
-    positions = torch.where(mask, arange, arange.new_full((), -1))
+    positions = arange.masked_fill(~mask, -1)
     return positions, mask
 
 
@@ -28,7 +28,7 @@ def build_window_positions(total_lens: torch.Tensor, window_size: int):
     starts = total_lens - window_lens
     mask = arange < window_lens.unsqueeze(1)
     positions = torch.remainder(starts.unsqueeze(1) + arange, window_size)
-    positions = torch.where(mask, positions, positions.new_full((), -1))
+    positions = positions.masked_fill(~mask, -1)
     return positions, window_lens, mask
 
 

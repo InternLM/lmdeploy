@@ -58,23 +58,23 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
     def _precompute_decode(meta, window_size):
         from lmdeploy.pytorch.backends.cuda.attention.v4_utils import build_prefix_positions, build_window_positions
         kv_seqlens = meta.kv_seqlens
-        block_offsets = meta.block_offsets.long()
+        block_offsets = meta.block_offsets
         block_size = meta.block_size
 
-        window_positions, window_lens, _ = build_window_positions(kv_seqlens.long(), window_size)
-        meta.extra_indices_in_kvcache = window_positions.unsqueeze(1).to(torch.int32)
-        meta.extra_topk_length = window_lens.to(torch.int32)
+        window_positions, window_lens, _ = build_window_positions(kv_seqlens, window_size)
+        meta.extra_indices_in_kvcache = window_positions.unsqueeze(1)
+        meta.extra_topk_length = window_lens
 
         bsz = kv_seqlens.numel()
         meta.batch_offsets = (
-            torch.arange(bsz, device=kv_seqlens.device, dtype=torch.int32).view(-1, 1, 1) * window_size)
+            torch.arange(bsz, device=kv_seqlens.device, dtype=block_offsets.dtype).view(-1, 1, 1) * window_size)
 
         for ratio in (4, 128):
-            num_compressed = torch.div(kv_seqlens, ratio, rounding_mode='floor').long()
+            num_compressed = torch.div(kv_seqlens, ratio, rounding_mode='floor')
             max_comp = max(block_offsets.size(1) * block_size // ratio, 1)
             comp_positions, _ = build_prefix_positions(num_compressed, max_comp)
-            indices = comp_positions.unsqueeze(1).to(torch.int32)
-            topk = num_compressed.to(torch.int32)
+            indices = comp_positions.unsqueeze(1)
+            topk = num_compressed
             if ratio == 4:
                 meta.compress_fallback_indices_r4 = indices
                 meta.compress_fallback_topk_r4 = topk
@@ -98,7 +98,7 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
         # Uncompressed region = prev_window (ring buffer) + raw_kv (current chunk)
         # prev_window_len = min(start_pos, window_size), raw_kv_len = q_seqlens
         prev_window_lens = start_pos.clamp(max=window_size)
-        meta.prefill_uncompressed_kv_lens = (prev_window_lens + q_seqlens).long()
+        meta.prefill_uncompressed_kv_lens = (prev_window_lens + q_seqlens)
 
         # Safe upper bounds (no CUDA sync): max_unkv <= window_size + max_q,
         # sum_unkv <= sum(kv_seqlens) = sum_kv (since min(sp,ws) <= sp)
@@ -154,13 +154,13 @@ class V4IndicesUpdater:
         bsz = logical_topk.size(0)
         safe_logical_topk = logical_topk.clamp(min=0)
         token_positions = safe_logical_topk * compress_ratio
-        block_idx = torch.div(token_positions, block_size, rounding_mode='floor').long()
+        block_idx = torch.div(token_positions, block_size, rounding_mode='floor')
         max_block_idx = block_offsets.size(1)
         safe_block_idx = block_idx.clamp(max=max_block_idx - 1)
         block_idx_valid = block_idx < max_block_idx
-        phys_block = block_offsets.gather(1, safe_block_idx.view(bsz, -1)).view_as(logical_topk).long()
+        phys_block = block_offsets.gather(1, safe_block_idx.view(bsz, -1)).view_as(logical_topk)
         entries_per_block = block_size // compress_ratio
-        block_off = torch.remainder(safe_logical_topk, entries_per_block).long()
+        block_off = torch.remainder(safe_logical_topk, entries_per_block)
         phys_indices = phys_block * entries_per_block + block_off
         valid = (logical_topk >= 0) & block_idx_valid
         return torch.where(valid, phys_indices, phys_indices.new_full((), -1))
@@ -179,11 +179,11 @@ class V4IndicesUpdater:
         Mirrors NSAIndicesUpdater.update_prefill: adds cu_seqlens_k offsets and preserves -1 padding.
         """
         num_tokens = topk_indices.size(0)
-        repeat_cu = torch.repeat_interleave(cu_seqlens_k[:-1], q_seqlens.long(), output_size=num_tokens)
+        repeat_cu = torch.repeat_interleave(cu_seqlens_k[:-1], q_seqlens, output_size=num_tokens)
         neg_mask = topk_indices < 0
         topk_indices = topk_indices + repeat_cu[:, None]
         topk_indices[neg_mask] = -1
-        return topk_indices.unsqueeze(1).to(torch.int32)  # [total_q, 1, total_topk]
+        return topk_indices.unsqueeze(1)  # [total_q, 1, total_topk]
 
     def update_prefill(self, topk_indices: torch.Tensor, q_seqlens: torch.Tensor,
                        cu_seqlens_k: torch.Tensor) -> torch.Tensor:
@@ -206,7 +206,12 @@ def _try_dynamic_compile(func, *args, **kwargs):
     accesses during graph replay, leading to segfaults.  Eager execution is
     safe and the index conversion is not a bottleneck.
     """
-    return func
+    try:
+        compiled_func = torch.compile(func, dynamic=True)
+        compiled_func(*args, **kwargs)
+        return compiled_func
+    except Exception:
+        return func
 
 
 class TritonV4AttentionImpl:
@@ -266,8 +271,8 @@ class TritonV4AttentionImpl:
 
     def _write_window_decode(self, kv, attn_caches, slot, start_pos):
         """Write decode KV to window state and pack FP8."""
-        window_pos = torch.remainder(start_pos, self.window_size).long()
-        slot_idx = slot.long().clamp(min=0)
+        window_pos = torch.remainder(start_pos, self.window_size)
+        slot_idx = slot.clamp(min=0)
         kv_decode = kv[:, 0]  # [bsz, head_dim]
         attn_caches['window_state'][slot_idx, window_pos] = kv_decode
         self._pack_window_fp8(kv_decode, attn_caches['window_state_fp8'], slot_idx, window_pos)
@@ -281,27 +286,27 @@ class TritonV4AttentionImpl:
         total_tokens = kv_flat.size(0)
 
         # Build per-token indices
-        token_slot = slot.repeat_interleave(q_seqlens.long())
-        token_seq = torch.arange(num_seqs, device=slot.device).repeat_interleave(q_seqlens.long())
+        token_slot = slot.repeat_interleave(q_seqlens)
+        token_seq = torch.arange(num_seqs, device=slot.device).repeat_interleave(q_seqlens)
         token_pos_in_seq = torch.arange(total_tokens, device=slot.device) - cu_q[token_seq]
-        token_start = start_pos.repeat_interleave(q_seqlens.long())
+        token_start = start_pos.repeat_interleave(q_seqlens)
         token_abs_pos = token_start + token_pos_in_seq
         token_total = total_lens[token_seq]
         cutoff_pos = (token_total - self.window_size).clamp(min=0)
         valid = token_abs_pos >= cutoff_pos
         ring_pos = torch.remainder(token_abs_pos, self.window_size)
 
-        valid_slot = token_slot[valid].long()
-        valid_ring = ring_pos[valid].long()
+        valid_slot = token_slot[valid]
+        valid_ring = ring_pos[valid]
         valid_kv = kv_flat[valid]
         attn_caches['window_state'][valid_slot, valid_ring] = valid_kv
 
         # Batched FP8 pack
-        slot_idx = slot.long().clamp(min=0)
+        slot_idx = slot.clamp(min=0)
         selected = attn_caches['window_state'][slot_idx]
         num_seqs_local = slot.numel()
         slot_expanded = slot_idx.repeat_interleave(self.window_size)
-        pos_expanded = torch.arange(self.window_size, device=slot.device).repeat(num_seqs_local).long()
+        pos_expanded = torch.arange(self.window_size, device=slot.device).repeat(num_seqs_local)
         kv_tokens = selected.reshape(-1, self.head_size)
         self._pack_window_fp8(kv_tokens, attn_caches['window_state_fp8'], slot_expanded, pos_expanded)
 
@@ -344,7 +349,7 @@ class TritonV4AttentionImpl:
         start_pos = attn_metadata.start_pos
         total_lens = attn_metadata.kv_seqlens
         bsz = total_lens.numel()
-        block_offsets = attn_metadata.block_offsets.long()
+        block_offsets = attn_metadata.block_offsets
         block_size = attn_metadata.block_size
 
         # Phase 1: Write window state + FP8 pack
@@ -485,7 +490,7 @@ class TritonV4AttentionImpl:
         raw_kv = kv.squeeze(0)  # [total_q_tokens, head_dim]
         flat_kv, cu_seqlens_k = self._flatten_v4_kv(
             caches['window_state'], None,
-            block_offsets.long(), total_lens.long(),
+            block_offsets, total_lens,
             self.window_size, self.compress_ratio,
             total_flat_kv_tokens, max_flat_kv_len,
             fp8_compressed_kv_cache=fp8_compressed_kv_cache, slot=slot,
