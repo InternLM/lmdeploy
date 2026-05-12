@@ -404,6 +404,14 @@ class BaseResponseParser(ResponseParser):
         self._mode = self.MODE_PLAIN
         return (reasoning_chunk if reasoning_chunk else None), True
 
+    @staticmethod
+    def truncate_tool_calls(tool_calls: list | None, parallel_tool_calls: bool | None) -> list | None:
+        """Truncate tool calls to a single call when parallel_tool_calls is
+        False."""
+        if not tool_calls or parallel_tool_calls is not False:
+            return tool_calls
+        return tool_calls[:1]
+
     def _consume_tool(self) -> tuple[list[DeltaToolCall], bool]:
         """Consume buffered text while in tool mode.
 
@@ -425,6 +433,19 @@ class BaseResponseParser(ResponseParser):
         """
         if self.tool_parser is None:
             raise RuntimeError('Invariant violated: MODE_TOOL requires a tool_parser.')
+
+        # Skip subsequent tool calls when parallel_tool_calls is False
+        if self.request.parallel_tool_calls is False and self.tool_parser._active_tool_index >= 1:
+            close_tag = self.profile.tool_close_tag
+            if close_tag:
+                idx = self._pending.find(close_tag)
+                if idx >= 0:
+                    self._pending = self._pending[idx + len(close_tag):]
+                else:
+                    self._pending = ''
+            else:
+                self._pending = ''
+            return [], True
 
         close_tag = self.profile.tool_close_tag
         if not close_tag:
@@ -566,6 +587,7 @@ class BaseResponseParser(ResponseParser):
 
         content = ''.join(content_parts)
         reasoning_content = ''.join(reasoning_parts) if reasoning_parts else None
+        tool_calls = self.truncate_tool_calls(tool_calls, self.request.parallel_tool_calls)
         return content if content != '' else None, tool_calls or None, reasoning_content
 
     @staticmethod
