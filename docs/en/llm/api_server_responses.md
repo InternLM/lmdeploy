@@ -30,7 +30,7 @@ curl http://{server_ip}:{server_port}/v1/responses \
   -H "content-type: application/json" \
   -H "Authorization: Bearer <api_key>" \
   -d '{
-    "model": "internlm-chat-7b",
+    "model": "Qwen/Qwen3.5-35B-A3B",
     "input": "Reply exactly: pong",
     "max_output_tokens": 32
   }'
@@ -58,7 +58,7 @@ curl http://{server_ip}:{server_port}/v1/responses \
   -H "content-type: application/json" \
   -H "Authorization: Bearer <api_key>" \
   -d '{
-    "model": "internlm-chat-7b",
+    "model": "Qwen/Qwen3.5-35B-A3B",
     "input": "Call the search tool with query lmdeploy.",
     "max_output_tokens": 128,
     "tools": [{
@@ -96,7 +96,7 @@ When `stream=true`, the endpoint returns `text/event-stream` events such as:
 Codex can connect to LMDeploy by configuring a custom provider with `wire_api = "responses"` and `base_url` pointing to the LMDeploy `/v1` root:
 
 ```toml
-model = "internlm-chat-7b"
+model = "Qwen/Qwen3.5-35B-A3B"
 model_provider = "lmdeploy"
 
 [model_providers.lmdeploy]

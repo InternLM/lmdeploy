@@ -30,7 +30,7 @@ curl http://{server_ip}:{server_port}/v1/responses \
   -H "content-type: application/json" \
   -H "Authorization: Bearer <api_key>" \
   -d '{
-    "model": "internlm-chat-7b",
+    "model": "Qwen/Qwen3.5-35B-A3B",
     "input": "Reply exactly: pong",
     "max_output_tokens": 32
   }'
@@ -58,7 +58,7 @@ curl http://{server_ip}:{server_port}/v1/responses \
   -H "content-type: application/json" \
   -H "Authorization: Bearer <api_key>" \
   -d '{
-    "model": "internlm-chat-7b",
+    "model": "Qwen/Qwen3.5-35B-A3B",
     "input": "Call the search tool with query lmdeploy.",
     "max_output_tokens": 128,
     "tools": [{
@@ -96,7 +96,7 @@ curl http://{server_ip}:{server_port}/v1/responses \
 Codex 可以通过自定义 provider 连接到 LMDeploy。需要将 `wire_api` 设为 `"responses"`，并将 `base_url` 指向 LMDeploy 的 `/v1` 根路径：
 
 ```toml
-model = "internlm-chat-7b"
+model = "Qwen/Qwen3.5-35B-A3B"
 model_provider = "lmdeploy"
 
 [model_providers.lmdeploy]
