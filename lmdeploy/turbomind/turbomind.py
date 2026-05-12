@@ -11,7 +11,6 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from multiprocessing.reduction import ForkingPickler
-from queue import Queue
 from typing import Any
 
 import pybase64
@@ -162,21 +161,18 @@ class TurboMind:
 
         if not osp.exists(model_path):
             model_path = get_model(model_path, _engine_config.download_dir, _engine_config.revision)
-        self.model_comm = self._from_hf(model_path=model_path, engine_config=_engine_config,
-                                        trust_remote_code=trust_remote_code)
+        self.model_comm, model_loader = self._from_hf(model_path=model_path, engine_config=_engine_config,
+                                                      trust_remote_code=trust_remote_code)
         self.is_dummy = self.model_comm.is_dummy_node()
         self.tokenizer = Tokenizer(model_path, trust_remote_code=trust_remote_code)
         if not _engine_config.empty_init:
-            self._load_weights()
+            with torch.cuda.device(self.devices[0]):
+                model_loader.export()
             self._process_weights()
             self._create_engine()
 
         self.session_len = _engine_config.session_len
 
-    def _load_weights(self):
-        """Load weights."""
-        with torch.cuda.device(self.devices[0]):
-            self._model_loader.export()
 
     def _process_weights(self):
         """Process weight."""
@@ -267,7 +263,7 @@ class TurboMind:
         model_comm = _tm.TurboMind.create(model_dir='', engine_config=ec)
         self._create_weight(model_comm)
 
-        self._model_loader = ModelLoader(
+        model_loader = ModelLoader(
             model=text_model,
             model_comm=model_comm,
             gpu_count=self.gpu_count,
@@ -275,7 +271,8 @@ class TurboMind:
             data_type=data_type,
             engine_config=engine_config,
         )
-        return model_comm
+
+        return model_comm, model_loader
 
     async def sleep(self, level: int = 1):
         """Sleep the model."""
@@ -309,13 +306,6 @@ class TurboMind:
             args = list(args)
             args[6] = torch.cuda.current_device()  # device id.
             return func(*args).clone()
-
-        if not hasattr(self, '_export_iter'):
-            que = Queue()
-            ml = self._model_loader
-            ml.model_path = que
-            self._update_params_que = que
-            self._export_iter = ml.export_iter()
 
         with torch.cuda.device(self.devices[0]):
             if isinstance(request.serialized_named_tensors, str):
