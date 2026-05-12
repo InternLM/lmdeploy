@@ -19,7 +19,7 @@ from lmdeploy.serve.openai.protocol import (
 )
 from lmdeploy.utils import get_logger
 
-from .response_parser import ResponseParser, ResponseParserManager
+from .response_parser import ResponseParser, ResponseParserManager, normalize_chat_request
 
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
@@ -60,6 +60,7 @@ class GptOssResponseParser(ResponseParser):
             # Unit tests may inject a lightweight sentinel request object.
             self.request = request
         self._convert_response_format_to_harmony()
+        self.request = normalize_chat_request(self.request)
         self.model_tokenizer = tokenizer
         self.parser = StreamableParser(get_encoding(), role=Role.ASSISTANT)
         self._seen_any = False
