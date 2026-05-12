@@ -37,7 +37,7 @@ class RequestLogger:
         if not logger.isEnabledFor(REQUEST_LOG_LEVEL):
             return
         max_log_len = self.max_log_len
-        input_tokens = len(prompt_token_ids)
+        input_tokens = len(prompt_token_ids) if prompt_token_ids is not None else 0
         if max_log_len is not None:
             if prompt is not None:
                 prompt = prompt[:max_log_len]

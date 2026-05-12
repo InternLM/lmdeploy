@@ -63,6 +63,16 @@ def test_request_logger_log_inputs_visible_at_request(monkeypatch):
     assert 'input_tokens=2' in records[0].getMessage()
 
 
+def test_request_logger_log_inputs_handles_none_token_ids(monkeypatch):
+    records = _capture_request_logs(monkeypatch, REQUEST_LOG_LEVEL)
+
+    RequestLogger(max_log_len=None).log_inputs(1, 'hello', None, 'gen_config', 'default')
+
+    assert len(records) == 1
+    assert 'input_tokens=0' in records[0].getMessage()
+    assert 'prompt_token_id=None' in records[0].getMessage()
+
+
 def test_request_log_level_includes_info_logs(monkeypatch):
     records = _capture_request_logs(monkeypatch, REQUEST_LOG_LEVEL)
 
