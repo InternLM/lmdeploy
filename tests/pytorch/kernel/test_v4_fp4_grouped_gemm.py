@@ -122,8 +122,8 @@ class TestGroupedGemmContiguous:
 
     @torch.inference_mode()
     def test_contiguous_vs_launcher(self, A_quant, A_scale, B_packed, B_scale, grouped_layout, M, N, device):
-        from lmdeploy.pytorch.kernels.cuda.v4_fp4_grouped_gemm import m_grouped_fp8_fp4_gemm_nt_contiguous
         from lmdeploy.pytorch.kernels.cuda.v4_fp4_fused_moe import fused_moe_v4_fp4_kernel_launcher
+        from lmdeploy.pytorch.kernels.cuda.v4_fp4_grouped_gemm import m_grouped_fp8_fp4_gemm_nt_contiguous
 
         # Run through the new wrapper.
         out_wrapper = torch.empty(M, N, dtype=torch.bfloat16, device=device)
@@ -138,7 +138,9 @@ class TestGroupedGemmContiguous:
         num_experts = B_packed.size(0)
         expert_counts = torch.zeros(num_experts, dtype=torch.int64, device=device)
         valid = grouped_layout >= 0
-        expert_counts.scatter_add_(0, grouped_layout[valid].long(), torch.ones(valid.sum().item(), dtype=torch.int64, device=device))
+        expert_counts.scatter_add_(
+            0, grouped_layout[valid].long(),
+            torch.ones(valid.sum().item(), dtype=torch.int64, device=device))
         exp_end = expert_counts.cumsum(0)
         exp_start = exp_end - expert_counts
         sorted_idx = torch.arange(M, device=device, dtype=torch.int64)
@@ -262,8 +264,8 @@ class TestGroupedGemmMasked:
 
     @torch.inference_mode()
     def test_masked_vs_launcher(self, A_quant, A_scale, B_packed, B_scale, masked_m, max_m, device):
-        from lmdeploy.pytorch.kernels.cuda.v4_fp4_grouped_gemm import m_grouped_fp8_fp4_gemm_nt_masked
         from lmdeploy.pytorch.kernels.cuda.v4_fp4_fused_moe import fused_moe_v4_fp4_kernel_launcher
+        from lmdeploy.pytorch.kernels.cuda.v4_fp4_grouped_gemm import m_grouped_fp8_fp4_gemm_nt_masked
 
         num_experts = B_packed.size(0)
         N = B_packed.size(1)
@@ -391,8 +393,9 @@ class TestEPNormal:
 
     @pytest.fixture
     def permuted_data(self, num_experts, hidden_dim, topk_ids, device):
-        """Simulate what DeepEPTokenDispatcher.dispatch returns: tokens permuted
-        by expert (contiguous per expert), plus recv_tokens_per_expert."""
+        """Simulate what DeepEPTokenDispatcher.dispatch returns: tokens
+        permuted by expert (contiguous per expert), plus
+        recv_tokens_per_expert."""
         flat_ids = topk_ids.flatten()
         counts = torch.zeros(num_experts, dtype=torch.int64, device=device)
         for e in range(num_experts):
@@ -451,9 +454,11 @@ class TestEPNormal:
     def test_ep_normal_with_expert_offset(self, w1_packed, w1_scale,
                                            w2_packed, w2_scale,
                                            num_experts, top_k, device):
-        from lmdeploy.pytorch.kernels.cuda.v4_fp4_grouped_gemm import fused_moe_v4_fp4_ep_normal
-        from lmdeploy.pytorch.kernels.cuda.v4_fp4_grouped_gemm import m_grouped_fp8_fp4_gemm_nt_contiguous
         from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
+        from lmdeploy.pytorch.kernels.cuda.v4_fp4_grouped_gemm import (
+            fused_moe_v4_fp4_ep_normal,
+            m_grouped_fp8_fp4_gemm_nt_contiguous,
+        )
 
         # Simulate EP rank 1 of 2: experts [2, 3] are local.
         # recv_x is already permuted by expert (dispatcher did this).
@@ -585,9 +590,11 @@ class TestEPLowLatency:
                                               w2_packed, w2_scale,
                                               masked_m, max_m, num_experts,
                                               hidden_dim, ffn_dim, device):
-        from lmdeploy.pytorch.kernels.cuda.v4_fp4_grouped_gemm import fused_moe_v4_fp4_ep_low_latency
         from lmdeploy.pytorch.kernels.cuda.v4_fp4_grouped_gemm import (
-            m_grouped_fp8_fp4_gemm_nt_masked, silu_and_mul_moe_ep_v4)
+            fused_moe_v4_fp4_ep_low_latency,
+            m_grouped_fp8_fp4_gemm_nt_masked,
+            silu_and_mul_moe_ep_v4,
+        )
 
         out = fused_moe_v4_fp4_ep_low_latency(
             (A_quant, A_scale),

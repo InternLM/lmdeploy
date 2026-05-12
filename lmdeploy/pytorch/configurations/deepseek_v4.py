@@ -1,10 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import importlib.util
+
 import torch
 
 from lmdeploy.pytorch.config import BlockCacheSpec, ModelConfig, StateCacheSpec
 from lmdeploy.pytorch.consts import V4_FLASHMLA_D_NOPE, V4_FLASHMLA_D_ROPE, V4_FLASHMLA_NUM_TILES
+from lmdeploy.utils import get_logger
 
 from .builder import AutoModelConfigBuilder
+
+logger = get_logger('lmdeploy')
 
 
 def _check_env_v4(device: str = 'cuda'):
@@ -22,25 +27,29 @@ def _check_env_v4(device: str = 'cuda'):
     except ImportError as e:
         raise ImportError('DeepSeek-V4 requires <deep_gemm> to be installed.') from e
 
-    # import tilekernels would lead to error here
-    # try:
-    #     import tile_kernels  # noqa: F401
-    # except ImportError as e:
-    #     raise ImportError('DeepSeek-V4 requires <tile_kernels> to be installed.') from e
-
     try:
         import fast_hadamard_transform  # noqa: F401
     except ImportError as e:
         raise ImportError('DeepSeek-V4 requires <fast_hadamard_transform> to be installed.') from e
 
+    if importlib.util.find_spec('tile_kernels') is None:
+        raise ImportError('DeepSeek-V4 requires <tile_kernels> to be installed.')
+
 
 def _finalize_v4_cache_specs(model_config: ModelConfig, block_size: int):
+    adjusted = False
     if block_size < 256:
-        raise ValueError('DeepSeek-V4 requires block_size >= 256 because FlashMLA sparse decode crashes '
-                         'with entries_per_block=1 (block_size=128, ratio=128). entries_per_block must be >= 2.')
+        block_size = 256
+        adjusted = True
     if block_size % 128 != 0:
-        raise ValueError('DeepSeek-V4 requires block_size to be a multiple of 128 so ratio=128 compressed cache '
-                         'has an integral number of entries per block.')
+        block_size = ((block_size + 127) // 128) * 128
+        if block_size < 256:
+            block_size = 256
+        adjusted = True
+    if adjusted:
+        logger.warning(f'DeepSeek-V4 requires block_size >= 256 and a multiple of 128. '
+                       f'Adjusting block_size from {model_config.block_size} to {block_size}.')
+        model_config.block_size = block_size
 
     hf_config = model_config.hf_config
     # V4 FlashMLA sparse FP8: 448 fp8 NoPE + 128 bytes (64 bf16) RoPE + 7 e8m0 scales + 1 pad = 584
@@ -71,9 +80,21 @@ def _finalize_v4_cache_specs(model_config: ModelConfig, block_size: int):
 
 
 def update_cache_config(cache_config):
-    if cache_config.block_size < 256:
-        raise ValueError('DeepSeek-V4 requires block_size >= 256 because FlashMLA sparse decode crashes '
-                         'with entries_per_block=1 (block_size=128, ratio=128). entries_per_block must be >= 2.')
+    adjusted = False
+    block_size = cache_config.block_size
+    if block_size < 256:
+        block_size = 256
+        adjusted = True
+    if block_size % 128 != 0:
+        block_size = ((block_size + 127) // 128) * 128
+        if block_size < 256:
+            block_size = 256
+        adjusted = True
+    if adjusted:
+        logger.warning(f'DeepSeek-V4 requires block_size >= 256 and a multiple of 128. '
+                       f'Adjusting block_size from {cache_config.block_size} to {block_size}.')
+        cache_config.block_size = block_size
+        cache_config.kernel_block_size = block_size
     # V4 manages its sliding window via ring-buffer state caches internally.
     # Setting window_size=-1 selects DefaultBlockManager so blocks are not
     # dropped and kv_seqlens are not reduced by num_ignored_history.
