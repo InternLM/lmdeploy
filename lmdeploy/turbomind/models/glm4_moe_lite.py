@@ -2,8 +2,12 @@
 """GLM-4 MoE Lite (GLM-4.7-Flash) TextModel for the new pipeline."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import _turbomind as _tm
-from transformers import Glm4MoeLiteConfig
+
+if TYPE_CHECKING:
+    from transformers import Glm4MoeLiteConfig
 
 from ..builders import (
     DecoderLayerBuilder,
