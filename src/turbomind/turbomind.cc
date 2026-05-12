@@ -439,14 +439,12 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     engine_param_.max_context_token_num = engine["max_context_token_num"].as<int>(0);
     engine_param_.session_len           = model["session_len"].as<int>(0);
 
-    engine_param_.cache_max_block_count = engine["cache_max_entry_count"].as<float>(0);
-    engine_param_.cache_chunk_size      = engine["cache_chunk_size"].as<int>(0);
-    engine_param_.enable_prefix_caching = engine["enable_prefix_caching"].as<bool>(false);
-    engine_param_.enable_metrics        = engine["enable_metrics"].as<bool>(false);
-
-    if (engine_param_.enable_prefix_caching && HasLinearAttention(model_param_)) {
-        TM_CHECK(0) << "Prefix caching is unsupported when linear attention is present";
-    }
+    engine_param_.cache_max_block_count               = engine["cache_max_entry_count"].as<float>(0);
+    engine_param_.cache_chunk_size                    = engine["cache_chunk_size"].as<int>(0);
+    engine_param_.enable_prefix_caching               = engine["enable_prefix_caching"].as<bool>(false);
+    engine_param_.linear_prefix_cache_interval_blocks = engine["linear_prefix_cache_interval_blocks"].as<int>(64);
+    engine_param_.enable_metrics                      = engine["enable_metrics"].as<bool>(false);
+    TM_CHECK_GE(engine_param_.linear_prefix_cache_interval_blocks, 1);
 
     engine_param_.num_tokens_per_iter = engine["num_tokens_per_iter"].as<int>(0);
     engine_param_.max_prefill_iters   = engine["max_prefill_iters"].as<int>(1);

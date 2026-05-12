@@ -230,6 +230,7 @@ void Engine::Impl::CreateSequenceManager()
                                                  param_.cache_max_block_count,
                                                  param_.cache_chunk_size,
                                                  param_.enable_prefix_caching,
+                                                 param_.linear_prefix_cache_interval_blocks,
                                                  tp_rank_,
                                                  param_.attn_cp_size,
                                                  core::Context::alloc(kDEVICE),
