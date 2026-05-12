@@ -1,7 +1,6 @@
 ---
 name: docker-build
 description: Build an LMDeploy Docker image and push it to the inner registry.
-disable-model-invocation: true
 ---
 
 # Docker Build & Push
@@ -26,7 +25,7 @@ If any are missing, stop and tell the user to set them before proceeding.
 BRANCH=$(git branch --show-current | sed 's/[^a-zA-Z0-9._-]/-/g')
 SHA=$(git rev-parse --short=7 HEAD)
 TAG="${BRANCH}-${SHA}"
-IMAGE="${LMDEPLOY_REGISTRY}/lmdeploy:${TAG}"
+IMAGE="${LMDEPLOY_REGISTRY}/ailab-puyu-puyu_gpu/lmdeploy-dev:lmdeploy-${TAG}"
 ```
 
 Print the computed image name so the user can confirm.
