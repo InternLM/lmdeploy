@@ -178,7 +178,9 @@ def _long_user_prompt() -> str:
 
 def _finish_reason_indicates_abort(finish_reason) -> bool:
     """LMDeploy may use OpenAI-style ``'abort'`` or nested ``{'type':
-    'abort'}``."""
+
+    'abort'}``.
+    """
     if finish_reason == 'abort':
         return True
     if isinstance(finish_reason, dict) and finish_reason.get('type') == 'abort':
@@ -316,7 +318,11 @@ class TestRestfulAbortRequest:
         _emit_log('test_end', test=test_name)
         _set_log_hook(None)
         if os.path.isfile(self.log_file):
-            allure.attach.file(self.log_file, name=os.path.basename(self.log_file), attachment_type=allure.attachment_type.TEXT)
+            allure.attach.file(
+                self.log_file,
+                name=os.path.basename(self.log_file),
+                attachment_type=allure.attachment_type.TEXT,
+            )
 
     def test_abort_running_stream_chat_request_returns_abort_finish_reason(self, backend, model_case):
         api_client = APIClient(BASE_URL)
