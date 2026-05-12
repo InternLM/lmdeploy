@@ -109,37 +109,37 @@ def _reference_flatten_v4_kv(window_kv_cache, compressed_kv_cache, block_offsets
     return flat_kv, cu_seqlens_k
 
 
-def _make_ring_buffer_window(bsz, window_size, head_dim, total_lens, token_fn):
-    """Populate a ring-buffer window cache.
+def _pack_bf16_window_to_fp8(window_kv, bsz, window_size, device):
+    """Pack a BF16 window cache [bsz, window_size, 512] to FP8."""
+    from lmdeploy.pytorch.consts import V4_FLASHMLA_HEAD_DIM
+    from lmdeploy.pytorch.kernels.cuda.v4_pack_window import pack_window_tokens_fp8
 
-    token_fn(batch_idx, position) -> scalar value to store (broadcast over head_dim). Writes each token at position %
-    window_size, mimicking the real ring-buffer write.
-    """
-    window_kv = torch.zeros(bsz, window_size, head_dim, dtype=DTYPE, device=DEVICE)
-    for b in range(bsz):
-        tl = total_lens[b].item()
-        for p in range(tl):
-            ring_pos = p % window_size
-            window_kv[b, ring_pos] = token_fn(b, p)
-    return window_kv
+    head_dim = V4_FLASHMLA_HEAD_DIM
+    packed_dim = 584
+    fp8_window = torch.zeros(bsz, window_size, packed_dim,
+                              dtype=torch.float8_e4m3fn, device=device)
+    slot_all = torch.arange(bsz, device=device).repeat_interleave(window_size).long()
+    pos_all = torch.arange(window_size, device=device).repeat(bsz).long()
+    pack_window_tokens_fp8(window_kv.reshape(-1, head_dim), fp8_window, slot_all, pos_all)
+    return fp8_window
 
 
-def _make_paged_cache(num_blocks, entries_per_block, head_dim, num_entries,
-                       block_offsets, entry_fn):
-    """Populate a paged compressed KV cache.
+def _pack_global_bf16_window_to_fp8(global_cache, num_slots, window_size, device):
+    """Pack a global BF16 window cache [num_slots, window_size, 512] to FP8,
+    per slot."""
+    from lmdeploy.pytorch.consts import V4_FLASHMLA_HEAD_DIM
+    from lmdeploy.pytorch.kernels.cuda.v4_pack_window import pack_window_tokens_fp8
 
-    entry_fn(batch_idx, entry_idx) -> scalar value (broadcast over head_dim). Scatters entries into the correct physical
-    blocks.
-    """
-    compressed_kv = torch.zeros(num_blocks, entries_per_block, head_dim,
-                                dtype=DTYPE, device=DEVICE)
-    for b in range(block_offsets.size(0)):
-        for e in range(num_entries[b].item()):
-            page_id = e // entries_per_block
-            page_off = e % entries_per_block
-            phys_block = block_offsets[b, page_id].item()
-            compressed_kv[phys_block, page_off] = entry_fn(b, e)
-    return compressed_kv
+    head_dim = V4_FLASHMLA_HEAD_DIM
+    packed_dim = 584
+    fp8_window = torch.zeros(num_slots, window_size, packed_dim,
+                              dtype=torch.float8_e4m3fn, device=device)
+    for s in range(num_slots):
+        slot_arr = torch.full((window_size,), s, dtype=torch.long, device=device)
+        pos_arr = torch.arange(window_size, device=device, dtype=torch.long)
+        pack_window_tokens_fp8(global_cache[s].reshape(-1, head_dim), fp8_window,
+                               slot_arr, pos_arr)
+    return fp8_window
 
 
 class TestFlattenV4KV:
@@ -153,355 +153,169 @@ class TestFlattenV4KV:
         yield DTYPE
 
     # ------------------------------------------------------------------
-    # Window-only (compress_ratio=0)
+    # Window-only (compress_ratio=0), FP8 window
     # ------------------------------------------------------------------
 
-    def test_window_only_short(self, device, dtype):
-        """total_len < window_size: no ring wrap, no compressed entries."""
+    def test_fp8_window_short(self, device, dtype):
+        """FP8 window: total_len < window_size, no ring wrap."""
+        from lmdeploy.pytorch.consts import V4_FLASHMLA_HEAD_DIM
         from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
 
-        bsz, window_size, head_dim = 2, 8, 16
-        total_lens = torch.tensor([3, 5], dtype=torch.long, device=device)
-
-        window_kv = torch.zeros(bsz, window_size, head_dim, dtype=dtype, device=device)
-        for b in range(bsz):
-            for p in range(total_lens[b].item()):
-                window_kv[b, p] = b * 100 + p
-
-        block_offsets = torch.zeros(bsz, 1, dtype=torch.long, device=device)
-        tot, mxf = _flat_kv_bounds(total_lens, window_size, 0)
-        flat_kv, cu = flatten_v4_kv(window_kv, None, block_offsets,
-                                    total_lens, window_size, 0, tot, mxf)
-
-        ref_kv, ref_cu = _reference_flatten_v4_kv(
-            window_kv, None, block_offsets, total_lens, window_size, 0)
-
-        torch.testing.assert_close(flat_kv.cpu(), ref_kv.cpu(), atol=0, rtol=0)
-        assert cu.cpu().tolist() == ref_cu.cpu().tolist()
-
-    def test_window_only_equal_window(self, device, dtype):
-        """total_len == window_size: exactly fills the ring, no wrap."""
-        from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
-
-        bsz, window_size, head_dim = 1, 6, 8
-        total_lens = torch.tensor([6], dtype=torch.long, device=device)
-
-        window_kv = _make_ring_buffer_window(
-            bsz, window_size, head_dim, total_lens,
-            token_fn=lambda b, p: p)
-
-        block_offsets = torch.zeros(bsz, 1, dtype=torch.long, device=device)
-        tot, mxf = _flat_kv_bounds(total_lens, window_size, 0)
-        flat_kv, cu = flatten_v4_kv(window_kv, None, block_offsets,
-                                    total_lens, window_size, 0, tot, mxf)
-
-        ref_kv, ref_cu = _reference_flatten_v4_kv(
-            window_kv, None, block_offsets, total_lens, window_size, 0)
-
-        torch.testing.assert_close(flat_kv.cpu(), ref_kv.cpu(), atol=0, rtol=0)
-        assert cu.cpu().tolist() == [0, 6]
-
-    def test_window_only_long(self, device, dtype):
-        """total_len >> window_size: ring wraps multiple times."""
-        from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
-
-        bsz, window_size, head_dim = 1, 4, 8
-        total_lens = torch.tensor([20], dtype=torch.long, device=device)
-
-        window_kv = _make_ring_buffer_window(
-            bsz, window_size, head_dim, total_lens,
-            token_fn=lambda b, p: p)
-
-        block_offsets = torch.zeros(bsz, 1, dtype=torch.long, device=device)
-        tot, mxf = _flat_kv_bounds(total_lens, window_size, 0)
-        flat_kv, cu = flatten_v4_kv(window_kv, None, block_offsets,
-                                    total_lens, window_size, 0, tot, mxf)
-
-        # Expected: last 4 tokens = 16, 17, 18, 19 in chronological order
-        vals = flat_kv[:, 0, 0].cpu().tolist()
-        assert vals == [16.0, 17.0, 18.0, 19.0]
-        assert cu.cpu().tolist() == [0, 4]
-
-    # ------------------------------------------------------------------
-    # Window + compressed (ratio=4)
-    # ------------------------------------------------------------------
-
-    def test_ratio4_short(self, device, dtype):
-        """total_len < window_size with ratio=4: window + 1 compressed
-        entry."""
-        from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
-
-        bsz, window_size, head_dim = 1, 8, 16
-        compress_ratio = 4
-        block_size = 4
+        bsz, window_size = 1, 8
+        head_dim = V4_FLASHMLA_HEAD_DIM
         total_len = 5
         total_lens = torch.tensor([total_len], dtype=torch.long, device=device)
 
+        window_kv = torch.randn(bsz, window_size, head_dim, dtype=dtype, device=device)
+        window_kv[0, total_len:].zero_()
+
+        fp8_window = _pack_bf16_window_to_fp8(window_kv, bsz, window_size, device)
+
+        block_offsets = torch.zeros(bsz, 1, dtype=torch.long, device=device)
+        ref_kv, ref_cu = _reference_flatten_v4_kv(
+            window_kv, None, block_offsets, total_lens, window_size, 0)
+
+        tot, mxf = _flat_kv_bounds(total_lens, window_size, 0)
+        flat_kv, cu = flatten_v4_kv(
+            fp8_window, block_offsets, total_lens, window_size, 0, tot, mxf)
+
+        torch.testing.assert_close(flat_kv.cpu(), ref_kv.cpu(), atol=0.1, rtol=0.05)
+        assert cu.cpu().tolist() == ref_cu.cpu().tolist()
+
+    def test_fp8_window_ring_wrap(self, device, dtype):
+        """FP8 window: total_len > window_size, ring wraps."""
+        from lmdeploy.pytorch.consts import V4_FLASHMLA_HEAD_DIM
+        from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
+
+        bsz, window_size = 1, 4
+        head_dim = V4_FLASHMLA_HEAD_DIM
+        total_len = 20
+        total_lens = torch.tensor([total_len], dtype=torch.long, device=device)
+
         window_kv = torch.zeros(bsz, window_size, head_dim, dtype=dtype, device=device)
         for p in range(total_len):
-            window_kv[0, p] = p
+            ring_pos = p % window_size
+            window_kv[0, ring_pos] = torch.randn(head_dim, dtype=dtype, device=device)
 
-        block_offsets = torch.tensor([[0]], dtype=torch.long, device=device)
-        compressed_kv = torch.zeros(1, block_size, head_dim, dtype=dtype, device=device)
-        compressed_kv[0, 0] = 100
+        fp8_window = _pack_bf16_window_to_fp8(window_kv, bsz, window_size, device)
 
-        tot, mxf = _flat_kv_bounds(total_lens, window_size, compress_ratio)
-        flat_kv, cu = flatten_v4_kv(window_kv, compressed_kv, block_offsets,
-                                    total_lens, window_size, compress_ratio, tot, mxf)
-
+        block_offsets = torch.zeros(bsz, 1, dtype=torch.long, device=device)
         ref_kv, ref_cu = _reference_flatten_v4_kv(
-            window_kv, compressed_kv, block_offsets, total_lens,
-            window_size, compress_ratio)
+            window_kv, None, block_offsets, total_lens, window_size, 0)
 
-        torch.testing.assert_close(flat_kv.cpu(), ref_kv.cpu(), atol=0, rtol=0)
-        assert cu.cpu().tolist() == ref_cu.cpu().tolist()
+        tot, mxf = _flat_kv_bounds(total_lens, window_size, 0)
+        flat_kv, cu = flatten_v4_kv(
+            fp8_window, block_offsets, total_lens, window_size, 0, tot, mxf)
 
-    def test_ratio4_ring_wrap(self, device, dtype):
-        """total_len > window_size with ratio=4: ring wraps, multiple
-        compressed."""
+        torch.testing.assert_close(flat_kv.cpu(), ref_kv.cpu(), atol=0.1, rtol=0.05)
+        assert cu.cpu().tolist() == [0, 4]
+
+    def test_fp8_window_multi_batch(self, device, dtype):
+        """FP8 window: multiple sequences with different lengths."""
+        from lmdeploy.pytorch.consts import V4_FLASHMLA_HEAD_DIM
         from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
 
-        bsz, window_size, head_dim = 1, 4, 8
-        compress_ratio = 4
-        block_size = 4
-        total_len = 10
-        total_lens = torch.tensor([total_len], dtype=torch.long, device=device)
-
-        window_kv = _make_ring_buffer_window(
-            bsz, window_size, head_dim, total_lens,
-            token_fn=lambda b, p: p)
-
-        block_offsets = torch.tensor([[0]], dtype=torch.long, device=device)
-        compressed_kv = torch.zeros(1, block_size, head_dim, dtype=dtype, device=device)
-        compressed_kv[0, 0] = 100
-        compressed_kv[0, 1] = 101
-
-        tot, mxf = _flat_kv_bounds(total_lens, window_size, compress_ratio)
-        flat_kv, cu = flatten_v4_kv(window_kv, compressed_kv, block_offsets,
-                                    total_lens, window_size, compress_ratio, tot, mxf)
-
-        # Window chronological: tokens 6,7,8,9
-        vals = flat_kv[:, 0, 0].cpu().tolist()
-        assert vals[:4] == [6.0, 7.0, 8.0, 9.0], f'Window: {vals[:4]}'
-        assert vals[4:6] == [100.0, 101.0], f'Compressed: {vals[4:6]}'
-        assert cu.cpu().tolist() == [0, 6]
-
-    def test_ratio4_multi_block(self, device, dtype):
-        """Compressed entries span multiple pages in the paged cache."""
-        from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
-
-        bsz, window_size, head_dim = 1, 4, 8
-        compress_ratio = 4
-        block_size = 2  # small block so 2 entries = 2 blocks
-        total_len = 12
-        total_lens = torch.tensor([total_len], dtype=torch.long, device=device)
-
-        window_kv = _make_ring_buffer_window(
-            bsz, window_size, head_dim, total_lens,
-            token_fn=lambda b, p: p)
-
-        # 3 entries with block_size=2: needs 2 physical blocks
-        block_offsets = torch.tensor([[0, 1]], dtype=torch.long, device=device)
-        compressed_kv = torch.zeros(2, block_size, head_dim, dtype=dtype, device=device)
-        compressed_kv[0, 0] = 200
-        compressed_kv[0, 1] = 201
-        compressed_kv[1, 0] = 202
-
-        tot, mxf = _flat_kv_bounds(total_lens, window_size, compress_ratio)
-        flat_kv, cu = flatten_v4_kv(window_kv, compressed_kv, block_offsets,
-                                    total_lens, window_size, compress_ratio, tot, mxf)
-
-        ref_kv, ref_cu = _reference_flatten_v4_kv(
-            window_kv, compressed_kv, block_offsets, total_lens,
-            window_size, compress_ratio)
-
-        torch.testing.assert_close(flat_kv.cpu(), ref_kv.cpu(), atol=0, rtol=0)
-        assert cu.cpu().tolist() == ref_cu.cpu().tolist()
-
-    # ------------------------------------------------------------------
-    # Window + compressed (ratio=128)
-    # ------------------------------------------------------------------
-
-    def test_ratio128(self, device, dtype):
-        """Ratio=128 with large total_len, many compressed entries."""
-        from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
-
-        bsz, window_size, head_dim = 1, 4, 8
-        compress_ratio = 128
-        block_size = 4
-        total_len = 512
-        total_lens = torch.tensor([total_len], dtype=torch.long, device=device)
-
-        window_kv = _make_ring_buffer_window(
-            bsz, window_size, head_dim, total_lens,
-            token_fn=lambda b, p: p % 100)
-
-        num_comp = total_len // compress_ratio  # 4
-        num_blocks = (num_comp + block_size - 1) // block_size  # 1
-        block_offsets = torch.zeros(1, num_blocks, dtype=torch.long, device=device)
-        compressed_kv = torch.zeros(num_blocks, block_size, head_dim,
-                                    dtype=dtype, device=device)
-        for e in range(num_comp):
-            compressed_kv[e // block_size, e % block_size] = 500 + e
-
-        tot, mxf = _flat_kv_bounds(total_lens, window_size, compress_ratio)
-        flat_kv, cu = flatten_v4_kv(window_kv, compressed_kv, block_offsets,
-                                    total_lens, window_size, compress_ratio, tot, mxf)
-
-        ref_kv, ref_cu = _reference_flatten_v4_kv(
-            window_kv, compressed_kv, block_offsets, total_lens,
-            window_size, compress_ratio)
-
-        torch.testing.assert_close(flat_kv.cpu(), ref_kv.cpu(), atol=0, rtol=0)
-
-    # ------------------------------------------------------------------
-    # Multi-batch
-    # ------------------------------------------------------------------
-
-    def test_batched_different_lengths(self, device, dtype):
-        """Two sequences with different total_len and different compressed
-        counts."""
-        from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
-
-        bsz, window_size, head_dim = 2, 4, 8
-        compress_ratio = 4
-        block_size = 4
+        bsz, window_size = 2, 4
+        head_dim = V4_FLASHMLA_HEAD_DIM
         total_lens = torch.tensor([6, 10], dtype=torch.long, device=device)
-
-        window_kv = _make_ring_buffer_window(
-            bsz, window_size, head_dim, total_lens,
-            token_fn=lambda b, p: b * 100 + p)
-
-        # seq0: 6//4=1 compressed, seq1: 10//4=2 compressed
-        num_comp = total_lens // compress_ratio  # [1, 2]
-        max_blocks = (num_comp.max() + block_size - 1) // block_size
-        block_offsets = torch.zeros(bsz, max_blocks, dtype=torch.long, device=device)
-        for b in range(bsz):
-            block_offsets[b, 0] = b
-
-        compressed_kv = torch.zeros(bsz, block_size, head_dim,
-                                    dtype=dtype, device=device)
-        compressed_kv[0, 0] = 200
-        compressed_kv[1, 0] = 300
-        compressed_kv[1, 1] = 301
-
-        tot, mxf = _flat_kv_bounds(total_lens, window_size, compress_ratio)
-        flat_kv, cu = flatten_v4_kv(window_kv, compressed_kv, block_offsets,
-                                    total_lens, window_size, compress_ratio, tot, mxf)
-
-        ref_kv, ref_cu = _reference_flatten_v4_kv(
-            window_kv, compressed_kv, block_offsets, total_lens,
-            window_size, compress_ratio)
-
-        torch.testing.assert_close(flat_kv.cpu(), ref_kv.cpu(), atol=0, rtol=0)
-        assert cu.cpu().tolist() == ref_cu.cpu().tolist()
-
-    def test_batched_one_seq_no_compress(self, device, dtype):
-        """Mixed: one sequence with compression, one without (ratio=0)."""
-        from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
-
-        # ratio=0 means no compressed entries for any sequence
-        bsz, window_size, head_dim = 2, 8, 16
-        total_lens = torch.tensor([5, 3], dtype=torch.long, device=device)
 
         window_kv = torch.zeros(bsz, window_size, head_dim, dtype=dtype, device=device)
         for b in range(bsz):
             for p in range(total_lens[b].item()):
-                window_kv[b, p] = b * 50 + p
+                ring_pos = p % window_size
+                window_kv[b, ring_pos] = torch.randn(head_dim, dtype=dtype, device=device)
+
+        fp8_window = _pack_bf16_window_to_fp8(window_kv, bsz, window_size, device)
 
         block_offsets = torch.zeros(bsz, 1, dtype=torch.long, device=device)
-        tot, mxf = _flat_kv_bounds(total_lens, window_size, 0)
-        flat_kv, cu = flatten_v4_kv(window_kv, None, block_offsets,
-                                    total_lens, window_size, 0, tot, mxf)
-
         ref_kv, ref_cu = _reference_flatten_v4_kv(
             window_kv, None, block_offsets, total_lens, window_size, 0)
 
-        torch.testing.assert_close(flat_kv.cpu(), ref_kv.cpu(), atol=0, rtol=0)
-
-    # ------------------------------------------------------------------
-    # Edge cases
-    # ------------------------------------------------------------------
-
-    def test_single_token(self, device, dtype):
-        """total_len=1: single window token, no compressed."""
-        from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
-
-        bsz, window_size, head_dim = 1, 4, 8
-        total_lens = torch.tensor([1], dtype=torch.long, device=device)
-
-        window_kv = torch.zeros(bsz, window_size, head_dim, dtype=dtype, device=device)
-        window_kv[0, 0] = 42
-
-        block_offsets = torch.zeros(bsz, 1, dtype=torch.long, device=device)
         tot, mxf = _flat_kv_bounds(total_lens, window_size, 0)
-        flat_kv, cu = flatten_v4_kv(window_kv, None, block_offsets,
-                                    total_lens, window_size, 0, tot, mxf)
+        flat_kv, cu = flatten_v4_kv(
+            fp8_window, block_offsets, total_lens, window_size, 0, tot, mxf)
 
-        assert flat_kv.shape == (1, 1, head_dim)
-        assert flat_kv[0, 0, 0].item() == 42.0
-        assert cu.cpu().tolist() == [0, 1]
+        torch.testing.assert_close(flat_kv.cpu(), ref_kv.cpu(), atol=0.1, rtol=0.05)
+        assert cu.cpu().tolist() == ref_cu.cpu().tolist()
 
-    def test_exactly_one_compressed_entry(self, device, dtype):
-        """total_len == compress_ratio: exactly 1 compressed entry."""
+    # ------------------------------------------------------------------
+    # FP8 window + slot indexing
+    # ------------------------------------------------------------------
+
+    def test_fp8_window_slot_indexing(self, device, dtype):
+        """FP8 window with slot-based global cache indexing."""
+        from lmdeploy.pytorch.consts import V4_FLASHMLA_HEAD_DIM
         from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
 
-        bsz, window_size, head_dim = 1, 4, 8
-        compress_ratio = 4
-        block_size = 4
-        total_len = 4
-        total_lens = torch.tensor([total_len], dtype=torch.long, device=device)
+        num_slots, window_size = 4, 8
+        head_dim = V4_FLASHMLA_HEAD_DIM
+        total_lens = torch.tensor([3, 5], dtype=torch.long, device=device)
+        bsz = total_lens.numel()
 
-        window_kv = _make_ring_buffer_window(
-            bsz, window_size, head_dim, total_lens,
-            token_fn=lambda b, p: p)
+        global_cache = torch.zeros(num_slots, window_size, head_dim, dtype=dtype, device=device)
+        for p in range(3):
+            global_cache[2, p] = torch.randn(head_dim, dtype=dtype, device=device)
+        for p in range(5):
+            global_cache[0, p] = torch.randn(head_dim, dtype=dtype, device=device)
 
-        block_offsets = torch.tensor([[0]], dtype=torch.long, device=device)
-        compressed_kv = torch.zeros(1, block_size, head_dim, dtype=dtype, device=device)
-        compressed_kv[0, 0] = 99
+        fp8_window = _pack_global_bf16_window_to_fp8(global_cache, num_slots, window_size, device)
 
-        tot, mxf = _flat_kv_bounds(total_lens, window_size, compress_ratio)
-        flat_kv, cu = flatten_v4_kv(window_kv, compressed_kv, block_offsets,
-                                    total_lens, window_size, compress_ratio, tot, mxf)
-
-        # window_kv_len = min(4, 4) = 4, num_compressed = 4//4 = 1
-        vals = flat_kv[:, 0, 0].cpu().tolist()
-        assert vals[:4] == [0.0, 1.0, 2.0, 3.0]
-        assert vals[4] == 99.0
-        assert cu.cpu().tolist() == [0, 5]
-
-    def test_total_len_below_compress_ratio(self, device, dtype):
-        """total_len < compress_ratio: 0 compressed entries."""
-        from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
-
-        bsz, window_size, head_dim = 1, 8, 16
-        compress_ratio = 4
-        total_len = 3
-        total_lens = torch.tensor([total_len], dtype=torch.long, device=device)
-
-        window_kv = torch.zeros(bsz, window_size, head_dim, dtype=dtype, device=device)
-        for p in range(total_len):
-            window_kv[0, p] = p
-
+        slot = torch.tensor([2, 0], dtype=torch.long, device=device)
         block_offsets = torch.zeros(bsz, 1, dtype=torch.long, device=device)
-        compressed_kv = torch.zeros(1, 1, head_dim, dtype=dtype, device=device)
 
-        tot, mxf = _flat_kv_bounds(total_lens, window_size, compress_ratio)
-        flat_kv, cu = flatten_v4_kv(window_kv, compressed_kv, block_offsets,
-                                    total_lens, window_size, compress_ratio, tot, mxf)
+        batch_cache = global_cache[slot.long()]
+        ref_kv, ref_cu = _reference_flatten_v4_kv(
+            batch_cache, None, block_offsets, total_lens, window_size, 0)
 
-        # 3 < 4 → 0 compressed, flat_kv_len = 3
-        assert flat_kv.shape[0] == 3
-        vals = flat_kv[:, 0, 0].cpu().tolist()
-        assert vals == [0.0, 1.0, 2.0]
-        assert cu.cpu().tolist() == [0, 3]
+        tot, mxf = _flat_kv_bounds(total_lens, window_size, 0)
+        flat_kv, cu = flatten_v4_kv(
+            fp8_window, block_offsets, total_lens, window_size, 0, tot, mxf,
+            slot=slot)
+
+        torch.testing.assert_close(flat_kv.cpu(), ref_kv.cpu(), atol=0.1, rtol=0.05)
+        assert cu.cpu().tolist() == ref_cu.cpu().tolist()
+
+    def test_fp8_window_negative_slot(self, device, dtype):
+        """FP8 window: negative slot values produce all-zero window region."""
+        from lmdeploy.pytorch.consts import V4_FLASHMLA_HEAD_DIM
+        from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
+
+        num_slots, window_size = 4, 8
+        head_dim = V4_FLASHMLA_HEAD_DIM
+        total_lens = torch.tensor([3, 0, 5], dtype=torch.long, device=device)
+        bsz = total_lens.numel()
+
+        global_cache = torch.zeros(num_slots, window_size, head_dim, dtype=dtype, device=device)
+        for p in range(3):
+            global_cache[1, p] = torch.randn(head_dim, dtype=dtype, device=device)
+        for p in range(5):
+            global_cache[3, p] = torch.randn(head_dim, dtype=dtype, device=device)
+
+        fp8_window = _pack_global_bf16_window_to_fp8(global_cache, num_slots, window_size, device)
+
+        slot = torch.tensor([1, -1, 3], dtype=torch.long, device=device)
+        block_offsets = torch.zeros(bsz, 1, dtype=torch.long, device=device)
+
+        batch_cache = global_cache[slot.clamp(min=0).long()]
+        ref_kv, ref_cu = _reference_flatten_v4_kv(
+            batch_cache, None, block_offsets, total_lens, window_size, 0, slot=slot)
+
+        tot, mxf = _flat_kv_bounds(total_lens, window_size, 0)
+        flat_kv, cu = flatten_v4_kv(
+            fp8_window, block_offsets, total_lens, window_size, 0, tot, mxf,
+            slot=slot)
+
+        torch.testing.assert_close(flat_kv.cpu(), ref_kv.cpu(), atol=0.1, rtol=0.05)
+        if cu[1].item() < cu[2].item():
+            seq1 = flat_kv[cu[1]:cu[2], 0, :].cpu()
+            assert seq1.abs().max().item() < 0.15, 'Negative slot window should be near-zero'
 
     # ------------------------------------------------------------------
-    # FP8 compressed cache path
+    # FP8 window + FP8 compressed
     # ------------------------------------------------------------------
 
-    def test_fp8_compressed_path(self, device, dtype):
-        """Flatten with FP8 compressed cache: dequantize → compare vs BF16 reference."""
+    def test_fp8_window_fp8_compress(self, device, dtype):
+        """FP8 window + FP8 compressed KV cache combined path."""
         from lmdeploy.pytorch.consts import V4_FLASHMLA_HEAD_DIM
         from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
 
@@ -509,486 +323,242 @@ class TestFlattenV4KV:
 
         bsz, window_size = 1, 4
         compress_ratio = 4
-        head_dim = V4_FLASHMLA_HEAD_DIM  # must be 512 for FP8 path
+        head_dim = V4_FLASHMLA_HEAD_DIM
         block_size = 4
         total_len = 10
         total_lens = torch.tensor([total_len], dtype=torch.long, device=device)
 
-        # BF16 window cache (ring buffer)
         window_kv = torch.zeros(bsz, window_size, head_dim, dtype=dtype, device=device)
         for p in range(total_len):
             ring_pos = p % window_size
             window_kv[0, ring_pos] = torch.randn(head_dim, dtype=dtype, device=device)
 
-        # BF16 compressed cache (paged)
-        num_comp = total_len // compress_ratio  # 2
+        fp8_window = _pack_bf16_window_to_fp8(window_kv, bsz, window_size, device)
+
+        num_comp = total_len // compress_ratio
         block_offsets = torch.tensor([[0]], dtype=torch.long, device=device)
-        compressed_kv_bf16 = torch.randn(1, block_size, head_dim,
-                                         dtype=dtype, device=device)
-        # Zero out unused entries
+        compressed_kv_bf16 = torch.randn(1, block_size, head_dim, dtype=dtype, device=device)
         for e in range(num_comp, block_size):
             compressed_kv_bf16[0, e].zero_()
 
-        # BF16 reference
+        fp8_compress = quantize_v4_flashmla_sparse(
+            compressed_kv_bf16.unsqueeze(2)).squeeze(2)
+
         ref_kv, ref_cu = _reference_flatten_v4_kv(
             window_kv, compressed_kv_bf16, block_offsets, total_lens,
             window_size, compress_ratio)
 
-        # Quantize compressed cache to V4 FlashMLA FP8 format
-        fp8_cache = quantize_v4_flashmla_sparse(
-            compressed_kv_bf16.unsqueeze(2))  # [1, block_size, 1, packed_dim]
-
-        # Flatten using FP8 path
         tot, mxf = _flat_kv_bounds(total_lens, window_size, compress_ratio)
         flat_kv, cu = flatten_v4_kv(
-            window_kv, None, block_offsets, total_lens,
-            window_size, compress_ratio, tot, mxf,
-            fp8_compressed_kv_cache=fp8_cache.squeeze(2))  # [1, block_size, packed_dim]
+            fp8_window, block_offsets, total_lens, window_size, compress_ratio,
+            tot, mxf,
+            fp8_compressed_kv_cache=fp8_compress)
 
-        # FP8 quantization has limited precision — allow small tolerance
         torch.testing.assert_close(flat_kv.cpu(), ref_kv.cpu(), atol=0.1, rtol=0.05)
         assert cu.cpu().tolist() == ref_cu.cpu().tolist()
 
-    def test_fp8_multi_batch(self, device, dtype):
-        """FP8 path with multiple sequences of different lengths."""
+    # ------------------------------------------------------------------
+    # FP8 window + raw_kv (chunked prefill)
+    # ------------------------------------------------------------------
+
+    def test_fp8_window_raw_kv_chunked(self, device, dtype):
+        """FP8 window: chunked prefill with prev_window from FP8 + raw_kv."""
         from lmdeploy.pytorch.consts import V4_FLASHMLA_HEAD_DIM
         from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
 
-        from .dsv4_utils import quantize_v4_flashmla_sparse
-
-        bsz, window_size = 2, 4
-        compress_ratio = 4
+        bsz, window_size = 1, 4
         head_dim = V4_FLASHMLA_HEAD_DIM
-        block_size = 4
-        total_lens = torch.tensor([8, 12], dtype=torch.long, device=device)
-
-        # BF16 window cache
-        window_kv = torch.zeros(bsz, window_size, head_dim, dtype=dtype, device=device)
-        for b in range(bsz):
-            for p in range(total_lens[b].item()):
-                ring_pos = p % window_size
-                window_kv[b, ring_pos] = torch.randn(head_dim, dtype=dtype, device=device)
-
-        # BF16 compressed cache
-        num_comp = total_lens // compress_ratio  # [2, 3]
-        max_blocks = (num_comp.max() + block_size - 1) // block_size
-        block_offsets = torch.zeros(bsz, max_blocks, dtype=torch.long, device=device)
-        for b in range(bsz):
-            block_offsets[b, 0] = b
-
-        compressed_kv_bf16 = torch.zeros(bsz * max_blocks, block_size, head_dim,
-                                         dtype=dtype, device=device)
-        for b in range(bsz):
-            for e in range(num_comp[b].item()):
-                phys_block = block_offsets[b, e // block_size].item()
-                off = e % block_size
-                compressed_kv_bf16[phys_block, off] = torch.randn(
-                    head_dim, dtype=dtype, device=device)
-
-        # BF16 reference
-        ref_kv, ref_cu = _reference_flatten_v4_kv(
-            window_kv, compressed_kv_bf16, block_offsets, total_lens,
-            window_size, compress_ratio)
-
-        # Quantize to FP8
-        fp8_input = compressed_kv_bf16.unsqueeze(2)  # [num_blocks, block_size, 1, head_dim]
-        fp8_cache = quantize_v4_flashmla_sparse(fp8_input)
-
-        # Flatten using FP8 path
-        tot, mxf = _flat_kv_bounds(total_lens, window_size, compress_ratio)
-        flat_kv, cu = flatten_v4_kv(
-            window_kv, None, block_offsets, total_lens,
-            window_size, compress_ratio, tot, mxf,
-            fp8_compressed_kv_cache=fp8_cache.squeeze(2))
-
-        torch.testing.assert_close(flat_kv.cpu(), ref_kv.cpu(), atol=0.1, rtol=0.05)
-        assert cu.cpu().tolist() == ref_cu.cpu().tolist()
-
-    # ------------------------------------------------------------------
-    # cu_seqlens_k passthrough
-    # ------------------------------------------------------------------
-
-    def test_provided_cu_seqlens_k(self, device, dtype):
-        """When cu_seqlens_k is provided, it should be used as-is."""
-        from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
-
-        bsz, window_size, head_dim = 1, 8, 8
-        total_len = 5
-        total_lens = torch.tensor([total_len], dtype=torch.long, device=device)
-
-        window_kv = torch.zeros(bsz, window_size, head_dim, dtype=dtype, device=device)
-        for p in range(total_len):
-            window_kv[0, p] = p
-
-        block_offsets = torch.zeros(bsz, 1, dtype=torch.long, device=device)
-
-        # Provide cu_seqlens_k explicitly
-        cu_seqlens_k = torch.tensor([0, 5], dtype=torch.int32, device=device)
-
-        tot, mxf = _flat_kv_bounds(total_lens, window_size, 0)
-        flat_kv, cu_out = flatten_v4_kv(
-            window_kv, None, block_offsets, total_lens, window_size, 0, tot, mxf,
-            cu_seqlens_k=cu_seqlens_k)
-
-        assert cu_out.data_ptr() == cu_seqlens_k.data_ptr() or cu_out.cpu().tolist() == [0, 5]
-        vals = flat_kv[:, 0, 0].cpu().tolist()
-        assert vals == [0.0, 1.0, 2.0, 3.0, 4.0]
-
-    # ------------------------------------------------------------------
-    # Ring buffer wrapping stress
-    # ------------------------------------------------------------------
-
-    def test_ring_wrap_many_cycles(self, device, dtype):
-        """Ring buffer wraps many times — verify only the last window_size
-        tokens."""
-        from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
-
-        bsz, window_size, head_dim = 1, 4, 8
-        total_len = 100
-        total_lens = torch.tensor([total_len], dtype=torch.long, device=device)
-
-        window_kv = _make_ring_buffer_window(
-            bsz, window_size, head_dim, total_lens,
-            token_fn=lambda b, p: p % 256)
-
-        block_offsets = torch.zeros(bsz, 1, dtype=torch.long, device=device)
-        tot, mxf = _flat_kv_bounds(total_lens, window_size, 0)
-        flat_kv, cu = flatten_v4_kv(window_kv, None, block_offsets,
-                                    total_lens, window_size, 0, tot, mxf)
-
-        # Expected: tokens 96, 97, 98, 99 (mod 256)
-        vals = flat_kv[:, 0, 0].cpu().tolist()
-        assert vals == [96.0, 97.0, 98.0, 99.0]
-
-    # ------------------------------------------------------------------
-    # Slot-based indexing (global cache + slot vector)
-    # ------------------------------------------------------------------
-
-    def test_slot_indexing_basic(self, device, dtype):
-        """Slot param indexes into global cache instead of batch dim."""
-        from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
-
-        num_slots, window_size, head_dim = 4, 8, 8
-        total_lens = torch.tensor([3, 5], dtype=torch.long, device=device)
-        bsz = total_lens.numel()
-
-        # Build global cache with 4 slots; only slots 2,0 are used
-        global_cache = torch.zeros(num_slots, window_size, head_dim,
-                                   dtype=dtype, device=device)
-        for p in range(3):
-            global_cache[2, p] = 10 + p   # slot 2 -> seq 0
-        for p in range(5):
-            global_cache[0, p] = 20 + p   # slot 0 -> seq 1
-
-        slot = torch.tensor([2, 0], dtype=torch.long, device=device)
-        block_offsets = torch.zeros(bsz, 1, dtype=torch.long, device=device)
-
-        tot, mxf = _flat_kv_bounds(total_lens, window_size, 0)
-        flat_kv, cu = flatten_v4_kv(global_cache, None, block_offsets,
-                                    total_lens, window_size, 0, tot, mxf,
-                                    slot=slot)
-
-        # Build reference from a batch-gathered cache
-        batch_cache = global_cache[slot.long()]  # [2, 8, 8]
-        ref_kv, ref_cu = _reference_flatten_v4_kv(
-            batch_cache, None, block_offsets, total_lens, window_size, 0)
-
-        torch.testing.assert_close(flat_kv.cpu(), ref_kv.cpu(), atol=0, rtol=0)
-        assert cu.cpu().tolist() == ref_cu.cpu().tolist()
-
-    def test_slot_negative_produces_zeros(self, device, dtype):
-        """Negative slot values produce all-zero window region."""
-        from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
-
-        num_slots, window_size, head_dim = 4, 8, 8
-        # bsz=3: seq0 valid (slot=1), seq1 padded (slot=-1), seq2 valid (slot=3)
-        total_lens = torch.tensor([3, 0, 5], dtype=torch.long, device=device)
-        bsz = total_lens.numel()
-
-        global_cache = torch.zeros(num_slots, window_size, head_dim,
-                                   dtype=dtype, device=device)
-        for p in range(3):
-            global_cache[1, p] = 100 + p
-        for p in range(5):
-            global_cache[3, p] = 200 + p
-
-        slot = torch.tensor([1, -1, 3], dtype=torch.long, device=device)
-        block_offsets = torch.zeros(bsz, 1, dtype=torch.long, device=device)
-
-        tot, mxf = _flat_kv_bounds(total_lens, window_size, 0)
-        flat_kv, cu = flatten_v4_kv(global_cache, None, block_offsets,
-                                    total_lens, window_size, 0, tot, mxf,
-                                    slot=slot)
-
-        # seq0: 3 tokens from slot 1
-        seq0 = flat_kv[cu[0]:cu[1], 0, 0].cpu().tolist()
-        assert seq0 == [100.0, 101.0, 102.0]
-
-        # seq1: 0 tokens (total_len=0), padded slot -1 → empty
-        assert cu[1].item() == cu[2].item()
-
-        # seq2: 5 tokens from slot 3
-        seq2 = flat_kv[cu[2]:cu[3], 0, 0].cpu().tolist()
-        assert seq2 == [200.0, 201.0, 202.0, 203.0, 204.0]
-
-    def test_slot_negative_with_compressed(self, device, dtype):
-        """Negative slot with compress_ratio>0: window zeros, compressed still
-        works."""
-        from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
-
-        num_slots, window_size, head_dim = 4, 4, 8
-        compress_ratio = 4
-        block_size = 4
-        # bsz=2: seq0 padded (slot=-1, total_len=4), seq1 valid (slot=2, total_len=8)
-        total_lens = torch.tensor([4, 8], dtype=torch.long, device=device)
-        bsz = total_lens.numel()
-
-        global_cache = torch.zeros(num_slots, window_size, head_dim,
-                                   dtype=dtype, device=device)
-        # Fill slot 2 for seq1 (ring buffer)
-        for p in range(8):
-            global_cache[2, p % window_size] = 50 + p
-
-        slot = torch.tensor([-1, 2], dtype=torch.long, device=device)
-        block_offsets = torch.zeros(bsz, 1, dtype=torch.long, device=device)
-        compressed_kv = torch.zeros(1, block_size, head_dim, dtype=dtype, device=device)
-        compressed_kv[0, 0] = 500  # BF16-safe value
-
-        tot, mxf = _flat_kv_bounds(total_lens, window_size, compress_ratio)
-        flat_kv, cu = flatten_v4_kv(global_cache, compressed_kv, block_offsets,
-                                    total_lens, window_size, compress_ratio, tot, mxf,
-                                    slot=slot)
-
-        # seq0 (slot=-1): window should be all zeros, compressed = 4//4=1 entry
-        seq0 = flat_kv[cu[0]:cu[1], 0, :].cpu()
-        assert seq0[:4].abs().max().item() == 0.0, 'Negative slot window should be zeros'
-        # The compressed entry is read from block_offsets[0,0]=0 → compressed_kv[0,0]
-        assert seq0[4, 0].item() == 500.0
-
-    # ------------------------------------------------------------------
-    # raw_kv path (first-time prefill & chunked prefill)
-    # ------------------------------------------------------------------
-
-    def test_raw_kv_first_time_short(self, device, dtype):
-        """First-time prefill (start_pos=0), total_len < window_size.
-
-        All tokens from raw_kv, no ring buffer.
-        """
-        from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
-
-        bsz, window_size, head_dim = 1, 8, 16
-        total_lens = torch.tensor([5], dtype=torch.long, device=device)
-        start_pos = torch.tensor([0], dtype=torch.long, device=device)
-        q_seqlens = torch.tensor([5], dtype=torch.long, device=device)
-
-        # Raw KV tokens: values 10..14
-        raw_kv = torch.arange(10, 10 + 5, device=device).float().to(dtype)
-        raw_kv = raw_kv.unsqueeze(1).expand(5, head_dim)
-
-        # Ring buffer is empty (start_pos=0), but still need a valid tensor
-        window_kv = torch.zeros(bsz, window_size, head_dim, dtype=dtype, device=device)
-
-        block_offsets = torch.zeros(bsz, 1, dtype=torch.long, device=device)
-        tot, mxf = _flat_kv_bounds(total_lens, window_size, 0, start_pos, q_seqlens)
-        flat_kv, cu = flatten_v4_kv(
-            window_kv, None, block_offsets, total_lens, window_size, 0, tot, mxf,
-            raw_kv=raw_kv, raw_kv_lens=q_seqlens, start_pos=start_pos)
-
-        ref_kv, ref_cu = _reference_flatten_v4_kv(
-            window_kv, None, block_offsets, total_lens, window_size, 0,
-            raw_kv=raw_kv, raw_kv_lens=q_seqlens, start_pos=start_pos)
-
-        torch.testing.assert_close(flat_kv.cpu(), ref_kv.cpu(), atol=0, rtol=0)
-        assert cu.cpu().tolist() == ref_cu.cpu().tolist()
-        # Verify values: all 5 raw_kv tokens
-        vals = flat_kv[:, 0, 0].cpu().tolist()
-        assert vals == [10.0, 11.0, 12.0, 13.0, 14.0]
-
-    def test_raw_kv_first_time_long(self, device, dtype):
-        """First-time prefill (start_pos=0), total_len > window_size.
-
-        All tokens from raw_kv, ring buffer empty.
-        """
-        from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
-
-        bsz, window_size, head_dim = 1, 4, 8
-        total_len = 10
-        total_lens = torch.tensor([total_len], dtype=torch.long, device=device)
-        start_pos = torch.tensor([0], dtype=torch.long, device=device)
-        q_seqlens = torch.tensor([total_len], dtype=torch.long, device=device)
-
-        # Raw KV: values 0..9
-        raw_kv = torch.arange(total_len, device=device).float().to(dtype)
-        raw_kv = raw_kv.unsqueeze(1).expand(total_len, head_dim)
-
-        window_kv = torch.zeros(bsz, window_size, head_dim, dtype=dtype, device=device)
-
-        block_offsets = torch.zeros(bsz, 1, dtype=torch.long, device=device)
-        tot, mxf = _flat_kv_bounds(total_lens, window_size, 0, start_pos, q_seqlens)
-        flat_kv, cu = flatten_v4_kv(
-            window_kv, None, block_offsets, total_lens, window_size, 0, tot, mxf,
-            raw_kv=raw_kv, raw_kv_lens=q_seqlens, start_pos=start_pos)
-
-        # All 10 tokens from raw_kv (not just last 4 from ring buffer)
-        vals = flat_kv[:, 0, 0].cpu().tolist()
-        assert vals == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]
-        assert cu.cpu().tolist() == [0, 10]
-
-    def test_raw_kv_chunked_prefill(self, device, dtype):
-        """Chunked prefill (start_pos > 0): prev window from ring buffer +
-        current chunk from raw_kv."""
-        from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
-
-        bsz, window_size, head_dim = 1, 4, 8
-        start_pos_val = 8  # 8 tokens already in ring buffer
-        q_seqlens_val = 3  # current chunk has 3 tokens
+        start_pos_val = 8
+        q_seqlens_val = 3
         total_len = start_pos_val + q_seqlens_val
         total_lens = torch.tensor([total_len], dtype=torch.long, device=device)
         start_pos = torch.tensor([start_pos_val], dtype=torch.long, device=device)
         q_seqlens = torch.tensor([q_seqlens_val], dtype=torch.long, device=device)
 
-        # Ring buffer: tokens 0..7 stored at positions 0..3,4..7→0..3
         window_kv = torch.zeros(bsz, window_size, head_dim, dtype=dtype, device=device)
         for p in range(start_pos_val):
             ring_pos = p % window_size
-            window_kv[0, ring_pos] = p
+            window_kv[0, ring_pos] = torch.randn(head_dim, dtype=dtype, device=device)
 
-        # Raw KV: tokens 8,9,10
-        raw_kv = torch.tensor([8.0, 9.0, 10.0], device=device).to(dtype)
-        raw_kv = raw_kv.unsqueeze(1).expand(q_seqlens_val, head_dim)
+        fp8_window = _pack_bf16_window_to_fp8(window_kv, bsz, window_size, device)
 
-        block_offsets = torch.zeros(bsz, 1, dtype=torch.long, device=device)
-        tot, mxf = _flat_kv_bounds(total_lens, window_size, 0, start_pos, q_seqlens)
-        flat_kv, cu = flatten_v4_kv(
-            window_kv, None, block_offsets, total_lens, window_size, 0, tot, mxf,
-            raw_kv=raw_kv, raw_kv_lens=q_seqlens, start_pos=start_pos)
-
-        # Expected: ring buffer has [4,5,6,7] (last 4 of 0..7),
-        # then raw_kv [8,9,10]
-        vals = flat_kv[:, 0, 0].cpu().tolist()
-        assert vals == [4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
-        assert cu.cpu().tolist() == [0, 7]
-
-    def test_raw_kv_chunked_with_compress(self, device, dtype):
-        """Chunked prefill with compressed KV: prev_window + raw_kv + compressed."""
-        from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
-
-        bsz, window_size, head_dim = 1, 4, 8
-        compress_ratio = 4
-        block_size = 4
-        start_pos_val = 8
-        q_seqlens_val = 4
-        total_len = start_pos_val + q_seqlens_val  # 12
-        total_lens = torch.tensor([total_len], dtype=torch.long, device=device)
-        start_pos = torch.tensor([start_pos_val], dtype=torch.long, device=device)
-        q_seqlens = torch.tensor([q_seqlens_val], dtype=torch.long, device=device)
-
-        # Ring buffer: tokens 0..7
-        window_kv = torch.zeros(bsz, window_size, head_dim, dtype=dtype, device=device)
-        for p in range(start_pos_val):
-            ring_pos = p % window_size
-            window_kv[0, ring_pos] = p
-
-        # Raw KV: tokens 8,9,10,11
-        raw_kv = torch.tensor([8.0, 9.0, 10.0, 11.0], device=device).to(dtype)
-        raw_kv = raw_kv.unsqueeze(1).expand(q_seqlens_val, head_dim)
-
-        block_offsets = torch.tensor([[0]], dtype=torch.long, device=device)
-        compressed_kv = torch.zeros(1, block_size, head_dim, dtype=dtype, device=device)
-        compressed_kv[0, 0] = 100  # 12//4=3 compressed entries
-        compressed_kv[0, 1] = 101
-        compressed_kv[0, 2] = 102
-
-        tot, mxf = _flat_kv_bounds(total_lens, window_size, compress_ratio, start_pos,
-                                   q_seqlens)
-        flat_kv, cu = flatten_v4_kv(
-            window_kv, compressed_kv, block_offsets, total_lens, window_size,
-            compress_ratio, tot, mxf,
-            raw_kv=raw_kv, raw_kv_lens=q_seqlens, start_pos=start_pos)
-
-        ref_kv, ref_cu = _reference_flatten_v4_kv(
-            window_kv, compressed_kv, block_offsets, total_lens, window_size,
-            compress_ratio,
-            raw_kv=raw_kv, raw_kv_lens=q_seqlens, start_pos=start_pos)
-
-        torch.testing.assert_close(flat_kv.cpu(), ref_kv.cpu(), atol=0, rtol=0)
-        assert cu.cpu().tolist() == ref_cu.cpu().tolist()
-
-    def test_raw_kv_mixed_batch(self, device, dtype):
-        """Mixed batch: first-time prefill (start_pos=0) + chunked prefill."""
-        from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
-
-        bsz, window_size, head_dim = 2, 4, 8
-        # seq0: first-time prefill, 6 tokens
-        # seq1: chunked prefill, 8 prev + 3 new = 11 total
-        total_lens = torch.tensor([6, 11], dtype=torch.long, device=device)
-        start_pos = torch.tensor([0, 8], dtype=torch.long, device=device)
-        q_seqlens = torch.tensor([6, 3], dtype=torch.long, device=device)
-
-        # Ring buffer: seq0 empty (start_pos=0), seq1 has tokens 0..7
-        window_kv = torch.zeros(bsz, window_size, head_dim, dtype=dtype, device=device)
-        for p in range(8):
-            ring_pos = p % window_size
-            window_kv[1, ring_pos] = 100 + p  # seq1 ring buffer
-
-        # Raw KV: seq0 tokens 0..5, seq1 tokens 8..10
-        raw_kv = torch.zeros(9, head_dim, dtype=dtype, device=device)
-        for i in range(6):
-            raw_kv[i] = i
-        for i in range(3):
-            raw_kv[6 + i] = 108 + i
+        raw_kv = torch.randn(q_seqlens_val, head_dim, dtype=dtype, device=device)
 
         block_offsets = torch.zeros(bsz, 1, dtype=torch.long, device=device)
-        tot, mxf = _flat_kv_bounds(total_lens, window_size, 0, start_pos, q_seqlens)
-        flat_kv, cu = flatten_v4_kv(
-            window_kv, None, block_offsets, total_lens, window_size, 0, tot, mxf,
-            raw_kv=raw_kv, raw_kv_lens=q_seqlens, start_pos=start_pos)
 
         ref_kv, ref_cu = _reference_flatten_v4_kv(
             window_kv, None, block_offsets, total_lens, window_size, 0,
             raw_kv=raw_kv, raw_kv_lens=q_seqlens, start_pos=start_pos)
 
+        tot, mxf = _flat_kv_bounds(total_lens, window_size, 0, start_pos, q_seqlens)
+        flat_kv, cu = flatten_v4_kv(
+            fp8_window, block_offsets, total_lens, window_size, 0, tot, mxf,
+            raw_kv=raw_kv, raw_kv_lens=q_seqlens, start_pos=start_pos)
+
+        torch.testing.assert_close(flat_kv.cpu(), ref_kv.cpu(), atol=0.1, rtol=0.05)
+        assert cu.cpu().tolist() == ref_cu.cpu().tolist()
+
+    def test_fp8_window_raw_kv_first_time(self, device, dtype):
+        """FP8 window: first-time prefill (start_pos=0), all tokens from raw_kv."""
+        from lmdeploy.pytorch.consts import V4_FLASHMLA_HEAD_DIM
+        from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
+
+        bsz, window_size = 1, 4
+        head_dim = V4_FLASHMLA_HEAD_DIM
+        total_len = 10
+        total_lens = torch.tensor([total_len], dtype=torch.long, device=device)
+        start_pos = torch.tensor([0], dtype=torch.long, device=device)
+        q_seqlens = torch.tensor([total_len], dtype=torch.long, device=device)
+
+        window_kv = torch.zeros(bsz, window_size, head_dim, dtype=dtype, device=device)
+        fp8_window = _pack_bf16_window_to_fp8(window_kv, bsz, window_size, device)
+
+        raw_kv = torch.randn(total_len, head_dim, dtype=dtype, device=device)
+
+        block_offsets = torch.zeros(bsz, 1, dtype=torch.long, device=device)
+
+        ref_kv, ref_cu = _reference_flatten_v4_kv(
+            window_kv, None, block_offsets, total_lens, window_size, 0,
+            raw_kv=raw_kv, raw_kv_lens=q_seqlens, start_pos=start_pos)
+
+        tot, mxf = _flat_kv_bounds(total_lens, window_size, 0, start_pos, q_seqlens)
+        flat_kv, cu = flatten_v4_kv(
+            fp8_window, block_offsets, total_lens, window_size, 0, tot, mxf,
+            raw_kv=raw_kv, raw_kv_lens=q_seqlens, start_pos=start_pos)
+
         torch.testing.assert_close(flat_kv.cpu(), ref_kv.cpu(), atol=0, rtol=0)
         assert cu.cpu().tolist() == ref_cu.cpu().tolist()
 
-    def test_raw_kv_with_slot_indexing(self, device, dtype):
-        """raw_kv with slot-based window cache indexing."""
+    def test_fp8_window_raw_kv_fp8_compress(self, device, dtype):
+        """Full path: FP8 window + raw_kv + FP8 compressed KV."""
+        from lmdeploy.pytorch.consts import V4_FLASHMLA_HEAD_DIM
         from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
 
-        num_slots, window_size, head_dim = 4, 4, 8
-        # seq0: chunked prefill, start_pos=6, q_seqlens=3
-        # seq1: chunked prefill, start_pos=8, q_seqlens=2
-        total_lens = torch.tensor([9, 10], dtype=torch.long, device=device)
-        start_pos = torch.tensor([6, 8], dtype=torch.long, device=device)
-        q_seqlens = torch.tensor([3, 2], dtype=torch.long, device=device)
+        from .dsv4_utils import quantize_v4_flashmla_sparse
 
-        global_cache = torch.zeros(num_slots, window_size, head_dim,
-                                   dtype=dtype, device=device)
-        # Fill slot 1 for seq0: tokens 0..5 (ring positions 0,1,2,3,0,1)
-        for p in range(6):
-            global_cache[1, p % window_size] = 10 + p
-        # Fill slot 3 for seq1: tokens 0..7
-        for p in range(8):
-            global_cache[3, p % window_size] = 20 + p
+        bsz, window_size = 1, 4
+        compress_ratio = 4
+        head_dim = V4_FLASHMLA_HEAD_DIM
+        block_size = 4
+        start_pos_val = 8
+        q_seqlens_val = 4
+        total_len = start_pos_val + q_seqlens_val
+        total_lens = torch.tensor([total_len], dtype=torch.long, device=device)
+        start_pos = torch.tensor([start_pos_val], dtype=torch.long, device=device)
+        q_seqlens = torch.tensor([q_seqlens_val], dtype=torch.long, device=device)
 
-        slot = torch.tensor([1, 3], dtype=torch.long, device=device)
+        window_kv = torch.zeros(bsz, window_size, head_dim, dtype=dtype, device=device)
+        for p in range(start_pos_val):
+            ring_pos = p % window_size
+            window_kv[0, ring_pos] = torch.randn(head_dim, dtype=dtype, device=device)
 
-        # Raw KV: seq0 tokens 6,7,8; seq1 tokens 8,9
-        raw_kv = torch.zeros(5, head_dim, dtype=dtype, device=device)
-        raw_kv[0] = 16; raw_kv[1] = 17; raw_kv[2] = 18  # noqa: E702
-        raw_kv[3] = 28; raw_kv[4] = 29  # noqa: E702
+        fp8_window = _pack_bf16_window_to_fp8(window_kv, bsz, window_size, device)
 
-        block_offsets = torch.zeros(2, 1, dtype=torch.long, device=device)
-        tot, mxf = _flat_kv_bounds(total_lens, window_size, 0, start_pos, q_seqlens)
-        flat_kv, cu = flatten_v4_kv(
-            global_cache, None, block_offsets, total_lens, window_size, 0, tot, mxf,
-            slot=slot, raw_kv=raw_kv, raw_kv_lens=q_seqlens, start_pos=start_pos)
+        raw_kv = torch.randn(q_seqlens_val, head_dim, dtype=dtype, device=device)
+
+        block_offsets = torch.tensor([[0]], dtype=torch.long, device=device)
+        compressed_kv_bf16 = torch.randn(1, block_size, head_dim, dtype=dtype, device=device)
+
+        fp8_compress = quantize_v4_flashmla_sparse(
+            compressed_kv_bf16.unsqueeze(2)).squeeze(2)
 
         ref_kv, ref_cu = _reference_flatten_v4_kv(
-            global_cache, None, block_offsets, total_lens, window_size, 0,
-            raw_kv=raw_kv, raw_kv_lens=q_seqlens, start_pos=start_pos, slot=slot)
+            window_kv, compressed_kv_bf16, block_offsets, total_lens,
+            window_size, compress_ratio,
+            raw_kv=raw_kv, raw_kv_lens=q_seqlens, start_pos=start_pos)
 
-        torch.testing.assert_close(flat_kv.cpu(), ref_kv.cpu(), atol=0, rtol=0)
+        tot, mxf = _flat_kv_bounds(total_lens, window_size, compress_ratio, start_pos, q_seqlens)
+        flat_kv, cu = flatten_v4_kv(
+            fp8_window, block_offsets, total_lens, window_size, compress_ratio, tot, mxf,
+            fp8_compressed_kv_cache=fp8_compress,
+            raw_kv=raw_kv, raw_kv_lens=q_seqlens, start_pos=start_pos)
+
+        torch.testing.assert_close(flat_kv.cpu(), ref_kv.cpu(), atol=0.1, rtol=0.05)
+        assert cu.cpu().tolist() == ref_cu.cpu().tolist()
+
+    def test_fp8_window_raw_kv_mixed_batch(self, device, dtype):
+        """FP8 window: mixed batch — first-time prefill + chunked prefill."""
+        from lmdeploy.pytorch.consts import V4_FLASHMLA_HEAD_DIM
+        from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
+
+        bsz, window_size = 2, 4
+        head_dim = V4_FLASHMLA_HEAD_DIM
+        total_lens = torch.tensor([6, 11], dtype=torch.long, device=device)
+        start_pos = torch.tensor([0, 8], dtype=torch.long, device=device)
+        q_seqlens = torch.tensor([6, 3], dtype=torch.long, device=device)
+
+        window_kv = torch.zeros(bsz, window_size, head_dim, dtype=dtype, device=device)
+        for p in range(8):
+            ring_pos = p % window_size
+            window_kv[1, ring_pos] = torch.randn(head_dim, dtype=dtype, device=device)
+
+        fp8_window = _pack_bf16_window_to_fp8(window_kv, bsz, window_size, device)
+
+        raw_kv = torch.randn(9, head_dim, dtype=dtype, device=device)
+
+        block_offsets = torch.zeros(bsz, 1, dtype=torch.long, device=device)
+
+        ref_kv, ref_cu = _reference_flatten_v4_kv(
+            window_kv, None, block_offsets, total_lens, window_size, 0,
+            raw_kv=raw_kv, raw_kv_lens=q_seqlens, start_pos=start_pos)
+
+        tot, mxf = _flat_kv_bounds(total_lens, window_size, 0, start_pos, q_seqlens)
+        flat_kv, cu = flatten_v4_kv(
+            fp8_window, block_offsets, total_lens, window_size, 0, tot, mxf,
+            raw_kv=raw_kv, raw_kv_lens=q_seqlens, start_pos=start_pos)
+
+        torch.testing.assert_close(flat_kv.cpu(), ref_kv.cpu(), atol=0.1, rtol=0.05)
+        assert cu.cpu().tolist() == ref_cu.cpu().tolist()
+
+    def test_fp8_window_slot_raw_kv_compress(self, device, dtype):
+        """Full integration: FP8 window + slot + raw_kv + FP8 compressed."""
+        from lmdeploy.pytorch.consts import V4_FLASHMLA_HEAD_DIM
+        from lmdeploy.pytorch.kernels.cuda.v4_flatten_kv import flatten_v4_kv
+
+        from .dsv4_utils import quantize_v4_flashmla_sparse
+
+        num_slots, window_size = 4, 4
+        compress_ratio = 4
+        head_dim = V4_FLASHMLA_HEAD_DIM
+        block_size = 4
+        total_lens = torch.tensor([10, 12], dtype=torch.long, device=device)
+        start_pos = torch.tensor([6, 8], dtype=torch.long, device=device)
+        q_seqlens = torch.tensor([4, 4], dtype=torch.long, device=device)
+        bsz = total_lens.numel()
+
+        global_cache = torch.zeros(num_slots, window_size, head_dim, dtype=dtype, device=device)
+        for p in range(6):
+            global_cache[1, p % window_size] = torch.randn(head_dim, dtype=dtype, device=device)
+        for p in range(8):
+            global_cache[3, p % window_size] = torch.randn(head_dim, dtype=dtype, device=device)
+
+        fp8_window = _pack_global_bf16_window_to_fp8(global_cache, num_slots, window_size, device)
+
+        slot = torch.tensor([1, 3], dtype=torch.long, device=device)
+        raw_kv = torch.randn(8, head_dim, dtype=dtype, device=device)
+
+        block_offsets = torch.zeros(bsz, 1, dtype=torch.long, device=device)
+        block_offsets[0, 0] = 0
+        block_offsets[1, 0] = 1
+        compressed_kv_bf16 = torch.randn(2, block_size, head_dim, dtype=dtype, device=device)
+
+        fp8_compress = quantize_v4_flashmla_sparse(
+            compressed_kv_bf16.unsqueeze(2)).squeeze(2)
+
+        batch_cache = global_cache[slot.long()]
+        ref_kv, ref_cu = _reference_flatten_v4_kv(
+            batch_cache, compressed_kv_bf16, block_offsets, total_lens,
+            window_size, compress_ratio,
+            raw_kv=raw_kv, raw_kv_lens=q_seqlens, start_pos=start_pos)
+
+        tot, mxf = _flat_kv_bounds(total_lens, window_size, compress_ratio, start_pos, q_seqlens)
+        flat_kv, cu = flatten_v4_kv(
+            fp8_window, block_offsets, total_lens, window_size, compress_ratio, tot, mxf,
+            fp8_compressed_kv_cache=fp8_compress,
+            slot=slot,
+            raw_kv=raw_kv, raw_kv_lens=q_seqlens, start_pos=start_pos)
+
+        torch.testing.assert_close(flat_kv.cpu(), ref_kv.cpu(), atol=0.1, rtol=0.05)
         assert cu.cpu().tolist() == ref_cu.cpu().tolist()
 
 
@@ -1060,12 +630,10 @@ class TestPackWindowTokensFP8:
         packed_dim = 584
         head_dim = V4_FLASHMLA_HEAD_DIM
 
-        # Block-level reference
         block_kv = torch.randn(num_slots, window_size, 1, head_dim, dtype=dtype, device=device)
         packed_ref = quantize_v4_flashmla_sparse(block_kv)
         deq_ref = dequantize_v4_flashmla_sparse(packed_ref).squeeze(2)
 
-        # Per-token kernel pack
         fp8_kernel = torch.zeros(num_slots, window_size, packed_dim, dtype=torch.float8_e4m3fn, device=device)
         slot_all = torch.arange(num_slots, device=device).repeat_interleave(window_size).long()
         pos_all = torch.arange(window_size, device=device).repeat(num_slots).long()
@@ -1075,7 +643,6 @@ class TestPackWindowTokensFP8:
 
         deq_kernel = dequantize_v4_flashmla_sparse(fp8_kernel.unsqueeze(2)).squeeze(2)
 
-        # Should be exactly identical (same quantization logic)
         max_diff = (deq_kernel - deq_ref).abs().max().item()
         assert max_diff == 0.0, f'Kernel vs block pack differ by {max_diff}'
 

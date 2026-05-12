@@ -199,13 +199,6 @@ class V4IndicesUpdater:
 
 
 def _try_dynamic_compile(func, *args, **kwargs):
-    """Return the function as-is.
-
-    ``torch.compile(dynamic=True)`` is incompatible with CUDAGraph — it can
-    produce compiled code that triggers guard failures or invalid memory
-    accesses during graph replay, leading to segfaults.  Eager execution is
-    safe and the index conversion is not a bottleneck.
-    """
     try:
         compiled_func = torch.compile(func, dynamic=True)
         compiled_func(*args, **kwargs)
@@ -270,16 +263,15 @@ class TritonV4AttentionImpl:
         return torch.nn.functional.pad(indices, (0, pad), value=-1)
 
     def _write_window_decode(self, kv, attn_caches, slot, start_pos):
-        """Write decode KV to window state and pack FP8."""
+        """Write decode KV to FP8 window cache."""
         window_pos = torch.remainder(start_pos, self.window_size)
         slot_idx = slot.clamp(min=0)
         kv_decode = kv[:, 0]  # [bsz, head_dim]
-        attn_caches['window_state'][slot_idx, window_pos] = kv_decode
         self._pack_window_fp8(kv_decode, attn_caches['window_state_fp8'], slot_idx, window_pos)
         return attn_caches['window_state_fp8'].index_select(0, slot_idx)
 
     def _write_window_prefill(self, kv, attn_caches, slot, start_pos, q_seqlens, total_lens):
-        """Batched ring-buffer write for all prefill sequences + FP8 pack."""
+        """Batched ring-buffer FP8 pack for all prefill sequences."""
         kv_flat = kv.squeeze(0)  # [total_tokens, head_dim]
         num_seqs = start_pos.numel()
         cu_q = torch.cat([start_pos.new_zeros(1), q_seqlens.cumsum(0)])
@@ -296,19 +288,11 @@ class TritonV4AttentionImpl:
         valid = token_abs_pos >= cutoff_pos
         ring_pos = torch.remainder(token_abs_pos, self.window_size)
 
-        valid_slot = token_slot[valid]
+        # Pack only valid tokens directly into FP8 cache
+        valid_slot = token_slot[valid].clamp(min=0)
         valid_ring = ring_pos[valid]
         valid_kv = kv_flat[valid]
-        attn_caches['window_state'][valid_slot, valid_ring] = valid_kv
-
-        # Batched FP8 pack
-        slot_idx = slot.clamp(min=0)
-        selected = attn_caches['window_state'][slot_idx]
-        num_seqs_local = slot.numel()
-        slot_expanded = slot_idx.repeat_interleave(self.window_size)
-        pos_expanded = torch.arange(self.window_size, device=slot.device).repeat(num_seqs_local)
-        kv_tokens = selected.reshape(-1, self.head_size)
-        self._pack_window_fp8(kv_tokens, attn_caches['window_state_fp8'], slot_expanded, pos_expanded)
+        self._pack_window_fp8(valid_kv, attn_caches['window_state_fp8'], valid_slot, valid_ring)
 
 
     # ------------------------------------------------------------------
@@ -489,7 +473,7 @@ class TritonV4AttentionImpl:
         fp8_compressed_kv_cache = caches['compressed_kv_fp8'] if self.compress_ratio else None
         raw_kv = kv.squeeze(0)  # [total_q_tokens, head_dim]
         flat_kv, cu_seqlens_k = self._flatten_v4_kv(
-            caches['window_state'], None,
+            caches['window_state_fp8'],
             block_offsets, total_lens,
             self.window_size, self.compress_ratio,
             total_flat_kv_tokens, max_flat_kv_len,

@@ -147,8 +147,6 @@ class DeepseekV4ModelConfigBuilder(AutoModelConfigBuilder):
         # ---- state cache specs ----
         state_specs = []
         state_specs.append(
-            StateCacheSpec('v4_window_kv', (hf_config.sliding_window, head_dim), torch.bfloat16, layer_ids=all_layers))
-        state_specs.append(
             StateCacheSpec('v4_window_kv_fp8', (hf_config.sliding_window, packed_token_dim), torch.float8_e4m3fn,
                            layer_ids=all_layers))
         if ratio4_layers:

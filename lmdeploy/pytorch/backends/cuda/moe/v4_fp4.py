@@ -18,7 +18,17 @@ from lmdeploy.utils import get_logger
 logger = get_logger('lmdeploy')
 
 
-def _v4_swiglu(intermediate: torch.Tensor, swiglu_limit: float) -> torch.Tensor:
+
+def _try_dynamic_compile(func, *args, **kwargs):
+    try:
+        compiled_func = torch.compile(func, dynamic=True)
+        compiled_func(*args, **kwargs)
+        return compiled_func
+    except Exception:
+        return func
+
+
+def _v4_swiglu_impl(intermediate: torch.Tensor, swiglu_limit: float) -> torch.Tensor:
     """Match DeepSeek-V4 expert activation in the Triton FP4 fused MoE path."""
     hidden = intermediate.size(-1) // 2
     gate = intermediate[..., :hidden].float()
@@ -27,6 +37,9 @@ def _v4_swiglu(intermediate: torch.Tensor, swiglu_limit: float) -> torch.Tensor:
         up = torch.clamp(up, min=-swiglu_limit, max=swiglu_limit)
         gate = torch.clamp(gate, max=swiglu_limit)
     return (torch.nn.functional.silu(gate) * up).to(intermediate.dtype)
+
+
+_v4_swiglu = _try_dynamic_compile(_v4_swiglu_impl)
 
 
 def _slice_local_topk(topk_ids: torch.LongTensor,

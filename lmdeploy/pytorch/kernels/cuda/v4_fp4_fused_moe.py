@@ -15,23 +15,70 @@ def get_cuda_autotune_config():
     return [
         triton.Config({
             'BLOCK_SIZE_M': 128,
+            'BLOCK_SIZE_N': 256,
+        }, num_stages=3, num_warps=8),
+        triton.Config({
+            'BLOCK_SIZE_M': 128,
             'BLOCK_SIZE_N': 128,
+        }, num_stages=3, num_warps=4),
+        triton.Config({
+            'BLOCK_SIZE_M': 64,
+            'BLOCK_SIZE_N': 256,
+        }, num_stages=4, num_warps=4),
+        triton.Config({
+            'BLOCK_SIZE_M': 64,
+            'BLOCK_SIZE_N': 128,
+        }, num_stages=4, num_warps=4),
+        triton.Config({
+            'BLOCK_SIZE_M': 64,
+            'BLOCK_SIZE_N': 64,
+        }, num_stages=5, num_warps=2),
+        triton.Config({
+            'BLOCK_SIZE_M': 128,
+            'BLOCK_SIZE_N': 64,
+        }, num_stages=4, num_warps=4),
+        triton.Config({
+            'BLOCK_SIZE_M': 256,
+            'BLOCK_SIZE_N': 128,
+        }, num_stages=3, num_warps=8),
+        triton.Config({
+            'BLOCK_SIZE_M': 256,
+            'BLOCK_SIZE_N': 64,
         }, num_stages=3, num_warps=4),
     ]
 
 
 @triton.jit
 def _fp4_e2m1_to_fp8(code):
-    abs_code = code & 0x07
-    val = tl.where(abs_code == 0, 0.0, 0.5)
-    val = tl.where(abs_code == 2, 1.0, val)
-    val = tl.where(abs_code == 3, 1.5, val)
-    val = tl.where(abs_code == 4, 2.0, val)
-    val = tl.where(abs_code == 5, 3.0, val)
-    val = tl.where(abs_code == 6, 4.0, val)
-    val = tl.where(abs_code == 7, 6.0, val)
-    val = tl.where((code & 0x08) != 0, -val, val)
-    return val.to(tl.float8e4nv)
+    """Decode FP4 E2M1 to FP8 E4M3 via prmt LUT.
+
+    Uses PTX prmt.b32 for byte-level LUT lookup (1 prmt + 1 xor vs 9 selp). prmt.b32 selector is 16-bit: 4 nibbles, each
+    3-bit source index + sign-extend flag. LUT_LO encodes magnitudes 0-3, LUT_HI encodes magnitudes 4-7. Sign bit is
+    applied separately via XOR.
+    """
+    LUT_LO: tl.constexpr = 0x3C383000
+    LUT_HI: tl.constexpr = 0x4C484440
+
+    code_u32 = code.to(tl.uint32)
+    packed = code_u32 | (code_u32 << 8) | (code_u32 << 16) | (code_u32 << 24)
+
+    mag = packed & 0x07070707
+    sel = (mag & 0x00000007) | ((mag >> 4) & 0x00000070) | ((mag >> 8) & 0x00000700) | \
+        ((mag >> 12) & 0x00007000)
+
+    result = tl.inline_asm_elementwise(
+        'prmt.b32 $0, $2, $3, $4;',
+        '=r,r,r,r,r',
+        args=[sel, LUT_LO, LUT_HI, sel],
+        dtype=tl.uint32,
+        is_pure=True,
+        pack=1,
+    )
+
+    sign = packed & 0x08080808
+    result = result ^ (sign << 4)
+
+    return (result & 0xFF).to(tl.uint8).to(tl.float8e4nv, bitcast=True)
 
 
 @triton.autotune(
@@ -144,7 +191,7 @@ def fused_moe_v4_fp4_kernel(
         a_scale = tl.load(A_scale + offs_am * stride_asm + offs_ksa * stride_ask, mask=mask_sid, other=1.0)
         b_scale = tl.load(B_scale + stride_bse * exp_id + offs_bn * stride_bsn + offs_ksb * stride_bsk)
         if B_SCALE_E8M0:
-            b_scale = tl.exp2(b_scale.to(tl.int32).to(tl.float32) - 127.0)
+            b_scale = (b_scale.to(tl.int32) << 23).to(tl.float32, bitcast=True)
 
         accumulator += tl.dot(a, b) * a_scale[:, None] * b_scale[None, :]
         a_ptrs += BLOCK_SIZE_K * stride_ak

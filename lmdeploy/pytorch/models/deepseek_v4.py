@@ -457,7 +457,6 @@ class Attention(nn.Module):
         named_state_caches = caches.named_state_caches
         block_caches = caches.block_caches
 
-        window_state = named_state_caches['v4_window_kv'][self.layer_id]
         window_state_fp8 = named_state_caches['v4_window_kv_fp8'][self.layer_id]
 
         compressed_kv = None
@@ -472,8 +471,7 @@ class Attention(nn.Module):
             else:
                 compressed_kv_fp8 = block_caches['v4_compressed_kv_r128_fp8'][self.layer_id]
 
-        return dict(window_state=window_state,
-                    window_state_fp8=window_state_fp8,
+        return dict(window_state_fp8=window_state_fp8,
                     compressed_kv=compressed_kv,
                     compressed_kv_fp8=compressed_kv_fp8,
                     index_kv=index_kv,
