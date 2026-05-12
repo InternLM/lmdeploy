@@ -161,6 +161,10 @@ for item in api_client.completions_v1(model=model_name, prompt='hi'):
 
 参考 [api_server_tools](./api_server_tools.md)。
 
+### OpenAI Responses 兼容接口
+
+参考 [api_server_responses](./api_server_responses.md)。
+
 ### 使用 Java/Golang/Rust
 
 可以使用代码生成工具 [openapi-generator-cli](https://github.com/OpenAPITools/openapi-generator-cli) 将 `http://{server_ip}:{server_port}/openapi.json` 转成 java/rust/golang 客户端。
