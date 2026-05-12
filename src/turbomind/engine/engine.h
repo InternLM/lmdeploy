@@ -26,14 +26,14 @@ public:
         return static_cast<bool>(impl_);
     }
 
-    Engine(DataType      dtype,
-           EngineParam   param,
-           LanguageModel model,
-           Context&      ctx,
-           Gateway&      gateway,
-           int           device_id,
-           int           queue_id,
-           int           phases);
+    Engine(EngineParam        param,
+           LanguageModel      model,
+           const ModelWeight& weights,
+           Context&           ctx,
+           Gateway&           gateway,
+           int                device_id,
+           int                queue_id,
+           int                phases);
 
     void Start();
 

@@ -2,7 +2,7 @@
 # modify from https://github.com/vllm-project/vllm/blob/main/vllm/entrypoints/logger.py  # noqa
 
 from .messages import GenerationConfig
-from .utils import get_logger
+from .utils import REQUEST_LOG_LEVEL, get_logger
 
 logger = get_logger('lmdeploy')
 
@@ -20,6 +20,8 @@ class RequestLogger:
         self.max_log_len = max_log_len
 
     def log_prompt(self, session_id: int, prompt: str) -> None:
+        if not logger.isEnabledFor(REQUEST_LOG_LEVEL):
+            return
         if not isinstance(prompt, str):
             # Prompt may be a GPT4V message with base64 images;
             # logging might be impractical due to length
@@ -27,13 +29,15 @@ class RequestLogger:
         if self.max_log_len is not None:
             if prompt is not None:
                 prompt = prompt[:self.max_log_len]
-        logger.info(f'session={session_id}, '
-                    f'prompt={prompt!r}')
+        logger.log(REQUEST_LOG_LEVEL, f'session={session_id}, '
+                   f'prompt={prompt!r}')
 
     def log_inputs(self, session_id: int, prompt: str | None, prompt_token_ids: list[int] | None,
                    gen_config: GenerationConfig, adapter_name: str) -> None:
+        if not logger.isEnabledFor(REQUEST_LOG_LEVEL):
+            return
         max_log_len = self.max_log_len
-        input_tokens = len(prompt_token_ids)
+        input_tokens = len(prompt_token_ids) if prompt_token_ids is not None else 0
         if max_log_len is not None:
             if prompt is not None:
                 prompt = prompt[:max_log_len]
@@ -41,9 +45,9 @@ class RequestLogger:
             if prompt_token_ids is not None:
                 prompt_token_ids = prompt_token_ids[:max_log_len]
 
-        logger.info(f'session={session_id}, '
-                    f'adapter_name={adapter_name}, '
-                    f'input_tokens={input_tokens}, '
-                    f'gen_config={gen_config}, '
-                    f'prompt={prompt!r}, '
-                    f'prompt_token_id={prompt_token_ids}')
+        logger.log(REQUEST_LOG_LEVEL, f'session={session_id}, '
+                   f'adapter_name={adapter_name}, '
+                   f'input_tokens={input_tokens}, '
+                   f'gen_config={gen_config}, '
+                   f'prompt={prompt!r}, '
+                   f'prompt_token_id={prompt_token_ids}')

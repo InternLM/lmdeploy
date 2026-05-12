@@ -22,9 +22,11 @@ add_library(core STATIC
         context.cc
         buffer.cc
         layout.cc
+        data_format.cc
         tensor.cc
         tensor.cu
         module.cc
+        registry.cc
         copy.cc
         logger.cc)
 
@@ -41,4 +43,7 @@ if (BUILD_TEST)
 
     add_executable(test_logger test_logger.cc)
     target_link_libraries(test_logger PRIVATE core Catch2::Catch2WithMain)
+
+    add_executable(test_data_format test_data_format.cc)
+    target_link_libraries(test_data_format PRIVATE core Catch2::Catch2WithMain)
 endif ()
