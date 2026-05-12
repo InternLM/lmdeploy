@@ -4,14 +4,10 @@ from torch import nn
 
 from lmdeploy.messages import QuantPolicy
 from lmdeploy.pytorch.distributed import get_tp_world_rank
-from lmdeploy.utils import get_logger
 
 from ..backends import OpType, get_backend
 from ..backends.attention import AttentionMetadata
 from .utils import get_distribute_size
-
-logger = get_logger('lmdeploy')
-_DEFAULT_FP8_SCALE_WARNED = False
 
 
 def _is_normal_fp8_quant_policy(quant_policy: QuantPolicy):
@@ -96,20 +92,6 @@ class Attention(nn.Module):
                                                        device=device)
             self.impl.set_alibi_slopes(alibi_slopes)
             self.alibi_ready = True
-
-    @torch.no_grad()
-    def finalize_kv_scales(self, quant_policy: QuantPolicy):
-        """Finalize loaded per-tensor FP8 KV scales before inference."""
-        global _DEFAULT_FP8_SCALE_WARNED
-        if not _is_normal_fp8_quant_policy(quant_policy):
-            return
-
-        if _DEFAULT_FP8_SCALE_WARNED or quant_policy != QuantPolicy.FP8:
-            return
-        if self.k_scale.item() == 1.0 and self.v_scale.item() == 1.0:
-            logger.warning('Using normal FP8 E4M3 KV cache with default k_scale=v_scale=1.0. '
-                           'This matches vLLM no-calibration behavior but may affect accuracy.')
-            _DEFAULT_FP8_SCALE_WARNED = True
 
     def _effective_kv_scales(self):
         """Return per-tensor K/V scales."""
