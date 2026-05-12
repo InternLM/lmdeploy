@@ -91,21 +91,6 @@ When `stream=true`, the endpoint returns `text/event-stream` events such as:
 - `response.output_item.done`
 - `response.completed`
 
-## Codex Integration Note
+## Codex Integration
 
-Codex can connect to LMDeploy by configuring a custom provider with `wire_api = "responses"` and `base_url` pointing to the LMDeploy `/v1` root:
-
-```toml
-model = "Qwen/Qwen3.5-35B-A3B"
-model_provider = "lmdeploy"
-
-[model_providers.lmdeploy]
-name = "LMDeploy"
-base_url = "http://{server_ip}:{server_port}/v1"
-env_key = "LMDEPLOY_API_KEY"
-wire_api = "responses"
-requires_openai_auth = false
-stream_idle_timeout_ms = 300000
-```
-
-The `model` value must exactly match a model name exposed by LMDeploy.
+May refer to [codex](../integration/codex.md).

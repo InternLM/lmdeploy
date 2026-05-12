@@ -65,6 +65,13 @@ Documentation
    llm/api_server_lora.md
    llm/proxy_server.md
 
+.. toctree::
+   :maxdepth: 1
+   :caption: Integrations
+
+   integration/claude_code.md
+   integration/codex.md
+
 .. _vlm_deployment:
 .. toctree::
    :maxdepth: 1
