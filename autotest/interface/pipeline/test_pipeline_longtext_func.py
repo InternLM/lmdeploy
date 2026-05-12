@@ -6,6 +6,7 @@ import pytest
 from utils.config_utils import set_device_env_variable, unset_device_env_variable
 
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
+from lmdeploy.messages import Response
 
 SESSION_LEN = 198000
 SESSION_LEN_128K = 128000
@@ -13,9 +14,10 @@ SESSION_LEN_32K = 32000
 
 SESSION_LEN_CONFIG = {
     'Qwen/Qwen2.5-7B-Instruct': SESSION_LEN_32K,
-    'Qwen/Qwen3-235B-A22B': SESSION_LEN_128K,
     'Qwen/Qwen3-30B-A3B': SESSION_LEN_128K,
     'Qwen/Qwen3-32B': SESSION_LEN_128K,
+    'Qwen/Qwen3.5-35B-A3B': SESSION_LEN,
+    'Qwen/Qwen3.5-27B': SESSION_LEN,
     'meta-llama/Meta-Llama-3-1-8B-Instruct': SESSION_LEN_128K,
     'meta-llama/Meta-Llama-3-1-70B-Instruct': SESSION_LEN_128K,
 }
@@ -26,6 +28,9 @@ def run_case_in_spawn(target, args):
     process = ctx.Process(target=target, args=args)
     process.start()
     process.join()
+    if process.exitcode != 0:
+        name = getattr(target, '__name__', repr(target))
+        raise AssertionError(f'spawn worker {name!r} failed with exit code {process.exitcode!r}')
 
 
 @pytest.mark.gpu_num_1
@@ -49,6 +54,37 @@ def test_history_issue_tp2(config, model, worker_id):
         unset_device_env_variable()
 
 
+def _assert_stream_single(pipe, prompt, gen_config, msg):
+    """Merge multiplex stream chunks for a single prompt and validate."""
+    resp = None
+    n_chunks = 0
+    for chunk in pipe.stream_infer(prompt, gen_config=gen_config):
+        assert isinstance(chunk, Response), (msg, type(chunk))
+        resp = resp.extend(chunk) if resp else chunk
+        n_chunks += 1
+    assert resp is not None, f'{msg}: no stream output'
+    assert n_chunks > 0, f'{msg}: zero chunks'
+    assert resp.finish_reason in ('stop', 'length'), f'{msg}: {resp!r}'
+    assert resp.generate_token_len > 0, f'{msg}: {resp!r}'
+    assert len(resp.text) > 0, f'{msg}: empty text {resp!r}'
+    assert resp.input_token_len > 0, f'{msg}: {resp!r}'
+
+
+def _assert_stream_batch(pipe, prompts, gen_config, msg):
+    """Merge chunks per batch index (multiplex interleaving) and validate."""
+    by_index = {}
+    for chunk in pipe.stream_infer(prompts, gen_config=gen_config):
+        assert isinstance(chunk, Response), (msg, type(chunk))
+        by_index.setdefault(chunk.index, []).append(chunk)
+    assert len(by_index) == len(prompts), f'{msg}: expected {len(prompts)} sequences, got {by_index!r}'
+    for idx, chunks in sorted(by_index.items()):
+        full = ''.join(c.text for c in chunks)
+        assert len(chunks) > 0, f'{msg}: index {idx} no chunks'
+        assert chunks[-1].finish_reason in ('stop', 'length'), f'{msg}: index {idx} {chunks[-1]!r}'
+        assert chunks[-1].generate_token_len > 0, f'{msg}: index {idx} {chunks[-1]!r}'
+        assert len(full) > 0, f'{msg}: index {idx} empty merged text'
+
+
 def stream_infer_worker(config, model, tp_num):
     model_path = os.path.join(config.get('model_path'), model)
 
@@ -57,16 +93,10 @@ def stream_infer_worker(config, model, tp_num):
     prompt = '今 天 心 ' * int(SESSION_LEN / 6)
 
     gen_config = GenerationConfig(top_k=40)
-    # stream infer
-    for outputs in pipe.stream_infer(prompt, gen_config=gen_config):
-        continue
-    print(outputs)
+    _assert_stream_single(pipe, prompt, gen_config, 'longctx stream single')
 
     prompts = ['今 天 心 ' * int(SESSION_LEN / 6)] * 2
-    # stream infer
-    for outputs in pipe.stream_infer(prompts, gen_config=gen_config):
-        continue
-    print(outputs)
+    _assert_stream_batch(pipe, prompts, gen_config, 'longctx stream batch')
 
     pipe.close()
 
@@ -85,7 +115,7 @@ def test_long_test_passkey_tp1(config, model, backend, worker_id):
 
 
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize('model', ['Qwen/Qwen3-30B-A3B', 'Qwen/Qwen3-32B'])
+@pytest.mark.parametrize('model', ['Qwen/Qwen3-30B-A3B', 'Qwen/Qwen3-32B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-27B'])
 @pytest.mark.parametrize('backend', ['turbomind', 'pytorch'])
 def test_long_test_passkey_tp2(config, model, backend, worker_id):
     log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
@@ -99,7 +129,7 @@ def test_long_test_passkey_tp2(config, model, backend, worker_id):
 
 
 @pytest.mark.gpu_num_8
-@pytest.mark.parametrize('model', ['Qwen/Qwen3-235B-A22B', 'meta-llama/Meta-Llama-3-1-70B-Instruct'])
+@pytest.mark.parametrize('model', ['meta-llama/Meta-Llama-3-1-70B-Instruct'])
 @pytest.mark.parametrize('backend', ['turbomind', 'pytorch'])
 def test_long_test_passkey_tp8(config, model, backend, worker_id):
     log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
@@ -149,10 +179,9 @@ def passkey_retrival_worker(config, model, backend, log_name, tp_num, session_le
                                                  max_batch_size=1,
                                                  hf_overrides=YARN_CONFIG)
         elif 'intern-s1' in model.lower():
-            backend_config = TurbomindEngineConfig(session_len=session_len,
-                                                   max_batch_size=1,
-                                                   cache_max_entry_count=0.7,
+            backend_config = PytorchEngineConfig(session_len=session_len,
                                                    tp=tp_num,
+                                                   max_batch_size=1,
                                                    hf_overrides={'text_config': NTK_CONFIG})
         else:
             backend_config = PytorchEngineConfig(session_len=session_len, tp=tp_num, max_batch_size=1)
@@ -169,6 +198,16 @@ def passkey_retrival_worker(config, model, backend, log_name, tp_num, session_le
     response2 = pipe([prompt] * 2, gen_config=gen_config)
 
     pipe.close()
+
+    assert isinstance(response1, Response), type(response1)
+    assert response1.finish_reason in ('stop', 'length'), response1
+    assert response1.generate_token_len > 0, response1
+
+    assert isinstance(response2, list) and len(response2) == 2, response2
+    for i, r in enumerate(response2):
+        assert isinstance(r, Response), (i, type(r))
+        assert r.finish_reason in ('stop', 'length'), r
+        assert r.generate_token_len > 0, r
 
     assert str(pass_key1) in response1.text, str(response1)
     assert str(pass_key2) in response2[0].text and str(pass_key2) in response2[1].text, str(response2)
