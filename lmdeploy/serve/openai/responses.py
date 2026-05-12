@@ -143,20 +143,10 @@ def _stringify_value(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-def _tool_arguments_mapping(value: Any) -> dict[str, Any]:
-    if value in (None, ''):
-        return {}
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            return {'raw_arguments': value}
-        if isinstance(parsed, dict):
-            return parsed
-        return {'value': parsed}
-    return {'value': value}
+def _generation_messages_from_parser(messages: list[dict[str, Any]], parsed_request: ChatCompletionRequest | None):
+    if parsed_request is None:
+        return messages
+    return parsed_request.messages
 
 
 def _text_from_content(content: Any, field_name: str) -> str:
@@ -210,7 +200,7 @@ def _messages_from_input(request: ResponsesRequest) -> list[dict[str, Any]]:
                             type='function',
                             function=dict(
                                 name=name,
-                                arguments=_tool_arguments_mapping(item.get('arguments')),
+                                arguments=_stringify_value(item.get('arguments')),
                             ),
                         )
                     ],
@@ -267,14 +257,20 @@ def _openai_tools_from_responses(request: ResponsesRequest) -> list[Tool] | None
     return tools or None
 
 
-def _tool_choice_from_responses(tool_choice: Any) -> ToolChoice | Literal['auto', 'required', 'none']:
+def _tool_choice_from_responses(tool_choice: Any,
+                                tools: list[Tool] | None = None) -> ToolChoice | Literal['auto', 'required', 'none']:
     """Map Responses tool_choice to the OpenAI chat tool_choice shape used
     internally."""
 
+    has_tools = bool(tools)
     if tool_choice is None:
-        return 'auto'
+        return 'auto' if has_tools else 'none'
     if isinstance(tool_choice, str):
-        if tool_choice in ('auto', 'required', 'none'):
+        if tool_choice in ('auto', 'none'):
+            return tool_choice if has_tools else 'none'
+        if tool_choice == 'required':
+            if not has_tools:
+                raise ValueError("Tool choice 'required' must be specified with `tools`.")
             return tool_choice
         raise ValueError(f'Unsupported tool_choice: {tool_choice!r}.')
     if isinstance(tool_choice, dict):
@@ -282,6 +278,9 @@ def _tool_choice_from_responses(tool_choice: Any) -> ToolChoice | Literal['auto'
             name = tool_choice.get('name')
             if not name:
                 raise ValueError('Missing `name` in function tool_choice.')
+            tool_names = {tool.function.name for tool in tools or []}
+            if name not in tool_names:
+                raise ValueError(f"Tool choice 'function' not found in `tools`: {name!r}.")
             return ToolChoice(function=ToolChoiceFuncName(name=name))
         raise ValueError(f'Unsupported tool_choice type: {tool_choice.get("type")!r}.')
     raise ValueError('Unsupported tool_choice. Expected string or function tool choice object.')
@@ -657,6 +656,7 @@ async def _stream_response(result_generator,
                 'response_id': request.request_id,
                 'item_id': state['item_id'],
                 'output_index': state['output_index'],
+                'name': state['name'],
                 'arguments': state['arguments'],
             },
         )
@@ -701,7 +701,7 @@ def create_responses_router(server_context) -> APIRouter:
             messages = _messages_from_input(request)
             gen_config = _to_generation_config(request)
             tools = _openai_tools_from_responses(request)
-            tool_choice = _tool_choice_from_responses(request.tool_choice)
+            tool_choice = _tool_choice_from_responses(request.tool_choice, tools)
         except ValueError as err:
             return _error_response(HTTPStatus.BAD_REQUEST, str(err), param='input')
 
@@ -735,7 +735,7 @@ def create_responses_router(server_context) -> APIRouter:
         session = server_context.create_session(-1)
         adapter_name = None if model_name == server_context.async_engine.model_name else model_name
         result_generator = server_context.async_engine.generate(
-            messages,
+            _generation_messages_from_parser(messages, parsed_request),
             session,
             gen_config=gen_config,
             tools=None if parsed_request is None else parsed_request.tools,
