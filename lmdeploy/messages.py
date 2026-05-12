@@ -245,8 +245,7 @@ class TurbomindEngineConfig:
         enable_prefix_caching: enable cache prompts for block reuse,
             default to False
         quant_policy: default to 0. For TurboMind, when k/v is quantized
-            into int4, int8, or fp8, set it to 4, 8, or 16,
-            respectively
+            into int4 or int8, set it to 4 or 8, respectively
         rope_scaling_factor: scaling factor used for dynamic ntk,
             default to 0. TurboMind follows the implementation of transformer
             LlamaAttention
@@ -314,8 +313,12 @@ class TurbomindEngineConfig:
         assert self.dtype in ['auto', 'float16', 'bfloat16']
         assert self.tp >= 1, 'tp must be a positive integer'
         assert self.cache_max_entry_count > 0, 'invalid cache_max_entry_count'
-        assert self.quant_policy in (QuantPolicy.NONE, QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.FP8,
-                                     QuantPolicy.TURBO_QUANT), 'invalid quant_policy'
+        assert self.quant_policy in (
+            QuantPolicy.NONE,
+            QuantPolicy.INT4,
+            QuantPolicy.INT8,
+            QuantPolicy.TURBO_QUANT,
+        ), 'invalid quant_policy'
         assert self.rope_scaling_factor >= 0, 'invalid rope_scaling_factor'
         assert self.max_prefill_token_num >= 0, \
             'invalid max_prefill_token_num'

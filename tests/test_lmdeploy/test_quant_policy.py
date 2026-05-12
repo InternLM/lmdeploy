@@ -18,7 +18,7 @@ from lmdeploy.messages import QuantPolicy, Response
 MODEL_ID = 'Qwen/Qwen3-8B'
 
 
-def _e4m3_fp8_requires_sm90():
+def _e4m3_fp8_unsupported_on_pre_sm90():
     return torch.cuda.is_available() and torch.cuda.get_device_capability()[0] < 9
 
 
@@ -300,7 +300,8 @@ class TestQuantPolicy42Accuracy:
 # =============================================================================
 
 
-@pytest.mark.skipif(_e4m3_fp8_requires_sm90(), reason='Triton float8_e4m3fn conversion requires device with cc>=9.0')
+@pytest.mark.skipif(_e4m3_fp8_unsupported_on_pre_sm90(),
+                    reason='Triton float8_e4m3fn conversion requires device with cc>=9.0')
 class TestQuantPolicyFP8Basic:
     """Basic functional tests for quant_policy=QuantPolicy.FP8."""
 
@@ -351,7 +352,8 @@ class TestQuantPolicyFP8Basic:
         assert len(response.text) > 0
 
 
-@pytest.mark.skipif(_e4m3_fp8_requires_sm90(), reason='Triton float8_e4m3fn conversion requires device with cc>=9.0')
+@pytest.mark.skipif(_e4m3_fp8_unsupported_on_pre_sm90(),
+                    reason='Triton float8_e4m3fn conversion requires device with cc>=9.0')
 class TestQuantPolicyFP8Accuracy:
     """Accuracy tests comparing quant_policy=QuantPolicy.FP8 against non-
     quantized baseline.

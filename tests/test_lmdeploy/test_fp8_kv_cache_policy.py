@@ -27,15 +27,23 @@ def test_quant_policy_fp8_aliases():
     assert parser.parse_args(['--quant-policy', '17']).quant_policy == QuantPolicy.FP8_E5M2
 
 
+def test_quant_policy_uses_configured_default():
+    parser = argparse.ArgumentParser()
+    ArgumentHelper.quant_policy(parser, default=QuantPolicy.FP8.value)
+
+    assert parser.parse_args([]).quant_policy == QuantPolicy.FP8.value
+
+
 def test_pytorch_config_accepts_fp8_quant_policies():
     config = PytorchEngineConfig(quant_policy=QuantPolicy.FP8_E5M2)
 
     assert config.quant_policy == QuantPolicy.FP8_E5M2
 
 
-def test_turbomind_config_rejects_fp8_e5m2_quant_policy():
+@pytest.mark.parametrize('quant_policy', [QuantPolicy.FP8, QuantPolicy.FP8_E5M2])
+def test_turbomind_config_rejects_fp8_quant_policies(quant_policy):
     with pytest.raises(ValidationError, match='invalid quant_policy'):
-        TurbomindEngineConfig(quant_policy=QuantPolicy.FP8_E5M2)
+        TurbomindEngineConfig(quant_policy=quant_policy)
 
 
 def test_fp8_kv_cache_dtype_mapping():
