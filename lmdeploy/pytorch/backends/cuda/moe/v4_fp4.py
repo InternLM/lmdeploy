@@ -1,10 +1,18 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import torch
 
-import lmdeploy.pytorch.distributed as dist
+
+import torch
+import torch.distributed as dist
+
+from lmdeploy.pytorch.backends.deepep_state import get_deepep_state
 from lmdeploy.pytorch.backends.moe import FusedMoEBuilder
+from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
 from lmdeploy.pytorch.kernels.cuda.v4_fp4_fused_moe import fused_moe_v4_fp4
+from lmdeploy.pytorch.kernels.cuda.v4_fp4_grouped_gemm import (
+    fused_moe_v4_fp4_ep_low_latency,
+    fused_moe_v4_fp4_ep_normal,
+)
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -240,8 +248,175 @@ class DeepGemmFusedMoEV4TPImpl:
         return out
 
 
+class V4FP4FusedMoENormal:
+    """Prefill EP MoE: dispatch -> scatter -> FP4 GEMM -> gather -> combine."""
+
+    def __init__(self, ep_size, ep_group, num_experts, num_local_experts,
+                 hidden_dim, ffn_dim, top_k, swiglu_limit, scale_fmt, layer_idx, out_dtype):
+        from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPTokenDispatcher
+        self.num_experts = num_experts
+        self.num_local_experts = num_local_experts
+        self.top_k = top_k
+        self.swiglu_limit = swiglu_limit
+        self.scale_fmt = scale_fmt
+        self.hidden_dim = hidden_dim
+        self.ffn_dim = ffn_dim
+        self.out_dtype = out_dtype
+        self.token_dispatcher = DeepEPTokenDispatcher(
+            group=ep_group,
+            num_experts=num_experts,
+            num_local_experts=num_local_experts,
+            hidden_size=hidden_dim,
+            params_dtype=out_dtype,
+        )
+
+    def forward(self, hidden_states, topk_weights, topk_ids,
+                gate_up_weight, gate_up_scale, down_weight, down_scale,
+                expert_list=None):
+        topk_weights = topk_weights.to(torch.float32)
+        recv_x, recv_topk_idx, recv_topk_weights, recv_tokens_per_expert = \
+            self.token_dispatcher.dispatch(hidden_states, topk_ids, topk_weights, expert_list)
+
+        expert_offset = expert_list[0] if expert_list else 0
+        out = fused_moe_v4_fp4_ep_normal(
+            recv_x, recv_topk_idx, recv_topk_weights, recv_tokens_per_expert,
+            gate_up_weight, gate_up_scale, down_weight, down_scale,
+            num_local_experts=self.num_local_experts,
+            expert_offset=expert_offset,
+            swiglu_limit=self.swiglu_limit,
+            group_size=128,
+            out_dtype=self.out_dtype,
+        )
+
+        out = self.token_dispatcher.combine(out)
+        return out
+
+
+class V4FP4FusedMoELowLatency:
+    """Decode EP MoE: low_latency_dispatch -> masked FP4 GEMM -> low_latency_combine."""
+
+    def __init__(self, ep_size, ep_group, num_experts, num_local_experts,
+                 hidden_dim, ffn_dim, top_k, swiglu_limit, scale_fmt, layer_idx, out_dtype):
+        from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPTokenDispatcherLowLatency
+        self.num_experts = num_experts
+        self.num_local_experts = num_local_experts
+        self.top_k = top_k
+        self.swiglu_limit = swiglu_limit
+        self.scale_fmt = scale_fmt
+        self.hidden_dim = hidden_dim
+        self.ffn_dim = ffn_dim
+        self.out_dtype = out_dtype
+        self.token_dispatcher = DeepEPTokenDispatcherLowLatency(
+            group=ep_group,
+            num_experts=num_experts,
+            num_local_experts=num_local_experts,
+            hidden_size=hidden_dim,
+            params_dtype=out_dtype,
+        )
+
+    def forward(self, hidden_states, topk_weights, topk_ids,
+                gate_up_weight, gate_up_scale, down_weight, down_scale,
+                expert_list=None):
+        topk_weights = topk_weights.to(torch.float32)
+        recv_hidden_states, topk_idx, topk_weights, masked_m, expected_m = \
+            self.token_dispatcher.dispatch(hidden_states, topk_ids, topk_weights, self.num_experts)
+
+        out = fused_moe_v4_fp4_ep_low_latency(
+            recv_hidden_states, masked_m, expected_m,
+            gate_up_weight, gate_up_scale, down_weight, down_scale,
+            swiglu_limit=self.swiglu_limit,
+            group_size=128,
+            out_dtype=self.out_dtype,
+        )
+
+        out = self.token_dispatcher.combine(out, topk_idx, topk_weights)
+        return out
+
+
+class TritonFusedMoEV4FP4EPImpl:
+    """V4 FP4 MoE with Expert Parallelism.
+
+    Follows the same pattern as FusedDeepEpMoEBlockedF8Impl: dispatch/combine
+    via DeepEP, GEMM via V4 FP4 Triton kernels.
+    """
+
+    def __init__(self, ep_size, ep_group, top_k, num_experts, num_local_experts,
+                 hidden_dim, ffn_dim, swiglu_limit=0.0, scale_fmt='ue8m0',
+                 layer_idx=0):
+        self.ep_size = ep_size
+        self.ep_group = ep_group
+        self.top_k = top_k
+        self.num_experts = num_experts
+        self.num_local_experts = num_local_experts
+        self.hidden_dim = hidden_dim
+        self.ffn_dim = ffn_dim
+        self.swiglu_limit = swiglu_limit
+        self.scale_fmt = scale_fmt
+        self.layer_idx = layer_idx
+
+        try:
+            from deep_ep import Buffer  # noqa: F401
+            get_deepep_state().enable()
+        except ImportError:
+            logger.warning('DeepEP is not installed. V4 FP4 EP MoE requires DeepEP '
+                           'from https://github.com/deepseek-ai/DeepEP')
+
+        # Pre-allocate buffer.
+        self.fusedmoe_build(True)
+
+    def update_weights(self, gate_up_weight, gate_up_scale, down_weight, down_scale):
+        return gate_up_weight, gate_up_scale, down_weight, down_scale
+
+    def ep_expert_list(self, world_size, rank):
+        if get_dist_manager().current_context().dist_config.enable_eplb:
+            from lmdeploy.pytorch.nn.eplb import EPLBManager
+            return EPLBManager.get_dispatch_info(rank, self.layer_idx)
+        expert_per_rank = (self.num_experts + world_size - 1) // world_size
+        first_expert = rank * expert_per_rank
+        last_expert = min(first_expert + expert_per_rank, self.num_experts)
+        return list(range(first_expert, last_expert))
+
+    def fusedmoe_build(self, low_latency_mode=False):
+        if low_latency_mode:
+            return V4FP4FusedMoELowLatency(
+                ep_size=self.ep_size, ep_group=self.ep_group,
+                num_experts=self.num_experts, num_local_experts=self.num_local_experts,
+                hidden_dim=self.hidden_dim, ffn_dim=self.ffn_dim,
+                top_k=self.top_k, swiglu_limit=self.swiglu_limit,
+                scale_fmt=self.scale_fmt, layer_idx=self.layer_idx,
+                out_dtype=torch.bfloat16)
+        return V4FP4FusedMoENormal(
+            ep_size=self.ep_size, ep_group=self.ep_group,
+            num_experts=self.num_experts, num_local_experts=self.num_local_experts,
+            hidden_dim=self.hidden_dim, ffn_dim=self.ffn_dim,
+            top_k=self.top_k, swiglu_limit=self.swiglu_limit,
+            scale_fmt=self.scale_fmt, layer_idx=self.layer_idx,
+            out_dtype=torch.bfloat16)
+
+    def forward(self, hidden_states, topk_weights, topk_ids,
+                gate_up_weight, gate_up_scale, down_weight, down_scale,
+                expert_list=None):
+        from lmdeploy.pytorch.backends.cuda.moe.ep_utils import gather_outputs_by_attn_tp, split_inputs_by_attn_tp
+        from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
+
+        hidden_states, topk_weights, topk_ids, split_size = \
+            split_inputs_by_attn_tp(hidden_states, topk_weights, topk_ids)
+
+        step_ctx = get_step_ctx_manager().current_context()
+        low_latency_mode = step_ctx.is_decoding
+        moe = self.fusedmoe_build(low_latency_mode)
+        out_states = moe.forward(hidden_states, topk_weights, topk_ids,
+                                  gate_up_weight, gate_up_scale,
+                                  down_weight, down_scale,
+                                  expert_list=expert_list)
+
+        out_states = gather_outputs_by_attn_tp(out_states, split_size)
+        return out_states
+
+
+
 class DeepGemmFusedMoEV4Builder(FusedMoEBuilder):
-    """Builder for TP-only DeepSeek-V4 fused MoE."""
+    """Builder for DeepSeek-V4 fused MoE (DeepGEMM path)."""
 
     @staticmethod
     def build(top_k: int,
@@ -255,9 +430,14 @@ class DeepGemmFusedMoEV4Builder(FusedMoEBuilder):
               ffn_dim: int = 1,
               expert_offset: int = 0,
               swiglu_limit: float = 0.0):
-        del renormalize, ep_group, layer_idx, out_dtype
+        del renormalize, out_dtype
         if ep_size > 1:
-            raise RuntimeError('DeepSeek-V4 fused MoE currently supports TP only; EP is not implemented.')
+            num_local_experts = num_experts // ep_size
+            return TritonFusedMoEV4FP4EPImpl(
+                ep_size=ep_size, ep_group=ep_group, top_k=top_k,
+                num_experts=num_experts, num_local_experts=num_local_experts,
+                hidden_dim=hidden_dim, ffn_dim=ffn_dim,
+                swiglu_limit=swiglu_limit, layer_idx=layer_idx)
         return DeepGemmFusedMoEV4TPImpl(top_k=top_k,
                                         num_experts=num_experts,
                                         hidden_dim=hidden_dim,
@@ -267,7 +447,7 @@ class DeepGemmFusedMoEV4Builder(FusedMoEBuilder):
 
 
 class TritonFusedMoEV4FP4Builder(FusedMoEBuilder):
-    """Builder for TP-only DeepSeek-V4 Triton FP4 fused MoE."""
+    """Builder for DeepSeek-V4 Triton FP4 fused MoE."""
 
     @staticmethod
     def build(top_k: int,
@@ -282,9 +462,15 @@ class TritonFusedMoEV4FP4Builder(FusedMoEBuilder):
               expert_offset: int = 0,
               swiglu_limit: float = 0.0,
               scale_fmt: str | None = 'ue8m0'):
-        del renormalize, ep_group, layer_idx, out_dtype
+        del renormalize, out_dtype
         if ep_size > 1:
-            raise RuntimeError('DeepSeek-V4 fused MoE currently supports TP only; EP is not implemented.')
+            num_local_experts = num_experts // ep_size
+            return TritonFusedMoEV4FP4EPImpl(
+                ep_size=ep_size, ep_group=ep_group, top_k=top_k,
+                num_experts=num_experts, num_local_experts=num_local_experts,
+                hidden_dim=hidden_dim, ffn_dim=ffn_dim,
+                swiglu_limit=swiglu_limit, scale_fmt=scale_fmt,
+                layer_idx=layer_idx)
         return TritonFusedMoEV4FP4TPImpl(top_k=top_k,
                                          num_experts=num_experts,
                                          hidden_dim=hidden_dim,

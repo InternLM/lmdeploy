@@ -20,7 +20,7 @@ from lmdeploy.pytorch.nn import V4Attention as NativeV4Attention
 from lmdeploy.pytorch.nn import V4Compressor as NativeV4Compressor
 from lmdeploy.pytorch.nn import V4Indexer as NativeV4Indexer
 from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_down_linear, build_gateup_linear, build_o_proj
-from lmdeploy.pytorch.nn.moe import FusedMoEV4
+from lmdeploy.pytorch.nn.moe import FusedMoEV4FP4
 from lmdeploy.pytorch.nn.rotary_embedding import build_rotary_embedding
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 from lmdeploy.utils import get_logger
@@ -62,23 +62,19 @@ def _dequantize_wo_a_shard(weight: torch.Tensor, scale: torch.Tensor, world_size
     return weight.flatten(2, 3).flatten(0, 1).bfloat16()
 
 
-def _map_v4_expert_param_name(name: str, use_fused_experts: bool) -> tuple[str, str] | None:
+def _map_v4_expert_param_name(name: str) -> tuple[str, str] | None:
     expert_match = re.search(r'\.ffn\.experts\.(\d+)\.(w[123])\.(weight|scale)$', name)
     if expert_match is None:
         return None
     proj = expert_match.group(2)
     suffix = expert_match.group(3)
-    if use_fused_experts:
-        if proj == 'w1':
-            return name[:expert_match.start()] + f'.ffn.experts.ckpt_gate_up.{suffix}', 'gate'
-        if proj == 'w3':
-            return name[:expert_match.start()] + f'.ffn.experts.ckpt_gate_up.{suffix}', 'up'
-        return name[:expert_match.start()] + f'.ffn.experts.ckpt_down.{suffix}', 'down'
+    # Both V4ExpertTPWeights and V4ExpertWeights use gate_up/down attribute names.
+    # The weight_loader on each parameter handles TP/EP sharding internally.
     if proj == 'w1':
-        return name, 'gate'
+        return name[:expert_match.start()] + f'.ffn.experts.gate_up.{suffix}', 'gate'
     if proj == 'w3':
-        return name, 'up'
-    return name, 'down'
+        return name[:expert_match.start()] + f'.ffn.experts.gate_up.{suffix}', 'up'
+    return name[:expert_match.start()] + f'.ffn.experts.down.{suffix}', 'down'
 
 @dataclass
 
@@ -627,7 +623,7 @@ class MoE(nn.Module):
         super().__init__()
         self.dim = args.dim
         self.gate = Gate(layer_id, args, device=device)
-        self.experts = FusedMoEV4(args.dim,
+        self.experts = FusedMoEV4FP4(args.dim,
                                     args.moe_inter_dim,
                                     args.n_routed_experts,
                                     args.n_activated_experts,
@@ -974,7 +970,7 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         expert_match = re.search(r'\.ffn\.experts\.(\d+)\.(w[123])\.(weight|scale)$', name)
         if expert_match is not None:
             expert_id = int(expert_match.group(1))
-            mapped = _map_v4_expert_param_name(name, True)
+            mapped = _map_v4_expert_param_name(name)
             assert mapped is not None
             param_name, shard_id = mapped
             if param_name in params_dict:

@@ -22,10 +22,11 @@ def _check_env_v4(device: str = 'cuda'):
     except ImportError as e:
         raise ImportError('DeepSeek-V4 requires <deep_gemm> to be installed.') from e
 
-    try:
-        import tile_kernels  # noqa: F401
-    except ImportError as e:
-        raise ImportError('DeepSeek-V4 requires <tile_kernels> to be installed.') from e
+    # import tilekernels would lead to error here
+    # try:
+    #     import tile_kernels  # noqa: F401
+    # except ImportError as e:
+    #     raise ImportError('DeepSeek-V4 requires <tile_kernels> to be installed.') from e
 
     try:
         import fast_hadamard_transform  # noqa: F401
