@@ -446,6 +446,7 @@ class Qwen3_5MoeReader(Qwen3_5ReaderMixin, Qwen3MoeReader):
 
 
 @INPUT_MODELS.register_module(name='qwen3_5-moe')
+@INPUT_MODELS.register_module(name='interns2preview')
 class Qwen3_5MoeModel(Qwen3MoeModel):
     Reader = Qwen3_5MoeReader
 

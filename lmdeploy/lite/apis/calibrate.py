@@ -27,6 +27,7 @@ LAYER_TYPE_MAP = {
     'LlavaLlamaForCausalLM': 'LlamaDecoderLayer',
     'MGMLlamaForCausalLM': 'LlamaDecoderLayer',  # mini gemini
     'InternLMXComposer2ForCausalLM': 'InternLM2DecoderLayer',
+    'InternS2PreviewForConditionalGeneration': 'InternS2PreviewDecoderLayer',
     'Phi3ForCausalLM': 'Phi3DecoderLayer',
     'ChatGLMForConditionalGeneration': 'GLMBlock',
     'MixtralForCausalLM': 'MixtralDecoderLayer',
@@ -51,6 +52,7 @@ NORM_TYPE_MAP = {
     'LlavaLlamaForCausalLM': 'LlamaRMSNorm',
     'MGMLlamaForCausalLM': 'LlamaRMSNorm',  # mini gemini
     'InternLMXComposer2ForCausalLM': 'InternLM2RMSNorm',
+    'InternS2PreviewForConditionalGeneration': 'InternS2PreviewRMSNorm',
     'Phi3ForCausalLM': 'Phi3RMSNorm',
     'ChatGLMForConditionalGeneration': 'RMSNorm',
     'MixtralForCausalLM': 'MixtralRMSNorm',
@@ -75,6 +77,7 @@ HEAD_NAME_MAP = {
     'LlavaLlamaForCausalLM': 'lm_head',
     'MGMLlamaForCausalLM': 'lm_head',  # mini gemini
     'InternLMXComposer2ForCausalLM': 'output',
+    'InternS2PreviewForConditionalGeneration': 'lm_head',
     'Phi3ForCausalLM': 'lm_head',
     'ChatGLMForConditionalGeneration': 'output_layer',
     'MixtralForCausalLM': 'lm_head',
@@ -82,12 +85,6 @@ HEAD_NAME_MAP = {
     'Qwen2_5_VLForConditionalGeneration': 'lm_head',
     'MistralForCausalLM': 'lm_head',
 }
-
-MOE_MODEL_LIST = [
-    'Qwen3MoeForCausalLM',
-    'Qwen3_5MoeForConditionalGeneration',
-    'MixtralForCausalLM'
-]
 
 
 def check_vl_llm(backend: str, config: dict) -> bool:
@@ -110,7 +107,8 @@ def check_vl_llm(backend: str, config: dict) -> bool:
         'Qwen3_5MoeForConditionalGeneration', 'MllamaForConditionalGeneration', 'MolmoForCausalLM',
         'Gemma3ForConditionalGeneration', 'Llama4ForConditionalGeneration', 'InternVLForConditionalGeneration',
         'InternS1ForConditionalGeneration', 'InternS1ProForConditionalGeneration',
-        'InternS1_1_ForConditionalGeneration', 'Glm4vForConditionalGeneration'
+        'InternS1_1_ForConditionalGeneration', 'Glm4vForConditionalGeneration',
+        'InternS2PreviewForConditionalGeneration'
     ])
     if arch == 'QWenLMHeadModel' and 'visual' in config:
         return True
@@ -125,11 +123,7 @@ def check_vl_llm(backend: str, config: dict) -> bool:
 
 def get_task(backend: str, model_path: str):
     """Get pipeline type and pipeline class from model config."""
-    import os
 
-    if os.path.exists(os.path.join(model_path, 'triton_models', 'weights')):
-        # workspace model
-        return 'llm'
     _, config = get_model_arch(model_path)
     if check_vl_llm(backend, config.to_dict()):
         return 'vlm'
@@ -260,22 +254,23 @@ def update_moe_mapping(model, model_type):
 
 def load_model_and_tokenizer(model: str,
                          dtype: Literal['float16', 'bfloat16', 'auto'] = 'auto',
-                         work_dir: str = './work_dir'):
+                         work_dir: str = './work_dir',
+                         trust_remote_code: bool = False):
     """Load model and tokenizer."""
     model_type = get_task(backend='turbomind', model_path=model)
     make_compatible_internvl_config(model)
 
     # Load tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=trust_remote_code)
 
     # get model arch and config
-    arch, original_config = get_model_arch(model)
+    arch, original_config = get_model_arch(model, trust_remote_code=trust_remote_code)
 
     if model_type == 'llm':
-        model = load_hf_from_pretrained(model, dtype=dtype, trust_remote_code=True)
+        model = load_hf_from_pretrained(model, dtype=dtype, trust_remote_code=trust_remote_code)
         vl_model = None
     elif model_type == 'vlm':
-        vl_model = load_vl_model(model, backend=None, with_llm=True).vl_model
+        vl_model = load_vl_model(model, backend=None, with_llm=True, trust_remote_code=trust_remote_code).vl_model
         model = vl_model
         if hasattr(vl_model, 'language_model'):  # deepseek-vl, ...
             model = vl_model.language_model
@@ -355,7 +350,7 @@ def calibrate(model: str,
         '`neuralmagic_calibration`, `open-platypus`, `openwebtext`.'
 
     arch, vl_model, model, tokenizer, model_type, work_dir = load_model_and_tokenizer(
-        model, dtype=dtype, work_dir=work_dir)
+        model, dtype=dtype, work_dir=work_dir, trust_remote_code=trust_remote_code)
 
     if model_type in ['MixtralForCausalLM']:
         update_moe_mapping(model, model_type)
@@ -401,7 +396,7 @@ def calibrate(model: str,
 
     calib_ctx.export(work_dir)
 
-    return arch, vl_model, model, tokenizer
+    return arch, vl_model, model, tokenizer, work_dir
 
 
 if __name__ == '__main__':

@@ -8,8 +8,8 @@ from typing import Literal
 import torch
 from torch import nn
 
-from lmdeploy.lite.apis.calibrate import LAYER_TYPE_MAP, MOE_MODEL_LIST, calibrate, load_model_and_tokenizer
-from lmdeploy.lite.moe_mlp_modules import CONVERT_MOE_MODELS
+from lmdeploy.lite.apis.calibrate import LAYER_TYPE_MAP, calibrate, load_model_and_tokenizer
+from lmdeploy.lite.model import MODELS
 from lmdeploy.lite.quantization.awq import FC_FCS_MAP, NORM_FCS_MAP, awq_layers, quant_weights, smooth_layers
 from lmdeploy.lite.utils import collect_target_modules
 from lmdeploy.utils import try_import_deeplink
@@ -87,26 +87,31 @@ def auto_awq(model: str,
         model = get_model(model, revision=revision, download_dir=download_dir)
     model_path = model
     if calib_samples == 0:
-        arch, vl_model, model, tokenizer, _, _ = load_model_and_tokenizer(model, dtype=dtype, work_dir=work_dir)
+        arch, vl_model, model, tokenizer, _, _ = load_model_and_tokenizer(model,
+                                                                          dtype=dtype,
+                                                                          work_dir=work_dir,
+                                                                          trust_remote_code=trust_remote_code)
     else:
-        arch, vl_model, model, tokenizer = calibrate(model,
-                                                         calib_dataset,
-                                                         calib_samples,
-                                                         calib_seqlen,
-                                                         work_dir,
-                                                         device,
-                                                         w_bits=w_bits,
-                                                         w_group_size=w_group_size,
-                                                         search_scale=search_scale,
-                                                         dtype=dtype,
-                                                         batch_size=batch_size)
+        arch, vl_model, model, tokenizer, _ = calibrate(model,
+                                                        calib_dataset,
+                                                        calib_samples,
+                                                        calib_seqlen,
+                                                        work_dir,
+                                                        device,
+                                                        w_bits=w_bits,
+                                                        w_group_size=w_group_size,
+                                                        search_scale=search_scale,
+                                                        dtype=dtype,
+                                                        batch_size=batch_size,
+                                                        trust_remote_code=trust_remote_code)
 
     layer_type = LAYER_TYPE_MAP[type(model).__name__]
     layers = collect_target_modules(model, layer_type)
     fcs = {}
+    model_layer = MODELS.get(arch)
     for l_name, layer in layers.items():
-        if arch in MOE_MODEL_LIST:
-            CONVERT_MOE_MODELS.get(arch)(layer)
+        if model_layer:
+            model_layer(layer)
         name2fc = collect_target_modules(layer, nn.Linear, prefix=l_name)
         fcs.update(name2fc)
 
@@ -122,15 +127,14 @@ def auto_awq(model: str,
             act_scales = input_stats['absmax']
             smooth_layers(layers, fc2fcs, norm2fcs, act_scales, w_group_size, device)
 
-    matched_exclude_modules = quant_weights(model, fcs, w_bits, w_sym, w_group_size, device,
-                                            arch=arch)
+    skipped_modules = quant_weights(model, fcs, w_bits, w_sym, arch, w_group_size, device)
     quantization_config = dict(quant_method='awq',
                                version='gemm',
                                bits=w_bits,
                                group_size=w_group_size,
                                zero_point=not w_sym)
-    if matched_exclude_modules:
-        quantization_config['modules_to_not_convert'] = matched_exclude_modules
+    if skipped_modules:
+        quantization_config['modules_to_not_convert'] = skipped_modules
     model.config.update(dict(quantization_config=quantization_config))
 
     if vl_model:

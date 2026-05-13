@@ -48,6 +48,8 @@ SUPPORTED_ARCHS = dict(
     # internvl3
     InternVLForConditionalGeneration='internvl',
     InternS1ForConditionalGeneration='internvl',
+    # internS2
+    InternS2PreviewForConditionalGeneration='interns2preview',
     # deepseek-vl
     MultiModalityCausalLM='deepseekvl',
     DeepseekV2ForCausalLM='deepseek2',
