@@ -54,7 +54,8 @@ class MolmoVisionModel(VisionModel):
         for i, message in enumerate(messages):
             if not isinstance(message['content'], list):
                 continue
-            images = [x['image'] for x in message['content'] if x['type'] == 'image']
+            mm_items = self.collect_multimodal_items([message])
+            images = [data for modality, data, _ in mm_items if modality == 'image']
             content = [x.get('text', '') for x in message['content'] if x['type'] == 'text']
             prompt = f' User: {content[0]}'
             tokens = self.processor.tokenizer.encode(prompt, add_special_tokens=False)
