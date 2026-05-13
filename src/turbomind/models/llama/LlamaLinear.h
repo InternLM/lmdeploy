@@ -14,15 +14,15 @@ class LlamaLinear {
 public:
     explicit LlamaLinear();
 
-    Tensor Forward(const Tensor&         input,  //
-                   const LinearWeight&   weight,
-                   std::optional<Tensor> output = {});
+    void Forward(const Tensor&       input,  //
+                 const LinearWeight& weight,
+                 Ref<Tensor>         output);
 
-    Tensor Forward(const Tensor&         input,
-                   const LinearWeight&   weight,
-                   const Buffer_<int>&   indices,
-                   const Buffer_<int>&   offsets,
-                   std::optional<Tensor> output = {});
+    void Forward(const Tensor&       input,
+                 const LinearWeight& weight,
+                 const Buffer_<int>& indices,
+                 const Buffer_<int>& offsets,
+                 Ref<Tensor>         output);
 
     void set_measure(bool measure);
 

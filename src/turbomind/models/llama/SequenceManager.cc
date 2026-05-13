@@ -129,8 +129,8 @@ SequenceManager::SequenceManager(int                     head_dim,
             TM_LOG_ERROR("[SeqMgr] Linear-state memory ({:.2f} MB) >= cache budget ({:.2f} MB). ",
                          linear_bytes / (1024. * 1024.),
                          target_bytes / (1024. * 1024.));
-            TM_CHECK(0)
-                << "Please decrease max_batch_size to reduce total linear state size or increase cache_max_entry_count.";
+            TM_LOG_FATAL(
+                "Please decrease max_batch_size to reduce total linear state size or increase cache_max_entry_count.");
         }
         const size_t cache_bytes = target_bytes - linear_bytes;
         block_count              = static_cast<double>(cache_bytes) / static_cast<double>(block_size);

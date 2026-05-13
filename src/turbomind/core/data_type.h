@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <fmt/format.h>
 #include <type_traits>
 
 // forward declarations for CUDA floating point types
@@ -266,6 +267,17 @@ inline std::ostream& operator<<(std::ostream& os, DataType type) {
     return os;
 }
 
+}  // namespace turbomind
+
+template <>
+struct fmt::formatter<turbomind::DataType>: formatter<string_view> {
+    auto format(turbomind::DataType type, format_context& ctx) const {
+        return formatter<string_view>::format(turbomind::to_string(type), ctx);
+    }
+};
+
+namespace turbomind {
+
 /// TODO: mapping with DLPack
 
 // clang-format on
@@ -317,7 +329,7 @@ inline std::ostream& operator<<(std::ostream& os, DataType type) {
     switch (var) {                                                                                                     \
         TM_PP_DISPATCH_N(TM_PP_INVOKE_, __VA_ARGS__)(TM_DISPATCH_DTYPE_RET_CASE, f, __VA_ARGS__);                      \
         default:                                                                                                       \
-            TM_CHECK(0) << "unsupported type: "  << to_string(var);                                                    \
+            TM_LOG_FATAL("unsupported type: {}", to_string(var));                                                      \
             return {};                                                                                                 \
     }
 
@@ -325,7 +337,7 @@ inline std::ostream& operator<<(std::ostream& os, DataType type) {
     switch (var) {                                                                                                     \
         TM_PP_DISPATCH_N(TM_PP_INVOKE_, __VA_ARGS__)(TM_DISPATCH_DTYPE_CASE, f, __VA_ARGS__);                          \
         default:                                                                                                       \
-            TM_CHECK(0) << "unsupported type: "  << to_string(var);                                                    \
+            TM_LOG_FATAL("unsupported type: {}", to_string(var));                                                      \
     }
 // clang-format on
 

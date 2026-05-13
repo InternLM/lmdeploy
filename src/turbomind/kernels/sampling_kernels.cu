@@ -8,6 +8,7 @@
 #include "src/turbomind/kernels/sampling_kernels.h"
 #include "src/turbomind/kernels/sampling_topp_kernels.h"
 #include "src/turbomind/utils/constant.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
@@ -95,6 +96,7 @@ void invokeSampling(SamplingParams& params, cudaStream_t stream)
                                                    (T*)params.sampled_logprobs,
                                                    params.sampled_indexes,
                                                    params.sampled_nums);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template void invokeSampling<float>(SamplingParams& params, cudaStream_t stream);

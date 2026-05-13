@@ -24,6 +24,7 @@
 #include "src/turbomind/kernels/quantization.h"
 
 #include "src/turbomind/kernels/attention/quantization.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
@@ -113,6 +114,7 @@ void QuantizeSymm(Tensor& out, Tensor& scale, const Tensor& src, cudaStream_t st
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(src.dtype(), invoke);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<int vec_size, int group_size, class Tout, class Tscale, class T>
@@ -165,6 +167,7 @@ void DequantizeSymm(Tensor& out, const Tensor& src, const Tensor& scale, cudaStr
                                                                                        scale.stride(0),
                                                                                        num,
                                                                                        dim);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<int vec_size, int cta_size, int block_size, class Tout, class Tscale, class T>
@@ -272,6 +275,7 @@ void QuantizeSymmBlock(Ref<Tensor> out_, Ref<Tensor> scale_, const Tensor& src, 
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(src.dtype(), invoke);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<int vec_size, int cta_size, int block_size, class Tout, class Tscale, class T>
@@ -345,6 +349,7 @@ void DequantizeSymmBlock(Ref<Tensor> out_, Ref<Tensor> src_, const Tensor& scale
     }
 
     TM_DISPATCH_PRIMARY_DTYPES(out_.get().dtype(), invoke);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<int start_bit, int end_bit, class D, class T>
@@ -665,8 +670,9 @@ void QuantizeGroupwise(Tensor            quant,    // (m,k)
         invoke(FloatingPointQuantizer<half_t, 2, 1, uint16_t>{});
     }
     else {
-        TM_CHECK(0) << "Unsupported types: " << to_string(src.dtype()) << ", " << to_string(quant.dtype());
+        TM_LOG_FATAL("Unsupported types: {}, {}", to_string(src.dtype()), to_string(quant.dtype()));
     }
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 }  // namespace turbomind

@@ -3,6 +3,7 @@
 #include <cuda_runtime.h>
 
 #include "src/turbomind/core/context.h"
+#include "src/turbomind/core/scope.h"
 #include "src/turbomind/kernels/activation.h"
 #include "src/turbomind/kernels/norm/rms_norm.h"
 
@@ -49,18 +50,20 @@ void MoeFfnLayer::Init(ForwardParam& p)
 
 Tensor_<float> MoeFfnLayer::Gate(const Tensor& input, const LinearWeight& gate)
 {
+    TM_FUNCTION_SCOPE();
+
     auto& w = gate.weight;
     TM_CHECK_EQ(input.shape(1), w.shape(0));
     Tensor_<float> logits{{input.shape(0), w.shape(1)}, kDEVICE};
-    linear_.Forward(input, gate, logits);
-    sync_check_cuda_error();
+    TM_SCOPE_CALL(linear_.Forward(input, gate, logits));
     ApplyBias(logits, gate.bias, core::Context::stream().handle());
-    sync_check_cuda_error();
+    TM_CUDA_CHECK(cudaGetLastError());
     return logits;
 }
 
 void MoeFfnLayer::Forward(ForwardParam& p)
 {
+    TM_FUNCTION_SCOPE();
     if (!initialized_) {
         Init(p);
     }
@@ -76,7 +79,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
     const size_t padded     = (tokens + kMoeGateVecSize - 1) / kMoeGateVecSize * kMoeGateVecSize;
     const int    expert_num = moe.num_experts();
 
-    FT_CHECK(expert_num);
+    TM_CHECK(expert_num);
 
     auto logits = Gate(p.input, *moe.gate.get());
 
@@ -112,13 +115,13 @@ void MoeFfnLayer::Forward(ForwardParam& p)
     }
     else {
         // V2: accum must be cleared by caller; masks cleared internally
-        check_cuda_error(cudaMemsetAsync(accum_.data(), 0, sizeof(int) * expert_num * kMoeGateMaxTiles, st));
+        TM_CUDA_CHECK(cudaMemsetAsync(accum_.data(), 0, sizeof(int) * expert_num * kMoeGateMaxTiles, st));
 
         bool softmax = true;
         if (p.weights->topk_method == "group_limited_greedy") {
             invokeMoeSoftmaxMaskTopKGroups(
                 logits.data(), tokens, expert_num, expert_num / p.weights->n_group, p.weights->topk_group, st);
-            sync_check_cuda_error();
+            TM_CUDA_CHECK(cudaGetLastError());
             softmax = false;
         }
 
@@ -140,7 +143,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
                          p.weights->routed_scale,
                          st);
     }
-    sync_check_cuda_error();
+    TM_CUDA_CHECK(cudaGetLastError());
 
     if (is_warm_up_) {
         std::mt19937     g;
@@ -153,7 +156,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
         for (int i = 0; i < expert_num; ++i) {
             h_offsets_[i + 1] = h_offsets_[i] + cnt[i];
         }
-        check_cuda_error(
+        TM_CUDA_CHECK(
             cudaMemcpyAsync(offsets_.data(), h_offsets_.data(), sizeof(int) * (expert_num + 1), cudaMemcpyDefault, st));
     }
 
@@ -164,30 +167,28 @@ void MoeFfnLayer::Forward(ForwardParam& p)
 
     if (block.w1w3) {
         // Fused w1w3 path
-        Tensor inter = linear_.Forward(p.input, *block.w1w3, indices, offsets_);
-        sync_check_cuda_error();
+        Tensor inter;
+        TM_SCOPE_CALL(linear_.Forward(p.input, *block.w1w3, indices, offsets_, inter));
 
         if (!block.is_fused_silu) {
             Activation(inter, block.w1w3->bias, f2E_, block.act_type, st);
-            sync_check_cuda_error();
+            TM_CUDA_CHECK(cudaGetLastError());
         }
 
-        linear_.Forward(inter.slice({0, 0}, {-1, inter_size}), *block.w2, {}, offsets, temp_);
-        sync_check_cuda_error();
+        TM_SCOPE_CALL(linear_.Forward(inter.slice({0, 0}, {-1, inter_size}), *block.w2, {}, offsets, temp_));
     }
     else {
         // Separate w1/w3 path
-        Tensor gating = linear_.Forward(p.input, *block.w1, indices, offsets_);
-        sync_check_cuda_error();
+        Tensor gating;
+        TM_SCOPE_CALL(linear_.Forward(p.input, *block.w1, indices, offsets_, gating));
 
-        Tensor up = linear_.Forward(p.input, *block.w3, indices, offsets_);
-        sync_check_cuda_error();
+        Tensor up;
+        TM_SCOPE_CALL(linear_.Forward(p.input, *block.w3, indices, offsets_, up));
 
         Activation(gating, up, block.act_type, st);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
 
-        linear_.Forward(gating, *block.w2, {}, offsets, temp_);
-        sync_check_cuda_error();
+        TM_SCOPE_CALL(linear_.Forward(gating, *block.w2, {}, offsets, temp_));
     }
 
     if (moe.shared_gate) {
@@ -197,6 +198,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
 
 void MoeFfnLayer::Combine(ForwardParam& p)
 {
+    TM_FUNCTION_SCOPE();
     auto& moe = *p.weights;
 
     invokeMoeCombine(p.output,
@@ -210,7 +212,7 @@ void MoeFfnLayer::Combine(ForwardParam& p)
                      1.f / tp_size_,
                      p.scale,
                      core::Context::stream().handle());
-    sync_check_cuda_error();
+    TM_CUDA_CHECK(cudaGetLastError());
 
     temp_          = {};
     shared_scales_ = {};

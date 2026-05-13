@@ -6,6 +6,7 @@
 #include <cuda_runtime.h>
 
 #include "src/turbomind/core/allocator.h"
+#include "src/turbomind/core/scope.h"
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/norm/rms_norm.h"
 #include "src/turbomind/models/decoder_layer_weight.h"
@@ -126,7 +127,7 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
                                                 group1,
                                                 local_token_nums,
                                                 stream);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
     }
     else if (d_comm_) {
         d_comm_->AllreduceResidualBiasRMSnorm(hidden_states.raw_data(),
@@ -139,7 +140,7 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
                                               dtype,
                                               0,
                                               stream);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
     }
     else {
         invokeResidualBiasRMSNorm(hidden_states.raw_data(),
@@ -151,12 +152,13 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
                                   token_num,
                                   eps,
                                   stream);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
     }
 }
 
 void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<WeightType*>& weights)
 {
+    TM_FUNCTION_SCOPE();
     /**
      * input tensors:
      *   \param decoder_input [token_num, hidden_units], float
@@ -222,7 +224,7 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
                   weights.at(0)->attention_norm->norm_eps_,
                   stream);
 
-    sync_check_cuda_error();
+    TM_CUDA_CHECK(cudaGetLastError());
 
     TM_DEBUG_TENSOR(local_hidden_states, Concat("norm0", 0), 2);
 
@@ -230,6 +232,9 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
     // core::ContextGuard ctx{Allocator{stack_alloc}};
 
     for (int layer = 0; layer < layer_num_; ++layer) {
+
+        std::string _tm_layer_name = Concat("layer", layer);
+        TM_SCOPE(_tm_layer_name.c_str());
 
         // stack_alloc->iter();
 
@@ -315,7 +320,7 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
                                  0,
                                  attn_tp_group_,
                                  local_token_nums.data());
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
 
         TM_DEBUG_TENSOR(local_residual, Concat("residual1", layer), 2);
         TM_DEBUG_TENSOR(local_hidden_states, Concat("norm0", layer + 1), 2);

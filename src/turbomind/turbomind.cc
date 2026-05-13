@@ -90,11 +90,11 @@ struct TurboMind::Impl {
     void ProcessWeights(int index)
     {
         CudaDeviceGuard dev_guard(engine_param_.devices[index]);
-        FT_CHECK(weights_[index] != nullptr);
+        TM_CHECK(weights_[index] != nullptr);
 
         auto ctx_guard = weights_[index]->context();
         weights_[index]->prepare();
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
     }
 
     void CreateEngine(int index);
@@ -165,7 +165,7 @@ TurboMind::Impl::Impl(string model_dir, EngineConfig config, FFICtxFactory ffi_c
     }
 
     comm_size_ = engine_param_.attn_dp_size * engine_param_.attn_tp_size * engine_param_.attn_cp_size;
-    FT_CHECK(engine_param_.mlp_tp_size == comm_size_);
+    TM_CHECK(engine_param_.mlp_tp_size == comm_size_);
 
     communicator_type_ = std::move(config.communicator);
 

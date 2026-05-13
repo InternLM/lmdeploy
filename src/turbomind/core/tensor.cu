@@ -110,9 +110,9 @@ void GenericCopy(const Tensor& src, Tensor& dst, Stream& stream)
     const auto size = a.size() / vec_size;
 
     int device{};
-    check_cuda_error(cudaGetDevice(&device));
+    TM_CUDA_CHECK(cudaGetDevice(&device));
     int sm_num{};
-    check_cuda_error(cudaDeviceGetAttribute(&sm_num, cudaDevAttrMultiProcessorCount, device));
+    TM_CUDA_CHECK(cudaDeviceGetAttribute(&sm_num, cudaDevAttrMultiProcessorCount, device));
 
     auto invoke = [&](auto vec_t, auto index_t, auto d) {
         using T         = decltype(vec_t);
@@ -145,7 +145,7 @@ void GenericCopy(const Tensor& src, Tensor& dst, Stream& stream)
         for (int threads = 256; threads <= 1024; threads *= 2) {
             int blocks = cdiv<ssize_t>(size, block_size);
             int n_active{};
-            check_cuda_error(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&n_active, func, block_size, 0));
+            TM_CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&n_active, func, block_size, 0));
             int waves = cdiv(blocks, n_active * sm_num);
             if (waves < min_waves) {
                 min_waves  = waves;

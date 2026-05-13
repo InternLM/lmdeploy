@@ -6,6 +6,7 @@
 #include "src/turbomind/kernels/gemm/convert.cuh"
 #include "src/turbomind/kernels/gemm/convert.h"
 #include "src/turbomind/kernels/gemm/types.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 #include "src/turbomind/kernels/gemm/arch/operand_simt.h"
 #include "src/turbomind/kernels/gemm/arch/operand_sm70_s884.h"
@@ -159,8 +160,7 @@ std::array<const LayoutConverter*, 2> GetConverters(DataType data_type,
         // clang-format on
     }
 
-    TM_CHECK(0) << "Invalid combination: " << sm << " " << data_type << " " << weight_type << " " << input_type << " "
-                << grouped;
+    TM_LOG_FATAL("Invalid combination: {} {} {} {} {}", sm, data_type, weight_type, input_type, grouped);
 
     return {};
 }
@@ -203,6 +203,7 @@ void* MakeStridedPtrs(const std::vector<std::pair<void*, int>>& ptrs, cudaStream
         fill_strided_ptrs<<<1, N, 0, stream>>>(param);
         param.ptr += N;
     }
+    TM_CUDA_CHECK(cudaGetLastError());
     return ptr;
 }
 
@@ -235,6 +236,7 @@ void* MakeBlockedPtrs(const std::vector<std::pair<void*, int>>& ptrs, cudaStream
         fill_blocked_ptrs<<<1, N, 0, stream>>>(src, dst, n);
         dst += n;
     }
+    TM_CUDA_CHECK(cudaGetLastError());
     return dst - ptrs.size();
 }
 
