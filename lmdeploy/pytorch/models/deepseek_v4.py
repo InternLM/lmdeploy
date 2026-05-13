@@ -204,7 +204,6 @@ class Compressor(nn.Module):
         """
         ratio = self.compress_ratio
         rd = self.rope_head_dim
-        dtype = x.dtype
         overlap = self.overlap
         coff = 1 + overlap
         rows = coff * ratio
@@ -228,7 +227,7 @@ class Compressor(nn.Module):
             kv_flat, score_flat, self.ape, kv_state, score_state, state_ids, v4_compressor_meta)
 
         # ---- Phase F: Post-processing (norm + RoPE + quant on entire compressed_kv) ----
-        compressed_kv = self.norm(compressed_kv.to(dtype))
+        compressed_kv = self.norm(compressed_kv)
         # Apply RoPE to compressed KV rope dims
         kv_rope = compressed_kv[..., -rd:].unsqueeze(1)  # [total_flat, 1, rd]
         cos_c, sin_c = compress_pos_emb

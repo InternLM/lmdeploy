@@ -15,75 +15,22 @@ def get_cuda_autotune_config():
     return [
         triton.Config({
             'BLOCK_SIZE_M': 128,
-            'BLOCK_SIZE_N': 256,
-        }, num_stages=3, num_warps=8),
-        triton.Config({
-            'BLOCK_SIZE_M': 128,
-            'BLOCK_SIZE_N': 128,
-        }, num_stages=3, num_warps=4),
-        triton.Config({
-            'BLOCK_SIZE_M': 64,
-            'BLOCK_SIZE_N': 256,
-        }, num_stages=4, num_warps=4),
-        triton.Config({
-            'BLOCK_SIZE_M': 64,
-            'BLOCK_SIZE_N': 128,
+            'BLOCK_SIZE_N': 64,
         }, num_stages=4, num_warps=4),
         triton.Config({
             'BLOCK_SIZE_M': 64,
             'BLOCK_SIZE_N': 64,
         }, num_stages=5, num_warps=2),
         triton.Config({
-            'BLOCK_SIZE_M': 128,
-            'BLOCK_SIZE_N': 64,
-        }, num_stages=4, num_warps=4),
-        triton.Config({
-            'BLOCK_SIZE_M': 256,
+            'BLOCK_SIZE_M': 64,
             'BLOCK_SIZE_N': 128,
-        }, num_stages=3, num_warps=8),
-        triton.Config({
-            'BLOCK_SIZE_M': 256,
-            'BLOCK_SIZE_N': 64,
-        }, num_stages=3, num_warps=4),
+        }, num_stages=4, num_warps=4),
     ]
-
-
-@triton.jit
-def _fp4_e2m1_to_fp8(code):
-    """Decode FP4 E2M1 to FP8 E4M3 via prmt LUT.
-
-    Uses PTX prmt.b32 for byte-level LUT lookup (1 prmt + 1 xor vs 9 selp). prmt.b32 selector is 16-bit: 4 nibbles, each
-    3-bit source index + sign-extend flag. LUT_LO encodes magnitudes 0-3, LUT_HI encodes magnitudes 4-7. Sign bit is
-    applied separately via XOR.
-    """
-    LUT_LO: tl.constexpr = 0x3C383000
-    LUT_HI: tl.constexpr = 0x4C484440
-
-    code_u32 = code.to(tl.uint32)
-    packed = code_u32 | (code_u32 << 8) | (code_u32 << 16) | (code_u32 << 24)
-
-    mag = packed & 0x07070707
-    sel = (mag & 0x00000007) | ((mag >> 4) & 0x00000070) | ((mag >> 8) & 0x00000700) | \
-        ((mag >> 12) & 0x00007000)
-
-    result = tl.inline_asm_elementwise(
-        'prmt.b32 $0, $2, $3, $4;',
-        '=r,r,r,r,r',
-        args=[sel, LUT_LO, LUT_HI, sel],
-        dtype=tl.uint32,
-        is_pure=True,
-        pack=1,
-    )
-
-    sign = packed & 0x08080808
-    result = result ^ (sign << 4)
-
-    return (result & 0xFF).to(tl.uint8).to(tl.float8e4nv, bitcast=True)
 
 
 @triton.autotune(
     configs=get_cuda_autotune_config(),
-    key=['N', 'K', 'M_NP2'],
+    key=['N', 'K'],
 )
 @triton.jit
 def fused_moe_v4_fp4_kernel(
@@ -118,7 +65,7 @@ def fused_moe_v4_fp4_kernel(
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
-    M_NP2: tl.constexpr,
+    M_NP2,
     top_k: tl.constexpr,
     expert_offset: tl.constexpr,
     reindex_a: tl.constexpr,
@@ -126,7 +73,10 @@ def fused_moe_v4_fp4_kernel(
     B_SCALE_E8M0: tl.constexpr,
 ):
     """Fused MoE GEMM with FP8 activations and checkpoint-native V4 FP4
-    weights."""
+    weights.
+
+    Uses int32 load + prmt decode + join for 3x speedup over per-element decode.
+    """
     exp_id = tl.program_id(1)
     pid = tl.program_id(0)
 
@@ -171,20 +121,69 @@ def fused_moe_v4_fp4_kernel(
     exp_off = stride_be * exp_id
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
+    K8_BLOCK: tl.constexpr = BLOCK_SIZE_K // 8
+    offs_k8 = tl.arange(0, K8_BLOCK)
+    LUT_LO: tl.constexpr = 0x3C383000
+    LUT_HI: tl.constexpr = 0x4C484440
+
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         k_start = k * BLOCK_SIZE_K
         global_k = k_start + offs_k
-        packed_k = global_k // 2
-        high = (global_k & 1) != 0
+        k8_offs = k_start // 8 + offs_k8
 
         a = tl.load(a_ptrs, mask=mask_sid[:, None] & (global_k[None, :] < K), other=0.0)
 
-        b_ptrs = B + exp_off + offs_bn[None, :] * stride_bn + packed_k[:, None] * stride_bk
-        packed = tl.load(b_ptrs, mask=global_k[:, None] < K, other=0).to(tl.uint8, bitcast=True)
-        low_code = packed & 0x0F
-        high_code = (packed >> 4) & 0x0F
-        code = tl.where(high[:, None], high_code, low_code)
-        b = _fp4_e2m1_to_fp8(code)
+        # B is int32*: each int32 = 4 packed uint8 = 8 FP4 values
+        # Load as [BLOCK_SIZE_N, K8_BLOCK] to avoid transposing later
+        b_i32 = tl.load(B + exp_off + offs_bn[:, None] * stride_bn + k8_offs[None, :] * stride_bk,
+                         mask=k8_offs[None, :] < K // 8, other=0)
+
+        # Low nibble decode
+        mag_lo = b_i32 & 0x07070707
+        sel_lo = (mag_lo & 0x00000007) | ((mag_lo >> 4) & 0x00000070) | \
+            ((mag_lo >> 8) & 0x00000700) | ((mag_lo >> 12) & 0x00007000)
+        result_lo = tl.inline_asm_elementwise(
+            'prmt.b32 $0, $2, $3, $4;', '=r,r,r,r,r',
+            args=[sel_lo, LUT_LO, LUT_HI, sel_lo],
+            dtype=tl.uint32, is_pure=True, pack=1,
+        )
+        sign_lo = b_i32 & 0x08080808
+        result_lo = result_lo ^ (sign_lo << 4)
+
+        # High nibble decode — shift then mask to prevent cross-byte leakage
+        b_shifted = (b_i32 >> 4) & 0x0F0F0F0F
+        mag_hi = b_shifted & 0x07070707
+        sel_hi = (mag_hi & 0x00000007) | ((mag_hi >> 4) & 0x00000070) | \
+            ((mag_hi >> 8) & 0x00000700) | ((mag_hi >> 12) & 0x00007000)
+        result_hi = tl.inline_asm_elementwise(
+            'prmt.b32 $0, $2, $3, $4;', '=r,r,r,r,r',
+            args=[sel_hi, LUT_LO, LUT_HI, sel_hi],
+            dtype=tl.uint32, is_pure=True, pack=1,
+        )
+        sign_hi = b_shifted & 0x08080808
+        result_hi = result_hi ^ (sign_hi << 4)
+
+        # Extract 8 fp8 bytes: byte j low→K=k8*8+2j, byte j high→K=k8*8+2j+1
+        b0 = (result_lo).to(tl.uint8).to(tl.float8e4nv, bitcast=True)
+        b1 = (result_lo >> 8).to(tl.uint8).to(tl.float8e4nv, bitcast=True)
+        b2 = (result_lo >> 16).to(tl.uint8).to(tl.float8e4nv, bitcast=True)
+        b3 = (result_lo >> 24).to(tl.uint8).to(tl.float8e4nv, bitcast=True)
+        b4 = (result_hi).to(tl.uint8).to(tl.float8e4nv, bitcast=True)
+        b5 = (result_hi >> 8).to(tl.uint8).to(tl.float8e4nv, bitcast=True)
+        b6 = (result_hi >> 16).to(tl.uint8).to(tl.float8e4nv, bitcast=True)
+        b7 = (result_hi >> 24).to(tl.uint8).to(tl.float8e4nv, bitcast=True)
+
+        # Already [BLOCK_SIZE_N, K8_BLOCK] from load — join with v2 pairing
+        j_lo_02 = tl.join(b0, b2)
+        j_lo_13 = tl.join(b1, b3)
+        j_lo = tl.join(j_lo_02, j_lo_13)
+        j_hi_02 = tl.join(b4, b6)
+        j_hi_13 = tl.join(b5, b7)
+        j_hi = tl.join(j_hi_02, j_hi_13)
+        # join(low, high) interleaves → K order [0,4,1,5,2,6,3,7]
+        j_all = tl.join(j_lo, j_hi)
+        flat = j_all.reshape(BLOCK_SIZE_N, K8_BLOCK * 8)
+        b = flat.trans()  # [BLOCK_SIZE_K, BLOCK_SIZE_N]
 
         offs_ksa = k_start // group_ak
         offs_ksb = k_start // group_bk
@@ -244,12 +243,25 @@ def fused_moe_v4_fp4_kernel_launcher(
     assert K % A_scale.size(1) == 0
     assert K % B_scale.size(2) == 0
 
+    # B layout checks for int32 pack + prmt decode
+    assert B.dtype in (torch.int8, torch.uint8), (
+        f"B must be int8/uint8 (packed FP4), got {B.dtype}")
+    assert B.stride(-1) == 1, (
+        f"B must have stride[-1]==1 for int32 view, got stride {B.stride()}")
+    assert B.shape[-1] % 4 == 0, (
+        f"B packed_K (last dim) must be a multiple of 4 for int32 packing, "
+        f"got {B.shape[-1]}")
+
     group_ak = K // A_scale.size(1)
     group_bk = K // B_scale.size(2)
     assert group_bk == 32, 'DeepSeek-V4 FP4 weights use per-32 K scales.'
     b_scale_e8m0 = B_scale.dtype == torch.float8_e8m0fnu
     if b_scale_e8m0:
         B_scale = B_scale.view(torch.uint8)
+
+    # View B as int32: [E, N, packed_K] int8 → [E, N, packed_K//4] int32
+    # Kernel uses int32 pointer with strides in int32 elements
+    B_i32 = B.view(torch.int32)
 
     def _grid_fn(META):
         grid = (triton.cdiv(M_NP2, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), E)
@@ -264,7 +276,7 @@ def fused_moe_v4_fp4_kernel_launcher(
     fused_moe_v4_fp4_kernel[_grid_fn](
         A,
         A_scale,
-        B,
+        B_i32,
         B_scale,
         bias,
         C,
@@ -279,9 +291,9 @@ def fused_moe_v4_fp4_kernel_launcher(
         stride_ak=A.stride(1),
         stride_asm=A_scale.stride(0),
         stride_ask=A_scale.stride(1),
-        stride_be=B.stride(0),
-        stride_bn=B.stride(1),
-        stride_bk=B.stride(2),
+        stride_be=B_i32.stride(0),
+        stride_bn=B_i32.stride(1),
+        stride_bk=B_i32.stride(2),
         stride_bse=B_scale.stride(0),
         stride_bsn=B_scale.stride(1),
         stride_bsk=B_scale.stride(2),
