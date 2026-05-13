@@ -51,6 +51,16 @@ Documentation
    supported_models/supported_models.md
    supported_models/reward_models.md
 
+.. _best_practice:
+.. toctree::
+   :maxdepth: 3
+   :caption: Deployment Best Practice
+
+   best_practice/qwen/index
+   best_practice/deepseek/index
+   best_practice/glm/index
+   best_practice/internlm/index
+
 .. _llm_deployment:
 .. toctree::
    :maxdepth: 1

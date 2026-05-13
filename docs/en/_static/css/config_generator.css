@@ -1,0 +1,216 @@
+/* ================================================================
+   LMDeploy Interactive Configuration Generator – pill-bar layout
+   Matches the SGLang Cookbook segmented-control style
+   ================================================================ */
+
+/* Wrapper: full content width, no card background */
+.cg-wrapper {
+    width: 100%;
+    margin: 0;
+    padding: 0;
+}
+
+/* ── Dimension row ─────────────────────────────────────────────── */
+.cg-row {
+    margin-bottom: 1.25em;
+}
+
+.cg-label {
+    font-weight: 600;
+    font-size: 0.95em;
+    margin-bottom: 0.4em;
+    color: var(--pst-color-text-base, #24292e);
+}
+
+/* ── Pill bar (segmented control) ──────────────────────────────── */
+.cg-pill-bar {
+    display: flex;
+    flex-wrap: wrap;
+    width: 100%;
+    border: 1px solid var(--pst-color-border, #d1d5db);
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--pst-color-surface, #ffffff);
+}
+
+.cg-pill {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 0.55em 0.4em;
+    margin: 0;
+    border: none;
+    border-right: 1px solid var(--pst-color-border, #d1d5db);
+    background: transparent;
+    color: var(--pst-color-text-base, #24292e);
+    font-size: 0.88em;
+    font-weight: 500;
+    cursor: pointer;
+    text-align: center;
+    transition: background 0.15s ease, color 0.15s ease;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.4;
+}
+
+.cg-pill:last-child {
+    border-right: none;
+}
+
+.cg-pill:hover {
+    background: rgba(3, 102, 214, 0.08);
+}
+
+.cg-pill.active {
+    background: #0366d6;
+    color: #ffffff;
+    font-weight: 600;
+}
+
+.cg-pill.active:hover {
+    background: #0256c2;
+}
+
+/* ── Command output section ────────────────────────────────────── */
+.cg-command-section {
+    margin-top: 1.5em;
+}
+
+.cg-command-label {
+    font-weight: 600;
+    font-size: 0.95em;
+    margin-bottom: 0.4em;
+    color: var(--pst-color-text-base, #24292e);
+}
+
+.cg-command-box {
+    background: #1e1e1e;
+    border-radius: 6px;
+    padding: 1em 1em 1em 1.2em;
+    position: relative;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.cg-command-box pre {
+    margin: 0;
+    padding: 0;
+    padding-right: 4.5em;         /* space for the copy button */
+    background: transparent;
+    overflow-x: auto;
+}
+
+.cg-command-box code {
+    color: #d4d4d4;
+    font-family: 'SFMono-Regular', 'Consolas', 'Liberation Mono', 'Menlo', monospace;
+    font-size: 0.88em;
+    line-height: 1.6;
+    white-space: pre;
+}
+
+.cg-copy-btn {
+    position: absolute;
+    top: 0.6em;
+    right: 0.6em;
+    background: #0366d6;
+    color: #ffffff;
+    border: none;
+    border-radius: 4px;
+    padding: 0.35em 0.9em;
+    cursor: pointer;
+    font-size: 0.8em;
+    font-weight: 500;
+    transition: background 0.2s ease;
+}
+
+.cg-copy-btn:hover {
+    background: #0256c2;
+}
+
+.cg-copy-btn:active {
+    background: #014a9e;
+}
+
+/* ── Responsive: stack pills on narrow screens ─────────────────── */
+@media (max-width: 640px) {
+    .cg-pill-bar {
+        flex-direction: column;
+    }
+
+    .cg-pill {
+        border-right: none;
+        border-bottom: 1px solid var(--pst-color-border, #d1d5db);
+    }
+
+    .cg-pill:last-child {
+        border-bottom: none;
+    }
+}
+
+/* ── Dark-mode overrides (sphinx-book-theme data-theme) ────────── */
+html[data-theme="dark"] .cg-label,
+html[data-theme="dark"] .cg-command-label {
+    color: #f0f6fc;
+}
+
+html[data-theme="dark"] .cg-pill-bar {
+    border-color: #30363d;
+    background: #161b22;
+}
+
+html[data-theme="dark"] .cg-pill {
+    color: #c9d1d9;
+    border-color: #30363d;
+}
+
+html[data-theme="dark"] .cg-pill:hover {
+    background: rgba(88, 166, 255, 0.12);
+}
+
+html[data-theme="dark"] .cg-pill.active {
+    background: #1f6feb;
+    color: #ffffff;
+}
+
+html[data-theme="dark"] .cg-command-box {
+    background: #0d1117;
+}
+
+html[data-theme="dark"] .cg-command-box code {
+    color: #c9d1d9;
+}
+
+/* Also handle prefers-color-scheme for themes without data-theme */
+@media (prefers-color-scheme: dark) {
+    .cg-label,
+    .cg-command-label {
+        color: #f0f6fc;
+    }
+
+    .cg-pill-bar {
+        border-color: #30363d;
+        background: #161b22;
+    }
+
+    .cg-pill {
+        color: #c9d1d9;
+        border-color: #30363d;
+    }
+
+    .cg-pill:hover {
+        background: rgba(88, 166, 255, 0.12);
+    }
+
+    .cg-pill.active {
+        background: #1f6feb;
+        color: #ffffff;
+    }
+
+    .cg-command-box {
+        background: #0d1117;
+    }
+
+    .cg-command-box code {
+        color: #c9d1d9;
+    }
+}
