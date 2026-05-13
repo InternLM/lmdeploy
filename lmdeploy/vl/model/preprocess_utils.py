@@ -125,7 +125,7 @@ def get_expanded_mm_items(collected_mm_items, mm_tokens: 'MultimodalSpecialToken
                 expanded_mm_items.append(
                     dict(
                         modality=modality,
-                        pixel_values=item['feature'][start_idx:end_idx],
+                        pixel_values=item['feature'][start_idx:end_idx].clone(),
                         image_grid_thw=image_grid_thw[i],
                         offset=item['offset'][i],
                         image_token_id=token_id,
@@ -173,7 +173,7 @@ def get_expanded_mm_items(collected_mm_items, mm_tokens: 'MultimodalSpecialToken
                     expanded_mm_items.append(
                         dict(
                             modality=modality,
-                            pixel_values_videos=video_feature[frame_idx * h * w:(frame_idx + 1) * h * w],
+                            pixel_values_videos=video_feature[frame_idx * h * w:(frame_idx + 1) * h * w].clone(),
                             video_grid_thw=torch.tensor([1, h, w]),
                             offset=item['offset'][frame_start:frame_end][frame_idx],
                             video_token_id=token_id,
