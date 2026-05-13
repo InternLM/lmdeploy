@@ -4,8 +4,9 @@
 from __future__ import annotations
 
 import json
-import time
 from typing import Any
+
+import shortuuid
 
 from lmdeploy.messages import GenerationConfig
 from lmdeploy.serve.openai.protocol import Tool, ToolChoice, ToolChoiceFuncName
@@ -186,9 +187,12 @@ def _convert_image_source_to_url(source: Any) -> str:
     source_type = _block_get(source, 'type')
     if source_type == 'url':
         return _block_get(source, 'url', '')
-    media_type = _block_get(source, 'media_type', 'image/jpeg')
-    data = _block_get(source, 'data', '')
-    return f'data:{media_type};base64,{data}'
+    if source_type == 'base64':
+        media_type = _block_get(source, 'media_type', 'image/jpeg')
+        data = _block_get(source, 'data', '')
+        if data:
+            return f'data:{media_type};base64,{data}'
+    return ''
 
 
 def _convert_system_blocks_to_text(system: list[ContentBlockParam]) -> str:
@@ -268,14 +272,16 @@ def to_openai_messages(request: MessagesRequest | CountTokensRequest) -> list[di
             if block_type == 'image':
                 source = _block_get(block, 'source')
                 if source:
-                    content_parts.append(
-                        dict(type='image_url', image_url=dict(url=_convert_image_source_to_url(source))))
+                    url = _convert_image_source_to_url(source)
+                    if url:
+                        content_parts.append(
+                            dict(type='image_url', image_url=dict(url=url)))
                 continue
 
             if block_type == 'tool_use':
                 tool_calls.append(
                     dict(
-                        id=_block_get(block, 'id') or f'call_{int(time.time())}',
+                        id=_block_get(block, 'id') or f'call_{shortuuid.random()}',
                         type='function',
                         function=dict(
                             name=_block_get(block, 'name') or '',
