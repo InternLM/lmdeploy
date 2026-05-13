@@ -18,13 +18,13 @@
 
 #include "src/turbomind/core/copy.h"
 #include "src/turbomind/core/logger.h"
+#include "src/turbomind/core/scope.h"
 #include "src/turbomind/models/decoder_layer_weight.h"
 #include "src/turbomind/models/delta_net_weight.h"
 #include "src/turbomind/models/language_model.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/model_weight.h"
-#include "src/turbomind/core/scope.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/metrics.h"
 
