@@ -419,16 +419,18 @@ async def _stream_response(result_generator,
     content_index = 0
     sequence_number = 2
     text_started = False
+    text_output_index = None
     text = ''
     tool_states: dict[int, dict[str, Any]] = {}
     streaming_tools = False
     final_res = None
 
     def _start_text_item() -> list[str]:
-        nonlocal next_output_index, sequence_number, text_started
+        nonlocal next_output_index, sequence_number, text_output_index, text_started
         if text_started:
             return []
         text_started = True
+        text_output_index = next_output_index
         events = [
             _sse(
                 'response.output_item.added',
@@ -436,7 +438,7 @@ async def _stream_response(result_generator,
                     'type': 'response.output_item.added',
                     'sequence_number': sequence_number,
                     'response_id': request.request_id,
-                    'output_index': next_output_index,
+                    'output_index': text_output_index,
                     'item': {
                         'id': message_id,
                         'type': 'message',
@@ -455,7 +457,7 @@ async def _stream_response(result_generator,
                     'type': 'response.content_part.added',
                     'sequence_number': sequence_number,
                     'response_id': request.request_id,
-                    'output_index': next_output_index,
+                    'output_index': text_output_index,
                     'item_id': message_id,
                     'content_index': content_index,
                     'part': {
@@ -543,7 +545,7 @@ async def _stream_response(result_generator,
                     'sequence_number': sequence_number,
                     'response_id': request.request_id,
                     'item_id': message_id,
-                    'output_index': 0,
+                    'output_index': text_output_index,
                     'content_index': content_index,
                     'delta': content_delta,
                 },
@@ -597,12 +599,29 @@ async def _stream_response(result_generator,
         finish_reason=finish_reason,
         message_id=message_id,
     )
+    output_by_index: dict[int, ResponseOutputMessage | ResponseOutputFunctionCall] = {}
+    text_item = next((item for item in final_response.output if isinstance(item, ResponseOutputMessage)), None)
+    if text_started and text_output_index is not None and text_item is not None:
+        output_by_index[text_output_index] = text_item
+    tool_items = {
+        item.call_id: item
+        for item in final_response.output
+        if isinstance(item, ResponseOutputFunctionCall)
+    }
+    for state in tool_states.values():
+        tool_item = tool_items.get(state['call_id'])
+        if tool_item is not None:
+            output_by_index[state['output_index']] = tool_item
+    if output_by_index:
+        final_response.output = [item for _, item in sorted(output_by_index.items())]
     if text_started:
         output_text = {
             'type': 'output_text',
             'text': text,
             'annotations': [],
         }
+        assert text_output_index is not None
+        assert text_item is not None
         yield _sse(
             'response.output_text.done',
             {
@@ -610,7 +629,7 @@ async def _stream_response(result_generator,
                 'sequence_number': sequence_number,
                 'response_id': request.request_id,
                 'item_id': message_id,
-                'output_index': 0,
+                'output_index': text_output_index,
                 'content_index': content_index,
                 'text': text,
             },
@@ -623,7 +642,7 @@ async def _stream_response(result_generator,
                 'sequence_number': sequence_number,
                 'response_id': request.request_id,
                 'item_id': message_id,
-                'output_index': 0,
+                'output_index': text_output_index,
                 'content_index': content_index,
                 'part': output_text,
             },
@@ -635,8 +654,8 @@ async def _stream_response(result_generator,
                 'type': 'response.output_item.done',
                 'sequence_number': sequence_number,
                 'response_id': request.request_id,
-                'output_index': 0,
-                'item': final_response.output[0].model_dump(exclude_none=True),
+                'output_index': text_output_index,
+                'item': text_item.model_dump(exclude_none=True),
             },
         )
         sequence_number += 1
@@ -699,19 +718,30 @@ def create_responses_router(server_context) -> APIRouter:
 
         try:
             messages = _messages_from_input(request)
-            gen_config = _to_generation_config(request)
-            tools = _openai_tools_from_responses(request)
-            tool_choice = _tool_choice_from_responses(request.tool_choice, tools)
         except ValueError as err:
             return _error_response(HTTPStatus.BAD_REQUEST, str(err), param='input')
+        try:
+            gen_config = _to_generation_config(request)
+        except ValueError as err:
+            return _error_response(HTTPStatus.BAD_REQUEST, str(err), param='text')
+        try:
+            tools = _openai_tools_from_responses(request)
+        except ValueError as err:
+            return _error_response(HTTPStatus.BAD_REQUEST, str(err), param='tools')
+        try:
+            tool_choice = _tool_choice_from_responses(request.tool_choice, tools)
+        except ValueError as err:
+            return _error_response(HTTPStatus.BAD_REQUEST, str(err), param='tool_choice')
 
         parser_cls = getattr(server_context, 'response_parser_cls', None)
-        if tools and (parser_cls is None or parser_cls.tool_parser_cls is None):
+        tools_enabled = tools and tool_choice != 'none'
+        if tools_enabled and (parser_cls is None or parser_cls.tool_parser_cls is None):
             return _error_response(
                 HTTPStatus.BAD_REQUEST,
                 'Please launch the api_server with --tool-call-parser if you want to use tool calling.',
                 param='tools',
             )
+        parser_tools = tools if tools_enabled else None
 
         response_parser = None
         parsed_request = None
@@ -726,7 +756,7 @@ def create_responses_router(server_context) -> APIRouter:
                 top_p=request.top_p,
                 top_k=request.top_k,
                 stop=request.stop,
-                tools=tools,
+                tools=parser_tools,
                 tool_choice=tool_choice,
             )
             response_parser = parser_cls(request=openai_request, tokenizer=tokenizer)
