@@ -191,9 +191,11 @@ def fused_moe_v4_fp4_kernel(
 
 # Tile configs keyed by per-expert M range: (BM, BN, num_stages, num_warps)
 # BN=128 is critical for HBM read coalescing — BN=64 gives ~3x lower B-bandwidth.
-# BM has minor impact; small BM slightly helps at small M due to less padding.
+# 4 warps at small BM hides latency better than 2 warps (+16% at M<=16).
+# BM>=64 triggers WGMMA FP8 path (vs mma.sync FP16), which only wins at large
+# per-expert M (>=4) where CTA count isn't the bottleneck.
 _TILE_CONFIGS = [
-    (16, 128, 5, 2),   # M <= 16
+    (16, 128, 4, 4),   # M <= 16
     (64, 128, 4, 4),   # M <= 64
     (128, 128, 4, 4),  # M > 64
 ]

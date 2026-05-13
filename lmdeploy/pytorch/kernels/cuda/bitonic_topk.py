@@ -96,6 +96,20 @@ def argsort(x, ids, dim: tl.constexpr = None, descending: tl.constexpr = core.CO
 
 
 @triton.jit
+def _partial_argsort(x, ids, eff_n_dims: tl.constexpr, descending: tl.constexpr):
+    """Bitonic sort limited to eff_n_dims stages.
+
+    After eff_n_dims stages, the first 2^eff_n_dims elements are sorted in the specified order.  Remaining elements form
+    alternating-sorted groups of size 2^eff_n_dims (their content is irrelevant when they are all threshold padding).
+    Only safe when the consumer (kernel1) does not merge across blocks, i.e. when seqlen <= K.
+    """
+    n_dims: tl.constexpr = _log2(x.shape[-1])
+    for i in tl.static_range(1, eff_n_dims + 1):
+        x, ids = _bitonic_merge(x, ids, i, 2 if i < eff_n_dims else descending, n_dims)
+    return x, ids
+
+
+@triton.jit
 def _bitonic_topk_kernel0(score_ptr,
                           seqlen_ptr,
                           out_ptr,
@@ -132,8 +146,31 @@ def _bitonic_topk_kernel0(score_ptr,
             scores = tl.load(score_ptrs, mask=mask, other=-1e6)
             ids = tl.where(mask, origin_ids, fill)
 
-            if sorted or (seqlen > K):
+            if seqlen > K:
                 scores, ids = argsort(scores, ids, 0, descending)
+            elif sorted:
+                if seqlen <= 1:
+                    pass
+                elif K >= 2 and seqlen <= 2:
+                    scores, ids = _partial_argsort(scores, ids, 1, descending)
+                elif K >= 4 and seqlen <= 4:
+                    scores, ids = _partial_argsort(scores, ids, 2, descending)
+                elif K >= 8 and seqlen <= 8:
+                    scores, ids = _partial_argsort(scores, ids, 3, descending)
+                elif K >= 16 and seqlen <= 16:
+                    scores, ids = _partial_argsort(scores, ids, 4, descending)
+                elif K >= 32 and seqlen <= 32:
+                    scores, ids = _partial_argsort(scores, ids, 5, descending)
+                elif K >= 64 and seqlen <= 64:
+                    scores, ids = _partial_argsort(scores, ids, 6, descending)
+                elif K >= 128 and seqlen <= 128:
+                    scores, ids = _partial_argsort(scores, ids, 7, descending)
+                elif K >= 256 and seqlen <= 256:
+                    scores, ids = _partial_argsort(scores, ids, 8, descending)
+                elif K >= 512 and seqlen <= 512:
+                    scores, ids = _partial_argsort(scores, ids, 9, descending)
+                else:
+                    scores, ids = argsort(scores, ids, 0, descending)
 
             tl.store(out_ptr + batch_id * stride_m + origin_ids, scores, mask=mask)
             tl.store(ids_ptr + batch_id * stride_m + origin_ids, ids, mask=mask)
@@ -231,7 +268,7 @@ def bitonic_topk(scores: torch.Tensor,
     # Avoids launching num_tokens * ceil(N/K) CTAs that mostly early-return.
     from lmdeploy.pytorch.kernels.cuda.utils import get_device_props
     props = get_device_props(scores.device.index)
-    num_ctas = props['multi_processor_count'] * 4
+    num_ctas = props['multi_processor_count'] * 8
     num_blocks_per_row = triton.cdiv(max_kv_len, k)
     _bitonic_topk_kernel0[(num_ctas, )](scores,
                                         repeat_kv_seqlens,
