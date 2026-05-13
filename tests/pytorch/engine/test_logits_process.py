@@ -150,7 +150,7 @@ def test_filter_ngram():
         [9, 8, 7, 3, 8, 7, 5, 9, 8, 7],
         [9, 8, 7, 3, 8, 7, 5, 9, 8, 7],
     ],
-                                 dtype=torch.int64)
+        dtype=torch.int64)
     n = torch.tensor([3, 3, 2], dtype=torch.int64)
     threshold = torch.tensor([3, 3, 3], dtype=torch.int64)
 

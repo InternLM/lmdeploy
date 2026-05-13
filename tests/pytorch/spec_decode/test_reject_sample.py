@@ -100,8 +100,8 @@ class TestRejectSample:
             [10, 21, 30],
             [10, 20, 31],
         ],
-                             dtype=torch.long,
-                             device=device)
+            dtype=torch.long,
+            device=device)
         bonus = torch.tensor([99, 88, 77, 66], dtype=torch.long, device=device)
         si = SamplingInputs(max_top_k=1)
 

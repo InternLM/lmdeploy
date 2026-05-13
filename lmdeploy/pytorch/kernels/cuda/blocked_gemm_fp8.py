@@ -208,7 +208,7 @@ def _gemm_fp8_tma_pre_hook(nargs):
         'BLOCK_N': 64,
     }, num_stages=3, num_warps=4, pre_hook=_gemm_fp8_tma_pre_hook)
 ],
-                 key=['N', 'K'])
+    key=['N', 'K'])
 @triton.jit
 def _gemm_fp8_tma_kernel(
     desc_a,
@@ -296,7 +296,7 @@ def _gemm_fp8_tma_kernel(
         'BLOCK_N': 64,
     }, num_stages=3, num_warps=4)
 ],
-                 key=['N', 'K'])
+    key=['N', 'K'])
 @triton.jit
 def _gemm_fp8_kernel(
     A,

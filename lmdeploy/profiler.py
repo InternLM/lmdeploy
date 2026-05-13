@@ -166,8 +166,8 @@ class Profiler:
                 f'{self.rps:.3f}',
                 f'{(self.input_throughput):.3f}',
                 f'{self.output_throughput:.3f}',
-                f'{self.e2e_mean*1000:.3f}',
-                f'{self.ttft_mean*1000:.3f}' if self.stream_output else '-',
-                f'{self.tpot_mean*1000:.3f}',
-                f'{self.itls_mean*1000:.3f}' if self.stream_output else '-',
+                f'{self.e2e_mean * 1000:.3f}',
+                f'{self.ttft_mean * 1000:.3f}' if self.stream_output else '-',
+                f'{self.tpot_mean * 1000:.3f}',
+                f'{self.itls_mean * 1000:.3f}' if self.stream_output else '-',
             ])

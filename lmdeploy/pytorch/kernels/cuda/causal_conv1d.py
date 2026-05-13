@@ -121,7 +121,7 @@ def causal_conv1d_fwd(hidden_size, width, has_bias, activation, dtype, stride_x,
                             init_col = k_val + w
                             if init_col < width - 1:
                                 out_vals[i] += w_local[w] * T.cast(Init_states[seq_idx_cur, c_idx, init_col],
-                                                                    T.float32)
+                                                                   T.float32)
                 else:
                     for w in T.unroll(width):
                         out_vals[i] += T.if_then_else(seq_idx_local[i + w] == seq_idx_cur,

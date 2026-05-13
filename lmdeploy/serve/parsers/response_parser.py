@@ -43,6 +43,7 @@ class ResponseParser:
                        token_ids: list[int] | None = None, **kwargs) -> tuple[str, list | None, str | None]:
         raise NotImplementedError
 
+
 @dataclass
 class ProtocolProfile:
     """Protocol tags and startup mode used by :class:`ResponseParser`.
@@ -399,7 +400,7 @@ class BaseResponseParser(ResponseParser):
             self._pending = ''
             out = self.tool_parser.decode_tool_incremental(added_text=emit, final=False)
             if (self.profile.tool_payload_format == 'json'
-                and self._is_complete_json_object(self.tool_parser._tool_payload)):
+                    and self._is_complete_json_object(self.tool_parser._tool_payload)):
                 out.extend(self.tool_parser.decode_tool_incremental(added_text='', final=True))
                 self.tool_parser.finish_tool_call()
                 self._mode = self.MODE_PLAIN

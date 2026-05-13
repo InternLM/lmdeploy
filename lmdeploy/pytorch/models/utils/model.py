@@ -171,6 +171,7 @@ class DeployModelMixinV1(DeployModelMixin):
 
         return multimodal_mask
 
+
 def vlm_model(vlm_cls):
     if not issubclass(vlm_cls, torch.nn.Module):
         raise ValueError('Only subclasses of nn.Module can be decorated with @vlm_model.')

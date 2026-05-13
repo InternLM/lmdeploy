@@ -724,6 +724,7 @@ class Glm4vForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixin)
         """Get input processor."""
         return self.input_processor
 
+
 class Glm4vInputProcessor(BaseModelInputProcessor):
     """Glm4v input processor."""
 

@@ -11,7 +11,6 @@ from lmdeploy.vl.model.qwen3 import Qwen3VLModel
 logger = get_logger('lmdeploy')
 
 
-
 @VISION_MODELS.register_module()
 class InternS1ProVisionModel(Qwen3VLModel):
     """InternS1Pro model.
@@ -81,8 +80,8 @@ class InternS1ProVisionModel(Qwen3VLModel):
             if f'{self.ts_start_token}{self.ts_token}{self.ts_end_token}' in text[i]:
                 ts_placeholder = self.ts_start_token + self.ts_token * ts_tokens + self.ts_end_token
                 text[i] = text[i].replace(
-                        f'{self.ts_start_token}{self.ts_token}{self.ts_end_token}', ts_placeholder, 1
-                    )
+                    f'{self.ts_start_token}{self.ts_token}{self.ts_end_token}', ts_placeholder, 1
+                )
             elif self.ts_token in text[i]:
                 text[i] = text[i].replace(self.ts_token, self.ts_token * ts_tokens)
 

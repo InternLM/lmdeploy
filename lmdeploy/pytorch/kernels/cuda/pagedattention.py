@@ -228,8 +228,6 @@ def _fwd_grouped_split_kernel(
     tl.store(acc_out_ptr + off_meta + 1, l_i, mask=mask_h)
 
 
-
-
 @triton.jit
 def _k4v2_k_centroid(idx3, head_size: tl.constexpr):
     """QJL4 K centroid lookup: 8 entries, pure register."""
@@ -238,18 +236,18 @@ def _k4v2_k_centroid(idx3, head_size: tl.constexpr):
     S1: tl.constexpr = -1.3439093
     S2: tl.constexpr = -0.7560052
     S3: tl.constexpr = -0.2450942
-    S4: tl.constexpr =  0.2450942
-    S5: tl.constexpr =  0.7560052
-    S6: tl.constexpr =  1.3439093
-    S7: tl.constexpr =  2.1519456
+    S4: tl.constexpr = 0.2450942
+    S5: tl.constexpr = 0.7560052
+    S6: tl.constexpr = 1.3439093
+    S7: tl.constexpr = 2.1519456
     sigma: tl.constexpr = 1.0 / tl.math.sqrt(head_size * 2.0)
     c = tl.where(idx3 < 4,
-            tl.where(idx3 < 2,
-                tl.where(idx3 == 0, S0, S1),
-                tl.where(idx3 == 2, S2, S3)),
-            tl.where(idx3 < 6,
-                tl.where(idx3 == 4, S4, S5),
-                tl.where(idx3 == 6, S6, S7)))
+                 tl.where(idx3 < 2,
+                          tl.where(idx3 == 0, S0, S1),
+                          tl.where(idx3 == 2, S2, S3)),
+                 tl.where(idx3 < 6,
+                          tl.where(idx3 == 4, S4, S5),
+                          tl.where(idx3 == 6, S6, S7)))
     return c * sigma
 
 
@@ -259,12 +257,12 @@ def _k4v2_v_centroid(idx2, head_size_v: tl.constexpr):
     # Lloyd-Max 2-bit centroids at sigma=1
     S0: tl.constexpr = -1.5104176
     S1: tl.constexpr = -0.4527808
-    S2: tl.constexpr =  0.4527808
-    S3: tl.constexpr =  1.5104176
+    S2: tl.constexpr = 0.4527808
+    S3: tl.constexpr = 1.5104176
     sigma: tl.constexpr = 1.0 / tl.math.sqrt(head_size_v * 4.0)
     c = tl.where(idx2 < 2,
-            tl.where(idx2 == 0, S0, S1),
-            tl.where(idx2 == 2, S2, S3))
+                 tl.where(idx2 == 0, S0, S1),
+                 tl.where(idx2 == 2, S2, S3))
     return c * sigma
 
 
@@ -391,16 +389,16 @@ def _fwd_grouped_split_quant_kernel(
         packed_offs_dk = raw_offs_dk % packed_k_dim
         shift_kd = (raw_offs_dk // packed_k_dim * 4)[:, None]
         off_k = (cur_kv_head * stride_kh
-                + packed_offs_dk[:, None] * stride_kd
-                + offs_n[None, :] * stride_kbs)
+                 + packed_offs_dk[:, None] * stride_kd
+                 + offs_n[None, :] * stride_kbs)
 
         if BLOCK_DMODEL1 != 0:
             raw_offs_dk1 = BLOCK_DMODEL + tl.arange(0, BLOCK_DMODEL1)
             packed_offs_dk1 = raw_offs_dk1 % packed_k_dim
             shift_k1d = (raw_offs_dk1 // packed_k_dim * 4)[:, None]
             off_k1 = (cur_kv_head * stride_kh
-                    + packed_offs_dk1[:, None] * stride_kd
-                    + offs_n[None, :] * stride_kbs)
+                      + packed_offs_dk1[:, None] * stride_kd
+                      + offs_n[None, :] * stride_kbs)
 
         if quant_policy == Q_POLICY_TURBO:
             # V: packed dim = head_size_v, raw dim = head_size_v * 4
@@ -408,8 +406,8 @@ def _fwd_grouped_split_quant_kernel(
             packed_offs_dv = raw_offs_dv % head_size_v
             shift_vd = (raw_offs_dv // head_size_v) * 2
             off_v = (cur_kv_head * stride_vh
-                    + packed_offs_dv[None, :] * stride_vd
-                    + offs_n[:, None] * stride_vbs)
+                     + packed_offs_dv[None, :] * stride_vd
+                     + offs_n[:, None] * stride_vbs)
             mask_dv = raw_offs_dv < (head_size_v * 4)
             offs_dv = raw_offs_dv
             acc = tl.zeros([BLOCK_H, BLOCK_DV * 4], dtype=tl.float32)
@@ -419,8 +417,8 @@ def _fwd_grouped_split_quant_kernel(
             packed_offs_dv = raw_offs_dv % head_size_v
             shift_vd = (raw_offs_dv // head_size_v) * 4
             off_v = (cur_kv_head * stride_vh
-                    + packed_offs_dv[None, :] * stride_vd
-                    + offs_n[:, None] * stride_vbs)
+                     + packed_offs_dv[None, :] * stride_vd
+                     + offs_n[:, None] * stride_vbs)
             mask_dv = raw_offs_dv < (head_size_v * 2)
             offs_dv = raw_offs_dv
             acc = tl.zeros([BLOCK_H, BLOCK_DV * 2], dtype=tl.float32)
@@ -799,7 +797,6 @@ def flash_attn_with_kvcache(
             BLOCK_DMODEL1 = max(16, triton.next_power_of_2(Lk - BLOCK_DMODEL))
         BLOCK_DV = triton.next_power_of_2(Lv)
         return BLOCK_DMODEL, BLOCK_DMODEL1, BLOCK_DV
-
 
     # shape constraints
     Lq, Lk, Lv = q.shape[-1], k_cache.shape[d_dim], v_cache.shape[d_dim]
