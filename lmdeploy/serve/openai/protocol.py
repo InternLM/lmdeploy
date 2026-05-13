@@ -82,6 +82,18 @@ class ToolChoice(BaseModel):
     type: Literal['function'] = Field(default='function', examples=['function'])
 
 
+class AllowedTools(BaseModel):
+    """Constrains the tools available to the model to a pre-defined set."""
+    mode: Literal['auto', 'required']
+    tools: list[dict[str, Any]]
+
+
+class AllowedToolChoice(BaseModel):
+    """Allowed tool choice definition."""
+    type: Literal['allowed_tools'] = 'allowed_tools'
+    allowed_tools: AllowedTools
+
+
 class StreamOptions(BaseModel):
     """The stream options."""
     include_usage: bool | None = False
@@ -114,7 +126,8 @@ class ChatCompletionRequest(BaseModel):
     temperature: float | None = 0.7
     top_p: float | None = 1.0
     tools: list[Tool] | None = Field(default=None, examples=[None])
-    tool_choice: ToolChoice | Literal['auto', 'required', 'none'] = Field(default='auto', examples=['none'])
+    tool_choice: ToolChoice | AllowedToolChoice | Literal[
+        'auto', 'required', 'none'] = Field(default='auto', examples=['none'])
     logprobs: bool | None = False
     top_logprobs: int | None = None
     n: int | None = 1
