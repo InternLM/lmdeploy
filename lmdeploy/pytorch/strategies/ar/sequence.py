@@ -87,6 +87,10 @@ class SchedulerSequenceDefault(SchedulerSequence):
             if len(self.all_routed_experts) > step:
                 self.all_routed_experts.resize(step)
 
+    def cleanup(self):
+        """Setup history meta after sequence stopped or cancelled."""
+        pass
+
 
 class ARSequenceStrategy(SequenceStrategy):
 

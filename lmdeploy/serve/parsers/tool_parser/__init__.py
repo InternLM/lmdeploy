@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from .glm47_tool_parser import Glm47ToolParser
 from .internlm2_tool_parser import Internlm2ToolParser
+from .interns2preview_tool_parser import InternS2PreviewToolParser
 from .llama3_tool_parser import Llama3JsonToolParser
 from .qwen2d5_tool_parser import Qwen2d5ToolParser
 from .qwen3_tool_parser import Qwen3ToolParser
@@ -18,4 +19,5 @@ __all__ = [
     'Qwen2d5ToolParser',
     'Qwen3ToolParser',
     'Qwen3CoderToolParser',
+    'InternS2PreviewToolParser',
 ]
