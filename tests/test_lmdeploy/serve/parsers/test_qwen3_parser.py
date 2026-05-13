@@ -399,3 +399,90 @@ class TestQwenResponseParserComplete:
         finally:
             cls.reasoning_parser_cls = old_reasoning_cls
             cls.tool_parser_cls = old_tool_cls
+
+
+    def test_stream_chunk_reasoning_to_tool_without_close_tag(self, tokenizer):
+        """Reasoning text followed by tool open tag without any </think>.
+
+        The parser should switch from reasoning mode to tool mode, emitting
+        the reasoning text as reasoning_content before the tool call.
+        """
+        cls = ResponseParserManager.get('default')
+        cls.reasoning_parser_cls = ReasoningParserManager.get('default')
+        cls.tool_parser_cls = ToolParserManager.get('qwen3')
+
+        request = ChatCompletionRequest(
+            model=MODEL_ID, messages=[], stream=True, tool_choice='auto',
+            chat_template_kwargs={'enable_thinking': True},
+        )
+        parser = cls(request=request, tokenizer=tokenizer)
+
+        def _call(delta_text: str):
+            ids = tokenizer.encode(delta_text, add_special_tokens=False)
+            return parser.stream_chunk(delta_text=delta_text, delta_token_ids=ids)
+
+        # Reasoning text chunk (no <think> open tag, starts in reasoning mode)
+        delta_msg, tool_emitted = _call('Let me call a tool')
+        assert delta_msg is not None
+        assert delta_msg.reasoning_content == 'Let me call a tool'
+        assert delta_msg.content is None
+        assert tool_emitted is False
+
+        # Tool open tag arrives without closing reasoning tag - parser switches to tool mode.
+        delta_msg, tool_emitted = _call('<tool_call>\n')
+        assert delta_msg is None
+        assert tool_emitted is False
+
+        # JSON content chunks stream tool arguments.
+        delta_msg, tool_emitted = _call('{"name": "get_weather", "arguments": {"location": "\\u5317\\u4eac"}}')
+        assert tool_emitted is True
+        assert delta_msg is not None
+        assert delta_msg.tool_calls is not None
+        assert delta_msg.tool_calls[0].function is not None
+        assert delta_msg.tool_calls[0].function.name == 'get_weather'
+
+        # Tool close tag completes the call.
+        delta_msg, tool_emitted = _call('\n</tool_call>')
+        assert tool_emitted is True
+        assert delta_msg is not None
+        assert delta_msg.tool_calls is not None
+        assert delta_msg.tool_calls[0].function is not None
+        assert delta_msg.tool_calls[0].function.arguments == '{"location": "北京"}'
+
+    def test_stream_chunk_split_tag_boundary(self, tokenizer):
+        """Test that tags split across chunks are correctly recognized.
+
+        This covers the case where <tool_call> appears without any prior </think>.
+        """
+        cls = ResponseParserManager.get('default')
+        cls.reasoning_parser_cls = ReasoningParserManager.get('default')
+        cls.tool_parser_cls = ToolParserManager.get('qwen3')
+
+        request = ChatCompletionRequest(
+            model=MODEL_ID, messages=[], stream=True, tool_choice='auto',
+            chat_template_kwargs={'enable_thinking': True},
+        )
+        parser = cls(request=request, tokenizer=tokenizer)
+
+        def _call(delta_text: str):
+            ids = tokenizer.encode(delta_text, add_special_tokens=False)
+            return parser.stream_chunk(delta_text=delta_text, delta_token_ids=ids)
+
+        # First chunk: reasoning text (starts in reasoning mode)
+        delta_msg, tool_emitted = _call('Let me think')
+        assert delta_msg.reasoning_content == 'Let me think'
+        assert tool_emitted is False
+
+        # Second chunk: tool open tag split across two chunks
+        # First half of the tag arrives, parser should buffer it
+        half_tag = '<to'
+        delta_msg, tool_emitted = _call(half_tag)
+        # Parser should buffer partial tag, no output
+        assert delta_msg is None or delta_msg.reasoning_content == 'Let me think'
+        assert tool_emitted is False
+
+        # Complete the tag and add tool payload
+        rest = 'ol_call>\n{"name": "test"}\n</tool_call>'
+        delta_msg, tool_emitted = _call(rest)
+        assert tool_emitted is True
+        assert delta_msg.tool_calls[0].function.name == 'test'

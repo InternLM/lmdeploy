@@ -393,6 +393,17 @@ class BaseResponseParser(ResponseParser):
         # keeping possible partial-tag suffix in buffer.
         if not self._pending:
             return None, False
+        # Preserve the longest suffix of _pending that is a prefix of either
+        # reasoning_close_tag or tool_open_tag, so split tags across chunks
+        # can still be recognized later.
+        close_and_tool_tags = [t for t in (close_tag, tool_tag) if t]
+        keep = self._longest_open_tag_prefix_suffix(self._pending, close_and_tool_tags)
+        if keep > 0:
+            if keep >= len(self._pending):
+                return None, False
+            out = self._pending[:-keep]
+            self._pending = self._pending[-keep:]
+            return (out if out else None), bool(out)
         out = self._pending
         self._pending = ''
         return out, True
@@ -503,6 +514,23 @@ class BaseResponseParser(ResponseParser):
                     continue
                 close_tag = self.profile.reasoning_close_tag
                 close_idx = text.find(close_tag, pos) if close_tag else -1
+                tool_tag = self.profile.tool_open_tag
+                tool_idx = text.find(tool_tag, pos) if tool_tag else -1
+
+                # Check if tool tag appears before reasoning close tag.
+                if tool_idx >= 0 and (close_idx < 0 or tool_idx < close_idx):
+                    # Tool comes first - emit reasoning before tool as content,
+                    # then switch to tool parsing.
+                    reasoning_chunk = text[pos:tool_idx]
+                    if reasoning_chunk:
+                        if self.enable_thinking is False:
+                            content_parts.append(reasoning_chunk)
+                        else:
+                            reasoning_parts.append(reasoning_chunk)
+                    pos = tool_idx + len(tool_tag)
+                    mode = self.MODE_TOOL
+                    continue
+
                 if close_idx < 0:
                     piece = text[pos:]
                     if self.enable_thinking is False:
@@ -517,6 +545,25 @@ class BaseResponseParser(ResponseParser):
                     else:
                         reasoning_parts.append(piece)
                 pos = close_idx + len(close_tag)
+                mode = self.MODE_PLAIN
+                continue
+
+            if mode == self.MODE_TOOL:
+                close_tag = self.profile.tool_close_tag
+                if close_tag:
+                    close_idx = text.find(close_tag, pos)
+                    if close_idx < 0:
+                        # Unterminated tool block in complete text — treat payload as content.
+                        content_parts.append(text[pos:])
+                        break
+                    tool_payload = text[pos:close_idx].strip()
+                    pos = close_idx + len(close_tag)
+                else:
+                    tool_payload = text[pos:].strip()
+                    pos = n
+                parsed_call = self.tool_parser.parse_tool_call_complete(tool_payload) if self.tool_parser else None
+                if parsed_call is not None:
+                    tool_calls.append(parsed_call)
                 mode = self.MODE_PLAIN
                 continue
 
