@@ -421,8 +421,7 @@ class TestGptOssResponseFormatHarmonyConversion:
         # The user message is still present after the inserted system message
         assert msgs[1]['role'] == 'user'
 
-    def test_text_response_format_is_not_converted(self):
-        """A text-type response_format should be left untouched."""
+    def test_text_response_format_is_cleared_by_normalize(self):
         from lmdeploy.serve.openai.protocol import ResponseFormat
 
         request = ChatCompletionRequest(
@@ -431,8 +430,7 @@ class TestGptOssResponseFormatHarmonyConversion:
             response_format=ResponseFormat(type='text'),
         )
         parser = gpt_oss_mod.GptOssResponseParser(request=request, tokenizer=object())
-        assert parser.request.response_format is not None
-        assert parser.request.response_format.type == 'text'
+        assert parser.request.response_format is None
 
     def test_no_response_format_leaves_request_unchanged(self):
         """When response_format is None the request is not modified."""

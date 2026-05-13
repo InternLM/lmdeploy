@@ -28,11 +28,13 @@ ResponseParserManager = Registry('response_parser', locations=['lmdeploy.serve.p
 def normalize_chat_request(request: ChatCompletionRequest) -> ChatCompletionRequest:
     """Normalize a ChatCompletionRequest for downstream consumption.
 
-    Normalizes (via ``model_copy``):
     - ``response_format``: ``ResponseFormat → dict``, ``type='text' → None``
     - ``stop``: ``str → list[str]``
     - ``max_completion_tokens``: resolves from deprecated ``max_tokens``
     """
+    if not hasattr(request, 'model_copy'):
+        return request
+
     updates: dict = {}
 
     fmt = request.response_format
@@ -44,8 +46,10 @@ def normalize_chat_request(request: ChatCompletionRequest) -> ChatCompletionRequ
     if isinstance(request.stop, str):
         updates['stop'] = [request.stop]
 
-    if request.max_completion_tokens is None and request.max_tokens is not None:
-        updates['max_completion_tokens'] = request.max_tokens
+    if request.max_completion_tokens is None:
+        max_tokens = getattr(request, 'max_tokens', None)
+        if max_tokens is not None:
+            updates['max_completion_tokens'] = max_tokens
 
     if updates:
         request = request.model_copy(update=updates)
