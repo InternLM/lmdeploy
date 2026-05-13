@@ -79,7 +79,7 @@ def register(router: APIRouter, server_context) -> None:
             response_parser = parser_cls(request=openai_request, tokenizer=tokenizer)
             parsed_request = response_parser.request
 
-        session = server_context.get_session(-1)
+        session = server_context.create_session(-1)
         adapter_name = None if request.model == server_context.async_engine.model_name else request.model
         result_generator = server_context.async_engine.generate(
             messages,

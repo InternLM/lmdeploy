@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import torch
-from transformers import AutoConfig, AutoProcessor
+from transformers import AutoProcessor
 from transformers.processing_utils import ImagesKwargs, ProcessingKwargs
 
 from lmdeploy.utils import get_logger
@@ -38,14 +38,6 @@ class Gemma3VisionModel(VisionModel):
     """Gemma3 vision model."""
 
     _arch = 'Gemma3ForConditionalGeneration'
-
-    def __init__(self,
-                 model_path: str,
-                 with_llm: bool = False,
-                 max_memory: dict[int, int] = None,
-                 hf_config: AutoConfig = None,
-                 backend: str = ''):
-        super().__init__(model_path, with_llm, max_memory, hf_config, backend)
 
     def build_preprocessor(self, trust_remote_code: bool = False):
         self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=trust_remote_code)
