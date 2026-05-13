@@ -15,7 +15,7 @@ from lmdeploy.pytorch.backends.indexer import V4IndexerMetadata
 from lmdeploy.pytorch.backends.rotary_embedding import RopeType, YarnParameters
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import ApplyRotaryEmb, HcSplitSinkhorn, RMSNorm, SiluAndMul
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, HcSplitSinkhorn, RMSNorm, SiluAndMul, rms_scale
 from lmdeploy.pytorch.nn import V4Attention as NativeV4Attention
 from lmdeploy.pytorch.nn import V4Compressor as NativeV4Compressor
 from lmdeploy.pytorch.nn import V4Indexer as NativeV4Indexer
@@ -60,6 +60,13 @@ def _dequantize_wo_a_shard(weight: torch.Tensor, scale: torch.Tensor, world_size
     weight = weight.unflatten(0, (-1, 128)).unflatten(-1, (-1, 128)).float()
     weight = weight * scale[:, None, :, None].float()
     return weight.flatten(2, 3).flatten(0, 1).bfloat16()
+
+
+@torch.compile(dynamic=True)
+def _hc_post_fused(x: torch.Tensor, residual: torch.Tensor, post: torch.Tensor,
+                   comb: torch.Tensor) -> torch.Tensor:
+    return (post.unsqueeze(-1) * x.unsqueeze(-2)
+            + torch.sum(comb.unsqueeze(-1) * residual.unsqueeze(-2), dim=2)).to(x.dtype)
 
 
 def _map_v4_expert_param_name(name: str) -> tuple[str, str] | None:
@@ -490,7 +497,7 @@ class Attention(nn.Module):
         # ---- Projections + RoPE (no prefill/decode branch) ----
         qr = q = self.q_norm(self.wq_a(x))
         q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim))
-        q *= torch.rsqrt(q.square().mean(-1, keepdim=True) + self.eps)
+        q = rms_scale(q, q, dim=-1, eps=self.eps)
         cos, sin, neg_sin = rotary_pos_emb
         q_rope = q[..., -rd:]
         kv = self.wkv(x)
@@ -581,7 +588,7 @@ class Gate(nn.Module):
 
 class Expert(nn.Module):
 
-    def __init__(self, config, dim: int, inter_dim: int, dtype=None, swiglu_limit=0.0, device=None):
+    def __init__(self, config, dim: int, inter_dim: int, dtype=None, device=None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         self.w13 = build_gateup_linear(dim, [inter_dim, inter_dim], bias=False, dtype=dtype, device=device,
@@ -589,23 +596,11 @@ class Expert(nn.Module):
                                       is_tp=False)
         self.w2 = build_down_linear(inter_dim, dim, bias=False, quant_config=quantization_config,
                                       is_tp=False, dtype=dtype, device=device)
-        self.swiglu_limit = swiglu_limit
         self.act_fn = SiluAndMul(inplace=True)
 
-    def forward(self, x: torch.Tensor, weights: torch.Tensor | None = None):
-        dtype = x.dtype
+    def forward(self, x: torch.Tensor):
         gate_up = self.w13(x)
-        if self.swiglu_limit > 0:
-            gate, up = gate_up.chunk(2, dim=-1)
-            up = torch.clamp(up, min=-self.swiglu_limit, max=self.swiglu_limit)
-            gate = torch.clamp(gate, max=self.swiglu_limit)
-            x = F.silu(gate) * up
-        else:
-            x = self.act_fn(gate_up)
-
-        if weights is not None:
-            x = weights * x.float()
-            x = x.to(dtype)
+        x = self.act_fn(gate_up)
         return self.w2(x)
 
 
@@ -631,7 +626,6 @@ class MoE(nn.Module):
             args.dim,
             args.moe_inter_dim,
             dtype=dtype,
-            swiglu_limit=0.0,
             device=device)
 
     def forward(self, x: torch.Tensor, input_ids: torch.Tensor):
@@ -640,7 +634,7 @@ class MoE(nn.Module):
         weights, indices = self.gate(x, input_ids.flatten())
         y = self.experts(x, weights, indices)
         y += self.shared_experts(x)
-        return y.type_as(x).view(shape)
+        return y.view(shape)
 
 
 class Block(nn.Module):
@@ -675,15 +669,13 @@ class Block(nn.Module):
     def _hc_pre(self, x: torch.Tensor, hc_fn: torch.Tensor, hc_scale: torch.Tensor, hc_base: torch.Tensor):
         shape, dtype = x.size(), x.dtype
         x = x.flatten(2).float()
-        rsqrt = torch.rsqrt(x.square().mean(-1, keepdim=True) + self.norm_eps)
-        mixes = F.linear(x, hc_fn) * rsqrt
+        mixes = rms_scale(F.linear(x, hc_fn), x, eps=self.norm_eps)
         pre, post, comb = self.hc_split_sinkhorn_impl(mixes, hc_scale, hc_base)
         y = torch.sum(pre.unsqueeze(-1) * x.view(shape), dim=2)
         return y.to(dtype), post, comb
 
     def _hc_post(self, x: torch.Tensor, residual: torch.Tensor, post: torch.Tensor, comb: torch.Tensor):
-        y = post.unsqueeze(-1) * x.unsqueeze(-2) + torch.sum(comb.unsqueeze(-1) * residual.unsqueeze(-2), dim=2)
-        return y.type_as(x)
+        return _hc_post_fused(x, residual, post, comb)
 
     def forward(self, x: torch.Tensor, v4_meta: V4AttentionMetadata,
                 v4_indexer_meta: V4IndexerMetadata, v4_compressor_meta: V4CompressorMetadata,
@@ -809,8 +801,7 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
     def _hc_head(self, x: torch.Tensor):
         shape, dtype = x.size(), x.dtype
         x = x.flatten(2).float()
-        rsqrt = torch.rsqrt(x.square().mean(-1, keepdim=True) + self.config.rms_norm_eps)
-        mixes = F.linear(x, self.hc_head_fn) * rsqrt
+        mixes = rms_scale(F.linear(x, self.hc_head_fn), x, eps=self.config.rms_norm_eps)
         pre = torch.sigmoid(mixes * self.hc_head_scale + self.hc_head_base) + self.config.hc_eps
         y = torch.sum(pre.unsqueeze(-1) * x.view(shape), dim=2)
         return y.to(dtype)

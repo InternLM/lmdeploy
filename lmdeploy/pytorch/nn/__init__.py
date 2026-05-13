@@ -5,7 +5,7 @@ from .activation import GeluAndMul, SiluAndMul  # noqa: F401
 from .attention import Attention, FlashAttention  # noqa: F401
 from .embedding import ParallelEmbedding  # noqa: F401
 from .hc_split_sinkhorn import HcSplitSinkhorn  # noqa: F401
-from .norm import LayerNorm, RMSNorm  # noqa: F401
+from .norm import LayerNorm, RMSNorm, rms_scale  # noqa: F401
 from .rotary_embedding import (
     ApplyRotaryEmb,  # noqa: F401
     RopeType,  # noqa: F401

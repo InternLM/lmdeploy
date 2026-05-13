@@ -11,27 +11,6 @@ from .blocked_gemm_fp8 import quant_fp8
 from .fused_moe import _get_sorted_idx, _make_intermediate, _renormalize, moe_reduce
 
 
-def get_cuda_autotune_config():
-    return [
-        triton.Config({
-            'BLOCK_SIZE_M': 128,
-            'BLOCK_SIZE_N': 64,
-        }, num_stages=4, num_warps=4),
-        triton.Config({
-            'BLOCK_SIZE_M': 64,
-            'BLOCK_SIZE_N': 64,
-        }, num_stages=5, num_warps=2),
-        triton.Config({
-            'BLOCK_SIZE_M': 64,
-            'BLOCK_SIZE_N': 128,
-        }, num_stages=4, num_warps=4),
-    ]
-
-
-@triton.autotune(
-    configs=get_cuda_autotune_config(),
-    key=['N', 'K'],
-)
 @triton.jit
 def fused_moe_v4_fp4_kernel(
     A,
@@ -65,7 +44,7 @@ def fused_moe_v4_fp4_kernel(
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
-    M_NP2,
+    M_NP2: tl.constexpr,
     top_k: tl.constexpr,
     expert_offset: tl.constexpr,
     reindex_a: tl.constexpr,
@@ -210,6 +189,26 @@ def fused_moe_v4_fp4_kernel(
     tl.store(c_ptrs, c, mask=mask_sid[:, None])
 
 
+# Tile configs keyed by per-expert M range: (BM, BN, num_stages, num_warps)
+# BN=128 is critical for HBM read coalescing — BN=64 gives ~3x lower B-bandwidth.
+# BM has minor impact; small BM slightly helps at small M due to less padding.
+_TILE_CONFIGS = [
+    (16, 128, 5, 2),   # M <= 16
+    (64, 128, 4, 4),   # M <= 64
+    (128, 128, 4, 4),  # M > 64
+]
+_TILE_THRESHOLDS = [16, 64]
+
+
+def _select_tile_config(num_tokens: int, num_experts: int, top_k: int):
+    """Select BM/BN based on estimated per-expert token count."""
+    m_per_exp = num_tokens * top_k / num_experts
+    for i, thresh in enumerate(_TILE_THRESHOLDS):
+        if m_per_exp <= thresh:
+            return _TILE_CONFIGS[i]
+    return _TILE_CONFIGS[-1]
+
+
 def fused_moe_v4_fp4_kernel_launcher(
     A: torch.Tensor,
     A_scale: torch.Tensor,
@@ -229,8 +228,6 @@ def fused_moe_v4_fp4_kernel_launcher(
     """Launch the V4 FP8xFP4 fused MoE GEMM kernel."""
     if num_tokens is None:
         num_tokens = A.size(0)
-    M_NP2 = triton.next_power_of_2(num_tokens)
-    M_NP2 = max(64, M_NP2)
     E, N, packed_K = B.shape
     K = packed_K * 2
 
@@ -263,9 +260,10 @@ def fused_moe_v4_fp4_kernel_launcher(
     # Kernel uses int32 pointer with strides in int32 elements
     B_i32 = B.view(torch.int32)
 
-    def _grid_fn(META):
-        grid = (triton.cdiv(M_NP2, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), E)
-        return grid
+    BM, BN, num_stages, num_warps = _select_tile_config(num_tokens, E, top_k)
+    M_NP2 = max(64, triton.next_power_of_2(num_tokens))
+
+    grid = (triton.cdiv(M_NP2, BM) * triton.cdiv(N, BN), E)
 
     A = A.flatten(0, -2)
     C = C.flatten(0, -2)
@@ -273,7 +271,7 @@ def fused_moe_v4_fp4_kernel_launcher(
 
     BLOCK_SIZE_K = group_bk
     GROUP_SIZE_M = 1
-    fused_moe_v4_fp4_kernel[_grid_fn](
+    fused_moe_v4_fp4_kernel[grid](
         A,
         A_scale,
         B_i32,
@@ -307,8 +305,12 @@ def fused_moe_v4_fp4_kernel_launcher(
         reindex_c=reindex_c,
         B_SCALE_E8M0=b_scale_e8m0,
         M_NP2=M_NP2,
+        BLOCK_SIZE_M=BM,
+        BLOCK_SIZE_N=BN,
         BLOCK_SIZE_K=BLOCK_SIZE_K,
         GROUP_SIZE_M=GROUP_SIZE_M,
+        num_stages=num_stages,
+        num_warps=num_warps,
     )
 
 

@@ -8,6 +8,17 @@ import torch
 from lmdeploy.pytorch.backends.attention import V4AttentionMetadata
 
 
+@torch.compile(dynamic=True)
+def _decode_padded_and_offset(is_padded, extra_topk_length, topk_length,
+                              extra_indices_in_kvcache, batch_offsets):
+    extra_topk_length = torch.where(is_padded, 1, extra_topk_length)
+    topk_length = torch.where(is_padded, 1, topk_length)
+    extra_indices = torch.where(extra_indices_in_kvcache >= 0,
+                                extra_indices_in_kvcache + batch_offsets,
+                                extra_indices_in_kvcache)
+    return extra_topk_length, topk_length, extra_indices
+
+
 @dataclass
 class CudaV4AttentionMetadata(V4AttentionMetadata):
     """CUDA-specific V4 attention metadata with pre-computed indices.
@@ -367,17 +378,14 @@ class TritonV4AttentionImpl:
 
         # Phase 4: Apply is_padded correction + convert to physical indices
         # Padded sequences (slot < 0) attend to only 1 KV entry to avoid OOB access.
-        extra_topk_length = torch.where(is_padded, 1, extra_topk_length)
-        topk_length = torch.where(is_padded, 1, topk_length)
-
-        # Window indices: additive offset (dense [bsz*ws] layout)
         extra_k_cache = window_state_fp8.view(bsz, self.window_size, 1, -1)
         batch_offsets = attn_metadata.batch_offsets
-        extra_indices = torch.where(extra_indices_in_kvcache >= 0,
-                                    extra_indices_in_kvcache + batch_offsets,
-                                    extra_indices_in_kvcache)
+        extra_topk_length, topk_length, extra_indices = _decode_padded_and_offset(
+            is_padded, extra_topk_length, topk_length,
+            extra_indices_in_kvcache, batch_offsets)
         # Compressed indices: gather-based logical→physical (paged layout)
-        if self.compress_ratio and indices_in_kvcache is not None:
+        # Only indexer output needs conversion; fallback indices are already physical.
+        if index_out is not None:
             indices_in_kvcache = self.v4_updater.update_decode(
                 indices_in_kvcache, block_offsets, block_size, self.compress_ratio)
 
