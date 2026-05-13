@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-
 import torch
 
 # Maps that describe the structure of your model.
@@ -139,11 +138,7 @@ def skipped_module(name: str, patterns: list[str]):
 
     patterns.extend(SKIPPED_MODULE)
 
-    for pattern in patterns:
-        if pattern in name:
-            return True, pattern
-
-    return False, None
+    return next(((True, pattern) for pattern in patterns if pattern in name), (False, None))
 
 
 @torch.no_grad()
@@ -320,9 +315,9 @@ def quant_weights(model, fcs, bits, symmetry, arch, group_size=-1, device='cuda'
     from lmdeploy.lite.utils import QParams
     patterns = []
     skipped_modules = []
-    model_layer = MODELS.get(arch)
-    if model_layer:
-        patterns = model_layer.skipped_modules()
+    rebuilder = MODELS.get(arch)
+    if rebuilder:
+        patterns = rebuilder.skipped_modules()
         skipped_modules.extend(patterns)
     for name, fc in fcs.items():
         fc.to(device)

@@ -101,9 +101,9 @@ def smooth_quant(model: str,
     patterns = []
     skipped_modules = []
     arch = model.config.architectures[0]
-    model_layer = MODELS.get(arch)
-    if model_layer:
-        patterns = model_layer.skipped_modules()
+    rebuilder = MODELS.get(arch)
+    if rebuilder:
+        patterns = rebuilder.skipped_modules()
         skipped_modules.extend(patterns)
 
     for modules, q_cls in ((fcs, QLinear), (rmsnorms, QRMSNorm)):

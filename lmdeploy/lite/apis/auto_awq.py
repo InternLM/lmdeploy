@@ -108,10 +108,10 @@ def auto_awq(model: str,
     layer_type = LAYER_TYPE_MAP[type(model).__name__]
     layers = collect_target_modules(model, layer_type)
     fcs = {}
-    model_layer = MODELS.get(arch)
+    rebuilder = MODELS.get(arch)
     for l_name, layer in layers.items():
-        if model_layer:
-            model_layer(layer)
+        if rebuilder:
+            rebuilder(layer)
         name2fc = collect_target_modules(layer, nn.Linear, prefix=l_name)
         fcs.update(name2fc)
 

@@ -14,8 +14,6 @@ SUPPORTED_ARCHS = dict(
     # Qwen 3.5
     Qwen3_5ForConditionalGeneration='qwen3_5',
     Qwen3_5MoeForConditionalGeneration='qwen3_5-moe',
-    # InternS2
-    InternS2PreviewForConditionalGeneration='interns2preview',
     # InternVL family
     InternVLChatModel='internvl',
     InternVLForConditionalGeneration='internvl',
