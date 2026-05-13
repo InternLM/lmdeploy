@@ -14,7 +14,64 @@ from lmdeploy.serve.openai.responses import (
     _to_generation_config,
     _tool_choice_from_responses,
     _validate_text_v1_request,
+    create_responses_router,
 )
+
+
+class _FakeAsyncEngine:
+
+    model_name = 'fake-model'
+    backend_config = SimpleNamespace(adapters=[])
+    tokenizer = SimpleNamespace(model=SimpleNamespace(model=None))
+
+    def __init__(self):
+        self.generate_kwargs = None
+
+    def generate(self, prompt, session, **kwargs):
+        self.generate_kwargs = kwargs
+
+        async def _generator():
+            yield SimpleNamespace(
+                response='ok',
+                token_ids=[1],
+                input_token_len=1,
+                generate_token_len=1,
+                finish_reason='stop',
+            )
+
+        return _generator()
+
+
+class _FakeServerContext:
+
+    response_parser_cls = None
+
+    def __init__(self):
+        self.async_engine = _FakeAsyncEngine()
+
+    def create_session(self, session_id):
+        return _FakeSession(session_id)
+
+
+class _FakeSession:
+
+    def __init__(self, session_id):
+        self.session_id = session_id
+
+    async def async_abort(self):
+        pass
+
+
+class _FakeRawRequest:
+
+    async def is_disconnected(self):
+        return False
+
+
+def _responses_endpoint():
+    context = _FakeServerContext()
+    router = create_responses_router(context)
+    return router.routes[0].endpoint, context
 
 
 def _sse_payloads(events: list[str]):
@@ -258,6 +315,76 @@ def test_responses_named_tool_choice_must_match_function_tools():
         assert 'not found' in str(err)
     else:
         raise AssertionError('named tool_choice should match one of the function tools')
+
+
+def test_responses_tool_validation_uses_tools_error_param():
+    import asyncio
+
+    endpoint, _ = _responses_endpoint()
+    response = asyncio.run(
+        endpoint(
+            ResponsesRequest(
+                model='fake-model',
+                input='Hi',
+                tools=[{
+                    'type': 'function',
+                }],
+            ),
+            _FakeRawRequest(),
+        )
+    )
+
+    assert response.status_code == 400
+    assert json.loads(response.body)['error']['param'] == 'tools'
+
+
+def test_responses_tool_choice_validation_uses_tool_choice_error_param():
+    import asyncio
+
+    endpoint, _ = _responses_endpoint()
+    response = asyncio.run(
+        endpoint(
+            ResponsesRequest(
+                model='fake-model',
+                input='Hi',
+                tools=[{
+                    'type': 'function',
+                    'name': 'search',
+                }],
+                tool_choice={
+                    'type': 'function',
+                    'name': 'missing',
+                },
+            ),
+            _FakeRawRequest(),
+        )
+    )
+
+    assert response.status_code == 400
+    assert json.loads(response.body)['error']['param'] == 'tool_choice'
+
+
+def test_responses_tool_choice_none_does_not_require_tool_parser():
+    import asyncio
+
+    endpoint, context = _responses_endpoint()
+    response = asyncio.run(
+        endpoint(
+            ResponsesRequest(
+                model='fake-model',
+                input='Hi',
+                tools=[{
+                    'type': 'function',
+                    'name': 'search',
+                }],
+                tool_choice='none',
+            ),
+            _FakeRawRequest(),
+        )
+    )
+
+    assert response['output_text'] == 'ok'
+    assert context.async_engine.generate_kwargs['tools'] is None
 
 
 def test_responses_uses_parser_adjusted_messages_for_generation():
@@ -543,3 +670,72 @@ def test_responses_streaming_tool_call_events():
                 if payload['type'] == 'response.function_call_arguments.done')['name'] == 'search'
     assert done['item']['arguments'] == '{"query":"lmdeploy"}'
     assert payloads[-1]['response']['output'][0]['type'] == 'function_call'
+
+
+def test_responses_streaming_text_indices_follow_text_item_order():
+    request = ResponsesRequest(model='fake-model', input='Hi there', stream=True)
+
+    class _ToolThenTextParser:
+
+        def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
+            if delta_text == 'tool':
+                return DeltaMessage(
+                    role='assistant',
+                    tool_calls=[
+                        DeltaToolCall(
+                            index=0,
+                            id='call_123',
+                            function=DeltaFunctionCall(name='search', arguments='{}'),
+                        )
+                    ],
+                ), True
+            return DeltaMessage(role='assistant', content='visible text'), False
+
+    async def _result_generator():
+        yield SimpleNamespace(
+            response='tool',
+            token_ids=[101],
+            input_token_len=8,
+            generate_token_len=1,
+            finish_reason=None,
+        )
+        yield SimpleNamespace(
+            response='text',
+            token_ids=[102],
+            input_token_len=8,
+            generate_token_len=2,
+            finish_reason='stop',
+        )
+
+    async def _collect_events():
+        return [
+            event async for event in _stream_response(
+                _result_generator(),
+                request=request,
+                model_name='fake-model',
+                created_time=123,
+                response_parser=_ToolThenTextParser(),
+            )
+        ]
+
+    import asyncio
+
+    payloads = _sse_payloads(asyncio.run(_collect_events()))
+
+    text_events = [
+        payload for payload in payloads
+        if payload['type'] in (
+            'response.output_text.delta',
+            'response.output_text.done',
+            'response.content_part.done',
+        )
+    ]
+    text_item_done = next(payload for payload in payloads
+                          if payload['type'] == 'response.output_item.done'
+                          and payload['item']['type'] == 'message')
+    completed_output = payloads[-1]['response']['output']
+
+    assert {payload['output_index'] for payload in text_events} == {1}
+    assert text_item_done['output_index'] == 1
+    assert completed_output[0]['type'] == 'function_call'
+    assert completed_output[1]['type'] == 'message'
