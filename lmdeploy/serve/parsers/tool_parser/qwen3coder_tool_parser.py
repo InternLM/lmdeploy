@@ -64,10 +64,7 @@ class Qwen3CoderToolParser(XmlToolParser):
                 if not isinstance(function, dict) or isinstance(function.get('arguments'), dict):
                     continue
 
-                try:
-                    parsed_arguments = _parse_tool_call_arguments_dict(function.get('arguments'))
-                except ValueError:
-                    continue
+                parsed_arguments = _parse_tool_call_arguments_dict(function.get('arguments'))
                 if parsed_arguments is None:
                     continue
 

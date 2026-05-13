@@ -185,26 +185,6 @@ class BaseChatTemplate:
                 ret += f'{self.system}{self.meta_instruction}{self.eosys}'
         for message in messages:
             role = message['role']
-            # Handle assistant messages with tool_calls
-            if role == 'assistant' and message.get('tool_calls'):
-                tool_calls_text = ''
-                for tc in message['tool_calls']:
-                    func = tc.get('function', {})
-                    name = func.get('name', '')
-                    arguments = func.get('arguments', '{}')
-                    tc_id = tc.get('id', '')
-                    if tc_id:
-                        tool_calls_text += f'{tc_id}: {name}({arguments})\n'
-                    else:
-                        tool_calls_text += f'{name}({arguments})\n'
-                ret += f'{box_map[role]}{tool_calls_text.rstrip()}{eox_map[role]}'
-                continue
-            # Handle tool messages with tool_call_id
-            if role == 'tool' and message.get('tool_call_id'):
-                content = get_text(message['content']) if message.get('content') else ''
-                tool_call_id = message['tool_call_id']
-                ret += f'{box_map[role]}{tool_call_id}: {content}{eox_map[role]}'
-                continue
             content = get_text(message['content'])
             ret += f'{box_map[role]}{content}{eox_map[role]}'
         if len(messages) and messages[-1]['role'] == 'assistant' and len(eox_map['assistant']) > 0:
