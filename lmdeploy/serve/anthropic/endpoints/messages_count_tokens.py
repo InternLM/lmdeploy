@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Request
 
 from lmdeploy.serve.utils.server_utils import validate_json_request
 
-from ..adapter import count_input_tokens, ensure_tools_not_requested, get_model_list, to_lmdeploy_messages
+from ..adapter import count_input_tokens, get_model_list, to_lmdeploy_messages
 from ..errors import create_error_response
 from ..protocol import CountTokensRequest, CountTokensResponse
 
@@ -38,11 +38,8 @@ def register(router: APIRouter, server_context) -> None:
             )
 
         try:
-            ensure_tools_not_requested(request)
             messages = to_lmdeploy_messages(request)
             input_tokens = count_input_tokens(server_context.async_engine, messages)
-        except NotImplementedError as err:
-            return create_error_response(HTTPStatus.BAD_REQUEST, str(err))
         except ValueError as err:
             return create_error_response(HTTPStatus.BAD_REQUEST, str(err))
 
