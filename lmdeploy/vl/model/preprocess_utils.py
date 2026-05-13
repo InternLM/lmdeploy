@@ -149,7 +149,7 @@ def get_expanded_mm_items(collected_mm_items, mm_tokens: 'MultimodalSpecialToken
                 expanded_mm_items.append(
                     dict(
                         modality=modality,
-                        pixel_values=item['feature'][start_idx:end_idx],
+                        pixel_values=item['feature'][start_idx:end_idx].clone(),
                         image_grid_thw=image_grid_thw[i],
                         offset=item['offset'][i],
                         image_token_id=token_id,
@@ -188,7 +188,7 @@ def get_expanded_mm_items(collected_mm_items, mm_tokens: 'MultimodalSpecialToken
                     expanded_mm_items.append(
                         dict(
                             modality=modality,
-                            pixel_values_videos=item['feature'][start:end],
+                            pixel_values_videos=item['feature'][start:end].clone(),
                             video_grid_thw=video_grid_thw[video_idx],
                             offset=item['offset'][video_idx],
                             second_per_grid=second_per_grid,
@@ -218,7 +218,7 @@ def get_expanded_mm_items(collected_mm_items, mm_tokens: 'MultimodalSpecialToken
                     expanded_mm_items.append(
                         dict(
                             modality=modality,
-                            pixel_values_videos=video_feature[frame_idx * h * w:(frame_idx + 1) * h * w],
+                            pixel_values_videos=video_feature[frame_idx * h * w:(frame_idx + 1) * h * w].clone(),
                             video_grid_thw=torch.tensor([1, h, w]),
                             offset=offset,
                             second_per_grid=second_per_grid,
@@ -228,11 +228,11 @@ def get_expanded_mm_items(collected_mm_items, mm_tokens: 'MultimodalSpecialToken
             for i in range(num_items):
                 feature_attention_mask = item.get('feature_attention_mask')
                 if feature_attention_mask is not None:
-                    feature_attention_mask = feature_attention_mask[i:i + 1]
+                    feature_attention_mask = feature_attention_mask[i:i + 1].clone()
                 expanded_mm_items.append(
                     dict(
                         modality=modality,
-                        input_features=item['feature'][i:i + 1],
+                        input_features=item['feature'][i:i + 1].clone(),
                         feature_attention_mask=feature_attention_mask,
                         offset=item['offset'][i],
                         audio_token_id=token_id,
