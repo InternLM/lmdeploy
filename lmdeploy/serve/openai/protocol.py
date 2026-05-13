@@ -269,7 +269,7 @@ class DeltaFunctionCall(BaseModel):
 
 # a tool call delta where everything is optional
 class DeltaToolCall(BaseModel):
-    id: str = Field(default_factory=lambda: f'chatcmpl-tool-{shortuuid.random()}')
+    id: str | None = None
     type: Literal['function'] | None = 'function'
     index: int
     function: DeltaFunctionCall | None = None
