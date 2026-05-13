@@ -93,10 +93,6 @@ class Attention(nn.Module):
             self.impl.set_alibi_slopes(alibi_slopes)
             self.alibi_ready = True
 
-    def _effective_kv_scales(self):
-        """Return per-tensor K/V scales."""
-        return self.k_scale, self.v_scale
-
     def forward(
         self,
         query: torch.Tensor,
@@ -116,7 +112,7 @@ class Attention(nn.Module):
 
         quant_policy = attn_metadata.quant_policy
         if _is_normal_fp8_quant_policy(quant_policy):
-            k_scale, v_scale = self._effective_kv_scales()
+            k_scale, v_scale = self.k_scale, self.v_scale
         else:
             k_scale = None
             v_scale = None
