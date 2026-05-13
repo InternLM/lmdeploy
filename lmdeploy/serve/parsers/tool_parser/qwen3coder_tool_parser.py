@@ -17,14 +17,18 @@ if TYPE_CHECKING:
 
 
 def _parse_tool_call_arguments_dict(arguments: Any) -> dict[str, Any] | None:
-    """Return dict-like tool arguments for Qwen3Coder request normalization."""
+    """Return dict-like tool arguments for Qwen3Coder request normalization.
+
+    Raises ValueError if arguments is a string but contains invalid JSON. Returns None if arguments is not a string or
+    JSON parses to non-dict.
+    """
     if not isinstance(arguments, str):
         return None
 
     try:
         parsed_arguments = json.loads(arguments)
-    except (json.JSONDecodeError, TypeError):
-        return None
+    except (json.JSONDecodeError, TypeError) as e:
+        raise ValueError(f'Tool call arguments contain invalid JSON: {arguments!r}') from e
     if isinstance(parsed_arguments, dict):
         return parsed_arguments
     return None
@@ -60,7 +64,10 @@ class Qwen3CoderToolParser(XmlToolParser):
                 if not isinstance(function, dict) or isinstance(function.get('arguments'), dict):
                     continue
 
-                parsed_arguments = _parse_tool_call_arguments_dict(function.get('arguments'))
+                try:
+                    parsed_arguments = _parse_tool_call_arguments_dict(function.get('arguments'))
+                except ValueError:
+                    continue
                 if parsed_arguments is None:
                     continue
 

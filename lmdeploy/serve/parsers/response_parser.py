@@ -593,8 +593,9 @@ class BaseResponseParser(ResponseParser):
                 tool_calls.append(parsed_call)
                 pos = close_idx + len(close_tag) if close_tag else n
             else:
-                content_parts.append(text[open_idx:])
-                break
+                # Tool call with invalid arguments — return error instead of
+                # silently treating it as plain text.
+                return 'Tool call arguments are not valid JSON', None, None
 
         content = ''.join(content_parts)
         reasoning_content = ''.join(reasoning_parts) if reasoning_parts else None
