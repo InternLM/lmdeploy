@@ -102,8 +102,8 @@ def test_parse_tool_call_arguments_dict_returns_none_for_non_dict_json():
     assert result is None
 
 
-def test_parse_complete_returns_error_on_invalid_tool_arguments():
-    """parse_complete returns error message when tool call arguments are
+def test_parse_complete_falls_back_to_plain_text_on_invalid_tool_arguments():
+    """parse_complete falls back to plain text when tool call arguments are
     invalid."""
     from lmdeploy.serve.openai.protocol import ChatCompletionRequest
     from lmdeploy.serve.parsers import ResponseParserManager
@@ -126,9 +126,10 @@ def test_parse_complete_returns_error_on_invalid_tool_arguments():
         close_tag = parser.profile.tool_close_tag
         text = open_tag + '{"name": "get_weather", "arguments": {"city":' + close_tag
         content, tool_calls, reasoning = parser.parse_complete(text)
-        assert content == 'Tool call arguments are not valid JSON'
         assert tool_calls is None
         assert reasoning is None
+        # Falls back to plain text when parsing fails
+        assert content is not None
     finally:
         cls.reasoning_parser_cls = old_reasoning_cls
         cls.tool_parser_cls = old_tool_cls

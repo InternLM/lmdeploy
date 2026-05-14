@@ -152,7 +152,6 @@ class ChatCompletionRequest(BaseModel):
     user: str | None = None
     reasoning_effort: Literal['low', 'medium', 'high'] | None = None
     response_format: ResponseFormat | None = Field(default=None, examples=[None])
-    parallel_tool_calls: bool | None = True
     # additional argument of lmdeploy
     do_preprocess: bool | None = True
     repetition_penalty: float | None = 1.0
