@@ -26,7 +26,6 @@ class MixtralMoeMLP(nn.Module):
 class Mixtral(Base):
 
     def __init__(self, model: nn.Module):
-        # super().__init__(model, MixtralMoeMLP)
         self.convert_moe_parameters(model, MixtralMoeMLP)
 
     @classmethod
