@@ -52,6 +52,11 @@ def _expand_sampling_inputs(sampling_inputs: SamplingInputs, num_tokens: int) ->
         'max_top_k', 'min_top_p', 'max_num_logprobs',
         'max_repetition_ngram_size',
     }
+    # Fields that are global (not per-batch-element) and should not be
+    # repeated when expanding sampling inputs.
+    _GLOBAL_FIELDS = {
+        'session_to_cleanup',
+    }
     for f in fields(sampling_inputs):
         k = f.name
         v = getattr(sampling_inputs, k)
@@ -62,7 +67,7 @@ def _expand_sampling_inputs(sampling_inputs: SamplingInputs, num_tokens: int) ->
                 # reproducible but distinct random sampling
                 arange = torch.arange(num_tokens, device=v.device)
                 v = v + arange.repeat(sampling_inputs.batch_size)
-        elif k in _SCALAR_FIELDS:
+        elif k in _SCALAR_FIELDS or k in _GLOBAL_FIELDS:
             pass
         elif k == 'batch_size':
             v = sampling_inputs.batch_size * num_tokens
@@ -102,6 +107,11 @@ def _slice_sampling_inputs(sampling_inputs: SamplingInputs, num_tokens: int, is_
         'max_top_k', 'min_top_p', 'max_num_logprobs',
         'max_repetition_ngram_size',
     }
+    # Fields that are global (not per-batch-element) and should not be
+    # sliced when expanding sampling inputs.
+    _GLOBAL_FIELDS = {
+        'session_to_cleanup',
+    }
 
     batch_size = sampling_inputs.batch_size // num_tokens
     out_dict = {}
@@ -115,7 +125,7 @@ def _slice_sampling_inputs(sampling_inputs: SamplingInputs, num_tokens: int, is_
                 shape = v.shape
                 v = v.view(batch_size, num_tokens, *shape[1:])
                 v = v[:, :-1].reshape(batch_size * (num_tokens - 1), *shape[1:])
-        elif k in _SCALAR_FIELDS:
+        elif k in _SCALAR_FIELDS or k in _GLOBAL_FIELDS:
             pass
         elif isinstance(v, (list, tuple)) and v is not None:
             # Skip if length doesn't match the expanded batch size (e.g.

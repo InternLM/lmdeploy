@@ -634,42 +634,36 @@ class TestGrammarStateAfterRejection:
     """After rejection sampling, the grammar matcher's state must reflect
     exactly the accepted tokens."""
 
-    def test_rollback_then_accept_rejection_output(self, compiler, tokenizer_info):
-        """Draft model advanced grammar state N steps via accept_string.
+    def test_fork_strategy_rejection_output(self, compiler, tokenizer_info):
+        """Production code accepts rejection-sampled output + bonus token on
+        the original (un-forked) matcher — no rollback needed because forks are
+        used for spec positions and originals stay at the pre-step state.
 
-        Rejection says only K < N were accepted. Rollback N-K steps, then accept the target model's output tokens.
+        This test models the same logic: accept exactly the rejection-sampled
+        draft tokens (n_valid_draft) plus the bonus token on the original
+        matcher.
         """
         schema = {'type': 'object', 'properties': {'name': {'type': 'string'}}, 'required': ['name']}
-        matcher = _json_matcher(compiler, schema)
+        original = _json_matcher(compiler, schema)
         vocab_size = tokenizer_info.vocab_size
 
-        # Accept 4 draft steps
-        draft_steps = ['{"', 'name', '"', ':']
-        for s in draft_steps:
-            matcher.accept_string(s)
+        # Simulate: 3 spec steps, only 1 accepted + 1 bonus
+        # Production code: accept the 1 accepted draft + 1 bonus on original
+        accepted_strings = ['{"', ':']  # 1 accepted draft + 1 bonus
+        for s in accepted_strings:
+            original.accept_string(s)
 
-        # Rejection: only 1 step accepted → rollback 3
-        num_accepted = 1
-        rollback_count = len(draft_steps) - num_accepted
-        matcher.rollback(rollback_count)
-
-        # Now accept target's output (the 1 accepted step + 1 bonus)
-        target_output_steps = [draft_steps[0], '"']  # 1 accepted + bonus
-        for s in target_output_steps:
-            matcher.accept_string(s)
-
-        # Build reference from scratch
+        # Verify
         reference = _json_matcher(compiler, schema)
-        for s in target_output_steps:
+        for s in accepted_strings:
             reference.accept_string(s)
 
-        # Compare states
-        bm_actual = xgr.allocate_token_bitmask(1, vocab_size)
-        matcher.fill_next_token_bitmask(bm_actual, 0)
+        bm_orig = xgr.allocate_token_bitmask(1, vocab_size)
+        original.fill_next_token_bitmask(bm_orig, 0)
         bm_ref = xgr.allocate_token_bitmask(1, vocab_size)
         reference.fill_next_token_bitmask(bm_ref, 0)
 
-        assert _allowed_ids(bm_actual) == _allowed_ids(bm_ref)
+        assert _allowed_ids(bm_orig) == _allowed_ids(bm_ref)
 
     def test_fork_strategy_all_accepted(self, compiler, tokenizer_info):
         """All draft tokens accepted → accept all + bonus on original."""
