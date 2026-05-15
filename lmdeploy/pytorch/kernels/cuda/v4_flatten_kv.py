@@ -124,7 +124,7 @@ def _flatten_v4_kv_kernel(
     # Ring buffer covers only the previous window (before current chunk).
     # For first-time prefill (start_pos=0), prev_window_len=0 and all tokens
     # come from raw_kv. For chunked prefill, prev_window_len=min(start_pos, WINDOW_SIZE).
-    start_pos_val = tl.load(start_pos_ptr + batch_id)
+    start_pos_val = tl.load(start_pos_ptr + batch_id).to(tl.int32)
     prev_window_len = tl.minimum(start_pos_val, WINDOW_SIZE)
     offs_d = tl.arange(0, HEAD_DIM)
 
@@ -207,6 +207,8 @@ def flatten_v4_kv(
     total_kv_tokens: int,
     max_flat_kv_len: int,
     cu_seqlens_k: torch.Tensor | None = None,
+    flat_kv_lens: torch.Tensor | None = None,
+    cu_q_seqlens: torch.Tensor | None = None,
     fp8_compressed_kv_cache: torch.Tensor | None = None,
     slot: torch.Tensor | None = None,
     raw_kv: torch.Tensor | None = None,
@@ -241,6 +243,8 @@ def flatten_v4_kv(
             over-estimation is acceptable (excess programs exit immediately).
         cu_seqlens_k: optional [bsz+1] int32 cumulative KV sequence lengths.
             If None, computed from kv_seqlens.
+        flat_kv_lens: optional [bsz] int32 per-sequence flat KV lengths.
+            If None, computed from kv_seqlens, raw_kv_lens, and compress_ratio.
         fp8_compressed_kv_cache: optional [num_blocks, entries_per_block, 584]
             FP8 V4 FlashMLA sparse paged cache.
         slot: optional [bsz] int64 slot indices into the global
@@ -268,22 +272,22 @@ def flatten_v4_kv(
     head_dim = 512  # V4 FlashMLA head_dim
 
     has_raw_kv = raw_kv is not None
+    raw_kv_lens_t = raw_kv_lens if has_raw_kv else kv_seqlens.new_zeros(bsz, dtype=kv_seqlens.dtype)
 
-    if has_raw_kv:
-        prev_window_lens = start_pos.clamp(max=window_size).long()
-        raw_kv_lens_t = raw_kv_lens.long()
-    else:
-        prev_window_lens = kv_seqlens.clamp(max=window_size).long()
-        raw_kv_lens_t = kv_seqlens.new_zeros(bsz, dtype=torch.long)
+    if flat_kv_lens is None:
+        if has_raw_kv:
+            prev_window_lens = start_pos.clamp(max=window_size)
+        else:
+            prev_window_lens = kv_seqlens.clamp(max=window_size)
 
-    if compress_ratio > 0:
-        num_compressed = torch.div(kv_seqlens, compress_ratio, rounding_mode='floor').long()
-    else:
-        num_compressed = kv_seqlens.new_zeros(kv_seqlens.shape, dtype=torch.long)
-    flat_kv_lens = (prev_window_lens + raw_kv_lens_t + num_compressed).to(torch.int32)
+        if compress_ratio > 0:
+            num_compressed = torch.div(kv_seqlens, compress_ratio, rounding_mode='floor')
+        else:
+            num_compressed = kv_seqlens.new_zeros(kv_seqlens.shape, dtype=kv_seqlens.dtype)
+        flat_kv_lens = prev_window_lens + raw_kv_lens_t + num_compressed
 
     if cu_seqlens_k is None:
-        cu_seqlens_k = torch.zeros(bsz + 1, dtype=torch.int32, device=device)
+        cu_seqlens_k = torch.zeros(bsz + 1, dtype=flat_kv_lens.dtype, device=device)
         torch.cumsum(flat_kv_lens, dim=0, out=cu_seqlens_k[1:])
 
     flat_kv = torch.empty(total_kv_tokens, 1, head_dim, dtype=torch.bfloat16, device=device)
@@ -335,19 +339,22 @@ def flatten_v4_kv(
     win_scale_view = win_flat[:, win_ws * win_NR_DIM:].view(
         win_num_slots, win_ws, 8)[:, :, :V4_FLASHMLA_NUM_TILES].view(torch.uint8)
 
-    # Build raw KV tensors
+    # Build raw KV tensors — cu_raw_kv = cumsum(q_seqlens) = cu_q_seqlens
     if has_raw_kv:
-        cu_raw_kv = torch.zeros(bsz + 1, dtype=torch.int32, device=device)
-        torch.cumsum(raw_kv_lens_t.to(torch.int32), dim=0, out=cu_raw_kv[1:])
+        if cu_q_seqlens is not None:
+            cu_raw_kv = cu_q_seqlens
+        else:
+            cu_raw_kv = torch.zeros(bsz + 1, dtype=raw_kv_lens_t.dtype, device=device)
+            torch.cumsum(raw_kv_lens_t, dim=0, out=cu_raw_kv[1:])
     else:
-        cu_raw_kv = kv_seqlens.new_zeros(bsz + 1, dtype=torch.int32)
+        cu_raw_kv = kv_seqlens.new_zeros(bsz + 1, dtype=kv_seqlens.dtype)
         raw_kv = flat_kv  # placeholder, HAS_RAW_KV=False so it's never read
 
     _flatten_v4_kv_kernel[grid](
         flat_kv,
         cu_seqlens_k[:-1],  # start_loc
         flat_kv_lens,
-        block_offsets.long(),
+        block_offsets,
         slot if has_slot else kv_seqlens,  # placeholder when no slot
         flat_kv.stride(0),
         flat_kv.stride(2),
@@ -368,8 +375,8 @@ def flatten_v4_kv(
         raw_kv.stride(0) if has_raw_kv else 0,
         raw_kv.stride(1) if has_raw_kv else 0,
         cu_raw_kv[:-1],
-        raw_kv_lens_t.to(torch.int32),
-        start_pos.to(torch.int32) if has_raw_kv else kv_seqlens.to(torch.int32),
+        raw_kv_lens_t,
+        start_pos if has_raw_kv else kv_seqlens,
         # FP8 window cache views
         win_nope_view,
         win_nope_view.stride(0),

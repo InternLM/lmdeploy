@@ -47,6 +47,10 @@ def _pack_window_tokens_fp8_kernel(
     cur_slot = tl.load(slot_ptr + token_id * stride_slot)
     cur_pos = tl.load(pos_ptr + token_id * stride_slot)
 
+    # Skip invalid slots (padded) and out-of-range positions
+    if cur_slot < 0 or cur_pos < 0:
+        return
+
     slot64 = cur_slot.to(tl.int64)
     pos64 = cur_pos.to(tl.int64)
 
@@ -138,8 +142,8 @@ def pack_window_tokens_fp8(
         nope_view,
         rope_view,
         scale_view,
-        slot.long(),
-        positions.long(),
+        slot,
+        positions,
         stride_kv_n=kv_tokens.stride(0),
         stride_kv_d=kv_tokens.stride(1),
         stride_nope_slot=nope_view.stride(0),

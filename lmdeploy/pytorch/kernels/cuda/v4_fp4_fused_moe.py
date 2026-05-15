@@ -226,8 +226,14 @@ def fused_moe_v4_fp4_kernel_launcher(
     expert_offset: int = 0,
     reindex_a: bool = True,
     reindex_c: bool = True,
+    routing_topk: int = None,
 ):
-    """Launch the V4 FP8xFP4 fused MoE GEMM kernel."""
+    """Launch the V4 FP8xFP4 fused MoE GEMM kernel.
+
+    routing_topk is used for tile selection to estimate per-expert M. For gate_up, routing_topk=topk (each token routes
+    to topk experts). For down, top_k=1 (no reindexing) but routing_topk=topk because each expert still processes
+    M*topk/E rows on average.
+    """
     if num_tokens is None:
         num_tokens = A.size(0)
     E, N, packed_K = B.shape
@@ -262,7 +268,8 @@ def fused_moe_v4_fp4_kernel_launcher(
     # Kernel uses int32 pointer with strides in int32 elements
     B_i32 = B.view(torch.int32)
 
-    BM, BN, num_stages, num_warps = _select_tile_config(num_tokens, E, top_k)
+    tk = routing_topk if routing_topk is not None else top_k
+    BM, BN, num_stages, num_warps = _select_tile_config(num_tokens, E, tk)
     M_NP2 = max(64, triton.next_power_of_2(num_tokens))
 
     grid = (triton.cdiv(M_NP2, BM) * triton.cdiv(N, BN), E)
@@ -387,6 +394,7 @@ def fused_moe_v4_fp4(input: torch.Tensor,
         expert_offset=expert_offset,
         reindex_a=False,
         reindex_c=True,
+        routing_topk=topk,
     )
 
     ret = moe_reduce(intermediate_cache2, topk_weights)

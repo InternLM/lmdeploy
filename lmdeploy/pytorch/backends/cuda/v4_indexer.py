@@ -70,14 +70,14 @@ class TritonV4IndexerImpl(BaseV4Indexer):
         k_s_cache = index_kv_scale_cache.squeeze(-1)  # [num_blocks, entries_per_block]
         scores = fp8_index(q_3d, q_scale_weighted,
                            k_cache, k_s_cache,
-                           cu_q_seqlens, num_index.to(torch.int32), block_offsets,
+                           cu_q_seqlens, num_index, block_offsets,
                            max_q_seqlen=meta.max_q_seqlen, max_k_seqlen=max_index, causal=True)
 
         topk_width = self.index_topk
-        topk_length = num_index.clamp(max=topk_width).to(torch.int32)
+        topk_length = num_index.clamp(max=topk_width)
         # bitonic_topk requires K to be a power of 2; fall back to torch.topk otherwise
-        topk = bitonic_topk(scores, q_seqlens, num_index.to(torch.int32),
-                            k=topk_width, fill=-1, descending=True).long()
+        topk = bitonic_topk(scores, q_seqlens, num_index,
+                            k=topk_width, fill=-1, descending=True)
 
         # Always return [total_q, topk_width] — caller handles decode/prefill dimension adaptation
         return V4IndexerOutput(indices_in_kvcache=topk, topk_length=topk_length)

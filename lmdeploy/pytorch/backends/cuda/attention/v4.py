@@ -54,6 +54,20 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
     prefill_num_vis_compress_r4: torch.Tensor = None    # [total_q_tokens] int32
     prefill_num_vis_compress_r128: torch.Tensor = None  # [total_q_tokens] int32
 
+    # --- Prefill pre-computed (layer-invariant, eliminates per-layer repeat_interleave/searchsorted) ---
+    prefill_seq_id: torch.Tensor = None                 # [total_q_tokens] int64
+    prefill_compress_offset: torch.Tensor = None         # [total_q_tokens, 1] (uncompressed_kv_lens[seq_id])
+    prefill_flat_kv_lens_r4: torch.Tensor = None         # [bsz] int32
+    prefill_cu_seqlens_k_r4: torch.Tensor = None         # [bsz+1] int32
+    prefill_repeat_cu_r4: torch.Tensor = None            # [total_q_tokens] int32
+    prefill_flat_kv_lens_r128: torch.Tensor = None       # [bsz] int32
+    prefill_cu_seqlens_k_r128: torch.Tensor = None       # [bsz+1] int32
+    prefill_repeat_cu_r128: torch.Tensor = None          # [total_q_tokens] int32
+
+    # --- Prefill window write indices (pre-computed, reused across all layers) ---
+    prefill_window_slot: torch.Tensor = None              # [total_q_tokens] int64
+    prefill_window_ring_pos: torch.Tensor = None          # [total_q_tokens] int64 (-1 for invalid)
+
     @classmethod
     def from_step_context(cls, attn_metadata, step_ctx, **kwargs) -> 'CudaV4AttentionMetadata':
         window_size = kwargs.get('window_size', 0)
@@ -66,7 +80,7 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
             if meta.is_decoding:
                 cls._precompute_decode(meta, window_size)
             else:
-                cls._precompute_prefill(meta, window_size)
+                cls._precompute_prefill(meta, window_size, slot)
 
         return meta
 
@@ -99,7 +113,7 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
                 meta.compress_fallback_topk_r128 = topk
 
     @staticmethod
-    def _precompute_prefill(meta, window_size):
+    def _precompute_prefill(meta, window_size, slot):
         from lmdeploy.pytorch.backends.cuda.attention.v4_utils import (
             build_compress_topk_indices,
             build_window_topk_indices,
@@ -150,6 +164,43 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
             else:
                 meta.prefill_compress_topk_r128 = compress_topk
                 meta.prefill_num_vis_compress_r128 = num_vis_r.to(torch.int32)
+
+        # Pre-compute layer-invariant tensors to eliminate per-layer repeat_interleave/searchsorted
+        cu_q_seqlens = meta.cu_q_seqlens
+        total_q_tokens = cu_q_seqlens[-1]
+        token_seq = torch.arange(total_q_tokens, device=kv_seqlens.device)
+        meta.prefill_seq_id = torch.searchsorted(cu_q_seqlens[1:], token_seq, right=True)
+        meta.prefill_compress_offset = meta.prefill_uncompressed_kv_lens[meta.prefill_seq_id].unsqueeze(-1)
+
+        # Pre-compute flat_kv_lens + cu_seqlens_k + repeat_cu per compress_ratio
+        raw_kv_lens_t = q_seqlens.long()
+        for ratio in (4, 128):
+            num_compressed = torch.div(kv_seqlens, ratio, rounding_mode='floor').long()
+            flat_kv_lens = (prev_window_lens + raw_kv_lens_t + num_compressed).to(torch.int32)
+            cu_seqlens_k = torch.zeros(kv_seqlens.numel() + 1, dtype=torch.int32, device=kv_seqlens.device)
+            torch.cumsum(flat_kv_lens, dim=0, out=cu_seqlens_k[1:])
+            repeat_cu = torch.repeat_interleave(
+                cu_seqlens_k[:-1], q_seqlens, output_size=total_q_tokens)
+            if ratio == 4:
+                meta.prefill_flat_kv_lens_r4 = flat_kv_lens
+                meta.prefill_cu_seqlens_k_r4 = cu_seqlens_k
+                meta.prefill_repeat_cu_r4 = repeat_cu
+            else:
+                meta.prefill_flat_kv_lens_r128 = flat_kv_lens
+                meta.prefill_cu_seqlens_k_r128 = cu_seqlens_k
+                meta.prefill_repeat_cu_r128 = repeat_cu
+
+        # Pre-compute window write indices (reused across all layers)
+        token_seq = meta.prefill_seq_id
+        cu_q = cu_q_seqlens
+        token_slot = slot[token_seq]
+        token_pos_in_seq = torch.arange(total_q_tokens, device=kv_seqlens.device) - cu_q[token_seq]
+        token_abs_pos = start_pos[token_seq] + token_pos_in_seq
+        cutoff_pos = (total_lens[token_seq] - window_size).clamp(min=0)
+        ring_pos = torch.remainder(token_abs_pos, window_size)
+        invalid = token_abs_pos < cutoff_pos
+        meta.prefill_window_slot = token_slot.clamp(min=0)
+        meta.prefill_window_ring_pos = torch.where(invalid, -1, ring_pos)
 
 
 class V4IndicesUpdater:
@@ -214,6 +265,7 @@ class V4IndicesUpdater:
         return V4IndicesUpdater()
 
 
+
 def _try_dynamic_compile(func, *args, **kwargs):
     try:
         compiled_func = torch.compile(func, dynamic=True)
@@ -251,6 +303,7 @@ class TritonV4AttentionImpl:
     # ------------------------------------------------------------------
 
     @staticmethod
+    @torch.compile(dynamic=True)
     def _pad_query_heads(query: torch.Tensor, attn_sink: torch.Tensor):
         num_heads = query.size(2) if query.dim() == 4 else query.size(1)
         if num_heads in (64, 128):
@@ -268,6 +321,7 @@ class TritonV4AttentionImpl:
         return query, attn_sink, num_heads
 
     @staticmethod
+    @torch.compile(dynamic=True)
     def _pad_sparse_indices(indices: torch.Tensor | None, block: int = 128):
         if indices is None:
             return None
@@ -286,29 +340,11 @@ class TritonV4AttentionImpl:
         self._pack_window_fp8(kv_decode, attn_caches['window_state_fp8'], slot_idx, window_pos)
         return attn_caches['window_state_fp8'].index_select(0, slot_idx)
 
-    def _write_window_prefill(self, kv, attn_caches, slot, start_pos, q_seqlens, total_lens):
+    def _write_window_prefill(self, kv, attn_caches, attn_metadata):
         """Batched ring-buffer FP8 pack for all prefill sequences."""
         kv_flat = kv.squeeze(0)  # [total_tokens, head_dim]
-        num_seqs = start_pos.numel()
-        cu_q = torch.cat([start_pos.new_zeros(1), q_seqlens.cumsum(0)])
-        total_tokens = kv_flat.size(0)
-
-        # Build per-token indices
-        token_slot = slot.repeat_interleave(q_seqlens)
-        token_seq = torch.arange(num_seqs, device=slot.device).repeat_interleave(q_seqlens)
-        token_pos_in_seq = torch.arange(total_tokens, device=slot.device) - cu_q[token_seq]
-        token_start = start_pos.repeat_interleave(q_seqlens)
-        token_abs_pos = token_start + token_pos_in_seq
-        token_total = total_lens[token_seq]
-        cutoff_pos = (token_total - self.window_size).clamp(min=0)
-        valid = token_abs_pos >= cutoff_pos
-        ring_pos = torch.remainder(token_abs_pos, self.window_size)
-
-        # Pack only valid tokens directly into FP8 cache
-        valid_slot = token_slot[valid].clamp(min=0)
-        valid_ring = ring_pos[valid]
-        valid_kv = kv_flat[valid]
-        self._pack_window_fp8(valid_kv, attn_caches['window_state_fp8'], valid_slot, valid_ring)
+        self._pack_window_fp8(kv_flat, attn_caches['window_state_fp8'],
+                              attn_metadata.prefill_window_slot, attn_metadata.prefill_window_ring_pos)
 
 
     # ------------------------------------------------------------------
@@ -448,12 +484,7 @@ class TritonV4AttentionImpl:
         if index_out is not None:
             compress_topk = index_out.indices_in_kvcache
             # Offset indexer's logical indices into flat_kv positions
-            uncompressed_kv_lens = attn_metadata.prefill_uncompressed_kv_lens
-            cu_q_seqlens = attn_metadata.cu_q_seqlens
-            total_tokens = compress_topk.size(0)
-            token_seq = torch.arange(total_tokens, device=compress_topk.device)
-            seq_id = torch.searchsorted(cu_q_seqlens[1:], token_seq, right=True)
-            compress_topk = compress_topk + uncompressed_kv_lens[seq_id].unsqueeze(-1)
+            compress_topk = compress_topk + attn_metadata.prefill_compress_offset
             # Per-token causal limit from the pre-computed ratio-specific count.
             # index_out.topk_length is per-sequence and ignores causal masking.
             if self.compress_ratio == 128:
@@ -483,9 +514,21 @@ class TritonV4AttentionImpl:
         if self.compress_ratio == 4:
             max_flat_kv_len = attn_metadata.prefill_max_flat_kv_len_r4
             total_flat_kv_tokens = attn_metadata.prefill_total_flat_kv_tokens_r4
-        else:
+            cu_seqlens_k = attn_metadata.prefill_cu_seqlens_k_r4
+            flat_kv_lens = attn_metadata.prefill_flat_kv_lens_r4
+            repeat_cu = attn_metadata.prefill_repeat_cu_r4
+        elif self.compress_ratio == 128:
             max_flat_kv_len = attn_metadata.prefill_max_flat_kv_len_r128
             total_flat_kv_tokens = attn_metadata.prefill_total_flat_kv_tokens_r128
+            cu_seqlens_k = attn_metadata.prefill_cu_seqlens_k_r128
+            flat_kv_lens = attn_metadata.prefill_flat_kv_lens_r128
+            repeat_cu = attn_metadata.prefill_repeat_cu_r128
+        else:
+            max_flat_kv_len = attn_metadata.prefill_max_flat_kv_len_r4
+            total_flat_kv_tokens = attn_metadata.prefill_total_flat_kv_tokens_r4
+            cu_seqlens_k = None
+            flat_kv_lens = None
+            repeat_cu = None
 
         fp8_compressed_kv_cache = caches['compressed_kv_fp8'] if self.compress_ratio else None
         raw_kv = kv.squeeze(0)  # [total_q_tokens, head_dim]
@@ -494,12 +537,15 @@ class TritonV4AttentionImpl:
             block_offsets, total_lens,
             self.window_size, self.compress_ratio,
             total_flat_kv_tokens, max_flat_kv_len,
+            cu_seqlens_k=cu_seqlens_k,
+            flat_kv_lens=flat_kv_lens,
+            cu_q_seqlens=attn_metadata.cu_q_seqlens,
             fp8_compressed_kv_cache=fp8_compressed_kv_cache, slot=slot,
             raw_kv=raw_kv, raw_kv_lens=q_seqlens,
             start_pos=start_pos)
 
         # Phase 3: Write window state + FP8 pack
-        self._write_window_prefill(kv, caches, slot, start_pos, q_seqlens, total_lens)
+        self._write_window_prefill(kv, caches, attn_metadata)
 
         # Phase 4: Assemble topk_indices (cat window + compress) + convert to global
         window_topk = attn_metadata.prefill_window_topk
@@ -507,7 +553,13 @@ class TritonV4AttentionImpl:
             topk_indices = torch.cat([window_topk, compress_topk], dim=-1)
         else:
             topk_indices = window_topk
-        topk_indices = self.v4_updater.update_prefill(topk_indices, q_seqlens, cu_seqlens_k)
+        if repeat_cu is not None:
+            neg_mask = topk_indices < 0
+            topk_indices = topk_indices + repeat_cu[:, None]
+            topk_indices[neg_mask] = -1
+            topk_indices = topk_indices.unsqueeze(1)
+        else:
+            topk_indices = self.v4_updater.update_prefill(topk_indices, q_seqlens, cu_seqlens_k)
         topk_indices = self._pad_sparse_indices(topk_indices).to(torch.int32)
 
         # Phase 5: Compute topk_length + FlashMLA sparse prefill
