@@ -38,10 +38,12 @@ public:
         desc_.arch      = K::Arch::value;
         desc_.head_dim  = K::kHeadDim;
         desc_.data_type = data_type_v<typename K::T>;
+        desc_.causal    = K::kCausal;
 
         if constexpr (kIsDecoding) {
             desc_.kv_quant = kv_quant_from_type<typename K::Tkv>();
             desc_.qh       = K::CTA_H;
+            desc_.causal   = true;
         }
         else {
             desc_.kv_quant = 0;

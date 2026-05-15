@@ -7,12 +7,14 @@
 #include "src/turbomind/engine/batch.h"
 #include "src/turbomind/engine/queue.h"
 #include "src/turbomind/models/language_model.h"
+#include "src/turbomind/models/visual_model.h"
 
 #include "src/turbomind/models/llama/context.h"
 
 namespace turbomind {
 
-// Model executor for auto-regressive language models
+// Model executor for auto-regressive language models, optionally
+// preceded by a per-batch ViT pass for VLM checkpoints.
 class ModelExecutor {
 public:
     ~ModelExecutor();
@@ -27,6 +29,7 @@ public:
     }
 
     ModelExecutor(LanguageModel&                     model,
+                  VisualModel*                       visual_model,  // nullable
                   Context&                           context,
                   int                                device_id,
                   Queue<std::unique_ptr<BatchData>>& inbound,

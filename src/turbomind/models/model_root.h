@@ -4,6 +4,7 @@
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/module.h"
 #include "src/turbomind/models/model_weight.h"
+#include "src/turbomind/models/visual_model_weight.h"
 
 namespace turbomind {
 
@@ -44,7 +45,16 @@ public:
         return text_model.get();
     }
 
-#define MODEL_ROOT_CHILDREN(X) X(ModelWeight, text_model)
+    /// Convenience accessor for the optional VLM sub-tree. Nullptr for
+    /// text-only checkpoints (the spec never attached a visual root).
+    VisualModelWeight* visual_model_ptr() const
+    {
+        return visual_model.get();
+    }
+
+#define MODEL_ROOT_CHILDREN(X)                                                                                         \
+    X(ModelWeight, text_model)                                                                                         \
+    X(VisualModelWeight, visual_model)
 
 #define MODEL_ROOT_PARAMS(X)
 

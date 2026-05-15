@@ -14,7 +14,13 @@ enum class RopeType
     kDynamic,
     kYarn,
     kLlama3,
-    kMrope,
+};
+
+enum class MropeMode
+{
+    kNone,
+    kChunked,
+    kInterleaved,
 };
 
 struct YarnRopeKernelParam {
@@ -49,7 +55,9 @@ struct RopeKernelParam {
 
     YarnRopeKernelParam   yarn;
     Llama3RopeKernelParam llama3;
-    MropeRopeKernelParam  mrope;
+
+    MropeMode            mrope_mode{MropeMode::kNone};
+    MropeRopeKernelParam mrope;
 };
 
 }  // namespace turbomind

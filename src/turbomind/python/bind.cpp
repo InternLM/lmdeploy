@@ -20,14 +20,19 @@
 #include "src/turbomind/core/tensor.h"
 #include "src/turbomind/engine/engine_config.h"
 #include "src/turbomind/engine/model_request.h"
+#include "src/turbomind/engine/multimodal_input.h"
 #include "src/turbomind/models/attention_weight.h"
 #include "src/turbomind/models/decoder_layer_weight.h"
 #include "src/turbomind/models/delta_net_weight.h"
 #include "src/turbomind/models/ffn_weight.h"
+#include "src/turbomind/models/layer_norm_weight.h"
 #include "src/turbomind/models/linear_weight.h"
 #include "src/turbomind/models/model_weight.h"
 #include "src/turbomind/models/moe_weight.h"
 #include "src/turbomind/models/norm_weight.h"
+#include "src/turbomind/models/qwen3_5vit/qwen3_5vit_block_weight.h"
+#include "src/turbomind/models/qwen3_5vit/qwen3_5vit_weight.h"
+#include "src/turbomind/models/visual_model_weight.h"
 #include "src/turbomind/python/dlpack.h"
 #include "src/turbomind/turbomind.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -283,6 +288,69 @@ static void safe_memcpy(void* dst, const void* src, size_t size)
     }
 }
 
+namespace multimodal {
+
+using Value    = ft::multimodal::Value;
+using Array    = ft::multimodal::Array;
+using Document = ft::multimodal::Document;
+
+Value py_to_value(py::handle obj)
+{
+    if (obj.is_none())
+        return Value{};
+    if (py::hasattr(obj, "__dlpack__")) {
+        py::capsule cap  = obj.attr("__dlpack__")();
+        auto*       dlmt = static_cast<DLManagedTensor*>(PyCapsule_GetPointer(cap.ptr(), kDlTensorCapsuleName));
+        auto        ret  = DLManagedTensorToTritonTensor(dlmt);
+        cap.set_name("used_dltensor");
+        return Value{std::move(*ret)};
+    }
+    if (py::isinstance<py::bool_>(obj))
+        return Value{obj.cast<bool>()};
+    if (py::isinstance<py::int_>(obj))
+        return Value{obj.cast<int64_t>()};
+    if (py::isinstance<py::float_>(obj))
+        return Value{obj.cast<double>()};
+    if (py::isinstance<py::str>(obj))
+        return Value{obj.cast<std::string>()};
+    if (py::isinstance(obj, py::module_::import("enum").attr("Enum"))) {
+        return py_to_value(obj.attr("value"));
+    }
+
+    if (py::isinstance<py::list>(obj) || py::isinstance<py::tuple>(obj)) {
+        Array list;
+        for (auto& item : obj) {
+            list.push_back(py_to_value(item));
+        }
+        return Value{std::move(list)};
+    }
+    if (py::isinstance<py::dict>(obj)) {
+        Document dict;
+        for (auto& [k, v] : obj.cast<py::dict>()) {
+            dict[k.cast<std::string>()] = py_to_value(v);
+        }
+        return Value{std::move(dict)};
+    }
+    throw std::runtime_error("unsupported Python type for Value conversion");
+}
+
+std::shared_ptr<ft::multimodal::Value> make_multimodal_input(py::list mm_inputs)
+{
+    Array items;
+    for (auto& py_item : mm_inputs) {
+        auto d = py_item.cast<py::dict>();
+
+        Document doc;
+        for (auto& [k, v] : d) {
+            auto key = k.cast<std::string>();
+            doc.insert({key, py_to_value(v)});
+        }
+        items.push_back(std::move(doc));
+    }
+    return std::make_shared<ft::multimodal::Value>(std::move(items));
+}
+}  // namespace multimodal
+
 namespace {
 
 struct ScopedGIL {
@@ -324,6 +392,14 @@ void bind_struct(py::module_& m, const char* name)
 
 PYBIND11_MODULE(_turbomind, m)
 {
+    py::module_ multimodal = m.def_submodule("multimodal");
+    py::class_<turbomind::multimodal::Value, std::shared_ptr<turbomind::multimodal::Value>>(multimodal, "Value")
+        .def(py::init<>())
+        .def_static(
+            "from_list",
+            [](py::list mm_inputs) { return multimodal::make_multimodal_input(mm_inputs); },
+            "mm_inputs"_a);
+
     py::class_<ft::RequestMetrics, std::shared_ptr<ft::RequestMetrics>>(m, "RequestMetrics")
         .def(py::init())
         .def_property_readonly("enqueue_time",
@@ -458,6 +534,9 @@ PYBIND11_MODULE(_turbomind, m)
     bind_config<turbomind::core::NormConfig>(m, "NormConfig");
     bind_config<turbomind::core::DecoderLayerConfig>(m, "DecoderLayerConfig");
     bind_config<turbomind::core::ModelWeightConfig>(m, "ModelWeightConfig");
+    bind_config<turbomind::core::LayerNormConfig>(m, "LayerNormConfig");
+    bind_config<turbomind::core::Qwen3_5VitConfig>(m, "Qwen3_5VitConfig");
+    bind_config<turbomind::core::Qwen3_5VitBlockConfig>(m, "Qwen3_5VitBlockConfig");
 
     // tensor
     py::class_<Tensor, std::shared_ptr<Tensor>>(m, "Tensor")
@@ -519,11 +598,13 @@ PYBIND11_MODULE(_turbomind, m)
     py::bind_map<TensorMap, std::shared_ptr<TensorMap>>(m, "TensorMap");
 
     using ft::ModelRequest;
+    using MMInput = ft::multimodal::Value;
     py::class_<ModelRequest>(m, "ModelRequest")
         .def(
             "forward",
             [](ModelRequest*               model_request,
                std::shared_ptr<TensorMap>  input_tensors,
+               std::shared_ptr<MMInput>    mm_inputs,
                const ft::SessionParam&     session,
                const ft::GenerationConfig& gen_cfg,
                bool                        stream_output,
@@ -531,6 +612,7 @@ PYBIND11_MODULE(_turbomind, m)
                std::function<void()>       cb) {
                 ModelRequest::InputParam param{};
                 param.tensors        = std::move(input_tensors);
+                param.mm_inputs      = std::move(mm_inputs);
                 param.session        = session;
                 param.gen_cfg        = gen_cfg;
                 param.stream_output  = stream_output;
@@ -548,6 +630,7 @@ PYBIND11_MODULE(_turbomind, m)
             },
             py::call_guard<py::gil_scoped_release>(),
             "input_tensors"_a,
+            "mm_inputs"_a,
             "session"_a,
             "gen_cfg"_a,
             "stream_output"_a,

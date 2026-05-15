@@ -13,7 +13,7 @@ public:
 
     void Run(BatchOp op, int phase, TensorMap& env);
 
-    void PatchEmbedding(int phase, Tensor& embeds, BatchCopy& copy);
+    void PatchEmbedding(int phase, Tensor& embeds, TensorMap& env);
 
 private:
     struct Impl;
