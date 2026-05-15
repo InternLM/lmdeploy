@@ -29,6 +29,7 @@ class Qwen3_5Model(Qwen3VLModel):
         'InternS2PreviewForConditionalGeneration',
         'InternS2PreviewForCausalLM',
     ]
+    _turbomind_native_vision = True
 
     def build_preprocessor(self, trust_remote_code: bool = False):
         check_transformers()

@@ -382,7 +382,18 @@ class MultimodalProcessor:
         messages = await self.async_parse_multimodal_item(messages, media_io_kwargs)
 
         if self.backend == 'turbomind':
-            results = await self.vl_encoder.preprocess(messages, mm_processor_kwargs)
+            if self.vl_encoder._uses_new_preprocess:
+                input_prompt = self.vl_encoder.model.get_input_prompt(messages=messages,
+                                                                      chat_template=chat_template,
+                                                                      sequence_start=sequence_start,
+                                                                      chat_template_kwargs=chat_template_kwargs)
+                results = await self.vl_encoder.preprocess(messages,
+                                                           input_prompt=input_prompt,
+                                                           mm_processor_kwargs=mm_processor_kwargs)
+                if getattr(self.vl_encoder.model, '_turbomind_native_vision', False):
+                    return results
+            else:
+                results = await self.vl_encoder.preprocess(messages, mm_processor_kwargs)
             results = await self.vl_encoder.async_infer(results)
             results = await self.vl_encoder.wrap_for_turbomind(messages=results,
                                                                chat_template=chat_template,

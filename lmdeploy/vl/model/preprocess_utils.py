@@ -74,6 +74,18 @@ def get_expanded_input_ids(input_prompt, collected_mm_items, processor,
     return torch.tensor(input_ids)
 
 
+def _get_offset_start(offset) -> int:
+    if isinstance(offset, torch.Tensor):
+        return int(offset.flatten()[0].item())
+    if isinstance(offset, (list, tuple)):
+        return _get_offset_start(offset[0])
+    return int(offset)
+
+
+def _sort_mm_items_by_offset(mm_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(mm_items, key=lambda item: _get_offset_start(item['offset']))
+
+
 # adapted from https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/managers/mm_utils.py
 def get_expanded_mm_items(collected_mm_items, mm_tokens: 'MultimodalSpecialTokens'):
     """Expand bundled hf processor outputs into per-image/video entries for
@@ -179,4 +191,4 @@ def get_expanded_mm_items(collected_mm_items, mm_tokens: 'MultimodalSpecialToken
                             video_token_id=token_id,
                         ))
 
-    return expanded_mm_items
+    return _sort_mm_items_by_offset(expanded_mm_items)
