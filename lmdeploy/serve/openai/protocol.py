@@ -62,7 +62,6 @@ class Function(BaseModel):
     description: str | None = Field(default=None, examples=[None])
     name: str
     parameters: dict[str, Any] | None = None
-    strict: bool | None = None
 
 
 class Tool(BaseModel):
