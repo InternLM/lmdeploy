@@ -640,6 +640,7 @@ class TurboMindInstance:
                                  input_embeddings=None,
                                  input_embedding_ranges=None,
                                  input_meta: dict[str, Any] = None,
+                                 multimodal: list[dict[str, Any]] = None,
                                  sequence_start: bool = True,
                                  sequence_end: bool = False,
                                  step=0,
@@ -709,11 +710,12 @@ class TurboMindInstance:
         session = _tm.SessionParam(id=session_id, step=step, start=sequence_start, end=sequence_end)
 
         inputs = _np_dict_to_tm_dict(inputs)
+        mm_inputs = _tm.multimodal.Value.from_list(multimodal) if multimodal else None
 
         sem = StreamingSemaphore()
         signal_cb = partial(self.async_signal_cb, sem)
 
-        outputs, shared_state, metrics = self.model_inst.forward(inputs, session, gen_cfg, stream_output,
+        outputs, shared_state, metrics = self.model_inst.forward(inputs, mm_inputs, session, gen_cfg, stream_output,
                                                                  self.tm_model.engine_config.enable_metrics, signal_cb)
 
         outputs = _tm_dict_to_torch_dict(outputs)
