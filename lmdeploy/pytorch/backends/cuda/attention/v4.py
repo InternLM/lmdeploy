@@ -36,6 +36,11 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
     compress_fallback_indices_r128: torch.Tensor = None  # [bsz, 1, max_comp] int32
     compress_fallback_topk_r128: torch.Tensor = None     # [bsz] int32
 
+    # --- FlashMLA schedule meta (per compress_ratio, computed once, reused across layers) ---
+    flash_mla_sched_meta_r4: object = None
+    flash_mla_sched_meta_r128: object = None
+    flash_mla_sched_meta_r0: object = None
+
     # --- Prefill pre-computed ---
     prefill_uncompressed_kv_lens: torch.Tensor = None   # [bsz] long (prev_window + raw_kv)
     prefill_max_flat_kv_len_r4: int = None
@@ -397,7 +402,11 @@ class TritonV4AttentionImpl:
         # when no compression, window cache serves as primary.
         k_cache = compressed_cache_fp8.unsqueeze(2) if compressed_cache_fp8 is not None else extra_k_cache
 
-        sched_meta, _ = self.flash_mla.get_mla_metadata()
+        ratio_key = f'flash_mla_sched_meta_r{self.compress_ratio}'
+        sched_meta = getattr(attn_metadata, ratio_key)
+        if sched_meta is None:
+            sched_meta, _ = self.flash_mla.get_mla_metadata()
+            object.__setattr__(attn_metadata, ratio_key, sched_meta)
 
         output, _ = self.flash_mla.flash_mla_with_kvcache(
             padded_query,
