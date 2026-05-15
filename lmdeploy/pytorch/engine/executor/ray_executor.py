@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import contextlib
-import json
 import os
 from typing import Any
 
@@ -44,42 +43,6 @@ def _get_master_port():
     if port is not None:
         return port
     return find_available_port()
-
-
-def get_ascend_device_rank_mapping(master_addr):
-    rank_table_file = _envs.ascend_rank_table_file
-    if not rank_table_file:
-        raise ValueError('ASCEND_RANK_TABLE_FILE_PATH is not set')
-    with open(rank_table_file) as f:
-        rank_table = json.load(f)
-    try:
-        assert master_addr == rank_table['server_list'][0]['server_id'], 'Master address does not match rank table'
-        rank_mapping: dict[int, int] = {}
-        worker_ip_by_rank: dict[int, str] = {}
-        for server in rank_table['server_list']:
-            node_ip = server['server_id']
-            for idx, device in enumerate(server['device']):
-                # Prefer explicit device_id if present; fall back to enumeration order.
-                local_rank = int(device.get('device_id', idx))
-                global_rank = int(device['rank_id'])
-                rank_mapping[global_rank] = local_rank
-                worker_ip_by_rank[global_rank] = node_ip
-
-        if len(worker_ip_by_rank) == 0:
-            raise ValueError('Rank table contains no devices.')
-
-        ranks = sorted(worker_ip_by_rank.keys())
-        if ranks[0] != 0 or ranks[-1] != len(ranks) - 1:
-            raise ValueError(f'Rank ids are not contiguous starting from 0: {ranks[:8]}...{ranks[-8:]}')
-        worker_ips = [worker_ip_by_rank[r] for r in range(len(ranks))]
-    except Exception as e:
-        logger.error(f'Parse rank table file({rank_table})  failed')
-        raise e
-
-    envs = {
-        'ASCEND_RANK_TABLE_FILE_PATH': rank_table_file,
-    }
-    return rank_mapping, worker_ips, envs
 
 
 def _update_env_cuda_alloc_conf(env_vars: dict):
@@ -666,33 +629,40 @@ class RayExecutor(ExecutorBase):
 
     def _init_ascend_distributed_environment(self, driver_ip):
         """Init ascend distributed environment."""
-        rank_table_file = _envs.ascend_rank_table_file
+        from collections import defaultdict
+
         set_rt_visable_devices_by_ray = _envs.ascend_set_rt_visable_devices_by_ray
+        self.workers = self._sort_workers(driver_ip, self.workers)
 
-        if rank_table_file:
-            # if rank table file is set, use it to get rank mapping, multiple nodes
-            rank_mapping, worker_ips, envs = get_ascend_device_rank_mapping(driver_ip)
-            rank_start = self.rank_offset
-            rank_end = rank_start + len(self.workers)
-            if rank_end > len(worker_ips):
-                raise ValueError(
-                    'Rank table world_size is smaller than required ranks for current dp_rank. '
-                    f'rank_table_world_size={len(worker_ips)}, required_rank_range=[{rank_start}, {rank_end})')
+        if set_rt_visable_devices_by_ray:
+            # Ray populated ASCEND_RT_VISIBLE_DEVICES per actor; no set_device.
+            return
 
-            # In dp mode each process only owns a slice of global ranks.
-            expected_worker_ips = worker_ips[rank_start:rank_end]
-            self.workers = self._sort_workers_by_ip(expected_worker_ips, self.workers)
+        worker_ips = ray.get([w.get_node_ip.remote() for w in self.workers])
+        is_multi_node_pg = len(set(worker_ips)) > 1
 
-            ray.get(
-                [worker.set_device.remote(rank_mapping[rank_start + idx]) for idx, worker in enumerate(self.workers)])
-            ray.get([worker.set_env.remote(envs) for worker in self.workers])
-        elif not set_rt_visable_devices_by_ray:
-            # if rank table file is not set, treat as single node
-            # simply set device by index, this is for single node, multiple devices
-            self.workers = self._sort_workers(driver_ip, self.workers)
-            ray.get([worker.set_device.remote(idx + self.rank_offset) for idx, worker in enumerate(self.workers)])
+        if is_multi_node_pg:
+            # Cross-node TP: each worker uses its index within its own node.
+            local_indices: list[int] = []
+            counts: dict[str, int] = defaultdict(int)
+            for ip in worker_ips:
+                local_indices.append(counts[ip])
+                counts[ip] += 1
+            ray.get([w.set_device.remote(local_indices[idx]) for idx, w in enumerate(self.workers)])
+            return
+
+        # Single-node PG below.
+        if 'ASCEND_RT_VISIBLE_DEVICES' in os.environ:
+            ray.get([w.set_device.remote(idx) for idx, w in enumerate(self.workers)])
         else:
-            self.workers = self._sort_workers(driver_ip, self.workers)
+            local_npu_count = torch.npu.device_count()
+            if local_npu_count <= 0:
+                raise RuntimeError(
+                    'torch.npu.device_count() returned a non-positive value; '
+                    'cannot derive local NPU offset. Please set '
+                    'ASCEND_RT_VISIBLE_DEVICES explicitly.')
+            local_offset = self.rank_offset % local_npu_count
+            ray.get([w.set_device.remote(idx + local_offset) for idx, w in enumerate(self.workers)])
 
     """ PD Disaggregation API Begin """
 
