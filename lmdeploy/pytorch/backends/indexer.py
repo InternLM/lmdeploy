@@ -17,6 +17,9 @@ class V4IndexerMetadata:
     max_kv_seqlen: int = None
     max_q_seqlen: int = None
     block_size: int = None
+    num_index: torch.Tensor = None
+    num_index_r4: torch.Tensor = None
+    num_index_r128: torch.Tensor = None
 
 
 @dataclass

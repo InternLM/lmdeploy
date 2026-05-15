@@ -142,9 +142,11 @@ def build_compress_topk_indices(total_lens: torch.Tensor, compress_ratio: int, o
 
     num_compressed = torch.div(total_lens, compress_ratio, rounding_mode='floor').long()
     if max_width is None:
-        max_width = int(num_compressed.max().item())
+        # NOTE: This causes a GPU→CPU sync. Callers should always provide max_width
+        # to avoid this. Currently all callers in the V4 path pass max_width explicitly.
+        max_width = int(num_compressed.max().cpu().item())
     elif isinstance(max_width, torch.Tensor):
-        max_width = int(max_width.item())
+        max_width = int(max_width.cpu().item())
 
     # Per-sequence sequential indices with -1 padding beyond num_compressed
     positions, mask = build_prefix_positions(num_compressed, max_width)
@@ -154,9 +156,9 @@ def build_compress_topk_indices(total_lens: torch.Tensor, compress_ratio: int, o
         positions = torch.where(mask, positions + offset, positions)
 
     if causal and q_seqlens is not None:
-        token_pos_in_seq, _, _, seq_id = _build_token_positions(q_seqlens)
+        token_pos_in_seq, total_q, _, seq_id = _build_token_positions(q_seqlens)
         abs_pos = start_pos[seq_id] + token_pos_in_seq
         causal_limit = torch.div(abs_pos + 1, compress_ratio, rounding_mode='floor')
-        return positions.repeat_interleave(q_seqlens.long(), dim=0), causal_limit
+        return positions.repeat_interleave(q_seqlens.long(), dim=0, output_size=total_q), causal_limit
 
     return positions.unsqueeze(1), None  # [bsz, 1, max_width]

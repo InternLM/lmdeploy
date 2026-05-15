@@ -834,15 +834,18 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             window_size=self.args.window_size, slot=safe_state_ids)
 
         # Pre-build indexer/compressor metadata once (not per-layer)
+        kv_seqlens = v4_meta.kv_seqlens
         v4_indexer_meta = V4IndexerMetadata(
             block_offsets=v4_meta.block_offsets,
             is_decoding=v4_meta.is_decoding,
             cu_q_seqlens=v4_meta.cu_q_seqlens,
-            kv_seqlens=v4_meta.kv_seqlens,
+            kv_seqlens=kv_seqlens,
             q_seqlens=v4_meta.q_seqlens,
             max_kv_seqlen=v4_meta.max_kv_seqlen,
             max_q_seqlen=v4_meta.max_q_seqlen,
             block_size=v4_meta.block_size,
+            num_index_r4=torch.div(kv_seqlens, 4, rounding_mode='floor').to(torch.int32),
+            num_index_r128=torch.div(kv_seqlens, 128, rounding_mode='floor').to(torch.int32),
         )
         v4_compressor_meta = V4CompressorMetadata(
             cu_q_seqlens=v4_meta.cu_q_seqlens,

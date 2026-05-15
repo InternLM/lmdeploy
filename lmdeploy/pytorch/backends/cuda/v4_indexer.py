@@ -53,7 +53,16 @@ class TritonV4IndexerImpl(BaseV4Indexer):
         q_scale_weighted = q_scale * weights_2d
 
         total_lens = kv_seqlens
-        num_index = torch.div(total_lens, self.compress_ratio, rounding_mode='floor')
+        # Use pre-computed num_index from metadata (avoid per-layer torch.div).
+        # Prefer ratio-specific field, then generic num_index, then compute on-the-fly.
+        if self.compress_ratio == 4 and meta.num_index_r4 is not None:
+            num_index = meta.num_index_r4
+        elif self.compress_ratio == 128 and meta.num_index_r128 is not None:
+            num_index = meta.num_index_r128
+        elif meta.num_index is not None:
+            num_index = meta.num_index
+        else:
+            num_index = torch.div(total_lens, self.compress_ratio, rounding_mode='floor')
         max_kv_seqlen = meta.max_kv_seqlen if meta.max_kv_seqlen is not None else block_offsets.size(1) * block_size
         max_index = max(max_kv_seqlen // self.compress_ratio, 1)
 
