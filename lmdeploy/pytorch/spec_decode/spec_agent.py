@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
@@ -136,6 +137,28 @@ def _slice_sampling_inputs(sampling_inputs: SamplingInputs, num_tokens: int, is_
     else:
         out_dict['batch_size'] = batch_size * (num_tokens - 1)
     return SamplingInputs(**out_dict)
+
+
+def _accept_spec_rejection_tokens(guided_manager, guided_processors, cpu_num_rejected,
+                                    cpu_output_token_ids, cpu_next_token_ids, num_spec_tokens):
+    for idx, processor in guided_processors.items():
+        n_rejected = cpu_num_rejected[idx].item()
+        n_valid_draft = num_spec_tokens - n_rejected
+        for pos in range(n_valid_draft):
+            tid = cpu_output_token_ids[idx, pos].item()
+            if tid >= 0:
+                guided_manager.accept_token(processor, tid)
+        guided_manager.accept_token(processor, cpu_next_token_ids[idx].item())
+
+
+def _fill_spec_bitmask(guided_manager, forked, guided_bitmask):
+    for idx, fork_proc in forked.items():
+        guided_manager.fill_bitmap(fork_proc, guided_bitmask, idx)
+
+
+def _accept_spec_forked_tokens(guided_manager, forked, cpu_draft_token_ids, pos):
+    for idx, fork_proc in forked.items():
+        guided_manager.accept_token(fork_proc, cpu_draft_token_ids[idx, pos].item())
 
 
 class SpecModelAgent(BaseSpecModelAgent):
@@ -445,14 +468,12 @@ class SpecModelAgent(BaseSpecModelAgent):
                 cpu_num_rejected = num_rejected_tokens.cpu()
                 cpu_output_token_ids = output_token_ids.cpu()
                 cpu_next_token_ids = next_token_ids.cpu()
-                for idx, processor in guided_processors.items():
-                    n_rejected = cpu_num_rejected[idx].item()
-                    n_valid_draft = self.num_spec_tokens - n_rejected
-                    for pos in range(n_valid_draft):
-                        tid = cpu_output_token_ids[idx, pos].item()
-                        if tid >= 0:
-                            guided_manager.accept_token(processor, tid)
-                    guided_manager.accept_token(processor, cpu_next_token_ids[idx].item())
+                await asyncio.to_thread(
+                    _accept_spec_rejection_tokens,
+                    guided_manager, guided_processors,
+                    cpu_num_rejected, cpu_output_token_ids, cpu_next_token_ids,
+                    self.num_spec_tokens,
+                )
         else:
             # Prefill path — standard FusedLogitsProcessor handles guided decoding
             logits_processor = FusedLogitsProcessor(
@@ -532,8 +553,7 @@ class SpecModelAgent(BaseSpecModelAgent):
         guided_bitmask = guided_manager.allocate_batched_bitmap(batch_size)
         for pos in range(num_expand):
 
-            for idx, fork_proc in forked.items():
-                guided_manager.fill_bitmap(fork_proc, guided_bitmask, idx)
+            await asyncio.to_thread(_fill_spec_bitmask, guided_manager, forked, guided_bitmask)
 
             pos_logits = scores_3d[:, pos, :]
             guided_manager.apply_batched_bitmap(pos_logits, guided_bitmask)
@@ -545,8 +565,10 @@ class SpecModelAgent(BaseSpecModelAgent):
             # token is rejected, rejection sampling discards all later
             # positions — so the draft-token path is the only reachable one.
             if pos < self.num_spec_tokens:
-                for idx, fork_proc in forked.items():
-                    guided_manager.accept_token(fork_proc, cpu_draft_token_ids[idx, pos].item())
+                await asyncio.to_thread(
+                    _accept_spec_forked_tokens,
+                    guided_manager, forked, cpu_draft_token_ids, pos,
+                )
 
         scores = scores_3d.view(batch_size * num_expand, -1)
         return scores, raw_logprobs
