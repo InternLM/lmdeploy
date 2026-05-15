@@ -490,6 +490,18 @@ class SpecModelAgent(BaseSpecModelAgent):
                 bonus_logits, raw_logprobs = await logits_processor(target_logits)
                 next_token_ids = logits_processor.sampling(bonus_logits)  # [batch_size]
                 output_token_ids = next_token_ids.unsqueeze(-1)
+                # Accept the sampled token on original grammar matchers
+                if guided_processors:
+                    cpu_next_token_ids = next_token_ids.cpu()
+                    await asyncio.to_thread(
+                        _accept_spec_rejection_tokens,
+                        guided_manager,
+                        guided_processors,
+                        torch.zeros_like(next_token_ids),  # 0 rejected
+                        output_token_ids.cpu(),
+                        cpu_next_token_ids,
+                        0,  # num_spec_tokens=0, only bonus accepted
+                    )
 
         logprobs = __compute_logprobs(raw_logprobs, output_token_ids, sampling_inputs.max_num_logprobs)
 
