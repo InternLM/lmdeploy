@@ -80,30 +80,24 @@ static const char* _cudaGetErrorEnum(cublasStatus_t error)
     return "<unknown>";
 }
 
-template<typename T>
-void check(T result, char const* const func, const char* const file, int const line)
-{
-    if (result) {
-        TM_LOG_ERROR("CUDA runtime error: {} {}:{}", _cudaGetErrorEnum(result), file, line);
-        std::abort();
-    }
-}
+// --- Unified CUDA error checking ---
 
-#define check_cuda_error(val) check((val), #val, __FILE__, __LINE__)
-#define check_cuda_error_2(val, file, line) check((val), #val, file, line)
+void ReportCudaError(cudaError_t ec, const char* file, int line);
+void ReportCuDrvError(CUresult ec, const char* file, int line);
 
-void syncAndCheck(const char* const file, int const line);
+#define TM_CUDA_CHECK(expr)                                                                                            \
+    do {                                                                                                               \
+        if (auto _ec = (expr); TM_UNLIKELY(_ec != cudaSuccess)) {                                                      \
+            ::turbomind::ReportCudaError(_ec, __FILE__, __LINE__);                                                     \
+        }                                                                                                              \
+    } while (0)
 
-#define sync_check_cuda_error() syncAndCheck(__FILE__, __LINE__)
-
-#define CUDRVCHECK(expr)                                                                                               \
-    if (auto ec = expr; ec != CUDA_SUCCESS) {                                                                          \
-        const char* p_str{};                                                                                           \
-        cuGetErrorString(ec, &p_str);                                                                                  \
-        p_str    = p_str ? p_str : "Unknown error";                                                                    \
-        auto msg = fmt::format("[TM][ERROR] CUDA driver error: {}:{} '{}'", __FILE__, __LINE__, p_str);                \
-        throw std::runtime_error(msg.c_str());                                                                         \
-    }
+#define TM_CUDRV_CHECK(expr)                                                                                           \
+    do {                                                                                                               \
+        if (auto _ec = (expr); TM_UNLIKELY(_ec != CUDA_SUCCESS)) {                                                     \
+            ::turbomind::ReportCuDrvError(_ec, __FILE__, __LINE__);                                                    \
+        }                                                                                                              \
+    } while (0)
 
 template<typename T>
 void printMatrix(T* ptr, int m, int k, int stride, bool is_device_ptr);
@@ -122,30 +116,6 @@ void check_abs_mean_val(const T* result, const int size);
     do {                                                                                                               \
         std::cout << "[TM][CALL] " << __FUNCTION__ << " " << std::endl;                                                \
     } while (0)
-
-[[noreturn]] inline void throwRuntimeError(const char* const file, int const line, std::string const& info = "")
-{
-    throw std::runtime_error(std::string("[TM][ERROR] ") + info + " Assertion fail: " + file + ":"
-                             + std::to_string(line) + " \n");
-}
-
-inline void myAssert(bool result, const char* const file, int const line, std::string const& info = "")
-{
-    if (!result) {
-        throwRuntimeError(file, line, info);
-    }
-}
-
-#define FT_CHECK(val) myAssert(bool(val), __FILE__, __LINE__)
-#define FT_CHECK_WITH_INFO(val, info)                                                                                  \
-    do {                                                                                                               \
-        bool is_valid_val = bool(val);                                                                                 \
-        if (!is_valid_val) {                                                                                           \
-            turbomind::myAssert(is_valid_val, __FILE__, __LINE__, (info));                                             \
-        }                                                                                                              \
-    } while (0)
-
-#define FT_THROW(info) throwRuntimeError(__FILE__, __LINE__, info)
 
 /* ***************************** common utils ****************************** */
 
@@ -169,15 +139,15 @@ class CudaDeviceGuard {
 public:
     CudaDeviceGuard(int device)
     {
-        check_cuda_error(cudaGetDevice(&last_device_id_));
+        TM_CUDA_CHECK(cudaGetDevice(&last_device_id_));
         if (device != last_device_id_) {
-            check_cuda_error(cudaSetDevice(device));
+            TM_CUDA_CHECK(cudaSetDevice(device));
         }
     }
 
     ~CudaDeviceGuard()
     {
-        TM_CHECK_EQ(cudaSetDevice(last_device_id_), cudaSuccess);
+        TM_CUDA_CHECK(cudaSetDevice(last_device_id_));
     }
 
 private:

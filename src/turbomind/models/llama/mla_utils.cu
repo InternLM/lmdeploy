@@ -3,9 +3,11 @@
 #include <cuda_bf16.h>
 
 #include "src/turbomind/core/check.h"
+#include "src/turbomind/core/scope.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/math.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
@@ -70,6 +72,7 @@ void invokeMLACopyQKV(T*           qkv,
 
     mla_copy_qkv_kernel<T, vec_size>
         <<<grid, block, 0, stream>>>(qkv, q, kv_a_k_pe, head_num, head_dim, kv_lora_rank, rope_dim);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 void MLACopyQKV(DataType     dtype,
@@ -84,13 +87,13 @@ void MLACopyQKV(DataType     dtype,
 {
     auto invoke = [&](auto t) {
         using T = decltype(t);
-        invokeMLACopyQKV(
-            (T*)qkv, (const T*)q, (const T*)kv_a_k_pe, token_num, head_num, kv_lora_rank, rope_dim, stream);
+        TM_SCOPE_CALL(invokeMLACopyQKV(
+            (T*)qkv, (const T*)q, (const T*)kv_a_k_pe, token_num, head_num, kv_lora_rank, rope_dim, stream));
     };
 
     TM_CHECK_EQ(byte_size(dtype, 1), 2) << "unsupported data type: " << dtype;
 
-    return invoke(uint16_t{});
+    invoke(uint16_t{});
 }
 
 }  // namespace turbomind

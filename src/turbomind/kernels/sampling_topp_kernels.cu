@@ -83,6 +83,7 @@ void invokeTopPSortInitialize(const int    vocab_size_padded,
     const size_t grid_size  = (batch_size * vocab_size_padded + block_size - 1) / block_size;
     topPSortInitialize<<<grid_size, block_size, 0, stream>>>(
         vocab_size_padded, vocab_size, batch_size, top_ks, topp_id_val_buf, begin_offset_buf, end_offset_buf);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<typename T>
@@ -140,6 +141,7 @@ void invokeSoftmax(T*           logits,
     dim3 grid(batch_size);
     dim3 block(std::min(vocab_size_padded, 1024));
     softmax<<<grid, block, 0, stream>>>(logits, vocab_size_padded, vocab_size, kept);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 #define INSTANTIATE_INVOKE_SOFTMAX(T)                                                                                  \
@@ -221,19 +223,19 @@ void invokeTopPSort(TopPSortParams& params, cudaStream_t stream)
     const int num_items = params.vocab_size_padded * (params.batch_size - 1) + params.vocab_size;
 
     size_t cub_temp_storage_size{};
-    check_cuda_error(cub::DeviceSegmentedRadixSort::SortPairsDescending(nullptr,
-                                                                        cub_temp_storage_size,
-                                                                        (T*)nullptr,
-                                                                        (T*)nullptr,
-                                                                        (int*)nullptr,
-                                                                        (int*)nullptr,
-                                                                        num_items,
-                                                                        params.batch_size,
-                                                                        (int*)nullptr,
-                                                                        (int*)nullptr,
-                                                                        0,              // begin_bit
-                                                                        sizeof(T) * 8,  // end_bit = sizeof(KeyT) * 8
-                                                                        stream));       // cudaStream_t
+    TM_CUDA_CHECK(cub::DeviceSegmentedRadixSort::SortPairsDescending(nullptr,
+                                                                     cub_temp_storage_size,
+                                                                     (T*)nullptr,
+                                                                     (T*)nullptr,
+                                                                     (int*)nullptr,
+                                                                     (int*)nullptr,
+                                                                     num_items,
+                                                                     params.batch_size,
+                                                                     (int*)nullptr,
+                                                                     (int*)nullptr,
+                                                                     0,              // begin_bit
+                                                                     sizeof(T) * 8,  // end_bit = sizeof(KeyT) * 8
+                                                                     stream));       // cudaStream_t
 
     TM_CHECK(core::Context::stream().handle() == stream);
 
@@ -247,14 +249,14 @@ void invokeTopPSort(TopPSortParams& params, cudaStream_t stream)
     auto beg_offset_buf = beg_offset.data();
     auto end_offset_buf = end_offset.data();
 
-    invokeTopPSortInitialize(params.vocab_size_padded,
-                             params.vocab_size,
-                             params.batch_size,
-                             params.top_ks,
-                             topp_ids_buf,
-                             beg_offset_buf,
-                             end_offset_buf,
-                             stream);
+    TM_SCOPE_CALL(invokeTopPSortInitialize(params.vocab_size_padded,
+                                           params.vocab_size,
+                                           params.batch_size,
+                                           params.top_ks,
+                                           topp_ids_buf,
+                                           beg_offset_buf,
+                                           end_offset_buf,
+                                           stream));
 
     topp_beam_topk_kernel<T, 1, 256><<<params.batch_size, 256, 0, stream>>>((T*)params.logits,
                                                                             (T*)params.sorted_logits,
@@ -267,19 +269,20 @@ void invokeTopPSort(TopPSortParams& params, cudaStream_t stream)
                                                                             params.top_ps,
                                                                             params.top_ks);
 
-    check_cuda_error(cub::DeviceSegmentedRadixSort::SortPairsDescending(cub_temp_storage.data(),
-                                                                        cub_temp_storage_size,
-                                                                        (T*)params.logits,
-                                                                        (T*)params.sorted_logits,
-                                                                        topp_ids_buf,
-                                                                        params.sorted_indices,
-                                                                        num_items,
-                                                                        params.batch_size,
-                                                                        beg_offset_buf,
-                                                                        end_offset_buf,
-                                                                        0,              // begin_bit
-                                                                        sizeof(T) * 8,  // end_bit = sizeof(KeyT) * 8
-                                                                        stream));       // cudaStream_t
+    TM_CUDA_CHECK(cub::DeviceSegmentedRadixSort::SortPairsDescending(cub_temp_storage.data(),
+                                                                     cub_temp_storage_size,
+                                                                     (T*)params.logits,
+                                                                     (T*)params.sorted_logits,
+                                                                     topp_ids_buf,
+                                                                     params.sorted_indices,
+                                                                     num_items,
+                                                                     params.batch_size,
+                                                                     beg_offset_buf,
+                                                                     end_offset_buf,
+                                                                     0,              // begin_bit
+                                                                     sizeof(T) * 8,  // end_bit = sizeof(KeyT) * 8
+                                                                     stream));       // cudaStream_t
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template void invokeTopPSort<float>(TopPSortParams& params, cudaStream_t stream);
@@ -388,6 +391,7 @@ void invokeTopPMinPFilter(TopPMinPFilterParams& params, cudaStream_t stream)
                                                                   params.vocab_size_padded,
                                                                   params.top_ps,
                                                                   params.min_ps);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template void invokeTopPMinPFilter<float>(TopPMinPFilterParams& params, cudaStream_t stream);

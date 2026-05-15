@@ -115,6 +115,7 @@ class ConfigBuilder:
                 target_cache_cfg=cache_config,
                 dtype=engine_config.dtype,
                 trust_remote_code=trust_remote_code,
+                model_format=engine_config.model_format,
                 hf_overrides=engine_config.hf_overrides,
             )
         return specdecode_config

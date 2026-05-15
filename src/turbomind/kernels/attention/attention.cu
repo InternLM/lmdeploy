@@ -2,6 +2,7 @@
 
 #include "attention.h"
 #include "src/turbomind/core/data_type.h"
+#include "src/turbomind/core/scope.h"
 #include "src/turbomind/kernels/attention/registry.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
@@ -22,7 +23,7 @@ void dispatchAttention(const AttentionParams<T>& params)
 
     TM_CHECK(kernel) << "No attention kernel found: " + to_string(desc);
 
-    kernel->Launch(&params, reg.sm_count());
+    TM_SCOPE_CALL(kernel->Launch(&params, reg.sm_count()));
 }
 
 template void dispatchAttention(const AttentionParams<half>& params);

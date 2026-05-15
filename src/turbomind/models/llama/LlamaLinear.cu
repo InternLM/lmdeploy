@@ -5,6 +5,7 @@
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/cuda_data_type.h"
 #include "src/turbomind/core/data_type.h"
+#include "src/turbomind/core/scope.h"
 
 #include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/gemm/moe_utils_v2.h"
@@ -12,7 +13,7 @@
 
 #include "src/turbomind/kernels/quantization.h"
 
-#include "src/turbomind/models/llama/LlamaDenseWeight.h"
+#include "src/turbomind/models/linear_weight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 
 #include "src/turbomind/utils/cuda_utils.h"
@@ -33,11 +34,11 @@ struct LlamaLinear::Impl {
 
         auto st = core::Context::stream().handle();
 
-        check_cuda_error(cudaMallocAsync(&workspace_.barriers, workspace_.barriers_size, st));
-        check_cuda_error(cudaMallocAsync(&workspace_.partials, workspace_.partials_size, st));
-        check_cuda_error(cudaMallocAsync(&workspace_.tensormaps, workspace_.partials_size, st));
-        check_cuda_error(cudaMemsetAsync(workspace_.barriers, 0, workspace_.barriers_size, st));
-        check_cuda_error(cudaMallocAsync(&workspace_.flags, sizeof(int), st));
+        TM_CUDA_CHECK(cudaMallocAsync(&workspace_.barriers, workspace_.barriers_size, st));
+        TM_CUDA_CHECK(cudaMallocAsync(&workspace_.partials, workspace_.partials_size, st));
+        TM_CUDA_CHECK(cudaMallocAsync(&workspace_.tensormaps, workspace_.partials_size, st));
+        TM_CUDA_CHECK(cudaMemsetAsync(workspace_.barriers, 0, workspace_.barriers_size, st));
+        TM_CUDA_CHECK(cudaMallocAsync(&workspace_.flags, sizeof(int), st));
 
         core::Context::stream().Sync();
     }
@@ -53,17 +54,17 @@ struct LlamaLinear::Impl {
         workspace_ = {};
     }
 
-    std::tuple<Tensor, MatrixLayout, Tensor, MatrixLayout> GetOperandB(const LlamaDenseWeight& dense)
+    std::tuple<Tensor, MatrixLayout, Tensor, MatrixLayout> GetOperandB(const LinearWeight& weight)
     {
-        const Tensor& B      = dense.weight;
-        const Tensor& V      = dense.scales;
-        MatrixLayout  desc_B = dense.k_desc;
-        MatrixLayout  desc_V = dense.q_desc;
+        const Tensor& B      = weight.weight;
+        const Tensor& V      = weight.scales;
+        MatrixLayout  desc_B = weight.k_desc;
+        MatrixLayout  desc_V = weight.q_desc;
         return {B, desc_B, V, desc_V};
     }
 
     std::tuple<Tensor, MatrixLayout, Tensor, MatrixLayout>
-    GetOperandA(const LlamaDenseWeight& dense, const Tensor& input, Buffer_<int> indices, const Buffer_<int>& offsets)
+    GetOperandA(const LinearWeight& weight, const Tensor& input, Buffer_<int> indices, const Buffer_<int>& offsets)
     {
         auto st = core::Context::stream().handle();
 
@@ -73,26 +74,23 @@ struct LlamaLinear::Impl {
         const int m = indices ? indices.size() : input.shape(0);
 
         // Currently, FP8 only; INT8 may be added later
-        if (input.dtype() != dense.input_type) {
-            QuantizeSymm(A, U, input, st);
-            sync_check_cuda_error();
+        if (input.dtype() != weight.input_dtype()) {
+            TM_SCOPE_CALL(QuantizeSymm(A, U, input, st));
         }
         else {
             A = input;
         }
 
         // SM100+ grouped bf16/fp16: use chunk() weights so Activation() runs separately.
-        const bool is_cublas_grouped = offsets && getSMVersion() == 100 && dense.weight_type == kBfloat16;
+        const bool is_cublas_grouped = offsets && getSMVersion() == 100 && weight.weight_format.dtype == kBfloat16;
         if (indices && (A.dtype() == kFloat8_e4m3 || is_cublas_grouped)) {
             const auto [bsz, k] = A.shapes(0, 1);
             const int e         = indices.size() / bsz;
             Tensor    A_e       = {{m, k}, A.dtype(), kDEVICE};
-            invokeMoeDispatch(A_e, A, indices.data(), e, st);
-            sync_check_cuda_error();
+            TM_SCOPE_CALL(invokeMoeDispatch(A_e, A, indices.data(), e, st));
             if (U) {
                 Tensor U_e;
-                invokeMoeDispatchScales(U_e, U, indices.data(), e, st);
-                sync_check_cuda_error();
+                TM_SCOPE_CALL(invokeMoeDispatchScales(U_e, U, indices.data(), e, st));
                 U = U_e;
             }
             A       = A_e;
@@ -105,7 +103,7 @@ struct LlamaLinear::Impl {
             desc_U = {U.dtype(), kColMajor, (int)U.shape(1), (int)U.shape(0), (int)U.stride(0)};
         }
         if (offsets) {
-            desc_A.num = desc_U.num = dense.k_desc.num;
+            desc_A.num = desc_U.num = weight.k_desc.num;
             desc_A.offsets = desc_U.offsets = const_cast<int*>(offsets.data());
         }
         if (indices) {
@@ -115,28 +113,29 @@ struct LlamaLinear::Impl {
         return {A, desc_A, U, desc_U};
     }
 
-    void Forward(Tensor&                 output,
-                 const Tensor&           input,  //
-                 const LlamaDenseWeight& dense,
-                 const Buffer_<int>&     indices,
-                 const Buffer_<int>&     offsets)
+    void Forward(Tensor&             output,
+                 const Tensor&       input,  //
+                 const LinearWeight& weight,
+                 const Buffer_<int>& indices,
+                 const Buffer_<int>& offsets)
     {
+        TM_FUNCTION_SCOPE();
         using namespace gemm;
 
         Operation op{};
         op.dispatch  = dispatch_policy_;
-        op.epilogue  = dense.epilogue;
-        op.quant_a   = dense.input_quant;
-        op.quant_b   = dense.weight_quant;
+        op.epilogue  = weight.epilogue;
+        op.quant_a   = MakeQuantDesc(weight.input_format);
+        op.quant_b   = MakeQuantDesc(weight.weight_format);
         op.batch_dim = 0;
 
-        auto&& [A, desc_A, U, desc_U] = GetOperandA(dense, input, indices, offsets);
-        auto&& [B, desc_B, V, desc_V] = GetOperandB(dense);
+        auto&& [A, desc_A, U, desc_U] = GetOperandA(weight, input, indices, offsets);
+        auto&& [B, desc_B, V, desc_V] = GetOperandB(weight);
 
         Tensor& D = output;
         if (!D) {
-            int dim = dense.epilogue == Epilogue::kGatedSilu ? dense.output_dim / 2 : dense.output_dim;
-            D       = Tensor{{desc_A.rows, dim}, dense.data_type, kDEVICE};
+            int dim = weight.epilogue == Epilogue::kGatedSilu ? weight.output_dim / 2 : weight.output_dim;
+            D       = Tensor{{desc_A.rows, dim}, weight.output_dtype(), kDEVICE};
         }
 
         // std::cout << "D: " << D << " " << desc_B.num << "\n";
@@ -145,7 +144,7 @@ struct LlamaLinear::Impl {
             output.dtype(),
             kRowMajor,
             (int)output.shape(0),
-            dense.output_dim,
+            weight.output_dim,
             (int)output.stride(0),
         };
 
@@ -185,29 +184,26 @@ struct LlamaLinear::Impl {
 
 LlamaLinear::LlamaLinear(): impl_{std::make_shared<Impl>()} {}
 
-Tensor LlamaLinear::Forward(const Tensor&           input,  //
-                            const LlamaDenseWeight& weight,
-                            std::optional<Tensor>   output)
+void LlamaLinear::Forward(const Tensor&       input,  //
+                          const LinearWeight& weight,
+                          Ref<Tensor>         output)
 {
-    return Forward(input, weight, {}, {}, output);
+    Forward(input, weight, {}, {}, output);
 }
 
-Tensor LlamaLinear::Forward(const Tensor&           input,  //
-                            const LlamaDenseWeight& weight,
-                            const Buffer_<int>&     indices,
-                            const Buffer_<int>&     offsets,
-                            std::optional<Tensor>   output)
+void LlamaLinear::Forward(const Tensor&       input,  //
+                          const LinearWeight& weight,
+                          const Buffer_<int>& indices,
+                          const Buffer_<int>& offsets,
+                          Ref<Tensor>         output)
 {
     Tensor in = input.view({-1, input.shape(-1)});
-    Tensor out;
 
-    if (output) {
-        out = output->view({-1, output->shape(-1)});
+    if (output.get()) {
+        output.get() = output.get().view({-1, output.get().shape(-1)});
     }
 
-    impl_->Forward(out, in, weight, indices, offsets);
-
-    return out;
+    impl_->Forward(output.get(), in, weight, indices, offsets);
 }
 
 void LlamaLinear::set_measure(bool measure)

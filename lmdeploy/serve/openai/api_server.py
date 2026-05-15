@@ -393,9 +393,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     request_id = str(session.session_id)
     created_time = int(time.time())
 
-    if isinstance(request.stop, str):
-        request.stop = [request.stop]
-
     tokenizer = VariableInterface.async_engine.tokenizer.model.model
     gen_logprobs, logits_processors = None, None
     if request.logprobs and request.top_logprobs:
@@ -416,18 +413,15 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 'Please launch the api_server with --tool-call-parser if you want to use tool.')
 
     random_seed = request.seed if request.seed is not None else None
-    max_new_tokens = (request.max_completion_tokens if request.max_completion_tokens else request.max_tokens)
-    response_format = None
-    if request.response_format and request.response_format.type != 'text':
-        response_format = request.response_format.model_dump()
 
     parser_cls = VariableInterface.response_parser_cls
     response_parser = parser_cls(request=request, tokenizer=tokenizer)
-    # request might be adjusted by tool parser
+    # request is normalized and may be adjusted by the parser
+    # (e.g. GPT-OSS clears response_format and injects the schema into messages)
     request = response_parser.request
 
     gen_config = GenerationConfig(
-        max_new_tokens=max_new_tokens,
+        max_new_tokens=request.max_completion_tokens,
         do_sample=True,
         logprobs=gen_logprobs,
         top_k=request.top_k,
@@ -438,7 +432,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         stop_words=request.stop,
         include_stop_str_in_output=request.include_stop_str_in_output,
         skip_special_tokens=request.skip_special_tokens,
-        response_format=response_format,
+        response_format=request.response_format,
         logits_processors=logits_processors,
         min_new_tokens=request.min_new_tokens,
         min_p=request.min_p,
