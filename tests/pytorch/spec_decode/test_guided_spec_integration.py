@@ -183,6 +183,10 @@ class TestSimulatedGuidedSpecLogitsProcess:
             guided_manager.apply_batched_bitmap(pos_logits, guided_bitmask)
             scores_3d[:, pos, :] = pos_logits
 
+            # NOTE: The production code advances forks with draft tokens (not
+            # argmax).  This simulation uses argmax as a stand-in because there
+            # is no draft model.  The mask→apply→accept loop structure and
+            # per-position grammar constraint are what matter here.
             pos_token_ids = pos_logits.argmax(dim=-1)
             for idx, fork_proc in forked.items():
                 guided_manager.accept_token(fork_proc, pos_token_ids[idx].item())

@@ -33,6 +33,21 @@ class Eagle3(DeepseekMTP):
         draft_indices = torch.arange(draft_vocab_size, dtype=torch.int32)
         self._draft_words = draft_indices // 32
         self._draft_bits = draft_indices % 32
+        self._n_draft_words = (draft_vocab_size + 31) // 32
+        # Cache device-specific constants; keyed by device.
+        self._bitmask_cache: dict[torch.device, dict] = {}
+
+    def _get_bitmask_constants(self, device: torch.device):
+        """Return bitmask-translate constants on *device*, caching the
+        transfer."""
+        if device not in self._bitmask_cache:
+            self._bitmask_cache[device] = dict(
+                d2t_words=self._d2t_words.to(device),
+                d2t_bits=self._d2t_bits.to(device),
+                draft_words=self._draft_words.to(device),
+                draft_bits=self._draft_bits.to(device),
+            )
+        return self._bitmask_cache[device]
 
     def _translate_bitmask(self, target_bitmask: torch.Tensor) -> torch.Tensor:
         """Translate target-vocab bitmask to draft-vocab bitmask.
@@ -45,10 +60,11 @@ class Eagle3(DeepseekMTP):
             draft_bitmask: [batch, ceil(draft_vocab/32)] int32 bitmask
                 compatible with apply_batched_bitmap.
         """
-        d2t_words = self._d2t_words.to(target_bitmask.device)
-        d2t_bits = self._d2t_bits.to(target_bitmask.device)
-        draft_words = self._draft_words.to(target_bitmask.device)
-        draft_bits = self._draft_bits.to(target_bitmask.device)
+        c = self._get_bitmask_constants(target_bitmask.device)
+        d2t_words = c['d2t_words']
+        d2t_bits = c['d2t_bits']
+        draft_words = c['draft_words']
+        draft_bits = c['draft_bits']
 
         word_vals = target_bitmask[:, d2t_words]
         draft_valid = ((word_vals >> d2t_bits.unsqueeze(0)) & 1).to(torch.int32)
@@ -56,8 +72,7 @@ class Eagle3(DeepseekMTP):
         # scatter_add_ is correct because bit positions within the same word
         # never overlap, so addition ≡ bitwise OR.
         bits_to_set = draft_valid << draft_bits
-        n_draft_words = (draft_valid.size(1) + 31) // 32
-        out = target_bitmask.new_zeros(target_bitmask.size(0), n_draft_words)
+        out = target_bitmask.new_zeros(target_bitmask.size(0), self._n_draft_words)
         out.scatter_add_(1, draft_words.to(torch.int64).unsqueeze(0).expand(target_bitmask.size(0), -1),
                          bits_to_set)
         return out
