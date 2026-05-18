@@ -5,6 +5,7 @@ from itertools import groupby
 from typing import Any
 
 import numpy as np
+import torch
 from mmengine import Registry
 from transformers import AutoConfig, AutoTokenizer
 
@@ -18,6 +19,31 @@ from lmdeploy.vl.model.preprocess_utils import (
 )
 
 VISION_MODELS = Registry('vision_model')
+
+
+def _normalize_mm_feature_dtype(dtype: torch.dtype | None) -> torch.dtype | None:
+    """Return a floating torch dtype suitable for MM features."""
+    if not isinstance(dtype, torch.dtype):
+        return None
+    if not torch.empty((), dtype=dtype).is_floating_point():
+        return None
+    return dtype
+
+
+def _postprocess_mm_output(output, target_dtype: torch.dtype | None):
+    """Cast floating processor-output tensors to the resolved model dtype."""
+    target_dtype = _normalize_mm_feature_dtype(target_dtype)
+    if target_dtype is None:
+        return output
+    if isinstance(output, torch.Tensor):
+        if output.is_floating_point() and output.dtype != target_dtype:
+            return output.to(dtype=target_dtype)
+        return output
+    if isinstance(output, dict):
+        return {key: _postprocess_mm_output(value, target_dtype) for key, value in output.items()}
+    if isinstance(output, list):
+        return [_postprocess_mm_output(value, target_dtype) for value in output]
+    return output
 
 
 class VisionModel(ABC):
@@ -57,10 +83,15 @@ class VisionModel(ABC):
         self.with_llm = with_llm
         self.max_memory = max_memory
         self.backend = backend
+        self.mm_feature_dtype: torch.dtype | None = None
         if hf_config is None:
             _, hf_config = get_model_arch(model_path, trust_remote_code=trust_remote_code)
         self.hf_config = hf_config
         self.image_token_id = self.get_pad_token_id(model_path, hf_config, trust_remote_code=trust_remote_code) or 0
+
+    def set_mm_feature_dtype(self, dtype: torch.dtype | None):
+        """Set target dtype for floating MM feature tensors."""
+        self.mm_feature_dtype = _normalize_mm_feature_dtype(dtype)
 
     def get_pad_token_id(self, model_path, hf_config, trust_remote_code: bool = False):
         """Get pad_token_id from hf_config or tokenizer."""
@@ -172,6 +203,8 @@ class VisionModel(ABC):
                     collected_mm_items[current_modality] = {}
 
                 if attr_name in self.FEATURE_NAMES:
+                    value = _postprocess_mm_output(value, self.mm_feature_dtype)
+                    processor_outputs[attr_name] = value
                     attr_name = 'feature'
 
                 collected_mm_items[current_modality][attr_name] = value
@@ -190,7 +223,15 @@ class VisionModel(ABC):
         # expand bundled hf processor outputs into per-image/video entry for lmdeploy to consume
         expanded_mm_items = get_expanded_mm_items(collected_mm_items, self.mm_tokens)
 
-        return dict(input_ids=input_ids.tolist(), multimodal=expanded_mm_items)
+        result = dict(input_ids=input_ids.tolist(), multimodal=expanded_mm_items)
+
+        # Drop large temporary preprocessing references before handing the result to the engine.
+        processor_outputs = None
+        collected_mm_items = None
+        mm_items = None
+        raw_images = raw_videos = video_metadatas = None
+        raw_time_series = sampling_rates = None
+        return result
 
     @staticmethod
     def has_input_ids(messages: list[dict]) -> bool:

@@ -29,6 +29,7 @@ class MPEngine(EngineBase):
         """Initialize mp engine."""
         self.session_states = defaultdict(SessionState)
         self.engine_config = self._collective_rpc('get_engine_config')
+        self.model_config = self._collective_rpc('get_model_config')
         self.pending_cancel_sessions = set()
 
     def _collective_rpc(self, func, *args, **kwargs):
@@ -137,6 +138,7 @@ class MPEngineInstance(EngineInstanceBase):
                                                                 state.is_exists,
                                                                 *args,
                                                                 **kwargs)
+        kwargs.pop('multimodal', None)
 
         async for result in generator:
             yield result

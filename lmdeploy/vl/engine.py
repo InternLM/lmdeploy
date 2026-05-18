@@ -34,11 +34,15 @@ class ImageEncoder:
         vision_config: VisionConfig = None,
         backend_config: TurbomindEngineConfig | PytorchEngineConfig | None = None,
         trust_remote_code: bool = False,
+        mm_feature_dtype: torch.dtype | None = None,
     ):
         self.model = load_vl_model(model_path,
                                    backend,
                                    backend_config=backend_config,
                                    trust_remote_code=trust_remote_code)
+        self.mm_feature_dtype = mm_feature_dtype
+        if self.model is not None and hasattr(self.model, 'set_mm_feature_dtype'):
+            self.model.set_mm_feature_dtype(self.mm_feature_dtype)
         if vision_config is None:
             vision_config = VisionConfig()
         self.vision_config = vision_config

@@ -212,6 +212,8 @@ class EngineInstance(EngineInstanceBase):
         )
         logger.debug(f'session[{session_id}] add message: num_input_ids={len(input_ids)}.')
         resp = self.req_sender.send_async(RequestType.ADD_MESSAGE, msg)
+        msg = None
+        multimodal = None
         # notify add msg
         if notify_add_msg_func is not None:
             notify_add_msg_func()

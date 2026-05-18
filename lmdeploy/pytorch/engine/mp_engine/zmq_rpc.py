@@ -97,7 +97,6 @@ class AsyncRPCServer:
     async def _method_async_streaming_task(self, stream_id: int, request_id: int, client_id: int, method: Callable,
                                            args: tuple, kwargs: dict):
         """Call method in a task for streaming."""
-
         def __send_resp():
             response = dict(success=True, request_id=request_id, result=stream_id)
             session_id = kwargs.get('session_id', None)
@@ -114,6 +113,8 @@ class AsyncRPCServer:
         __send_resp()
         try:
             generator = method(*args, **kwargs)
+            args = ()
+            kwargs.pop('multimodal', None)
             async for result in generator:
                 self._engine_output_gather.add(stream_id, result)
                 stream_out['result'] = result
@@ -168,6 +169,7 @@ class AsyncRPCServer:
         # receive message: [client_id, empty, request_data]
         client_id, request_data = self.socket.recv_multipart()
         request = pickle.loads(request_data)
+        request_data = None
 
         method_name = request.get('method')
         logger.debug(f'call method: {method_name}')
@@ -296,6 +298,8 @@ class AsyncRPCClient:
         logger.debug(f'call method: {method}, request_id: {request_id}')
         data = pickle.dumps(dict(request_id=request_id, method=method, args=args, kwargs=kwargs, streaming=streaming))
         await self.async_socket.send(data)
+        data = None
+        kwargs.pop('multimodal', None)
 
         return await future
 
