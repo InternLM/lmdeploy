@@ -11,7 +11,6 @@ logger = logging.getLogger('lmdeploy')
 
 
 class GuidedDecodingManager:
-    processors = {}
 
     def __init__(self, tokenizer: PreTrainedTokenizerBase, vocab_size: int | None):
         if vocab_size is None:
@@ -20,6 +19,7 @@ class GuidedDecodingManager:
         tokenizer_info = xgr.TokenizerInfo.from_huggingface(tokenizer, vocab_size=vocab_size)
         self.compiler = xgr.GrammarCompiler(tokenizer_info)
         self.vocab_size = vocab_size
+        self.processors: dict[int, dict[int, xgr.GrammarMatcher]] = {}
 
     def get_processors(self, session_ctx: list[dict[str, Any]],
                        response_formats: tuple[dict]) -> dict[int, xgr.GrammarMatcher]:
