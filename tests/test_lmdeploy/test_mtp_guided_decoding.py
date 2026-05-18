@@ -41,6 +41,7 @@ from lmdeploy.messages import (
     PytorchEngineConfig,
     SpeculativeConfig,
 )
+from lmdeploy.pytorch.configurations.utils import flash_attn_v3_available
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -84,10 +85,12 @@ def _make_engine_config():
     )
 
 
-# Skip entire module if no GPU is available
+# Skip entire module if no GPU or FA3 is unavailable.
+# Speculative decoding (ar_spec) requires FlashAttention-3 for the decode
+# kernel; without it the engine will fail at runtime.
 pytestmark = pytest.mark.skipif(
-    not torch.cuda.is_available(),
-    reason='GPU required for MTP + guided decoding integration tests',
+    not (torch.cuda.is_available() and flash_attn_v3_available()),
+    reason='GPU + FlashAttention-3 required for MTP + guided decoding integration tests',
 )
 
 
