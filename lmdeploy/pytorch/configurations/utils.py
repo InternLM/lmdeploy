@@ -21,18 +21,3 @@ def flash_mla_available():
     except ImportError:
         logger.warning('For higher performance, please install flash_mla https://github.com/deepseek-ai/FlashMLA')
     return use_flash_mla
-
-
-def flash_attn_v3_available():
-    """Check if flash attn v3 is available."""
-    use_fa3 = False
-    try:
-        # flash-attention supports FA3 for sm80+ (Ampere and above) && cuda >= 12.3
-        if (torch.cuda.get_device_capability()[0] >= 8) and (torch.version.cuda >= '12.3'):
-            import flash_attn_interface  # noqa: F401
-            assert torch.ops.flash_attn_3 is not None
-            use_fa3 = True
-    except Exception:
-        logger.warning('For higher performance, please install FlashAttention-3 '
-                       'https://github.com/Dao-AILab/flash-attention')
-    return use_fa3

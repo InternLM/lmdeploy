@@ -231,6 +231,14 @@ class CudaOpsBackend(DefaultOpsBackend):
                 decode_query_len = step_context.input_ids.size(1) // q_seqlens.size(0)
                 cls.update_meta_flashmla(attn_metadata, model_config, decode_query_len)
             elif use_flash_attn3_decoding:
+                from .attention import use_fa3
+                if not use_fa3:
+                    raise RuntimeError(
+                        'Speculative decoding on CUDA requires FlashAttention-3 (FA3), '
+                        'which is available on SM80+ GPUs (Ampere architecture and above) '
+                        'with CUDA >= 12.3. Current GPU does not meet these requirements. '
+                        'Please use a SM80+ GPU with CUDA >= 12.3 and install flash-attn, '
+                        'or disable speculative decoding.')
                 attn_metadata = cls.update_meta_flashattn(attn_metadata, step_context)
 
         # update chunk gated delta indices
