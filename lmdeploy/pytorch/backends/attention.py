@@ -23,6 +23,61 @@ class AttentionMetadata:
     quant_policy: QuantPolicy = QuantPolicy.NONE
 
 
+@dataclass
+class V4AttentionMetadata:
+    """DeepSeek V4 attention metadata base class.
+
+    Built once per step from attn_metadata + step_ctx, then passed through all V4 sub-modules (Attention, Compressor,
+    Indexer). Backends should subclass this to add their own pre-computed fields and override ``from_step_context``.
+    """
+
+    is_decoding: bool
+    # [bsz, 1, topk] logical compressed KV indices (converted to physical by V4IndicesUpdater)
+    indices_in_kvcache: torch.Tensor = None
+    topk_length: torch.Tensor = None              # [bsz] int32
+    extra_indices_in_kvcache: torch.Tensor = None  # [bsz, 1, extra_topk] ring-buffer positions
+    extra_topk_length: torch.Tensor = None        # [bsz] int32
+    # Sequence-length metadata (from attn_metadata, pre-extracted once)
+    block_offsets: torch.Tensor = None
+    cu_q_seqlens: torch.Tensor = None
+    kv_seqlens: torch.Tensor = None
+    q_seqlens: torch.Tensor = None
+    max_kv_seqlen: int = None
+    max_q_seqlen: int = None
+    block_size: int = 0
+    cu_seqlens_k: torch.Tensor = None
+    sum_kv_seqlen: int = None
+    start_pos: torch.Tensor = None                      # [bsz] long
+
+    @classmethod
+    def from_step_context(cls, attn_metadata, step_ctx, **kwargs) -> 'V4AttentionMetadata':
+        """Build V4AttentionMetadata from the scheduler's attn_metadata and
+        step_ctx.
+
+        Subclasses can accept additional keyword arguments for backend- specific pre-computation.
+        """
+        is_decoding = attn_metadata.is_decoding
+        cache_config = step_ctx.cache_config
+        max_kv_seqlen = (cache_config.block_size * cache_config.num_gpu_blocks
+                         if is_decoding else step_ctx.max_kv_seqlen)
+        kv_seqlens = attn_metadata.kv_seqlens
+        q_seqlens = attn_metadata.q_seqlens
+
+        return cls(
+            is_decoding=is_decoding,
+            block_offsets=attn_metadata.block_offsets,
+            cu_q_seqlens=attn_metadata.cu_seqlens_q,
+            kv_seqlens=kv_seqlens,
+            q_seqlens=q_seqlens,
+            max_kv_seqlen=max_kv_seqlen,
+            max_q_seqlen=step_ctx.max_q_seqlen,
+            block_size=cache_config.block_size,
+            sum_kv_seqlen=step_ctx.sum_kv_seqlen,
+            cu_seqlens_k=attn_metadata.cu_seqlens_k,
+            start_pos=(kv_seqlens.to(torch.long) - q_seqlens.to(torch.long)),
+        )
+
+
 T = TypeVar('T', bound=AttentionMetadata)
 
 

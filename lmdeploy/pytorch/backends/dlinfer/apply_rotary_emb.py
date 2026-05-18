@@ -9,8 +9,15 @@ from ..apply_rotary_emb import ApplyRotaryEmbBuilder, ApplyRotaryEmbImpl
 class DlinferApplyRotaryEmbImpl(ApplyRotaryEmbImpl):
     """Apply rotary embedding implementation."""
 
-    def forward(self, query: Tensor, key: Tensor, cos: Tensor, sin: Tensor, inplace: bool = True):
+    def forward(self,
+                query: Tensor,
+                key: Tensor,
+                cos: Tensor,
+                sin: Tensor,
+                inplace: bool = True,
+                complex_mode: bool = False):
         """forward."""
+        assert not complex_mode, 'Dlinfer backend does not support complex_mode'
         if inplace:
             q_embed = None
             k_embed = None

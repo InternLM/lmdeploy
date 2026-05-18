@@ -30,7 +30,12 @@ class OpType(Enum):
     FusedMoEW8A8 = auto()
     LinearBlockedF8 = auto()
     FusedMoEBlockedF8 = auto()
+    FusedMoEV4FP4 = auto()
     NSAIndexFP8 = auto()
+    V4Attention = auto()
+    V4Indexer = auto()
+    V4Compressor = auto()
+    HcSplitSinkhorn = auto()
     Embedding = auto()
 
     # MoE router
@@ -61,6 +66,16 @@ class OpsBackend(ABC):
     def get_attention_metadata_cls():
         """Get attention metadata class."""
         raise NotImplementedError
+
+    @staticmethod
+    def get_v4_attention_metadata_cls():
+        """Get V4 attention metadata class.
+
+        Returns ``V4AttentionMetadata`` by default; backends with V4-specific
+        pre-computation should override this to return their subclass.
+        """
+        from lmdeploy.pytorch.backends.attention import V4AttentionMetadata
+        return V4AttentionMetadata
 
     @staticmethod
     @abstractmethod

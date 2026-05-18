@@ -10,6 +10,21 @@ from ..backends import OpType, get_backend
 from .utils import chunk_aligned, get_distribute_size
 
 
+@torch.compile(dynamic=True)
+def rms_scale(a: torch.Tensor, b: torch.Tensor, dim: int = -1, eps: float = 1e-6,
+              out_dtype: torch.dtype | None = None, use_fp32: bool = True) -> torch.Tensor:
+    """A * rsqrt(B.square().mean(dim, keepdim=True) + eps).
+
+    Computation is done in float32. Output dtype is out_dtype if given, else b.dtype.
+    """
+    result_dtype = out_dtype if out_dtype is not None else b.dtype
+    if use_fp32:
+        a = a.float()
+        b = b.float()
+    out = a * torch.rsqrt(b.square().mean(dim, keepdim=True) + eps)
+    return out.to(result_dtype)
+
+
 class RMSNorm(nn.Module):
     """RMS Norm with add residual."""
 
