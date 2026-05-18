@@ -513,6 +513,70 @@ def test_messages_non_stream_includes_routed_experts():
     assert 'routed_experts' in data
 
 
+def test_messages_rejects_input_ids_with_non_empty_messages():
+    client = _make_client()
+    response = client.post(
+        '/v1/messages',
+        headers={'anthropic-version': '2023-06-01'},
+        json={
+            'model': 'fake-model',
+            'max_tokens': 16,
+            'messages': [{'role': 'user', 'content': 'Hi'}],
+            'input_ids': [1, 2, 3],
+        },
+    )
+    assert response.status_code == 400
+    assert 'input_ids' in response.json()['error']['message']
+
+
+def test_messages_rejects_image_data_with_non_empty_messages():
+    client = _make_client()
+    response = client.post(
+        '/v1/messages',
+        headers={'anthropic-version': '2023-06-01'},
+        json={
+            'model': 'fake-model',
+            'max_tokens': 16,
+            'messages': [{'role': 'user', 'content': 'Hi'}],
+            'image_data': 'https://example.com/img.png',
+        },
+    )
+    assert response.status_code == 400
+    assert 'image_data' in response.json()['error']['message']
+
+
+def test_messages_rejects_image_data_without_input_ids():
+    client = _make_client()
+    response = client.post(
+        '/v1/messages',
+        headers={'anthropic-version': '2023-06-01'},
+        json={
+            'model': 'fake-model',
+            'max_tokens': 16,
+            'messages': [],
+            'image_data': 'https://example.com/img.png',
+        },
+    )
+    assert response.status_code == 400
+    assert 'input_ids' in response.json()['error']['message']
+
+
+def test_messages_rejects_empty_input_ids():
+    client = _make_client()
+    response = client.post(
+        '/v1/messages',
+        headers={'anthropic-version': '2023-06-01'},
+        json={
+            'model': 'fake-model',
+            'max_tokens': 16,
+            'messages': [],
+            'input_ids': [],
+        },
+    )
+    assert response.status_code == 400
+    assert 'input_ids' in response.json()['error']['message']
+
+
 def test_count_tokens():
     client = _make_client()
     response = client.post(
