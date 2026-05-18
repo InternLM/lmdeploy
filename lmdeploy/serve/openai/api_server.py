@@ -505,13 +505,11 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                                     finish_reason: str | None = None,
                                     logprobs: LogProbs | None = None,
                                     usage: UsageInfo | None = None,
-                                    routed_experts=None,
-                                    output_token_logprobs=None) -> str:
+                                    routed_experts=None) -> str:
         choice_data = ChatCompletionResponseStreamChoice(index=index,
                                                          delta=delta_message,
                                                          finish_reason=finish_reason,
-                                                         logprobs=logprobs,
-                                                         output_token_logprobs=output_token_logprobs)
+                                                         logprobs=logprobs)
         response = ChatCompletionStreamResponse(
             id=request_id,
             created=created_time,
@@ -562,13 +560,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             if request.return_token_ids:
                 delta_message.gen_tokens = delta_token_ids
 
-            # Compute output_token_logprobs per token (generate-style)
-            output_token_logprobs = None
-            if res.logprobs:
-                output_token_logprobs = []
-                for tok, tok_logprobs in zip(res.token_ids or [], res.logprobs):
-                    output_token_logprobs.append((tok_logprobs[tok], tok))
-
             # Only output routed_experts in the final chunk
             routed_experts = res.routed_experts if res.finish_reason is not None else None
 
@@ -577,8 +568,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                                                         finish_reason=res.finish_reason,
                                                         logprobs=logprobs,
                                                         usage=usage,
-                                                        routed_experts=routed_experts,
-                                                        output_token_logprobs=output_token_logprobs)
+                                                        routed_experts=routed_experts)
             if res.cache_block_ids is not None:
                 response_json['cache_block_ids'] = res.cache_block_ids
                 response_json['remote_token_ids'] = res.token_ids
@@ -633,13 +623,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     if gen_logprobs and len(final_logprobs):
         logprobs = _create_chat_completion_logprobs(tokenizer, final_token_ids, final_logprobs)
 
-    # Compute output_token_logprobs in generate-style format
-    output_token_logprobs = None
-    if len(final_logprobs) and len(final_token_ids):
-        output_token_logprobs = []
-        for tok, tok_logprobs in zip(final_token_ids, final_logprobs):
-            output_token_logprobs.append((tok_logprobs[tok], tok))
-
     assert final_res is not None
     choices = []
     if request.return_token_ids:
@@ -649,7 +632,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         message=message,
         logprobs=logprobs,
         finish_reason=final_res.finish_reason,
-        output_token_logprobs=output_token_logprobs,
     )
     choices.append(choice_data)
 

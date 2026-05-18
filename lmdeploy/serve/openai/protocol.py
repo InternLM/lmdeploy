@@ -259,7 +259,6 @@ class ChatCompletionResponseChoice(BaseModel):
     message: ChatMessage
     logprobs: ChoiceLogprobs | None = None
     finish_reason: Literal['stop', 'length', 'tool_calls', 'error', 'abort'] | None = None
-    output_token_logprobs: list[tuple[float, int]] | None = None
 
 
 class ChatCompletionResponse(BaseModel):
@@ -301,7 +300,6 @@ class ChatCompletionResponseStreamChoice(BaseModel):
     delta: DeltaMessage
     logprobs: ChoiceLogprobs | None = None
     finish_reason: Literal['stop', 'length', 'tool_calls', 'error', 'abort'] | None = None
-    output_token_logprobs: list[tuple[float, int]] | None = None
 
 
 class ChatCompletionStreamResponse(BaseModel):
