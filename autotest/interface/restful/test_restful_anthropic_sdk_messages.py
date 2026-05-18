@@ -90,7 +90,8 @@ async def _sdk_stream_events_and_final() -> tuple[list, object | None]:
 @pytest.mark.parametrize('backend', BACKEND_LIST)
 @pytest.mark.parametrize('model_case', RESTFUL_MODEL_LIST)
 class TestRestfulAnthropicSdkMessages:
-    """Covers simple / system / streaming Messages (LMDeploy streams zero usage on ``message_start``)."""
+    """Covers simple / system / streaming Messages (LMDeploy streams zero usage
+    on ``message_start``)."""
 
     def test_sdk_simple_messages_non_stream(self, backend, model_case):
         msg = asyncio.run(_sdk_simple_non_stream())

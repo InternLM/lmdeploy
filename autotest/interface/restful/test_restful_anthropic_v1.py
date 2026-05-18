@@ -38,7 +38,8 @@ def deployed_model_name() -> str:
 
 @lru_cache(maxsize=1)
 def _eval_resource_path() -> str:
-    """``resource_path`` from active autotest YAML (``TEST_ENV`` → ``autotest/config_{tag}.yml``)."""
+    """``resource_path`` from active autotest YAML (``TEST_ENV`` →
+    ``autotest/config_{tag}.yml``)."""
 
     cfg = get_config()
     path = cfg.get('resource_path')
@@ -89,7 +90,8 @@ def _model_likely_supports_anthropic_vlm(model_name: str) -> bool:
 
 
 def _parse_anthropic_sse(raw: str) -> list[tuple[str | None, dict]]:
-    """Parse Anthropic-style SSE (``event:`` / ``data:`` lines) into (event_name, json_payload) pairs."""
+    """Parse Anthropic-style SSE (``event:`` / ``data:`` lines) into
+    (event_name, json_payload) pairs."""
 
     pairs: list[tuple[str | None, dict]] = []
     current_event: str | None = None
@@ -125,7 +127,8 @@ def _assert_count_tokens_json(data: dict) -> int:
 
 
 def _assert_success_message_json(data: dict, *, model: str) -> dict:
-    """Non-stream ``/v1/messages`` success body: Anthropic message + usage invariants."""
+    """Non-stream ``/v1/messages`` success body: Anthropic message + usage
+    invariants."""
 
     assert data.get('type') == 'message', data
     assert data.get('role') == 'assistant'
@@ -150,7 +153,10 @@ def _assert_anthropic_error_envelope(body: dict) -> None:
 
 
 def _assert_fastapi_validation_error(resp: requests.Response) -> dict:
-    """FastAPI ``RequestValidationError`` payload (not Anthropic ``type: error``)."""
+    """FastAPI ``RequestValidationError`` payload (not Anthropic ``type:
+
+    error``).
+    """
 
     assert resp.status_code == 422, resp.text
     body = resp.json()
@@ -282,7 +288,8 @@ class TestRestfulAnthropicV1:
         assert 'acknowledged' in text.lower(), text[:500]
 
     def test_messages_user_content_as_blocks(self, backend, model_case, deployed_model_name: str):
-        """``messages[].content`` as a list of ``{type: text}`` blocks (Anthropic-native shape)."""
+        """``messages[].content`` as a list of ``{type: text}`` blocks
+        (Anthropic-native shape)."""
 
         resp = requests.post(
             _MESSAGES_URL,
@@ -310,7 +317,8 @@ class TestRestfulAnthropicV1:
             for k in ('green', 'grass', '青', '綠', '绿')), f'expected color-of-grass hint in reply: {text[:500]!r}'
 
     def test_messages_system_as_content_blocks(self, backend, model_case, deployed_model_name: str):
-        """``system`` as Anthropic block list (concatenated server-side for the chat template)."""
+        """``system`` as Anthropic block list (concatenated server-side for the
+        chat template)."""
 
         resp = requests.post(
             _MESSAGES_URL,
@@ -334,7 +342,8 @@ class TestRestfulAnthropicV1:
 
     def test_messages_history_tool_use_and_tool_result_without_request_tools(
             self, backend, model_case, deployed_model_name: str):
-        """Replay ``tool_use`` / ``tool_result`` blocks without top-level ``tools`` (parserless RESTFUL)."""
+        """Replay ``tool_use`` / ``tool_result`` blocks without top-level
+        ``tools`` (parserless RESTFUL)."""
 
         resp = requests.post(
             _MESSAGES_URL,
@@ -384,7 +393,8 @@ class TestRestfulAnthropicV1:
         )
 
     def test_messages_history_thinking_and_text_blocks(self, backend, model_case, deployed_model_name: str):
-        """Assistant history with ``thinking`` + ``text`` (reasoning replay path)."""
+        """Assistant history with ``thinking`` + ``text`` (reasoning replay
+        path)."""
 
         resp = requests.post(
             _MESSAGES_URL,
@@ -416,7 +426,8 @@ class TestRestfulAnthropicV1:
         )
 
     def test_messages_user_image_file_from_config_resource(self, backend, model_case, deployed_model_name: str):
-        """``user`` message with Anthropic ``image`` + local ``resource_path`` file (``config_h.yml``)."""
+        """``user`` message with Anthropic ``image`` + local ``resource_path``
+        file (``config_h.yml``)."""
 
         if not _model_likely_supports_anthropic_vlm(deployed_model_name):
             pytest.skip(f'model {deployed_model_name!r} is not treated as vision-capable for this test')
@@ -450,7 +461,8 @@ class TestRestfulAnthropicV1:
             for k in ('tiger', 'cat', 'big cat', '虎', '猫', 'feline')), text[:800]
 
     def test_count_tokens_user_image_block_exceeds_text_only(self, backend, model_case, deployed_model_name: str):
-        """``count_tokens`` flattens ``image`` blocks in ``to_lmdeploy_messages``; count should exceed text-only."""
+        """``count_tokens`` flattens ``image`` blocks in
+        ``to_lmdeploy_messages``; count should exceed text-only."""
 
         image_path = _eval_resource_file(_EVAL_IMAGE_TIGER)
         base = {
@@ -519,7 +531,8 @@ class TestRestfulAnthropicV1:
             for k in ('tiger', 'cat', 'big cat', '虎', '猫', 'feline')), text[:800]
 
     def test_messages_user_image_base64_stream(self, backend, model_case, deployed_model_name: str):
-        """Tiny PNG via ``base64`` source + ``stream: true`` (VLM + SSE path)."""
+        """Tiny PNG via ``base64`` source + ``stream: true`` (VLM + SSE
+        path)."""
 
         if not _model_likely_supports_anthropic_vlm(deployed_model_name):
             pytest.skip(f'model {deployed_model_name!r} is not treated as vision-capable for this test')
@@ -602,7 +615,8 @@ class TestRestfulAnthropicV1:
         assert 'banana' in text, text[:500]
 
     def test_messages_max_tokens_budget(self, backend, model_case, deployed_model_name: str):
-        """Tight ``max_tokens`` should cap generation (``stop_reason`` often ``max_tokens``)."""
+        """Tight ``max_tokens`` should cap generation (``stop_reason`` often
+        ``max_tokens``)."""
 
         resp = requests.post(
             _MESSAGES_URL,
@@ -627,7 +641,11 @@ class TestRestfulAnthropicV1:
         assert _assistant_text_from_message_payload(data), data['content']
 
     def test_messages_stop_sequences(self, backend, model_case, deployed_model_name: str):
-        """Maps to LMDeploy ``stop_sequences`` / ``GenerationConfig.stop_words`` (cf. chat completion stop tests)."""
+        """Maps to LMDeploy ``stop_sequences`` /
+        ``GenerationConfig.stop_words`` (cf.
+
+        chat completion stop tests).
+        """
 
         resp = requests.post(
             _MESSAGES_URL,
@@ -668,7 +686,8 @@ class TestRestfulAnthropicV1:
         assert len(_assistant_text_from_message_payload(data).strip()) > 0
 
     def test_messages_stream(self, backend, model_case, deployed_model_name: str):
-        """SSE lifecycle including ``message_start`` shape (usage zero until ``message_delta``)."""
+        """SSE lifecycle including ``message_start`` shape (usage zero until
+        ``message_delta``)."""
 
         resp = requests.post(
             _MESSAGES_URL,
@@ -750,7 +769,8 @@ class TestRestfulAnthropicV1:
         _assert_fastapi_validation_error(resp)
 
     def test_count_tokens_rejects_tools(self, backend, model_case, deployed_model_name: str):
-        """``count_tokens`` rejects Anthropic ``tools`` until supported (400 + fixed message)."""
+        """``count_tokens`` rejects Anthropic ``tools`` until supported (400 +
+        fixed message)."""
 
         base_json = {
             'model': deployed_model_name,
@@ -788,7 +808,8 @@ class TestRestfulAnthropicV1:
         assert body['error']['message'] == 'Anthropic tool fields are temporarily unsupported.'
 
     def test_count_tokens_with_system_content_blocks(self, backend, model_case, deployed_model_name: str):
-        """``count_tokens`` with ``system`` as block list (``to_lmdeploy_messages`` flattens text)."""
+        """``count_tokens`` with ``system`` as block list
+        (``to_lmdeploy_messages`` flattens text)."""
 
         messages = [{'role': 'user', 'content': 'Hello, estimate my token count.'}]
         resp_base = requests.post(
@@ -892,7 +913,8 @@ class TestRestfulAnthropicV1:
         _assert_fastapi_validation_error(resp)
 
     def test_messages_stream_validation_error_returns_json(self, backend, model_case, deployed_model_name: str):
-        """Invalid bodies must not upgrade to ``text/event-stream``; FastAPI returns JSON 422."""
+        """Invalid bodies must not upgrade to ``text/event-stream``; FastAPI
+        returns JSON 422."""
 
         resp = requests.post(
             _MESSAGES_URL,
@@ -912,7 +934,8 @@ class TestRestfulAnthropicV1:
         assert 'text/event-stream' not in ctype
 
     def test_count_tokens_empty_messages(self, backend, model_case, deployed_model_name: str):
-        """Pydantic allows ``messages: []``; counting should still return a positive estimate."""
+        """Pydantic allows ``messages: []``; counting should still return a
+        positive estimate."""
 
         resp = requests.post(
             _COUNT_TOKENS_URL,
@@ -924,7 +947,8 @@ class TestRestfulAnthropicV1:
         _assert_count_tokens_json(resp.json())
 
     def test_messages_large_user_payload(self, backend, model_case, deployed_model_name: str):
-        """Regression guard for large JSON bodies (CI-sized payload, not stress-test scale)."""
+        """Regression guard for large JSON bodies (CI-sized payload, not
+        stress-test scale)."""
 
         big = 'x' * (128 * 1024)
         resp = requests.post(
@@ -943,7 +967,8 @@ class TestRestfulAnthropicV1:
         assert len(_assistant_text_from_message_payload(data).strip()) > 0
 
     def test_messages_rejects_tools_without_tool_call_parser(self, backend, model_case, deployed_model_name: str):
-        """``RESTFUL`` jobs start api_server *without* ``--tool-call-parser``; ``tools`` must yield 400."""
+        """``RESTFUL`` jobs start api_server *without* ``--tool-call-parser``;
+        ``tools`` must yield 400."""
 
         resp = requests.post(
             _MESSAGES_URL,
@@ -961,7 +986,8 @@ class TestRestfulAnthropicV1:
 
     def test_messages_rejects_tool_choice_with_tools_without_tool_call_parser(
             self, backend, model_case, deployed_model_name: str):
-        """``tool_choice`` is only meaningful with ``tools``; still blocked without ``--tool-call-parser``."""
+        """``tool_choice`` is only meaningful with ``tools``; still blocked
+        without ``--tool-call-parser``."""
 
         resp = requests.post(
             _MESSAGES_URL,

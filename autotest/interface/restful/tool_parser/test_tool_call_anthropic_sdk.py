@@ -8,7 +8,7 @@ from functools import lru_cache
 import pytest
 import requests
 from utils.config_utils import get_config
-from utils.constant import DEFAULT_SERVER, DEFAULT_PORT
+from utils.constant import DEFAULT_PORT, DEFAULT_SERVER
 from utils.tool_reasoning_definitions import (
     SEARCH_TOOL,
     WEATHER_TOOL,
@@ -20,7 +20,7 @@ from utils.tool_reasoning_definitions import (
 
 from lmdeploy.serve.openai.api_client import APIClient
 
-from .conftest import MESSAGES_ASKING_FOR_WEATHER, _ToolCallTestBase, _apply_marks
+from .conftest import MESSAGES_ASKING_FOR_WEATHER, _apply_marks, _ToolCallTestBase
 
 ANTHROPIC_VERSION = '2023-06-01'
 BASE_HTTP_URL = f'http://{DEFAULT_SERVER}:{DEFAULT_PORT}'
@@ -152,7 +152,8 @@ def _sdk_tool_use_blocks(msg) -> list:
 
 
 def _assert_weather_tool_city_state(inp: dict, *, ctx: str = '') -> None:
-    """``get_current_weather`` OpenAI-style args (``city`` / ``state``) after parser mapping."""
+    """``get_current_weather`` OpenAI-style args (``city`` / ``state``) after
+    parser mapping."""
 
     assert isinstance(inp, dict), (ctx, type(inp))
     city, state = inp.get('city'), inp.get('state')
@@ -178,7 +179,10 @@ def _trace_anthropic_http(
     response_text: str,
     max_chars: int = 24000,
 ) -> None:
-    """Append one JSON line to the same ``tool_calls/*.log`` tree as ``test_tool_call_advanced`` (via ``setup_log_file``)."""
+    """Append one JSON line to ``tool_calls/*.log``.
+
+    Same tree as ``test_tool_call_advanced`` (``setup_log_file``).
+    """
 
     rtxt = (
         response_text
@@ -206,7 +210,8 @@ def _trace_anthropic_http(
 
 @_apply_marks
 class TestAnthropicHttpToolMessages(_ToolCallTestBase):
-    """``POST /v1/messages`` over HTTP when api_server is launched *with* ``--tool-call-parser``.
+    """``POST /v1/messages`` over HTTP when api_server is launched *with*
+    ``--tool-call-parser``.
 
     Adapter block semantics (``lmdeploy.serve.anthropic.adapter``):
 
@@ -383,7 +388,8 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         )
 
     def test_http_non_stream_tools_with_user_image_url(self, backend, model_case):
-        """``tools`` + user ``content`` blocks with ``image`` (VLM matrix only; same tool contract as text-only)."""
+        """``tools`` + user ``content`` blocks with ``image`` (VLM matrix only;
+        same tool contract as text-only)."""
 
         model_name = APIClient(BASE_HTTP_URL).available_models[0]
         if not _model_likely_supports_anthropic_vlm(model_name):
@@ -433,7 +439,8 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         _assert_weather_tool_city_state(inp, ctx='test_http_non_stream_tools_with_user_image_url')
 
     def test_http_stream_tools_with_user_image_url(self, backend, model_case):
-        """Streaming ``tools`` + user image URL (VLM): SSE must still surface ``tool_use``."""
+        """Streaming ``tools`` + user image URL (VLM): SSE must still surface
+        ``tool_use``."""
 
         model_name = APIClient(BASE_HTTP_URL).available_models[0]
         if not _model_likely_supports_anthropic_vlm(model_name):
@@ -474,7 +481,8 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         assert WEATHER_TOOL['function']['name'] in names, names
 
     def test_http_stream_user_image_base64_solid_color_vlm(self, backend, model_case):
-        """Align with RESTful ``test_messages_user_image_base64_stream``: SSE text names the solid color."""
+        """Align with RESTful ``test_messages_user_image_base64_stream``: SSE
+        text names the solid color."""
 
         model_name = APIClient(BASE_HTTP_URL).available_models[0]
         if not _model_likely_supports_anthropic_vlm(model_name):
@@ -743,7 +751,8 @@ async def _async_messages_tool_stream(log_file: str):
 
 
 async def _async_vlm_base64_solid_color_stream(log_file: str) -> tuple[str, str]:
-    """Returns ``(kind, text_or_blob)`` where ``kind`` is ``'final'`` or ``'raw'``."""
+    """Returns ``(kind, text_or_blob)`` where ``kind`` is ``'final'`` or
+    ``'raw'``."""
 
     client, model_name = get_async_anthropic_client_and_model()
     stream = await client.messages.create(
@@ -798,7 +807,8 @@ async def _async_vlm_base64_solid_color_stream(log_file: str) -> tuple[str, str]
 
 @_apply_marks
 class TestAnthropicSdkToolCall(_ToolCallTestBase):
-    """Anthropic Messages + tools via official async SDK (end-to-end integration)."""
+    """Anthropic Messages + tools via official async SDK (end-to-end
+    integration)."""
 
     @pytest.fixture(autouse=True)
     def _require_anthropic_sdk(self):
@@ -895,7 +905,8 @@ class TestAnthropicSdkToolCall(_ToolCallTestBase):
         )
 
     def test_sdk_stream_vlm_user_image_base64_solid_color(self, backend, model_case):
-        """SDK streaming + 1×1 red PNG: final text (or raw event blob) should mention a red-ish color."""
+        """SDK streaming + 1×1 red PNG: final text (or raw event blob) should
+        mention a red-ish color."""
 
         model_name = APIClient(BASE_HTTP_URL).available_models[0]
         if not _model_likely_supports_anthropic_vlm(model_name):
