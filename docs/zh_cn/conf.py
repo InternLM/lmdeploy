@@ -22,7 +22,10 @@ from yaml import safe_dump
 sys.path.insert(0, os.path.abspath('../..'))
 
 from lmdeploy.serve.openai.api_server import router  # noqa: E402
-from lmdeploy.serve.proxy.proxy import app as proxy_server  # noqa: E402
+from lmdeploy.serve.proxy.app import create_app  # noqa: E402
+from lmdeploy.serve.proxy.config import ProxyConfig, RoutingStrategy, ServingStrategy  # noqa: E402
+from lmdeploy.serve.proxy.node import NodeRegistry  # noqa: E402
+from lmdeploy.serve.proxy.routing import get_strategy  # noqa: E402
 
 version_file = '../../lmdeploy/version.py'
 with open(version_file) as f:
@@ -71,7 +74,12 @@ with open(spec_dir / 'openai.yaml', 'w', encoding='utf-8') as f:
     f.write(safe_dump(openai_server.openapi()))
 
 with open(spec_dir / 'proxy.yaml', 'w', encoding='utf-8') as f:
-    f.write(safe_dump(proxy_server.openapi()))
+    _proxy_cfg = ProxyConfig(routing_strategy=RoutingStrategy.MIN_EXPECTED_LATENCY,
+                             serving_strategy=ServingStrategy.HYBRID)
+    _proxy_reg = NodeRegistry()
+    _proxy_strat = get_strategy(_proxy_cfg.routing_strategy, _proxy_reg, _proxy_cfg)
+    _proxy_app = create_app(_proxy_cfg, _proxy_reg, _proxy_strat)
+    f.write(safe_dump(_proxy_app.openapi()))
 
 # -- General configuration ---------------------------------------------------
 
