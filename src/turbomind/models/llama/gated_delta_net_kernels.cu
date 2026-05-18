@@ -306,6 +306,7 @@ void invokeGatedDeltaRuleBatched_v2(Ref<Tensor>           v_out_,
         }
     };
     TM_DISPATCH_PRIMARY_DTYPES(v_out.dtype(), invoke);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 // =============================================================================
@@ -544,6 +545,7 @@ void invokeGatedDeltaRuleBatched_v3(Ref<Tensor>           v_out_,
             launch(T{});
     };
     TM_DISPATCH_PRIMARY_DTYPES(v_out.dtype(), invoke);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 // =============================================================================
@@ -914,6 +916,7 @@ void invokeChunkedGatedDeltaRuleBatched(Ref<Tensor>           v_out_,
         }
     };
     TM_DISPATCH_PRIMARY_DTYPES(v_out.dtype(), invoke);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<class T>
@@ -980,6 +983,7 @@ void ComputeBetaG_v2(Ref<Tensor>   beta_out_,
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(beta_out.dtype(), invoke);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 // =============================================================================
@@ -1049,6 +1053,7 @@ void invokeRMSNormGated(Ref<Tensor> hidden_, const Tensor& gate, const Tensor& w
             hidden.data<T>(), gate.data<T>(), weight.data<T>(), eps, N, head_dim, gate_stride, num_heads);
     };
     TM_DISPATCH_PRIMARY_DTYPES(hidden.dtype(), invoke);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 // =============================================================================
@@ -1297,10 +1302,11 @@ void invokeFusedConv1dSiLU(Ref<Tensor>           out_,
                 launch(std::integral_constant<int, 1>{});
         }
         else {
-            TM_CHECK(0) << "Only d_conv == 4 is supported by fused_conv1d_batched_kernel_v2";
+            TM_LOG_FATAL("Only d_conv == 4 is supported by fused_conv1d_batched_kernel_v2");
         }
     };
     TM_DISPATCH_PRIMARY_DTYPES(out.dtype(), invoke);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 }  // namespace turbomind

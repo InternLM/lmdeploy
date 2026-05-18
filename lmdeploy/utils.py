@@ -13,6 +13,10 @@ import torch
 from transformers import PretrainedConfig
 
 logger_initialized = {}
+# Put REQUEST between DEBUG(10) and INFO(20): INFO hides request
+# payload logs, while REQUEST shows them together with normal INFO logs.
+REQUEST_LOG_LEVEL = 15
+logging.addLevelName(REQUEST_LOG_LEVEL, 'REQUEST')
 
 
 class _ASNI_COLOR:
@@ -59,6 +63,7 @@ class ColorFormatter(logging.Formatter):
                                 ERROR=_ASNI_COLOR.RED,
                                 WARN=_ASNI_COLOR.YELLOW,
                                 WARNING=_ASNI_COLOR.YELLOW,
+                                REQUEST=_ASNI_COLOR.WHITE,
                                 INFO=_ASNI_COLOR.WHITE,
                                 DEBUG=_ASNI_COLOR.GREEN)
 

@@ -46,7 +46,7 @@ struct Context {
     {
         core::ContextGuard guard{core_stream};
         linear = std::make_unique<LlamaLinear>();
-        check_cuda_error(cudaGetDeviceProperties(&device_prop, device_id));
+        TM_CUDA_CHECK(cudaGetDeviceProperties(&device_prop, device_id));
     }
 };
 

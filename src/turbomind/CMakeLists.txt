@@ -36,4 +36,4 @@ target_link_libraries(turbomind PUBLIC
         nvtx_utils
         CUDA::cublasLt
         CUDA::cudart
-        yaml-cpp::yaml-cpp)
+        )
