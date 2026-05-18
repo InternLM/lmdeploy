@@ -76,6 +76,8 @@ class ProxyConfig(BaseModel):
     link_type: str = 'RoCE'
     disable_gdr: bool = False
     dummy_prefill: bool = False
+    conn_limit: int = int(os.getenv('LMDEPLOY_PROXY_CONN_LIMIT', '100'))
+    conn_limit_per_host: int = int(os.getenv('LMDEPLOY_PROXY_CONN_LIMIT_PER_HOST', '0'))
     api_keys: list[str] | None = None
     ssl: bool = False
     log_level: str = 'INFO'

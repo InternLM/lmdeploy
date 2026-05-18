@@ -90,7 +90,8 @@ def create_app(config: ProxyConfig, registry: NodeRegistry, strategy) -> FastAPI
     async def lifespan(app: FastAPI):
         # Startup: create a shared aiohttp session
         aiotimeout = aiohttp.ClientTimeout(total=AIOHTTP_TIMEOUT) if AIOHTTP_TIMEOUT else None
-        session = aiohttp.ClientSession(timeout=aiotimeout)
+        connector = aiohttp.TCPConnector(limit=config.conn_limit, limit_per_host=config.conn_limit_per_host)
+        session = aiohttp.ClientSession(connector=connector, timeout=aiotimeout)
         strategy.client = session
         app.state.client = session
         await strategy.start()
