@@ -2,10 +2,13 @@
 """OpenAI Responses-compatible endpoint."""
 
 from .protocol import (
+    ResponseIncompleteDetails,
     ResponseInputOutputItem,
+    ResponseInputTokensDetails,
     ResponseOutputFunctionCall,
     ResponseOutputMessage,
     ResponseOutputText,
+    ResponseOutputTokensDetails,
     ResponsesRequest,
     ResponsesResponse,
     ResponseUsage,
@@ -23,7 +26,10 @@ from .serving import (
 )
 
 __all__ = [
+    'ResponseIncompleteDetails',
+    'ResponseInputTokensDetails',
     'ResponseInputOutputItem',
+    'ResponseOutputTokensDetails',
     'ResponseOutputFunctionCall',
     'ResponseOutputMessage',
     'ResponseOutputText',

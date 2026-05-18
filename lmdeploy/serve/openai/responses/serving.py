@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from lmdeploy.messages import GenerationConfig
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, Tool, ToolChoice, ToolChoiceFuncName
 from lmdeploy.serve.openai.responses.protocol import (
+    ResponseIncompleteDetails,
     ResponseOutputFunctionCall,
     ResponseOutputMessage,
     ResponseOutputText,
@@ -85,6 +86,9 @@ def _warn_ignored_request_fields(request: ResponsesRequest) -> None:
             'stream_options',
             'top_logprobs',
             'user',
+            'presence_penalty',
+            'frequency_penalty',
+            'repetition_penalty',
     ):
         if getattr(request, field_name) is not None:
             ignored_fields.append(field_name)
@@ -265,8 +269,7 @@ def _tool_choice_from_responses(tool_choice: Any,
             if name not in tool_names:
                 raise ValueError(f"Tool choice 'function' not found in `tools`: {name!r}.")
             return ToolChoice(function=ToolChoiceFuncName(name=name))
-        logger.warning('Ignoring unsupported Responses tool_choice type: %r.', tool_choice.get('type'))
-        return 'auto' if has_tools else 'none'
+        raise ValueError(f'Unsupported tool_choice type: {tool_choice.get("type")!r}.')
     raise ValueError('Unsupported tool_choice. Expected string or function tool choice object.')
 
 
@@ -315,6 +318,34 @@ def _to_generation_config(request: ResponsesRequest) -> GenerationConfig:
     )
 
 
+def _response_metadata_kwargs(request: ResponsesRequest) -> dict[str, Any]:
+    return dict(
+        instructions=request.instructions,
+        metadata=request.metadata,
+        max_output_tokens=request.max_output_tokens,
+        max_tool_calls=request.max_tool_calls,
+        parallel_tool_calls=request.parallel_tool_calls,
+        previous_response_id=request.previous_response_id,
+        prompt=request.prompt,
+        prompt_cache_key=request.prompt_cache_key,
+        prompt_cache_retention=request.prompt_cache_retention,
+        reasoning=request.reasoning,
+        safety_identifier=request.safety_identifier,
+        service_tier=request.service_tier,
+        background=bool(request.background),
+        conversation=request.conversation,
+        store=False,
+        temperature=request.temperature,
+        text=request.text,
+        tool_choice=request.tool_choice,
+        tools=request.tools,
+        top_logprobs=request.top_logprobs,
+        top_p=request.top_p,
+        truncation=request.truncation,
+        user=request.user,
+    )
+
+
 def _make_response(*,
                    request: ResponsesRequest,
                    model_name: str,
@@ -328,6 +359,9 @@ def _make_response(*,
     text = text or ''
     status = 'incomplete' if finish_reason == 'length' else 'completed'
     message_status = 'incomplete' if status == 'incomplete' else 'completed'
+    incomplete_details = None
+    if status == 'incomplete':
+        incomplete_details = ResponseIncompleteDetails(reason='max_output_tokens')
     output: list[ResponseOutputMessage | ResponseOutputFunctionCall] = []
     if text or not tool_calls:
         output.append(
@@ -364,11 +398,8 @@ def _make_response(*,
             output_tokens=output_tokens,
             total_tokens=input_tokens + output_tokens,
         ),
-        instructions=request.instructions,
-        max_output_tokens=request.max_output_tokens,
-        temperature=request.temperature,
-        top_p=request.top_p,
-        store=False,
+        incomplete_details=incomplete_details,
+        **_response_metadata_kwargs(request),
     )
 
 
@@ -387,11 +418,7 @@ async def _stream_response(result_generator,
         created_at=created_time,
         model=model_name,
         status='in_progress',
-        instructions=request.instructions,
-        max_output_tokens=request.max_output_tokens,
-        temperature=request.temperature,
-        top_p=request.top_p,
-        store=False,
+        **_response_metadata_kwargs(request),
     ).model_dump(exclude_none=True)
     yield _sse('response.created', {'type': 'response.created', 'sequence_number': 0, 'response': initial_response})
     yield _sse('response.in_progress', {
@@ -490,6 +517,7 @@ async def _stream_response(result_generator,
                     'call_id': state['call_id'],
                     'name': state['name'],
                     'arguments': '',
+                    'status': 'in_progress',
                 },
             },
         )
@@ -652,6 +680,7 @@ async def _stream_response(result_generator,
             'call_id': state['call_id'],
             'name': state['name'],
             'arguments': state['arguments'],
+            'status': 'completed',
         }
         yield _sse(
             'response.function_call_arguments.done',
