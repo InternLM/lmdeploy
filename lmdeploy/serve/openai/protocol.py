@@ -351,7 +351,6 @@ class CompletionRequest(BaseModel):
     top_k: int | None = 40  # for opencompass
     seed: int | None = None
     min_p: float = 0.0
-    return_token_ids: bool | None = False
 
 
 class CompletionResponseChoice(BaseModel):
@@ -359,7 +358,6 @@ class CompletionResponseChoice(BaseModel):
     index: int
     text: str
     logprobs: LogProbs | None = None
-    gen_tokens: list[int] | None = None
     finish_reason: Literal['stop', 'length', 'tool_calls', 'error', 'abort'] | None = None
 
 
@@ -378,7 +376,6 @@ class CompletionResponseStreamChoice(BaseModel):
     index: int
     text: str
     logprobs: LogProbs | None = None
-    gen_tokens: list[int] | None = None
     finish_reason: Literal['stop', 'length', 'tool_calls', 'error', 'abort'] | None = None
 
 

@@ -782,11 +782,9 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
                                     text: str,
                                     finish_reason: str | None = None,
                                     logprobs: LogProbs | None = None,
-                                    gen_tokens: list[int] | None = None,
                                     usage: UsageInfo | None = None) -> str:
         choice_data = CompletionResponseStreamChoice(index=index,
                                                      text=text,
-                                                     gen_tokens=gen_tokens,
                                                      finish_reason=finish_reason,
                                                      logprobs=logprobs)
         response = CompletionStreamResponse(
@@ -816,12 +814,8 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
                         completion_tokens=final_res.generate_token_len,
                         total_tokens=total_tokens,
                     )
-                gen_tokens = None
-                if request.return_token_ids:
-                    gen_tokens = res.token_ids or []
                 response_json = create_stream_response_json(index=0,
                                                             text=res.response,
-                                                            gen_tokens=gen_tokens,
                                                             finish_reason=res.finish_reason,
                                                             logprobs=logprobs,
                                                             usage=usage)
@@ -866,8 +860,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         choice_data = CompletionResponseChoice(index=i,
                                                text=text,
                                                finish_reason=final_res.finish_reason,
-                                               logprobs=logprobs,
-                                               gen_tokens=final_token_ids if request.return_token_ids else None)
+                                               logprobs=logprobs)
         choices[i] = choice_data
 
         if with_cache:
