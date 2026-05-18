@@ -195,7 +195,7 @@ class AscendOpsBackend(DlinferOpsBackend):
                 cls.total_slots = cls.total_slots.view(block_num, block_size)
             return cls.total_slots
 
-        def get_cpu_seqlens(is_decoding, is_prefill_no_cache, is_multi_token_decoding):
+        def get_cpu_seqlens(is_decoding, is_prefill_no_cache):
             """Get sequence lengths on CPU.
 
             Returns:
@@ -205,9 +205,6 @@ class AscendOpsBackend(DlinferOpsBackend):
             """
             if is_decoding:
                 q_seqlens_cpu = None
-                kv_seqlens_cpu = step_context.kv_seqlens.cpu()
-            elif is_multi_token_decoding:
-                q_seqlens_cpu = step_context.q_seqlens.cpu()
                 kv_seqlens_cpu = step_context.kv_seqlens.cpu()
             elif is_prefill_no_cache:
                 q_seqlens_cpu = step_context.q_seqlens.cpu()
@@ -375,8 +372,7 @@ class AscendOpsBackend(DlinferOpsBackend):
             group_name = backend.get_hccl_comm_name(local_rank)
             return group_name
 
-        q_seqlens_cpu, kv_seqlens_cpu = get_cpu_seqlens(is_decoding, is_prefill_no_cache,
-                                                        is_multi_token_decoding)
+        q_seqlens_cpu, kv_seqlens_cpu = get_cpu_seqlens(is_decoding, is_prefill_no_cache)
         q_seqlens_list, kv_seqlens_list = get_list_seqlens(is_decoding, is_prefill_no_cache, q_seqlens_cpu,
                                                            kv_seqlens_cpu)
         max_q_seq_len, max_kv_seq_len = get_max_seqlens(is_decoding, is_prefill_no_cache, q_seqlens_list,
