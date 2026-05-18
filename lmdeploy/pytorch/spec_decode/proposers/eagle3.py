@@ -66,6 +66,13 @@ class Eagle3(DeepseekMTP):
         draft_words = c['draft_words']
         draft_bits = c['draft_bits']
 
+        max_word_idx = d2t_words.max().item()
+        if max_word_idx >= target_bitmask.size(1):
+            raise ValueError(
+                f'd2t mapping references word index {max_word_idx} but target_bitmask '
+                f'only has {target_bitmask.size(1)} words. '
+                f'The draft-to-target mapping may be out of bounds for the current vocab.')
+
         word_vals = target_bitmask[:, d2t_words]
         draft_valid = ((word_vals >> d2t_bits.unsqueeze(0)) & 1).to(torch.int32)
 
@@ -83,7 +90,7 @@ class Eagle3(DeepseekMTP):
         hidden_size = getattr(hf_config, 'target_hidden_size', hf_config.hidden_size)
         return hidden_size * 3
 
-    def get_outputs(self,
+    async def get_outputs(self,
                     model_outputs: dict[str, torch.Tensor],
                     model_inputs: ModelInputs,
                     extra_inputs: ExtraInputs = None,
@@ -104,21 +111,14 @@ class Eagle3(DeepseekMTP):
 
         logits = self.get_logits(hidden_states)[0]
 
-        if guided_processors and self.guided_decoding_manager is not None:
-            guided_manager = self.guided_decoding_manager
-            guided_bitmask = guided_manager.allocate_batched_bitmap(logits.size(0))
-            for idx, processor in guided_processors.items():
-                guided_manager.fill_bitmap(processor, guided_bitmask, idx)
+        guided_bitmask = await self._apply_guided_bitmask(logits, guided_processors)
+        if guided_bitmask is not None:
             draft_bitmask = self._translate_bitmask(guided_bitmask)
-            guided_manager.apply_batched_bitmap(logits, draft_bitmask)
+            self.guided_decoding_manager.apply_batched_bitmap(logits, draft_bitmask)
 
         draft_token_ids = logits.argmax(dim=-1, keepdim=True)
         draft_token_ids = self.draft_id_to_target_id[draft_token_ids]
 
-        if guided_processors and self.guided_decoding_manager is not None:
-            guided_manager = self.guided_decoding_manager
-            cpu_draft_token_ids = draft_token_ids[:, 0].cpu()
-            for idx, processor in guided_processors.items():
-                guided_manager.accept_token(processor, cpu_draft_token_ids[idx].item())
+        await self._accept_guided_tokens(draft_token_ids, guided_processors)
 
         return draft_token_ids, model_metas, hidden_states_prenorm
