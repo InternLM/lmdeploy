@@ -16,6 +16,7 @@ struct EngineParam: EngineConfig {
     int attn_cp_rank  = 0;
     int mlp_tp_rank   = 0;
     int model_tp_rank = 0;  // rank(d_tp_group), in [0, attn_tp_size × attn_cp_size)
+    int ep_rank       = 0;  // expert-parallel rank (set in CreateContext when ep_size > 1)
 
     // Derived field (set in Impl ctor)
     int max_forward_token_num = 0;

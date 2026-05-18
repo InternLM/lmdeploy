@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/kernels/gemm/context.h"
 #include "src/turbomind/kernels/gemm/moe_utils_v2.h"
 #include "src/turbomind/models/llama/LlamaFfnLayer.h"
@@ -19,6 +20,8 @@ public:
         Tensor           output;
         const MoeWeight* weights;
         float            scale;
+        int              max_tokens_per_rank;
+        Buffer           ht_buffer;
         int              layer_id;
     };
 
@@ -31,11 +34,26 @@ private:
 
     Tensor_<float> Gate(const Tensor& input, const LinearWeight& gate);
 
+    void SetWarmup(ForwardParam& p);
+
+    void ForwardFused(ForwardParam& p);
+
+    void RouteTP(ForwardParam& p, Tensor_<float>& logits);
+
+    void RouteEP(ForwardParam& p, Tensor_<float>& logits);
+
+    void CombineTP(ForwardParam& p);
+
+    void CombineEP(ForwardParam& p);
+
     void dump_logits(int token_num, int layer_id, int expert_num);
 
     const int tp_size_;
+    const int ep_size_;
     const int max_token_num_;
-    int&      is_warm_up_;
+    const int ll_max_tokens_per_rank_;
+
+    int& is_warm_up_;
 
     LlamaLinear& linear_;
 
@@ -55,6 +73,13 @@ private:
     Buffer_<int>   accum_;
     Buffer_<int>   offsets_;
 
+    comm::DeviceCommImpl* const             d_comm_;
+    Buffer_<float>                          topk_weights_;
+    Buffer_<int64_t>                        topk_idx_;
+    std::unique_ptr<comm::EpDispatchOutput> dispatch_output_;
+    comm::EpMode                            ep_mode_{comm::EpMode::kNull};
+
+    Tensor         input_;
     Tensor         temp_;
     Tensor_<float> shared_scales_;
     ///////////////////////////////////////////////////////

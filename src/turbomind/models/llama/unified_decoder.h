@@ -1,6 +1,7 @@
 #pragma once
 
 #include "src/turbomind/comm/device_comm.h"
+#include "src/turbomind/models/llama/FusedRMSNormLayer.h"
 #include "src/turbomind/models/llama/GatedDeltaNetLayer.h"
 #include "src/turbomind/models/llama/LlamaFfnLayer.h"
 #include "src/turbomind/models/llama/context.h"
@@ -31,8 +32,11 @@ private:
     const int attn_dp_size_;
     const int attn_dp_rank_;
     const int mlp_tp_size_;
+    const int ep_size_;
 
-    const int attn_tp_group_;
+    const int attn_tp_group_;  // attn_tp x attn_cp
+
+    const float rmsnorm_eps_;
 
     comm::DeviceCommImpl* const d_comm_;
 
@@ -44,16 +48,10 @@ private:
     std::unique_ptr<GatedDeltaNetLayer>    linear_attn_layer_;
     std::unique_ptr<LlamaFfnLayer>         ffn_layer_;
     std::unique_ptr<MoeFfnLayer>           moe_ffn_layer_;
+    std::unique_ptr<FusedRMSNormLayer>     fused_rmsnorm_layer_;
 
-    void AllreduceResidualRMSnorm(Tensor&       hidden_states,
-                                  Tensor&       residual,
-                                  const Tensor& bias,
-                                  const Tensor& weight,
-                                  float         eps,
-                                  int           token_num,
-                                  int           t0,
-                                  int           t1,
-                                  const int*    local_token_nums);
+    struct HiddenStateLayout;
+    HiddenStateLayout CreateHiddenStateLayout(TensorMap& env);
 };
 
 }  // namespace turbomind

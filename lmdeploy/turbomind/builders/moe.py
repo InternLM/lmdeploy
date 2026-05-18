@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import annotations
 
-from ._base import Builder, SplitSide
+from ._base import Builder, ParallelGroup, SplitSide
 
 # ---------------------------------------------------------------------------
 # MoeBuilder -- gate, non-expert params
@@ -10,6 +10,15 @@ from ._base import Builder, SplitSide
 
 class MoeBuilder(Builder):
     """MoE weight loading builder."""
+
+    def __init__(self, config, ctx, ep: ParallelGroup | None = None):
+        super().__init__(config, ctx)
+        self.ep = ep or ParallelGroup(1, None)
+        if self.ep.size > 1 and config.expert_num % self.ep.size != 0:
+            raise ValueError(
+                f'num_experts={config.expert_num} must be divisible by '
+                f'ep={self.ep.size}')
+        self.config.ep_size = self.ep.size
 
     def add_gate(self, name, linear):
         """Commit a gate linear (broadcast, no split)."""

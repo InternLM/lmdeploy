@@ -23,6 +23,8 @@ MoeWeight::MoeWeight(const core::MoeConfig& cfg)
     act_type_         = static_cast<ActivationType>(cfg.act_type);
     fuse_silu_act_    = cfg.fuse_silu;
     expert_num        = cfg.expert_num;
+    ep_size           = cfg.ep_size > 0 ? cfg.ep_size : 1;
+    ep_rank           = cfg.ep_rank;
 }
 
 // Adapted from LinkExperts for LinearWeight
@@ -87,8 +89,13 @@ void MoeWeight::prepare()
     // First prepare all children (experts, gate, etc.)
     Module::prepare();
 
+    // Under expert parallelism only `local` experts are resident on this
+    // rank, attached at their *global* index [offset, offset + local).
+    const int local  = local_num_experts();
+    const int offset = local_expert_offset();
+
     // Create batched block view for fused MoE path
-    auto e0 = TM_CHECK_NOTNULL(expert(0));  // exemplar expert
+    auto e0 = TM_CHECK_NOTNULL(expert(offset));  // exemplar expert (first local)
 
     core::FfnConfig block_cfg;
     block_cfg.hidden_dim = e0->hidden_dim;
@@ -102,44 +109,46 @@ void MoeWeight::prepare()
     block_cfg.fuse_silu = fuse_silu_act_;
     block_              = std::make_unique<FfnWeight>(block_cfg);
 
-    // Link each linear in the block to the corresponding expert linears
-    auto get_expert_w1w3 = [this](int i) -> LinearWeight* {
-        auto* exp = expert(i);
+    // Link each linear in the block to the corresponding expert linears.
+    // The slot index `i` is local ([0, local)); it maps to the global
+    // expert `i + offset`.
+    auto get_expert_w1w3 = [this, offset](int i) -> LinearWeight* {
+        auto* exp = expert(i + offset);
         return exp ? exp->w1w3.get() : nullptr;
     };
-    auto get_expert_w1 = [this](int i) -> LinearWeight* {
-        auto* exp = expert(i);
+    auto get_expert_w1 = [this, offset](int i) -> LinearWeight* {
+        auto* exp = expert(i + offset);
         return exp ? exp->w1.get() : nullptr;
     };
-    auto get_expert_w3 = [this](int i) -> LinearWeight* {
-        auto* exp = expert(i);
+    auto get_expert_w3 = [this, offset](int i) -> LinearWeight* {
+        auto* exp = expert(i + offset);
         return exp ? exp->w3.get() : nullptr;
     };
-    auto get_expert_w2 = [this](int i) -> LinearWeight* {
-        auto* exp = expert(i);
+    auto get_expert_w2 = [this, offset](int i) -> LinearWeight* {
+        auto* exp = expert(i + offset);
         return exp ? exp->w2.get() : nullptr;
     };
 
     if (get_expert_w1w3(0)) {
         // Fused w1w3 path: experts have a single fused gate+up projection
         block_->add_child("w1w3", std::make_unique<LinearWeight>());
-        LinkLinearExperts(get_expert_w1w3, expert_num, *block_->w1w3);
+        LinkLinearExperts(get_expert_w1w3, local, *block_->w1w3);
     }
     else {
         // Separate w1/w3 path: link individually
         block_->add_child("w1", std::make_unique<LinearWeight>());
         block_->add_child("w3", std::make_unique<LinearWeight>());
         if (get_expert_w1(0)) {
-            LinkLinearExperts(get_expert_w1, expert_num, *block_->w1);
+            LinkLinearExperts(get_expert_w1, local, *block_->w1);
         }
         if (get_expert_w3(0)) {
-            LinkLinearExperts(get_expert_w3, expert_num, *block_->w3);
+            LinkLinearExperts(get_expert_w3, local, *block_->w3);
         }
     }
 
     block_->add_child("w2", std::make_unique<LinearWeight>());
     if (get_expert_w2(0)) {
-        LinkLinearExperts(get_expert_w2, expert_num, *block_->w2);
+        LinkLinearExperts(get_expert_w2, local, *block_->w2);
     }
 
     // Propagate the actual fused-silu state from the first expert to

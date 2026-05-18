@@ -82,7 +82,27 @@ def complete_parallel_config(cfg: TurbomindEngineConfig):
 
 def update_parallel_config(cfg: TurbomindEngineConfig):
     cfg.device_num = len(cfg.devices) * cfg.nnodes if cfg.devices else cfg.device_num
-    if not complete_parallel_config(cfg):
+    if not complete_parallel_config(cfg) and cfg.ep > 1:
+        os.environ['NCCL_GIN_GDAKI_QP_DEPTH'] = '1024'
+        if cfg.communicator in ['cuda-ipc', 'native']:
+            assert cfg.nnodes == 1, 'TurboMind does not support multi-node with ep > 1'
+        total = cfg.dp * cfg.ep
+        if not cfg.device_num:
+            count = torch.cuda.device_count() * cfg.nnodes
+            if total < count:
+                count = total
+            cfg.device_num = count
+        assert total % cfg.device_num == 0
+        overlap = total // cfg.device_num
+        attn_dp_size = overlap
+        inner_tp_size = cfg.ep // overlap
+        cfg.outer_dp_size = cfg.dp // overlap
+        cfg.attn_dp_size = overlap
+        cfg.attn_tp_size = inner_tp_size // cfg.cp
+        cfg.attn_cp_size = cfg.cp
+        cfg.mlp_dp_size = 1
+        cfg.mlp_tp_size = cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size
+    elif not complete_parallel_config(cfg):
         total = cfg.dp * cfg.tp
         if not cfg.device_num:
             count = torch.cuda.device_count() * cfg.nnodes
@@ -102,6 +122,8 @@ def update_parallel_config(cfg: TurbomindEngineConfig):
         cfg.mlp_tp_size = mlp_tp_size * inner_tp_size
     assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size == cfg.mlp_dp_size * cfg.mlp_tp_size
     assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size * cfg.outer_dp_size == cfg.device_num
+    if cfg.ep > 1:
+        assert cfg.mlp_tp_size == cfg.ep, 'TurboMind EP requires mlp_tp_size == ep'
     # update devices
     cfg.devices = cfg.devices or list(range(cfg.device_num // cfg.nnodes))
     cfg.devices = cfg.devices[:cfg.device_num // cfg.nnodes]
@@ -247,6 +269,9 @@ class TurboMind:
         ec.attn_tp_size = engine_config.attn_tp_size
         ec.attn_cp_size = engine_config.attn_cp_size
         ec.mlp_tp_size = engine_config.mlp_tp_size
+        ec.ep_size = engine_config.ep
+        # Low-latency dispatch threshold (moe-2 historical default: 256).
+        ec.ll_max_tokens_per_rank = 256 if engine_config.ep > 1 else 0
         ec.devices = engine_config.devices
         ec.nnodes = engine_config.nnodes
         ec.node_rank = engine_config.node_rank
