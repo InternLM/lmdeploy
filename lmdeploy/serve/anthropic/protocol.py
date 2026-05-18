@@ -105,6 +105,28 @@ class MessagesRequest(BaseModel):
     tools: list[ToolParam] | None = None
     tool_choice: ToolChoiceParam | Literal['auto', 'any'] | None = None
     service_tier: Literal['auto', 'standard_only'] | None = None
+    # Extended input fields from /generate endpoint.
+    # input_ids and image_data are fallback inputs — they are only used when
+    # messages is empty. When messages is non-empty, it takes priority.
+    input_ids: list[int] | None = Field(
+        default=None,
+        description=('Token IDs as input. Only used when messages is empty. '
+                     'Mutually exclusive with non-empty messages.'),
+    )
+    image_data: str | dict | list[str | dict] | None = Field(
+        default=None,
+        description=('Image data for multimodal input. Only used alongside input_ids '
+                     'when messages is empty. Mutually exclusive with non-empty messages. '
+                     'Can be a URL/base64 string, a dict, or a list of these.'),
+    )
+    return_routed_experts: bool | None = Field(
+        default=False,
+        description=('Whether to return MoE routed expert indices in the response.'),
+    )
+    return_token_ids: bool | None = Field(
+        default=False,
+        description=('Whether to include output token IDs in the response.'),
+    )
 
 
 class MessageTextBlock(BaseModel):
