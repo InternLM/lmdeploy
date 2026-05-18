@@ -2,6 +2,8 @@
 
 from abc import ABC, abstractmethod
 
+import aiohttp
+
 from lmdeploy.serve.proxy.config import ProxyConfig
 from lmdeploy.serve.proxy.node import Node, NodeRegistry
 
@@ -12,6 +14,7 @@ class BaseStrategy(ABC):
     def __init__(self, registry: NodeRegistry, config: ProxyConfig):
         self.registry = registry
         self.config = config
+        self.client: aiohttp.ClientSession | None = None
 
     @abstractmethod
     async def select_node(self, model_name: str, role=None) -> Node:

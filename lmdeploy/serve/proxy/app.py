@@ -88,7 +88,11 @@ def create_app(config: ProxyConfig, registry: NodeRegistry, strategy) -> FastAPI
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        # Startup
+        # Startup: create a shared aiohttp session
+        aiotimeout = aiohttp.ClientTimeout(total=AIOHTTP_TIMEOUT) if AIOHTTP_TIMEOUT else None
+        session = aiohttp.ClientSession(timeout=aiotimeout)
+        strategy.client = session
+        app.state.client = session
         await strategy.start()
         if not config.disable_cache_status:
             await registry.load()
@@ -98,6 +102,7 @@ def create_app(config: ProxyConfig, registry: NodeRegistry, strategy) -> FastAPI
         yield
         # Shutdown
         await strategy.stop()
+        await session.close()
 
     app = FastAPI(docs_url='/', lifespan=lifespan)
     app.add_middleware(
@@ -239,17 +244,16 @@ def create_app(config: ProxyConfig, registry: NodeRegistry, strategy) -> FastAPI
         await strategy.on_request_start(node)
         start = time.time()
 
-        aiotimeout = aiohttp.ClientTimeout(total=AIOHTTP_TIMEOUT) if AIOHTTP_TIMEOUT else None
-        async with aiohttp.ClientSession(timeout=aiotimeout) as client:
-            if request.stream is True:
-                response = forward_request_stream(client, node.url, raw_request, '/v1/chat/completions')
-                background_task = BackgroundTasks()
-                background_task.add_task(strategy.on_request_end, node, time.time() - start)
-                return ProxyStreamingResponse(response, background=background_task, media_type='text/event-stream')
-            else:
-                response = await forward_request(client, node.url, raw_request, '/v1/chat/completions')
-                await strategy.on_request_end(node, time.time() - start)
-                return JSONResponse(json.loads(response))
+        client = raw_request.app.state.client
+        if request.stream is True:
+            response = forward_request_stream(client, node.url, raw_request, '/v1/chat/completions')
+            background_task = BackgroundTasks()
+            background_task.add_task(strategy.on_request_end, node, time.time() - start)
+            return ProxyStreamingResponse(response, background=background_task, media_type='text/event-stream')
+        else:
+            response = await forward_request(client, node.url, raw_request, '/v1/chat/completions')
+            await strategy.on_request_end(node, time.time() - start)
+            return JSONResponse(json.loads(response))
 
     @app.post('/v1/completions', dependencies=[Depends(validate_json_request)])
     async def completions_v1(request: CompletionRequest, raw_request: Request = None):
@@ -265,16 +269,15 @@ def create_app(config: ProxyConfig, registry: NodeRegistry, strategy) -> FastAPI
         await strategy.on_request_start(node)
         start = time.time()
 
-        aiotimeout = aiohttp.ClientTimeout(total=AIOHTTP_TIMEOUT) if AIOHTTP_TIMEOUT else None
-        async with aiohttp.ClientSession(timeout=aiotimeout) as client:
-            if request.stream is True:
-                response = forward_request_stream(client, node.url, raw_request, '/v1/completions')
-                background_task = BackgroundTasks()
-                background_task.add_task(strategy.on_request_end, node, time.time() - start)
-                return ProxyStreamingResponse(response, background=background_task, media_type='text/event-stream')
-            else:
-                response = await forward_request(client, node.url, raw_request, '/v1/completions')
-                await strategy.on_request_end(node, time.time() - start)
-                return JSONResponse(json.loads(response))
+        client = raw_request.app.state.client
+        if request.stream is True:
+            response = forward_request_stream(client, node.url, raw_request, '/v1/completions')
+            background_task = BackgroundTasks()
+            background_task.add_task(strategy.on_request_end, node, time.time() - start)
+            return ProxyStreamingResponse(response, background=background_task, media_type='text/event-stream')
+        else:
+            response = await forward_request(client, node.url, raw_request, '/v1/completions')
+            await strategy.on_request_end(node, time.time() - start)
+            return JSONResponse(json.loads(response))
 
     return app

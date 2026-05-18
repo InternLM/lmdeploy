@@ -4,9 +4,7 @@ import asyncio
 import re
 import time
 
-import aiohttp
-
-from lmdeploy.serve.proxy.config import AIOHTTP_TIMEOUT, ProxyConfig
+from lmdeploy.serve.proxy.config import ProxyConfig
 from lmdeploy.serve.proxy.node import Node, NodeRegistry
 from lmdeploy.serve.proxy.routing.base import BaseStrategy
 from lmdeploy.serve.proxy.routing.min_expected import MinExpectedLatencyStrategy
@@ -48,7 +46,6 @@ class MinCacheUsageStrategy(BaseStrategy):
         super().__init__(registry, config)
         self._fallback = MinExpectedLatencyStrategy(registry, config)
         self._poll_task: asyncio.Task | None = None
-        self._timeout = aiohttp.ClientTimeout(total=AIOHTTP_TIMEOUT) if AIOHTTP_TIMEOUT else None
 
     async def select_node(self, model_name: str, role=None) -> Node:
         nodes = await self.registry.get(model_name, role=role)
@@ -91,15 +88,16 @@ class MinCacheUsageStrategy(BaseStrategy):
             await asyncio.sleep(self.config.metrics_poll_interval)
 
     async def _poll_all_nodes(self) -> None:
+        if self.client is None or self.client.closed:
+            return
         nodes = await self.registry.all_nodes()
-        async with aiohttp.ClientSession(timeout=self._timeout) as session:
-            for node in nodes:
-                try:
-                    async with session.get(f'{node.url}/metrics') as response:
-                        if response.status == 200:
-                            text = await response.text()
-                            usage = parse_prometheus_cache_usage(text)
-                            if usage is not None:
-                                await self.registry.update_cache_usage(node.url, usage)
-                except Exception as e:
-                    logger.debug(f'Failed to poll metrics from {node.url}: {e}')
+        for node in nodes:
+            try:
+                async with self.client.get(f'{node.url}/metrics') as response:
+                    if response.status == 200:
+                        text = await response.text()
+                        usage = parse_prometheus_cache_usage(text)
+                        if usage is not None:
+                            await self.registry.update_cache_usage(node.url, usage)
+            except Exception as e:
+                logger.debug(f'Failed to poll metrics from {node.url}: {e}')
