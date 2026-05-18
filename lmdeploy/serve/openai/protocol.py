@@ -224,7 +224,6 @@ class ChatMessage(BaseModel):
     """Chat messages."""
     role: str
     content: str | None = None
-    gen_tokens: list[int] | None = None
     reasoning_content: str | None = Field(default=None, examples=[None])
     tool_calls: list[ToolCall] | None = Field(default=None, examples=[None])
 
@@ -259,6 +258,7 @@ class ChatCompletionResponseChoice(BaseModel):
     message: ChatMessage
     logprobs: ChoiceLogprobs | None = None
     finish_reason: Literal['stop', 'length', 'tool_calls', 'error', 'abort'] | None = None
+    output_ids: list[int] | None = None
 
 
 class ChatCompletionResponse(BaseModel):
@@ -290,7 +290,6 @@ class DeltaMessage(BaseModel):
     role: str | None = None
     content: str | None = None
     reasoning_content: str | None = None
-    gen_tokens: list[int] | None = None
     tool_calls: list[DeltaToolCall] | None = None
 
 
@@ -299,6 +298,7 @@ class ChatCompletionResponseStreamChoice(BaseModel):
     index: int
     delta: DeltaMessage
     logprobs: ChoiceLogprobs | None = None
+    output_ids: list[int] | None = None
     finish_reason: Literal['stop', 'length', 'tool_calls', 'error', 'abort'] | None = None
 
 

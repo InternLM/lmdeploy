@@ -505,11 +505,13 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                                     finish_reason: str | None = None,
                                     logprobs: LogProbs | None = None,
                                     usage: UsageInfo | None = None,
-                                    routed_experts=None) -> str:
+                                    routed_experts=None,
+                                    output_ids=None) -> str:
         choice_data = ChatCompletionResponseStreamChoice(index=index,
                                                          delta=delta_message,
                                                          finish_reason=finish_reason,
-                                                         logprobs=logprobs)
+                                                         logprobs=logprobs,
+                                                         output_ids=output_ids)
         response = ChatCompletionStreamResponse(
             id=request_id,
             created=created_time,
@@ -557,18 +559,17 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                     continue
                 delta_message = DeltaMessage(role='assistant')
 
-            if request.return_token_ids:
-                delta_message.gen_tokens = delta_token_ids
-
             # Only output routed_experts in the final chunk
             routed_experts = res.routed_experts if res.finish_reason is not None else None
+            stream_output_ids = delta_token_ids if request.return_token_ids else None
 
             response_json = create_stream_response_json(index=0,
                                                         delta_message=delta_message,
                                                         finish_reason=res.finish_reason,
                                                         logprobs=logprobs,
                                                         usage=usage,
-                                                        routed_experts=routed_experts)
+                                                        routed_experts=routed_experts,
+                                                        output_ids=stream_output_ids)
             if res.cache_block_ids is not None:
                 response_json['cache_block_ids'] = res.cache_block_ids
                 response_json['remote_token_ids'] = res.token_ids
@@ -625,13 +626,12 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
     assert final_res is not None
     choices = []
-    if request.return_token_ids:
-        message.gen_tokens = final_token_ids
     choice_data = ChatCompletionResponseChoice(
         index=0,
         message=message,
         logprobs=logprobs,
         finish_reason=final_res.finish_reason,
+        output_ids=final_token_ids if request.return_token_ids else None,
     )
     choices.append(choice_data)
 
