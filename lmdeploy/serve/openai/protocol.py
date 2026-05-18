@@ -105,6 +105,11 @@ class ResponseFormat(BaseModel):
     regex_schema: str | None = None
 
 
+# str for url/base64, base64 should be data:image/jpeg;base64, dict should be {'url': url/base64, 'options': ...}
+ImageDataInputItem = str | dict
+ImageDataFormat = ImageDataInputItem | list[ImageDataInputItem]
+
+
 class ChatCompletionRequest(BaseModel):
     """Chat completion request."""
     model: str
@@ -169,6 +174,25 @@ class ChatCompletionRequest(BaseModel):
     mm_processor_kwargs: dict[str, Any] | None = Field(
         default=None,
         description=('Additional kwargs to pass to the HF processor'),
+    )
+    # Extended input fields from /generate endpoint.
+    # input_ids and image_data are fallback inputs — they are only used when
+    # messages is empty/None/''. When messages is non-empty, it takes priority.
+    input_ids: list[int] | None = Field(
+        default=None,
+        description=('Token IDs as input. Only used when messages is empty. '
+                     'Mutually exclusive with non-empty messages.'),
+    )
+    image_data: ImageDataFormat | None = Field(
+        default=None,
+        examples=[None],
+        description=('Image data for multimodal input. Only used alongside input_ids '
+                     '(when messages is empty). '
+                     'Can be a URL/base64 string, a dict, or a list of these.'),
+    )
+    return_routed_experts: bool | None = Field(
+        default=False,
+        description=('Whether to return MoE routed expert indices in the response.'),
     )
 
 
@@ -235,6 +259,7 @@ class ChatCompletionResponseChoice(BaseModel):
     message: ChatMessage
     logprobs: ChoiceLogprobs | None = None
     finish_reason: Literal['stop', 'length', 'tool_calls', 'error', 'abort'] | None = None
+    output_token_logprobs: list[tuple[float, int]] | None = None
 
 
 class ChatCompletionResponse(BaseModel):
@@ -245,6 +270,7 @@ class ChatCompletionResponse(BaseModel):
     model: str
     choices: list[ChatCompletionResponseChoice]
     usage: UsageInfo
+    routed_experts: list[list[list[int]]] | str | None = None
 
 
 class DeltaFunctionCall(BaseModel):
@@ -275,6 +301,7 @@ class ChatCompletionResponseStreamChoice(BaseModel):
     delta: DeltaMessage
     logprobs: ChoiceLogprobs | None = None
     finish_reason: Literal['stop', 'length', 'tool_calls', 'error', 'abort'] | None = None
+    output_token_logprobs: list[tuple[float, int]] | None = None
 
 
 class ChatCompletionStreamResponse(BaseModel):
@@ -285,6 +312,7 @@ class ChatCompletionStreamResponse(BaseModel):
     model: str
     choices: list[ChatCompletionResponseStreamChoice]
     usage: UsageInfo | None = None
+    routed_experts: list[list[list[int]]] | str | None = None
 
 
 class CompletionRequest(BaseModel):
@@ -436,10 +464,6 @@ class UpdateParamsRequest(BaseModel):
     load_format: str | None = None  # 'flattened_bucket' or None
     finished: bool = False
 
-
-# str for url/base64, base64 should be data:image/jpeg;base64, dict should be {'url': url/base64, 'options': ...}
-ImageDataInputItem = str | dict
-ImageDataFormat = ImageDataInputItem | list[ImageDataInputItem]
 
 
 # /generate input
