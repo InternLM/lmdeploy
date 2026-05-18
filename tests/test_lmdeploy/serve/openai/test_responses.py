@@ -18,7 +18,8 @@ from lmdeploy.serve.openai.responses import (
     _validate_text_v1_request,
     create_responses_router,
 )
-from lmdeploy.serve.openai.responses.protocol import ResponseInputOutputItem
+from lmdeploy.serve.openai.responses import serving as responses_serving
+from lmdeploy.serve.openai.responses.protocol import ResponseInputOutputItem, ResponsesResponse
 
 
 class _FakeAsyncEngine:
@@ -141,6 +142,44 @@ def test_responses_request_keeps_official_field_order_prefix():
         'top_logprobs',
         'top_p',
         'truncation',
+        'user',
+    ]
+
+
+def test_responses_response_keeps_official_field_order_prefix():
+    assert list(ResponsesResponse.model_fields)[:33] == [
+        'id',
+        'created_at',
+        'error',
+        'incomplete_details',
+        'instructions',
+        'metadata',
+        'model',
+        'object',
+        'output',
+        'parallel_tool_calls',
+        'temperature',
+        'tool_choice',
+        'tools',
+        'top_p',
+        'background',
+        'completed_at',
+        'conversation',
+        'max_output_tokens',
+        'max_tool_calls',
+        'output_text',
+        'previous_response_id',
+        'prompt',
+        'prompt_cache_key',
+        'prompt_cache_retention',
+        'reasoning',
+        'safety_identifier',
+        'service_tier',
+        'status',
+        'text',
+        'top_logprobs',
+        'truncation',
+        'usage',
         'user',
     ]
 
@@ -379,6 +418,15 @@ def test_responses_named_tool_choice_must_match_function_tools():
         raise AssertionError('named tool_choice should match one of the function tools')
 
 
+def test_responses_explicit_unsupported_tool_choice_is_rejected():
+    try:
+        _tool_choice_from_responses({'type': 'web_search_preview'}, None)
+    except ValueError as err:
+        assert 'Unsupported tool_choice type' in str(err)
+    else:
+        raise AssertionError('explicit unsupported tool_choice should be rejected')
+
+
 def test_responses_tool_validation_uses_tools_error_param():
     import asyncio
 
@@ -499,7 +547,21 @@ def test_responses_generation_config_mapping():
 
 
 def test_responses_non_stream_response_shape():
-    request = ResponsesRequest(model='fake-model', input='Hi there')
+    request = ResponsesRequest(
+        model='fake-model',
+        input='Hi there',
+        max_tool_calls=2,
+        metadata={'trace_id': 'abc'},
+        parallel_tool_calls=False,
+        prompt_cache_key='cache-key',
+        prompt_cache_retention='in-memory',
+        safety_identifier='safe-user',
+        service_tier='flex',
+        text={'format': {'type': 'text'}},
+        top_logprobs=3,
+        truncation='auto',
+        user='user-123',
+    )
 
     response = _make_response(
         request=request,
@@ -514,6 +576,18 @@ def test_responses_non_stream_response_shape():
     assert response['object'] == 'response'
     assert response['status'] == 'completed'
     assert response['output_text'] == 'Hello world!'
+    assert response['background'] is False
+    assert response['max_tool_calls'] == 2
+    assert response['metadata'] == {'trace_id': 'abc'}
+    assert response['parallel_tool_calls'] is False
+    assert response['prompt_cache_key'] == 'cache-key'
+    assert response['prompt_cache_retention'] == 'in-memory'
+    assert response['safety_identifier'] == 'safe-user'
+    assert response['service_tier'] == 'flex'
+    assert response['text'] == {'format': {'type': 'text'}}
+    assert response['top_logprobs'] == 3
+    assert response['truncation'] == 'auto'
+    assert response['user'] == 'user-123'
     assert response['output'][0]['type'] == 'message'
     assert response['output'][0]['content'][0] == {
         'type': 'output_text',
@@ -522,9 +596,38 @@ def test_responses_non_stream_response_shape():
     }
     assert response['usage'] == {
         'input_tokens': 8,
+        'input_tokens_details': {
+            'cached_tokens': 0,
+            'input_tokens_per_turn': [],
+            'cached_tokens_per_turn': [],
+        },
         'output_tokens': 2,
+        'output_tokens_details': {
+            'reasoning_tokens': 0,
+            'tool_output_tokens': 0,
+            'output_tokens_per_turn': [],
+            'tool_output_tokens_per_turn': [],
+        },
         'total_tokens': 10,
     }
+
+
+def test_responses_length_finish_reason_sets_incomplete_details():
+    request = ResponsesRequest(model='fake-model', input='Hi there')
+
+    response = _make_response(
+        request=request,
+        model_name='fake-model',
+        created_time=123,
+        text='partial',
+        input_tokens=8,
+        output_tokens=2,
+        finish_reason='length',
+    ).model_dump(exclude_none=True)
+
+    assert response['status'] == 'incomplete'
+    assert response['incomplete_details'] == {'reason': 'max_output_tokens'}
+    assert response['output'][0]['status'] == 'incomplete'
 
 
 def test_responses_tool_call_response_shape():
@@ -556,6 +659,7 @@ def test_responses_tool_call_response_shape():
         'call_id': 'call_123',
         'name': 'search',
         'arguments': '{"query":"lmdeploy"}',
+        'status': 'completed',
     }
 
 
@@ -643,6 +747,51 @@ def test_responses_rejects_unsupported_input_items():
         raise AssertionError('input_image should be rejected by Text V1')
 
 
+def test_responses_rejects_reasoning_input_items():
+    request = ResponsesRequest(
+        model='fake-model',
+        input=[{
+            'type': 'reasoning',
+            'summary': [],
+        }],
+    )
+
+    try:
+        _messages_from_input(request)
+    except ValueError as err:
+        assert 'reasoning' in str(err)
+    else:
+        raise AssertionError('reasoning input items should be rejected by Text V1')
+
+
+def test_responses_penalty_fields_are_warned_and_ignored(monkeypatch):
+    import asyncio
+
+    assert 'presence_penalty' in ResponsesRequest.model_fields
+    assert 'frequency_penalty' in ResponsesRequest.model_fields
+    assert 'repetition_penalty' in ResponsesRequest.model_fields
+
+    warnings: list[str] = []
+    monkeypatch.setattr(responses_serving.logger, 'warning',
+                        lambda message, *args: warnings.append(message % args))
+
+    endpoint, _ = _responses_endpoint()
+    request = ResponsesRequest(
+        model='fake-model',
+        input='Hi',
+        presence_penalty=0.1,
+        frequency_penalty=0.2,
+        repetition_penalty=1.1,
+    )
+
+    response = asyncio.run(endpoint(request, _FakeRawRequest()))
+
+    assert response['output_text'] == 'ok'
+    assert any('presence_penalty' in warning for warning in warnings)
+    assert any('frequency_penalty' in warning for warning in warnings)
+    assert any('repetition_penalty' in warning for warning in warnings)
+
+
 def test_responses_streaming_sse_shape():
     request = ResponsesRequest(model='fake-model', input='Hi there', stream=True)
 
@@ -683,11 +832,19 @@ def test_responses_streaming_sse_shape():
     assert 'event: response.output_text.delta' in body
     assert 'event: response.completed' in body
     assert any(payload.get('delta') == 'Hello ' for payload in payloads)
+    created_response = payloads[0]['response']
     added_item = next(payload['item'] for payload in payloads if payload['type'] == 'response.output_item.added')
     done_item = next(payload['item'] for payload in payloads if payload['type'] == 'response.output_item.done')
+    completed_response = payloads[-1]['response']
+    assert created_response['background'] is False
+    assert created_response['parallel_tool_calls'] is True
+    assert created_response['service_tier'] == 'auto'
+    assert created_response['tools'] == []
+    assert created_response['truncation'] == 'disabled'
     assert done_item['id'] == added_item['id']
     assert payloads[-1]['type'] == 'response.completed'
-    assert payloads[-1]['response']['output_text'] == 'Hello world!'
+    assert completed_response['output_text'] == 'Hello world!'
+    assert completed_response['parallel_tool_calls'] is True
 
 
 def test_responses_streaming_tool_call_events():
@@ -758,10 +915,13 @@ def test_responses_streaming_tool_call_events():
     done = next(payload for payload in payloads if payload['type'] == 'response.output_item.done')
     assert added['item']['type'] == 'function_call'
     assert added['item']['name'] == 'search'
+    assert added['item']['status'] == 'in_progress'
     assert next(payload for payload in payloads
                 if payload['type'] == 'response.function_call_arguments.done')['name'] == 'search'
     assert done['item']['arguments'] == '{"query":"lmdeploy"}'
+    assert done['item']['status'] == 'completed'
     assert payloads[-1]['response']['output'][0]['type'] == 'function_call'
+    assert payloads[-1]['response']['output'][0]['status'] == 'completed'
 
 
 def test_responses_streaming_text_indices_follow_text_item_order():

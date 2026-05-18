@@ -20,6 +20,29 @@ from pydantic import BaseModel, ConfigDict, Field
 ResponseInputOutputItem: TypeAlias = ResponseInputItemParam | ResponseOutputItem
 
 
+class ResponseInputTokensDetails(BaseModel):
+    """Input token details in Responses API shape."""
+
+    cached_tokens: int = 0
+    input_tokens_per_turn: list[int] = Field(default_factory=list)
+    cached_tokens_per_turn: list[int] = Field(default_factory=list)
+
+
+class ResponseOutputTokensDetails(BaseModel):
+    """Output token details in Responses API shape."""
+
+    reasoning_tokens: int = 0
+    tool_output_tokens: int = 0
+    output_tokens_per_turn: list[int] = Field(default_factory=list)
+    tool_output_tokens_per_turn: list[int] = Field(default_factory=list)
+
+
+class ResponseIncompleteDetails(BaseModel):
+    """Details about why a response is incomplete."""
+
+    reason: Literal['max_output_tokens', 'content_filter'] | None = None
+
+
 class ResponsesRequest(BaseModel):
     """Request body for ``POST /v1/responses``.
 
@@ -62,6 +85,9 @@ class ResponsesRequest(BaseModel):
     user: str | None = None
 
     # LMDeploy-compatible generation extensions.
+    presence_penalty: float | None = None
+    frequency_penalty: float | None = None
+    repetition_penalty: float | None = None
     top_k: int | None = 40
     stop: str | list[str] | None = None
     seed: int | None = None
@@ -76,7 +102,9 @@ class ResponseUsage(BaseModel):
     """Token usage in Responses API shape."""
 
     input_tokens: int = 0
+    input_tokens_details: ResponseInputTokensDetails = Field(default_factory=ResponseInputTokensDetails)
     output_tokens: int = 0
+    output_tokens_details: ResponseOutputTokensDetails = Field(default_factory=ResponseOutputTokensDetails)
     total_tokens: int = 0
 
 
@@ -106,23 +134,49 @@ class ResponseOutputFunctionCall(BaseModel):
     call_id: str
     name: str
     arguments: str
+    status: Literal['in_progress', 'completed', 'incomplete'] = 'completed'
 
 
 class ResponsesResponse(BaseModel):
-    """Response body for Text V1 ``POST /v1/responses``."""
+    """Response body for Text V1 ``POST /v1/responses``.
+
+    Fields are ordered to follow the OpenAI Responses return schema.
+    Reference: https://developers.openai.com/api/reference/resources/responses/methods/create
+    """
 
     id: str
     created_at: int
+    error: dict[str, Any] | None = None
+    incomplete_details: ResponseIncompleteDetails | None = None
+    instructions: str | None = None
+    metadata: Metadata | None = None
     model: str
     object: Literal['response'] = 'response'
     output: list[ResponseOutputMessage | ResponseOutputFunctionCall] = Field(default_factory=list)
-    output_text: str = ''
-    usage: ResponseUsage | None = None
-    instructions: str | None = None
-    max_output_tokens: int | None = None
-    status: Literal['in_progress', 'completed', 'incomplete', 'failed'] = 'completed'
-    store: bool = False
+    parallel_tool_calls: bool | None = True
     temperature: float | None = None
     tool_choice: ResponseToolChoice | None = None
     tools: list[ResponseTool | dict[str, Any]] = Field(default_factory=list)
     top_p: float | None = None
+    background: bool = False
+    completed_at: int | None = None
+    conversation: str | dict[str, Any] | None = None
+    max_output_tokens: int | None = None
+    max_tool_calls: int | None = None
+    output_text: str = ''
+    previous_response_id: str | None = None
+    prompt: ResponsePrompt | None = None
+    prompt_cache_key: str | None = None
+    prompt_cache_retention: Literal['in-memory', '24h'] | None = None
+    reasoning: Reasoning | None = None
+    safety_identifier: str | None = None
+    service_tier: Literal['auto', 'default', 'flex', 'scale', 'priority'] | None = 'auto'
+    status: Literal['in_progress', 'completed', 'incomplete', 'failed', 'cancelled', 'queued'] = 'completed'
+    text: ResponseTextConfig | dict[str, Any] | None = None
+    top_logprobs: int | None = None
+    truncation: Literal['auto', 'disabled'] | None = 'disabled'
+    usage: ResponseUsage | None = None
+    user: str | None = None
+
+    # Existing compatibility echo for clients that expect the request store flag.
+    store: bool = False
