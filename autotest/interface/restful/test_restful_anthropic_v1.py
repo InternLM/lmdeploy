@@ -79,13 +79,13 @@ def _model_likely_supports_anthropic_vlm(model_name: str) -> bool:
             'QWEN-VL',
             'QWEN2-VL',
             'QWEN2.5-VL',
+            'QWEN3.5',
             'MINICPM-V',
-            'GLM-4V',
-            'GLM-4.5V',
             'LLAVA',
             'COGVLM',
             'XCOMPOSER',
             'INTERNXCOMPOSER',
+            'INTERNS',
         ))
 
 
@@ -542,7 +542,8 @@ class TestRestfulAnthropicV1:
             headers=_anthropic_headers(),
             json={
                 'model': deployed_model_name,
-                'max_tokens': 64,
+                # Same as tool_parser HTTP solid-color VLM test: leave room after thinking_delta.
+                'max_tokens': 16384,
                 'temperature': 0.01,
                 'stream': True,
                 'messages': [{

@@ -76,13 +76,13 @@ def _model_likely_supports_anthropic_vlm(model_name: str) -> bool:
             'QWEN-VL',
             'QWEN2-VL',
             'QWEN2.5-VL',
+            'QWEN3.5',
             'MINICPM-V',
-            'GLM-4V',
-            'GLM-4.5V',
             'LLAVA',
             'COGVLM',
             'XCOMPOSER',
             'INTERNXCOMPOSER',
+            'INTERNS',
         ))
 
 
@@ -132,7 +132,11 @@ def _sse_tool_use_names(raw: str) -> list[str]:
 
 
 def _assert_redish_color_in_text(assembled: str, *, ctx: str) -> None:
-    assert len(assembled.strip()) > 0, (ctx, repr(assembled[:300]))
+    assert len(assembled.strip()) > 0, (
+        f'{ctx}: no text_delta content in stream (prefix {assembled[:300]!r}). '
+        'Reasoning models may stream long thinking_delta first; if max_tokens is too low, '
+        'the run can end before any visible text block is emitted.'
+    )
     al = assembled.lower()
     assert any(k in al for k in _REDISH_COLOR_KEYWORDS), (
         f'{ctx}: expected red-ish color in reply: {assembled[:500]!r}',
@@ -491,7 +495,7 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         url = f'{BASE_HTTP_URL}/v1/messages'
         req_json = {
             'model': model_name,
-            'max_tokens': 64,
+            'max_tokens': 16384,
             'temperature': 0.01,
             'stream': True,
             'messages': [{
@@ -757,7 +761,7 @@ async def _async_vlm_base64_solid_color_stream(log_file: str) -> tuple[str, str]
     client, model_name = get_async_anthropic_client_and_model()
     stream = await client.messages.create(
         model=model_name,
-        max_tokens=64,
+        max_tokens=16384,
         temperature=0.01,
         stream=True,
         messages=[{
