@@ -107,12 +107,13 @@ class GptOssModel(TextModel):
 
     def moe(self, pfx):
         cfg = self._moe_cfg.clone()
-        m = MoeBuilder(cfg, self._ctx)
+        m = MoeBuilder(cfg, self._ctx, ep=self._ep_group())
         m.add_gate('gate', self._linear(pfx + 'router'))
         experts_pfx = pfx + 'experts'
         experts = ModuleListBuilder(ModuleListConfig(), self._ctx)
         for e in range(cfg.expert_num):
-            experts[e] = self._packed_moe_ffn(experts_pfx, e)
+            experts[e] = self._packed_moe_ffn(
+                experts_pfx, e, active_mask=self._expert_active_mask(cfg.expert_num, e))
         m.experts = experts.build()
         return m.build()
 
@@ -127,7 +128,7 @@ class GptOssModel(TextModel):
             layers[i] = d.build()
         return layers.build()
 
-    def _packed_moe_ffn(self, experts_pfx, idx):
+    def _packed_moe_ffn(self, experts_pfx, idx, active_mask=None):
         w1, w2, w3 = read_packed_moe_expert(
             experts_pfx + 'gate_up_proj',
             experts_pfx + 'down_proj',
@@ -137,6 +138,6 @@ class GptOssModel(TextModel):
             trans=True,
         )
         cfg = self._ffn_cfg.clone()
-        m = FfnBuilder(cfg, self._ctx, tp=self._mlp_tp)
+        m = FfnBuilder(cfg, self._ctx, tp=self._ffn_tp_group(), active_mask=active_mask)
         m.add_ffn(w1, w2, w3)
         return m.build()

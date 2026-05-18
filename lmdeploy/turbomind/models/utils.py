@@ -234,8 +234,7 @@ def make_moe_config(cfg, *,
                     n_group=1,
                     router_n_groups=0,
                     ep_size=1,
-                    ep_rank=0,
-                    ll_max_tokens_per_rank=0):
+                    ep_rank=0):
     """Build a MoeConfig populated from HF config and per-model overrides."""
     if act_type is None:
         act_type = _act_type_id('silu')
@@ -255,7 +254,6 @@ def make_moe_config(cfg, *,
     # unchanged (ep_size<=1 collapses to plain TP in MoeWeight).
     moe_cfg.ep_size = ep_size
     moe_cfg.ep_rank = ep_rank
-    moe_cfg.ll_max_tokens_per_rank = ll_max_tokens_per_rank
     return moe_cfg
 
 

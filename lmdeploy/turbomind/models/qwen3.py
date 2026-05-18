@@ -97,25 +97,27 @@ class Qwen3TextModel(TextModel):
 
         return m.build()
 
-    def ffn(self, pfx, is_expert=False):
+    def ffn(self, pfx, is_expert=False, active_mask=None):
         w1, w3, w2 = [self._linear(pfx + f'{x}_proj') for x in ('gate', 'up', 'down')]
 
         cfg = self._ffn_cfg.clone()
         cfg.is_expert = is_expert
 
-        m = FfnBuilder(cfg, self._ctx, tp=self._mlp_tp)
+        m = FfnBuilder(cfg, self._ctx, tp=self._ffn_tp_group(), active_mask=active_mask)
         m.add_ffn(w1, w2, w3)
         return m.build()
 
     def moe(self, pfx):
         cfg = self._moe_cfg.clone()
 
-        m = MoeBuilder(cfg, self._ctx)
+        m = MoeBuilder(cfg, self._ctx, ep=self._ep_group())
         m.add_gate('gate', self._linear(pfx + 'gate'))
 
         experts = ModuleListBuilder(ModuleListConfig(), self._ctx)
         for e in range(self.cfg.num_experts):
-            experts[e] = self.ffn(pfx + 'experts' + e, is_expert=True)
+            experts[e] = self.ffn(pfx + 'experts' + e,
+                                  is_expert=True,
+                                  active_mask=self._expert_active_mask(self.cfg.num_experts, e))
         m.experts = experts.build()
 
         return m.build()

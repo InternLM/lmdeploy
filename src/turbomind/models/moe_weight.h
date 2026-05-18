@@ -28,7 +28,6 @@ struct MoeConfig: ModuleConfig {
     X(double, routed_scale)                                                                                            \
     X(int, ep_size)                                                                                                    \
     X(int, ep_rank)                                                                                                    \
-    X(int, ll_max_tokens_per_rank)                                                                                     \
     X(DataType, data_type)
 
     MOE_FIELDS(TM_MEMBER)
@@ -97,7 +96,6 @@ public:
     int         router_n_groups{};
     int         ep_size{1};
     int         ep_rank{0};
-    int         ll_max_tokens_per_rank{};
 
 private:
     ActivationType act_type_{};
