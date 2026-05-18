@@ -16,6 +16,8 @@ Key scenarios:
 5. End-to-end: draft → target verification → rejection → grammar state.
 6. Batch-level grammar mask: mixed guided/unguided sequences.
 """
+import asyncio
+
 import pytest
 import torch
 import xgrammar as xgr
@@ -1046,8 +1048,8 @@ class TestEagle3GetOutputs:
         # Minimal ModelInputs (not used by get_outputs for this path)
         model_inputs = type('M', (), {'is_decoding': True, 'seq_length': torch.tensor([1])})()
 
-        draft_token_ids, _, _ = proposer.get_outputs(
-            model_outputs, model_inputs, guided_processors={0: matcher})
+        draft_token_ids, _, _ = asyncio.run(proposer.get_outputs(
+            model_outputs, model_inputs, guided_processors={0: matcher}))
 
         target_token = draft_token_ids[0, 0].item()
         assert 0 <= target_token < vocab_size
@@ -1075,7 +1077,7 @@ class TestEagle3GetOutputs:
         }
         model_inputs = type('M', (), {'is_decoding': True, 'seq_length': torch.tensor([1])})()
 
-        draft_token_ids, _, _ = proposer.get_outputs(model_outputs, model_inputs)
+        draft_token_ids, _, _ = asyncio.run(proposer.get_outputs(model_outputs, model_inputs))
         target_token = draft_token_ids[0, 0].item()
         assert 0 <= target_token < vocab_size
 
@@ -1105,8 +1107,8 @@ class TestEagle3GetOutputs:
         }
         model_inputs = type('M', (), {'is_decoding': True, 'seq_length': torch.tensor([1])})()
 
-        draft_token_ids, _, _ = proposer.get_outputs(
-            model_outputs, model_inputs, guided_processors={0: draft_fork})
+        draft_token_ids, _, _ = asyncio.run(proposer.get_outputs(
+            model_outputs, model_inputs, guided_processors={0: draft_fork}))
 
         # Original matcher should be unchanged, while the fork should reflect
         # acceptance of the emitted token. Since immediate allowed-id sets may
@@ -1151,8 +1153,8 @@ class TestEagle3GetOutputs:
                 'model_metas': [None],
             }
             model_inputs = type('M', (), {'is_decoding': True, 'seq_length': torch.tensor([1])})()
-            draft_token_ids, _, _ = proposer.get_outputs(
-                model_outputs, model_inputs, guided_processors={0: draft_fork})
+            draft_token_ids, _, _ = asyncio.run(proposer.get_outputs(
+                model_outputs, model_inputs, guided_processors={0: draft_fork}))
             target_tokens.append(draft_token_ids[0, 0].item())
 
         # Verify original matcher is still at initial state
