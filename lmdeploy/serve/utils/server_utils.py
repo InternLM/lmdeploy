@@ -85,12 +85,13 @@ class AuthenticationMiddleware:
     def __init__(self, app: ASGIApp, tokens: list[str]) -> None:
         self.app = app
         self.api_tokens = [hashlib.sha256(t.encode('utf-8')).digest() for t in tokens]
-        # Path prefixes that bypass authentication
+        # Path prefixes that bypass authentication. Keep this list limited to
+        # passive public endpoints; proxy node-management routes mutate routing
+        # state and must stay behind bearer-token authentication.
         self.skip_prefixes = [
             '/health',  # Health check endpoints
             '/docs',  # Swagger UI documentation
             '/redoc',  # ReDoc documentation
-            '/nodes',  # Endpoints about node operation between proxy and api_server
         ]
 
     def verify_token(self, headers: Headers) -> bool:

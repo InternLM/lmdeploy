@@ -100,6 +100,7 @@ class VariableInterface:
     api_server_url: str | None = None
     allow_terminate_by_client: bool = False
     enable_abort_handling: bool = False
+    api_keys: list[str] | None = None
     response_parser_cls: type[ResponseParser] | None = None
 
     @classmethod
@@ -1207,6 +1208,8 @@ async def startup_event():
         url = f'{VariableInterface.proxy_url}/nodes/add'
         data = {'url': VariableInterface.api_server_url, 'status': {'models': get_model_list(), 'role': engine_role}}
         headers = {'accept': 'application/json', 'Content-Type': 'application/json'}
+        if isinstance(VariableInterface.api_keys, list) and len(VariableInterface.api_keys) > 0:
+            headers['Authorization'] = f'Bearer {VariableInterface.api_keys[0]}'
         response = requests.post(url, headers=headers, json=data)
 
         if response.status_code != 200:
@@ -1388,6 +1391,9 @@ def serve(model_path: str,
 
     VariableInterface.allow_terminate_by_client = allow_terminate_by_client
     VariableInterface.enable_abort_handling = enable_abort_handling
+    if isinstance(api_keys, str):
+        api_keys = [api_keys]
+    VariableInterface.api_keys = api_keys
 
     ssl_keyfile, ssl_certfile, http_or_https = None, None, 'http'
     if ssl:
