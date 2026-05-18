@@ -310,7 +310,6 @@ class TritonV4AttentionImpl:
     # ------------------------------------------------------------------
 
     @staticmethod
-    @torch.compile(dynamic=True)
     def _pad_query_heads(query: torch.Tensor, attn_sink: torch.Tensor):
         num_heads = query.size(2) if query.dim() == 4 else query.size(1)
         if num_heads in (64, 128):
@@ -322,10 +321,21 @@ class TritonV4AttentionImpl:
         else:
             raise RuntimeError(f'Unsupported h_q for FlashMLA sparse decode: {num_heads}')
 
-        pad_heads = padded_heads - num_heads
-        query = torch.nn.functional.pad(query, (0, 0, 0, pad_heads))
-        attn_sink = torch.nn.functional.pad(attn_sink, (0, pad_heads))
-        return query, attn_sink, num_heads
+        # torch.empty + copy_ valid heads: skips zero-fill of padded heads since
+        # FlashMLA computes per-head attention independently (MQA, h_kv=1) and
+        # padded-head output is discarded by the caller's slice anyway.
+        # This halves the data volume vs F.pad for TP>1 (e.g. TP=4: 16→64 heads).
+        if query.dim() == 4:
+            padded_q = torch.empty(query.size(0), query.size(1), padded_heads, query.size(3),
+                                   dtype=query.dtype, device=query.device)
+            padded_q[:, :, :num_heads, :].copy_(query)
+        else:
+            padded_q = torch.empty(query.size(0), padded_heads, query.size(2),
+                                   dtype=query.dtype, device=query.device)
+            padded_q[:, :num_heads, :].copy_(query)
+        padded_s = torch.empty(padded_heads, dtype=attn_sink.dtype, device=attn_sink.device)
+        padded_s[:num_heads].copy_(attn_sink)
+        return padded_q, padded_s, num_heads
 
     @staticmethod
     @torch.compile(dynamic=True)
@@ -490,7 +500,10 @@ class TritonV4AttentionImpl:
         if index_out is not None:
             compress_topk = index_out.indices_in_kvcache
             # Offset indexer's logical indices into flat_kv positions
+            # Preserve -1 sentinels from bitonic_topk (invalid positions)
+            neg_mask = compress_topk < 0
             compress_topk = compress_topk + attn_metadata.prefill_compress_offset
+            compress_topk = compress_topk.masked_fill(neg_mask, -1)
             # Per-token causal limit from the pre-computed ratio-specific count.
             # index_out.topk_length is per-sequence and ignores causal masking.
             if self.compress_ratio == 128:

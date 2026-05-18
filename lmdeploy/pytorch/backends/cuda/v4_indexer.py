@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import torch
+import torch.distributed as dist
 
 from lmdeploy.pytorch.kernels.cuda.bitonic_topk import bitonic_topk
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
@@ -30,7 +31,8 @@ class TritonV4IndexerImpl(BaseV4Indexer):
                 weights: torch.Tensor,
                 index_kv_cache: torch.Tensor,
                 index_kv_scale_cache: torch.Tensor,
-                meta: V4IndexerMetadata) -> V4IndexerOutput:
+                meta: V4IndexerMetadata,
+                tp_group=None) -> V4IndexerOutput:
         block_offsets = meta.block_offsets
         cu_q_seqlens = meta.cu_q_seqlens
         kv_seqlens = meta.kv_seqlens
@@ -81,6 +83,10 @@ class TritonV4IndexerImpl(BaseV4Indexer):
                            k_cache, k_s_cache,
                            cu_q_seqlens, num_index, block_offsets,
                            max_q_seqlen=meta.max_q_seqlen, max_k_seqlen=max_index, causal=True)
+
+        # Aggregate scores across TP ranks so all ranks select the same topk indices
+        if tp_group is not None:
+            dist.all_reduce(scores, group=tp_group)
 
         topk_width = self.index_topk
         topk_length = num_index.clamp(max=topk_width)

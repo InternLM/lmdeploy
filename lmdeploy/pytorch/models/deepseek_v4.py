@@ -497,7 +497,7 @@ class Attention(nn.Module):
         # ---- Projections + RoPE (no prefill/decode branch) ----
         qr = q = self.q_norm(self.wq_a(x))
         q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim))
-        q = rms_scale(q, q, dim=-1, eps=self.eps)
+        q = rms_scale(q, q, dim=-1, eps=self.eps, use_fp32=True)
         cos, sin, neg_sin = rotary_pos_emb
         q_rope = q[..., -rd:]
         kv = self.wkv(x)
@@ -586,9 +586,21 @@ class Gate(nn.Module):
         return weights, indices
 
 
+@torch.compile(dynamic=True)
+def _v4_swiglu_impl(intermediate: torch.Tensor, swiglu_limit: float) -> torch.Tensor:
+    """Match DeepSeek-V4 expert activation in the Triton FP4 fused MoE path."""
+    hidden = intermediate.size(-1) // 2
+    gate = intermediate[..., :hidden].float()
+    up = intermediate[..., hidden:].float()
+    if swiglu_limit > 0:
+        up = torch.clamp(up, min=-swiglu_limit, max=swiglu_limit)
+        gate = torch.clamp(gate, max=swiglu_limit)
+    return (torch.nn.functional.silu(gate) * up).to(intermediate.dtype)
+
+
 class Expert(nn.Module):
 
-    def __init__(self, config, dim: int, inter_dim: int, dtype=None, device=None):
+    def __init__(self, config, dim: int, inter_dim: int, swiglu_limit=None, dtype=None, device=None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         self.w13 = build_gateup_linear(dim, [inter_dim, inter_dim], bias=False, dtype=dtype, device=device,
@@ -597,10 +609,14 @@ class Expert(nn.Module):
         self.w2 = build_down_linear(inter_dim, dim, bias=False, quant_config=quantization_config,
                                       is_tp=False, dtype=dtype, device=device)
         self.act_fn = SiluAndMul(inplace=True)
+        self.swiglu_limit = swiglu_limit
 
     def forward(self, x: torch.Tensor):
         gate_up = self.w13(x)
-        x = self.act_fn(gate_up)
+        if self.swiglu_limit is not None:
+            x = _v4_swiglu_impl(gate_up, self.swiglu_limit)
+        else:
+            x = self.act_fn(gate_up)
         return self.w2(x)
 
 
@@ -625,6 +641,7 @@ class MoE(nn.Module):
             config,
             args.dim,
             args.moe_inter_dim,
+            swiglu_limit=args.swiglu_limit,
             dtype=dtype,
             device=device)
 
