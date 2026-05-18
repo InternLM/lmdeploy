@@ -107,9 +107,6 @@ def test_input_ids(api_server, input_ids):
     assert len(data["choices"]) > 0
 
 
-# ---- input_ids + image_data ----
-
-
 def test_input_ids_with_image_data(api_server, input_ids, image_data):
     """Use input_ids + image_data."""
     resp = _chat(api_server, {
@@ -117,15 +114,12 @@ def test_input_ids_with_image_data(api_server, input_ids, image_data):
         "messages": "",
         "input_ids": input_ids,
         "image_data": image_data,
-        "max_completion_tokens": 32,
+        "max_completion_tokens": 8,
         "temperature": 0.0,
     })
     # May succeed or fail depending on whether the model supports VLM;
     # just check it doesn't crash the server
     assert resp.status_code in (200, 400)
-
-
-# ---- return_routed_experts ----
 
 
 def test_return_routed_experts(api_server):
@@ -157,9 +151,6 @@ def test_return_routed_experts_default_off(api_server):
     assert data.get("routed_experts") is None
 
 
-# ---- output_token_logprobs ----
-
-
 def test_output_token_logprobs(api_server):
     """Check output_token_logprobs in response choices."""
     resp = _chat(api_server, {
@@ -180,9 +171,6 @@ def test_output_token_logprobs(api_server):
             assert len(entry) == 2
             assert isinstance(entry[0], (int, float))
             assert isinstance(entry[1], int)
-
-
-# ---- messages priority ----
 
 
 def test_messages_priority_over_input_ids(api_server, input_ids):
@@ -207,9 +195,6 @@ def test_image_data_rejected_with_nonempty_messages(api_server, image_data):
         "temperature": 0.0,
     })
     assert resp.status_code != 200
-
-
-# ---- Streaming ----
 
 
 def test_streaming_with_routed_experts(api_server):
