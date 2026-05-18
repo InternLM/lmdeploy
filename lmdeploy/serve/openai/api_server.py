@@ -398,7 +398,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                     image_input.append(dict(type='image_url', image_url=dict(url=img)))
                 else:
                     image_input.append(dict(type='image_url', image_url=img))
-            text_input = dict(type='text', text='')
+            text_input = dict(type='text', text=request.input_ids)
             request.messages = [dict(role='user', content=[text_input] + image_input)]
             resolved_input_ids = None  # image_data conversion takes over
 
