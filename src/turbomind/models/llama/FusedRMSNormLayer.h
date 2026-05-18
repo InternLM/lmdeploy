@@ -3,6 +3,7 @@
 #include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/kernels/norm/rms_norm.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 #include <memory>
 
@@ -79,7 +80,7 @@ public:
                                                           group1,
                                                           param.local_token_nums.data(),
                                                           stream);
-            sync_check_cuda_error();
+            TM_CUDA_CHECK(cudaGetLastError());
         }
         else if (param_.d_comm) {
             param_.d_comm->AllreduceResidualBiasRMSnorm(param.global_hidden_states.raw_data(),
@@ -92,7 +93,7 @@ public:
                                                         dtype,
                                                         0,
                                                         stream);
-            sync_check_cuda_error();
+            TM_CUDA_CHECK(cudaGetLastError());
         }
         else {
             invokeResidualBiasRMSNorm(param.global_hidden_states.raw_data(),
@@ -104,7 +105,7 @@ public:
                                       param.global_token_num,
                                       param_.rmsnorm_eps,
                                       stream);
-            sync_check_cuda_error();
+            TM_CUDA_CHECK(cudaGetLastError());
         }
     }
 
@@ -130,7 +131,7 @@ public:
                                           param.local_hidden_states.dtype(),
                                           param_.attn_tp_group,
                                           stream);
-            sync_check_cuda_error();
+            TM_CUDA_CHECK(cudaGetLastError());
         }
 
         invokeResidualBiasRMSNorm(param.partial_hidden_states.data_or((void*)nullptr),
@@ -142,7 +143,7 @@ public:
                                   param.token_nums[param_.d_comm->rank(param_.attn_tp_group)],
                                   param_.rmsnorm_eps,
                                   stream);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
 
         if (stage == FusedRMSNormLayerStage::kFfn) {
             param_.d_comm->AllGatherV(param.partial_hidden_states.data_or((void*)nullptr),
@@ -151,7 +152,7 @@ public:
                                       param.local_hidden_states.dtype(),
                                       param_.attn_tp_group,
                                       stream);
-            sync_check_cuda_error();
+            TM_CUDA_CHECK(cudaGetLastError());
         }
     }
 

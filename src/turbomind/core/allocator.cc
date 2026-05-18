@@ -19,9 +19,9 @@ public:
     CudaMemPoolAllocator(Stream stream, bool use_default_pool):
         pool_{}, stream_{stream}, device_{kDEVICE}, use_default_pool_{use_default_pool}
     {
-        check_cuda_error(cudaGetDevice(&device_.id));
+        TM_CUDA_CHECK(cudaGetDevice(&device_.id));
         if (use_default_pool_) {
-            check_cuda_error(cudaDeviceGetDefaultMemPool(&pool_, device_.id));
+            TM_CUDA_CHECK(cudaDeviceGetDefaultMemPool(&pool_, device_.id));
         }
         else {
             cudaMemPoolProps props{};
@@ -29,16 +29,16 @@ public:
             props.handleTypes   = cudaMemHandleTypeNone;
             props.location.type = cudaMemLocationTypeDevice;
             props.location.id   = device_.id;
-            check_cuda_error(cudaMemPoolCreate(&pool_, &props));
+            TM_CUDA_CHECK(cudaMemPoolCreate(&pool_, &props));
             cuuint64_t thres = (cuuint64_t)-1;
-            check_cuda_error(cudaMemPoolSetAttribute(pool_, cudaMemPoolAttrReleaseThreshold, &thres));
+            TM_CUDA_CHECK(cudaMemPoolSetAttribute(pool_, cudaMemPoolAttrReleaseThreshold, &thres));
         }
     }
 
     ~CudaMemPoolAllocator() override
     {
         if (!use_default_pool_) {
-            check_cuda_error(cudaMemPoolDestroy(pool_));
+            TM_CUDA_CHECK(cudaMemPoolDestroy(pool_));
         }
         pool_ = {};
     }
@@ -46,13 +46,13 @@ public:
     void* allocate(ssize_t size) override
     {
         void* ptr{};
-        check_cuda_error(cudaMallocFromPoolAsync(&ptr, size, pool_, stream_.handle()));
+        TM_CUDA_CHECK(cudaMallocFromPoolAsync(&ptr, size, pool_, stream_.handle()));
         return ptr;
     }
 
     void deallocate(void* p, ssize_t) override
     {
-        check_cuda_error(cudaFreeAsync(p, stream_.handle()));
+        TM_CUDA_CHECK(cudaFreeAsync(p, stream_.handle()));
     }
 
     Device device() const noexcept override
@@ -67,7 +67,7 @@ public:
 
     void trim(size_t bytes_to_keep)
     {
-        check_cuda_error(cudaMemPoolTrimTo(pool_, bytes_to_keep));
+        TM_CUDA_CHECK(cudaMemPoolTrimTo(pool_, bytes_to_keep));
     }
 
 private:
@@ -82,13 +82,13 @@ public:
     void* allocate(ssize_t size) override
     {
         void* ptr{};
-        check_cuda_error(cudaMalloc(&ptr, size));
+        TM_CUDA_CHECK(cudaMalloc(&ptr, size));
         return ptr;
     }
 
     void deallocate(void* p, ssize_t) override
     {
-        check_cuda_error(cudaFree(p));
+        TM_CUDA_CHECK(cudaFree(p));
     }
 
     Device device() const noexcept override
@@ -102,13 +102,13 @@ public:
     void* allocate(ssize_t size) override
     {
         void* ptr{};
-        check_cuda_error(cudaHostAlloc(&ptr, size, cudaHostAllocDefault));
+        TM_CUDA_CHECK(cudaHostAlloc(&ptr, size, cudaHostAllocDefault));
         return ptr;
     }
 
     void deallocate(void* p, ssize_t) override
     {
-        check_cuda_error(cudaFreeHost(p));
+        TM_CUDA_CHECK(cudaFreeHost(p));
     }
 
     Device device() const noexcept override

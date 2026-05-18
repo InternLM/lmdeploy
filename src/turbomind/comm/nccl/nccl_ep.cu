@@ -81,7 +81,7 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
                                           input.use_fp8,
                                           false,
                                           false);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
         // Compute offsets
         cub::DeviceScan::InclusiveSum(temp_storage_.raw_data(),
                                       temp_storage_bytes_,
@@ -89,11 +89,11 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
                                       output.offsets.data() + 1,
                                       num_local_experts,
                                       st);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
 
         // Compute f2n, f2E (f2n points into the flattened sparse packed_recv_x)
         invokeMoeLLDispatchPostprocess(output.f2n.data(), output.f2E.data(), output.offsets.data(), packed_recv_x, st);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
 
         // Expose the sparse buffer as a flat 2D view; downstream linear gathers via f2n.
         Tensor sparse_out_x = packed_recv_x.view({-1, packed_recv_x.shape().back()});
@@ -105,7 +105,7 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
             const int num_groups = packed_recv_x_scales->shape(2);
             Tensor    out_scales{{num_groups, input.num_worst_tokens}, kFloat32, kDEVICE};
             invokeMoeLLDispatchScalesLayoutConvert(out_scales, packed_recv_x_scales.value(), packed_recv_count, st);
-            sync_check_cuda_error();
+            TM_CUDA_CHECK(cudaGetLastError());
             if (input.output_scales) {
                 output.out_x        = sparse_out_x;
                 output.out_x_scales = out_scales;
@@ -114,7 +114,7 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
                 const int* total_ptr = output.offsets.data() + num_local_experts;
                 Tensor     indices{output.f2n.slice(0, input.num_worst_tokens)};
                 DequantizeSymm(output.out_x, sparse_out_x, out_scales, indices, total_ptr, st);
-                sync_check_cuda_error();
+                TM_CUDA_CHECK(cudaGetLastError());
             }
         }
         else {
@@ -132,7 +132,7 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
     else {
         auto [num_tokens_per_rank, num_tokens_per_rdma_rank, num_tokens_per_expert, is_token_in_rank] =
             buffer_->get_dispatch_layout(input.topk_idx, ep_config_.num_experts);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
 
         auto Postprocess = [&](Tensor&                recv_x,
                                std::optional<Tensor>& recv_x_scales,
@@ -147,7 +147,7 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
                                           output.offsets.data() + 1,
                                           num_local_experts,
                                           st);
-            sync_check_cuda_error();
+            TM_CUDA_CHECK(cudaGetLastError());
 
             if (input.use_fp8) {
                 auto&  scales_t = recv_x_scales.value();
@@ -186,7 +186,7 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
                                              topk,
                                              num_local_experts,
                                              st);
-            sync_check_cuda_error();
+            TM_CUDA_CHECK(cudaGetLastError());
         };
 
         if (buffer_->get_num_rdma_ranks() > 1) {
@@ -232,7 +232,7 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
                                                                input.num_worst_tokens,
                                                                input.ht_buffer,
                                                                config);
-            sync_check_cuda_error();
+            TM_CUDA_CHECK(cudaGetLastError());
 
             // Generate output
             output.handle = {is_token_in_rank,
@@ -289,7 +289,7 @@ void NcclCommImpl::Dispatch(const EpDispatchInput& input, EpDispatchOutput& outp
                                                            input.num_worst_tokens,
                                                            input.ht_buffer,
                                                            config);
-            sync_check_cuda_error();
+            TM_CUDA_CHECK(cudaGetLastError());
 
             // Generate output
             output.handle = {rank_prefix_matrix,
@@ -334,7 +334,7 @@ void NcclCommImpl::Combine(const EpCombineInput& input, EpCombineOutput& output,
                                                          false,
                                                          input.zero_copy,
                                                          std::nullopt);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
 
         // Generate output
         output.out_x = combined_x;
@@ -373,7 +373,7 @@ void NcclCommImpl::Combine(const EpCombineInput& input, EpCombineOutput& output,
                                                                                   combined_nvl_head,
                                                                                   num_recv_tokens_ptr,
                                                                                   config);
-            sync_check_cuda_error();
+            TM_CUDA_CHECK(cudaGetLastError());
             output.out_x = combined_x;
         }
         else {
@@ -394,7 +394,7 @@ void NcclCommImpl::Combine(const EpCombineInput& input, EpCombineOutput& output,
                                                                           channel_prefix_matrix,
                                                                           send_head,
                                                                           config);
-            sync_check_cuda_error();
+            TM_CUDA_CHECK(cudaGetLastError());
             output.out_x = recv_x;
         }
     }

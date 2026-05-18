@@ -135,6 +135,7 @@ with set_envs():
 
     # logging
     log_file = os.getenv('LMDEPLOY_LOG_FILE', None)
+    os.getenv('LMDEPLOY_LOG_PID', '0')
 
     # check env
     enable_check_env = env_to_bool('LMDEPLOY_ENABLE_CHECK_ENV', True)

@@ -43,11 +43,11 @@ class HuggingFaceTokenizer:
         model_dir: the directory of the tokenizer model.
     """
 
-    def __init__(self, model_dir: str):
-        self._check_transformers_version(model_dir)
+    def __init__(self, model_dir: str, trust_remote_code: bool = False):
+        self._check_transformers_version(model_dir, trust_remote_code=trust_remote_code)
         from transformers import AutoTokenizer
         self.logger = get_logger('lmdeploy')
-        self.model = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)
+        self.model = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=trust_remote_code)
         self._prefix_space_tokens = None
 
         if self.model.eos_token_id is None:
@@ -67,7 +67,7 @@ class HuggingFaceTokenizer:
         self.max_indexes_num = 5
         self.token2id = {}
 
-    def _check_transformers_version(self, model_dir: str):
+    def _check_transformers_version(self, model_dir: str, trust_remote_code: bool = False):
         import transformers
         from packaging import version
 
@@ -76,7 +76,7 @@ class HuggingFaceTokenizer:
         logger = get_logger('lmdeploy')
 
         current_transformers_version = version.parse(transformers.__version__)
-        cfg = get_model_arch(model_dir)[1]
+        cfg = get_model_arch(model_dir, trust_remote_code=trust_remote_code)[1]
         cfg_ver = getattr(cfg, 'transformers_version', None)
         if cfg_ver is None:
             llm_config = getattr(cfg, 'llm_config', None)
@@ -352,8 +352,8 @@ class HuggingFaceTokenizer:
 class ChatGLM4Tokenizer(HuggingFaceTokenizer):
     """Tokenizer of GLM4."""
 
-    def __init__(self, model_path):
-        super().__init__(model_path)
+    def __init__(self, model_path, trust_remote_code: bool = False):
+        super().__init__(model_path, trust_remote_code=trust_remote_code)
         original_pad = self.model._pad
 
         def __pad(*args, **kwargs):
@@ -374,8 +374,8 @@ class ChatGLM4Tokenizer(HuggingFaceTokenizer):
 class ChatGLMTokenizer(HuggingFaceTokenizer):
     """Tokenizer of GLM2."""
 
-    def __init__(self, model_path):
-        super().__init__(model_path)
+    def __init__(self, model_path, trust_remote_code: bool = False):
+        super().__init__(model_path, trust_remote_code=trust_remote_code)
         original_pad = self.model._pad
 
         def __pad(*args, **kwargs):
@@ -390,8 +390,8 @@ class ChatGLMTokenizer(HuggingFaceTokenizer):
 class GptOssTokenizer(HuggingFaceTokenizer):
     """Tokenizer of GPT-OSS."""
 
-    def __init__(self, model_dir: str):
-        super().__init__(model_dir)
+    def __init__(self, model_dir: str, trust_remote_code: bool = False):
+        super().__init__(model_dir, trust_remote_code=trust_remote_code)
         from openai_harmony import HarmonyEncodingName, Role, StreamableParser, load_harmony_encoding
         encoding = load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)
         self.role = Role.ASSISTANT
@@ -423,24 +423,24 @@ class Tokenizer:
         model_path: the path of the tokenizer model.
     """
 
-    def __init__(self, model_path: str):
+    def __init__(self, model_path: str, trust_remote_code: bool = False):
         from transformers import AutoConfig, PretrainedConfig
         try:
-            model_cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+            model_cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=trust_remote_code)
         except Exception as e:  # noqa
-            model_cfg = PretrainedConfig.from_pretrained(model_path, trust_remote_code=True)
+            model_cfg = PretrainedConfig.from_pretrained(model_path, trust_remote_code=trust_remote_code)
         is_gpt_oss = getattr(model_cfg, 'model_type', '') == 'gpt_oss'
         from transformers.models.auto.tokenization_auto import get_tokenizer_config
-        tokenizer_config = get_tokenizer_config(model_path, trust_remote_code=True)
+        tokenizer_config = get_tokenizer_config(model_path, trust_remote_code=trust_remote_code)
         config_tokenizer_class = tokenizer_config.get('tokenizer_class')
         if config_tokenizer_class == 'ChatGLM4Tokenizer':
-            self.model = ChatGLM4Tokenizer(model_path)
+            self.model = ChatGLM4Tokenizer(model_path, trust_remote_code=trust_remote_code)
         elif config_tokenizer_class == 'ChatGLMTokenizer':
-            self.model = ChatGLMTokenizer(model_path)
+            self.model = ChatGLMTokenizer(model_path, trust_remote_code=trust_remote_code)
         elif is_gpt_oss:
-            self.model = GptOssTokenizer(model_path)
+            self.model = GptOssTokenizer(model_path, trust_remote_code=trust_remote_code)
         else:
-            self.model = HuggingFaceTokenizer(model_path)
+            self.model = HuggingFaceTokenizer(model_path, trust_remote_code=trust_remote_code)
         self.logger = get_logger('lmdeploy')
 
     @property

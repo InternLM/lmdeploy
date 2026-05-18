@@ -10,8 +10,9 @@
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/quantization.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
-#include "src/turbomind/models/llama/LlamaDenseWeight.h"
+#include "src/turbomind/models/linear_weight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 
 #include "src/turbomind/kernels/gpt_kernels.h"
@@ -21,8 +22,7 @@ namespace turbomind {
 using std::vector;
 using std::unique_ptr;
 
-using DenseWeight = LlamaDenseWeight;
-using Linear      = LlamaLinear;
+using Linear = LlamaLinear;
 
 using namespace gemm;
 
@@ -56,8 +56,8 @@ static Tensor CopyTransposed(const Tensor& src, Tensor out = {})
 
     auto invoke = [&](auto t) {
         using T = decltype(t);
-        invokeTransposeAxis01(
-            (T*)out.raw_data(), (T*)src.raw_data(), src.shape(0), src.shape(1), 1, core::Context::stream().handle());
+        TM_SCOPE_CALL(invokeTransposeAxis01(
+            (T*)out.raw_data(), (T*)src.raw_data(), src.shape(0), src.shape(1), 1, core::Context::stream().handle()));
     };
 
     const int bits = byte_size(src.dtype(), 8);
@@ -75,6 +75,55 @@ static Tensor CopyTransposed(const Tensor& src, Tensor out = {})
     }
 
     return out;
+}
+
+/// Link individual expert weights into a batched block view for fused MoE.
+static void LinkExperts(std::function<LinearWeight*(int)> experts, int n, LinearWeight& d)
+{
+    const auto& e0 = *experts(0);
+
+    e0.copy_metadata_to(d);
+
+    d.k_desc.num = d.q_desc.num = n;
+
+    if (e0.bias()) {
+        d.bias() = Tensor{{n, e0.output_dim}, e0.bias().dtype(), kDEVICE};
+    }
+
+    std::vector<std::pair<void*, int>> weights;
+    std::vector<std::pair<void*, int>> scales;
+
+    for (int i = 0; i < n; ++i) {
+        auto& e = *experts(i);
+        weights.emplace_back(e.weight().raw_data(), e.k_desc.ld);
+        if (e.scales()) {
+            scales.emplace_back(e.scales().raw_data(), e.q_desc.ld);
+        }
+        if (e.bias()) {
+            Copy(e.bias(), d.bias().slice(i, 1).squeeze(0));
+        }
+    }
+
+    auto stream = core::Context::stream().handle();
+
+    if (d.weight_format.dtype == kFloat8_e4m3 && d.input_dtype() == kFloat8_e4m3) {
+        auto make_blocked_ptr = [&](const auto& ptrs) {
+            return std::shared_ptr<void>{gemm::MakeBlockedPtrs(ptrs, stream), [](auto p) { cudaFree(p); }};
+        };
+        d.weight()       = Tensor{make_blocked_ptr(weights), {n}, e0.weight().dtype(), kDEVICE};
+        d.scales()       = Tensor{make_blocked_ptr(scales), {n}, e0.scales().dtype(), kDEVICE};
+        d.k_desc.offsets = d.q_desc.offsets = (int*)1;
+    }
+    else {
+        auto make_strided_ptr = [&](const auto& ptrs) {
+            return std::shared_ptr<void>{gemm::MakeStridedPtrs(ptrs, stream), [](auto p) { cudaFree(p); }};
+        };
+        d.weight() = Tensor{make_strided_ptr(weights), {n}, d.weight_format.dtype, kDEVICE};
+        if (e0.scales()) {
+            d.scales() = Tensor{make_strided_ptr(scales), {n}, e0.scales().dtype(), kDEVICE};
+        }
+        d.k_desc.ld = d.q_desc.ld = 0;
+    }
 }
 
 struct Testbed_v3: Parameter {
@@ -100,14 +149,14 @@ struct Testbed_v3: Parameter {
 
         cudaGetDeviceProperties(&prop_, 0);
 
-        w_original_ = std::make_unique<DenseWeight>();
-        w_quant_    = std::make_unique<DenseWeight>();
-        w_dequant_  = std::make_unique<DenseWeight>();
+        w_original_ = std::make_unique<LinearWeight>();
+        w_quant_    = std::make_unique<LinearWeight>();
+        w_dequant_  = std::make_unique<LinearWeight>();
 
         for (int i = 0; i < expert_num; ++i) {
-            e_original_.push_back(std::make_unique<DenseWeight>());
-            e_quant_.push_back(std::make_unique<DenseWeight>());
-            e_dequant_.push_back(std::make_unique<DenseWeight>());
+            e_original_.push_back(std::make_unique<LinearWeight>());
+            e_quant_.push_back(std::make_unique<LinearWeight>());
+            e_dequant_.push_back(std::make_unique<LinearWeight>());
         }
 
         GenerateWeight();
@@ -237,44 +286,57 @@ struct Testbed_v3: Parameter {
 
     // - quantize weight
     // - dequantize weight
-    void GenerateWeight(DenseWeight& original, DenseWeight& quant, DenseWeight& dequant)
+    void GenerateWeight(LinearWeight& original, LinearWeight& quant, LinearWeight& dequant)
     {
-        original.emplace(input_dim, output_dim, data_type, false, data_type, group_size);
-        rng_.NormalFloat(original.weight, 1., .1);
+        auto make_cfg = [&](DataType wt) -> core::LinearConfig {
+            core::LinearConfig cfg;
+            cfg.input_dim  = input_dim;
+            cfg.output_dim = output_dim;
+            cfg.data_type  = data_type;
+            cfg.format     = ResolveLinearWeightFormat(data_type, wt, group_size, 1);
+            cfg.has_bias   = false;
+            return cfg;
+        };
 
-        quant.emplace(input_dim, output_dim, data_type, false, weight_type, group_size);
-        dequant.emplace(input_dim, output_dim, data_type, false, data_type, group_size);
+        new (&original) LinearWeight(make_cfg(data_type));
+        original.param("weight").alloc({(size_t)input_dim, (size_t)output_dim}, data_type);
+        rng_.NormalFloat(original.weight(), 1., .1);
+
+        new (&quant) LinearWeight(make_cfg(weight_type));
+        quant.param("weight").alloc({(size_t)input_dim, (size_t)output_dim}, weight_type);
+        new (&dequant) LinearWeight(make_cfg(data_type));
+        dequant.param("weight").alloc({(size_t)input_dim, (size_t)output_dim}, data_type);
 
         Buffer_<unsigned> rbits;
-        // rbits = {original.weight.size(), kDEVICE};
+        // rbits = {original.weight().size(), kDEVICE};
         // rng_.RandomBytes(Tensor{rbits});
 
         /// Weights are allocated in MN-major, but some quantization requires K-major tensor
 
         if (weight_type == data_type) {
-            Copy(original.weight, quant.weight);
-            Copy(original.weight, dequant.weight);
+            Copy(original.weight(), quant.weight());
+            Copy(original.weight(), dequant.weight());
         }
         else if (weight_type == kFloat8_e4m3) {
-            QuantizeSymmBlock(quant.weight, quant.scales, original.weight, stream_);
-            DequantizeSymmBlock(dequant.weight, quant.weight, quant.scales, stream_);
+            QuantizeSymmBlock(quant.weight(), quant.scales(), original.weight(), stream_);
+            DequantizeSymmBlock(dequant.weight(), quant.weight(), quant.scales(), stream_);
         }
         else if (weight_type == kUint4) {
             /// Weights are allocated in (M,N), quantization needs K-major tensor
-            QuantizeGroupwise(quant.weight.t(),
-                              quant.scales.t(),
-                              quant.zeros.t(),
-                              dequant.weight.t(),
-                              original.weight.t(),
+            QuantizeGroupwise(quant.weight().t(),
+                              quant.scales().t(),
+                              quant.zeros().t(),
+                              dequant.weight().t(),
+                              original.weight().t(),
                               {},
                               group_size);
         }
         else if (weight_type == kFloat4_e2m1) {
-            QuantizeGroupwise(quant.weight.t(),  //
-                              quant.scales.t(),
+            QuantizeGroupwise(quant.weight().t(),  //
+                              quant.scales().t(),
                               {},
-                              dequant.weight.t(),
-                              original.weight.t(),
+                              dequant.weight().t(),
+                              original.weight().t(),
                               rbits,
                               group_size);
         }
@@ -282,9 +344,9 @@ struct Testbed_v3: Parameter {
             TM_CHECK(0);
         }
 
-        original.prepare(0);
-        quant.prepare(expert_num > 0);
-        dequant.prepare(0);
+        original.prepare();
+        quant.prepare();
+        dequant.prepare();
     }
 
     void GetReference()
@@ -299,7 +361,7 @@ struct Testbed_v3: Parameter {
         }
     }
 
-    void GetReference(const Tensor& x, const unique_ptr<DenseWeight>& dense, Ref<Tensor> d_)
+    void GetReference(const Tensor& x, const unique_ptr<LinearWeight>& dense, Ref<Tensor> d_)
     {
         auto& d = d_.get();
         if (!d) {
@@ -311,12 +373,12 @@ struct Testbed_v3: Parameter {
         ref_.gemm(x.raw_data(), desc_A, dense->weight.raw_data(), dense->k_desc, d.raw_data(), desc_D);
     }
 
-    void GetReference(const Tensor& x, const vector<unique_ptr<DenseWeight>>& experts, Ref<Tensor> d_)
+    void GetReference(const Tensor& x, const vector<unique_ptr<LinearWeight>>& experts, Ref<Tensor> d_)
     {
         Tensor xe{{x.shape(0) * experts_per_token, input_dim}, data_type, kDEVICE};
         Tensor de{{x.shape(0) * experts_per_token, output_dim}, data_type, kDEVICE};
 
-        invokeMoeDispatch(xe, x, f2n_.data(), xe.shape(0), stream_);
+        TM_SCOPE_CALL(invokeMoeDispatch(xe, x, f2n_.data(), xe.shape(0), stream_));
 
         for (int i = 0; i < expert_num; ++i) {
             const int base = h_offsets_[i], size = h_offsets_[i + 1] - base;
@@ -326,17 +388,17 @@ struct Testbed_v3: Parameter {
         auto& d = d_.get();
         if (combine_experts) {
             d = Tensor{{x.shape(0), output_dim}, data_type, kDEVICE};
-            invokeMoeCombine(d,  //
-                             de,
-                             {},
-                             scales_.data(),
-                             en2f_.data(),
-                             nullptr,
-                             nullptr,
-                             experts_per_token,
-                             1.,
-                             0.,
-                             stream_);
+            TM_SCOPE_CALL(invokeMoeCombine(d,  //
+                                           de,
+                                           {},
+                                           scales_.data(),
+                                           en2f_.data(),
+                                           nullptr,
+                                           nullptr,
+                                           experts_per_token,
+                                           1.,
+                                           0.,
+                                           stream_));
         }
         else {
             d = de;
@@ -349,34 +411,35 @@ struct Testbed_v3: Parameter {
             linear_.set_measure(true);
         }
         if (expert_num) {
-            auto de = linear_.Forward(x_original_, *w_quant_, f2n_, offsets_);
+            Tensor de;
+            TM_SCOPE_CALL(linear_.Forward(x_original_, *w_quant_, f2n_, offsets_, de));
             if (combine_experts) {
                 d_quant_ = Tensor{{x_original_.shape(0), output_dim}, data_type, kDEVICE};
-                invokeMoeCombine(d_quant_,
-                                 de,
-                                 {},
-                                 scales_.data(),
-                                 en2f_.data(),
-                                 nullptr,
-                                 nullptr,
-                                 experts_per_token,
-                                 1.,
-                                 0.,
-                                 stream_);
+                TM_SCOPE_CALL(invokeMoeCombine(d_quant_,
+                                               de,
+                                               {},
+                                               scales_.data(),
+                                               en2f_.data(),
+                                               nullptr,
+                                               nullptr,
+                                               experts_per_token,
+                                               1.,
+                                               0.,
+                                               stream_));
             }
             else {
                 d_quant_ = de;
             }
         }
         else {
-            d_quant_ = linear_.Forward(x_original_, *w_quant_);
+            TM_SCOPE_CALL(linear_.Forward(x_original_, *w_quant_, d_quant_));
         }
         if (tuning_) {
             linear_.set_measure(false);
         }
     }
 
-    void Run(const Tensor& x, const vector<unique_ptr<DenseWeight>>& experts) {}
+    void Run(const Tensor& x, const vector<unique_ptr<LinearWeight>>& experts) {}
 
     void Compare()
     {
@@ -421,9 +484,9 @@ struct Testbed_v3: Parameter {
     Linear linear_;
 
     // ! weights are non-movable
-    unique_ptr<DenseWeight> w_original_;
-    unique_ptr<DenseWeight> w_quant_;
-    unique_ptr<DenseWeight> w_dequant_;
+    unique_ptr<LinearWeight> w_original_;
+    unique_ptr<LinearWeight> w_quant_;
+    unique_ptr<LinearWeight> w_dequant_;
 
     Tensor x_original_;
     Tensor x_quant_, x_scale_;
@@ -433,9 +496,9 @@ struct Testbed_v3: Parameter {
     Tensor d_quant_;     // x_original * w_quant, quant for X done by `Linear`
     Tensor d_dequant_;   // x_dequant  * w_dequant
 
-    vector<unique_ptr<DenseWeight>> e_original_;
-    vector<unique_ptr<DenseWeight>> e_quant_;
-    vector<unique_ptr<DenseWeight>> e_dequant_;
+    vector<unique_ptr<LinearWeight>> e_original_;
+    vector<unique_ptr<LinearWeight>> e_quant_;
+    vector<unique_ptr<LinearWeight>> e_dequant_;
 
     Buffer_<int> f2n_;
     Buffer_<int> en2f_;

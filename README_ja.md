@@ -23,6 +23,15 @@ ______________________________________________________________________
 
 ## 最新ニュース 🎉
 
+<details open>
+<summary><b>2026</b></summary>
+
+- \[2026/04\] PyPI で LMDeploy のストレージ枠が拡張され、wheel のアップロードが再開されました。`v0.12.3` はすでに PyPI で公開されており、`pip install lmdeploy` で直接インストールできます。
+- \[2026/02\] [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35) をサポート
+- \[2026/02\] [vllm-project/llm-compressor](https://github.com/vllm-project/llm-compressor) の 4 ビット対称／非対称量子化をサポート。詳細な手順は[こちら](docs/en/quantization/llm_compressor.md)を参照してください
+
+</details>
+
 <details close>
 <summary><b>2024</b></summary>
 
@@ -201,7 +210,10 @@ conda activate lmdeploy
 pip install lmdeploy
 ```
 
-v0.3.0から、デフォルトの事前構築済みパッケージはCUDA 12でコンパイルされています。
+**v0.13.0** 以降、**PyPI** に公開される既定の事前構築wheelは **CUDA 12.8** 向けにビルドされています。v0.10.2以降、LMDeployはCUDA 11系をサポートしません。
+
+GeForce RTX 50シリーズを含む一般的な用途でも、上記の `pip install lmdeploy` で問題ありません。
+
 CUDA 11+プラットフォームでのインストールに関する情報、またはソースからのビルド手順については、[インストールガイドを](docs/en/get_started/installation.md)参照してください。
 
 ## オフラインバッチ推論

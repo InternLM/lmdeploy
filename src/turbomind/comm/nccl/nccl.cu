@@ -151,7 +151,7 @@ void* NcclCommImpl::Allocate(size_t size)
         NCCLCHECK(alloc_fn(&ptr, size));
     }
     else {
-        check_cuda_error(cudaMalloc(&ptr, size));
+        TM_CUDA_CHECK(cudaMalloc(&ptr, size));
     }
     buffers_.emplace(ptr, size);
     return ptr;
@@ -164,7 +164,7 @@ void NcclCommImpl::Free(void* ptr)
             NCCLCHECK(free_fn(ptr));
         }
         else {
-            check_cuda_error(cudaFree(ptr));
+            TM_CUDA_CHECK(cudaFree(ptr));
         }
         buffers_.erase(ptr);
     }
@@ -336,15 +336,15 @@ void NcclCommImpl::AllreduceResidualBiasRMSnorm(void*        hidden,
     const auto elem_size = byte_size(dtype);
 
     auto rms_norm = [&](int64_t first, int64_t count) {
-        invokeResidualBiasRMSNorm((char*)hidden + elem_size * first * dim,
-                                  (char*)residual + elem_size * first * dim,
-                                  weights,
-                                  bias,
-                                  dtype,
-                                  dim,
-                                  count,
-                                  eps,
-                                  stream);
+        TM_SCOPE_CALL(invokeResidualBiasRMSNorm((char*)hidden + elem_size * first * dim,
+                                                (char*)residual + elem_size * first * dim,
+                                                weights,
+                                                bias,
+                                                dtype,
+                                                dim,
+                                                count,
+                                                eps,
+                                                stream));
     };
 
     if (1) {
@@ -379,7 +379,7 @@ void NcclCommImpl::AllreduceResidualBiasRMSnormEx(void*        hidden,
     const size_t         elem_size = byte_size(type);
     const ncclDataType_t nccl_type = to_nccl_dtype(type);
 
-    FT_CHECK(group0 == 0 || group1 == 0);
+    TM_CHECK(group0 == 0 || group1 == 0);
 
     ncclComm_t comm0 = groups_.at(group0);
     ncclComm_t comm1 = groups_.at(group1);
@@ -390,7 +390,7 @@ void NcclCommImpl::AllreduceResidualBiasRMSnormEx(void*        hidden,
 
     const int inner_tp = std::min(tp0, tp1);
 
-    FT_CHECK(tp0 % inner_tp == 0 && tp1 % inner_tp == 0);
+    TM_CHECK(tp0 % inner_tp == 0 && tp1 % inner_tp == 0);
 
     std::vector<std::tuple<int, int, int>> tasks;
     tasks.reserve(global_n_ranks_);
@@ -415,14 +415,12 @@ void NcclCommImpl::AllreduceResidualBiasRMSnormEx(void*        hidden,
             }
         }
         NCCLCHECK(ncclGroupEnd());
-        sync_check_cuda_error();
     }
 
     if (auto& [offset, first, num] = tasks[global_rank_]; num > 0) {
         char* buff = (char*)hidden + elem_size * (offset + first) * dim;
-        invokeResidualBiasRMSNorm(
-            buff, (char*)residual + elem_size * first * dim, weights, bias, type, dim, num, eps, stream);
-        sync_check_cuda_error();
+        TM_SCOPE_CALL(invokeResidualBiasRMSNorm(
+            buff, (char*)residual + elem_size * first * dim, weights, bias, type, dim, num, eps, stream));
     }
 
     if (tp1 > 1) {
@@ -434,7 +432,6 @@ void NcclCommImpl::AllreduceResidualBiasRMSnormEx(void*        hidden,
             }
         }
         NCCLCHECK(ncclGroupEnd());
-        sync_check_cuda_error();
     }
 }
 

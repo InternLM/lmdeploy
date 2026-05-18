@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 .vscode/
 .idea/
+.cursor/
 # C extensions
 *.so
 
@@ -45,7 +46,9 @@ htmlcov/
 .coverage.*
 .cache
 *build*/
+!lmdeploy/turbomind/builders
 !builder/
+!.claude/skills/docker-build/
 lmdeploy/lib/
 lmdeploy/bin/
 dist/
@@ -83,3 +86,6 @@ work_dir*/
 
 !CMakeLists.txt
 proxy_config.yml
+
+# Claude Code local config
+CLAUDE.local.md

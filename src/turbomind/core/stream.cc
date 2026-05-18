@@ -13,7 +13,7 @@ Stream Stream::create(int priority)
 
 void StreamImpl::Wait(const Event& event)
 {
-    check_cuda_error(cudaStreamWaitEvent(stream_, event));
+    TM_CUDA_CHECK(cudaStreamWaitEvent(stream_, event));
 }
 
 }  // namespace turbomind::core

@@ -45,6 +45,7 @@ private:
     void sm90_64n32_8();
 
     void cublas_float();
+    void sm100_cublas_grouped_float();
 
 private:
     std::shared_ptr<cudaDeviceProp>      device_prop_;

@@ -24,6 +24,7 @@
 
 #include "src/turbomind/core/context.h"
 #include "src/turbomind/kernels/apply_token_bitmask_inplace_cuda.h"
+#include "src/turbomind/utils/cuda_utils.h"
 // clang-format on
 
 using namespace std;
@@ -164,6 +165,7 @@ void ApplyTokenBitmaskInplaceDispatchToBitsPerThread(T* __restrict__ logits,
         LogitsBitmaskKernel<T, PackedT, 32>
             <<<grid, block, 0, stream.handle()>>>(logits, bitmask, indices, vocab_size, logits_stride, bitmask_stride);
     }
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<typename T>

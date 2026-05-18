@@ -1,6 +1,7 @@
 ---
 name: support-new-model
 description: Add a new LLM or VLM to LMDeploy's PyTorch backend.
+disable-model-invocation: true
 ---
 
 # Tutorial: Adding a New Model to LMDeploy (PyTorch Backend)

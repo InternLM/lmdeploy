@@ -189,7 +189,7 @@ void invokeMoeGateEp(float*       topk_weights,
                 softmax,
                 norm_topk,
                 routed_scale);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
 
         return true;
     };
@@ -313,11 +313,11 @@ void invokeMoeRoutingMapEp(int*           f2n,
     }
 
     constexpr int block = 256;
-    check_cuda_error(cudaMemsetAsync(en2f, -1, sizeof(int) * num_tokens * topk, stream));
+    TM_CUDA_CHECK(cudaMemsetAsync(en2f, -1, sizeof(int) * num_tokens * topk, stream));
     // One CTA per local expert
     MoeEpRoutingMapKernel<block><<<num_local_experts, block, 0, stream>>>(
         f2n, f2E, en2f, offsets, recv_topk_idx, total_tokens_ptr, num_tokens, topk);
-    sync_check_cuda_error();
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<int vec_size, int block_dim, class T>
@@ -376,7 +376,7 @@ void invokeMoeAddBias(
 
         MoeAddBiasKernel<vec_size, threads>
             <<<grid, threads, 0, st>>>(out.data<T>(), bias.data<T>(), f2E, total_tokens_ptr, tokens, dim);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(out.dtype(), dispatch);
@@ -489,7 +489,7 @@ void invokeMoeLocalCombineEp(Ref<Tensor>   out_,
             dim,
             total_tokens_ptr,
             tokens);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
     };
 
     auto dispatch_topk = [&](auto has_bias, auto t) {
@@ -593,7 +593,7 @@ void invokeMoeCombineOutputEp(
             shared_scales,
             dim,
             scale);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(src.dtype(), dispatch);
@@ -619,7 +619,7 @@ void invokeMoeLLDispatchPostprocess(
     const int threads           = 256;
 
     MoeLLDispatchRoutingMapKernel<<<num_local_experts, threads, 0, st>>>(f2n, f2E, offsets, num_max_tokens);
-    sync_check_cuda_error();
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 // Reorder deep_ep's sparse LL dispatch scales into the layout expected by the

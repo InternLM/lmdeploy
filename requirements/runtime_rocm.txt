@@ -15,6 +15,7 @@ pybase64
 pydantic>2.0.0
 pyzmq
 ray
+rdkit
 safetensors
 sentencepiece
 shortuuid

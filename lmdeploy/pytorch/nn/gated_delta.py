@@ -73,6 +73,8 @@ class GatedDeltaMeta:
         self.conv_state_indices = state_ids.to(torch.int32)
         # we assume 0 is dummy state, shared by all invalid states.
         self.valid_state = state_ids >= 0
+        # keep state_ids < 0 so we can ignore invalid init state
+        self.origin_state_ids = state_ids
         self.state_ids = state_ids.clamp(0)
 
 
@@ -241,7 +243,7 @@ class GatedDelta:
                 initial_state=recurrent_state,
                 output_final_state=True,
                 use_qk_l2norm_in_kernel=self.use_qk_l2norm_in_kernel,
-                state_indices=state_ids,
+                state_indices=gated_delta_meta.origin_state_ids,
                 cache_seqlens=cache_seqlens,
             )
             # out (seqlen, B, ...) -> (1, seqlen * B, ...)

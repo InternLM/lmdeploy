@@ -23,8 +23,9 @@ class DeepseekMTP(BaseSpecProposer):
         model_metas = model_outputs['model_metas']
         if extra_inputs is not None:
             last_token_loc = extra_inputs.last_token_indices
-            target_hidden_states = model_inputs.target_hidden_states[:, last_token_loc]
             hidden_states = hidden_states[:, last_token_loc]
+            # use hidden states for draft prefill forward for next step
+            target_hidden_states = hidden_states
         else:
             target_hidden_states = hidden_states
 
