@@ -81,6 +81,18 @@ class ToolChoice(BaseModel):
     type: Literal['function'] = Field(default='function', examples=['function'])
 
 
+class AllowedTools(BaseModel):
+    """Constrains the tools available to the model to a pre-defined set."""
+    mode: Literal['auto', 'required']
+    tools: list[dict[str, Any]]
+
+
+class AllowedToolChoice(BaseModel):
+    """Allowed tool choice definition."""
+    type: Literal['allowed_tools'] = 'allowed_tools'
+    allowed_tools: AllowedTools
+
+
 class StreamOptions(BaseModel):
     """The stream options."""
     include_usage: bool | None = False
@@ -113,7 +125,8 @@ class ChatCompletionRequest(BaseModel):
     temperature: float | None = 0.7
     top_p: float | None = 1.0
     tools: list[Tool] | None = Field(default=None, examples=[None])
-    tool_choice: ToolChoice | Literal['auto', 'required', 'none'] = Field(default='auto', examples=['none'])
+    tool_choice: ToolChoice | AllowedToolChoice | Literal[
+        'auto', 'required', 'none'] = Field(default='auto', examples=['none'])
     logprobs: bool | None = False
     top_logprobs: int | None = None
     n: int | None = 1
@@ -254,7 +267,7 @@ class DeltaFunctionCall(BaseModel):
 
 # a tool call delta where everything is optional
 class DeltaToolCall(BaseModel):
-    id: str = Field(default_factory=lambda: f'chatcmpl-tool-{shortuuid.random()}')
+    id: str | None = None
     type: Literal['function'] | None = 'function'
     index: int
     function: DeltaFunctionCall | None = None

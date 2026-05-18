@@ -287,9 +287,20 @@ class BaseResponseParser(ResponseParser):
     @staticmethod
     def dump_tools(request: ChatCompletionRequest) -> ChatCompletionRequest:
         """Dump tools to a list of dicts to fit jinja chat template."""
+        from lmdeploy.serve.openai.protocol import AllowedToolChoice
+
         if not request.tools:
             return request.model_copy(update={'tools': None})
-        if not isinstance(request.tool_choice, str):
+
+        # Determine which tools to include based on tool_choice
+        if isinstance(request.tool_choice, AllowedToolChoice):
+            allowed_names = set()
+            for t in request.tool_choice.allowed_tools.tools:
+                func = t.get('function', {})
+                if isinstance(func, dict) and 'name' in func:
+                    allowed_names.add(func['name'])
+            tools = [item.function.model_dump() for item in request.tools if item.function.name in allowed_names]
+        elif not isinstance(request.tool_choice, str):
             tools = [
                 item.function.model_dump() for item in request.tools
                 if item.function.name == request.tool_choice.function.name
@@ -561,6 +572,7 @@ class BaseResponseParser(ResponseParser):
                 tool_calls.append(parsed_call)
                 pos = close_idx + len(close_tag) if close_tag else n
             else:
+                # Tool call parsing failed — fall back to plain text.
                 content_parts.append(text[open_idx:])
                 break
 
