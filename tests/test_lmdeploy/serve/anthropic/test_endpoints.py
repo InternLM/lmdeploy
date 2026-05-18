@@ -635,8 +635,10 @@ def test_messages_non_stream_includes_routed_experts():
 
 def test_messages_non_stream_with_output_ids_and_routed_experts():
     """When return_token_ids is True, output_ids must be populated with the
-    generated token IDs. When return_routed_experts is True, routed_experts
-    must be populated from the engine result."""
+    generated token IDs.
+
+    When return_routed_experts is True, routed_experts must be populated from the engine result.
+    """
     client = _make_client()
     # Test output_ids when return_token_ids is True
     response = client.post(
