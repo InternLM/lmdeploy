@@ -35,6 +35,7 @@ class EngineSleepingMiddleware:
     DEFAULT_PROTECTED_INFERENCE_ROUTES = frozenset({
         ('POST', '/v1/chat/completions'),
         ('POST', '/v1/completions'),
+        ('POST', '/v1/responses'),
         ('POST', '/generate'),
     })
 

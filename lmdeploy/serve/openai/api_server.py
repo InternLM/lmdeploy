@@ -80,6 +80,7 @@ from lmdeploy.serve.openai.protocol import (
     UpdateParamsRequest,
     UsageInfo,
 )
+from lmdeploy.serve.openai.responses import create_responses_router
 from lmdeploy.serve.utils.server_utils import AuthenticationMiddleware, EngineSleepingMiddleware, validate_json_request
 from lmdeploy.utils import get_logger
 
@@ -1423,6 +1424,7 @@ def serve(model_path: str,
 
     app.include_router(router)
     app.include_router(create_anthropic_router(VariableInterface))
+    app.include_router(create_responses_router(VariableInterface))
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
     mount_metrics(app, backend_config)
 
