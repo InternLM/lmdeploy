@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import asyncio
 from typing import Any
 
 import torch
@@ -67,6 +68,46 @@ class BaseSpecProposer:
         # Set by SpecModelAgent after construction
         self.guided_decoding_manager = None
 
+    async def _apply_guided_bitmask(self, logits: torch.Tensor,
+                                    guided_processors: dict | None) -> torch.Tensor | None:
+        """Apply guided-decoding bitmask to draft logits and return the
+        allocated bitmask (caller may need it for e.g. d2t translation).
+
+        If no guided processors are active, returns None.
+
+        CPU-bound xgrammar ``fill_bitmap`` calls are offloaded to a thread
+        so they don't block the asyncio event loop.
+        """
+        if not guided_processors or self.guided_decoding_manager is None:
+            return None
+        guided_manager = self.guided_decoding_manager
+        guided_bitmask = guided_manager.allocate_batched_bitmap(logits.size(0))
+
+        def _fill():
+            for idx, processor in guided_processors.items():
+                guided_manager.fill_bitmap(processor, guided_bitmask, idx)
+
+        await asyncio.to_thread(_fill)
+        return guided_bitmask
+
+    async def _accept_guided_tokens(self, draft_token_ids: torch.Tensor,
+                                    guided_processors: dict | None):
+        """Accept draft tokens on the original grammar matchers.
+
+        CPU-bound xgrammar ``accept_token`` calls are offloaded to a thread
+        so they don't block the asyncio event loop.
+        """
+        if not guided_processors or self.guided_decoding_manager is None:
+            return
+        guided_manager = self.guided_decoding_manager
+        cpu_draft_token_ids = draft_token_ids[:, 0].cpu()
+
+        def _accept():
+            for idx, processor in guided_processors.items():
+                guided_manager.accept_token(processor, cpu_draft_token_ids[idx].item())
+
+        await asyncio.to_thread(_accept)
+
     def build_model(self, empty_init: bool, target_model: torch.nn.Module = None, build_model_ctx=None):
         if self.specdecode_config is None:
             return
@@ -87,7 +128,7 @@ class BaseSpecProposer:
         self.model = patched_model
         self.target_model = target_model
 
-    def get_outputs(self,
+    async def get_outputs(self,
                     model_outputs: dict[str, torch.Tensor],
                     model_inputs: ModelInputs,
                     extra_inputs: ExtraInputs = None,

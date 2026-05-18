@@ -14,7 +14,7 @@ logger = get_logger('lmdeploy')
 @SPEC_PROPOSERS.register_module(name='deepseek_mtp')
 class DeepseekMTP(BaseSpecProposer):
 
-    def get_outputs(self,
+    async def get_outputs(self,
                     model_outputs: dict[str, torch.Tensor],
                     model_inputs: ModelInputs,
                     extra_inputs: ARSpecExtraInputs = None,
@@ -32,19 +32,11 @@ class DeepseekMTP(BaseSpecProposer):
 
         logits = self.get_logits(hidden_states)[0]
 
-        if guided_processors and self.guided_decoding_manager is not None:
-            guided_manager = self.guided_decoding_manager
-            guided_bitmask = guided_manager.allocate_batched_bitmap(logits.size(0))
-            for idx, processor in guided_processors.items():
-                guided_manager.fill_bitmap(processor, guided_bitmask, idx)
-            guided_manager.apply_batched_bitmap(logits, guided_bitmask)
+        guided_bitmask = await self._apply_guided_bitmask(logits, guided_processors)
+        if guided_bitmask is not None:
+            self.guided_decoding_manager.apply_batched_bitmap(logits, guided_bitmask)
 
         draft_token_ids = logits.argmax(dim=-1, keepdim=True)
-
-        if guided_processors and self.guided_decoding_manager is not None:
-            guided_manager = self.guided_decoding_manager
-            cpu_draft_token_ids = draft_token_ids[:, 0].cpu()
-            for idx, processor in guided_processors.items():
-                guided_manager.accept_token(processor, cpu_draft_token_ids[idx].item())
+        await self._accept_guided_tokens(draft_token_ids, guided_processors)
 
         return draft_token_ids, model_metas, target_hidden_states

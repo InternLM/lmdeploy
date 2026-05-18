@@ -6,6 +6,7 @@ import asyncio
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
+import numpy as np
 import torch
 from torch.profiler import record_function
 
@@ -31,6 +32,17 @@ if TYPE_CHECKING:
 
 logger = get_logger('lmdeploy')
 
+# Fields that hold a single scalar value shared across the expanded batch.
+_SCALAR_FIELDS = frozenset({
+    'max_top_k', 'min_top_p', 'max_num_logprobs',
+    'max_repetition_ngram_size',
+})
+# Fields that are global (not per-batch-element) and should not be
+# repeated when expanding sampling inputs.
+_GLOBAL_FIELDS = frozenset({
+    'session_to_cleanup',
+})
+
 
 def _expand_sampling_inputs(sampling_inputs: SamplingInputs, num_tokens: int) -> SamplingInputs:
     """Expand per-batch SamplingInputs to per-token by repeating each batch
@@ -48,15 +60,6 @@ def _expand_sampling_inputs(sampling_inputs: SamplingInputs, num_tokens: int) ->
 
     from dataclasses import fields
     out_dict = {}
-    _SCALAR_FIELDS = {
-        'max_top_k', 'min_top_p', 'max_num_logprobs',
-        'max_repetition_ngram_size',
-    }
-    # Fields that are global (not per-batch-element) and should not be
-    # repeated when expanding sampling inputs.
-    _GLOBAL_FIELDS = {
-        'session_to_cleanup',
-    }
     for f in fields(sampling_inputs):
         k = f.name
         v = getattr(sampling_inputs, k)
@@ -69,8 +72,8 @@ def _expand_sampling_inputs(sampling_inputs: SamplingInputs, num_tokens: int) ->
                 v = v + arange.repeat(sampling_inputs.batch_size)
         elif k in _SCALAR_FIELDS or k in _GLOBAL_FIELDS:
             pass
-        elif k == 'batch_size':
-            v = sampling_inputs.batch_size * num_tokens
+        elif isinstance(v, np.ndarray) and v.ndim >= 1 and v.shape[0] == sampling_inputs.batch_size:
+            v = np.repeat(v, num_tokens, axis=0)
         elif isinstance(v, (list, tuple)) and len(v) == sampling_inputs.batch_size:
             v = type(v)(_item for elem in v for _item in [elem] * num_tokens)
         out_dict[k] = v
@@ -103,16 +106,6 @@ def _slice_sampling_inputs(sampling_inputs: SamplingInputs, num_tokens: int, is_
 
     from dataclasses import fields
 
-    _SCALAR_FIELDS = {
-        'max_top_k', 'min_top_p', 'max_num_logprobs',
-        'max_repetition_ngram_size',
-    }
-    # Fields that are global (not per-batch-element) and should not be
-    # sliced when expanding sampling inputs.
-    _GLOBAL_FIELDS = {
-        'session_to_cleanup',
-    }
-
     batch_size = sampling_inputs.batch_size // num_tokens
     out_dict = {}
     for f in fields(sampling_inputs):
@@ -127,7 +120,13 @@ def _slice_sampling_inputs(sampling_inputs: SamplingInputs, num_tokens: int, is_
                 v = v[:, :-1].reshape(batch_size * (num_tokens - 1), *shape[1:])
         elif k in _SCALAR_FIELDS or k in _GLOBAL_FIELDS:
             pass
-        elif isinstance(v, (list, tuple)) and v is not None:
+        elif isinstance(v, np.ndarray) and v.ndim >= 1 and v.shape[0] == sampling_inputs.batch_size:
+            if is_last:
+                v = v[num_tokens - 1::num_tokens]
+            else:
+                v = v.reshape(batch_size, num_tokens, *v.shape[1:])[:, :-1].reshape(
+                    batch_size * (num_tokens - 1), *v.shape[1:])
+        elif isinstance(v, (list, tuple)):
             # Skip if length doesn't match the expanded batch size (e.g.
             # empty defaults or fields that were not per-batch).
             if len(v) == sampling_inputs.batch_size:
@@ -485,11 +484,13 @@ class SpecModelAgent(BaseSpecModelAgent):
                     self.num_spec_tokens,
                 )
         else:
-            # Prefill path — standard FusedLogitsProcessor handles guided decoding
+            # Prefill path — handle guided decoding manually (same pattern as
+            # the decode path) to keep accept_token in asyncio.to_thread and
+            # avoid the double-accept bug that occurs when
+            # FusedLogitsProcessor.sampling() also calls accept_token.
             logits_processor = FusedLogitsProcessor(
                 expanded_sampling_inputs,
                 logprobs_mode=self.misc_config.logprobs_mode,
-                guided_decoding_manager=guided_manager if guided_processors else None,
             )
             if model_inputs.is_chunk and not model_inputs.is_last_chunk:
                 # dummy output, no need to sampling or compute logprobs for non-last chunk
@@ -498,6 +499,13 @@ class SpecModelAgent(BaseSpecModelAgent):
                 raw_logprobs = None
             else:
                 bonus_logits, raw_logprobs = await logits_processor(target_logits)
+                # Apply guided bitmask manually (no fork needed — single position)
+                if guided_processors:
+                    guided_bitmask = guided_manager.allocate_batched_bitmap(batch_size)
+                    await asyncio.to_thread(
+                        _fill_spec_bitmask, guided_manager, guided_processors, guided_bitmask,
+                    )
+                    guided_manager.apply_batched_bitmap(bonus_logits, guided_bitmask)
                 next_token_ids = logits_processor.sampling(bonus_logits)  # [batch_size]
                 output_token_ids = next_token_ids.unsqueeze(-1)
                 # Accept the sampled token on original grammar matchers
@@ -623,7 +631,7 @@ class SpecModelAgent(BaseSpecModelAgent):
                                            for idx, proc in orig_processors.items()}
 
             loop_count = self.num_spec_tokens - 1
-            draft_token_ids, model_metas, target_hidden_states = self.proposer.get_outputs(
+            draft_token_ids, model_metas, target_hidden_states = await self.proposer.get_outputs(
                 outputs, inputs, extra_inputs,
                 guided_processors=draft_guided_processors)
             draft_tokens_li = [draft_token_ids]
@@ -635,7 +643,7 @@ class SpecModelAgent(BaseSpecModelAgent):
 
                 for loop_idx in range(loop_count):
                     outputs = self._forward_impl(inputs)
-                    draft_token_ids, model_metas, target_hidden_states = self.proposer.get_outputs(
+                    draft_token_ids, model_metas, target_hidden_states = await self.proposer.get_outputs(
                         outputs, inputs,
                         guided_processors=draft_guided_processors)
                     draft_tokens_li.append(draft_token_ids)
