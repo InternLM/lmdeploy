@@ -10,7 +10,7 @@ Re-implement the lmdeploy proxy server (`lmdeploy/serve/proxy/`) with clean modu
 - Add a `min_cache_usage` routing strategy that polls backend `/metrics` endpoints for `lmdeploy:gpu_cache_usage_perc`
 - Preserve all existing functionality: Hybrid and DistServe serving modes, all endpoints, node management
 - Use a Pydantic `ProxyConfig` class instead of scattered kwargs
-- Background polling for metrics (default 5s, configurable via `LMPROXY_METRICS_POLL_INTERVAL` env var)
+- Background polling for metrics (default 5s, configurable via `LMDEPLOY_PROXY_POLL_METRICS_INTERVAL` env var)
 - Fallback to `min_expected_latency` strategy when a node has no metrics data
 
 ## Module Structure
@@ -53,7 +53,7 @@ class ProxyConfig(BaseModel):
     routing_strategy: RoutingStrategy = RoutingStrategy.MIN_EXPECTED_LATENCY
     serving_strategy: ServingStrategy = ServingStrategy.HYBRID
     disable_cache_status: bool = False
-    metrics_poll_interval: float = 5.0  # overridden by LMPROXY_METRICS_POLL_INTERVAL env var
+    metrics_poll_interval: float = 5.0  # overridden by LMDEPLOY_PROXY_POLL_METRICS_INTERVAL env var
     migration_protocol: str = "RDMA"
     link_type: str = "RoCE"
     disable_gdr: bool = False
@@ -183,6 +183,6 @@ Isolated in `distserve.py`:
 
 ## Environment Variables
 
-- `LMPROXY_METRICS_POLL_INTERVAL` — override `metrics_poll_interval` in ProxyConfig (in seconds)
+- `LMDEPLOY_PROXY_POLL_METRICS_INTERVAL` — override `metrics_poll_interval` in ProxyConfig (in seconds)
 - `LMDEPLOY_CONTROLLER_HEART_BEAT_EXPIRATION` — heartbeat check interval (preserved from current code)
 - `AIOHTTP_TIMEOUT` — client timeout for aiohttp requests (preserved from current code)
