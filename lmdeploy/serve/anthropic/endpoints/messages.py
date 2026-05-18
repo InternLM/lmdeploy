@@ -191,5 +191,7 @@ def register(router: APIRouter, server_context) -> None:
                 input_tokens=final_res.input_token_len,
                 output_tokens=final_res.generate_token_len,
             ),
+            output_ids=final_token_ids if request.return_token_ids else None,
+            routed_experts=final_res.routed_experts if request.return_routed_experts else None,
         )
         return response.model_dump()
