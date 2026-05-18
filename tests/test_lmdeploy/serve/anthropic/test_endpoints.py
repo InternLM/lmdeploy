@@ -435,6 +435,47 @@ def test_stream_messages_response_closes_text_before_resuming_tool_delta():
         for item in payloads[:resumed_tool_delta_index])
 
 
+def test_messages_accepts_input_ids_and_image_data():
+    """Extended fields input_ids, image_data, return_routed_experts, and
+    return_token_ids must be accepted by the protocol model."""
+    from lmdeploy.serve.anthropic.protocol import MessagesRequest
+
+    req = MessagesRequest(
+        model='fake-model',
+        messages=[],
+        max_tokens=16,
+        input_ids=[1, 2, 3],
+        image_data='https://example.com/img.png',
+        return_routed_experts=True,
+        return_token_ids=True,
+    )
+    assert req.input_ids == [1, 2, 3]
+    assert req.image_data == 'https://example.com/img.png'
+    assert req.return_routed_experts is True
+    assert req.return_token_ids is True
+
+    # Defaults
+    req2 = MessagesRequest(model='m', messages=[], max_tokens=16)
+    assert req2.input_ids is None
+    assert req2.image_data is None
+    assert req2.return_routed_experts is False
+    assert req2.return_token_ids is False
+
+    # Also verify the endpoint doesn't reject the extended fields via HTTP
+    client = _make_client()
+    response = client.post(
+        '/v1/messages',
+        headers={'anthropic-version': '2023-06-01'},
+        json={
+            'model': 'fake-model',
+            'max_tokens': 16,
+            'messages': [],
+            'input_ids': [1, 2, 3],
+        },
+    )
+    assert response.status_code != 422
+
+
 def test_count_tokens():
     client = _make_client()
     response = client.post(
