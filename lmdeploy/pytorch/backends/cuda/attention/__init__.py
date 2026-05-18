@@ -13,7 +13,8 @@ logger = get_logger('lmdeploy')
 use_fa3 = False
 try:
     # flash-attention supports FA3 for sm80+ (Ampere and above) && cuda >= 12.3
-    if (torch.cuda.get_device_capability()[0] >= 8) and (torch.version.cuda >= '12.3'):
+    _cuda_ver = tuple(int(x) for x in torch.version.cuda.split('.')[:2]) if torch.version.cuda else (0, 0)
+    if (torch.cuda.get_device_capability()[0] >= 8) and _cuda_ver >= (12, 3):
         import lmdeploy.pytorch.third_party.flash_attn_interface  # noqa: F401
         assert torch.ops.flash_attn_3 is not None
         use_fa3 = True
