@@ -19,6 +19,18 @@ REQUEST_LOG_LEVEL = 15
 logging.addLevelName(REQUEST_LOG_LEVEL, 'REQUEST')
 
 
+async def await_executor_future(future: asyncio.Future):
+    """Await executor work without releasing a lock before it finishes."""
+    try:
+        return await asyncio.shield(future)
+    except asyncio.CancelledError:
+        try:
+            await future
+        except BaseException:
+            pass
+        raise
+
+
 class _ASNI_COLOR:
     BRIGHT_RED = '\033[91m'
     RED = '\033[31m'
