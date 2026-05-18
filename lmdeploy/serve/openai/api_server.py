@@ -564,7 +564,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
             # Compute output_token_logprobs per token (generate-style)
             output_token_logprobs = None
-            if res.logprobs and not gen_logprobs:
+            if res.logprobs:
                 output_token_logprobs = []
                 for tok, tok_logprobs in zip(res.token_ids or [], res.logprobs):
                     output_token_logprobs.append((tok_logprobs[tok], tok))
