@@ -55,6 +55,8 @@ turbomind_chat_model:
         - mistralai/Mixtral-8x7B-Instruct-v0.1
         - THUDM/glm-4-9b-chat
         - zai-org/GLM-4.7-Flash
+        - microsoft/Phi-3-vision-128k-instruct
+        - microsoft/Phi-3.5-vision-instruct
 
 pytorch_chat_model:
     tp:

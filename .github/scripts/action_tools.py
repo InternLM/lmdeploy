@@ -3,10 +3,6 @@ import glob
 import json
 import logging
 import os
-
-os.environ['LAZY_IMPORT'] = '0'
-os.environ['MMENGINE_NO_LAZY'] = '1'
-
 import shutil
 import subprocess
 import time
