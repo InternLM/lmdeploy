@@ -49,6 +49,30 @@ def register(router: APIRouter, server_context) -> None:
                 error_type='not_found_error',
             )
 
+        # Validate input_ids and image_data constraints.
+        # messages has higher priority. input_ids and image_data are only used when
+        # messages is empty. image_data requires input_ids.
+        messages_empty = (request.messages is None
+                          or (isinstance(request.messages, list) and len(request.messages) == 0))
+        if not messages_empty:
+            if request.input_ids is not None:
+                return create_error_response(
+                    HTTPStatus.BAD_REQUEST,
+                    'input_ids cannot be used when messages is non-empty. messages takes priority.')
+            if request.image_data is not None:
+                return create_error_response(
+                    HTTPStatus.BAD_REQUEST,
+                    'image_data cannot be used when messages is non-empty. messages takes priority.')
+        else:
+            if request.input_ids is not None and len(request.input_ids) == 0:
+                return create_error_response(
+                    HTTPStatus.BAD_REQUEST,
+                    'input_ids must not be an empty list.')
+            if request.image_data is not None and request.input_ids is None:
+                return create_error_response(
+                    HTTPStatus.BAD_REQUEST,
+                    'image_data requires input_ids to be set when messages is empty.')
+
         try:
             parser_messages = to_openai_messages(request)
         except ValueError as err:
