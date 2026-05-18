@@ -2,11 +2,17 @@
 import torch
 from torch import nn
 
+from lmdeploy.messages import QuantPolicy
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 
 from ..backends import OpType, get_backend
 from ..backends.attention import AttentionMetadata
 from .utils import get_distribute_size
+
+
+def _is_per_tensor_fp8_kv_quant_policy(quant_policy: QuantPolicy):
+    """Return whether quant_policy uses per-tensor FP8 KV cache."""
+    return quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2)
 
 
 def _update_num_heads(num_heads: int, num_kv_heads: int):
@@ -68,6 +74,9 @@ class Attention(nn.Module):
             self.alibi_ready = False
         else:
             self.alibi_ready = True
+        scale_device = kwargs.get('device', None)
+        self.register_buffer('k_scale', torch.ones((), dtype=torch.float32, device=scale_device))
+        self.register_buffer('v_scale', torch.ones((), dtype=torch.float32, device=scale_device))
 
     def _lazy_init(self, device):
         """Lazy init."""
@@ -101,6 +110,13 @@ class Attention(nn.Module):
         """forward."""
         self._lazy_init(query.device)
 
+        quant_policy = attn_metadata.quant_policy
+        if _is_per_tensor_fp8_kv_quant_policy(quant_policy):
+            k_scale, v_scale = self.k_scale, self.v_scale
+        else:
+            k_scale = None
+            v_scale = None
+
         kwargs = dict()
         if nsa_indices is not None:
             kwargs['nsa_indices'] = nsa_indices
@@ -115,6 +131,8 @@ class Attention(nn.Module):
             attn_metadata=attn_metadata,
             k_scales_zeros=k_scales_zeros,
             v_scales_zeros=v_scales_zeros,
+            k_scale=k_scale,
+            v_scale=v_scale,
             inplace=inplace,
             **kwargs,
         )

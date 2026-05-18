@@ -146,6 +146,8 @@ class FA3Impl(TritonAttentionImpl):
         max_q_seqlen: int,
         k_scales_zeros: torch.Tensor = None,
         v_scales_zeros: torch.Tensor = None,
+        k_scale: torch.Tensor = None,
+        v_scale: torch.Tensor = None,
     ) -> torch.Tensor:
         """Standard single-token decoding.
 
@@ -160,6 +162,8 @@ class FA3Impl(TritonAttentionImpl):
             max_q_seqlen: Maximum query sequence length (= 1).
             k_scales_zeros: Key quantization scales/zeros.
             v_scales_zeros: Value quantization scales/zeros.
+            k_scale: Scalar key scale for normal FP8 KV cache.
+            v_scale: Scalar value scale for normal FP8 KV cache.
 
         Returns:
             Attention output tensor.
@@ -183,6 +187,8 @@ class FA3Impl(TritonAttentionImpl):
             # custom args
             k_scales_zeros=k_scales_zeros,
             v_scales_zeros=v_scales_zeros,
+            k_scale=k_scale,
+            v_scale=v_scale,
             quant_policy=quant_policy,
         )
         return attn_output
@@ -196,6 +202,8 @@ class FA3Impl(TritonAttentionImpl):
         max_q_seqlen: int,
         k_scales_zeros: torch.Tensor = None,
         v_scales_zeros: torch.Tensor = None,
+        k_scale: torch.Tensor = None,
+        v_scale: torch.Tensor = None,
     ) -> torch.Tensor:
         """Forward pass for decoding stage.
 
@@ -211,6 +219,8 @@ class FA3Impl(TritonAttentionImpl):
             max_q_seqlen: Maximum query sequence length.
             k_scales_zeros: Key quantization scales/zeros.
             v_scales_zeros: Value quantization scales/zeros.
+            k_scale: Scalar key scale for normal FP8 KV cache.
+            v_scale: Scalar value scale for normal FP8 KV cache.
 
         Returns:
             Attention output tensor.
@@ -219,7 +229,7 @@ class FA3Impl(TritonAttentionImpl):
             return self._decoding_speculative(query, k_cache, v_cache, attn_metadata, max_q_seqlen)
         else:
             return self._decoding_standard(query, k_cache, v_cache, attn_metadata, max_q_seqlen, k_scales_zeros,
-                                           v_scales_zeros)
+                                           v_scales_zeros, k_scale, v_scale)
 
     def _forward_prefill(
         self,
@@ -230,6 +240,8 @@ class FA3Impl(TritonAttentionImpl):
         max_q_seqlen: int,
         k_scales_zeros: torch.Tensor = None,
         v_scales_zeros: torch.Tensor = None,
+        k_scale: torch.Tensor = None,
+        v_scale: torch.Tensor = None,
     ) -> torch.Tensor:
         """Forward pass for prefill stage.
 
@@ -244,6 +256,8 @@ class FA3Impl(TritonAttentionImpl):
             max_q_seqlen: Maximum query sequence length.
             k_scales_zeros: Key quantization scales/zeros.
             v_scales_zeros: Value quantization scales/zeros.
+            k_scale: Scalar key scale for normal FP8 KV cache.
+            v_scale: Scalar value scale for normal FP8 KV cache.
 
         Returns:
             Attention output tensor.
@@ -265,6 +279,8 @@ class FA3Impl(TritonAttentionImpl):
             out_dtype=query.dtype,
             k_scales_zeros=k_scales_zeros,
             v_scales_zeros=v_scales_zeros,
+            k_scale=k_scale,
+            v_scale=v_scale,
             quant_policy=quant_policy,
             flatten_kv_layout='shd',
         )
@@ -310,6 +326,8 @@ class FA3Impl(TritonAttentionImpl):
         attn_metadata: TritonAttentionMetadata,
         k_scales_zeros: torch.Tensor = None,
         v_scales_zeros: torch.Tensor = None,
+        k_scale: torch.Tensor = None,
+        v_scale: torch.Tensor = None,
         learnable_sink: torch.Tensor = None,
         inplace: bool = True,
     ) -> torch.Tensor:
@@ -333,6 +351,8 @@ class FA3Impl(TritonAttentionImpl):
             attn_metadata: Attention metadata containing stage info and indices.
             k_scales_zeros: Key quantization scales/zeros.
             v_scales_zeros: Value quantization scales/zeros.
+            k_scale: Scalar key scale for normal FP8 KV cache.
+            v_scale: Scalar value scale for normal FP8 KV cache.
             learnable_sink: Learnable sink tokens (unused in FA3).
             inplace: Whether to modify query inplace (unused, kept for compatibility).
 
@@ -353,6 +373,8 @@ class FA3Impl(TritonAttentionImpl):
                 max_q_seqlen=max_q_seqlen,
                 k_scales_zeros=k_scales_zeros,
                 v_scales_zeros=v_scales_zeros,
+                k_scale=k_scale,
+                v_scale=v_scale,
             )
 
         # Dispatch to stage-specific forward method
@@ -365,6 +387,8 @@ class FA3Impl(TritonAttentionImpl):
                 max_q_seqlen,
                 k_scales_zeros,
                 v_scales_zeros,
+                k_scale,
+                v_scale,
             )
         else:
             return self._forward_prefill(
@@ -375,4 +399,6 @@ class FA3Impl(TritonAttentionImpl):
                 max_q_seqlen,
                 k_scales_zeros,
                 v_scales_zeros,
+                k_scale,
+                v_scale,
             )

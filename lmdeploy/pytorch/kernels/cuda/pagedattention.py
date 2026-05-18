@@ -23,6 +23,7 @@ logger = get_logger('lmdeploy')
 Q_POLICY_NONE = tl.constexpr(0)
 Q_POLICY_INT4 = tl.constexpr(4)
 Q_POLICY_INT8 = tl.constexpr(8)
+Q_POLICY_FP8 = tl.constexpr(16)
 Q_POLICY_TURBO = tl.constexpr(42)
 
 TRITON_VERSION = version.parse(triton.__version__)
@@ -459,6 +460,9 @@ def _fwd_grouped_split_quant_kernel(
             k_cent = _k4v2_k_centroid((k & 0x7), head_size)
             k_sign = ((k >> 3) & 0x1).to(tl.float32) * 2.0 - 1.0
             k = (kmse_norm * (k_cent + kqjl_norm * k_sign)).to(q.dtype)
+        elif quant_policy == Q_POLICY_FP8:
+            ks = tl.load(KScalesZeros).to(tl.float32)
+            k = k.to(q.dtype)
         else:
             ks = tl.load(ksz_ptrs + b_offset * stride_kszp)
             kz = tl.load(ksz_ptrs + b_offset * stride_kszp + 1)
@@ -476,6 +480,8 @@ def _fwd_grouped_split_quant_kernel(
                 k1_cent = _k4v2_k_centroid((k1 & 0x7), head_size)
                 k1_sign = ((k1 >> 3) & 0x1).to(tl.float32) * 2.0 - 1.0
                 k1 = (kmse_norm * (k1_cent + kqjl_norm * k1_sign)).to(q.dtype)
+            elif quant_policy == Q_POLICY_FP8:
+                k1 = k1.to(q.dtype)
             else:
                 k1 = ((k1 - kz) * ks).to(q.dtype)
 
@@ -493,6 +499,9 @@ def _fwd_grouped_split_quant_kernel(
             vs = tl.load(vsz_ptrs + b_offset * stride_vszp)
             v = _k4v2_v_centroid(v, head_size_v)
             v = (v * vs).to(q.dtype)
+        elif quant_policy == Q_POLICY_FP8:
+            vs = tl.load(VScalesZeros).to(tl.float32)
+            v = v.to(q.dtype)
         else:
             vs = tl.load(vsz_ptrs + b_offset * stride_vszp)
             vz = tl.load(vsz_ptrs + b_offset * stride_vszp + 1)
@@ -503,6 +512,8 @@ def _fwd_grouped_split_quant_kernel(
         qk += tl.dot(q, k)
         if BLOCK_DMODEL1 != 0:
             qk += tl.dot(q1, k1)
+        if quant_policy == Q_POLICY_FP8:
+            qk *= ks
         qk *= sm_scale
         if logit_softcapping > 0.0:
             qk = qk / logit_softcapping
@@ -536,6 +547,8 @@ def _fwd_grouped_split_quant_kernel(
         acc = acc * alpha[:, None]
 
         # update acc
+        if quant_policy == Q_POLICY_FP8:
+            p = p * vs
         p, v = _convert_pv(p, v)
         acc += tl.dot(p, v)
         # update m_i and l_i
@@ -756,6 +769,8 @@ def flash_attn_with_kvcache(
     alibi_slopes: Tensor = None,
     k_scales_zeros: Tensor = None,
     v_scales_zeros: Tensor = None,
+    k_scale: Tensor = None,
+    v_scale: Tensor = None,
     quant_policy: QuantPolicy = QuantPolicy.NONE,
     sinks: Tensor = None,
     kv_layout: str = 'bshd',
@@ -763,6 +778,10 @@ def flash_attn_with_kvcache(
     """Paged Attention forward.
 
     Note that this kernel is decoding-only
+
+    Args:
+        k_scale: Per-tensor key scale for normal FP8 KV cache.
+        v_scale: Per-tensor value scale for normal FP8 KV cache.
     """
 
     global _nv_cap
@@ -871,6 +890,7 @@ def flash_attn_with_kvcache(
     else:
         num_warps, num_stages = _kernel_meta_sm9x(BLOCK_DMODEL, BLOCK_H)
 
+    is_fp8_scalar = quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2)
     SPLIT_K = _get_split_k(q.device.index, grid_1, batch, num_warps)
 
     if quant_policy == QuantPolicy.INT4 or quant_policy == QuantPolicy.TURBO_QUANT:
@@ -885,11 +905,33 @@ def flash_attn_with_kvcache(
     )
 
     if quant_policy != QuantPolicy.NONE:
+        if is_fp8_scalar:
+            if k_scale is None:
+                k_scale = torch.ones((), device=q.device, dtype=torch.float32)
+            if v_scale is None:
+                v_scale = k_scale
+            k_scales_arg = k_scale
+            v_scales_arg = v_scale
+            stride_kszp = stride_kszbs = stride_kszh = stride_kszd = 0
+            stride_vszp = stride_vszbs = stride_vszh = stride_vszd = 0
+            triton_quant_policy = QuantPolicy.FP8
+        else:
+            k_scales_arg = k_scales_zeros
+            v_scales_arg = v_scales_zeros
+            stride_kszp = k_scales_zeros.stride(b_dim)
+            stride_kszbs = k_scales_zeros.stride(s_dim)
+            stride_kszh = k_scales_zeros.stride(h_dim)
+            stride_kszd = k_scales_zeros.stride(d_dim)
+            stride_vszp = v_scales_zeros.stride(b_dim)
+            stride_vszbs = v_scales_zeros.stride(s_dim)
+            stride_vszh = v_scales_zeros.stride(h_dim)
+            stride_vszd = v_scales_zeros.stride(d_dim)
+            triton_quant_policy = quant_policy
         _fwd_grouped_split_quant_kernel[grid](q,
                                               k_cache,
                                               v_cache,
-                                              k_scales_zeros,
-                                              v_scales_zeros,
+                                              k_scales_arg,
+                                              v_scales_arg,
                                               softmax_scale,
                                               cache_seqlens,
                                               page_table,
@@ -906,15 +948,15 @@ def flash_attn_with_kvcache(
                                               stride_vbs=v_cache.stride(s_dim),
                                               stride_vh=v_cache.stride(h_dim),
                                               stride_vd=v_cache.stride(d_dim),
-                                              stride_kszp=k_scales_zeros.stride(b_dim),
-                                              stride_kszbs=k_scales_zeros.stride(s_dim),
-                                              stride_kszh=k_scales_zeros.stride(h_dim),
-                                              stride_kszd=k_scales_zeros.stride(d_dim),
-                                              stride_vszp=v_scales_zeros.stride(b_dim),
-                                              stride_vszbs=v_scales_zeros.stride(s_dim),
-                                              stride_vszh=v_scales_zeros.stride(h_dim),
-                                              stride_vszd=v_scales_zeros.stride(d_dim),
-                                              quant_policy=quant_policy,
+                                              stride_kszp=stride_kszp,
+                                              stride_kszbs=stride_kszbs,
+                                              stride_kszh=stride_kszh,
+                                              stride_kszd=stride_kszd,
+                                              stride_vszp=stride_vszp,
+                                              stride_vszbs=stride_vszbs,
+                                              stride_vszh=stride_vszh,
+                                              stride_vszd=stride_vszd,
+                                              quant_policy=triton_quant_policy,
                                               stride_ok=acc.stride(-2),
                                               stride_obs=acc.stride(-4),
                                               stride_oh=acc.stride(-3),
