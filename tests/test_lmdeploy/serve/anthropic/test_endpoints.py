@@ -476,6 +476,43 @@ def test_messages_accepts_input_ids_and_image_data():
     assert response.status_code != 422
 
 
+def test_messages_non_stream_includes_output_ids_when_return_token_ids():
+    """The response should include output_ids in the response-level field."""
+    client = _make_client()
+    response = client.post(
+        '/v1/messages',
+        headers={'anthropic-version': '2023-06-01'},
+        json={
+            'model': 'fake-model',
+            'max_tokens': 16,
+            'messages': [{'role': 'user', 'content': 'Hi'}],
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    # output_ids is a new optional field; it should be present (possibly None)
+    assert 'output_ids' in data
+
+
+def test_messages_non_stream_includes_routed_experts():
+    """The response should include routed_experts in the response-level
+    field."""
+    client = _make_client()
+    response = client.post(
+        '/v1/messages',
+        headers={'anthropic-version': '2023-06-01'},
+        json={
+            'model': 'fake-model',
+            'max_tokens': 16,
+            'messages': [{'role': 'user', 'content': 'Hi'}],
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    # routed_experts is a new optional field; it should be present (possibly None)
+    assert 'routed_experts' in data
+
+
 def test_count_tokens():
     client = _make_client()
     response = client.post(
