@@ -188,7 +188,7 @@ class CUDAGraphRunner(GraphRunner):
         for size in cap_sizes:
             if size >= batch_size:
                 return size
-        assert False, f'Unsupported batch_size={batch_size}'
+        return None
 
     def get_graph_key(self, input_ids: torch.Tensor, position_ids: torch.Tensor, past_key_values: list,
                       attn_metadata: TritonAttentionMetadata, inputs_embeds: torch.Tensor, **kwargs):
@@ -237,6 +237,10 @@ class CUDAGraphRunner(GraphRunner):
 
         graph_key = self.get_graph_key(**kwargs)
         max_batches = graph_key[0]
+        if max_batches is None:
+            with record_function('forward_eager'):
+                output = self.model(**kwargs)
+                return self.model.make_output_buffers(output)
         is_decoding = graph_key[1]
         decode_query_len = graph_key[3]
         if graph_key not in self._runner_map:
@@ -303,9 +307,12 @@ class CUDAGraphRunner(GraphRunner):
             meta = self.get_meta()
             padding_batch_size = meta.padding_batch_size
             tp_size = self._get_capture_tokens(padding_batch_size)
-            dp_meta.sync_tp_size(tp_size)
+            if tp_size is not None:
+                dp_meta.sync_tp_size(tp_size)
         return inputs
 
     def get_capture_batch_sizes(self) -> list[int]:
         """Capture batch sizes."""
+        if self.cache_config.cudagraph_capture_batch_sizes is not None:
+            return self.cache_config.cudagraph_capture_batch_sizes
         return _get_capture_batch_size_impl(self.cache_config.max_batches)

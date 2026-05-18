@@ -128,6 +128,7 @@ class SubCliServe:
         ArgumentHelper.enable_eplb(pt_group)
         ArgumentHelper.role(pt_group)
         ArgumentHelper.migration_backend(pt_group)
+        ArgumentHelper.cudagraph_capture_batch_sizes(pt_group)
         # multi-node serving args
         node_rank_act = ArgumentHelper.node_rank(pt_group)
         num_nodes_act = ArgumentHelper.num_nodes(pt_group)
@@ -236,6 +237,7 @@ class SubCliServe:
                 quant_policy=args.quant_policy,
                 eager_mode=args.eager_mode,
                 max_prefill_token_num=args.max_prefill_token_num,
+                cudagraph_capture_batch_sizes=args.cudagraph_capture_batch_sizes,
                 enable_microbatch=args.enable_microbatch,
                 enable_eplb=args.enable_eplb,
                 enable_metrics=not args.disable_metrics,

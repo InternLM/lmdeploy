@@ -606,6 +606,15 @@ class ArgumentHelper:
                                    help='the max number of tokens per iteration during prefill')
 
     @staticmethod
+    def cudagraph_capture_batch_sizes(parser):
+        return parser.add_argument('--cudagraph-capture-batch-sizes',
+                                   type=int,
+                                   nargs='+',
+                                   default=None,
+                                   help='Batch sizes to capture CUDA graphs for in the PyTorch engine. '
+                                   'If not specified, the engine infers them from max_batch_size')
+
+    @staticmethod
     def vision_max_batch_size(parser):
         return parser.add_argument('--vision-max-batch-size', type=int, default=1, help='the vision model batch size')
 
