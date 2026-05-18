@@ -435,6 +435,19 @@ def test_stream_messages_response_closes_text_before_resuming_tool_delta():
         for item in payloads[:resumed_tool_delta_index])
 
 
+def test_messages_return_routed_experts_in_generation_config():
+    from lmdeploy.serve.anthropic.adapter import to_generation_config
+    from lmdeploy.serve.anthropic.protocol import MessagesRequest
+    req = MessagesRequest(
+        model='fake-model',
+        messages=[{'role': 'user', 'content': 'Hi'}],
+        max_tokens=16,
+        return_routed_experts=True,
+    )
+    cfg = to_generation_config(req)
+    assert cfg.return_routed_experts is True
+
+
 def test_messages_accepts_input_ids_and_image_data():
     """Extended fields input_ids, image_data, return_routed_experts, and
     return_token_ids must be accepted by the protocol model."""

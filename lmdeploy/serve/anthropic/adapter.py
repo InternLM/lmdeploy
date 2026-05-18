@@ -200,6 +200,7 @@ def to_generation_config(request: MessagesRequest) -> GenerationConfig:
         stop_words=request.stop_sequences,
         skip_special_tokens=True,
         spaces_between_special_tokens=True,
+        return_routed_experts=request.return_routed_experts or False,
     )
 
 
