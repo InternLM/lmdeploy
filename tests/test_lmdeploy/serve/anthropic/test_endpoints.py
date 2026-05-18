@@ -640,6 +640,25 @@ def test_messages_rejects_empty_input_ids():
     assert 'input_ids' in response.json()['error']['message']
 
 
+def test_messages_input_ids_non_stream():
+    client = _make_client()
+    response = client.post(
+        '/v1/messages',
+        headers={'anthropic-version': '2023-06-01'},
+        json={
+            'model': 'fake-model',
+            'max_tokens': 16,
+            'messages': [],
+            'input_ids': [1, 2, 3],
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data['type'] == 'message'
+    assert data['content'][0]['type'] == 'text'
+    assert data['content'][0]['text'] == 'Hello world!'
+
+
 def test_count_tokens():
     client = _make_client()
     response = client.post(

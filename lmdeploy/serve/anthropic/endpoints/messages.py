@@ -73,10 +73,28 @@ def register(router: APIRouter, server_context) -> None:
                     HTTPStatus.BAD_REQUEST,
                     'image_data requires input_ids to be set when messages is empty.')
 
-        try:
-            parser_messages = to_openai_messages(request)
-        except ValueError as err:
-            return create_error_response(HTTPStatus.BAD_REQUEST, str(err))
+        parser_messages = None
+        resolved_input_ids = None
+        if messages_empty and request.input_ids is not None:
+            resolved_input_ids = request.input_ids
+            if request.image_data is not None:
+                image_data = request.image_data
+                image_input = []
+                if not isinstance(image_data, list):
+                    image_data = [image_data]
+                for img in image_data:
+                    if isinstance(img, str):
+                        image_input.append(dict(type='image_url', image_url=dict(url=img)))
+                    else:
+                        image_input.append(dict(type='image_url', image_url=img))
+                text_input = dict(type='text', text=str(request.input_ids))
+                parser_messages = [dict(role='user', content=[text_input] + image_input)]
+                resolved_input_ids = None
+        else:
+            try:
+                parser_messages = to_openai_messages(request)
+            except ValueError as err:
+                return create_error_response(HTTPStatus.BAD_REQUEST, str(err))
 
         parser_cls = getattr(server_context, 'response_parser_cls', None)
         if request.tools and (parser_cls is None or parser_cls.tool_parser_cls is None):
@@ -86,7 +104,7 @@ def register(router: APIRouter, server_context) -> None:
 
         response_parser = None
         parsed_request = None
-        if parser_cls is not None:
+        if parser_cls is not None and parser_messages is not None:
             tokenizer_holder = server_context.async_engine.tokenizer
             tokenizer = getattr(getattr(tokenizer_holder, 'model', None), 'model', tokenizer_holder)
             openai_request = ChatCompletionRequest(
@@ -116,8 +134,9 @@ def register(router: APIRouter, server_context) -> None:
             stream_response=True,
             sequence_start=True,
             sequence_end=True,
-            do_preprocess=True,
+            do_preprocess=False if resolved_input_ids is not None else True,
             adapter_name=adapter_name,
+            input_ids=resolved_input_ids,
         )
 
         request_id = f'msg_{shortuuid.random()}'
