@@ -28,7 +28,7 @@ struct MoeConfig: ModuleConfig {
     X(double, routed_scale)                                                                                            \
     X(int, ep_size)                                                                                                    \
     X(int, ep_rank)                                                                                                    \
-    X(int, ll_max_tokens_per_rank)                                                                                      \
+    X(int, ll_max_tokens_per_rank)                                                                                     \
     X(DataType, data_type)
 
     MOE_FIELDS(TM_MEMBER)

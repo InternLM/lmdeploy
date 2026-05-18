@@ -196,8 +196,7 @@ UnifiedDecoder::UnifiedDecoder(const EngineParam& engine,
         ffn_layer_ = std::make_unique<LlamaFfnLayer>(ctx);
     }
 
-    fused_rmsnorm_layer_ =
-        CreateFusedRMSNormLayer({ep_size_, hidden_units_, rmsnorm_eps_, attn_tp_group_, d_comm_});
+    fused_rmsnorm_layer_ = CreateFusedRMSNormLayer({ep_size_, hidden_units_, rmsnorm_eps_, attn_tp_group_, d_comm_});
 }
 
 void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<WeightType*>& weights)
@@ -337,8 +336,7 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
 
         const bool last = layer == layer_num_ - 1;
 
-        auto& scale_weight =
-            !last ? weights.at(layer + 1)->attention_norm->weight : args.at("output_norm_weight");
+        auto& scale_weight = !last ? weights.at(layer + 1)->attention_norm->weight : args.at("output_norm_weight");
 
         fused_rmsnorm_layer_->forward(rmsnorm_fwd_param,  //
                                       scale_weight,

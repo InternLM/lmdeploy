@@ -23,8 +23,9 @@ MoeWeight::MoeWeight(const core::MoeConfig& cfg)
     act_type_         = static_cast<ActivationType>(cfg.act_type);
     fuse_silu_act_    = cfg.fuse_silu;
     expert_num        = cfg.expert_num;
-    ep_size           = cfg.ep_size > 0 ? cfg.ep_size : 1;
-    ep_rank           = cfg.ep_rank;
+
+    ep_size                = cfg.ep_size > 0 ? cfg.ep_size : 1;
+    ep_rank                = cfg.ep_rank;
     ll_max_tokens_per_rank = cfg.ll_max_tokens_per_rank;
 }
 

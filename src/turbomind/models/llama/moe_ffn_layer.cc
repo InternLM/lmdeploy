@@ -34,8 +34,8 @@ MoeFfnLayer::MoeFfnLayer(const EngineParam& engine, const Context& ctx):
 
 void MoeFfnLayer::Init(ForwardParam& p)
 {
-    const int expert_num        = p.weights->num_experts();         // global
-    const int local_expert_num  = p.weights->local_num_experts();   // resident on this rank
+    const int expert_num        = p.weights->num_experts();        // global
+    const int local_expert_num  = p.weights->local_num_experts();  // resident on this rank
     const int experts_per_token = p.weights->experts_per_token;
 
     h_offsets_ = {local_expert_num + 1, kCPU};
@@ -200,15 +200,14 @@ void MoeFfnLayer::RouteEP(ForwardParam& p, Tensor_<float>& logits)
         TM_CUDA_CHECK(cudaGetLastError());
     }
 
-    ep_mode_ = p.max_tokens_per_rank <= ll_max_tokens_per_rank_ ? comm::EpMode::kLowLatency :
-                                                                  comm::EpMode::kHighThroughput;
+    ep_mode_ =
+        p.max_tokens_per_rank <= ll_max_tokens_per_rank_ ? comm::EpMode::kLowLatency : comm::EpMode::kHighThroughput;
 
     // HT `num_worst_tokens` is the upper bound on distinct tokens received by this rank after dispatch.
     const int num_worst_tokens = ep_mode_ == comm::EpMode::kLowLatency ? ll_max_tokens_per_rank_ * expert_num :
                                                                          p.max_tokens_per_rank * d_comm_->n_ranks(0);
-    const int num_worst_flat_tokens = ep_mode_ == comm::EpMode::kLowLatency ?
-                                           num_worst_tokens :
-                                           num_worst_tokens * p.weights->experts_per_token;
+    const int num_worst_flat_tokens =
+        ep_mode_ == comm::EpMode::kLowLatency ? num_worst_tokens : num_worst_tokens * p.weights->experts_per_token;
     TM_CHECK_LE(num_worst_flat_tokens, f2n_.size());
     TM_CHECK_LE(num_worst_flat_tokens, f2E_.size());
     TM_CHECK_LE(p.max_tokens_per_rank * d_comm_->n_ranks(0) * p.weights->experts_per_token, en2f_.size());
