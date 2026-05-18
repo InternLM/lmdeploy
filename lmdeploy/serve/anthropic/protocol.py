@@ -171,6 +171,8 @@ class MessagesResponse(BaseModel):
     stop_reason: Literal['end_turn', 'max_tokens', 'stop_sequence', 'tool_use'] | None = None
     stop_sequence: str | None = None
     usage: MessageUsage
+    output_ids: list[int] | None = None
+    routed_experts: list[list[list[int]]] | str | None = None
 
 
 class CountTokensRequest(BaseModel):
