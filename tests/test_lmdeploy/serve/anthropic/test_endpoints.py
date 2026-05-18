@@ -689,6 +689,28 @@ def test_messages_input_ids_non_stream():
     assert data['content'][0]['text'] == 'Hello world!'
 
 
+def test_messages_input_ids_streaming():
+    client = _make_client()
+    with client.stream(
+            'POST',
+            '/v1/messages',
+            headers={'anthropic-version': '2023-06-01'},
+            json={
+                'model': 'fake-model',
+                'max_tokens': 16,
+                'stream': True,
+                'messages': [],
+                'input_ids': [1, 2, 3],
+            },
+    ) as response:
+        body = '\n'.join(response.iter_lines())
+
+    assert response.status_code == 200
+    assert 'event: message_start' in body
+    assert 'event: content_block_delta' in body
+    assert 'event: message_stop' in body
+
+
 def test_count_tokens():
     client = _make_client()
     response = client.post(
