@@ -78,6 +78,7 @@ work_dir*/
 
 # Outputs and logs
 *.txt
+!requirements/*.txt
 *.log
 *.out
 *.csv
