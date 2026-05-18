@@ -113,6 +113,7 @@ class MessagesRequest(BaseModel):
         description=('Token IDs as input. Only used when messages is empty. '
                      'Mutually exclusive with non-empty messages.'),
     )
+    # Mirrors ImageDataFormat from lmdeploy/serve/openai/protocol.py
     image_data: str | dict | list[str | dict] | None = Field(
         default=None,
         description=('Image data for multimodal input. Only used alongside input_ids '
