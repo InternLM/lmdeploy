@@ -160,12 +160,14 @@ class CUDAGraphRunner(GraphRunner):
         if model_config.model_paradigm == 'ar_spec':
             from .attention import use_fa3
             if not use_fa3:
+                sm = torch.cuda.get_device_capability()
+                cuda_ver = torch.version.cuda or 'N/A'
                 raise RuntimeError(
-                    'Speculative decoding on CUDA requires FlashAttention-3 (FA3), '
-                    'which is available on SM80+ GPUs (Ampere architecture and above) '
-                    'with CUDA >= 12.3. Current GPU does not meet these requirements. '
-                    'Please use a SM80+ GPU with CUDA >= 12.3 and install flash-attn, '
-                    'or disable speculative decoding.')
+                    f'Speculative decoding on CUDA requires FlashAttention-3 (FA3), '
+                    f'which needs SM80+ (Ampere and above) with CUDA >= 12.3 and '
+                    f'flash-attn installed. Detected: SM{sm[0]}.{sm[1]}, CUDA {cuda_ver}. '
+                    f'Please ensure your GPU meets SM80+, CUDA >= 12.3, and flash-attn '
+                    f'is installed, or disable speculative decoding.')
 
         self.enable_graph = self.check_enable_graph()
 
