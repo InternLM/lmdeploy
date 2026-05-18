@@ -51,3 +51,10 @@ class RequestLogger:
                    f'gen_config={gen_config}, '
                    f'prompt={prompt!r}, '
                    f'prompt_token_id={prompt_token_ids}')
+
+    def log_response(self, session_id: int, response: list[str]) -> None:
+        if not logger.isEnabledFor(REQUEST_LOG_LEVEL):
+            return
+        response = ''.join(response)
+        logger.log(REQUEST_LOG_LEVEL, f'session={session_id}, '
+                   f'response={response!r}')
