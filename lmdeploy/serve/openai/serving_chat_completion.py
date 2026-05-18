@@ -38,18 +38,17 @@ def check_request(request: ChatCompletionRequest, server_context: 'VariableInter
         return f'The temperature {request.temperature!r} must be in [0, 2]'
 
     # Validate input_ids and image_data constraints.
-    # messages has higher priority over input_ids. image_data can be used with
-    # input_ids (when messages is empty) or with a string messages (prompt).
+    # messages has higher priority. input_ids and image_data are only used when
+    # messages is empty (None, '', or []). image_data requires input_ids.
     messages_empty = (request.messages is None
                       or request.messages == ''
                       or (isinstance(request.messages, list) and len(request.messages) == 0))
     if not messages_empty:
-        # messages is active — input_ids must not be set
+        # messages is active — input_ids and image_data must not be set
         if request.input_ids is not None:
             return 'input_ids cannot be used when messages is non-empty. messages takes priority.'
-        # image_data with chat-style messages (list of dicts) is silently ignored
-        # since multimodal is already supported via content blocks.
-        # image_data with string messages is allowed (/generate-style prompt + image).
+        if request.image_data is not None:
+            return 'image_data cannot be used when messages is non-empty. messages takes priority.'
     else:
         # messages is empty — input_ids and image_data are the active inputs
         if request.input_ids is not None and len(request.input_ids) == 0:

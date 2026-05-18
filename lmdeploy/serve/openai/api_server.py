@@ -401,19 +401,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             text_input = dict(type='text', text='')
             request.messages = [dict(role='user', content=[text_input] + image_input)]
             resolved_input_ids = None  # image_data conversion takes over
-    elif isinstance(request.messages, str) and request.image_data is not None:
-        # /generate-style input: prompt (string) + image_data
-        image_data = request.image_data
-        image_input = []
-        if not isinstance(image_data, list):
-            image_data = [image_data]
-        for img in image_data:
-            if isinstance(img, str):
-                image_input.append(dict(type='image_url', image_url=dict(url=img)))
-            else:
-                image_input.append(dict(type='image_url', image_url=img))
-        text_input = dict(type='text', text=request.messages)
-        request.messages = [dict(role='user', content=[text_input] + image_input)]
 
     json_request = await raw_request.json()
     migration_request = json_request.pop('migration_request', None)

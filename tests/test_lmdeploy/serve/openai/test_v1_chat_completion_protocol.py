@@ -231,24 +231,25 @@ def test_image_data_with_input_ids_is_ok():
     assert error == ""
 
 
-def test_image_data_with_nonempty_messages_is_ignored():
-    """image_data is silently ignored with chat-style messages (multimodal already in content)."""
+def test_image_data_with_nonempty_messages_is_rejected():
+    """image_data cannot be used when messages is non-empty (chat-style)."""
     req = ChatCompletionRequest(
         model="test-model",
         messages=[{"role": "user", "content": "describe this"}],
         image_data="http://example.com/img.png",
     )
-    # No validation error — image_data is just ignored
     error = check_request(req, _FakeServerContext())
-    assert error == ""
+    assert error != ""
+    assert "image_data" in error.lower()
 
 
-def test_image_data_with_string_messages_is_ok():
-    """image_data is valid with a string messages (/generate-style prompt + image)."""
+def test_image_data_with_string_messages_is_rejected():
+    """image_data cannot be used when messages is a non-empty string."""
     req = ChatCompletionRequest(
         model="test-model",
         messages="describe this image",
         image_data="http://example.com/img.png",
     )
     error = check_request(req, _FakeServerContext())
-    assert error == ""
+    assert error != ""
+    assert "image_data" in error.lower()

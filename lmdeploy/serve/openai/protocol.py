@@ -187,7 +187,7 @@ class ChatCompletionRequest(BaseModel):
         default=None,
         examples=[None],
         description=('Image data for multimodal input. Only used alongside input_ids '
-                     '(when messages is empty). '
+                     'when messages is empty. Mutually exclusive with non-empty messages. '
                      'Can be a URL/base64 string, a dict, or a list of these.'),
     )
     return_routed_experts: bool | None = Field(
