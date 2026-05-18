@@ -379,6 +379,42 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         return error_check_ret
     session = VariableInterface.create_session(request.session_id)
 
+    # Resolve input: messages has priority over input_ids/image_data
+    messages_empty = (request.messages is None
+                      or request.messages == ''
+                      or (isinstance(request.messages, list) and len(request.messages) == 0))
+    resolved_input_ids = None
+    if messages_empty and request.input_ids is not None:
+        # /generate-style input: use input_ids (+ optional image_data)
+        resolved_input_ids = request.input_ids
+        if request.image_data is not None:
+            # Convert image_data to OpenAI multimodal content format
+            image_data = request.image_data
+            image_input = []
+            if not isinstance(image_data, list):
+                image_data = [image_data]
+            for img in image_data:
+                if isinstance(img, str):
+                    image_input.append(dict(type='image_url', image_url=dict(url=img)))
+                else:
+                    image_input.append(dict(type='image_url', image_url=img))
+            text_input = dict(type='text', text='')
+            request.messages = [dict(role='user', content=[text_input] + image_input)]
+            resolved_input_ids = None  # image_data conversion takes over
+    elif isinstance(request.messages, str) and request.image_data is not None:
+        # /generate-style input: prompt (string) + image_data
+        image_data = request.image_data
+        image_input = []
+        if not isinstance(image_data, list):
+            image_data = [image_data]
+        for img in image_data:
+            if isinstance(img, str):
+                image_input.append(dict(type='image_url', image_url=dict(url=img)))
+            else:
+                image_input.append(dict(type='image_url', image_url=img))
+        text_input = dict(type='text', text=request.messages)
+        request.messages = [dict(role='user', content=[text_input] + image_input)]
+
     json_request = await raw_request.json()
     migration_request = json_request.pop('migration_request', None)
     with_cache = json_request.pop('with_cache', False)
@@ -443,10 +479,12 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         preserve_cache=preserve_cache,
         repetition_ngram_size=request.repetition_ngram_size,
         repetition_ngram_threshold=request.repetition_ngram_threshold,
+        return_routed_experts=request.return_routed_experts,
     )
 
-    # text completion for string input
-    do_preprocess = False if isinstance(request.messages, str) else request.do_preprocess
+    # text completion for string input or input_ids
+    do_preprocess = (False if isinstance(request.messages, str)
+                     or resolved_input_ids is not None else request.do_preprocess)
     chat_template_kwargs = request.chat_template_kwargs or {}
     if request.enable_thinking is not None:
         logger.warning('`enable_thinking` will be deprecated in the future, '
@@ -468,6 +506,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         do_preprocess=do_preprocess,
         adapter_name=adapter_name,
         chat_template_kwargs=chat_template_kwargs or None,
+        input_ids=resolved_input_ids,
         media_io_kwargs=request.media_io_kwargs,
         mm_processor_kwargs=request.mm_processor_kwargs)
 
@@ -475,17 +514,21 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                                     delta_message: DeltaMessage,
                                     finish_reason: str | None = None,
                                     logprobs: LogProbs | None = None,
-                                    usage: UsageInfo | None = None) -> str:
+                                    usage: UsageInfo | None = None,
+                                    routed_experts=None,
+                                    output_token_logprobs=None) -> str:
         choice_data = ChatCompletionResponseStreamChoice(index=index,
                                                          delta=delta_message,
                                                          finish_reason=finish_reason,
-                                                         logprobs=logprobs)
+                                                         logprobs=logprobs,
+                                                         output_token_logprobs=output_token_logprobs)
         response = ChatCompletionStreamResponse(
             id=request_id,
             created=created_time,
             model=model_name,
             choices=[choice_data],
             usage=usage,
+            routed_experts=routed_experts,
         )
         response_json = response.model_dump_json()
 
@@ -528,11 +571,24 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
             if request.return_token_ids:
                 delta_message.gen_tokens = delta_token_ids
+
+            # Compute output_token_logprobs per token (generate-style)
+            output_token_logprobs = None
+            if res.logprobs and not gen_logprobs:
+                output_token_logprobs = []
+                for tok, tok_logprobs in zip(res.token_ids or [], res.logprobs):
+                    output_token_logprobs.append((tok_logprobs[tok], tok))
+
+            # Only output routed_experts in the final chunk
+            routed_experts = res.routed_experts if res.finish_reason is not None else None
+
             response_json = create_stream_response_json(index=0,
                                                         delta_message=delta_message,
                                                         finish_reason=res.finish_reason,
                                                         logprobs=logprobs,
-                                                        usage=usage)
+                                                        usage=usage,
+                                                        routed_experts=routed_experts,
+                                                        output_token_logprobs=output_token_logprobs)
             if res.cache_block_ids is not None:
                 response_json['cache_block_ids'] = res.cache_block_ids
                 response_json['remote_token_ids'] = res.token_ids
@@ -587,6 +643,13 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     if gen_logprobs and len(final_logprobs):
         logprobs = _create_chat_completion_logprobs(tokenizer, final_token_ids, final_logprobs)
 
+    # Compute output_token_logprobs in generate-style format
+    output_token_logprobs = None
+    if len(final_logprobs) and len(final_token_ids):
+        output_token_logprobs = []
+        for tok, tok_logprobs in zip(final_token_ids, final_logprobs):
+            output_token_logprobs.append((tok_logprobs[tok], tok))
+
     assert final_res is not None
     choices = []
     if request.return_token_ids:
@@ -596,6 +659,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         message=message,
         logprobs=logprobs,
         finish_reason=final_res.finish_reason,
+        output_token_logprobs=output_token_logprobs,
     )
     choices.append(choice_data)
 
@@ -615,6 +679,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         model=model_name,
         choices=choices,
         usage=usage,
+        routed_experts=final_res.routed_experts if request.return_routed_experts else None,
     ).model_dump()
 
     if with_cache:
