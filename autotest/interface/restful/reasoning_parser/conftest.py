@@ -85,7 +85,7 @@ class _ReasoningTestBase:
         """
         client, model_name = self._get_client()
         create_kwargs.setdefault('temperature', 0)
-        create_kwargs.setdefault('max_completion_tokens', 1024)
+        create_kwargs.setdefault('max_completion_tokens', 8192)
         create_kwargs.setdefault('logprobs', False)
         extra_body = dict(create_kwargs.pop('extra_body', {}) or {})
         legacy_et = extra_body.pop('enable_thinking', None)

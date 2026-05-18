@@ -47,7 +47,7 @@ class TestReasoningBasic(_ReasoningTestBase):
 
     def test_reasoning_content_present(self, backend, model_case, stream):
         """Model should populate reasoning_content for math questions."""
-        r = self._call_api(stream, MESSAGES_REASONING_BASIC, max_completion_tokens=4096)
+        r = self._call_api(stream, MESSAGES_REASONING_BASIC, max_completion_tokens=8192)
         assert r['finish_reason'] in ('stop', 'length')
         assert len(r['reasoning']) > 10, (f'reasoning too short ({len(r["reasoning"])} chars)')
         assert any(kw in r['reasoning'] for kw in ('37', '43', '1591', 'multiply', '*', '×'))
@@ -59,7 +59,7 @@ class TestReasoningBasic(_ReasoningTestBase):
 
     def test_reasoning_quality_complex(self, backend, model_case, stream):
         """Complex train problem: reasoning should contain calculation steps."""
-        r = self._call_api(stream, MESSAGES_REASONING_COMPLEX, max_completion_tokens=2048)
+        r = self._call_api(stream, MESSAGES_REASONING_COMPLEX, max_completion_tokens=8192)
         assert len(r['reasoning']) > 50
         assert any(kw in r['reasoning'] for kw in ('60', '80', '140', '280'))
         assert len(r['content'].strip()) > 0
@@ -84,7 +84,7 @@ class TestReasoningStreamConsistency(_ReasoningTestBase):
         common_kwargs = dict(model=model_name,
                              messages=MESSAGES_REASONING_BASIC,
                              temperature=0,
-                             max_completion_tokens=4096,
+                             max_completion_tokens=8192,
                              logprobs=False,
                              extra_body={'chat_template_kwargs': {'enable_thinking': True}})
         ns_resp = client.chat.completions.create(**common_kwargs)
@@ -241,7 +241,7 @@ class TestReasoningToolCallConsistency(_ReasoningTestBase):
         common_kwargs = dict(model=model_name,
                              messages=MESSAGES_REASONING_WEATHER_TOOL,
                              temperature=0,
-                             max_completion_tokens=4096,
+                             max_completion_tokens=8192,
                              tools=[WEATHER_TOOL, SEARCH_TOOL],
                              logprobs=False,
                              extra_body={'chat_template_kwargs': {'enable_thinking': True}})
@@ -275,7 +275,7 @@ class TestReasoningToolCallConsistency(_ReasoningTestBase):
         stream = client.chat.completions.create(model=model_name,
                                                 messages=MESSAGES_REASONING_BASIC,
                                                 temperature=0,
-                                                max_completion_tokens=4096,
+                                                max_completion_tokens=8192,
                                                 logprobs=False,
                                                 extra_body={'chat_template_kwargs': {'enable_thinking': True}},
                                                 stream=True)
@@ -288,7 +288,7 @@ class TestReasoningToolCallConsistency(_ReasoningTestBase):
         stream = client.chat.completions.create(model=model_name,
                                                 messages=MESSAGES_REASONING_WEATHER_TOOL,
                                                 temperature=0,
-                                                max_completion_tokens=4096,
+                                                max_completion_tokens=8192,
                                                 tools=[WEATHER_TOOL],
                                                 tool_choice={
                                                     'type': 'function',
@@ -373,7 +373,7 @@ class TestReasoningToolResultConsistency(_ReasoningTestBase):
         common_kwargs = dict(model=model_name,
                              messages=messages,
                              temperature=0,
-                             max_completion_tokens=512,
+                             max_completion_tokens=8192,
                              tools=[WEATHER_TOOL],
                              logprobs=False,
                              extra_body={'chat_template_kwargs': {'enable_thinking': True}})
@@ -461,7 +461,7 @@ class TestReasoningTokenAccounting(_ReasoningTestBase):
         response = client.chat.completions.create(model=model_name,
                                                   messages=MESSAGES_REASONING_BASIC,
                                                   temperature=0,
-                                                  max_completion_tokens=4096,
+                                                  max_completion_tokens=8192,
                                                   logprobs=False,
                                                   extra_body={'chat_template_kwargs': {'enable_thinking': True}})
         assert response.usage is not None
@@ -475,7 +475,7 @@ class TestReasoningTokenAccounting(_ReasoningTestBase):
         response = client.chat.completions.create(model=model_name,
                                                   messages=MESSAGES_REASONING_COMPLEX,
                                                   temperature=0,
-                                                  max_completion_tokens=2048,
+                                                  max_completion_tokens=8192,
                                                   logprobs=False,
                                                   extra_body={'chat_template_kwargs': {'enable_thinking': True}})
         rt = get_reasoning_tokens(response)
@@ -490,7 +490,7 @@ class TestReasoningTokenAccounting(_ReasoningTestBase):
         stream = client.chat.completions.create(model=model_name,
                                                 messages=MESSAGES_REASONING_BASIC,
                                                 temperature=0,
-                                                max_completion_tokens=4096,
+                                                max_completion_tokens=8192,
                                                 logprobs=False,
                                                 extra_body={'chat_template_kwargs': {'enable_thinking': True}},
                                                 stream=True,
@@ -510,7 +510,7 @@ class TestReasoningTokenAccounting(_ReasoningTestBase):
         stream = client.chat.completions.create(model=model_name,
                                                 messages=MESSAGES_REASONING_COMPLEX,
                                                 temperature=0,
-                                                max_completion_tokens=2048,
+                                                max_completion_tokens=8192,
                                                 logprobs=False,
                                                 extra_body={'chat_template_kwargs': {'enable_thinking': True}},
                                                 stream=True,
@@ -540,7 +540,7 @@ class TestReasoningMultilingual(_ReasoningTestBase):
     """Reasoning with Chinese / multilingual prompts."""
 
     def test_chinese_reasoning(self, backend, model_case, stream):
-        r = self._call_api(stream, MESSAGES_REASONING_CN, max_completion_tokens=2048)
+        r = self._call_api(stream, MESSAGES_REASONING_CN, max_completion_tokens=8192)
         assert r['finish_reason'] in ('stop', 'length')
         assert len(r['reasoning']) > 20
         assert any(kw in r['reasoning'] for kw in ('60', '80', '140', '280'))
@@ -579,7 +579,7 @@ class TestReasoningMultiTurn(_ReasoningTestBase):
     """Multi-turn conversations where reasoning persists."""
 
     def test_multi_turn_reasoning(self, backend, model_case, stream):
-        r = self._call_api(stream, MESSAGES_REASONING_MULTI_TURN, max_completion_tokens=2048)
+        r = self._call_api(stream, MESSAGES_REASONING_MULTI_TURN, max_completion_tokens=8192)
         assert r['finish_reason'] in ('stop', 'length')
         assert len(r['reasoning']) > 20
         assert any(kw in r['reasoning'] for kw in ('100', '101', '5050', '5,050', 'formula', 'Gauss', 'n(n', 'n *'))
@@ -602,7 +602,7 @@ class TestReasoningResponseValidation(_ReasoningTestBase):
         response = client.chat.completions.create(model=model_name,
                                                   messages=MESSAGES_REASONING_BASIC,
                                                   temperature=0,
-                                                  max_completion_tokens=4096,
+                                                  max_completion_tokens=8192,
                                                   logprobs=False,
                                                   extra_body={'chat_template_kwargs': {'enable_thinking': True}})
         assert response.model is not None and len(response.model) > 0
@@ -624,7 +624,7 @@ class TestReasoningResponseValidation(_ReasoningTestBase):
         stream = client.chat.completions.create(model=model_name,
                                                 messages=MESSAGES_REASONING_BASIC,
                                                 temperature=0,
-                                                max_completion_tokens=4096,
+                                                max_completion_tokens=8192,
                                                 logprobs=False,
                                                 extra_body={'chat_template_kwargs': {'enable_thinking': True}},
                                                 stream=True)
@@ -659,7 +659,7 @@ class TestReasoningEdgeCases(_ReasoningTestBase):
 
     def test_simple_question(self, backend, model_case, stream):
         """'What is 2+2?' should produce answer '4'."""
-        r = self._call_api(stream, MESSAGES_REASONING_SIMPLE, max_completion_tokens=512)
+        r = self._call_api(stream, MESSAGES_REASONING_SIMPLE, max_completion_tokens=8192)
         assert r['finish_reason'] in ('stop', 'length')
         assert len(r['reasoning'].strip()) > 0, (f'Expected non-empty reasoning_content for reasoning model, '
                                                  f'got reasoning={r["reasoning"]!r}, content={r["content"][:200]!r}')
