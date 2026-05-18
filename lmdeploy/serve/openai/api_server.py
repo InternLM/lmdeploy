@@ -401,6 +401,9 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             text_input = dict(type='text', text=request.input_ids)
             request.messages = [dict(role='user', content=[text_input] + image_input)]
             resolved_input_ids = None  # image_data conversion takes over
+        else:
+            # input_ids only — engine requires messages=None
+            request.messages = None
 
     json_request = await raw_request.json()
     migration_request = json_request.pop('migration_request', None)
