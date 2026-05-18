@@ -54,6 +54,7 @@ class _FakeEngine:
                 input_token_len=8,
                 generate_token_len=1,
                 finish_reason=None,
+                routed_experts=[1, 2, 3],
             )
             yield SimpleNamespace(
                 response='world!',
@@ -61,6 +62,7 @@ class _FakeEngine:
                 input_token_len=8,
                 generate_token_len=2,
                 finish_reason='stop',
+                routed_experts=[1, 2, 3],
             )
 
         return _gen()
@@ -296,6 +298,48 @@ def test_messages_non_stream_with_reasoning_and_tool_use_blocks():
     assert data['content'][2]['type'] == 'tool_use'
     assert data['content'][2]['name'] == 'search'
     assert data['content'][2]['input'] == {'query': 'lmdeploy'}
+
+
+def test_messages_streaming_includes_output_ids():
+    client = _make_client()
+    with client.stream(
+            'POST',
+            '/v1/messages',
+            headers={'anthropic-version': '2023-06-01'},
+            json={
+                'model': 'fake-model',
+                'max_tokens': 16,
+                'stream': True,
+                'messages': [{'role': 'user', 'content': 'Hi there'}],
+                'return_token_ids': True,
+            },
+    ) as response:
+        body = '\n'.join(response.iter_lines())
+
+    assert response.status_code == 200
+    # output_ids should appear in content_block_delta events
+    assert 'output_ids' in body
+
+
+def test_messages_streaming_includes_routed_experts():
+    client = _make_client()
+    with client.stream(
+            'POST',
+            '/v1/messages',
+            headers={'anthropic-version': '2023-06-01'},
+            json={
+                'model': 'fake-model',
+                'max_tokens': 16,
+                'stream': True,
+                'messages': [{'role': 'user', 'content': 'Hi there'}],
+                'return_routed_experts': True,
+            },
+    ) as response:
+        body = '\n'.join(response.iter_lines())
+
+    assert response.status_code == 200
+    # routed_experts should appear in the message_delta event
+    assert 'routed_experts' in body
 
 
 def test_messages_streaming_sse_shape():

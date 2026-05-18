@@ -18,7 +18,9 @@ async def stream_messages_response(result_generator,
                                    *,
                                    request_id: str,
                                    model: str,
-                                   response_parser=None) -> AsyncGenerator[str, None]:
+                                   response_parser=None,
+                                   return_token_ids: bool = False,
+                                   return_routed_experts: bool = False) -> AsyncGenerator[str, None]:
     """Convert LMDeploy generation stream to Anthropic SSE events."""
 
     yield _format_sse(
@@ -128,21 +130,21 @@ async def stream_messages_response(result_generator,
         current_block = dict(kind='tool_use', block_index=block['block_index'], tool_index=tool_index)
         return events
 
-    def _emit_text_delta(text: str, thinking: bool) -> str:
+    def _emit_text_delta(text: str, thinking: bool, output_ids: list[int] | None = None) -> str:
         block_index = current_block['block_index']
         delta_key = 'thinking' if thinking else 'text'
         delta_type = 'thinking_delta' if thinking else 'text_delta'
-        return _format_sse(
-            'content_block_delta',
-            {
-                'type': 'content_block_delta',
-                'index': block_index,
-                'delta': {
-                    'type': delta_type,
-                    delta_key: text,
-                },
+        data = {
+            'type': 'content_block_delta',
+            'index': block_index,
+            'delta': {
+                'type': delta_type,
+                delta_key: text,
             },
-        )
+        }
+        if output_ids is not None:
+            data['output_ids'] = output_ids
+        return _format_sse('content_block_delta', data)
 
     async for res in result_generator:
         final_res = res
@@ -158,7 +160,8 @@ async def stream_messages_response(result_generator,
             for event in _start_text_or_thinking('text'):
                 yield event
             if current_block is not None:
-                yield _emit_text_delta(text, thinking=False)
+                yield _emit_text_delta(text, thinking=False,
+                                       output_ids=delta_token_ids if return_token_ids else None)
 
         if tool_emitted:
             streaming_tools = True
@@ -178,7 +181,8 @@ async def stream_messages_response(result_generator,
             for event in _start_text_or_thinking('text'):
                 yield event
             if current_block is not None:
-                yield _emit_text_delta(delta_message.content, thinking=False)
+                yield _emit_text_delta(delta_message.content, thinking=False,
+                                       output_ids=delta_token_ids if return_token_ids else None)
 
         if delta_message.tool_calls:
             for tool_delta in delta_message.tool_calls:
@@ -207,18 +211,18 @@ async def stream_messages_response(result_generator,
 
     output_tokens = 0 if final_res is None else final_res.generate_token_len
     stop_reason = map_finish_reason(None if final_res is None else final_res.finish_reason)
-    yield _format_sse(
-        'message_delta',
-        {
-            'type': 'message_delta',
-            'delta': {
-                'stop_reason': stop_reason,
-                'stop_sequence': None,
-            },
-            'usage': {
-                'input_tokens': input_tokens,
-                'output_tokens': output_tokens,
-            },
+    message_delta_data = {
+        'type': 'message_delta',
+        'delta': {
+            'stop_reason': stop_reason,
+            'stop_sequence': None,
         },
-    )
+        'usage': {
+            'input_tokens': input_tokens,
+            'output_tokens': output_tokens,
+        },
+    }
+    if return_routed_experts and final_res is not None and hasattr(final_res, 'routed_experts'):
+        message_delta_data['routed_experts'] = final_res.routed_experts
+    yield _format_sse('message_delta', message_delta_data)
     yield _format_sse('message_stop', {'type': 'message_stop'})

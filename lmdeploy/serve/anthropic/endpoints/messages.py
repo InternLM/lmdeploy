@@ -151,6 +151,8 @@ def register(router: APIRouter, server_context) -> None:
                     request_id=request_id,
                     model=request.model,
                     response_parser=response_parser,
+                    return_token_ids=request.return_token_ids or False,
+                    return_routed_experts=request.return_routed_experts or False,
                 ),
                 media_type='text/event-stream',
             )
