@@ -6,6 +6,7 @@ nvidia-ml-py
 opencv-python-headless
 pytest
 pytest-assume
+pytest-asyncio
 pytest-cov
 pytest-order
 pytest-rerunfailures
