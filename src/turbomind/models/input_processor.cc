@@ -222,9 +222,9 @@ public:
             const auto& [sz0, image_offset] = multimodal.image_embeds_coords[i];
             const auto& [sz1, input_offset] = multimodal.input_embeds_coords[i];
             TM_CHECK_EQ(sz0, sz1);
-            copy(multimodal.data.slice(image_offset, image_offset + sz0).buffer(),
+            copy(multimodal.data.slice(image_offset, sz0).buffer(),
                  sz0 * embeds.shape(1),
-                 embeds.slice(input_offset, input_offset + sz0).buffer());
+                 embeds.slice(input_offset, sz1).buffer());
         }
     }
 

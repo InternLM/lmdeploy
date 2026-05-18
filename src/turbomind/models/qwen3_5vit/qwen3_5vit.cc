@@ -32,75 +32,6 @@
 
 namespace turbomind {
 
-namespace {
-
-std::string TensorShapeString(const Tensor& tensor)
-{
-    std::string str   = "[";
-    const auto& shape = tensor.shape();
-    for (std::size_t i = 0; i < shape.size(); ++i) {
-        if (i) {
-            str += ", ";
-        }
-        str += std::to_string(shape[i]);
-    }
-    str += "]";
-    return str;
-}
-
-[[maybe_unused]] void DumpTensorToBin(const Tensor& tensor, const std::string& output_path)
-{
-    TM_CHECK(tensor) << "Cannot dump an empty tensor to " << output_path;
-    TM_CHECK(tensor.is_contiguous()) << "Only contiguous tensors can be dumped: " << tensor;
-    TM_LOG_ERROR("DumpTensorToBin: file={}, shape={}", output_path, TensorShapeString(tensor));
-
-    Tensor host_tensor{tensor.layout(), tensor.dtype(), kCPU};
-    Copy(tensor, host_tensor);
-    core::Context::stream().Sync();
-
-    std::ofstream ofs(output_path, std::ios::binary);
-    TM_CHECK(ofs.is_open()) << "Failed to open " << output_path << " for writing";
-
-    if (const auto bytes = host_tensor.byte_size()) {
-        ofs.write(static_cast<const char*>(host_tensor.raw_data()), bytes);
-        TM_CHECK(ofs.good()) << "Failed to write tensor to " << output_path;
-    }
-}
-
-[[maybe_unused]] void ReadTensorFromBin(Tensor& tensor, const std::string& input_path)
-{
-    TM_CHECK(tensor) << "Cannot read an empty tensor from " << input_path;
-    TM_CHECK(tensor.is_contiguous()) << "Only contiguous tensors can be read: " << tensor;
-    TM_LOG_ERROR("ReadTensorFromBin: file={}, shape={}", input_path, TensorShapeString(tensor));
-
-    const bool is_host_tensor = tensor.device().type == kCPU || tensor.device().type == kCPUpinned;
-    Tensor     host_tensor    = is_host_tensor ? tensor : Tensor{tensor.layout(), tensor.dtype(), kCPU};
-    const auto expected_bytes = host_tensor.byte_size();
-
-    std::ifstream ifs(input_path, std::ios::binary | std::ios::ate);
-    TM_CHECK(ifs.is_open()) << "Failed to open " << input_path << " for reading";
-
-    const std::streamoff actual_bytes = ifs.tellg();
-    TM_CHECK_GE(actual_bytes, 0) << "Failed to get size of " << input_path;
-    TM_CHECK_EQ(actual_bytes, expected_bytes)
-        << "Unexpected tensor file size for " << input_path << ", tensor " << tensor;
-
-    ifs.seekg(0, std::ios::beg);
-    TM_CHECK(ifs.good()) << "Failed to seek " << input_path;
-
-    if (expected_bytes) {
-        ifs.read(static_cast<char*>(host_tensor.raw_data()), expected_bytes);
-        TM_CHECK(ifs.good()) << "Failed to read tensor from " << input_path;
-    }
-
-    if (!is_host_tensor) {
-        Copy(host_tensor, tensor);
-        core::Context::stream().Sync();
-    }
-}
-
-}  // namespace
-
 struct Qwen3_5Vit::Impl {
     const Qwen3_5VitWeight&       weights_;
     const core::Qwen3_5VitConfig& config_;
@@ -275,7 +206,6 @@ struct Qwen3_5Vit::Impl {
 
     int Add(RequestCache& c)
     {
-        TM_LOG_ERROR("add");
         const auto& [r, s] = std::tie(*c.req, *c.seq);
         if (r.mm_inputs && !r.mm_inputs->is_null()) {
             if ((not r.session.start_flag) or (not r.session.end_flag)) {
@@ -312,7 +242,6 @@ struct Qwen3_5Vit::Impl {
                     MultiModalData{data, Interval{offset, Interval::Size{tokens}}, grid_thw});
                 s.multimodal_inputs.push_back(mm_item);
             }
-            TM_LOG_ERROR("add done");
         }
 
         return Request::kOk;
@@ -635,12 +564,6 @@ struct Qwen3_5Vit::Impl {
                                  stream);
         TM_CUDA_CHECK(cudaGetLastError());
 
-        // DumpTensorToBin(pos_embeds, "pos_embeds_" + std::to_string(d_comm_->rank(tp_group_)) + ".bin");
-        // DumpTensorToBin(pos_embed_weights, "pos_embed_weights_" + std::to_string(d_comm_->rank(tp_group_)) + ".bin");
-
-        // DumpTensorToBin(residual, "residual_" + std::to_string(d_comm_->rank(tp_group_)) + ".bin");
-        // TM_LOG_ERROR("residual {} {}, dtype {}", residual.shape(0), residual.shape(1), (int)residual.dtype());
-
         // 3) decoder
         Tensor hidden_states = [&]() {
             Buffer symm_buf = args.contains("symm_buf") ? args.at("symm_buf").buffer() : Buffer{};
@@ -704,7 +627,6 @@ struct Qwen3_5Vit::Impl {
             TM_CUDA_CHECK(cudaGetLastError());
         }
 
-        // ReadTensorFromBin(hidden_states, "merger_input.bin");
         Tensor image_embeds = Merger(hidden_states);
 
         args.produce("multimodal",
