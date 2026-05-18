@@ -11,6 +11,7 @@
 #include "src/turbomind/kernels/core/meta.h"
 
 #include "src/turbomind/kernels/norm/rms_norm.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
@@ -117,6 +118,7 @@ void invokeRMSNorm(Tensor& out, const Tensor& x, const Tensor& w, float eps, cud
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(x.dtype(), invoke);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 namespace kernel {
@@ -202,7 +204,7 @@ void invokeQkRMSNorm(void*        data,
             constexpr int vec_size   = sizeof(uint4) / sizeof(T);
             constexpr int thr_per_qk = kMaxDim / vec_size;
 
-            FT_CHECK(head_dim % vec_size == 0);
+            TM_CHECK(head_dim % vec_size == 0);
 
             const int threads   = thr_per_qk * n * (int64_t)token_num;
             const int block_dim = 512;
@@ -221,6 +223,7 @@ void invokeQkRMSNorm(void*        data,
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(dtype, invoke);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 void invokeRMSNormQK(Tensor& x, const Tensor& w, float eps, cudaStream_t st)
@@ -264,6 +267,7 @@ void invokeRMSNormQK(Tensor& x, const Tensor& w, float eps, cudaStream_t st)
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(x.dtype(), invoke);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 // r' <- r + (h + b)
@@ -363,6 +367,7 @@ void invokeBiasResidualRMSNorm(
                                                                                        num,
                                                                                        eps,
                                                                                        1.f / dims);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template void invokeBiasResidualRMSNorm(half*        residual,
@@ -414,6 +419,7 @@ void invokeResidualBiasRMSNorm(void*        hidden_states,
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(dtype, invoke);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<class T, class B, int vec_size>
@@ -465,6 +471,7 @@ void ApplyBias(Tensor& data, const Tensor& bias, cudaStream_t st)
         }
     };
     TM_DISPATCH_DTYPES(data.dtype(), invoke0, float, half, nv_bfloat16);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<class T, int vec_size>
@@ -545,6 +552,7 @@ void ApplyBias(Tensor& data, const Tensor& bias, const Buffer_<int>& offsets, fl
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(data.dtype(), invoke);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 }  // namespace turbomind

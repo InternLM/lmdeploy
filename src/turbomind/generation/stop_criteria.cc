@@ -4,6 +4,7 @@
 #include "src/turbomind/generation/utils.h"
 
 #include "src/turbomind/kernels/stop_criteria_kernels.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 #include "src/turbomind/engine/batch.h"
 #include "src/turbomind/engine/request.h"
@@ -32,6 +33,7 @@ StopCriteria::StopCriteria(const BaseGenerationParam& base, int phases): BaseGen
 
 void StopCriteria::Setup(int phase, TensorMap& env)
 {
+    TM_FUNCTION_SCOPE();
     auto& d = *data_.at(phase);
 
     const auto& rs   = env.at("batch").data<BatchData*>()[0]->rc;
@@ -54,6 +56,7 @@ void StopCriteria::Setup(int phase, TensorMap& env)
 
 void StopCriteria::Forward(int phase, TensorMap& env)
 {
+    TM_FUNCTION_SCOPE();
     auto& d = *data_.at(phase);
 
     const Buffer_<int*> token_ids_ptrs  = env.at("token_ids_ptrs").buffer();
@@ -68,22 +71,20 @@ void StopCriteria::Forward(int phase, TensorMap& env)
     if (auto& stop_words = d.stop_words_ten) {
         TM_CHECK_EQ(stop_words.ndim(), 3);  // [batch, 2, len]
         size_t stop_words_len = stop_words.shape(2);
-        invokeStopWordsCriterion_v2((const int**)token_ids_ptrs.data(),
-                                    sequence_length.data(),
-                                    stop_words.data(),
-                                    finished.data(),
-                                    stop_words_len,
-                                    batch_size,
-                                    stream);
-        sync_check_cuda_error();
+        TM_SCOPE_CALL(invokeStopWordsCriterion_v2((const int**)token_ids_ptrs.data(),
+                                                  sequence_length.data(),
+                                                  stop_words.data(),
+                                                  finished.data(),
+                                                  stop_words_len,
+                                                  batch_size,
+                                                  stream));
     }
 
-    invokeLengthCriterion_v2(finished.data(),  //
-                             sequence_length.data(),
-                             d.max_seq_len.data(),
-                             batch_size,
-                             stream);
-    sync_check_cuda_error();
+    TM_SCOPE_CALL(invokeLengthCriterion_v2(finished.data(),  //
+                                           sequence_length.data(),
+                                           d.max_seq_len.data(),
+                                           batch_size,
+                                           stream));
 }
 
 }  // namespace turbomind

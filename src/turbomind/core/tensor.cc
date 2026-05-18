@@ -48,7 +48,7 @@ void Copy(const Tensor& src, Ref<Tensor> dst_, const Stream& stream)
     TM_CHECK(src.is_contiguous());
     TM_CHECK(dst.is_contiguous());
     if (auto size = src.byte_size()) {
-        check_cuda_error(cudaMemcpyAsync(dst.raw_data(), src.raw_data(), size, cudaMemcpyDefault, stream.handle()));
+        TM_CUDA_CHECK(cudaMemcpyAsync(dst.raw_data(), src.raw_data(), size, cudaMemcpyDefault, stream.handle()));
     }
 }
 
@@ -62,7 +62,7 @@ void Clear(Ref<Tensor> a_, const Stream& stream)
     auto& a = a_.get();
     TM_CHECK(a.is_contiguous());
     if (auto size = a.byte_size()) {
-        check_cuda_error(cudaMemsetAsync(a.raw_data(), 0, size, stream.handle()));
+        TM_CUDA_CHECK(cudaMemsetAsync(a.raw_data(), 0, size, stream.handle()));
     }
 }
 
@@ -82,7 +82,7 @@ void Copy(const Tensor& src, Tensor& dst, Stream& stream)
 
     auto trivial = [&] {
         const ssize_t bytesize = get_byte_size(dtype, src.size());
-        check_cuda_error(cudaMemcpyAsync(dst.raw_data(), src.raw_data(), bytesize, cudaMemcpyDefault, stream.handle()));
+        TM_CUDA_CHECK(cudaMemcpyAsync(dst.raw_data(), src.raw_data(), bytesize, cudaMemcpyDefault, stream.handle()));
     };
 
     if (src.layout().is_contiguous() && dst.layout().is_contiguous()) {
@@ -128,7 +128,7 @@ void Copy(const Tensor& src, Tensor& dst, Stream& stream)
     }
 
     if (rank == 2) {
-        check_cuda_error(cudaMemcpy2DAsync(dst.raw_data(),
+        TM_CUDA_CHECK(cudaMemcpy2DAsync(dst.raw_data(),
                                            get_byte_size(dtype, b.stride(0)),
                                            src.raw_data(),
                                            get_byte_size(dtype, a.stride(0)),
@@ -155,7 +155,7 @@ void Copy(const Tensor& src, Tensor& dst, Stream& stream)
         param.extent = make_cudaExtent(get_byte_size(dtype, a.shape(2)), a.shape(1), a.shape(0));
         param.kind   = cudaMemcpyDefault;
 
-        if (auto ec = cudaMemcpy3DAsync(&param, stream.handle()); ec == cudaSuccess) {
+        if (auto ec = cudaMemcpy3DAsync(&param, stream.handle()); ec != cudaSuccess) {
             TM_LOG_WARN("{}", cudaGetErrorString(ec));
             return;
         }
