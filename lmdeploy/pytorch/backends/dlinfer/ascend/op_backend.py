@@ -13,6 +13,7 @@ import torch.distributed as dist
 from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.distributed import get_dist_manager
+from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 from lmdeploy.utils import get_logger
 
 from ..moe import DlinferMoECommType, DlinferMoeMetadata
@@ -156,19 +157,17 @@ class AscendOpsBackend(DlinferOpsBackend):
 
         block_num, block_size, *_ = step_context.kv_caches[0][0].shape
         is_prefill_no_cache = False
-        is_multi_token_decoding = False
-        actual_seq_lengths_q = None
-        num_accepted_tokens = None
-        # Pre-compute CPU q_seqlens for decode path (reused in get_cpu_seqlens)
-        q_seqlens_cpu_early = None
+        
         if not step_context.is_decoding:
             is_prefill_no_cache = all((step_context.q_seqlens == step_context.kv_seqlens).tolist())
+            is_multi_token_decoding = False
+            is_decoding = False
         else:
-            q_seqlens_cpu_early = step_context.q_seqlens.cpu()
-            is_multi_token_decoding = q_seqlens_cpu_early.max().item() > 1
-        effective_is_decoding = step_context.is_decoding and not is_multi_token_decoding
-        if is_multi_token_decoding:
-            actual_seq_lengths_q = q_seqlens_cpu_early.cumsum(0).to(torch.int32)
+            # Device-side scalar op; avoids a full D2H copy on every regular decode step
+            is_multi_token_decoding = step_context.q_seqlens.max().item() > 1
+            # is_decoding: True only for regular single-token decode (original semantics)
+            is_decoding = not is_multi_token_decoding
+            
         if step_context.is_decoding and step_context.model_metas is not None:
             accepted = []
             for model_meta in step_context.model_metas:
@@ -196,8 +195,7 @@ class AscendOpsBackend(DlinferOpsBackend):
                 cls.total_slots = cls.total_slots.view(block_num, block_size)
             return cls.total_slots
 
-        def get_cpu_seqlens(is_decoding, is_prefill_no_cache, is_multi_token_decoding,
-                            _q_seqlens_cpu_early=None):
+        def get_cpu_seqlens(is_decoding, is_prefill_no_cache, is_multi_token_decoding):
             """Get sequence lengths on CPU.
 
             Returns:
@@ -205,11 +203,11 @@ class AscendOpsBackend(DlinferOpsBackend):
                 kv_seqlens_cpu: kv sequence lengths (per sequence), used for
                     list/max seqlens calculation.
             """
-            if is_decoding and not is_multi_token_decoding:
+            if is_decoding:
                 q_seqlens_cpu = None
                 kv_seqlens_cpu = step_context.kv_seqlens.cpu()
             elif is_multi_token_decoding:
-                q_seqlens_cpu = _q_seqlens_cpu_early
+                q_seqlens_cpu = step_context.q_seqlens.cpu()
                 kv_seqlens_cpu = step_context.kv_seqlens.cpu()
             elif is_prefill_no_cache:
                 q_seqlens_cpu = step_context.q_seqlens.cpu()
@@ -244,7 +242,8 @@ class AscendOpsBackend(DlinferOpsBackend):
                 return torch.arange(1, batch_size + 1, dtype=torch.int32)
             elif is_prefill_no_cache:
                 return q_seqlens_cpu
-            return q_seqlens_cpu.cumsum(dim=0)
+            # for paged_prefill, eg. MTP, prefix caching
+            return q_seqlens_cpu.cumsum(dim=0).to(torch.int32)
 
         def get_kv_start_indices_and_attention_mask(is_decoding, is_prefill_no_cache, q_seqlens_list, kv_seqlens_list,
                                                     max_q_seq_len, max_kv_seq_len):
@@ -300,7 +299,7 @@ class AscendOpsBackend(DlinferOpsBackend):
             if ep_size <= 1:
                 return 0, 0, 0
             # get padded_tokens_current_rank
-            is_graph = cls.enable_graph and effective_is_decoding
+            is_graph = cls.enable_graph and is_decoding
             if is_graph:
                 from dlinfer.framework.lmdeploy_ext.cudagraph.ascend_cudagraph import get_ascend_compatible_size
                 actual_tokens_current_rank = step_context.q_seqlens.shape[0]
@@ -334,7 +333,7 @@ class AscendOpsBackend(DlinferOpsBackend):
             if ep_size <= 1:
                 return DlinferMoECommType.ALLGATHER
             mc2_token_capacity = init_mc2_token_capacity(tp_size)
-            is_graph = cls.enable_graph and effective_is_decoding
+            is_graph = cls.enable_graph and is_decoding
             if is_graph:
                 max_tokens_across_dp = math.ceil(max_tokens_across_dp / tp_size) * tp_size
             if SocVersion.is_A2():
@@ -376,18 +375,18 @@ class AscendOpsBackend(DlinferOpsBackend):
             group_name = backend.get_hccl_comm_name(local_rank)
             return group_name
 
-        q_seqlens_cpu, kv_seqlens_cpu = get_cpu_seqlens(effective_is_decoding, is_prefill_no_cache,
-                                                        is_multi_token_decoding, q_seqlens_cpu_early)
-        q_seqlens_list, kv_seqlens_list = get_list_seqlens(effective_is_decoding, is_prefill_no_cache, q_seqlens_cpu,
+        q_seqlens_cpu, kv_seqlens_cpu = get_cpu_seqlens(is_decoding, is_prefill_no_cache,
+                                                        is_multi_token_decoding)
+        q_seqlens_list, kv_seqlens_list = get_list_seqlens(is_decoding, is_prefill_no_cache, q_seqlens_cpu,
                                                            kv_seqlens_cpu)
-        max_q_seq_len, max_kv_seq_len = get_max_seqlens(effective_is_decoding, is_prefill_no_cache, q_seqlens_list,
+        max_q_seq_len, max_kv_seq_len = get_max_seqlens(is_decoding, is_prefill_no_cache, q_seqlens_list,
                                                         kv_seqlens_list)
-        kv_start_indices, attention_mask = get_kv_start_indices_and_attention_mask(effective_is_decoding,
+        kv_start_indices, attention_mask = get_kv_start_indices_and_attention_mask(is_decoding,
                                                                                    is_prefill_no_cache, q_seqlens_list,
                                                                                    kv_seqlens_list, max_q_seq_len,
                                                                                    max_kv_seq_len)
-        q_seqlens_cpu = update_q_seqlens(effective_is_decoding, is_prefill_no_cache, q_seqlens_cpu)
-
+        q_seqlens_cpu = update_q_seqlens(is_decoding, is_prefill_no_cache, q_seqlens_cpu)
+        
         if not cls.enable_graph and step_context.kv_quant_policy == 8:
             record_file = os.getenv('ASCEND_QUANT_RECORD_FILE')
             assert record_file, 'please specify valid ASCEND_QUANT_RECORD_FILE'
@@ -403,18 +402,58 @@ class AscendOpsBackend(DlinferOpsBackend):
 
         cu_seqlens = None
         has_initial_state = None
-
+        spec_conv_offsets = None
+        spec_state_offsets = None
+        cache_seqlens = None
         is_gated_delta = step_context.model_config.is_gated_delta
         if is_gated_delta:
-            q_start_loc = step_context.q_start_loc.to(dtype=step_context.q_seqlens.dtype,
-                                                      device=step_context.q_seqlens.device)
-            cu_seqlens = torch.cat((q_start_loc, step_context.q_seqlens.sum().unsqueeze(0))).int()
-            if not effective_is_decoding:
-                has_initial_state = ~(step_context.q_seqlens == step_context.kv_seqlens)
+            q_seqlens = step_context.q_seqlens
+            kv_seqlens = step_context.kv_seqlens
+            
+            q_start_loc = step_context.q_start_loc.to(dtype=q_seqlens.dtype,
+                                                      device=q_seqlens.device)
+            cu_seqlens = torch.cat((q_start_loc, q_seqlens.sum().unsqueeze(0))).int()
+            cache_seqlens = (kv_seqlens - q_seqlens).contiguous()
+            
+            
+            states_shapes = step_context.model_config.states_shapes
+            if not is_decoding and not is_multi_token_decoding and len(states_shapes) > 0:
+                has_initial_state = ~(q_seqlens == kv_seqlens)
+                num_spec_tokens = get_step_ctx_manager().build_ctx.num_spec_tokens
+                # # Conv ring buffer: conv_state_len = conv_kernel_size + num_spec_tokens.
+                conv_state_len = states_shapes[0][0][0]
+                conv_kernel_size = conv_state_len - num_spec_tokens
+                
+                if num_spec_tokens > 0:
+                    state_slots = 1 + num_spec_tokens
+                    spec_state_offsets = (
+                        torch.remainder(cache_seqlens, state_slots),
+                        torch.remainder(kv_seqlens, state_slots),
+                    )
+                    
+                    range_idx = torch.arange(
+                        -conv_kernel_size,
+                        0,
+                        device=cache_seqlens.device,
+                        dtype=torch.int32,
+                    )
+                    # Read the (conv_kernel_size - 1) tokens preceding the current write
+                    # window from the circular buffer.
+                    read_conv_offsets = torch.remainder(
+                        cache_seqlens[:, None] + range_idx[1:][None],
+                        conv_state_len,
+                    ).to(torch.int64)
+                    # Write the last conv_kernel_size tokens of this prefill batch into
+                    # circular-buffer slots so the next decode read aligns naturally.
+                    write_conv_offsets = torch.remainder(
+                        kv_seqlens[:, None] + range_idx[None],
+                        conv_state_len,
+                    ).to(torch.int64)
+                    spec_conv_offsets = (read_conv_offsets, write_conv_offsets)
 
         attn_meta_cls = cls.get_attention_metadata_cls()
         attn_metadata = attn_meta_cls(
-            effective_is_decoding,
+            is_decoding,
             step_context.block_offsets,
             # cu_seqlens is only used in GDN and is passed down via q_start_loc.
             # Otherwise, q_start_loc is None.
@@ -431,9 +470,9 @@ class AscendOpsBackend(DlinferOpsBackend):
             quant_meta=AscendKVQuantMeta.quant_meta,
             has_initial_state=has_initial_state,
             is_multi_token_decoding=is_multi_token_decoding,
-            actual_seq_lengths_q=actual_seq_lengths_q,
-            num_accepted_tokens=num_accepted_tokens,
-            kv_seqlens_device=step_context.kv_seqlens,
+            spec_conv_offsets=spec_conv_offsets,
+            spec_state_offsets=spec_state_offsets,
+            cache_seqlens=cache_seqlens,
         )
         step_context.attn_metadata = attn_metadata
 
