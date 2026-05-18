@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import AsyncGenerator
 from http import HTTPStatus
@@ -12,97 +13,20 @@ from typing import Any, Literal
 import shortuuid
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
 
 from lmdeploy.messages import GenerationConfig
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, Tool, ToolChoice, ToolChoiceFuncName
+from lmdeploy.serve.openai.responses.protocol import (
+    ResponseOutputFunctionCall,
+    ResponseOutputMessage,
+    ResponseOutputText,
+    ResponsesRequest,
+    ResponsesResponse,
+    ResponseUsage,
+)
 from lmdeploy.serve.utils.server_utils import validate_json_request
 
-
-class ResponsesRequest(BaseModel):
-    """Request body for ``POST /v1/responses``.
-
-    This is intentionally a Text V1 subset. Unsupported agentic fields are accepted by the model so the endpoint can
-    return OpenAI-style 400 errors.
-    """
-
-    model_config = ConfigDict(extra='allow')
-
-    input: str | list[dict[str, Any]]
-    model: str | None = None
-    instructions: str | None = None
-    max_output_tokens: int | None = Field(default=None, gt=0)
-    stream: bool | None = False
-    temperature: float | None = 1.0
-    top_p: float | None = 1.0
-    top_k: int | None = 40
-    stop: str | list[str] | None = None
-    seed: int | None = None
-    min_p: float = 0.0
-    ignore_eos: bool | None = False
-    skip_special_tokens: bool | None = True
-    include_stop_str_in_output: bool | None = False
-    text: dict[str, Any] | None = None
-    store: bool | None = True
-    background: bool | None = False
-    previous_response_id: str | None = None
-    tools: list[dict[str, Any]] = Field(default_factory=list)
-    tool_choice: Any = 'auto'
-    request_id: str = Field(default_factory=lambda: f'resp_{shortuuid.random()}')
-
-
-class ResponseUsage(BaseModel):
-    """Token usage in Responses API shape."""
-
-    input_tokens: int = 0
-    output_tokens: int = 0
-    total_tokens: int = 0
-
-
-class ResponseOutputText(BaseModel):
-    """Text content part in a Responses output message."""
-
-    type: Literal['output_text'] = 'output_text'
-    text: str
-    annotations: list[Any] = Field(default_factory=list)
-
-
-class ResponseOutputMessage(BaseModel):
-    """Assistant output item."""
-
-    id: str = Field(default_factory=lambda: f'msg_{shortuuid.random()}')
-    type: Literal['message'] = 'message'
-    role: Literal['assistant'] = 'assistant'
-    status: Literal['in_progress', 'completed', 'incomplete'] = 'completed'
-    content: list[ResponseOutputText]
-
-
-class ResponseOutputFunctionCall(BaseModel):
-    """Function call output item in Responses API shape."""
-
-    id: str
-    type: Literal['function_call'] = 'function_call'
-    call_id: str
-    name: str
-    arguments: str
-
-
-class ResponsesResponse(BaseModel):
-    """Response body for Text V1 ``POST /v1/responses``."""
-
-    id: str
-    object: Literal['response'] = 'response'
-    created_at: int
-    model: str
-    status: Literal['in_progress', 'completed', 'incomplete', 'failed'] = 'completed'
-    output: list[ResponseOutputMessage | ResponseOutputFunctionCall] = Field(default_factory=list)
-    output_text: str = ''
-    usage: ResponseUsage | None = None
-    instructions: str | None = None
-    max_output_tokens: int | None = None
-    temperature: float | None = None
-    top_p: float | None = None
-    store: bool = False
+logger = logging.getLogger(__name__)
 
 
 def _error_response(status: HTTPStatus, message: str, *, param: str | None = None) -> JSONResponse:
@@ -128,11 +52,55 @@ def _validate_text_v1_request(request: ResponsesRequest) -> JSONResponse | None:
     if request.background:
         return _error_response(HTTPStatus.BAD_REQUEST, 'background mode is not supported by Responses Text V1.',
                                param='background')
+    if request.context_management is not None:
+        return _error_response(HTTPStatus.BAD_REQUEST,
+                               'context_management is not supported by Responses Text V1.',
+                               param='context_management')
+    if request.conversation is not None:
+        return _error_response(HTTPStatus.BAD_REQUEST, 'conversation is not supported by Responses Text V1.',
+                               param='conversation')
     if request.previous_response_id is not None:
         return _error_response(HTTPStatus.BAD_REQUEST,
                                'previous_response_id is not supported by Responses Text V1.',
                                param='previous_response_id')
+    if request.prompt is not None:
+        return _error_response(HTTPStatus.BAD_REQUEST, 'prompt is not supported by Responses Text V1.',
+                               param='prompt')
+    if request.input is None:
+        return _error_response(HTTPStatus.BAD_REQUEST, 'input is required by Responses Text V1.', param='input')
     return None
+
+
+def _warn_ignored_request_fields(request: ResponsesRequest) -> None:
+    ignored_fields: list[str] = []
+    for field_name in (
+            'include',
+            'max_tool_calls',
+            'metadata',
+            'logit_bias',
+            'prompt_cache_key',
+            'prompt_cache_retention',
+            'reasoning',
+            'safety_identifier',
+            'stream_options',
+            'top_logprobs',
+            'user',
+    ):
+        if getattr(request, field_name) is not None:
+            ignored_fields.append(field_name)
+    if request.parallel_tool_calls is not None and request.parallel_tool_calls is not True:
+        ignored_fields.append('parallel_tool_calls')
+    if request.service_tier not in (None, 'auto'):
+        ignored_fields.append('service_tier')
+    if request.truncation not in (None, 'disabled'):
+        ignored_fields.append('truncation')
+
+    text = _as_dict(request.text)
+    if text.get('verbosity') is not None:
+        ignored_fields.append('text.verbosity')
+
+    if ignored_fields:
+        logger.warning('Ignoring unsupported Responses request fields: %s.', ', '.join(ignored_fields))
 
 
 def _stringify_value(value: Any) -> str:
@@ -149,6 +117,16 @@ def _generation_messages_from_parser(messages: list[dict[str, Any]], parsed_requ
     return parsed_request.messages
 
 
+def _as_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if hasattr(value, 'model_dump'):
+        return value.model_dump(exclude_none=True, by_alias=True)
+    if hasattr(value, 'to_dict'):
+        return value.to_dict()
+    return {}
+
+
 def _text_from_content(content: Any, field_name: str) -> str:
     if isinstance(content, str):
         return content
@@ -157,7 +135,8 @@ def _text_from_content(content: Any, field_name: str) -> str:
 
     text_parts: list[str] = []
     for idx, part in enumerate(content):
-        if not isinstance(part, dict):
+        part = _as_dict(part)
+        if not part:
             raise ValueError(f'Unsupported `{field_name}` content part at index {idx}.')
         part_type = part.get('type')
         if part_type in ('input_text', 'output_text', 'text'):
@@ -181,7 +160,8 @@ def _messages_from_input(request: ResponsesRequest) -> list[dict[str, Any]]:
         return ([dict(role='system', content='\n\n'.join(system_parts))] if system_parts else []) + messages
 
     for idx, item in enumerate(request.input):
-        if not isinstance(item, dict):
+        item = _as_dict(item)
+        if not item:
             raise ValueError(f'Unsupported Responses input item at index {idx}.')
 
         item_type = item.get('type', 'message')
@@ -240,7 +220,9 @@ def _openai_tools_from_responses(request: ResponsesRequest) -> list[Tool] | None
         return None
     tools: list[Tool] = []
     for idx, tool in enumerate(request.tools):
+        tool = _as_dict(tool)
         if tool.get('type') != 'function':
+            logger.warning('Ignoring unsupported Responses tool type at index %s: %r.', idx, tool.get('type'))
             continue
         name = tool.get('name')
         if not name:
@@ -273,7 +255,8 @@ def _tool_choice_from_responses(tool_choice: Any,
                 raise ValueError("Tool choice 'required' must be specified with `tools`.")
             return tool_choice
         raise ValueError(f'Unsupported tool_choice: {tool_choice!r}.')
-    if isinstance(tool_choice, dict):
+    tool_choice = _as_dict(tool_choice)
+    if tool_choice:
         if tool_choice.get('type') == 'function':
             name = tool_choice.get('name')
             if not name:
@@ -282,17 +265,20 @@ def _tool_choice_from_responses(tool_choice: Any,
             if name not in tool_names:
                 raise ValueError(f"Tool choice 'function' not found in `tools`: {name!r}.")
             return ToolChoice(function=ToolChoiceFuncName(name=name))
-        raise ValueError(f'Unsupported tool_choice type: {tool_choice.get("type")!r}.')
+        logger.warning('Ignoring unsupported Responses tool_choice type: %r.', tool_choice.get('type'))
+        return 'auto' if has_tools else 'none'
     raise ValueError('Unsupported tool_choice. Expected string or function tool choice object.')
 
 
-def _response_format_from_text(text: dict[str, Any] | None) -> dict[str, Any] | None:
+def _response_format_from_text(text: Any) -> dict[str, Any] | None:
     if not text:
         return None
+    text = _as_dict(text)
     text_format = text.get('format')
     if text_format is None:
         return None
-    if not isinstance(text_format, dict):
+    text_format = _as_dict(text_format)
+    if not text_format:
         raise ValueError('`text.format` must be an object.')
     format_type = text_format.get('type', 'text')
     if format_type == 'text':
@@ -711,6 +697,7 @@ def create_responses_router(server_context) -> APIRouter:
         validation_error = _validate_text_v1_request(request)
         if validation_error is not None:
             return validation_error
+        _warn_ignored_request_fields(request)
 
         model_name = request.model or server_context.async_engine.model_name
         if model_name not in _get_model_list(server_context):

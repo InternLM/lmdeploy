@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+from openai.types.responses import ResponseFunctionToolCall
+
 from lmdeploy.serve.openai.protocol import DeltaFunctionCall, DeltaMessage, DeltaToolCall, FunctionCall, ToolCall
 from lmdeploy.serve.openai.responses import (
     ResponsesRequest,
@@ -16,6 +18,7 @@ from lmdeploy.serve.openai.responses import (
     _validate_text_v1_request,
     create_responses_router,
 )
+from lmdeploy.serve.openai.responses.protocol import ResponseInputOutputItem
 
 
 class _FakeAsyncEngine:
@@ -81,6 +84,65 @@ def _sse_payloads(events: list[str]):
             if line.startswith('data: '):
                 payloads.append(json.loads(line.removeprefix('data: ')))
     return payloads
+
+
+def test_responses_request_uses_structured_input_item_alias():
+    item: ResponseInputOutputItem = ResponseFunctionToolCall(
+        id='fc_1',
+        call_id='call_1',
+        name='search',
+        arguments='{"query":"lmdeploy"}',
+        type='function_call',
+    )
+    request = ResponsesRequest(model='fake-model', input=[item])
+
+    assert _messages_from_input(request) == [{
+        'role': 'assistant',
+        'content': None,
+        'tool_calls': [{
+            'id': 'call_1',
+            'type': 'function',
+            'function': {
+                'name': 'search',
+                'arguments': '{"query":"lmdeploy"}',
+            },
+        }],
+    }]
+
+
+def test_responses_request_keeps_official_field_order_prefix():
+    assert list(ResponsesRequest.model_fields)[:30] == [
+        'background',
+        'context_management',
+        'conversation',
+        'include',
+        'input',
+        'instructions',
+        'max_output_tokens',
+        'max_tool_calls',
+        'metadata',
+        'model',
+        'logit_bias',
+        'parallel_tool_calls',
+        'previous_response_id',
+        'prompt',
+        'prompt_cache_key',
+        'prompt_cache_retention',
+        'reasoning',
+        'safety_identifier',
+        'service_tier',
+        'store',
+        'stream',
+        'stream_options',
+        'temperature',
+        'text',
+        'tool_choice',
+        'tools',
+        'top_logprobs',
+        'top_p',
+        'truncation',
+        'user',
+    ]
 
 
 def test_responses_string_input_maps_to_user_message():
@@ -528,6 +590,36 @@ def test_responses_rejects_unsupported_agentic_fields_for_text_v1():
     assert response is not None
     assert response.status_code == 400
     assert json.loads(response.body)['error']['param'] == 'previous_response_id'
+
+
+def test_responses_rejects_unsupported_conversation_for_text_v1():
+    request = ResponsesRequest(model='fake-model', input='Hi', conversation={'id': 'conv_123'})
+
+    response = _validate_text_v1_request(request)
+
+    assert response is not None
+    assert response.status_code == 400
+    assert json.loads(response.body)['error']['param'] == 'conversation'
+
+
+def test_responses_rejects_unsupported_prompt_before_missing_input():
+    request = ResponsesRequest(model='fake-model', prompt={'id': 'pmpt_123'})
+
+    response = _validate_text_v1_request(request)
+
+    assert response is not None
+    assert response.status_code == 400
+    assert json.loads(response.body)['error']['param'] == 'prompt'
+
+
+def test_responses_rejects_missing_input_for_text_v1():
+    request = ResponsesRequest(model='fake-model')
+
+    response = _validate_text_v1_request(request)
+
+    assert response is not None
+    assert response.status_code == 400
+    assert json.loads(response.body)['error']['param'] == 'input'
 
 
 def test_responses_rejects_unsupported_input_items():
