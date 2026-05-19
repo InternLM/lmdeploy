@@ -7,11 +7,17 @@ accepted in one step, and the stop_pos parameter which truncates acceptance inli
 from unittest.mock import MagicMock
 
 import numpy as np
+import torch
 
+from lmdeploy.pytorch.engine.engine_loop import EngineLoop
+from lmdeploy.pytorch.engine.model_agent import BatchedOutputs
 from lmdeploy.pytorch.messages import (
     SamplingParam,
     SequenceMeta,
+    UpdateTokenMode,
 )
+from lmdeploy.pytorch.model_inputs import ModelInputs
+from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
 from lmdeploy.pytorch.strategies.ar_spec.sequence import (
     ARSpecSequenceStrategy,
     SchedulerSequenceARSpec,
@@ -342,6 +348,45 @@ def _experts(n, k=2):
     return np.arange(n * k, dtype=np.uint16).reshape(n, 1, k)
 
 
+def _make_ar_seq_with_experts(prefill_tokens=None):
+    """Create a default AR sequence with return_routed_experts=True."""
+    strategy = ARSequenceStrategy()
+    seq_meta = SequenceMeta(block_size=16, strategy=strategy)
+    session = MagicMock()
+    session.seq_meta = seq_meta
+    sampling_param = SamplingParam(return_routed_experts=True)
+    seq = strategy.make_sequence(seq_id=0, session=session, sampling_param=sampling_param)
+    if prefill_tokens is not None:
+        seq.update_token_ids(np.array(prefill_tokens, dtype=np.int64), mode=UpdateTokenMode.INPUTS)
+    return seq
+
+
+def _chunk_model_inputs(history_length, chunk_size):
+    """Create minimal non-final chunk inputs for EngineLoop output handling."""
+    return ModelInputs(
+        input_ids=torch.arange(chunk_size, dtype=torch.int64).unsqueeze(0),
+        seq_length=torch.tensor([chunk_size], dtype=torch.int64),
+        history_lengths=torch.tensor([history_length], dtype=torch.int64),
+        block_offsets=torch.zeros((1, 1), dtype=torch.int64),
+        is_decoding=False,
+        num_ignored_history=torch.zeros(1, dtype=torch.int64),
+        max_q_seqlen=chunk_size,
+        max_kv_seqlen=history_length + chunk_size,
+        sum_kv_seqlen=history_length + chunk_size,
+        is_chunk=True,
+        is_first_chunk=history_length == 0,
+        is_last_chunk=False,
+    )
+
+
+def _chunk_outputs(num_experts):
+    return BatchedOutputs(
+        next_token_ids=torch.empty((0, ), dtype=torch.int64),
+        stopped=torch.empty((0, ), dtype=torch.bool),
+        all_routed_experts=torch.from_numpy(_experts(num_experts)),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tests for routed_experts in _update_token_ids_decode
 # ---------------------------------------------------------------------------
@@ -358,31 +403,35 @@ class TestRoutedExpertsDecode:
         seq.history_cache.append(
             np.array(base + [prior_valid - 1] + list(range(100, 100 + num_spec)), dtype=np.int64))
         seq._num_token_ids = 1 + num_spec
+        seq.append_routed_experts(_experts(seq.num_history_ids), start_pos=0)
         return seq
 
     def test_experts_clipped_to_num_valid(self):
         """When 2 of 3 tokens are accepted, experts are clipped to 2."""
         seq = self._seq_with_prior_spec(prior_valid=3, num_spec=2)
+        before = len(seq.all_routed_experts)
         seq._update_token_ids_decode(
             np.array([30, 40, -1]),       # 2 valid
             draft_token_ids=np.array([], dtype=np.int64),
             routed_experts=_experts(3),   # 3 expert rows provided
         )
-        assert len(seq.all_routed_experts) == 2
+        assert len(seq.all_routed_experts) == before + 2
 
     def test_experts_all_accepted(self):
         """When all tokens are accepted, all expert rows are kept."""
         seq = self._seq_with_prior_spec(prior_valid=3, num_spec=2)
+        before = len(seq.all_routed_experts)
         seq._update_token_ids_decode(
             np.array([30, 40, 50]),
             draft_token_ids=np.array([], dtype=np.int64),
             routed_experts=_experts(3),
         )
-        assert len(seq.all_routed_experts) == 3
+        assert len(seq.all_routed_experts) == before + 3
 
     def test_experts_clipped_by_stop_pos(self):
         """stop_pos limits num_valid, which limits expert rows kept."""
         seq = self._seq_with_prior_spec(prior_valid=3, num_spec=2)
+        before = len(seq.all_routed_experts)
         # 3 valid tokens, but stop at pos=1 → only 2 accepted
         seq._update_token_ids_decode(
             np.array([30, 40, 50]),
@@ -390,7 +439,7 @@ class TestRoutedExpertsDecode:
             routed_experts=_experts(3),
             stop_pos=1,
         )
-        assert len(seq.all_routed_experts) == 2  # stop_pos+1
+        assert len(seq.all_routed_experts) == before + 2  # stop_pos+1
 
     def test_experts_none_is_noop(self):
         """Passing routed_experts=None leaves all_routed_experts unchanged."""
@@ -448,17 +497,20 @@ class TestRoutedExpertsPrefill:
         )
         assert len(seq.all_routed_experts) == before
 
+    def test_set_step_preserves_routed_experts(self):
+        """set_step(step) preserves routed experts while changing token
+        counters."""
+        seq = _make_seq_with_experts([1, 2, 3, 4, 5, 6])
+        seq.append_routed_experts(_experts(6), start_pos=0)
+
+        seq.set_step(5)
+
+        assert len(seq.all_routed_experts) == 6
+
     def test_expert_after_evict(self):
-        """set_step(0) evicts all cached experts; reprefill over all valid ids
-        re-accumulates them.
-
-        Evict only happens when the sequence is still running (not stopped), so prefill always has draft tokens and
-        decode always attaches new drafts.
-        """
-        seq = _make_seq_with_experts([1, 2, 3])   # 3 input tokens
-
-        # prefill: main model generates token 10, draft model produces 2 draft tokens
-        # → num_valid_ids = 4, num_token_ids = 3 (1 + 2 drafts)
+        """Eviction preserves experts; reprefill appends only missing
+        suffix."""
+        seq = _make_seq_with_experts([1, 2, 3])
         seq._update_token_ids_prefill(
             np.array([10], dtype=np.int64),
             draft_token_ids=np.array([100, 101], dtype=np.int64),
@@ -476,31 +528,99 @@ class TestRoutedExpertsPrefill:
         assert len(seq.all_routed_experts) == 6
 
         num_valid = seq.num_valid_ids   # == 7
-
-        # evict: set_step(0) clears all cached experts
+        old_routed_experts = seq.all_routed_experts[:num_valid].copy()
+        # evict: set_step(0)
         seq.set_step(0)
-        assert len(seq.all_routed_experts) == 0
-        assert seq.routed_experts is None
+        assert len(seq.all_routed_experts) == 6
 
         new_routed_experts = _experts(num_valid)
-        # reprefill: all num_valid tokens reprocessed, draft tokens re-attached
         seq._update_token_ids_prefill(
             np.array([60]),
             draft_token_ids=np.array([300, 301], dtype=np.int64),
-            routed_experts=new_routed_experts,   # one row per valid token
+            routed_experts=new_routed_experts,
         )
         assert seq.routed_experts is not None
+        assert len(seq.all_routed_experts) == num_valid
         assert len(seq.routed_experts) == num_valid
-        assert np.array_equal(seq.all_routed_experts, new_routed_experts)
+        expected_experts = np.concatenate([old_routed_experts, new_routed_experts[-1:]], axis=0)
+        assert np.array_equal(seq.all_routed_experts, expected_experts)
 
-    def test_set_step_keeps_transition_aligned_experts(self):
-        """set_step(step) keeps routed experts aligned to step transitions."""
-        seq = _make_seq_with_experts([1, 2, 3, 4, 5, 6])
-        seq.append_routed_experts(_experts(6))
 
-        seq.set_step(5)
+class TestRoutedExpertsReuse:
+    """Compact routed_experts reuse coverage for eviction/re-prefill."""
 
-        assert len(seq.all_routed_experts) == 5
+    def test_set_step_preserves_expert_history(self):
+        step_seq = _make_seq_with_experts([1, 2, 3, 4, 5, 6])
+        preserve_seq = _make_seq_with_experts([1, 2, 3, 4, 5, 6])
+        step_seq.append_routed_experts(_experts(6), start_pos=0)
+        preserve_seq.append_routed_experts(_experts(6), start_pos=0)
+
+        step_seq.set_step(5)
+        preserve_seq.set_step(0)
+
+        assert len(step_seq.all_routed_experts) == 6
+        assert len(preserve_seq.all_routed_experts) == 6
+
+    def test_arspec_stop_decode_clips_suffix_after_reprefill(self):
+        seq = _make_seq_with_experts([1, 2, 3])
+        seq._update_token_ids_prefill(
+            np.array([10], dtype=np.int64),
+            draft_token_ids=np.array([100, 101], dtype=np.int64),
+            routed_experts=_experts(3),
+        )
+
+        seq.set_step(0)
+        seq._update_token_ids_prefill(
+            np.array([60], dtype=np.int64),
+            draft_token_ids=np.array([200, 201], dtype=np.int64),
+            routed_experts=_experts(4),
+        )
+        seq._update_token_ids_decode(
+            np.array([200, 201, 70]),
+            draft_token_ids=np.array([300, 301], dtype=np.int64),
+            routed_experts=_experts(3),
+            stop_pos=1,
+        )
+
+        assert len(seq.all_routed_experts) == 6
+        assert seq.num_token_ids == 1
+
+    def test_ar_and_long_context_reprefill_append_missing_suffix(self):
+        ar_seq = _make_ar_seq_with_experts([1, 2, 3])
+        ar_seq.update_token_ids(np.array([10]), mode=UpdateTokenMode.PREFILL, routed_experts=_experts(3))
+        ar_seq.update_token_ids(np.array([20]), mode=UpdateTokenMode.DECODE, routed_experts=_experts(1))
+        ar_seq.set_step(0)
+        ar_seq.update_token_ids(np.array([30]), mode=UpdateTokenMode.PREFILL, routed_experts=_experts(5))
+
+        chunk_seq = _make_seq_with_experts([1, 2, 3, 4, 5, 6])
+        chunk_seq.append_routed_experts(_experts(3), start_pos=0)
+        chunk_seq.set_step(3)
+        chunk_seq.append_routed_experts(_experts(3), start_pos=3)
+        chunk_seq.set_step(5)
+        chunk_seq._update_token_ids_prefill(
+            np.array([10]), draft_token_ids=np.array([], dtype=np.int64), routed_experts=_experts(1))
+
+        assert len(ar_seq.all_routed_experts) == 5
+        assert len(chunk_seq.all_routed_experts) == 6
+
+
+class TestRoutedExpertsLongContext:
+    """Regression coverage for routed_experts in chunked long-context output
+    handling."""
+
+    def test_non_final_chunks_append_at_original_history_length(self):
+        seq = _make_seq_with_experts(list(range(6)))
+        loop = EngineLoop.__new__(EngineLoop)
+
+        first_inputs = _chunk_model_inputs(history_length=0, chunk_size=3)
+        seq.set_step(3)
+        EngineLoop._make_infer_outputs(loop, _chunk_outputs(3), running=[seq], model_inputs=first_inputs, delta=None)
+        assert len(seq.all_routed_experts) == 3
+
+        second_inputs = _chunk_model_inputs(history_length=3, chunk_size=3)
+        seq.set_step(6)
+        EngineLoop._make_infer_outputs(loop, _chunk_outputs(3), running=[seq], model_inputs=second_inputs, delta=None)
+        assert len(seq.all_routed_experts) == 6
 
 # ---------------------------------------------------------------------------
 # Tests for _update_token_ids_inputs across multiple turns

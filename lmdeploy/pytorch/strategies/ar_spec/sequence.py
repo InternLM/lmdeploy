@@ -66,12 +66,13 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
     def _update_token_ids_prefill(self, token_ids: np.ndarray, draft_token_ids: np.ndarray,
                                   stop_pos: int = -1, routed_experts: np.ndarray = None):
         """Update token ids for prefill."""
+        expert_start_pos = self.num_history_ids
         # back to last valid position
         self.history_cache.resize(self.num_valid_ids)
 
         num_valid = len(token_ids)
         self.history_cache.append(token_ids)
-        self.append_routed_experts(routed_experts)
+        self.append_routed_experts(routed_experts, start_pos=expert_start_pos)
         self._num_history_ids += self._num_token_ids
         self.num_new_tokens += num_valid
         self._num_valid_ids = self.num_history_ids + num_valid
@@ -84,6 +85,7 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
     def _update_token_ids_decode(self, token_ids: np.ndarray, draft_token_ids: np.ndarray,
                                  stop_pos: int = -1, routed_experts: np.ndarray = None):
         """Update token ids for decode."""
+        expert_start_pos = self.num_history_ids
         # back to last valid position
         self.history_cache.resize(self.num_valid_ids)
 
@@ -100,7 +102,7 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
         # append valid experts
         if routed_experts is not None:
             routed_experts = routed_experts[:num_valid]
-            self.append_routed_experts(routed_experts)
+            self.append_routed_experts(routed_experts, start_pos=expert_start_pos)
 
         if stop_pos > -1:
             self._num_token_ids = 1
@@ -160,11 +162,6 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
 
         self.history_cache.resize(num_valid_ids)
         self.model_meta = None
-
-        if self.return_routed_experts:
-            # chunk long context might not have all routed experts
-            if len(self.all_routed_experts) > step:
-                self.all_routed_experts.resize(step)
 
     def cleanup(self):
         """Setup history meta after sequence stopped or cancelled."""
