@@ -676,20 +676,21 @@ class DeepseekV4ChatTemplate(BaseChatTemplate):
         if isinstance(messages, str):
             messages = [{'role': 'user', 'content': messages}]
 
-        # Build prompt following official encoding format
         prompt = '<｜begin▁of▁sentence｜>'
 
-        for msg in messages:
+        for i, msg in enumerate(messages):
             role = msg.get('role')
             content = msg.get('content', '')
+            is_last = i == len(messages) - 1
 
             if role == 'user':
                 prompt += '<｜User｜>'
                 prompt += content
                 prompt += '<｜Assistant｜>'
-                prompt += '</think>'  # Official encoding closes user turn with thinking token
+                if is_last:
+                    prompt += '<think>'
             elif role == 'assistant':
-                # Assistant message: content + EOS
+                prompt += '</think>'
                 prompt += content
                 prompt += '<｜end▁of▁sentence｜>'
             elif role == 'system':
