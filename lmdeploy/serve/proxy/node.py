@@ -16,6 +16,16 @@ from lmdeploy.utils import get_logger
 logger = get_logger('lmdeploy')
 
 
+def _normalize_url(url: str) -> str:
+    """Replace 0.0.0.0 with 127.0.0.1 for client connections."""
+    from urllib.parse import urlparse, urlunparse
+    parsed = urlparse(url)
+    if parsed.hostname == '0.0.0.0':
+        replaced = parsed._replace(netloc=parsed.netloc.replace('0.0.0.0', '127.0.0.1', 1))
+        return urlunparse(replaced)
+    return url
+
+
 class Node(BaseModel):
     """A backend api_server node tracked by the proxy."""
     url: str
@@ -42,6 +52,7 @@ class NodeRegistry:
     async def add(self, url: str, role: EngineRole = EngineRole.Hybrid,
                   models: list[str] | None = None,
                   status: Node | None = None) -> None:
+        url = _normalize_url(url)
         async with self._lock:
             if status is not None:
                 if status.models:
