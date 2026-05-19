@@ -13,12 +13,12 @@ from lmdeploy.pytorch.nn.linear import build_colwise_linear
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .patch import add_prefix, get_build_model_context
-from .qwen3_5 import Qwen3_5Attention, Qwen3_5DecoderLayer, Qwen3_5MLP
-from .qwen3_5_moe import Qwen3_5MoeSparseMoeBlock
+from .qwen3_5 import Qwen3_5Attention, Qwen3_5MLP
+from .qwen3_5_moe import Qwen3_5MoeDecoderLayer, Qwen3_5MoeSparseMoeBlock
 from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
 
 
-class Qwen3_5MtpDecoderLayer(Qwen3_5DecoderLayer):
+class Qwen3_5MtpDecoderLayer(Qwen3_5MoeDecoderLayer):
     """Decoder layer."""
 
     def __init__(self,
@@ -26,6 +26,7 @@ class Qwen3_5MtpDecoderLayer(Qwen3_5DecoderLayer):
                  layer_idx: int,
                  dtype: torch.dtype = None,
                  device: torch.device = None,
+                 use_meta_moe: bool = False,
                  prefix: str = ''):
         nn.Module.__init__(self)
         self.layer_idx = layer_idx
@@ -39,6 +40,9 @@ class Qwen3_5MtpDecoderLayer(Qwen3_5DecoderLayer):
                                           device=device,
                                           prefix=add_prefix('self_attn', prefix=prefix),
                                           )
+
+        self.use_meta_moe = use_meta_moe
+        assert use_meta_moe is False, 'meta_moe for mtp_layer has not supported yet'
 
         # build MLP
         if 'moe' in config.model_type.lower():
@@ -54,6 +58,17 @@ class Qwen3_5MtpDecoderLayer(Qwen3_5DecoderLayer):
                                   device=device,
                                   prefix=add_prefix('mlp', prefix=prefix),
                                   )
+
+        self.shared_expert = Qwen3_5MLP(
+            config=config,
+            intermediate_size=config.shared_expert_intermediate_size,
+            dtype=dtype,
+            device=device,
+            is_tp=False,
+            all_reduce=False,
+            prefix=add_prefix('shared_expert', prefix),
+        )
+        self.shared_expert_gate = torch.nn.Linear(config.hidden_size, 1, bias=False, device=device, dtype=dtype)
 
         # build input layer norm
         self.input_layernorm = RMSNorm(config.hidden_size,
@@ -89,6 +104,7 @@ class Qwen3_5MultiTokenPredictor(nn.Module):
                 self.mtp_start_layer_idx + idx,
                 dtype=dtype,
                 device=device,
+                use_meta_moe=False,
                 prefix=add_prefix(f'layers.{self.mtp_start_layer_idx + idx}', prefix=prefix),
             )
             for idx in range(self.num_mtp_layers)
@@ -160,7 +176,9 @@ class Qwen3_5MultiTokenPredictor(nn.Module):
             hidden_states,
             rotary_pos_emb,
             past_key_value,
+            residual=None,
             attn_metadata=attn_metadata,
+            gated_delta_meta=None,
             all_routed_experts=all_routed_experts,
         )
         hidden_states, _ = self.norm(hidden_states, residual)
@@ -190,6 +208,9 @@ class Qwen3_5MTPModel(nn.Module, CudaGraphMixin):
                  prefix: str = ''):
 
         super().__init__()
+        config.text_config.num_experts = config.text_config.mtp_num_experts
+        config.text_config.num_experts_per_tok = config.text_config.mtp_num_experts_per_tok
+
         self.config = config
         self.ctx_mgr = ctx_mgr
         self.dtype = dtype
@@ -388,6 +409,8 @@ class Qwen3_5MTPModel(nn.Module, CudaGraphMixin):
 
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
+            if 'mlp.shared_expert' in name:
+                name = name.replace('mlp.shared_expert', 'shared_expert')
             if not name.startswith('mtp.'):
                 continue
             name, skip = self._rename_interns2_preview(name, interns2_preview_names)

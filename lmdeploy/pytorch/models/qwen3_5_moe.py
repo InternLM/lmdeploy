@@ -118,6 +118,7 @@ class Qwen3_5MoeDecoderLayer(Qwen3_5DecoderLayer):
         layer_idx: int,
         dtype: torch.dtype | None = None,
         device: torch.device | None = None,
+        use_meta_moe: bool = True,
         prefix: str = '',
     ):
         nn.Module.__init__(self)
@@ -139,9 +140,12 @@ class Qwen3_5MoeDecoderLayer(Qwen3_5DecoderLayer):
                                               device=device,
                                               prefix=add_prefix('self_attn', prefix))
 
+        self.use_meta_moe = use_meta_moe
+
         # build MLP
-        if True:
+        if self.use_meta_moe:
             self.mlp = None
+
         else:
             self.mlp = Qwen3_5MoeSparseMoeBlock(config,
                                                 layer_idx,
@@ -212,9 +216,10 @@ class Qwen3_5MoeDecoderLayer(Qwen3_5DecoderLayer):
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.reshape(-1, hidden_dim)
 
-        if True:
+        if self.use_meta_moe:
             moe_block = meta_mlp[self.layer_idx % len(meta_mlp)]
             out_states = moe_block(hidden_states, all_routed_experts=all_routed_experts, layer_idx=self.layer_idx)
+
         else:
             moe_block = self.mlp
             out_states = self.mlp(hidden_states, all_routed_experts=all_routed_experts)
@@ -232,13 +237,13 @@ class Qwen3_5MoeDecoderLayer(Qwen3_5DecoderLayer):
         outputs = (hidden_states, residual)
         return outputs
 
-
 class Qwen3_5MoeTextModel(Qwen3_5TextModel):
 
     def __init__(self,
                  config: PretrainedConfig,
                  dtype: torch.dtype | None = None,
                  device: torch.device | None = None,
+                 use_meta_moe: bool = True,
                  prefix: str = ''):
         nn.Module.__init__(self)
         self.config = config
@@ -251,26 +256,27 @@ class Qwen3_5MoeTextModel(Qwen3_5TextModel):
                                          dtype=dtype,
                                          device=device)
 
+        self.use_meta_moe = use_meta_moe
+
         # build all decode layers
-        # TODO: use full config.num_hidden_layers
         self.layers = nn.ModuleList([
             Qwen3_5MoeDecoderLayer(config,
                                    layer_idx,
                                    dtype=dtype,
                                    device=device,
+                                   use_meta_moe=self.use_meta_moe,
                                    prefix=add_prefix(f'layers.{layer_idx}', prefix))
             for layer_idx in range(self.config.num_hidden_layers)
         ])
 
-        if True:
+        if self.use_meta_moe:
             self.meta_mlp = nn.ModuleList([
                 Qwen3_5MoeSparseMoeBlock(config,
                                          layer_idx=idx,
                                          dtype=dtype,
                                          device=device,
                                          prefix=add_prefix('mlp', prefix))
-                for idx in range(4)
-            ])
+                for idx in range(4)])
         else:
             self.meta_mlp = None
 
@@ -324,13 +330,13 @@ class Qwen3_5MoeTextModel(Qwen3_5TextModel):
                 attn_metadata=attn_metadata,
                 gated_delta_meta=gated_delta_meta,
                 all_routed_experts=all_routed_experts,
-                meta_mlp=self.meta_mlp)
+                meta_mlp=self.meta_mlp
+            )
 
         # norm
         hidden_states, _ = self.norm(hidden_states, residual)
 
         return hidden_states
-
 
 class Qwen3_5MoeModel(Qwen3_5Model):
 
@@ -374,6 +380,7 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
                  ctx_mgr: StepContextManager,
                  dtype: torch.dtype | None = None,
                  device: torch.device | None = None,
+                 use_meta_moe: bool = True,
                  prefix: str = ''):
         nn.Module.__init__(self)
         self.config = config
@@ -394,6 +401,7 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
         bm_ctx = get_build_model_context()
         self.enable_return_routed_experts = bm_ctx.enable_return_routed_experts
         self.is_spec_decoding = get_build_model_context().num_spec_tokens > 0
+        self.use_meta_moe = use_meta_moe
 
     def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter]):
         """Load weight experts."""
@@ -451,6 +459,7 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
         def __skip_layers(name):
             """We might change the number of layers so we can debug the model
             with less gpus."""
+
             if '.layers.' not in name:
                 return False
             matches = re.findall(r'\.layers\.(\d+)\.', name)
@@ -498,7 +507,7 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3_5ForConditionalGeneration):
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
 
-            if '.experts' in name:
+            if (self.use_meta_moe and '.experts' in name) or ('.experts' in name and '.shared_expert' not in name):
                 self._load_weight_experts(name, loaded_weight, params_dict)
                 continue
 
