@@ -56,4 +56,8 @@ def check_request(request: ChatCompletionRequest, server_context: 'VariableInter
         if request.image_data is not None and request.input_ids is None:
             return 'image_data requires input_ids to be set when messages is empty.'
 
+    if request.return_routed_experts and not engine_config.enable_return_routed_experts:
+        return ('routed experts requested but not configured in engine configuration. '
+    'May start api_server with --enable-return-routed-experts flag.')
+
     return ''
