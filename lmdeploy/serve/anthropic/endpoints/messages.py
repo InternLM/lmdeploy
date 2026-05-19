@@ -74,8 +74,6 @@ def register(router: APIRouter, server_context) -> None:
                     'image_data requires input_ids to be set when messages is empty.')
 
         # Resolve input: messages has priority over input_ids/image_data
-        messages_empty = (request.messages is None
-                          or (isinstance(request.messages, list) and len(request.messages) == 0))
         resolved_input_ids = None
         if messages_empty and request.input_ids is not None:
             resolved_input_ids = request.input_ids
@@ -103,29 +101,28 @@ def register(router: APIRouter, server_context) -> None:
                 return create_error_response(HTTPStatus.BAD_REQUEST, str(err))
 
         parser_cls = getattr(server_context, 'response_parser_cls', None)
+        if parser_cls is None:
+            raise ValueError('response_parser_cls is not set')
         if request.tools and (parser_cls is None or parser_cls.tool_parser_cls is None):
             return create_error_response(
                 HTTPStatus.BAD_REQUEST,
                 'Please launch the api_server with --tool-call-parser if you want to use tool calling.')
 
-        response_parser = None
-        parsed_request = None
-        if parser_cls is not None and messages is not None:
-            tokenizer_holder = server_context.async_engine.tokenizer
-            tokenizer = getattr(getattr(tokenizer_holder, 'model', None), 'model', tokenizer_holder)
-            openai_request = ChatCompletionRequest(
-                model=request.model,
-                messages=messages,
-                max_tokens=request.max_tokens,
-                temperature=request.temperature,
-                top_p=request.top_p,
-                top_k=request.top_k,
-                stop=request.stop_sequences,
-                tools=to_openai_tools(request.tools),
-                tool_choice=normalize_tool_choice(request.tool_choice),
-            )
-            response_parser = parser_cls(request=openai_request, tokenizer=tokenizer)
-            parsed_request = response_parser.request
+        tokenizer_holder = server_context.async_engine.tokenizer
+        tokenizer = getattr(getattr(tokenizer_holder, 'model', None), 'model', tokenizer_holder)
+        openai_request = ChatCompletionRequest(
+            model=request.model,
+            messages=messages,
+            max_tokens=request.max_tokens,
+            temperature=request.temperature,
+            top_p=request.top_p,
+            top_k=request.top_k,
+            stop=request.stop_sequences,
+            tools=to_openai_tools(request.tools),
+            tool_choice=normalize_tool_choice(request.tool_choice),
+        )
+        response_parser = parser_cls(request=openai_request, tokenizer=tokenizer)
+        parsed_request = response_parser.request
 
         session = server_context.create_session(-1)
         adapter_name = None if request.model == server_context.async_engine.model_name else request.model
@@ -163,9 +160,6 @@ def register(router: APIRouter, server_context) -> None:
         final_logprobs: list[dict[int, float]] = []
         final_res = None
         async for res in result_generator:
-            if await raw_request.is_disconnected():
-                await session.async_abort()
-                return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
             final_res = res
             text += res.response or ''
             if getattr(res, 'token_ids', None):
@@ -178,13 +172,12 @@ def register(router: APIRouter, server_context) -> None:
 
         tool_calls = None
         reasoning_content = None
-        if response_parser is not None:
-            try:
-                text, tool_calls, reasoning_content = response_parser.parse_complete(text, final_token_ids)
-            except Exception as err:
-                return create_error_response(HTTPStatus.BAD_REQUEST, f'Failed to parse output: {err}')
-            if tool_calls and final_res.finish_reason == 'stop':
-                final_res.finish_reason = 'tool_calls'
+        try:
+            text, tool_calls, reasoning_content = response_parser.parse_complete(text, final_token_ids)
+        except Exception as err:
+            return create_error_response(HTTPStatus.BAD_REQUEST, f'Failed to parse output: {err}')
+        if tool_calls and final_res.finish_reason == 'stop':
+            final_res.finish_reason = 'tool_calls'
 
         content_blocks = build_message_content_blocks(text, tool_calls, reasoning_content)
         if not content_blocks:
