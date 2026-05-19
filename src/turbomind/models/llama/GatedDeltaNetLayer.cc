@@ -3,6 +3,7 @@
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/core/logger.h"
+#include "src/turbomind/core/scope.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/llama/gated_delta_net_kernels.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -40,9 +41,9 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(DataType                state_dtype,
     cudaDeviceGetAttribute(&sm_count_, cudaDevAttrMultiProcessorCount, device);
     work_counter_ = {1, kDEVICE};
 
-    check_cuda_error(cudaStreamCreateWithPriority(&aux_stream_, cudaStreamNonBlocking, -1));
-    check_cuda_error(cudaEventCreateWithFlags(&ev_before_, cudaEventDisableTiming));
-    check_cuda_error(cudaEventCreateWithFlags(&ev_after_, cudaEventDisableTiming));
+    TM_CUDA_CHECK(cudaStreamCreateWithPriority(&aux_stream_, cudaStreamNonBlocking, -1));
+    TM_CUDA_CHECK(cudaEventCreateWithFlags(&ev_before_, cudaEventDisableTiming));
+    TM_CUDA_CHECK(cudaEventCreateWithFlags(&ev_after_, cudaEventDisableTiming));
 }
 
 GatedDeltaNetLayer::~GatedDeltaNetLayer()
@@ -120,7 +121,7 @@ static int linear_layer_index(int layer_id, const std::vector<int>& layer_types)
 
 void GatedDeltaNetLayer::Forward(ForwardParam p)
 {
-    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_FUNCTION_SCOPE();
 
     const int token_num = p.input.shape(0);
     if (token_num == 0)
@@ -152,8 +153,8 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
         //    where the split dims are: conv_dim, value_dim, v_heads_tp, v_heads_tp
         // =================================================================
         const int v_heads_tp = num_v_heads;  // already TP-sharded
-        Tensor    all_proj   = linear_.Forward(p.input, *weights.in_proj_all);
-        sync_check_cuda_error();
+        Tensor    all_proj;
+        TM_SCOPE_CALL(linear_.Forward(p.input, *weights.in_proj_all, all_proj));
 
         // Column offsets per token (all_proj is token-major, row-major):
         //   [0, conv_dim)           -> mixed_qkv
@@ -181,6 +182,8 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
 
         ComputeBetaG_v2(beta, g, b, a, weights.A_log, weights.dt_bias, stream);
 
+        TM_CUDA_CHECK(cudaGetLastError());
+
         // =================================================================
         // 3. Process all requests at once via batched kernel launches
         // =================================================================
@@ -206,7 +209,7 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
                               sm_count_,
                               work_counter_.data(),
                               stream);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
 
         // ----- 3b. Gated Delta Rule -----
         // Requests are sorted by input_len: decode (seq_len==1) first, prefill last.
@@ -224,8 +227,8 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
 
             if (decode_count > 0 && prefill_count > 0) {
                 // Fork: aux_stream (high priority) waits for prior work on main stream
-                check_cuda_error(cudaEventRecord(ev_before_, stream));
-                check_cuda_error(cudaStreamWaitEvent(aux_stream_, ev_before_));
+                TM_CUDA_CHECK(cudaEventRecord(ev_before_, stream));
+                TM_CUDA_CHECK(cudaStreamWaitEvent(aux_stream_, ev_before_));
 
                 // Decode on main stream
                 auto dc_state = pd.recurrent_state_ptrs.slice(0, decode_count);
@@ -262,8 +265,8 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
                                                    aux_stream_);
 
                 // Join: main stream waits for prefill to finish
-                check_cuda_error(cudaEventRecord(ev_after_, aux_stream_));
-                check_cuda_error(cudaStreamWaitEvent(stream, ev_after_));
+                TM_CUDA_CHECK(cudaEventRecord(ev_after_, aux_stream_));
+                TM_CUDA_CHECK(cudaStreamWaitEvent(stream, ev_after_));
             }
             else if (decode_count > 0) {
                 auto state_slice = pd.recurrent_state_ptrs.slice(0, decode_count);
@@ -301,20 +304,19 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
                 // invokeChunkedGatedDeltaRuleBatched
             }
         }
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
 
         // ----- 3c. RMSNormGated (all tokens at once) -----
         // Gate (z) lives at column conv_dim of all_proj with row-stride all_col.
         Tensor gate        = all_proj.slice({0, conv_dim}, {-1, value_dim});
         Tensor hidden_view = attn_out.view({token_num * num_v_heads, value_head_dim});
         invokeRMSNormGated(hidden_view, gate, weights.norm->weight, weights.norm->norm_eps_, stream);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
 
         // =================================================================
         // 4. Output projection (all tokens at once)
         // =================================================================
-        (void)linear_.Forward(attn_out, *weights.out_proj, p.output);
-        sync_check_cuda_error();
+        TM_SCOPE_CALL(linear_.Forward(attn_out, *weights.out_proj, p.output));
     };
 
     if (dtype == kHalf) {
@@ -324,7 +326,7 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
         dispatch(nv_bfloat16{});
     }
     else {
-        TM_CHECK(0) << "Unsupported dtype for GatedDeltaNetLayer";
+        TM_LOG_FATAL("Unsupported dtype for GatedDeltaNetLayer");
     }
 }
 

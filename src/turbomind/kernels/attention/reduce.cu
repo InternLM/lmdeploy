@@ -245,8 +245,6 @@ void invokeReduceV3(T*           out,
             cp_rank,
             stride_k,
             stride_k * CTA_K);
-
-        sync_check_cuda_error();
     };
 
     auto dispatch_cp = [&](int stride_k, auto is_first) {
@@ -275,6 +273,8 @@ void invokeReduceV3(T*           out,
         stride_k *= CTA_K;
         dispatch_cp(stride_k, std::false_type{});
     }
+
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 #define INSTANTIATE_invokeReduceV3(dim, type)                                                                          \

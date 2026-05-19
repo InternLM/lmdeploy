@@ -47,11 +47,12 @@ void invokeInPlaceTranspose102(
     // Note that this kernel is used for pre-processing and not very efficient.
     const size_t count = dim0 * dim1 * dim2;
     if (copy) {
-        check_cuda_error(cudaMemcpyAsync(workspace, data, sizeof(T) * count, cudaMemcpyDefault, stream));
+        TM_CUDA_CHECK(cudaMemcpyAsync(workspace, data, sizeof(T) * count, cudaMemcpyDefault, stream));
     }
     const int block = 512;
     const int grid  = std::min((count + block - 1) / block, (size_t)8192);
     transpose102<<<grid, block, 0, stream>>>(data, workspace, dim0, dim1, dim2);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template void invokeInPlaceTranspose102(uint16_t*    data,
