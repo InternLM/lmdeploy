@@ -963,7 +963,7 @@ def _fill_compressed_kv_kernel(
     token_pos = p * compress_ratio
     block_idx = token_pos // block_size
     block_off = p % entries_per_block
-    phys_block = tl.load(block_offsets_ptr + batch_id * stride_boff0 + block_idx * stride_boff1)
+    phys_block = tl.load(block_offsets_ptr + batch_id * stride_boff0 + block_idx * stride_boff1).to(tl.int64)
 
     # ---- Write to BF16 paged block cache ----
     if has_bf16:

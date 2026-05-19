@@ -73,7 +73,7 @@ def _fp8_index_kernel(
     causal_pos = k_seqlen - q_seqlen + q_id
     num_blocks = tl.cdiv(k_seqlen, BLOCK_N)
     for boff_id in tl.range(split_id, num_blocks, NUM_SPLIT, num_stages=3):
-        boff = tl.load(boff_ptr)
+        boff = tl.load(boff_ptr).to(tl.int64)
 
         k = tl.load(k_ptrs + boff * stride_kb)
         k_s = tl.load(k_s_ptrs + boff * stride_ksb)

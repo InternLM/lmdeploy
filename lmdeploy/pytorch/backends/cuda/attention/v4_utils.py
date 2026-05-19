@@ -4,18 +4,20 @@
 import torch
 
 
+@torch.compile(dynamic=True)
 def build_prefix_positions(lengths: torch.Tensor, max_len: int):
     """Build ``[0, ..., len-1]`` positions padded with ``-1``."""
     device = lengths.device
     if max_len == 0:
-        empty = torch.empty((lengths.numel(), 0), dtype=torch.long, device=device)
+        empty = torch.empty((lengths.numel(), 0), dtype=torch.int32, device=device)
         return empty, empty.bool()
-    arange = torch.arange(max_len, device=device).unsqueeze(0)
+    arange = torch.arange(max_len, dtype=torch.int32, device=device).unsqueeze(0)
     mask = arange < lengths.unsqueeze(1)
     positions = arange.masked_fill(~mask, -1)
     return positions, mask
 
 
+@torch.compile(dynamic=True)
 def build_window_positions(total_lens: torch.Tensor, window_size: int):
     """Build chronologically ordered trailing window positions in ring-buffer
     coordinates padded with ``-1``."""
