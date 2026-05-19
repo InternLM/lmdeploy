@@ -132,14 +132,12 @@ class MiniCPMVModel(VisionModel):
 
     def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refer to `super().preprocess() for spec."""
-        outputs = []
         for i, message in enumerate(messages):
             if message['role'] != 'user' or not isinstance(message['content'], list):
                 continue
-            for item in message['content']:
-                if item['type'] == 'image':
-                    image = item['image']
-                    params = {k: v for k, v in item.items() if k not in {'type', 'image'}}
+            outputs = []
+            for modality, image, params in self.collect_multimodal_items([message]):
+                if modality == 'image':
                     result = self._preprocess_func(image, params)
                     outputs.append(result)
             messages[i].update(dict(preprocess=outputs))

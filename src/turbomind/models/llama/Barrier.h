@@ -2,8 +2,8 @@
 
 #pragma once
 
+#include "src/turbomind/core/check.h"
 #include "src/turbomind/core/logger.h"
-#include "src/turbomind/utils/cuda_utils.h"
 #ifndef _MSC_VER
 #include <pthread.h>
 #endif
@@ -17,7 +17,7 @@ public:
     Barrier(unsigned count)
     {
         TM_LOG_INFO("Barrier({})", (int)count);
-        FT_CHECK(count == 1);
+        TM_CHECK(count == 1);
     }
 
     Barrier(const Barrier&) = delete;

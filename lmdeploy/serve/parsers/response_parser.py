@@ -25,6 +25,38 @@ logger = get_logger('lmdeploy')
 ResponseParserManager = Registry('response_parser', locations=['lmdeploy.serve.parsers.response_parser'])
 
 
+def normalize_chat_request(request: ChatCompletionRequest) -> ChatCompletionRequest:
+    """Normalize a ChatCompletionRequest for downstream consumption.
+
+    - ``response_format``: ``ResponseFormat → dict``, ``type='text' → None``
+    - ``stop``: ``str → list[str]``
+    - ``max_completion_tokens``: resolves from deprecated ``max_tokens``
+    """
+    if not hasattr(request, 'model_copy'):
+        return request
+
+    updates: dict = {}
+
+    fmt = request.response_format
+    if fmt is not None and fmt.type != 'text':
+        updates['response_format'] = fmt.model_dump()
+    elif fmt is not None and fmt.type == 'text':
+        updates['response_format'] = None
+
+    if isinstance(request.stop, str):
+        updates['stop'] = [request.stop]
+
+    if request.max_completion_tokens is None:
+        max_tokens = getattr(request, 'max_tokens', None)
+        if max_tokens is not None:
+            updates['max_completion_tokens'] = max_tokens
+
+    if updates:
+        request = request.model_copy(update=updates)
+
+    return request
+
+
 class ResponseParser:
     @classmethod
     def set_parsers(cls, reasoning_parser_name: str | None = None, tool_parser_name: str | None = None) -> None:
@@ -162,6 +194,9 @@ class BaseResponseParser(ResponseParser):
             self.request = self.tool_parser.adjust_request(request)
         else:
             self.request = self.dump_tools(request)
+
+        self.request = normalize_chat_request(self.request)
+
         self._accumulated_text = ''
 
         self.profile = self._build_profile()

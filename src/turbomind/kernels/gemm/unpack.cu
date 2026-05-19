@@ -3,6 +3,7 @@
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/data_type.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include <iostream>
 
 namespace turbomind {
@@ -69,6 +70,7 @@ void unpack_awq_gemm(uint4_t* dst, const uint4_t* src, int rows, int cols, cudaS
 {
     Array<int, 4> shape{cols, rows / 8, 2, 4};
     permute_u4<0, 1, 3, 2><<<512, 512, 0, st>>>((uint*)dst, (const uint*)src, shape);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 __global__ void transpose_u4_kernel(uint4_t* dst, const uint4_t* src, int s, int c)
@@ -109,6 +111,7 @@ void transpose_u4(uint4_t* dst, const uint4_t* src, int s, int c, cudaStream_t s
     const dim3 block(16, 16);
     const dim3 grid((c + 15) / 16, (s + 15) / 16);
     transpose_u4_kernel<<<grid, block, 0, st>>>(dst, src, s, c);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 // load -> unpack -> extend_to_u8 -> manipulation -> compat_to_u4 -> store

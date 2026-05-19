@@ -14,7 +14,6 @@ void CpPost(void* context)
                            DataType::kFloat,
                            ctx->attn_cp_group,
                            ctx->stream);
-    sync_check_cuda_error();
 }
 
 }  // namespace turbomind

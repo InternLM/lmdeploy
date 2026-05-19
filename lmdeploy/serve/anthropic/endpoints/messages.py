@@ -18,7 +18,7 @@ from ..adapter import (
     map_finish_reason,
     normalize_tool_choice,
     to_generation_config,
-    to_lmdeploy_messages,
+    to_openai_messages,
     to_openai_tools,
 )
 from ..errors import create_error_response
@@ -96,7 +96,7 @@ def register(router: APIRouter, server_context) -> None:
                 messages = None
         else:
             try:
-                messages = to_lmdeploy_messages(request)
+                messages = to_openai_messages(request)
             except ValueError as err:
                 return create_error_response(HTTPStatus.BAD_REQUEST, str(err))
 
@@ -127,7 +127,7 @@ def register(router: APIRouter, server_context) -> None:
         session = server_context.create_session(-1)
         adapter_name = None if request.model == server_context.async_engine.model_name else request.model
         result_generator = server_context.async_engine.generate(
-            messages,
+            messages if parsed_request is None else parsed_request.messages,
             session,
             gen_config=to_generation_config(request),
             tools=None if parsed_request is None else parsed_request.tools,

@@ -20,6 +20,7 @@
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/gemm/moe_utils_v2.h"
 #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
@@ -625,7 +626,7 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n] -> n
 
     if (!softmax && norm_topk) {
         // norm top-k is part of softmax impl
-        TM_CHECK(0) << softmax << " " << norm_topk;
+        TM_LOG_FATAL("unsupported moe config: softmax={} norm_topk={}", softmax, norm_topk);
     }
 
     auto dispatch = [&] {
@@ -665,8 +666,6 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n] -> n
 
     auto success = dispatch();
 
-    sync_check_cuda_error();
-
     TM_CHECK(success) << "unsupported moe config: expert_num=" << experts << ", top_k=" << experts_per_token
                       << ", softmax=" << softmax << ", norm_topk=" << norm_topk;
 
@@ -686,6 +685,7 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n] -> n
                                                               tokens_padded,
                                                               experts);
     }
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 // noaux_tc: scores = scoring_func(logits), scores_for_choice = scores + correction_bias,
@@ -877,6 +877,8 @@ void invokeMoeGate_NoAuxTC(int*         f2n,
     const dim3    scan_blocks(tiles, experts + 1);
     MoeScanKernel_v2<scan_threads><<<scan_blocks, scan_threads, 0, st>>>(
         f2n, f2E, en2f, offsets, (int8_t*)masks, accum, log_tile, tiles, tokens, tokens_padded, experts);
+
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<int vec_size, int block_dim, class T>
@@ -911,16 +913,19 @@ void invokeMoeDispatch(Ref<Tensor> out_, const Tensor& src, const int* f2n, int 
             (const T*)src.raw_data(),
             f2n,
             dim / vec_size);
+        TM_CUDA_CHECK(cudaGetLastError());
     };
     TM_CHECK_EQ(src.dtype(), out.dtype());
     const auto elem_size = byte_size(src.dtype());
     if (elem_size == sizeof(uint16_t)) {
-        return invoke(uint16_t{});
+        invoke(uint16_t{});
     }
     else if (elem_size == sizeof(uint8_t)) {
-        return invoke(uint8_t{});
+        invoke(uint8_t{});
     }
-    TM_CHECK(0) << "unsupported data type: " << src.dtype();
+    else {
+        TM_LOG_FATAL("unsupported data type: {}", src.dtype());
+    }
 }
 
 template<int alignment, int block_dim, class T>
@@ -997,6 +1002,8 @@ void invokeMoeDispatchScales(Ref<Tensor> out_, const Tensor& src, const int* f2n
                                                             src.stride(0),
                                                             f2n,
                                                             dim);
+
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<int vec_size, int exp_k, bool has_bias, int block_dim, class T>
@@ -1102,19 +1109,25 @@ void invokeMoeReduce(T*           dst,
             tokens,
             bscale,
             dst_scale);
+        TM_CUDA_CHECK(cudaGetLastError());
     };
 
     switch (experts_per_token) {
         case 1:
-            return invoke(std::integral_constant<int, 1>{});
+            invoke(std::integral_constant<int, 1>{});
+            break;
         case 2:
-            return invoke(std::integral_constant<int, 2>{});
+            invoke(std::integral_constant<int, 2>{});
+            break;
         case 4:
-            return invoke(std::integral_constant<int, 4>{});
+            invoke(std::integral_constant<int, 4>{});
+            break;
         case 6:
-            return invoke(std::integral_constant<int, 6>{});
+            invoke(std::integral_constant<int, 6>{});
+            break;
         case 8:
-            return invoke(std::integral_constant<int, 8>{});
+            invoke(std::integral_constant<int, 8>{});
+            break;
         default:
             fprintf(stderr, "Unsupported experts_per_token %d\n", experts_per_token);
             std::abort();
@@ -1140,28 +1153,28 @@ void invokeMoeCombine(Ref<Tensor>   out_,
 
     auto invoke = [&](auto has_bias, auto t) {
         using T = decltype(t);
-        return invokeMoeReduce<has_bias.value>(out.data<T>(),
-                                               src.data<T>(),
-                                               bias.data_or((T*)nullptr),
-                                               scales,
-                                               en2f,
-                                               f2E,
-                                               dst_scales,
-                                               tokens,
-                                               experts_per_token,
-                                               src.shape(1),
-                                               (T)bscale,
-                                               dst_scale,
-                                               st);
+        invokeMoeReduce<has_bias.value>(out.data<T>(),
+                                        src.data<T>(),
+                                        bias.data_or((T*)nullptr),
+                                        scales,
+                                        en2f,
+                                        f2E,
+                                        dst_scales,
+                                        tokens,
+                                        experts_per_token,
+                                        src.shape(1),
+                                        (T)bscale,
+                                        dst_scale,
+                                        st);
     };
 
     auto dispatch_dtype = [&](auto t) {
         if (bias) {
             TM_CHECK_NOTNULL(f2E);
-            return invoke(std::true_type{}, t);
+            invoke(std::true_type{}, t);
         }
         else {
-            return invoke(std::false_type{}, t);
+            invoke(std::false_type{}, t);
         }
     };
 
@@ -1321,10 +1334,12 @@ void invokeMoeSoftmaxMaskTopKGroups(
         const int     blocks       = ceil_div(token_num, threads / thrs_per_tok);
         MoeSoftmaxMaskTopKGroups<max_expert_num.value, items_per_thread.value, vec_size.value>
             <<<blocks, threads, 0, st>>>(logits, token_num, expert_num, top_k);
+        TM_CUDA_CHECK(cudaGetLastError());
     };
 
     if (expert_num == 160 && group_size == 20) {
-        return invoke(_Int<160>, _Int<20>, _Int<4>);
+        invoke(_Int<160>, _Int<20>, _Int<4>);
+        return;
     }
 
     std::cerr << __FILE__ << "(" << __LINE__ << "): unsupported moe config: expert_num=" << expert_num

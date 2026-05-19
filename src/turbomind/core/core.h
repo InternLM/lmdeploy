@@ -8,6 +8,7 @@
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/core/layout.h"
 #include "src/turbomind/core/ranges.h"
+#include "src/turbomind/core/scope.h"
 #include "src/turbomind/core/stream.h"
 #include "src/turbomind/core/tensor.h"
 
@@ -25,6 +26,7 @@ using core::Allocator;
 using core::Stream;
 using core::Event;
 using core::BatchCopy;
+using core::Scope;
 
 using core::subrange;
 

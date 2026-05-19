@@ -22,6 +22,7 @@
 
 #include "src/turbomind/kernels/ban_bad_words.h"
 #include "src/turbomind/kernels/sampling_penalty_kernels.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 #include "src/turbomind/generation/logits_processor.h"
 #include "src/turbomind/generation/utils.h"
@@ -64,6 +65,7 @@ LogitsProcessor::LogitsProcessor(const BaseGenerationParam& base, int phases): B
 
 void LogitsProcessor::Forward(int phase, TensorMap& env)
 {
+    TM_FUNCTION_SCOPE();
     // apply repetition penalty -> ban bad words -> min length penalty -> temperature penalty
     // the order is same with transformerss
     TM_LOG_DEBUG("{} start", __PRETTY_FUNCTION__);
@@ -81,38 +83,34 @@ void LogitsProcessor::Forward(int phase, TensorMap& env)
     // repetition penalty
     if (d.has_repetition_penalty) {
         ApplyRepetitionPenalty(logits, d.repetition_penalty_buf, token_ids_ptrs, sequence_length, stream);
-        sync_check_cuda_error();
     }
 
     // ban bad words
     if (auto& bad_words = d.bad_words_ten) {
         BanBadWords(logits, token_ids_ptrs, sequence_length, bad_words, stream);
-        sync_check_cuda_error();
     }
 
     // min length
     if (d.has_min_length_penalty) {
-        invokeMinLengthPenalty(logits.data(),
-                               d.min_lengths_buf.data(),
-                               sequence_length.data(),
-                               vocab_size_padded_,
-                               bsz,
-                               d.end_ids_ten.data(),
-                               d.end_ids_ten.shape(1),
-                               stream);
-        sync_check_cuda_error();
+        TM_SCOPE_CALL(invokeMinLengthPenalty(logits.data(),
+                                             d.min_lengths_buf.data(),
+                                             sequence_length.data(),
+                                             vocab_size_padded_,
+                                             bsz,
+                                             d.end_ids_ten.data(),
+                                             d.end_ids_ten.shape(1),
+                                             stream));
     }
 
     // temperature
     if (d.has_temperature_penalty) {
-        invokeBatchApplyTemperaturePenalty_v2(logits.data(),  //
-                                              (float*)nullptr,
-                                              d.temperature_buf.data(),
-                                              bsz,
-                                              vocab_size_,
-                                              vocab_size_padded_,
-                                              stream);
-        sync_check_cuda_error();
+        TM_SCOPE_CALL(invokeBatchApplyTemperaturePenalty_v2(logits.data(),  //
+                                                            (float*)nullptr,
+                                                            d.temperature_buf.data(),
+                                                            bsz,
+                                                            vocab_size_,
+                                                            vocab_size_padded_,
+                                                            stream));
     }
 
     TM_LOG_DEBUG("{} stop", __PRETTY_FUNCTION__);
@@ -120,6 +118,7 @@ void LogitsProcessor::Forward(int phase, TensorMap& env)
 
 void LogitsProcessor::Setup(int phase, TensorMap& env)
 {
+    TM_FUNCTION_SCOPE();
     TM_LOG_DEBUG("{} start", __PRETTY_FUNCTION__);
 
     auto& d = *data_.at(phase);
@@ -171,8 +170,6 @@ void LogitsProcessor::Setup(int phase, TensorMap& env)
     if (d.has_min_length_penalty) {
         copy(min_lengths, bsz, d.min_lengths_buf);
     }
-
-    sync_check_cuda_error();
 
     d.bad_words_ten = {};
     init_stop_bad_words(&GenerationConfig::bad_ids,  //
