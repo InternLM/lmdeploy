@@ -511,14 +511,14 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                                                          delta=delta_message,
                                                          finish_reason=finish_reason,
                                                          logprobs=logprobs,
-                                                         output_ids=output_ids)
+                                                         output_ids=output_ids,
+                                                         routed_experts=routed_experts)
         response = ChatCompletionStreamResponse(
             id=request_id,
             created=created_time,
             model=model_name,
             choices=[choice_data],
             usage=usage,
-            routed_experts=routed_experts,
         )
         response_json = response.model_dump_json()
 
@@ -632,6 +632,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         logprobs=logprobs,
         finish_reason=final_res.finish_reason,
         output_ids=final_token_ids if request.return_token_ids else None,
+        routed_experts=final_res.routed_experts if request.return_routed_experts else None,
     )
     choices.append(choice_data)
 
@@ -651,7 +652,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         model=model_name,
         choices=choices,
         usage=usage,
-        routed_experts=final_res.routed_experts if request.return_routed_experts else None,
     ).model_dump()
 
     if with_cache:

@@ -259,6 +259,7 @@ class ChatCompletionResponseChoice(BaseModel):
     logprobs: ChoiceLogprobs | None = None
     finish_reason: Literal['stop', 'length', 'tool_calls', 'error', 'abort'] | None = None
     output_ids: list[int] | None = None
+    routed_experts: list[list[list[int]]] | str | None = None
 
 
 class ChatCompletionResponse(BaseModel):
@@ -269,7 +270,6 @@ class ChatCompletionResponse(BaseModel):
     model: str
     choices: list[ChatCompletionResponseChoice]
     usage: UsageInfo
-    routed_experts: list[list[list[int]]] | str | None = None
 
 
 class DeltaFunctionCall(BaseModel):
@@ -300,6 +300,7 @@ class ChatCompletionResponseStreamChoice(BaseModel):
     logprobs: ChoiceLogprobs | None = None
     output_ids: list[int] | None = None
     finish_reason: Literal['stop', 'length', 'tool_calls', 'error', 'abort'] | None = None
+    routed_experts: list[list[list[int]]] | str | None = None
 
 
 class ChatCompletionStreamResponse(BaseModel):
@@ -310,7 +311,6 @@ class ChatCompletionStreamResponse(BaseModel):
     model: str
     choices: list[ChatCompletionResponseStreamChoice]
     usage: UsageInfo | None = None
-    routed_experts: list[list[list[int]]] | str | None = None
 
 
 class CompletionRequest(BaseModel):
