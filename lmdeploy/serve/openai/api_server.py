@@ -421,8 +421,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
     tokenizer = VariableInterface.async_engine.tokenizer.model.model
     gen_logprobs, logits_processors = None, None
-    if request.logprobs and request.top_logprobs:
-        gen_logprobs = request.top_logprobs
+    if request.logprobs:
+        gen_logprobs = request.top_logprobs or 1
     if request.logit_bias is not None:
         try:
             logits_processors = [
