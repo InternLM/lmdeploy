@@ -42,15 +42,11 @@ class RequestLogger:
             if prompt is not None:
                 prompt = prompt[:max_log_len]
 
-            if prompt_token_ids is not None:
-                prompt_token_ids = prompt_token_ids[:max_log_len]
-
         logger.log(REQUEST_LOG_LEVEL, f'session={session_id}, '
                    f'adapter_name={adapter_name}, '
                    f'input_tokens={input_tokens}, '
                    f'gen_config={gen_config}, '
-                   f'prompt={prompt!r}, '
-                   f'prompt_token_id={prompt_token_ids}')
+                   f'prompt={prompt!r}')
 
     def log_response(self, session_id: int, response: list[str]) -> None:
         if not logger.isEnabledFor(REQUEST_LOG_LEVEL):
