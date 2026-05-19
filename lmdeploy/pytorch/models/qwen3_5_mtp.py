@@ -94,15 +94,14 @@ class Qwen3_5MultiTokenPredictor(nn.Module):
             for idx in range(self.num_mtp_layers)
         })
 
-        quantization_config = getattr(config, 'quantization_config', None)
-
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps, dtype=dtype, device=device)
         self.pre_fc_norm_hidden = RMSNorm(config.hidden_size, eps=config.rms_norm_eps, dtype=dtype, device=device)
         self.pre_fc_norm_embedding = RMSNorm(config.hidden_size, eps=config.rms_norm_eps, dtype=dtype, device=device)
 
         # shared with target model
         self.embed_tokens = None
-
+        # do not quant fc as in https://huggingface.co/Qwen/Qwen3.5-27B-FP8/blob/main/config.json#L403
+        # and https://huggingface.co/Qwen/Qwen3.5-35B-A3B-FP8/blob/main/config.json#L409
         self.fc = build_colwise_linear(
             config.hidden_size * 2,
             config.hidden_size,
@@ -110,8 +109,8 @@ class Qwen3_5MultiTokenPredictor(nn.Module):
             dtype=dtype,
             device=device,
             is_tp=False,
-            quant_config=quantization_config,
             dp_disable_tp=True,
+            prefix=add_prefix('fc', prefix=prefix),
         )
 
         # build rotary embedding
@@ -200,7 +199,7 @@ class Qwen3_5MTPModel(nn.Module, CudaGraphMixin):
         self.model = Qwen3_5MultiTokenPredictor(config.text_config,
                                                 dtype=dtype,
                                                 device=device,
-                                                prefix=add_prefix('model', prefix=prefix))
+                                                prefix=add_prefix('mtp', prefix=prefix))
 
         self.num_experts = getattr(config.text_config, 'num_experts', None)
         self.enable_sci_mtp = getattr(config, 'enable_sci_mtp', False)

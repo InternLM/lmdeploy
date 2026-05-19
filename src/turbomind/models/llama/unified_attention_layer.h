@@ -22,15 +22,17 @@
 #pragma once
 
 #include <cuda_runtime.h>
+#include <vector>
 
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/engine/batch.h"
 #include "src/turbomind/kernels/attention/cp_utils.h"
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
-#include "src/turbomind/models/llama/LlamaDenseWeight.h"
+#include "src/turbomind/models/attention_weight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
+#include "src/turbomind/models/llama/llama_rope.h"
 
 namespace turbomind {
 
@@ -38,7 +40,7 @@ struct AttentionData;
 
 class UnifiedAttentionLayer {
 public:
-    using WeightType = LlamaAttentionWeight;
+    using WeightType = AttentionWeight;
 
     static constexpr int kMaxKVSplits        = 128;
     static constexpr int kMaxWorkspaceTokens = 4096;
@@ -53,13 +55,14 @@ public:
 
     ~UnifiedAttentionLayer();
 
-    UnifiedAttentionLayer(const ModelParam&     model,
-                          const AttentionParam& attn,
-                          const EngineParam&    engine,
-                          int                   tp_size,
-                          const Context&        context,
-                          int                   phases,
-                          bool                  init);
+    UnifiedAttentionLayer(int                           quant_policy,
+                          const std::vector<int>&       layer_types,
+                          int                           layer_num,
+                          std::vector<AttentionWeight*> attn_weights,
+                          const EngineParam&            engine,
+                          const Context&                context,
+                          int                           phases,
+                          bool                          init);
 
     void Run(BatchOp op, int phase, TensorMap& env);
 
@@ -77,19 +80,12 @@ private:
     void qk_norm(Tensor& qkv, const WeightType& weights);
 
 private:
-    const int head_num_;
-    const int kv_head_num_;
-    const int size_per_head_;
-    const int hidden_units_;
-    const int local_head_num_;
-    const int local_kv_head_num_;
-
-    const AttentionParam param_;
-    const EngineParam    engine_param_;
-    const ModelParam     model_param_;
-    const Context&       context_;
-
-    int& is_warm_up_;
+    const int              quant_policy_;
+    const core::RopeConfig rope_;
+    const EngineParam      engine_param_;
+    const Context&         context_;
+    int&                   is_warm_up_;
+    const bool             init_;
 
     LlamaLinear& linear_;
     const int    arch_{};
@@ -107,7 +103,7 @@ private:
     std::vector<int> cache_layer_ids_;
 
     ///////////////////////////////////////////////////////
-    /// temp runtime buffers
+    /// temp runtime buffers (allocated in constructor)
     Tensor_<float> partial_O_;
     Tensor_<float> partial_ML_;
     Tensor_<int>   split_cnt_;

@@ -20,30 +20,26 @@
 #pragma once
 
 #include "src/turbomind/core/core.h"
-#include "src/turbomind/models/llama/LlamaDenseWeight.h"
+#include "src/turbomind/models/ffn_weight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/context.h"
-#include "src/turbomind/models/llama/llama_params.h"
 
 namespace turbomind {
 
 class LlamaFfnLayer {
 public:
-    LlamaFfnLayer(const ModelParam& model, const Context& ctx): hidden_units_(model.hidden_units), linear_(*ctx.linear)
-    {
-    }
+    LlamaFfnLayer(const Context& ctx): linear_(*ctx.linear) {}
 
     struct ForwardParam {
-        Tensor                input;
-        Tensor                output;
-        const LlamaFfnWeight* weights;
-        int                   layer_id;
+        Tensor           input;
+        Tensor           output;
+        const FfnWeight* weights;
+        int              layer_id;
     };
 
     void forward(ForwardParam param);
 
 private:
-    const size_t hidden_units_;
     LlamaLinear& linear_;
 };
 

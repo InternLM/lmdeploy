@@ -5,8 +5,11 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <utility>
 
 #include "src/turbomind/core/core.h"
+#include "src/turbomind/core/module.h"
+#include "src/turbomind/engine/engine_config.h"
 #include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/utils/metrics.h"
 
@@ -18,11 +21,16 @@ public:
 
     ~TurboMind();
 
-    TurboMind(std::string model_dir, std::string config, FFICtxFactory ffi_ctx_factory);
+    TurboMind(std::string model_dir, EngineConfig config, FFICtxFactory ffi_ctx_factory);
 
-    void CreateWeights(int index);
+    void          CreateContext(int index);
+    core::Module* CreateRoot(int index);
 
-    TensorMap GetWeights(int index);
+    /// Returns the root `Module` for GPU `index`'s weight tree.
+    core::Module* root(int index);
+
+    /// Returns the Stream and Allocator for GPU `index`'s weight tree.
+    std::pair<core::Stream, core::Allocator> weight_context(int index);
 
     void ProcessWeights(int index);
 
@@ -37,6 +45,15 @@ public:
     std::shared_ptr<ScheduleMetrics> GetScheduleMetrics(int index);
 
     std::unique_ptr<ModelRequest> CreateRequest();
+
+    /// Attention TP rank for GPU *index*.
+    int GetAttnTpRank(int index);
+
+    /// MLP TP rank for GPU *index*.
+    int GetMlpTpRank(int index);
+
+    /// Model-level TP rank (rank within d_tp_group) for GPU *index*.
+    int GetModelTpRank(int index);
 
 private:
     struct Impl;

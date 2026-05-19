@@ -210,15 +210,11 @@ conda activate lmdeploy
 pip install lmdeploy
 ```
 
-v0.3.0 以降、デフォルトの事前ビルドパッケージは **CUDA 12** でビルドされています。v0.10.2 以降、LMDeploy は CUDA 11 系をサポートしていません。
+**v0.13.0** 以降、**PyPI** に公開される既定の事前構築wheelは **CUDA 12.8** 向けにビルドされています。v0.10.2以降、LMDeployはCUDA 11系をサポートしません。
 
-GeForce RTX 50 シリーズの GPU を使用している場合は、次のように **CUDA 12.8** でビルドされた LMDeploy の事前ビルドパッケージをインストールしてください。
+GeForce RTX 50シリーズを含む一般的な用途でも、上記の `pip install lmdeploy` で問題ありません。
 
-```shell
-export LMDEPLOY_VERSION=0.12.3
-export PYTHON_VERSION=312
-pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu128-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu128
-```
+CUDA 11+プラットフォームでのインストールに関する情報、またはソースからのビルド手順については、[インストールガイドを](docs/en/get_started/installation.md)参照してください。
 
 ## オフラインバッチ推論
 
