@@ -140,11 +140,23 @@ def create_app(config: ProxyConfig, registry: NodeRegistry, strategy) -> FastAPI
     @app.post('/nodes/add', dependencies=[Depends(validate_json_request)])
     async def add_node(node: Node, raw_request: Request = None):
         try:
+            # The api_server self-registration sends:
+            #   {'url': '...', 'status': {'models': [...], 'role': ...}}
+            # Extract models from the nested status if present (old format),
+            # otherwise use the top-level models field (new format).
+            body = await raw_request.json() if raw_request else {}
+            nested_status = body.get('status', {})
+            models = node.models or nested_status.get('models', [])
+            role = node.role
+            if 'role' in nested_status:
+                from lmdeploy.pytorch.disagg.config import EngineRole
+                role = EngineRole(nested_status['role'])
+            speed = nested_status.get('speed', node.speed)
             await registry.add(
                 node.url,
-                role=node.role,
-                models=node.models if node.models else None,
-                status=node if node.models else None,
+                role=role,
+                models=models if models else None,
+                status=Node(url=node.url, role=role, models=models, speed=speed) if models else None,
             )
             logger.info(f"add node {node.url} successfully")
             return 'Added successfully'

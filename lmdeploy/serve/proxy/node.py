@@ -74,8 +74,9 @@ class NodeRegistry:
                     client = APIClient(api_server_url=url)
                     node.models = client.available_models
                 except requests.exceptions.RequestException as e:
-                    logger.error(f"Exception when adding node {url}: {e}")
-                    return
+                    logger.warning(f"Could not fetch models from {url}: {e}. "
+                                   'Registering node with empty model list.')
+                    node.models = []
 
             self._nodes[url] = node
             await self._persist_unlocked()
