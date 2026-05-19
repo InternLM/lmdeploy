@@ -250,12 +250,12 @@ def fused_moe_v4_fp4_kernel_launcher(
 
     # B layout checks for int32 pack + prmt decode
     assert B.dtype in (torch.int8, torch.uint8), (
-        f"B must be int8/uint8 (packed FP4), got {B.dtype}")
+        f'B must be int8/uint8 (packed FP4), got {B.dtype}')
     assert B.stride(-1) == 1, (
-        f"B must have stride[-1]==1 for int32 view, got stride {B.stride()}")
+        f'B must have stride[-1]==1 for int32 view, got stride {B.stride()}')
     assert B.shape[-1] % 4 == 0, (
-        f"B packed_K (last dim) must be a multiple of 4 for int32 packing, "
-        f"got {B.shape[-1]}")
+        f'B packed_K (last dim) must be a multiple of 4 for int32 packing, '
+        f'got {B.shape[-1]}')
 
     group_ak = K // A_scale.size(1)
     group_bk = K // B_scale.size(2)
