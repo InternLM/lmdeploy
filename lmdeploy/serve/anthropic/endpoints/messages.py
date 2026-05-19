@@ -73,6 +73,7 @@ def register(router: APIRouter, server_context) -> None:
                     HTTPStatus.BAD_REQUEST,
                     'image_data requires input_ids to be set when messages is empty.')
 
+        # Resolve fallback input when messages is empty.
         parser_messages = None
         resolved_input_ids = None
         if messages_empty and request.input_ids is not None:
