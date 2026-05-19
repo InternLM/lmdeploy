@@ -480,7 +480,7 @@ class FusedLogitsProcessor:
 
         if self.guided_decoding_manager and self.guided_processors:
             for i, processor in self.guided_processors.items():
-                self.guided_decoding_manager.accept_token(processor, result[i])
+                self.guided_decoding_manager.accept_token(processor, result[i].item())
 
         return result
 
