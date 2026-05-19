@@ -291,7 +291,7 @@ class Indexer(nn.Module):
             bias=config.attention_bias,
             dtype=dtype,
             device=device,
-            is_tp=True,
+            is_tp=False,
             quant_config=quantization_config
         )
         self.weights_proj = build_colwise_linear(
@@ -300,7 +300,7 @@ class Indexer(nn.Module):
             bias=config.attention_bias,
             dtype=dtype,
             device=device,
-            is_tp=True,
+            is_tp=False,
         )
         self.compressor = Compressor(args, layer_id, compress_ratio, self.head_dim,
                                      dtype=dtype, device=device, rotate=True)
