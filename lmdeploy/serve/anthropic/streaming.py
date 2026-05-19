@@ -22,7 +22,8 @@ async def stream_messages_response(result_generator,
                                    model: str,
                                    response_parser=None,
                                    return_token_ids: bool = False,
-                                   return_routed_experts: bool = False) -> AsyncGenerator[str, None]:
+                                   return_routed_experts: bool = False,
+                                   logprobs: bool = False) -> AsyncGenerator[str, None]:
     """Convert LMDeploy generation stream to Anthropic SSE events."""
 
     yield _format_sse(
@@ -132,7 +133,10 @@ async def stream_messages_response(result_generator,
         current_block = dict(kind='tool_use', block_index=block['block_index'], tool_index=tool_index)
         return events
 
-    def _emit_text_delta(text: str, thinking: bool, output_ids: list[int] | None = None) -> str:
+    def _emit_text_delta(text: str,
+                         thinking: bool,
+                         output_ids: list[int] | None = None,
+                         output_token_logprobs: list[list] | None = None) -> str:
         block_index = current_block['block_index']
         delta_key = 'thinking' if thinking else 'text'
         delta_type = 'thinking_delta' if thinking else 'text_delta'
@@ -146,6 +150,8 @@ async def stream_messages_response(result_generator,
         }
         if output_ids is not None:
             data['output_ids'] = output_ids
+        if output_token_logprobs is not None:
+            data['output_token_logprobs'] = output_token_logprobs
         return _format_sse('content_block_delta', data)
 
     async for res in result_generator:
@@ -153,6 +159,13 @@ async def stream_messages_response(result_generator,
         input_tokens = res.input_token_len
         text = res.response or ''
         delta_token_ids = res.token_ids if getattr(res, 'token_ids', None) is not None else []
+        delta_logprobs = None
+        if logprobs and getattr(res, 'logprobs', None) and delta_token_ids:
+            delta_logprobs = [
+                (tok_logprobs[tok], tok)
+                for tok, tok_logprobs in zip(delta_token_ids, res.logprobs)
+            ]
+
         stream_deltas = []
         if response_parser is not None:
             stream_deltas = response_parser.stream_chunk(text, delta_token_ids)
@@ -180,6 +193,7 @@ async def stream_messages_response(result_generator,
                         delta_message.content,
                         thinking=False,
                         output_ids=delta_token_ids if return_token_ids else None,
+                        output_token_logprobs=delta_logprobs,
                     )
 
             if delta_message.tool_calls:

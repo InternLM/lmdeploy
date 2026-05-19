@@ -128,6 +128,10 @@ class MessagesRequest(BaseModel):
         default=False,
         description=('Whether to include output token IDs in the response.'),
     )
+    logprobs: bool | None = Field(
+        default=False,
+        description=('Whether to return log probabilities for output tokens.'),
+    )
 
 
 class MessageTextBlock(BaseModel):
@@ -172,6 +176,7 @@ class MessagesResponse(BaseModel):
     stop_sequence: str | None = None
     usage: MessageUsage
     output_ids: list[int] | None = None
+    output_token_logprobs: list[tuple[float, int]] | None = None  # (logprob, token_id)
     routed_experts: list[list[list[int]]] | str | None = None
 
 

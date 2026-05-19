@@ -55,6 +55,7 @@ class _FakeEngine:
                 generate_token_len=1,
                 finish_reason=None,
                 routed_experts=[1, 2, 3],
+                logprobs=[{101: -0.5, 102: -1.2}],
             )
             yield SimpleNamespace(
                 response='world!',
@@ -63,6 +64,7 @@ class _FakeEngine:
                 generate_token_len=2,
                 finish_reason='stop',
                 routed_experts=[1, 2, 3],
+                logprobs=[{102: -0.3, 103: -2.1}],
             )
 
         return _gen()
@@ -830,3 +832,57 @@ def test_anthropic_model_listing():
     data = response.json()
     assert data['has_more'] is False
     assert [item['id'] for item in data['data']] == ['fake-model', 'adapter-model']
+
+
+def test_messages_non_stream_includes_logprobs():
+    client = _make_client()
+    response = client.post(
+        '/v1/messages',
+        headers={'anthropic-version': '2023-06-01'},
+        json={
+            'model': 'fake-model',
+            'max_tokens': 16,
+            'messages': [{'role': 'user', 'content': 'Hi'}],
+            'logprobs': True,
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    # output_token_logprobs should be [(logprob, token_id), ...]
+    assert data['output_token_logprobs'] == [[-0.5, 101], [-0.3, 102]]
+
+
+def test_messages_non_stream_logprobs_default_off():
+    client = _make_client()
+    response = client.post(
+        '/v1/messages',
+        headers={'anthropic-version': '2023-06-01'},
+        json={
+            'model': 'fake-model',
+            'max_tokens': 16,
+            'messages': [{'role': 'user', 'content': 'Hi'}],
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data.get('output_token_logprobs') is None
+
+
+def test_messages_streaming_includes_logprobs():
+    client = _make_client()
+    with client.stream(
+            'POST',
+            '/v1/messages',
+            headers={'anthropic-version': '2023-06-01'},
+            json={
+                'model': 'fake-model',
+                'max_tokens': 16,
+                'stream': True,
+                'messages': [{'role': 'user', 'content': 'Hi there'}],
+                'logprobs': True,
+            },
+    ) as response:
+        body = '\n'.join(response.iter_lines())
+
+    assert response.status_code == 200
+    assert 'output_token_logprobs' in body
