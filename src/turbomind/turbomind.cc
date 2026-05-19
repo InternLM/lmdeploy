@@ -218,7 +218,7 @@ void TurboMind::Impl::CreateContext(int index)
 
     auto& c = ctx->comm;
 
-    c.h_global = group_id_->CreateCommunicator(comm_size_, global_rank, p.node_rank);
+    c.h_global = group_id_->CreateCommunicator(comm_size_ * p.outer_dp_size, global_rank, p.node_rank);
 
     c.h_comm = c.h_global->Split(outer_rank, 0);
 

@@ -1,5 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+import inspect
+
 import torch
 
 from lmdeploy.archs import get_model_arch, search_nested_config
@@ -110,25 +112,17 @@ def _validate_quant_group_size(model_format: str | None, group_size: int | None)
     return group_size
 
 
-def get_registered_name(model_path: str,
-                        arch: str = None,
-                        disable_vision_encoder: bool = False):
+def get_registered_name(model_path: str, arch: str = None):
     """Get the registered name of a model. The name will be used to access the
     INPUT_MODELS registry.
 
     Args:
         model_path (str): the path of the input model
         arch (str): optional architecture string, to avoid reloading config
-        disable_vision_encoder (bool): load the language model only when a
-            TurboMind source model supports a separate vision encoder.
     """
     if arch is None:
         arch = get_model_arch(model_path)[0]
     register_name = SUPPORTED_ARCHS[arch]
-
-    if disable_vision_encoder and register_name in ('qwen3_5', 'qwen3_5-moe'):
-        register_name = f'_{register_name}'
-
     return register_name
 
 
@@ -233,17 +227,20 @@ def get_tm_config(model_path,
     engine_config.mlp_tp_size = engine_config.mlp_tp_size or 1
 
     # 6. Build text model.
-    registered_name = get_registered_name(
-        model_path,
-        arch=arch,
-        disable_vision_encoder=engine_config.disable_vision_encoder)
+    registered_name = get_registered_name(model_path, arch=arch)
     model_cls = INPUT_MODELS.get(registered_name)
 
-    cfg = hf_model_cfg if getattr(model_cls, '_vision', False) else source_model_config(hf_model_cfg)
+    cfg = source_model_config(hf_model_cfg)
     if engine_config.hf_overrides:
         logger.warning(f'Overriding HF config with {engine_config.hf_overrides}')
         _apply_hf_overrides(cfg, engine_config.hf_overrides)
 
-    text_model = model_cls(cfg, resolver=resolver)
+    # Pass disable_vision_encoder only to constructors that declare it, so the
+    # model itself decides whether to build a vision encoder while every
+    # text-only model keeps its strict (cfg, *, resolver) signature.
+    init_kwargs = {}
+    if 'disable_vision_encoder' in inspect.signature(model_cls).parameters:
+        init_kwargs['disable_vision_encoder'] = engine_config.disable_vision_encoder
+    text_model = model_cls(cfg, resolver=resolver, **init_kwargs)
 
     return text_model, model_path, resolver.data_type
