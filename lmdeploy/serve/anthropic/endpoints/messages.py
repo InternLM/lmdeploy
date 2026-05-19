@@ -153,12 +153,14 @@ def register(router: APIRouter, server_context) -> None:
                     response_parser=response_parser,
                     return_token_ids=request.return_token_ids or False,
                     return_routed_experts=request.return_routed_experts or False,
+                    logprobs=request.logprobs or False,
                 ),
                 media_type='text/event-stream',
             )
 
         text = ''
         final_token_ids: list[int] = []
+        final_logprobs: list[dict[int, float]] = []
         final_res = None
         async for res in result_generator:
             if await raw_request.is_disconnected():
@@ -168,6 +170,8 @@ def register(router: APIRouter, server_context) -> None:
             text += res.response or ''
             if getattr(res, 'token_ids', None):
                 final_token_ids.extend(res.token_ids)
+            if getattr(res, 'logprobs', None):
+                final_logprobs.extend(res.logprobs)
 
         if final_res is None:
             return create_error_response(HTTPStatus.INTERNAL_SERVER_ERROR, 'No generation output from engine.')
@@ -186,6 +190,13 @@ def register(router: APIRouter, server_context) -> None:
         if not content_blocks:
             content_blocks = [MessageTextBlock(text='')]
 
+        output_token_logprobs = None
+        if request.logprobs and final_logprobs and final_token_ids:
+            output_token_logprobs = [
+                (tok_logprobs[tok], tok)
+                for tok, tok_logprobs in zip(final_token_ids, final_logprobs)
+            ]
+
         response = MessagesResponse(
             id=request_id,
             model=request.model,
@@ -197,6 +208,7 @@ def register(router: APIRouter, server_context) -> None:
                 output_tokens=final_res.generate_token_len,
             ),
             output_ids=final_token_ids if request.return_token_ids else None,
+            output_token_logprobs=output_token_logprobs,
             routed_experts=final_res.routed_experts if request.return_routed_experts else None,
         )
         return response.model_dump()
