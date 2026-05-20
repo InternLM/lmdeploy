@@ -361,10 +361,20 @@ class Qwen3_5VisionModel(TextModel):
     def model(self, pfx):
         self._build_visual_model(pfx + 'model.visual')
 
+    def _restore_dtype(self, builder):
+        """Builder.__init__ unconditionally overwrites cfg.data_type with the
+        context's (text-engine) dtype.
+
+        The cfg is held by reference, so re-pinning it here propagates to every downstream _add_linear call on this
+        builder, keeping the visual sub-tree on its native dtype.
+        """
+        builder.config.data_type = self._resolver.data_type
+        return builder
+
     def _build_visual_model(self, pfx):
         cfg = self._make_visual_root_cfg()
-        root = VisualModelBuilder(
-            cfg, self._ctx, root_handles=self._root_handles)
+        root = self._restore_dtype(VisualModelBuilder(
+            cfg, self._ctx, root_handles=self._root_handles))
         root.tp = self._model_tp
 
         root._add_tensor('pos_embed', (pfx + 'pos_embed').pop('weight'))
@@ -420,7 +430,7 @@ class Qwen3_5VisionModel(TextModel):
         cfg.intermediate_size = self._vis_inter
         cfg.norm_eps = self._vis_norm_eps
 
-        b = Builder(cfg, self._ctx)
+        b = self._restore_dtype(Builder(cfg, self._ctx))
         b.tp = self._model_tp
 
         b.norm1 = self._layer_norm(pfx + 'norm1', dim=self._vis_hidden)
@@ -478,7 +488,8 @@ class Qwen3_5VisionModel(TextModel):
             v = _pad_head_dim_out(v, **pad_kwargs)
             proj = _pad_head_dim_in(proj, **pad_kwargs)
 
-        m = AttentionBuilder(cfg, self._ctx, tp=self._model_tp)
+        m = self._restore_dtype(
+            AttentionBuilder(cfg, self._ctx, tp=self._model_tp))
         m.add_qkv_proj(q, k, v)
         m.add_o_proj(proj)
         return m.build()
@@ -493,7 +504,7 @@ class Qwen3_5VisionModel(TextModel):
         cfg = make_layer_norm_config(dim=dim,
                                      data_type=self._resolver.data_type,
                                      norm_eps=self._vis_norm_eps)
-        m = LayerNormBuilder(cfg, self._ctx)
+        m = self._restore_dtype(LayerNormBuilder(cfg, self._ctx))
         m.set_weight(weight, bias=bias)
         return m.build()
 
@@ -504,7 +515,10 @@ class Qwen3_5Model:
     """Aggregate source model for Qwen3.5 checkpoints (text + optional
     vision)."""
 
+    _vision = True
+
     def __init__(self, cfg: Qwen3_5Config | Qwen3_5MoeConfig, *, resolver,
+                 vision_resolver=None,
                  disable_vision_encoder: bool = False):
         text_cfg = getattr(cfg, 'text_config', cfg)
         if text_cfg is None:
@@ -516,7 +530,8 @@ class Qwen3_5Model:
         if disable_vision_encoder or vision_cfg is None:
             self.vision_model = None
         else:
-            self.vision_model = Qwen3_5VisionModel(vision_cfg, resolver=resolver)
+            self.vision_model = Qwen3_5VisionModel(
+                vision_cfg, resolver=vision_resolver or resolver)
 
     def bind_runtime(self, *, ctx, root_handles,
                      attn_tp, mlp_tp, model_tp):

@@ -39,6 +39,7 @@ struct Qwen3_5Vit::Impl {
     LlamaLinear&                  linear_;
     comm::DeviceCommImpl* const   d_comm_;
     const int                     tp_group_;
+    const DataType                engine_data_type_;
 
     Buffer_<int> grid_thws_buf_;     // (t, h, w)
     Buffer_<int> grid_offsets_buf_;  // (t*h*w, h*w)
@@ -98,7 +99,8 @@ struct Qwen3_5Vit::Impl {
         phases_{phases},
         linear_{*ctx.linear},
         d_comm_{ctx.comm.d_comm},
-        tp_group_{ctx.comm.d_tp_group}
+        tp_group_{ctx.comm.d_tp_group},
+        engine_data_type_{engine.data_type}
     {
         auto& cfg = weights.config();
         for (int i = 0; i < phases; ++i) {
@@ -628,6 +630,12 @@ struct Qwen3_5Vit::Impl {
         }
 
         Tensor image_embeds = Merger(hidden_states);
+
+        // ViT may run in its own dtype (e.g. bf16) while the text engine runs
+        // in fp16 (AWQ-forced). PatchMultimodalEmbedding merges this buffer
+        // into the text embedding stream via a byte-level copy, so the dtypes
+        // must match before publishing.
+        EnsureFloatDtype(image_embeds, engine_data_type_);
 
         args.produce("multimodal",
                      MultiModalEmbeddingData{image_embeds, d.image_embeds_coords, d.input_embeds_coords}.buf());

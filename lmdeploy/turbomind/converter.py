@@ -1,7 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-import inspect
-
 import torch
 
 from lmdeploy.archs import get_model_arch, search_nested_config
@@ -209,6 +207,12 @@ def get_tm_config(model_path,
     dtype = _resolve_dtype(engine_config.dtype, hf_model_cfg)
     dtype = getattr(torch, dtype)
 
+    # Capture the user/file dtype before _build_resolver may force fp16 for
+    # AWQ/GPTQ/CT. VL checkpoints list 'visual' in modules_to_not_convert, so
+    # the ViT sub-tree is unquantized and should keep this dtype rather than
+    # inherit the text path's forced fp16.
+    vision_dtype = dtype
+
     # Build resolver after dtype is finalized but before the CT→AWQ rename,
     # so compressed-tensors models instantiate CompressedTensorFormat.
     resolver, dtype = _build_resolver(engine_config.model_format,
@@ -235,12 +239,18 @@ def get_tm_config(model_path,
         logger.warning(f'Overriding HF config with {engine_config.hf_overrides}')
         _apply_hf_overrides(cfg, engine_config.hf_overrides)
 
-    # Pass disable_vision_encoder only to constructors that declare it, so the
-    # model itself decides whether to build a vision encoder while every
-    # text-only model keeps its strict (cfg, *, resolver) signature.
+    # VL aggregate classes declare `_vision = True` to opt into the vision-
+    # branch contract: receive `disable_vision_encoder` and a dedicated
+    # `vision_resolver` (TrivialFormat only, vision-native dtype). Text-only
+    # models leave the flag unset and keep the strict (cfg, *, resolver)
+    # signature.
     init_kwargs = {}
-    if 'disable_vision_encoder' in inspect.signature(model_cls).parameters:
+    if getattr(model_cls, '_vision', False):
         init_kwargs['disable_vision_encoder'] = engine_config.disable_vision_encoder
+        if not engine_config.disable_vision_encoder:
+            init_kwargs['vision_resolver'] = WeightFormatResolver(
+                data_type=_torch_dtype_to_cpp(vision_dtype),
+                formats=[TrivialFormat()])
     text_model = model_cls(cfg, resolver=resolver, **init_kwargs)
 
     return text_model, model_path, resolver.data_type
