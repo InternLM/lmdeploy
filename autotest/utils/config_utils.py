@@ -336,6 +336,7 @@ def _is_kvint_model(config: dict[str, Any], backend: str, model: str, quant_poli
     if quant_policy == 42:
         kv42_list = config.get(f'{backend}_quantization', {}).get('kvint42', [])
         return _base_model_name(model) in kv42_list
+    return False
 
 def _base_model_name(model: str) -> str:
     """Simplify model name by removing quantization suffix for config
