@@ -202,6 +202,17 @@ class CausalConv1dFunc:
         return self.conv1d_func(x, weight, bias, conv_state, gated_delta_meta=gated_delta_meta)
 
 
+def repeat_and_l2norm(q: torch.Tensor, k: torch.Tensor, kv_ratio: int, do_norm: bool = True):
+    # repeat interleave would enlarge shape of kv, do l2norm first.
+    if do_norm:
+        q = torch.nn.functional.normalize(q, p=2, dim=-1)
+        k = torch.nn.functional.normalize(k, p=2, dim=-1)
+    if kv_ratio > 1:
+        q = q.repeat_interleave(kv_ratio, dim=-2)
+        k = k.repeat_interleave(kv_ratio, dim=-2)
+    return q, k
+
+
 class GatedDelta:
 
     def __init__(self, use_qk_l2norm_in_kernel: bool = True):
@@ -219,6 +230,7 @@ class GatedDelta:
         beta: torch.Tensor,
         recurrent_state: torch.Tensor,
         gated_delta_meta: GatedDeltaMeta,
+        kv_ratio: int = 1,
     ):
         """call."""
         is_decoding = gated_delta_meta.is_decoding
@@ -231,6 +243,7 @@ class GatedDelta:
             is_init_token = gated_delta_meta.is_init_token
             # set gate to 0 for init tokens to avoid attention to invalid kv
             g = g.masked_fill(is_init_token[None, :, None], -1e6)
+            query, key = repeat_and_l2norm(query, key, kv_ratio, do_norm=self.use_qk_l2norm_in_kernel)
             core_attn_out, last_recurrent_state = self.impl.chunk_gated_delta_rule(
                 query,
                 key,
@@ -240,11 +253,14 @@ class GatedDelta:
                 initial_state=recurrent_state,
                 state_indices=state_ids,
                 output_final_state=True,
-                use_qk_l2norm_in_kernel=self.use_qk_l2norm_in_kernel,
+                use_qk_l2norm_in_kernel=False,
                 cu_seqlens=cu_seqlens,
                 spec_state_offsets=spec_state_offsets,
             )
         else:
+            if kv_ratio > 1:
+                query = query.repeat_interleave(kv_ratio, dim=-2)
+                key = key.repeat_interleave(kv_ratio, dim=-2)
             # qkvgb (1, seqlen, ...) -> (B, seqlen, ...)
             batch_size = state_ids.size(0)
             core_attn_out, last_recurrent_state = self.impl.fused_recurrent_gated_delta_rule(
