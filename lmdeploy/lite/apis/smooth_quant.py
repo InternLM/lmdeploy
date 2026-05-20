@@ -8,6 +8,7 @@ import torch
 from torch import nn
 
 from lmdeploy.lite.apis.calibrate import LAYER_TYPE_MAP, NORM_TYPE_MAP, calibrate
+from lmdeploy.lite.model import MODELS
 from lmdeploy.lite.quantization.awq import FC_FCS_MAP, NORM_FCS_MAP, awq_layers, skipped_module, smooth_layers
 from lmdeploy.lite.utils import collect_target_modules
 from lmdeploy.pytorch.models import QLinear, QRMSNorm
@@ -26,7 +27,8 @@ def smooth_quant(model: str,
                  device: str = 'cuda',
                  quant_dtype: Literal['int8', 'fp8', 'float8_e4m3fn', 'float8_e5m2'] = 'int8',
                  revision: str = None,
-                 download_dir: str = None):
+                 download_dir: str = None,
+                 trust_remote_code: bool = False):
     try_import_deeplink(device)
     if quant_dtype == 'fp8':
         quant_dtype = 'float8_e4m3fn'
@@ -44,17 +46,18 @@ def smooth_quant(model: str,
         from lmdeploy.utils import get_model
         model = get_model(model, revision=revision, download_dir=download_dir)
     model_path = model
-    vl_model, model, tokenizer, work_dir = calibrate(model,
-                                                     calib_dataset,
-                                                     calib_samples,
-                                                     calib_seqlen,
-                                                     work_dir,
-                                                     device,
-                                                     w_bits=w_bits,
-                                                     w_group_size=-1,
-                                                     search_scale=search_scale,
-                                                     dtype=dtype,
-                                                     batch_size=batch_size)
+    arch, vl_model, model, tokenizer, work_dir = calibrate(model,
+                                                           calib_dataset,
+                                                           calib_samples,
+                                                           calib_seqlen,
+                                                           work_dir,
+                                                           device,
+                                                           w_bits=w_bits,
+                                                           w_group_size=-1,
+                                                           search_scale=search_scale,
+                                                           dtype=dtype,
+                                                           batch_size=batch_size,
+                                                           trust_remote_code=trust_remote_code)
 
     # calibrate function exports the calibration statistics
     # (inputs, outputs, keys and values) to `work_dir`.
@@ -95,32 +98,41 @@ def smooth_quant(model: str,
 
     rmsnorms = collect_target_modules(model, norm_type)
 
-    for name, linear in fcs.items():
-        if skipped_module(name):
-            continue
-        linear.to(device)
-        q_linear = QLinear.from_float(linear, quant_dtype=quant_dtype)
-        parent_name, _, child_name = name.rpartition('.')
-        parent = model.get_submodule(parent_name)
-        setattr(parent, child_name, q_linear)
-        linear.to('cpu')
-        q_linear.to('cpu')
-        torch.cuda.empty_cache()
+    patterns = []
+    skipped_modules = []
+    arch = model.config.architectures[0]
+    rebuilder = MODELS.get(arch)
+    if rebuilder:
+        patterns = rebuilder.skipped_modules()
+        skipped_modules.extend(patterns)
 
-    for name, norm in rmsnorms.items():
-        if skipped_module(name):
-            continue
-        norm.to(device)
-        q_norm = QRMSNorm.from_float(norm, quant_dtype=quant_dtype)
-        parent_name, _, child_name = name.rpartition('.')
-        parent = model.get_submodule(parent_name)
-        setattr(parent, child_name, q_norm)
-        norm.to('cpu')
-        q_norm.to('cpu')
-        torch.cuda.empty_cache()
+    for modules, q_cls in ((fcs, QLinear), (rmsnorms, QRMSNorm)):
+        for name, module in modules.items():
+            skipped, skipped_pattern = skipped_module(name, patterns)
+            if skipped:
+                if skipped_pattern and skipped_pattern not in skipped_modules:
+                    skipped_modules.append(skipped_pattern)
+                continue
+
+            module.to(device)
+            q_module = q_cls.from_float(module, quant_dtype=quant_dtype)
+
+            parent_name, _, child_name = name.rpartition('.')
+            parent = model.get_submodule(parent_name)
+            setattr(parent, child_name, q_module)
+
+            module.to('cpu')
+            q_module.to('cpu')
+            torch.cuda.empty_cache()
+
 
     quant_dtype_s = str(quant_dtype).split('.')[1]
-    model.config.update(dict(quantization_config=dict(quant_method='smooth_quant', quant_dtype=f'{quant_dtype_s}')))
+    quantization_config = dict(quant_method='smooth_quant',
+                               quant_dtype=f'{quant_dtype_s}')
+    if skipped_modules:
+        quantization_config['modules_to_not_convert'] = skipped_modules
+    model.config.update(dict(quantization_config=quantization_config))
+    # model.config.update(dict(quantization_config=dict(quant_method='smooth_quant', quant_dtype=f'{quant_dtype_s}')))
 
     if vl_model:
         from .auto_awq import save_vl_model

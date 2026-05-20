@@ -407,7 +407,8 @@ class ArgumentHelper:
         return parser.add_argument('--calib-samples',
                                    type=int,
                                    default=128,
-                                   help='The number of samples for calibration')
+                                   help='The number of samples for calibration. '
+                                        'Define 0 to indicate the data free quantization.')
 
     @staticmethod
     def calib_seqlen(parser):

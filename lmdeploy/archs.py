@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import os
 from typing import Literal
 
 from transformers import AutoConfig
@@ -138,10 +137,7 @@ def get_task(backend: str,
     """Get pipeline type and pipeline class from model config."""
     from lmdeploy.serve.core import AsyncEngine
 
-    if os.path.exists(os.path.join(model_path, 'triton_models', 'weights')):
-        # workspace model
-        return 'llm', AsyncEngine
-    if getattr(backend_config, 'disable_vision_encoder', False):
+    if backend_config and getattr(backend_config, 'disable_vision_encoder', False):
         return 'llm', AsyncEngine
     _, config = get_model_arch(model_path, trust_remote_code=trust_remote_code)
     if check_vl_llm(backend, config.to_dict()):
