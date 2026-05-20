@@ -221,15 +221,19 @@ void invokeLayerNorm(
         const int dim = x.shape(1);
 
         constexpr int vec_size = 16 / sizeof(T);
-        constexpr int threads  = 512;
         const int     blocks   = num;
 
         TM_CHECK(dim % vec_size == 0) << "dim=" << dim << " must be divisible by vec_size=" << vec_size;
 
         auto launch = [&](auto has_bias_c) {
+            // Redeclare these as constexpr inside this nested lambda. MSVC odr-uses
+            // (captures) constexpr locals read from an enclosing lambda and then
+            // refuses them as non-type template arguments; see rms_norm.cu (RMSNormQK).
+            constexpr int  kThreads = 512;
+            constexpr int  kVecSize = 16 / sizeof(T);
             constexpr bool kHasBias = decltype(has_bias_c)::value;
-            kernel::LayerNorm<T, float, threads, vec_size, kHasBias>
-                <<<blocks, threads, 0, stream>>>((T*)out.raw_data(),
+            kernel::LayerNorm<T, float, kThreads, kVecSize, kHasBias>
+                <<<blocks, kThreads, 0, stream>>>((T*)out.raw_data(),
                                                  out.stride(0),
                                                  (const T*)x.raw_data(),
                                                  x.stride(0),
@@ -275,17 +279,21 @@ void invokeResidualBiasLayerNorm(void*        hidden_states,
         using T = decltype(t);
 
         constexpr int vec_size = 16 / sizeof(T);
-        constexpr int threads  = 512;
         const int     blocks   = num;
 
         TM_CHECK(dims % vec_size == 0) << "dims=" << dims << " must be divisible by vec_size=" << vec_size;
 
         auto launch = [&](auto has_norm_bias_c, auto has_residual_bias_c) {
+            // Redeclare these as constexpr inside this nested lambda. MSVC odr-uses
+            // (captures) constexpr locals read from an enclosing lambda and then
+            // refuses them as non-type template arguments; see rms_norm.cu (RMSNormQK).
+            constexpr int  kThreads         = 512;
+            constexpr int  kVecSize         = 16 / sizeof(T);
             constexpr bool kHasNormBias     = decltype(has_norm_bias_c)::value;
             constexpr bool kHasResidualBias = decltype(has_residual_bias_c)::value;
 
-            kernel::ResidualBiasLayerNorm<T, float, threads, vec_size, kHasNormBias, kHasResidualBias>
-                <<<blocks, threads, 0, stream>>>((T*)hidden_states,
+            kernel::ResidualBiasLayerNorm<T, float, kThreads, kVecSize, kHasNormBias, kHasResidualBias>
+                <<<blocks, kThreads, 0, stream>>>((T*)hidden_states,
                                                  (T*)residual,
                                                  (const T*)norm_weight,
                                                  kHasNormBias ? (const T*)norm_bias : nullptr,
