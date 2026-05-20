@@ -55,6 +55,13 @@ class GatedDeltaMeta:
         # TODO: fix last chunk with less conv kernel tokens
         self.conv_idx = self.conv_idx.clamp_min(0)
 
+        self.is_init = None
+        self.is_init_token = None
+        if not self.is_decoding:
+            self.is_init = (attn_metadata.kv_seqlens - attn_metadata.q_seqlens) == 0
+            self.is_init_token = self.is_init.new_zeros(num_tokens, dtype=torch.bool)
+            self.is_init_token.scatter_(0, self.cu_seqlens[:-1], self.is_init)
+
         # for spec decoding
         if self.num_spec_tokens > 0:
             self.cache_seqlens = (attn_metadata.kv_seqlens - attn_metadata.q_seqlens).to(torch.int32)
@@ -126,6 +133,9 @@ class CausalConv1dFunc:
             # (num_seqs, dim, ks-1): last ks-1 raw input values per sequence.
             all_inits = conv_state[state_ids, :, 1:]
             conv_state = conv_state.index_copy_(0, state_ids, final_state)
+
+        is_init = gated_delta_meta.is_init
+        all_inits.masked_fill_(is_init[:, None, None], 0.0)
 
         x = x.transpose(-2, -1)
         out = self.causal_conv1d_fn(
@@ -218,6 +228,9 @@ class GatedDelta:
         cache_seqlens = gated_delta_meta.cache_seqlens
 
         if not is_decoding:
+            is_init_token = gated_delta_meta.is_init_token
+            # set gate to 0 for init tokens to avoid attention to invalid kv
+            g = g.masked_fill(is_init_token[None, :, None], -1e6)
             core_attn_out, last_recurrent_state = self.impl.chunk_gated_delta_rule(
                 query,
                 key,
