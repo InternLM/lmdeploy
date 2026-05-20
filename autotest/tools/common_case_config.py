@@ -98,6 +98,15 @@ TURBOMIND_FALLBACK_TEST_LLM_GPU1 = [{
         'tp': 1
     },
     'extra_params': {}
+}, {
+    'model': 'microsoft/Phi-3.5-vision-instruct',
+    'backend': 'turbomind',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 1
+    },
+    'extra_params': {}
 }]
 
 TURBOMIND_FALLBACK_TEST_LLM_GPU2 = [{

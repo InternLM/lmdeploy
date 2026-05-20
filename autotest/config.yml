@@ -55,8 +55,6 @@ turbomind_chat_model:
         - mistralai/Mixtral-8x7B-Instruct-v0.1
         - THUDM/glm-4-9b-chat
         - zai-org/GLM-4.7-Flash
-        - microsoft/Phi-3-vision-128k-instruct
-        - microsoft/Phi-3.5-vision-instruct
 
 pytorch_chat_model:
     tp:
@@ -86,6 +84,8 @@ pytorch_chat_model:
         - google/gemma-2-9b-it
         - google/gemma-2-27b-it
         - zai-org/GLM-4.7-Flash
+        - microsoft/Phi-3-vision-128k-instruct
+        - microsoft/Phi-3.5-vision-instruct
 
 turbomind_vl_model:
     tp:
@@ -107,6 +107,8 @@ pytorch_vl_model:
         - THUDM/cogvlm-chat-hf
         - THUDM/cogvlm2-llama3-chinese-chat-19B
         # - THUDM/glm-4v-9b
+        - microsoft/Phi-3-vision-128k-instruct
+        - microsoft/Phi-3.5-vision-instruct
 
 turbomind_base_model:
     tp:
@@ -211,6 +213,8 @@ pytorch_quantization:
         - Qwen/Qwen3-VL-8B-Instruct
         - Qwen/Qwen3-VL-30B-A3B-Instruct
         - zai-org/GLM-4.7-Flash
+        - microsoft/Phi-3-vision-128k-instruct
+        - microsoft/Phi-3.5-vision-instruct
     no_kvint8:
         - zai-org/GLM-4.7-Flash
 

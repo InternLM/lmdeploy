@@ -83,6 +83,9 @@ def get_func_config_list(backend: str,
                     continue
                 if not _is_kvint_model(config, backend, model, quant_policy):
                     continue
+                # Prefix caching is unsupported when linear attention is present
+                if 'enable-prefix-caching' in extra and 'Qwen3.' in model:
+                    continue
                 run_config = {
                     'model': model,
                     'backend': backend,
