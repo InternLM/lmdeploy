@@ -33,4 +33,7 @@ def config_from_pretrained(pretrained_model_name_or_path: str, **kwargs):
         if trust_remote_code is not None:
             kwargs['trust_remote_code'] = trust_remote_code
         register_config(model_type)
-        return AutoConfig.from_pretrained(pretrained_model_name_or_path, **kwargs)
+        try:
+            return AutoConfig.from_pretrained(pretrained_model_name_or_path, **kwargs)
+        except Exception as e:
+            return PretrainedConfig.from_pretrained(pretrained_model_name_or_path, **kwargs)
