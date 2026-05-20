@@ -60,7 +60,7 @@ class GatedDeltaMeta:
         if not self.is_decoding:
             self.is_init = (attn_metadata.kv_seqlens - attn_metadata.q_seqlens) == 0
             self.is_init_token = self.is_init.new_zeros(num_tokens, dtype=torch.bool)
-            self.is_init_token.scatter_(0, self.cu_seqlens[:-1], self.is_init)
+            self.is_init_token.scatter_(0, self.cu_seqlens[:-1].long(), self.is_init)
 
         # for spec decoding
         if self.num_spec_tokens > 0:

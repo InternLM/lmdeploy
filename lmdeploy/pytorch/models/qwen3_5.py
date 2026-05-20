@@ -577,7 +577,7 @@ class Qwen3_5GatedDeltaNet(nn.Module):
             beta=beta,
             recurrent_state=recurrent_state,
             gated_delta_meta=gated_delta_meta,
-            kv_ratio = self.kv_ratio,
+            kv_ratio=self.kv_ratio,
         )
 
         z_shape_og = z.shape
