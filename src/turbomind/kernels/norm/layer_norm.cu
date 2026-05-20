@@ -234,15 +234,15 @@ void invokeLayerNorm(
             constexpr bool kHasBias = decltype(has_bias_c)::value;
             kernel::LayerNorm<T, float, kThreads, kVecSize, kHasBias>
                 <<<blocks, kThreads, 0, stream>>>((T*)out.raw_data(),
-                                                 out.stride(0),
-                                                 (const T*)x.raw_data(),
-                                                 x.stride(0),
-                                                 (const T*)weight.raw_data(),
-                                                 kHasBias ? (const T*)bias.raw_data() : nullptr,
-                                                 dim,
-                                                 num,
-                                                 eps,
-                                                 1.f / dim);
+                                                  out.stride(0),
+                                                  (const T*)x.raw_data(),
+                                                  x.stride(0),
+                                                  (const T*)weight.raw_data(),
+                                                  kHasBias ? (const T*)bias.raw_data() : nullptr,
+                                                  dim,
+                                                  num,
+                                                  eps,
+                                                  1.f / dim);
         };
 
         if (bias) {
@@ -294,14 +294,14 @@ void invokeResidualBiasLayerNorm(void*        hidden_states,
 
             kernel::ResidualBiasLayerNorm<T, float, kThreads, kVecSize, kHasNormBias, kHasResidualBias>
                 <<<blocks, kThreads, 0, stream>>>((T*)hidden_states,
-                                                 (T*)residual,
-                                                 (const T*)norm_weight,
-                                                 kHasNormBias ? (const T*)norm_bias : nullptr,
-                                                 kHasResidualBias ? (const T*)residual_bias : nullptr,
-                                                 dims,
-                                                 num,
-                                                 eps,
-                                                 1.f / dims);
+                                                  (T*)residual,
+                                                  (const T*)norm_weight,
+                                                  kHasNormBias ? (const T*)norm_bias : nullptr,
+                                                  kHasResidualBias ? (const T*)residual_bias : nullptr,
+                                                  dims,
+                                                  num,
+                                                  eps,
+                                                  1.f / dims);
         };
 
         if (norm_bias && residual_bias) {
