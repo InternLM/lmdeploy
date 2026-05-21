@@ -7,14 +7,10 @@ from functools import lru_cache
 import pytest
 import requests
 from utils.config_utils import get_config
-from utils.constant import BACKEND_LIST, DEFAULT_SERVER, RESTFUL_MODEL_LIST
+from utils.constant import BACKEND_LIST, BASE_URL, RESTFUL_MODEL_LIST
 from utils.tool_reasoning_definitions import WEATHER_TOOL, openai_function_tool_to_anthropic
 
 from lmdeploy.serve.openai.api_client import APIClient
-
-BASE_HTTP_URL = f'http://{DEFAULT_SERVER}'
-DEFAULT_PORT = 23333
-BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
 
 ANTHROPIC_VERSION = '2023-06-01'
 

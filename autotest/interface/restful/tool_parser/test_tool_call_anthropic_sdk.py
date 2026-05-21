@@ -8,7 +8,7 @@ from functools import lru_cache
 import pytest
 import requests
 from utils.config_utils import get_config
-from utils.constant import DEFAULT_PORT, DEFAULT_SERVER
+from utils.constant import BASE_URL
 from utils.tool_reasoning_definitions import (
     SEARCH_TOOL,
     WEATHER_TOOL,
@@ -23,7 +23,6 @@ from lmdeploy.serve.openai.api_client import APIClient
 from .conftest import MESSAGES_ASKING_FOR_WEATHER, _apply_marks, _ToolCallTestBase
 
 ANTHROPIC_VERSION = '2023-06-01'
-BASE_HTTP_URL = f'http://{DEFAULT_SERVER}:{DEFAULT_PORT}'
 
 _EVAL_IMAGE_TIGER = 'tiger.jpeg'
 _TINY_PNG_BASE64 = (
@@ -225,8 +224,8 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
     """
 
     def test_http_stream_tool_choice_force_named_tool(self, backend, model_case):
-        model_name = APIClient(BASE_HTTP_URL).available_models[0]
-        url = f'{BASE_HTTP_URL}/v1/messages'
+        model_name = APIClient(BASE_URL).available_models[0]
+        url = f'{BASE_URL}/v1/messages'
         req_json = {
             'model': model_name,
             'max_tokens': 512,
@@ -264,8 +263,8 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         assert WEATHER_TOOL['function']['name'] in names, names
 
     def test_http_stream_single_location_weather_tool(self, backend, model_case):
-        model_name = APIClient(BASE_HTTP_URL).available_models[0]
-        url = f'{BASE_HTTP_URL}/v1/messages'
+        model_name = APIClient(BASE_URL).available_models[0]
+        url = f'{BASE_URL}/v1/messages'
         req_json = {
             'model': model_name,
             'max_tokens': 512,
@@ -296,8 +295,8 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         assert 'get_current_weather' in names, names
 
     def test_http_history_tool_use_and_tool_result_blocks(self, backend, model_case):
-        model_name = APIClient(BASE_HTTP_URL).available_models[0]
-        url = f'{BASE_HTTP_URL}/v1/messages'
+        model_name = APIClient(BASE_URL).available_models[0]
+        url = f'{BASE_URL}/v1/messages'
         req_json = {
             'model': model_name,
             'max_tokens': 8192,
@@ -351,8 +350,8 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         )
 
     def test_http_history_thinking_block_replay(self, backend, model_case):
-        model_name = APIClient(BASE_HTTP_URL).available_models[0]
-        url = f'{BASE_HTTP_URL}/v1/messages'
+        model_name = APIClient(BASE_URL).available_models[0]
+        url = f'{BASE_URL}/v1/messages'
         req_json = {
             'model': model_name,
             'max_tokens': 8192,
@@ -395,12 +394,12 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         """``tools`` + user ``content`` blocks with ``image`` (VLM matrix only;
         same tool contract as text-only)."""
 
-        model_name = APIClient(BASE_HTTP_URL).available_models[0]
+        model_name = APIClient(BASE_URL).available_models[0]
         if not _model_likely_supports_anthropic_vlm(model_name):
             pytest.skip(f'model {model_name!r} is not treated as vision-capable for this test')
 
         image_path = _eval_resource_file(_EVAL_IMAGE_TIGER)
-        url = f'{BASE_HTTP_URL}/v1/messages'
+        url = f'{BASE_URL}/v1/messages'
         req_json = {
             'model': model_name,
             'max_tokens': 512,
@@ -446,12 +445,12 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         """Streaming ``tools`` + user image URL (VLM): SSE must still surface
         ``tool_use``."""
 
-        model_name = APIClient(BASE_HTTP_URL).available_models[0]
+        model_name = APIClient(BASE_URL).available_models[0]
         if not _model_likely_supports_anthropic_vlm(model_name):
             pytest.skip(f'model {model_name!r} is not treated as vision-capable for this test')
 
         image_path = _eval_resource_file(_EVAL_IMAGE_TIGER)
-        url = f'{BASE_HTTP_URL}/v1/messages'
+        url = f'{BASE_URL}/v1/messages'
         req_json = {
             'model': model_name,
             'max_tokens': 512,
@@ -488,11 +487,11 @@ class TestAnthropicHttpToolMessages(_ToolCallTestBase):
         """Align with RESTful ``test_messages_user_image_base64_stream``: SSE
         text names the solid color."""
 
-        model_name = APIClient(BASE_HTTP_URL).available_models[0]
+        model_name = APIClient(BASE_URL).available_models[0]
         if not _model_likely_supports_anthropic_vlm(model_name):
             pytest.skip(f'model {model_name!r} is not treated as vision-capable for this test')
 
-        url = f'{BASE_HTTP_URL}/v1/messages'
+        url = f'{BASE_URL}/v1/messages'
         req_json = {
             'model': model_name,
             'max_tokens': 16384,
@@ -881,7 +880,7 @@ class TestAnthropicSdkToolCall(_ToolCallTestBase):
         assert WEATHER_TOOL['function']['name'] in names, names
 
     def test_tool_non_stream_weather_with_user_image_url(self, backend, model_case):
-        model_name = APIClient(BASE_HTTP_URL).available_models[0]
+        model_name = APIClient(BASE_URL).available_models[0]
         if not _model_likely_supports_anthropic_vlm(model_name):
             pytest.skip(f'model {model_name!r} is not treated as vision-capable for this test')
 
@@ -894,7 +893,7 @@ class TestAnthropicSdkToolCall(_ToolCallTestBase):
         _assert_weather_tool_city_state(tool_blocks[0].input, ctx='test_tool_non_stream_weather_with_user_image_url')
 
     def test_tool_non_stream_weather_with_user_image_base64(self, backend, model_case):
-        model_name = APIClient(BASE_HTTP_URL).available_models[0]
+        model_name = APIClient(BASE_URL).available_models[0]
         if not _model_likely_supports_anthropic_vlm(model_name):
             pytest.skip(f'model {model_name!r} is not treated as vision-capable for this test')
 
@@ -912,7 +911,7 @@ class TestAnthropicSdkToolCall(_ToolCallTestBase):
         """SDK streaming + 1×1 red PNG: final text (or raw event blob) should
         mention a red-ish color."""
 
-        model_name = APIClient(BASE_HTTP_URL).available_models[0]
+        model_name = APIClient(BASE_URL).available_models[0]
         if not _model_likely_supports_anthropic_vlm(model_name):
             pytest.skip(f'model {model_name!r} is not treated as vision-capable for this test')
 

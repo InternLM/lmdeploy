@@ -7,11 +7,8 @@ import pytest
 
 pytest.importorskip('anthropic')
 
-from utils.constant import BACKEND_LIST, DEFAULT_SERVER, RESTFUL_MODEL_LIST
+from utils.constant import BACKEND_LIST, RESTFUL_MODEL_LIST
 from utils.tool_reasoning_definitions import get_async_anthropic_client_and_model
-
-BASE_HTTP_URL = f'http://{DEFAULT_SERVER}'
-DEFAULT_PORT = 23333
 
 
 def _text_from_message(msg) -> str:
@@ -37,9 +34,7 @@ def _first_message_start_usage(events: list) -> tuple[int, int] | None:
 
 
 async def _sdk_simple_non_stream() -> object:
-    client, model_name = get_async_anthropic_client_and_model(
-        base_url=f'{BASE_HTTP_URL}:{DEFAULT_PORT}',
-    )
+    client, model_name = get_async_anthropic_client_and_model()
     return await client.messages.create(
         model=model_name,
         max_tokens=1024,
@@ -49,9 +44,7 @@ async def _sdk_simple_non_stream() -> object:
 
 
 async def _sdk_system_non_stream() -> object:
-    client, model_name = get_async_anthropic_client_and_model(
-        base_url=f'{BASE_HTTP_URL}:{DEFAULT_PORT}',
-    )
+    client, model_name = get_async_anthropic_client_and_model()
     return await client.messages.create(
         model=model_name,
         max_tokens=1024,
@@ -62,9 +55,7 @@ async def _sdk_system_non_stream() -> object:
 
 
 async def _sdk_stream_events_and_final() -> tuple[list, object | None]:
-    client, model_name = get_async_anthropic_client_and_model(
-        base_url=f'{BASE_HTTP_URL}:{DEFAULT_PORT}',
-    )
+    client, model_name = get_async_anthropic_client_and_model()
     stream = await client.messages.create(
         model=model_name,
         max_tokens=1024,

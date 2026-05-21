@@ -4,6 +4,9 @@ DEFAULT_PORT = 23333
 DEFAULT_SERVER = os.getenv('MASTER_ADDR', '127.0.0.1')
 PROXY_PORT = 8000
 
+BASE_HTTP_URL = f'http://{DEFAULT_SERVER}'
+BASE_URL = f'{BASE_HTTP_URL}:{os.getenv("LMDEPLOY_PORT", str(DEFAULT_PORT))}'
+
 EVAL_CONFIGS = {
     'default': {
         'query_per_second': 4,
@@ -208,7 +211,7 @@ RESTFUL_MODEL_LIST_LATEST = [
     'Qwen/Qwen3-32B', 'Qwen/Qwen3-30B-A3B', 'Qwen/Qwen3-0.6B', 'OpenGVLab/InternVL3_5-30B-A3B',
     'OpenGVLab/InternVL3-38B', 'Qwen/Qwen3-VL-8B-Instruct', 'internlm/Intern-S1',
     'internlm/internlm3-8b-instruct', 'meta-llama/Llama-3.2-3B-Instruct',
-    'Qwen/Qwen3-VL-30B-A3B-Instruct',
+    'Qwen/Qwen3-VL-30B-A3B-Instruct', 'internlm/interns2-preview-0509',
 ]
 
 RESTFUL_MODEL_LIST_LEGACY = ['internlm/internlm2_5-20b']
@@ -228,6 +231,7 @@ TOOL_REASONING_MODEL_LIST_LATEST = [
     'unsloth/gpt-oss-20b-BF16',
     'Qwen/Qwen2.5-7B-Instruct',
     'internlm/Intern-S1-Pro-FP8',
+    'internlm/interns2-preview-0509',
 ]
 
 TOOL_REASONING_MODEL_LIST_LEGACY = [

@@ -3,11 +3,7 @@ import os
 import re
 
 from openai import OpenAI
-from utils.constant import DEFAULT_PORT
-
-BASE_HTTP_URL = f"http://{os.getenv('MASTER_ADDR', 'localhost')}"
-PORT = os.getenv('LMDEPLOY_PORT', str(DEFAULT_PORT))
-BASE_URL = f'{BASE_HTTP_URL}:{PORT}'
+from utils.constant import BASE_URL
 
 #: Think-tag delimiters used by DeepSeek-R1 and QwenQwQ parsers
 THINK_START_TOKEN = '<think>'
@@ -247,11 +243,10 @@ def get_async_anthropic_client_and_model(base_url: str | None = None):
     on server root)."""
 
     import anthropic
-    from utils.constant import DEFAULT_PORT, DEFAULT_SERVER
 
     from lmdeploy.serve.openai.api_client import get_model_list
 
-    url = base_url or f'http://{DEFAULT_SERVER}:{DEFAULT_PORT}'
+    url = base_url or BASE_URL
     model_names = get_model_list(f'{url}/v1/models')
     if not model_names:
         raise RuntimeError(f'No models returned from {url}/v1/models')
