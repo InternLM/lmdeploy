@@ -123,7 +123,8 @@ class ARSpecStepInputs(StepInputs):
         max_q_seqlen = next_token_ids_expanded.size(-1)
         next_token_ids_flat = next_token_ids_expanded.flatten()[None, :]
         inputs = get_model_inputs_next_decoding(
-            inputs, next_token_ids_flat, max_q_seqlen=max_q_seqlen, model_metas=model_metas)
+            inputs, next_token_ids_flat,
+            max_q_seqlen=max_q_seqlen, model_metas=model_metas)
 
         # update mrope pos ids
         mrope_pos_ids = inputs.mrope_pos_ids

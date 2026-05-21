@@ -256,7 +256,9 @@ class AscendOpsBackend(DlinferOpsBackend):
                                               device=step_context.block_offsets.device),
                                    diagonal=max_kv_seq_len - max_q_seq_len + 1))
                 else:
-                    attention_mask.append(torch.triu(torch.ones(2048, 2048, dtype=torch.bool, device=step_context.block_offsets.device), diagonal=1))
+                    attention_mask.append(
+                        torch.triu(torch.ones(2048, 2048, dtype=torch.bool, device=step_context.block_offsets.device),
+                                   diagonal=1))
 
                 kv_start_indices = torch.cat(kv_start_indices)
 
