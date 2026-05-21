@@ -832,6 +832,7 @@ class TestFillCompressedKV:
         self._run_decode_test(kvlen, compress_ratio, head_dim, block_size, device, dtype)
 
 
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason='require device with cc>=9.0')
 class TestFillCompressedKVFP8:
     """Test FP8 direct write in fill_compressed_kv.
 

@@ -142,6 +142,7 @@ def _pack_global_bf16_window_to_fp8(global_cache, num_slots, window_size, device
     return fp8_window
 
 
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason='require device with cc>=9.0')
 class TestFlattenV4KV:
 
     @pytest.fixture
@@ -562,6 +563,7 @@ class TestFlattenV4KV:
         assert cu.cpu().tolist() == ref_cu.cpu().tolist()
 
 
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason='require device with cc>=9.0')
 class TestPackWindowTokensFP8:
     """Tests for the pack_window_tokens_fp8 Triton kernel."""
 
