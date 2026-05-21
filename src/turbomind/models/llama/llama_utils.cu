@@ -27,7 +27,7 @@ void CheckNan(const T* ptr, size_t size, std::string key, cudaStream_t stream)
     std::vector<T> h_data(size);
     cudaMemcpyAsync(h_data.data(), ptr, sizeof(T) * size, cudaMemcpyDefault, stream);
 
-    check_cuda_error(cudaStreamSynchronize(stream));
+    TM_CUDA_CHECK(cudaStreamSynchronize(stream));
 
     size_t nan_cnt = 0;
     for (const auto& x : h_data) {
@@ -62,8 +62,8 @@ void CmpRead(T* ptr, size_t size, std::string key, cudaStream_t stream)
         ifs.read((char*)h_a.data(), sizeof(T) * h_a.size());
     }
     std::vector<T> h_b(size);
-    check_cuda_error(cudaMemcpyAsync(h_b.data(), ptr, sizeof(T) * size, cudaMemcpyDefault, stream));
-    check_cuda_error(cudaStreamSynchronize(stream));
+    TM_CUDA_CHECK(cudaMemcpyAsync(h_b.data(), ptr, sizeof(T) * size, cudaMemcpyDefault, stream));
+    TM_CUDA_CHECK(cudaStreamSynchronize(stream));
 
     using Tacc         = std::conditional_t<std::is_integral_v<T>, int64_t, float>;
     constexpr Tacc eps = std::is_integral_v<T> ? 1 : 1e-8f;
@@ -92,8 +92,8 @@ void CmpRead(T* ptr, size_t size, std::string key, cudaStream_t stream)
             (float)asum / (float)size,
             (float)rsum / (float)size);
 
-    check_cuda_error(cudaMemcpyAsync(ptr, h_a.data(), sizeof(T) * h_a.size(), cudaMemcpyDefault, stream));
-    check_cuda_error(cudaStreamSynchronize(stream));
+    TM_CUDA_CHECK(cudaMemcpyAsync(ptr, h_a.data(), sizeof(T) * h_a.size(), cudaMemcpyDefault, stream));
+    TM_CUDA_CHECK(cudaStreamSynchronize(stream));
 }
 
 template<typename T>
@@ -101,8 +101,8 @@ void CmpWrite(T* ptr, size_t size, std::string key, cudaStream_t stream)
 {
     std::vector<T> a(size);
     // copy a to host
-    check_cuda_error(cudaMemcpyAsync(a.data(), ptr, sizeof(T) * size, cudaMemcpyDefault, stream));
-    check_cuda_error(cudaStreamSynchronize(stream));
+    TM_CUDA_CHECK(cudaMemcpyAsync(a.data(), ptr, sizeof(T) * size, cudaMemcpyDefault, stream));
+    TM_CUDA_CHECK(cudaStreamSynchronize(stream));
     // write to file
     {
         std::ofstream ofs("tmp/" + key + ".cmp", std::ios::binary);

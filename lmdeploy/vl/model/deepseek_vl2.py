@@ -76,7 +76,8 @@ class DeepSeek2VisionModel(VisionModel):
         formatted_messages = []
         for message in messages:
             text_content = DeepSeek2VisionModel.proc_single_message(message)
-            image_content = [x['image'] for x in message['content'] if x['type'] == 'image']
+            mm_items = self.collect_multimodal_items([message])
+            image_content = [data for modality, data, _ in mm_items if modality == 'image']
             formatted_messages.append(dict(role=message['role'], content=text_content, images=image_content))
 
         # NOTE: DeepseekVLV2Processor inputs

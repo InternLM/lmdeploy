@@ -162,14 +162,12 @@ void LinearWeight::prepare()
 
             if (bits == 4) {
                 extend_to_u16(tmp.data(), (const uint4_t*)weight.raw_data(), tmp.size(), stream);
-                sync_check_cuda_error();
             }
             else if (bits == 8) {
                 extend_to_u16(tmp.data(), (const uint8_t*)weight.raw_data(), tmp.size(), stream);
-                sync_check_cuda_error();
             }
             else if (bits == 16) {
-                check_cuda_error(
+                TM_CUDA_CHECK(
                     cudaMemcpyAsync(tmp.raw_data(), weight.raw_data(), weight.byte_size(), cudaMemcpyDefault, stream));
             }
 
@@ -202,9 +200,8 @@ void LinearWeight::prepare()
             }
             kd.pack = conv_w->pack;
 
-            check_cuda_error(cudaMemsetAsync(weight.raw_data(), 0, weight.byte_size(), stream));
+            TM_CUDA_CHECK(cudaMemsetAsync(weight.raw_data(), 0, weight.byte_size(), stream));
             TM_CHECK(conv_w->Convert(tmp.data(), w_desc, weight.raw_data(), kd, stream) == 0);
-            sync_check_cuda_error();
 
             kd.type = weight_format.dtype;
             if (is_A) {
@@ -242,7 +239,6 @@ void LinearWeight::prepare()
 
             if (data_type == kHalf && weight_format.dtype == kFloat4_e2m1) {
                 AdjustUe8m0ScaleForHalf(tmp_q.data<uint8_t>(), tmp_q.size(), stream);
-                sync_check_cuda_error();
             }
 
             int          gs = weight_format.block_sizes[0];  // K-axis, tensor-shape order
@@ -263,7 +259,6 @@ void LinearWeight::prepare()
             qd.pack         = pack_s;
 
             TM_CHECK(conv_s->Convert(tmp_q.raw_data(), s_desc, scales.raw_data(), qd, stream) == 0);
-            sync_check_cuda_error();
 
             if (is_A) {
                 qd = transpose(qd);

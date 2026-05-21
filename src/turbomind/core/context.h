@@ -1,10 +1,26 @@
 #pragma once
 
+#include <string>
+
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/common.h"
 #include "src/turbomind/core/stream.h"
 
 namespace turbomind::core {
+
+enum class scope_type
+{
+    named,
+    function,
+    call,
+};
+
+struct ScopeEntry {
+    const char* name;
+    const char* file;
+    int         line;
+    scope_type  type = scope_type::named;
+};
 
 class Context {
 public:
@@ -13,6 +29,11 @@ public:
     static Allocator& device_alloc();
     static Allocator& pinned_alloc();
     static Allocator& alloc(Device device);
+
+    static void        push_scope(const ScopeEntry& entry);
+    static void        pop_scope();
+    static std::string scope_trace();
+    static int         scope_depth();
 
 private:
     friend class ContextGuard;

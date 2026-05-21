@@ -2,6 +2,7 @@
 
 #include "src/turbomind/core/data_format.h"
 #include "src/turbomind/core/check.h"
+#include "src/turbomind/core/logger.h"
 
 namespace turbomind {
 
@@ -57,7 +58,7 @@ DataFormat ResolveLinearWeightFormat(DataType data_type, DataType weight_dtype, 
         return fmt;
     }
 
-    TM_CHECK(0) << "Unsupported weight format: " << to_string(weight_dtype);
+    TM_LOG_FATAL("Unsupported weight format: {}", to_string(weight_dtype));
     return fmt;
 }
 

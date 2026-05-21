@@ -4,6 +4,7 @@
 #include "src/turbomind/kernels/activation.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
@@ -93,11 +94,12 @@ void Activation(Ref<Tensor> gate_, const Tensor& up, ActivationType type, cudaSt
             return invoke(t, SiluGptOss<T>{});
         }
         else {
-            TM_CHECK(0) << "unknown activation type: " << (int)type;
+            TM_LOG_FATAL("unknown activation type: {}", (int)type);
         }
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(gate.dtype(), dispatch);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<int vec_size, class Activation, class T>
@@ -183,11 +185,12 @@ void Activation(Tensor&             gate_up,  //
             return invoke(t, SiluGptOss<T>{});
         }
         else {
-            TM_CHECK(0) << "unknown activation type: " << (int)type;
+            TM_LOG_FATAL("unknown activation type: {}", (int)type);
         }
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(gate_up.dtype(), dispatch);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 }  // namespace turbomind

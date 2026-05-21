@@ -19,6 +19,7 @@
 #include "src/turbomind/kernels/sampling_topk_kernels.h"  // InitializeRandomStates
 
 #include "src/turbomind/models/llama/llama_kernels.h"  // invokePadLastTokenIds
+#include "src/turbomind/utils/cuda_utils.h"
 
 // #include "dbg.h"
 
@@ -123,6 +124,7 @@ struct Generation::Impl {
 
     void Setup(int phase, TensorMap& env)
     {
+        TM_FUNCTION_SCOPE();
         auto& d = *data_.at(phase);
 
         auto& b    = *env.at("batch").data<BatchData*>()[0];
@@ -202,6 +204,7 @@ struct Generation::Impl {
 
     void Prepare(int phase, TensorMap& env)
     {
+        TM_FUNCTION_SCOPE();
         auto& d = *data_.at(phase);
 
         auto& b    = *env.at("batch").data<BatchData*>()[0];
@@ -215,6 +218,7 @@ struct Generation::Impl {
 
     void Unprep(int phase, TensorMap& env)
     {
+        TM_FUNCTION_SCOPE();
         auto& d    = *data_.at(phase);
         auto& b    = *env.at("batch").data<BatchData*>()[0];
         auto& copy = *env.at("copy").data<BatchCopy*>()[0];
@@ -226,6 +230,7 @@ struct Generation::Impl {
 
     void Fetch(int phase, TensorMap& env)
     {
+        TM_FUNCTION_SCOPE();
         auto& d    = *data_.at(phase);
         auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 
@@ -240,11 +245,13 @@ struct Generation::Impl {
 
     void Update(int phase, TensorMap& env)
     {
+        TM_FUNCTION_SCOPE();
         sampling_->Update(phase, env);
     }
 
     void Forward(int phase, TensorMap& env)
     {
+        TM_FUNCTION_SCOPE();
         auto& d = *data_.at(phase);
         auto& b = *env.at("batch").data<BatchData*>()[0];
 
@@ -256,7 +263,6 @@ struct Generation::Impl {
                                    d.random_init.data(),
                                    b.bsz,
                                    stream);
-            sync_check_cuda_error();
         }
 
         env.emplace("output_ids", output_ids_);              // out
@@ -270,7 +276,7 @@ struct Generation::Impl {
 
             if (logits.dtype() != kFloat32) {
                 auto tmp = empty_like(logits, kFloat32);
-                invokeCastFloat2D(logits, tmp, stream);
+                TM_SCOPE_CALL(invokeCastFloat2D(logits, tmp, stream));
                 logits = std::move(tmp);
             }
 

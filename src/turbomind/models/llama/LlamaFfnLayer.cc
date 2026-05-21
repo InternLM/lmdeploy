@@ -18,6 +18,7 @@
 // Modified from https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/layers/FfnLayer.h
 
 #include "src/turbomind/models/llama/LlamaFfnLayer.h"
+#include "src/turbomind/core/scope.h"
 #include "src/turbomind/kernels/activation.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/anomaly_handler.h"
@@ -26,6 +27,8 @@ namespace turbomind {
 
 void LlamaFfnLayer::forward(ForwardParam param)
 {
+    TM_FUNCTION_SCOPE();
+
     NvtxScope scope("ffn");
 
     const auto& mlp = *param.weights;
@@ -43,8 +46,8 @@ void LlamaFfnLayer::forward(ForwardParam param)
     bool  use_fused = fused && fused->weight;
 
     if (use_fused) {
-        auto mix = linear_.Forward(param.input, *fused);
-        sync_check_cuda_error();
+        Tensor mix;
+        TM_SCOPE_CALL(linear_.Forward(param.input, *fused, mix));
 
         gating = mix.slice({0, 0}, {(int)token_num, inter_size});
         if (!mlp.is_fused_silu) {
@@ -52,12 +55,10 @@ void LlamaFfnLayer::forward(ForwardParam param)
         }
     }
     else {
-        gating = linear_.Forward(param.input, *mlp.w1);
-        sync_check_cuda_error();
+        TM_SCOPE_CALL(linear_.Forward(param.input, *mlp.w1, gating));
         TM_DEBUG_TENSOR(gating, Concat("w1", layer_id), 3);
 
-        inter = linear_.Forward(param.input, *mlp.w3);
-        sync_check_cuda_error();
+        TM_SCOPE_CALL(linear_.Forward(param.input, *mlp.w3, inter));
         TM_DEBUG_TENSOR(inter, Concat("w3", layer_id), 3);
     }
 
@@ -66,14 +67,13 @@ void LlamaFfnLayer::forward(ForwardParam param)
     if (!use_fused || !mlp.is_fused_silu) {
         // gate' = silu(gate) * up
         Activation(gating, inter, mlp.act_type, stream);
-        sync_check_cuda_error();
+        TM_CUDA_CHECK(cudaGetLastError());
         TM_DEBUG_TENSOR(gating, Concat("act", layer_id), 3);
     }
 
     {  // w2(x)
         NvtxScope scope("w2");
-        linear_.Forward(gating, *mlp.w2, param.output);
-        sync_check_cuda_error();
+        TM_SCOPE_CALL(linear_.Forward(gating, *mlp.w2, param.output));
     }
 }
 
