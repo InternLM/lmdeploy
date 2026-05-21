@@ -7,6 +7,7 @@ import torch
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, MultimodalSpecialTokens
 from lmdeploy.vl.model.qwen3 import Qwen3VLModel
+from lmdeploy.vl.model.utils import disable_logging
 
 logger = get_logger('lmdeploy')
 
@@ -106,3 +107,58 @@ class Qwen3_5Model(Qwen3VLModel):
                     ts_sr=ts_sr,
                     ts_lens=ts_lens,
                     ts_token_id=self.ts_token_id)
+
+    def build_model(self, trust_remote_code: bool = False):
+        check_transformers()
+        arch = self.hf_config.architectures[0]
+        if arch == 'Qwen3_5ForConditionalGeneration':
+            from transformers import Qwen3_5ForConditionalGeneration as AutoModelCls
+        elif arch == 'Qwen3_5MoeForConditionalGeneration':
+            from transformers import Qwen3_5MoeForConditionalGeneration as AutoModelCls
+        elif arch in ['InternS2PreviewForConditionalGeneration', 'InternS2PreviewForCausalLM']:
+            from transformers import AutoModelForImageTextToText as AutoModelCls
+        else:
+            raise ValueError(f'Unsupported arch={arch}')
+
+        if self.with_llm:
+            if arch in ['Qwen3_5ForConditionalGeneration', 'Qwen3_5MoeForConditionalGeneration']:
+                self.vl_model = AutoModelCls.from_pretrained(self.model_path, device_map='cpu')
+            else:
+                self.vl_model = AutoModelCls.from_pretrained(self.model_path,
+                                                             device_map='cpu',
+                                                             trust_remote_code=trust_remote_code)
+        else:
+            from accelerate import init_empty_weights
+            with init_empty_weights():
+                config = self.hf_config
+                config.tie_word_embeddings = False
+                if hasattr(config, 'text_config'):
+                    config.text_config.tie_word_embeddings = False
+
+                if arch in ['Qwen3_5ForConditionalGeneration', 'Qwen3_5MoeForConditionalGeneration']:
+                    model = AutoModelCls._from_config(config)
+                    model.visual = model.model.visual
+                    del model.model
+                    del model.lm_head
+                elif arch in ['InternS2PreviewForConditionalGeneration', 'InternS2PreviewForCausalLM']:
+                    model = AutoModelCls.from_config(config, trust_remote_code=trust_remote_code)
+                    model.visual = model.model.visual
+                    model.time_series = model.model.time_series
+                    del model.model
+                    del model.lm_head
+                model.half()
+
+            from accelerate import load_checkpoint_and_dispatch
+            with disable_logging():
+                load_checkpoint_and_dispatch(model=model,
+                                             checkpoint=self.model_path,
+                                             device_map='auto' if not self.with_llm else {'': 'cpu'},
+                                             max_memory=self.max_memory,
+                                             no_split_module_classes=[
+                                                'Qwen3_5VisionBlock',
+                                                'Qwen3_5MoeVisionBlock',
+                                                'InternS2PreviewDecoderLayer',
+                                                'InternS2PreviewVisionBlock'
+                                            ],
+                                             dtype=torch.half)
+            self.model = model.eval()
