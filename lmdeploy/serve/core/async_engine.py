@@ -502,6 +502,7 @@ class AsyncEngine:
             output_len, gen_len = 0, 0
             state = DetokenizeState(input_len)
             response = ''
+            response_chunks = []
             finish_reason = None
             async with self.safe_run(handle,
                                      session=session,
@@ -545,6 +546,7 @@ class AsyncEngine:
                         state,
                         skip_special_tokens=gen_config.skip_special_tokens,
                         spaces_between_special_tokens=gen_config.spaces_between_special_tokens)
+                    response_chunks.append(response)
                     res = token_ids[ids_offset:]
 
                     out = GenOut(response,
@@ -564,6 +566,7 @@ class AsyncEngine:
                         out.logits = (outputs.logits[:-hit_stop_token] if hit_stop_token else outputs.logits)
                     yield out
                 # end of generator loop
+                self.request_logger.log_response(session_id, response_chunks)
 
                 if not is_error(outputs.status):
                     if outputs.status == ResponseType.CANCEL:
