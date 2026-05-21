@@ -249,7 +249,7 @@ __global__ void Allreduce_NVLS_V2(
 void CudaIpcCommImpl::AllReduceSum(
     const void* sendbuff, void* recvbuff, size_t count, DataType type, int group, cudaStream_t stream)
 {
-    FT_CHECK(sendbuff == recvbuff);
+    TM_CHECK(sendbuff == recvbuff);
 
     void* data = recvbuff;
 

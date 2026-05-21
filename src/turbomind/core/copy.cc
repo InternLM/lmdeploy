@@ -110,7 +110,11 @@ void BatchCopy::Run()
                                    core::Context::stream().handle());
 
                 if (auto i = fail_idx; i != SIZE_MAX) {
-                    TM_CHECK(0) << (void*)src_[i] << " " << size_[i] << " " << (void*)dst_[i] << " code " << status;
+                    TM_LOG_FATAL("copy failed: src={} size={} dst={} code={}",
+                                 (void*)src_[i],
+                                 size_[i],
+                                 (void*)dst_[i],
+                                 (int)status);
                 }
             }
             else {

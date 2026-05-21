@@ -455,6 +455,33 @@ def test_count_tokens():
     assert data['input_tokens'] > 0
 
 
+def test_count_tokens_accepts_tools():
+    client = _make_client()
+    response = client.post(
+        '/v1/messages/count_tokens',
+        headers={'anthropic-version': '2023-06-01'},
+        json={
+            'model': 'fake-model',
+            'messages': [{
+                'role': 'user',
+                'content': 'count these tokens',
+            }],
+            'tools': [{
+                'name': 'search',
+                'description': 'demo',
+                'input_schema': {
+                    'type': 'object',
+                    'properties': {},
+                },
+            }],
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data['input_tokens'], int)
+    assert data['input_tokens'] > 0
+
+
 def test_anthropic_model_listing():
     client = _make_client()
     response = client.get('/anthropic/v1/models')

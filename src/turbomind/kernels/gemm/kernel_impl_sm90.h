@@ -173,6 +173,8 @@ public:
         [[maybe_unused]] const int n = Ddesc.cols;
         [[maybe_unused]] const int k = Adesc.cols;
 
+        TM_CHECK_GE(cdiv(k, TILE_K), 2) << "The kernel requires at least 2 k-tiles to work";
+
         // std::cout << "M: " << m << ", N: " << n << ", K: " << k << "\n";
 
         auto transpose = [](MatrixLayout x) {
@@ -209,7 +211,7 @@ public:
         constexpr int kTileN = Gemm::TILE_N;
 
         if (Gemm::Scheduler::is_dynamic) {
-            check_cuda_error(cudaMemsetAsync(workspace.flags, 0, sizeof(int), stream));
+            TM_CUDA_CHECK(cudaMemsetAsync(workspace.flags, 0, sizeof(int), stream));
         }
 
         // std::cout << "A: " << Adesc << "\n";
@@ -294,7 +296,7 @@ public:
                                      to_param((void*)D, Ddesc),
                                      sched,
                                      workspace.tensormaps);
-        TM_CHECK_EQ(ec, cudaSuccess) << cudaGetErrorString(ec);
+        TM_CUDA_CHECK(ec);
 
         return 0;
     }

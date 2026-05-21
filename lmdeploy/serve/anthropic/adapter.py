@@ -6,6 +6,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import shortuuid
+
 from lmdeploy.messages import GenerationConfig
 from lmdeploy.serve.openai.protocol import Tool, ToolChoice, ToolChoiceFuncName
 
@@ -173,6 +175,157 @@ def text_from_content(content: str | list[ContentBlockParam], field_name: str) -
     if isinstance(content, str):
         return content
     return _text_from_blocks(content, field_name=field_name)
+
+
+def _block_get(block: ContentBlockParam | dict[str, Any], key: str, default: Any = None) -> Any:
+    if isinstance(block, dict):
+        return block.get(key, default)
+    return getattr(block, key, default)
+
+
+def _convert_image_source_to_url(source: Any) -> str:
+    source_type = _block_get(source, 'type')
+    if source_type == 'url':
+        return _block_get(source, 'url', '')
+    if source_type == 'base64':
+        media_type = _block_get(source, 'media_type', 'image/jpeg')
+        data = _block_get(source, 'data', '')
+        if data:
+            return f'data:{media_type};base64,{data}'
+    return ''
+
+
+def _convert_system_blocks_to_text(system: list[ContentBlockParam]) -> str:
+    system_prompt = ''
+    for block in system:
+        if _block_get(block, 'type') != 'text':
+            continue
+        text = _block_get(block, 'text')
+        if not text or text.startswith('x-anthropic-billing-header'):
+            continue
+        system_prompt += text
+    return system_prompt
+
+
+def _convert_user_tool_result(block: ContentBlockParam | dict[str, Any]) -> list[dict[str, Any]]:
+    tool_text = ''
+    tool_image_urls: list[str] = []
+    content = _block_get(block, 'content')
+
+    if isinstance(content, str):
+        tool_text = content
+    elif isinstance(content, list):
+        text_parts: list[str] = []
+        for item in content:
+            if _block_get(item, 'type') == 'text':
+                text_parts.append(_block_get(item, 'text', ''))
+            elif _block_get(item, 'type') == 'image':
+                url = _convert_image_source_to_url(_block_get(item, 'source', {}))
+                if url:
+                    tool_image_urls.append(url)
+        tool_text = '\n'.join(text_parts)
+
+    messages = [
+        dict(
+            role='tool',
+            tool_call_id=_block_get(block, 'tool_use_id') or _block_get(block, 'id') or '',
+            content=tool_text or '',
+        )
+    ]
+    if tool_image_urls:
+        messages.append(
+            dict(
+                role='user',
+                content=[dict(type='image_url', image_url=dict(url=url)) for url in tool_image_urls],
+            ))
+    return messages
+
+
+def to_openai_messages(request: MessagesRequest | CountTokensRequest) -> list[dict[str, Any]]:
+    """Convert Anthropic request messages into OpenAI-compatible message
+    dicts."""
+
+    openai_messages: list[dict[str, Any]] = []
+    if request.system is not None:
+        if isinstance(request.system, str):
+            openai_messages.append(dict(role='system', content=request.system))
+        else:
+            openai_messages.append(dict(role='system', content=_convert_system_blocks_to_text(request.system)))
+
+    for idx, message in enumerate(request.messages):
+        if isinstance(message.content, str):
+            openai_messages.append(dict(role=message.role, content=message.content))
+            continue
+
+        openai_message: dict[str, Any] = dict(role=message.role)
+        content_parts: list[dict[str, Any]] = []
+        tool_calls: list[dict[str, Any]] = []
+        reasoning_parts: list[str] = []
+        for block_idx, block in enumerate(message.content):
+            block_type = _block_get(block, 'type')
+            if block_type == 'text':
+                text = _block_get(block, 'text')
+                if text:
+                    content_parts.append(dict(type='text', text=text))
+                continue
+
+            if block_type == 'image':
+                source = _block_get(block, 'source')
+                if source:
+                    url = _convert_image_source_to_url(source)
+                    if url:
+                        content_parts.append(
+                            dict(type='image_url', image_url=dict(url=url)))
+                continue
+
+            if block_type == 'tool_use':
+                tool_calls.append(
+                    dict(
+                        id=_block_get(block, 'id') or f'call_{shortuuid.random()}',
+                        type='function',
+                        function=dict(
+                            name=_block_get(block, 'name') or '',
+                            arguments=json.dumps(_block_get(block, 'input') or {}),
+                        ),
+                    ))
+                continue
+
+            if block_type == 'tool_result':
+                if message.role == 'user':
+                    openai_messages.extend(_convert_user_tool_result(block))
+                else:
+                    result_text = _text_from_block_content(
+                        _block_get(block, 'content'),
+                        field_name=f'messages[{idx}].content[{block_idx}].content',
+                    )
+                    content_parts.append(dict(type='text', text=f'Tool result: {result_text}'))
+                continue
+
+            if block_type == 'thinking':
+                thinking = _block_get(block, 'thinking')
+                if thinking is not None:
+                    reasoning_parts.append(thinking)
+                continue
+
+            if block_type == 'redacted_thinking':
+                continue
+
+            content_parts.append(dict(type='text', text=_stringify_block_value(block)))
+
+        if reasoning_parts:
+            openai_message['reasoning_content'] = ''.join(reasoning_parts)
+        if tool_calls:
+            openai_message['tool_calls'] = tool_calls
+        if content_parts:
+            if len(content_parts) == 1 and content_parts[0]['type'] == 'text':
+                openai_message['content'] = content_parts[0]['text']
+            else:
+                openai_message['content'] = content_parts
+
+        if ('content' in openai_message or 'tool_calls' in openai_message
+                or 'reasoning_content' in openai_message):
+            openai_messages.append(openai_message)
+    return openai_messages
 
 
 def to_lmdeploy_messages(request: MessagesRequest | CountTokensRequest) -> list[dict[str, str]]:
