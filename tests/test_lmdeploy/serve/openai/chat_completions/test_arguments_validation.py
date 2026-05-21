@@ -62,9 +62,7 @@ def test_parse_tool_call_complete_json_invalid_returns_none():
 def test_parse_tool_call_arguments_dict_raises_on_invalid():
     """_parse_tool_call_arguments_dict should raise ValueError on invalid
     JSON."""
-    from lmdeploy.serve.parsers.tool_parser.qwen3coder_tool_parser import (
-        _parse_tool_call_arguments_dict,
-    )
+    from lmdeploy.serve.parsers.response_parser import _parse_tool_call_arguments_dict
 
     with pytest.raises(ValueError, match='invalid JSON'):
         _parse_tool_call_arguments_dict('{"city":')
@@ -72,9 +70,7 @@ def test_parse_tool_call_arguments_dict_raises_on_invalid():
 
 def test_parse_tool_call_arguments_dict_returns_dict_on_valid():
     """_parse_tool_call_arguments_dict returns dict for valid JSON."""
-    from lmdeploy.serve.parsers.tool_parser.qwen3coder_tool_parser import (
-        _parse_tool_call_arguments_dict,
-    )
+    from lmdeploy.serve.parsers.response_parser import _parse_tool_call_arguments_dict
 
     result = _parse_tool_call_arguments_dict('{"city": "NYC"}')
     assert result == {'city': 'NYC'}
@@ -83,9 +79,7 @@ def test_parse_tool_call_arguments_dict_returns_dict_on_valid():
 def test_parse_tool_call_arguments_dict_returns_none_for_non_string():
     """_parse_tool_call_arguments_dict returns None for non-string input (no
     error)."""
-    from lmdeploy.serve.parsers.tool_parser.qwen3coder_tool_parser import (
-        _parse_tool_call_arguments_dict,
-    )
+    from lmdeploy.serve.parsers.response_parser import _parse_tool_call_arguments_dict
 
     result = _parse_tool_call_arguments_dict({'city': 'NYC'})
     assert result is None
@@ -94,9 +88,7 @@ def test_parse_tool_call_arguments_dict_returns_none_for_non_string():
 def test_parse_tool_call_arguments_dict_returns_none_for_non_dict_json():
     """_parse_tool_call_arguments_dict returns None when JSON parses to non-
     dict."""
-    from lmdeploy.serve.parsers.tool_parser.qwen3coder_tool_parser import (
-        _parse_tool_call_arguments_dict,
-    )
+    from lmdeploy.serve.parsers.response_parser import _parse_tool_call_arguments_dict
 
     result = _parse_tool_call_arguments_dict('[1, 2, 3]')
     assert result is None
