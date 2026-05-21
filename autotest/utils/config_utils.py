@@ -63,6 +63,14 @@ def get_func_config_list(backend: str,
     run_configs = []
     dtype = 'float16' if not is_bf16_supported(device) else None
 
+    quantization_config = config.get(f'{backend}_quantization', {})
+    fp8_model_list = quantization_config.get('fp8', [])
+
+    def get_model_extra_params(model: str) -> dict:
+        if model in fp8_model_list:
+            return {'model-format': 'fp8'}
+        return {}
+
     for communicator in _get_communicator_list(config, backend, parallel_config):
         for model in base_case_list:
             for quant_policy in [0, 4, 8]:
@@ -95,6 +103,13 @@ def get_func_config_list(backend: str,
                     run_config['extra_params']['dtype'] = dtype
                 if device != 'cuda':
                     run_config['extra_params']['device'] = device
+
+                model_extra_params = get_model_extra_params(model)
+                if model_extra_params and quant_policy == 0:
+                    run_config_with_format = copy.deepcopy(run_config)
+                    run_config_with_format['extra_params'].update(model_extra_params)
+                    run_configs.append(run_config_with_format)
+
                 run_configs.append(run_config)
 
     for run_config in run_configs:
@@ -108,6 +123,10 @@ def get_func_config_list(backend: str,
         if 'GLM-5-FP8' in run_config['model']:
             run_config['extra_params']['cache-max-entry-count'] = 0.9
             run_config['extra_params']['max-batch-size'] = 128
+
+        if 'Qwen3.5-397B-A17B' in run_config['model']:
+            run_config['extra_params']['max-batch-size'] = 256
+            run_config['extra_params']['cache-max-entry-count'] = 0.9
 
         if (func_type == 'evaluate' and 'session_len' not in extra
                 and 'session-len' not in extra and 'Qwen3.5' not in run_config['model']):
@@ -143,7 +162,7 @@ def get_func_config_list(backend: str,
                 and func_type in ('benchmark', 'longtext_benchmark')):
             run_config['extra_params']['model-format'] = 'mxfp4'
 
-        if func_type == 'mtp_evaluate' and 'Qwen3.5' in run_config['model']:
+        if func_type == 'mtp_evaluate':
             run_config['extra_params'].update({
                 'reasoning-parser': 'qwen-qwq',
                 'speculative-algorithm': 'qwen3_5_mtp',
@@ -521,6 +540,9 @@ def get_case_str_by_config(run_config: dict[str, Any], is_simple: bool = True) -
     # Get last section of model name, compatible with model name contains '/'
     pure_model_name = model_name.split('/')[-1].replace('_', '-')
     extra_params_case = ''
+    model_format = extra_params.get('model-format')
+    if model_format:
+        extra_params_case += f'_{model_format}'
     if not is_simple:
         for k, v in extra_params.items():
             if len(v) > 10:
@@ -535,12 +557,23 @@ def parse_config_by_case(case_str: str) -> dict[str, Any]:
     """Parse run config dict from case name string (fix split & type convert
     bug)"""
     case_parts = case_str.split('_')
-    # Parse fixed field & reassemble dynamic parallel config
+    if len(case_parts) < 4:
+        raise ValueError(f'Invalid case string: {case_str}')
+
     backend = case_parts[0]
     model = case_parts[1]
     communicator = case_parts[2]
-    quant_policy = int(case_parts[-1])
-    parallel_parts = case_parts[3:-1]
+
+    quant_idx = None
+    for i in range(len(case_parts) - 1, 2, -1):
+        if case_parts[i].isdigit():
+            quant_idx = i
+            break
+    if quant_idx is None:
+        raise ValueError(f'No numeric quant policy found in case string: {case_str}')
+
+    quant_policy = int(case_parts[quant_idx])
+    parallel_parts = case_parts[3:quant_idx]
 
     # Convert parallel str to dict, e.g: ['tp1','pp2'] -> {'tp':1, 'pp':2}
     parallel_config = {}
