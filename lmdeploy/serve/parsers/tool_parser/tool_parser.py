@@ -124,7 +124,7 @@ class ToolParser:
             diff = args_json[self._args_emitted_len:]
             out.append(
                 DeltaToolCall(
-                    id=self._active_tool_call_id,
+                    id=None,
                     index=self._active_tool_index,
                     type=None,
                     function=DeltaFunctionCall(arguments=diff),

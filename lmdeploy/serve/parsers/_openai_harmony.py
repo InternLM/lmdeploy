@@ -183,7 +183,7 @@ class GptOssResponseParser(ResponseParser):
                 if self._active_tool_id is not None and self._active_tool_index is not None:
                     tool_deltas.append(
                         DeltaToolCall(
-                            id=self._active_tool_id,
+                            id=None,
                             index=self._active_tool_index,
                             type=None,
                             function=DeltaFunctionCall(arguments=event_value),
