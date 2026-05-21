@@ -26,6 +26,10 @@ GuidedDecoding::GuidedDecoding(const BaseGenerationParam& base, const comm::Host
     bitmask_buf_    = {{max_batch_size_, bitmask_size}, kCPUpinned};
     output_ids_buf_ = {max_batch_size_, kCPUpinned};
 
+    d2h_stream_    = core::Stream::create();
+    sampling_done_ = core::Event::create();
+    d2h_done_      = core::Event::create();
+
     for (int i = 0; i < phases; ++i) {
         auto& d    = data_.emplace_back(std::make_shared<Data>());
         d->bitmask = empty_like(bitmask_buf_);
@@ -101,11 +105,28 @@ void GuidedDecoding::ApplyMask(int phase, TensorMap& env)
     }
 }
 
-void GuidedDecoding::Update(int phase, TensorMap& env)
+void GuidedDecoding::ScheduleUpdate(int phase, TensorMap& env)
 {
     if (auto& d = *data_.at(phase); d.active) {
-        Copy(env.at("output_ids").buffer(), d.matchers.size(), output_ids_buf_);
-        core::Context::stream().Sync();
+        // Record event on main stream after sampling GPU work is submitted.
+        // The secondary stream will wait for this before issuing the D2H copy,
+        // ensuring it reads the output_ids written by sampling.
+        sampling_done_.Record(core::Context::stream());
+
+        // D2H copy on secondary stream — overlaps with subsequent GPU kernels
+        // on the main stream (AppendTokenIds, stop_criteria).
+        d2h_stream_.Wait(sampling_done_);
+        Copy(env.at("output_ids").buffer(), d.matchers.size(), output_ids_buf_, d2h_stream_);
+        d2h_done_.Record(d2h_stream_);
+    }
+}
+
+void GuidedDecoding::FinishUpdate(int phase)
+{
+    if (auto& d = *data_.at(phase); d.active) {
+        // Wait only for the D2H copy to complete — the main stream's
+        // AppendTokenIds + stop_criteria may still be executing on GPU.
+        d2h_done_.Sync();
 
         if (tp_group_->rank() == 0) {
             // Collect active matchers and their token IDs for batch AcceptToken
