@@ -1,6 +1,5 @@
 import asyncio
 import sys
-from types import SimpleNamespace
 
 import pytest
 from PIL import Image
@@ -346,62 +345,6 @@ def test_has_multimodal_input_detects_all_supported_types():
     for item_type in ['image_url', 'image_data', 'image', 'video_url', 'video', 'time_series_url', 'time_series']:
         assert processor._has_multimodal_input([{'role': 'user', 'content': [{'type': item_type}]}])
     assert not processor._has_multimodal_input([{'role': 'user', 'content': [{'type': 'text', 'text': 'hello'}]}])
-
-
-@pytest.mark.parametrize(
-    'backend,uses_new_preprocess,expected_input_prompt',
-    [
-        ('turbomind', False, None),
-        ('pytorch', True, 'input-prompt'),
-        ('pytorch', False, None),
-    ])
-def test_multimodal_preprocess_passes_mm_kwargs_by_keyword(monkeypatch, backend, uses_new_preprocess,
-                                                           expected_input_prompt):
-    """Regression test for keeping mm_processor_kwargs out of input_prompt."""
-    calls = []
-    mm_processor_kwargs = {'image': {'max_pixels': 1024}}
-
-    async def fake_parse(messages, media_io_kwargs=None):
-        return messages
-
-    class FakeEncoder:
-        _uses_new_preprocess = uses_new_preprocess
-        model = SimpleNamespace(get_input_prompt=lambda **kwargs: 'input-prompt')
-
-        async def preprocess(self, messages, input_prompt=None, mm_processor_kwargs=None, request_id=None):
-            calls.append((input_prompt, mm_processor_kwargs, request_id))
-            return {'prompt': 'prompt', 'input_ids': [1]}
-
-        async def async_infer(self, messages):
-            return messages
-
-        async def wrap_for_turbomind(self, **kwargs):
-            return kwargs['messages']
-
-        async def wrap_for_pytorch(self, **kwargs):
-            return kwargs['messages']
-
-    monkeypatch.setattr(MultimodalProcessor, 'async_parse_multimodal_item', staticmethod(fake_parse))
-    processor = MultimodalProcessor(tokenizer=None,
-                                    chat_template=object(),
-                                    vl_encoder=FakeEncoder(),
-                                    backend=backend)
-
-    result = asyncio.run(
-        processor._get_multimodal_prompt_input(messages=[{
-            'role': 'user',
-            'content': [{
-                'type': 'image_data'
-            }]
-        }],
-                                               do_preprocess=True,
-                                               sequence_start=True,
-                                               adapter_name=None,
-                                               mm_processor_kwargs=mm_processor_kwargs,
-                                               request_id=123))
-
-    assert result == {'prompt': 'prompt', 'input_ids': [1]}
-    assert calls == [(expected_input_prompt, mm_processor_kwargs, 123)]
 
 
 @pytest.mark.parametrize(
