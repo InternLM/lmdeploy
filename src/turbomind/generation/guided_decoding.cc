@@ -105,7 +105,7 @@ void GuidedDecoding::ApplyMask(int phase, TensorMap& env)
 
 void GuidedDecoding::ScheduleUpdate(int phase, TensorMap& env)
 {
-    if (auto& d = *data_.at(phase); d.active) {
+    if (auto& d = *data_.at(phase); d.active && tp_group_->rank() == 0) {
         // Record event on main stream after sampling GPU work is submitted.
         // The secondary stream will wait for this before issuing the D2H copy,
         // ensuring it reads the output_ids written by sampling.
@@ -121,30 +121,27 @@ void GuidedDecoding::ScheduleUpdate(int phase, TensorMap& env)
 
 void GuidedDecoding::FinishUpdate(int phase)
 {
-    if (auto& d = *data_.at(phase); d.active) {
+    if (auto& d = *data_.at(phase); d.active && tp_group_->rank() == 0) {
         // Wait only for the D2H copy to complete — the main stream's
         // AppendTokenIds + stop_criteria may still be executing on GPU.
         d2h_done_.Sync();
 
-        if (tp_group_->rank() == 0) {
-            // Collect active matchers and their token IDs for batch AcceptToken
-            std::vector<xgrammar::GrammarMatcher> active_matchers;
-            std::vector<int32_t>                  active_token_ids;
-            active_matchers.reserve(d.matchers.size());
-            active_token_ids.reserve(d.matchers.size());
+        // Collect active matchers and their token IDs for batch AcceptToken
+        std::vector<xgrammar::GrammarMatcher> active_matchers;
+        std::vector<int32_t>                  active_token_ids;
+        active_matchers.reserve(d.matchers.size());
+        active_token_ids.reserve(d.matchers.size());
 
-            for (size_t i = 0; i < d.matchers.size(); ++i) {
-                if (const auto& m = d.matchers[i]; m && !m->IsTerminated()) {
-                    active_matchers.emplace_back(*m);
-                    active_token_ids.emplace_back(output_ids_buf_[i]);
-                }
-            }
-
-            if (!active_matchers.empty()) {
-                xgrammar::BatchGrammarMatcher::BatchAcceptToken(&active_matchers, active_token_ids);
+        for (size_t i = 0; i < d.matchers.size(); ++i) {
+            if (const auto& m = d.matchers[i]; m && !m->IsTerminated()) {
+                active_matchers.emplace_back(*m);
+                active_token_ids.emplace_back(output_ids_buf_[i]);
             }
         }
-        // active_matchers destroyed here: refcount-- for each entry
+
+        if (!active_matchers.empty()) {
+            xgrammar::BatchGrammarMatcher::BatchAcceptToken(&active_matchers, active_token_ids);
+        }
     }
 }
 
