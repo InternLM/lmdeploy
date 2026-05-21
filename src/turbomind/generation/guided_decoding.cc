@@ -66,12 +66,12 @@ void GuidedDecoding::FillMask(int phase, TensorMap& env)
                            nullptr,
                            0};
 
-        std::vector<xgrammar::GrammarMatcher> active_matchers;
-        std::vector<int32_t>                  active_indices;
-        active_matchers.reserve(gs);
-        active_indices.reserve(gs);
-
         if (tp_group_->rank() == 0) {
+            std::vector<xgrammar::GrammarMatcher> active_matchers;
+            std::vector<int32_t>                  active_indices;
+            active_matchers.reserve(gs);
+            active_indices.reserve(gs);
+
             for (int i = 0; i < gs; ++i) {
                 if (const auto& m = d.matchers[i]; m && !m->IsTerminated()) {
                     active_matchers.emplace_back(*m);
