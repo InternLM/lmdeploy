@@ -147,7 +147,6 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
             kv_scales=kv_scales,
             kv_zeros=kv_zeros,
             quant_bits=quant_bits,
-            is_multi_token_decoding=attn_metadata.is_multi_token_decoding,
         )
 
         return attn_output

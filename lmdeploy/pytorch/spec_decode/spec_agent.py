@@ -5,6 +5,8 @@ from contextlib import contextmanager
 import torch
 from torch.profiler import record_function
 
+from lmdeploy.utils import get_logger
+
 from ..backends import get_backend
 from ..config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from ..distributed import DistContext, get_dist_manager
@@ -16,6 +18,8 @@ from ..strategies.ar_spec.model_agent import ARSpecExtraInputs
 from ..strategies.base.model_agent import ExtraInputs
 from .base import BaseSpecModelAgent
 from .proposers.base import build_specdecode_proposer
+
+logger = get_logger('lmdeploy')
 
 
 def _expand_sampling_inputs(sampling_inputs: SamplingInputs, num_tokens: int) -> SamplingInputs:
@@ -508,11 +512,7 @@ class SpecModelAgent(BaseSpecModelAgent):
                     if loop_idx < loop_count - 1:
                         step_seqlens = inputs.seq_length.new_ones(inputs.seq_length.size(0))
                         inputs = inputs.step(draft_token_ids.transpose(0, 1), step_seqlens)
-                        inputs.model_metas = self.proposer.with_spec_step_idx(
-                            model_metas,
-                            inputs.seq_length.size(0),
-                            loop_idx + 1,
-                        )
+                        inputs.model_metas = model_metas
                         inputs.target_hidden_states = target_hidden_states
                         if inputs.target_position_ids is not None:
                             inputs.target_position_ids += 1

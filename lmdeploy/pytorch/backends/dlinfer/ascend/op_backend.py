@@ -163,23 +163,10 @@ class AscendOpsBackend(DlinferOpsBackend):
             is_multi_token_decoding = False
             is_decoding = False
         else:
-            # Device-side scalar op; avoids a full D2H copy on every regular decode step
             is_multi_token_decoding = step_context.q_seqlens.max().item() > 1
             # is_decoding: True only for regular single-token decode (original semantics)
             is_decoding = not is_multi_token_decoding
             
-        if step_context.is_decoding and step_context.model_metas is not None:
-            accepted = []
-            for model_meta in step_context.model_metas:
-                if isinstance(model_meta, dict):
-                    accepted.append(int(model_meta.get('num_accepted_tokens', 1)))
-                else:
-                    accepted.append(1)
-            num_accepted_tokens = torch.tensor(
-                accepted,
-                dtype=torch.int32,
-                device=step_context.block_offsets.device,
-            )
         if step_context.block_offsets.dtype != torch.int32:
             step_context.block_offsets = step_context.block_offsets.to(torch.int32)
         if step_context.kv_seqlens.dtype != torch.int32:

@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 from collections.abc import Iterable
 from typing import Any
 
@@ -218,7 +219,6 @@ class Qwen3_5MTPModel(nn.Module, CudaGraphMixin):
         attn_metadata: Any,
         inputs_embeds: torch.Tensor | None = None,
         mrope_position_ids: torch.Tensor | None = None,
-        spec_step_idx: int = 0,
         **kwargs,
     ):
         """Model forward, return logits."""
@@ -236,7 +236,6 @@ class Qwen3_5MTPModel(nn.Module, CudaGraphMixin):
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
             mrope_position_ids=mrope_position_ids,
-            spec_step_idx=spec_step_idx,
             previous_hidden_states=target_hidden_states,
             all_routed_experts=all_routed_experts,
         )
@@ -287,11 +286,6 @@ class Qwen3_5MTPModel(nn.Module, CudaGraphMixin):
         attn_metadata = context.attn_metadata
         target_hidden_states = context.target_hidden_states
         mrope_position_ids = getattr(context, 'mrope_position_ids', None)
-        spec_step_idx = 0
-        if context.model_metas:
-            model_meta = context.model_metas[0]
-            if isinstance(model_meta, dict):
-                spec_step_idx = int(model_meta.get('spec_step_idx', 0))
         if context.target_inputs_embeds is not None:
             inputs_embeds = context.target_inputs_embeds
 
@@ -303,7 +297,6 @@ class Qwen3_5MTPModel(nn.Module, CudaGraphMixin):
             inputs_embeds=inputs_embeds,
             target_hidden_states=target_hidden_states,
             mrope_position_ids=mrope_position_ids,
-            spec_step_idx=spec_step_idx,
         )
 
     def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],

@@ -97,24 +97,6 @@ def _reindex_model_inputs_arspec(
     )
 
 
-def _with_num_accepted_tokens(model_metas: Any, num_accepted_tokens: torch.Tensor):
-    """Attach accepted-token counts to per-sequence model metas."""
-    batch_size = num_accepted_tokens.size(0)
-    if model_metas is None:
-        model_metas = [None] * batch_size
-
-    updated = []
-    for batch_idx in range(batch_size):
-        model_meta = model_metas[batch_idx] if batch_idx < len(model_metas) else None
-        if model_meta is None:
-            model_meta = {}
-        else:
-            model_meta = dict(model_meta)
-        model_meta['num_accepted_tokens'] = int(num_accepted_tokens[batch_idx].item())
-        updated.append(model_meta)
-    return updated
-
-
 @dataclass
 class ARSpecStepInputs(StepInputs):
     """AR Spec paradigm step inputs."""
@@ -140,11 +122,8 @@ class ARSpecStepInputs(StepInputs):
             [next_token_ids_expanded, extra_outputs.draft_token_ids], dim=-1)
         max_q_seqlen = next_token_ids_expanded.size(-1)
         next_token_ids_flat = next_token_ids_expanded.flatten()[None, :]
-        num_accepted_tokens = next_token_ids.new_ones(next_token_ids.size(0))
         inputs = get_model_inputs_next_decoding(
-            inputs, next_token_ids_flat,
-            max_q_seqlen=max_q_seqlen,
-            model_metas=_with_num_accepted_tokens(model_metas, num_accepted_tokens))
+            inputs, next_token_ids_flat, max_q_seqlen=max_q_seqlen, model_metas=model_metas)
 
         # update mrope pos ids
         mrope_pos_ids = inputs.mrope_pos_ids
@@ -199,10 +178,10 @@ class ARSpecStepInputs(StepInputs):
 
         # advance model state
         model_inputs.is_decoding = True
-        step_seqlens = model_inputs.seq_length - extra_inputs.num_rejected_tokens
-        model_inputs.model_metas = _with_num_accepted_tokens(model_metas, step_seqlens)
+        model_inputs.model_metas = model_metas
 
         # update inputs with rejected token adjustment
+        step_seqlens = model_inputs.seq_length - extra_inputs.num_rejected_tokens
         batch_size = step_seqlens.size(0)
         input_ids = next_token_ids.new_empty((batch_size, num_spec_tokens + 1))
         input_ids[:, 0] = next_token_ids
