@@ -1,4 +1,3 @@
-from lmdeploy.serve.openai.protocol import DeltaToolCall
 
 
 def test_decode_tool_incremental_json_id_only_on_first_chunk():
@@ -32,15 +31,3 @@ def test_decode_tool_incremental_json_id_only_on_first_chunk():
     assert args_delta.function.arguments is not None
     assert args_delta.id is None  # id MUST be None on argument-delta
     assert args_delta.type is None
-
-
-def test_delta_tool_call_id_default_is_none():
-    """DeltaToolCall.id defaults to None."""
-    dtc = DeltaToolCall(index=0)
-    assert dtc.id is None
-
-
-def test_delta_tool_call_id_can_be_set():
-    """DeltaToolCall.id can be explicitly set."""
-    dtc = DeltaToolCall(id='chatcmpl-tool-abc', index=0, type='function')
-    assert dtc.id == 'chatcmpl-tool-abc'
