@@ -1,4 +1,4 @@
-
+# Copyright (c) OpenMMLab. All rights reserved.
 
 def test_decode_tool_incremental_json_id_only_on_first_chunk():
     """When streaming a tool call, id should appear only on the name-delta
