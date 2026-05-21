@@ -2,6 +2,7 @@
 
 import asyncio
 import inspect
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -63,14 +64,24 @@ class ImageEncoder:
     async def preprocess(self,
                          messages: list[dict],
                          input_prompt: str | list[int] | None = None,
-                         mm_processor_kwargs: dict[str, Any] | None = None) -> list[dict]:
+                         mm_processor_kwargs: dict[str, Any] | None = None,
+                         request_id: int | None = None) -> list[dict]:
         """Preprocess multimodal data in the messages."""
+        def _preprocess():
+            start = time.perf_counter()
+            try:
+                if self._uses_new_preprocess:
+                    return self.model.preprocess(messages, input_prompt, mm_processor_kwargs)
+                return self.model.preprocess(messages)
+            finally:
+                elapsed = time.perf_counter() - start
+                request_info = '' if request_id is None else f'session={request_id}, '
+                logger.info(f'{request_info}multimodal preprocess time={elapsed:.3f}s')
+
         if self._uses_new_preprocess:
-            future = asyncio.get_event_loop().run_in_executor(
-                self.executor, self.model.preprocess, messages, input_prompt, mm_processor_kwargs)
+            future = asyncio.get_event_loop().run_in_executor(self.executor, _preprocess)
         else:
-            future = asyncio.get_event_loop().run_in_executor(
-                self.executor, self.model.preprocess, messages)
+            future = asyncio.get_event_loop().run_in_executor(self.executor, _preprocess)
         future.add_done_callback(_raise_exception_on_finish)
         outputs = await future
         return outputs
