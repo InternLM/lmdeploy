@@ -22,7 +22,7 @@ public:
     void ApplyMask(int phase, TensorMap& env);
 
     void ScheduleUpdate(int phase, TensorMap& env);
-    void FinishUpdate(int phase);
+    void FinishUpdate(int phase, TensorMap& env);
 
 private:
     comm::HostComm tp_group_;

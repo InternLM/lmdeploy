@@ -52,6 +52,11 @@ void GuidedDecoding::Setup(int phase, TensorMap& env)
 void GuidedDecoding::FillMask(int phase, TensorMap& env)
 {
     if (auto& d = *data_.at(phase); d.active) {
+        // Only the first `generation_size` (= logits.shape(0)) slots are actively
+        // generating; matchers beyond this index belong to idle/prefill requests
+        // whose output_ids are stale and whose bitmasks are never applied.
+        const int gs = env.at("logits").shape(0);
+
         static_assert(sizeof(ssize_t) == sizeof(int64_t));
         DLTensor dlbitmask{bitmask_buf_.data(),
                            DLDevice{kDLCPU, 0},
@@ -63,11 +68,11 @@ void GuidedDecoding::FillMask(int phase, TensorMap& env)
 
         std::vector<xgrammar::GrammarMatcher> active_matchers;
         std::vector<int32_t>                  active_indices;
-        active_matchers.reserve(d.matchers.size());
-        active_indices.reserve(d.matchers.size());
+        active_matchers.reserve(gs);
+        active_indices.reserve(gs);
 
         if (tp_group_->rank() == 0) {
-            for (size_t i = 0; i < d.matchers.size(); ++i) {
+            for (int i = 0; i < gs; ++i) {
                 if (const auto& m = d.matchers[i]; m && !m->IsTerminated()) {
                     active_matchers.emplace_back(*m);
                     active_indices.emplace_back(static_cast<int32_t>(i));
@@ -113,26 +118,32 @@ void GuidedDecoding::ScheduleUpdate(int phase, TensorMap& env)
 
         // D2H copy on secondary stream — overlaps with subsequent GPU kernels
         // on the main stream (AppendTokenIds, stop_criteria).
+        // Only copy the first `generation_size` entries: sampling writes exactly
+        // that many output_ids, and entries beyond it contain stale values.
+        const int gs = env.at("logits").shape(0);
         d2h_stream_.Wait(sampling_done_);
-        Copy(env.at("output_ids").buffer(), d.matchers.size(), output_ids_buf_, d2h_stream_);
+        Copy(env.at("output_ids").buffer(), gs, output_ids_buf_, d2h_stream_);
         d2h_done_.Record(d2h_stream_);
     }
 }
 
-void GuidedDecoding::FinishUpdate(int phase)
+void GuidedDecoding::FinishUpdate(int phase, TensorMap& env)
 {
     if (auto& d = *data_.at(phase); d.active && tp_group_->rank() == 0) {
         // Wait only for the D2H copy to complete — the main stream's
         // AppendTokenIds + stop_criteria may still be executing on GPU.
         d2h_done_.Sync();
 
-        // Collect active matchers and their token IDs for batch AcceptToken
+        // Collect active matchers and their token IDs for batch AcceptToken.
+        // Only iterate over the first `generation_size` (= logits.shape(0)) slots —
+        // beyond that index the output_ids buffer contains stale data from prior steps.
+        const int                             gs = env.at("logits").shape(0);
         std::vector<xgrammar::GrammarMatcher> active_matchers;
         std::vector<int32_t>                  active_token_ids;
-        active_matchers.reserve(d.matchers.size());
-        active_token_ids.reserve(d.matchers.size());
+        active_matchers.reserve(gs);
+        active_token_ids.reserve(gs);
 
-        for (size_t i = 0; i < d.matchers.size(); ++i) {
+        for (int i = 0; i < gs; ++i) {
             if (const auto& m = d.matchers[i]; m && !m->IsTerminated()) {
                 active_matchers.emplace_back(*m);
                 active_token_ids.emplace_back(output_ids_buf_[i]);
