@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import ctypes
 import gc
 import os
 from dataclasses import dataclass
@@ -9,6 +10,7 @@ import numpy as np
 import torch
 
 from lmdeploy.messages import PytorchEngineConfig, RequestMetrics, ResponseType, SpeculativeConfig
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.conn.engine_conn import EngineP2PConnection
 from lmdeploy.pytorch.disagg.conn.protocol import (
@@ -188,6 +190,8 @@ class Engine(EngineBase):
         # infer sleeping from empty_init: empty_init still builds runtime
         # resources and has its own weight-update workflow.
         self._sleeping_tags = set()
+        self._multimodal_session_trim_count = max(0, _envs.multimodal_session_trim_count)
+        self._multimodal_session_end_count = 0
 
         # create main thread
         self.req_manager.set_main_loop_func(self.async_loop)
@@ -317,6 +321,32 @@ class Engine(EngineBase):
                 resp_type = ResponseType.SUCCESS
             if resp:
                 self._response(req.resp, resp_type)
+
+    @staticmethod
+    def _try_mem_trim():
+        """Try to trim memory."""
+        try:
+            gc.collect()
+            ctypes.CDLL('libc.so.6').malloc_trim(0)
+        except Exception as e:
+            logger.debug(f'Memory trim failed: {e}')
+
+    @staticmethod
+    def _has_multimodal_session(session) -> bool:
+        """Check whether session has multimodal history."""
+        return any(not seq.history_multimodals.empty() for seq in session.sequences.values())
+
+    def _maybe_trim_multimodal_session(self, has_multimodal: bool):
+        """Trim host memory after enough multimodal sessions have ended."""
+        if not has_multimodal or self._multimodal_session_trim_count <= 0:
+            return
+
+        self._multimodal_session_end_count += 1
+        if self._multimodal_session_end_count < self._multimodal_session_trim_count:
+            return
+
+        self._multimodal_session_end_count = 0
+        self._try_mem_trim()
 
     def _on_end_session(self, reqs: list[Request], **kwargs):
         """On end session callback."""
@@ -598,7 +628,9 @@ class Engine(EngineBase):
     def end_session(self, session_id: int):
         """End session."""
         if session_id in self.scheduler.sessions:
+            has_multimodal = self._has_multimodal_session(self.scheduler.sessions[session_id])
             self.scheduler.end_session(session_id)
+            self._maybe_trim_multimodal_session(has_multimodal)
             return True
         return False
 
