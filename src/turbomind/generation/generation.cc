@@ -298,7 +298,7 @@ struct Generation::Impl {
 
             stop_criteria_->Forward(phase, env);
 
-            guided_decoding_->FinishUpdate(phase);
+            guided_decoding_->FinishUpdate(phase, env);
         }
     }
 };
