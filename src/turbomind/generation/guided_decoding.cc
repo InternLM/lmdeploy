@@ -12,7 +12,6 @@ namespace turbomind {
 struct GuidedDecoding::Data {
     Tensor_<int32_t> bitmask;
     bool             active{};
-    bool             needs_apply{};
 
     std::vector<std::shared_ptr<xgrammar::GrammarMatcher>> matchers;
 };
@@ -64,14 +63,14 @@ void GuidedDecoding::FillMask(int phase, TensorMap& env)
 
         std::vector<xgrammar::GrammarMatcher> active_matchers;
         std::vector<int32_t>                  active_indices;
-
-        d.needs_apply = false;
+        active_matchers.reserve(d.matchers.size());
+        active_indices.reserve(d.matchers.size());
 
         if (tp_group_->rank() == 0) {
             for (size_t i = 0; i < d.matchers.size(); ++i) {
                 if (const auto& m = d.matchers[i]; m && !m->IsTerminated()) {
-                    active_matchers.push_back(*m);
-                    active_indices.push_back(static_cast<int32_t>(i));
+                    active_matchers.emplace_back(*m);
+                    active_indices.emplace_back(static_cast<int32_t>(i));
                 }
                 else {
                     std::fill_n(bitmask_buf_.data() + i * bitmask_buf_.stride(0),
@@ -82,7 +81,6 @@ void GuidedDecoding::FillMask(int phase, TensorMap& env)
 
             if (!active_matchers.empty()) {
                 batch_matcher_.BatchFillNextTokenBitmask(&active_matchers, &dlbitmask, active_indices);
-                d.needs_apply = true;
             }
         }
     }
@@ -90,7 +88,7 @@ void GuidedDecoding::FillMask(int phase, TensorMap& env)
 
 void GuidedDecoding::ApplyMask(int phase, TensorMap& env)
 {
-    if (auto& d = *data_.at(phase); d.active && d.needs_apply) {
+    if (auto& d = *data_.at(phase); d.active) {
         const ssize_t numel = d.matchers.size() * bitmask_buf_.stride(0);
         if (tp_group_->n_ranks() > 1) {
             // bcast the data instead of `bitmask_buf` instance (which may avoid copying the data)
@@ -132,11 +130,13 @@ void GuidedDecoding::FinishUpdate(int phase)
             // Collect active matchers and their token IDs for batch AcceptToken
             std::vector<xgrammar::GrammarMatcher> active_matchers;
             std::vector<int32_t>                  active_token_ids;
+            active_matchers.reserve(d.matchers.size());
+            active_token_ids.reserve(d.matchers.size());
 
             for (size_t i = 0; i < d.matchers.size(); ++i) {
                 if (const auto& m = d.matchers[i]; m && !m->IsTerminated()) {
-                    active_matchers.push_back(*m);  // copy: refcount++
-                    active_token_ids.push_back(output_ids_buf_[i]);
+                    active_matchers.emplace_back(*m);
+                    active_token_ids.emplace_back(output_ids_buf_[i]);
                 }
             }
 
