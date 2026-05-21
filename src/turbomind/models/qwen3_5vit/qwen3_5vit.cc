@@ -37,6 +37,7 @@ struct Qwen3_5Vit::Impl {
     const core::Qwen3_5VitConfig& config_;
     int                           phases_;
     LlamaLinear&                  linear_;
+    const comm::HostComm&         h_tp_group;
     comm::DeviceCommImpl* const   d_comm_;
     const int                     tp_group_;
     const DataType                engine_data_type_;
@@ -98,6 +99,7 @@ struct Qwen3_5Vit::Impl {
         config_{weights.config()},
         phases_{phases},
         linear_{*ctx.linear},
+        h_tp_group{ctx.comm.h_comm},
         d_comm_{ctx.comm.d_comm},
         tp_group_{ctx.comm.d_tp_group},
         engine_data_type_{engine.data_type}
@@ -521,6 +523,7 @@ struct Qwen3_5Vit::Impl {
         }
 
         SetupMrope(phase, env);
+        h_tp_group->Sync();
     }
 
     void Prepare(int phase, TensorMap& env)
