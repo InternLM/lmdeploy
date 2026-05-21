@@ -15,7 +15,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 add_library(guided_decoding STATIC guided_decoding.cc)
-target_link_libraries(guided_decoding PRIVATE
+target_link_libraries(guided_decoding PUBLIC
     apply_token_bitmask_inplace_cuda
     xgrammar
     core)

@@ -6,6 +6,7 @@
 
 #include "src/turbomind/comm/host_comm.h"
 #include "src/turbomind/core/core.h"
+#include "xgrammar/matcher.h"
 
 namespace turbomind {
 
@@ -26,6 +27,8 @@ private:
 
     struct Data;
     std::vector<std::shared_ptr<Data>> data_;
+
+    xgrammar::BatchGrammarMatcher batch_matcher_;
 
     Tensor_<int32_t> bitmask_buf_;
     Buffer_<int>     output_ids_buf_;
