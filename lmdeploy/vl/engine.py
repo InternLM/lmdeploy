@@ -9,7 +9,7 @@ from typing import Any
 import torch
 
 from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig, VisionConfig
-from lmdeploy.utils import get_logger
+from lmdeploy.utils import REQUEST_LOG_LEVEL, get_logger
 from lmdeploy.vl.model.builder import load_vl_model
 
 logger = get_logger('lmdeploy')
@@ -68,15 +68,17 @@ class ImageEncoder:
                          request_id: int | None = None) -> list[dict]:
         """Preprocess multimodal data in the messages."""
         def _preprocess():
-            start = time.perf_counter()
+            log_preprocess_time = logger.isEnabledFor(REQUEST_LOG_LEVEL)
+            start = time.perf_counter() if log_preprocess_time else 0.0
             try:
                 if self._uses_new_preprocess:
                     return self.model.preprocess(messages, input_prompt, mm_processor_kwargs)
                 return self.model.preprocess(messages)
             finally:
-                elapsed = time.perf_counter() - start
-                request_info = '' if request_id is None else f'session={request_id}, '
-                logger.info(f'{request_info}multimodal preprocess time={elapsed:.3f}s')
+                if log_preprocess_time:
+                    elapsed = time.perf_counter() - start
+                    request_info = '' if request_id is None else f'session={request_id}, '
+                    logger.log(REQUEST_LOG_LEVEL, f'{request_info}multimodal preprocess time={elapsed:.3f}s')
 
         if self._uses_new_preprocess:
             future = asyncio.get_event_loop().run_in_executor(self.executor, _preprocess)
