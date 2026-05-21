@@ -292,11 +292,13 @@ struct Generation::Impl {
 
             sampling_->Forward(phase, env);
 
-            guided_decoding_->Update(phase, env);
+            guided_decoding_->ScheduleUpdate(phase, env);
 
             AppendTokenIds(d.token_ids_ptrs.data(), output_ids_.data(), output_pos.data(), gs, stream);
 
             stop_criteria_->Forward(phase, env);
+
+            guided_decoding_->FinishUpdate(phase);
         }
     }
 };
