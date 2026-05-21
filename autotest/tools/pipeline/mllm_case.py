@@ -5,10 +5,11 @@ from typing import Any
 
 import fire
 import numpy as np
+from PIL import Image
+
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
 from lmdeploy.vl import encode_image_base64, load_image, load_video
 from lmdeploy.vl.constants import IMAGE_TOKEN
-from PIL import Image
 
 gen_config = GenerationConfig(max_new_tokens=500, min_new_tokens=10)
 
