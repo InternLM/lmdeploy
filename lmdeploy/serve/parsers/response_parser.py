@@ -36,8 +36,13 @@ def _parse_tool_call_arguments_dict(arguments: Any) -> dict[str, Any] | None:
 
     try:
         parsed_arguments = json.loads(arguments)
-    except (json.JSONDecodeError, TypeError) as e:
-        raise ValueError(f'Tool call arguments contain invalid JSON: {arguments!r}') from e
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            f'Tool call arguments contain invalid JSON at position {e.pos} '
+            f'(line {e.lineno}, column {e.colno})'
+        ) from e
+    except TypeError as e:
+        raise ValueError('Tool call arguments contain invalid JSON') from e
     if isinstance(parsed_arguments, dict):
         return parsed_arguments
     return None
@@ -355,18 +360,30 @@ class BaseResponseParser(ResponseParser):
         """Dump tools to a list of dicts to fit jinja chat template."""
         from lmdeploy.serve.openai.protocol import AllowedToolChoice
 
-        if not request.tools:
-            return request.model_copy(update={'tools': None})
-
-        # Determine which tools to include based on tool_choice
         if isinstance(request.tool_choice, AllowedToolChoice):
-            allowed_names = set()
+            allowed_names: set[str] = set()
+            allowed_functions: list[dict] = []
             for t in request.tool_choice.allowed_tools.tools:
                 func = t.get('function', {})
                 if isinstance(func, dict) and 'name' in func:
                     allowed_names.add(func['name'])
+                    allowed_functions.append(func)
+
+            if not request.tools:
+                return request.model_copy(update={'tools': allowed_functions or None})
+
+            request_tool_names = {item.function.name for item in request.tools}
+            missing = sorted(allowed_names - request_tool_names)
+            if missing:
+                raise ValueError(f'Allowed tool(s) not found in request.tools: {missing}')
+
             tools = [item.function.model_dump() for item in request.tools if item.function.name in allowed_names]
-        elif not isinstance(request.tool_choice, str):
+            return request.model_copy(update={'tools': tools})
+
+        if not request.tools:
+            return request.model_copy(update={'tools': None})
+
+        if not isinstance(request.tool_choice, str):
             tools = [
                 item.function.model_dump() for item in request.tools
                 if item.function.name == request.tool_choice.function.name

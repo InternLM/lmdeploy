@@ -64,7 +64,7 @@ def test_parse_tool_call_arguments_dict_raises_on_invalid():
     JSON."""
     from lmdeploy.serve.parsers.response_parser import _parse_tool_call_arguments_dict
 
-    with pytest.raises(ValueError, match='invalid JSON'):
+    with pytest.raises(ValueError, match=r'invalid JSON at position \d+ \(line \d+, column \d+\)'):
         _parse_tool_call_arguments_dict('{"city":')
 
 

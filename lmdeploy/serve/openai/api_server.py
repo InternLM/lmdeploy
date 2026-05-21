@@ -418,7 +418,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     try:
         response_parser = parser_cls(request=request, tokenizer=tokenizer)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=str(e))
     # request is normalized and may be adjusted by the parser
     # (e.g. GPT-OSS clears response_format and injects the schema into messages)
     request = response_parser.request
