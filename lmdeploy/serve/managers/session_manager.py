@@ -183,6 +183,13 @@ class RequestHandlePool:
         if handle is not None and self.pool is not None:
             self.pool.put_nowait(handle)
 
+    @property
+    def num_dispatched(self) -> int:
+        """Number of handles currently checked out from the pool."""
+        if self.pool is None:
+            return 0
+        return self.size - self.pool.qsize()
+
     def clear(self):
         """Clear all handles."""
         self.handles = []

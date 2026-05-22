@@ -6,7 +6,9 @@ import json
 import math
 import os
 import os.path as osp
+import queue
 import sys
+import threading
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
@@ -382,6 +384,48 @@ class TurboMind:
                                total_blocks=tm_metrics.total_blocks,
                                active_blocks=tm_metrics.active_blocks,
                                free_blocks=tm_metrics.free_blocks)
+
+    def _get_health_status(self) -> dict:
+        """Get lightweight health status."""
+        if self.model_comm is None:
+            return dict(alive=False,
+                        message='TurboMind model communicator is not available.',
+                        schedule_metrics=None)
+
+        if not self._engine_created:
+            if self.engine_config.empty_init:
+                return dict(alive=True,
+                            message='TurboMind engine is waiting for weights in empty-init mode.',
+                            schedule_metrics=None)
+            return dict(alive=False,
+                        message='TurboMind engine has not been created.',
+                        schedule_metrics=None)
+
+        return dict(alive=True,
+                    message='TurboMind engine is healthy.',
+                    schedule_metrics=self.get_schedule_metrics())
+
+    async def get_health_status(self) -> dict:
+        """Get backend health status without blocking the event loop."""
+        result_queue = queue.Queue(maxsize=1)
+
+        def _worker():
+            try:
+                result_queue.put((True, self._get_health_status()))
+            except Exception as e:
+                result_queue.put((False, str(e)))
+
+        thread = threading.Thread(target=_worker, name='TurboMindHealthProbe', daemon=True)
+        thread.start()
+        while True:
+            try:
+                succeeded, result = result_queue.get_nowait()
+                break
+            except queue.Empty:
+                await asyncio.sleep(0.01)
+        if not succeeded:
+            raise RuntimeError(result)
+        return result
 
 
 def _get_logits(outputs, offset: int):

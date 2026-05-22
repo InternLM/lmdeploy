@@ -179,6 +179,14 @@ class ZMQMPEngine(MPEngine):
         async for out in self.rpc_client.async_stream_call(func, sess_event, *args, **kwargs):
             yield out
 
+    async def get_health_status(self):
+        """Get backend health status."""
+        if self.proc is None or not self.proc.is_alive():
+            return dict(alive=False,
+                        message='PyTorch ZMQ engine process is not alive.',
+                        schedule_metrics=None)
+        return await super().get_health_status()
+
     def close(self) -> None:
         """Close mp engine."""
         if self.proc is None:
