@@ -334,15 +334,20 @@ class Engine(EngineBase):
     @staticmethod
     def _has_multimodal_session(session) -> bool:
         """Check whether session has multimodal history."""
-        return any(not seq.history_multimodals.empty() for seq in session.sequences.values())
+        for seq in session.sequences.values():
+            history_multimodals = getattr(seq, 'history_multimodals', None)
+            if history_multimodals is not None and not history_multimodals.empty():
+                return True
+        return False
 
     def _maybe_trim_multimodal_session(self, has_multimodal: bool):
         """Trim host memory after enough multimodal sessions have ended."""
-        if not has_multimodal or self._multimodal_session_trim_count <= 0:
+        trim_count = getattr(self, '_multimodal_session_trim_count', max(0, _envs.multimodal_session_trim_count))
+        if not has_multimodal or trim_count <= 0:
             return
 
-        self._multimodal_session_end_count += 1
-        if self._multimodal_session_end_count < self._multimodal_session_trim_count:
+        self._multimodal_session_end_count = getattr(self, '_multimodal_session_end_count', 0) + 1
+        if self._multimodal_session_end_count < trim_count:
             return
 
         self._multimodal_session_end_count = 0
