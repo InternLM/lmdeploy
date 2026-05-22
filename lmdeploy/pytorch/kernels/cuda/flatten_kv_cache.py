@@ -43,7 +43,6 @@ def _flatten_kv_cache(
     stride_vod: tl.constexpr,
     stride_boff,
     OUT_SIZE,
-    BATCH_SIZE: tl.constexpr,
     HEAD_DIM_K: tl.constexpr,
     HEAD_DIM_V: tl.constexpr,
     BLOCK_BS: tl.constexpr,
@@ -54,9 +53,10 @@ def _flatten_kv_cache(
     page_id = tl.program_id(0)
     batch_id = tl.program_id(1)
     head_id = tl.program_id(2)
+    tail_batch = tl.num_programs(1) - 1
 
-    if batch_id == BATCH_SIZE:
-        last_batch = BATCH_SIZE - 1
+    if batch_id == tail_batch:
+        last_batch = tail_batch - 1
         last_start = tl.load(start_loc_ptr + last_batch)
         last_seqlen = tl.load(seqlens_ptr + last_batch)
         start_loc = last_start + last_seqlen
@@ -167,7 +167,6 @@ def _flatten_kv_cache_quant(
     stride_boff,
     quant_policy: tl.constexpr,
     OUT_SIZE,
-    BATCH_SIZE: tl.constexpr,
     HEAD_DIM_K: tl.constexpr,
     HEAD_DIM_V: tl.constexpr,
     BLOCK_BS: tl.constexpr,
@@ -178,9 +177,10 @@ def _flatten_kv_cache_quant(
     page_id = tl.program_id(0)
     batch_id = tl.program_id(1)
     head_id = tl.program_id(2)
+    tail_batch = tl.num_programs(1) - 1
 
-    if batch_id == BATCH_SIZE:
-        last_batch = BATCH_SIZE - 1
+    if batch_id == tail_batch:
+        last_batch = tail_batch - 1
         last_start = tl.load(start_loc_ptr + last_batch)
         last_seqlen = tl.load(seqlens_ptr + last_batch)
         start_loc = last_start + last_seqlen
@@ -395,7 +395,6 @@ def flatten_kv_cache(k_caches: Tensor,
             stride_vod=v_states.stride(2),
             stride_boff=block_offsets.stride(0),
             OUT_SIZE=out_size,
-            BATCH_SIZE=batch_size,
             HEAD_DIM_K=k_head_dim,
             HEAD_DIM_V=v_head_dim,
             BLOCK_BS=BLOCK_BS,
@@ -448,7 +447,6 @@ def flatten_kv_cache(k_caches: Tensor,
             stride_boff=block_offsets.stride(0),
             quant_policy=quant_policy,
             OUT_SIZE=out_size,
-            BATCH_SIZE=batch_size,
             HEAD_DIM_K=k_head_dim,
             HEAD_DIM_V=v_head_dim,
             BLOCK_BS=BLOCK_BS,
@@ -498,7 +496,6 @@ def flatten_kv_cache_mla_fp8_kernel(
     stride_kod: tl.constexpr,
     stride_boff,
     OUT_SIZE,
-    BATCH_SIZE: tl.constexpr,
     BLOCK_BS: tl.constexpr,
     BLOCK_NOPE: tl.constexpr,
     BLOCK_PE: tl.constexpr,
@@ -508,9 +505,10 @@ def flatten_kv_cache_mla_fp8_kernel(
     page_id = tl.program_id(0)
     batch_id = tl.program_id(1)
     head_id = tl.program_id(2)
+    tail_batch = tl.num_programs(1) - 1
 
-    if batch_id == BATCH_SIZE:
-        last_batch = BATCH_SIZE - 1
+    if batch_id == tail_batch:
+        last_batch = tail_batch - 1
         last_start = tl.load(start_loc_ptr + last_batch)
         last_seqlen = tl.load(seqlens_ptr + last_batch)
         start_loc = last_start + last_seqlen
@@ -644,7 +642,6 @@ def flatten_kv_cache_mla_fp8(k_caches: Tensor,
         stride_kod=k_states.stride(2),
         stride_boff=block_offsets.stride(0),
         OUT_SIZE=out_size,
-        BATCH_SIZE=batch_size,
         BLOCK_BS=BLOCK_BS,
         BLOCK_NOPE=BLOCK_NOPE,
         BLOCK_PE=BLOCK_PE,
