@@ -15,6 +15,7 @@
 #include "src/turbomind/engine/engine.h"
 #include "src/turbomind/engine/model_executor.h"
 #include "src/turbomind/engine/request.h"
+#include "src/turbomind/engine/schedule_policy.h"
 
 #include "src/turbomind/core/copy.h"
 #include "src/turbomind/core/logger.h"
@@ -52,6 +53,23 @@ void serdes(Archive& ar, RequestData& r)
     ar& r.cancel;
     ar& r.abort;
 }
+
+namespace {
+
+uint64_t make_schedule_key(SchedulePolicy policy, bool scheduled, uint8_t priority, uint64_t arrival_order)
+{
+    switch (policy) {
+        case SchedulePolicy::kFifo:
+            return arrival_order;
+        case SchedulePolicy::kPriority:
+            const uint64_t order           = arrival_order & ((uint64_t{1} << 48) - 1);
+            const uint64_t scheduled_field = scheduled ? 0x00 : 0x0F;
+            return (scheduled_field << 56) | (uint64_t{priority} << 48) | order;
+    }
+    return arrival_order;
+}
+
+}  // namespace
 
 struct Engine::Impl {
 
@@ -108,6 +126,8 @@ struct Engine::Impl {
     ~Impl();
 
     const EngineParam param_;
+
+    const SchedulePolicy schedule_policy_;
 
     Gateway& gateway_;
 
@@ -186,6 +206,7 @@ Engine::Impl::Impl(EngineParam        param,
                    int                queue_id,
                    int                phases):
     param_{param},
+    schedule_policy_{parse_schedule_policy(param.schedule_policy)},
     gateway_{gateway},
     tp_group_{ctx.comm.h_tp_group},
     dp_group_{ctx.comm.h_dp_group},
@@ -562,7 +583,8 @@ void Engine::Impl::Schedule()
             cache.push_back(c.get());
             sequences.push_back(c->seq);
             status.push_back(c->seq->status);
-            priorities.push_back(c->req->unique_id);
+            priorities.push_back(
+                make_schedule_key(schedule_policy_, c->scheduled, c->req->gen_cfg.priority, c->req->unique_id));
             context_length.push_back(c->seq_len + c->beta /* plus draft tokens */);
             alpha.push_back(c->alpha);
             TM_CHECK(c->seq->status == Sequence::kActive || c->alpha == 0) << c->seq->status << " " << c->alpha;
@@ -608,6 +630,10 @@ void Engine::Impl::Schedule()
 
     // |<-- existing -->|<-- swap-in -->|<- swap-out ->|
     // |<----------- active ----------->|<------- inactive ----->|
+
+    for (auto i : swap_in) {
+        cache[i]->scheduled = true;
+    }
 
     for (auto i : swap_in) {
         cache[i]->autoregres = {};

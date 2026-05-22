@@ -108,6 +108,8 @@ class GenerationConfig:
             Must be non-negative; values below 0 are treated as 0.
         repetition_ngram_threshold: The number of times an n-gram must be repeated to trigger early stop.
             Must be non-negative; values below 0 are treated as 0.
+        priority: TurboMind scheduling priority. Smaller values have higher priority.
+            Must be in range [0, 255]. Defaults to 0.
     """
 
     n: int = 1
@@ -145,6 +147,9 @@ class GenerationConfig:
     # ngram, generation would stop if latest [size] tokens are repeated for [threshold] times
     repetition_ngram_size: int = 0
     repetition_ngram_threshold: int = 0
+
+    # TurboMind scheduling priority. Smaller values have higher priority.
+    priority: int = 0
 
     def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
         """Convert stop_words/bad_sords to ids and append the ids to
@@ -198,6 +203,8 @@ class GenerationConfig:
         if self.repetition_ngram_size <= 0 or self.repetition_ngram_threshold <= 0:
             self.repetition_ngram_size = 0
             self.repetition_ngram_threshold = 0
+        assert type(self.priority) is int, 'priority must be an integer'
+        assert 0 <= self.priority <= 255, 'priority must be in range [0, 255]'
 
 
 @pydantic_dataclass
@@ -267,6 +274,10 @@ class TurbomindEngineConfig:
         hf_overrides: Huggingface overrides for the model.
             It can be used to override the default config of the model
         enable_metrics: enable metrics system
+        schedule_policy: TurboMind scheduling policy.
+            `fifo` preserves existing behavior. `priority` admits lower
+            GenerationConfig.priority values first and keeps already-started
+            requests before new requests inside TurboMind.
     """
 
     dtype: str = 'auto'
@@ -305,6 +316,7 @@ class TurbomindEngineConfig:
     communicator: str = 'nccl'
     hf_overrides: dict[str, Any] | None = None
     enable_metrics: bool = True
+    schedule_policy: Literal['fifo', 'priority'] = 'fifo'
 
     def __post_init__(self):
         """Check input validation."""
@@ -318,6 +330,7 @@ class TurbomindEngineConfig:
             'invalid max_prefill_token_num'
         assert self.num_tokens_per_iter >= 0, 'invalid num_tokens_per_iter'
         assert self.async_ in (0, 1), 'async_ must be 0 (disabled) or 1 (enabled)'
+        assert self.schedule_policy in ('fifo', 'priority'), 'invalid schedule_policy'
 
 
 @dataclass

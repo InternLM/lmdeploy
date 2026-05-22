@@ -599,6 +599,16 @@ class ArgumentHelper:
                                    'Set to 0 to disable async mode, 1 to enable it.')
 
     @staticmethod
+    def schedule_policy(parser):
+        return parser.add_argument('--schedule-policy',
+                                   type=str,
+                                   default='fifo',
+                                   choices=['fifo', 'priority'],
+                                   help='TurboMind scheduling policy. '
+                                   '"fifo" preserves existing behavior; "priority" admits lower request priority '
+                                   'values first and avoids preempting started requests.')
+
+    @staticmethod
     def max_prefill_token_num(parser):
         return parser.add_argument('--max-prefill-token-num',
                                    type=int,

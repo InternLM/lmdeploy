@@ -155,6 +155,7 @@ class SubCliServe:
         ArgumentHelper.num_tokens_per_iter(tb_group)
         ArgumentHelper.max_prefill_iters(tb_group)
         ArgumentHelper.async_(tb_group)
+        ArgumentHelper.schedule_policy(tb_group)
         ArgumentHelper.communicator(tb_group)
         ArgumentHelper.dist_init_addr(tb_group)
 
@@ -273,6 +274,7 @@ class SubCliServe:
                                                    num_tokens_per_iter=args.num_tokens_per_iter,
                                                    max_prefill_iters=args.max_prefill_iters,
                                                    async_=args.async_,
+                                                   schedule_policy=args.schedule_policy,
                                                    communicator=args.communicator,
                                                    enable_metrics=not args.disable_metrics,
                                                    hf_overrides=args.hf_overrides)

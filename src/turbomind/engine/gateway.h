@@ -13,6 +13,7 @@
 #include "src/turbomind/core/logger.h"
 #include "src/turbomind/engine/request.h"
 #include "src/turbomind/engine/request_queue.h"
+#include "src/turbomind/engine/schedule_policy.h"
 #include "src/turbomind/engine/signal_buffer.h"
 
 namespace turbomind {
@@ -62,7 +63,9 @@ private:
 
 class Gateway {
 public:
-    Gateway(int size, std::function<std::shared_ptr<void>()> ctx_factory);
+    Gateway(int                                    size,
+            std::function<std::shared_ptr<void>()> ctx_factory,
+            SchedulePolicy                         schedule_policy = SchedulePolicy::kFifo);
 
     void shutdown();
 
@@ -95,6 +98,8 @@ private:
     const int size_;
 
     int dp_thr_;
+
+    SchedulePolicy schedule_policy_;
 
     std::vector<std::unique_ptr<RequestQueue>> queues_;
 

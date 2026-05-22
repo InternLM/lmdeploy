@@ -5,7 +5,7 @@ import time
 from typing import Any, Literal
 
 import shortuuid
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 
 class ErrorResponse(BaseModel):
@@ -169,6 +169,7 @@ class ChatCompletionRequest(BaseModel):
     seed: int | None = None
     min_new_tokens: int | None = Field(default=None, examples=[None])
     min_p: float = 0.0
+    priority: StrictInt | None = Field(default=0, ge=0, le=255)
     enable_thinking: bool | None = None  # will be deprecated in the future
     return_token_ids: bool | None = False
     include_stop_str_in_output: bool | None = False
@@ -364,6 +365,7 @@ class CompletionRequest(BaseModel):
     top_k: int | None = 40  # for opencompass
     seed: int | None = None
     min_p: float = 0.0
+    priority: StrictInt | None = Field(default=0, ge=0, le=255)
 
 
 class CompletionResponseChoice(BaseModel):

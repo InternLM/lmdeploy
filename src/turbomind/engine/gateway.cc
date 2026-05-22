@@ -8,11 +8,11 @@
 
 namespace turbomind {
 
-Gateway::Gateway(int size, std::function<std::shared_ptr<void>()> ctx_factory):
-    size_{size}, queues_(size_), dp_thr_{1}, ctx_factory_{ctx_factory}, next_{0}
+Gateway::Gateway(int size, std::function<std::shared_ptr<void>()> ctx_factory, SchedulePolicy schedule_policy):
+    size_{size}, dp_thr_{1}, schedule_policy_{schedule_policy}, queues_(size_), ctx_factory_{ctx_factory}, next_{0}
 {
     for (int i = 0; i < size_; ++i) {
-        queues_[i] = std::make_unique<RequestQueue>();
+        queues_[i] = RequestQueue::create(schedule_policy_);
     }
 
     signal_thread_ = std::thread(&Gateway::signal_thread_entry, this);

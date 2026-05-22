@@ -15,6 +15,7 @@
 #include "src/turbomind/engine/gateway.h"
 #include "src/turbomind/engine/model_executor.h"
 #include "src/turbomind/engine/model_request.h"
+#include "src/turbomind/engine/schedule_policy.h"
 
 #include "src/turbomind/models/language_model.h"
 #include "src/turbomind/models/llama/context.h"
@@ -46,6 +47,8 @@ struct TurboMind::Impl {
     string communicator_type_;  // communicator backend
 
     unique_ptr<comm::HostGroupId> group_id_;
+
+    SchedulePolicy schedule_policy_;
 
     shared_ptr<Gateway> gateway_;
 
@@ -146,7 +149,10 @@ TurboMind::Impl::~Impl()
 }
 
 TurboMind::Impl::Impl(string model_dir, EngineConfig config, FFICtxFactory ffi_ctx_factory):
-    data_type_{}, engine_param_{}, ffi_ctx_factory_{ffi_ctx_factory}
+    data_type_{},
+    engine_param_{},
+    schedule_policy_{parse_schedule_policy(config.schedule_policy)},
+    ffi_ctx_factory_{ffi_ctx_factory}
 {
     data_type_ = config.data_type;
     TM_CHECK(data_type_ == kBfloat16 || data_type_ == kHalf);
@@ -255,7 +261,7 @@ void TurboMind::Impl::CreateContext(int index)
         for (size_t i = 0; i < queue_id_.size(); ++i) {
             queue_id_[i] = queue_id_[i] ? n_queues_++ : -1;
         }
-        gateway_ = std::make_shared<Gateway>(n_queues_, ffi_ctx_factory_);
+        gateway_ = std::make_shared<Gateway>(n_queues_, ffi_ctx_factory_, schedule_policy_);
     }
 
     c.h_global->Sync();

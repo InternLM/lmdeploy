@@ -13,3 +13,8 @@ add_library(engine STATIC
 target_link_libraries(engine PRIVATE xgrammar core)
 set_property(TARGET engine PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET engine PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+
+if(BUILD_TEST)
+    add_executable(test_request_queue test_request_queue.cc)
+    target_link_libraries(test_request_queue PRIVATE engine Catch2::Catch2WithMain)
+endif()

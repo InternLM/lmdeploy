@@ -2,7 +2,7 @@
 import pytest
 from pydantic import ValidationError
 
-from lmdeploy import GenerationConfig, Tokenizer
+from lmdeploy import GenerationConfig, Tokenizer, TurbomindEngineConfig
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 from lmdeploy.utils import get_hf_gen_cfg
 
@@ -11,6 +11,29 @@ def test_generation_config_repetition_ngram_clamped():
     c = GenerationConfig(repetition_ngram_size=-1, repetition_ngram_threshold=-2)
     assert c.repetition_ngram_size == 0
     assert c.repetition_ngram_threshold == 0
+
+
+def test_generation_config_priority_validation():
+    assert GenerationConfig(priority=0).priority == 0
+    assert GenerationConfig(priority=7).priority == 7
+    assert GenerationConfig(priority=255).priority == 255
+
+    for priority in (None, True, 1.5, '1'):
+        with pytest.raises(AssertionError):
+            GenerationConfig(priority=priority)
+
+    for priority in (-1, 256):
+        with pytest.raises(AssertionError):
+            GenerationConfig(priority=priority)
+
+
+def test_turbomind_engine_config_schedule_policy_validation():
+    assert TurbomindEngineConfig().schedule_policy == 'fifo'
+    assert TurbomindEngineConfig(schedule_policy='fifo').schedule_policy == 'fifo'
+    assert TurbomindEngineConfig(schedule_policy='priority').schedule_policy == 'priority'
+
+    with pytest.raises((AssertionError, ValidationError)):
+        TurbomindEngineConfig(schedule_policy='bad')
 
 
 def test_chat_completion_request_repetition_ngram_ge_zero():

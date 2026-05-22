@@ -251,6 +251,7 @@ class TurboMind:
         ec.nnodes = engine_config.nnodes
         ec.node_rank = engine_config.node_rank
         ec.communicator = engine_config.communicator
+        ec.schedule_policy = engine_config.schedule_policy
 
         logger.info(f'turbomind engine config:\n\n'
                     f'dtype={engine_config.dtype}, session_len={engine_config.session_len}, '
@@ -258,7 +259,8 @@ class TurboMind:
                     f'devices={engine_config.devices}, '
                     f'tp={engine_config.attn_tp_size}, '
                     f'dp={engine_config.attn_dp_size}, '
-                    f'cp={engine_config.attn_cp_size}')
+                    f'cp={engine_config.attn_cp_size}, '
+                    f'schedule_policy={engine_config.schedule_policy}')
 
         model_comm = _tm.TurboMind.create(model_dir='', engine_config=ec)
         self._create_weight(model_comm)
@@ -662,7 +664,7 @@ class TurboMindInstance:
             stream_output (bool): indicator for stream output
             kwargs (dict): kwargs for backward compatibility
         """
-        logger.info(f'[async_stream_infer] session {session_id} start')
+        logger.info(f'[async_stream_infer] session {session_id} start, priority={gen_config.priority}')
         gen_cfg = self._get_generation_config(gen_config)
 
         inputs, input_len = self.prepare_inputs(input_ids=input_ids,
@@ -791,6 +793,7 @@ class TurboMindInstance:
         if not cfg.ignore_eos and cfg.stop_token_ids:
             c.stop_ids = _construct_stop_or_bad_words(cfg.stop_token_ids)
         c.repetition_penalty = cfg.repetition_penalty
+        c.priority = cfg.priority
         if cfg.min_new_tokens:
             c.min_new_tokens = cfg.min_new_tokens
         output_type = dict(all=1, generation=2)
