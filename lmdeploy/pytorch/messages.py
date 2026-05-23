@@ -940,13 +940,15 @@ class SchedulerSequence:
                 modality = modal_data.modality
                 if isinstance(modality, enum.Enum):
                     modality = modality.value
-                content_hash = _make_prefix_cache_content_hash(modal_data.data, modal_data.meta,
-                                                               modal_data.mrope_pos_ids)
+                content_hash = modal_data.content_hash
+                if content_hash is None:
+                    content_hash = _make_prefix_cache_content_hash(modal_data.data, modal_data.meta,
+                                                                   modal_data.mrope_pos_ids)
                 self.prefix_cache_metas.append(
                     PrefixCacheMeta(start=modal_data.start,
                                     end=modal_data.end,
                                     modality=str(modality),
-                                    content_hash=content_hash))
+                                    content_hash=str(content_hash)))
 
     def _index_prefix_cache_metas(self):
         """Build block-indexed multimodal prefix-cache metadata."""

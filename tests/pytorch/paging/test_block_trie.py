@@ -60,12 +60,18 @@ class TestBlockTire:
     def block_trie(self, scheduler):
         yield scheduler.block_trie
 
-    def _image_multimodals(self, start: int, end: int, value: float, image_token_id: int = 99):
+    def _image_multimodals(self,
+                           start: int,
+                           end: int,
+                           value: float,
+                           image_token_id: int = 99,
+                           content_hash: str | None = None):
         data = torch.full((2, 2), value, dtype=torch.float32)
         return dict(image=[MultiModalData(data=data,
                                           start=start,
                                           end=end,
-                                          meta=dict(image_token_id=image_token_id))])
+                                          meta=dict(image_token_id=image_token_id),
+                                          content_hash=content_hash)])
 
     def _modal_data(self, start: int, end: int, value: float, modality: Modality):
         data = torch.full((2, 2), value, dtype=torch.float32)
@@ -74,6 +80,15 @@ class TestBlockTire:
                               end=end,
                               modality=modality,
                               meta=dict(token_id=int(value)))
+
+    def _multi_image_multimodals(self, spans: list[tuple[int, int, float]]):
+        return dict(image=[
+            MultiModalData(data=torch.full((2, 2), value, dtype=torch.float32),
+                           start=start,
+                           end=end,
+                           modality=Modality.IMAGE,
+                           meta=dict(image_token_id=99)) for start, end, value in spans
+        ])
 
     def test_allocate(self, block_trie, block_mgr, scheduler):
         allocator = block_trie.allocator
@@ -188,6 +203,50 @@ class TestBlockTire:
         assert node is not None
         assert node.num_matched == block_size
 
+    def test_match_multimodal_uses_precomputed_content_hash(self, block_trie, block_mgr, scheduler):
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = [1] * block_size + [99] * block_size + [2] * block_size + [3]
+
+        seq = sess.add_sequence(
+            token_ids,
+            multimodals=self._image_multimodals(block_size, block_size * 2, 1.0, content_hash='image-a'),
+        )
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+
+        seq = sess.add_sequence(
+            token_ids,
+            multimodals=self._image_multimodals(block_size, block_size * 2, 2.0, content_hash='image-a'),
+        )
+        block_trie.match(seq)
+
+        assert len(seq.logical_blocks) == 3
+        assert seq.num_history_ids == block_size * 3
+        assert seq.prefix_cache_metas[0].content_hash == 'image-a'
+
+    def test_match_multimodal_different_precomputed_content_hash(self, block_trie, block_mgr, scheduler):
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = [1] * block_size + [99] * block_size + [2] * block_size + [3]
+
+        seq = sess.add_sequence(
+            token_ids,
+            multimodals=self._image_multimodals(block_size, block_size * 2, 1.0, content_hash='image-a'),
+        )
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+
+        seq = sess.add_sequence(
+            token_ids,
+            multimodals=self._image_multimodals(block_size, block_size * 2, 1.0, content_hash='image-b'),
+        )
+        block_trie.match(seq)
+
+        assert len(seq.logical_blocks) == 1
+        assert seq.num_history_ids == block_size
+        assert seq.prefix_cache_metas[0].content_hash == 'image-b'
+
     def test_match_multimodal_clamps_before_split_span(self, block_trie, block_mgr, scheduler):
         allocator = block_trie.allocator
         sess = scheduler.add_session(0)
@@ -211,6 +270,44 @@ class TestBlockTire:
         node = getattr(seq.logical_blocks, 'last_shared_node', None)
         assert node is not None
         assert node.num_matched == 0
+
+    def test_match_multimodal_clamp_keeps_previous_images(self, block_trie, block_mgr, scheduler):
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = [7] * (block_size * 7 + block_size // 2)
+        image1 = (block_size, block_size * 2, 1.0)
+        image2 = (block_size * 3, block_size * 4, 2.0)
+        image3 = (block_size * 6, block_size * 7 + block_size // 4, 3.0)
+
+        seq = sess.add_sequence(token_ids, multimodals=self._multi_image_multimodals([image1, image2, image3]))
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+
+        seq = sess.add_sequence(token_ids, multimodals=self._multi_image_multimodals([image1, image2, image3]))
+        block_trie.match(seq)
+        assert len(seq.logical_blocks) == 6
+        assert seq.num_history_ids == block_size * 6
+        node = getattr(seq.logical_blocks, 'last_shared_node', None)
+        assert node is not None
+        assert node.num_matched == block_size * 6
+
+        different_last_image = (image3[0], image3[1], 4.0)
+        seq = sess.add_sequence(
+            token_ids,
+            multimodals=self._multi_image_multimodals([image1, image2, different_last_image]),
+        )
+        block_trie.match(seq)
+        assert len(seq.logical_blocks) == 6
+        assert seq.num_history_ids == block_size * 6
+
+        different_middle_image = (image2[0], image2[1], 5.0)
+        seq = sess.add_sequence(
+            token_ids,
+            multimodals=self._multi_image_multimodals([image1, different_middle_image, image3]),
+        )
+        block_trie.match(seq)
+        assert len(seq.logical_blocks) == 3
+        assert seq.num_history_ids == block_size * 3
 
     def test_match_multimodal_extra_hash_order_is_canonical(self, block_trie, block_mgr, scheduler):
         sess = scheduler.add_session(0)

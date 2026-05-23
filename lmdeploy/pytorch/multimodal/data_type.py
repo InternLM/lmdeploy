@@ -21,6 +21,7 @@ class MultiModalData:
     mrope_pos_ids: np.ndarray | None = None
 
     modality: Modality = Modality.IMAGE
+    content_hash: str | None = None
 
     def __post_init__(self):
         if self.end is None:
