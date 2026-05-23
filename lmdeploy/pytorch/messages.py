@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
-import hashlib
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -11,7 +10,7 @@ from torch import Tensor
 
 from lmdeploy.messages import EngineEvent, EventType, GenerationConfig, LogitsProcessor
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
-from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
+from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs, make_multimodal_content_hash
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.constants import Modality
 
@@ -273,45 +272,6 @@ def _to_ndarray(token_ids) -> np.ndarray:
     if token_ids.ndim == 0:
         token_ids = token_ids[None]
     return token_ids
-
-
-def _hash_prefix_cache_value(hasher: 'hashlib._Hash', value: Any):
-    """Update prefix-cache hash with a deterministic representation."""
-    if isinstance(value, Tensor):
-        tensor = value.detach().cpu().contiguous()
-        hasher.update(f'tensor:{tensor.dtype}:{tuple(tensor.shape)}:'.encode())
-        hasher.update(tensor.view(torch.uint8).numpy().tobytes())
-    elif isinstance(value, np.ndarray):
-        array = np.ascontiguousarray(value)
-        hasher.update(f'ndarray:{array.dtype}:{array.shape}:'.encode())
-        hasher.update(array.tobytes())
-    elif isinstance(value, dict):
-        hasher.update(b'dict:{')
-        for key in sorted(value, key=lambda x: repr(x)):
-            _hash_prefix_cache_value(hasher, key)
-            hasher.update(b':')
-            _hash_prefix_cache_value(hasher, value[key])
-            hasher.update(b',')
-        hasher.update(b'}')
-    elif isinstance(value, (list, tuple)):
-        hasher.update(f'{type(value).__name__}:['.encode())
-        for item in value:
-            _hash_prefix_cache_value(hasher, item)
-            hasher.update(b',')
-        hasher.update(b']')
-    elif isinstance(value, enum.Enum):
-        _hash_prefix_cache_value(hasher, value.value)
-    else:
-        hasher.update(f'{type(value).__name__}:{repr(value)}'.encode())
-
-
-def _make_prefix_cache_content_hash(data: Any, meta: dict[str, Any] | None, mrope_pos_ids: np.ndarray | None) -> str:
-    """Create a stable content hash for prefix-cache multimodal matching."""
-    hasher = hashlib.sha256()
-    _hash_prefix_cache_value(hasher, data)
-    _hash_prefix_cache_value(hasher, meta)
-    _hash_prefix_cache_value(hasher, mrope_pos_ids)
-    return hasher.hexdigest()
 
 
 class SchedulerSession:
@@ -942,8 +902,8 @@ class SchedulerSequence:
                     modality = modality.value
                 content_hash = modal_data.content_hash
                 if content_hash is None:
-                    content_hash = _make_prefix_cache_content_hash(modal_data.data, modal_data.meta,
-                                                                   modal_data.mrope_pos_ids)
+                    content_hash = make_multimodal_content_hash(modal_data.data, modal_data.meta,
+                                                                modal_data.mrope_pos_ids)
                 self.prefix_cache_metas.append(
                     PrefixCacheMeta(start=modal_data.start,
                                     end=modal_data.end,
