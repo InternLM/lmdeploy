@@ -53,14 +53,36 @@ def _flatten_kv_cache(
     page_id = tl.program_id(0)
     batch_id = tl.program_id(1)
     head_id = tl.program_id(2)
+    tail_batch = tl.num_programs(1) - 1
 
-    num_batches = tl.num_programs(1)
+    if batch_id == tail_batch:
+        last_batch = tail_batch - 1
+        last_start = tl.load(start_loc_ptr + last_batch)
+        last_seqlen = tl.load(seqlens_ptr + last_batch)
+        start_loc = last_start + last_seqlen
+        seqlen = OUT_SIZE - start_loc
+        if page_id * BLOCK_BS >= seqlen:
+            return
+
+        offs_dk = tl.arange(0, BLOCK_DK) % HEAD_DIM_K
+        offs_obs = page_id * BLOCK_BS + tl.arange(0, BLOCK_BS)
+        mask_bs = offs_obs < seqlen
+        mask_dk = tl.arange(0, BLOCK_DK) < HEAD_DIM_K
+        ko_ptrs = (ko_ptr + head_id * stride_koh + (start_loc + offs_obs[:, None]) * stride_kos +
+                   offs_dk[None, :] * stride_kod)
+        zeros_k = tl.zeros([BLOCK_BS, BLOCK_DK], dtype=tl.float32)
+        tl.store(ko_ptrs, zeros_k, mask=mask_bs[:, None] & mask_dk[None, :])
+
+        if HEAD_DIM_V > 0:
+            offs_dv = tl.arange(0, BLOCK_DV) % HEAD_DIM_V
+            mask_dv = tl.arange(0, BLOCK_DV) < HEAD_DIM_V
+            vo_ptrs = (vo_ptr + head_id * stride_voh + (start_loc + offs_obs[:, None]) * stride_vos +
+                       offs_dv[None, :] * stride_vod)
+            zeros_v = tl.zeros([BLOCK_BS, BLOCK_DV], dtype=tl.float32)
+            tl.store(vo_ptrs, zeros_v, mask=mask_bs[:, None] & mask_dv[None, :])
+        return
 
     seqlen = tl.load(seqlens_ptr + batch_id)
-    start_loc = tl.load(start_loc_ptr + batch_id)
-    # fill last block to prevent attention nan
-    if batch_id == num_batches - 1:
-        seqlen = (OUT_SIZE - start_loc).to(seqlen.dtype)
     if page_id * BLOCK_BS >= seqlen:
         return
 
@@ -155,16 +177,38 @@ def _flatten_kv_cache_quant(
     page_id = tl.program_id(0)
     batch_id = tl.program_id(1)
     head_id = tl.program_id(2)
+    tail_batch = tl.num_programs(1) - 1
 
-    num_batches = tl.num_programs(1)
+    if batch_id == tail_batch:
+        last_batch = tail_batch - 1
+        last_start = tl.load(start_loc_ptr + last_batch)
+        last_seqlen = tl.load(seqlens_ptr + last_batch)
+        start_loc = last_start + last_seqlen
+        seqlen = OUT_SIZE - start_loc
+        if page_id * BLOCK_BS >= seqlen:
+            return
+
+        offs_obs = page_id * BLOCK_BS + tl.arange(0, BLOCK_BS)
+        mask_bs = offs_obs < seqlen
+        offs_dok = tl.arange(0, BLOCK_DK)
+        offs_dov = tl.arange(0, BLOCK_DV)
+        mask_dok = offs_dok < HEAD_DIM_K
+        mask_dov = offs_dov < HEAD_DIM_V
+        ko_ptrs = (ko_ptr + head_id * stride_koh + (start_loc + offs_obs[:, None]) * stride_kos +
+                   offs_dok[None, :] * stride_kod)
+        vo_ptrs = (vo_ptr + head_id * stride_voh + (start_loc + offs_obs[:, None]) * stride_vos +
+                   offs_dov[None, :] * stride_vod)
+        zeros_k = tl.zeros([BLOCK_BS, BLOCK_DK], dtype=tl.float32)
+        zeros_v = tl.zeros([BLOCK_BS, BLOCK_DV], dtype=tl.float32)
+        tl.store(ko_ptrs, zeros_k, mask=mask_bs[:, None] & mask_dok[None, :])
+        tl.store(vo_ptrs, zeros_v, mask=mask_bs[:, None] & mask_dov[None, :])
+        return
 
     seqlen = tl.load(seqlens_ptr + batch_id)
-    start_loc = tl.load(start_loc_ptr + batch_id)
-    if batch_id == num_batches - 1:
-        seqlen = OUT_SIZE - start_loc
     if page_id * BLOCK_BS >= seqlen:
         return
 
+    start_loc = tl.load(start_loc_ptr + batch_id)
     b_off = tl.load(block_offsets_ptr + batch_id * stride_boff + page_id)
     b_off = b_off.to(tl.int64)
     offs_bs = tl.arange(0, BLOCK_BS)
@@ -323,7 +367,9 @@ def flatten_kv_cache(k_caches: Tensor,
     else:
         raise RuntimeError('Unsupported layout.')
 
-    grid = (num_blocks, batch_size, num_heads)
+    # The extra batch zero-fills the padded tail. Current callers pad to the
+    # next block plus one guard block, so at most two pages are needed.
+    grid = (max(num_blocks, 2), batch_size + 1, num_heads)
     if quant_policy == QuantPolicy.NONE:
         _flatten_kv_cache[grid](
             k_caches,
@@ -459,16 +505,36 @@ def flatten_kv_cache_mla_fp8_kernel(
     page_id = tl.program_id(0)
     batch_id = tl.program_id(1)
     head_id = tl.program_id(2)
-    num_batches = tl.num_programs(1)
+    tail_batch = tl.num_programs(1) - 1
+
+    if batch_id == tail_batch:
+        last_batch = tail_batch - 1
+        last_start = tl.load(start_loc_ptr + last_batch)
+        last_seqlen = tl.load(seqlens_ptr + last_batch)
+        start_loc = last_start + last_seqlen
+        seqlen = OUT_SIZE - start_loc
+        if page_id * BLOCK_BS >= seqlen:
+            return
+
+        offs_bs = tl.arange(0, BLOCK_BS)
+        offs_dnope = tl.arange(0, BLOCK_NOPE)
+        offs_dpe = tl.arange(0, BLOCK_PE)
+        offs_obs = page_id * BLOCK_BS + offs_bs
+        mask_bs = offs_obs < seqlen
+        offs_ko = head_id * stride_koh + (start_loc + offs_obs[:, None]) * stride_kos
+        ko_nope_ptrs = ko_ptr + offs_ko + offs_dnope[None, :] * stride_kod
+        ko_pe_ptrs = ko_ptr + offs_ko + (BLOCK_NOPE + offs_dpe[None, :]) * stride_kod
+        zeros_nope = tl.zeros([BLOCK_BS, BLOCK_NOPE], dtype=tl.float32)
+        zeros_pe = tl.zeros([BLOCK_BS, BLOCK_PE], dtype=tl.float32)
+        tl.store(ko_nope_ptrs, zeros_nope, mask=mask_bs[:, None])
+        tl.store(ko_pe_ptrs, zeros_pe, mask=mask_bs[:, None])
+        return
 
     seqlen = tl.load(seqlens_ptr + batch_id)
-    start_loc = tl.load(start_loc_ptr + batch_id)
-    # fill last block to prevent attention nan
-    if batch_id == num_batches - 1:
-        seqlen = OUT_SIZE - start_loc
     if page_id * BLOCK_BS >= seqlen:
         return
 
+    start_loc = tl.load(start_loc_ptr + batch_id)
     b_off = tl.load(block_offsets_ptr + batch_id * stride_boff + page_id)
     b_off = b_off.to(tl.int64)
 
@@ -548,7 +614,9 @@ def flatten_kv_cache_mla_fp8(k_caches: Tensor,
     else:
         raise RuntimeError(f'Unsupported layout: {flatten_kv_layout}.')
 
-    grid = (num_blocks, batch_size, num_heads)
+    # The extra batch zero-fills the padded tail. Current callers pad to the
+    # next block plus one guard block, so at most two pages are needed.
+    grid = (max(num_blocks, 2), batch_size + 1, num_heads)
     flatten_kv_cache_mla_fp8_kernel[grid](
         k_caches_nope,
         k_caches_scale,

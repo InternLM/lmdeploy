@@ -175,6 +175,127 @@ class TestFlattenKVCacheQuant4(TestFlattenKVCacheQuant8):
         yield 1e-3
 
 
+@pytest.mark.parametrize('flatten_kv_layout', ['hsd', 'shd'])
+def test_flatten_kv_cache_zeroes_padded_tail(flatten_kv_layout):
+    """Padding beyond real flattened KV length should be finite zeros."""
+    from lmdeploy.pytorch.kernels.cuda.flatten_kv_cache import flatten_kv_cache
+
+    kv_lens = [2, 7]
+    block_size = 16
+    num_heads = 2
+    head_dim = 8
+    batch_size = len(kv_lens)
+    max_num_blocks = max(_div_up(kv_len, block_size) for kv_len in kv_lens)
+    out_size = sum(kv_lens)
+    padded_out_size = _div_up(out_size, block_size) * block_size + block_size
+
+    shape = (batch_size * max_num_blocks, block_size, num_heads, head_dim)
+    k_caches = torch.rand(shape, dtype=torch.float16, device='cuda')
+    v_caches = torch.rand_like(k_caches)
+
+    batch_ids = torch.arange(batch_size)
+    block_offsets = torch.arange(max_num_blocks)
+    block_offsets = batch_ids[:, None] + block_offsets[None, :] * batch_size
+    block_offsets = block_offsets.cuda()
+
+    # Poison the last request's cache positions beyond its real sequence length.
+    # The flattened padding tail must not copy these values.
+    for pos in range(kv_lens[-1], max_num_blocks * block_size):
+        page_id = pos // block_size
+        block_pos = pos % block_size
+        block_id = block_offsets[-1, page_id]
+        k_caches[block_id, block_pos] = float('nan')
+        v_caches[block_id, block_pos] = float('nan')
+
+    kv_seqlens = torch.tensor(kv_lens, device='cuda')
+    k_states, v_states = flatten_kv_cache(k_caches,
+                                          v_caches,
+                                          kv_seqlens,
+                                          block_offsets,
+                                          out_size=padded_out_size,
+                                          flatten_kv_layout=flatten_kv_layout)
+
+    k_expected = k_caches.new_empty(num_heads, out_size, head_dim)
+    v_expected = v_caches.new_empty(num_heads, out_size, head_dim)
+    start_loc = 0
+    for kv_len, block_offs in zip(kv_lens, block_offsets):
+        remain_len = kv_len
+        for idx, _ in enumerate(range(0, kv_len, block_size)):
+            block_id = block_offs[idx]
+            block_len = min(block_size, remain_len)
+            end_loc = start_loc + block_len
+            k_expected[:, start_loc:end_loc] = k_caches[block_id, :block_len].transpose(0, 1)
+            v_expected[:, start_loc:end_loc] = v_caches[block_id, :block_len].transpose(0, 1)
+            start_loc = end_loc
+            remain_len -= block_len
+
+    if flatten_kv_layout == 'hsd':
+        torch.testing.assert_close(k_states[:, :out_size], k_expected)
+        torch.testing.assert_close(v_states[:, :out_size], v_expected)
+        torch.testing.assert_close(k_states[:, out_size:], torch.zeros_like(k_states[:, out_size:]))
+        torch.testing.assert_close(v_states[:, out_size:], torch.zeros_like(v_states[:, out_size:]))
+    else:
+        torch.testing.assert_close(k_states[:out_size], k_expected.transpose(0, 1))
+        torch.testing.assert_close(v_states[:out_size], v_expected.transpose(0, 1))
+        torch.testing.assert_close(k_states[out_size:], torch.zeros_like(k_states[out_size:]))
+        torch.testing.assert_close(v_states[out_size:], torch.zeros_like(v_states[out_size:]))
+
+
+@pytest.mark.parametrize('flatten_kv_layout', ['hsd', 'shd'])
+@pytest.mark.parametrize('nbits', [8, 4])
+def test_flatten_kv_cache_quant_zeroes_padded_tail(flatten_kv_layout, nbits):
+    """Quantized padding branch should write finite zeros."""
+    from lmdeploy.pytorch.kernels.cuda.flatten_kv_cache import flatten_kv_cache
+
+    kv_lens = [2, 7]
+    block_size = 16
+    num_heads = 2
+    head_dim = 8
+    batch_size = len(kv_lens)
+    max_num_blocks = max(_div_up(kv_len, block_size) for kv_len in kv_lens)
+    out_size = sum(kv_lens)
+    padded_out_size = _div_up(out_size, block_size) * block_size + block_size
+
+    shape = (batch_size * max_num_blocks, block_size, num_heads, head_dim)
+    k_raw = torch.rand(shape, dtype=torch.float16, device='cuda')
+    v_raw = torch.rand_like(k_raw)
+    k_caches, k_scales_zeros = quant(k_raw, nbits)
+    v_caches, v_scales_zeros = quant(v_raw, nbits)
+    k_scales_zeros = k_scales_zeros.to(torch.float16)
+    v_scales_zeros = v_scales_zeros.to(torch.float16)
+
+    batch_ids = torch.arange(batch_size)
+    block_offsets = torch.arange(max_num_blocks)
+    block_offsets = batch_ids[:, None] + block_offsets[None, :] * batch_size
+    block_offsets = block_offsets.cuda()
+
+    for pos in range(kv_lens[-1], max_num_blocks * block_size):
+        page_id = pos // block_size
+        block_pos = pos % block_size
+        block_id = block_offsets[-1, page_id]
+        k_scales_zeros[block_id, block_pos] = float('nan')
+        v_scales_zeros[block_id, block_pos] = float('nan')
+
+    kv_seqlens = torch.tensor(kv_lens, device='cuda')
+    k_states, v_states = flatten_kv_cache(k_caches,
+                                          v_caches,
+                                          kv_seqlens,
+                                          block_offsets,
+                                          out_size=padded_out_size,
+                                          out_dtype=torch.float16,
+                                          k_scales_zeros=k_scales_zeros,
+                                          v_scales_zeros=v_scales_zeros,
+                                          quant_policy=nbits,
+                                          flatten_kv_layout=flatten_kv_layout)
+
+    if flatten_kv_layout == 'hsd':
+        torch.testing.assert_close(k_states[:, out_size:], torch.zeros_like(k_states[:, out_size:]))
+        torch.testing.assert_close(v_states[:, out_size:], torch.zeros_like(v_states[:, out_size:]))
+    else:
+        torch.testing.assert_close(k_states[out_size:], torch.zeros_like(k_states[out_size:]))
+        torch.testing.assert_close(v_states[out_size:], torch.zeros_like(v_states[out_size:]))
+
+
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason='require device with cc>=9.0')
 class TestFlattenKVCacheMLAFP8(TestFlattenKVCache):
 
@@ -245,6 +366,25 @@ class TestFlattenKVCacheMLAFP8(TestFlattenKVCache):
                                             out_size=out_size,
                                             out_dtype=out_dtype)
         torch.testing.assert_close(k_states, gt)
+
+    @pytest.mark.parametrize('flatten_kv_layout', ['hsd', 'shd'])
+    def test_flatten_kv_cache_zeroes_padded_tail(self, k_cache_mla, kv_seqlens, block_offsets, out_size, out_dtype,
+                                                 flatten_kv_layout):
+        from lmdeploy.pytorch.kernels.cuda.flatten_kv_cache import flatten_kv_cache_mla_fp8
+
+        block_size = k_cache_mla.size(1)
+        padded_out_size = _div_up(out_size, block_size) * block_size + block_size
+
+        k_states = flatten_kv_cache_mla_fp8(k_cache_mla,
+                                            kv_seqlens,
+                                            block_offsets,
+                                            out_size=padded_out_size,
+                                            out_dtype=out_dtype,
+                                            flatten_kv_layout=flatten_kv_layout)
+        if flatten_kv_layout == 'hsd':
+            torch.testing.assert_close(k_states[:, out_size:], torch.zeros_like(k_states[:, out_size:]))
+        else:
+            torch.testing.assert_close(k_states[out_size:], torch.zeros_like(k_states[out_size:]))
 
 
 # =============================================================================
