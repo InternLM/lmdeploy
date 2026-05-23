@@ -190,6 +190,8 @@ class ModelInputs:
     enable_microbatch: bool = False
     is_dummy: bool = False
     state_offsets: torch.Tensor | None = None
+    state_prefix_cache_offsets: torch.Tensor | None = None
+    state_prefix_cache_save_offsets: torch.Tensor | None = None
     target_hidden_states: torch.Tensor | None = None
     target_position_ids: torch.Tensor | None = None
     target_inputs_embeds: torch.Tensor | None = None
@@ -219,6 +221,8 @@ class ModelInputs:
             history_lengths=self.history_lengths + step_seqlens,
             max_kv_seqlen=self.max_kv_seqlen + self.max_q_seqlen,
             sum_kv_seqlen=self.sum_kv_seqlen + self.max_q_seqlen * self.seq_length.numel(),
+            state_prefix_cache_offsets=None,
+            state_prefix_cache_save_offsets=None,
             mrope_pos_ids=mrope_pos_ids,
         )
 

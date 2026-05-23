@@ -54,9 +54,9 @@ class Scheduler:
         # For Disaggregation
         self.locked_sessions: dict[int, SchedulerSession] = OrderedDict()
 
-        self.block_manager = build_block_manager(cache_config)
-        self.block_trie = BlockTrie(self.cache_config, self.block_manager)
         self.state_manager = build_state_manager(self.cache_config)
+        self.block_manager = build_block_manager(cache_config)
+        self.block_trie = BlockTrie(self.cache_config, self.block_manager, self.state_manager)
         self.is_ssm = len(self.cache_config.states_shapes) > 0
 
         self.eviction_helper = build_eviction_helper(self, self.scheduler_config.eviction_type)
@@ -64,6 +64,15 @@ class Scheduler:
         seq_meta = seq_meta or SequenceMeta(self.cache_config.block_size)
         self.seq_meta = seq_meta
         self.seq_manager = SequenceManager(seq_meta)
+
+    def _ensure_runtime_state_available(self):
+        """Make one state-cache slot available for an SSM runtime state."""
+        if not self.is_ssm:
+            return True
+        if self.state_manager.get_num_free() > 0:
+            return True
+        self.block_trie.evict_state_checkpoints(1)
+        return self.state_manager.get_num_free() > 0
 
     @staticmethod
     def create_status_list_property(status: MessageStatus):
@@ -212,6 +221,8 @@ class Scheduler:
                 break
 
             # allocate session memory
+            if self.is_ssm and not self._ensure_runtime_state_available():
+                break
             self.block_manager.allocate(seq, prealloc_size)
             self.block_trie.allocate(seq)
             if self.is_ssm:

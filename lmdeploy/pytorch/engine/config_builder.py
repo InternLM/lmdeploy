@@ -68,6 +68,7 @@ class ConfigBuilder:
             cache_max_entry_count=engine_config.cache_max_entry_count,
             max_prefill_token_num=engine_config.max_prefill_token_num,
             enable_prefix_caching=engine_config.enable_prefix_caching,
+            prefix_cache_state_budget=engine_config.prefix_cache_state_budget,
             quant_policy=engine_config.quant_policy,
             device_type=engine_config.device_type,
             migration_backend=engine_config.migration_backend,

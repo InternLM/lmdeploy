@@ -226,17 +226,19 @@ class ExecutorBase:
 
         num_state_caches = cache_config.num_state_caches
         if num_state_caches is None:
-            # add more caches for eviction
+            # One state slot is reserved for system use. Active sequences need
+            # max_batches runtime slots; prefix-cache checkpoints use an
+            # explicitly configured extra budget.
             # TODO: Share memory between state cache and pageable cache
-            num_state_caches = int(cache_config.max_batches + 1)
+            num_state_caches = int(cache_config.max_batches + 1 + cache_config.prefix_cache_state_budget)
             cache_config.num_state_caches = num_state_caches
 
         mems = StateCacheEngine.get_cache_state_size(cache_config.states_shapes)
         mems *= num_state_caches
 
-        if cache_config.enable_prefix_caching:
+        if cache_config.enable_prefix_caching and cache_config.prefix_cache_state_budget <= 0:
             cache_config.enable_prefix_caching = False
-            logger.warning('Prefix caching has not been support for state space model.')
+            logger.warning('State-space model prefix caching requires prefix_cache_state_budget > 0.')
 
         return mems
 

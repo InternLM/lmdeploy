@@ -575,6 +575,16 @@ class ArgumentHelper:
                                    help='Enable cache and match prefix')
 
     @staticmethod
+    def prefix_cache_state_budget(parser):
+        """Add argument prefix_cache_state_budget to parser."""
+
+        return parser.add_argument('--prefix-cache-state-budget',
+                                   type=int,
+                                   default=0,
+                                   help='Extra SSM state-cache slots reserved for prefix-cache checkpoints. '
+                                   'Only used by the PyTorch engine.')
+
+    @staticmethod
     def num_tokens_per_iter(parser):
         return parser.add_argument('--num-tokens-per-iter',
                                    type=int,

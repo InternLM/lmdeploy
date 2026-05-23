@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import heapq
+import time
 from dataclasses import dataclass
 
 import numpy as np
@@ -32,12 +33,22 @@ class Node:
                  block: int,
                  tokens: np.ndarray,
                  num_matched: int = 0,
-                 extra_hashes: tuple = ()):
+                 extra_hashes: tuple = (),
+                 state_idx: int = -1,
+                 state_ready: bool = False,
+                 state_ref_count: int = 0,
+                 state_access_time: float = 0.0,
+                 adapter_name: str = None):
         self.hash_key = hash_key
         self.block = block
         self.tokens = tokens
         self.num_matched = num_matched
         self.extra_hashes = extra_hashes
+        self.state_idx = state_idx
+        self.state_ready = state_ready
+        self.state_ref_count = state_ref_count
+        self.state_access_time = state_access_time
+        self.adapter_name = adapter_name
         self.children: dict[int, Node] = dict()
         self._parent: Node = None
 
@@ -64,16 +75,20 @@ class Node:
 class BlockTrie:
     """Block trie for prefix caching."""
 
-    def __init__(self, cache_config: CacheConfig, block_manager: BaseBlockManager):
+    def __init__(self, cache_config: CacheConfig, block_manager: BaseBlockManager, state_manager=None):
         self.block_manager = block_manager
         self.cache_config = cache_config
         self.allocator = self.block_manager.allocator
+        self.state_manager = state_manager
         self.block_size = cache_config.block_size
         self.enable = self.cache_config.enable_prefix_caching
+        self.requires_state_checkpoint = state_manager is not None and len(cache_config.states_shapes) > 0
 
         # caches with different adapter should not be shared.
         self._roots: dict[str, Node] = dict()
         self.leaves: set[Node] = set()
+        self._state_checkpoint_index: dict[tuple, list[Node]] = dict()
+        self._state_checkpoint_steps: dict[str, set[int]] = dict()
         self.stats = PrefixCacheStats()
 
     def hit_rate(self):
@@ -83,7 +98,7 @@ class BlockTrie:
     def get_root(self, adapter_name: str):
         """Get root by adapter name."""
         if adapter_name not in self._roots:
-            self._roots[adapter_name] = Node(-1, -1, None)
+            self._roots[adapter_name] = Node(-1, -1, None, adapter_name=adapter_name)
         return self._roots[adapter_name]
 
     def _get_block_extra_hashes(self, seq: SchedulerSequence, start: int, end: int):
@@ -98,9 +113,308 @@ class BlockTrie:
         """Check whether node content matches a token block."""
         return np.array_equal(tokens, node.tokens) and extra_hashes == node.extra_hashes
 
+    def _make_state_checkpoint_lookup_key(self, seq: SchedulerSequence, step: int):
+        """Make the sparse SSM checkpoint lookup key for a sequence prefix."""
+        start = step - self.block_size
+        end = step
+        tokens = seq.history_cache[start:end]
+        extra_hashes = self._get_block_extra_hashes(seq, start, end)
+        return (seq.adapter_name, step, self._make_key(tokens, extra_hashes))
+
+    def _make_state_checkpoint_node_key(self, node: Node):
+        """Make the sparse SSM checkpoint lookup key for a trie node."""
+        return (node.adapter_name, node.num_matched, node.hash_key)
+
+    def _index_state_checkpoint(self, node: Node):
+        """Add a ready state checkpoint to the sparse SSM index."""
+        key = self._make_state_checkpoint_node_key(node)
+        nodes = self._state_checkpoint_index.setdefault(key, [])
+        if not any(indexed_node is node for indexed_node in nodes):
+            nodes.append(node)
+        steps = self._state_checkpoint_steps.setdefault(node.adapter_name, set())
+        steps.add(node.num_matched)
+
+    def _unindex_state_checkpoint(self, node: Node):
+        """Remove a state checkpoint from the sparse SSM index."""
+        key = self._make_state_checkpoint_node_key(node)
+        nodes = self._state_checkpoint_index.get(key)
+        if nodes is not None:
+            nodes[:] = [indexed_node for indexed_node in nodes if indexed_node is not node]
+            if len(nodes) == 0:
+                self._state_checkpoint_index.pop(key)
+
+        steps = self._state_checkpoint_steps.get(node.adapter_name)
+        if steps is not None and node.num_matched in steps:
+            has_step = any(key[0] == node.adapter_name and key[1] == node.num_matched
+                           for key in self._state_checkpoint_index)
+            if not has_step:
+                steps.remove(node.num_matched)
+            if len(steps) == 0:
+                self._state_checkpoint_steps.pop(node.adapter_name)
+
+    def reserve_state_checkpoint(self, node: Node):
+        """Reserve a state-cache slot owned by a trie node."""
+        if not self.requires_state_checkpoint or node.parent is None:
+            return -1
+        if node.state_ready:
+            if node.state_ref_count > 0:
+                return -1
+            self._unindex_state_checkpoint(node)
+        if node.state_idx < 0:
+            if self.state_manager.get_num_free_checkpoint() == 0:
+                self.evict_state_checkpoints(1)
+            node.state_idx = self.state_manager.allocate_checkpoint_state()
+        node.state_ready = False
+        return node.state_idx
+
+    def _clear_pending_state_checkpoint(self, seq: SchedulerSequence):
+        """Clear pending checkpoint save metadata from a sequence."""
+        seq.prefix_cache_save_state = -1
+        seq.prefix_cache_save_step = 0
+        seq.prefix_cache_save_node = None
+
+    def discard_state_checkpoint_for_seq(self, seq: SchedulerSequence):
+        """Discard an unpublished state checkpoint reservation for a sequence."""
+        state_idx = seq.prefix_cache_save_state
+        node = seq.prefix_cache_save_node
+        self._clear_pending_state_checkpoint(seq)
+        if state_idx < 0 or node is None:
+            return False
+        if node.state_idx == state_idx and not node.state_ready:
+            self.release_state_checkpoint(node)
+            return True
+        return False
+
+    def discard_state_checkpoints(self, seqs: list[SchedulerSequence]):
+        """Discard unpublished sequence state checkpoint reservations."""
+        for seq in seqs:
+            self.discard_state_checkpoint_for_seq(seq)
+
+    def _get_state_checkpoint_node_for_seq(self, seq: SchedulerSequence, step: int):
+        """Get the trie node that exactly represents a sequence checkpoint step."""
+        node = getattr(seq.logical_blocks, 'last_shared_node', None)
+        while node is not None and node.num_matched > step:
+            node = node.parent
+        if node is None or node.parent is None or node.num_matched != step:
+            return None
+        return node
+
+    def reserve_state_checkpoint_for_seq(self, seq: SchedulerSequence, step: int = None):
+        """Reserve a state checkpoint slot for a sequence checkpoint step."""
+        self.discard_state_checkpoint_for_seq(seq)
+
+        if not self.enable or not self.requires_state_checkpoint:
+            return -1
+
+        if step is None:
+            step = seq.num_valid_ids
+        if step <= 0 or step % self.block_size != 0:
+            return -1
+        if step > seq.num_valid_ids:
+            return -1
+        if seq.clamp_prefix_cache_match_step(step) != step:
+            return -1
+
+        node = self._get_state_checkpoint_node_for_seq(seq, step)
+        if node is None:
+            return -1
+        if node.state_ready:
+            return -1
+
+        try:
+            state_idx = self.reserve_state_checkpoint(node)
+        except RuntimeError as e:
+            if 'No free states' not in str(e):
+                raise
+            return -1
+
+        seq.prefix_cache_save_state = state_idx
+        seq.prefix_cache_save_step = step
+        seq.prefix_cache_save_node = node
+        return state_idx
+
+    def mark_state_checkpoint_ready(self, node: Node):
+        """Mark a node-owned state checkpoint as ready for SSM matching."""
+        if node.state_idx < 0:
+            raise RuntimeError('Cannot mark an unreserved state checkpoint as ready.')
+        if node.state_ready:
+            self._unindex_state_checkpoint(node)
+        node.state_ready = True
+        node.state_access_time = time.perf_counter()
+        self._index_state_checkpoint(node)
+
+    def commit_state_checkpoint_for_seq(self, seq: SchedulerSequence):
+        """Publish a sequence state checkpoint after its state copy is enqueued."""
+        state_idx = seq.prefix_cache_save_state
+        save_step = seq.prefix_cache_save_step
+        node = seq.prefix_cache_save_node
+        self._clear_pending_state_checkpoint(seq)
+        if state_idx < 0:
+            return False
+
+        current_node = self._get_state_checkpoint_node_for_seq(seq, save_step)
+        if (node is None or node is not current_node or node.state_idx != state_idx
+                or node.num_matched != save_step):
+            if node is not None and node.state_idx == state_idx and not node.state_ready:
+                self.release_state_checkpoint(node)
+            return False
+
+        self.mark_state_checkpoint_ready(node)
+        return True
+
+    def commit_state_checkpoints(self, seqs: list[SchedulerSequence]):
+        """Publish pending sequence state checkpoints."""
+        for seq in seqs:
+            self.commit_state_checkpoint_for_seq(seq)
+
+    def acquire_state_checkpoint_restore_for_seq(self, seq: SchedulerSequence):
+        """Pin a matched state checkpoint until its restore copy has completed."""
+        if seq.prefix_cache_restore_state < 0 or seq.prefix_cache_restore_state_acquired:
+            return False
+        node = getattr(seq.logical_blocks, 'last_shared_node', None)
+        if node is None or node.state_idx != seq.prefix_cache_restore_state or not node.state_ready:
+            return False
+        node.state_ref_count += 1
+        node.state_access_time = time.perf_counter()
+        seq.prefix_cache_restore_state_acquired = True
+        return True
+
+    def acquire_state_checkpoint_restores(self, seqs: list[SchedulerSequence]):
+        """Pin matched state checkpoints for a batch."""
+        for seq in seqs:
+            self.acquire_state_checkpoint_restore_for_seq(seq)
+
+    def release_state_checkpoint_restore_for_seq(self, seq: SchedulerSequence):
+        """Release a state checkpoint pinned for restore."""
+        if not seq.prefix_cache_restore_state_acquired:
+            return False
+        node = getattr(seq.logical_blocks, 'last_shared_node', None)
+        if node is not None and node.state_idx == seq.prefix_cache_restore_state and node.state_ref_count > 0:
+            node.state_ref_count -= 1
+        seq.prefix_cache_restore_state = -1
+        seq.prefix_cache_restore_state_acquired = False
+        return True
+
+    def release_state_checkpoint_restores(self, seqs: list[SchedulerSequence]):
+        """Release state checkpoints pinned for a batch restore."""
+        for seq in seqs:
+            self.release_state_checkpoint_restore_for_seq(seq)
+
+    def release_state_checkpoint(self, node: Node):
+        """Release a node-owned state checkpoint."""
+        if node.state_idx < 0:
+            return
+        if node.state_ready:
+            self._unindex_state_checkpoint(node)
+        self.state_manager.free_checkpoint_state(node.state_idx)
+        node.state_idx = -1
+        node.state_ready = False
+        node.state_ref_count = 0
+        node.state_access_time = 0.0
+
+    def evict_state_checkpoints(self, max_num_states: int):
+        """Evict ready SSM state checkpoints without removing KV trie nodes."""
+        if not self.requires_state_checkpoint or max_num_states <= 0:
+            return 0
+
+        candidates = []
+        seen_nodes = set()
+        for nodes in self._state_checkpoint_index.values():
+            for node in nodes:
+                node_id = id(node)
+                if node_id in seen_nodes:
+                    continue
+                seen_nodes.add(node_id)
+                if node.state_idx >= 0 and node.state_ready and node.state_ref_count == 0:
+                    candidates.append((node.state_access_time, node))
+        heapq.heapify(candidates)
+
+        evicted = 0
+        while len(candidates) > 0 and evicted < max_num_states:
+            _, node = heapq.heappop(candidates)
+            if node.state_idx < 0 or not node.state_ready or node.state_ref_count > 0:
+                continue
+            self.release_state_checkpoint(node)
+            evicted += 1
+        return evicted
+
+    def _get_node_blocks(self, node: Node):
+        """Get trie nodes from root to a target node."""
+        nodes = []
+        while node is not None and node.parent is not None:
+            nodes.append(node)
+            node = node.parent
+        nodes.reverse()
+        return nodes
+
+    def _verify_state_checkpoint_node(self, seq: SchedulerSequence, node: Node):
+        """Verify a sparse SSM checkpoint candidate exactly."""
+        if node.adapter_name != seq.adapter_name or not node.state_ready or node.state_idx < 0:
+            return None
+
+        step = node.num_matched
+        if step <= 0 or step > ((seq.num_valid_ids - 1) // self.block_size) * self.block_size:
+            return None
+        if seq.clamp_prefix_cache_match_step(step) != step:
+            return None
+
+        nodes = self._get_node_blocks(node)
+        if len(nodes) * self.block_size != step:
+            return None
+
+        matched_blocks = []
+        for idx, block_node in enumerate(nodes):
+            start = idx * self.block_size
+            end = start + self.block_size
+            tokens = seq.history_cache[start:end]
+            extra_hashes = self._get_block_extra_hashes(seq, start, end)
+            if not self._match_node(block_node, tokens, extra_hashes):
+                return None
+            matched_blocks.append(block_node.block)
+
+        return matched_blocks
+
+    def _match_state_checkpoint(self, seq: SchedulerSequence):
+        """Match SSM prefixes through sparse ready-checkpoint lookup."""
+        seq.prefix_cache_restore_state = -1
+
+        init_curr = getattr(seq.logical_blocks, 'last_shared_node', None)
+        if init_curr is None:
+            init_curr = self.get_root(seq.adapter_name)
+        init_num_matched = init_curr.num_matched
+
+        max_step = ((seq.num_valid_ids - 1) // self.block_size) * self.block_size
+        steps = self._state_checkpoint_steps.get(seq.adapter_name, ())
+        for step in sorted((step for step in steps if init_num_matched < step <= max_step), reverse=True):
+            if seq.clamp_prefix_cache_match_step(step) != step:
+                continue
+            key = self._make_state_checkpoint_lookup_key(seq, step)
+            for node in self._state_checkpoint_index.get(key, ()):
+                matched_blocks = self._verify_state_checkpoint_node(seq, node)
+                if matched_blocks is None:
+                    continue
+
+                matched_blocks = np.array(matched_blocks[init_num_matched // self.block_size:])
+                self.allocator.update_access_time(matched_blocks)
+                self.allocator.add_ref_count(matched_blocks, 1)
+                seq.logical_blocks.append(matched_blocks)
+                seq.set_step(step)
+                seq.prefix_cache_restore_state = node.state_idx
+                seq.logical_blocks.last_shared_node = node
+                self.stats.num_query_tokens += seq.num_all_ids - init_num_matched
+                self.stats.num_hit_tokens += step - init_num_matched
+                return
+
+        seq.logical_blocks.last_shared_node = init_curr
+        self.stats.num_query_tokens += seq.num_all_ids - init_num_matched
+
     def match(self, seq: SchedulerSequence):
         """Match sequence and cache."""
         if not self.enable:
+            return
+        seq.prefix_cache_restore_state = -1
+        if self.requires_state_checkpoint:
+            self._match_state_checkpoint(seq)
             return
 
         block_size = self.block_size
@@ -139,10 +453,12 @@ class BlockTrie:
             matched_nodes.append(child)
             __match_success(child)
 
-        clamped_num_matched = seq.clamp_prefix_cache_match_step(num_matched)
-        clamped_num_matched = max(init_num_matched, clamped_num_matched)
-        if clamped_num_matched < num_matched:
-            keep = (clamped_num_matched - init_num_matched) // block_size
+        def __clamp_match_step(match_step: int):
+            nonlocal curr, num_matched, matched_blocks, matched_nodes
+            match_step = max(init_num_matched, match_step)
+            if match_step >= num_matched:
+                return
+            keep = (match_step - init_num_matched) // block_size
             matched_nodes = matched_nodes[:keep]
             matched_blocks = matched_blocks[:keep]
             if keep > 0:
@@ -152,12 +468,17 @@ class BlockTrie:
                 curr = init_curr
                 num_matched = init_num_matched
 
+        clamped_num_matched = seq.clamp_prefix_cache_match_step(num_matched)
+        __clamp_match_step(clamped_num_matched)
+
         if len(matched_blocks) > 0:
             matched_blocks = np.array(matched_blocks)
             self.allocator.update_access_time(matched_blocks)
             self.allocator.add_ref_count(matched_blocks, 1)
             seq.logical_blocks.append(matched_blocks)
             seq.set_step(num_matched)
+            if self.requires_state_checkpoint:
+                seq.prefix_cache_restore_state = curr.state_idx
 
         # record prefix hit
         self.stats.num_query_tokens += seq.num_all_ids - init_num_matched
@@ -211,7 +532,8 @@ class BlockTrie:
                             block=block,
                             tokens=curr_tokens,
                             num_matched=num_matched + block_size,
-                            extra_hashes=extra_hashes)
+                            extra_hashes=extra_hashes,
+                            adapter_name=seq.adapter_name)
                 node.parent = parent
             blocks.append(node.block)
             num_matched += block_size
@@ -234,6 +556,7 @@ class BlockTrie:
         def __remove_leaf(leaves, evicted_blocks):
             _, leaf = heapq.heappop(leaves)
             evicted_blocks.append(leaf.block)
+            self.release_state_checkpoint(leaf)
             parent = leaf.parent
             leaf.parent = None
             self.leaves.remove(leaf)

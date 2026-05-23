@@ -362,7 +362,10 @@ class InputsMakerAsync:
 
     @torch.inference_mode()
     @record_function('create_model_inputs')
-    def create_model_inputs(self, messages: 'SeqList', is_prefill: bool):
+    def create_model_inputs(self,
+                            messages: 'SeqList',
+                            is_prefill: bool,
+                            allow_state_checkpoint_save: bool = True):
         """Create model inputs from messages.
 
         Args:
@@ -426,6 +429,19 @@ class InputsMakerAsync:
         if self.config.is_ssm:
             state_offsets = torch.tensor([msg.logical_state for msg in messages])
             model_inputs.state_offsets = state_offsets
+            if any(msg.prefix_cache_restore_state >= 0 for msg in messages):
+                self.scheduler.block_trie.acquire_state_checkpoint_restores(messages)
+                if any(msg.prefix_cache_restore_state >= 0 and not msg.prefix_cache_restore_state_acquired
+                       for msg in messages):
+                    raise RuntimeError('Failed to acquire SSM prefix-cache restore checkpoint.')
+                prefix_state_offsets = [msg.prefix_cache_restore_state for msg in messages]
+                model_inputs.state_prefix_cache_offsets = torch.tensor(prefix_state_offsets)
+            if allow_state_checkpoint_save and not is_decoding:
+                save_state_offsets = [
+                    self.scheduler.block_trie.reserve_state_checkpoint_for_seq(msg) for msg in messages
+                ]
+                if any(state_idx >= 0 for state_idx in save_state_offsets):
+                    model_inputs.state_prefix_cache_save_offsets = torch.tensor(save_state_offsets)
 
         if self.config.use_mrope:
             mrope_pos_ids = [msg.mrope_pos_ids for msg in messages]
@@ -439,7 +455,8 @@ class InputsMakerAsync:
     def create_model_inputs_long_context(self,
                                          seq: 'SchedulerSequence',
                                          chunk_size: int,
-                                         multimodals: 'MultiModalInputs|None' = None):
+                                         multimodals: 'MultiModalInputs|None' = None,
+                                         allow_state_checkpoint_save: bool = True):
         """Create model inputs for long context messages."""
         token_ids = seq.token_ids[:chunk_size]
         input_ids = torch.as_tensor(token_ids)[None]
@@ -489,6 +506,16 @@ class InputsMakerAsync:
         # ssm
         if self.config.is_ssm:
             model_inputs.state_offsets = torch.tensor([seq.logical_state])
+            if seq.prefix_cache_restore_state >= 0:
+                self.scheduler.block_trie.acquire_state_checkpoint_restore_for_seq(seq)
+                if not seq.prefix_cache_restore_state_acquired:
+                    raise RuntimeError('Failed to acquire SSM prefix-cache restore checkpoint.')
+                model_inputs.state_prefix_cache_offsets = torch.tensor([seq.prefix_cache_restore_state])
+            if allow_state_checkpoint_save:
+                checkpoint_step = seq.num_history_ids + chunk_size
+                save_state = self.scheduler.block_trie.reserve_state_checkpoint_for_seq(seq, step=checkpoint_step)
+                if save_state >= 0:
+                    model_inputs.state_prefix_cache_save_offsets = torch.tensor([save_state])
 
         # mrope
         if self.config.use_mrope:
@@ -629,9 +656,9 @@ class InputsMakerAsync:
             """Need routed experts."""
             return any(seq.return_routed_experts for seq in seqs)
 
-        def __create_model_inputs(seqs):
+        def __create_model_inputs(seqs, allow_state_checkpoint_save: bool = True):
             """Createe model inputs."""
-            inputs = self.create_model_inputs(seqs, True)
+            inputs = self.create_model_inputs(seqs, True, allow_state_checkpoint_save=allow_state_checkpoint_save)
             delta, valid_seqs, _ = self.create_model_inputs_delta_valid_only()
             self.running_seqs = valid_seqs
             extra_inputs = self.model_agent_strategy.make_extra_inputs(seqs, inputs)

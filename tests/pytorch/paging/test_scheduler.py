@@ -4,6 +4,7 @@ import torch
 from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
 from lmdeploy.pytorch.messages import MessageStatus, SequenceMeta
 from lmdeploy.pytorch.paging.scheduler import Scheduler
+from lmdeploy.pytorch.paging.state_manager import StateManager
 
 
 class TestScheduler:
@@ -179,3 +180,103 @@ class TestScheduler:
         assert seq1.status == MessageStatus.READY
         assert seq2.status == MessageStatus.WAITING
         assert block_manager.get_num_free_gpu_blocks() == 2
+
+
+def test_state_manager_reserves_system_state_slot():
+    manager = StateManager(num_states=3, num_reserved=1)
+
+    assert manager.allocate_state() == 1
+    assert manager.allocate_state() == 2
+    with pytest.raises(RuntimeError, match='No free states'):
+        manager.allocate_state()
+
+
+def test_state_manager_checkpoint_can_borrow_idle_runtime_slots():
+    manager = StateManager(num_states=5, num_reserved=1, num_runtime_states=2)
+
+    checkpoints = [manager.allocate_checkpoint_state() for _ in range(4)]
+    assert checkpoints == [1, 2, 3, 4]
+    with pytest.raises(RuntimeError, match='No free states'):
+        manager.allocate_checkpoint_state()
+
+    manager.free_checkpoint_state(checkpoints[0])
+    manager.free_checkpoint_state(checkpoints[1])
+    assert manager.allocate_state() == checkpoints[1]
+    assert manager.allocate_state() == checkpoints[0]
+    with pytest.raises(RuntimeError, match='No free states'):
+        manager.allocate_state()
+
+
+def test_state_manager_caps_runtime_count_even_with_extra_free_slots():
+    manager = StateManager(num_states=6, num_reserved=1, num_runtime_states=2)
+
+    assert manager.num_runtime_states == 2
+    assert manager.allocate_state() == 1
+    assert manager.allocate_state() == 2
+    assert manager.get_num_free() == 3
+    with pytest.raises(RuntimeError, match='No free states'):
+        manager.allocate_state()
+
+
+def _make_ssm_scheduler(max_batch_size: int = 1, prefix_cache_state_budget: int = 0):
+    from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+    block_size = 16
+    cache_config = CacheConfig(max_batches=max_batch_size,
+                               block_size=block_size,
+                               num_cpu_blocks=4,
+                               num_gpu_blocks=16,
+                               enable_prefix_caching=True,
+                               num_state_caches=max_batch_size + 1 + prefix_cache_state_budget,
+                               prefix_cache_state_budget=prefix_cache_state_budget,
+                               states_shapes=[((1, ), torch.float32)])
+    scheduler_config = SchedulerConfig(max_batches=max_batch_size,
+                                       max_session_len=128,
+                                       max_request_output_len=64,
+                                       eviction_type='recompute')
+    seq_meta = SequenceMeta(block_size, strategy=ARSequenceStrategy())
+    return Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
+
+
+def _add_ready_ssm_checkpoint(scheduler: Scheduler, token_ids: list[int]):
+    session = scheduler.add_session(len(scheduler.sessions))
+    seq = session.add_sequence(token_ids)
+    scheduler.block_manager.allocate(seq)
+    scheduler.block_trie.allocate(seq)
+    state_idx = scheduler.block_trie.reserve_state_checkpoint_for_seq(seq)
+    assert state_idx >= 0
+    assert scheduler.block_trie.commit_state_checkpoint_for_seq(seq)
+    node = getattr(seq.logical_blocks, 'last_shared_node')
+    session.remove_sequence(seq)
+    return node, state_idx
+
+
+def test_ssm_runtime_state_reclaims_borrowed_checkpoint_slot():
+    scheduler = _make_ssm_scheduler(max_batch_size=1, prefix_cache_state_budget=0)
+    block_size = scheduler.seq_meta.block_size
+    node, state_idx = _add_ready_ssm_checkpoint(scheduler, [1] * block_size * 2)
+    seq = scheduler.add_session(100).add_sequence([2] * block_size * 2)
+
+    output = scheduler.schedule(is_prefill=True)
+
+    assert output.running == [seq]
+    assert seq.logical_state == state_idx
+    assert node.state_idx == -1
+    assert not node.state_ready
+    assert scheduler.state_manager.get_num_runtime_states() == 1
+    assert scheduler.state_manager.get_num_allocated_checkpoint_states() == 0
+
+
+def test_ssm_runtime_state_waits_when_only_checkpoint_slot_is_pinned():
+    scheduler = _make_ssm_scheduler(max_batch_size=1, prefix_cache_state_budget=0)
+    block_size = scheduler.seq_meta.block_size
+    node, state_idx = _add_ready_ssm_checkpoint(scheduler, [1] * block_size * 2)
+    node.state_ref_count = 1
+    seq = scheduler.add_session(100).add_sequence([2] * block_size * 2)
+
+    output = scheduler.schedule(is_prefill=True)
+
+    assert output.running == []
+    assert seq.status == MessageStatus.WAITING
+    assert seq.logical_state == -1
+    assert node.state_idx == state_idx
+    assert node.state_ready

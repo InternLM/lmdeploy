@@ -33,32 +33,89 @@ class StateAllocator:
 
 
 class StateManager:
+    """Manage runtime and checkpoint ownership over one elastic state pool."""
 
-    def __init__(self, num_states: int, num_reserved: int = 0):
+    def __init__(self,
+                 num_states: int,
+                 num_reserved: int = 0,
+                 num_runtime_states: int = None):
         if num_states is None:
             num_states = 1
-        self.allocator = StateAllocator(num_states, offset=num_reserved)
+        self.num_states = num_states
+        self.num_reserved = num_reserved
+        num_available = max(0, num_states - num_reserved)
+
+        if num_runtime_states is None:
+            num_runtime_states = num_available
+        num_runtime_states = max(0, min(num_runtime_states, num_available))
+
+        self.num_runtime_states = num_runtime_states
+        self.allocator = StateAllocator(num_available, offset=num_reserved)
+        self._runtime_states: set[int] = set()
+        self._checkpoint_states: set[int] = set()
 
     def is_allocated(self, seq: SchedulerSequence):
         """Check if a sequence is allocated."""
         return seq.logical_state >= 0
 
+    def allocate_state(self):
+        """Allocate one state-cache slot."""
+        if len(self._runtime_states) >= self.num_runtime_states:
+            raise RuntimeError('No free states.')
+        state_id = int(self.allocator.allocate())
+        self._runtime_states.add(state_id)
+        return state_id
+
+    def free_state(self, state_id: int):
+        """Free one state-cache slot."""
+        state_id = int(state_id)
+        if state_id not in self._runtime_states:
+            raise RuntimeError(f'State {state_id} is not a runtime state.')
+        self._runtime_states.remove(state_id)
+        self.allocator.free(state_id)
+
+    def allocate_checkpoint_state(self):
+        """Allocate one frozen prefix-cache checkpoint state slot."""
+        state_id = int(self.allocator.allocate())
+        self._checkpoint_states.add(state_id)
+        return state_id
+
+    def free_checkpoint_state(self, state_id: int):
+        """Free one frozen prefix-cache checkpoint state slot."""
+        state_id = int(state_id)
+        if state_id not in self._checkpoint_states:
+            raise RuntimeError(f'State {state_id} is not a checkpoint state.')
+        self._checkpoint_states.remove(state_id)
+        self.allocator.free(state_id)
+
     def allocate(self, seq: SchedulerSequence):
         """Allocate states for a sequence."""
         if self.is_allocated(seq):
             return None
-        seq.logical_state = self.allocator.allocate()
+        seq.logical_state = self.allocate_state()
 
     def free(self, seq: SchedulerSequence):
         """Free states for a sequence."""
         if not self.is_allocated(seq):
             return None
-        self.allocator.free(seq.logical_state)
+        self.free_state(seq.logical_state)
         seq.logical_state = -1
 
     def get_num_free(self):
         """Get num free."""
         return self.allocator.get_num_free()
+
+    def get_num_free_checkpoint(self):
+        """Get num free checkpoint states."""
+        return self.allocator.get_num_free()
+
+    def get_num_runtime_states(self):
+        """Get num allocated runtime states."""
+        return len(self._runtime_states)
+
+    def get_num_allocated_checkpoint_states(self):
+        """Get num allocated checkpoint states."""
+        return len(self._checkpoint_states)
 
 
 def build_state_manager(cache_config: CacheConfig) -> StateManager:
@@ -66,4 +123,6 @@ def build_state_manager(cache_config: CacheConfig) -> StateManager:
     num_states = cache_config.num_state_caches
     # state is different from block, we always reserve one state for system use
     num_reserved = 1
-    return StateManager(num_states, num_reserved)
+    return StateManager(num_states,
+                        num_reserved,
+                        num_runtime_states=cache_config.max_batches)

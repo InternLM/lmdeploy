@@ -354,6 +354,8 @@ class PytorchEngineConfig:
         max_prefill_token_num: tokens per iteration.
         thread_safe: thread safe engine instance.
         enable_prefix_caching: Enable token match and sharing caches.
+        prefix_cache_state_budget: Extra SSM state-cache slots reserved for
+            prefix-cache checkpoints.
         device_type: The inference device type, options ['cuda']
         eager_mode: Enable "eager" mode or not
         custom_module_map: nn module map customized by users. Once
@@ -413,6 +415,7 @@ class PytorchEngineConfig:
     max_prefill_token_num: int = 8192
     thread_safe: bool = False
     enable_prefix_caching: bool = False
+    prefix_cache_state_budget: int = 0
     device_type: str = 'cuda'
     eager_mode: bool = False
     custom_module_map: dict[str, str] = None
@@ -457,6 +460,7 @@ class PytorchEngineConfig:
         assert self.max_prefill_token_num >= 0, \
             'invalid max_prefill_token_num'
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
+        assert self.prefix_cache_state_budget >= 0, 'invalid prefix_cache_state_budget'
         assert self.quant_policy in (QuantPolicy.NONE, QuantPolicy.INT4, QuantPolicy.INT8, QuantPolicy.TURBO_QUANT), \
                'invalid quant_policy'
         assert self.device_type in ['cuda', 'ascend', 'maca', 'camb'], (f'invalid device_type: {self.device_type}')

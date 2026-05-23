@@ -385,18 +385,34 @@ class EngineLoop:
         model_inputs = forward_inputs['inputs']
         delta = forward_inputs['delta']
         self.inputs_maker.update_running_seqs(running, model_inputs)
+        has_state_checkpoint_save = (model_inputs is not None
+                                     and model_inputs.state_prefix_cache_save_offsets is not None)
 
-        # try prefetch inputs
-        self.scheduler.collect_migration_done()
-        forward_inputs, next_running = await self.inputs_maker.prefetch_next_inputs()
-
-        # send output
-        out = await self.executor.get_output_async()
+        if has_state_checkpoint_save:
+            # Publish saved SSM checkpoints before scheduling the next batch so
+            # immediate followers can hit them. This waits for the worker output
+            # event, not a background-loop CUDA synchronize.
+            out = await self.executor.get_output_async()
+        else:
+            self.scheduler.collect_migration_done()
+            forward_inputs, next_running = await self.inputs_maker.prefetch_next_inputs()
+            out = await self.executor.get_output_async()
         if out is not None:
+            if has_state_checkpoint_save:
+                self.scheduler.block_trie.commit_state_checkpoints(running)
+            self.scheduler.block_trie.release_state_checkpoint_restores(running)
             step_outputs = self._make_infer_outputs(out, running=running, model_inputs=model_inputs, delta=delta)
             self.resp_queue.put_nowait(step_outputs)
             # out might come from shared memory, need to explicitly delete to release memory in time
             del out
+        else:
+            if has_state_checkpoint_save:
+                self.scheduler.block_trie.discard_state_checkpoints(running)
+            self.scheduler.block_trie.release_state_checkpoint_restores(running)
+
+        if has_state_checkpoint_save:
+            self.scheduler.collect_migration_done()
+            forward_inputs, next_running = await self.inputs_maker.prefetch_next_inputs()
 
         return forward_inputs, next_running
 

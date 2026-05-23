@@ -167,6 +167,11 @@ def model_forward(
         )
 
         with ctx_mgr.context(context):
+            if (not inputs.is_dummy and inputs.state_offsets is not None
+                    and inputs.state_prefix_cache_offsets is not None):
+                valid = inputs.state_prefix_cache_offsets >= 0
+                state_cache_engine.copy_caches(inputs.state_prefix_cache_offsets[valid], inputs.state_offsets[valid])
+
             # initialize cache for ssm
             # chunk_indices in gated delta kernel requires cuda synchronize
             # so we have to init cache after build_context
@@ -187,6 +192,11 @@ def model_forward(
             # InternVL-3.5-Flash will change the seqlen, model_metas during forward
             if getattr(context, 'is_model_meta_updated', False):
                 model_metas = context.model_metas
+            if (not inputs.is_dummy and inputs.state_offsets is not None
+                    and inputs.state_prefix_cache_save_offsets is not None):
+                valid = inputs.state_prefix_cache_save_offsets >= 0
+                state_cache_engine.copy_caches(inputs.state_offsets[valid],
+                                               inputs.state_prefix_cache_save_offsets[valid])
             output['model_metas'] = model_metas
             output['seq_length'] = context.q_seqlens[:len(inputs.seq_length)]
             # for draft model reuse

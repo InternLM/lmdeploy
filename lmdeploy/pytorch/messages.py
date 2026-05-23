@@ -644,6 +644,11 @@ class SchedulerSequence:
     sampling_param: SamplingParam = field(default_factory=SamplingParam)
     logical_blocks: LogicalTokenBlocks = field(default_factory=LogicalTokenBlocks)
     logical_state: int = -1
+    prefix_cache_restore_state: int = -1
+    prefix_cache_restore_state_acquired: bool = False
+    prefix_cache_save_state: int = -1
+    prefix_cache_save_step: int = 0
+    prefix_cache_save_node: Any = field(default=None, repr=False)
     adapter_name: str = None
     arrive_time: float = 0.0
     output_start_pos: int = 0

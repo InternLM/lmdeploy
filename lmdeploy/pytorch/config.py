@@ -102,6 +102,7 @@ class CacheConfig:
     quant_policy: QuantPolicy = QuantPolicy.NONE
     device_type: str = 'cuda'
     num_state_caches: int = None
+    prefix_cache_state_budget: int = 0
     states_shapes: list[tuple] = field(default_factory=list)
 
     # reserved blocks for dummy inputs, init to 0 for unit test.
@@ -113,6 +114,7 @@ class CacheConfig:
 
     def __post_init__(self):
         """Post init."""
+        assert self.prefix_cache_state_budget >= 0, 'invalid prefix_cache_state_budget'
         if self.window_size > 1 and self.enable_prefix_caching:
             logger.warning('Prefix caching is not available for window attention.')
             self.enable_prefix_caching = False

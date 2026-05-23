@@ -518,6 +518,32 @@ class StateCacheEngine:
         """State caches."""
         return self._state_caches
 
+    def _index_tensor(self, idx: int | list[int] | torch.Tensor):
+        """Convert cache indices to a tensor on the state-cache device."""
+        if isinstance(idx, torch.Tensor):
+            return idx.to(device=self.mem_pool.device, dtype=torch.long)
+        if isinstance(idx, int):
+            idx = [idx]
+        return torch.tensor(idx, dtype=torch.long, device=self.mem_pool.device)
+
+    def copy_caches(self, src_idx: int | list[int] | torch.Tensor, dst_idx: int | list[int] | torch.Tensor):
+        """Copy state cache slots.
+
+        This is the low-level primitive needed by SSM prefix caching: a frozen
+        state checkpoint can be copied into a newly allocated runtime slot
+        before the next forward.
+        """
+        if len(self._state_caches) <= 0:
+            return
+
+        src_idx = self._index_tensor(src_idx)
+        dst_idx = self._index_tensor(dst_idx)
+        if src_idx.numel() != dst_idx.numel():
+            raise ValueError('src_idx and dst_idx must have the same number of elements.')
+
+        values = self.mem_pool.index_select(0, src_idx).clone()
+        self.mem_pool.index_copy_(0, dst_idx, values)
+
     def init_caches(self, idx: torch.Tensor, mask: torch.Tensor):
         """Initialize state caches.
 

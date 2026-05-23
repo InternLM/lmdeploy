@@ -2,8 +2,12 @@
 from types import SimpleNamespace
 
 import pytest
+import torch
 
+from lmdeploy.messages import PytorchEngineConfig
 from lmdeploy.pytorch.config import CacheConfig
+from lmdeploy.pytorch.engine.cache_engine import StateCacheEngine
+from lmdeploy.pytorch.engine.config_builder import ConfigBuilder
 from lmdeploy.pytorch.engine.executor.base import ExecutorBase, _CacheBlockSize
 
 
@@ -74,3 +78,78 @@ def test_update_num_gpu_blocks_can_be_limited_by_non_spec_rank():
 
     assert executor.cache_config.num_gpu_blocks == 3
     assert spec_cache_config.num_gpu_blocks == 3
+
+
+def test_get_state_cache_mem_uses_prefix_cache_state_budget():
+    executor = object.__new__(ExecutorBase)
+    state_shapes = [((2, ), torch.float32)]
+    executor.cache_config = CacheConfig(max_batches=4,
+                                        block_size=64,
+                                        num_cpu_blocks=0,
+                                        num_gpu_blocks=0,
+                                        states_shapes=state_shapes,
+                                        prefix_cache_state_budget=3)
+
+    mem = executor._get_state_cache_mem()
+
+    expected_num_state_caches = 4 + 1 + 3
+    expected_mem = StateCacheEngine.get_cache_state_size(state_shapes) * expected_num_state_caches
+    assert executor.cache_config.num_state_caches == expected_num_state_caches
+    assert mem == expected_mem
+
+
+def test_get_state_cache_mem_disables_ssm_prefix_cache_without_budget():
+    executor = object.__new__(ExecutorBase)
+    state_shapes = [((2, ), torch.float32)]
+    executor.cache_config = CacheConfig(max_batches=4,
+                                        block_size=64,
+                                        num_cpu_blocks=0,
+                                        num_gpu_blocks=0,
+                                        states_shapes=state_shapes,
+                                        enable_prefix_caching=True,
+                                        prefix_cache_state_budget=0)
+
+    executor._get_state_cache_mem()
+
+    assert executor.cache_config.num_state_caches == 4 + 1
+    assert not executor.cache_config.enable_prefix_caching
+
+
+def test_get_state_cache_mem_keeps_budgeted_ssm_prefix_cache_enabled():
+    executor = object.__new__(ExecutorBase)
+    state_shapes = [((2, ), torch.float32)]
+    executor.cache_config = CacheConfig(max_batches=4,
+                                        block_size=64,
+                                        num_cpu_blocks=0,
+                                        num_gpu_blocks=0,
+                                        states_shapes=state_shapes,
+                                        enable_prefix_caching=True,
+                                        prefix_cache_state_budget=2)
+
+    executor._get_state_cache_mem()
+
+    assert executor.cache_config.num_state_caches == 4 + 1 + 2
+    assert executor.cache_config.enable_prefix_caching
+
+
+def test_get_state_cache_mem_leaves_non_ssm_prefix_cache_enabled():
+    executor = object.__new__(ExecutorBase)
+    executor.cache_config = CacheConfig(max_batches=4,
+                                        block_size=64,
+                                        num_cpu_blocks=0,
+                                        num_gpu_blocks=0,
+                                        enable_prefix_caching=True,
+                                        prefix_cache_state_budget=0)
+
+    mem = executor._get_state_cache_mem()
+
+    assert mem == 0
+    assert executor.cache_config.enable_prefix_caching
+
+
+def test_build_cache_config_carries_prefix_cache_state_budget():
+    engine_config = PytorchEngineConfig(max_batch_size=4, prefix_cache_state_budget=3)
+
+    cache_config = ConfigBuilder.build_cache_config(engine_config)
+
+    assert cache_config.prefix_cache_state_budget == 3
