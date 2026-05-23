@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from types import SimpleNamespace
 
 from lmdeploy.messages import ScheduleMetrics
@@ -48,6 +49,10 @@ def _make_async_engine(backend, *, sleeping=False):
     engine.sleeping_tags = {'weights'} if sleeping else set()
     engine._health_probe_task = None
     engine.session_mgr = SimpleNamespace(request_handle_pool=SimpleNamespace(num_dispatched=0))
+    engine._last_scheduler_tick = None
+    engine._last_scheduler_tick_time = time.monotonic()
+    engine._dispatched_start_time = None
+    engine._idle_schedule_start_time = None
     return engine
 
 
@@ -75,23 +80,7 @@ def test_health_probe_sleeping_does_not_call_backend():
     assert backend.calls == 0
 
 
-def test_health_probe_rejects_invalid_schedule_metrics():
-    backend = _FakeBackend(
-        dict(
-            alive=True,
-            message='ok',
-            schedule_metrics=ScheduleMetrics(total_blocks=0, free_blocks=0),
-        ))
-    engine = _make_async_engine(backend)
-
-    result = asyncio.run(engine.health_probe(timeout=1.0))
-
-    assert result['status'] == 'unhealthy'
-    assert set(result) == {'status', 'message'}
-    assert 'Invalid total_blocks' in result['message']
-
-
-def test_health_probe_rejects_idle_metrics_when_request_is_in_backend():
+def test_health_probe_allows_idle_metrics_during_grace_when_request_is_in_backend():
     backend = _FakeBackend(
         dict(
             alive=True,
@@ -102,6 +91,23 @@ def test_health_probe_rejects_idle_metrics_when_request_is_in_backend():
     engine.session_mgr.request_handle_pool.num_dispatched = 1
 
     result = asyncio.run(engine.health_probe(timeout=1.0))
+
+    assert result == {'status': 'healthy', 'message': 'ok'}
+
+
+def test_health_probe_rejects_idle_metrics_after_grace_when_request_is_in_backend():
+    backend = _FakeBackend(
+        dict(
+            alive=True,
+            message='ok',
+            schedule_metrics=ScheduleMetrics(total_blocks=8, free_blocks=6),
+        ))
+    engine = _make_async_engine(backend)
+    engine.session_mgr.request_handle_pool.num_dispatched = 1
+    engine._last_scheduler_tick = 0
+    engine._idle_schedule_start_time = time.monotonic() - 2
+
+    result = asyncio.run(engine.health_probe(timeout=1.0, scheduler_stall_timeout=1.0))
 
     assert result['status'] == 'unhealthy'
     assert 'no active or waiting sequences' in result['message']
@@ -120,6 +126,25 @@ def test_health_probe_accepts_busy_metrics_when_request_is_in_backend():
     result = asyncio.run(engine.health_probe(timeout=1.0))
 
     assert result == {'status': 'healthy', 'message': 'ok'}
+
+
+def test_health_probe_rejects_stale_scheduler_tick_when_request_is_in_backend():
+    backend = _FakeBackend(
+        dict(
+            alive=True,
+            message='ok',
+            schedule_metrics=ScheduleMetrics(active_seqs=1, total_blocks=8, free_blocks=6, scheduler_tick=7),
+        ))
+    engine = _make_async_engine(backend)
+    engine.session_mgr.request_handle_pool.num_dispatched = 1
+    engine._last_scheduler_tick = 7
+    engine._last_scheduler_tick_time = time.monotonic() - 2
+    engine._dispatched_start_time = time.monotonic() - 2
+
+    result = asyncio.run(engine.health_probe(timeout=1.0, scheduler_stall_timeout=1.0))
+
+    assert result['status'] == 'unhealthy'
+    assert 'scheduler_tick has not advanced' in result['message']
 
 
 def test_health_probe_timeout_prevents_overlapping_probe():

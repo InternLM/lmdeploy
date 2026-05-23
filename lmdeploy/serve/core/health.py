@@ -54,7 +54,8 @@ class EngineHealthMonitor:
                           message='Async engine is not initialized.')
         else:
             try:
-                result = await self.async_engine.health_probe(timeout=self.probe_timeout)
+                result = await self.async_engine.health_probe(timeout=self.probe_timeout,
+                                                              scheduler_stall_timeout=self.unhealthy_after)
             except Exception as e:
                 result = dict(status='unhealthy',
                               message=f'Engine health probe failed: {e}')

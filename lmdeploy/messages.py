@@ -624,6 +624,7 @@ class ScheduleMetrics:
     cached_blocks: int = 0
     free_blocks: int = 0
     prefix_cache_hit_rate: float = 0
+    scheduler_tick: int = 0
 
 
 @dataclass

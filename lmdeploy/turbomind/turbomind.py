@@ -383,7 +383,8 @@ class TurboMind:
                                waiting_seqs=tm_metrics.waiting_seqs,
                                total_blocks=tm_metrics.total_blocks,
                                active_blocks=tm_metrics.active_blocks,
-                               free_blocks=tm_metrics.free_blocks)
+                               free_blocks=tm_metrics.free_blocks,
+                               scheduler_tick=tm_metrics.scheduler_tick)
 
     def _get_health_status(self) -> dict:
         """Get lightweight health status."""

@@ -140,6 +140,8 @@ struct Engine::Impl {
 
     shared_ptr<ScheduleMetrics> metrics_;
 
+    std::atomic<int64_t> scheduler_tick_{};
+
     struct State {
         vector<shared_ptr<RequestCache>> rc;
         vector<int>                      perm;
@@ -273,6 +275,7 @@ void Engine::Impl::CreateSequenceManager()
     if (session_len_trunc_ != param_.session_len) {
         TM_LOG_WARN("`session_len` truncated to {} due to limited KV cache memory", session_len_trunc_);
     }
+    UpdateScheduleMetrics();
 }
 
 void Engine::Impl::Validate(Requests& infer_reqs, Requests& kill_reqs)
@@ -935,30 +938,36 @@ void Engine::Start()
 
 void Engine::Impl::UpdateScheduleMetrics()
 {
-    if (param_.enable_metrics) {
-        const auto& [total, active, cached] = seq_mgr_->seq_stats();
-
-        auto m = std::make_shared<ScheduleMetrics>();
-
-        m->total_seqs   = total;
-        m->active_seqs  = active;
-        m->waiting_seqs = total - active;
-
-        m->total_blocks  = seq_mgr_->total_count();
-        m->active_blocks = seq_mgr_->active_count();
-        m->cached_blocks = seq_mgr_->cached_count();
-        m->free_blocks   = seq_mgr_->free_count();
-
-        std::atomic_store_explicit(&metrics_, std::move(m), std::memory_order_release);
+    scheduler_tick_.fetch_add(1, std::memory_order_relaxed);
+    if (!param_.enable_metrics && metrics_) {
+        return;
     }
+
+    const auto& [total, active, cached] = seq_mgr_->seq_stats();
+
+    auto m = std::make_shared<ScheduleMetrics>();
+
+    m->total_seqs      = total;
+    m->active_seqs     = active;
+    m->waiting_seqs    = total - active;
+    m->scheduler_tick  = scheduler_tick_.load(std::memory_order_relaxed);
+
+    m->total_blocks  = seq_mgr_->total_count();
+    m->active_blocks = seq_mgr_->active_count();
+    m->cached_blocks = seq_mgr_->cached_count();
+    m->free_blocks   = seq_mgr_->free_count();
+
+    std::atomic_store_explicit(&metrics_, std::move(m), std::memory_order_release);
 }
 
 shared_ptr<ScheduleMetrics> Engine::GetScheduleMetrics()
 {
-    if (impl_->param_.enable_metrics) {
-        return std::atomic_load_explicit(&impl_->metrics_, std::memory_order_acquire);
+    auto metrics = std::atomic_load_explicit(&impl_->metrics_, std::memory_order_acquire);
+    if (!impl_->param_.enable_metrics && metrics) {
+        metrics = std::make_shared<ScheduleMetrics>(*metrics);
+        metrics->scheduler_tick = impl_->scheduler_tick_.load(std::memory_order_relaxed);
     }
-    return {};
+    return metrics;
 }
 
 }  // namespace turbomind

@@ -4,6 +4,7 @@ import asyncio
 import concurrent.futures
 import dataclasses
 import random
+import time
 from contextlib import asynccontextmanager
 from copy import deepcopy
 from typing import Any, Literal
@@ -164,6 +165,10 @@ class AsyncEngine:
         self._build_stat_loggers()
         self.epoch = 0
         self._health_probe_task: asyncio.Task | None = None
+        self._last_scheduler_tick: int | None = None
+        self._last_scheduler_tick_time: float = time.monotonic()
+        self._dispatched_start_time: float | None = None
+        self._idle_schedule_start_time: float | None = None
 
     def close(self):
         self.session_mgr.clear()
@@ -242,25 +247,40 @@ class AsyncEngine:
             return await result
         return result
 
-    def _validate_schedule_metrics(self, metrics) -> tuple[bool, str]:
-        if metrics is None:
-            return False, 'Backend health probe did not return schedule metrics.'
-        total_blocks = metrics.total_blocks
-        free_blocks = metrics.free_blocks
-        if total_blocks is None or total_blocks <= 0:
-            return False, f'Invalid total_blocks in schedule metrics: {total_blocks}.'
-        if free_blocks is None or free_blocks < 0 or free_blocks > total_blocks:
-            return False, f'Invalid free_blocks in schedule metrics: {free_blocks}.'
-        if self.session_mgr.request_handle_pool.num_dispatched > 0 and metrics.active_seqs + metrics.waiting_seqs == 0:
-            return False, ('Backend has in-flight request(s), but schedule metrics report no active or waiting '
-                           'sequences.')
+    def _validate_scheduler_progress(self, metrics, scheduler_stall_timeout: float) -> tuple[bool, str]:
+        now = time.monotonic()
+        if self._last_scheduler_tick is None or metrics.scheduler_tick != self._last_scheduler_tick:
+            self._last_scheduler_tick = metrics.scheduler_tick
+            self._last_scheduler_tick_time = now
+            self._idle_schedule_start_time = None
+
+        if self.session_mgr.request_handle_pool.num_dispatched == 0:
+            self._dispatched_start_time = None
+            self._idle_schedule_start_time = None
+            return True, ''
+
+        if self._dispatched_start_time is None:
+            self._dispatched_start_time = now
+
+        if metrics.active_seqs + metrics.waiting_seqs == 0:
+            if self._idle_schedule_start_time is None:
+                self._idle_schedule_start_time = now
+            if now - self._idle_schedule_start_time > scheduler_stall_timeout:
+                return False, ('Backend has dispatched request handle(s), but schedule metrics report no active or '
+                               'waiting sequences.')
+        else:
+            self._idle_schedule_start_time = None
+
+        last_progress_time = max(self._last_scheduler_tick_time, self._dispatched_start_time)
+        if now - last_progress_time > scheduler_stall_timeout:
+            return False, f'Backend scheduler_tick has not advanced for {now - last_progress_time:.1f}s.'
         return True, ''
 
     @staticmethod
     def _make_health_result(status: str, message: str) -> dict:
         return dict(status=status, message=message)
 
-    async def health_probe(self, timeout: float = 2.0) -> dict:
+    async def health_probe(self, timeout: float = 2.0, scheduler_stall_timeout: float = 15.0) -> dict:
         """Probe backend health with a bounded, non-overlapping call."""
         if self.is_sleeping:
             return self._make_health_result(
@@ -304,8 +324,11 @@ class AsyncEngine:
                 message=backend_status['message'] or 'Backend reported unhealthy.',
             )
 
-        valid_metrics, invalid_message = self._validate_schedule_metrics(backend_status['schedule_metrics'])
-        if not valid_metrics:
+        valid_progress, invalid_message = self._validate_scheduler_progress(
+            backend_status['schedule_metrics'],
+            scheduler_stall_timeout=scheduler_stall_timeout,
+        )
+        if not valid_progress:
             return self._make_health_result(
                 status='unhealthy',
                 message=invalid_message,
