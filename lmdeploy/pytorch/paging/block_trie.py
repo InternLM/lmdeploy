@@ -27,11 +27,17 @@ class PrefixCacheStats:
 class Node:
     """Node of block trie."""
 
-    def __init__(self, hash_key: int, block: int, tokens: np.ndarray, num_matched: int = 0):
+    def __init__(self,
+                 hash_key: int,
+                 block: int,
+                 tokens: np.ndarray,
+                 num_matched: int = 0,
+                 extra_hashes: tuple = ()):
         self.hash_key = hash_key
         self.block = block
         self.tokens = tokens
         self.num_matched = num_matched
+        self.extra_hashes = extra_hashes
         self.children: dict[int, Node] = dict()
         self._parent: Node = None
 
@@ -80,6 +86,18 @@ class BlockTrie:
             self._roots[adapter_name] = Node(-1, -1, None)
         return self._roots[adapter_name]
 
+    def _get_block_extra_hashes(self, seq: SchedulerSequence, start: int, end: int):
+        """Get extra hashes for a token block."""
+        return seq.get_prefix_cache_extra_hashes(start, end)
+
+    def _make_key(self, tokens: np.ndarray, extra_hashes: tuple):
+        """Make trie lookup key."""
+        return hash(('random', tuple(tokens), extra_hashes))
+
+    def _match_node(self, node: Node, tokens: np.ndarray, extra_hashes: tuple):
+        """Check whether node content matches a token block."""
+        return np.array_equal(tokens, node.tokens) and extra_hashes == node.extra_hashes
+
     def match(self, seq: SchedulerSequence):
         """Match sequence and cache."""
         if not self.enable:
@@ -92,6 +110,7 @@ class BlockTrie:
         curr: Node = getattr(logical_blocks, 'last_shared_node', None)
         if curr is None:
             curr = self.get_root(seq.adapter_name)
+        init_curr = curr
         init_num_matched = curr.num_matched
         num_matched = curr.num_matched
 
@@ -101,18 +120,37 @@ class BlockTrie:
             curr = node
             num_matched += block_size
 
-        while num_matched + block_size < seq.num_valid_ids:
-            curr_tokens = seq.history_cache[num_matched:num_matched + block_size]
+        matched_nodes: list[Node] = []
 
-            key = hash(('random', tuple(curr_tokens)))
+        while num_matched + block_size < seq.num_valid_ids:
+            start = num_matched
+            end = num_matched + block_size
+            curr_tokens = seq.history_cache[start:end]
+            extra_hashes = self._get_block_extra_hashes(seq, start, end)
+
+            key = self._make_key(curr_tokens, extra_hashes)
             if key not in curr.children:
                 break
 
             child = curr.children[key]
-            if not np.array_equal(curr_tokens, child.tokens):
+            if not self._match_node(child, curr_tokens, extra_hashes):
                 break
 
+            matched_nodes.append(child)
             __match_success(child)
+
+        clamped_num_matched = seq.clamp_prefix_cache_match_step(num_matched)
+        clamped_num_matched = max(init_num_matched, clamped_num_matched)
+        if clamped_num_matched < num_matched:
+            keep = (clamped_num_matched - init_num_matched) // block_size
+            matched_nodes = matched_nodes[:keep]
+            matched_blocks = matched_blocks[:keep]
+            if keep > 0:
+                curr = matched_nodes[-1]
+                num_matched = curr.num_matched
+            else:
+                curr = init_curr
+                num_matched = init_num_matched
 
         if len(matched_blocks) > 0:
             matched_blocks = np.array(matched_blocks)
@@ -152,21 +190,28 @@ class BlockTrie:
         blocks = []
         free_blocks = []
         while num_matched + block_size <= num_valid_ids:
-            curr_tokens = seq.history_cache[num_matched:num_matched + block_size]
+            start = num_matched
+            end = num_matched + block_size
+            curr_tokens = seq.history_cache[start:end]
+            extra_hashes = self._get_block_extra_hashes(seq, start, end)
 
             block = logical_blocks[block_id]
 
-            hash_key = hash(('random', tuple(curr_tokens)))
+            hash_key = self._make_key(curr_tokens, extra_hashes)
             parent = node
             if hash_key in parent.children:
                 child = parent.children[hash_key]
-                if not np.array_equal(curr_tokens, child.tokens):
+                if not self._match_node(child, curr_tokens, extra_hashes):
                     break
                 node = child
                 free_blocks.append(block)
                 logical_blocks[block_id] = node.block
             else:
-                node = Node(hash_key=hash_key, block=block, tokens=curr_tokens, num_matched=num_matched + block_size)
+                node = Node(hash_key=hash_key,
+                            block=block,
+                            tokens=curr_tokens,
+                            num_matched=num_matched + block_size,
+                            extra_hashes=extra_hashes)
                 node.parent = parent
             blocks.append(node.block)
             num_matched += block_size

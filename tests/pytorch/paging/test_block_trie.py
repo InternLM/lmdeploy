@@ -1,9 +1,12 @@
 import numpy as np
 import pytest
+import torch
 
 from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
 from lmdeploy.pytorch.messages import SequenceMeta
+from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.paging import Scheduler
+from lmdeploy.vl.constants import Modality
 
 
 class TestBlockTire:
@@ -56,6 +59,21 @@ class TestBlockTire:
     @pytest.fixture
     def block_trie(self, scheduler):
         yield scheduler.block_trie
+
+    def _image_multimodals(self, start: int, end: int, value: float, image_token_id: int = 99):
+        data = torch.full((2, 2), value, dtype=torch.float32)
+        return dict(image=[MultiModalData(data=data,
+                                          start=start,
+                                          end=end,
+                                          meta=dict(image_token_id=image_token_id))])
+
+    def _modal_data(self, start: int, end: int, value: float, modality: Modality):
+        data = torch.full((2, 2), value, dtype=torch.float32)
+        return MultiModalData(data=data,
+                              start=start,
+                              end=end,
+                              modality=modality,
+                              meta=dict(token_id=int(value)))
 
     def test_allocate(self, block_trie, block_mgr, scheduler):
         allocator = block_trie.allocator
@@ -133,6 +151,111 @@ class TestBlockTire:
         assert len(logical_blocks) == 2
         ref_cnt = allocator.get_ref_count(logical_blocks.get_real_blocks())
         assert np.array_equal(ref_cnt, [4, 3])
+
+    def test_match_multimodal_same_hash(self, block_trie, block_mgr, scheduler):
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = [1] * block_size + [99] * block_size + [2] * block_size + [3]
+
+        seq = sess.add_sequence(token_ids, multimodals=self._image_multimodals(block_size, block_size * 2, 1.0))
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+
+        seq = sess.add_sequence(token_ids, multimodals=self._image_multimodals(block_size, block_size * 2, 1.0))
+        block_trie.match(seq)
+
+        assert len(seq.logical_blocks) == 3
+        assert seq.num_history_ids == block_size * 3
+        node = getattr(seq.logical_blocks, 'last_shared_node', None)
+        assert node is not None
+        assert node.num_matched == block_size * 3
+
+    def test_match_multimodal_different_hash(self, block_trie, block_mgr, scheduler):
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = [1] * block_size + [99] * block_size + [2] * block_size + [3]
+
+        seq = sess.add_sequence(token_ids, multimodals=self._image_multimodals(block_size, block_size * 2, 1.0))
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+
+        seq = sess.add_sequence(token_ids, multimodals=self._image_multimodals(block_size, block_size * 2, 2.0))
+        block_trie.match(seq)
+
+        assert len(seq.logical_blocks) == 1
+        assert seq.num_history_ids == block_size
+        node = getattr(seq.logical_blocks, 'last_shared_node', None)
+        assert node is not None
+        assert node.num_matched == block_size
+
+    def test_match_multimodal_clamps_before_split_span(self, block_trie, block_mgr, scheduler):
+        allocator = block_trie.allocator
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        start = block_size // 2
+        end = block_size + block_size // 2
+        token_ids = [99] * block_size + [99] * block_size + [3]
+
+        seq = sess.add_sequence(token_ids, multimodals=self._image_multimodals(start, end, 1.0))
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+        cached_blocks = seq.logical_blocks.get_real_blocks()[:1]
+
+        token_ids = [99] * block_size + [98] * block_size + [3]
+        seq = sess.add_sequence(token_ids, multimodals=self._image_multimodals(start, end, 1.0))
+        block_trie.match(seq)
+
+        assert len(seq.logical_blocks) == 0
+        assert seq.num_history_ids == 0
+        assert np.array_equal(allocator.get_ref_count(cached_blocks), [2])
+        node = getattr(seq.logical_blocks, 'last_shared_node', None)
+        assert node is not None
+        assert node.num_matched == 0
+
+    def test_match_multimodal_extra_hash_order_is_canonical(self, block_trie, block_mgr, scheduler):
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = [99] * block_size + [3]
+        image = self._modal_data(2, 6, 1.0, Modality.IMAGE)
+        video = self._modal_data(8, 12, 2.0, Modality.VIDEO)
+
+        seq = sess.add_sequence(token_ids, multimodals=dict(image=[image], video=[video]))
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+
+        image = self._modal_data(2, 6, 1.0, Modality.IMAGE)
+        video = self._modal_data(8, 12, 2.0, Modality.VIDEO)
+        seq = sess.add_sequence(token_ids, multimodals=dict(video=[video], image=[image]))
+        block_trie.match(seq)
+
+        assert len(seq.logical_blocks) == 1
+        assert seq.num_history_ids == block_size
+        node = getattr(seq.logical_blocks, 'last_shared_node', None)
+        assert node is not None
+        assert node.num_matched == block_size
+
+    def test_prefix_cache_extra_hash_lookup_is_block_indexed(self, scheduler):
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = [99] * block_size * 4 + [3]
+        multimodals = dict(image=[
+            self._modal_data(1, block_size + 1, 1.0, Modality.IMAGE),
+            self._modal_data(block_size * 2 + 1, block_size * 2 + 4, 2.0, Modality.IMAGE),
+            self._modal_data(block_size * 3 + 2, block_size * 3 + 6, 3.0, Modality.IMAGE),
+        ])
+        seq = sess.add_sequence(token_ids, multimodals=multimodals)
+
+        block0_hashes = seq.get_prefix_cache_extra_hashes(0, block_size)
+        block1_hashes = seq.get_prefix_cache_extra_hashes(block_size, block_size * 2)
+        block2_hashes = seq.get_prefix_cache_extra_hashes(block_size * 2, block_size * 3)
+        block3_hashes = seq.get_prefix_cache_extra_hashes(block_size * 3, block_size * 4)
+
+        assert len(block0_hashes) == 1
+        assert block0_hashes == block1_hashes
+        assert len(block2_hashes) == 1
+        assert len(block3_hashes) == 1
+        assert len(seq._prefix_cache_extra_hashes) == 4
+        assert seq._num_indexed_prefix_cache_metas == 3
 
     def test_evict(self, block_trie, scheduler, num_gpu_blocks):
         block_mgr = block_trie.block_manager

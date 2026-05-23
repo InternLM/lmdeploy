@@ -25,14 +25,17 @@ class VLAsyncEngine(AsyncEngine):
 
         if backend == 'pytorch':
             try_import_deeplink(backend_config.device_type)
-        if backend_config and backend_config.enable_prefix_caching:
-            backend_config.enable_prefix_caching = False
-            logger.warning('Prefix caching is disabled since LMDeploy hasn\'t support in on VL models yet')
         self.vl_encoder = ImageEncoder(model_path,
                                        backend,
                                        vision_config,
                                        backend_config=backend_config,
                                        trust_remote_code=trust_remote_code)
+        if backend_config and backend_config.enable_prefix_caching:
+            supports_prefix_caching = backend == 'pytorch' and getattr(self.vl_encoder, '_uses_new_preprocess', False)
+            if not supports_prefix_caching:
+                backend_config.enable_prefix_caching = False
+                logger.warning('Prefix caching is disabled for this VL model path. '
+                               'Only PyTorch new-preprocess multimodal inputs are supported.')
         super().__init__(model_path,
                          backend=backend,
                          backend_config=backend_config,

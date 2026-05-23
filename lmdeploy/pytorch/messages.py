@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
+import hashlib
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -41,6 +42,16 @@ class InputEmbeddings:
             self.start += offset
             self.end += offset
         return self
+
+
+@dataclass(frozen=True)
+class PrefixCacheMeta:
+    """Multimodal metadata used by prefix-cache block keys."""
+
+    start: int
+    end: int
+    modality: str
+    content_hash: str
 
 
 @dataclass
@@ -262,6 +273,45 @@ def _to_ndarray(token_ids) -> np.ndarray:
     if token_ids.ndim == 0:
         token_ids = token_ids[None]
     return token_ids
+
+
+def _hash_prefix_cache_value(hasher: 'hashlib._Hash', value: Any):
+    """Update prefix-cache hash with a deterministic representation."""
+    if isinstance(value, Tensor):
+        tensor = value.detach().cpu().contiguous()
+        hasher.update(f'tensor:{tensor.dtype}:{tuple(tensor.shape)}:'.encode())
+        hasher.update(tensor.view(torch.uint8).numpy().tobytes())
+    elif isinstance(value, np.ndarray):
+        array = np.ascontiguousarray(value)
+        hasher.update(f'ndarray:{array.dtype}:{array.shape}:'.encode())
+        hasher.update(array.tobytes())
+    elif isinstance(value, dict):
+        hasher.update(b'dict:{')
+        for key in sorted(value, key=lambda x: repr(x)):
+            _hash_prefix_cache_value(hasher, key)
+            hasher.update(b':')
+            _hash_prefix_cache_value(hasher, value[key])
+            hasher.update(b',')
+        hasher.update(b'}')
+    elif isinstance(value, (list, tuple)):
+        hasher.update(f'{type(value).__name__}:['.encode())
+        for item in value:
+            _hash_prefix_cache_value(hasher, item)
+            hasher.update(b',')
+        hasher.update(b']')
+    elif isinstance(value, enum.Enum):
+        _hash_prefix_cache_value(hasher, value.value)
+    else:
+        hasher.update(f'{type(value).__name__}:{repr(value)}'.encode())
+
+
+def _make_prefix_cache_content_hash(data: Any, meta: dict[str, Any] | None, mrope_pos_ids: np.ndarray | None) -> str:
+    """Create a stable content hash for prefix-cache multimodal matching."""
+    hasher = hashlib.sha256()
+    _hash_prefix_cache_value(hasher, data)
+    _hash_prefix_cache_value(hasher, meta)
+    _hash_prefix_cache_value(hasher, mrope_pos_ids)
+    return hasher.hexdigest()
 
 
 class SchedulerSession:
@@ -629,6 +679,7 @@ class SchedulerSequence:
     history_cache: HistoryTokenIds = field(default_factory=HistoryTokenIds)
     history_embeddings: HistoryEmbeddings = field(default_factory=HistoryEmbeddings)
     history_multimodals: HistoryMultiModals = field(default_factory=HistoryMultiModals)
+    prefix_cache_metas: list[PrefixCacheMeta] = field(default_factory=list)
     num_new_tokens: int = 0
     sampling_param: SamplingParam = field(default_factory=SamplingParam)
     logical_blocks: LogicalTokenBlocks = field(default_factory=LogicalTokenBlocks)
@@ -667,6 +718,8 @@ class SchedulerSequence:
         # vlm
         self._num_images: int = len(self.history_embeddings)
         self._state = None
+        self._prefix_cache_extra_hashes: dict[int, tuple] = dict()
+        self._num_indexed_prefix_cache_metas = 0
 
     @property
     def block_size(self) -> int:
@@ -820,6 +873,41 @@ class SchedulerSequence:
         end = self.num_all_ids
         return self.history_multimodals.get_datas(start, end)
 
+    def get_prefix_cache_extra_hashes(self, start: int, end: int):
+        """Get multimodal hashes for a token range."""
+        if len(self.prefix_cache_metas) == 0:
+            return ()
+
+        if self._num_indexed_prefix_cache_metas != len(self.prefix_cache_metas):
+            self._index_prefix_cache_metas()
+        start_block = start // self.block_size
+        end_block = (max(start, end - 1)) // self.block_size
+        if start_block == end_block:
+            extras = self._prefix_cache_extra_hashes.get(start_block, ())
+            if start % self.block_size == 0 and end - start == self.block_size:
+                return extras
+            return tuple(extra for extra in extras if extra[0] < end and start < extra[1])
+
+        extras = []
+        for block_id in range(start_block, end_block + 1):
+            extras.extend(self._prefix_cache_extra_hashes.get(block_id, ()))
+        extras = [extra for extra in set(extras) if extra[0] < end and start < extra[1]]
+        return tuple(sorted(extras))
+
+    def clamp_prefix_cache_match_step(self, step: int):
+        """Clamp prefix-cache match step to a safe block boundary."""
+        if step <= 0:
+            return step
+
+        clamped = step
+        for meta in self.prefix_cache_metas:
+            if meta.start < step < meta.end:
+                clamped = min(clamped, meta.start)
+        for emb in self.history_embeddings.embeddings:
+            if emb.start < step < emb.end:
+                clamped = min(clamped, emb.start)
+        return (clamped // self.block_size) * self.block_size
+
     def record_event(
         self,
         event_type: EventType,
@@ -842,7 +930,42 @@ class SchedulerSequence:
         if multimodals is None:
             return
         multimodals = HistoryMultiModals.update_multimodals(multimodals, self.num_valid_ids)
+        self._update_prefix_cache_metas(multimodals)
         self.history_multimodals.add_inputs(multimodals)
+
+    def _update_prefix_cache_metas(self, multimodals: MultiModalInputs):
+        """Update multimodal prefix-cache metadata."""
+        for modal_datas in multimodals.values():
+            for modal_data in modal_datas:
+                modality = modal_data.modality
+                if isinstance(modality, enum.Enum):
+                    modality = modality.value
+                content_hash = _make_prefix_cache_content_hash(modal_data.data, modal_data.meta,
+                                                               modal_data.mrope_pos_ids)
+                self.prefix_cache_metas.append(
+                    PrefixCacheMeta(start=modal_data.start,
+                                    end=modal_data.end,
+                                    modality=str(modality),
+                                    content_hash=content_hash))
+
+    def _index_prefix_cache_metas(self):
+        """Build block-indexed multimodal prefix-cache metadata."""
+        block_size = self.block_size
+        new_metas = self.prefix_cache_metas[self._num_indexed_prefix_cache_metas:]
+        if len(new_metas) == 0:
+            return
+
+        for meta in new_metas:
+            if meta.end <= meta.start:
+                continue
+            extra = (meta.start, meta.end, meta.modality, meta.content_hash)
+            start_block = meta.start // block_size
+            end_block = (meta.end - 1) // block_size
+            for block_id in range(start_block, end_block + 1):
+                extras = list(self._prefix_cache_extra_hashes.get(block_id, ()))
+                extras.append(extra)
+                self._prefix_cache_extra_hashes[block_id] = tuple(sorted(extras))
+        self._num_indexed_prefix_cache_metas = len(self.prefix_cache_metas)
 
     def _update_mrope_pos_ids(self):
         """Update mrope pos ids."""
