@@ -154,13 +154,65 @@ class Eagle3(DeepseekMTP):
         return hidden_size * 3
 ```
 
+## Wire up the draft model architecture
+
+`BaseSpecProposer.build_model` reuses the PyTorch engine's standard model-loading path, so the
+draft checkpoint must be discoverable by the engine in the same way any other model is. In
+practice this means two more touch-points outside `spec_decode/`:
+
+1. **`lmdeploy/pytorch/configurations/`** — add (or extend) an `AutoModelConfigBuilder` so the
+   engine can produce a `ModelConfig` for the draft. Each file under this directory subclasses
+   `AutoModelConfigBuilder` (see `configurations/builder.py`) and is auto-registered at import
+   time by `configurations/__init__.py`, which walks the package with `pkgutil.walk_packages`.
+   The base builder picks the first subclass whose `condition(hf_config)` returns `True`, falling
+   back to `DefaultModelConfigBuilder`. The `build(...)` classmethod receives `is_draft_model`
+   and `spec_method` kwargs — use them to override the draft-side fields. Existing references:
+
+   - `configurations/deepseek_v2.py` (`DeepseekV2ModelConfigBuilder`) shows the minimal
+     `deepseek_mtp` wiring: switch `hf_config.architectures[0]` to `'DeepseekMTPModel'` and set
+     `model_paradigm = 'ar_spec'` when `is_draft_model=True`.
+   - `configurations/qwen3_5.py` (`Qwen3_5ModelConfigBuilder`) shows a `qwen3_5_mtp` variant
+     that additionally adjusts `num_layers`, `states_shapes`, and `conv_kernel_size` for the
+     draft model.
+   - `configurations/llama.py` (`LlamaModelConfigBuilder`) shows the eagle/eagle3 pattern:
+     prepending the `spec_method` to the original architecture name to produce a unique draft
+     architecture string (e.g. `Eagle3LlamaForCausalLM`).
+
+2. **`lmdeploy/pytorch/models/`** — add the draft model definition (an `nn.Module` subclass,
+   typically also mixing in `CudaGraphMixin`) and register the architecture string from step 1
+   in `lmdeploy/pytorch/models/module_map.py`. The engine's patcher (`models/patch.py`)
+   resolves the architecture string via the `MODULE_MAP` dictionary to a fully-qualified class
+   path. For example, after the qwen3.5 MTP draft was added, `module_map.py` gained:
+
+   ```python
+   MODULE_MAP.update({
+       'Qwen3_5MTPModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_5_mtp.Qwen3_5MTPModel',
+   })
+   ```
+
+   Existing draft-model implementations worth using as templates:
+
+   - `models/deepseek_mtp.py` — the canonical MTP draft module.
+   - `models/qwen3_5_mtp.py` — `Qwen3_5MTPModel`, extends the deepseek MTP pattern.
+   - `models/llama_eagle.py` / `models/llama_eagle3.py` — Eagle-family draft heads on top of Llama.
+   - `models/glm4moe_mtp.py` — `Glm4MoeMTPModel`.
+
+If you skip either of these, `build_specdecode_proposer` will still be able to instantiate your
+proposer, but `BaseSpecProposer.build_model` will fail to materialise the draft network because
+neither `AutoModelConfigBuilder` nor `MODULE_MAP` knows how to handle the draft architecture.
+
 ## Checklist
 
-1. The class is decorated with `@SPEC_PROPOSERS.register_module(name='<unique-method-name>')` and
-   the name is not already in `SPEC_PROPOSERS.module_dict`.
-2. The module is imported from `lmdeploy/pytorch/spec_decode/proposers/__init__.py` so the
-   decorator runs at engine startup.
+1. The proposer class is decorated with `@SPEC_PROPOSERS.register_module(name='<unique-method-name>')`
+   and the name is not already in `SPEC_PROPOSERS.module_dict`.
+2. The proposer module is imported from `lmdeploy/pytorch/spec_decode/proposers/__init__.py` so
+   the decorator runs at engine startup.
 3. `get_outputs` returns the three-tuple above; tensor shapes match existing proposers.
 4. If your draft model needs target weights, override `build_model` rather than rewriting patching.
-5. Run end-to-end with `SpeculativeConfig(method='<name>', ...)` and confirm draft tokens are
+5. A config builder under `lmdeploy/pytorch/configurations/` recognises the draft `hf_config`
+   (via `condition`) and sets `model_paradigm = 'ar_spec'` / the right `architectures[0]` when
+   `is_draft_model=True`.
+6. The draft architecture string is registered in `lmdeploy/pytorch/models/module_map.py` and
+   resolves to a model class under `lmdeploy/pytorch/models/`.
+7. Run end-to-end with `SpeculativeConfig(method='<name>', ...)` and confirm draft tokens are
    being accepted by the target model.
