@@ -648,7 +648,9 @@ class SchedulerSequence:
     prefix_cache_restore_state_acquired: bool = False
     prefix_cache_save_state: int = -1
     prefix_cache_save_step: int = 0
+    prefix_cache_save_is_decode: bool = False
     prefix_cache_save_node: Any = field(default=None, repr=False)
+    prefix_cache_decode_state_node: Any = field(default=None, repr=False)
     adapter_name: str = None
     arrive_time: float = 0.0
     output_start_pos: int = 0

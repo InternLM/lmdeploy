@@ -137,6 +137,8 @@ class ModelInputsDelta:
     is_decoding: bool = True
     # sliding window
     num_ignored_history: torch.Tensor | None = None
+    # SSM prefix-cache checkpoint save offsets for decode forwards.
+    state_prefix_cache_save_offsets: torch.Tensor | None = None
 
     @property
     def seq_length(self):

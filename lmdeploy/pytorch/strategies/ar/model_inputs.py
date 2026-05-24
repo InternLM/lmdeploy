@@ -129,7 +129,8 @@ def index_select_model_inputs(inputs: ModelInputs,
                               max_q_seqlen: int | None = None,
                               max_kv_seqlen: int | None = None,
                               sum_kv_seqlen: int | None = None,
-                              num_ignored_history: torch.Tensor | None = None):
+                              num_ignored_history: torch.Tensor | None = None,
+                              state_prefix_cache_save_offsets: torch.Tensor | None = None):
     """Index select model inputs by indices."""
     assert inputs.is_decoding, 'Only support index_select in decoding.'
 
@@ -192,6 +193,7 @@ def index_select_model_inputs(inputs: ModelInputs,
         local_adapter_ids=local_adapter_ids,
         model_metas=model_metas,
         state_offsets=state_offsets,
+        state_prefix_cache_save_offsets=state_prefix_cache_save_offsets,
         target_hidden_states=target_hidden_states,
         target_position_ids=target_position_ids,
         mrope_pos_ids=mrope_pos_ids,

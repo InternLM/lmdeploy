@@ -171,16 +171,21 @@ class BlockTrie:
         """Clear pending checkpoint save metadata from a sequence."""
         seq.prefix_cache_save_state = -1
         seq.prefix_cache_save_step = 0
+        seq.prefix_cache_save_is_decode = False
         seq.prefix_cache_save_node = None
 
     def discard_state_checkpoint_for_seq(self, seq: SchedulerSequence):
-        """Discard an unpublished state checkpoint reservation for a sequence."""
+        """Discard an unpublished state checkpoint reservation for a
+        sequence."""
         state_idx = seq.prefix_cache_save_state
         node = seq.prefix_cache_save_node
+        is_decode = seq.prefix_cache_save_is_decode
         self._clear_pending_state_checkpoint(seq)
         if state_idx < 0 or node is None:
             return False
         if node.state_idx == state_idx and not node.state_ready:
+            if is_decode and seq.prefix_cache_decode_state_node is node:
+                seq.prefix_cache_decode_state_node = None
             self.release_state_checkpoint(node)
             return True
         return False
@@ -191,7 +196,8 @@ class BlockTrie:
             self.discard_state_checkpoint_for_seq(seq)
 
     def _get_state_checkpoint_node_for_seq(self, seq: SchedulerSequence, step: int):
-        """Get the trie node that exactly represents a sequence checkpoint step."""
+        """Get the trie node that exactly represents a sequence checkpoint
+        step."""
         node = getattr(seq.logical_blocks, 'last_shared_node', None)
         while node is not None and node.num_matched > step:
             node = node.parent
@@ -199,7 +205,15 @@ class BlockTrie:
             return None
         return node
 
-    def reserve_state_checkpoint_for_seq(self, seq: SchedulerSequence, step: int = None):
+    def _is_attached_node(self, node: Node):
+        """Check whether a node is still attached to the trie."""
+        parent = node.parent
+        return parent is not None and parent.children.get(node.hash_key) is node
+
+    def reserve_state_checkpoint_for_seq(self,
+                                         seq: SchedulerSequence,
+                                         step: int = None,
+                                         is_decode: bool = False):
         """Reserve a state checkpoint slot for a sequence checkpoint step."""
         self.discard_state_checkpoint_for_seq(seq)
 
@@ -230,8 +244,44 @@ class BlockTrie:
 
         seq.prefix_cache_save_state = state_idx
         seq.prefix_cache_save_step = step
+        seq.prefix_cache_save_is_decode = is_decode
         seq.prefix_cache_save_node = node
         return state_idx
+
+    def reserve_decode_state_checkpoint_for_seq(self,
+                                                seq: SchedulerSequence,
+                                                interval: int,
+                                                step: int = None):
+        """Reserve a bounded decode checkpoint for a sequence."""
+        if step is None:
+            step = seq.num_valid_ids
+        if interval <= 0 or step % interval != 0:
+            return -1
+        if not self.enable or not self.requires_state_checkpoint:
+            return -1
+        if step <= 0 or step % self.block_size != 0:
+            return -1
+        if step > seq.num_valid_ids:
+            return -1
+        if seq.clamp_prefix_cache_match_step(step) != step:
+            return -1
+        node = self._get_state_checkpoint_node_for_seq(seq, step)
+        if node is None or node.state_ready:
+            return -1
+
+        old_node = seq.prefix_cache_decode_state_node
+        if old_node is not None and old_node.state_idx < 0:
+            seq.prefix_cache_decode_state_node = None
+            old_node = None
+        if old_node is not None:
+            if old_node.num_matched == step and old_node.state_ready:
+                return -1
+            if old_node.state_ref_count > 0:
+                return -1
+            self.release_state_checkpoint(old_node)
+            seq.prefix_cache_decode_state_node = None
+
+        return self.reserve_state_checkpoint_for_seq(seq, step=step, is_decode=True)
 
     def mark_state_checkpoint_ready(self, node: Node):
         """Mark a node-owned state checkpoint as ready for SSM matching."""
@@ -244,22 +294,27 @@ class BlockTrie:
         self._index_state_checkpoint(node)
 
     def commit_state_checkpoint_for_seq(self, seq: SchedulerSequence):
-        """Publish a sequence state checkpoint after its state copy is enqueued."""
+        """Publish a sequence state checkpoint after its state copy is
+        enqueued."""
         state_idx = seq.prefix_cache_save_state
         save_step = seq.prefix_cache_save_step
+        is_decode = seq.prefix_cache_save_is_decode
         node = seq.prefix_cache_save_node
         self._clear_pending_state_checkpoint(seq)
         if state_idx < 0:
             return False
 
-        current_node = self._get_state_checkpoint_node_for_seq(seq, save_step)
-        if (node is None or node is not current_node or node.state_idx != state_idx
+        if (node is None or not self._is_attached_node(node) or node.state_idx != state_idx
                 or node.num_matched != save_step):
             if node is not None and node.state_idx == state_idx and not node.state_ready:
+                if is_decode and seq.prefix_cache_decode_state_node is node:
+                    seq.prefix_cache_decode_state_node = None
                 self.release_state_checkpoint(node)
             return False
 
         self.mark_state_checkpoint_ready(node)
+        if is_decode:
+            seq.prefix_cache_decode_state_node = node
         return True
 
     def commit_state_checkpoints(self, seqs: list[SchedulerSequence]):
@@ -268,7 +323,8 @@ class BlockTrie:
             self.commit_state_checkpoint_for_seq(seq)
 
     def acquire_state_checkpoint_restore_for_seq(self, seq: SchedulerSequence):
-        """Pin a matched state checkpoint until its restore copy has completed."""
+        """Pin a matched state checkpoint until its restore copy has
+        completed."""
         if seq.prefix_cache_restore_state < 0 or seq.prefix_cache_restore_state_acquired:
             return False
         node = getattr(seq.logical_blocks, 'last_shared_node', None)

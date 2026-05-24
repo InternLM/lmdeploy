@@ -3,7 +3,7 @@ import pytest
 import torch
 
 from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
-from lmdeploy.pytorch.messages import SequenceMeta
+from lmdeploy.pytorch.messages import SequenceMeta, UpdateTokenMode
 from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.paging import Scheduler
 from lmdeploy.vl.constants import Modality
@@ -608,7 +608,29 @@ class TestBlockTire:
         assert not node.state_ready
         assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states
 
-    def test_ssm_checkpoint_commit_failure_discards_pending_slot(self, ssm_scheduler):
+    def test_ssm_checkpoint_commit_allows_sequence_to_advance_past_save_step(self, ssm_scheduler):
+        block_mgr = ssm_scheduler.block_manager
+        block_trie = ssm_scheduler.block_trie
+        sess = ssm_scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        save_step = block_size * 2
+        token_ids = [1] * save_step
+
+        seq = sess.add_sequence(token_ids)
+        seq.set_step(save_step - 1)
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+        state_idx = block_trie.reserve_decode_state_checkpoint_for_seq(seq, interval=block_size)
+        node = seq.prefix_cache_save_node
+
+        assert state_idx >= 0
+        seq.update_token_ids([2], mode=UpdateTokenMode.DECODE)
+
+        assert block_trie.commit_state_checkpoint_for_seq(seq)
+        assert seq.prefix_cache_decode_state_node is node
+        assert node.state_ready
+
+    def test_ssm_checkpoint_commit_failure_discards_detached_pending_slot(self, ssm_scheduler):
         block_mgr = ssm_scheduler.block_manager
         block_trie = ssm_scheduler.block_trie
         sess = ssm_scheduler.add_session(0)
@@ -623,7 +645,7 @@ class TestBlockTire:
         node = getattr(seq.logical_blocks, 'last_shared_node')
 
         assert state_idx >= 0
-        seq.logical_blocks.last_shared_node = node.parent
+        node.parent = None
 
         assert not block_trie.commit_state_checkpoint_for_seq(seq)
         assert seq.prefix_cache_save_state == -1
@@ -631,6 +653,91 @@ class TestBlockTire:
         assert seq.prefix_cache_save_node is None
         assert node.state_idx == -1
         assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states
+
+    def test_ssm_decode_checkpoint_replaces_previous_unpinned_state(self, ssm_scheduler):
+        block_mgr = ssm_scheduler.block_manager
+        block_trie = ssm_scheduler.block_trie
+        sess = ssm_scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        step = block_size * 2
+
+        seq = sess.add_sequence([1] * step)
+        seq.set_step(step - 1)
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+        state_idx_a = block_trie.reserve_decode_state_checkpoint_for_seq(seq, interval=block_size)
+        node_a = seq.prefix_cache_save_node
+
+        assert state_idx_a >= 0
+        assert seq.prefix_cache_save_is_decode
+        assert block_trie.commit_state_checkpoint_for_seq(seq)
+        assert seq.prefix_cache_decode_state_node is node_a
+        assert node_a.state_ready
+
+        seq.update_token_ids([2] * block_size, mode=UpdateTokenMode.DECODE)
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+        state_idx_b = block_trie.reserve_decode_state_checkpoint_for_seq(seq, interval=block_size)
+        node_b = seq.prefix_cache_save_node
+
+        assert state_idx_b >= 0
+        assert node_a.state_idx == -1
+        assert not node_a.state_ready
+        assert seq.prefix_cache_decode_state_node is None
+        assert block_trie.commit_state_checkpoint_for_seq(seq)
+        assert seq.prefix_cache_decode_state_node is node_b
+        assert node_b.state_ready
+
+    def test_ssm_decode_checkpoint_skip_replacement_when_previous_is_pinned(self, ssm_scheduler):
+        block_mgr = ssm_scheduler.block_manager
+        block_trie = ssm_scheduler.block_trie
+        sess = ssm_scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        step = block_size * 2
+
+        seq = sess.add_sequence([1] * step)
+        seq.set_step(step - 1)
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+        state_idx = block_trie.reserve_decode_state_checkpoint_for_seq(seq, interval=block_size)
+        node = seq.prefix_cache_save_node
+        assert state_idx >= 0
+        assert block_trie.commit_state_checkpoint_for_seq(seq)
+        node.state_ref_count = 1
+
+        seq.update_token_ids([2] * block_size, mode=UpdateTokenMode.DECODE)
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+
+        assert block_trie.reserve_decode_state_checkpoint_for_seq(seq, interval=block_size) == -1
+        assert seq.prefix_cache_decode_state_node is node
+        assert node.state_idx == state_idx
+        assert node.state_ready
+        assert seq.prefix_cache_save_state == -1
+
+    def test_ssm_decode_checkpoint_keeps_old_state_when_new_step_is_not_allocated(self, ssm_scheduler):
+        block_mgr = ssm_scheduler.block_manager
+        block_trie = ssm_scheduler.block_trie
+        sess = ssm_scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        step = block_size * 2
+
+        seq = sess.add_sequence([1] * step)
+        seq.set_step(step - 1)
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+        state_idx = block_trie.reserve_decode_state_checkpoint_for_seq(seq, interval=block_size)
+        node = seq.prefix_cache_save_node
+        assert state_idx >= 0
+        assert block_trie.commit_state_checkpoint_for_seq(seq)
+
+        seq.update_token_ids([2] * block_size, mode=UpdateTokenMode.DECODE)
+        block_mgr.allocate(seq)
+
+        assert block_trie.reserve_decode_state_checkpoint_for_seq(seq, interval=block_size) == -1
+        assert seq.prefix_cache_decode_state_node is node
+        assert node.state_idx == state_idx
+        assert node.state_ready
 
     def test_ssm_checkpoint_save_uses_explicit_chunk_step(self, ssm_scheduler):
         block_mgr = ssm_scheduler.block_manager

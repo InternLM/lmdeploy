@@ -134,6 +134,7 @@ def _reindex_model_inputs_dllm(
     max_kv_seqlen = delta.max_kv_seqlen
     sum_kv_seqlen = delta.sum_kv_seqlen
     num_ignored_history = delta.num_ignored_history
+    state_prefix_cache_save_offsets = delta.state_prefix_cache_save_offsets
 
     # required inputs — reshape by block_size for DLLM
     inputs_ids = inputs.input_ids.reshape(1, -1, block_size)
@@ -176,6 +177,7 @@ def _reindex_model_inputs_dllm(
         local_adapter_ids=local_adapter_ids,
         model_metas=model_metas,
         state_offsets=state_offsets,
+        state_prefix_cache_save_offsets=state_prefix_cache_save_offsets,
     )
 
 

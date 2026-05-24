@@ -148,8 +148,16 @@ def test_get_state_cache_mem_leaves_non_ssm_prefix_cache_enabled():
 
 
 def test_build_cache_config_carries_prefix_cache_state_budget():
-    engine_config = PytorchEngineConfig(max_batch_size=4, prefix_cache_state_budget=3)
+    engine_config = PytorchEngineConfig(max_batch_size=4,
+                                        prefix_cache_state_budget=3,
+                                        prefix_cache_decode_state_interval=128)
 
     cache_config = ConfigBuilder.build_cache_config(engine_config)
 
     assert cache_config.prefix_cache_state_budget == 3
+    assert cache_config.prefix_cache_decode_state_interval == 128
+
+
+def test_engine_config_rejects_unaligned_prefix_cache_decode_state_interval():
+    with pytest.raises(AssertionError):
+        PytorchEngineConfig(max_batch_size=4, prefix_cache_decode_state_interval=96)

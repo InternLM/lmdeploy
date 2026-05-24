@@ -387,6 +387,8 @@ class EngineLoop:
         self.inputs_maker.update_running_seqs(running, model_inputs)
         has_state_checkpoint_save = (model_inputs is not None
                                      and model_inputs.state_prefix_cache_save_offsets is not None)
+        has_state_checkpoint_save = has_state_checkpoint_save or (
+            delta is not None and delta.state_prefix_cache_save_offsets is not None)
 
         if has_state_checkpoint_save:
             # Publish saved SSM checkpoints before scheduling the next batch so

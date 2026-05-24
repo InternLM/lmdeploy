@@ -109,6 +109,7 @@ class SubCliServe:
         ArgumentHelper.distributed_executor_backend(pt_group)
         ArgumentHelper.kernel_block_size(pt_group)
         ArgumentHelper.prefix_cache_state_budget(pt_group)
+        ArgumentHelper.prefix_cache_decode_state_interval(pt_group)
 
         # common engine args
         dtype_act = ArgumentHelper.dtype(pt_group)
@@ -234,6 +235,7 @@ class SubCliServe:
                 adapters=adapters,
                 enable_prefix_caching=args.enable_prefix_caching,
                 prefix_cache_state_budget=args.prefix_cache_state_budget,
+                prefix_cache_decode_state_interval=args.prefix_cache_decode_state_interval,
                 device_type=args.device,
                 quant_policy=args.quant_policy,
                 eager_mode=args.eager_mode,

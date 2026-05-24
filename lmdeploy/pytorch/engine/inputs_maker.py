@@ -570,6 +570,14 @@ class InputsMakerAsync:
             sum_kv_seqlen=sum_kv_seqlen,
             num_ignored_history=num_ignored_history,
         )
+        decode_state_interval = self.cache_config.prefix_cache_decode_state_interval
+        if self.config.is_ssm and decode_state_interval > 0 and not self.spec_decoding and num_decode_tokens == 1:
+            save_state_offsets = [
+                self.scheduler.block_trie.reserve_decode_state_checkpoint_for_seq(seq, decode_state_interval)
+                for seq in valid_seqs
+            ]
+            if any(state_idx >= 0 for state_idx in save_state_offsets):
+                output.state_prefix_cache_save_offsets = torch.tensor(save_state_offsets)
 
         return output, valid_seqs, invalid_seqs
 
