@@ -429,12 +429,12 @@ class InputsMakerAsync:
         if self.config.is_ssm:
             state_offsets = torch.tensor([msg.logical_state for msg in messages])
             model_inputs.state_offsets = state_offsets
-            if any(msg.prefix_cache_restore_state >= 0 for msg in messages):
+            if any(msg.prefix_cache.restore_state >= 0 for msg in messages):
                 self.scheduler.block_trie.acquire_state_checkpoint_restores(messages)
-                if any(msg.prefix_cache_restore_state >= 0 and not msg.prefix_cache_restore_state_acquired
+                if any(msg.prefix_cache.restore_state >= 0 and not msg.prefix_cache.restore_state_acquired
                        for msg in messages):
                     raise RuntimeError('Failed to acquire SSM prefix-cache restore checkpoint.')
-                prefix_state_offsets = [msg.prefix_cache_restore_state for msg in messages]
+                prefix_state_offsets = [msg.prefix_cache.restore_state for msg in messages]
                 model_inputs.state_prefix_cache_offsets = torch.tensor(prefix_state_offsets)
             if allow_state_checkpoint_save and not is_decoding:
                 save_state_offsets = [
@@ -506,11 +506,11 @@ class InputsMakerAsync:
         # ssm
         if self.config.is_ssm:
             model_inputs.state_offsets = torch.tensor([seq.logical_state])
-            if seq.prefix_cache_restore_state >= 0:
+            if seq.prefix_cache.restore_state >= 0:
                 self.scheduler.block_trie.acquire_state_checkpoint_restore_for_seq(seq)
-                if not seq.prefix_cache_restore_state_acquired:
+                if not seq.prefix_cache.restore_state_acquired:
                     raise RuntimeError('Failed to acquire SSM prefix-cache restore checkpoint.')
-                model_inputs.state_prefix_cache_offsets = torch.tensor([seq.prefix_cache_restore_state])
+                model_inputs.state_prefix_cache_offsets = torch.tensor([seq.prefix_cache.restore_state])
             if allow_state_checkpoint_save:
                 checkpoint_step = seq.num_history_ids + chunk_size
                 save_state = self.scheduler.block_trie.reserve_state_checkpoint_for_seq(seq, step=checkpoint_step)

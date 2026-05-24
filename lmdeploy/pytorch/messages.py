@@ -54,6 +54,22 @@ class PrefixCacheMeta:
 
 
 @dataclass
+class PrefixCacheState:
+    """Per-sequence prefix-cache metadata and transient SSM state."""
+
+    metas: list[PrefixCacheMeta] = field(default_factory=list)
+    block_extra_hashes: dict[int, tuple] = field(default_factory=dict, repr=False)
+    num_indexed_metas: int = 0
+    restore_state: int = -1
+    restore_state_acquired: bool = False
+    save_state: int = -1
+    save_step: int = 0
+    save_is_decode: bool = False
+    save_node: Any = field(default=None, repr=False)
+    decode_state_node: Any = field(default=None, repr=False)
+
+
+@dataclass
 class SamplingParam:
     """Sampling parameter."""
     top_p: float = 1.0
@@ -639,18 +655,11 @@ class SchedulerSequence:
     history_cache: HistoryTokenIds = field(default_factory=HistoryTokenIds)
     history_embeddings: HistoryEmbeddings = field(default_factory=HistoryEmbeddings)
     history_multimodals: HistoryMultiModals = field(default_factory=HistoryMultiModals)
-    prefix_cache_metas: list[PrefixCacheMeta] = field(default_factory=list)
+    prefix_cache: PrefixCacheState = field(default_factory=PrefixCacheState)
     num_new_tokens: int = 0
     sampling_param: SamplingParam = field(default_factory=SamplingParam)
     logical_blocks: LogicalTokenBlocks = field(default_factory=LogicalTokenBlocks)
     logical_state: int = -1
-    prefix_cache_restore_state: int = -1
-    prefix_cache_restore_state_acquired: bool = False
-    prefix_cache_save_state: int = -1
-    prefix_cache_save_step: int = 0
-    prefix_cache_save_is_decode: bool = False
-    prefix_cache_save_node: Any = field(default=None, repr=False)
-    prefix_cache_decode_state_node: Any = field(default=None, repr=False)
     adapter_name: str = None
     arrive_time: float = 0.0
     output_start_pos: int = 0
@@ -685,8 +694,6 @@ class SchedulerSequence:
         # vlm
         self._num_images: int = len(self.history_embeddings)
         self._state = None
-        self._prefix_cache_extra_hashes: dict[int, tuple] = dict()
-        self._num_indexed_prefix_cache_metas = 0
 
     @property
     def block_size(self) -> int:
@@ -842,22 +849,23 @@ class SchedulerSequence:
 
     def get_prefix_cache_extra_hashes(self, start: int, end: int):
         """Get multimodal hashes for a token range."""
-        if len(self.prefix_cache_metas) == 0:
+        prefix_cache = self.prefix_cache
+        if len(prefix_cache.metas) == 0:
             return ()
 
-        if self._num_indexed_prefix_cache_metas != len(self.prefix_cache_metas):
+        if prefix_cache.num_indexed_metas != len(prefix_cache.metas):
             self._index_prefix_cache_metas()
         start_block = start // self.block_size
         end_block = (max(start, end - 1)) // self.block_size
         if start_block == end_block:
-            extras = self._prefix_cache_extra_hashes.get(start_block, ())
+            extras = prefix_cache.block_extra_hashes.get(start_block, ())
             if start % self.block_size == 0 and end - start == self.block_size:
                 return extras
             return tuple(extra for extra in extras if extra[0] < end and start < extra[1])
 
         extras = []
         for block_id in range(start_block, end_block + 1):
-            extras.extend(self._prefix_cache_extra_hashes.get(block_id, ()))
+            extras.extend(prefix_cache.block_extra_hashes.get(block_id, ()))
         extras = [extra for extra in set(extras) if extra[0] < end and start < extra[1]]
         return tuple(sorted(extras))
 
@@ -867,7 +875,7 @@ class SchedulerSequence:
             return step
 
         clamped = step
-        for meta in self.prefix_cache_metas:
+        for meta in self.prefix_cache.metas:
             if meta.start < step < meta.end:
                 clamped = min(clamped, meta.start)
         for emb in self.history_embeddings.embeddings:
@@ -911,7 +919,7 @@ class SchedulerSequence:
                 if content_hash is None:
                     content_hash = make_multimodal_content_hash(modal_data.data, modal_data.meta,
                                                                 modal_data.mrope_pos_ids)
-                self.prefix_cache_metas.append(
+                self.prefix_cache.metas.append(
                     PrefixCacheMeta(start=modal_data.start,
                                     end=modal_data.end,
                                     modality=str(modality),
@@ -919,8 +927,9 @@ class SchedulerSequence:
 
     def _index_prefix_cache_metas(self):
         """Build block-indexed multimodal prefix-cache metadata."""
+        prefix_cache = self.prefix_cache
         block_size = self.block_size
-        new_metas = self.prefix_cache_metas[self._num_indexed_prefix_cache_metas:]
+        new_metas = prefix_cache.metas[prefix_cache.num_indexed_metas:]
         if len(new_metas) == 0:
             return
 
@@ -931,10 +940,10 @@ class SchedulerSequence:
             start_block = meta.start // block_size
             end_block = (meta.end - 1) // block_size
             for block_id in range(start_block, end_block + 1):
-                extras = list(self._prefix_cache_extra_hashes.get(block_id, ()))
+                extras = list(prefix_cache.block_extra_hashes.get(block_id, ()))
                 extras.append(extra)
-                self._prefix_cache_extra_hashes[block_id] = tuple(sorted(extras))
-        self._num_indexed_prefix_cache_metas = len(self.prefix_cache_metas)
+                prefix_cache.block_extra_hashes[block_id] = tuple(sorted(extras))
+        prefix_cache.num_indexed_metas = len(prefix_cache.metas)
 
     def _update_mrope_pos_ids(self):
         """Update mrope pos ids."""

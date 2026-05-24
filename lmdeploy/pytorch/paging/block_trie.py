@@ -169,23 +169,25 @@ class BlockTrie:
 
     def _clear_pending_state_checkpoint(self, seq: SchedulerSequence):
         """Clear pending checkpoint save metadata from a sequence."""
-        seq.prefix_cache_save_state = -1
-        seq.prefix_cache_save_step = 0
-        seq.prefix_cache_save_is_decode = False
-        seq.prefix_cache_save_node = None
+        prefix_cache = seq.prefix_cache
+        prefix_cache.save_state = -1
+        prefix_cache.save_step = 0
+        prefix_cache.save_is_decode = False
+        prefix_cache.save_node = None
 
     def discard_state_checkpoint_for_seq(self, seq: SchedulerSequence):
         """Discard an unpublished state checkpoint reservation for a
         sequence."""
-        state_idx = seq.prefix_cache_save_state
-        node = seq.prefix_cache_save_node
-        is_decode = seq.prefix_cache_save_is_decode
+        prefix_cache = seq.prefix_cache
+        state_idx = prefix_cache.save_state
+        node = prefix_cache.save_node
+        is_decode = prefix_cache.save_is_decode
         self._clear_pending_state_checkpoint(seq)
         if state_idx < 0 or node is None:
             return False
         if node.state_idx == state_idx and not node.state_ready:
-            if is_decode and seq.prefix_cache_decode_state_node is node:
-                seq.prefix_cache_decode_state_node = None
+            if is_decode and prefix_cache.decode_state_node is node:
+                prefix_cache.decode_state_node = None
             self.release_state_checkpoint(node)
             return True
         return False
@@ -242,10 +244,11 @@ class BlockTrie:
                 raise
             return -1
 
-        seq.prefix_cache_save_state = state_idx
-        seq.prefix_cache_save_step = step
-        seq.prefix_cache_save_is_decode = is_decode
-        seq.prefix_cache_save_node = node
+        prefix_cache = seq.prefix_cache
+        prefix_cache.save_state = state_idx
+        prefix_cache.save_step = step
+        prefix_cache.save_is_decode = is_decode
+        prefix_cache.save_node = node
         return state_idx
 
     def reserve_decode_state_checkpoint_for_seq(self,
@@ -269,9 +272,10 @@ class BlockTrie:
         if node is None or node.state_ready:
             return -1
 
-        old_node = seq.prefix_cache_decode_state_node
+        prefix_cache = seq.prefix_cache
+        old_node = prefix_cache.decode_state_node
         if old_node is not None and old_node.state_idx < 0:
-            seq.prefix_cache_decode_state_node = None
+            prefix_cache.decode_state_node = None
             old_node = None
         if old_node is not None:
             if old_node.num_matched == step and old_node.state_ready:
@@ -279,7 +283,7 @@ class BlockTrie:
             if old_node.state_ref_count > 0:
                 return -1
             self.release_state_checkpoint(old_node)
-            seq.prefix_cache_decode_state_node = None
+            prefix_cache.decode_state_node = None
 
         return self.reserve_state_checkpoint_for_seq(seq, step=step, is_decode=True)
 
@@ -296,10 +300,11 @@ class BlockTrie:
     def commit_state_checkpoint_for_seq(self, seq: SchedulerSequence):
         """Publish a sequence state checkpoint after its state copy is
         enqueued."""
-        state_idx = seq.prefix_cache_save_state
-        save_step = seq.prefix_cache_save_step
-        is_decode = seq.prefix_cache_save_is_decode
-        node = seq.prefix_cache_save_node
+        prefix_cache = seq.prefix_cache
+        state_idx = prefix_cache.save_state
+        save_step = prefix_cache.save_step
+        is_decode = prefix_cache.save_is_decode
+        node = prefix_cache.save_node
         self._clear_pending_state_checkpoint(seq)
         if state_idx < 0:
             return False
@@ -307,14 +312,14 @@ class BlockTrie:
         if (node is None or not self._is_attached_node(node) or node.state_idx != state_idx
                 or node.num_matched != save_step):
             if node is not None and node.state_idx == state_idx and not node.state_ready:
-                if is_decode and seq.prefix_cache_decode_state_node is node:
-                    seq.prefix_cache_decode_state_node = None
+                if is_decode and prefix_cache.decode_state_node is node:
+                    prefix_cache.decode_state_node = None
                 self.release_state_checkpoint(node)
             return False
 
         self.mark_state_checkpoint_ready(node)
         if is_decode:
-            seq.prefix_cache_decode_state_node = node
+            prefix_cache.decode_state_node = node
         return True
 
     def commit_state_checkpoints(self, seqs: list[SchedulerSequence]):
@@ -325,14 +330,15 @@ class BlockTrie:
     def acquire_state_checkpoint_restore_for_seq(self, seq: SchedulerSequence):
         """Pin a matched state checkpoint until its restore copy has
         completed."""
-        if seq.prefix_cache_restore_state < 0 or seq.prefix_cache_restore_state_acquired:
+        prefix_cache = seq.prefix_cache
+        if prefix_cache.restore_state < 0 or prefix_cache.restore_state_acquired:
             return False
         node = getattr(seq.logical_blocks, 'last_shared_node', None)
-        if node is None or node.state_idx != seq.prefix_cache_restore_state or not node.state_ready:
+        if node is None or node.state_idx != prefix_cache.restore_state or not node.state_ready:
             return False
         node.state_ref_count += 1
         node.state_access_time = time.perf_counter()
-        seq.prefix_cache_restore_state_acquired = True
+        prefix_cache.restore_state_acquired = True
         return True
 
     def acquire_state_checkpoint_restores(self, seqs: list[SchedulerSequence]):
@@ -342,13 +348,14 @@ class BlockTrie:
 
     def release_state_checkpoint_restore_for_seq(self, seq: SchedulerSequence):
         """Release a state checkpoint pinned for restore."""
-        if not seq.prefix_cache_restore_state_acquired:
+        prefix_cache = seq.prefix_cache
+        if not prefix_cache.restore_state_acquired:
             return False
         node = getattr(seq.logical_blocks, 'last_shared_node', None)
-        if node is not None and node.state_idx == seq.prefix_cache_restore_state and node.state_ref_count > 0:
+        if node is not None and node.state_idx == prefix_cache.restore_state and node.state_ref_count > 0:
             node.state_ref_count -= 1
-        seq.prefix_cache_restore_state = -1
-        seq.prefix_cache_restore_state_acquired = False
+        prefix_cache.restore_state = -1
+        prefix_cache.restore_state_acquired = False
         return True
 
     def release_state_checkpoint_restores(self, seqs: list[SchedulerSequence]):
@@ -432,7 +439,7 @@ class BlockTrie:
 
     def _match_state_checkpoint(self, seq: SchedulerSequence):
         """Match SSM prefixes through sparse ready-checkpoint lookup."""
-        seq.prefix_cache_restore_state = -1
+        seq.prefix_cache.restore_state = -1
 
         init_curr = getattr(seq.logical_blocks, 'last_shared_node', None)
         if init_curr is None:
@@ -455,7 +462,7 @@ class BlockTrie:
                 self.allocator.add_ref_count(matched_blocks, 1)
                 seq.logical_blocks.append(matched_blocks)
                 seq.set_step(step)
-                seq.prefix_cache_restore_state = node.state_idx
+                seq.prefix_cache.restore_state = node.state_idx
                 seq.logical_blocks.last_shared_node = node
                 self.stats.num_query_tokens += seq.num_all_ids - init_num_matched
                 self.stats.num_hit_tokens += step - init_num_matched
@@ -468,7 +475,7 @@ class BlockTrie:
         """Match sequence and cache."""
         if not self.enable:
             return
-        seq.prefix_cache_restore_state = -1
+        seq.prefix_cache.restore_state = -1
         if self.requires_state_checkpoint:
             self._match_state_checkpoint(seq)
             return
@@ -534,7 +541,7 @@ class BlockTrie:
             seq.logical_blocks.append(matched_blocks)
             seq.set_step(num_matched)
             if self.requires_state_checkpoint:
-                seq.prefix_cache_restore_state = curr.state_idx
+                seq.prefix_cache.restore_state = curr.state_idx
 
         # record prefix hit
         self.stats.num_query_tokens += seq.num_all_ids - init_num_matched
