@@ -45,7 +45,13 @@ class InputEmbeddings:
 
 @dataclass(frozen=True)
 class PrefixCacheMeta:
-    """Multimodal metadata used by prefix-cache block keys."""
+    """Multimodal span identity used by prefix-cache block keys.
+
+    Placeholder token ids alone are not enough for VLM prefix caching: two
+    requests can contain the same image placeholder tokens backed by different
+    image/video content.  The trie key therefore includes every overlapping
+    span's modality and stable content hash.
+    """
 
     start: int
     end: int
@@ -55,13 +61,21 @@ class PrefixCacheMeta:
 
 @dataclass
 class PrefixCacheState:
-    """Per-sequence prefix-cache metadata and transient SSM state."""
+    """Per-sequence prefix-cache bookkeeping.
+
+    ``metas`` and ``block_extra_hashes`` are persistent request metadata used
+    when constructing multimodal-aware trie keys.  The restore/save fields are
+    transient scheduler state for SSM checkpoints: a matched frozen state is
+    pinned before forward, and pending save slots are published only after the
+    model has copied runtime state into them.
+    """
 
     metas: list[PrefixCacheMeta] = field(default_factory=list)
     block_extra_hashes: dict[int, tuple] = field(default_factory=dict, repr=False)
     num_indexed_metas: int = 0
     restore_state: int = -1
     restore_state_acquired: bool = False
+    restore_node: Any = field(default=None, repr=False)
     save_state: int = -1
     save_step: int = 0
     save_is_decode: bool = False
@@ -848,7 +862,13 @@ class SchedulerSequence:
         return self.history_multimodals.get_datas(start, end)
 
     def get_prefix_cache_extra_hashes(self, start: int, end: int):
-        """Get multimodal hashes for a token range."""
+        """Get canonical multimodal identity entries for a token range.
+
+        The common caller asks for a full block, but partial ranges are used
+        when verifying sparse SSM checkpoint candidates.  Returning only
+        overlapping spans keeps text-only blocks unchanged while making blocks
+        that touch multimodal placeholders content-aware.
+        """
         prefix_cache = self.prefix_cache
         if len(prefix_cache.metas) == 0:
             return ()
@@ -860,6 +880,8 @@ class SchedulerSequence:
         if start_block == end_block:
             extras = prefix_cache.block_extra_hashes.get(start_block, ())
             if start % self.block_size == 0 and end - start == self.block_size:
+                # Full-block lookup is the hot path; the indexed tuple already
+                # contains exactly the spans that overlap this block.
                 return extras
             return tuple(extra for extra in extras if extra[0] < end and start < extra[1])
 
@@ -870,7 +892,12 @@ class SchedulerSequence:
         return tuple(sorted(extras))
 
     def clamp_prefix_cache_match_step(self, step: int):
-        """Clamp prefix-cache match step to a safe block boundary."""
+        """Clamp a prefix-cache match so forward never starts inside a span.
+
+        Multimodal processors expect an image/video span to be consumed as a
+        whole.  If a candidate cache hit would stop in the middle of such a
+        span, rewind to the span start and then to a block boundary.
+        """
         if step <= 0:
             return step
 
@@ -909,7 +936,7 @@ class SchedulerSequence:
         self.history_multimodals.add_inputs(multimodals)
 
     def _update_prefix_cache_metas(self, multimodals: MultiModalInputs):
-        """Update multimodal prefix-cache metadata."""
+        """Record multimodal span identities for future trie keying."""
         for modal_datas in multimodals.values():
             for modal_data in modal_datas:
                 modality = modal_data.modality
@@ -917,6 +944,9 @@ class SchedulerSequence:
                     modality = modality.value
                 content_hash = modal_data.content_hash
                 if content_hash is None:
+                    # Most request paths precompute the hash after model
+                    # preprocessing.  Keep this fallback for unit tests and
+                    # defensive correctness if a processor omits it.
                     content_hash = make_multimodal_content_hash(modal_data.data, modal_data.meta,
                                                                 modal_data.mrope_pos_ids)
                 self.prefix_cache.metas.append(
@@ -926,7 +956,12 @@ class SchedulerSequence:
                                     content_hash=str(content_hash)))
 
     def _index_prefix_cache_metas(self):
-        """Build block-indexed multimodal prefix-cache metadata."""
+        """Build the lazy block -> multimodal identity index.
+
+        The trie asks for block keys many times during match/allocation, so we
+        pay the span-to-block indexing cost once per newly appended metadata
+        entry instead of scanning all multimodal spans for every block.
+        """
         prefix_cache = self.prefix_cache
         block_size = self.block_size
         new_metas = prefix_cache.metas[prefix_cache.num_indexed_metas:]

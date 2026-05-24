@@ -2,6 +2,7 @@ import pytest
 import torch
 
 from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
+from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol, MigrationRequest
 from lmdeploy.pytorch.messages import MessageStatus, SequenceMeta
 from lmdeploy.pytorch.paging.scheduler import Scheduler
 from lmdeploy.pytorch.paging.state_manager import StateManager
@@ -214,6 +215,7 @@ def test_state_manager_caps_runtime_count_even_with_extra_free_slots():
     assert manager.allocate_state() == 1
     assert manager.allocate_state() == 2
     assert manager.get_num_free() == 3
+    assert manager.get_num_free_runtime() == 0
     with pytest.raises(RuntimeError, match='No free states'):
         manager.allocate_state()
 
@@ -280,3 +282,111 @@ def test_ssm_runtime_state_waits_when_only_checkpoint_slot_is_pinned():
     assert seq.logical_state == -1
     assert node.state_idx == state_idx
     assert node.state_ready
+
+
+def test_ssm_failed_restore_schedule_rolls_back_match():
+    scheduler = _make_ssm_scheduler(max_batch_size=1, prefix_cache_state_budget=0)
+    block_size = scheduler.seq_meta.block_size
+    node, state_idx = _add_ready_ssm_checkpoint(scheduler, [1] * block_size * 2)
+    node.state_ref_count = 1
+    seq = scheduler.add_session(100).add_sequence([1] * block_size * 2 + [2])
+
+    output = scheduler.schedule(is_prefill=True)
+
+    assert output.running == []
+    assert seq.status == MessageStatus.WAITING
+    assert seq.num_history_ids == 0
+    assert len(seq.logical_blocks) == 0
+    assert seq.prefix_cache.restore_state == -1
+    assert seq.prefix_cache.restore_node is None
+    assert node.state_idx == state_idx
+    assert node.state_ready
+    assert scheduler.block_trie.stats.num_query_tokens == 0
+    assert scheduler.block_trie.stats.num_hit_tokens == 0
+
+    node.state_ref_count = 0
+    output = scheduler.schedule(is_prefill=True)
+
+    assert output.running == [seq]
+    assert seq.status == MessageStatus.READY
+    assert seq.num_history_ids == 0
+    assert seq.prefix_cache.restore_state == -1
+    assert seq.logical_state == state_idx
+    assert node.state_idx == -1
+    assert not node.state_ready
+    assert scheduler.block_trie.stats.num_query_tokens == len(seq.all_ids)
+    assert scheduler.block_trie.stats.num_hit_tokens == 0
+
+
+def test_ssm_scheduler_preserves_matched_checkpoint_when_evicting_for_runtime_state():
+    scheduler = _make_ssm_scheduler(max_batch_size=1, prefix_cache_state_budget=1)
+    block_size = scheduler.seq_meta.block_size
+    node_a, state_idx_a = _add_ready_ssm_checkpoint(scheduler, [1] * block_size * 2)
+    node_b, state_idx_b = _add_ready_ssm_checkpoint(scheduler, [2] * block_size * 2)
+    seq = scheduler.add_session(100).add_sequence([1] * block_size * 2 + [3])
+
+    output = scheduler.schedule(is_prefill=True)
+
+    assert output.running == [seq]
+    assert seq.num_history_ids == block_size * 2
+    assert seq.prefix_cache.restore_state == state_idx_a
+    assert seq.prefix_cache.restore_node is node_a
+    assert seq.prefix_cache.restore_state_acquired
+    assert seq.logical_state == state_idx_b
+    assert node_a.state_idx == state_idx_a
+    assert node_a.state_ready
+    assert node_a.state_ref_count == 1
+    assert node_b.state_idx == -1
+    assert not node_b.state_ready
+    assert scheduler.block_trie.stats.num_hit_tokens == block_size * 2
+
+    assert scheduler.block_trie.release_state_checkpoint_restore_for_seq(seq)
+
+
+def test_ssm_scheduler_evicts_stopped_runtime_state_with_free_checkpoint_slot():
+    scheduler = _make_ssm_scheduler(max_batch_size=1, prefix_cache_state_budget=1)
+    block_size = scheduler.seq_meta.block_size
+    seq_a = scheduler.add_session(100).add_sequence([1] * block_size)
+
+    output = scheduler.schedule(is_prefill=True)
+    assert output.running == [seq_a]
+    assert seq_a.logical_state >= 0
+    assert scheduler.state_manager.get_num_free() == 1
+    assert scheduler.state_manager.get_num_free_runtime() == 0
+
+    seq_a.state.stop()
+    seq_b = scheduler.add_session(101).add_sequence([2] * block_size)
+
+    output = scheduler.schedule(is_prefill=True)
+
+    assert output.running == [seq_b]
+    assert seq_b.logical_state >= 0
+    assert seq_a.logical_state == -1
+    assert seq_a.status == MessageStatus.STOPPED
+
+
+def test_schedule_migration_matches_current_sequence():
+    from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+    block_size = 16
+    seq_meta = SequenceMeta(block_size, strategy=ARSequenceStrategy())
+    cache_config = CacheConfig(max_batches=1,
+                               block_size=block_size,
+                               num_cpu_blocks=4,
+                               num_gpu_blocks=4,
+                               enable_prefix_caching=True)
+    scheduler_config = SchedulerConfig(max_batches=1,
+                                       max_session_len=128,
+                                       max_request_output_len=64,
+                                       eviction_type='recompute')
+    scheduler = Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
+    migration_request = MigrationRequest(protocol=MigrationProtocol.RDMA,
+                                         remote_engine_id='prefill-0',
+                                         remote_session_id=7,
+                                         remote_token_id=8,
+                                         remote_block_ids=[1])
+    seq = scheduler.add_session(100).add_sequence([1] * block_size, migration_request=migration_request)
+
+    output = scheduler._schedule_migration()
+
+    assert output == [seq]
+    assert seq.status == MessageStatus.MIGRATION_READY

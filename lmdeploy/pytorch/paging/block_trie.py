@@ -26,7 +26,12 @@ class PrefixCacheStats:
 
 
 class Node:
-    """Node of block trie."""
+    """One full-token-block edge in the prefix-cache trie.
+
+    ``extra_hashes`` augments the token block key with VLM content identity.
+    ``state_idx`` / ``state_ready`` are optional SSM state-checkpoint ownership
+    fields; they are meaningful only when the cache config has state shapes.
+    """
 
     def __init__(self,
                  hash_key: int,
@@ -87,6 +92,8 @@ class BlockTrie:
         # caches with different adapter should not be shared.
         self._roots: dict[str, Node] = dict()
         self.leaves: set[Node] = set()
+        # SSM checkpoints are sparse.  The trie still owns KV blocks, but ready
+        # recurrent-state snapshots are indexed only at selected exact steps.
         self._state_checkpoint_index: dict[tuple, list[Node]] = dict()
         self._state_checkpoint_steps: dict[str, set[int]] = dict()
         self.stats = PrefixCacheStats()
@@ -102,19 +109,24 @@ class BlockTrie:
         return self._roots[adapter_name]
 
     def _get_block_extra_hashes(self, seq: SchedulerSequence, start: int, end: int):
-        """Get extra hashes for a token block."""
+        """Get multimodal identity entries that belong in a block key."""
         return seq.get_prefix_cache_extra_hashes(start, end)
 
     def _make_key(self, tokens: np.ndarray, extra_hashes: tuple):
-        """Make trie lookup key."""
+        """Make the trie lookup key from tokens plus multimodal identity."""
         return hash(('random', tuple(tokens), extra_hashes))
 
     def _match_node(self, node: Node, tokens: np.ndarray, extra_hashes: tuple):
-        """Check whether node content matches a token block."""
+        """Check the exact key payload after the hash-table lookup."""
         return np.array_equal(tokens, node.tokens) and extra_hashes == node.extra_hashes
 
     def _make_state_checkpoint_lookup_key(self, seq: SchedulerSequence, step: int):
-        """Make the sparse SSM checkpoint lookup key for a sequence prefix."""
+        """Make the sparse SSM checkpoint lookup key for a sequence prefix.
+
+        The last block key is only a filter into the sparse index.  Candidate
+        nodes are still verified by walking the full ancestor chain so hash
+        collisions or stale index entries cannot produce a false state hit.
+        """
         start = step - self.block_size
         end = step
         tokens = seq.history_cache[start:end]
@@ -153,7 +165,13 @@ class BlockTrie:
                 self._state_checkpoint_steps.pop(node.adapter_name)
 
     def reserve_state_checkpoint(self, node: Node):
-        """Reserve a state-cache slot owned by a trie node."""
+        """Reserve a state-cache slot owned by a trie node.
+
+        Reusing a ready slot means replacing the checkpoint for the same node,
+        which is allowed only while no restore copy has it pinned.  If the
+        shared state pool is full, evict an old unpinned checkpoint without
+        removing the trie/KV node itself.
+        """
         if not self.requires_state_checkpoint or node.parent is None:
             return -1
         if node.state_ready:
@@ -176,8 +194,12 @@ class BlockTrie:
         prefix_cache.save_node = None
 
     def discard_state_checkpoint_for_seq(self, seq: SchedulerSequence):
-        """Discard an unpublished state checkpoint reservation for a
-        sequence."""
+        """Discard an unpublished state checkpoint reservation for a sequence.
+
+        Reservations happen before forward.  If the executor fails to produce
+        output, or the sequence is rescheduled before the copy is committed, the
+        unready state slot must be released rather than becoming matchable.
+        """
         prefix_cache = seq.prefix_cache
         state_idx = prefix_cache.save_state
         node = prefix_cache.save_node
@@ -216,7 +238,12 @@ class BlockTrie:
                                          seq: SchedulerSequence,
                                          step: int = None,
                                          is_decode: bool = False):
-        """Reserve a state checkpoint slot for a sequence checkpoint step."""
+        """Reserve a state checkpoint slot for an exact trie step.
+
+        SSM prefix hits are valid only when KV blocks and recurrent state refer
+        to the same prefix.  Therefore saves are limited to block-aligned,
+        multimodal-safe steps that already have an attached trie node.
+        """
         self.discard_state_checkpoint_for_seq(seq)
 
         if not self.enable or not self.requires_state_checkpoint:
@@ -255,7 +282,13 @@ class BlockTrie:
                                                 seq: SchedulerSequence,
                                                 interval: int,
                                                 step: int = None):
-        """Reserve a bounded decode checkpoint for a sequence."""
+        """Reserve a bounded decode checkpoint for a sequence.
+
+        Decode checkpoints are opt-in and replaceable: keep at most one ready
+        decode checkpoint per sequence so long generations do not consume the
+        whole checkpoint budget.  The previous ready checkpoint is released
+        only after the new step is proven eligible.
+        """
         if step is None:
             step = seq.num_valid_ids
         if interval <= 0 or step % interval != 0:
@@ -298,8 +331,12 @@ class BlockTrie:
         self._index_state_checkpoint(node)
 
     def commit_state_checkpoint_for_seq(self, seq: SchedulerSequence):
-        """Publish a sequence state checkpoint after its state copy is
-        enqueued."""
+        """Publish a sequence state checkpoint after its state copy is enqueued.
+
+        Commit validates the remembered node directly.  This matters for decode
+        saves because the sequence may have advanced by one sampled token before
+        the output boundary publishes the checkpoint.
+        """
         prefix_cache = seq.prefix_cache
         state_idx = prefix_cache.save_state
         save_step = prefix_cache.save_step
@@ -333,7 +370,7 @@ class BlockTrie:
         prefix_cache = seq.prefix_cache
         if prefix_cache.restore_state < 0 or prefix_cache.restore_state_acquired:
             return False
-        node = getattr(seq.logical_blocks, 'last_shared_node', None)
+        node = prefix_cache.restore_node
         if node is None or node.state_idx != prefix_cache.restore_state or not node.state_ready:
             return False
         node.state_ref_count += 1
@@ -351,10 +388,11 @@ class BlockTrie:
         prefix_cache = seq.prefix_cache
         if not prefix_cache.restore_state_acquired:
             return False
-        node = getattr(seq.logical_blocks, 'last_shared_node', None)
+        node = prefix_cache.restore_node
         if node is not None and node.state_idx == prefix_cache.restore_state and node.state_ref_count > 0:
             node.state_ref_count -= 1
         prefix_cache.restore_state = -1
+        prefix_cache.restore_node = None
         prefix_cache.restore_state_acquired = False
         return True
 
@@ -364,7 +402,7 @@ class BlockTrie:
             self.release_state_checkpoint_restore_for_seq(seq)
 
     def release_state_checkpoint(self, node: Node):
-        """Release a node-owned state checkpoint."""
+        """Release a node-owned state checkpoint while keeping KV ownership."""
         if node.state_idx < 0:
             return
         if node.state_ready:
@@ -411,7 +449,12 @@ class BlockTrie:
         return nodes
 
     def _verify_state_checkpoint_node(self, seq: SchedulerSequence, node: Node):
-        """Verify a sparse SSM checkpoint candidate exactly."""
+        """Verify a sparse SSM checkpoint candidate exactly.
+
+        Matching only the sparse index key is not enough: we require every
+        ancestor block to match tokens and multimodal extra hashes before
+        restoring the frozen recurrent state.
+        """
         if node.adapter_name != seq.adapter_name or not node.state_ready or node.state_idx < 0:
             return None
 
@@ -438,8 +481,13 @@ class BlockTrie:
         return matched_blocks
 
     def _match_state_checkpoint(self, seq: SchedulerSequence):
-        """Match SSM prefixes through sparse ready-checkpoint lookup."""
+        """Match SSM prefixes through sparse ready-checkpoint lookup.
+
+        KV-only reuse is unsafe for SSM models, so this path reports a hit only
+        if a ready recurrent-state checkpoint exists at the exact matched step.
+        """
         seq.prefix_cache.restore_state = -1
+        seq.prefix_cache.restore_node = None
 
         init_curr = getattr(seq.logical_blocks, 'last_shared_node', None)
         if init_curr is None:
@@ -463,6 +511,7 @@ class BlockTrie:
                 seq.logical_blocks.append(matched_blocks)
                 seq.set_step(step)
                 seq.prefix_cache.restore_state = node.state_idx
+                seq.prefix_cache.restore_node = node
                 seq.logical_blocks.last_shared_node = node
                 self.stats.num_query_tokens += seq.num_all_ids - init_num_matched
                 self.stats.num_hit_tokens += step - init_num_matched
@@ -472,10 +521,16 @@ class BlockTrie:
         self.stats.num_query_tokens += seq.num_all_ids - init_num_matched
 
     def match(self, seq: SchedulerSequence):
-        """Match sequence and cache."""
+        """Match reusable prefix blocks for a sequence.
+
+        Text/VLM models walk the trie block by block.  SSM models delegate to
+        the sparse checkpoint matcher above because a KV block match without an
+        exact recurrent-state snapshot must be treated as a miss.
+        """
         if not self.enable:
             return
         seq.prefix_cache.restore_state = -1
+        seq.prefix_cache.restore_node = None
         if self.requires_state_checkpoint:
             self._match_state_checkpoint(seq)
             return
@@ -521,6 +576,8 @@ class BlockTrie:
             match_step = max(init_num_matched, match_step)
             if match_step >= num_matched:
                 return
+            # If a candidate hit stopped inside a multimodal span, drop any
+            # blocks beyond the clamped safe boundary before acquiring refs.
             keep = (match_step - init_num_matched) // block_size
             matched_nodes = matched_nodes[:keep]
             matched_blocks = matched_blocks[:keep]
@@ -550,7 +607,7 @@ class BlockTrie:
         seq.logical_blocks.last_shared_node = curr
 
     def allocate(self, seq: SchedulerSequence):
-        """allocate."""
+        """Attach newly allocated full blocks to the prefix-cache trie."""
         if not self.enable:
             return
 
@@ -587,6 +644,8 @@ class BlockTrie:
                 child = parent.children[hash_key]
                 if not self._match_node(child, curr_tokens, extra_hashes):
                     break
+                # Another sequence inserted the same key before us.  Reuse the
+                # trie-owned block and release this sequence's duplicate block.
                 node = child
                 free_blocks.append(block)
                 logical_blocks[block_id] = node.block

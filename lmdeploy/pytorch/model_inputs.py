@@ -191,8 +191,11 @@ class ModelInputs:
     dp_meta: DPMeta | None = None
     enable_microbatch: bool = False
     is_dummy: bool = False
+    # Runtime SSM state slot ids for each sequence in the batch.
     state_offsets: torch.Tensor | None = None
+    # Frozen checkpoint slot ids to restore from before forward.
     state_prefix_cache_offsets: torch.Tensor | None = None
+    # Reserved checkpoint slot ids to save into after forward.
     state_prefix_cache_save_offsets: torch.Tensor | None = None
     target_hidden_states: torch.Tensor | None = None
     target_position_ids: torch.Tensor | None = None

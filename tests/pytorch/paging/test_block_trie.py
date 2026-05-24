@@ -538,6 +538,32 @@ class TestBlockTire:
         assert seq.num_history_ids == block_size * 2
         assert seq.prefix_cache.restore_state == state_idx
 
+    def test_ssm_restore_acquire_survives_tail_allocation(self, ssm_scheduler):
+        block_mgr = ssm_scheduler.block_manager
+        block_trie = ssm_scheduler.block_trie
+        block_size = ssm_scheduler.seq_meta.block_size
+        checkpoint_tokens = [1] * block_size * 2
+        suffix_tokens = [2] * block_size * 3 + [3]
+
+        _, checkpoint_node, state_idx = self._add_ready_ssm_checkpoint(ssm_scheduler, checkpoint_tokens)
+
+        seq = ssm_scheduler.add_session(100).add_sequence(checkpoint_tokens + suffix_tokens)
+        block_trie.match(seq)
+        assert seq.num_history_ids == block_size * 2
+        assert seq.prefix_cache.restore_state == state_idx
+        assert seq.prefix_cache.restore_node is checkpoint_node
+
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+        assert getattr(seq.logical_blocks, 'last_shared_node') is not checkpoint_node
+        assert seq.prefix_cache.restore_node is checkpoint_node
+
+        assert block_trie.acquire_state_checkpoint_restore_for_seq(seq)
+        assert checkpoint_node.state_ref_count == 1
+        assert block_trie.release_state_checkpoint_restore_for_seq(seq)
+        assert checkpoint_node.state_ref_count == 0
+        assert seq.prefix_cache.restore_node is None
+
     def test_ssm_checkpoint_ready_index_is_idempotent(self, ssm_scheduler):
         block_mgr = ssm_scheduler.block_manager
         block_trie = ssm_scheduler.block_trie

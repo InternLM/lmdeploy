@@ -169,6 +169,9 @@ def model_forward(
         with ctx_mgr.context(context):
             if (not inputs.is_dummy and inputs.state_offsets is not None
                     and inputs.state_prefix_cache_offsets is not None):
+                # Restore frozen SSM prefix state into this request's runtime
+                # slot on the forward stream.  No host synchronize is needed:
+                # the following model kernels are ordered after this copy.
                 valid = inputs.state_prefix_cache_offsets >= 0
                 state_cache_engine.copy_caches(inputs.state_prefix_cache_offsets[valid], inputs.state_offsets[valid])
 
@@ -194,6 +197,9 @@ def model_forward(
                 model_metas = context.model_metas
             if (not inputs.is_dummy and inputs.state_offsets is not None
                     and inputs.state_prefix_cache_save_offsets is not None):
+                # Save the post-forward runtime state into reserved checkpoint
+                # slots.  The scheduler publishes these slots only after the
+                # executor output boundary confirms the copy was enqueued.
                 valid = inputs.state_prefix_cache_save_offsets >= 0
                 state_cache_engine.copy_caches(inputs.state_offsets[valid],
                                                inputs.state_prefix_cache_save_offsets[valid])

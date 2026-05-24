@@ -33,7 +33,13 @@ class StateAllocator:
 
 
 class StateManager:
-    """Manage runtime and checkpoint ownership over one elastic state pool."""
+    """Manage runtime and checkpoint ownership over one elastic state pool.
+
+    Runtime sequence states have a configurable capacity cap so a large prefix
+    checkpoint budget cannot starve active requests.  Checkpoint states borrow
+    from the same allocator and are evicted by ``BlockTrie`` when runtime slots
+    need to be recovered.
+    """
 
     def __init__(self,
                  num_states: int,
@@ -59,8 +65,8 @@ class StateManager:
         return seq.logical_state >= 0
 
     def allocate_state(self):
-        """Allocate one state-cache slot."""
-        if len(self._runtime_states) >= self.num_runtime_states:
+        """Allocate one state-cache slot for an active sequence."""
+        if self.get_num_free_runtime() <= 0:
             raise RuntimeError('No free states.')
         state_id = int(self.allocator.allocate())
         self._runtime_states.add(state_id)
@@ -105,8 +111,13 @@ class StateManager:
         """Get num free."""
         return self.allocator.get_num_free()
 
+    def get_num_free_runtime(self):
+        """Get slots still available under the runtime-state cap."""
+        free_runtime_capacity = self.num_runtime_states - len(self._runtime_states)
+        return max(0, min(free_runtime_capacity, self.allocator.get_num_free()))
+
     def get_num_free_checkpoint(self):
-        """Get num free checkpoint states."""
+        """Get raw free slots that checkpoint saves may reserve."""
         return self.allocator.get_num_free()
 
     def get_num_runtime_states(self):
