@@ -947,10 +947,10 @@ void Engine::Impl::UpdateScheduleMetrics()
 
     auto m = std::make_shared<ScheduleMetrics>();
 
-    m->total_seqs      = total;
-    m->active_seqs     = active;
-    m->waiting_seqs    = total - active;
-    m->scheduler_tick  = scheduler_tick_.load(std::memory_order_relaxed);
+    m->total_seqs     = total;
+    m->active_seqs    = active;
+    m->waiting_seqs   = total - active;
+    m->scheduler_tick = scheduler_tick_.load(std::memory_order_relaxed);
 
     m->total_blocks  = seq_mgr_->total_count();
     m->active_blocks = seq_mgr_->active_count();
@@ -964,7 +964,7 @@ shared_ptr<ScheduleMetrics> Engine::GetScheduleMetrics()
 {
     auto metrics = std::atomic_load_explicit(&impl_->metrics_, std::memory_order_acquire);
     if (!impl_->param_.enable_metrics && metrics) {
-        metrics = std::make_shared<ScheduleMetrics>(*metrics);
+        metrics                 = std::make_shared<ScheduleMetrics>(*metrics);
         metrics->scheduler_tick = impl_->scheduler_tick_.load(std::memory_order_relaxed);
     }
     return metrics;

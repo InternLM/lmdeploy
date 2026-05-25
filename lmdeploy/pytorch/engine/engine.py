@@ -619,8 +619,8 @@ class Engine(EngineBase):
     async def get_health_status(self) -> dict:
         """Get lightweight health status.
 
-        Scheduler metrics alone can still be readable after runtime failure,
-        so this also checks Engine-owned loop tasks before returning metrics.
+        Scheduler metrics alone can still be readable after runtime failure, so this also checks Engine-owned loop tasks
+        before returning metrics.
         """
         if not self.req_manager.is_loop_alive():
             return dict(alive=False,
