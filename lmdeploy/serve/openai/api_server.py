@@ -509,7 +509,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                                     finish_reason: str | None = None,
                                     logprobs: LogProbs | None = None,
                                     routed_experts=None,
-                                    output_ids=None) -> str:
+                                    output_ids=None) -> dict:
         choice_data = ChatCompletionResponseStreamChoice(index=index,
                                                          delta=delta_message,
                                                          finish_reason=finish_reason,
@@ -526,9 +526,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         response_dict = response.model_dump(mode='json', exclude_none=True)
         if include_usage:
             response_dict['usage'] = None
-        response_json = json.dumps(response_dict)
-
-        return response_json
+        return response_dict
 
     def create_stream_usage_response_json(usage: UsageInfo) -> str:
         response = ChatCompletionStreamResponse(
@@ -588,7 +586,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             if res.cache_block_ids is not None:
                 response_json['cache_block_ids'] = res.cache_block_ids
                 response_json['remote_token_ids'] = res.token_ids
-            yield f'data: {response_json}\n\n'
+            yield f'data: {json.dumps(response_json)}\n\n'
         if final_usage is not None:
             yield f'data: {create_stream_usage_response_json(final_usage)}\n\n'
         yield 'data: [DONE]\n\n'
