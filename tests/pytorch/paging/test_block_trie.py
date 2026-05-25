@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 import torch
 
+from lmdeploy.pytorch import messages as messages_module
 from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
 from lmdeploy.pytorch.messages import SequenceMeta, UpdateTokenMode
 from lmdeploy.pytorch.multimodal.data_type import MultiModalData
@@ -270,6 +271,23 @@ class TestBlockTire:
         assert len(seq.logical_blocks) == 1
         assert seq.num_history_ids == block_size
         assert seq.prefix_cache.metas[0].content_hash == 'image-b'
+
+    def test_multimodal_prefix_cache_meta_skips_hash_when_prefix_cache_disabled(self, cache_config, scheduler_config,
+                                                                                seq_meta, monkeypatch):
+        cache_config.enable_prefix_caching = False
+        scheduler = Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
+
+        def _fail_hash(*args, **kwargs):
+            raise AssertionError('disabled prefix cache should not hash multimodal payloads')
+
+        monkeypatch.setattr(messages_module, 'make_multimodal_content_hash', _fail_hash)
+
+        sess = scheduler.add_session(0)
+        seq = sess.add_sequence([99] * sess.seq_meta.block_size,
+                                multimodals=self._image_multimodals(0, sess.seq_meta.block_size, 1.0))
+
+        assert seq.prefix_cache.metas == []
+        assert not seq.history_multimodals.empty()
 
     def test_match_multimodal_clamps_before_split_span(self, block_trie, block_mgr, scheduler):
         allocator = block_trie.allocator

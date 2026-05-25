@@ -41,6 +41,7 @@ def _reindex_model_inputs_arspec(
     max_kv_seqlen = delta.max_kv_seqlen
     sum_kv_seqlen = delta.sum_kv_seqlen
     num_ignored_history = delta.num_ignored_history
+    state_prefix_cache_save_src_offsets = delta.state_prefix_cache_save_src_offsets
     state_prefix_cache_save_offsets = delta.state_prefix_cache_save_offsets
 
     # required inputs — reshape by num_spec_tokens+1 for spec decoding
@@ -90,6 +91,7 @@ def _reindex_model_inputs_arspec(
         local_adapter_ids=local_adapter_ids,
         model_metas=model_metas,
         state_offsets=state_offsets,
+        state_prefix_cache_save_src_offsets=state_prefix_cache_save_src_offsets,
         state_prefix_cache_save_offsets=state_prefix_cache_save_offsets,
         mrope_pos_ids=mrope_pos_ids,
     )

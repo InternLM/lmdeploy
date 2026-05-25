@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from collections.abc import Sequence
 from dataclasses import dataclass, field, fields
 from typing import TYPE_CHECKING, Any
 
@@ -137,8 +138,9 @@ class ModelInputsDelta:
     is_decoding: bool = True
     # sliding window
     num_ignored_history: torch.Tensor | None = None
-    # SSM prefix-cache checkpoint save offsets for decode forwards.
-    state_prefix_cache_save_offsets: torch.Tensor | None = None
+    # Compact SSM prefix-cache checkpoint save pairs for decode forwards.
+    state_prefix_cache_save_src_offsets: Sequence[int] | None = None
+    state_prefix_cache_save_offsets: Sequence[int] | None = None
 
     @property
     def seq_length(self):
@@ -193,10 +195,14 @@ class ModelInputs:
     is_dummy: bool = False
     # Runtime SSM state slot ids for each sequence in the batch.
     state_offsets: torch.Tensor | None = None
-    # Frozen checkpoint slot ids to restore from before forward.
-    state_prefix_cache_offsets: torch.Tensor | None = None
-    # Reserved checkpoint slot ids to save into after forward.
-    state_prefix_cache_save_offsets: torch.Tensor | None = None
+    # Frozen checkpoint slot ids to restore from before forward. Compact, no sentinels.
+    state_prefix_cache_offsets: Sequence[int] | None = None
+    # Runtime state slot ids to restore into before forward. Compact, no sentinels.
+    state_prefix_cache_dst_offsets: Sequence[int] | None = None
+    # Runtime state slot ids to save from after forward. Compact, no sentinels.
+    state_prefix_cache_save_src_offsets: Sequence[int] | None = None
+    # Reserved checkpoint slot ids to save into after forward. Compact, no sentinels.
+    state_prefix_cache_save_offsets: Sequence[int] | None = None
     target_hidden_states: torch.Tensor | None = None
     target_position_ids: torch.Tensor | None = None
     target_inputs_embeds: torch.Tensor | None = None
@@ -227,6 +233,8 @@ class ModelInputs:
             max_kv_seqlen=self.max_kv_seqlen + self.max_q_seqlen,
             sum_kv_seqlen=self.sum_kv_seqlen + self.max_q_seqlen * self.seq_length.numel(),
             state_prefix_cache_offsets=None,
+            state_prefix_cache_dst_offsets=None,
+            state_prefix_cache_save_src_offsets=None,
             state_prefix_cache_save_offsets=None,
             mrope_pos_ids=mrope_pos_ids,
         )

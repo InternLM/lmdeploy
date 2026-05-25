@@ -76,7 +76,7 @@ def test_state_cache_engine_copy_caches_supports_batched_indices():
     conv_state[1].fill_(3.0)
     recurrent_state[1].fill_(4.0)
 
-    cache_engine.copy_caches(torch.tensor([0, 1]), torch.tensor([2, 3]))
+    cache_engine.copy_caches((0, 1), (2, 3))
 
     assert torch.equal(conv_state[2], conv_state[0])
     assert torch.equal(recurrent_state[2], recurrent_state[0])
@@ -89,3 +89,17 @@ def test_state_cache_engine_copy_caches_rejects_mismatched_indices():
 
     with pytest.raises(ValueError, match='same number of elements'):
         cache_engine.copy_caches([0, 1], [2])
+
+
+def test_state_cache_engine_copy_caches_rejects_tensor_indices():
+    cache_engine = _make_state_cache_engine()
+
+    with pytest.raises(TypeError, match='host integers'):
+        cache_engine.copy_caches(torch.tensor([0, 1]), torch.tensor([2, 3]))
+
+
+def test_state_cache_engine_copy_caches_rejects_overlapping_indices():
+    cache_engine = _make_state_cache_engine()
+
+    with pytest.raises(ValueError, match='must not overlap'):
+        cache_engine.copy_caches([0, 1], [1, 2])

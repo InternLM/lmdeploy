@@ -930,7 +930,8 @@ class SchedulerSequence:
         if multimodals is None:
             return
         multimodals = HistoryMultiModals.update_multimodals(multimodals, self.num_valid_ids)
-        self._update_prefix_cache_metas(multimodals)
+        if self.session.scheduler.cache_config.enable_prefix_caching:
+            self._update_prefix_cache_metas(multimodals)
         self.history_multimodals.add_inputs(multimodals)
 
     def _update_prefix_cache_metas(self, multimodals: MultiModalInputs):

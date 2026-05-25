@@ -170,10 +170,11 @@ def model_forward(
             if (not inputs.is_dummy and inputs.state_offsets is not None
                     and inputs.state_prefix_cache_offsets is not None):
                 # Restore frozen SSM prefix state into this request's runtime
-                # slot on the forward stream.  No host synchronize is needed:
-                # the following model kernels are ordered after this copy.
-                valid = inputs.state_prefix_cache_offsets >= 0
-                state_cache_engine.copy_caches(inputs.state_prefix_cache_offsets[valid], inputs.state_offsets[valid])
+                # slot on the forward stream.  The input maker already
+                # compacted valid src/dst pairs on CPU, so no CUDA boolean
+                # indexing/nonzero synchronization is needed here.
+                state_cache_engine.copy_caches(inputs.state_prefix_cache_offsets,
+                                               inputs.state_prefix_cache_dst_offsets)
 
             # initialize cache for ssm
             # chunk_indices in gated delta kernel requires cuda synchronize
@@ -200,9 +201,8 @@ def model_forward(
                 # Save the post-forward runtime state into reserved checkpoint
                 # slots.  The scheduler publishes these slots only after the
                 # executor output boundary confirms the copy was enqueued.
-                valid = inputs.state_prefix_cache_save_offsets >= 0
-                state_cache_engine.copy_caches(inputs.state_offsets[valid],
-                                               inputs.state_prefix_cache_save_offsets[valid])
+                state_cache_engine.copy_caches(inputs.state_prefix_cache_save_src_offsets,
+                                               inputs.state_prefix_cache_save_offsets)
             output['model_metas'] = model_metas
             output['seq_length'] = context.q_seqlens[:len(inputs.seq_length)]
             # for draft model reuse

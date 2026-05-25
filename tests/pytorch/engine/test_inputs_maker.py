@@ -2,7 +2,8 @@
 from dataclasses import dataclass
 from types import SimpleNamespace
 
-from lmdeploy.pytorch.engine.inputs_maker import LongContextChunker
+from lmdeploy.pytorch.engine.inputs_maker import (LongContextChunker, _compact_state_prefix_cache_restore_offsets,
+                                                  _compact_state_prefix_cache_save_offsets)
 
 
 @dataclass
@@ -21,6 +22,11 @@ class _DummySeq:
 
     def get_input_multimodals(self):
         return self._input_multimodals
+
+
+def _state_seq(logical_state: int, restore_state: int = -1):
+    return SimpleNamespace(logical_state=logical_state,
+                           prefix_cache=SimpleNamespace(restore_state=restore_state))
 
 
 def test_long_context_chunker_uses_cached_multimodal_size_for_chunk_limit():
@@ -61,3 +67,21 @@ def test_long_context_chunker_only_tracks_remaining_multimodals():
     assert chunker.max_prefill_num == 5376
     assert chunk_size == 2000
     assert multimodals == {'image': [remaining_image]}
+
+
+def test_state_prefix_cache_restore_offsets_are_compact():
+    messages = [_state_seq(4, 11), _state_seq(5, -1), _state_seq(6, 13)]
+
+    src_offsets, dst_offsets = _compact_state_prefix_cache_restore_offsets(messages)
+
+    assert src_offsets == (11, 13)
+    assert dst_offsets == (4, 6)
+
+
+def test_state_prefix_cache_save_offsets_are_compact():
+    messages = [_state_seq(4), _state_seq(5), _state_seq(6)]
+
+    src_offsets, dst_offsets = _compact_state_prefix_cache_save_offsets(messages, [-1, 21, 22])
+
+    assert src_offsets == (5, 6)
+    assert dst_offsets == (21, 22)

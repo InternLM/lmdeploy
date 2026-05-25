@@ -105,6 +105,7 @@ def _reindex_model_inputs(inputs: ModelInputs, delta: ModelInputsDelta) -> Model
         max_kv_seqlen=delta.max_kv_seqlen,
         sum_kv_seqlen=delta.sum_kv_seqlen,
         num_ignored_history=delta.num_ignored_history,
+        state_prefix_cache_save_src_offsets=delta.state_prefix_cache_save_src_offsets,
         state_prefix_cache_save_offsets=delta.state_prefix_cache_save_offsets,
     )
 

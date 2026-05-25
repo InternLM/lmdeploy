@@ -2,7 +2,9 @@
 # modify from: https://github.com/vllm-project/vllm
 import json
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
+from operator import index as as_index
 
 import torch
 
@@ -518,15 +520,18 @@ class StateCacheEngine:
         """State caches."""
         return self._state_caches
 
-    def _index_tensor(self, idx: int | list[int] | torch.Tensor):
-        """Convert cache indices to a tensor on the state-cache device."""
+    @staticmethod
+    def _index_list(idx: int | Sequence[int]):
+        """Normalize host-side cache indices."""
         if isinstance(idx, torch.Tensor):
-            return idx.to(device=self.mem_pool.device, dtype=torch.long)
+            raise TypeError('State cache copy indices must be host integers, not torch.Tensor.')
         if isinstance(idx, int):
-            idx = [idx]
-        return torch.tensor(idx, dtype=torch.long, device=self.mem_pool.device)
+            return [idx]
+        if not isinstance(idx, Sequence) or isinstance(idx, (str, bytes)):
+            raise TypeError('State cache copy indices must be an int or a sequence of ints.')
+        return [as_index(item) for item in idx]
 
-    def copy_caches(self, src_idx: int | list[int] | torch.Tensor, dst_idx: int | list[int] | torch.Tensor):
+    def copy_caches(self, src_idx: int | Sequence[int], dst_idx: int | Sequence[int]):
         """Copy state cache slots.
 
         This is the low-level primitive needed by SSM prefix caching: a frozen
@@ -536,13 +541,17 @@ class StateCacheEngine:
         if len(self._state_caches) <= 0:
             return
 
-        src_idx = self._index_tensor(src_idx)
-        dst_idx = self._index_tensor(dst_idx)
-        if src_idx.numel() != dst_idx.numel():
+        src_list = self._index_list(src_idx)
+        dst_list = self._index_list(dst_idx)
+        if len(src_list) != len(dst_list):
             raise ValueError('src_idx and dst_idx must have the same number of elements.')
+        if len(src_list) == 0:
+            return
+        if not set(src_list).isdisjoint(dst_list):
+            raise ValueError('src_idx and dst_idx must not overlap for stream-ordered state copies.')
 
-        values = self.mem_pool.index_select(0, src_idx).clone()
-        self.mem_pool.index_copy_(0, dst_idx, values)
+        for src, dst in zip(src_list, dst_list):
+            self.mem_pool[dst].copy_(self.mem_pool[src], non_blocking=True)
 
     def init_caches(self, idx: torch.Tensor, mask: torch.Tensor):
         """Initialize state caches.
