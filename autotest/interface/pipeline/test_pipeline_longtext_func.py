@@ -3,6 +3,7 @@ import os
 
 import numpy as np
 import pytest
+from transformers import AutoTokenizer
 from utils.config_utils import set_device_env_variable, unset_device_env_variable
 
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
@@ -189,12 +190,14 @@ def passkey_retrival_worker(config, model, backend, log_name, tp_num, session_le
     pipe = pipeline(model_path, backend_config=backend_config)
 
     gen_config = GenerationConfig(top_k=40)
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+
     # inference
-    pass_key1, prompt = get_passkey_prompt(pipe, session_len)
+    pass_key1, prompt = get_passkey_prompt(pipe, session_len, tokenizer)
     response1 = pipe(prompt, gen_config=gen_config)
 
     # inference
-    pass_key2, prompt = get_passkey_prompt(pipe, session_len)
+    pass_key2, prompt = get_passkey_prompt(pipe, session_len, tokenizer)
     response2 = pipe([prompt] * 2, gen_config=gen_config)
 
     pipe.close()
@@ -213,13 +216,12 @@ def passkey_retrival_worker(config, model, backend, log_name, tp_num, session_le
     assert str(pass_key2) in response2[0].text and str(pass_key2) in response2[1].text, str(response2)
 
 
-def get_passkey_prompt(pipe, session_len):
+def get_passkey_prompt(pipe, session_len, tokenizer):
     # create long context input
-    tok = pipe.tokenizer
     task_description = 'There is an important info hidden inside a lot of irrelevant text. Find it and memorize them. I will quiz you about the important information there.'  # noqa: E501
     garbage = 'The grass is green. The sky is blue. The sun is yellow. Here we go. There and back again.'  # noqa: E501
 
-    n_times = (session_len - 1000) // len(tok.encode(garbage))
+    n_times = (session_len - 1000) // len(tokenizer.encode(garbage))
     n_garbage_prefix = np.random.randint(0, n_times)
     n_garbage_suffix = n_times - n_garbage_prefix
     garbage_prefix = ' '.join([garbage] * n_garbage_prefix)

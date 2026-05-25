@@ -70,6 +70,7 @@ jobs:
           RUN python3 -m pip install --no-cache-dir -r /tmp/requirements/lite.txt && \
               python3 -m pip install --no-cache-dir -r /tmp/requirements/test.txt && \
               pip install --no-cache-dir ${{ env.OFFLINE_REQUIREMENTS }}
+              pip install --no-cache-dir nvidia-nccl-cu12>2.29
           EOF
           docker build . -f docker/Dockerfile.nightly-extended \
             --build-arg BASE_IMAGE=${{ env.TAG }} \
