@@ -57,8 +57,10 @@ def _skip_video_error_text(exc: BaseException) -> str:
     return f'SKIPPED_UNSUPPORTED_VIDEO:{exc!s}'
 
 
-def _is_input_length_error_text(text: str) -> bool:
-    rl = (text or '').lower()
+def _is_input_length_error_text(text: str | None) -> bool:
+    if text is None:
+        return False
+    rl = text.lower()
     return 'input_length_error' in rl or 'internal error happened' in rl
 
 
@@ -83,12 +85,9 @@ def load_video_sampled_pil(video_path: str, num_frames: int, **kwargs: Any) -> t
 
 def _is_video_mixed_whitelist_model(model_path: str) -> bool:
     """Only run video/mixed-mm cases for selected model families."""
-    m = (model_path or '').lower()
-    return (
-        'qwen3-vl' in m
-        or 'qwen3.5' in m
-        or 'interns2-preview' in m
-    )
+    m = model_path.lower()
+    whitelist = ('qwen3-vl', 'qwen3.5', 'interns2-preview')
+    return any(p in m for p in whitelist)
 
 
 def _log_case_result(case_name: str, payload: Any) -> None:

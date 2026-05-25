@@ -180,22 +180,27 @@ def _is_skipped_case_response(response: str) -> bool:
     return 'skipped_' in response.lower()
 
 
-def _parse_pipeline_mm_demo_payload(raw: str) -> tuple[str, str | None]:
+def _parse_pipeline_mm_demo_payload(raw: str | None) -> tuple[str | None, str | None]:
     """Parse ``qwen3-demo-video`` log payload (plain text or JSON with
     finish_reason)."""
-    s = (raw or '').strip()
+    if raw is None:
+        return None, None
+    s = raw.strip()
     if s.startswith('{'):
         try:
             obj = json.loads(s)
         except json.JSONDecodeError:
             return s, None
         if isinstance(obj, dict) and 'text' in obj:
-            return str(obj.get('text') or ''), obj.get('finish_reason')
+            text_val = obj.get('text')
+            return (str(text_val) if text_val is not None else None), obj.get('finish_reason')
     return s, None
 
 
-def _is_engine_error_response(text: str) -> bool:
-    rl = (text or '').lower()
+def _is_engine_error_response(text: str | None) -> bool:
+    if text is None:
+        return False
+    rl = text.lower()
     return 'input_length_error' in rl or 'internal error happened' in rl
 
 
@@ -375,27 +380,34 @@ def Qwen_vl_testcase(output_text, file):
             response = get_response_from_output(output_text, 'qwen3-demo-video')
             text, finish = _parse_pipeline_mm_demo_payload(response)
             rl = response.lower()
-            text_l = text.lower()
-            if _is_skipped_case_response(response) or _is_skipped_case_response(text):
+            if _is_skipped_case_response(response):
                 file.writelines(f'qwen3-demo-video result: skipped, reason: {response}\n')
-            elif 'skipped_no_demo_mp4' in rl or 'skipped_no_demo_mp4' in text_l:
-                file.writelines('qwen3-demo-video result: skipped (N1cdUjctpG8.mp4 not in resource_path)\n')
-            elif 'skipped_input_length_error' in rl or 'skipped_input_length_error' in text_l:
-                file.writelines(
-                    'qwen3-demo-video result: skipped (input exceeds session_len, same as restful server log)\n')
-            elif 'pipeline_video_error:' in rl or 'pipeline_video_error:' in text_l:
-                file.writelines(f'qwen3-demo-video result: false, pipeline video error in {response} \n')
+            elif text is None:
+                file.writelines(f'qwen3-demo-video result: false, missing text in payload: {response}\n')
                 with assume:
-                    assert False, f'qwen3-demo-video pipeline error: {response}'
-            elif _is_engine_error_response(text):
-                file.writelines(f'qwen3-demo-video result: skipped, engine error: {text} \n')
+                    assert False, f'qwen3-demo-video missing text: {response}'
+            elif _is_skipped_case_response(text):
+                file.writelines(f'qwen3-demo-video result: skipped, reason: {response}\n')
             else:
-                case_result = _mm_demo_tomb_run_assert(finish, text)
-                reason = 'tomb/jar + bounded public tail (restful mm_processor assert)'
-                file.writelines(f'qwen3-demo-video result: {case_result}, reason: {reason}: {text} \n')
-                with assume:
-                    msg = 'reason: qwen3 demo video: expected tomb/jar-related bounded answer'
-                    assert case_result, f'{msg}: finish={finish}, text={text[:2000]}'
+                text_l = text.lower()
+                if 'skipped_no_demo_mp4' in rl or 'skipped_no_demo_mp4' in text_l:
+                    file.writelines('qwen3-demo-video result: skipped (N1cdUjctpG8.mp4 not in resource_path)\n')
+                elif 'skipped_input_length_error' in rl or 'skipped_input_length_error' in text_l:
+                    file.writelines(
+                        'qwen3-demo-video result: skipped (input exceeds session_len, same as restful server log)\n')
+                elif 'pipeline_video_error:' in rl or 'pipeline_video_error:' in text_l:
+                    file.writelines(f'qwen3-demo-video result: false, pipeline video error in {response} \n')
+                    with assume:
+                        assert False, f'qwen3-demo-video pipeline error: {response}'
+                elif _is_engine_error_response(text):
+                    file.writelines(f'qwen3-demo-video result: skipped, engine error: {text} \n')
+                else:
+                    case_result = _mm_demo_tomb_run_assert(finish, text)
+                    reason = 'tomb/jar + bounded public tail (restful mm_processor assert)'
+                    file.writelines(f'qwen3-demo-video result: {case_result}, reason: {reason}: {text} \n')
+                    with assume:
+                        msg = 'reason: qwen3 demo video: expected tomb/jar-related bounded answer'
+                        assert case_result, f'{msg}: finish={finish}, text={text[:2000]}'
     if '[caseresult qwen-mixed-image-text-video start]' in output_text:
         with allure.step('qwen-mixed-image-text-video'):
             response = get_response_from_output(output_text, 'qwen-mixed-image-text-video')
