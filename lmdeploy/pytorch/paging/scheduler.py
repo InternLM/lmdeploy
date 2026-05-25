@@ -1,6 +1,43 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
+"""Request scheduling and prefix-cache side-effect boundaries.
 
+The scheduler is the first owner of prefix-cache side effects.  In prefill,
+``BlockTrie.match()`` is intentionally called before eviction and allocation so
+the scheduler can account for reused KV/state.  That match is tentative:
+rollback is required if long-context chunking, checkpoint pinning, KV eviction,
+or runtime state allocation means the request cannot safely run now.
+
+Successful prefill scheduling keeps this order:
+
+1. ``block_trie.match(seq)`` mutates sequence state to skip a cached prefix.
+2. eviction and SSM runtime-state availability are checked.
+3. ``block_manager.allocate(seq)`` allocates missing KV blocks.
+4. ``block_trie.allocate(seq)`` publishes newly allocated full blocks.
+5. For SSM, downstream input/model/engine code restores and saves checkpoint
+   states; the scheduler only owns resource decisions and rollback.
+
+SSM scheduling detail:
+
+* ``block_trie.match(seq)`` may find a ready checkpoint and record
+  ``seq.prefix_cache.restore_state`` before the request owns a runtime state.
+  The scheduler must treat that as tentative until KV blocks and one runtime
+  state slot are guaranteed.
+* A matched restore checkpoint can be pinned before eviction so checkpoint LRU
+  cannot free the source slot.  If that pin prevents eviction from finding
+  enough resources, the scheduler rolls the match back, releases the pin, and
+  retries eviction once without the tentative hit.
+* Runtime state availability is checked after KV eviction because old unpinned
+  checkpoints may be dropped to free state-cache slots.  If no runtime slot can
+  be recovered, the tentative prefix hit is rolled back and the request waits.
+* ``state_manager.allocate(seq)`` assigns the request runtime state only after
+  ``block_manager.allocate(seq)`` and ``block_trie.allocate(seq)`` succeed.
+  Later, ``InputsMaker`` may reserve checkpoint saves for the exact produced
+  step; scheduler code does not perform state-cache tensor copies or publish
+  checkpoint readiness.
+"""
+
+import logging
 from collections import OrderedDict
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -100,6 +137,7 @@ class Scheduler:
         elif seq.num_history_ids > 0:
             seq.set_step(0)
         prefix_cache = seq.prefix_cache
+        prefix_cache.last_shared_node = None
         prefix_cache.restore_state = -1
         prefix_cache.restore_node = None
         prefix_cache.restore_state_acquired = False
@@ -263,33 +301,37 @@ class Scheduler:
             stats_snapshot = self.block_trie.snapshot_stats()
             rolled_back_match = False
 
-            def __rollback_prefix_match():
+            def __rollback_prefix_match(reason: str):
                 nonlocal rolled_back_match
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f'Rollback tentative prefix-cache match: session_id={seq.session_id} '
+                                 f'seq_id={seq.seq_id} reason={reason} num_history_ids={seq.num_history_ids} '
+                                 f'restore_state={seq.prefix_cache.restore_state}')
                 self._rollback_unscheduled_prefix_match(seq, stats_snapshot)
                 rolled_back_match = True
 
             self.block_trie.match(seq)
             if self._prefix_hit_starts_middle_long_context_chunk(seq):
-                __rollback_prefix_match()
+                __rollback_prefix_match('long-context chunk starts after prefix hit')
 
             had_ssm_restore = self.is_ssm and seq.prefix_cache.restore_state >= 0
             if not self._acquire_ssm_restore_if_needed(seq):
-                __rollback_prefix_match()
+                __rollback_prefix_match('failed to acquire SSM restore checkpoint')
 
             if not __evict_for_seq(seq, waiting):
                 if not had_ssm_restore:
-                    __rollback_prefix_match()
+                    __rollback_prefix_match('eviction failed')
                     break
                 # A matched SSM restore may be pinning the only checkpoint
                 # state that eviction would otherwise free.  Roll it back once
                 # and retry eviction before declaring the sequence unschedulable.
-                __rollback_prefix_match()
+                __rollback_prefix_match('eviction failed with pinned SSM restore')
                 if not __evict_for_seq(seq, waiting):
                     break
 
             # allocate session memory
             if self.is_ssm and not self._ensure_runtime_state_available():
-                __rollback_prefix_match()
+                __rollback_prefix_match('no runtime SSM state available')
                 if not __evict_for_seq(seq, waiting):
                     break
                 if not self._ensure_runtime_state_available():

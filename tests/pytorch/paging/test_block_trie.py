@@ -117,7 +117,7 @@ class TestBlockTire:
         state_idx = scheduler.block_trie.reserve_state_checkpoint_for_seq(seq)
         assert state_idx >= 0
         assert scheduler.block_trie.commit_state_checkpoint_for_seq(seq)
-        return seq, getattr(seq.logical_blocks, 'last_shared_node'), state_idx
+        return seq, seq.prefix_cache.last_shared_node, state_idx
 
     def test_allocate(self, block_trie, block_mgr, scheduler):
         allocator = block_trie.allocator
@@ -134,7 +134,7 @@ class TestBlockTire:
         assert len(logical_blocks) == 3
         ref_cnt = allocator.get_ref_count(logical_blocks.get_real_blocks())
         assert np.array_equal(ref_cnt, [2, 2, 1])
-        node = getattr(seq.logical_blocks, 'last_shared_node', None)
+        node = seq.prefix_cache.last_shared_node
         assert node is not None
         assert node.num_matched == block_size * 2
         assert np.array_equal(node.tokens, [2] * block_size)
@@ -150,7 +150,7 @@ class TestBlockTire:
         assert len(logical_blocks) == 4
         ref_cnt = allocator.get_ref_count(logical_blocks.get_real_blocks())
         assert np.array_equal(ref_cnt, [2, 2, 2, 1])
-        node = getattr(seq.logical_blocks, 'last_shared_node', None)
+        node = seq.prefix_cache.last_shared_node
         assert node is not None
         assert node.num_matched == block_size * 3
         expect_tokens = [3] * (block_size // 2) + [4] * (block_size // 2)
@@ -178,7 +178,7 @@ class TestBlockTire:
         assert len(logical_blocks) == 1
         ref_cnt = allocator.get_ref_count(logical_blocks.get_real_blocks())
         assert np.array_equal(ref_cnt, [3])
-        node = getattr(seq.logical_blocks, 'last_shared_node', None)
+        node = seq.prefix_cache.last_shared_node
         assert node is not None
         assert node.num_matched == block_size
         assert np.array_equal(node.tokens, [1] * block_size)
@@ -208,12 +208,13 @@ class TestBlockTire:
 
         assert seq.num_history_ids == 0
         assert len(seq.logical_blocks) == 0
+        assert seq.prefix_cache.last_shared_node is None
 
         block_trie.match(seq)
 
         assert seq.num_history_ids == block_size * 2
         assert len(seq.logical_blocks) == 2
-        node = getattr(seq.logical_blocks, 'last_shared_node', None)
+        node = seq.prefix_cache.last_shared_node
         assert node is not None
         assert node.num_matched == block_size * 2
 
@@ -261,7 +262,7 @@ class TestBlockTire:
         seq = sess.add_sequence(token_ids)
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
-        node = getattr(seq.logical_blocks, 'last_shared_node', None)
+        node = seq.prefix_cache.last_shared_node
         assert node is not None
         assert node.routed_experts is None
 
@@ -301,7 +302,7 @@ class TestBlockTire:
 
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
-        last_node = getattr(seq.logical_blocks, 'last_shared_node', None)
+        last_node = seq.prefix_cache.last_shared_node
         assert last_node is not None
         assert last_node.routed_experts is None
 
@@ -330,7 +331,7 @@ class TestBlockTire:
 
         assert len(seq.logical_blocks) == 3
         assert seq.num_history_ids == block_size * 3
-        node = getattr(seq.logical_blocks, 'last_shared_node', None)
+        node = seq.prefix_cache.last_shared_node
         assert node is not None
         assert node.num_matched == block_size * 3
 
@@ -348,7 +349,7 @@ class TestBlockTire:
 
         assert len(seq.logical_blocks) == 1
         assert seq.num_history_ids == block_size
-        node = getattr(seq.logical_blocks, 'last_shared_node', None)
+        node = seq.prefix_cache.last_shared_node
         assert node is not None
         assert node.num_matched == block_size
 
@@ -433,7 +434,7 @@ class TestBlockTire:
         assert len(seq.logical_blocks) == 0
         assert seq.num_history_ids == 0
         assert np.array_equal(allocator.get_ref_count(cached_blocks), [2])
-        node = getattr(seq.logical_blocks, 'last_shared_node', None)
+        node = seq.prefix_cache.last_shared_node
         assert node is not None
         assert node.num_matched == 0
 
@@ -453,7 +454,7 @@ class TestBlockTire:
         block_trie.match(seq)
         assert len(seq.logical_blocks) == 6
         assert seq.num_history_ids == block_size * 6
-        node = getattr(seq.logical_blocks, 'last_shared_node', None)
+        node = seq.prefix_cache.last_shared_node
         assert node is not None
         assert node.num_matched == block_size * 6
 
@@ -493,7 +494,7 @@ class TestBlockTire:
 
         assert len(seq.logical_blocks) == 1
         assert seq.num_history_ids == block_size
-        node = getattr(seq.logical_blocks, 'last_shared_node', None)
+        node = seq.prefix_cache.last_shared_node
         assert node is not None
         assert node.num_matched == block_size
 
@@ -553,7 +554,7 @@ class TestBlockTire:
         seq = sess.add_sequence(token_ids)
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
-        node = getattr(seq.logical_blocks, 'last_shared_node')
+        node = seq.prefix_cache.last_shared_node
 
         seq = sess.add_sequence(token_ids)
         block_trie.match(seq)
@@ -580,7 +581,7 @@ class TestBlockTire:
         seq = sess.add_sequence(token_ids)
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
-        leaf = getattr(seq.logical_blocks, 'last_shared_node')
+        leaf = seq.prefix_cache.last_shared_node
         checkpoint_node = leaf.parent
         state_idx = block_trie.reserve_state_checkpoint(checkpoint_node)
         block_trie.mark_state_checkpoint_ready(checkpoint_node)
@@ -631,7 +632,7 @@ class TestBlockTire:
         seq = sess.add_sequence(token_ids)
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
-        node = getattr(seq.logical_blocks, 'last_shared_node')
+        node = seq.prefix_cache.last_shared_node
         block_trie.reserve_state_checkpoint(node)
         block_trie.mark_state_checkpoint_ready(node)
 
@@ -663,7 +664,7 @@ class TestBlockTire:
         seq = sess.add_sequence(token_ids)
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
-        node = getattr(seq.logical_blocks, 'last_shared_node')
+        node = seq.prefix_cache.last_shared_node
         block_trie.reserve_state_checkpoint(node)
         block_trie.mark_state_checkpoint_ready(node)
 
@@ -678,6 +679,123 @@ class TestBlockTire:
         assert len(seq.logical_blocks) == 0
         assert seq.prefix_cache.restore_state == -1
 
+    def test_match_ssm_keeps_request_mismatch_checkpoint_candidate(self, ssm_scheduler):
+        block_size = ssm_scheduler.seq_meta.block_size
+        token_ids = [1] * block_size + [2] * block_size
+        _, node, state_idx = self._add_ready_ssm_checkpoint(ssm_scheduler, token_ids)
+        key = ssm_scheduler.block_trie._make_state_checkpoint_node_key(node)
+        free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()
+
+        # Same indexed step and last block, but a different earlier block. This
+        # is a miss for this request, not proof that the cached checkpoint is
+        # stale globally.
+        miss_token_ids = [4] * block_size + [2] * block_size + [3]
+        seq = ssm_scheduler.add_session(100).add_sequence(miss_token_ids)
+        ssm_scheduler.block_trie.match(seq)
+
+        assert len(seq.logical_blocks) == 0
+        assert seq.prefix_cache.restore_state == -1
+        assert node.state_idx == state_idx
+        assert node.state_ready
+        assert node in ssm_scheduler.block_trie._state_checkpoint_index[key]
+        assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states
+
+    def test_match_ssm_drops_stale_sparse_index_entry_only(self, ssm_scheduler):
+        block_size = ssm_scheduler.seq_meta.block_size
+        token_ids = [1] * block_size + [2] * block_size
+        _, node, state_idx = self._add_ready_ssm_checkpoint(ssm_scheduler, token_ids)
+        block_trie = ssm_scheduler.block_trie
+        canonical_key = block_trie._make_state_checkpoint_node_key(node)
+
+        miss_token_ids = [1] * block_size + [4] * block_size + [3]
+        seq = ssm_scheduler.add_session(100).add_sequence(miss_token_ids)
+        stale_key = block_trie._make_state_checkpoint_lookup_key(seq, block_size * 2)
+        assert stale_key != canonical_key
+        block_trie._state_checkpoint_index.setdefault(stale_key, []).append(node)
+        block_trie._state_checkpoint_steps.setdefault(seq.adapter_name, set()).add(block_size * 2)
+        free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()
+
+        block_trie.match(seq)
+
+        assert len(seq.logical_blocks) == 0
+        assert seq.prefix_cache.restore_state == -1
+        assert stale_key not in block_trie._state_checkpoint_index
+        assert node in block_trie._state_checkpoint_index[canonical_key]
+        assert block_trie._state_checkpoint_steps[node.adapter_name] == {node.num_matched}
+        assert node.state_idx == state_idx
+        assert node.state_ready
+        assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states
+
+    def test_match_ssm_releases_detached_stale_checkpoint_candidate(self, ssm_scheduler):
+        block_size = ssm_scheduler.seq_meta.block_size
+        token_ids = [1] * block_size + [2] * block_size
+        _, node, _ = self._add_ready_ssm_checkpoint(ssm_scheduler, token_ids)
+        block_trie = ssm_scheduler.block_trie
+        key = block_trie._make_state_checkpoint_node_key(node)
+        free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()
+
+        node.parent = None
+        seq = ssm_scheduler.add_session(100).add_sequence(token_ids + [3])
+        block_trie.match(seq)
+
+        assert len(seq.logical_blocks) == 0
+        assert seq.prefix_cache.restore_state == -1
+        assert key not in block_trie._state_checkpoint_index
+        assert node.adapter_name not in block_trie._state_checkpoint_steps
+        assert node.state_idx == -1
+        assert not node.state_ready
+        assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states + 1
+
+    def test_match_ssm_keeps_pinned_stale_checkpoint_candidate(self, ssm_scheduler):
+        block_size = ssm_scheduler.seq_meta.block_size
+        token_ids = [1] * block_size + [2] * block_size
+        _, node, state_idx = self._add_ready_ssm_checkpoint(ssm_scheduler, token_ids)
+        block_trie = ssm_scheduler.block_trie
+        key = block_trie._make_state_checkpoint_node_key(node)
+        free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()
+
+        node.state_ref_count = 1
+        node.parent = None
+        seq = ssm_scheduler.add_session(100).add_sequence(token_ids + [3])
+        block_trie.match(seq)
+
+        assert len(seq.logical_blocks) == 0
+        assert seq.prefix_cache.restore_state == -1
+        assert node.state_idx == state_idx
+        assert node.state_ready
+        assert node.state_ref_count == 1
+        assert node in block_trie._state_checkpoint_index[key]
+        assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states
+
+    def test_match_ssm_releases_unready_indexed_checkpoint_candidate(self, ssm_scheduler):
+        block_mgr = ssm_scheduler.block_manager
+        block_trie = ssm_scheduler.block_trie
+        sess = ssm_scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = [1] * block_size + [2] * block_size
+
+        seq = sess.add_sequence(token_ids)
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+        node = seq.prefix_cache.last_shared_node
+        state_idx = block_trie.reserve_state_checkpoint(node)
+        assert state_idx >= 0
+        assert not node.state_ready
+        block_trie._index_state_checkpoint(node)
+        key = block_trie._make_state_checkpoint_node_key(node)
+        free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()
+
+        seq = sess.add_sequence(token_ids + [3])
+        block_trie.match(seq)
+
+        assert len(seq.logical_blocks) == 0
+        assert seq.prefix_cache.restore_state == -1
+        assert key not in block_trie._state_checkpoint_index
+        assert node.adapter_name not in block_trie._state_checkpoint_steps
+        assert node.state_idx == -1
+        assert not node.state_ready
+        assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states + 1
+
     def test_ssm_checkpoint_save_publishes_to_sparse_index(self, ssm_scheduler):
         block_mgr = ssm_scheduler.block_manager
         block_trie = ssm_scheduler.block_trie
@@ -689,7 +807,7 @@ class TestBlockTire:
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
         state_idx = block_trie.reserve_state_checkpoint_for_seq(seq)
-        node = getattr(seq.logical_blocks, 'last_shared_node')
+        node = seq.prefix_cache.last_shared_node
 
         assert state_idx >= 0
         assert seq.prefix_cache.save_state == state_idx
@@ -722,7 +840,7 @@ class TestBlockTire:
 
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
-        assert getattr(seq.logical_blocks, 'last_shared_node') is not checkpoint_node
+        assert seq.prefix_cache.last_shared_node is not checkpoint_node
         assert seq.prefix_cache.restore_node is checkpoint_node
 
         assert block_trie.acquire_state_checkpoint_restore_for_seq(seq)
@@ -741,7 +859,7 @@ class TestBlockTire:
         seq = sess.add_sequence(token_ids)
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
-        node = getattr(seq.logical_blocks, 'last_shared_node')
+        node = seq.prefix_cache.last_shared_node
         block_trie.reserve_state_checkpoint(node)
 
         block_trie.mark_state_checkpoint_ready(node)
@@ -761,7 +879,7 @@ class TestBlockTire:
         seq = sess.add_sequence(token_ids)
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
-        node = getattr(seq.logical_blocks, 'last_shared_node')
+        node = seq.prefix_cache.last_shared_node
         block_trie.reserve_state_checkpoint(node)
         block_trie.mark_state_checkpoint_ready(node)
         key = block_trie._make_state_checkpoint_node_key(node)
@@ -786,7 +904,7 @@ class TestBlockTire:
         block_trie.allocate(seq)
         free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()
         state_idx = block_trie.reserve_state_checkpoint_for_seq(seq)
-        node = getattr(seq.logical_blocks, 'last_shared_node')
+        node = seq.prefix_cache.last_shared_node
 
         assert state_idx >= 0
         assert node.state_idx == state_idx
@@ -835,7 +953,7 @@ class TestBlockTire:
         block_trie.allocate(seq)
         free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()
         state_idx = block_trie.reserve_state_checkpoint_for_seq(seq)
-        node = getattr(seq.logical_blocks, 'last_shared_node')
+        node = seq.prefix_cache.last_shared_node
 
         assert state_idx >= 0
         node.parent = None
@@ -1068,7 +1186,7 @@ class TestBlockTire:
         seq = sess.add_sequence(token_ids)
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
-        node = getattr(seq.logical_blocks, 'last_shared_node')
+        node = seq.prefix_cache.last_shared_node
         block_trie.reserve_state_checkpoint(node)
         block_trie.mark_state_checkpoint_ready(node)
         free_states = ssm_scheduler.state_manager.get_num_free_checkpoint()

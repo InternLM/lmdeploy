@@ -67,12 +67,16 @@ class PrefixCacheState:
     when constructing multimodal-aware trie keys.  The restore/save fields are
     transient scheduler state for SSM checkpoints: a matched frozen state is
     pinned before forward, and pending save slots are published only after the
-    model has copied runtime state into them.
+    model has copied runtime state into them.  ``last_shared_node`` is the
+    deepest trie node already shared by this sequence; ``BlockTrie.match()``
+    writes it and ``BlockTrie.allocate()`` continues inserting new full blocks
+    from it.
     """
 
     metas: list[PrefixCacheMeta] = field(default_factory=list)
     block_extra_hashes: dict[int, tuple] = field(default_factory=dict, repr=False)
     num_indexed_metas: int = 0
+    last_shared_node: Any = field(default=None, repr=False)
     restore_state: int = -1
     restore_state_acquired: bool = False
     restore_node: Any = field(default=None, repr=False)
